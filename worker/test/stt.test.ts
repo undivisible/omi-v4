@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { Hono } from "hono";
 import { Miniflare } from "miniflare";
 import { app as rootApp } from "../src/index";
-import stt from "../src/stt";
+import stt, { bridgeSttSockets } from "../src/stt";
 import type { AppEnv, Bindings } from "../src/types";
 
 const miniflare = new Miniflare({
@@ -12,6 +12,21 @@ const miniflare = new Miniflare({
 });
 
 let database: D1Database;
+
+class FakeSocket extends EventTarget {
+  readyState = WebSocket.OPEN;
+  sent: unknown[] = [];
+  throwOnSend = false;
+
+  send(data: unknown) {
+    if (this.throwOnSend) throw new Error("send failed");
+    this.sent.push(data);
+  }
+
+  close() {
+    this.readyState = WebSocket.CLOSED;
+  }
+}
 
 const validRequest = {
   idempotencyKey: "desktop:session:1",
@@ -31,12 +46,17 @@ const environment = (overrides: Partial<Bindings> = {}) =>
     DB: database,
     STT_ADMISSION: {
       getByName: () => ({
-        fetch: async () => Response.json({ admitted: true }),
+        fetch: async () =>
+          Response.json({
+            admitted: true,
+            acquisitionToken: "test-acquisition-token",
+          }),
       }),
     },
     DEEPGRAM_API_KEY: "managed-deepgram-secret",
     STT_MAX_SESSION_SECONDS: "900",
     STT_COST_MICROUSD_PER_MINUTE: "10000",
+    STT_UPSTREAM_CONNECT_TIMEOUT_MS: "10000",
     ...overrides,
   }) as Bindings;
 
@@ -62,6 +82,43 @@ const request = (
   );
 };
 
+const stream = (
+  uid: string,
+  sessionId: string,
+  overrides: Partial<Bindings> = {},
+) => {
+  const app = new Hono<AppEnv>();
+  app.use("*", async (context, next) => {
+    context.set("auth", { uid, email: `${uid}@example.test` });
+    await next();
+  });
+  app.route("/stt", stt);
+  return app.request(
+    `/stt/sessions/${sessionId}/stream`,
+    { headers: { upgrade: "websocket" } },
+    environment(overrides),
+  );
+};
+
+const admissionTracker = () => {
+  let releases = 0;
+  const namespace = {
+    getByName: () => ({
+      fetch: async (input: RequestInfo | URL) => {
+        const path = new URL(String(input)).pathname;
+        if (path === "/release") releases += 1;
+        return Response.json({
+          admitted: true,
+          acquisitionToken: "test-acquisition-token",
+          claimed: true,
+          released: true,
+        });
+      },
+    }),
+  } as unknown as DurableObjectNamespace;
+  return { namespace, releases: () => releases };
+};
+
 const migrate = async (path: string) => {
   const migration = await Bun.file(path).text();
   for (const statement of migration.split(";").map((value) => value.trim())) {
@@ -83,6 +140,7 @@ beforeAll(async () => {
     .run();
   await migrate("migrations/0009_managed_stt.sql");
   await migrate("migrations/0010_bound_stt_proxy.sql");
+  await migrate("migrations/0011_stt_acquisition_token.sql");
   const now = Date.now();
   await database
     .prepare(
@@ -102,6 +160,68 @@ afterAll(async () => {
 });
 
 describe("managed STT sessions", () => {
+  test("bridges successful sockets and settles terminal races once", async () => {
+    const server = new FakeSocket();
+    const upstream = new FakeSocket();
+    const statuses: string[] = [];
+    bridgeSttSockets(
+      server as unknown as WebSocket,
+      upstream as unknown as WebSocket,
+      10_000,
+      (status) => statuses.push(status),
+    );
+    server.dispatchEvent(new MessageEvent("message", { data: "audio" }));
+    upstream.dispatchEvent(new MessageEvent("message", { data: "transcript" }));
+    expect(upstream.sent).toEqual(["audio"]);
+    expect(server.sent).toEqual(["transcript"]);
+    server.dispatchEvent(
+      new CloseEvent("close", { code: 1000, wasClean: true }),
+    );
+    upstream.dispatchEvent(new Event("error"));
+    expect(statuses).toEqual(["complete"]);
+
+    const abnormalServer = new FakeSocket();
+    const abnormalUpstream = new FakeSocket();
+    const abnormal: string[] = [];
+    bridgeSttSockets(
+      abnormalServer as unknown as WebSocket,
+      abnormalUpstream as unknown as WebSocket,
+      10_000,
+      (status) => abnormal.push(status),
+    );
+    abnormalUpstream.dispatchEvent(
+      new CloseEvent("close", { code: 1011, wasClean: false }),
+    );
+    abnormalUpstream.dispatchEvent(new Event("error"));
+    expect(abnormal).toEqual(["failed"]);
+
+    const failingServer = new FakeSocket();
+    const failingUpstream = new FakeSocket();
+    failingUpstream.throwOnSend = true;
+    const failures: string[] = [];
+    bridgeSttSockets(
+      failingServer as unknown as WebSocket,
+      failingUpstream as unknown as WebSocket,
+      10_000,
+      (status) => failures.push(status),
+    );
+    failingServer.dispatchEvent(new MessageEvent("message", { data: "audio" }));
+    failingServer.dispatchEvent(new Event("error"));
+    expect(failures).toEqual(["failed"]);
+
+    const timedServer = new FakeSocket();
+    const timedUpstream = new FakeSocket();
+    const timed: string[] = [];
+    bridgeSttSockets(
+      timedServer as unknown as WebSocket,
+      timedUpstream as unknown as WebSocket,
+      1,
+      (status) => timed.push(status),
+    );
+    await Bun.sleep(5);
+    expect(timed).toEqual(["complete"]);
+  });
+
   test("pins the conservative managed Deepgram reservation price", async () => {
     const config = JSON.parse(
       await Bun.file("wrangler.jsonc").text(),
@@ -162,6 +282,97 @@ describe("managed STT sessions", () => {
       )
       .first<{ count: number }>();
     expect(count?.count).toBe(1);
+  });
+
+  test("releases a new admission when D1 session creation fails", async () => {
+    const tracker = admissionTracker();
+    const failing = {
+      prepare(query: string) {
+        if (!query.includes("INSERT INTO managed_stt_sessions"))
+          return database.prepare(query);
+        return {
+          bind: () => ({
+            run: async () => {
+              throw new Error("simulated D1 write failure");
+            },
+          }),
+        };
+      },
+    } as unknown as D1Database;
+    const response = await request(
+      "pro",
+      { ...validRequest, idempotencyKey: "desktop:d1-failure:1" },
+      { DB: failing, STT_ADMISSION: tracker.namespace },
+    );
+    expect(response.status).toBe(503);
+    expect(tracker.releases()).toBe(1);
+  });
+
+  test("bounds upstream connection time and releases failed sessions", async () => {
+    for (const failure of ["provider", "timeout"] as const) {
+      const tracker = admissionTracker();
+      const idempotencyKey = `desktop:${failure}:release`;
+      const created = await request(
+        "pro",
+        { ...validRequest, idempotencyKey },
+        { STT_ADMISSION: tracker.namespace },
+      );
+      const { sessionId } = (await created.json()) as { sessionId: string };
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = async (_input, init) => {
+        if (failure === "provider") throw new Error("provider unavailable");
+        return new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () =>
+            reject(init.signal?.reason),
+          );
+        });
+      };
+      try {
+        const response = await stream("pro", sessionId, {
+          STT_ADMISSION: tracker.namespace,
+          STT_UPSTREAM_CONNECT_TIMEOUT_MS:
+            failure === "timeout" ? "1" : "10000",
+        });
+        expect(response.status).toBe(502);
+        expect(tracker.releases()).toBe(1);
+        const row = await database
+          .prepare("SELECT status FROM managed_stt_sessions WHERE id = ?1")
+          .bind(sessionId)
+          .first();
+        expect(row?.status).toBe("failed");
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    }
+  });
+
+  test("releases admission when entitlement D1 fails during socket claim", async () => {
+    const tracker = admissionTracker();
+    const created = await request(
+      "pro",
+      { ...validRequest, idempotencyKey: "desktop:entitlement-failure" },
+      { STT_ADMISSION: tracker.namespace },
+    );
+    const { sessionId } = (await created.json()) as { sessionId: string };
+    const failing = {
+      prepare(query: string) {
+        if (!query.includes("FROM entitlements"))
+          return database.prepare(query);
+        return {
+          bind: () => ({
+            first: async () => {
+              throw new Error("simulated entitlement read failure");
+            },
+          }),
+        };
+      },
+    } as unknown as D1Database;
+    const response = await stream("pro", sessionId, {
+      DB: failing,
+      STT_ADMISSION: tracker.namespace,
+    });
+    expect(response.status).toBe(503);
+    expect(tracker.releases()).toBe(1);
   });
 
   test("scopes the same idempotency key to each Firebase UID", async () => {
@@ -280,5 +491,46 @@ describe("managed STT sessions", () => {
         })
       ).status,
     ).toBe(400);
+  });
+
+  test("accepts only provider-compatible physical Omi audio contracts", async () => {
+    for (const body of [
+      {
+        ...validRequest,
+        idempotencyKey: "desktop:codec:pcm8",
+        sampleRate: 8000,
+      },
+      {
+        ...validRequest,
+        idempotencyKey: "desktop:codec:opus320",
+        encoding: "opus",
+        sampleRate: 16000,
+        channels: 1,
+      },
+    ]) {
+      expect((await request("pro", body)).status).toBe(201);
+    }
+
+    for (const body of [
+      {
+        ...validRequest,
+        idempotencyKey: "desktop:codec:opus-stereo",
+        encoding: "opus",
+        channels: 2,
+      },
+      {
+        ...validRequest,
+        idempotencyKey: "desktop:codec:opus48",
+        encoding: "opus",
+        sampleRate: 48000,
+      },
+      {
+        ...validRequest,
+        idempotencyKey: "desktop:codec:pcm44",
+        sampleRate: 44100,
+      },
+    ]) {
+      expect((await request("pro", body)).status).toBe(400);
+    }
   });
 });

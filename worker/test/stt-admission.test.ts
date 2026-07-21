@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { Miniflare } from "miniflare";
 
 const instances: Miniflare[] = [];
+const tokens = new Map<Miniflare, Map<string, string>>();
 
 const createAdmission = async (vars: Record<string, string> = {}) => {
   const bundle = await Bun.build({
@@ -25,23 +26,64 @@ const createAdmission = async (vars: Record<string, string> = {}) => {
       STT_GLOBAL_SECONDS_BUDGET: "9000",
       STT_UID_COST_BUDGET_MICROUSD: "150000",
       STT_GLOBAL_COST_BUDGET_MICROUSD: "750000",
+      STT_CLAIM_DEADLINE_SECONDS: "60",
       ...vars,
     },
   });
   instances.push(instance);
+  tokens.set(instance, new Map());
   return instance;
 };
 
-const admit = (instance: Miniflare, body: Record<string, unknown>) =>
-  instance.dispatchFetch("https://admission.test/admit", {
+const admit = async (instance: Miniflare, body: Record<string, unknown>) => {
+  const response = await instance.dispatchFetch(
+    "https://admission.test/admit",
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    },
+  );
+  if (response.ok) {
+    const result = (await response.clone().json()) as {
+      acquisitionToken?: string;
+    };
+    if (result.acquisitionToken)
+      tokens
+        .get(instance)
+        ?.set(String(body.sessionId), result.acquisitionToken);
+  }
+  return response;
+};
+
+const release = (
+  instance: Miniflare,
+  sessionId: string,
+  uid: string,
+  acquisitionToken = tokens.get(instance)?.get(sessionId),
+) =>
+  instance.dispatchFetch("https://admission.test/release", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
+    body: JSON.stringify({ sessionId, uid, acquisitionToken }),
+  });
+
+const claim = (
+  instance: Miniflare,
+  sessionId: string,
+  uid: string,
+  acquisitionToken = tokens.get(instance)?.get(sessionId),
+) =>
+  instance.dispatchFetch("https://admission.test/claim", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ sessionId, uid, acquisitionToken }),
   });
 
 afterEach(async () => {
   await Promise.all(instances.map((instance) => instance.dispose()));
   instances.length = 0;
+  tokens.clear();
 });
 
 describe("managed STT admission", () => {
@@ -88,4 +130,149 @@ describe("managed STT admission", () => {
     });
     expect(overBudget.status).toBe(200);
   });
+
+  test("releases in-flight capacity idempotently while retaining budget", async () => {
+    const instance = await createAdmission({ STT_UID_IN_FLIGHT_LIMIT: "1" });
+    const body = {
+      sessionId: "released",
+      uid: "alpha",
+      reservedSeconds: 900,
+      costBudgetMicrousd: 75000,
+    };
+    expect((await admit(instance, body)).status).toBe(200);
+    expect((await release(instance, body.sessionId, "beta")).status).toBe(200);
+    expect(
+      (
+        await admit(instance, {
+          ...body,
+          sessionId: "still-blocked",
+          reservedSeconds: 1,
+          costBudgetMicrousd: 1,
+        })
+      ).status,
+    ).toBe(429);
+    const duplicateReleases = await Promise.all([
+      release(instance, body.sessionId, body.uid),
+      release(instance, body.sessionId, body.uid),
+    ]);
+    expect(duplicateReleases.map((response) => response.status)).toEqual([
+      200, 200,
+    ]);
+    const reacquired = await admit(instance, body);
+    expect(reacquired.status).toBe(200);
+    expect(await reacquired.json()).toMatchObject({
+      duplicate: true,
+      reacquired: true,
+    });
+    expect(
+      (
+        await admit(instance, {
+          ...body,
+          sessionId: "blocked-by-reacquired",
+          reservedSeconds: 1,
+          costBudgetMicrousd: 1,
+        })
+      ).status,
+    ).toBe(429);
+    expect((await release(instance, body.sessionId, body.uid)).status).toBe(
+      200,
+    );
+    expect(
+      (
+        await admit(instance, {
+          ...body,
+          sessionId: "next",
+          reservedSeconds: 1,
+          costBudgetMicrousd: 1,
+        })
+      ).status,
+    ).toBe(200);
+    expect(
+      (
+        await admit(instance, {
+          ...body,
+          sessionId: "over-budget",
+          reservedSeconds: 900,
+        })
+      ).status,
+    ).toBe(429);
+  });
+
+  test("releases an abandoned claim deadline but preserves a claimed session", async () => {
+    const instance = await createAdmission({
+      STT_UID_IN_FLIGHT_LIMIT: "1",
+      STT_CLAIM_DEADLINE_SECONDS: "1",
+    });
+    const body = {
+      sessionId: "abandoned",
+      uid: "alpha",
+      reservedSeconds: 900,
+      costBudgetMicrousd: 75000,
+    };
+    expect((await admit(instance, body)).status).toBe(200);
+    await Bun.sleep(1100);
+    expect(
+      (
+        await admit(instance, {
+          ...body,
+          sessionId: "after-alarm",
+          reservedSeconds: 1,
+          costBudgetMicrousd: 1,
+        })
+      ).status,
+    ).toBe(200);
+    expect((await claim(instance, "after-alarm", "alpha")).status).toBe(200);
+    await Bun.sleep(1100);
+    expect(
+      (
+        await admit(instance, {
+          ...body,
+          sessionId: "still-blocked",
+          reservedSeconds: 1,
+          costBudgetMicrousd: 1,
+        })
+      ).status,
+    ).toBe(429);
+  }, 5000);
+
+  test("rejects a late claim and ignores a delayed release from an old acquisition", async () => {
+    const instance = await createAdmission({
+      STT_UID_IN_FLIGHT_LIMIT: "1",
+      STT_CLAIM_DEADLINE_SECONDS: "1",
+    });
+    const body = {
+      sessionId: "generation",
+      uid: "alpha",
+      reservedSeconds: 900,
+      costBudgetMicrousd: 75000,
+    };
+    const first = (await (await admit(instance, body)).json()) as {
+      acquisitionToken: string;
+    };
+    await Bun.sleep(1100);
+    const lateClaim = await claim(
+      instance,
+      body.sessionId,
+      body.uid,
+      first.acquisitionToken,
+    );
+    expect(await lateClaim.json()).toEqual({ claimed: false });
+    const second = (await (await admit(instance, body)).json()) as {
+      acquisitionToken: string;
+      reacquired: boolean;
+    };
+    expect(second.reacquired).toBe(true);
+    expect(second.acquisitionToken).not.toBe(first.acquisitionToken);
+    await release(instance, body.sessionId, body.uid, first.acquisitionToken);
+    expect(
+      (
+        await admit(instance, {
+          ...body,
+          sessionId: "still-blocked-by-new-generation",
+          reservedSeconds: 1,
+          costBudgetMicrousd: 1,
+        })
+      ).status,
+    ).toBe(429);
+  }, 5000);
 });
