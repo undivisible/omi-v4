@@ -1,7 +1,7 @@
 # Omi v4 living plan
 
 Updated: 2026-07-21
-Status: architecture locked; implementation in progress
+Status: architecture locked; v0 implementation and platform validation in progress
 
 ## Product
 
@@ -49,18 +49,21 @@ The reusable memory engine lives in the public [`tschk/zkr`](https://github.com/
 ## Active build checklist
 
 - [x] Verify the `zkr` evidence, temporal-claim, profile, review, and retrieval core.
-- [x] Verify the Flutter gradient shell, onboarding, chat, Memory, Currents, Devices, Setup, and Account screens.
+- [ ] Verify the Flutter gradient shell and every onboarding, navigation, and product surface on target platforms.
 - [x] Verify the Bun/Hono Worker contracts, D1 schema, auth boundary, and channel webhook boundaries.
-- [ ] Integrate the Rinf hub with typed Dart/Rust signals and the memory engine.
-- [ ] Wire Firebase Auth, D1 persistence, Telegram, Blooio, Omi hardware, and model routes against real credentials and devices.
+- [ ] Complete production Dart consumption of generated Rinf signals and published `zkr` memory storage/search.
+- [x] Implement Worker D1 persistence, Stripe entitlement, Telegram linking/ingestion, and Blooio linking/ingestion with fail-closed signatures.
+- [ ] Route the implemented mobile Omi BLE discovery/connection/audio stream through bounded Rinf events into sourced memory.
+- [ ] Prove Android, iOS without signing, macOS, Windows, and web release builds in CI and on available local hosts.
+- [ ] Wire Firebase Auth, real channel delivery, physical Omi hardware, desktop permissions/computer use, and model routes against real credentials and devices.
 
 ## Initial modules
 
 | File | Owns | Reuses |
 | --- | --- | --- |
-| `app/lib/features/memory.dart` | Personal Memory state and screens | upstream Omi domain language and source evidence |
-| `app/lib/features/currents.dart` | Recommendation state, ranking display, feedback | `omi-v3/app/src/lib/home-cards.ts` behavior |
-| `app/lib/features/device.dart` | Omi pairing, BLE/audio status, phone capture | upstream Flutter device and capture services |
+| `app/lib/memory/` and `app/lib/features/memory_screen.dart` | Personal Memory state and screens | upstream Omi domain language and source evidence |
+| `app/lib/currents/` and `app/lib/features/currents_screen.dart` | Recommendation state, ranking display, feedback | `omi-v3/app/src/lib/home-cards.ts` behavior |
+| `app/lib/device/` and `app/lib/features/device_screen.dart` | Omi pairing, BLE/audio status, phone capture | upstream Flutter device and capture services |
 | `app/native/hub/src/lib.rs` | Rinf signals, `rx4`, `rs_ai`, computer-use orchestration | `rotary` and `rs_peekaboo` crates; no fork |
 | `worker/src/index.ts` | Authenticated API, D1 memory, channels, plans, managed inference | `omi-v3/desktop/cloud-api` |
 
@@ -81,22 +84,24 @@ Native builds link the full hub. Web builds use the same signal schema but compi
 
 1. Sign in with phone OTP, Google, or Apple; explain memory and AI consent before processing personal data.
 2. Ask three conversational questions: identity, current priorities, and what the user wants Omi to notice or help with.
-3. Require Accessibility, Microphone, Screen Recording, and Full Disk Access on desktop, then scan and show editable “what I understand about you” evidence.
+3. Require each platform's applicable core desktop capabilities, then scan and show editable “what I understand about you” evidence.
 4. Teach voice by asking the user to say “What are my tasks?” and render the real tasks returned by the assistant.
 5. Continue into the main screen with setup tasks for Calendar, Reminders, Contacts, Location, Telegram, Blooio, Notion, providers, and Omi hardware.
 
 Use upstream Flutter's mature consent, name, language, permission, knowledge-graph, and device flows. Use `omi-v3`'s gradient profile conversation as presentation, not application code.
 
-## Desktop permissions
+## Desktop capabilities
 
-Onboarding is blocked until these four core permissions are granted:
+Model native access as typed states: `unsupported`, `notApplicable`, `unknown`, `notDetermined`, `denied`, `requiresSettings`, `requiresSelection`, `limited`, and `granted`. Onboarding blocks only when a capability is required on the current platform and has not reached an acceptable state.
 
-| Permission | Product reason |
-| --- | --- |
-| Accessibility | Read interface structure and perform approved computer-use actions |
-| Microphone | Voice assistant and meeting/capture input |
-| Screen Recording | Screen context, visual memory, and action grounding |
-| Full Disk Access | Broad file and workspace discovery for the second brain |
+| Capability | macOS direct distribution | Windows | Product reason |
+| --- | --- | --- | --- |
+| Accessibility | Required TCC grant | UI Automation is limited by process integrity; no equivalent grant | Read interface structure and perform approved computer-use actions |
+| Microphone | Required TCC grant | Require the applicable privacy/capture path | Voice assistant and meeting/capture input |
+| Screen capture | Required TCC grant | Require a window/display selection for each capture session | Screen context, visual memory, and action grounding |
+| Broad file access | Require concrete-root access and guide Full Disk Access | Report actual ACL scope as limited; no equivalent grant | File and workspace discovery for the second brain |
+
+The macOS v0 is notarized direct distribution without App Sandbox because broad workspace discovery conflicts with sandbox scope. Windows remains `asInvoker`; do not request elevation or `uiAccess` merely to satisfy onboarding.
 
 Calendar, Reminders, Contacts, and Location remain prominent post-onboarding setup tasks. Camera and Photos are omitted until a concrete feature needs them.
 
@@ -256,17 +261,17 @@ Keep `grok-composer-2.5-fast` only when the authenticated xAI catalog returns it
 4. Import required Firestore history explicitly; never maintain permanent dual writes.
 5. Add Vectorize, R2, Queues, Workflows, or Containers only when a measured feature needs each one.
 
-## Build sprint — first few hours
+## Current release train
 
-The first sprint targets roughly 80% of the visible product and architectural seams. It does not claim three days of validation before those tests happen.
+| Slice | Implemented | Proof still required |
+| --- | --- | --- |
+| Product shell | Gradient Flutter navigation, onboarding, chat, Memory, Currents, Devices, Setup, and Account | Rendered accessibility/responsive audit on every target |
+| Native hub | Generated Rinf signals, bounded/reaped command registry, ordered configuration, nonblocking/idempotent `zkr` capture/search, cancellation, bounded audio sessions, `rx4`, and `rs_peekaboo` | Production Dart configuration/event consumption, native lifecycle stress, and Rinf generation-drift CI |
+| Mobile relay | Omi-filtered BLE discovery, connect/discover, battery/codec reads, audio subscription, disconnect | Forward bounded audio into Rinf and sourced memory; physical iOS/Android sessions and background recovery |
+| SaaS backend | Firebase-token boundary, D1 memory/settings, Stripe entitlements, Telegram, Blooio, and cited retrieval | Real Firebase/Stripe/channel credentials, outbound delivery, retries, and preview deployment |
+| Platform packages | Web release, Android release APK, and universal macOS 12 release app proven locally | iOS no-sign release, Windows release, then CI artifacts for every target |
 
-| Window | Deliverable |
-| --- | --- |
-| Hour 0–1 | Create private personal `omi-v4` repository; trim/fork the upstream Flutter shell; add Rinf hub and Worker workspace |
-| Hour 1–2 | Apply gradient shell, navigation, onboarding conversation, Firebase auth, and public/sign-in portal routes |
-| Hour 2–4 | Wire D1 memory, Currents contracts, Rinf chat streaming, model settings, and two-plan entitlement UI |
-| Hour 4–6 | Bring over mobile Omi BLE/audio streaming; add Telegram and Blooio Worker modules |
-| Hour 6–8 | Add desktop both-Shift adapter, `rx4` computer-use approval, website content, and full build/test pass |
+Do not count a compiled adapter as a deployed integration. Credentialed provider tests, physical-device tests, release packages, CI, and public deployment remain separate proof layers.
 
 ## Three validation days
 
@@ -306,10 +311,13 @@ The first sprint targets roughly 80% of the visible product and architectural se
 - `rx4` and `rs_peekaboo` need feature-gated audits for mobile and wasm linking.
 - `omi-v3` implements MiMo ASR/translation but not managed MiMo Pro chat, Telegram, Grok voice, or a complete Recommendation Memory lifecycle.
 - Cloudflare bindings and secrets in the reference backend are placeholders; deployment proof starts only after real preview resources exist.
+- Rinf 8.10's bundled Cargokit uses an API removed by Gradle 9; Android stays on the latest Flutter-supported Gradle 8 line until Rinf publishes a compatible release.
+- Flutter 3.44.6 macOS universal-framework verification currently conflicts with the newer `lipo -verify_arch` argument form; keep any local toolchain shim out of the repository and verify CI on a supported Xcode image.
+- OpenClaw and Hermes evolve independently. Their adapters need host-contract tests and durable ingestion; the neutral `zkr` crate must not absorb agent-specific lifecycle behavior.
 
 ## Immediate next task
 
-Create the private personal GitHub repository, copy the upstream Flutter application into it without history pollution, remove unrelated product surfaces, add Rinf and the Worker workspace, then prove Android, iOS, macOS, Windows, and web builds. Estimated focused implementation time: 60–90 minutes before feature wiring.
+Commit and push the audited Flutter/Rinf/BLE/platform slices, then prove CI artifacts and the remaining iOS no-sign and Windows release builds. After CI is green, implement real Firebase sign-in and preview Cloudflare bindings before calling the product deployed. Estimated focused time for the current commit/CI checkpoint: 30–60 minutes, dominated by native CI builds.
 
 ## Progress log
 
@@ -318,3 +326,6 @@ Create the private personal GitHub repository, copy the upstream Flutter applica
 - 2026-07-21: Locked desktop-first assistant roles, mobile hardware relay, web memory portal, four-permission desktop gate, voice-created first tasks, deferred connection tasks, and channel-triggered desktop actions.
 - 2026-07-21: Added task-scoped authority, ask-when-blocked behavior, chat-controlled typed settings, progressive tool disclosure, and hybrid direct/programmatic tool execution.
 - 2026-07-21: Added evidence-backed temporal claims, bounded hot profile, retrieval packs, inspected skills, `rs_gbrain` reuse limits, and cited Daily Reviews with separately validated memory/task/skill candidates.
+- 2026-07-21: Published `zkr 0.1.1`, integrated its source/evidence retrieval and projection lifecycle into the Rinf hub, implemented mobile BLE relay and Worker SaaS/channel boundaries, and moved the roadmap from scaffolding to release-build and credentialed-integration proof.
+- 2026-07-21: Replaced the provisional four-boolean desktop permission gate with platform-aware capability states; macOS uses TCC/direct distribution while Windows uses limited UI Automation, privacy-aware microphone access, and per-session capture selection.
+- 2026-07-21: Published `zkr 0.1.2` with idempotent ingestion and hardened OpenClaw/Hermes plugins; audited the Omi runtime for bounded tasks, shutdown, cancellation, audio lifecycle, configuration ordering, and retry-safe capture.
