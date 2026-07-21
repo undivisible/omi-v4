@@ -1,7 +1,9 @@
 import { Hono } from "hono";
 import { requireAuth } from "./auth";
 import desktopAuth from "./desktop-auth";
+import { reconcileManagedAssistantRequests } from "./assistant";
 import { deliverDueChannelMessages } from "./delivery";
+export { AssistantAdmission } from "./assistant-admission";
 export { DeliveryCoordinator } from "./delivery";
 import routes from "./routes";
 import type { AppEnv } from "./types";
@@ -25,6 +27,11 @@ export default {
     env: AppEnv["Bindings"],
     context: ExecutionContext,
   ) {
-    context.waitUntil(deliverDueChannelMessages(env));
+    context.waitUntil(
+      Promise.all([
+        deliverDueChannelMessages(env),
+        reconcileManagedAssistantRequests(env),
+      ]).then(() => undefined),
+    );
   },
 };

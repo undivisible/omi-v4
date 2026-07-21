@@ -1,6 +1,7 @@
 export type Bindings = {
   DB: D1Database;
   DELIVERY_COORDINATOR: DurableObjectNamespace;
+  ASSISTANT_ADMISSION: DurableObjectNamespace;
   FIREBASE_PROJECT_ID: string;
   TELEGRAM_WEBHOOK_SECRET?: string;
   TELEGRAM_BOT_TOKEN?: string;
@@ -12,6 +13,18 @@ export type Bindings = {
   APP_URL?: string;
   FIREBASE_SERVICE_ACCOUNT_EMAIL?: string;
   FIREBASE_SERVICE_ACCOUNT_PRIVATE_KEY?: string;
+  MIMO_API_KEY?: string;
+  MIMO_CHAT_COMPLETIONS_URL?: string;
+  MIMO_MODEL?: string;
+  MIMO_OUTPUT_MICROUSD_PER_MILLION_TOKENS?: string;
+  MIMO_INPUT_MICROUSD_PER_MILLION_TOKENS?: string;
+  MIMO_BUDGET_WINDOW_SECONDS?: string;
+  MIMO_UID_IN_FLIGHT_LIMIT?: string;
+  MIMO_GLOBAL_IN_FLIGHT_LIMIT?: string;
+  MIMO_UID_TOKEN_BUDGET?: string;
+  MIMO_GLOBAL_TOKEN_BUDGET?: string;
+  MIMO_UID_COST_BUDGET_MICROUSD?: string;
+  MIMO_GLOBAL_COST_BUDGET_MICROUSD?: string;
 };
 
 export type Auth = { uid: string; email: string | null };

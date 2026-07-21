@@ -1,4 +1,5 @@
 import { Hono, type Context } from "hono";
+import assistant from "./assistant";
 import billing from "./billing";
 import { dispatchChannelMessage, dispatchChannelUnlink } from "./delivery";
 import type {
@@ -13,6 +14,7 @@ import type {
 
 const routes = new Hono<AppEnv>();
 
+routes.route("/", assistant);
 routes.route("/payments/stripe", billing);
 
 const text = (value: unknown, limit: number): string | null =>

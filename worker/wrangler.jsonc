@@ -3,12 +3,30 @@
   "name": "omi-v4-api",
   "main": "src/index.ts",
   "compatibility_date": "2026-07-21",
+  "compatibility_flags": ["nodejs_compat"],
+  "vars": {
+    "MIMO_CHAT_COMPLETIONS_URL": "https://api.xiaomimimo.com/v1/chat/completions",
+    "MIMO_MODEL": "mimo-v2.5-pro",
+    "MIMO_INPUT_MICROUSD_PER_MILLION_TOKENS": "435000",
+    "MIMO_OUTPUT_MICROUSD_PER_MILLION_TOKENS": "870000",
+    "MIMO_BUDGET_WINDOW_SECONDS": "3600",
+    "MIMO_UID_IN_FLIGHT_LIMIT": "2",
+    "MIMO_GLOBAL_IN_FLIGHT_LIMIT": "32",
+    "MIMO_UID_TOKEN_BUDGET": "100000",
+    "MIMO_GLOBAL_TOKEN_BUDGET": "2000000",
+    "MIMO_UID_COST_BUDGET_MICROUSD": "1000000",
+    "MIMO_GLOBAL_COST_BUDGET_MICROUSD": "20000000"
+  },
   "triggers": { "crons": ["* * * * *"] },
   "durable_objects": {
     "bindings": [
       {
         "name": "DELIVERY_COORDINATOR",
         "class_name": "DeliveryCoordinator"
+      },
+      {
+        "name": "ASSISTANT_ADMISSION",
+        "class_name": "AssistantAdmission"
       }
     ]
   },
@@ -16,6 +34,10 @@
     {
       "tag": "v1",
       "new_sqlite_classes": ["DeliveryCoordinator"]
+    },
+    {
+      "tag": "v2",
+      "new_sqlite_classes": ["AssistantAdmission"]
     }
   ],
   "d1_databases": [
