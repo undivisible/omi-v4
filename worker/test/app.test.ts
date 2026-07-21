@@ -37,4 +37,13 @@ describe("public boundaries", () => {
     );
     expect(response.status).toBe(401);
   });
+
+  test("Stripe webhook fails closed without configuration", async () => {
+    const response = await app.request(
+      "/v1/webhooks/stripe",
+      { method: "POST" },
+      {},
+    );
+    expect(response.status).toBe(401);
+  });
 });

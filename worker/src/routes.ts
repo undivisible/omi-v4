@@ -1,4 +1,5 @@
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
+import billing from "./billing";
 import type {
   AppEnv,
   Channel,
@@ -10,6 +11,8 @@ import type {
 } from "./types";
 
 const routes = new Hono<AppEnv>();
+
+routes.route("/payments/stripe", billing);
 
 const text = (value: unknown, limit: number): string | null =>
   typeof value === "string" && value.trim().length > 0 && value.length <= limit
@@ -60,6 +63,69 @@ const sourceKinds = new Set([
   "integration",
   "user_correction",
 ]);
+
+const retrieveMemory = async (context: Context<AppEnv>) => {
+  const body =
+    context.req.method === "POST" ? await json(context.req.raw) : null;
+  const query = text(body?.query ?? context.req.query("q"), 500);
+  const limit = Number(body?.limit ?? context.req.query("limit") ?? 12);
+  if (!query || !Number.isSafeInteger(limit) || limit < 1 || limit > 50)
+    return context.json({ error: "Invalid retrieval" }, 400);
+  const match = query
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 16)
+    .map((term) => `"${term.replaceAll('"', '""')}"`)
+    .join(" AND ");
+  const rows = await context.env.DB.prepare(
+    `SELECT c.id, c.content, bm25(memory_claims_fts) AS score
+     FROM memory_claims_fts
+     JOIN memory_claims c ON c.id = memory_claims_fts.id AND c.uid = memory_claims_fts.uid
+     WHERE memory_claims_fts.uid = ?1 AND memory_claims_fts MATCH ?2
+       AND c.status = 'accepted' AND c.retracted_at IS NULL
+     ORDER BY score, c.recorded_at DESC LIMIT ?3`,
+  )
+    .bind(context.get("auth").uid, match, limit)
+    .all();
+  const candidates = rows.results ?? [];
+  const citations =
+    candidates.length === 0
+      ? []
+      : await context.env.DB.batch(
+          candidates.map((row) =>
+            context.env.DB.prepare(
+              `SELECT ce.evidence_id FROM memory_claim_evidence ce
+           JOIN memory_evidence e ON e.id = ce.evidence_id AND e.uid = ce.uid
+           JOIN memory_source_revisions r ON r.id = e.source_revision_id AND r.uid = e.uid
+           JOIN memory_sources s ON s.id = r.source_id AND s.uid = r.uid
+           WHERE ce.claim_id = ?1 AND ce.uid = ?2 AND s.tombstoned_at IS NULL`,
+            ).bind(row.id, context.get("auth").uid),
+          ),
+        );
+  const items = candidates.flatMap((row, index) => {
+    const evidenceIds = (citations[index]?.results ?? []).map((evidence) =>
+      String((evidence as Record<string, unknown>).evidence_id),
+    );
+    return evidenceIds.length === 0
+      ? []
+      : [
+          {
+            memory: { kind: "claim", id: String(row.id) },
+            excerpt: String(row.content),
+            relevance_basis_points: Math.max(1, 10_000 - index * 500),
+            evidence_ids: evidenceIds,
+          },
+        ];
+  });
+  return context.json({
+    query,
+    items,
+    gaps: items.length === 0 ? ["No cited memory matched the query."] : [],
+  });
+};
+
+routes.get("/memory/retrieve", retrieveMemory);
+routes.post("/memory/retrieve", retrieveMemory);
 
 routes.get("/me", async (context) => {
   const auth = context.get("auth");
@@ -188,6 +254,10 @@ routes.post("/memories", async (context) => {
          (id, uid, content, subject, predicate, value, valid_from, valid_to, recorded_at)
        VALUES (?1, ?2, ?3, ?4, ?5, ?3, ?6, ?7, ?8)`,
     ).bind(claimId, uid, content, subject, predicate, validFrom, validTo, now),
+    context.env.DB.prepare(
+      `INSERT INTO memory_claims_fts (id, uid, content, subject, predicate, value)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?3)`,
+    ).bind(claimId, uid, content, subject, predicate),
     context.env.DB.prepare(
       "INSERT INTO memory_claim_evidence (uid, claim_id, evidence_id, relation, confidence_basis_points) VALUES (?1, ?2, ?3, 'supports', 10000)",
     ).bind(uid, claimId, evidenceId),

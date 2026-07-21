@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { Hono } from "hono";
 import { Miniflare } from "miniflare";
 import routes from "../src/routes";
-import type { AppEnv } from "../src/types";
+import type { AppEnv, Bindings } from "../src/types";
 
 const miniflare = new Miniflare({
   modules: true,
@@ -12,14 +12,23 @@ const miniflare = new Miniflare({
 
 let database: D1Database;
 
-const request = (uid: string, path: string, init?: RequestInit) => {
+const request = (
+  uid: string,
+  path: string,
+  init?: RequestInit,
+  environment: Partial<Bindings> = {},
+) => {
   const app = new Hono<AppEnv>();
   app.use("*", async (context, next) => {
     context.set("auth", { uid, email: `${uid}@example.test` });
     await next();
   });
   app.route("/", routes);
-  return app.request(path, init, { DB: database, FIREBASE_PROJECT_ID: "test" });
+  return app.request(path, init, {
+    DB: database,
+    FIREBASE_PROJECT_ID: "test",
+    ...environment,
+  });
 };
 
 beforeAll(async () => {
@@ -36,6 +45,8 @@ beforeAll(async () => {
   await migration("migrations/0001_initial.sql");
   await migration("migrations/0002_memory_and_policy.sql");
   await migration("migrations/0003_align_kr_model.sql");
+  await migration("migrations/0004_saas_foundations.sql");
+  await migration("migrations/0005_memory_search.sql");
   const now = Date.now();
   await database
     .prepare(
@@ -65,6 +76,7 @@ describe("memory routes", () => {
     const identifiers = (await created.json()) as {
       id: string;
       sourceId: string;
+      claimId: string;
     };
 
     const alpha = await request("alpha", "/memories");
@@ -75,6 +87,25 @@ describe("memory routes", () => {
     expect(alphaBody.memories).toHaveLength(1);
     expect(alphaBody.memories[0]?.id).toBe(identifiers.id);
     expect(alphaBody.memories[0]?.evidence).toHaveLength(1);
+
+    const retrieval = await request("alpha", "/memory/retrieve", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ query: "concise status", limit: 3 }),
+    });
+    expect(retrieval.status).toBe(200);
+    expect((await retrieval.json()) as unknown).toEqual({
+      query: "concise status",
+      items: [
+        {
+          memory: { kind: "claim", id: identifiers.claimId },
+          excerpt: "Alpha prefers concise status reports.",
+          relevance_basis_points: 10000,
+          evidence_ids: [alphaBody.memories[0]?.evidence[0]?.id],
+        },
+      ],
+      gaps: [],
+    });
 
     const revision = await request(
       "alpha",
@@ -271,5 +302,59 @@ describe("channel routes", () => {
       action: "channel.unlinked",
       target_id: "telegram",
     });
+  });
+});
+
+describe("billing routes", () => {
+  test("ties Stripe Checkout and Portal sessions to the Firebase UID", async () => {
+    const originalFetch = globalThis.fetch;
+    const requests: Array<{ url: string; body: URLSearchParams }> = [];
+    globalThis.fetch = async (input, init) => {
+      requests.push({
+        url: String(input),
+        body: new URLSearchParams(String(init?.body)),
+      });
+      return Response.json({
+        id: `session-${requests.length}`,
+        url: "https://stripe.test/session",
+      });
+    };
+    try {
+      const environment = {
+        STRIPE_SECRET_KEY: "sk_test",
+        STRIPE_PRO_PRICE_ID: "price_pro",
+        APP_URL: "https://app.example.test",
+      };
+      const checkout = await request(
+        "alpha",
+        "/payments/stripe/checkout",
+        { method: "POST" },
+        environment,
+      );
+      expect(checkout.status).toBe(201);
+      expect(requests[0]?.body.get("client_reference_id")).toBe("alpha");
+      expect(
+        requests[0]?.body.get("subscription_data[metadata][firebase_uid]"),
+      ).toBe("alpha");
+      await database
+        .prepare(
+          `INSERT INTO entitlements
+             (uid, plan, status, stripe_customer_id, updated_at)
+           VALUES ('alpha', 'pro', 'active', 'cus_alpha', ?1)`,
+        )
+        .bind(Date.now())
+        .run();
+      const portal = await request(
+        "alpha",
+        "/payments/stripe/portal",
+        { method: "POST" },
+        environment,
+      );
+      expect(portal.status).toBe(201);
+      expect(requests[1]?.body.get("customer")).toBe("cus_alpha");
+      expect(requests[1]?.url).toEndWith("/billing_portal/sessions");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 });

@@ -3,6 +3,10 @@ export type Bindings = {
   FIREBASE_PROJECT_ID: string;
   TELEGRAM_WEBHOOK_SECRET?: string;
   BLOOIO_WEBHOOK_SIGNING_SECRET?: string;
+  STRIPE_SECRET_KEY?: string;
+  STRIPE_PRO_PRICE_ID?: string;
+  STRIPE_WEBHOOK_SECRET?: string;
+  APP_URL?: string;
 };
 
 export type Auth = { uid: string; email: string | null };
