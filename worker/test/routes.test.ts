@@ -101,6 +101,28 @@ afterAll(async () => {
   await miniflare.dispose();
 });
 
+describe("setup health", () => {
+  test("reports readiness without returning credential values", async () => {
+    const response = await request("alpha", "/setup-health", undefined, {
+      TELEGRAM_WEBHOOK_SECRET: "telegram-webhook-secret",
+      TELEGRAM_BOT_TOKEN: "telegram-bot-secret",
+      MIMO_API_KEY: "mimo-secret",
+    });
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as Record<string, unknown>;
+    expect(body).toEqual({
+      worker: true,
+      firebase: true,
+      memory: true,
+      channels: { telegram: true, blooio: false },
+      billing: false,
+      models: { managedChat: true, managedStt: false },
+      desktopAuth: false,
+    });
+    expect(JSON.stringify(body)).not.toContain("secret");
+  });
+});
+
 describe("shared conversation routes", () => {
   test("append is UID-scoped, replayable, and conflict-safe", async () => {
     const append = (uid: string, value: string) =>

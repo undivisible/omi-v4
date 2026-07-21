@@ -147,6 +147,36 @@ routes.get("/me", async (context) => {
   return context.json({ ...auth, channels: bindings.results ?? [] });
 });
 
+routes.get("/setup-health", (context) => {
+  const configured = (value: string | undefined) => Boolean(value?.trim());
+  return context.json({
+    worker: true,
+    firebase: configured(context.env.FIREBASE_PROJECT_ID),
+    memory: true,
+    channels: {
+      telegram:
+        configured(context.env.TELEGRAM_WEBHOOK_SECRET) &&
+        configured(context.env.TELEGRAM_BOT_TOKEN),
+      blooio:
+        configured(context.env.BLOOIO_WEBHOOK_SIGNING_SECRET) &&
+        configured(context.env.BLOOIO_API_KEY),
+    },
+    billing:
+      configured(context.env.STRIPE_SECRET_KEY) &&
+      configured(context.env.STRIPE_PRO_PRICE_ID) &&
+      configured(context.env.STRIPE_WEBHOOK_SECRET) &&
+      configured(context.env.APP_URL),
+    models: {
+      managedChat: configured(context.env.MIMO_API_KEY),
+      managedStt: configured(context.env.DEEPGRAM_API_KEY),
+    },
+    desktopAuth:
+      configured(context.env.FIREBASE_SERVICE_ACCOUNT_EMAIL) &&
+      configured(context.env.FIREBASE_SERVICE_ACCOUNT_PRIVATE_KEY) &&
+      configured(context.env.APP_URL),
+  });
+});
+
 routes.get("/memories", async (context) => {
   const rows = await context.env.DB.prepare(
     `SELECT p.id, c.value, c.valid_from, c.valid_to, c.recorded_at, p.updated_at,
