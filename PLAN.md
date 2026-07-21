@@ -299,7 +299,7 @@ Keep `grok-composer-2.5-fast` only when the authenticated xAI catalog returns it
 | SaaS backend | Firebase-token boundary, D1 memory/settings, Stripe entitlements, Telegram, Blooio, cited retrieval, durable channel-to-desktop leases, and serialized outbound delivery | Real Firebase/Stripe/channel credentials and preview deployment |
 | Shared conversation | UID-scoped persistence, ordered replay, desktop channel dispatch, offline retry, and atomic outbound replies | Live app/web refresh and credentialed Telegram/Blooio proof |
 | Desktop voice | Both-Shift tap/hold/hands-free state machine, macOS/Windows PCM16 capture, permission-first managed STT, authority fencing, final transcript submission, acknowledged pre-EOS cancellation, and navigation/error cleanup | Physical macOS/Windows shortcut tests, Windows negotiated-format proof, and credentialed managed-STT proof |
-| Currents and reflection | Validated Current state model, native signal shape, memory evidence/review primitives, and empty-state UI | Candidate generation/ranking, D1 persistence, feedback/action lifecycle, outcome learning, and idempotent nightly Daily Review orchestration |
+| Currents and reflection | Cited candidate generation from live current-profile memory, deterministic ranking, D1 persistence, feedback, approval-bound action handoff, and outcome learning | Credentialed end-to-end action proof and idempotent nightly Daily Review orchestration |
 | Platform packages | Web release, Android release APK, universal macOS 12 release app, Windows release, and exact-head Android/iOS/macOS/Windows/web CI proof | Signed physical-device installation and release-channel distribution |
 
 Do not count a compiled adapter as a deployed integration. Credentialed provider tests, physical-device tests, release packages, CI, and public deployment remain separate proof layers.
@@ -346,11 +346,11 @@ Do not count a compiled adapter as a deployed integration. Credentialed provider
 - Flutter 3.44.6 macOS universal-framework verification currently conflicts with the newer `lipo -verify_arch` argument form; keep any local toolchain shim out of the repository and verify CI on a supported Xcode image.
 - OpenClaw and Hermes evolve independently. Their adapters need host-contract tests and durable ingestion; the neutral `zkr` crate must not absorb agent-specific lifecycle behavior.
 - Telegram and Blooio now feed the authenticated desktop assistant through a strict ordered lease and persist its reply into the shared replay before durable provider delivery; live provider credentials and foreground cross-client refresh remain unproved.
-- Currents currently has a validated state model and presentation shell only. No production candidate generator, persistence route, feedback learner, action handoff, or scheduled nightly reflection is wired.
+- Currents generates one idempotent cited recommendation from live current-profile memory when the surface loads; nightly reflection remains unwired.
 
 ## Immediate next task
 
-Prove managed/BYOK Deepgram with real credentials and a physical Omi on iOS and Android, including PCM8/PCM16/Opus, reconnect gaps, EOS, stop-before-EOS, and revocation. Next, prove the implemented Telegram/Blooio desktop round trip with real credentials, add foreground conversation refresh, then ship one evidence-backed Current through feedback and an approved action. Run combined multi-platform CI and separately prove Firebase/Cloudflare bindings before calling the product deployed. Add local STT only when `rs_ai_local` supplies a real supported provider; until then it fails closed. Keep nightly Daily Review orchestration as the first v1 follow-on unless it is required for the launch demo.
+Prove managed/BYOK Deepgram with real credentials and a physical Omi on iOS and Android, including PCM8/PCM16/Opus, reconnect gaps, EOS, stop-before-EOS, and revocation. Next, prove the implemented Telegram/Blooio desktop round trip and cited Current approval/outcome path with real credentials, then add foreground conversation refresh. Run combined multi-platform CI and separately prove Firebase/Cloudflare bindings before calling the product deployed. Add local STT only when `rs_ai_local` supplies a real supported provider; until then it fails closed. Keep nightly Daily Review orchestration as the first v1 follow-on unless it is required for the launch demo.
 
 ## Progress log
 
