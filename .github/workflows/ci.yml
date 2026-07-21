@@ -23,6 +23,34 @@ jobs:
       - run: flutter analyze
       - run: flutter test
       - run: flutter build web
+      - run: flutter build apk --release
+
+  flutter-apple-aot:
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - run: flutter build macos --release
+      - run: flutter build ios --release --no-codesign
+
+  flutter-windows-aot:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - run: flutter build windows --release
 
   worker:
     runs-on: ubuntu-latest
@@ -50,4 +78,3 @@ jobs:
       - run: cargo clippy --all-targets --all-features -- -D warnings
       - run: cargo check --all-targets --all-features
       - run: cargo test --all-features
-
