@@ -34,11 +34,14 @@ class _ChatScreenState extends State<ChatScreen> {
   StreamSubscription<int>? _authorityChanges;
   DesktopGestureController? _desktopGesture;
   StreamSubscription<ShiftGestureAction>? _desktopGestureActions;
+  Timer? _conversationRefreshTimer;
+  final _conversationLoads = <int>{};
   String? _activeRequestId;
   String? _progress;
   String? _error;
   bool _sending = false;
   int _conversationLoadGeneration = 0;
+  int _conversationCursor = 0;
 
   @override
   void initState() {
@@ -49,6 +52,9 @@ class _ChatScreenState extends State<ChatScreen> {
       _authorityChanges = widget.services.chatAuthorityChanges.listen((_) {
         if (!mounted) return;
         _conversationLoadGeneration += 1;
+        _conversationRefreshTimer?.cancel();
+        _conversationRefreshTimer = null;
+        _conversationCursor = 0;
         setState(() {
           _messages.clear();
           _activeRequestId = null;
@@ -139,13 +145,21 @@ class _ChatScreenState extends State<ChatScreen> {
 
   Future<void> _loadConversation() async {
     final generation = _conversationLoadGeneration;
+    if (!_conversationLoads.add(generation)) return;
     try {
-      final messages = await widget.services.replayConversation();
+      final messages = await widget.services.replayConversation(
+        after: _conversationCursor,
+      );
       if (!mounted || generation != _conversationLoadGeneration) return;
       setState(() {
         for (final message in messages) {
           if (_messages.any(
-            (existing) => existing.requestId == message.clientMessageId,
+            (existing) =>
+                existing.requestId == message.clientMessageId ||
+                (!existing.fromUser &&
+                    message.role == 'assistant' &&
+                    message.clientMessageId ==
+                        'assistant:${existing.requestId}'),
           )) {
             continue;
           }
@@ -157,16 +171,29 @@ class _ChatScreenState extends State<ChatScreen> {
             ),
           );
         }
+        if (messages.isNotEmpty) {
+          _conversationCursor = messages.last.cursor;
+        }
       });
     } catch (failure) {
       if (mounted && generation == _conversationLoadGeneration) {
         setState(() => _error = failure.toString());
+      }
+    } finally {
+      _conversationLoads.remove(generation);
+      if (mounted && generation == _conversationLoadGeneration) {
+        _conversationRefreshTimer ??= Timer(const Duration(seconds: 2), () {
+          _conversationRefreshTimer = null;
+          unawaited(_loadConversation());
+        });
       }
     }
   }
 
   @override
   void dispose() {
+    _conversationLoadGeneration += 1;
+    _conversationRefreshTimer?.cancel();
     unawaited(widget.services.cancelDesktopVoice());
     unawaited(_events?.cancel());
     unawaited(_authorityChanges?.cancel());
