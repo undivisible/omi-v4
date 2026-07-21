@@ -2,27 +2,29 @@
 part of 'signals.dart';
 
 @immutable
-class AssistantDelta {
-  const AssistantDelta({
+class TranscriptionStopAcknowledgement {
+  const TranscriptionStopAcknowledgement({
     required this.requestId,
-    required this.text,
-    required this.finalSegment,
+    required this.audioStreamId,
+    required this.accepted,
   });
 
-  static AssistantDelta deserialize(BinaryDeserializer deserializer) {
+  static TranscriptionStopAcknowledgement deserialize(
+    BinaryDeserializer deserializer,
+  ) {
     deserializer.increaseContainerDepth();
-    final instance = AssistantDelta(
+    final instance = TranscriptionStopAcknowledgement(
       requestId: deserializer.deserializeString(),
-      text: deserializer.deserializeString(),
-      finalSegment: deserializer.deserializeBool(),
+      audioStreamId: deserializer.deserializeString(),
+      accepted: deserializer.deserializeBool(),
     );
     deserializer.decreaseContainerDepth();
     return instance;
   }
 
-  static AssistantDelta bincodeDeserialize(Uint8List input) {
+  static TranscriptionStopAcknowledgement bincodeDeserialize(Uint8List input) {
     final deserializer = BincodeDeserializer(input);
-    final value = AssistantDelta.deserialize(deserializer);
+    final value = TranscriptionStopAcknowledgement.deserialize(deserializer);
     if (deserializer.offset < input.length) {
       throw Exception('Some input bytes were not read');
     }
@@ -30,26 +32,26 @@ class AssistantDelta {
   }
 
   final String requestId;
-  final String text;
-  final bool finalSegment;
+  final String audioStreamId;
+  final bool accepted;
 
-  AssistantDelta copyWith({
+  TranscriptionStopAcknowledgement copyWith({
     String? requestId,
-    String? text,
-    bool? finalSegment,
+    String? audioStreamId,
+    bool? accepted,
   }) {
-    return AssistantDelta(
+    return TranscriptionStopAcknowledgement(
       requestId: requestId ?? this.requestId,
-      text: text ?? this.text,
-      finalSegment: finalSegment ?? this.finalSegment,
+      audioStreamId: audioStreamId ?? this.audioStreamId,
+      accepted: accepted ?? this.accepted,
     );
   }
 
   void serialize(BinarySerializer serializer) {
     serializer.increaseContainerDepth();
     serializer.serializeString(requestId);
-    serializer.serializeString(text);
-    serializer.serializeBool(finalSegment);
+    serializer.serializeString(audioStreamId);
+    serializer.serializeBool(accepted);
     serializer.decreaseContainerDepth();
   }
 
@@ -64,14 +66,14 @@ class AssistantDelta {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is AssistantDelta &&
+    return other is TranscriptionStopAcknowledgement &&
         requestId == other.requestId &&
-        text == other.text &&
-        finalSegment == other.finalSegment;
+        audioStreamId == other.audioStreamId &&
+        accepted == other.accepted;
   }
 
   @override
-  int get hashCode => Object.hash(requestId, text, finalSegment);
+  int get hashCode => Object.hash(requestId, audioStreamId, accepted);
 
   @override
   String toString() {
@@ -81,12 +83,12 @@ class AssistantDelta {
       fullString =
           '$runtimeType('
           'requestId: $requestId, '
-          'text: [REDACTED], '
-          'finalSegment: $finalSegment'
+          'audioStreamId: $audioStreamId, '
+          'accepted: $accepted'
           ')';
       return true;
     }());
 
-    return fullString ?? 'AssistantDelta';
+    return fullString ?? 'TranscriptionStopAcknowledgement';
   }
 }

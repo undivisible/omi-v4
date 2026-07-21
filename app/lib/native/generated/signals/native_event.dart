@@ -24,20 +24,28 @@ abstract class NativeEvent {
       case 0:
         return NativeEventTranscriptDelta.load(deserializer);
       case 1:
-        return NativeEventAssistantDelta.load(deserializer);
+        return NativeEventTranscriptionStatus.load(deserializer);
       case 2:
-        return NativeEventCurrentUpdate.load(deserializer);
+        return NativeEventTranscriptionStopAcknowledged.load(deserializer);
       case 3:
-        return NativeEventActionProposal.load(deserializer);
+        return NativeEventTranscriptGap.load(deserializer);
       case 4:
-        return NativeEventToolProgress.load(deserializer);
+        return NativeEventAssistantDelta.load(deserializer);
       case 5:
-        return NativeEventError.load(deserializer);
+        return NativeEventCurrentUpdate.load(deserializer);
       case 6:
-        return NativeEventRuntimeStatus.load(deserializer);
+        return NativeEventActionProposal.load(deserializer);
       case 7:
-        return NativeEventMemoryCaptured.load(deserializer);
+        return NativeEventApprovalExecutionAcknowledged.load(deserializer);
       case 8:
+        return NativeEventToolProgress.load(deserializer);
+      case 9:
+        return NativeEventError.load(deserializer);
+      case 10:
+        return NativeEventRuntimeStatus.load(deserializer);
+      case 11:
+        return NativeEventMemoryCaptured.load(deserializer);
+      case 12:
         return NativeEventMemorySearchResults.load(deserializer);
       default:
         throw Exception(
@@ -116,6 +124,171 @@ class NativeEventTranscriptDelta extends NativeEvent {
 }
 
 @immutable
+class NativeEventTranscriptionStatus extends NativeEvent {
+  const NativeEventTranscriptionStatus({required this.value}) : super();
+
+  static NativeEventTranscriptionStatus load(BinaryDeserializer deserializer) {
+    deserializer.increaseContainerDepth();
+    final instance = NativeEventTranscriptionStatus(
+      value: TranscriptionStatus.deserialize(deserializer),
+    );
+    deserializer.decreaseContainerDepth();
+    return instance;
+  }
+
+  final TranscriptionStatus value;
+
+  NativeEventTranscriptionStatus copyWith({TranscriptionStatus? value}) {
+    return NativeEventTranscriptionStatus(value: value ?? this.value);
+  }
+
+  void serialize(BinarySerializer serializer) {
+    serializer.increaseContainerDepth();
+    serializer.serializeVariantIndex(1);
+    value.serialize(serializer);
+    serializer.decreaseContainerDepth();
+  }
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    if (other.runtimeType != runtimeType) return false;
+
+    return other is NativeEventTranscriptionStatus && value == other.value;
+  }
+
+  @override
+  int get hashCode => value.hashCode;
+
+  @override
+  String toString() {
+    String? fullString;
+
+    assert(() {
+      fullString =
+          '$runtimeType('
+          'value: $value'
+          ')';
+      return true;
+    }());
+
+    return fullString ?? 'NativeEventTranscriptionStatus';
+  }
+}
+
+@immutable
+class NativeEventTranscriptionStopAcknowledged extends NativeEvent {
+  const NativeEventTranscriptionStopAcknowledged({required this.value})
+    : super();
+
+  static NativeEventTranscriptionStopAcknowledged load(
+    BinaryDeserializer deserializer,
+  ) {
+    deserializer.increaseContainerDepth();
+    final instance = NativeEventTranscriptionStopAcknowledged(
+      value: TranscriptionStopAcknowledgement.deserialize(deserializer),
+    );
+    deserializer.decreaseContainerDepth();
+    return instance;
+  }
+
+  final TranscriptionStopAcknowledgement value;
+
+  NativeEventTranscriptionStopAcknowledged copyWith({
+    TranscriptionStopAcknowledgement? value,
+  }) {
+    return NativeEventTranscriptionStopAcknowledged(value: value ?? this.value);
+  }
+
+  void serialize(BinarySerializer serializer) {
+    serializer.increaseContainerDepth();
+    serializer.serializeVariantIndex(2);
+    value.serialize(serializer);
+    serializer.decreaseContainerDepth();
+  }
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    if (other.runtimeType != runtimeType) return false;
+
+    return other is NativeEventTranscriptionStopAcknowledged &&
+        value == other.value;
+  }
+
+  @override
+  int get hashCode => value.hashCode;
+
+  @override
+  String toString() {
+    String? fullString;
+
+    assert(() {
+      fullString =
+          '$runtimeType('
+          'value: $value'
+          ')';
+      return true;
+    }());
+
+    return fullString ?? 'NativeEventTranscriptionStopAcknowledged';
+  }
+}
+
+@immutable
+class NativeEventTranscriptGap extends NativeEvent {
+  const NativeEventTranscriptGap({required this.value}) : super();
+
+  static NativeEventTranscriptGap load(BinaryDeserializer deserializer) {
+    deserializer.increaseContainerDepth();
+    final instance = NativeEventTranscriptGap(
+      value: TranscriptGap.deserialize(deserializer),
+    );
+    deserializer.decreaseContainerDepth();
+    return instance;
+  }
+
+  final TranscriptGap value;
+
+  NativeEventTranscriptGap copyWith({TranscriptGap? value}) {
+    return NativeEventTranscriptGap(value: value ?? this.value);
+  }
+
+  void serialize(BinarySerializer serializer) {
+    serializer.increaseContainerDepth();
+    serializer.serializeVariantIndex(3);
+    value.serialize(serializer);
+    serializer.decreaseContainerDepth();
+  }
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    if (other.runtimeType != runtimeType) return false;
+
+    return other is NativeEventTranscriptGap && value == other.value;
+  }
+
+  @override
+  int get hashCode => value.hashCode;
+
+  @override
+  String toString() {
+    String? fullString;
+
+    assert(() {
+      fullString =
+          '$runtimeType('
+          'value: $value'
+          ')';
+      return true;
+    }());
+
+    return fullString ?? 'NativeEventTranscriptGap';
+  }
+}
+
+@immutable
 class NativeEventAssistantDelta extends NativeEvent {
   const NativeEventAssistantDelta({required this.value}) : super();
 
@@ -136,7 +309,7 @@ class NativeEventAssistantDelta extends NativeEvent {
 
   void serialize(BinarySerializer serializer) {
     serializer.increaseContainerDepth();
-    serializer.serializeVariantIndex(1);
+    serializer.serializeVariantIndex(4);
     value.serialize(serializer);
     serializer.decreaseContainerDepth();
   }
@@ -189,7 +362,7 @@ class NativeEventCurrentUpdate extends NativeEvent {
 
   void serialize(BinarySerializer serializer) {
     serializer.increaseContainerDepth();
-    serializer.serializeVariantIndex(2);
+    serializer.serializeVariantIndex(5);
     value.serialize(serializer);
     serializer.decreaseContainerDepth();
   }
@@ -242,7 +415,7 @@ class NativeEventActionProposal extends NativeEvent {
 
   void serialize(BinarySerializer serializer) {
     serializer.increaseContainerDepth();
-    serializer.serializeVariantIndex(3);
+    serializer.serializeVariantIndex(6);
     value.serialize(serializer);
     serializer.decreaseContainerDepth();
   }
@@ -275,6 +448,65 @@ class NativeEventActionProposal extends NativeEvent {
 }
 
 @immutable
+class NativeEventApprovalExecutionAcknowledged extends NativeEvent {
+  const NativeEventApprovalExecutionAcknowledged({required this.value})
+    : super();
+
+  static NativeEventApprovalExecutionAcknowledged load(
+    BinaryDeserializer deserializer,
+  ) {
+    deserializer.increaseContainerDepth();
+    final instance = NativeEventApprovalExecutionAcknowledged(
+      value: ApprovalExecutionAcknowledgement.deserialize(deserializer),
+    );
+    deserializer.decreaseContainerDepth();
+    return instance;
+  }
+
+  final ApprovalExecutionAcknowledgement value;
+
+  NativeEventApprovalExecutionAcknowledged copyWith({
+    ApprovalExecutionAcknowledgement? value,
+  }) {
+    return NativeEventApprovalExecutionAcknowledged(value: value ?? this.value);
+  }
+
+  void serialize(BinarySerializer serializer) {
+    serializer.increaseContainerDepth();
+    serializer.serializeVariantIndex(7);
+    value.serialize(serializer);
+    serializer.decreaseContainerDepth();
+  }
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    if (other.runtimeType != runtimeType) return false;
+
+    return other is NativeEventApprovalExecutionAcknowledged &&
+        value == other.value;
+  }
+
+  @override
+  int get hashCode => value.hashCode;
+
+  @override
+  String toString() {
+    String? fullString;
+
+    assert(() {
+      fullString =
+          '$runtimeType('
+          'value: $value'
+          ')';
+      return true;
+    }());
+
+    return fullString ?? 'NativeEventApprovalExecutionAcknowledged';
+  }
+}
+
+@immutable
 class NativeEventToolProgress extends NativeEvent {
   const NativeEventToolProgress({required this.value}) : super();
 
@@ -295,7 +527,7 @@ class NativeEventToolProgress extends NativeEvent {
 
   void serialize(BinarySerializer serializer) {
     serializer.increaseContainerDepth();
-    serializer.serializeVariantIndex(4);
+    serializer.serializeVariantIndex(8);
     value.serialize(serializer);
     serializer.decreaseContainerDepth();
   }
@@ -348,7 +580,7 @@ class NativeEventError extends NativeEvent {
 
   void serialize(BinarySerializer serializer) {
     serializer.increaseContainerDepth();
-    serializer.serializeVariantIndex(5);
+    serializer.serializeVariantIndex(9);
     value.serialize(serializer);
     serializer.decreaseContainerDepth();
   }
@@ -401,7 +633,7 @@ class NativeEventRuntimeStatus extends NativeEvent {
 
   void serialize(BinarySerializer serializer) {
     serializer.increaseContainerDepth();
-    serializer.serializeVariantIndex(6);
+    serializer.serializeVariantIndex(10);
     value.serialize(serializer);
     serializer.decreaseContainerDepth();
   }
@@ -454,7 +686,7 @@ class NativeEventMemoryCaptured extends NativeEvent {
 
   void serialize(BinarySerializer serializer) {
     serializer.increaseContainerDepth();
-    serializer.serializeVariantIndex(7);
+    serializer.serializeVariantIndex(11);
     value.serialize(serializer);
     serializer.decreaseContainerDepth();
   }
@@ -507,7 +739,7 @@ class NativeEventMemorySearchResults extends NativeEvent {
 
   void serialize(BinarySerializer serializer) {
     serializer.increaseContainerDepth();
-    serializer.serializeVariantIndex(8);
+    serializer.serializeVariantIndex(12);
     value.serialize(serializer);
     serializer.decreaseContainerDepth();
   }

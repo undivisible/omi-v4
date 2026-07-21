@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../app_services.dart';
+import '../native/generated/signals/signals.dart'
+    show ComputerUseAction, ComputerUseActionClick, ComputerUseActionTypeText;
 import '../native/native_hub.dart';
 import '../ui/omi_ui.dart';
 
@@ -198,6 +200,39 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
+  Widget _computerActionDetails(ComputerUseAction action) => switch (action) {
+    ComputerUseActionClick(:final x, :final y, :final button, :final count) =>
+      Text(
+        'Click ${button.name} at ($x, $y) ${count == 1 ? 'once' : '$count times'}',
+        key: const Key('computer_action_details'),
+      ),
+    ComputerUseActionTypeText(
+      :final text,
+      :final clear,
+      :final pressReturn,
+      :final delayMs,
+    ) =>
+      Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('Exact text to type'),
+          const SizedBox(height: 4),
+          SelectableText(text, key: const Key('computer_action_text')),
+          const SizedBox(height: 6),
+          Text(
+            '${clear ? 'Clears the focused field first' : 'Keeps existing field contents'} · '
+            '${pressReturn ? 'Presses Return after typing' : 'Does not press Return'} · '
+            'Delay: ${delayMs?.toString() ?? 'default'} ms',
+            key: const Key('computer_action_details'),
+          ),
+        ],
+      ),
+    _ => const Text(
+      'Unknown computer action',
+      key: Key('computer_action_details'),
+    ),
+  };
+
   @override
   Widget build(BuildContext context) {
     final ready = !widget.previewMode && widget.services.chatReady;
@@ -274,6 +309,10 @@ class _ChatScreenState extends State<ChatScreen> {
                         ),
                         const SizedBox(height: 6),
                         Text(proposal.summary),
+                        if (proposal.computerAction case final action?) ...[
+                          const SizedBox(height: 10),
+                          _computerActionDetails(action),
+                        ],
                         const SizedBox(height: 12),
                         Row(
                           children: [

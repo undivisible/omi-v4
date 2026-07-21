@@ -12,15 +12,30 @@ export 'generated/signals/signals.dart'
         CaptureSource,
         ActionProposal,
         ApprovalDecision,
+        ApprovalExecutionAcknowledgement,
         AssistantDelta,
         AssistantProvider,
         NativeEvent,
         NativeEventActionProposal,
+        NativeEventApprovalExecutionAcknowledged,
         NativeEventAssistantDelta,
         NativeEventError,
         NativeEventMemoryCaptured,
+        NativeEventTranscriptGap,
         NativeEventToolProgress,
         NativeEventTranscriptDelta,
+        NativeEventTranscriptionStatus,
+        NativeEventTranscriptionStopAcknowledged,
+        TranscriptionAuth,
+        TranscriptionAuthByok,
+        TranscriptionAuthLocal,
+        TranscriptionAuthManaged,
+        TranscriptionRoute,
+        TranscriptionState,
+        TranscriptionStatus,
+        TranscriptionStopAcknowledgement,
+        TranscriptGap,
+        TranscriptLocator,
         ToolProgress,
         ToolStatus,
         TranscriptDelta;
@@ -44,6 +59,7 @@ abstract interface class NativeHub {
     String? text,
     String? application,
     String? windowTitle,
+    TranscriptLocator? transcriptLocator,
   });
   void search({
     required String requestId,
@@ -71,6 +87,24 @@ abstract interface class NativeHub {
     required String requestId,
     required String proposalId,
     required ApprovalDecision decision,
+  });
+  void approveAndExecuteComputerUse({
+    required String requestId,
+    required String proposalId,
+  });
+  void startTranscription({
+    required String requestId,
+    required String audioStreamId,
+    required String deviceId,
+    required TranscriptionAuth auth,
+    required String language,
+    required int sampleRateHz,
+    required int channels,
+    required AudioEncoding encoding,
+  });
+  void stopTranscription({
+    required String requestId,
+    required String audioStreamId,
   });
   void cancel(String requestId);
   void sendAudio({
@@ -131,6 +165,7 @@ final class UnavailableNativeHub implements NativeHub {
     String? text,
     String? application,
     String? windowTitle,
+    TranscriptLocator? transcriptLocator,
   }) => _unavailable();
 
   @override
@@ -170,6 +205,30 @@ final class UnavailableNativeHub implements NativeHub {
     required String requestId,
     required String proposalId,
     required ApprovalDecision decision,
+  }) => _unavailable();
+
+  @override
+  void approveAndExecuteComputerUse({
+    required String requestId,
+    required String proposalId,
+  }) => _unavailable();
+
+  @override
+  void startTranscription({
+    required String requestId,
+    required String audioStreamId,
+    required String deviceId,
+    required TranscriptionAuth auth,
+    required String language,
+    required int sampleRateHz,
+    required int channels,
+    required AudioEncoding encoding,
+  }) => _unavailable();
+
+  @override
+  void stopTranscription({
+    required String requestId,
+    required String audioStreamId,
   }) => _unavailable();
 
   @override
@@ -238,6 +297,7 @@ final class RinfNativeHub implements NativeHub {
     String? text,
     String? application,
     String? windowTitle,
+    TranscriptLocator? transcriptLocator,
   }) => _send(
     requestId,
     CommandCaptureEvent(
@@ -247,6 +307,7 @@ final class RinfNativeHub implements NativeHub {
       text: text,
       application: application,
       windowTitle: windowTitle,
+      transcriptLocator: transcriptLocator,
     ),
   );
 
@@ -306,6 +367,45 @@ final class RinfNativeHub implements NativeHub {
     requestId,
     CommandApprovalDecision(proposalId: proposalId, decision: decision),
   );
+
+  @override
+  void approveAndExecuteComputerUse({
+    required String requestId,
+    required String proposalId,
+  }) => _send(
+    requestId,
+    CommandApproveAndExecuteComputerUse(proposalId: proposalId),
+  );
+
+  @override
+  void startTranscription({
+    required String requestId,
+    required String audioStreamId,
+    required String deviceId,
+    required TranscriptionAuth auth,
+    required String language,
+    required int sampleRateHz,
+    required int channels,
+    required AudioEncoding encoding,
+  }) => _send(
+    requestId,
+    CommandStartTranscription(
+      audioStreamId: audioStreamId,
+      deviceId: deviceId,
+      auth: auth,
+      language: language,
+      sampleRateHz: sampleRateHz,
+      channels: channels,
+      encoding: encoding,
+    ),
+  );
+
+  @override
+  void stopTranscription({
+    required String requestId,
+    required String audioStreamId,
+  }) =>
+      _send(requestId, CommandStopTranscription(audioStreamId: audioStreamId));
 
   @override
   void cancel(String requestId) => _send(requestId, const CommandCancel());

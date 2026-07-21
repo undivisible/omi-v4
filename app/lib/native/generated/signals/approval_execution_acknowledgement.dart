@@ -2,27 +2,29 @@
 part of 'signals.dart';
 
 @immutable
-class AssistantDelta {
-  const AssistantDelta({
+class ApprovalExecutionAcknowledgement {
+  const ApprovalExecutionAcknowledgement({
     required this.requestId,
-    required this.text,
-    required this.finalSegment,
+    required this.proposalId,
+    required this.accepted,
   });
 
-  static AssistantDelta deserialize(BinaryDeserializer deserializer) {
+  static ApprovalExecutionAcknowledgement deserialize(
+    BinaryDeserializer deserializer,
+  ) {
     deserializer.increaseContainerDepth();
-    final instance = AssistantDelta(
+    final instance = ApprovalExecutionAcknowledgement(
       requestId: deserializer.deserializeString(),
-      text: deserializer.deserializeString(),
-      finalSegment: deserializer.deserializeBool(),
+      proposalId: deserializer.deserializeString(),
+      accepted: deserializer.deserializeBool(),
     );
     deserializer.decreaseContainerDepth();
     return instance;
   }
 
-  static AssistantDelta bincodeDeserialize(Uint8List input) {
+  static ApprovalExecutionAcknowledgement bincodeDeserialize(Uint8List input) {
     final deserializer = BincodeDeserializer(input);
-    final value = AssistantDelta.deserialize(deserializer);
+    final value = ApprovalExecutionAcknowledgement.deserialize(deserializer);
     if (deserializer.offset < input.length) {
       throw Exception('Some input bytes were not read');
     }
@@ -30,26 +32,26 @@ class AssistantDelta {
   }
 
   final String requestId;
-  final String text;
-  final bool finalSegment;
+  final String proposalId;
+  final bool accepted;
 
-  AssistantDelta copyWith({
+  ApprovalExecutionAcknowledgement copyWith({
     String? requestId,
-    String? text,
-    bool? finalSegment,
+    String? proposalId,
+    bool? accepted,
   }) {
-    return AssistantDelta(
+    return ApprovalExecutionAcknowledgement(
       requestId: requestId ?? this.requestId,
-      text: text ?? this.text,
-      finalSegment: finalSegment ?? this.finalSegment,
+      proposalId: proposalId ?? this.proposalId,
+      accepted: accepted ?? this.accepted,
     );
   }
 
   void serialize(BinarySerializer serializer) {
     serializer.increaseContainerDepth();
     serializer.serializeString(requestId);
-    serializer.serializeString(text);
-    serializer.serializeBool(finalSegment);
+    serializer.serializeString(proposalId);
+    serializer.serializeBool(accepted);
     serializer.decreaseContainerDepth();
   }
 
@@ -64,14 +66,14 @@ class AssistantDelta {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is AssistantDelta &&
+    return other is ApprovalExecutionAcknowledgement &&
         requestId == other.requestId &&
-        text == other.text &&
-        finalSegment == other.finalSegment;
+        proposalId == other.proposalId &&
+        accepted == other.accepted;
   }
 
   @override
-  int get hashCode => Object.hash(requestId, text, finalSegment);
+  int get hashCode => Object.hash(requestId, proposalId, accepted);
 
   @override
   String toString() {
@@ -81,12 +83,12 @@ class AssistantDelta {
       fullString =
           '$runtimeType('
           'requestId: $requestId, '
-          'text: [REDACTED], '
-          'finalSegment: $finalSegment'
+          'proposalId: $proposalId, '
+          'accepted: $accepted'
           ')';
       return true;
     }());
 
-    return fullString ?? 'AssistantDelta';
+    return fullString ?? 'ApprovalExecutionAcknowledgement';
   }
 }

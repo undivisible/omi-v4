@@ -61,11 +61,7 @@ class DeviceRelayService {
       capabilities.audioStreaming,
       'audioFrames',
     );
-    return adapter
-        .audioPackets(deviceId)
-        .map(DeviceAudioFrame.decode)
-        .where((frame) => frame != null)
-        .cast();
+    return decodeDeviceAudioFrames(adapter.audioPackets(deviceId));
   }
 
   Stream<bool> connectionState(String deviceId) =>

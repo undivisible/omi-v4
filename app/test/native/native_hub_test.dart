@@ -29,6 +29,7 @@ void main() {
         text: 'remember this',
       ),
       const CommandSearchMemory(query: 'this', limit: 12),
+      const CommandApproveAndExecuteComputerUse(proposalId: 'proposal-1'),
       const CommandCancel(),
     ];
 
@@ -55,6 +56,30 @@ void main() {
 
     expect(AudioChunk.bincodeDeserialize(chunk.bincodeSerialize()), chunk);
     expect(Uint8List.fromList([1, 2]), hasLength(2));
+  });
+
+  test('approval execution acknowledgement round trips', () {
+    const event = NativeEventApprovalExecutionAcknowledged(
+      value: ApprovalExecutionAcknowledgement(
+        requestId: 'approval-1',
+        proposalId: 'proposal-1',
+        accepted: true,
+      ),
+    );
+
+    expect(NativeEvent.bincodeDeserialize(event.bincodeSerialize()), event);
+  });
+
+  test('transcription stop acknowledgement round trips independently', () {
+    const event = NativeEventTranscriptionStopAcknowledged(
+      value: TranscriptionStopAcknowledgement(
+        requestId: 'stop-voice-1',
+        audioStreamId: 'voice-1',
+        accepted: true,
+      ),
+    );
+
+    expect(NativeEvent.bincodeDeserialize(event.bincodeSerialize()), event);
   });
 
   test('unavailable hub does not claim native capability', () async {

@@ -1,5 +1,6 @@
 mod runtime;
 pub mod signals;
+mod stt;
 
 use rinf::{dart_shutdown, write_interface};
 use runtime::{AudioDispatcher, CommandDispatcher, runtime_status};
@@ -12,8 +13,9 @@ write_interface!();
 async fn main() {
     NativeEvent::RuntimeStatus(runtime_status(false)).send();
 
-    let (command_sender, dispatcher) = CommandDispatcher::channel();
-    let (audio_sender, audio_dispatcher) = AudioDispatcher::channel();
+    let (audio_sender, transcription_sender, audio_dispatcher) = AudioDispatcher::channel();
+    let (command_sender, dispatcher) =
+        CommandDispatcher::channel_with_transcription(transcription_sender);
     let dispatcher = spawn(dispatcher.run());
     let audio_dispatcher = spawn(audio_dispatcher.run());
     let command_listener = spawn(ClientCommand::listen(command_sender));

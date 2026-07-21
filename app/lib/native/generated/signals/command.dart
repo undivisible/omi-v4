@@ -20,14 +20,20 @@ abstract class Command {
       case 4:
         return CommandClearAssistant.load(deserializer);
       case 5:
-        return CommandCaptureEvent.load(deserializer);
+        return CommandStartTranscription.load(deserializer);
       case 6:
-        return CommandSearchMemory.load(deserializer);
+        return CommandStopTranscription.load(deserializer);
       case 7:
-        return CommandApprovalDecision.load(deserializer);
+        return CommandApproveAndExecuteComputerUse.load(deserializer);
       case 8:
-        return CommandDeviceState.load(deserializer);
+        return CommandCaptureEvent.load(deserializer);
       case 9:
+        return CommandSearchMemory.load(deserializer);
+      case 10:
+        return CommandApprovalDecision.load(deserializer);
+      case 11:
+        return CommandDeviceState.load(deserializer);
+      case 12:
         return CommandCancel.load(deserializer);
       default:
         throw Exception(
@@ -185,7 +191,7 @@ class CommandSendMessage extends Command {
     assert(() {
       fullString =
           '$runtimeType('
-          'text: $text, '
+          'text: [REDACTED], '
           'conversationId: $conversationId'
           ')';
       return true;
@@ -382,6 +388,237 @@ class CommandClearAssistant extends Command {
 }
 
 @immutable
+class CommandStartTranscription extends Command {
+  const CommandStartTranscription({
+    required this.audioStreamId,
+    required this.deviceId,
+    required this.auth,
+    required this.language,
+    required this.sampleRateHz,
+    required this.channels,
+    required this.encoding,
+  }) : super();
+
+  static CommandStartTranscription load(BinaryDeserializer deserializer) {
+    deserializer.increaseContainerDepth();
+    final instance = CommandStartTranscription(
+      audioStreamId: deserializer.deserializeString(),
+      deviceId: deserializer.deserializeString(),
+      auth: TranscriptionAuth.deserialize(deserializer),
+      language: deserializer.deserializeString(),
+      sampleRateHz: deserializer.deserializeUint32(),
+      channels: deserializer.deserializeUint8(),
+      encoding: AudioEncodingExtension.deserialize(deserializer),
+    );
+    deserializer.decreaseContainerDepth();
+    return instance;
+  }
+
+  final String audioStreamId;
+  final String deviceId;
+  final TranscriptionAuth auth;
+  final String language;
+  final int sampleRateHz;
+  final int channels;
+  final AudioEncoding encoding;
+
+  CommandStartTranscription copyWith({
+    String? audioStreamId,
+    String? deviceId,
+    TranscriptionAuth? auth,
+    String? language,
+    int? sampleRateHz,
+    int? channels,
+    AudioEncoding? encoding,
+  }) {
+    return CommandStartTranscription(
+      audioStreamId: audioStreamId ?? this.audioStreamId,
+      deviceId: deviceId ?? this.deviceId,
+      auth: auth ?? this.auth,
+      language: language ?? this.language,
+      sampleRateHz: sampleRateHz ?? this.sampleRateHz,
+      channels: channels ?? this.channels,
+      encoding: encoding ?? this.encoding,
+    );
+  }
+
+  void serialize(BinarySerializer serializer) {
+    serializer.increaseContainerDepth();
+    serializer.serializeVariantIndex(5);
+    serializer.serializeString(audioStreamId);
+    serializer.serializeString(deviceId);
+    auth.serialize(serializer);
+    serializer.serializeString(language);
+    serializer.serializeUint32(sampleRateHz);
+    serializer.serializeUint8(channels);
+    encoding.serialize(serializer);
+    serializer.decreaseContainerDepth();
+  }
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    if (other.runtimeType != runtimeType) return false;
+
+    return other is CommandStartTranscription &&
+        audioStreamId == other.audioStreamId &&
+        deviceId == other.deviceId &&
+        auth == other.auth &&
+        language == other.language &&
+        sampleRateHz == other.sampleRateHz &&
+        channels == other.channels &&
+        encoding == other.encoding;
+  }
+
+  @override
+  int get hashCode => Object.hash(
+    audioStreamId,
+    deviceId,
+    auth,
+    language,
+    sampleRateHz,
+    channels,
+    encoding,
+  );
+
+  @override
+  String toString() {
+    String? fullString;
+
+    assert(() {
+      fullString =
+          '$runtimeType('
+          'audioStreamId: $audioStreamId, '
+          'deviceId: $deviceId, '
+          'auth: $auth, '
+          'language: $language, '
+          'sampleRateHz: $sampleRateHz, '
+          'channels: $channels, '
+          'encoding: $encoding'
+          ')';
+      return true;
+    }());
+
+    return fullString ?? 'CommandStartTranscription';
+  }
+}
+
+@immutable
+class CommandStopTranscription extends Command {
+  const CommandStopTranscription({required this.audioStreamId}) : super();
+
+  static CommandStopTranscription load(BinaryDeserializer deserializer) {
+    deserializer.increaseContainerDepth();
+    final instance = CommandStopTranscription(
+      audioStreamId: deserializer.deserializeString(),
+    );
+    deserializer.decreaseContainerDepth();
+    return instance;
+  }
+
+  final String audioStreamId;
+
+  CommandStopTranscription copyWith({String? audioStreamId}) {
+    return CommandStopTranscription(
+      audioStreamId: audioStreamId ?? this.audioStreamId,
+    );
+  }
+
+  void serialize(BinarySerializer serializer) {
+    serializer.increaseContainerDepth();
+    serializer.serializeVariantIndex(6);
+    serializer.serializeString(audioStreamId);
+    serializer.decreaseContainerDepth();
+  }
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    if (other.runtimeType != runtimeType) return false;
+
+    return other is CommandStopTranscription &&
+        audioStreamId == other.audioStreamId;
+  }
+
+  @override
+  int get hashCode => audioStreamId.hashCode;
+
+  @override
+  String toString() {
+    String? fullString;
+
+    assert(() {
+      fullString =
+          '$runtimeType('
+          'audioStreamId: $audioStreamId'
+          ')';
+      return true;
+    }());
+
+    return fullString ?? 'CommandStopTranscription';
+  }
+}
+
+@immutable
+class CommandApproveAndExecuteComputerUse extends Command {
+  const CommandApproveAndExecuteComputerUse({required this.proposalId})
+    : super();
+
+  static CommandApproveAndExecuteComputerUse load(
+    BinaryDeserializer deserializer,
+  ) {
+    deserializer.increaseContainerDepth();
+    final instance = CommandApproveAndExecuteComputerUse(
+      proposalId: deserializer.deserializeString(),
+    );
+    deserializer.decreaseContainerDepth();
+    return instance;
+  }
+
+  final String proposalId;
+
+  CommandApproveAndExecuteComputerUse copyWith({String? proposalId}) {
+    return CommandApproveAndExecuteComputerUse(
+      proposalId: proposalId ?? this.proposalId,
+    );
+  }
+
+  void serialize(BinarySerializer serializer) {
+    serializer.increaseContainerDepth();
+    serializer.serializeVariantIndex(7);
+    serializer.serializeString(proposalId);
+    serializer.decreaseContainerDepth();
+  }
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    if (other.runtimeType != runtimeType) return false;
+
+    return other is CommandApproveAndExecuteComputerUse &&
+        proposalId == other.proposalId;
+  }
+
+  @override
+  int get hashCode => proposalId.hashCode;
+
+  @override
+  String toString() {
+    String? fullString;
+
+    assert(() {
+      fullString =
+          '$runtimeType('
+          'proposalId: $proposalId'
+          ')';
+      return true;
+    }());
+
+    return fullString ?? 'CommandApproveAndExecuteComputerUse';
+  }
+}
+
+@immutable
 class CommandCaptureEvent extends Command {
   const CommandCaptureEvent({
     required this.ingestionKey,
@@ -390,6 +627,7 @@ class CommandCaptureEvent extends Command {
     this.text,
     this.application,
     this.windowTitle,
+    this.transcriptLocator,
   }) : super();
 
   static CommandCaptureEvent load(BinaryDeserializer deserializer) {
@@ -401,6 +639,9 @@ class CommandCaptureEvent extends Command {
       text: TraitHelpers.deserializeOptionStr(deserializer),
       application: TraitHelpers.deserializeOptionStr(deserializer),
       windowTitle: TraitHelpers.deserializeOptionStr(deserializer),
+      transcriptLocator: TraitHelpers.deserializeOptionTranscriptLocator(
+        deserializer,
+      ),
     );
     deserializer.decreaseContainerDepth();
     return instance;
@@ -412,6 +653,7 @@ class CommandCaptureEvent extends Command {
   final String? text;
   final String? application;
   final String? windowTitle;
+  final TranscriptLocator? transcriptLocator;
 
   CommandCaptureEvent copyWith({
     String? ingestionKey,
@@ -420,6 +662,7 @@ class CommandCaptureEvent extends Command {
     String? Function()? text,
     String? Function()? application,
     String? Function()? windowTitle,
+    TranscriptLocator? Function()? transcriptLocator,
   }) {
     return CommandCaptureEvent(
       ingestionKey: ingestionKey ?? this.ingestionKey,
@@ -428,18 +671,25 @@ class CommandCaptureEvent extends Command {
       text: text == null ? this.text : text(),
       application: application == null ? this.application : application(),
       windowTitle: windowTitle == null ? this.windowTitle : windowTitle(),
+      transcriptLocator: transcriptLocator == null
+          ? this.transcriptLocator
+          : transcriptLocator(),
     );
   }
 
   void serialize(BinarySerializer serializer) {
     serializer.increaseContainerDepth();
-    serializer.serializeVariantIndex(5);
+    serializer.serializeVariantIndex(8);
     serializer.serializeString(ingestionKey);
     source.serialize(serializer);
     serializer.serializeInt64(occurredAtMs);
     TraitHelpers.serializeOptionStr(text, serializer);
     TraitHelpers.serializeOptionStr(application, serializer);
     TraitHelpers.serializeOptionStr(windowTitle, serializer);
+    TraitHelpers.serializeOptionTranscriptLocator(
+      transcriptLocator,
+      serializer,
+    );
     serializer.decreaseContainerDepth();
   }
 
@@ -454,7 +704,8 @@ class CommandCaptureEvent extends Command {
         occurredAtMs == other.occurredAtMs &&
         text == other.text &&
         application == other.application &&
-        windowTitle == other.windowTitle;
+        windowTitle == other.windowTitle &&
+        transcriptLocator == other.transcriptLocator;
   }
 
   @override
@@ -465,6 +716,7 @@ class CommandCaptureEvent extends Command {
     text,
     application,
     windowTitle,
+    transcriptLocator,
   );
 
   @override
@@ -477,9 +729,10 @@ class CommandCaptureEvent extends Command {
           'ingestionKey: $ingestionKey, '
           'source: $source, '
           'occurredAtMs: $occurredAtMs, '
-          'text: $text, '
-          'application: $application, '
-          'windowTitle: $windowTitle'
+          'text: [REDACTED], '
+          'application: [REDACTED], '
+          'windowTitle: [REDACTED], '
+          'transcriptLocator: $transcriptLocator'
           ')';
       return true;
     }());
@@ -515,7 +768,7 @@ class CommandSearchMemory extends Command {
 
   void serialize(BinarySerializer serializer) {
     serializer.increaseContainerDepth();
-    serializer.serializeVariantIndex(6);
+    serializer.serializeVariantIndex(9);
     serializer.serializeString(query);
     serializer.serializeUint32(limit);
     serializer.decreaseContainerDepth();
@@ -583,7 +836,7 @@ class CommandApprovalDecision extends Command {
 
   void serialize(BinarySerializer serializer) {
     serializer.increaseContainerDepth();
-    serializer.serializeVariantIndex(7);
+    serializer.serializeVariantIndex(10);
     serializer.serializeString(proposalId);
     decision.serialize(serializer);
     serializer.decreaseContainerDepth();
@@ -665,7 +918,7 @@ class CommandDeviceState extends Command {
 
   void serialize(BinarySerializer serializer) {
     serializer.increaseContainerDepth();
-    serializer.serializeVariantIndex(8);
+    serializer.serializeVariantIndex(11);
     serializer.serializeString(deviceId);
     serializer.serializeBool(connected);
     TraitHelpers.serializeOptionU8(batteryPercent, serializer);
@@ -721,7 +974,7 @@ class CommandCancel extends Command {
 
   void serialize(BinarySerializer serializer) {
     serializer.increaseContainerDepth();
-    serializer.serializeVariantIndex(9);
+    serializer.serializeVariantIndex(12);
     serializer.decreaseContainerDepth();
   }
 

@@ -73,7 +73,7 @@ class _DevicesScreenState extends State<DevicesScreen> {
     return PageList(
       title: 'Devices',
       subtitle: _mobile
-          ? 'This phone relays audio from your Omi wearable.'
+          ? 'This phone relays Omi audio through managed or BYOK transcription. Local transcription is not available yet.'
           : 'Pair and stream Omi hardware from the mobile companion.',
       children: [
         if (widget.previewMode)

@@ -119,7 +119,7 @@ void main() {
       ),
       (
         Icons.devices_other_rounded,
-        'This phone relays audio from your Omi wearable.',
+        'This phone relays Omi audio through managed or BYOK transcription. Local transcription is not available yet.',
       ),
       (
         Icons.checklist_rounded,
@@ -183,7 +183,10 @@ void main() {
       (0, 'Your thinking partner across every connected device.'),
       (1, 'What Omi knows, with sources you can inspect.'),
       (2, 'Patterns and opportunities moving through your life.'),
-      (3, 'This phone relays audio from your Omi wearable.'),
+      (
+        3,
+        'This phone relays Omi audio through managed or BYOK transcription. Local transcription is not available yet.',
+      ),
       (4, 'Each connection makes your assistant more useful.'),
       (5, 'Identity, plan, providers, and agent control.'),
     ]) {

@@ -26,6 +26,70 @@ if grep -Fq "'credential: \$credential'" "$command_file"; then
   exit 1
 fi
 if [[ "$(grep -Fc "'credential: [REDACTED]'" "$command_file")" -ne 1 ]]; then
-  echo "generated assistant credential redaction is missing or ambiguous" >&2
+  echo "generated credential redaction is missing or ambiguous" >&2
+  exit 1
+fi
+
+transcription_auth_file="$generated_dir/signals/transcription_auth.dart"
+for field in firebaseToken apiKey; do
+  if grep -Fq "'$field: \$$field'" "$transcription_auth_file"; then
+    echo "generated transcription $field debug output is not redacted" >&2
+    exit 1
+  fi
+  if [[ "$(grep -Fc "'$field: [REDACTED]'" "$transcription_auth_file")" -ne 1 ]]; then
+    echo "generated transcription $field redaction is missing or ambiguous" >&2
+    exit 1
+  fi
+done
+
+message_block="$(sed -n '/^class CommandSendMessage /,/^@immutable$/p' "$command_file")"
+if grep -Fq "'text: \$text, '" <<<"$message_block"; then
+  echo "generated send-message text debug output is not redacted" >&2
+  exit 1
+fi
+if [[ "$(grep -Fc "'text: [REDACTED], '" <<<"$message_block")" -ne 1 ]]; then
+  echo "generated send-message text redaction is missing or ambiguous" >&2
+  exit 1
+fi
+
+action_file="$generated_dir/signals/computer_use_action.dart"
+if grep -Fq "'text: \$text, '" "$action_file"; then
+  echo "generated computer-use text debug output is not redacted" >&2
+  exit 1
+fi
+if [[ "$(grep -Fc "'text: [REDACTED], '" "$action_file")" -ne 1 ]]; then
+  echo "generated computer-use text redaction is missing or ambiguous" >&2
+  exit 1
+fi
+
+capture_block="$(sed -n '/^class CommandCaptureEvent /,/^@immutable$/p' "$command_file")"
+for field in text application windowTitle; do
+  if grep -Fq "'$field: \$$field, '" <<<"$capture_block"; then
+    echo "generated capture $field debug output is not redacted" >&2
+    exit 1
+  fi
+  if [[ "$(grep -Fc "'$field: [REDACTED], '" <<<"$capture_block")" -ne 1 ]]; then
+    echo "generated capture $field redaction is missing or ambiguous" >&2
+    exit 1
+  fi
+done
+
+transcript_file="$generated_dir/signals/transcript_delta.dart"
+if grep -Fq "'text: \$text, '" "$transcript_file"; then
+  echo "generated transcript text debug output is not redacted" >&2
+  exit 1
+fi
+if [[ "$(grep -Fc "'text: [REDACTED], '" "$transcript_file")" -ne 1 ]]; then
+  echo "generated transcript text redaction is missing or ambiguous" >&2
+  exit 1
+fi
+
+assistant_file="$generated_dir/signals/assistant_delta.dart"
+if grep -Fq "'text: \$text, '" "$assistant_file"; then
+  echo "generated assistant text debug output is not redacted" >&2
+  exit 1
+fi
+if [[ "$(grep -Fc "'text: [REDACTED], '" "$assistant_file")" -ne 1 ]]; then
+  echo "generated assistant text redaction is missing or ambiguous" >&2
   exit 1
 fi

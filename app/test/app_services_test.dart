@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:omi/app_services.dart';
+import 'package:omi/api/worker_http.dart';
 import 'package:omi/auth/auth.dart';
 import 'package:omi/device/device.dart';
 import 'package:omi/features/chat_screen.dart';
@@ -112,15 +113,69 @@ void main() {
           title: 'Create task',
           summary: 'Add the task to your list.',
           risk: ActionRisk.reversible,
+          computerAction: const ComputerUseActionClick(
+            x: 10,
+            y: 20,
+            button: MouseButton.left,
+            count: 1,
+          ),
+        ),
+      ),
+    );
+    hub.eventsController.add(
+      NativeEventActionProposal(
+        value: ActionProposal(
+          proposalId: 'proposal-type',
+          requestId: requestId,
+          title: 'Type response',
+          summary: 'Type 23 bytes',
+          risk: ActionRisk.external,
+          computerAction: const ComputerUseActionTypeText(
+            text: 'send the exact response',
+            clear: true,
+            pressReturn: true,
+            delayMs: null,
+          ),
         ),
       ),
     );
     await tester.pump();
+    expect(find.text('send the exact response'), findsOneWidget);
+    expect(
+      find.textContaining('Clears the focused field first'),
+      findsOneWidget,
+    );
+    expect(find.textContaining('Presses Return after typing'), findsOneWidget);
+    expect(find.text('Click left at (10, 20) once'), findsOneWidget);
     final approve = find.byKey(const ValueKey('approve_proposal-1'));
     await tester.ensureVisible(approve);
     await tester.tap(approve);
-    expect(hub.approvals.single.$1, 'proposal-1');
-    expect(hub.approvals.single.$2, ApprovalDecision.approveOnce);
+    expect(hub.approvals, isEmpty);
+    expect(hub.executedProposals, ['proposal-1']);
+    final approvalRequestId = hub.atomicApprovals.single.$1;
+    services.cancelChatRequest(approvalRequestId);
+    expect(hub.cancelled, contains(approvalRequestId));
+    hub.eventsController.add(
+      NativeEventActionProposal(
+        value: ActionProposal(
+          proposalId: 'proposal-non-executable',
+          requestId: requestId,
+          title: 'Review plan',
+          summary: 'No computer action attached.',
+          risk: ActionRisk.reversible,
+        ),
+      ),
+    );
+    await tester.pump();
+    final approveNonExecutable = find.byKey(
+      const ValueKey('approve_proposal-non-executable'),
+    );
+    await tester.ensureVisible(approveNonExecutable);
+    await tester.tap(approveNonExecutable);
+    expect(hub.approvals.map((approval) => approval.$1), [
+      'proposal-non-executable',
+    ]);
+    expect(hub.executedProposals, ['proposal-1']);
     hub.eventsController.add(
       NativeEventActionProposal(
         value: ActionProposal(
@@ -189,6 +244,105 @@ void main() {
 
     services.dispose();
     await tester.pump();
+    await hub.close();
+  });
+
+  test('atomic approval restores proposal after enqueue failure', () async {
+    final auth = AuthController(
+      _FakeAuthGateway(_session('user-a')),
+      consentStore: VolatileConsentStore()..receipt = _receipt('user-a'),
+    );
+    await auth.restoreSession();
+    final hub = _FakeHub()..failAtomicApproval = true;
+    final services = AppServices.forTesting(
+      auth: auth,
+      nativeHub: hub,
+      deviceRelay: DeviceRelayService(
+        role: DeviceRelayRole.desktopObserver,
+        adapter: const UnavailableDeviceRelayAdapter(),
+      ),
+      memoryDatabasePath: (uid) => '/tmp/$uid.sqlite3',
+      approvalAcknowledgementTimeout: const Duration(milliseconds: 5),
+    );
+    await services.initialize();
+    final parentRequestId = services.sendChatMessage(text: 'Click it');
+    hub.eventsController.add(
+      NativeEventActionProposal(
+        value: ActionProposal(
+          proposalId: 'atomic-retry',
+          requestId: parentRequestId,
+          title: 'Click',
+          summary: 'Click once',
+          risk: ActionRisk.reversible,
+          computerAction: const ComputerUseActionClick(
+            x: 4,
+            y: 8,
+            button: MouseButton.left,
+            count: 1,
+          ),
+        ),
+      ),
+    );
+    await Future<void>.delayed(Duration.zero);
+
+    expect(
+      () => services.decideChatApproval(
+        proposalId: 'atomic-retry',
+        decision: ApprovalDecision.approveOnce,
+      ),
+      throwsStateError,
+    );
+    hub.failAtomicApproval = false;
+    hub.rejectAtomicApproval = true;
+    services.decideChatApproval(
+      proposalId: 'atomic-retry',
+      decision: ApprovalDecision.approveOnce,
+    );
+    await Future<void>.delayed(Duration.zero);
+
+    hub.rejectAtomicApproval = false;
+    hub.rejectAtomicApprovalWithoutFollowup = true;
+    services.decideChatApproval(
+      proposalId: 'atomic-retry',
+      decision: ApprovalDecision.approveOnce,
+    );
+    await Future<void>.delayed(Duration.zero);
+
+    hub.rejectAtomicApprovalWithoutFollowup = false;
+    hub.dropAtomicApproval = true;
+    final ambiguousRequestId = services.decideChatApproval(
+      proposalId: 'atomic-retry',
+      decision: ApprovalDecision.approveOnce,
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+
+    hub.dropAtomicApproval = false;
+    expect(
+      () => services.decideChatApproval(
+        proposalId: 'atomic-retry',
+        decision: ApprovalDecision.approveOnce,
+      ),
+      throwsStateError,
+    );
+    hub.eventsController.add(
+      NativeEventApprovalExecutionAcknowledged(
+        value: ApprovalExecutionAcknowledgement(
+          requestId: ambiguousRequestId,
+          proposalId: 'atomic-retry',
+          accepted: true,
+        ),
+      ),
+    );
+    await Future<void>.delayed(Duration.zero);
+    expect(
+      () => services.decideChatApproval(
+        proposalId: 'atomic-retry',
+        decision: ApprovalDecision.approveOnce,
+      ),
+      throwsStateError,
+    );
+
+    services.dispose();
     await hub.close();
   });
 
@@ -274,7 +428,10 @@ void main() {
           adapter: const UnavailableDeviceRelayAdapter(),
         ),
         memoryDatabasePath: (uid) => '/tmp/$uid.sqlite3',
-        workerOrigin: Uri.parse('https://worker.example.test'),
+        managedStt: _FakeManagedStt(
+          _managedSession('user-a'),
+          trustedWorkerOrigin: Uri.parse('https://worker.example.test'),
+        ),
         assistantRefreshLead: const Duration(milliseconds: 30),
         assistantMinimumRefreshDelay: const Duration(milliseconds: 5),
       );
@@ -315,7 +472,12 @@ void main() {
           adapter: const UnavailableDeviceRelayAdapter(),
         ),
         memoryDatabasePath: (uid) => '/tmp/$uid.sqlite3',
-        workerOrigin: Uri.parse('https://user@worker.example.test/path'),
+        managedStt: _FakeManagedStt(
+          _managedSession('user-a'),
+          trustedWorkerOrigin: Uri.parse(
+            'https://user@worker.example.test/path',
+          ),
+        ),
       ),
       throwsArgumentError,
     );
@@ -411,7 +573,14 @@ void main() {
     final partial = NativeEventTranscriptDelta(
       value: TranscriptDelta(
         requestId: 'audio-1',
+        audioStreamId: 'omi-stream-1',
+        segmentId: 'omi-stream-1-segment-0',
         segmentSequence: Uint64.fromBigInt(BigInt.zero),
+        sttEpoch: 1,
+        deviceId: 'omi-device-1',
+        provider: 'deepgram',
+        startMs: 0,
+        endMs: 900,
         occurredAtMs: 1000,
         text: 'unfinished',
         finalSegment: false,
@@ -420,7 +589,14 @@ void main() {
     final completed = NativeEventTranscriptDelta(
       value: TranscriptDelta(
         requestId: 'audio-1',
+        audioStreamId: 'omi-stream-1',
+        segmentId: 'omi-stream-1-segment-1',
         segmentSequence: Uint64.fromBigInt(BigInt.one),
+        sttEpoch: 1,
+        deviceId: 'omi-device-1',
+        provider: 'deepgram',
+        startMs: 900,
+        endMs: 1900,
         occurredAtMs: 2000,
         text: ' Remember this ',
         finalSegment: true,
@@ -430,11 +606,18 @@ void main() {
     hub.eventsController
       ..add(partial)
       ..add(completed)
-      ..add(completed);
+      ..add(
+        completed.copyWith(
+          value: completed.value.copyWith(requestId: 'audio-recreated'),
+        ),
+      );
     await _waitFor(() => hub.captures.length == 1);
     hub.eventsController.add(
       completed.copyWith(
-        value: completed.value.copyWith(text: 'changed evidence'),
+        value: completed.value.copyWith(
+          requestId: 'audio-retry-with-conflict',
+          deviceId: 'changed-device',
+        ),
       ),
     );
     await _waitFor(() => errors.isNotEmpty);
@@ -444,6 +627,15 @@ void main() {
       CaptureSource.omiDevice,
     ]);
     expect(hub.captures.single.occurredAtMs, 2000);
+    expect(hub.captures.single.transcriptLocator?.deviceId, 'omi-device-1');
+    expect(hub.captures.single.transcriptLocator?.provider, 'deepgram');
+    expect(hub.captures.single.transcriptLocator?.streamId, 'omi-stream-1');
+    expect(
+      hub.captures.single.transcriptLocator?.segmentId,
+      'omi-stream-1-segment-1',
+    );
+    expect(hub.captures.single.transcriptLocator?.startMs, 900);
+    expect(hub.captures.single.transcriptLocator?.endMs, 1900);
     expect(errors.single, isA<TranscriptCaptureConflict>());
 
     hub.eventsController.add(
@@ -497,7 +689,14 @@ void main() {
         NativeEventTranscriptDelta(
           value: TranscriptDelta(
             requestId: 'stream',
+            audioStreamId: 'omi-stream-ledger',
+            segmentId: 'omi-stream-ledger-segment-$sequence',
             segmentSequence: Uint64.fromBigInt(BigInt.from(sequence)),
+            sttEpoch: 1,
+            deviceId: 'omi-device-ledger',
+            provider: 'deepgram',
+            startMs: sequence * 1000,
+            endMs: sequence * 1000 + 900,
             occurredAtMs: sequence,
             text: 'segment $sequence',
             finalSegment: true,
@@ -547,7 +746,14 @@ void main() {
     final transcript = NativeEventTranscriptDelta(
       value: TranscriptDelta(
         requestId: 'same-stream',
+        audioStreamId: 'omi-stream-regrant',
+        segmentId: 'omi-stream-regrant-segment-1',
         segmentSequence: Uint64.fromBigInt(BigInt.one),
+        sttEpoch: 1,
+        deviceId: 'omi-device-regrant',
+        provider: 'deepgram',
+        startMs: 3000,
+        endMs: 3900,
         occurredAtMs: 4000,
         text: 'same evidence',
         finalSegment: true,
@@ -653,7 +859,14 @@ void main() {
       NativeEventTranscriptDelta(
         value: TranscriptDelta(
           requestId: 'audio-revoked',
+          audioStreamId: 'omi-stream-revoked',
+          segmentId: 'omi-stream-revoked-segment-0',
           segmentSequence: Uint64.fromBigInt(BigInt.zero),
+          sttEpoch: 1,
+          deviceId: 'omi-device-revoked',
+          provider: 'deepgram',
+          startMs: 2000,
+          endMs: 2900,
           occurredAtMs: 3000,
           text: 'must not outlive consent',
           finalSegment: true,
@@ -747,10 +960,121 @@ void main() {
     await hub.close();
     await adapter.close();
   });
+
+  test(
+    'managed device connection mints typed STT auth and revocation aborts audio',
+    () async {
+      final gateway = _FakeAuthGateway(_session('user-a'));
+      final auth = AuthController(
+        gateway,
+        consentStore: VolatileConsentStore()..receipt = _receipt('user-a'),
+      );
+      await auth.restoreSession();
+      final hub = _FakeHub();
+      final adapter = _DeviceAdapter(audioCodec: DeviceAudioCodec.pcm8);
+      final managedStt = _FakeManagedStt(
+        ManagedSttSession(
+          websocketUrl:
+              'wss://api.example.test/v1/stt/sessions/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/stream',
+          session: _session('user-a'),
+        ),
+      );
+      final services = AppServices.forTesting(
+        auth: auth,
+        nativeHub: hub,
+        deviceRelay: DeviceRelayService(
+          role: DeviceRelayRole.mobileOwner,
+          adapter: adapter,
+        ),
+        memoryDatabasePath: (uid) => '/tmp/$uid.sqlite3',
+        managedStt: managedStt,
+      );
+      await services.initialize();
+
+      await services.connectDevice('omi-managed');
+
+      expect(managedStt.requests, hasLength(1));
+      expect(managedStt.requests.single.language, 'multi');
+      expect(managedStt.requests.single.encoding, ManagedSttEncoding.linear16);
+      expect(managedStt.requests.single.sampleRate, 8000);
+      expect(managedStt.requests.single.deviceId, hasLength(64));
+      expect(hub.transcriptionAuth.single, isA<TranscriptionAuthManaged>());
+      expect(hub.transcriptionEncoding.single, AudioEncoding.pcmU8);
+      final nativeAuth =
+          hub.transcriptionAuth.single as TranscriptionAuthManaged;
+      expect(nativeAuth.firebaseToken, 'token-user-a');
+      expect(nativeAuth.endpoint, managedStt.result.websocketUrl);
+      expect(services.deviceAudio.active, isTrue);
+
+      final revocation = auth.revokeProcessingConsent();
+      await _waitFor(() => hub.stoppedAudioStreams == 1);
+      await revocation;
+      await _waitFor(() => !services.deviceAudio.active);
+
+      services.dispose();
+      await hub.close();
+      await adapter.close();
+    },
+  );
+
+  test(
+    'managed Opus works and explicit local transcription fails before audio starts',
+    () async {
+      final auth = AuthController(
+        _FakeAuthGateway(_session('user-a')),
+        consentStore: VolatileConsentStore()..receipt = _receipt('user-a'),
+      );
+      await auth.restoreSession();
+      final hub = _FakeHub();
+      final adapter = _DeviceAdapter(audioCodec: DeviceAudioCodec.opusFs320);
+      final managedStt = _FakeManagedStt(
+        ManagedSttSession(
+          websocketUrl:
+              'wss://api.example.test/v1/stt/sessions/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/stream',
+          session: _session('user-a'),
+        ),
+      );
+      final services = AppServices.forTesting(
+        auth: auth,
+        nativeHub: hub,
+        deviceRelay: DeviceRelayService(
+          role: DeviceRelayRole.mobileOwner,
+          adapter: adapter,
+        ),
+        memoryDatabasePath: (uid) => '/tmp/$uid.sqlite3',
+        managedStt: managedStt,
+      );
+      await services.initialize();
+
+      await services.connectDevice('omi-managed-opus');
+      expect(managedStt.requests.single.encoding, ManagedSttEncoding.opus);
+      expect(managedStt.requests.single.sampleRate, 16000);
+      await services.disconnectDevice();
+
+      await expectLater(
+        services.connectDevice(
+          'omi-local',
+          transcriptionAuth: const TranscriptionAuthLocal(),
+        ),
+        throwsA(isA<LocalTranscriptionUnavailable>()),
+      );
+      expect(hub.transcriptionAuth, hasLength(1));
+
+      services.dispose();
+      await hub.close();
+      await adapter.close();
+    },
+  );
 }
 
 AuthSession _session(String uid) =>
     AuthSession(uid: uid, idToken: 'token-$uid', expiresAt: DateTime.utc(2030));
+
+ManagedSttSession _managedSession(String uid) => ManagedSttSession(
+  websocketUrl:
+      'wss://worker.example.test/v1/stt/sessions/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/stream',
+  session: _session(uid),
+);
 
 ProcessingConsentReceipt _receipt(String uid) =>
     ProcessingConsentReceipt.current(
@@ -760,7 +1084,7 @@ ProcessingConsentReceipt _receipt(String uid) =>
 
 Future<void> _waitFor(bool Function() condition) async {
   for (var attempt = 0; attempt < 100 && !condition(); attempt += 1) {
-    await Future<void>.delayed(Duration.zero);
+    await Future<void>.delayed(const Duration(milliseconds: 1));
   }
   expect(condition(), isTrue);
 }
@@ -842,11 +1166,21 @@ final class _FakeHub implements NativeHub {
   final cancelled = <String>[];
   final messages = <(String, String)>[];
   final approvals = <(String, ApprovalDecision)>[];
+  final atomicApprovals = <(String, String)>[];
+  final executedProposals = <String>[];
   final assistantConfigurations =
       <(AssistantProvider, String, String?, String)>[];
   final trustedAssistantOrigins = <String>[];
   final assistantClears = <String>[];
+  final transcriptionAuth = <TranscriptionAuth>[];
+  final transcriptionEncoding = <AudioEncoding>[];
+  final transcriptionStartRequests = <String, String>{};
+  int stoppedAudioStreams = 0;
   bool failCancel = false;
+  bool failAtomicApproval = false;
+  bool rejectAtomicApproval = false;
+  bool rejectAtomicApprovalWithoutFollowup = false;
+  bool dropAtomicApproval = false;
 
   @override
   bool get available => true;
@@ -888,6 +1222,7 @@ final class _FakeHub implements NativeHub {
     String? text,
     String? application,
     String? windowTitle,
+    TranscriptLocator? transcriptLocator,
   }) {
     captures.add(
       _Capture(
@@ -896,6 +1231,7 @@ final class _FakeHub implements NativeHub {
         source: source,
         occurredAtMs: occurredAtMs,
         text: text,
+        transcriptLocator: transcriptLocator,
       ),
     );
   }
@@ -959,6 +1295,117 @@ final class _FakeHub implements NativeHub {
     required bool endOfStream,
     required Uint8List bytes,
   }) {}
+
+  @override
+  void startTranscription({
+    required String requestId,
+    required String audioStreamId,
+    required String deviceId,
+    required TranscriptionAuth auth,
+    required String language,
+    required int sampleRateHz,
+    required int channels,
+    required AudioEncoding encoding,
+  }) {
+    transcriptionAuth.add(auth);
+    transcriptionEncoding.add(encoding);
+    transcriptionStartRequests[audioStreamId] = requestId;
+    eventsController.add(
+      NativeEventTranscriptionStatus(
+        value: TranscriptionStatus(
+          requestId: requestId,
+          audioStreamId: audioStreamId,
+          state: TranscriptionState.started,
+          sttEpoch: 0,
+        ),
+      ),
+    );
+  }
+
+  @override
+  void stopTranscription({
+    required String requestId,
+    required String audioStreamId,
+  }) {
+    stoppedAudioStreams += 1;
+    eventsController.add(
+      NativeEventTranscriptionStopAcknowledged(
+        value: TranscriptionStopAcknowledgement(
+          requestId: requestId,
+          audioStreamId: audioStreamId,
+          accepted: true,
+        ),
+      ),
+    );
+    final startRequestId = transcriptionStartRequests.remove(audioStreamId);
+    if (startRequestId != null) {
+      eventsController.add(
+        NativeEventTranscriptionStatus(
+          value: TranscriptionStatus(
+            requestId: startRequestId,
+            audioStreamId: audioStreamId,
+            state: TranscriptionState.cancelled,
+            sttEpoch: 0,
+          ),
+        ),
+      );
+    }
+  }
+
+  @override
+  void approveAndExecuteComputerUse({
+    required String requestId,
+    required String proposalId,
+  }) {
+    if (failAtomicApproval) throw StateError('command queue unavailable');
+    if (dropAtomicApproval) return;
+    if (rejectAtomicApprovalWithoutFollowup) {
+      eventsController.add(
+        NativeEventApprovalExecutionAcknowledged(
+          value: ApprovalExecutionAcknowledgement(
+            requestId: requestId,
+            proposalId: proposalId,
+            accepted: false,
+          ),
+        ),
+      );
+      return;
+    }
+    if (rejectAtomicApproval) {
+      eventsController
+        ..add(
+          NativeEventApprovalExecutionAcknowledged(
+            value: ApprovalExecutionAcknowledgement(
+              requestId: requestId,
+              proposalId: proposalId,
+              accepted: false,
+            ),
+          ),
+        )
+        ..add(
+          NativeEventError(
+            value: NativeError(
+              requestId: requestId,
+              code: 'computer_use_unavailable',
+              message: 'permissions unavailable',
+              retryable: true,
+            ),
+          ),
+        );
+      return;
+    }
+    atomicApprovals.add((requestId, proposalId));
+    executedProposals.add(proposalId);
+    eventsController.add(
+      NativeEventApprovalExecutionAcknowledged(
+        value: ApprovalExecutionAcknowledgement(
+          requestId: requestId,
+          proposalId: proposalId,
+          accepted: true,
+        ),
+      ),
+    );
+  }
 }
 
 final class _Capture {
@@ -968,6 +1415,7 @@ final class _Capture {
     required this.source,
     required this.occurredAtMs,
     required this.text,
+    required this.transcriptLocator,
   });
 
   final String requestId;
@@ -975,9 +1423,13 @@ final class _Capture {
   final CaptureSource source;
   final int occurredAtMs;
   final String? text;
+  final TranscriptLocator? transcriptLocator;
 }
 
 final class _DeviceAdapter implements DeviceRelayAdapter {
+  _DeviceAdapter({this.audioCodec = DeviceAudioCodec.opus});
+
+  final DeviceAudioCodec audioCodec;
   final audio = StreamController<List<int>>.broadcast();
   final connections = StreamController<bool>.broadcast();
   int disconnectCalls = 0;
@@ -1006,11 +1458,7 @@ final class _DeviceAdapter implements DeviceRelayAdapter {
   Future<RelayDevice> connect(String deviceId) async {
     connectCalls += 1;
     await connectBarrier?.future;
-    return RelayDevice(
-      id: deviceId,
-      name: 'Omi',
-      audioCodec: DeviceAudioCodec.opus,
-    );
+    return RelayDevice(id: deviceId, name: 'Omi', audioCodec: audioCodec);
   }
 
   @override
@@ -1021,4 +1469,44 @@ final class _DeviceAdapter implements DeviceRelayAdapter {
 
   @override
   Stream<bool> connectionState(String deviceId) => connections.stream;
+}
+
+typedef _ManagedSttRequest = ({
+  String idempotencyKey,
+  String deviceId,
+  String language,
+  ManagedSttEncoding encoding,
+  int sampleRate,
+  int channels,
+});
+
+final class _FakeManagedStt implements ManagedSttClient {
+  _FakeManagedStt(this.result, {Uri? trustedWorkerOrigin})
+    : trustedWorkerOrigin =
+          trustedWorkerOrigin ?? Uri.parse('https://api.example.test/');
+
+  final ManagedSttSession result;
+  @override
+  final Uri trustedWorkerOrigin;
+  final requests = <_ManagedSttRequest>[];
+
+  @override
+  Future<ManagedSttSession> createSession({
+    required String idempotencyKey,
+    required String deviceId,
+    required String language,
+    required ManagedSttEncoding encoding,
+    required int sampleRate,
+    required int channels,
+  }) async {
+    requests.add((
+      idempotencyKey: idempotencyKey,
+      deviceId: deviceId,
+      language: language,
+      encoding: encoding,
+      sampleRate: sampleRate,
+      channels: channels,
+    ));
+    return result;
+  }
 }

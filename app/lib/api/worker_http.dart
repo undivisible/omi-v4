@@ -19,7 +19,30 @@ final class WorkerHttpClient {
   final Future<AuthSession?> Function() sessionProvider;
   final http.Client _client;
 
+  Uri get trustedOrigin {
+    if (_baseUri.scheme != 'https') {
+      throw StateError('Managed Worker features require an HTTPS API origin.');
+    }
+    return _baseUri.replace(path: '/', query: null, fragment: null);
+  }
+
   Future<({int statusCode, Object? body})> send({
+    required String method,
+    required String path,
+    Map<String, String> query = const {},
+    Map<String, Object?>? body,
+  }) async {
+    final response = await sendWithSession(
+      method: method,
+      path: path,
+      query: query,
+      body: body,
+    );
+    return (statusCode: response.statusCode, body: response.body);
+  }
+
+  Future<({AuthSession session, int statusCode, Object? body})>
+  sendWithSession({
     required String method,
     required String path,
     Map<String, String> query = const {},
@@ -51,7 +74,7 @@ final class WorkerHttpClient {
         throw const WorkerResponseException('Worker returned invalid JSON');
       }
     }
-    return (statusCode: response.statusCode, body: decoded);
+    return (session: session, statusCode: response.statusCode, body: decoded);
   }
 
   void close() => _client.close();
@@ -74,6 +97,114 @@ final class WorkerHttpClient {
       );
     }
     return uri.path.endsWith('/') ? uri : uri.replace(path: '${uri.path}/');
+  }
+}
+
+abstract interface class ManagedSttClient {
+  Uri get trustedWorkerOrigin;
+
+  Future<ManagedSttSession> createSession({
+    required String idempotencyKey,
+    required String deviceId,
+    required String language,
+    required ManagedSttEncoding encoding,
+    required int sampleRate,
+    required int channels,
+  });
+}
+
+enum ManagedSttEncoding { linear16, opus }
+
+final class ManagedSttSession {
+  const ManagedSttSession({required this.websocketUrl, required this.session});
+
+  final String websocketUrl;
+  final AuthSession session;
+}
+
+final class WorkerManagedSttClient implements ManagedSttClient {
+  const WorkerManagedSttClient(this._client);
+
+  final WorkerHttpClient _client;
+
+  @override
+  Uri get trustedWorkerOrigin => _client.trustedOrigin;
+
+  @override
+  Future<ManagedSttSession> createSession({
+    required String idempotencyKey,
+    required String deviceId,
+    required String language,
+    required ManagedSttEncoding encoding,
+    required int sampleRate,
+    required int channels,
+  }) async {
+    final response = await _client.sendWithSession(
+      method: 'POST',
+      path: '/v1/stt/sessions',
+      body: {
+        'idempotencyKey': idempotencyKey,
+        'model': 'nova-3',
+        'language': language,
+        'encoding': encoding.name,
+        'sampleRate': sampleRate,
+        'channels': channels,
+        'diarize': true,
+        'interimResults': true,
+        'deviceId': deviceId,
+        'sourceId': 'omi-device',
+      },
+    );
+    if (response.statusCode != 200 && response.statusCode != 201) {
+      throw WorkerResponseException(
+        'Managed transcription session was rejected (${response.statusCode})',
+      );
+    }
+    final body = response.body;
+    if (body is! Map<String, Object?> ||
+        body.keys.toSet().difference(const {
+          'sessionId',
+          'websocketUrl',
+          'maxSessionSeconds',
+          'state',
+        }).isNotEmpty ||
+        body.length != 4 ||
+        body['sessionId'] is! String ||
+        body['websocketUrl'] is! String ||
+        body['maxSessionSeconds'] is! int ||
+        body['state'] != 'ready') {
+      throw const WorkerResponseException(
+        'Worker returned an invalid transcription session',
+      );
+    }
+    final sessionId = body['sessionId']! as String;
+    final websocketUrl = Uri.tryParse(body['websocketUrl']! as String);
+    final maxSessionSeconds = body['maxSessionSeconds']! as int;
+    final loopback =
+        websocketUrl != null &&
+        {
+          'localhost',
+          '127.0.0.1',
+          '::1',
+        }.contains(websocketUrl.host.toLowerCase());
+    if (!RegExp(r'^[a-f0-9]{64}$').hasMatch(sessionId) ||
+        websocketUrl == null ||
+        (websocketUrl.scheme != 'wss' &&
+            !(websocketUrl.scheme == 'ws' && loopback)) ||
+        websocketUrl.userInfo.isNotEmpty ||
+        websocketUrl.hasQuery ||
+        websocketUrl.hasFragment ||
+        !websocketUrl.path.endsWith('/v1/stt/sessions/$sessionId/stream') ||
+        maxSessionSeconds <= 0 ||
+        maxSessionSeconds > 3600) {
+      throw const WorkerResponseException(
+        'Worker returned an invalid transcription session',
+      );
+    }
+    return ManagedSttSession(
+      websocketUrl: websocketUrl.toString(),
+      session: response.session,
+    );
   }
 }
 

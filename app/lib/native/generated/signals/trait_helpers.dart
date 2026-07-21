@@ -2,6 +2,52 @@
 part of 'signals.dart';
 
 class TraitHelpers {
+  static void serializeOptionComputerUseAction(
+    ComputerUseAction? value,
+    BinarySerializer serializer,
+  ) {
+    if (value == null) {
+      serializer.serializeOptionTag(false);
+    } else {
+      serializer.serializeOptionTag(true);
+      value.serialize(serializer);
+    }
+  }
+
+  static ComputerUseAction? deserializeOptionComputerUseAction(
+    BinaryDeserializer deserializer,
+  ) {
+    final tag = deserializer.deserializeOptionTag();
+    if (tag) {
+      return ComputerUseAction.deserialize(deserializer);
+    } else {
+      return null;
+    }
+  }
+
+  static void serializeOptionTranscriptLocator(
+    TranscriptLocator? value,
+    BinarySerializer serializer,
+  ) {
+    if (value == null) {
+      serializer.serializeOptionTag(false);
+    } else {
+      serializer.serializeOptionTag(true);
+      value.serialize(serializer);
+    }
+  }
+
+  static TranscriptLocator? deserializeOptionTranscriptLocator(
+    BinaryDeserializer deserializer,
+  ) {
+    final tag = deserializer.deserializeOptionTag();
+    if (tag) {
+      return TranscriptLocator.deserialize(deserializer);
+    } else {
+      return null;
+    }
+  }
+
   static void serializeOptionI64(int? value, BinarySerializer serializer) {
     if (value == null) {
       serializer.serializeOptionTag(false);
@@ -33,6 +79,24 @@ class TraitHelpers {
     final tag = deserializer.deserializeOptionTag();
     if (tag) {
       return deserializer.deserializeString();
+    } else {
+      return null;
+    }
+  }
+
+  static void serializeOptionU64(Uint64? value, BinarySerializer serializer) {
+    if (value == null) {
+      serializer.serializeOptionTag(false);
+    } else {
+      serializer.serializeOptionTag(true);
+      serializer.serializeUint64(value);
+    }
+  }
+
+  static Uint64? deserializeOptionU64(BinaryDeserializer deserializer) {
+    final tag = deserializer.deserializeOptionTag();
+    if (tag) {
+      return deserializer.deserializeUint64();
     } else {
       return null;
     }

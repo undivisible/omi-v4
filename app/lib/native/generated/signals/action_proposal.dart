@@ -9,6 +9,7 @@ class ActionProposal {
     required this.title,
     required this.summary,
     required this.risk,
+    this.computerAction,
     this.expiresAtMs,
   });
 
@@ -20,6 +21,9 @@ class ActionProposal {
       title: deserializer.deserializeString(),
       summary: deserializer.deserializeString(),
       risk: ActionRiskExtension.deserialize(deserializer),
+      computerAction: TraitHelpers.deserializeOptionComputerUseAction(
+        deserializer,
+      ),
       expiresAtMs: TraitHelpers.deserializeOptionI64(deserializer),
     );
     deserializer.decreaseContainerDepth();
@@ -40,6 +44,7 @@ class ActionProposal {
   final String title;
   final String summary;
   final ActionRisk risk;
+  final ComputerUseAction? computerAction;
   final int? expiresAtMs;
 
   ActionProposal copyWith({
@@ -48,6 +53,7 @@ class ActionProposal {
     String? title,
     String? summary,
     ActionRisk? risk,
+    ComputerUseAction? Function()? computerAction,
     int? Function()? expiresAtMs,
   }) {
     return ActionProposal(
@@ -56,6 +62,9 @@ class ActionProposal {
       title: title ?? this.title,
       summary: summary ?? this.summary,
       risk: risk ?? this.risk,
+      computerAction: computerAction == null
+          ? this.computerAction
+          : computerAction(),
       expiresAtMs: expiresAtMs == null ? this.expiresAtMs : expiresAtMs(),
     );
   }
@@ -67,6 +76,7 @@ class ActionProposal {
     serializer.serializeString(title);
     serializer.serializeString(summary);
     risk.serialize(serializer);
+    TraitHelpers.serializeOptionComputerUseAction(computerAction, serializer);
     TraitHelpers.serializeOptionI64(expiresAtMs, serializer);
     serializer.decreaseContainerDepth();
   }
@@ -88,12 +98,20 @@ class ActionProposal {
         title == other.title &&
         summary == other.summary &&
         risk == other.risk &&
+        computerAction == other.computerAction &&
         expiresAtMs == other.expiresAtMs;
   }
 
   @override
-  int get hashCode =>
-      Object.hash(proposalId, requestId, title, summary, risk, expiresAtMs);
+  int get hashCode => Object.hash(
+    proposalId,
+    requestId,
+    title,
+    summary,
+    risk,
+    computerAction,
+    expiresAtMs,
+  );
 
   @override
   String toString() {
@@ -107,6 +125,7 @@ class ActionProposal {
           'title: $title, '
           'summary: $summary, '
           'risk: $risk, '
+          'computerAction: $computerAction, '
           'expiresAtMs: $expiresAtMs'
           ')';
       return true;

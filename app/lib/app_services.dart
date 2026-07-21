@@ -12,6 +12,7 @@ import 'capabilities/desktop_capabilities.dart';
 import 'channels/channels.dart';
 import 'device/device.dart';
 import 'memory/memory.dart';
+import 'native/generated/signals/signals.dart' show NativeError;
 import 'native/native_hub.dart';
 import 'settings/settings.dart';
 
@@ -25,6 +26,7 @@ typedef _TranscriptCaptureFingerprint = ({
   CaptureSource source,
   int occurredAtMs,
   String text,
+  TranscriptLocator locator,
 });
 
 typedef _PendingTranscriptCapture = ({
@@ -39,14 +41,25 @@ typedef _ChatProposal = ({
   int generation,
   String parentRequestId,
   int? expiresAtMs,
+  bool executable,
 });
 
 const _completedTranscriptCapacity = 256;
 const _managedAssistantModel = 'mimo-v2.5-pro';
 const _defaultAssistantRefreshLead = Duration(minutes: 5);
 const _defaultAssistantMinimumRefreshDelay = Duration(seconds: 30);
+const _defaultApprovalAcknowledgementTimeout = Duration(seconds: 5);
+
+final class LocalTranscriptionUnavailable implements Exception {
+  const LocalTranscriptionUnavailable();
+
+  @override
+  String toString() =>
+      'LocalTranscriptionUnavailable: Local transcription is not available yet.';
+}
 
 final class AppServices {
+  static const localTranscriptionAvailable = false;
   AppServices._({
     required this.auth,
     required this.nativeHub,
@@ -58,10 +71,13 @@ final class AppServices {
     this.settings,
     this.channels,
     this._worker,
+    this._managedStt,
     this._workerOrigin,
     DateTime Function()? now,
     this._assistantRefreshLead = _defaultAssistantRefreshLead,
     this._assistantMinimumRefreshDelay = _defaultAssistantMinimumRefreshDelay,
+    this._approvalAcknowledgementTimeout =
+        _defaultApprovalAcknowledgementTimeout,
   }) : deviceAudio = DeviceAudioForwarder(relay: deviceRelay, hub: nativeHub),
        capabilities = PlatformDesktopCapabilityGateway(
          workspaceRoots: workspaceRoots,
@@ -73,7 +89,6 @@ final class AppServices {
     final nativeHub = createNativeHub();
     final deviceRelay = _createDeviceRelay();
     const origin = String.fromEnvironment('OMI_API_ORIGIN');
-    const assistantOrigin = String.fromEnvironment('OMI_WORKER_ORIGIN');
     if (origin.isEmpty) {
       return AppServices._(
         auth: auth,
@@ -83,7 +98,6 @@ final class AppServices {
         workspaceRoots: PreferencesWorkspaceRootStore(),
         configurationMessage:
             'Set OMI_API_ORIGIN and configure Firebase to connect.',
-        workerOrigin: _parseWorkerOrigin(assistantOrigin),
       );
     }
     final worker = WorkerHttpClient(
@@ -101,7 +115,8 @@ final class AppServices {
       settings: SettingsClient(WorkerSettingsTransport(worker)),
       channels: ChannelClient(WorkerChannelTransport(worker)),
       worker: worker,
-      workerOrigin: _parseWorkerOrigin(assistantOrigin),
+      managedStt: WorkerManagedSttClient(worker),
+      workerOrigin: worker.trustedOrigin,
     );
   }
 
@@ -115,7 +130,6 @@ final class AppServices {
     final nativeHub = createNativeHub();
     final deviceRelay = _createDeviceRelay();
     const origin = String.fromEnvironment('OMI_API_ORIGIN');
-    const assistantOrigin = String.fromEnvironment('OMI_WORKER_ORIGIN');
     if (origin.isEmpty) {
       return AppServices._(
         auth: auth,
@@ -124,7 +138,6 @@ final class AppServices {
         memoryDatabasePath: _defaultMemoryDatabasePath,
         workspaceRoots: PreferencesWorkspaceRootStore(),
         configurationMessage: 'Set OMI_API_ORIGIN to connect.',
-        workerOrigin: _parseWorkerOrigin(assistantOrigin),
       );
     }
     final worker = WorkerHttpClient(
@@ -144,7 +157,8 @@ final class AppServices {
       settings: SettingsClient(WorkerSettingsTransport(worker)),
       channels: ChannelClient(WorkerChannelTransport(worker)),
       worker: worker,
-      workerOrigin: _parseWorkerOrigin(assistantOrigin),
+      managedStt: WorkerManagedSttClient(worker),
+      workerOrigin: worker.trustedOrigin,
     );
   }
 
@@ -154,11 +168,13 @@ final class AppServices {
     required AuthController auth,
     required String Function(String uid) memoryDatabasePath,
     WorkspaceRootStore? workspaceRoots,
-    Uri? workerOrigin,
+    ManagedSttClient? managedStt,
     DateTime Function()? now,
     Duration assistantRefreshLead = _defaultAssistantRefreshLead,
     Duration assistantMinimumRefreshDelay =
         _defaultAssistantMinimumRefreshDelay,
+    Duration approvalAcknowledgementTimeout =
+        _defaultApprovalAcknowledgementTimeout,
   }) => AppServices._(
     auth: auth,
     nativeHub: nativeHub,
@@ -166,12 +182,14 @@ final class AppServices {
     memoryDatabasePath: (uid) async => memoryDatabasePath(uid),
     workspaceRoots: workspaceRoots ?? VolatileWorkspaceRootStore(),
     configurationMessage: 'Test services are not connected.',
-    workerOrigin: workerOrigin == null
+    managedStt: managedStt,
+    workerOrigin: managedStt == null
         ? null
-        : _validateWorkerOrigin(workerOrigin),
+        : _validateWorkerOrigin(managedStt.trustedWorkerOrigin),
     now: now,
     assistantRefreshLead: assistantRefreshLead,
     assistantMinimumRefreshDelay: assistantMinimumRefreshDelay,
+    approvalAcknowledgementTimeout: approvalAcknowledgementTimeout,
   );
 
   final AuthController auth;
@@ -185,10 +203,12 @@ final class AppServices {
   final SettingsClient? settings;
   final ChannelClient? channels;
   final WorkerHttpClient? _worker;
+  final ManagedSttClient? _managedStt;
   final Uri? _workerOrigin;
   final DateTime Function() _now;
   final Duration _assistantRefreshLead;
   final Duration _assistantMinimumRefreshDelay;
+  final Duration _approvalAcknowledgementTimeout;
   final Future<String> Function(String uid) memoryDatabasePath;
   final _nativeEvents = StreamController<NativeEvent>.broadcast();
   final _chatAuthorityChanges = StreamController<int>.broadcast(sync: true);
@@ -203,6 +223,10 @@ final class AppServices {
   int _chatTransportSequence = 0;
   final _chatRequests = <String, _ChatRequest>{};
   final _chatProposals = <String, _ChatProposal>{};
+  final _atomicApprovalProposalByRequest = <String, String>{};
+  final _atomicApprovalRequestByProposal = <String, String>{};
+  final _atomicApprovalAcknowledgementTimers = <String, Timer>{};
+  final _ambiguousAtomicApprovalProposalByRequest = <String, String>{};
   final _terminalChatRequests = <String>{};
   bool _nativeInitialized = false;
   bool _assistantConfigured = false;
@@ -330,25 +354,55 @@ final class AppServices {
       _chatProposals.remove(proposalId);
       throw StateError('This action proposal is unavailable or expired.');
     }
+    if (_atomicApprovalRequestByProposal.containsKey(proposalId)) {
+      throw StateError('This action proposal is already being approved.');
+    }
+    if (_atomicApprovalRequestByProposal.length >=
+        _completedTranscriptCapacity) {
+      throw StateError(
+        'Too many action approvals are awaiting reconciliation.',
+      );
+    }
     final requestId =
         'approval-g$_authorityGeneration-${_chatTransportSequence++}';
     _chatRequests[requestId] = (
       generation: _authorityGeneration,
       kind: _ChatRequestKind.approval,
     );
-    _chatProposals.remove(proposalId);
-    try {
-      nativeHub.decideApproval(
-        requestId: requestId,
-        proposalId: proposalId,
-        decision: decision,
+    if (decision == ApprovalDecision.approveOnce && proposal.executable) {
+      _atomicApprovalProposalByRequest[requestId] = proposalId;
+      _atomicApprovalRequestByProposal[proposalId] = requestId;
+      _atomicApprovalAcknowledgementTimers[requestId] = Timer(
+        _approvalAcknowledgementTimeout,
+        () => _approvalAcknowledgementTimedOut(requestId, proposalId),
       );
-      return requestId;
-    } catch (_) {
-      _chatRequests.remove(requestId);
-      _chatProposals[proposalId] = proposal;
-      rethrow;
+      try {
+        nativeHub.approveAndExecuteComputerUse(
+          requestId: requestId,
+          proposalId: proposalId,
+        );
+      } catch (_) {
+        _chatRequests.remove(requestId);
+        _atomicApprovalProposalByRequest.remove(requestId);
+        _atomicApprovalRequestByProposal.remove(proposalId);
+        _atomicApprovalAcknowledgementTimers.remove(requestId)?.cancel();
+        rethrow;
+      }
+    } else {
+      _chatProposals.remove(proposalId);
+      try {
+        nativeHub.decideApproval(
+          requestId: requestId,
+          proposalId: proposalId,
+          decision: decision,
+        );
+      } catch (_) {
+        _chatRequests.remove(requestId);
+        _chatProposals[proposalId] = proposal;
+        rethrow;
+      }
     }
+    return requestId;
   }
 
   void cancelChatRequest(String requestId) {
@@ -362,6 +416,7 @@ final class AppServices {
   void _authChanged() {
     if (!productionReady || auth.snapshot.session?.uid != _configuredPersonId) {
       _fenceTranscriptCaptures();
+      unawaited(deviceAudio.stop());
     }
     unawaited(_queueProductionSync().onError((_, _) {}));
   }
@@ -468,8 +523,8 @@ final class AppServices {
       final generation = _authorityGeneration;
       final identity = [
         uid,
-        value.requestId,
-        value.segmentSequence,
+        value.audioStreamId,
+        value.segmentId,
       ].join('\u0000');
       final ingestionKey =
           'transcript-${sha256.convert(utf8.encode(identity))}';
@@ -477,6 +532,14 @@ final class AppServices {
         source: CaptureSource.omiDevice,
         occurredAtMs: value.occurredAtMs,
         text: text,
+        locator: TranscriptLocator(
+          deviceId: value.deviceId,
+          provider: value.provider,
+          streamId: value.audioStreamId,
+          segmentId: value.segmentId,
+          startMs: value.startMs,
+          endMs: value.endMs,
+        ),
       );
       final pending = _pendingTranscriptCaptures[ingestionKey];
       final completed = _completedTranscriptCaptures[ingestionKey];
@@ -505,6 +568,7 @@ final class AppServices {
           source: CaptureSource.omiDevice,
           occurredAtMs: value.occurredAtMs,
           text: text,
+          transcriptLocator: fingerprint.locator,
         );
       } catch (failure, stackTrace) {
         _pendingTranscriptCaptures.remove(ingestionKey);
@@ -516,6 +580,23 @@ final class AppServices {
 
   bool _acceptChatEvent(NativeEvent event) {
     final now = DateTime.now().millisecondsSinceEpoch;
+    if (event case NativeEventApprovalExecutionAcknowledged(:final value)) {
+      final proposalId =
+          _atomicApprovalProposalByRequest[value.requestId] ??
+          _ambiguousAtomicApprovalProposalByRequest[value.requestId];
+      if (proposalId == null || proposalId != value.proposalId) return false;
+      _atomicApprovalProposalByRequest.remove(value.requestId);
+      _ambiguousAtomicApprovalProposalByRequest.remove(value.requestId);
+      _atomicApprovalRequestByProposal.remove(proposalId);
+      _atomicApprovalAcknowledgementTimers.remove(value.requestId)?.cancel();
+      if (value.accepted) {
+        _chatProposals.remove(proposalId);
+      } else {
+        _chatRequests.remove(value.requestId);
+        _tombstoneChatRequest(value.requestId);
+      }
+      return true;
+    }
     if (event case NativeEventActionProposal(:final value)) {
       final parent = _chatRequests[value.requestId];
       if (parent == null ||
@@ -530,6 +611,7 @@ final class AppServices {
         generation: _authorityGeneration,
         parentRequestId: value.requestId,
         expiresAtMs: value.expiresAtMs,
+        executable: value.computerAction != null,
       );
       return true;
     }
@@ -567,6 +649,11 @@ final class AppServices {
       return false;
     }
     if (terminal) {
+      final proposalId = _atomicApprovalProposalByRequest.remove(requestId);
+      if (proposalId != null) {
+        _atomicApprovalRequestByProposal.remove(proposalId);
+      }
+      _atomicApprovalAcknowledgementTimers.remove(requestId)?.cancel();
       _chatRequests.remove(requestId);
       _tombstoneChatRequest(requestId);
       final failedParent =
@@ -617,7 +704,50 @@ final class AppServices {
     }
     _chatRequests.clear();
     _chatProposals.clear();
+    _atomicApprovalProposalByRequest.clear();
+    _atomicApprovalRequestByProposal.clear();
+    _ambiguousAtomicApprovalProposalByRequest.clear();
+    for (final timer in _atomicApprovalAcknowledgementTimers.values) {
+      timer.cancel();
+    }
+    _atomicApprovalAcknowledgementTimers.clear();
     _chatAuthorityChanges.add(_authorityGeneration);
+  }
+
+  void _approvalAcknowledgementTimedOut(String requestId, String proposalId) {
+    if (_atomicApprovalProposalByRequest[requestId] != proposalId ||
+        _atomicApprovalRequestByProposal[proposalId] != requestId) {
+      return;
+    }
+    _atomicApprovalProposalByRequest.remove(requestId);
+    _atomicApprovalAcknowledgementTimers.remove(requestId)?.cancel();
+    _ambiguousAtomicApprovalProposalByRequest[requestId] = proposalId;
+    if (_ambiguousAtomicApprovalProposalByRequest.length >
+        _completedTranscriptCapacity) {
+      final expiredRequestId =
+          _ambiguousAtomicApprovalProposalByRequest.keys.first;
+      final expiredProposalId = _ambiguousAtomicApprovalProposalByRequest
+          .remove(expiredRequestId);
+      if (expiredProposalId != null &&
+          _atomicApprovalRequestByProposal[expiredProposalId] ==
+              expiredRequestId) {
+        _atomicApprovalRequestByProposal.remove(expiredProposalId);
+        _chatProposals.remove(expiredProposalId);
+      }
+    }
+    _chatRequests.remove(requestId);
+    _tombstoneChatRequest(requestId);
+    _nativeEvents.add(
+      NativeEventError(
+        value: NativeError(
+          requestId: requestId,
+          code: 'approval_acknowledgement_timeout',
+          message:
+              'Native approval state is unknown; retry is blocked until reconciled.',
+          retryable: false,
+        ),
+      ),
+    );
   }
 
   Future<void> _stopCapture() async {
@@ -639,10 +769,16 @@ final class AppServices {
     _nativeInitialized = false;
   }
 
-  Future<RelayDevice> connectDevice(String deviceId) async {
+  Future<RelayDevice> connectDevice(
+    String deviceId, {
+    TranscriptionAuth? transcriptionAuth,
+  }) async {
     final operation = _lifecycle.then<void>((_) {}, onError: (_, _) {}).then((
       _,
     ) async {
+      if (transcriptionAuth is TranscriptionAuthLocal) {
+        throw const LocalTranscriptionUnavailable();
+      }
       final uid = auth.snapshot.session?.uid;
       if (!productionReady || !_nativeInitialized || uid == null) {
         throw StateError('Sign in and grant current data consent first.');
@@ -652,7 +788,19 @@ final class AppServices {
         if (!productionReady || auth.snapshot.session?.uid != uid) {
           throw StateError('Account authority changed while connecting.');
         }
-        await deviceAudio.start(device);
+        final selectedAuth =
+            transcriptionAuth ?? await _managedTranscriptionAuth(device, uid);
+        final selectedAuthIsCurrent = switch (selectedAuth) {
+          TranscriptionAuthManaged(:final firebaseToken) =>
+            auth.snapshot.session?.idToken == firebaseToken,
+          _ => true,
+        };
+        if (!productionReady ||
+            auth.snapshot.session?.uid != uid ||
+            !selectedAuthIsCurrent) {
+          throw StateError('Account authority changed while connecting.');
+        }
+        await deviceAudio.start(device, auth: selectedAuth);
         if (!productionReady || auth.snapshot.session?.uid != uid) {
           await deviceAudio.stop();
           throw StateError('Account authority changed while connecting.');
@@ -665,6 +813,52 @@ final class AppServices {
     });
     _lifecycle = operation.then<void>((_) {}, onError: (_, _) {});
     return operation;
+  }
+
+  Future<TranscriptionAuthManaged> _managedTranscriptionAuth(
+    RelayDevice device,
+    String uid,
+  ) async {
+    final managedStt = _managedStt;
+    if (managedStt == null) {
+      throw StateError(
+        'Managed transcription is not configured. Configure BYOK transcription instead.',
+      );
+    }
+    final encoding = switch (device.audioCodec) {
+      DeviceAudioCodec.pcm8 ||
+      DeviceAudioCodec.pcm16 => ManagedSttEncoding.linear16,
+      DeviceAudioCodec.opus ||
+      DeviceAudioCodec.opusFs320 => ManagedSttEncoding.opus,
+      DeviceAudioCodec.unknown => null,
+    };
+    if (encoding == null) {
+      throw StateError(
+        'Managed transcription does not support this device audio format.',
+      );
+    }
+    final nonce = DateTime.now().microsecondsSinceEpoch;
+    final idempotencyKey = sha256
+        .convert(utf8.encode('$uid\u0000${device.id}\u0000$nonce'))
+        .toString();
+    final managedDeviceId = sha256.convert(utf8.encode(device.id)).toString();
+    final result = await managedStt.createSession(
+      idempotencyKey: idempotencyKey,
+      deviceId: managedDeviceId,
+      language: 'multi',
+      encoding: encoding,
+      sampleRate: device.audioCodec.sampleRate,
+      channels: 1,
+    );
+    if (result.session.uid != uid || result.session.idToken.isEmpty) {
+      throw StateError(
+        'Account authority changed while creating transcription session.',
+      );
+    }
+    return TranscriptionAuthManaged(
+      endpoint: result.websocketUrl,
+      firebaseToken: result.session.idToken,
+    );
   }
 
   Future<void> disconnectDevice() async {
@@ -695,9 +889,6 @@ final class AppServices {
     auth.dispose();
   }
 }
-
-Uri? _parseWorkerOrigin(String value) =>
-    value.isEmpty ? null : _validateWorkerOrigin(Uri.parse(value));
 
 Uri _validateWorkerOrigin(Uri uri) {
   if (uri.scheme != 'https' ||

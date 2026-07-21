@@ -31,6 +31,21 @@ pub enum Command {
         managed_worker_origin: String,
     },
     ClearAssistant,
+    StartTranscription {
+        audio_stream_id: String,
+        device_id: String,
+        auth: TranscriptionAuth,
+        language: String,
+        sample_rate_hz: u32,
+        channels: u8,
+        encoding: AudioEncoding,
+    },
+    StopTranscription {
+        audio_stream_id: String,
+    },
+    ApproveAndExecuteComputerUse {
+        proposal_id: String,
+    },
     CaptureEvent {
         ingestion_key: String,
         source: CaptureSource,
@@ -38,6 +53,7 @@ pub enum Command {
         text: Option<String>,
         application: Option<String>,
         window_title: Option<String>,
+        transcript_locator: Option<TranscriptLocator>,
     },
     SearchMemory {
         query: String,
@@ -81,6 +97,29 @@ pub enum ApprovalDecision {
     Reject,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, SignalPiece)]
+pub enum ComputerUseAction {
+    Click {
+        x: i64,
+        y: i64,
+        button: MouseButton,
+        count: u32,
+    },
+    TypeText {
+        text: String,
+        clear: bool,
+        press_return: bool,
+        delay_ms: Option<u64>,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, SignalPiece)]
+pub enum MouseButton {
+    Left,
+    Right,
+    Middle,
+}
+
 #[derive(Debug, Deserialize, DartSignalBinary)]
 pub struct AudioChunk {
     pub request_id: String,
@@ -100,12 +139,46 @@ pub enum AudioEncoding {
     Opus,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, SignalPiece)]
+pub enum TranscriptionRoute {
+    Managed,
+    Byok,
+    Local,
+}
+
+#[derive(Clone, Deserialize, Eq, PartialEq, SignalPiece)]
+pub enum TranscriptionAuth {
+    Managed {
+        endpoint: String,
+        firebase_token: String,
+    },
+    Byok {
+        endpoint: String,
+        api_key: String,
+    },
+    Local,
+}
+
+impl TranscriptionAuth {
+    pub fn route(&self) -> TranscriptionRoute {
+        match self {
+            Self::Managed { .. } => TranscriptionRoute::Managed,
+            Self::Byok { .. } => TranscriptionRoute::Byok,
+            Self::Local => TranscriptionRoute::Local,
+        }
+    }
+}
+
 #[derive(Debug, Serialize, RustSignal)]
 pub enum NativeEvent {
     TranscriptDelta(TranscriptDelta),
+    TranscriptionStatus(TranscriptionStatus),
+    TranscriptionStopAcknowledged(TranscriptionStopAcknowledgement),
+    TranscriptGap(TranscriptGap),
     AssistantDelta(AssistantDelta),
     CurrentUpdate(CurrentUpdate),
     ActionProposal(ActionProposal),
+    ApprovalExecutionAcknowledged(ApprovalExecutionAcknowledgement),
     ToolProgress(ToolProgress),
     Error(NativeError),
     RuntimeStatus(RuntimeStatus),
@@ -114,13 +187,72 @@ pub enum NativeEvent {
 }
 
 #[derive(Debug, Serialize, SignalPiece)]
+pub struct TranscriptionStopAcknowledgement {
+    pub request_id: String,
+    pub audio_stream_id: String,
+    pub accepted: bool,
+}
+
+#[derive(Debug, Serialize, SignalPiece)]
+pub struct ApprovalExecutionAcknowledgement {
+    pub request_id: String,
+    pub proposal_id: String,
+    pub accepted: bool,
+}
+
+#[derive(Debug, Serialize, SignalPiece)]
 pub struct TranscriptDelta {
     pub request_id: String,
+    pub audio_stream_id: String,
+    pub segment_id: String,
     pub segment_sequence: u64,
+    pub stt_epoch: u32,
+    pub device_id: String,
+    pub provider: String,
+    pub start_ms: i64,
+    pub end_ms: i64,
     pub occurred_at_ms: i64,
     pub text: String,
     pub final_segment: bool,
     pub language: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, SignalPiece)]
+pub struct TranscriptLocator {
+    pub device_id: String,
+    pub provider: String,
+    pub stream_id: String,
+    pub segment_id: String,
+    pub start_ms: i64,
+    pub end_ms: i64,
+}
+
+#[derive(Debug, Serialize, SignalPiece)]
+pub struct TranscriptionStatus {
+    pub request_id: String,
+    pub audio_stream_id: String,
+    pub state: TranscriptionState,
+    pub stt_epoch: u32,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, SignalPiece)]
+pub enum TranscriptionState {
+    Started,
+    Reconnecting,
+    Draining,
+    Finished,
+    Cancelled,
+    Failed,
+}
+
+#[derive(Debug, Serialize, SignalPiece)]
+pub struct TranscriptGap {
+    pub request_id: String,
+    pub audio_stream_id: String,
+    pub stt_epoch: u32,
+    pub start_ms: i64,
+    pub end_ms: i64,
+    pub reason: String,
 }
 
 #[derive(Debug, Serialize, SignalPiece)]
@@ -145,6 +277,7 @@ pub struct ActionProposal {
     pub title: String,
     pub summary: String,
     pub risk: ActionRisk,
+    pub computer_action: Option<ComputerUseAction>,
     pub expires_at_ms: Option<i64>,
 }
 
