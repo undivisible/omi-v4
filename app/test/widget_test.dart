@@ -132,6 +132,37 @@ void main() {
     }
   });
 
+  testWidgets('stable memory and channel content is not a live region', (
+    tester,
+  ) async {
+    final semantics = tester.ensureSemantics();
+    await tester.pumpWidget(const OmiApp());
+    await openInterfacePreview(tester);
+
+    await tester.tap(find.byIcon(Icons.auto_stories_outlined));
+    await tester.pumpAndSettle();
+    expect(
+      tester
+          .getSemantics(find.text('Memory is not connected'))
+          .getSemanticsData()
+          .flagsCollection
+          .isLiveRegion,
+      isFalse,
+    );
+
+    await tester.tap(find.byIcon(Icons.checklist_rounded));
+    await tester.pumpAndSettle();
+    expect(
+      tester
+          .getSemantics(find.text('Connect Telegram'))
+          .getSemanticsData()
+          .flagsCollection
+          .isLiveRegion,
+      isFalse,
+    );
+    semantics.dispose();
+  });
+
   testWidgets('phone preview reaches all surfaces without side effects', (
     tester,
   ) async {
@@ -162,5 +193,74 @@ void main() {
     expect(find.byTooltip('Scan'), findsNothing);
     expect(find.byTooltip('Connect'), findsNothing);
     debugDefaultTargetPlatformOverride = null;
+  });
+
+  for (final surface in [
+    (const Size(600, 800), false),
+    (const Size(760, 700), true),
+    (const Size(1050, 700), true),
+  ]) {
+    testWidgets(
+      'preview navigation is responsive at ${surface.$1.width.toInt()} pixels',
+      (tester) async {
+        tester.view.physicalSize = surface.$1;
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+        await tester.pumpWidget(const OmiApp());
+        await openInterfacePreview(tester);
+
+        expect(
+          find.byType(NavigationRail),
+          surface.$2 ? findsOne : findsNothing,
+        );
+        expect(
+          find.byType(NavigationBar),
+          surface.$2 ? findsNothing : findsOne,
+        );
+        if (surface.$1.width == 1050) {
+          expect(
+            tester.widget<NavigationRail>(find.byType(NavigationRail)).extended,
+            isTrue,
+          );
+        }
+        expect(tester.takeException(), isNull);
+      },
+    );
+  }
+
+  testWidgets('onboarding remains scrollable at short desktop height', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(800, 360);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await tester.pumpWidget(const OmiApp());
+
+    await reachPreviewGate(tester);
+    expect(find.text('Production setup is not ready.'), findsOneWidget);
+    expect(find.byKey(const Key('open_interface_preview')), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('preview remains usable at 200 percent text scale', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(600, 900);
+    tester.view.devicePixelRatio = 1;
+    tester.platformDispatcher.textScaleFactorTestValue = 2;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+    await tester.pumpWidget(const OmiApp());
+    await openInterfacePreview(tester);
+
+    await openNarrowDestination(tester, 4);
+    expect(
+      find.text('Each connection makes your assistant more useful.'),
+      findsOneWidget,
+    );
+    expect(tester.takeException(), isNull);
   });
 }

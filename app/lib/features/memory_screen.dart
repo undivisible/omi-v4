@@ -51,6 +51,7 @@ class _MemoryScreenState extends State<MemoryScreen> {
                 icon: Icons.sync_rounded,
                 title: 'Loading memory',
                 detail: 'Retrieving your latest memories…',
+                liveRegion: true,
               );
             }
             if (snapshot.hasError) {
@@ -58,6 +59,7 @@ class _MemoryScreenState extends State<MemoryScreen> {
                 icon: Icons.error_outline_rounded,
                 title: 'Memory could not load',
                 detail: '${snapshot.error}',
+                liveRegion: true,
               );
             }
             final items = snapshot.data!.items;
@@ -90,17 +92,22 @@ class _StatusTile extends StatelessWidget {
     required this.icon,
     required this.title,
     required this.detail,
+    this.liveRegion = false,
   });
 
   final IconData icon;
   final String title;
   final String detail;
+  final bool liveRegion;
 
   @override
-  Widget build(BuildContext context) => BaseTile(
-    icon: icon,
-    title: title,
-    detail: detail,
-    trailing: const SizedBox.shrink(),
+  Widget build(BuildContext context) => Semantics(
+    liveRegion: liveRegion,
+    child: BaseTile(
+      icon: icon,
+      title: title,
+      detail: detail,
+      trailing: const SizedBox.shrink(),
+    ),
   );
 }

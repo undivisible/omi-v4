@@ -87,24 +87,15 @@ class PageTitle extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Row(
+    return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(title, style: Theme.of(context).textTheme.displaySmall),
-              const SizedBox(height: 5),
-              Text(subtitle, style: const TextStyle(color: Colors.white60)),
-            ],
-          ),
+        Semantics(
+          header: true,
+          child: Text(title, style: Theme.of(context).textTheme.displaySmall),
         ),
-        IconButton(onPressed: () {}, icon: const Icon(Icons.search_rounded)),
-        IconButton(
-          onPressed: () {},
-          icon: const Icon(Icons.more_horiz_rounded),
-        ),
+        const SizedBox(height: 5),
+        Text(subtitle, style: const TextStyle(color: Colors.white60)),
       ],
     );
   }

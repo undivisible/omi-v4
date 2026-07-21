@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../app_services.dart';
 import '../auth/auth.dart';
@@ -531,9 +532,15 @@ class _AuthenticationGateState extends State<AuthenticationGate> {
                 key: const Key('auth_otp'),
                 controller: code,
                 keyboardType: TextInputType.number,
+                autofillHints: const [AutofillHints.oneTimeCode],
+                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                textInputAction: TextInputAction.done,
                 decoration: const InputDecoration(
                   labelText: 'Verification code',
                 ),
+                onSubmitted: busy
+                    ? null
+                    : (_) => widget.auth.confirmPhoneOtp(code.text),
               ),
               const SizedBox(height: 10),
               FilledButton(
@@ -570,10 +577,18 @@ class _AuthenticationGateState extends State<AuthenticationGate> {
                   key: const Key('auth_phone'),
                   controller: phone,
                   keyboardType: TextInputType.phone,
+                  autofillHints: const [AutofillHints.telephoneNumber],
+                  textInputAction: TextInputAction.send,
                   decoration: const InputDecoration(
                     labelText: 'Phone number',
                     hintText: '+1 555 555 0123',
                   ),
+                  onSubmitted:
+                      busy ||
+                          !snapshot.consentGranted ||
+                          !phoneDisclosureAcknowledged
+                      ? null
+                      : (_) => widget.auth.requestPhoneOtp(phone.text),
                 ),
                 const SizedBox(height: 10),
                 FilledButton(
@@ -589,6 +604,10 @@ class _AuthenticationGateState extends State<AuthenticationGate> {
               ] else if (widget.auth.supportsDesktopBrowserHandoff) ...[
                 const Text(
                   'Phone verification opens in your browser. The browser returns a one-time Firebase sign-in token only to this desktop.',
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  'Completing browser sign-in does not grant Omi processing consent. You will review that separately after returning to Omi.',
                 ),
                 CheckboxListTile(
                   key: const Key('firebase_phone_disclosure'),
@@ -660,12 +679,23 @@ class _AuthenticationGateState extends State<AuthenticationGate> {
                 ],
               ),
             ],
+            if (busy)
+              Semantics(
+                liveRegion: true,
+                label: 'Authentication in progress',
+                child: SizedBox.shrink(),
+              ),
             if (snapshot.failure case final failure?) ...[
               const SizedBox(height: 10),
-              Text(
-                failure.message,
-                key: const Key('auth_failure'),
-                style: const TextStyle(color: Color(0xffffb4ab)),
+              Semantics(
+                liveRegion: true,
+                label: 'Authentication error. ${failure.message}',
+                excludeSemantics: true,
+                child: Text(
+                  failure.message,
+                  key: const Key('auth_failure'),
+                  style: const TextStyle(color: Color(0xffffb4ab)),
+                ),
               ),
             ],
           ],

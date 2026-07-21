@@ -190,14 +190,26 @@ class _ChannelTileState extends State<_ChannelTile> {
           _ when snapshot.data == true => 'Connected',
           _ => 'Use the same assistant from any device',
         };
-        return _SetupTile(
-          icon: widget.provider == ChannelProvider.telegram
-              ? Icons.send_outlined
-              : Icons.chat_bubble_outline_rounded,
-          title: 'Connect $name',
-          detail: detail,
-          state: snapshot.data == true ? 'Connected' : 'Not connected',
-          onPressed: waiting || snapshot.data == true ? null : requestLink,
+        final connectionState = snapshot.data == true
+            ? 'Connected'
+            : 'Not connected';
+        final announce =
+            waiting ||
+            snapshot.hasError ||
+            state.phase == ChannelLinkPhase.failed ||
+            state.phase == ChannelLinkPhase.awaitingConfirmation;
+        return Semantics(
+          liveRegion: announce,
+          child: _SetupTile(
+            icon: widget.provider == ChannelProvider.telegram
+                ? Icons.send_outlined
+                : Icons.chat_bubble_outline_rounded,
+            title: 'Connect $name',
+            detail: detail,
+            state: connectionState,
+            onPressed: waiting || snapshot.data == true ? null : requestLink,
+            actionTooltip: 'Connect $name',
+          ),
         );
       },
     );
@@ -211,6 +223,7 @@ class _SetupTile extends StatelessWidget {
     required this.detail,
     required this.state,
     this.onPressed,
+    this.actionTooltip,
   });
 
   final IconData icon;
@@ -218,6 +231,7 @@ class _SetupTile extends StatelessWidget {
   final String detail;
   final String state;
   final VoidCallback? onPressed;
+  final String? actionTooltip;
 
   @override
   Widget build(BuildContext context) => BaseTile(
@@ -227,7 +241,7 @@ class _SetupTile extends StatelessWidget {
     trailing: onPressed == null
         ? Text(state, style: const TextStyle(color: Colors.white54))
         : IconButton(
-            tooltip: 'Connect',
+            tooltip: actionTooltip ?? 'Connect',
             onPressed: onPressed,
             icon: const Icon(Icons.arrow_forward_rounded),
           ),

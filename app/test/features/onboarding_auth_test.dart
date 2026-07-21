@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:omi/auth/auth.dart';
@@ -83,6 +85,7 @@ void main() {
   testWidgets('desktop completion recovers when session refresh fails', (
     tester,
   ) async {
+    final semantics = tester.ensureSemantics();
     final gateway = _Gateway(
       session,
       currentSession: session,
@@ -101,6 +104,14 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Session refresh failed. Retry.'), findsOneWidget);
+    expect(
+      tester
+          .getSemantics(find.text('Session refresh failed. Retry.'))
+          .getSemanticsData()
+          .flagsCollection
+          .isLiveRegion,
+      isTrue,
+    );
     expect(find.byType(LinearProgressIndicator), findsNothing);
     expect(
       tester
@@ -110,6 +121,33 @@ void main() {
           .onPressed,
       isNotNull,
     );
+    semantics.dispose();
+  });
+
+  testWidgets('desktop completion ignores rapid repeated submission', (
+    tester,
+  ) async {
+    final gateway = _Gateway(session, currentSession: session)
+      ..refreshBarrier = Completer<void>();
+    final auth = AuthController(gateway);
+    await auth.restoreSession();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: DesktopAuthScreen.forTesting(auth: auth, sessionId: 'session-id'),
+      ),
+    );
+    await tester.enterText(find.byType(TextField).last, '123456');
+    final button = tester.widget<FilledButton>(
+      find.widgetWithText(FilledButton, 'Confirm this desktop'),
+    );
+
+    button.onPressed!();
+    button.onPressed!();
+    await tester.pump();
+    expect(gateway.refreshCalls, 1);
+
+    gateway.refreshBarrier!.complete();
+    await tester.pumpAndSettle();
   });
 }
 
@@ -136,6 +174,8 @@ final class _Gateway implements AuthGateway {
   AuthSession? currentSession;
   bool didSignOut = false;
   final bool failRefresh;
+  Completer<void>? refreshBarrier;
+  int refreshCalls = 0;
 
   @override
   AuthFailure? get configurationFailure => null;
@@ -164,6 +204,8 @@ final class _Gateway implements AuthGateway {
 
   @override
   Future<AuthSession?> refreshSession() async {
+    refreshCalls += 1;
+    await refreshBarrier?.future;
     if (failRefresh) {
       throw const AuthOperationException(
         AuthFailure(AuthErrorCode.network, 'Session refresh failed. Retry.'),

@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 
 import '../app_services.dart';
@@ -57,7 +58,7 @@ class _DesktopAuthScreenState extends State<DesktopAuthScreen> {
   }
 
   Future<void> _complete() async {
-    if (!mounted) return;
+    if (!mounted || completing) return;
     setState(() {
       completing = true;
       error = null;
@@ -127,17 +128,23 @@ class _DesktopAuthScreenState extends State<DesktopAuthScreen> {
                 child: Padding(
                   padding: const EdgeInsets.all(28),
                   child: completed
-                      ? const Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(Icons.check_circle_rounded, size: 52),
-                            SizedBox(height: 16),
-                            Text('Desktop sign-in complete'),
-                            SizedBox(height: 8),
-                            Text(
-                              'You can close this browser tab and return to Omi.',
-                            ),
-                          ],
+                      ? Semantics(
+                          liveRegion: true,
+                          label:
+                              'Desktop sign-in complete. You can close this browser tab and return to Omi.',
+                          excludeSemantics: true,
+                          child: const Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(Icons.check_circle_rounded, size: 52),
+                              SizedBox(height: 16),
+                              Text('Desktop sign-in complete'),
+                              SizedBox(height: 8),
+                              Text(
+                                'You can close this browser tab and return to Omi.',
+                              ),
+                            ],
+                          ),
                         )
                       : Column(
                           mainAxisSize: MainAxisSize.min,
@@ -163,9 +170,19 @@ class _DesktopAuthScreenState extends State<DesktopAuthScreen> {
                                 controller: confirmationCode,
                                 keyboardType: TextInputType.number,
                                 maxLength: 6,
+                                autofillHints: const [
+                                  AutofillHints.oneTimeCode,
+                                ],
+                                inputFormatters: [
+                                  FilteringTextInputFormatter.digitsOnly,
+                                ],
+                                textInputAction: TextInputAction.done,
                                 decoration: const InputDecoration(
                                   labelText: 'Desktop confirmation code',
                                 ),
+                                onSubmitted: completing
+                                    ? null
+                                    : (_) => _complete(),
                               ),
                               FilledButton(
                                 onPressed: completing ? null : _complete,
@@ -174,14 +191,23 @@ class _DesktopAuthScreenState extends State<DesktopAuthScreen> {
                             ],
                             if (completing) ...[
                               const SizedBox(height: 16),
-                              const LinearProgressIndicator(),
+                              Semantics(
+                                liveRegion: true,
+                                label: 'Completing desktop sign-in',
+                                child: LinearProgressIndicator(),
+                              ),
                             ],
                             if (error != null) ...[
                               const SizedBox(height: 12),
-                              Text(
-                                error!,
-                                style: const TextStyle(
-                                  color: Color(0xffffb4ab),
+                              Semantics(
+                                liveRegion: true,
+                                label: 'Desktop sign-in error. $error',
+                                excludeSemantics: true,
+                                child: Text(
+                                  error!,
+                                  style: const TextStyle(
+                                    color: Color(0xffffb4ab),
+                                  ),
                                 ),
                               ),
                             ],
