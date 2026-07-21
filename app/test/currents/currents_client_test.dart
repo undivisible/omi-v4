@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:omi/currents/currents.dart';
 
@@ -45,15 +47,38 @@ void main() {
       expect(controller.items, isEmpty);
     },
   );
+
+  test('controller coalesces overlapping refreshes', () async {
+    final transport = _Transport()..pauseGenerate = Completer<void>();
+    final controller = CurrentsController(CurrentsClient(transport));
+
+    final first = controller.load();
+    final second = controller.load();
+    var secondCompleted = false;
+    second.then((_) => secondCompleted = true);
+    await Future<void>.delayed(Duration.zero);
+
+    expect(secondCompleted, isFalse);
+    transport.pauseGenerate!.complete();
+    await Future.wait([first, second]);
+    expect(secondCompleted, isTrue);
+
+    expect(
+      transport.requests.where((request) => request.path.endsWith('/generate')),
+      hasLength(1),
+    );
+  });
 }
 
 final class _Transport implements CurrentsTransport {
   final requests = <CurrentsRequest>[];
+  Completer<void>? pauseGenerate;
 
   @override
   Future<CurrentsResponse> send(CurrentsRequest request) async {
     requests.add(request);
     if (request.path.endsWith('/generate')) {
+      await pauseGenerate?.future;
       return const CurrentsResponse(statusCode: 200, body: {'current': null});
     }
     if (request.path.endsWith('/accept')) {

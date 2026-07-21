@@ -180,7 +180,7 @@ void main() {
 
     expect(find.byType(NavigationDestination), findsNWidgets(4));
     for (final destination in [
-      (0, 'Your thinking partner across every connected device.'),
+      (0, 'Quietly keeping track, so you can stay in the moment.'),
       (1, 'What Omi knows, with sources you can inspect.'),
       (2, 'Patterns and opportunities moving through your life.'),
       (

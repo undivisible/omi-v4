@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../app_services.dart';
+import '../currents/currents.dart';
 import '../keyboard/keyboard.dart';
 import '../native/generated/signals/signals.dart'
     show ComputerUseAction, ComputerUseActionClick, ComputerUseActionTypeText;
@@ -49,6 +50,8 @@ class ChatScreenState extends State<ChatScreen> {
   void initState() {
     super.initState();
     if (!widget.previewMode) {
+      widget.services.currents?.addListener(_currentsChanged);
+      unawaited(_refreshCurrents());
       unawaited(_loadConversation());
       _events = widget.services.nativeEvents.listen(_handleEvent);
       _authorityChanges = widget.services.chatAuthorityChanges.listen((_) {
@@ -69,10 +72,21 @@ class ChatScreenState extends State<ChatScreen> {
           _error = 'Chat authority changed. Reconnect before continuing.';
         });
         if (widget.services.auth.snapshot.hasProcessingAuthority) {
+          unawaited(_refreshCurrents());
           unawaited(_loadConversation());
         }
       });
     }
+  }
+
+  void _currentsChanged() {
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _refreshCurrents() async {
+    final currents = widget.services.currents;
+    if (currents == null || !widget.services.chatReady) return;
+    await currents.load();
   }
 
   Future<void> handleDesktopGesture(ShiftGestureAction action) async {
@@ -192,6 +206,7 @@ class ChatScreenState extends State<ChatScreen> {
   void dispose() {
     _conversationLoadGeneration += 1;
     _conversationRefreshTimer?.cancel();
+    widget.services.currents?.removeListener(_currentsChanged);
     widget.onDesktopGestureReset?.call();
     unawaited(widget.services.cancelDesktopVoice());
     unawaited(_events?.cancel());
@@ -328,6 +343,14 @@ class ChatScreenState extends State<ChatScreen> {
     });
   }
 
+  void _usePrompt(String prompt) {
+    _input.value = TextEditingValue(
+      text: prompt,
+      selection: TextSelection.collapsed(offset: prompt.length),
+    );
+    _inputFocus.requestFocus();
+  }
+
   void _removeProposalsForParent(String requestId) {
     final removed = _proposals.values
         .where((proposal) => proposal.requestId == requestId)
@@ -388,12 +411,35 @@ class ChatScreenState extends State<ChatScreen> {
   @override
   Widget build(BuildContext context) {
     final ready = !widget.previewMode && widget.services.chatReady;
+    final orbState = widget.services.desktopVoice.active
+        ? OmiOrbState.listening
+        : _activeRequestId != null
+        ? OmiOrbState.thinking
+        : OmiOrbState.idle;
+    final currents = widget.services.currents;
+    final current =
+        currents != null &&
+            !currents.loading &&
+            currents.error == null &&
+            currents.items.isNotEmpty
+        ? currents.items.first
+        : null;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        const PageTitle(
-          title: 'Chat',
-          subtitle: 'Your thinking partner across every connected device.',
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Expanded(
+              child: PageTitle(
+                title: 'Omi',
+                subtitle:
+                    'Quietly keeping track, so you can stay in the moment.',
+              ),
+            ),
+            const SizedBox(width: 16),
+            OmiActivityOrb(state: orbState),
+          ],
         ),
         const SizedBox(height: 20),
         Expanded(
@@ -401,40 +447,7 @@ class ChatScreenState extends State<ChatScreen> {
             key: const Key('chat_messages'),
             children: [
               if (_messages.isEmpty && _proposals.isEmpty)
-                Center(
-                  child: ConstrainedBox(
-                    constraints: const BoxConstraints(maxWidth: 560),
-                    child: GlassCard(
-                      child: Padding(
-                        padding: const EdgeInsets.all(24),
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            const Icon(Icons.forum_outlined, size: 36),
-                            const SizedBox(height: 14),
-                            Text(
-                              ready
-                                  ? 'Ask Omi anything'
-                                  : 'Chat is not connected yet',
-                              style: const TextStyle(
-                                fontSize: 20,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                            const SizedBox(height: 8),
-                            Text(
-                              ready
-                                  ? 'Messages run through your configured native assistant.'
-                                  : 'Finish account, consent, and model setup before sending your first message.',
-                              textAlign: TextAlign.center,
-                              style: const TextStyle(color: Colors.white60),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
+                _ChatHome(ready: ready, current: current, onPrompt: _usePrompt),
               for (final message in _messages)
                 Align(
                   alignment: message.fromUser
@@ -529,6 +542,116 @@ class ChatScreenState extends State<ChatScreen> {
       ],
     );
   }
+}
+
+class _ChatHome extends StatelessWidget {
+  const _ChatHome({
+    required this.ready,
+    required this.current,
+    required this.onPrompt,
+  });
+
+  final bool ready;
+  final CurrentCard? current;
+  final ValueChanged<String> onPrompt;
+
+  @override
+  Widget build(BuildContext context) => Center(
+    child: ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 620),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 28),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              ready
+                  ? 'What can I take off your mind?'
+                  : 'Chat is not connected yet',
+              textAlign: TextAlign.center,
+              style: Theme.of(context).textTheme.headlineMedium,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              ready
+                  ? 'Ask naturally. Omi remembers the context and brings the next useful thing forward.'
+                  : 'Finish account, consent, and model setup before sending your first message.',
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: Colors.white60, height: 1.45),
+            ),
+            if (current case final value?) ...[
+              const SizedBox(height: 24),
+              GlassCard(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 18, 12, 14),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Padding(
+                        padding: EdgeInsets.only(top: 2),
+                        child: Icon(
+                          Icons.waves_rounded,
+                          color: Color(0xffb9e4d6),
+                        ),
+                      ),
+                      const SizedBox(width: 14),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const OmiLabel('WORTH YOUR ATTENTION'),
+                            const SizedBox(height: 7),
+                            Text(
+                              value.title,
+                              style: Theme.of(context).textTheme.titleMedium,
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              value.summary,
+                              style: const TextStyle(
+                                color: Colors.white60,
+                                height: 1.4,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      IconButton(
+                        key: const Key('discuss_current'),
+                        tooltip: 'Talk this through with Omi',
+                        onPressed: () => onPrompt(value.item.proposedNextStep),
+                        icon: const Icon(Icons.arrow_forward_rounded),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+            if (ready) ...[
+              const SizedBox(height: 20),
+              Wrap(
+                alignment: WrapAlignment.center,
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  for (final prompt in const [
+                    'What deserves my attention?',
+                    'What did I leave unfinished?',
+                    'Help me plan today',
+                  ])
+                    ActionChip(
+                      key: ValueKey('chat_prompt_$prompt'),
+                      label: Text(prompt),
+                      onPressed: () => onPrompt(prompt),
+                    ),
+                ],
+              ),
+            ],
+          ],
+        ),
+      ),
+    ),
+  );
 }
 
 final class _ChatMessage {

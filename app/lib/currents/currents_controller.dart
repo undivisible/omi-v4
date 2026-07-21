@@ -9,8 +9,11 @@ final class CurrentsController extends ChangeNotifier {
   List<CurrentCard> items = const [];
   String? error;
   bool loading = false;
+  Future<void>? _loadFuture;
 
-  Future<void> load() async {
+  Future<void> load() => _loadFuture ??= _load();
+
+  Future<void> _load() async {
     loading = true;
     error = null;
     notifyListeners();
@@ -21,6 +24,7 @@ final class CurrentsController extends ChangeNotifier {
       error = failure.message;
     } finally {
       loading = false;
+      _loadFuture = null;
       notifyListeners();
     }
   }

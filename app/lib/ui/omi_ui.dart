@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+export 'omi_orb.dart';
+
 class GradientBackground extends StatelessWidget {
   const GradientBackground({required this.child, super.key});
 
@@ -7,16 +9,55 @@ class GradientBackground extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return DecoratedBox(
-      decoration: const BoxDecoration(
-        gradient: RadialGradient(
-          center: Alignment(-.8, -.9),
-          radius: 1.5,
-          colors: [Color(0xff18332f), Color(0xff10181b), Color(0xff0b1013)],
-          stops: [0, .46, 1],
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        const DecoratedBox(
+          decoration: BoxDecoration(
+            gradient: RadialGradient(
+              radius: 1.18,
+              colors: [Color(0xff11191c), Color(0xff090d10)],
+            ),
+          ),
         ),
-      ),
-      child: child,
+        const IgnorePointer(
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              gradient: RadialGradient(
+                center: Alignment(-1.15, -1.05),
+                radius: 1.05,
+                colors: [Color(0x8073d5c4), Color(0x0010181b)],
+                stops: [0, .74],
+              ),
+            ),
+          ),
+        ),
+        const IgnorePointer(
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              gradient: RadialGradient(
+                center: Alignment(1.25, -.8),
+                radius: 1.1,
+                colors: [Color(0x6696c4ff), Color(0x000b1013)],
+                stops: [0, .72],
+              ),
+            ),
+          ),
+        ),
+        const IgnorePointer(
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              gradient: RadialGradient(
+                center: Alignment(.75, 1.25),
+                radius: 1.12,
+                colors: [Color(0x55f2a78f), Color(0x000b1013)],
+                stops: [0, .72],
+              ),
+            ),
+          ),
+        ),
+        child,
+      ],
     );
   }
 }
