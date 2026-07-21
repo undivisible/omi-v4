@@ -50,6 +50,7 @@ pub enum Command {
         ingestion_key: String,
         source: CaptureSource,
         occurred_at_ms: i64,
+        recorded_at_ms: i64,
         text: Option<String>,
         application: Option<String>,
         window_title: Option<String>,
@@ -64,6 +65,7 @@ pub enum Command {
         text: String,
         value: String,
         occurred_at_ms: i64,
+        recorded_at_ms: i64,
     },
     DeleteMemorySource {
         source_id: String,

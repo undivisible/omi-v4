@@ -137,6 +137,7 @@ struct CaptureFingerprint {
     ingestion_key: String,
     source: CaptureSource,
     occurred_at_ms: i64,
+    recorded_at_ms: i64,
     text: Option<String>,
     application: Option<String>,
     window_title: Option<String>,
@@ -2002,6 +2003,7 @@ fn capture_fingerprint(command: &Command) -> Option<CaptureFingerprint> {
             ingestion_key,
             source,
             occurred_at_ms,
+            recorded_at_ms,
             text,
             application,
             window_title,
@@ -2010,6 +2012,7 @@ fn capture_fingerprint(command: &Command) -> Option<CaptureFingerprint> {
             ingestion_key: ingestion_key.clone(),
             source: source.clone(),
             occurred_at_ms: *occurred_at_ms,
+            recorded_at_ms: *recorded_at_ms,
             text: text.clone(),
             application: application.clone(),
             window_title: window_title.clone(),
@@ -2222,6 +2225,7 @@ async fn execute(
             ingestion_key,
             source,
             occurred_at_ms,
+            recorded_at_ms,
             text,
             application,
             window_title,
@@ -2233,6 +2237,7 @@ async fn execute(
                 ingestion_key,
                 source,
                 occurred_at_ms,
+                recorded_at_ms,
                 text,
                 application,
                 window_title,
@@ -2250,6 +2255,7 @@ async fn execute(
             text,
             value,
             occurred_at_ms,
+            recorded_at_ms,
         } => {
             correct_memory(
                 &request_id,
@@ -2258,6 +2264,7 @@ async fn execute(
                 text,
                 value,
                 occurred_at_ms,
+                recorded_at_ms,
                 &cancellation,
             )
             .await;
@@ -2414,6 +2421,7 @@ async fn capture(
     ingestion_key: String,
     source: CaptureSource,
     occurred_at_ms: i64,
+    recorded_at_ms: i64,
     text: Option<String>,
     application: Option<String>,
     window_title: Option<String>,
@@ -2452,6 +2460,7 @@ async fn capture(
         ingestion_key,
         source,
         occurred_at_ms,
+        recorded_at_ms,
         text,
         transcript_locator,
         cancellation.clone(),
@@ -2486,11 +2495,13 @@ async fn capture(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn spawn_capture(
     memory: Arc<StdMutex<MemoryContext>>,
     ingestion_key: String,
     source: CaptureSource,
     occurred_at_ms: i64,
+    recorded_at_ms: i64,
     text: String,
     transcript_locator: Option<TranscriptLocator>,
     cancellation: CancellationToken,
@@ -2507,6 +2518,7 @@ fn spawn_capture(
             ingestion_key,
             source,
             occurred_at_ms,
+            recorded_at_ms,
             text,
             transcript_locator,
         )
@@ -2519,6 +2531,7 @@ fn remember_capture(
     ingestion_key: String,
     source: CaptureSource,
     occurred_at_ms: i64,
+    recorded_at_ms: i64,
     text: String,
     transcript_locator: Option<TranscriptLocator>,
 ) -> Result<zkr::Remembered, String> {
@@ -2546,7 +2559,7 @@ fn remember_capture(
                 kind: source_kind(source),
                 text,
                 captured_at: occurred_at_ms,
-                recorded_at: occurred_at_ms,
+                recorded_at: recorded_at_ms,
                 claim: None,
             },
             locator,
@@ -2623,6 +2636,7 @@ async fn search(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn correct_memory(
     request_id: &str,
     state: &Mutex<RuntimeState>,
@@ -2630,6 +2644,7 @@ async fn correct_memory(
     text: String,
     value: String,
     occurred_at_ms: i64,
+    recorded_at_ms: i64,
     cancellation: &CancellationToken,
 ) {
     let Some(memory) = state.lock().await.memory.clone() else {
@@ -2645,7 +2660,14 @@ async fn correct_memory(
         let mut memory = memory
             .lock()
             .map_err(|_| "memory database lock was poisoned".to_owned())?;
-        correct_configured_memory(&mut memory, claim_id, text, value, occurred_at_ms)
+        correct_configured_memory(
+            &mut memory,
+            claim_id,
+            text,
+            value,
+            occurred_at_ms,
+            recorded_at_ms,
+        )
     });
     match await_mutating_blocking(task, cancellation).await {
         BlockingOutcome::Complete(corrected) => NativeEvent::MemoryCorrected(MemoryCorrected {
@@ -2714,6 +2736,7 @@ fn correct_configured_memory(
     text: String,
     value: String,
     occurred_at_ms: i64,
+    recorded_at_ms: i64,
 ) -> Result<zkr::Corrected, String> {
     memory
         .database
@@ -2724,7 +2747,7 @@ fn correct_configured_memory(
             text,
             value,
             valid_at: occurred_at_ms,
-            recorded_at: occurred_at_ms,
+            recorded_at: recorded_at_ms,
         })
         .map_err(|error_value| error_value.to_string())
 }
@@ -3180,6 +3203,7 @@ mod tests {
                     "Correction".to_owned(),
                     "Changed".to_owned(),
                     20,
+                    21,
                 )
                 .is_err()
             );
@@ -3202,6 +3226,7 @@ mod tests {
             "I moved to Beta".to_owned(),
             "Beta".to_owned(),
             20,
+            21,
         )
         .unwrap_or_else(|error_value| panic!("correction succeeds: {error_value}"));
         let results = memory
@@ -3252,6 +3277,7 @@ mod tests {
                 "Stale correction".to_owned(),
                 "Beta".to_owned(),
                 10,
+                11,
             )
             .is_err()
         );
@@ -3305,6 +3331,7 @@ mod tests {
             "stream-1-segment-2".to_owned(),
             CaptureSource::OmiDevice,
             2_000,
+            2_001,
             "Remember this".to_owned(),
             Some(TranscriptLocator {
                 device_id: "omi-1".to_owned(),
@@ -3322,6 +3349,7 @@ mod tests {
                 "stream-1-segment-2".to_owned(),
                 CaptureSource::OmiDevice,
                 2_000,
+                2_001,
                 "Remember this".to_owned(),
                 Some(TranscriptLocator {
                     device_id: "omi-1".to_owned(),
@@ -3348,11 +3376,42 @@ mod tests {
         assert_eq!(locator.stream_id, "stream-1");
         assert_eq!(locator.segment_id, "segment-2");
         assert_eq!((locator.start_ms, locator.end_ms), (1_000, 2_000));
+        let before_recording = memory
+            .database
+            .search(SearchInput {
+                tenant_id: memory.tenant_id.clone(),
+                person_id: memory.person_id.clone(),
+                query: "Remember this".to_owned(),
+                limit: 5,
+                query_embedding: None,
+                as_of: Some(zkr::TemporalQuery {
+                    valid_at: 2_000,
+                    recorded_at: 2_000,
+                }),
+            })
+            .unwrap_or_else(|error_value| panic!("historical search succeeds: {error_value}"));
+        assert!(before_recording.items.is_empty());
+        let after_recording = memory
+            .database
+            .search(SearchInput {
+                tenant_id: memory.tenant_id.clone(),
+                person_id: memory.person_id.clone(),
+                query: "Remember this".to_owned(),
+                limit: 5,
+                query_embedding: None,
+                as_of: Some(zkr::TemporalQuery {
+                    valid_at: 2_000,
+                    recorded_at: 2_001,
+                }),
+            })
+            .unwrap_or_else(|error_value| panic!("historical search succeeds: {error_value}"));
+        assert_eq!(after_recording.items.len(), 1);
         let point = remember_capture(
             &mut memory,
             "stream-1-segment-3".to_owned(),
             CaptureSource::OmiDevice,
             3_000,
+            3_001,
             "Point transcript".to_owned(),
             Some(TranscriptLocator {
                 device_id: "omi-1".to_owned(),
@@ -3658,6 +3717,7 @@ mod tests {
             ingestion_key: "transcript-1".to_owned(),
             source: CaptureSource::OmiDevice,
             occurred_at_ms,
+            recorded_at_ms: occurred_at_ms + 1,
             text: Some(text.to_owned()),
             application: None,
             window_title: None,
@@ -3712,6 +3772,7 @@ mod tests {
             "capture-1".to_owned(),
             CaptureSource::Screen,
             1,
+            2,
             "first capture".to_owned(),
             None,
         )
@@ -3724,6 +3785,7 @@ mod tests {
             "capture-1".to_owned(),
             CaptureSource::Screen,
             1,
+            2,
             "first capture".to_owned(),
             None,
         )
@@ -3926,6 +3988,7 @@ mod tests {
                 ingestion_key: "stable-transcript-1".to_owned(),
                 source: CaptureSource::OmiDevice,
                 occurred_at_ms,
+                recorded_at_ms: occurred_at_ms + 1,
                 text: Some(text.to_owned()),
                 application: None,
                 window_title: None,
@@ -3993,6 +4056,7 @@ mod tests {
                 "stable-transcript-1".to_owned(),
                 CaptureSource::OmiDevice,
                 1,
+                2,
                 "changed payload".to_owned(),
                 None,
             )
@@ -4022,6 +4086,12 @@ mod tests {
         );
         assert_eq!(
             completed.status("capture-1", &fingerprint("changed", 1)),
+            ReplayStatus::Conflict
+        );
+        let mut changed_recording = fingerprint("payload", 1);
+        changed_recording.recorded_at_ms += 1;
+        assert_eq!(
+            completed.status("capture-1", &changed_recording),
             ReplayStatus::Conflict
         );
         completed.clear();
@@ -4055,6 +4125,7 @@ mod tests {
             "transcript-1".to_owned(),
             CaptureSource::OmiDevice,
             1,
+            2,
             "remember this".to_owned(),
             None,
             cancellation.clone(),
@@ -4081,6 +4152,7 @@ mod tests {
                 "transcript-1".to_owned(),
                 CaptureSource::OmiDevice,
                 1,
+                2,
                 "different payload".to_owned(),
                 None,
             )

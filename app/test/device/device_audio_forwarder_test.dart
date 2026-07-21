@@ -715,6 +715,7 @@ final class _RecordingHub implements NativeHub {
     required String text,
     required String value,
     required int occurredAtMs,
+    required int recordedAtMs,
   }) {}
 
   @override
@@ -847,6 +848,7 @@ final class _RecordingHub implements NativeHub {
     required String ingestionKey,
     required CaptureSource source,
     required int occurredAtMs,
+    required int recordedAtMs,
     String? text,
     String? application,
     String? windowTitle,

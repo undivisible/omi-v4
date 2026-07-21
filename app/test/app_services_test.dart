@@ -854,6 +854,7 @@ void main() {
         adapter: const UnavailableDeviceRelayAdapter(),
       ),
       memoryDatabasePath: (uid) => '/tmp/$uid.sqlite3',
+      now: () => DateTime.fromMillisecondsSinceEpoch(2_500),
     );
     await services.initialize();
     final errors = <Object>[];
@@ -919,6 +920,7 @@ void main() {
       CaptureSource.omiDevice,
     ]);
     expect(hub.captures.single.occurredAtMs, 2000);
+    expect(hub.captures.single.recordedAtMs, 2500);
     expect(hub.captures.single.transcriptLocator?.deviceId, 'omi-device-1');
     expect(hub.captures.single.transcriptLocator?.provider, 'deepgram');
     expect(hub.captures.single.transcriptLocator?.streamId, 'omi-stream-1');

@@ -56,6 +56,7 @@ abstract interface class NativeHub {
     required String ingestionKey,
     required CaptureSource source,
     required int occurredAtMs,
+    required int recordedAtMs,
     String? text,
     String? application,
     String? windowTitle,
@@ -72,6 +73,7 @@ abstract interface class NativeHub {
     required String text,
     required String value,
     required int occurredAtMs,
+    required int recordedAtMs,
   });
   void deleteMemorySource({
     required String requestId,
@@ -174,6 +176,7 @@ final class UnavailableNativeHub implements NativeHub {
     required String ingestionKey,
     required CaptureSource source,
     required int occurredAtMs,
+    required int recordedAtMs,
     String? text,
     String? application,
     String? windowTitle,
@@ -194,6 +197,7 @@ final class UnavailableNativeHub implements NativeHub {
     required String text,
     required String value,
     required int occurredAtMs,
+    required int recordedAtMs,
   }) => _unavailable();
 
   @override
@@ -322,6 +326,7 @@ final class RinfNativeHub implements NativeHub {
     required String ingestionKey,
     required CaptureSource source,
     required int occurredAtMs,
+    required int recordedAtMs,
     String? text,
     String? application,
     String? windowTitle,
@@ -332,6 +337,7 @@ final class RinfNativeHub implements NativeHub {
       ingestionKey: ingestionKey,
       source: source,
       occurredAtMs: occurredAtMs,
+      recordedAtMs: recordedAtMs,
       text: text,
       application: application,
       windowTitle: windowTitle,
@@ -353,6 +359,7 @@ final class RinfNativeHub implements NativeHub {
     required String text,
     required String value,
     required int occurredAtMs,
+    required int recordedAtMs,
   }) => _send(
     requestId,
     CommandCorrectMemory(
@@ -360,6 +367,7 @@ final class RinfNativeHub implements NativeHub {
       text: text,
       value: value,
       occurredAtMs: occurredAtMs,
+      recordedAtMs: recordedAtMs,
     ),
   );
 

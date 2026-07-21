@@ -628,6 +628,7 @@ class CommandCaptureEvent extends Command {
     required this.ingestionKey,
     required this.source,
     required this.occurredAtMs,
+    required this.recordedAtMs,
     this.text,
     this.application,
     this.windowTitle,
@@ -640,6 +641,7 @@ class CommandCaptureEvent extends Command {
       ingestionKey: deserializer.deserializeString(),
       source: CaptureSourceExtension.deserialize(deserializer),
       occurredAtMs: deserializer.deserializeInt64(),
+      recordedAtMs: deserializer.deserializeInt64(),
       text: TraitHelpers.deserializeOptionStr(deserializer),
       application: TraitHelpers.deserializeOptionStr(deserializer),
       windowTitle: TraitHelpers.deserializeOptionStr(deserializer),
@@ -654,6 +656,7 @@ class CommandCaptureEvent extends Command {
   final String ingestionKey;
   final CaptureSource source;
   final int occurredAtMs;
+  final int recordedAtMs;
   final String? text;
   final String? application;
   final String? windowTitle;
@@ -663,6 +666,7 @@ class CommandCaptureEvent extends Command {
     String? ingestionKey,
     CaptureSource? source,
     int? occurredAtMs,
+    int? recordedAtMs,
     String? Function()? text,
     String? Function()? application,
     String? Function()? windowTitle,
@@ -672,6 +676,7 @@ class CommandCaptureEvent extends Command {
       ingestionKey: ingestionKey ?? this.ingestionKey,
       source: source ?? this.source,
       occurredAtMs: occurredAtMs ?? this.occurredAtMs,
+      recordedAtMs: recordedAtMs ?? this.recordedAtMs,
       text: text == null ? this.text : text(),
       application: application == null ? this.application : application(),
       windowTitle: windowTitle == null ? this.windowTitle : windowTitle(),
@@ -687,6 +692,7 @@ class CommandCaptureEvent extends Command {
     serializer.serializeString(ingestionKey);
     source.serialize(serializer);
     serializer.serializeInt64(occurredAtMs);
+    serializer.serializeInt64(recordedAtMs);
     TraitHelpers.serializeOptionStr(text, serializer);
     TraitHelpers.serializeOptionStr(application, serializer);
     TraitHelpers.serializeOptionStr(windowTitle, serializer);
@@ -706,6 +712,7 @@ class CommandCaptureEvent extends Command {
         ingestionKey == other.ingestionKey &&
         source == other.source &&
         occurredAtMs == other.occurredAtMs &&
+        recordedAtMs == other.recordedAtMs &&
         text == other.text &&
         application == other.application &&
         windowTitle == other.windowTitle &&
@@ -717,6 +724,7 @@ class CommandCaptureEvent extends Command {
     ingestionKey,
     source,
     occurredAtMs,
+    recordedAtMs,
     text,
     application,
     windowTitle,
@@ -733,6 +741,7 @@ class CommandCaptureEvent extends Command {
           'ingestionKey: $ingestionKey, '
           'source: $source, '
           'occurredAtMs: $occurredAtMs, '
+          'recordedAtMs: $recordedAtMs, '
           'text: [REDACTED], '
           'application: [REDACTED], '
           'windowTitle: [REDACTED], '
@@ -815,6 +824,7 @@ class CommandCorrectMemory extends Command {
     required this.text,
     required this.value,
     required this.occurredAtMs,
+    required this.recordedAtMs,
   }) : super();
 
   static CommandCorrectMemory load(BinaryDeserializer deserializer) {
@@ -824,6 +834,7 @@ class CommandCorrectMemory extends Command {
       text: deserializer.deserializeString(),
       value: deserializer.deserializeString(),
       occurredAtMs: deserializer.deserializeInt64(),
+      recordedAtMs: deserializer.deserializeInt64(),
     );
     deserializer.decreaseContainerDepth();
     return instance;
@@ -833,18 +844,21 @@ class CommandCorrectMemory extends Command {
   final String text;
   final String value;
   final int occurredAtMs;
+  final int recordedAtMs;
 
   CommandCorrectMemory copyWith({
     String? claimId,
     String? text,
     String? value,
     int? occurredAtMs,
+    int? recordedAtMs,
   }) {
     return CommandCorrectMemory(
       claimId: claimId ?? this.claimId,
       text: text ?? this.text,
       value: value ?? this.value,
       occurredAtMs: occurredAtMs ?? this.occurredAtMs,
+      recordedAtMs: recordedAtMs ?? this.recordedAtMs,
     );
   }
 
@@ -855,6 +869,7 @@ class CommandCorrectMemory extends Command {
     serializer.serializeString(text);
     serializer.serializeString(value);
     serializer.serializeInt64(occurredAtMs);
+    serializer.serializeInt64(recordedAtMs);
     serializer.decreaseContainerDepth();
   }
 
@@ -867,11 +882,13 @@ class CommandCorrectMemory extends Command {
         claimId == other.claimId &&
         text == other.text &&
         value == other.value &&
-        occurredAtMs == other.occurredAtMs;
+        occurredAtMs == other.occurredAtMs &&
+        recordedAtMs == other.recordedAtMs;
   }
 
   @override
-  int get hashCode => Object.hash(claimId, text, value, occurredAtMs);
+  int get hashCode =>
+      Object.hash(claimId, text, value, occurredAtMs, recordedAtMs);
 
   @override
   String toString() {
@@ -883,7 +900,8 @@ class CommandCorrectMemory extends Command {
           'claimId: $claimId, '
           'text: [REDACTED], '
           'value: [REDACTED], '
-          'occurredAtMs: $occurredAtMs'
+          'occurredAtMs: $occurredAtMs, '
+          'recordedAtMs: $recordedAtMs'
           ')';
       return true;
     }());
