@@ -113,6 +113,46 @@ void main(List<String> arguments) {
     ),
   );
 
+  final commandCorrectionSource = file.readAsStringSync();
+  const correctionStartMarker = 'class CommandCorrectMemory extends Command {';
+  final correctionStart = commandCorrectionSource.indexOf(
+    correctionStartMarker,
+  );
+  final correctionEnd = commandCorrectionSource.indexOf(
+    '\n@immutable',
+    correctionStart,
+  );
+  if (correctionStart < 0 || correctionEnd < 0) {
+    stderr.writeln('expected exactly one generated correction class');
+    exitCode = 1;
+    return;
+  }
+  var correctionSource = commandCorrectionSource.substring(
+    correctionStart,
+    correctionEnd,
+  );
+  for (final field in ['text', 'value']) {
+    final exposedCorrection = "'$field: \$$field, '";
+    final redactedCorrection = "'$field: [REDACTED], '";
+    if (exposedCorrection.allMatches(correctionSource).length != 1 ||
+        redactedCorrection.allMatches(correctionSource).isNotEmpty) {
+      stderr.writeln('expected exactly one generated correction $field field');
+      exitCode = 1;
+      return;
+    }
+    correctionSource = correctionSource.replaceFirst(
+      exposedCorrection,
+      redactedCorrection,
+    );
+  }
+  file.writeAsStringSync(
+    commandCorrectionSource.replaceRange(
+      correctionStart,
+      correctionEnd,
+      correctionSource,
+    ),
+  );
+
   final transcriptFile = File(
     '${arguments.single}/signals/transcript_delta.dart',
   );

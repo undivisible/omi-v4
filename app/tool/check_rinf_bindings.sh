@@ -52,6 +52,18 @@ if [[ "$(grep -Fc "'text: [REDACTED], '" <<<"$message_block")" -ne 1 ]]; then
   exit 1
 fi
 
+correction_block="$(sed -n '/^class CommandCorrectMemory /,/^@immutable$/p' "$command_file")"
+for field in text value; do
+  if grep -Fq "'$field: \$$field, '" <<<"$correction_block"; then
+    echo "generated correction $field output is not redacted" >&2
+    exit 1
+  fi
+  if [[ "$(grep -Fc "'$field: [REDACTED], '" <<<"$correction_block")" -ne 1 ]]; then
+    echo "generated correction $field redaction is missing or ambiguous" >&2
+    exit 1
+  fi
+done
+
 action_file="$generated_dir/signals/computer_use_action.dart"
 if grep -Fq "'text: \$text, '" "$action_file"; then
   echo "generated computer-use text debug output is not redacted" >&2

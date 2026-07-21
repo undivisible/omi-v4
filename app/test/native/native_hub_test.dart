@@ -29,6 +29,13 @@ void main() {
         text: 'remember this',
       ),
       const CommandSearchMemory(query: 'this', limit: 12),
+      const CommandCorrectMemory(
+        claimId: 'claim-1',
+        text: 'I moved to Beta',
+        value: 'Beta',
+        occurredAtMs: 43,
+      ),
+      const CommandDeleteMemorySource(sourceId: 'source-1', deletedAtMs: 44),
       const CommandApproveAndExecuteComputerUse(proposalId: 'proposal-1'),
       const CommandCancel(),
     ];
@@ -42,6 +49,9 @@ void main() {
     }
     expect(commands[1].toString(), contains('credential: [REDACTED]'));
     expect(commands[1].toString(), isNot(contains('runtime-token')));
+    expect(commands[6].toString(), contains('text: [REDACTED]'));
+    expect(commands[6].toString(), contains('value: [REDACTED]'));
+    expect(commands[6].toString(), isNot(contains('I moved to Beta')));
   });
 
   test('generated audio contract keeps bytes separate', () {

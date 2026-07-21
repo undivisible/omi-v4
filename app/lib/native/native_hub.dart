@@ -66,6 +66,18 @@ abstract interface class NativeHub {
     required String query,
     int limit = 12,
   });
+  void correctMemory({
+    required String requestId,
+    required String claimId,
+    required String text,
+    required String value,
+    required int occurredAtMs,
+  });
+  void deleteMemorySource({
+    required String requestId,
+    required String sourceId,
+    required int deletedAtMs,
+  });
   void sendMessage({
     required String requestId,
     required String text,
@@ -173,6 +185,22 @@ final class UnavailableNativeHub implements NativeHub {
     required String requestId,
     required String query,
     int limit = 12,
+  }) => _unavailable();
+
+  @override
+  void correctMemory({
+    required String requestId,
+    required String claimId,
+    required String text,
+    required String value,
+    required int occurredAtMs,
+  }) => _unavailable();
+
+  @override
+  void deleteMemorySource({
+    required String requestId,
+    required String sourceId,
+    required int deletedAtMs,
   }) => _unavailable();
 
   @override
@@ -317,6 +345,33 @@ final class RinfNativeHub implements NativeHub {
     required String query,
     int limit = 12,
   }) => _send(requestId, CommandSearchMemory(query: query, limit: limit));
+
+  @override
+  void correctMemory({
+    required String requestId,
+    required String claimId,
+    required String text,
+    required String value,
+    required int occurredAtMs,
+  }) => _send(
+    requestId,
+    CommandCorrectMemory(
+      claimId: claimId,
+      text: text,
+      value: value,
+      occurredAtMs: occurredAtMs,
+    ),
+  );
+
+  @override
+  void deleteMemorySource({
+    required String requestId,
+    required String sourceId,
+    required int deletedAtMs,
+  }) => _send(
+    requestId,
+    CommandDeleteMemorySource(sourceId: sourceId, deletedAtMs: deletedAtMs),
+  );
 
   @override
   void sendMessage({

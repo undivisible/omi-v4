@@ -1,10 +1,11 @@
 use crate::signals::{
     ActionProposal, ActionRisk, ApprovalDecision, ApprovalExecutionAcknowledgement, AssistantDelta,
     AssistantProvider as ProviderKind, AudioChunk, AudioEncoding, CaptureSource, ClientCommand,
-    Command, ComputerUseAction, MemoryCaptured, MemorySearchItem, MemorySearchResults, NativeError,
-    NativeEvent, RuntimePhase, RuntimeStatus, ToolProgress, ToolStatus, TranscriptDelta,
-    TranscriptGap, TranscriptLocator, TranscriptionAuth, TranscriptionRoute, TranscriptionState,
-    TranscriptionStatus, TranscriptionStopAcknowledgement,
+    Command, ComputerUseAction, MemoryCaptured, MemoryCorrected, MemorySearchItem,
+    MemorySearchResults, MemorySourceDeleted, NativeError, NativeEvent, RuntimePhase,
+    RuntimeStatus, ToolProgress, ToolStatus, TranscriptDelta, TranscriptGap, TranscriptLocator,
+    TranscriptionAuth, TranscriptionRoute, TranscriptionState, TranscriptionStatus,
+    TranscriptionStopAcknowledgement,
 };
 use crate::stt::{self, SttConfig, SttHandle};
 use futures::StreamExt;
@@ -18,8 +19,8 @@ use tokio::task::{JoinError, JoinHandle, JoinSet, spawn_blocking};
 use tokio_util::sync::CancellationToken;
 use url::{Host, Url};
 use zkr::{
-    MemoryDb, MemoryRef, PersonId, RememberInput, SearchInput, SourceKind, TenantId,
-    TranscriptLocator as ZkrTranscriptLocator,
+    ClaimId, CorrectInput, DeleteInput, MemoryDb, MemoryRef, PersonId, RememberInput, SearchInput,
+    SourceId, SourceKind, TenantId, TranscriptLocator as ZkrTranscriptLocator,
 };
 
 const COMMAND_QUEUE_CAPACITY: usize = 32;
@@ -2244,6 +2245,32 @@ async fn execute(
             search(&request_id, &state, query, limit, &cancellation).await;
             false
         }
+        Command::CorrectMemory {
+            claim_id,
+            text,
+            value,
+            occurred_at_ms,
+        } => {
+            correct_memory(
+                &request_id,
+                &state,
+                claim_id,
+                text,
+                value,
+                occurred_at_ms,
+                &cancellation,
+            )
+            .await;
+            false
+        }
+        Command::DeleteMemorySource {
+            source_id,
+            deleted_at_ms,
+        } => {
+            delete_memory_source(&request_id, &state, source_id, deleted_at_ms, &cancellation)
+                .await;
+            false
+        }
         Command::SendMessage { text, .. } => {
             dispatch_assistant(&request_id, &state, assistant_provider, text, &cancellation).await;
             false
@@ -2592,6 +2619,127 @@ async fn search(
         ),
         BlockingOutcome::Cancelled => cancelled(request_id),
     }
+}
+
+async fn correct_memory(
+    request_id: &str,
+    state: &Mutex<RuntimeState>,
+    claim_id: String,
+    text: String,
+    value: String,
+    occurred_at_ms: i64,
+    cancellation: &CancellationToken,
+) {
+    let Some(memory) = state.lock().await.memory.clone() else {
+        error(
+            Some(request_id.to_owned()),
+            "memory_unavailable",
+            "configure memory before correcting it",
+            true,
+        );
+        return;
+    };
+    let task = spawn_blocking(move || {
+        let mut memory = memory
+            .lock()
+            .map_err(|_| "memory database lock was poisoned".to_owned())?;
+        correct_configured_memory(&mut memory, claim_id, text, value, occurred_at_ms)
+    });
+    match await_mutating_blocking(task, cancellation).await {
+        BlockingOutcome::Complete(corrected) => NativeEvent::MemoryCorrected(MemoryCorrected {
+            request_id: request_id.to_owned(),
+            source_id: corrected.source_id.0,
+            evidence_id: corrected.evidence_id.0,
+            claim_id: corrected.claim_id.0,
+            superseded_claim_id: corrected.superseded_claim_id.0,
+        })
+        .send(),
+        BlockingOutcome::Failed(error_value) => error(
+            Some(request_id.to_owned()),
+            "memory_correction_failed",
+            &error_value,
+            false,
+        ),
+        BlockingOutcome::Cancelled => cancelled(request_id),
+    }
+}
+
+async fn delete_memory_source(
+    request_id: &str,
+    state: &Mutex<RuntimeState>,
+    source_id: String,
+    deleted_at_ms: i64,
+    cancellation: &CancellationToken,
+) {
+    let Some(memory) = state.lock().await.memory.clone() else {
+        error(
+            Some(request_id.to_owned()),
+            "memory_unavailable",
+            "configure memory before deleting from it",
+            true,
+        );
+        return;
+    };
+    let task = spawn_blocking(move || {
+        let mut memory = memory
+            .lock()
+            .map_err(|_| "memory database lock was poisoned".to_owned())?;
+        delete_configured_memory_source(&mut memory, source_id, deleted_at_ms)
+    });
+    match await_mutating_blocking(task, cancellation).await {
+        BlockingOutcome::Complete(deleted) => {
+            NativeEvent::MemorySourceDeleted(MemorySourceDeleted {
+                request_id: request_id.to_owned(),
+                source_id: deleted.source_id.0,
+                evidence_count: deleted.evidence_count,
+                claim_count: deleted.claim_count,
+            })
+            .send();
+        }
+        BlockingOutcome::Failed(error_value) => error(
+            Some(request_id.to_owned()),
+            "memory_deletion_failed",
+            &error_value,
+            false,
+        ),
+        BlockingOutcome::Cancelled => cancelled(request_id),
+    }
+}
+
+fn correct_configured_memory(
+    memory: &mut MemoryContext,
+    claim_id: String,
+    text: String,
+    value: String,
+    occurred_at_ms: i64,
+) -> Result<zkr::Corrected, String> {
+    memory
+        .database
+        .correct(CorrectInput {
+            tenant_id: memory.tenant_id.clone(),
+            person_id: memory.person_id.clone(),
+            claim_id: ClaimId(claim_id),
+            text,
+            value,
+            occurred_at: occurred_at_ms,
+        })
+        .map_err(|error_value| error_value.to_string())
+}
+
+fn delete_configured_memory_source(
+    memory: &mut MemoryContext,
+    source_id: String,
+    deleted_at_ms: i64,
+) -> Result<zkr::Deleted, String> {
+    memory
+        .database
+        .delete_source(DeleteInput {
+            tenant_id: memory.tenant_id.clone(),
+            person_id: memory.person_id.clone(),
+            source_id: SourceId(source_id),
+            deleted_at: deleted_at_ms,
+        })
+        .map_err(|error_value| error_value.to_string())
 }
 
 enum BlockingOutcome<T> {
@@ -2960,6 +3108,170 @@ mod tests {
     use super::*;
     use crate::signals::AudioEncoding;
     use std::sync::atomic::{AtomicBool, Ordering};
+
+    fn lifecycle_memory(label: &str) -> (std::path::PathBuf, MemoryContext, zkr::Remembered) {
+        let path = std::env::temp_dir().join(format!(
+            "omi-v4-{label}-{}-{}.sqlite3",
+            std::process::id(),
+            unix_time_ms()
+        ));
+        let mut memory = MemoryContext {
+            database: MemoryDb::open(&path)
+                .unwrap_or_else(|error_value| panic!("memory opens: {error_value}")),
+            tenant_id: TenantId::new("tenant-1")
+                .unwrap_or_else(|error_value| panic!("valid tenant: {error_value}")),
+            person_id: PersonId::new("person-1")
+                .unwrap_or_else(|error_value| panic!("valid person: {error_value}")),
+        };
+        let remembered = memory
+            .database
+            .remember(RememberInput {
+                tenant_id: memory.tenant_id.clone(),
+                person_id: memory.person_id.clone(),
+                ingestion_key: Some(format!("{label}-capture")),
+                kind: SourceKind::Conversation,
+                text: "I work at Acme".to_owned(),
+                captured_at: 10,
+                claim: Some(zkr::ClaimInput {
+                    subject: "person-1".to_owned(),
+                    predicate: "employer".to_owned(),
+                    value: "Acme".to_owned(),
+                    valid_from: 10,
+                }),
+            })
+            .unwrap_or_else(|error_value| panic!("memory is seeded: {error_value}"));
+        (path, memory, remembered)
+    }
+
+    #[test]
+    fn lifecycle_commands_cannot_cross_configured_tenant_or_person() {
+        let (path, mut memory, _) = lifecycle_memory("lifecycle-scope");
+        for (tenant_id, person_id) in [("tenant-2", "person-1"), ("tenant-1", "person-2")] {
+            let outside = memory
+                .database
+                .remember(RememberInput {
+                    tenant_id: TenantId::new(tenant_id)
+                        .unwrap_or_else(|error_value| panic!("valid tenant: {error_value}")),
+                    person_id: PersonId::new(person_id)
+                        .unwrap_or_else(|error_value| panic!("valid person: {error_value}")),
+                    ingestion_key: Some(format!("outside-{tenant_id}-{person_id}")),
+                    kind: SourceKind::Conversation,
+                    text: "I work at Outside".to_owned(),
+                    captured_at: 10,
+                    claim: Some(zkr::ClaimInput {
+                        subject: person_id.to_owned(),
+                        predicate: "employer".to_owned(),
+                        value: "Outside".to_owned(),
+                        valid_from: 10,
+                    }),
+                })
+                .unwrap_or_else(|error_value| panic!("outside memory is seeded: {error_value}"));
+            assert!(
+                correct_configured_memory(
+                    &mut memory,
+                    outside.claim_id.unwrap_or_else(|| panic!("claim exists")).0,
+                    "Correction".to_owned(),
+                    "Changed".to_owned(),
+                    20,
+                )
+                .is_err()
+            );
+            assert!(delete_configured_memory_source(&mut memory, outside.source_id.0, 20).is_err());
+        }
+        drop(memory);
+        std::fs::remove_file(path)
+            .unwrap_or_else(|error_value| panic!("temporary database removes: {error_value}"));
+    }
+
+    #[test]
+    fn correction_result_keeps_cited_provenance() {
+        let (path, mut memory, remembered) = lifecycle_memory("lifecycle-citation");
+        let corrected = correct_configured_memory(
+            &mut memory,
+            remembered
+                .claim_id
+                .unwrap_or_else(|| panic!("claim exists"))
+                .0,
+            "I moved to Beta".to_owned(),
+            "Beta".to_owned(),
+            20,
+        )
+        .unwrap_or_else(|error_value| panic!("correction succeeds: {error_value}"));
+        let results = memory
+            .database
+            .search(SearchInput {
+                tenant_id: memory.tenant_id.clone(),
+                person_id: memory.person_id.clone(),
+                query: "Beta".to_owned(),
+                limit: 5,
+                query_embedding: None,
+            })
+            .unwrap_or_else(|error_value| panic!("search succeeds: {error_value}"));
+        assert!(!results.items.is_empty());
+        assert!(
+            results
+                .items
+                .iter()
+                .all(|item| item.evidence_ids == vec![corrected.evidence_id.clone()])
+        );
+        let stale = memory
+            .database
+            .search(SearchInput {
+                tenant_id: memory.tenant_id.clone(),
+                person_id: memory.person_id.clone(),
+                query: "Acme".to_owned(),
+                limit: 5,
+                query_embedding: None,
+            })
+            .unwrap_or_else(|error_value| panic!("search succeeds: {error_value}"));
+        assert!(stale.items.is_empty());
+        drop(memory);
+        std::fs::remove_file(path)
+            .unwrap_or_else(|error_value| panic!("temporary database removes: {error_value}"));
+    }
+
+    #[test]
+    fn correction_rejects_stale_evidence_time() {
+        let (path, mut memory, remembered) = lifecycle_memory("lifecycle-stale");
+        assert!(
+            correct_configured_memory(
+                &mut memory,
+                remembered
+                    .claim_id
+                    .unwrap_or_else(|| panic!("claim exists"))
+                    .0,
+                "Stale correction".to_owned(),
+                "Beta".to_owned(),
+                10,
+            )
+            .is_err()
+        );
+        drop(memory);
+        std::fs::remove_file(path)
+            .unwrap_or_else(|error_value| panic!("temporary database removes: {error_value}"));
+    }
+
+    #[test]
+    fn source_deletion_propagates_to_evidence_claims_and_search() {
+        let (path, mut memory, remembered) = lifecycle_memory("lifecycle-delete");
+        let deleted = delete_configured_memory_source(&mut memory, remembered.source_id.0, 20)
+            .unwrap_or_else(|error_value| panic!("deletion succeeds: {error_value}"));
+        assert_eq!((deleted.evidence_count, deleted.claim_count), (1, 1));
+        let results = memory
+            .database
+            .search(SearchInput {
+                tenant_id: memory.tenant_id.clone(),
+                person_id: memory.person_id.clone(),
+                query: "Acme".to_owned(),
+                limit: 5,
+                query_embedding: None,
+            })
+            .unwrap_or_else(|error_value| panic!("search succeeds: {error_value}"));
+        assert!(results.items.is_empty());
+        drop(memory);
+        std::fs::remove_file(path)
+            .unwrap_or_else(|error_value| panic!("temporary database removes: {error_value}"));
+    }
 
     #[test]
     fn transcript_capture_persists_scoped_evidence_locator() {

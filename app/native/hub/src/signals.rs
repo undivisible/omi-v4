@@ -59,6 +59,16 @@ pub enum Command {
         query: String,
         limit: u32,
     },
+    CorrectMemory {
+        claim_id: String,
+        text: String,
+        value: String,
+        occurred_at_ms: i64,
+    },
+    DeleteMemorySource {
+        source_id: String,
+        deleted_at_ms: i64,
+    },
     ApprovalDecision {
         proposal_id: String,
         decision: ApprovalDecision,
@@ -184,6 +194,8 @@ pub enum NativeEvent {
     RuntimeStatus(RuntimeStatus),
     MemoryCaptured(MemoryCaptured),
     MemorySearchResults(MemorySearchResults),
+    MemoryCorrected(MemoryCorrected),
+    MemorySourceDeleted(MemorySourceDeleted),
 }
 
 #[derive(Debug, Serialize, SignalPiece)]
@@ -346,6 +358,23 @@ pub struct MemorySearchItem {
     pub excerpt: String,
     pub relevance_basis_points: u16,
     pub evidence_ids: Vec<String>,
+}
+
+#[derive(Debug, Serialize, SignalPiece)]
+pub struct MemoryCorrected {
+    pub request_id: String,
+    pub source_id: String,
+    pub evidence_id: String,
+    pub claim_id: String,
+    pub superseded_claim_id: String,
+}
+
+#[derive(Debug, Serialize, SignalPiece)]
+pub struct MemorySourceDeleted {
+    pub request_id: String,
+    pub source_id: String,
+    pub evidence_count: u64,
+    pub claim_count: u64,
 }
 
 #[derive(Debug, Serialize, SignalPiece)]

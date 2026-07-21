@@ -709,6 +709,22 @@ final class _RecordingHub implements NativeHub {
   Stream<NativeEvent> get events => eventsController.stream;
 
   @override
+  void correctMemory({
+    required String requestId,
+    required String claimId,
+    required String text,
+    required String value,
+    required int occurredAtMs,
+  }) {}
+
+  @override
+  void deleteMemorySource({
+    required String requestId,
+    required String sourceId,
+    required int deletedAtMs,
+  }) {}
+
+  @override
   void startTranscription({
     required String requestId,
     required String audioStreamId,

@@ -30,10 +30,14 @@ abstract class Command {
       case 9:
         return CommandSearchMemory.load(deserializer);
       case 10:
-        return CommandApprovalDecision.load(deserializer);
+        return CommandCorrectMemory.load(deserializer);
       case 11:
-        return CommandDeviceState.load(deserializer);
+        return CommandDeleteMemorySource.load(deserializer);
       case 12:
+        return CommandApprovalDecision.load(deserializer);
+      case 13:
+        return CommandDeviceState.load(deserializer);
+      case 14:
         return CommandCancel.load(deserializer);
       default:
         throw Exception(
@@ -805,6 +809,155 @@ class CommandSearchMemory extends Command {
 }
 
 @immutable
+class CommandCorrectMemory extends Command {
+  const CommandCorrectMemory({
+    required this.claimId,
+    required this.text,
+    required this.value,
+    required this.occurredAtMs,
+  }) : super();
+
+  static CommandCorrectMemory load(BinaryDeserializer deserializer) {
+    deserializer.increaseContainerDepth();
+    final instance = CommandCorrectMemory(
+      claimId: deserializer.deserializeString(),
+      text: deserializer.deserializeString(),
+      value: deserializer.deserializeString(),
+      occurredAtMs: deserializer.deserializeInt64(),
+    );
+    deserializer.decreaseContainerDepth();
+    return instance;
+  }
+
+  final String claimId;
+  final String text;
+  final String value;
+  final int occurredAtMs;
+
+  CommandCorrectMemory copyWith({
+    String? claimId,
+    String? text,
+    String? value,
+    int? occurredAtMs,
+  }) {
+    return CommandCorrectMemory(
+      claimId: claimId ?? this.claimId,
+      text: text ?? this.text,
+      value: value ?? this.value,
+      occurredAtMs: occurredAtMs ?? this.occurredAtMs,
+    );
+  }
+
+  void serialize(BinarySerializer serializer) {
+    serializer.increaseContainerDepth();
+    serializer.serializeVariantIndex(10);
+    serializer.serializeString(claimId);
+    serializer.serializeString(text);
+    serializer.serializeString(value);
+    serializer.serializeInt64(occurredAtMs);
+    serializer.decreaseContainerDepth();
+  }
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    if (other.runtimeType != runtimeType) return false;
+
+    return other is CommandCorrectMemory &&
+        claimId == other.claimId &&
+        text == other.text &&
+        value == other.value &&
+        occurredAtMs == other.occurredAtMs;
+  }
+
+  @override
+  int get hashCode => Object.hash(claimId, text, value, occurredAtMs);
+
+  @override
+  String toString() {
+    String? fullString;
+
+    assert(() {
+      fullString =
+          '$runtimeType('
+          'claimId: $claimId, '
+          'text: [REDACTED], '
+          'value: [REDACTED], '
+          'occurredAtMs: $occurredAtMs'
+          ')';
+      return true;
+    }());
+
+    return fullString ?? 'CommandCorrectMemory';
+  }
+}
+
+@immutable
+class CommandDeleteMemorySource extends Command {
+  const CommandDeleteMemorySource({
+    required this.sourceId,
+    required this.deletedAtMs,
+  }) : super();
+
+  static CommandDeleteMemorySource load(BinaryDeserializer deserializer) {
+    deserializer.increaseContainerDepth();
+    final instance = CommandDeleteMemorySource(
+      sourceId: deserializer.deserializeString(),
+      deletedAtMs: deserializer.deserializeInt64(),
+    );
+    deserializer.decreaseContainerDepth();
+    return instance;
+  }
+
+  final String sourceId;
+  final int deletedAtMs;
+
+  CommandDeleteMemorySource copyWith({String? sourceId, int? deletedAtMs}) {
+    return CommandDeleteMemorySource(
+      sourceId: sourceId ?? this.sourceId,
+      deletedAtMs: deletedAtMs ?? this.deletedAtMs,
+    );
+  }
+
+  void serialize(BinarySerializer serializer) {
+    serializer.increaseContainerDepth();
+    serializer.serializeVariantIndex(11);
+    serializer.serializeString(sourceId);
+    serializer.serializeInt64(deletedAtMs);
+    serializer.decreaseContainerDepth();
+  }
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    if (other.runtimeType != runtimeType) return false;
+
+    return other is CommandDeleteMemorySource &&
+        sourceId == other.sourceId &&
+        deletedAtMs == other.deletedAtMs;
+  }
+
+  @override
+  int get hashCode => Object.hash(sourceId, deletedAtMs);
+
+  @override
+  String toString() {
+    String? fullString;
+
+    assert(() {
+      fullString =
+          '$runtimeType('
+          'sourceId: $sourceId, '
+          'deletedAtMs: $deletedAtMs'
+          ')';
+      return true;
+    }());
+
+    return fullString ?? 'CommandDeleteMemorySource';
+  }
+}
+
+@immutable
 class CommandApprovalDecision extends Command {
   const CommandApprovalDecision({
     required this.proposalId,
@@ -836,7 +989,7 @@ class CommandApprovalDecision extends Command {
 
   void serialize(BinarySerializer serializer) {
     serializer.increaseContainerDepth();
-    serializer.serializeVariantIndex(10);
+    serializer.serializeVariantIndex(12);
     serializer.serializeString(proposalId);
     decision.serialize(serializer);
     serializer.decreaseContainerDepth();
@@ -918,7 +1071,7 @@ class CommandDeviceState extends Command {
 
   void serialize(BinarySerializer serializer) {
     serializer.increaseContainerDepth();
-    serializer.serializeVariantIndex(11);
+    serializer.serializeVariantIndex(13);
     serializer.serializeString(deviceId);
     serializer.serializeBool(connected);
     TraitHelpers.serializeOptionU8(batteryPercent, serializer);
@@ -974,7 +1127,7 @@ class CommandCancel extends Command {
 
   void serialize(BinarySerializer serializer) {
     serializer.increaseContainerDepth();
-    serializer.serializeVariantIndex(12);
+    serializer.serializeVariantIndex(14);
     serializer.decreaseContainerDepth();
   }
 

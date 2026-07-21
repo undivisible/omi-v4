@@ -1340,6 +1340,22 @@ final class _FakeHub implements NativeHub {
   }) {}
 
   @override
+  void correctMemory({
+    required String requestId,
+    required String claimId,
+    required String text,
+    required String value,
+    required int occurredAtMs,
+  }) {}
+
+  @override
+  void deleteMemorySource({
+    required String requestId,
+    required String sourceId,
+    required int deletedAtMs,
+  }) {}
+
+  @override
   void sendMessage({
     required String requestId,
     required String text,

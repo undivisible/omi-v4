@@ -47,6 +47,10 @@ abstract class NativeEvent {
         return NativeEventMemoryCaptured.load(deserializer);
       case 12:
         return NativeEventMemorySearchResults.load(deserializer);
+      case 13:
+        return NativeEventMemoryCorrected.load(deserializer);
+      case 14:
+        return NativeEventMemorySourceDeleted.load(deserializer);
       default:
         throw Exception(
           'Unknown variant index for NativeEvent: ' + index.toString(),
@@ -768,6 +772,112 @@ class NativeEventMemorySearchResults extends NativeEvent {
     }());
 
     return fullString ?? 'NativeEventMemorySearchResults';
+  }
+}
+
+@immutable
+class NativeEventMemoryCorrected extends NativeEvent {
+  const NativeEventMemoryCorrected({required this.value}) : super();
+
+  static NativeEventMemoryCorrected load(BinaryDeserializer deserializer) {
+    deserializer.increaseContainerDepth();
+    final instance = NativeEventMemoryCorrected(
+      value: MemoryCorrected.deserialize(deserializer),
+    );
+    deserializer.decreaseContainerDepth();
+    return instance;
+  }
+
+  final MemoryCorrected value;
+
+  NativeEventMemoryCorrected copyWith({MemoryCorrected? value}) {
+    return NativeEventMemoryCorrected(value: value ?? this.value);
+  }
+
+  void serialize(BinarySerializer serializer) {
+    serializer.increaseContainerDepth();
+    serializer.serializeVariantIndex(13);
+    value.serialize(serializer);
+    serializer.decreaseContainerDepth();
+  }
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    if (other.runtimeType != runtimeType) return false;
+
+    return other is NativeEventMemoryCorrected && value == other.value;
+  }
+
+  @override
+  int get hashCode => value.hashCode;
+
+  @override
+  String toString() {
+    String? fullString;
+
+    assert(() {
+      fullString =
+          '$runtimeType('
+          'value: $value'
+          ')';
+      return true;
+    }());
+
+    return fullString ?? 'NativeEventMemoryCorrected';
+  }
+}
+
+@immutable
+class NativeEventMemorySourceDeleted extends NativeEvent {
+  const NativeEventMemorySourceDeleted({required this.value}) : super();
+
+  static NativeEventMemorySourceDeleted load(BinaryDeserializer deserializer) {
+    deserializer.increaseContainerDepth();
+    final instance = NativeEventMemorySourceDeleted(
+      value: MemorySourceDeleted.deserialize(deserializer),
+    );
+    deserializer.decreaseContainerDepth();
+    return instance;
+  }
+
+  final MemorySourceDeleted value;
+
+  NativeEventMemorySourceDeleted copyWith({MemorySourceDeleted? value}) {
+    return NativeEventMemorySourceDeleted(value: value ?? this.value);
+  }
+
+  void serialize(BinarySerializer serializer) {
+    serializer.increaseContainerDepth();
+    serializer.serializeVariantIndex(14);
+    value.serialize(serializer);
+    serializer.decreaseContainerDepth();
+  }
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    if (other.runtimeType != runtimeType) return false;
+
+    return other is NativeEventMemorySourceDeleted && value == other.value;
+  }
+
+  @override
+  int get hashCode => value.hashCode;
+
+  @override
+  String toString() {
+    String? fullString;
+
+    assert(() {
+      fullString =
+          '$runtimeType('
+          'value: $value'
+          ')';
+      return true;
+    }());
+
+    return fullString ?? 'NativeEventMemorySourceDeleted';
   }
 }
 
