@@ -33,10 +33,11 @@ class SetupScreen extends StatelessWidget {
         state: 'Not granted',
       ),
       for (final provider in ChannelProvider.values)
-        _ChannelTile(
-          services: services,
+        ChannelConnectionTile(
+          client: !previewMode && services.canUseApi ? services.channels : null,
           provider: provider,
           previewMode: previewMode,
+          unavailableMessage: services.configurationMessage,
         ),
       const _SetupTile(
         icon: Icons.description_outlined,
@@ -118,43 +119,53 @@ class AccountScreen extends StatelessWidget {
   );
 }
 
-class _ChannelTile extends StatefulWidget {
-  const _ChannelTile({
-    required this.services,
+class ChannelConnectionTile extends StatefulWidget {
+  const ChannelConnectionTile({
+    required this.client,
     required this.provider,
     required this.previewMode,
+    required this.unavailableMessage,
+    super.key,
   });
 
-  final AppServices services;
+  final ChannelClient? client;
   final ChannelProvider provider;
   final bool previewMode;
+  final String unavailableMessage;
 
   @override
-  State<_ChannelTile> createState() => _ChannelTileState();
+  State<ChannelConnectionTile> createState() => _ChannelTileState();
 }
 
-class _ChannelTileState extends State<_ChannelTile> {
+class _ChannelTileState extends State<ChannelConnectionTile> {
   Future<bool>? linked;
   ChannelLinkState state = const ChannelLinkState.unlinked();
 
   @override
   void initState() {
     super.initState();
-    if (!widget.previewMode && widget.services.canUseApi) {
-      linked = widget.services.channels!.isLinked(widget.provider);
+    if (widget.client != null) {
+      linked = widget.client!.isLinked(widget.provider);
     }
   }
 
   Future<void> requestLink() async {
     setState(() => state = const ChannelLinkState.requesting());
     try {
-      final token = await widget.services.channels!.requestLink(
-        widget.provider,
-      );
+      final token = await widget.client!.requestLink(widget.provider);
+      if (!mounted) return;
       setState(() => state = ChannelLinkState.awaitingConfirmation(token));
     } catch (error) {
+      if (!mounted) return;
       setState(() => state = ChannelLinkState.failed('$error'));
     }
+  }
+
+  void recheckLink() {
+    setState(() {
+      state = const ChannelLinkState.unlinked();
+      linked = widget.client!.isLinked(widget.provider);
+    });
   }
 
   @override
@@ -171,7 +182,7 @@ class _ChannelTileState extends State<_ChannelTile> {
         title: 'Connect $name',
         detail: widget.previewMode
             ? 'Connections are disabled in the interface preview.'
-            : widget.services.configurationMessage,
+            : widget.unavailableMessage,
         state: 'Unavailable',
       );
     }
@@ -207,8 +218,14 @@ class _ChannelTileState extends State<_ChannelTile> {
             title: 'Connect $name',
             detail: detail,
             state: connectionState,
-            onPressed: waiting || snapshot.data == true ? null : requestLink,
-            actionTooltip: 'Connect $name',
+            onPressed: waiting || snapshot.data == true
+                ? null
+                : state.phase == ChannelLinkPhase.awaitingConfirmation
+                ? recheckLink
+                : requestLink,
+            actionTooltip: state.phase == ChannelLinkPhase.awaitingConfirmation
+                ? 'Check $name connection'
+                : 'Connect $name',
           ),
         );
       },
