@@ -513,12 +513,13 @@ packages:
     source: hosted
     version: "2.1.1"
   record_macos:
-    dependency: transitive
+    dependency: "direct overridden"
     description:
-      name: record_macos
-      sha256: ced7495abf3d683e8a7dbe8fc96df8ea5722837a26f922b7cb7c5de11661bb46
-      url: "https://pub.dev"
-    source: hosted
+      path: record_macos
+      ref: "21ac6275ab6256de2c90980e40de7aa97e132a83"
+      resolved-ref: "21ac6275ab6256de2c90980e40de7aa97e132a83"
+      url: "https://github.com/tschk/record.git"
+    source: git
     version: "2.1.1"
   record_platform_interface:
     dependency: transitive
