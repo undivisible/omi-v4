@@ -1,0 +1,14 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "omi-v4-api",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-07-21",
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "omi-v4",
+      "database_id": "replace-after-wrangler-d1-create",
+      "migrations_dir": "migrations"
+    }
+  ]
+}
