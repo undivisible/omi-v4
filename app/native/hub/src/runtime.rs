@@ -2546,6 +2546,7 @@ fn remember_capture(
                 kind: source_kind(source),
                 text,
                 captured_at: occurred_at_ms,
+                recorded_at: occurred_at_ms,
                 claim: None,
             },
             locator,
@@ -2581,6 +2582,7 @@ async fn search(
                 query,
                 limit,
                 query_embedding: None,
+                as_of: None,
             })
             .map_err(|error_value| error_value.to_string())
     });
@@ -2721,7 +2723,8 @@ fn correct_configured_memory(
             claim_id: ClaimId(claim_id),
             text,
             value,
-            occurred_at: occurred_at_ms,
+            valid_at: occurred_at_ms,
+            recorded_at: occurred_at_ms,
         })
         .map_err(|error_value| error_value.to_string())
 }
@@ -3132,10 +3135,12 @@ mod tests {
                 kind: SourceKind::Conversation,
                 text: "I work at Acme".to_owned(),
                 captured_at: 10,
+                recorded_at: 10,
                 claim: Some(zkr::ClaimInput {
                     subject: "person-1".to_owned(),
                     predicate: "employer".to_owned(),
                     value: "Acme".to_owned(),
+                    kind: zkr::ClaimKind::Fact,
                     valid_from: 10,
                 }),
             })
@@ -3158,10 +3163,12 @@ mod tests {
                     kind: SourceKind::Conversation,
                     text: "I work at Outside".to_owned(),
                     captured_at: 10,
+                    recorded_at: 10,
                     claim: Some(zkr::ClaimInput {
                         subject: person_id.to_owned(),
                         predicate: "employer".to_owned(),
                         value: "Outside".to_owned(),
+                        kind: zkr::ClaimKind::Fact,
                         valid_from: 10,
                     }),
                 })
@@ -3205,6 +3212,7 @@ mod tests {
                 query: "Beta".to_owned(),
                 limit: 5,
                 query_embedding: None,
+                as_of: None,
             })
             .unwrap_or_else(|error_value| panic!("search succeeds: {error_value}"));
         assert!(!results.items.is_empty());
@@ -3222,6 +3230,7 @@ mod tests {
                 query: "Acme".to_owned(),
                 limit: 5,
                 query_embedding: None,
+                as_of: None,
             })
             .unwrap_or_else(|error_value| panic!("search succeeds: {error_value}"));
         assert!(stale.items.is_empty());
@@ -3265,6 +3274,7 @@ mod tests {
                 query: "Acme".to_owned(),
                 limit: 5,
                 query_embedding: None,
+                as_of: None,
             })
             .unwrap_or_else(|error_value| panic!("search succeeds: {error_value}"));
         assert!(results.items.is_empty());
