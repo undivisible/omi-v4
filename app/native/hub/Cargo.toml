@@ -1,0 +1,23 @@
+[package]
+name = "hub"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+publish = false
+
+[lib]
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[dependencies]
+rinf = "8.10.0"
+serde = { version = "1", features = ["derive"] }
+tokio = { version = "1", features = ["macros", "rt", "sync"] }
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = "deny"
+unwrap_used = "deny"
+expect_used = "deny"
+wildcard_imports = "deny"
