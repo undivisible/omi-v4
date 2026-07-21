@@ -15,7 +15,7 @@ The product and implementation decisions live in [`PLAN.md`](PLAN.md). Domain la
 
 ```sh
 cd app
-dart format --output=none --set-exit-if-changed .
+dart format --output=none --set-exit-if-changed lib test
 flutter analyze
 flutter test
 flutter build web
