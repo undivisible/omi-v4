@@ -1,14 +1,13 @@
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { admitSttSession } from "./stt-admission";
 import type { AppEnv } from "./types";
 
 const stt = new Hono<AppEnv>();
-const deepgramGrantEndpoint = "https://api.deepgram.com/v1/auth/grant";
-const deepgramListenEndpoint = "wss://api.deepgram.com/v1/listen";
-const tokenTtlSeconds = 30;
+const deepgramListenEndpoint = "https://api.deepgram.com/v1/listen";
 const idempotencyPattern = /^[A-Za-z0-9._:-]{8,128}$/;
 const identifierPattern = /^[A-Za-z0-9._:-]{1,128}$/;
 const languagePattern = /^(multi|[a-z]{2,3}(?:-[A-Za-z0-9]{2,8})*)$/;
+const sessionPattern = /^[a-f0-9]{64}$/;
 
 stt.use("*", async (context, next) => {
   context.header("cache-control", "no-store");
@@ -89,8 +88,37 @@ const parseRequest = (body: Record<string, unknown>) => {
   };
 };
 
+const activePro = async (context: Context<AppEnv>): Promise<boolean> => {
+  const entitlement = await context.env.DB.prepare(
+    "SELECT plan, status, valid_until FROM entitlements WHERE uid = ?1",
+  )
+    .bind(context.get("auth").uid)
+    .first();
+  return (
+    entitlement?.plan === "pro" &&
+    entitlement.status === "active" &&
+    (entitlement.valid_until === null ||
+      Number(entitlement.valid_until) > Date.now())
+  );
+};
+
+const sessionIdFor = async (uid: string, idempotencyKey: string) => {
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(`${uid}\u0000${idempotencyKey}`),
+  );
+  return [...new Uint8Array(digest)]
+    .map((value) => value.toString(16).padStart(2, "0"))
+    .join("");
+};
+
+const websocketUrl = (requestUrl: string, sessionId: string) => {
+  const url = new URL(`/v1/stt/sessions/${sessionId}/stream`, requestUrl);
+  url.protocol = url.protocol === "http:" ? "ws:" : "wss:";
+  return url.toString();
+};
+
 stt.post("/sessions", async (context) => {
-  const secret = context.env.DEEPGRAM_API_KEY;
   const maxSessionSeconds = positiveInteger(
     context.env.STT_MAX_SESSION_SECONDS,
   );
@@ -98,7 +126,7 @@ stt.post("/sessions", async (context) => {
     context.env.STT_COST_MICROUSD_PER_MINUTE,
   );
   if (
-    !secret ||
+    !context.env.DEEPGRAM_API_KEY ||
     maxSessionSeconds === null ||
     maxSessionSeconds > 3600 ||
     costPerMinute === null
@@ -107,32 +135,10 @@ stt.post("/sessions", async (context) => {
   const body = await boundedJson(context.req.raw);
   const parsed = body ? parseRequest(body) : null;
   if (!parsed) return context.json({ error: "Invalid request" }, 400);
-  const auth = context.get("auth");
-  const entitlement = await context.env.DB.prepare(
-    "SELECT plan, status, valid_until FROM entitlements WHERE uid = ?1",
-  )
-    .bind(auth.uid)
-    .first();
-  const now = Date.now();
-  if (
-    entitlement?.plan !== "pro" ||
-    entitlement.status !== "active" ||
-    (entitlement.valid_until !== null && Number(entitlement.valid_until) <= now)
-  )
+  if (!(await activePro(context)))
     return context.json({ error: "Managed Pro required" }, 403);
-  const existing = await context.env.DB.prepare(
-    `SELECT id, status FROM managed_stt_sessions
-     WHERE uid = ?1 AND idempotency_key = ?2`,
-  )
-    .bind(auth.uid, parsed.idempotencyKey)
-    .first();
-  if (existing)
-    return context.json(
-      { error: "STT session already requested", sessionId: existing.id },
-      409,
-      { "cache-control": "no-store" },
-    );
-  const sessionId = crypto.randomUUID();
+  const auth = context.get("auth");
+  const sessionId = await sessionIdFor(auth.uid, parsed.idempotencyKey);
   const estimatedCost = Math.ceil((maxSessionSeconds * costPerMinute) / 60);
   if (!Number.isSafeInteger(estimatedCost) || estimatedCost <= 0)
     return context.json({ error: "Managed STT unavailable" }, 503);
@@ -156,6 +162,7 @@ stt.post("/sessions", async (context) => {
         ? { "retry-after": admission.headers.get("retry-after") as string }
         : undefined,
     );
+  const now = Date.now();
   try {
     await context.env.DB.prepare(
       `INSERT INTO managed_stt_sessions
@@ -163,7 +170,8 @@ stt.post("/sessions", async (context) => {
         channels, diarize, interim_results, device_id, source_id, status,
         reserved_seconds, estimated_cost_microusd, created_at, updated_at)
        VALUES (?1, ?2, ?3, 'deepgram', ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,
-        'minting', ?13, ?14, ?15, ?15)`,
+        'ready', ?13, ?14, ?15, ?15)
+       ON CONFLICT(uid, idempotency_key) DO NOTHING`,
     )
       .bind(
         sessionId,
@@ -186,73 +194,164 @@ stt.post("/sessions", async (context) => {
   } catch {
     return context.json({ error: "Managed STT unavailable" }, 503);
   }
-  let grant: Response;
-  try {
-    grant = await fetch(deepgramGrantEndpoint, {
-      method: "POST",
-      headers: {
-        authorization: `Token ${secret}`,
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({ ttl_seconds: tokenTtlSeconds }),
-      signal: AbortSignal.timeout(8000),
-    });
-  } catch {
-    await context.env.DB.prepare(
-      "UPDATE managed_stt_sessions SET status = 'failed', updated_at = ?1 WHERE id = ?2",
-    )
-      .bind(Date.now(), sessionId)
-      .run();
-    return context.json({ error: "Managed STT unavailable" }, 502);
-  }
-  const grantBody = (await grant.json().catch(() => null)) as Record<
-    string,
-    unknown
-  > | null;
-  if (
-    !grant.ok ||
-    typeof grantBody?.access_token !== "string" ||
-    grantBody.access_token.length < 32 ||
-    grantBody.expires_in !== tokenTtlSeconds
-  ) {
-    await context.env.DB.prepare(
-      "UPDATE managed_stt_sessions SET status = 'failed', updated_at = ?1 WHERE id = ?2",
-    )
-      .bind(Date.now(), sessionId)
-      .run();
-    return context.json({ error: "Managed STT unavailable" }, 502);
-  }
-  const tokenExpiresAt = Date.now() + tokenTtlSeconds * 1000;
-  await context.env.DB.prepare(
-    `UPDATE managed_stt_sessions
-     SET status = 'issued', token_expires_at = ?1, updated_at = ?2 WHERE id = ?3`,
+  const row = await context.env.DB.prepare(
+    `SELECT id, model, language, encoding, sample_rate, channels, diarize,
+            interim_results, device_id, source_id, status, reserved_seconds
+     FROM managed_stt_sessions WHERE uid = ?1 AND idempotency_key = ?2`,
   )
-    .bind(tokenExpiresAt, Date.now(), sessionId)
-    .run();
-  const parameters = {
-    model: parsed.model,
-    language: parsed.language,
-    encoding: parsed.encoding,
-    sample_rate: String(parsed.sampleRate),
-    channels: String(parsed.channels),
-    diarize: String(parsed.diarize),
-    interim_results: String(parsed.interimResults),
-  };
-  const websocketUrl = new URL(deepgramListenEndpoint);
-  for (const [key, value] of Object.entries(parameters))
-    websocketUrl.searchParams.set(key, value);
+    .bind(auth.uid, parsed.idempotencyKey)
+    .first();
+  if (
+    row?.id !== sessionId ||
+    row.model !== parsed.model ||
+    row.language !== parsed.language ||
+    row.encoding !== parsed.encoding ||
+    Number(row.sample_rate) !== parsed.sampleRate ||
+    Number(row.channels) !== parsed.channels ||
+    Number(row.diarize) !== (parsed.diarize ? 1 : 0) ||
+    Number(row.interim_results) !== (parsed.interimResults ? 1 : 0) ||
+    row.device_id !== parsed.deviceId ||
+    row.source_id !== parsed.sourceId ||
+    Number(row.reserved_seconds) !== maxSessionSeconds
+  )
+    return context.json({ error: "Idempotency conflict" }, 409);
   return context.json(
     {
       sessionId,
-      accessToken: grantBody.access_token,
-      expiresAt: tokenExpiresAt,
-      websocketUrl: websocketUrl.toString(),
-      allowedParams: parameters,
+      websocketUrl: websocketUrl(context.req.url, sessionId),
       maxSessionSeconds,
+      state: row.status,
     },
-    201,
-    { "cache-control": "no-store", pragma: "no-cache" },
+    row.status === "ready" ? 201 : 200,
   );
+});
+
+stt.get("/sessions/:sessionId/stream", async (context) => {
+  const sessionId = context.req.param("sessionId");
+  const secret = context.env.DEEPGRAM_API_KEY;
+  const maxSessionSeconds = positiveInteger(
+    context.env.STT_MAX_SESSION_SECONDS,
+  );
+  if (
+    !sessionPattern.test(sessionId) ||
+    !secret ||
+    maxSessionSeconds === null ||
+    maxSessionSeconds > 3600 ||
+    context.req.header("upgrade")?.toLowerCase() !== "websocket"
+  )
+    return context.json({ error: "Managed STT unavailable" }, 503);
+  if (!(await activePro(context)))
+    return context.json({ error: "Managed Pro required" }, 403);
+  const auth = context.get("auth");
+  const claimed = await context.env.DB.prepare(
+    `UPDATE managed_stt_sessions
+     SET status = 'streaming', claimed_at = ?1, updated_at = ?1
+     WHERE id = ?2 AND uid = ?3 AND status = 'ready'`,
+  )
+    .bind(Date.now(), sessionId, auth.uid)
+    .run();
+  if (claimed.meta.changes !== 1)
+    return context.json({ error: "STT session unavailable" }, 409);
+  const row = await context.env.DB.prepare(
+    `SELECT model, language, encoding, sample_rate, channels, diarize,
+            interim_results, reserved_seconds
+     FROM managed_stt_sessions WHERE id = ?1 AND uid = ?2`,
+  )
+    .bind(sessionId, auth.uid)
+    .first();
+  const sessionSeconds = positiveInteger(row?.reserved_seconds);
+  if (!row || sessionSeconds === null || sessionSeconds > maxSessionSeconds)
+    return context.json({ error: "STT session unavailable" }, 409);
+  const upstreamUrl = new URL(deepgramListenEndpoint);
+  for (const [key, value] of Object.entries({
+    model: String(row.model),
+    language: String(row.language),
+    encoding: String(row.encoding),
+    sample_rate: String(row.sample_rate),
+    channels: String(row.channels),
+    diarize: String(Number(row.diarize) === 1),
+    interim_results: String(Number(row.interim_results) === 1),
+  }))
+    upstreamUrl.searchParams.set(key, value);
+  let upstreamResponse: Response;
+  try {
+    upstreamResponse = await fetch(upstreamUrl, {
+      headers: { Upgrade: "websocket", Authorization: `Token ${secret}` },
+    });
+  } catch {
+    await context.env.DB.prepare(
+      "UPDATE managed_stt_sessions SET status = 'failed', updated_at = ?1 WHERE id = ?2 AND uid = ?3",
+    )
+      .bind(Date.now(), sessionId, auth.uid)
+      .run();
+    return context.json({ error: "Managed STT unavailable" }, 502);
+  }
+  const upstream = upstreamResponse.webSocket;
+  if (!upstream || upstreamResponse.status !== 101) {
+    await context.env.DB.prepare(
+      "UPDATE managed_stt_sessions SET status = 'failed', updated_at = ?1 WHERE id = ?2 AND uid = ?3",
+    )
+      .bind(Date.now(), sessionId, auth.uid)
+      .run();
+    return context.json({ error: "Managed STT unavailable" }, 502);
+  }
+  const pair = new WebSocketPair();
+  const [client, server] = Object.values(pair);
+  server.binaryType = "arraybuffer";
+  upstream.binaryType = "arraybuffer";
+  server.accept();
+  upstream.accept();
+  let closed = false;
+  const finish = (
+    status: "complete" | "failed",
+    code: number,
+    reason: string,
+  ) => {
+    if (closed) return;
+    closed = true;
+    clearTimeout(timeout);
+    if (server.readyState < WebSocket.CLOSING) server.close(code, reason);
+    if (upstream.readyState < WebSocket.CLOSING) upstream.close(code, reason);
+    void context.env.DB.prepare(
+      "UPDATE managed_stt_sessions SET status = ?1, completed_at = ?2, updated_at = ?2 WHERE id = ?3 AND uid = ?4 AND status = 'streaming'",
+    )
+      .bind(status, Date.now(), sessionId, auth.uid)
+      .run()
+      .catch(() => undefined);
+  };
+  const timeout = setTimeout(
+    () => finish("complete", 1000, "Session duration reached"),
+    sessionSeconds * 1000,
+  );
+  server.addEventListener("message", (event) => {
+    const size =
+      typeof event.data === "string"
+        ? new TextEncoder().encode(event.data).byteLength
+        : event.data instanceof ArrayBuffer
+          ? event.data.byteLength
+          : Number.MAX_SAFE_INTEGER;
+    if (size > 65_536) {
+      finish("failed", 1009, "Frame too large");
+      return;
+    }
+    if (upstream.readyState === WebSocket.OPEN) upstream.send(event.data);
+  });
+  upstream.addEventListener("message", (event) => {
+    if (server.readyState === WebSocket.OPEN) server.send(event.data);
+  });
+  server.addEventListener("close", () =>
+    finish("complete", 1000, "Client closed"),
+  );
+  server.addEventListener("error", () =>
+    finish("failed", 1011, "Client stream failed"),
+  );
+  upstream.addEventListener("close", () =>
+    finish("complete", 1000, "Provider closed"),
+  );
+  upstream.addEventListener("error", () =>
+    finish("failed", 1011, "Provider stream failed"),
+  );
+  return new Response(null, { status: 101, webSocket: client });
 });
 
 export default stt;
