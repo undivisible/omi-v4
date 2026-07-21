@@ -2,7 +2,28 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { Miniflare } from "miniflare";
 
 const instances: Miniflare[] = [];
-const tokens = new Map<Miniflare, Map<string, string>>();
+const tokens = new Map<
+  Miniflare,
+  Map<string, { acquisitionToken: string; uid: string }>
+>();
+const responses: Response[] = [];
+
+const dispatch = async (
+  instance: Miniflare,
+  path: "admit" | "claim" | "release",
+  body: Record<string, unknown>,
+) => {
+  const response = await instance.dispatchFetch(
+    `https://admission.test/${path}`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    },
+  );
+  responses.push(response);
+  return response;
+};
 
 const createAdmission = async (vars: Record<string, string> = {}) => {
   const bundle = await Bun.build({
@@ -36,22 +57,16 @@ const createAdmission = async (vars: Record<string, string> = {}) => {
 };
 
 const admit = async (instance: Miniflare, body: Record<string, unknown>) => {
-  const response = await instance.dispatchFetch(
-    "https://admission.test/admit",
-    {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
-    },
-  );
+  const response = await dispatch(instance, "admit", body);
   if (response.ok) {
     const result = (await response.clone().json()) as {
       acquisitionToken?: string;
     };
     if (result.acquisitionToken)
-      tokens
-        .get(instance)
-        ?.set(String(body.sessionId), result.acquisitionToken);
+      tokens.get(instance)?.set(String(body.sessionId), {
+        acquisitionToken: result.acquisitionToken,
+        uid: String(body.uid),
+      });
   }
   return response;
 };
@@ -60,27 +75,32 @@ const release = (
   instance: Miniflare,
   sessionId: string,
   uid: string,
-  acquisitionToken = tokens.get(instance)?.get(sessionId),
-) =>
-  instance.dispatchFetch("https://admission.test/release", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ sessionId, uid, acquisitionToken }),
-  });
+  acquisitionToken = tokens.get(instance)?.get(sessionId)?.acquisitionToken,
+) => dispatch(instance, "release", { sessionId, uid, acquisitionToken });
 
 const claim = (
   instance: Miniflare,
   sessionId: string,
   uid: string,
-  acquisitionToken = tokens.get(instance)?.get(sessionId),
-) =>
-  instance.dispatchFetch("https://admission.test/claim", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ sessionId, uid, acquisitionToken }),
-  });
+  acquisitionToken = tokens.get(instance)?.get(sessionId)?.acquisitionToken,
+) => dispatch(instance, "claim", { sessionId, uid, acquisitionToken });
 
 afterEach(async () => {
+  await Promise.all(
+    instances.flatMap((instance) =>
+      Array.from(tokens.get(instance)?.entries() ?? []).map(
+        ([sessionId, { acquisitionToken, uid }]) =>
+          release(instance, sessionId, uid, acquisitionToken),
+      ),
+    ),
+  );
+  await Promise.all(
+    responses
+      .splice(0)
+      .map((response) =>
+        response.bodyUsed ? Promise.resolve() : response.arrayBuffer(),
+      ),
+  );
   await Promise.all(instances.map((instance) => instance.dispose()));
   instances.length = 0;
   tokens.clear();
