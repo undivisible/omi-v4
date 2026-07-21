@@ -52,6 +52,7 @@ The reusable memory engine lives in the public [`tschk/zkr`](https://github.com/
 - [x] Verify the `zkr` evidence, temporal-claim, profile, review, and retrieval core.
 - [ ] Verify the Flutter gradient shell and every onboarding, navigation, and product surface on target platforms.
 - [x] Verify the Bun/Hono Worker contracts, D1 schema, auth boundary, and channel webhook boundaries.
+- [x] Provision the production Worker and D1, apply all migrations, and verify the live fail-closed edge boundary.
 - [x] Complete production Dart consumption of generated Rinf signals and published `zkr` memory storage/search.
 - [x] Implement Worker D1 persistence, Stripe entitlement, Telegram linking/ingestion, and Blooio linking/ingestion with fail-closed signatures.
 - [x] Connect the durable Telegram/Blooio inbox and app/web chat to one Firebase-UID-scoped conversation transport with ordered replay cursors and idempotent client messages.

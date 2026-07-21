@@ -5,6 +5,7 @@
   "compatibility_date": "2026-07-21",
   "compatibility_flags": ["nodejs_compat"],
   "vars": {
+    "FIREBASE_PROJECT_ID": "based-hardware",
     "MIMO_CHAT_COMPLETIONS_URL": "https://api.xiaomimimo.com/v1/chat/completions",
     "MIMO_MODEL": "mimo-v2.5-pro",
     "MIMO_INPUT_MICROUSD_PER_MILLION_TOKENS": "435000",
@@ -63,7 +64,7 @@
     {
       "binding": "DB",
       "database_name": "omi-v4",
-      "database_id": "replace-after-wrangler-d1-create",
+      "database_id": "74aab5eb-a81d-4494-9283-d48052b8a068",
       "migrations_dir": "migrations"
     }
   ]
