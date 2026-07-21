@@ -54,10 +54,12 @@ The reusable memory engine lives in the public [`tschk/zkr`](https://github.com/
 - [x] Verify the Bun/Hono Worker contracts, D1 schema, auth boundary, and channel webhook boundaries.
 - [x] Complete production Dart consumption of generated Rinf signals and published `zkr` memory storage/search.
 - [x] Implement Worker D1 persistence, Stripe entitlement, Telegram linking/ingestion, and Blooio linking/ingestion with fail-closed signatures.
-- [ ] Connect the durable Telegram/Blooio inbox and app/web chat to one Firebase-UID-scoped conversation transport; channel storage and delivery exist, but live desktop-session routing, replay cursors, and multi-client conflict handling do not.
-- [ ] Implement the first evidence-backed Current end to end: candidate generation, ranking, feedback, approved action handoff, and outcome learning. The domain model and empty-state screen exist; persistence and orchestration do not.
+- [x] Connect the durable Telegram/Blooio inbox and app/web chat to one Firebase-UID-scoped conversation transport with ordered replay cursors and idempotent client messages.
+- [x] Implement the first evidence-backed Current end to end: cited candidate generation, deterministic ranking, feedback, approved action handoff, and outcome learning.
+- [ ] Connect channel messages to a live desktop agent session, prove outbound delivery with real credentials, and add an offline retry queue.
+- [ ] Finish desktop both-Shift voice capture; native macOS/Windows key events and the shared gesture state machine exist, but the microphone path and physical Windows proof do not.
 - [x] Complete the audited live-STT slice between bounded Omi BLE/Rinf audio and idempotent final-transcript `zkr` capture, including managed/BYOK provider routing, reconnect gaps, final drain, cancellation, and typed stop acknowledgements.
-- [ ] Re-prove Android, iOS without signing, macOS, Windows, and web release builds on the exact release head; prior run 29842868977 passed for `ef3f016`, while current-head CI remains in progress.
+- [ ] Re-prove Android, iOS without signing, macOS, Windows, and web release builds on the exact release head after this integration lands.
 - [ ] Wire Firebase Auth, real channel delivery, physical Omi hardware, desktop permissions/computer use, and model routes against real credentials and devices.
 
 ## Initial modules
