@@ -8,6 +8,10 @@
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
 	<string>Omi</string>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>Omi uses Bluetooth to connect to your wearable and relay its audio.</string>
+	<key>NSBluetoothPeripheralUsageDescription</key>
+	<string>Omi uses Bluetooth to communicate with your wearable.</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -58,6 +62,10 @@
 		<string>UIInterfaceOrientationPortrait</string>
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>bluetooth-central</string>
 	</array>
 	<key>UISupportedInterfaceOrientations~ipad</key>
 	<array>

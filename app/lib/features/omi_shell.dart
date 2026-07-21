@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../app_services.dart';
 import '../ui/omi_ui.dart';
 import 'chat_screen.dart';
 import 'currents_screen.dart';
@@ -8,7 +9,10 @@ import 'memory_screen.dart';
 import 'setup_account_screens.dart';
 
 class OmiShell extends StatefulWidget {
-  const OmiShell({super.key});
+  const OmiShell({required this.services, this.previewMode = false, super.key});
+
+  final AppServices services;
+  final bool previewMode;
 
   @override
   State<OmiShell> createState() => _OmiShellState();
@@ -34,7 +38,20 @@ class _OmiShellState extends State<OmiShell> {
         left: !wide,
         child: Padding(
           padding: EdgeInsets.fromLTRB(wide ? 32 : 18, 20, wide ? 32 : 18, 12),
-          child: _Screen(index: selected),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              if (widget.previewMode) const _PreviewNotice(),
+              if (widget.previewMode) const SizedBox(height: 12),
+              Expanded(
+                child: _Screen(
+                  index: selected,
+                  services: widget.services,
+                  previewMode: widget.previewMode,
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -68,35 +85,115 @@ class _OmiShellState extends State<OmiShell> {
       bottomNavigationBar: wide
           ? null
           : NavigationBar(
-              selectedIndex: selected,
-              onDestinationSelected: (value) =>
-                  setState(() => selected = value),
-              destinations: [
-                for (final destination in destinations.take(5))
-                  NavigationDestination(
-                    icon: Icon(destination.$1),
-                    label: destination.$2,
-                  ),
+              selectedIndex: selected < 3 ? selected : 3,
+              onDestinationSelected: (value) {
+                if (value < 3) {
+                  setState(() => selected = value);
+                } else {
+                  _showMore();
+                }
+              },
+              destinations: const [
+                NavigationDestination(
+                  key: ValueKey('narrow_destination_0'),
+                  icon: Icon(Icons.chat_bubble_outline_rounded),
+                  label: 'Chat',
+                ),
+                NavigationDestination(
+                  key: ValueKey('narrow_destination_1'),
+                  icon: Icon(Icons.auto_stories_outlined),
+                  label: 'Memory',
+                ),
+                NavigationDestination(
+                  key: ValueKey('narrow_destination_2'),
+                  icon: Icon(Icons.waves_rounded),
+                  label: 'Currents',
+                ),
+                NavigationDestination(
+                  key: ValueKey('narrow_more'),
+                  icon: Icon(Icons.more_horiz_rounded),
+                  label: 'More',
+                ),
               ],
             ),
     );
   }
+
+  Future<void> _showMore() async {
+    final next = await showModalBottomSheet<int>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            for (final index in const [3, 4, 5])
+              ListTile(
+                key: ValueKey('narrow_destination_$index'),
+                leading: Icon(destinations[index].$1),
+                title: Text(destinations[index].$2),
+                selected: selected == index,
+                onTap: () => Navigator.pop(context, index),
+              ),
+          ],
+        ),
+      ),
+    );
+    if (next != null && mounted) setState(() => selected = next);
+  }
+}
+
+class _PreviewNotice extends StatelessWidget {
+  const _PreviewNotice();
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+    label: 'Interface preview. Services are not connected.',
+    child: DecoratedBox(
+      decoration: BoxDecoration(
+        color: const Color(0x22ffc66d),
+        border: Border.all(color: const Color(0x66ffc66d)),
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: const Padding(
+        padding: EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        child: Row(
+          children: [
+            Icon(Icons.visibility_outlined, size: 18, color: Color(0xffffc66d)),
+            SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                'INTERFACE PREVIEW · Account, memory, AI, permissions, and actions are not connected.',
+                style: TextStyle(fontSize: 12, color: Color(0xffffd99a)),
+              ),
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
 }
 
 class _Screen extends StatelessWidget {
-  const _Screen({required this.index});
+  const _Screen({
+    required this.index,
+    required this.services,
+    required this.previewMode,
+  });
 
   final int index;
+  final AppServices services;
+  final bool previewMode;
 
   @override
   Widget build(BuildContext context) {
     return switch (index) {
       0 => const ChatScreen(),
-      1 => const MemoryScreen(),
+      1 => MemoryScreen(services: services, previewMode: previewMode),
       2 => const CurrentsScreen(),
-      3 => const DevicesScreen(),
-      4 => const SetupScreen(),
-      _ => const AccountScreen(),
+      3 => DevicesScreen(previewMode: previewMode),
+      4 => SetupScreen(services: services, previewMode: previewMode),
+      _ => AccountScreen(services: services, previewMode: previewMode),
     };
   }
 }

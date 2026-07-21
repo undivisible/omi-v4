@@ -1,65 +1,136 @@
+import 'dart:async';
+
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../device/device.dart';
 import '../ui/omi_ui.dart';
 
-class DevicesScreen extends StatelessWidget {
-  const DevicesScreen({super.key});
+class DevicesScreen extends StatefulWidget {
+  const DevicesScreen({this.previewMode = false, super.key});
 
-  static const devices = [
-    RelayDevice(id: 'desktop', name: 'This computer'),
-    RelayDevice(id: 'wearable', name: 'Omi wearable'),
-    RelayDevice(id: 'phone', name: 'Phone relay'),
-  ];
+  final bool previewMode;
+
+  @override
+  State<DevicesScreen> createState() => _DevicesScreenState();
+}
+
+class _DevicesScreenState extends State<DevicesScreen> {
+  late final DeviceRelayService relay = DeviceRelayService(
+    role: _mobile
+        ? DeviceRelayRole.mobileOwner
+        : DeviceRelayRole.desktopObserver,
+    adapter: _mobile
+        ? UniversalBleDeviceRelayAdapter()
+        : const UnavailableDeviceRelayAdapter(
+            state: DeviceCapabilityState.unsupported,
+          ),
+  );
+  List<RelayDevice> devices = const [];
+  DeviceRelaySnapshot? snapshot;
+  Object? error;
+  late final StreamSubscription<DeviceRelaySnapshot> _snapshotSubscription;
+
+  bool get _mobile =>
+      !kIsWeb &&
+      (defaultTargetPlatform == TargetPlatform.android ||
+          defaultTargetPlatform == TargetPlatform.iOS);
+
+  @override
+  void initState() {
+    super.initState();
+    _snapshotSubscription = relay.snapshots.listen((next) {
+      if (mounted) setState(() => snapshot = next);
+    });
+  }
+
+  @override
+  void dispose() {
+    unawaited(_snapshotSubscription.cancel());
+    if (_mobile) unawaited(relay.disconnect().onError((_, _) {}));
+    super.dispose();
+  }
+
+  Future<void> scan() async {
+    setState(() => error = null);
+    try {
+      final found = await relay.scan();
+      if (mounted) setState(() => devices = found);
+    } catch (next) {
+      if (mounted) setState(() => error = next);
+    }
+  }
+
+  Future<void> connect(RelayDevice device) async {
+    setState(() => error = null);
+    try {
+      await relay.connect(device.id);
+    } catch (next) {
+      if (mounted) setState(() => error = next);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
+    final phase = snapshot?.phase ?? DeviceConnectionPhase.disconnected;
     return PageList(
       title: 'Devices',
-      subtitle: 'Capture and control stay visible across every surface.',
+      subtitle: _mobile
+          ? 'This phone relays audio from your Omi wearable.'
+          : 'Pair and stream Omi hardware from the mobile companion.',
       children: [
-        _DeviceTile(
-          icon: Icons.laptop_mac_rounded,
-          device: devices[0],
-          detail: 'Screen and microphone ready',
-          connected: true,
-        ),
-        _DeviceTile(
-          icon: Icons.watch_outlined,
-          device: devices[1],
-          detail: 'Not connected',
-        ),
-        _DeviceTile(
-          icon: Icons.phone_iphone_rounded,
-          device: devices[2],
-          detail: 'Waiting for pairing',
-        ),
+        if (widget.previewMode)
+          const BaseTile(
+            icon: Icons.visibility_outlined,
+            title: 'Device controls unavailable in preview',
+            detail: 'Bluetooth scanning and connection are disabled.',
+            trailing: Icon(Icons.block_rounded),
+          )
+        else if (_mobile)
+          BaseTile(
+            icon: Icons.bluetooth_searching_rounded,
+            title: phase == DeviceConnectionPhase.scanning
+                ? 'Scanning nearby…'
+                : 'Find an Omi device',
+            detail: error == null
+                ? 'Bluetooth permission is requested when you scan.'
+                : '$error',
+            trailing: IconButton(
+              tooltip: 'Scan',
+              onPressed: phase == DeviceConnectionPhase.scanning ? null : scan,
+              icon: const Icon(Icons.refresh_rounded),
+            ),
+          )
+        else
+          const BaseTile(
+            icon: Icons.phone_iphone_rounded,
+            title: 'Mobile relay required',
+            detail:
+                'Device pairing is intentionally unavailable on this client.',
+            trailing: Icon(Icons.info_outline_rounded),
+          ),
+        for (final device in devices)
+          BaseTile(
+            icon: Icons.watch_outlined,
+            title: device.name,
+            detail: [
+              if (device.signalStrength case final signal?) '$signal dBm',
+              if (device.batteryLevel case final battery?) '$battery% battery',
+            ].join(' · '),
+            trailing: IconButton(
+              tooltip: 'Connect',
+              onPressed: phase == DeviceConnectionPhase.connecting
+                  ? null
+                  : () => connect(device),
+              icon: Icon(
+                snapshot?.device?.id == device.id &&
+                        phase == DeviceConnectionPhase.connected
+                    ? Icons.check_circle_rounded
+                    : Icons.add_circle_outline_rounded,
+              ),
+            ),
+          ),
       ],
     );
   }
-}
-
-class _DeviceTile extends StatelessWidget {
-  const _DeviceTile({
-    required this.icon,
-    required this.device,
-    required this.detail,
-    this.connected = false,
-  });
-
-  final IconData icon;
-  final RelayDevice device;
-  final String detail;
-  final bool connected;
-
-  @override
-  Widget build(BuildContext context) => BaseTile(
-    icon: icon,
-    title: device.name,
-    detail: detail,
-    trailing: Icon(
-      connected ? Icons.check_circle_rounded : Icons.add_circle_outline_rounded,
-      color: connected ? const Color(0xff73d5c4) : null,
-    ),
-  );
 }

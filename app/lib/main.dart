@@ -1,11 +1,32 @@
 import 'package:flutter/material.dart';
 
+import 'app_services.dart';
 import 'features/onboarding_screen.dart';
 
-void main() => runApp(const OmiApp());
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  final services = AppServices.fromEnvironment();
+  await services.initialize();
+  runApp(OmiApp(services: services));
+}
 
-class OmiApp extends StatelessWidget {
-  const OmiApp({super.key});
+class OmiApp extends StatefulWidget {
+  const OmiApp({super.key, this.services});
+
+  final AppServices? services;
+
+  @override
+  State<OmiApp> createState() => _OmiAppState();
+}
+
+class _OmiAppState extends State<OmiApp> {
+  late final services = widget.services ?? AppServices.fromEnvironment();
+
+  @override
+  void dispose() {
+    services.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -45,7 +66,7 @@ class OmiApp extends StatelessWidget {
           ),
         ),
       ),
-      home: const OnboardingScreen(),
+      home: OnboardingScreen(services: services),
     );
   }
 }
