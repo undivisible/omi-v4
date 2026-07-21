@@ -1,6 +1,8 @@
 import { Hono } from "hono";
 import { requireAuth } from "./auth";
 import desktopAuth from "./desktop-auth";
+import { deliverDueChannelMessages } from "./delivery";
+export { DeliveryCoordinator } from "./delivery";
 import routes from "./routes";
 import type { AppEnv } from "./types";
 import webhooks from "./webhooks";
@@ -16,4 +18,13 @@ app.use("/v1/*", requireAuth);
 app.route("/v1", routes);
 app.notFound((context) => context.json({ error: "Not found" }, 404));
 
-export default app;
+export default {
+  fetch: app.fetch,
+  scheduled(
+    _controller: ScheduledController,
+    env: AppEnv["Bindings"],
+    context: ExecutionContext,
+  ) {
+    context.waitUntil(deliverDueChannelMessages(env));
+  },
+};

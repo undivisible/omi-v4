@@ -1,5 +1,6 @@
 import { Hono, type Context } from "hono";
 import billing from "./billing";
+import { dispatchChannelMessage, dispatchChannelUnlink } from "./delivery";
 import type {
   AppEnv,
   Channel,
@@ -650,32 +651,100 @@ routes.post("/channels/:channel/link", async (context) => {
   return context.json({ channel, token, expiresAt: now + 10 * 60_000 }, 201);
 });
 
+routes.post("/channels/:channel/messages", async (context) => {
+  const channel = context.req.param("channel") as Channel;
+  if (channel !== "telegram" && channel !== "blooio")
+    return context.json({ error: "Unknown channel" }, 404);
+  const body = await json(context.req.raw);
+  const message = text(body?.text, 4096);
+  const idempotencyKey = text(body?.idempotencyKey, 128);
+  if (
+    !message ||
+    !idempotencyKey ||
+    idempotencyKey.length < 8 ||
+    !/^[A-Za-z0-9._:-]+$/.test(idempotencyKey)
+  )
+    return context.json({ error: "Invalid delivery" }, 400);
+  const uid = context.get("auth").uid;
+  const binding = await context.env.DB.prepare(
+    `SELECT COALESCE(channel_chat_id, channel_user_id) AS channel_chat_id
+     FROM channel_bindings
+     WHERE uid = ?1 AND channel = ?2 AND revoked_at IS NULL
+     ORDER BY verified_at DESC LIMIT 1`,
+  )
+    .bind(uid, channel)
+    .first<{ channel_chat_id: string }>();
+  if (!binding?.channel_chat_id)
+    return context.json({ error: "Channel is not linked" }, 409);
+  const id = crypto.randomUUID();
+  const now = Date.now();
+  await context.env.DB.prepare(
+    `INSERT OR IGNORE INTO channel_deliveries
+       (id, uid, channel, idempotency_key, channel_chat_id, text, next_attempt_at, created_at, updated_at)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7, ?7)`,
+  )
+    .bind(
+      id,
+      uid,
+      channel,
+      idempotencyKey,
+      binding.channel_chat_id,
+      message,
+      now,
+    )
+    .run();
+  const delivery = await context.env.DB.prepare(
+    `SELECT id, channel_chat_id, text, state, attempts, provider_message_id, last_error
+     FROM channel_deliveries WHERE uid = ?1 AND channel = ?2 AND idempotency_key = ?3`,
+  )
+    .bind(uid, channel, idempotencyKey)
+    .first<{
+      id: string;
+      channel_chat_id: string;
+      text: string;
+      state: string;
+      attempts: number;
+      provider_message_id: string | null;
+      last_error: string | null;
+    }>();
+  if (
+    !delivery ||
+    delivery.channel_chat_id !== binding.channel_chat_id ||
+    delivery.text !== message
+  )
+    return context.json({ error: "Idempotency key conflict" }, 409);
+  try {
+    await dispatchChannelMessage(context.env, delivery.id, uid, channel);
+  } catch {
+    return context.json({ error: "Delivery coordination unavailable" }, 503);
+  }
+  const current = await context.env.DB.prepare(
+    "SELECT id, state, attempts, provider_message_id, last_error FROM channel_deliveries WHERE id = ?1 AND uid = ?2",
+  )
+    .bind(delivery.id, uid)
+    .first();
+  const status =
+    current?.state === "sent"
+      ? 200
+      : current?.state === "failed" &&
+          current.last_error === "Provider credentials unavailable"
+        ? 503
+        : current?.state === "failed"
+          ? 502
+          : 202;
+  return context.json({ delivery: current }, status);
+});
+
 routes.delete("/channels/:channel/link", async (context) => {
   const channel = context.req.param("channel") as Channel;
   if (channel !== "telegram" && channel !== "blooio")
     return context.json({ error: "Unknown channel" }, 404);
   const uid = context.get("auth").uid;
-  const now = Date.now();
-  const [bindings] = await context.env.DB.batch([
-    context.env.DB.prepare(
-      "UPDATE channel_bindings SET revoked_at = ?1 WHERE uid = ?2 AND channel = ?3 AND revoked_at IS NULL",
-    ).bind(now, uid, channel),
-    context.env.DB.prepare(
-      "UPDATE channel_link_tokens SET consumed_at = ?1 WHERE uid = ?2 AND channel = ?3 AND consumed_at IS NULL",
-    ).bind(now, uid, channel),
-  ]);
-  if (bindings.meta.changes > 0)
-    await context.env.DB.prepare(
-      "INSERT INTO audit_events (id, uid, actor_type, action, target_type, target_id, details, created_at) VALUES (?1, ?2, 'owner', 'channel.unlinked', 'channel', ?3, ?4, ?5)",
-    )
-      .bind(
-        crypto.randomUUID(),
-        uid,
-        channel,
-        JSON.stringify({ revokedBindings: bindings.meta.changes }),
-        now,
-      )
-      .run();
+  try {
+    await dispatchChannelUnlink(context.env, uid, channel);
+  } catch {
+    return context.json({ error: "Delivery coordination unavailable" }, 503);
+  }
   return context.body(null, 204);
 });
 

@@ -3,6 +3,21 @@
   "name": "omi-v4-api",
   "main": "src/index.ts",
   "compatibility_date": "2026-07-21",
+  "triggers": { "crons": ["* * * * *"] },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "DELIVERY_COORDINATOR",
+        "class_name": "DeliveryCoordinator"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["DeliveryCoordinator"]
+    }
+  ],
   "d1_databases": [
     {
       "binding": "DB",

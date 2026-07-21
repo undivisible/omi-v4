@@ -1,8 +1,11 @@
 export type Bindings = {
   DB: D1Database;
+  DELIVERY_COORDINATOR: DurableObjectNamespace;
   FIREBASE_PROJECT_ID: string;
   TELEGRAM_WEBHOOK_SECRET?: string;
+  TELEGRAM_BOT_TOKEN?: string;
   BLOOIO_WEBHOOK_SIGNING_SECRET?: string;
+  BLOOIO_API_KEY?: string;
   STRIPE_SECRET_KEY?: string;
   STRIPE_PRO_PRICE_ID?: string;
   STRIPE_WEBHOOK_SECRET?: string;
