@@ -51,6 +51,8 @@ beforeAll(async () => {
     "migrations/0003_align_kr_model.sql",
     "migrations/0004_saas_foundations.sql",
     "migrations/0005_memory_search.sql",
+    "migrations/0007_channel_delivery.sql",
+    "migrations/0013_conversations.sql",
   ]) {
     const sql = (await Bun.file(migration).text()).replace(
       "PRAGMA foreign_keys = ON;",
@@ -133,6 +135,18 @@ describe("channel webhooks", () => {
     expect(
       await database
         .prepare(
+          "SELECT role, source, text, channel_message_id FROM conversation_messages WHERE uid = 'alpha'",
+        )
+        .first(),
+    ).toEqual({
+      role: "user",
+      source: "telegram",
+      text: "What should I do next?",
+      channel_message_id: "11",
+    });
+    expect(
+      await database
+        .prepare(
           "SELECT uid, text FROM channel_inbox WHERE channel = 'telegram'",
         )
         .first(),
@@ -201,6 +215,45 @@ describe("channel webhooks", () => {
       },
     );
     expect(response.status).toBe(401);
+  });
+
+  test("rejects oversized signed Blooio text before storage", async () => {
+    const messageId = "msg_oversized";
+    const sender = "+15551234567";
+    const body = JSON.stringify({
+      event: "message.received",
+      message_id: messageId,
+      external_id: sender,
+      sender,
+      text: "x".repeat(20_001),
+      is_group: false,
+    });
+    const response = await app.request(
+      "/v1/webhooks/blooio",
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-blooio-signature": await sign(body),
+        },
+        body,
+      },
+      {
+        DB: database,
+        FIREBASE_PROJECT_ID: "test",
+        BLOOIO_WEBHOOK_SIGNING_SECRET: secret,
+      },
+    );
+
+    expect(await response.json()).toEqual({ accepted: true, queued: false });
+    expect(
+      await database
+        .prepare(
+          "SELECT COUNT(*) AS count FROM conversation_messages WHERE channel_message_id = ?1",
+        )
+        .bind(messageId)
+        .first(),
+    ).toMatchObject({ count: 0 });
   });
 });
 

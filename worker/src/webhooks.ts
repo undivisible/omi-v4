@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import type { AppEnv, Channel } from "./types";
+import { appendConversationMessage } from "./conversations";
 
 const webhooks = new Hono<AppEnv>();
 const encoder = new TextEncoder();
@@ -158,7 +159,7 @@ const enqueue = async (
   if (!binding) return false;
   const uid = String(binding.uid);
   const now = Date.now();
-  await database.batch([
+  const inserted = await database.batch([
     database
       .prepare(
         `INSERT OR IGNORE INTO channel_inbox
@@ -191,6 +192,17 @@ const enqueue = async (
         now,
       ),
   ]);
+  if (inserted[0].meta.changes === 1) {
+    await appendConversationMessage(database, {
+      uid,
+      clientMessageId: `channel:${channel}:${eventId}`,
+      role: "user",
+      source: channel,
+      text,
+      channelMessageId: messageId,
+      createdAt: now,
+    });
+  }
   return true;
 };
 
@@ -291,7 +303,8 @@ webhooks.post("/blooio", async (context) => {
     typeof body.message_id !== "string" ||
     typeof body.external_id !== "string" ||
     typeof body.sender !== "string" ||
-    (body.text !== null && typeof body.text !== "string")
+    (body.text !== null && typeof body.text !== "string") ||
+    (typeof body.text === "string" && body.text.length > 20_000)
   )
     return context.json({ accepted: true, queued: false });
   const eventId = `${body.event}:${body.message_id}`;

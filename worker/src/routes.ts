@@ -1,12 +1,13 @@
 import { Hono, type Context } from "hono";
 import assistant from "./assistant";
 import billing from "./billing";
+import currents from "./currents";
 import stt from "./stt";
+import conversations, { appendConversationMessage } from "./conversations";
 import { dispatchChannelMessage, dispatchChannelUnlink } from "./delivery";
 import type {
   AppEnv,
   Channel,
-  Current,
   MemoryEvidence,
   PersonalMemory,
   SettingsDuration,
@@ -18,6 +19,8 @@ const routes = new Hono<AppEnv>();
 routes.route("/", assistant);
 routes.route("/payments/stripe", billing);
 routes.route("/stt", stt);
+routes.route("/currents", currents);
+routes.route("/", conversations);
 
 const text = (value: unknown, limit: number): string | null =>
   typeof value === "string" && value.trim().length > 0 && value.length <= limit
@@ -448,23 +451,6 @@ routes.post("/memory/daily-reviews", async (context) => {
   return context.json({ id }, 201);
 });
 
-routes.get("/currents", async (context) => {
-  const rows = await context.env.DB.prepare(
-    "SELECT id, title, summary, status, created_at, updated_at FROM currents WHERE uid = ?1 ORDER BY updated_at DESC LIMIT 100",
-  )
-    .bind(context.get("auth").uid)
-    .all();
-  const currents: Current[] = (rows.results ?? []).map((row) => ({
-    id: String(row.id),
-    title: String(row.title),
-    summary: String(row.summary),
-    status: row.status as Current["status"],
-    createdAt: Number(row.created_at),
-    updatedAt: Number(row.updated_at),
-  }));
-  return context.json({ currents });
-});
-
 routes.get("/settings", async (context) => {
   const row = await context.env.DB.prepare(
     "SELECT value, revision FROM user_settings WHERE uid = ?1",
@@ -717,6 +703,16 @@ routes.post("/channels/:channel/messages", async (context) => {
     delivery.text !== message
   )
     return context.json({ error: "Idempotency key conflict" }, 409);
+  const conversationMessage = await appendConversationMessage(context.env.DB, {
+    uid,
+    clientMessageId: `delivery:${channel}:${idempotencyKey}`,
+    role: "assistant",
+    source: channel,
+    text: message,
+    deliveryId: delivery.id,
+  });
+  if (!conversationMessage)
+    return context.json({ error: "Conversation message conflict" }, 409);
   try {
     await dispatchChannelMessage(context.env, delivery.id, uid, channel);
   } catch {

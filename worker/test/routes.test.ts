@@ -86,6 +86,7 @@ beforeAll(async () => {
   await migration("migrations/0004_saas_foundations.sql");
   await migration("migrations/0005_memory_search.sql");
   await migration("migrations/0007_channel_delivery.sql");
+  await migration("migrations/0013_conversations.sql");
   const now = Date.now();
   await database
     .prepare(
@@ -97,6 +98,56 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await miniflare.dispose();
+});
+
+describe("shared conversation routes", () => {
+  test("append is UID-scoped, replayable, and conflict-safe", async () => {
+    const append = (uid: string, value: string) =>
+      request(uid, "/conversations/default/messages", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          clientMessageId: "app:message-1",
+          role: "user",
+          source: "app",
+          text: value,
+        }),
+      });
+    expect((await append("alpha", "hello from app")).status).toBe(201);
+    const replayed = await append("alpha", "hello from app");
+    expect(replayed.status).toBe(200);
+    expect(
+      ((await replayed.json()) as { message: { replayed: boolean } }).message
+        .replayed,
+    ).toBe(true);
+    expect((await append("alpha", "changed")).status).toBe(409);
+    expect((await append("beta", "beta message")).status).toBe(201);
+    const response = await request(
+      "alpha",
+      "/conversations/default/messages?after=0",
+    );
+    const value = (await response.json()) as {
+      messages: Array<{ text: string }>;
+      nextCursor: number;
+    };
+    expect(value.messages.map((message) => message.text)).toEqual([
+      "hello from app",
+    ]);
+    expect(value.nextCursor).toBeGreaterThan(0);
+  });
+
+  test("replay cursors use optimistic revisions and never move backward", async () => {
+    const update = (cursor: number, expectedRevision: number) =>
+      request("alpha", "/conversations/default/cursors/app-client", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ cursor, expectedRevision }),
+      });
+    expect((await update(4, 0)).status).toBe(200);
+    expect((await update(5, 0)).status).toBe(409);
+    expect((await update(3, 1)).status).toBe(409);
+    expect((await update(8, 1)).status).toBe(200);
+  });
 });
 
 describe("memory routes", () => {
