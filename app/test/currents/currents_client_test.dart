@@ -7,6 +7,8 @@ void main() {
     () async {
       final transport = _Transport();
       final client = CurrentsClient(transport);
+      await client.generate();
+      expect(transport.requests.single.path, '/v1/currents/generate');
       final items = await client.list();
       expect(items.single.title, 'Ship release');
       expect(items.single.item.evidence.single.sourceId, 'conversation-1');
@@ -37,6 +39,7 @@ void main() {
     () async {
       final controller = CurrentsController(CurrentsClient(_Transport()));
       await controller.load();
+      expect(controller.loading, isFalse);
       expect(controller.items, hasLength(1));
       await controller.dismiss('current-1');
       expect(controller.items, isEmpty);
@@ -50,6 +53,9 @@ final class _Transport implements CurrentsTransport {
   @override
   Future<CurrentsResponse> send(CurrentsRequest request) async {
     requests.add(request);
+    if (request.path.endsWith('/generate')) {
+      return const CurrentsResponse(statusCode: 200, body: {'current': null});
+    }
     if (request.path.endsWith('/accept')) {
       return const CurrentsResponse(
         statusCode: 201,

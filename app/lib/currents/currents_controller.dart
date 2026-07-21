@@ -15,6 +15,7 @@ final class CurrentsController extends ChangeNotifier {
     error = null;
     notifyListeners();
     try {
+      await _client.generate();
       items = await _client.list();
     } on CurrentsClientException catch (failure) {
       error = failure.message;

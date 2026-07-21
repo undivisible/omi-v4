@@ -19,6 +19,9 @@ const text = (value: unknown, limit = 500) =>
     ? value.trim()
     : null;
 
+const bounded = (value: string, limit: number) =>
+  Array.from(value).slice(0, limit).join("");
+
 const rowToCurrent = (row: Record<string, unknown>) => ({
   id: String(row.id),
   status: String(row.status),
@@ -63,6 +66,93 @@ const selectCurrent = async (
   )
     .bind(id, uid)
     .first<Record<string, unknown>>();
+
+currents.post("/generate", async (context) => {
+  const uid = context.get("auth").uid;
+  const settings = await context.env.DB.prepare(
+    "SELECT value FROM user_settings WHERE uid = ?1",
+  )
+    .bind(uid)
+    .first<{ value: string }>();
+  if (settings) {
+    try {
+      if (JSON.parse(settings.value).proactiveRecommendations === false)
+        return context.json({ current: null });
+    } catch {
+      return context.json({ error: "Invalid settings" }, 500);
+    }
+  }
+  const source = await context.env.DB.prepare(
+    `SELECT c.id AS claim_id, c.content, c.value, ce.evidence_id,
+            ce.confidence_basis_points, e.quote
+     FROM memory_profile_entries p
+     JOIN memory_claims c ON c.id = p.claim_id AND c.uid = p.uid
+     JOIN memory_claim_evidence ce ON ce.claim_id = c.id AND ce.uid = c.uid
+       AND ce.relation = 'supports'
+     JOIN memory_evidence e ON e.id = ce.evidence_id AND e.uid = ce.uid
+     JOIN memory_source_revisions r ON r.id = e.source_revision_id AND r.uid = e.uid
+     JOIN memory_sources s ON s.id = r.source_id AND s.uid = r.uid
+     LEFT JOIN currents existing ON existing.uid = p.uid
+       AND existing.generation_key = 'claim:' || c.id
+     WHERE p.uid = ?1 AND p.profile_kind = 'current' AND p.status != 'archived'
+       AND c.status = 'accepted' AND c.retracted_at IS NULL
+       AND s.tombstoned_at IS NULL AND existing.id IS NULL
+     ORDER BY p.updated_at DESC, ce.confidence_basis_points DESC, c.id, e.id
+     LIMIT 1`,
+  )
+    .bind(uid)
+    .first<Record<string, unknown>>();
+  if (!source) return context.json({ current: null });
+  const claimId = String(source.claim_id);
+  const value = String(source.value ?? source.content).trim();
+  const content = String(source.content).trim();
+  const quote = String(source.quote).trim();
+  if (!value || !content || !quote)
+    return context.json({ error: "Current source is invalid" }, 500);
+  const id = crypto.randomUUID();
+  const now = Date.now();
+  const inserted = await context.env.DB.prepare(
+    `INSERT OR IGNORE INTO currents
+      (id, uid, evidence_id, title, summary, reason, confidence_basis_points,
+       proposed_action, status, surface_at, generation_key, created_at, updated_at)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'candidate', ?9, ?10, ?9, ?9)`,
+  )
+    .bind(
+      id,
+      uid,
+      source.evidence_id,
+      bounded(`Revisit: ${value}`, 120),
+      bounded(content, 500),
+      bounded(`Based on: ${quote}`, 500),
+      Number(source.confidence_basis_points),
+      JSON.stringify({
+        kind: "review",
+        instruction: bounded(
+          `Review this memory and decide the smallest next action: ${value}`,
+          500,
+        ),
+      }),
+      now,
+      `claim:${claimId}`,
+    )
+    .run();
+  if (inserted.meta.changes === 1) {
+    return context.json(
+      { current: rowToCurrent((await selectCurrent(context.env, uid, id))!) },
+      201,
+    );
+  }
+  const existing = await context.env.DB.prepare(
+    "SELECT id FROM currents WHERE uid = ?1 AND generation_key = ?2",
+  )
+    .bind(uid, `claim:${claimId}`)
+    .first<{ id: string }>();
+  return context.json({
+    current: existing
+      ? rowToCurrent((await selectCurrent(context.env, uid, existing.id))!)
+      : null,
+  });
+});
 
 currents.post("/candidates", async (context) => {
   const body = await object(context.req.raw);

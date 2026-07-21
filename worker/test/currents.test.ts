@@ -38,6 +38,7 @@ beforeAll(async () => {
     "0002_memory_and_policy.sql",
     "0003_align_kr_model.sql",
     "0012_currents.sql",
+    "0015_currents_generation.sql",
   ]) {
     const sql = (await Bun.file(`migrations/${name}`).text()).replace(
       "PRAGMA foreign_keys = ON;",
@@ -50,11 +51,11 @@ beforeAll(async () => {
   const now = Date.now();
   await database
     .prepare(
-      "INSERT INTO users (uid, created_at, updated_at) VALUES ('alpha', ?1, ?1), ('beta', ?1, ?1)",
+      "INSERT INTO users (uid, created_at, updated_at) VALUES ('alpha', ?1, ?1), ('beta', ?1, ?1), ('gamma', ?1, ?1)",
     )
     .bind(now)
     .run();
-  for (const uid of ["alpha", "beta"]) {
+  for (const uid of ["alpha", "beta", "gamma"]) {
     await database.batch([
       database
         .prepare(
@@ -71,6 +72,21 @@ beforeAll(async () => {
           "INSERT INTO memory_evidence (id, uid, source_revision_id, quote, created_at) VALUES (?1, ?2, ?3, 'Finish the release', ?4)",
         )
         .bind(`${uid}-evidence`, uid, `${uid}-revision`, now),
+      database
+        .prepare(
+          "INSERT INTO memory_claims (id, uid, content, value, recorded_at) VALUES (?1, ?2, 'Finish the release', 'Finish the release', ?3)",
+        )
+        .bind(`${uid}-claim`, uid, now),
+      database
+        .prepare(
+          "INSERT INTO memory_claim_evidence (uid, claim_id, evidence_id, relation, confidence_basis_points) VALUES (?1, ?2, ?3, 'supports', 9000)",
+        )
+        .bind(uid, `${uid}-claim`, `${uid}-evidence`),
+      database
+        .prepare(
+          "INSERT INTO memory_profile_entries (id, uid, claim_id, profile_kind, profile_key, profile_value, created_at, updated_at) VALUES (?1, ?2, ?3, 'current', 'priority', 'Finish the release', ?4, ?4)",
+        )
+        .bind(`${uid}-profile`, uid, `${uid}-claim`, now),
     ]);
   }
 });
@@ -78,6 +94,28 @@ beforeAll(async () => {
 afterAll(() => miniflare.dispose());
 
 describe("Currents", () => {
+  test("generates one cited candidate from production memory", async () => {
+    const generated = await Promise.all([
+      post("gamma", "/generate", {}),
+      post("gamma", "/generate", {}),
+    ]);
+    expect(generated.map(({ status }) => status).sort()).toEqual([200, 201]);
+    const list = (await (await request("gamma", "/")).json()) as {
+      currents: Array<{
+        title: string;
+        evidence: Array<{ sourceId: string }>;
+      }>;
+    };
+    expect(list.currents).toHaveLength(1);
+    expect(list.currents[0]?.title).toBe("Revisit: Finish the release");
+    expect(list.currents[0]?.evidence[0]?.sourceId).toBe("gamma-source");
+    expect(
+      await database
+        .prepare("SELECT COUNT(*) AS count FROM currents WHERE uid = 'gamma'")
+        .first(),
+    ).toEqual({ count: 1 });
+  });
+
   test("creates only from UID-scoped live evidence and ranks deterministically", async () => {
     const now = Date.now();
     expect(

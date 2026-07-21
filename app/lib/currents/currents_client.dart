@@ -64,6 +64,16 @@ final class CurrentsClient {
 
   final CurrentsTransport _transport;
 
+  Future<void> generate() async {
+    await _send(
+      const CurrentsRequest(
+        method: CurrentsHttpMethod.post,
+        path: '/v1/currents/generate',
+        body: {},
+      ),
+    );
+  }
+
   Future<List<CurrentCard>> list() async {
     final body = await _send(
       const CurrentsRequest(
