@@ -726,6 +726,18 @@ final class _RecordingHub implements NativeHub {
   }) {}
 
   @override
+  void exportMemory({
+    required String requestId,
+    int afterCommit = 0,
+    int afterEventIndex = -1,
+    int? highWaterMark,
+    int limit = 100,
+  }) {}
+
+  @override
+  void listMemoryItems({required String requestId, int limit = 50}) {}
+
+  @override
   void startTranscription({
     required String requestId,
     required String audioStreamId,
@@ -871,6 +883,8 @@ final class _RecordingHub implements NativeHub {
     required String requestId,
     required String query,
     int limit = 12,
+    int? asOfValidAtMs,
+    int? asOfRecordedAtMs,
   }) {}
 
   @override

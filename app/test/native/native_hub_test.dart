@@ -29,7 +29,18 @@ void main() {
         recordedAtMs: 45,
         text: 'remember this',
       ),
-      const CommandSearchMemory(query: 'this', limit: 12),
+      const CommandSearchMemory(
+        query: 'this',
+        limit: 12,
+        asOfValidAtMs: 42,
+        asOfRecordedAtMs: 45,
+      ),
+      const CommandExportMemory(
+        afterCommit: 0,
+        afterEventIndex: -1,
+        limit: 100,
+      ),
+      const CommandListMemoryItems(limit: 50),
       const CommandCorrectMemory(
         claimId: 'claim-1',
         text: 'I moved to Beta',
@@ -51,9 +62,10 @@ void main() {
     }
     expect(commands[1].toString(), contains('credential: [REDACTED]'));
     expect(commands[1].toString(), isNot(contains('runtime-token')));
-    expect(commands[6].toString(), contains('text: [REDACTED]'));
-    expect(commands[6].toString(), contains('value: [REDACTED]'));
-    expect(commands[6].toString(), isNot(contains('I moved to Beta')));
+    final correction = commands.whereType<CommandCorrectMemory>().single;
+    expect(correction.toString(), contains('text: [REDACTED]'));
+    expect(correction.toString(), contains('value: [REDACTED]'));
+    expect(correction.toString(), isNot(contains('I moved to Beta')));
   });
 
   test('generated audio contract keeps bytes separate', () {
@@ -80,6 +92,54 @@ void main() {
     );
 
     expect(NativeEvent.bincodeDeserialize(event.bincodeSerialize()), event);
+  });
+
+  test('memory export and local item events round trip', () {
+    const exported = NativeEventMemoryExported(
+      value: MemoryExported(
+        requestId: 'export-1',
+        exportFormat: 1,
+        databaseSchemaVersion: 8,
+        highWaterMark: 4,
+        nextAfterCommit: 4,
+        nextAfterEventIndex: 1,
+        complete: true,
+        commits: [
+          MemoryExportCommit(
+            sequence: 4,
+            recordedAtMs: 12,
+            eventCount: 2,
+            firstEventIndex: 0,
+            recordsJson: ['{"kind":"source"}', '{"kind":"evidence"}'],
+          ),
+        ],
+      ),
+    );
+    const items = NativeEventMemoryItems(
+      value: MemoryItems(
+        requestId: 'items-1',
+        items: [
+          MemoryItem(
+            kind: 'profile',
+            id: 'profile-1',
+            title: 'employer',
+            body: 'Acme',
+            recordedAtMs: 12,
+            evidenceIds: [],
+          ),
+        ],
+      ),
+    );
+
+    expect(
+      NativeEvent.bincodeDeserialize(exported.bincodeSerialize()),
+      exported,
+    );
+    expect(NativeEvent.bincodeDeserialize(items.bincodeSerialize()), items);
+    expect(exported.toString(), contains('[REDACTED]'));
+    expect(exported.toString(), isNot(contains('{"kind":"source"}')));
+    expect(items.toString(), contains('[REDACTED]'));
+    expect(items.toString(), isNot(contains('Acme')));
   });
 
   test('transcription stop acknowledgement round trips independently', () {

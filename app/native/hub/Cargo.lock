@@ -2722,9 +2722,9 @@ dependencies = [
 
 [[package]]
 name = "zkr"
-version = "0.2.1"
+version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "173e50a3d392c5e8b369c8e974fab791c78be73d51baab4e46db0f98efa2c768"
+checksum = "5f5d4ff305ce08aa28500b9a67190c9e08d2d145a64b4be8a5301b571e772f37"
 dependencies = [
  "rusqlite",
  "serde",

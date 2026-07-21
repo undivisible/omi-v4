@@ -59,6 +59,17 @@ pub enum Command {
     SearchMemory {
         query: String,
         limit: u32,
+        as_of_valid_at_ms: Option<i64>,
+        as_of_recorded_at_ms: Option<i64>,
+    },
+    ExportMemory {
+        after_commit: i64,
+        after_event_index: i64,
+        high_water_mark: Option<i64>,
+        limit: u32,
+    },
+    ListMemoryItems {
+        limit: u32,
     },
     CorrectMemory {
         claim_id: String,
@@ -198,6 +209,8 @@ pub enum NativeEvent {
     MemorySearchResults(MemorySearchResults),
     MemoryCorrected(MemoryCorrected),
     MemorySourceDeleted(MemorySourceDeleted),
+    MemoryExported(MemoryExported),
+    MemoryItems(MemoryItems),
 }
 
 #[derive(Debug, Serialize, SignalPiece)]
@@ -377,6 +390,43 @@ pub struct MemorySourceDeleted {
     pub source_id: String,
     pub evidence_count: u64,
     pub claim_count: u64,
+}
+
+#[derive(Debug, Serialize, SignalPiece)]
+pub struct MemoryExported {
+    pub request_id: String,
+    pub export_format: u32,
+    pub database_schema_version: i64,
+    pub high_water_mark: i64,
+    pub next_after_commit: i64,
+    pub next_after_event_index: i64,
+    pub complete: bool,
+    pub commits: Vec<MemoryExportCommit>,
+}
+
+#[derive(Debug, Serialize, SignalPiece)]
+pub struct MemoryExportCommit {
+    pub sequence: i64,
+    pub recorded_at_ms: i64,
+    pub event_count: i64,
+    pub first_event_index: i64,
+    pub records_json: Vec<String>,
+}
+
+#[derive(Debug, Serialize, SignalPiece)]
+pub struct MemoryItems {
+    pub request_id: String,
+    pub items: Vec<MemoryItem>,
+}
+
+#[derive(Debug, Serialize, SignalPiece)]
+pub struct MemoryItem {
+    pub kind: String,
+    pub id: String,
+    pub title: String,
+    pub body: String,
+    pub recorded_at_ms: i64,
+    pub evidence_ids: Vec<String>,
 }
 
 #[derive(Debug, Serialize, SignalPiece)]

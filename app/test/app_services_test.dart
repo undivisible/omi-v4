@@ -539,6 +539,78 @@ void main() {
     await hub.close();
   });
 
+  testWidgets('chat refreshes remote messages without replacing local state', (
+    tester,
+  ) async {
+    final auth = AuthController(
+      _FakeAuthGateway(_session('user-a')),
+      consentStore: VolatileConsentStore()..receipt = _receipt('user-a'),
+    );
+    await auth.restoreSession();
+    final hub = _FakeHub();
+    final conversations = _FakeConversationTransport();
+    final services = AppServices.forTesting(
+      auth: auth,
+      nativeHub: hub,
+      deviceRelay: DeviceRelayService(
+        role: DeviceRelayRole.desktopObserver,
+        adapter: const UnavailableDeviceRelayAdapter(),
+      ),
+      memoryDatabasePath: (uid) => '/tmp/$uid.sqlite3',
+      conversations: conversations,
+    );
+    await services.initialize();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(body: ChatScreen(services: services)),
+      ),
+    );
+    await tester.pump();
+
+    await tester.enterText(
+      find.byKey(const Key('chat_input')),
+      'Local thought',
+    );
+    await tester.tap(find.byKey(const Key('send_chat')));
+    await tester.pump();
+    conversations.replayed.addAll(const [
+      ConversationMessage(
+        cursor: 1,
+        clientMessageId: 'telegram:message-1',
+        role: 'user',
+        source: 'telegram',
+        text: 'Remote thought',
+        createdAt: 1,
+      ),
+      ConversationMessage(
+        cursor: 2,
+        clientMessageId: 'assistant:chat-remote',
+        role: 'assistant',
+        source: 'telegram',
+        text: 'Remote answer',
+        createdAt: 2,
+      ),
+    ]);
+
+    await tester.pump(const Duration(seconds: 2));
+    await tester.pump();
+
+    expect(find.text('Local thought'), findsOneWidget);
+    expect(find.text('Remote thought'), findsOneWidget);
+    expect(find.text('Remote answer'), findsOneWidget);
+    expect(conversations.replayAfter, [0, 0]);
+
+    await tester.pump(const Duration(seconds: 2));
+    await tester.pump();
+    expect(find.text('Remote thought'), findsOneWidget);
+    expect(find.text('Remote answer'), findsOneWidget);
+    expect(conversations.replayAfter, [0, 0, 2]);
+
+    services.dispose();
+    await tester.pump();
+    await hub.close();
+  });
+
   test('atomic approval restores proposal after enqueue failure', () async {
     final auth = AuthController(
       _FakeAuthGateway(_session('user-a')),
@@ -1584,6 +1656,7 @@ final class _FakeConversationTransport implements ConversationTransport {
   final appended =
       <({String clientMessageId, String role, String source, String text})>[];
   final replayed = <ConversationMessage>[];
+  final replayAfter = <int>[];
   Completer<List<ConversationMessage>>? replayBarrier;
 
   @override
@@ -1611,6 +1684,7 @@ final class _FakeConversationTransport implements ConversationTransport {
 
   @override
   Future<List<ConversationMessage>> replay({required int after}) async {
+    replayAfter.add(after);
     final barrier = replayBarrier;
     if (barrier != null) return barrier.future;
     return replayed.where((message) => message.cursor > after).toList();
@@ -1807,6 +1881,18 @@ final class _FakeHub implements NativeHub {
   }
 
   @override
+  void exportMemory({
+    required String requestId,
+    int afterCommit = 0,
+    int afterEventIndex = -1,
+    int? highWaterMark,
+    int limit = 100,
+  }) {}
+
+  @override
+  void listMemoryItems({required String requestId, int limit = 50}) {}
+
+  @override
   void dispose() => disposeCalls += 1;
 
   Future<void> close() => eventsController.close();
@@ -1847,6 +1933,8 @@ final class _FakeHub implements NativeHub {
     required String requestId,
     required String query,
     int limit = 12,
+    int? asOfValidAtMs,
+    int? asOfRecordedAtMs,
   }) {}
 
   @override

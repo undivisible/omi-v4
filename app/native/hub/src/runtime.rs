@@ -1,11 +1,11 @@
 use crate::signals::{
     ActionProposal, ActionRisk, ApprovalDecision, ApprovalExecutionAcknowledgement, AssistantDelta,
     AssistantProvider as ProviderKind, AudioChunk, AudioEncoding, CaptureSource, ClientCommand,
-    Command, ComputerUseAction, MemoryCaptured, MemoryCorrected, MemorySearchItem,
-    MemorySearchResults, MemorySourceDeleted, NativeError, NativeEvent, RuntimePhase,
-    RuntimeStatus, ToolProgress, ToolStatus, TranscriptDelta, TranscriptGap, TranscriptLocator,
-    TranscriptionAuth, TranscriptionRoute, TranscriptionState, TranscriptionStatus,
-    TranscriptionStopAcknowledgement,
+    Command, ComputerUseAction, MemoryCaptured, MemoryCorrected, MemoryExportCommit,
+    MemoryExported, MemoryItem, MemoryItems, MemorySearchItem, MemorySearchResults,
+    MemorySourceDeleted, NativeError, NativeEvent, RuntimePhase, RuntimeStatus, ToolProgress,
+    ToolStatus, TranscriptDelta, TranscriptGap, TranscriptLocator, TranscriptionAuth,
+    TranscriptionRoute, TranscriptionState, TranscriptionStatus, TranscriptionStopAcknowledgement,
 };
 use crate::stt::{self, SttConfig, SttHandle};
 use futures::StreamExt;
@@ -19,8 +19,9 @@ use tokio::task::{JoinError, JoinHandle, JoinSet, spawn_blocking};
 use tokio_util::sync::CancellationToken;
 use url::{Host, Url};
 use zkr::{
-    ClaimId, CorrectInput, DeleteInput, MemoryDb, MemoryRef, PersonId, RememberInput, SearchInput,
-    SourceId, SourceKind, TenantId, TranscriptLocator as ZkrTranscriptLocator,
+    ClaimId, CorrectInput, DeleteInput, EXPORT_FORMAT_VERSION, ExportInput, MemoryDb, MemoryRef,
+    PersonId, ProfilesInput, RememberInput, ReviewsInput, SearchInput, SourceId, SourceKind,
+    TenantId, TranscriptLocator as ZkrTranscriptLocator,
 };
 
 const COMMAND_QUEUE_CAPACITY: usize = 32;
@@ -1782,6 +1783,21 @@ impl CommandDispatcher {
                 continue;
             }
             if matches!(&command.command, Command::ConfigureMemory { .. }) {
+                if let Command::ConfigureMemory {
+                    tenant_id,
+                    person_id,
+                    ..
+                } = &command.command
+                    && firebase_memory_scope(tenant_id, person_id).is_err()
+                {
+                    error(
+                        Some(request_id),
+                        "invalid_memory_configuration",
+                        "tenant_id and person_id must match the configured Firebase UID",
+                        false,
+                    );
+                    continue;
+                }
                 if let Some(transcription) = &self.transcription {
                     let _ = transcription.send(TranscriptionControl::Fence).await;
                 }
@@ -2246,8 +2262,44 @@ async fn execute(
             )
             .await
         }
-        Command::SearchMemory { query, limit } => {
-            search(&request_id, &state, query, limit, &cancellation).await;
+        Command::SearchMemory {
+            query,
+            limit,
+            as_of_valid_at_ms,
+            as_of_recorded_at_ms,
+        } => {
+            search(
+                &request_id,
+                &state,
+                query,
+                limit,
+                as_of_valid_at_ms,
+                as_of_recorded_at_ms,
+                &cancellation,
+            )
+            .await;
+            false
+        }
+        Command::ExportMemory {
+            after_commit,
+            after_event_index,
+            high_water_mark,
+            limit,
+        } => {
+            export_memory(
+                &request_id,
+                &state,
+                after_commit,
+                after_event_index,
+                high_water_mark,
+                limit,
+                &cancellation,
+            )
+            .await;
+            false
+        }
+        Command::ListMemoryItems { limit } => {
+            list_memory_items(&request_id, &state, limit, &cancellation).await;
             false
         }
         Command::CorrectMemory {
@@ -2338,6 +2390,15 @@ async fn configure_memory(
         );
         return;
     }
+    if let Err(message) = firebase_memory_scope(&tenant_id, &person_id) {
+        error(
+            Some(request_id.to_owned()),
+            "invalid_memory_configuration",
+            message,
+            false,
+        );
+        return;
+    }
     let tenant_id = match TenantId::new(tenant_id) {
         Ok(value) => value,
         Err(error_value) => {
@@ -2400,6 +2461,14 @@ async fn configure_memory(
             false,
         ),
         BlockingOutcome::Cancelled => cancelled(request_id),
+    }
+}
+
+fn firebase_memory_scope<'a>(tenant_id: &'a str, person_id: &str) -> Result<&'a str, &'static str> {
+    if tenant_id.trim().is_empty() || tenant_id != person_id {
+        Err("tenant_id and person_id must match the configured Firebase UID")
+    } else {
+        Ok(tenant_id)
     }
 }
 
@@ -2572,8 +2641,22 @@ async fn search(
     state: &Mutex<RuntimeState>,
     query: String,
     limit: u32,
+    as_of_valid_at_ms: Option<i64>,
+    as_of_recorded_at_ms: Option<i64>,
     cancellation: &CancellationToken,
 ) {
+    let as_of = match temporal_query(as_of_valid_at_ms, as_of_recorded_at_ms) {
+        Ok(value) => value,
+        Err(message) => {
+            error(
+                Some(request_id.to_owned()),
+                "invalid_memory_search",
+                message,
+                false,
+            );
+            return;
+        }
+    };
     let Some(memory) = state.lock().await.memory.clone() else {
         error(
             Some(request_id.to_owned()),
@@ -2595,7 +2678,7 @@ async fn search(
                 query,
                 limit,
                 query_embedding: None,
-                as_of: None,
+                as_of,
             })
             .map_err(|error_value| error_value.to_string())
     });
@@ -2633,6 +2716,209 @@ async fn search(
             false,
         ),
         BlockingOutcome::Cancelled => cancelled(request_id),
+    }
+}
+
+async fn export_memory(
+    request_id: &str,
+    state: &Mutex<RuntimeState>,
+    after_commit: i64,
+    after_event_index: i64,
+    high_water_mark: Option<i64>,
+    limit: u32,
+    cancellation: &CancellationToken,
+) {
+    let Some(memory) = state.lock().await.memory.clone() else {
+        error(
+            Some(request_id.to_owned()),
+            "memory_unavailable",
+            "configure memory before exporting it",
+            true,
+        );
+        return;
+    };
+    let task = spawn_blocking(move || {
+        let mut memory = memory
+            .lock()
+            .map_err(|_| "memory database lock was poisoned".to_owned())?;
+        export_configured_memory(
+            &mut memory,
+            after_commit,
+            after_event_index,
+            high_water_mark,
+            limit,
+        )
+    });
+    match await_blocking(task, cancellation).await {
+        BlockingOutcome::Complete(page) => match memory_exported(request_id, page) {
+            Ok(event) => NativeEvent::MemoryExported(event).send(),
+            Err(error_value) => error(
+                Some(request_id.to_owned()),
+                "memory_export_failed",
+                &error_value,
+                false,
+            ),
+        },
+        BlockingOutcome::Failed(error_value) => error(
+            Some(request_id.to_owned()),
+            "memory_export_failed",
+            &error_value,
+            false,
+        ),
+        BlockingOutcome::Cancelled => cancelled(request_id),
+    }
+}
+
+fn export_configured_memory(
+    memory: &mut MemoryContext,
+    after_commit: i64,
+    after_event_index: i64,
+    high_water_mark: Option<i64>,
+    limit: u32,
+) -> Result<zkr::ExportPage, String> {
+    memory
+        .database
+        .export(ExportInput {
+            export_format: EXPORT_FORMAT_VERSION,
+            tenant_id: memory.tenant_id.clone(),
+            person_id: memory.person_id.clone(),
+            after_commit,
+            after_event_index,
+            high_water_mark,
+            limit,
+        })
+        .map_err(|error_value| error_value.to_string())
+}
+
+fn memory_exported(request_id: &str, page: zkr::ExportPage) -> Result<MemoryExported, String> {
+    Ok(MemoryExported {
+        request_id: request_id.to_owned(),
+        export_format: page.export_format,
+        database_schema_version: page.database_schema_version,
+        high_water_mark: page.high_water_mark,
+        next_after_commit: page.next_after_commit,
+        next_after_event_index: page.next_after_event_index,
+        complete: page.complete,
+        commits: page
+            .commits
+            .into_iter()
+            .map(|commit| {
+                let records_json = commit
+                    .records
+                    .into_iter()
+                    .map(|record| serde_json::to_string(&record).map_err(|error| error.to_string()))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(MemoryExportCommit {
+                    sequence: commit.sequence,
+                    recorded_at_ms: commit.recorded_at,
+                    event_count: commit.event_count,
+                    first_event_index: commit.first_event_index,
+                    records_json,
+                })
+            })
+            .collect::<Result<Vec<_>, String>>()?,
+    })
+}
+
+async fn list_memory_items(
+    request_id: &str,
+    state: &Mutex<RuntimeState>,
+    limit: u32,
+    cancellation: &CancellationToken,
+) {
+    let Some(memory) = state.lock().await.memory.clone() else {
+        error(
+            Some(request_id.to_owned()),
+            "memory_unavailable",
+            "configure memory before listing it",
+            true,
+        );
+        return;
+    };
+    let task = spawn_blocking(move || {
+        let memory = memory
+            .lock()
+            .map_err(|_| "memory database lock was poisoned".to_owned())?;
+        list_configured_memory_items(&memory, limit)
+    });
+    match await_blocking(task, cancellation).await {
+        BlockingOutcome::Complete(items) => NativeEvent::MemoryItems(MemoryItems {
+            request_id: request_id.to_owned(),
+            items,
+        })
+        .send(),
+        BlockingOutcome::Failed(error_value) => error(
+            Some(request_id.to_owned()),
+            "memory_list_failed",
+            &error_value,
+            false,
+        ),
+        BlockingOutcome::Cancelled => cancelled(request_id),
+    }
+}
+
+fn list_configured_memory_items(
+    memory: &MemoryContext,
+    limit: u32,
+) -> Result<Vec<MemoryItem>, String> {
+    let mut items = memory
+        .database
+        .profiles(ProfilesInput {
+            tenant_id: memory.tenant_id.clone(),
+            person_id: memory.person_id.clone(),
+            limit,
+        })
+        .map_err(|error_value| error_value.to_string())?
+        .into_iter()
+        .map(|profile| MemoryItem {
+            kind: "profile".to_owned(),
+            id: profile.id.0,
+            title: profile.key,
+            body: profile.value,
+            recorded_at_ms: profile.recorded_at,
+            evidence_ids: Vec::new(),
+        })
+        .collect::<Vec<_>>();
+    items.extend(
+        memory
+            .database
+            .reviews(ReviewsInput {
+                tenant_id: memory.tenant_id.clone(),
+                person_id: memory.person_id.clone(),
+                limit,
+            })
+            .map_err(|error_value| error_value.to_string())?
+            .into_iter()
+            .map(|review| MemoryItem {
+                kind: "daily_review".to_owned(),
+                id: review.id.0,
+                title: review.day,
+                body: review.summary,
+                recorded_at_ms: review.recorded_at,
+                evidence_ids: review.evidence_ids.into_iter().map(|id| id.0).collect(),
+            }),
+    );
+    items.sort_by(|left, right| {
+        right
+            .recorded_at_ms
+            .cmp(&left.recorded_at_ms)
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    items.truncate(limit.clamp(1, 100) as usize);
+    Ok(items)
+}
+
+fn temporal_query(
+    valid_at: Option<i64>,
+    recorded_at: Option<i64>,
+) -> Result<Option<zkr::TemporalQuery>, &'static str> {
+    match (valid_at, recorded_at) {
+        (None, None) => Ok(None),
+        (Some(valid_at), Some(recorded_at)) => Ok(Some(zkr::TemporalQuery {
+            valid_at,
+            recorded_at,
+        })),
+        _ => Err("historical search requires both valid_at and recorded_at"),
     }
 }
 
@@ -3169,6 +3455,117 @@ mod tests {
             })
             .unwrap_or_else(|error_value| panic!("memory is seeded: {error_value}"));
         (path, memory, remembered)
+    }
+
+    #[test]
+    fn firebase_uid_is_the_only_configured_memory_scope() {
+        assert_eq!(firebase_memory_scope("user-a", "user-a"), Ok("user-a"));
+        assert!(firebase_memory_scope("tenant-a", "person-a").is_err());
+        assert!(firebase_memory_scope("", "").is_err());
+    }
+
+    #[test]
+    fn configured_memory_exports_and_lists_native_items_without_reimplementing_zkr() {
+        let path = std::env::temp_dir().join(format!(
+            "omi-v4-export-{}-{}.sqlite3",
+            std::process::id(),
+            unix_time_ms()
+        ));
+        let uid = "firebase-user";
+        let mut memory = MemoryContext {
+            database: MemoryDb::open(&path)
+                .unwrap_or_else(|error_value| panic!("memory opens: {error_value}")),
+            tenant_id: TenantId::new(uid)
+                .unwrap_or_else(|error_value| panic!("valid tenant: {error_value}")),
+            person_id: PersonId::new(uid)
+                .unwrap_or_else(|error_value| panic!("valid person: {error_value}")),
+        };
+        let remembered = memory
+            .database
+            .remember(RememberInput {
+                tenant_id: memory.tenant_id.clone(),
+                person_id: memory.person_id.clone(),
+                ingestion_key: Some("profile-capture".to_owned()),
+                kind: SourceKind::Conversation,
+                text: "I work at Acme".to_owned(),
+                captured_at: 10,
+                recorded_at: 10,
+                claim: Some(zkr::ClaimInput {
+                    subject: uid.to_owned(),
+                    predicate: "employer".to_owned(),
+                    value: "Acme".to_owned(),
+                    kind: zkr::ClaimKind::ProfileFact,
+                    valid_from: 10,
+                }),
+            })
+            .unwrap_or_else(|error_value| panic!("memory seeds: {error_value}"));
+        memory
+            .database
+            .store_profile(zkr::ProfileInput {
+                tenant_id: memory.tenant_id.clone(),
+                person_id: memory.person_id.clone(),
+                stability: zkr::ProfileStability::Current,
+                claim_id: remembered
+                    .claim_id
+                    .clone()
+                    .unwrap_or_else(|| panic!("claim exists")),
+                recorded_at: 11,
+            })
+            .unwrap_or_else(|error_value| panic!("profile stores: {error_value}"));
+        memory
+            .database
+            .store_review(zkr::ReviewInput {
+                tenant_id: memory.tenant_id.clone(),
+                person_id: memory.person_id.clone(),
+                day: "2026-07-21".to_owned(),
+                summary: "Worked at Acme".to_owned(),
+                evidence_ids: vec![remembered.evidence_id],
+                recorded_at: 12,
+            })
+            .unwrap_or_else(|error_value| panic!("review stores: {error_value}"));
+
+        let page = export_configured_memory(&mut memory, 0, -1, None, 100)
+            .unwrap_or_else(|error_value| panic!("memory exports: {error_value}"));
+        assert!(page.complete);
+        assert_eq!(page.export_format, EXPORT_FORMAT_VERSION);
+        let event = memory_exported("export-1", page)
+            .unwrap_or_else(|error_value| panic!("event maps: {error_value}"));
+        assert!(
+            event
+                .commits
+                .iter()
+                .all(|commit| !commit.records_json.is_empty())
+        );
+        assert!(
+            event
+                .commits
+                .iter()
+                .flat_map(|commit| &commit.records_json)
+                .all(|record| {
+                    serde_json::from_str::<serde_json::Value>(record).is_ok_and(|value| {
+                        let serialized = value.to_string();
+                        serialized.contains(uid) && !serialized.contains("firebase_token")
+                    })
+                })
+        );
+        let items = list_configured_memory_items(&memory, 10)
+            .unwrap_or_else(|error_value| panic!("memory lists: {error_value}"));
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].kind, "daily_review");
+        assert_eq!(items[1].kind, "profile");
+
+        std::fs::remove_file(path)
+            .unwrap_or_else(|error_value| panic!("temporary database removes: {error_value}"));
+    }
+
+    #[test]
+    fn memory_search_defaults_current_and_requires_a_complete_historical_point() {
+        assert!(temporal_query(None, None).is_ok_and(|query| query.is_none()));
+        assert!(temporal_query(Some(10), None).is_err());
+        assert!(temporal_query(None, Some(11)).is_err());
+        assert!(temporal_query(Some(10), Some(11)).is_ok_and(|query| {
+            query.is_some_and(|point| point.valid_at == 10 && point.recorded_at == 11)
+        }));
     }
 
     #[test]

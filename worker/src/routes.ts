@@ -2,6 +2,7 @@ import { Hono, type Context } from "hono";
 import assistant from "./assistant";
 import billing from "./billing";
 import currents from "./currents";
+import memorySync from "./memory-sync";
 import stt from "./stt";
 import conversations, { appendConversationMessage } from "./conversations";
 import { dispatchChannelMessage, dispatchChannelUnlink } from "./delivery";
@@ -20,6 +21,7 @@ routes.route("/", assistant);
 routes.route("/payments/stripe", billing);
 routes.route("/stt", stt);
 routes.route("/currents", currents);
+routes.route("/memory/zkr-sync", memorySync);
 routes.route("/", conversations);
 
 const text = (value: unknown, limit: number): string | null =>

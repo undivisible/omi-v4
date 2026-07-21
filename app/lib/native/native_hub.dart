@@ -66,7 +66,17 @@ abstract interface class NativeHub {
     required String requestId,
     required String query,
     int limit = 12,
+    int? asOfValidAtMs,
+    int? asOfRecordedAtMs,
   });
+  void exportMemory({
+    required String requestId,
+    int afterCommit = 0,
+    int afterEventIndex = -1,
+    int? highWaterMark,
+    int limit = 100,
+  });
+  void listMemoryItems({required String requestId, int limit = 50});
   void correctMemory({
     required String requestId,
     required String claimId,
@@ -188,7 +198,22 @@ final class UnavailableNativeHub implements NativeHub {
     required String requestId,
     required String query,
     int limit = 12,
+    int? asOfValidAtMs,
+    int? asOfRecordedAtMs,
   }) => _unavailable();
+
+  @override
+  void exportMemory({
+    required String requestId,
+    int afterCommit = 0,
+    int afterEventIndex = -1,
+    int? highWaterMark,
+    int limit = 100,
+  }) => _unavailable();
+
+  @override
+  void listMemoryItems({required String requestId, int limit = 50}) =>
+      _unavailable();
 
   @override
   void correctMemory({
@@ -350,7 +375,38 @@ final class RinfNativeHub implements NativeHub {
     required String requestId,
     required String query,
     int limit = 12,
-  }) => _send(requestId, CommandSearchMemory(query: query, limit: limit));
+    int? asOfValidAtMs,
+    int? asOfRecordedAtMs,
+  }) => _send(
+    requestId,
+    CommandSearchMemory(
+      query: query,
+      limit: limit,
+      asOfValidAtMs: asOfValidAtMs,
+      asOfRecordedAtMs: asOfRecordedAtMs,
+    ),
+  );
+
+  @override
+  void exportMemory({
+    required String requestId,
+    int afterCommit = 0,
+    int afterEventIndex = -1,
+    int? highWaterMark,
+    int limit = 100,
+  }) => _send(
+    requestId,
+    CommandExportMemory(
+      afterCommit: afterCommit,
+      afterEventIndex: afterEventIndex,
+      highWaterMark: highWaterMark,
+      limit: limit,
+    ),
+  );
+
+  @override
+  void listMemoryItems({required String requestId, int limit = 50}) =>
+      _send(requestId, CommandListMemoryItems(limit: limit));
 
   @override
   void correctMemory({

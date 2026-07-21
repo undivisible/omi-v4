@@ -110,6 +110,7 @@ final class AppServices {
     this._conversationInbox,
     CurrentsClient? currentsClient,
     this._worker,
+    this.memorySyncPump,
     this._managedStt,
     this._workerOrigin,
     DateTime Function()? now,
@@ -165,6 +166,12 @@ final class AppServices {
       conversationInbox: WorkerConversationTransport(worker),
       currentsClient: CurrentsClient(WorkerCurrentsTransport(worker)),
       worker: worker,
+      memorySyncPump: MemorySyncPump(
+        hub: nativeHub,
+        events: nativeHub.events,
+        transport: WorkerMemorySyncTransport(worker),
+        cursorStore: PreferencesMemorySyncCursorStore(),
+      ),
       managedStt: WorkerManagedSttClient(worker),
       workerOrigin: worker.trustedOrigin,
     );
@@ -210,6 +217,12 @@ final class AppServices {
       conversationInbox: WorkerConversationTransport(worker),
       currentsClient: CurrentsClient(WorkerCurrentsTransport(worker)),
       worker: worker,
+      memorySyncPump: MemorySyncPump(
+        hub: nativeHub,
+        events: nativeHub.events,
+        transport: WorkerMemorySyncTransport(worker),
+        cursorStore: PreferencesMemorySyncCursorStore(),
+      ),
       managedStt: WorkerManagedSttClient(worker),
       workerOrigin: worker.trustedOrigin,
     );
@@ -233,6 +246,7 @@ final class AppServices {
         _defaultApprovalAcknowledgementTimeout,
     Duration inboxPollInterval = _defaultInboxPollInterval,
     DesktopVoiceCapture? desktopVoice,
+    MemorySyncPump? memorySync,
   }) => AppServices._(
     auth: auth,
     nativeHub: nativeHub,
@@ -253,6 +267,7 @@ final class AppServices {
     approvalAcknowledgementTimeout: approvalAcknowledgementTimeout,
     inboxPollInterval: inboxPollInterval,
     desktopVoice: desktopVoice,
+    memorySyncPump: memorySync,
   );
 
   final AuthController auth;
@@ -271,6 +286,7 @@ final class AppServices {
   final CurrentsController? currents;
   final CurrentsClient? _currentsClient;
   final WorkerHttpClient? _worker;
+  final MemorySyncPump? memorySyncPump;
   final ManagedSttClient? _managedStt;
   final Uri? _workerOrigin;
   final DateTime Function() _now;
@@ -661,11 +677,13 @@ final class AppServices {
     if (_disposed) return;
     final session = productionReady ? auth.snapshot.session : null;
     if (session == null) {
+      memorySyncPump?.stop();
       await _stopCapture();
       await _shutdownNative();
       return;
     }
     if (_configuredPersonId == session.uid && _nativeInitialized) {
+      memorySyncPump?.start(session.uid);
       if (_workerOrigin != null && _assistantRefreshTimer == null) {
         await _configureManagedAssistant(session.uid);
       }
@@ -701,6 +719,7 @@ final class AppServices {
       tenantId: session.uid,
       personId: session.uid,
     );
+    memorySyncPump?.start(session.uid);
     if (_workerOrigin != null) await _configureManagedAssistant(session.uid);
     _scheduleInboxPoll(Duration.zero);
   }
@@ -1383,6 +1402,7 @@ final class AppServices {
 
   void dispose() {
     _disposed = true;
+    memorySyncPump?.dispose();
     _inboxPollTimer?.cancel();
     _inboxPollTimer = null;
     _activeInboxItem = null;

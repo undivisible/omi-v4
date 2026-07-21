@@ -120,6 +120,43 @@ class TraitHelpers {
     }
   }
 
+  static void serializeVectorMemoryExportCommit(
+    List<MemoryExportCommit> value,
+    BinarySerializer serializer,
+  ) {
+    serializer.serializeLength(value.length);
+    for (final item in value) {
+      item.serialize(serializer);
+    }
+  }
+
+  static List<MemoryExportCommit> deserializeVectorMemoryExportCommit(
+    BinaryDeserializer deserializer,
+  ) {
+    final length = deserializer.deserializeLength();
+    return List.generate(
+      length,
+      (_) => MemoryExportCommit.deserialize(deserializer),
+    );
+  }
+
+  static void serializeVectorMemoryItem(
+    List<MemoryItem> value,
+    BinarySerializer serializer,
+  ) {
+    serializer.serializeLength(value.length);
+    for (final item in value) {
+      item.serialize(serializer);
+    }
+  }
+
+  static List<MemoryItem> deserializeVectorMemoryItem(
+    BinaryDeserializer deserializer,
+  ) {
+    final length = deserializer.deserializeLength();
+    return List.generate(length, (_) => MemoryItem.deserialize(deserializer));
+  }
+
   static void serializeVectorMemorySearchItem(
     List<MemorySearchItem> value,
     BinarySerializer serializer,

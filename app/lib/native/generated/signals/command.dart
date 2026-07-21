@@ -30,14 +30,18 @@ abstract class Command {
       case 9:
         return CommandSearchMemory.load(deserializer);
       case 10:
-        return CommandCorrectMemory.load(deserializer);
+        return CommandExportMemory.load(deserializer);
       case 11:
-        return CommandDeleteMemorySource.load(deserializer);
+        return CommandListMemoryItems.load(deserializer);
       case 12:
-        return CommandApprovalDecision.load(deserializer);
+        return CommandCorrectMemory.load(deserializer);
       case 13:
-        return CommandDeviceState.load(deserializer);
+        return CommandDeleteMemorySource.load(deserializer);
       case 14:
+        return CommandApprovalDecision.load(deserializer);
+      case 15:
+        return CommandDeviceState.load(deserializer);
+      case 16:
         return CommandCancel.load(deserializer);
       default:
         throw Exception(
@@ -756,14 +760,20 @@ class CommandCaptureEvent extends Command {
 
 @immutable
 class CommandSearchMemory extends Command {
-  const CommandSearchMemory({required this.query, required this.limit})
-    : super();
+  const CommandSearchMemory({
+    required this.query,
+    required this.limit,
+    this.asOfValidAtMs,
+    this.asOfRecordedAtMs,
+  }) : super();
 
   static CommandSearchMemory load(BinaryDeserializer deserializer) {
     deserializer.increaseContainerDepth();
     final instance = CommandSearchMemory(
       query: deserializer.deserializeString(),
       limit: deserializer.deserializeUint32(),
+      asOfValidAtMs: TraitHelpers.deserializeOptionI64(deserializer),
+      asOfRecordedAtMs: TraitHelpers.deserializeOptionI64(deserializer),
     );
     deserializer.decreaseContainerDepth();
     return instance;
@@ -771,11 +781,24 @@ class CommandSearchMemory extends Command {
 
   final String query;
   final int limit;
+  final int? asOfValidAtMs;
+  final int? asOfRecordedAtMs;
 
-  CommandSearchMemory copyWith({String? query, int? limit}) {
+  CommandSearchMemory copyWith({
+    String? query,
+    int? limit,
+    int? Function()? asOfValidAtMs,
+    int? Function()? asOfRecordedAtMs,
+  }) {
     return CommandSearchMemory(
       query: query ?? this.query,
       limit: limit ?? this.limit,
+      asOfValidAtMs: asOfValidAtMs == null
+          ? this.asOfValidAtMs
+          : asOfValidAtMs(),
+      asOfRecordedAtMs: asOfRecordedAtMs == null
+          ? this.asOfRecordedAtMs
+          : asOfRecordedAtMs(),
     );
   }
 
@@ -784,6 +807,8 @@ class CommandSearchMemory extends Command {
     serializer.serializeVariantIndex(9);
     serializer.serializeString(query);
     serializer.serializeUint32(limit);
+    TraitHelpers.serializeOptionI64(asOfValidAtMs, serializer);
+    TraitHelpers.serializeOptionI64(asOfRecordedAtMs, serializer);
     serializer.decreaseContainerDepth();
   }
 
@@ -794,11 +819,14 @@ class CommandSearchMemory extends Command {
 
     return other is CommandSearchMemory &&
         query == other.query &&
-        limit == other.limit;
+        limit == other.limit &&
+        asOfValidAtMs == other.asOfValidAtMs &&
+        asOfRecordedAtMs == other.asOfRecordedAtMs;
   }
 
   @override
-  int get hashCode => Object.hash(query, limit);
+  int get hashCode =>
+      Object.hash(query, limit, asOfValidAtMs, asOfRecordedAtMs);
 
   @override
   String toString() {
@@ -808,12 +836,154 @@ class CommandSearchMemory extends Command {
       fullString =
           '$runtimeType('
           'query: $query, '
-          'limit: $limit'
+          'limit: $limit, '
+          'asOfValidAtMs: $asOfValidAtMs, '
+          'asOfRecordedAtMs: $asOfRecordedAtMs'
           ')';
       return true;
     }());
 
     return fullString ?? 'CommandSearchMemory';
+  }
+}
+
+@immutable
+class CommandExportMemory extends Command {
+  const CommandExportMemory({
+    required this.afterCommit,
+    required this.afterEventIndex,
+    this.highWaterMark,
+    required this.limit,
+  }) : super();
+
+  static CommandExportMemory load(BinaryDeserializer deserializer) {
+    deserializer.increaseContainerDepth();
+    final instance = CommandExportMemory(
+      afterCommit: deserializer.deserializeInt64(),
+      afterEventIndex: deserializer.deserializeInt64(),
+      highWaterMark: TraitHelpers.deserializeOptionI64(deserializer),
+      limit: deserializer.deserializeUint32(),
+    );
+    deserializer.decreaseContainerDepth();
+    return instance;
+  }
+
+  final int afterCommit;
+  final int afterEventIndex;
+  final int? highWaterMark;
+  final int limit;
+
+  CommandExportMemory copyWith({
+    int? afterCommit,
+    int? afterEventIndex,
+    int? Function()? highWaterMark,
+    int? limit,
+  }) {
+    return CommandExportMemory(
+      afterCommit: afterCommit ?? this.afterCommit,
+      afterEventIndex: afterEventIndex ?? this.afterEventIndex,
+      highWaterMark: highWaterMark == null
+          ? this.highWaterMark
+          : highWaterMark(),
+      limit: limit ?? this.limit,
+    );
+  }
+
+  void serialize(BinarySerializer serializer) {
+    serializer.increaseContainerDepth();
+    serializer.serializeVariantIndex(10);
+    serializer.serializeInt64(afterCommit);
+    serializer.serializeInt64(afterEventIndex);
+    TraitHelpers.serializeOptionI64(highWaterMark, serializer);
+    serializer.serializeUint32(limit);
+    serializer.decreaseContainerDepth();
+  }
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    if (other.runtimeType != runtimeType) return false;
+
+    return other is CommandExportMemory &&
+        afterCommit == other.afterCommit &&
+        afterEventIndex == other.afterEventIndex &&
+        highWaterMark == other.highWaterMark &&
+        limit == other.limit;
+  }
+
+  @override
+  int get hashCode =>
+      Object.hash(afterCommit, afterEventIndex, highWaterMark, limit);
+
+  @override
+  String toString() {
+    String? fullString;
+
+    assert(() {
+      fullString =
+          '$runtimeType('
+          'afterCommit: $afterCommit, '
+          'afterEventIndex: $afterEventIndex, '
+          'highWaterMark: $highWaterMark, '
+          'limit: $limit'
+          ')';
+      return true;
+    }());
+
+    return fullString ?? 'CommandExportMemory';
+  }
+}
+
+@immutable
+class CommandListMemoryItems extends Command {
+  const CommandListMemoryItems({required this.limit}) : super();
+
+  static CommandListMemoryItems load(BinaryDeserializer deserializer) {
+    deserializer.increaseContainerDepth();
+    final instance = CommandListMemoryItems(
+      limit: deserializer.deserializeUint32(),
+    );
+    deserializer.decreaseContainerDepth();
+    return instance;
+  }
+
+  final int limit;
+
+  CommandListMemoryItems copyWith({int? limit}) {
+    return CommandListMemoryItems(limit: limit ?? this.limit);
+  }
+
+  void serialize(BinarySerializer serializer) {
+    serializer.increaseContainerDepth();
+    serializer.serializeVariantIndex(11);
+    serializer.serializeUint32(limit);
+    serializer.decreaseContainerDepth();
+  }
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    if (other.runtimeType != runtimeType) return false;
+
+    return other is CommandListMemoryItems && limit == other.limit;
+  }
+
+  @override
+  int get hashCode => limit.hashCode;
+
+  @override
+  String toString() {
+    String? fullString;
+
+    assert(() {
+      fullString =
+          '$runtimeType('
+          'limit: $limit'
+          ')';
+      return true;
+    }());
+
+    return fullString ?? 'CommandListMemoryItems';
   }
 }
 
@@ -864,7 +1034,7 @@ class CommandCorrectMemory extends Command {
 
   void serialize(BinarySerializer serializer) {
     serializer.increaseContainerDepth();
-    serializer.serializeVariantIndex(10);
+    serializer.serializeVariantIndex(12);
     serializer.serializeString(claimId);
     serializer.serializeString(text);
     serializer.serializeString(value);
@@ -939,7 +1109,7 @@ class CommandDeleteMemorySource extends Command {
 
   void serialize(BinarySerializer serializer) {
     serializer.increaseContainerDepth();
-    serializer.serializeVariantIndex(11);
+    serializer.serializeVariantIndex(13);
     serializer.serializeString(sourceId);
     serializer.serializeInt64(deletedAtMs);
     serializer.decreaseContainerDepth();
@@ -1007,7 +1177,7 @@ class CommandApprovalDecision extends Command {
 
   void serialize(BinarySerializer serializer) {
     serializer.increaseContainerDepth();
-    serializer.serializeVariantIndex(12);
+    serializer.serializeVariantIndex(14);
     serializer.serializeString(proposalId);
     decision.serialize(serializer);
     serializer.decreaseContainerDepth();
@@ -1089,7 +1259,7 @@ class CommandDeviceState extends Command {
 
   void serialize(BinarySerializer serializer) {
     serializer.increaseContainerDepth();
-    serializer.serializeVariantIndex(13);
+    serializer.serializeVariantIndex(15);
     serializer.serializeString(deviceId);
     serializer.serializeBool(connected);
     TraitHelpers.serializeOptionU8(batteryPercent, serializer);
@@ -1145,7 +1315,7 @@ class CommandCancel extends Command {
 
   void serialize(BinarySerializer serializer) {
     serializer.increaseContainerDepth();
-    serializer.serializeVariantIndex(14);
+    serializer.serializeVariantIndex(16);
     serializer.decreaseContainerDepth();
   }
 

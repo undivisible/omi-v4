@@ -180,4 +180,31 @@ void main(List<String> arguments) {
   assistantFile.writeAsStringSync(
     assistantSource.replaceFirst(exposedText, redactedText),
   );
+
+  for (final entry in {
+    'memory_export_commit.dart': ['recordsJson'],
+    'memory_item.dart': ['title', 'body'],
+  }.entries) {
+    final memoryFile = File('${arguments.single}/signals/${entry.key}');
+    var memorySource = memoryFile.readAsStringSync();
+    for (final field in entry.value) {
+      final exposedMemory = "'$field: \$$field'";
+      final exposedMemoryWithComma = "'$field: \$$field, '";
+      final redactedMemory = "'$field: [REDACTED]'";
+      final redactedMemoryWithComma = "'$field: [REDACTED], '";
+      if (exposedMemory.allMatches(memorySource).length == 1) {
+        memorySource = memorySource.replaceFirst(exposedMemory, redactedMemory);
+      } else if (exposedMemoryWithComma.allMatches(memorySource).length == 1) {
+        memorySource = memorySource.replaceFirst(
+          exposedMemoryWithComma,
+          redactedMemoryWithComma,
+        );
+      } else {
+        stderr.writeln('expected exactly one generated memory $field field');
+        exitCode = 1;
+        return;
+      }
+    }
+    memoryFile.writeAsStringSync(memorySource);
+  }
 }
