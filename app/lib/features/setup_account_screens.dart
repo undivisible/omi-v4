@@ -27,15 +27,15 @@ class SetupScreen extends StatelessWidget {
             if (snapshot.connectionState != ConnectionState.done) {
               return const _SetupTile(
                 icon: Icons.cloud_sync_outlined,
-                title: 'Service health',
-                detail: 'Checking your connected services…',
+                title: 'Production services',
+                detail: 'Checking backend availability…',
                 state: 'Checking',
               );
             }
             if (snapshot.hasError) {
               return _SetupTile(
                 icon: Icons.cloud_off_outlined,
-                title: 'Service health',
+                title: 'Production services',
                 detail: '${snapshot.error}',
                 state: 'Unavailable',
               );
@@ -47,7 +47,7 @@ class SetupScreen extends StatelessWidget {
                 .join(', ');
             return _SetupTile(
               icon: Icons.cloud_done_outlined,
-              title: 'Service health',
+              title: 'Production services',
               detail: missing.isEmpty ? 'Everything is ready' : missing,
               state:
                   '${services.values.where((ready) => ready).length}/${services.length} ready',
