@@ -20,6 +20,40 @@ class SetupScreen extends StatelessWidget {
     title: 'Finish setup',
     subtitle: 'Each connection makes your assistant more useful.',
     children: [
+      if (!previewMode && services.settings != null)
+        FutureBuilder<SetupHealth>(
+          future: services.settings!.getSetupHealth(),
+          builder: (context, snapshot) {
+            if (snapshot.connectionState != ConnectionState.done) {
+              return const _SetupTile(
+                icon: Icons.cloud_sync_outlined,
+                title: 'Service health',
+                detail: 'Checking your connected services…',
+                state: 'Checking',
+              );
+            }
+            if (snapshot.hasError) {
+              return _SetupTile(
+                icon: Icons.cloud_off_outlined,
+                title: 'Service health',
+                detail: '${snapshot.error}',
+                state: 'Unavailable',
+              );
+            }
+            final services = snapshot.data!.services;
+            final missing = services.entries
+                .where((entry) => !entry.value)
+                .map((entry) => entry.key)
+                .join(', ');
+            return _SetupTile(
+              icon: Icons.cloud_done_outlined,
+              title: 'Service health',
+              detail: missing.isEmpty ? 'Everything is ready' : missing,
+              state:
+                  '${services.values.where((ready) => ready).length}/${services.length} ready',
+            );
+          },
+        ),
       const _SetupTile(
         icon: Icons.mic_none_rounded,
         title: 'Try voice',

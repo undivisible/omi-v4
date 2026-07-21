@@ -29,6 +29,29 @@ void main() {
     );
   });
 
+  test('loads strict setup health without credential values', () async {
+    final transport = QueueTransport([
+      const SettingsResponse(
+        statusCode: 200,
+        body: {
+          'worker': true,
+          'firebase': true,
+          'memory': true,
+          'channels': {'telegram': true, 'blooio': false},
+          'billing': false,
+          'models': {'managedChat': true, 'managedStt': false},
+          'desktopAuth': false,
+        },
+      ),
+    ]);
+
+    final health = await SettingsClient(transport).getSetupHealth();
+
+    expect(health.services.values.where((ready) => ready), hasLength(5));
+    expect(health.blooio, isFalse);
+    expect(transport.requests.single.path, '/v1/setup-health');
+  });
+
   test('sends expected revision and task scope', () async {
     final transport = QueueTransport([
       SettingsResponse(statusCode: 200, body: changeJson(scopeId: 'task-7')),

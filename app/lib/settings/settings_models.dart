@@ -4,6 +4,69 @@ enum ApprovalMode { ask, once, auto }
 
 enum SettingsDuration { task, session, persistent }
 
+final class SetupHealth {
+  const SetupHealth({
+    required this.worker,
+    required this.firebase,
+    required this.memory,
+    required this.telegram,
+    required this.blooio,
+    required this.billing,
+    required this.managedChat,
+    required this.managedStt,
+    required this.desktopAuth,
+  });
+
+  final bool worker;
+  final bool firebase;
+  final bool memory;
+  final bool telegram;
+  final bool blooio;
+  final bool billing;
+  final bool managedChat;
+  final bool managedStt;
+  final bool desktopAuth;
+
+  factory SetupHealth.fromJson(SettingsJson json) {
+    _onlyKeys(json, const {
+      'worker',
+      'firebase',
+      'memory',
+      'channels',
+      'billing',
+      'models',
+      'desktopAuth',
+    });
+    final channels = _map(json, 'channels');
+    final models = _map(json, 'models');
+    _onlyKeys(channels, const {'telegram', 'blooio'});
+    _onlyKeys(models, const {'managedChat', 'managedStt'});
+    return SetupHealth(
+      worker: _boolean(json, 'worker'),
+      firebase: _boolean(json, 'firebase'),
+      memory: _boolean(json, 'memory'),
+      telegram: _boolean(channels, 'telegram'),
+      blooio: _boolean(channels, 'blooio'),
+      billing: _boolean(json, 'billing'),
+      managedChat: _boolean(models, 'managedChat'),
+      managedStt: _boolean(models, 'managedStt'),
+      desktopAuth: _boolean(json, 'desktopAuth'),
+    );
+  }
+
+  Map<String, bool> get services => {
+    'Worker': worker,
+    'Firebase': firebase,
+    'Memory': memory,
+    'Telegram': telegram,
+    'Blooio': blooio,
+    'Billing': billing,
+    'Managed chat': managedChat,
+    'Managed transcription': managedStt,
+    'Desktop sign-in': desktopAuth,
+  };
+}
+
 final class SettingsFormatException implements Exception {
   const SettingsFormatException(this.message);
 

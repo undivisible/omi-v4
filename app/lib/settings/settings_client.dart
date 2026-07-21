@@ -71,6 +71,16 @@ final class SettingsClient {
     return _decode(response.body, SettingsSnapshot.fromJson);
   }
 
+  Future<SetupHealth> getSetupHealth() async {
+    final response = await _send(
+      const SettingsRequest(
+        method: SettingsHttpMethod.get,
+        path: '/v1/setup-health',
+      ),
+    );
+    return _decode(response.body, SetupHealth.fromJson);
+  }
+
   Future<SettingsChangeResult> changeSettings({
     required int expectedRevision,
     required SettingsPatch patch,
