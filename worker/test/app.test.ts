@@ -29,6 +29,15 @@ describe("public boundaries", () => {
     expect(response.status).toBe(401);
   });
 
+  test("managed STT requires Firebase auth", async () => {
+    const response = await app.request(
+      "/v1/stt/sessions",
+      { method: "POST" },
+      { FIREBASE_PROJECT_ID: "test" },
+    );
+    expect(response.status).toBe(401);
+  });
+
   test("Telegram webhook fails closed without configuration", async () => {
     const response = await app.request(
       "/v1/webhooks/telegram",

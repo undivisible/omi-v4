@@ -2,6 +2,7 @@ export type Bindings = {
   DB: D1Database;
   DELIVERY_COORDINATOR: DurableObjectNamespace;
   ASSISTANT_ADMISSION: DurableObjectNamespace;
+  STT_ADMISSION: DurableObjectNamespace;
   FIREBASE_PROJECT_ID: string;
   TELEGRAM_WEBHOOK_SECRET?: string;
   TELEGRAM_BOT_TOKEN?: string;
@@ -25,6 +26,16 @@ export type Bindings = {
   MIMO_GLOBAL_TOKEN_BUDGET?: string;
   MIMO_UID_COST_BUDGET_MICROUSD?: string;
   MIMO_GLOBAL_COST_BUDGET_MICROUSD?: string;
+  DEEPGRAM_API_KEY?: string;
+  STT_MAX_SESSION_SECONDS?: string;
+  STT_COST_MICROUSD_PER_MINUTE?: string;
+  STT_BUDGET_WINDOW_SECONDS?: string;
+  STT_UID_IN_FLIGHT_LIMIT?: string;
+  STT_GLOBAL_IN_FLIGHT_LIMIT?: string;
+  STT_UID_SECONDS_BUDGET?: string;
+  STT_GLOBAL_SECONDS_BUDGET?: string;
+  STT_UID_COST_BUDGET_MICROUSD?: string;
+  STT_GLOBAL_COST_BUDGET_MICROUSD?: string;
 };
 
 export type Auth = { uid: string; email: string | null };

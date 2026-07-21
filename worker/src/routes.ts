@@ -1,6 +1,7 @@
 import { Hono, type Context } from "hono";
 import assistant from "./assistant";
 import billing from "./billing";
+import stt from "./stt";
 import { dispatchChannelMessage, dispatchChannelUnlink } from "./delivery";
 import type {
   AppEnv,
@@ -16,6 +17,7 @@ const routes = new Hono<AppEnv>();
 
 routes.route("/", assistant);
 routes.route("/payments/stripe", billing);
+routes.route("/stt", stt);
 
 const text = (value: unknown, limit: number): string | null =>
   typeof value === "string" && value.trim().length > 0 && value.length <= limit

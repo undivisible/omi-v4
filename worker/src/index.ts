@@ -4,6 +4,7 @@ import desktopAuth from "./desktop-auth";
 import { reconcileManagedAssistantRequests } from "./assistant";
 import { deliverDueChannelMessages } from "./delivery";
 export { AssistantAdmission } from "./assistant-admission";
+export { SttAdmission } from "./stt-admission";
 export { DeliveryCoordinator } from "./delivery";
 import routes from "./routes";
 import type { AppEnv } from "./types";
