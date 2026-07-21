@@ -53,7 +53,7 @@ The reusable memory engine lives in the public [`tschk/zkr`](https://github.com/
 - [x] Verify the Bun/Hono Worker contracts, D1 schema, auth boundary, and channel webhook boundaries.
 - [x] Complete production Dart consumption of generated Rinf signals and published `zkr` memory storage/search.
 - [x] Implement Worker D1 persistence, Stripe entitlement, Telegram linking/ingestion, and Blooio linking/ingestion with fail-closed signatures.
-- [ ] Route the implemented mobile Omi BLE discovery/connection/audio stream through bounded Rinf events into sourced memory; bounded PCM8/PCM16/Opus forwarding is implemented, while transcription, sourced-memory capture, and physical-device proof remain.
+- [ ] Route the implemented mobile Omi BLE discovery/connection/audio stream through bounded Rinf events into sourced memory; bounded PCM8/PCM16/Opus forwarding and idempotent completed-transcript capture are implemented, while live STT and physical-device proof remain.
 - [ ] Prove Android, iOS without signing, macOS, Windows, and web release builds in CI; workflows exist, but no green combined multi-platform run has been recorded for this tree.
 - [ ] Wire Firebase Auth, real channel delivery, physical Omi hardware, desktop permissions/computer use, and model routes against real credentials and devices.
 
@@ -269,8 +269,8 @@ Keep `grok-composer-2.5-fast` only when the authenticated xAI catalog returns it
 | --- | --- | --- |
 | Product shell | Gradient Flutter navigation, onboarding, chat, Memory, Currents, Devices, Setup, and Account | Rendered accessibility/responsive audit on every target |
 | Native hub | Generated Rinf signals, UID-scoped production Dart configuration/event consumption, bounded/reaped command registry, ordered configuration, nonblocking/idempotent `zkr` capture/search, cancellation, bounded audio sessions, `rx4`, and `rs_peekaboo` | Native lifecycle stress and a green CI run of the implemented Rinf generation-drift gate |
-| Mobile relay | Omi-filtered BLE discovery, connect/discover, battery/codec reads, bounded sequenced PCM8/PCM16/Opus forwarding, disconnect/EOS, and restart handling | Transcription into sourced memory, physical iOS/Android sessions, and background recovery |
-| SaaS backend | Firebase-token boundary, D1 memory/settings, Stripe entitlements, Telegram, Blooio, and cited retrieval | Real Firebase/Stripe/channel credentials, outbound delivery, retries, and preview deployment |
+| Mobile relay | Omi-filtered BLE discovery, connect/discover, battery/codec reads, bounded sequenced PCM8/PCM16/Opus forwarding, disconnect/EOS, restart handling, and completed-transcript capture into evidenced `zkr` memory | Live STT, physical iOS/Android sessions, and background recovery |
+| SaaS backend | Firebase-token boundary, D1 memory/settings, Stripe entitlements, Telegram, Blooio, cited retrieval, and durable outbound delivery with per-account/channel serialization | Real Firebase/Stripe/channel credentials and preview deployment |
 | Platform packages | Web release, Android release APK, universal macOS 12 release app, and a prior green Android/iOS/macOS/Windows/web CI run | Repeat the combined CI run for the current authentication and relay tree |
 
 Do not count a compiled adapter as a deployed integration. Credentialed provider tests, physical-device tests, release packages, CI, and public deployment remain separate proof layers.
@@ -319,7 +319,7 @@ Do not count a compiled adapter as a deployed integration. Credentialed provider
 
 ## Immediate next task
 
-Commit and push the audited Firebase authentication, processing-consent, desktop browser handoff, Flutter/Rinf/BLE, and binding-drift slices. Then prove the combined multi-platform CI artifacts and exercise Firebase plus preview Cloudflare bindings with real test credentials before calling the product deployed. Estimated focused time for this commit/CI checkpoint: 30–60 minutes, dominated by native CI builds.
+Prove the combined multi-platform CI artifacts for the audited authentication, processing-consent, desktop handoff, Flutter/Rinf/BLE, transcript-memory, outbound-delivery, and accessibility slices. Then exercise Firebase plus preview Cloudflare bindings with real test credentials and physical Omi hardware before calling the product deployed.
 
 ## Progress log
 
@@ -332,3 +332,4 @@ Commit and push the audited Firebase authentication, processing-consent, desktop
 - 2026-07-21: Replaced the provisional four-boolean desktop permission gate with platform-aware capability states; macOS uses TCC/direct distribution while Windows uses limited UI Automation, privacy-aware microphone access, and per-session capture selection.
 - 2026-07-21: Published `zkr 0.1.2` with idempotent ingestion and hardened OpenClaw/Hermes plugins; audited the Omi runtime for bounded tasks, shutdown, cancellation, audio lifecycle, configuration ordering, and retry-safe capture.
 - 2026-07-21: Published `zkr 0.1.3`, added UID-bound Firebase authentication and versioned processing consent, implemented guarded macOS/Windows browser handoff, and connected bounded BLE PCM8/PCM16/Opus audio with deterministic EOS into the Rinf hub.
+- 2026-07-21: Added generation-fenced completed-transcript capture into `zkr`, Durable Object-serialized Telegram/Blooio outbound delivery, iOS 15 Firebase/Rinf packaging, and responsive accessibility coverage.
