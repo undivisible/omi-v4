@@ -7,6 +7,7 @@ import 'package:omi/app_services.dart';
 import 'package:omi/api/worker_http.dart';
 import 'package:omi/auth/auth.dart';
 import 'package:omi/device/device.dart';
+import 'package:omi/conversations/conversations.dart';
 import 'package:omi/features/chat_screen.dart';
 import 'package:omi/native/generated/signals/signals.dart';
 import 'package:omi/native/native_hub.dart';
@@ -21,6 +22,7 @@ void main() {
     );
     await auth.restoreSession();
     final hub = _FakeHub();
+    final conversations = _FakeConversationTransport();
     final services = AppServices.forTesting(
       auth: auth,
       nativeHub: hub,
@@ -29,6 +31,7 @@ void main() {
         adapter: const UnavailableDeviceRelayAdapter(),
       ),
       memoryDatabasePath: (uid) => '/tmp/$uid.sqlite3',
+      conversations: conversations,
     );
     await services.initialize();
     await tester.pumpWidget(
@@ -42,6 +45,11 @@ void main() {
     await tester.pump();
     final requestId = hub.messages.single.$1;
     expect(hub.messages.single.$2, 'Help me plan');
+    expect(conversations.appended.single.text, 'Help me plan');
+    expect(
+      conversations.appended.single.clientMessageId,
+      matches(RegExp(r'^chat-[a-f0-9]{32}-g0-\d+$')),
+    );
     expect(find.text('Help me plan'), findsOneWidget);
 
     hub.eventsController.add(
@@ -247,6 +255,57 @@ void main() {
     await hub.close();
   });
 
+  testWidgets('chat clears prior-account messages on authority change', (
+    tester,
+  ) async {
+    final gateway = _FakeAuthGateway(_session('user-a'));
+    final auth = AuthController(
+      gateway,
+      consentStore: VolatileConsentStore()..receipt = _receipt('user-a'),
+    );
+    await auth.restoreSession();
+    final hub = _FakeHub();
+    final conversations = _FakeConversationTransport();
+    final replay = Completer<List<ConversationMessage>>();
+    conversations.replayBarrier = replay;
+    final services = AppServices.forTesting(
+      auth: auth,
+      nativeHub: hub,
+      deviceRelay: DeviceRelayService(
+        role: DeviceRelayRole.desktopObserver,
+        adapter: const UnavailableDeviceRelayAdapter(),
+      ),
+      memoryDatabasePath: (uid) => '/tmp/$uid.sqlite3',
+      conversations: conversations,
+    );
+    await services.initialize();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(body: ChatScreen(services: services)),
+      ),
+    );
+
+    gateway.emit(_session('user-b'));
+    await tester.pump();
+    expect(auth.snapshot.session?.uid, 'user-b');
+    replay.complete(const [
+      ConversationMessage(
+        cursor: 1,
+        clientMessageId: 'private-message',
+        role: 'user',
+        source: 'app',
+        text: 'user-a private history',
+        createdAt: 1,
+      ),
+    ]);
+    await tester.pump();
+
+    expect(find.text('user-a private history'), findsNothing);
+    services.dispose();
+    await tester.pump();
+    await hub.close();
+  });
+
   test('atomic approval restores proposal after enqueue failure', () async {
     final auth = AuthController(
       _FakeAuthGateway(_session('user-a')),
@@ -265,7 +324,7 @@ void main() {
       approvalAcknowledgementTimeout: const Duration(milliseconds: 5),
     );
     await services.initialize();
-    final parentRequestId = services.sendChatMessage(text: 'Click it');
+    final parentRequestId = await services.sendChatMessage(text: 'Click it');
     hub.eventsController.add(
       NativeEventActionProposal(
         value: ActionProposal(
@@ -374,7 +433,7 @@ void main() {
     );
     expect(hub.assistantConfigurations.single.$1, AssistantProvider.worker);
     expect(hub.assistantConfigurations.single.$2, 'managed-chat');
-    final requestId = services.sendChatMessage(text: 'private request');
+    final requestId = await services.sendChatMessage(text: 'private request');
 
     gateway.emit(_session('user-b'));
     await _waitFor(() => auth.snapshot.session?.uid == 'user-b');
@@ -1065,6 +1124,43 @@ void main() {
       await adapter.close();
     },
   );
+}
+
+final class _FakeConversationTransport implements ConversationTransport {
+  final appended =
+      <({String clientMessageId, String role, String source, String text})>[];
+  final replayed = <ConversationMessage>[];
+  Completer<List<ConversationMessage>>? replayBarrier;
+
+  @override
+  Future<ConversationMessage> append({
+    required String clientMessageId,
+    required String role,
+    required String source,
+    required String text,
+  }) async {
+    appended.add((
+      clientMessageId: clientMessageId,
+      role: role,
+      source: source,
+      text: text,
+    ));
+    return ConversationMessage(
+      cursor: appended.length,
+      clientMessageId: clientMessageId,
+      role: role,
+      source: source,
+      text: text,
+      createdAt: DateTime.now().millisecondsSinceEpoch,
+    );
+  }
+
+  @override
+  Future<List<ConversationMessage>> replay({required int after}) async {
+    final barrier = replayBarrier;
+    if (barrier != null) return barrier.future;
+    return replayed.where((message) => message.cursor > after).toList();
+  }
 }
 
 AuthSession _session(String uid) =>

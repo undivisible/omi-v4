@@ -1,5 +1,6 @@
 #include "flutter_window.h"
 
+#include <UIAutomation.h>
 #include <shellapi.h>
 
 #include <optional>
@@ -20,6 +21,8 @@ bool HasMicrophoneAccess() {
 }
 
 } // namespace
+
+FlutterWindow *FlutterWindow::keyboard_window_ = nullptr;
 
 FlutterWindow::FlutterWindow(const flutter::DartProject &project)
     : project_(project) {}
@@ -73,6 +76,44 @@ bool FlutterWindow::OnCreate() {
         }
         result->NotImplemented();
       });
+  keyboard_channel_ =
+      std::make_unique<flutter::EventChannel<flutter::EncodableValue>>(
+          flutter_controller_->engine()->messenger(), "omi/desktop_keyboard",
+          &flutter::StandardMethodCodec::GetInstance());
+  keyboard_channel_->SetStreamHandler(
+      std::make_unique<
+          flutter::StreamHandlerFunctions<flutter::EncodableValue>>(
+          [this](const auto *, auto &&sink) {
+            keyboard_sink_ = std::move(sink);
+            SendKeyboardEvent(flutter::EncodableMap{
+                {flutter::EncodableValue("type"),
+                 flutter::EncodableValue("secureInput")},
+                {flutter::EncodableValue("enabled"),
+                 flutter::EncodableValue(SecureInputActive())},
+            });
+            return nullptr;
+          },
+          [this](const auto *) {
+            keyboard_sink_.reset();
+            return nullptr;
+          }));
+  keyboard_control_channel_ =
+      std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
+          flutter_controller_->engine()->messenger(),
+          "omi/desktop_keyboard_control",
+          &flutter::StandardMethodCodec::GetInstance());
+  keyboard_control_channel_->SetMethodCallHandler(
+      [this](const auto &call, auto result) {
+        if (call.method_name() != "focus") {
+          result->NotImplemented();
+          return;
+        }
+        ShowWindow(GetHandle(), SW_RESTORE);
+        SetForegroundWindow(GetHandle());
+        result->Success();
+      });
+  keyboard_window_ = this;
+  keyboard_hook_ = SetWindowsHookExW(WH_KEYBOARD_LL, KeyboardHook, nullptr, 0);
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
 
   flutter_controller_->engine()->SetNextFrameCallback([&]() { this->Show(); });
@@ -87,11 +128,87 @@ bool FlutterWindow::OnCreate() {
 
 void FlutterWindow::OnDestroy() {
   if (flutter_controller_) {
+    if (keyboard_hook_) {
+      UnhookWindowsHookEx(keyboard_hook_);
+      keyboard_hook_ = nullptr;
+    }
+    keyboard_window_ = nullptr;
+    keyboard_sink_.reset();
+    keyboard_control_channel_.reset();
+    keyboard_channel_.reset();
     capabilities_channel_.reset();
     flutter_controller_ = nullptr;
   }
 
   Win32Window::OnDestroy();
+}
+
+void FlutterWindow::SendKeyboardEvent(const flutter::EncodableValue &event) {
+  if (keyboard_sink_)
+    keyboard_sink_->Success(event);
+}
+
+bool FlutterWindow::SecureInputActive() const {
+  IUIAutomation *automation = nullptr;
+  IUIAutomationElement *element = nullptr;
+  BOOL password = FALSE;
+  const HRESULT initialized = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+  const HRESULT created =
+      CoCreateInstance(CLSID_CUIAutomation, nullptr, CLSCTX_INPROC_SERVER,
+                       IID_PPV_ARGS(&automation));
+  if (SUCCEEDED(created)) {
+    if (FAILED(automation->GetFocusedElement(&element)) || !element ||
+        FAILED(element->get_CurrentIsPassword(&password))) {
+      password = TRUE;
+    }
+  }
+  if (element)
+    element->Release();
+  if (automation)
+    automation->Release();
+  if (SUCCEEDED(initialized))
+    CoUninitialize();
+  return FAILED(created) || password == TRUE;
+}
+
+LRESULT CALLBACK FlutterWindow::KeyboardHook(int code, WPARAM wparam,
+                                             LPARAM lparam) {
+  if (code == HC_ACTION && keyboard_window_) {
+    const auto *event = reinterpret_cast<KBDLLHOOKSTRUCT *>(lparam);
+    const bool pressed = wparam == WM_KEYDOWN || wparam == WM_SYSKEYDOWN;
+    const bool released = wparam == WM_KEYUP || wparam == WM_SYSKEYUP;
+    const bool relevant = event->vkCode == VK_LSHIFT ||
+                          event->vkCode == VK_RSHIFT ||
+                          event->vkCode == VK_ESCAPE;
+    if (!relevant || (event->flags & LLKHF_INJECTED) != 0 ||
+        (!pressed && !released)) {
+      return CallNextHookEx(nullptr, code, wparam, lparam);
+    }
+    const bool secure = keyboard_window_->SecureInputActive();
+    keyboard_window_->SendKeyboardEvent(flutter::EncodableMap{
+        {flutter::EncodableValue("type"),
+         flutter::EncodableValue("secureInput")},
+        {flutter::EncodableValue("enabled"), flutter::EncodableValue(secure)},
+    });
+    if (!secure) {
+      if (event->vkCode == VK_LSHIFT || event->vkCode == VK_RSHIFT) {
+        keyboard_window_->SendKeyboardEvent(flutter::EncodableMap{
+            {flutter::EncodableValue("type"), flutter::EncodableValue("shift")},
+            {flutter::EncodableValue("key"),
+             flutter::EncodableValue(event->vkCode == VK_LSHIFT ? "left"
+                                                                : "right")},
+            {flutter::EncodableValue("pressed"),
+             flutter::EncodableValue(pressed)},
+        });
+      } else if (event->vkCode == VK_ESCAPE && pressed) {
+        keyboard_window_->SendKeyboardEvent(flutter::EncodableMap{
+            {flutter::EncodableValue("type"),
+             flutter::EncodableValue("escape")},
+        });
+      }
+    }
+  }
+  return CallNextHookEx(nullptr, code, wparam, lparam);
 }
 
 LRESULT

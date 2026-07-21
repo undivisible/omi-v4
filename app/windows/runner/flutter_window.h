@@ -2,6 +2,7 @@
 #define RUNNER_FLUTTER_WINDOW_H_
 
 #include <flutter/dart_project.h>
+#include <flutter/event_channel.h>
 #include <flutter/flutter_view_controller.h>
 #include <flutter/method_channel.h>
 #include <flutter/standard_method_codec.h>
@@ -25,6 +26,10 @@ protected:
                          LPARAM const lparam) noexcept override;
 
 private:
+  static LRESULT CALLBACK KeyboardHook(int code, WPARAM wparam, LPARAM lparam);
+  void SendKeyboardEvent(const flutter::EncodableValue &event);
+  bool SecureInputActive() const;
+
   // The project to run.
   flutter::DartProject project_;
 
@@ -32,6 +37,13 @@ private:
   std::unique_ptr<flutter::FlutterViewController> flutter_controller_;
   std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>>
       capabilities_channel_;
+  std::unique_ptr<flutter::EventChannel<flutter::EncodableValue>>
+      keyboard_channel_;
+  std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>>
+      keyboard_control_channel_;
+  std::unique_ptr<flutter::EventSink<flutter::EncodableValue>> keyboard_sink_;
+  HHOOK keyboard_hook_ = nullptr;
+  static FlutterWindow *keyboard_window_;
 };
 
 #endif // RUNNER_FLUTTER_WINDOW_H_

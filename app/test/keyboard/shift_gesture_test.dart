@@ -136,6 +136,23 @@ void main() {
     expect(gesture.phase, ShiftGesturePhase.idle);
   });
 
+  test('secure input discards a partial chord', () {
+    final gesture = ShiftGestureMachine();
+
+    gesture.shift(PhysicalShift.left, true, zero);
+    expect(gesture.setSecureInput(true), isEmpty);
+    expect(gesture.setSecureInput(false), isEmpty);
+    expect(
+      gesture.shift(
+        PhysicalShift.right,
+        true,
+        const Duration(milliseconds: 100),
+      ),
+      isEmpty,
+    );
+    expect(gesture.phase, ShiftGesturePhase.idle);
+  });
+
   test('a single shift never activates the gesture', () {
     final gesture = ShiftGestureMachine();
 

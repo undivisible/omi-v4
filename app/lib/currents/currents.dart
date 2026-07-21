@@ -1,3 +1,7 @@
+export 'currents_client.dart';
+export 'currents_controller.dart';
+export 'worker_currents_transport.dart';
+
 enum CurrentStatus {
   candidate,
   surfaced,

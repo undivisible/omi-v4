@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 
 import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
@@ -10,6 +11,8 @@ import 'auth/auth.dart';
 import 'auth/firebase_bootstrap.dart';
 import 'capabilities/desktop_capabilities.dart';
 import 'channels/channels.dart';
+import 'conversations/conversations.dart';
+import 'currents/currents.dart';
 import 'device/device.dart';
 import 'memory/memory.dart';
 import 'native/generated/signals/signals.dart' show NativeError;
@@ -50,6 +53,14 @@ const _defaultAssistantRefreshLead = Duration(minutes: 5);
 const _defaultAssistantMinimumRefreshDelay = Duration(seconds: 30);
 const _defaultApprovalAcknowledgementTimeout = Duration(seconds: 5);
 
+String _randomId() {
+  final random = Random.secure();
+  return List.generate(
+    16,
+    (_) => random.nextInt(256).toRadixString(16).padLeft(2, '0'),
+  ).join();
+}
+
 final class LocalTranscriptionUnavailable implements Exception {
   const LocalTranscriptionUnavailable();
 
@@ -70,6 +81,8 @@ final class AppServices {
     this.memory,
     this.settings,
     this.channels,
+    this.conversations,
+    CurrentsClient? currentsClient,
     this._worker,
     this._managedStt,
     this._workerOrigin,
@@ -78,7 +91,11 @@ final class AppServices {
     this._assistantMinimumRefreshDelay = _defaultAssistantMinimumRefreshDelay,
     this._approvalAcknowledgementTimeout =
         _defaultApprovalAcknowledgementTimeout,
-  }) : deviceAudio = DeviceAudioForwarder(relay: deviceRelay, hub: nativeHub),
+  }) : currents = currentsClient == null
+           ? null
+           : CurrentsController(currentsClient),
+       _currentsClient = currentsClient,
+       deviceAudio = DeviceAudioForwarder(relay: deviceRelay, hub: nativeHub),
        capabilities = PlatformDesktopCapabilityGateway(
          workspaceRoots: workspaceRoots,
        ),
@@ -114,6 +131,8 @@ final class AppServices {
       memory: MemoryClient(WorkerMemoryTransport(worker)),
       settings: SettingsClient(WorkerSettingsTransport(worker)),
       channels: ChannelClient(WorkerChannelTransport(worker)),
+      conversations: WorkerConversationTransport(worker),
+      currentsClient: CurrentsClient(WorkerCurrentsTransport(worker)),
       worker: worker,
       managedStt: WorkerManagedSttClient(worker),
       workerOrigin: worker.trustedOrigin,
@@ -156,6 +175,8 @@ final class AppServices {
       memory: MemoryClient(WorkerMemoryTransport(worker)),
       settings: SettingsClient(WorkerSettingsTransport(worker)),
       channels: ChannelClient(WorkerChannelTransport(worker)),
+      conversations: WorkerConversationTransport(worker),
+      currentsClient: CurrentsClient(WorkerCurrentsTransport(worker)),
       worker: worker,
       managedStt: WorkerManagedSttClient(worker),
       workerOrigin: worker.trustedOrigin,
@@ -169,6 +190,8 @@ final class AppServices {
     required String Function(String uid) memoryDatabasePath,
     WorkspaceRootStore? workspaceRoots,
     ManagedSttClient? managedStt,
+    ConversationTransport? conversations,
+    CurrentsClient? currentsClient,
     DateTime Function()? now,
     Duration assistantRefreshLead = _defaultAssistantRefreshLead,
     Duration assistantMinimumRefreshDelay =
@@ -183,6 +206,8 @@ final class AppServices {
     workspaceRoots: workspaceRoots ?? VolatileWorkspaceRootStore(),
     configurationMessage: 'Test services are not connected.',
     managedStt: managedStt,
+    conversations: conversations,
+    currentsClient: currentsClient,
     workerOrigin: managedStt == null
         ? null
         : _validateWorkerOrigin(managedStt.trustedWorkerOrigin),
@@ -202,6 +227,9 @@ final class AppServices {
   final MemoryClient? memory;
   final SettingsClient? settings;
   final ChannelClient? channels;
+  final ConversationTransport? conversations;
+  final CurrentsController? currents;
+  final CurrentsClient? _currentsClient;
   final WorkerHttpClient? _worker;
   final ManagedSttClient? _managedStt;
   final Uri? _workerOrigin;
@@ -218,6 +246,7 @@ final class AppServices {
   final _transcriptIngestionByRequest = <String, String>{};
   final _completedTranscriptCaptures =
       <String, _TranscriptCaptureFingerprint>{};
+  final String _chatSessionId = _randomId();
   int _authorityGeneration = 0;
   int _transcriptTransportSequence = 0;
   int _chatTransportSequence = 0;
@@ -227,6 +256,10 @@ final class AppServices {
   final _atomicApprovalRequestByProposal = <String, String>{};
   final _atomicApprovalAcknowledgementTimers = <String, Timer>{};
   final _ambiguousAtomicApprovalProposalByRequest = <String, String>{};
+  final _currentHandoffsByChatRequest = <String, CurrentActionHandoff>{};
+  final _currentHandoffsByProposal = <String, CurrentActionHandoff>{};
+  final _currentHandoffsByApprovalRequest = <String, CurrentActionHandoff>{};
+  final _currentApprovalSyncByRequest = <String, Future<void>>{};
   final _terminalChatRequests = <String>{};
   bool _nativeInitialized = false;
   bool _assistantConfigured = false;
@@ -319,25 +352,73 @@ final class AppServices {
     _assistantConfigured = false;
   }
 
-  String sendChatMessage({required String text}) {
+  Future<String> sendChatMessage({required String text}) =>
+      _sendChatMessage(text: text);
+
+  Future<String> _sendChatMessage({
+    required String text,
+    CurrentActionHandoff? currentHandoff,
+  }) async {
     if (!chatReady) {
       throw StateError(
         'Sign in, grant consent, and connect native services first.',
       );
     }
-    final requestId = 'chat-g$_authorityGeneration-${_chatTransportSequence++}';
+    final requestId =
+        'chat-$_chatSessionId-g$_authorityGeneration-${_chatTransportSequence++}';
     _chatRequests[requestId] = (
       generation: _authorityGeneration,
       kind: _ChatRequestKind.message,
     );
+    if (currentHandoff != null) {
+      _currentHandoffsByChatRequest[requestId] = currentHandoff;
+    }
     try {
+      await conversations?.append(
+        clientMessageId: requestId,
+        role: 'user',
+        source: _conversationSource,
+        text: text,
+      );
       nativeHub.sendMessage(requestId: requestId, text: text);
       return requestId;
     } catch (_) {
       _chatRequests.remove(requestId);
+      _currentHandoffsByChatRequest.remove(requestId);
       rethrow;
     }
   }
+
+  Future<void> saveAssistantMessage({
+    required String requestId,
+    required String text,
+  }) async {
+    await conversations?.append(
+      clientMessageId: 'assistant:$requestId',
+      role: 'assistant',
+      source: _conversationSource,
+      text: text,
+    );
+  }
+
+  Future<List<ConversationMessage>> replayConversation({int after = 0}) =>
+      conversations?.replay(after: after) ?? Future.value(const []);
+
+  Future<String> handoffCurrentAction(CurrentActionHandoff handoff) async {
+    if (_currentsClient == null) {
+      throw StateError('Currents are not connected.');
+    }
+    return _sendChatMessage(text: handoff.instruction, currentHandoff: handoff);
+  }
+
+  String get _conversationSource => kIsWeb
+      ? 'web'
+      : switch (defaultTargetPlatform) {
+          TargetPlatform.macOS ||
+          TargetPlatform.windows ||
+          TargetPlatform.linux => 'desktop',
+          _ => 'app',
+        };
 
   String decideChatApproval({
     required String proposalId,
@@ -369,6 +450,7 @@ final class AppServices {
       generation: _authorityGeneration,
       kind: _ChatRequestKind.approval,
     );
+    final currentHandoff = _currentHandoffsByProposal[proposalId];
     if (decision == ApprovalDecision.approveOnce && proposal.executable) {
       _atomicApprovalProposalByRequest[requestId] = proposalId;
       _atomicApprovalRequestByProposal[proposalId] = requestId;
@@ -376,6 +458,9 @@ final class AppServices {
         _approvalAcknowledgementTimeout,
         () => _approvalAcknowledgementTimedOut(requestId, proposalId),
       );
+      if (currentHandoff != null) {
+        _currentHandoffsByApprovalRequest[requestId] = currentHandoff;
+      }
       try {
         nativeHub.approveAndExecuteComputerUse(
           requestId: requestId,
@@ -385,6 +470,7 @@ final class AppServices {
         _chatRequests.remove(requestId);
         _atomicApprovalProposalByRequest.remove(requestId);
         _atomicApprovalRequestByProposal.remove(proposalId);
+        _currentHandoffsByApprovalRequest.remove(requestId);
         _atomicApprovalAcknowledgementTimers.remove(requestId)?.cancel();
         rethrow;
       }
@@ -396,6 +482,19 @@ final class AppServices {
           proposalId: proposalId,
           decision: decision,
         );
+        if (currentHandoff != null &&
+            (decision == ApprovalDecision.reject || !proposal.executable) &&
+            _currentsClient != null) {
+          _currentHandoffsByProposal.remove(proposalId);
+          unawaited(
+            _currentsClient.reject(currentHandoff).onError((error, stack) {
+              _nativeEvents.addError(
+                error ?? StateError('Currents rejection failed.'),
+                stack,
+              );
+            }),
+          );
+        }
       } catch (_) {
         _chatRequests.remove(requestId);
         _chatProposals[proposalId] = proposal;
@@ -591,7 +690,21 @@ final class AppServices {
       _atomicApprovalAcknowledgementTimers.remove(value.requestId)?.cancel();
       if (value.accepted) {
         _chatProposals.remove(proposalId);
+        final handoff = _currentHandoffsByApprovalRequest[value.requestId];
+        if (handoff != null && _currentsClient != null) {
+          final sync = _currentsClient.approve(handoff);
+          _currentApprovalSyncByRequest[value.requestId] = sync;
+          unawaited(
+            sync.onError((error, stack) {
+              _nativeEvents.addError(
+                error ?? StateError('Currents approval failed.'),
+                stack,
+              );
+            }),
+          );
+        }
       } else {
+        _currentHandoffsByApprovalRequest.remove(value.requestId);
         _chatRequests.remove(value.requestId);
         _tombstoneChatRequest(value.requestId);
       }
@@ -613,6 +726,10 @@ final class AppServices {
         expiresAtMs: value.expiresAtMs,
         executable: value.computerAction != null,
       );
+      final handoff = _currentHandoffsByChatRequest[value.requestId];
+      if (handoff != null) {
+        _currentHandoffsByProposal[value.proposalId] = handoff;
+      }
       return true;
     }
     String? requestId;
@@ -649,6 +766,42 @@ final class AppServices {
       return false;
     }
     if (terminal) {
+      final currentHandoff = _currentHandoffsByApprovalRequest.remove(
+        requestId,
+      );
+      final currentApproval = _currentApprovalSyncByRequest.remove(requestId);
+      if (currentHandoff != null &&
+          currentApproval != null &&
+          _currentsClient != null) {
+        final outcome =
+            event is NativeEventToolProgress &&
+                event.value.status == ToolStatus.complete
+            ? CurrentExecutionOutcome.succeeded
+            : CurrentExecutionOutcome.failed;
+        final detail = event is NativeEventToolProgress
+            ? [
+                event.value.tool,
+                event.value.status.name,
+                if (event.value.detail != null) event.value.detail!,
+              ].join(' · ')
+            : 'Native execution failed.';
+        unawaited(
+          currentApproval
+              .then(
+                (_) => _currentsClient.recordOutcome(
+                  currentHandoff,
+                  outcome,
+                  detail,
+                ),
+              )
+              .onError((error, stack) {
+                _nativeEvents.addError(
+                  error ?? StateError('Currents outcome failed.'),
+                  stack,
+                );
+              }),
+        );
+      }
       final proposalId = _atomicApprovalProposalByRequest.remove(requestId);
       if (proposalId != null) {
         _atomicApprovalRequestByProposal.remove(proposalId);
@@ -662,6 +815,22 @@ final class AppServices {
               (event.value.status == ToolStatus.failed ||
                   event.value.status == ToolStatus.cancelled));
       if (failedParent) _invalidateChatProposals(requestId);
+      if (request.kind == _ChatRequestKind.message) {
+        final pendingCurrent = _currentHandoffsByChatRequest.remove(requestId);
+        final hasProposal = _chatProposals.values.any(
+          (proposal) => proposal.parentRequestId == requestId,
+        );
+        if (pendingCurrent != null && !hasProposal && _currentsClient != null) {
+          unawaited(
+            _currentsClient.reject(pendingCurrent).onError((error, stack) {
+              _nativeEvents.addError(
+                error ?? StateError('Currents rejection failed.'),
+                stack,
+              );
+            }),
+          );
+        }
+      }
     }
     return true;
   }
@@ -674,9 +843,14 @@ final class AppServices {
   }
 
   void _invalidateChatProposals(String parentRequestId) {
-    _chatProposals.removeWhere(
-      (_, proposal) => proposal.parentRequestId == parentRequestId,
-    );
+    final proposalIds = _chatProposals.entries
+        .where((entry) => entry.value.parentRequestId == parentRequestId)
+        .map((entry) => entry.key)
+        .toList();
+    for (final proposalId in proposalIds) {
+      _chatProposals.remove(proposalId);
+      _currentHandoffsByProposal.remove(proposalId);
+    }
   }
 
   void _fenceTranscriptCaptures() {
@@ -707,6 +881,10 @@ final class AppServices {
     _atomicApprovalProposalByRequest.clear();
     _atomicApprovalRequestByProposal.clear();
     _ambiguousAtomicApprovalProposalByRequest.clear();
+    _currentHandoffsByChatRequest.clear();
+    _currentHandoffsByProposal.clear();
+    _currentHandoffsByApprovalRequest.clear();
+    _currentApprovalSyncByRequest.clear();
     for (final timer in _atomicApprovalAcknowledgementTimers.values) {
       timer.cancel();
     }

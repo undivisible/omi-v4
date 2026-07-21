@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../app_services.dart';
+import '../keyboard/keyboard.dart';
 import '../native/generated/signals/signals.dart'
     show ComputerUseAction, ComputerUseActionClick, ComputerUseActionTypeText;
 import '../native/native_hub.dart';
@@ -24,23 +25,32 @@ class ChatScreen extends StatefulWidget {
 
 class _ChatScreenState extends State<ChatScreen> {
   final _input = TextEditingController();
+  final _inputFocus = FocusNode();
+  final _desktopKeyboard = DesktopKeyboard();
   final _messages = <_ChatMessage>[];
   final _proposals = <String, ActionProposal>{};
   final _proposalExpiryTimers = <String, Timer>{};
   StreamSubscription<NativeEvent>? _events;
   StreamSubscription<int>? _authorityChanges;
+  DesktopGestureController? _desktopGesture;
+  StreamSubscription<ShiftGestureAction>? _desktopGestureActions;
   String? _activeRequestId;
   String? _progress;
   String? _error;
+  bool _sending = false;
+  int _conversationLoadGeneration = 0;
 
   @override
   void initState() {
     super.initState();
     if (!widget.previewMode) {
+      unawaited(_loadConversation());
       _events = widget.services.nativeEvents.listen(_handleEvent);
       _authorityChanges = widget.services.chatAuthorityChanges.listen((_) {
         if (!mounted) return;
+        _conversationLoadGeneration += 1;
         setState(() {
+          _messages.clear();
           _activeRequestId = null;
           _proposals.clear();
           for (final timer in _proposalExpiryTimers.values) {
@@ -50,7 +60,69 @@ class _ChatScreenState extends State<ChatScreen> {
           _progress = null;
           _error = 'Chat authority changed. Reconnect before continuing.';
         });
+        if (widget.services.auth.snapshot.hasProcessingAuthority) {
+          unawaited(_loadConversation());
+        }
       });
+      if (_desktopKeyboard.supported) {
+        _desktopGesture = DesktopGestureController(keyboard: _desktopKeyboard)
+          ..start();
+        _desktopGestureActions = _desktopGesture!.actions.listen(
+          _handleDesktopGesture,
+        );
+      }
+    }
+  }
+
+  Future<void> _handleDesktopGesture(ShiftGestureAction action) async {
+    if (!mounted) return;
+    switch (action) {
+      case ShiftGestureAction.openTextInput:
+        await _desktopKeyboard.focusApplication();
+        if (mounted) _inputFocus.requestFocus();
+      case ShiftGestureAction.submitText:
+        await _send();
+      case ShiftGestureAction.cancel:
+        if (_activeRequestId != null) {
+          _cancel();
+        } else {
+          _input.clear();
+          _inputFocus.unfocus();
+        }
+      case ShiftGestureAction.startVoice ||
+          ShiftGestureAction.continueVoice ||
+          ShiftGestureAction.stopVoice:
+        setState(() {
+          _error = 'Desktop microphone capture is not connected yet.';
+        });
+    }
+  }
+
+  Future<void> _loadConversation() async {
+    final generation = _conversationLoadGeneration;
+    try {
+      final messages = await widget.services.replayConversation();
+      if (!mounted || generation != _conversationLoadGeneration) return;
+      setState(() {
+        for (final message in messages) {
+          if (_messages.any(
+            (existing) => existing.requestId == message.clientMessageId,
+          )) {
+            continue;
+          }
+          _messages.add(
+            _ChatMessage(
+              requestId: message.clientMessageId,
+              text: message.text,
+              fromUser: message.role == 'user',
+            ),
+          );
+        }
+      });
+    } catch (failure) {
+      if (mounted && generation == _conversationLoadGeneration) {
+        setState(() => _error = failure.toString());
+      }
     }
   }
 
@@ -58,10 +130,13 @@ class _ChatScreenState extends State<ChatScreen> {
   void dispose() {
     unawaited(_events?.cancel());
     unawaited(_authorityChanges?.cancel());
+    unawaited(_desktopGestureActions?.cancel());
+    unawaited(_desktopGesture?.dispose());
     for (final timer in _proposalExpiryTimers.values) {
       timer.cancel();
     }
     _input.dispose();
+    _inputFocus.dispose();
     super.dispose();
   }
 
@@ -88,6 +163,16 @@ class _ChatScreenState extends State<ChatScreen> {
             _messages[index] = message;
           }
           if (value.finalSegment) {
+            unawaited(
+              widget.services
+                  .saveAssistantMessage(
+                    requestId: value.requestId,
+                    text: message.text,
+                  )
+                  .onError((failure, _) {
+                    if (mounted) setState(() => _error = failure.toString());
+                  }),
+            );
             _activeRequestId = null;
             _progress = null;
           }
@@ -142,11 +227,12 @@ class _ChatScreenState extends State<ChatScreen> {
     });
   }
 
-  void _send() {
+  Future<void> _send() async {
     final text = _input.text.trim();
-    if (text.isEmpty || _activeRequestId != null) return;
+    if (text.isEmpty || _activeRequestId != null || _sending) return;
+    _sending = true;
     try {
-      final requestId = widget.services.sendChatMessage(text: text);
+      final requestId = await widget.services.sendChatMessage(text: text);
       setState(() {
         _messages.add(
           _ChatMessage(requestId: requestId, text: text, fromUser: true),
@@ -162,6 +248,8 @@ class _ChatScreenState extends State<ChatScreen> {
         _progress = null;
         _error = failure.toString();
       });
+    } finally {
+      _sending = false;
     }
   }
 
@@ -352,6 +440,7 @@ class _ChatScreenState extends State<ChatScreen> {
         TextField(
           key: const Key('chat_input'),
           controller: _input,
+          focusNode: _inputFocus,
           enabled: ready,
           readOnly: _activeRequestId != null,
           onSubmitted: (_) => _send(),

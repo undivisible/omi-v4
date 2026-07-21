@@ -25,9 +25,10 @@ class ShiftGestureMachine {
 
   List<ShiftGestureAction> setSecureInput(bool enabled) {
     secureInput = enabled;
-    if (!enabled || phase == ShiftGesturePhase.idle) return const [];
+    if (!enabled) return const [];
+    final wasActive = phase != ShiftGesturePhase.idle;
     _reset();
-    return const [ShiftGestureAction.cancel];
+    return wasActive ? const [ShiftGestureAction.cancel] : const [];
   }
 
   List<ShiftGestureAction> shift(PhysicalShift key, bool pressed, Duration at) {

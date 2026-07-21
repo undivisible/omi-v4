@@ -48,6 +48,7 @@ class _OmiShellState extends State<OmiShell> {
                   index: selected,
                   services: widget.services,
                   previewMode: widget.previewMode,
+                  onOpenChat: () => setState(() => selected = 0),
                 ),
               ),
             ],
@@ -179,18 +180,28 @@ class _Screen extends StatelessWidget {
     required this.index,
     required this.services,
     required this.previewMode,
+    required this.onOpenChat,
   });
 
   final int index;
   final AppServices services;
   final bool previewMode;
+  final VoidCallback onOpenChat;
 
   @override
   Widget build(BuildContext context) {
     return switch (index) {
       0 => ChatScreen(services: services, previewMode: previewMode),
       1 => MemoryScreen(services: services, previewMode: previewMode),
-      2 => const CurrentsScreen(),
+      2 => CurrentsScreen(
+        controller: previewMode ? null : services.currents,
+        onActionHandoff: services.currents == null
+            ? null
+            : (handoff) async {
+                await services.handoffCurrentAction(handoff);
+                onOpenChat();
+              },
+      ),
       3 => DevicesScreen(services: services, previewMode: previewMode),
       4 => SetupScreen(services: services, previewMode: previewMode),
       _ => AccountScreen(services: services, previewMode: previewMode),
