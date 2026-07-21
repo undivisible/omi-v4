@@ -7,6 +7,8 @@ export type Bindings = {
   STRIPE_PRO_PRICE_ID?: string;
   STRIPE_WEBHOOK_SECRET?: string;
   APP_URL?: string;
+  FIREBASE_SERVICE_ACCOUNT_EMAIL?: string;
+  FIREBASE_SERVICE_ACCOUNT_PRIVATE_KEY?: string;
 };
 
 export type Auth = { uid: string; email: string | null };

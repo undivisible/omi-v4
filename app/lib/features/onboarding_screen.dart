@@ -1,6 +1,9 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../app_services.dart';
+import '../auth/auth.dart';
 import '../onboarding/onboarding_controller.dart';
 import '../ui/omi_ui.dart';
 import 'omi_shell.dart';
@@ -40,11 +43,13 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   void initState() {
     super.initState();
     onboarding.addListener(_refresh);
+    widget.services.auth.addListener(_refresh);
   }
 
   @override
   void dispose() {
     onboarding.removeListener(_refresh);
+    widget.services.auth.removeListener(_refresh);
     onboarding.dispose();
     answerController.dispose();
     super.dispose();
@@ -115,6 +120,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                           key: const ValueKey('permissions'),
                           configurationMessage:
                               widget.services.configurationMessage,
+                          auth: widget.services.auth,
                           onOpenPreview: _openPreview,
                         ),
                       },
@@ -310,11 +316,13 @@ class _ProfileQuestion extends StatelessWidget {
 class _ProductionGate extends StatelessWidget {
   const _ProductionGate({
     required this.configurationMessage,
+    required this.auth,
     required this.onOpenPreview,
     super.key,
   });
 
   final String configurationMessage;
+  final AuthController auth;
   final VoidCallback onOpenPreview;
 
   @override
@@ -336,20 +344,12 @@ class _ProductionGate extends StatelessWidget {
             ).textTheme.bodyLarge?.copyWith(color: Colors.white70),
           ),
           const SizedBox(height: 24),
-          _ReadinessRow(
-            icon: Icons.person_outline_rounded,
-            title: 'Firebase account',
-            detail: configurationMessage,
-            state: 'Unavailable',
+          AuthenticationGate(
+            auth: auth,
+            configurationMessage: configurationMessage,
           ),
           const SizedBox(height: 10),
-          const _ReadinessRow(
-            icon: Icons.policy_outlined,
-            title: 'Data and AI consent',
-            detail:
-                'No production consent receipt can be stored in this build.',
-            state: 'Unavailable',
-          ),
+          ProcessingConsentGate(auth: auth),
           const SizedBox(height: 10),
           const _ReadinessRow(
             icon: Icons.desktop_windows_outlined,
@@ -375,6 +375,304 @@ class _ProductionGate extends StatelessWidget {
       ),
     ),
   );
+}
+
+class ProcessingConsentGate extends StatelessWidget {
+  const ProcessingConsentGate({required this.auth, super.key});
+
+  final AuthController auth;
+
+  @override
+  Widget build(BuildContext context) {
+    final snapshot = auth.snapshot;
+    final granted = snapshot.hasProcessingAuthority;
+    final signedIn = snapshot.phase == AuthPhase.signedIn;
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: .18),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.white.withValues(alpha: .07)),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Text(
+              'Omi processing consent',
+              style: TextStyle(fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(height: 6),
+            const Text(
+              'Allow Omi to process your conversations, screen context, device audio, and connected-service data for memory and assistant features. This versioned consent can be revoked at any time.',
+              style: TextStyle(color: Colors.white60, height: 1.35),
+            ),
+            const SizedBox(height: 12),
+            if (!granted)
+              FilledButton(
+                key: const Key('grant_processing_consent'),
+                onPressed: signedIn
+                    ? () => unawaited(auth.grantProcessingConsent())
+                    : null,
+                child: Text(
+                  signedIn
+                      ? 'Grant processing consent v1'
+                      : 'Sign in before granting consent',
+                ),
+              )
+            else
+              OutlinedButton(
+                key: const Key('revoke_processing_consent'),
+                onPressed: () => unawaited(auth.revokeProcessingConsent()),
+                child: const Text('Revoke processing consent'),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class AuthenticationGate extends StatefulWidget {
+  const AuthenticationGate({
+    required this.auth,
+    required this.configurationMessage,
+    super.key,
+  });
+
+  final AuthController auth;
+  final String configurationMessage;
+
+  @override
+  State<AuthenticationGate> createState() => _AuthenticationGateState();
+}
+
+class _AuthenticationGateState extends State<AuthenticationGate> {
+  final phone = TextEditingController();
+  final code = TextEditingController();
+  bool phoneDisclosureAcknowledged = false;
+
+  @override
+  void dispose() {
+    phone.dispose();
+    code.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final snapshot = widget.auth.snapshot;
+    if (snapshot.phase == AuthPhase.signedIn) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _ReadinessRow(
+            icon: Icons.verified_user_outlined,
+            title: 'Firebase account',
+            detail:
+                snapshot.session?.phoneNumber ??
+                snapshot.session?.email ??
+                snapshot.session!.uid,
+            state: 'Signed in',
+          ),
+          const SizedBox(height: 8),
+          OutlinedButton(
+            key: const Key('sign_out_firebase'),
+            onPressed: () => unawaited(widget.auth.signOut()),
+            child: const Text('Sign out'),
+          ),
+        ],
+      );
+    }
+    if (snapshot.phase == AuthPhase.unavailable) {
+      return _ReadinessRow(
+        icon: Icons.person_off_outlined,
+        title: 'Firebase account',
+        detail: widget.configurationMessage,
+        state: 'Unavailable',
+      );
+    }
+    final busy = {
+      AuthPhase.requestingOtp,
+      AuthPhase.signingIn,
+      AuthPhase.signingOut,
+    }.contains(snapshot.phase);
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: .18),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.white.withValues(alpha: .07)),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Text(
+              'Firebase account',
+              style: TextStyle(fontWeight: FontWeight.w600),
+            ),
+            Material(
+              color: Colors.transparent,
+              child: CheckboxListTile(
+                key: const Key('firebase_auth_acknowledgement'),
+                contentPadding: EdgeInsets.zero,
+                value: snapshot.consentGranted,
+                onChanged: busy
+                    ? null
+                    : (value) =>
+                          unawaited(widget.auth.setConsent(value ?? false)),
+                title: const Text('I agree to Firebase account authentication'),
+                controlAffinity: ListTileControlAffinity.leading,
+              ),
+            ),
+            if (snapshot.phase == AuthPhase.awaitingOtp) ...[
+              TextField(
+                key: const Key('auth_otp'),
+                controller: code,
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(
+                  labelText: 'Verification code',
+                ),
+              ),
+              const SizedBox(height: 10),
+              FilledButton(
+                key: const Key('confirm_phone_otp'),
+                onPressed: busy
+                    ? null
+                    : () => widget.auth.confirmPhoneOtp(code.text),
+                child: const Text('Verify phone'),
+              ),
+            ] else ...[
+              if (widget.auth.supportsPhoneOtp) ...[
+                const Text(
+                  'For abuse prevention, Firebase sends your phone number to Google and Google stores it under its authentication terms.',
+                ),
+                Material(
+                  color: Colors.transparent,
+                  child: CheckboxListTile(
+                    key: const Key('firebase_phone_disclosure'),
+                    contentPadding: EdgeInsets.zero,
+                    value: phoneDisclosureAcknowledged,
+                    onChanged: busy
+                        ? null
+                        : (value) => setState(
+                            () => phoneDisclosureAcknowledged = value ?? false,
+                          ),
+                    title: const Text(
+                      'I understand this Firebase phone-number disclosure',
+                    ),
+                    controlAffinity: ListTileControlAffinity.leading,
+                  ),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  key: const Key('auth_phone'),
+                  controller: phone,
+                  keyboardType: TextInputType.phone,
+                  decoration: const InputDecoration(
+                    labelText: 'Phone number',
+                    hintText: '+1 555 555 0123',
+                  ),
+                ),
+                const SizedBox(height: 10),
+                FilledButton(
+                  key: const Key('request_phone_otp'),
+                  onPressed:
+                      busy ||
+                          !snapshot.consentGranted ||
+                          !phoneDisclosureAcknowledged
+                      ? null
+                      : () => widget.auth.requestPhoneOtp(phone.text),
+                  child: const Text('Text me a code'),
+                ),
+              ] else if (widget.auth.supportsDesktopBrowserHandoff) ...[
+                const Text(
+                  'Phone verification opens in your browser. The browser returns a one-time Firebase sign-in token only to this desktop.',
+                ),
+                CheckboxListTile(
+                  key: const Key('firebase_phone_disclosure'),
+                  contentPadding: EdgeInsets.zero,
+                  value: phoneDisclosureAcknowledged,
+                  onChanged: busy
+                      ? null
+                      : (value) => setState(
+                          () => phoneDisclosureAcknowledged = value ?? false,
+                        ),
+                  title: const Text(
+                    'I understand Firebase sends my phone number to Google for abuse prevention',
+                  ),
+                  controlAffinity: ListTileControlAffinity.leading,
+                ),
+                FilledButton.icon(
+                  key: const Key('desktop_browser_sign_in'),
+                  onPressed:
+                      busy ||
+                          !snapshot.consentGranted ||
+                          !phoneDisclosureAcknowledged
+                      ? null
+                      : () => widget.auth.signInWithDesktopBrowser(),
+                  icon: const Icon(Icons.open_in_browser_rounded),
+                  label: const Text('Continue securely in browser'),
+                ),
+                if (widget.auth.desktopConfirmationCode case final code?) ...[
+                  const SizedBox(height: 12),
+                  SelectableText(
+                    code,
+                    key: const Key('desktop_confirmation_code'),
+                    textAlign: TextAlign.center,
+                    style: Theme.of(context).textTheme.headlineMedium,
+                  ),
+                  const Text(
+                    'Enter this code in the browser to confirm it is your desktop.',
+                    textAlign: TextAlign.center,
+                  ),
+                ],
+              ] else
+                const _ReadinessRow(
+                  icon: Icons.phone_disabled_outlined,
+                  title: 'Phone sign-in',
+                  detail: 'Secure browser handoff is not configured.',
+                  state: 'Unavailable',
+                ),
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton(
+                      key: const Key('sign_in_google'),
+                      onPressed: busy || !snapshot.consentGranted
+                          ? null
+                          : () => widget.auth.signIn(AuthProvider.google),
+                      child: const Text('Google'),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: OutlinedButton(
+                      key: const Key('sign_in_apple'),
+                      onPressed: busy || !snapshot.consentGranted
+                          ? null
+                          : () => widget.auth.signIn(AuthProvider.apple),
+                      child: const Text('Apple'),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+            if (snapshot.failure case final failure?) ...[
+              const SizedBox(height: 10),
+              Text(
+                failure.message,
+                key: const Key('auth_failure'),
+                style: const TextStyle(color: Color(0xffffb4ab)),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 class _ReadinessRow extends StatelessWidget {

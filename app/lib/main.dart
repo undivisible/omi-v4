@@ -2,10 +2,11 @@ import 'package:flutter/material.dart';
 
 import 'app_services.dart';
 import 'features/onboarding_screen.dart';
+import 'features/desktop_auth_screen.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  final services = AppServices.fromEnvironment();
+  final services = await AppServices.initializeFromEnvironment();
   await services.initialize();
   runApp(OmiApp(services: services));
 }
@@ -66,7 +67,12 @@ class _OmiAppState extends State<OmiApp> {
           ),
         ),
       ),
-      home: OnboardingScreen(services: services),
+      home: Uri.base.queryParameters['desktop_auth'] != null
+          ? DesktopAuthScreen(
+              services: services,
+              sessionId: Uri.base.queryParameters['desktop_auth']!,
+            )
+          : OnboardingScreen(services: services),
     );
   }
 }

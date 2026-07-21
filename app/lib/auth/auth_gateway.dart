@@ -19,7 +19,19 @@ final class AuthOperationException extends AuthGatewayException {
 abstract interface class AuthGateway {
   bool get isConfigured;
 
+  AuthFailure? get configurationFailure;
+
+  bool get supportsPhoneOtp;
+
+  bool get supportsDesktopBrowserHandoff;
+
   AuthSession? get currentSession;
+
+  Stream<AuthSession?> get sessionChanges;
+
+  Future<AuthSession?> restoreSession();
+
+  Future<AuthSession?> refreshSession();
 
   Future<PhoneOtpChallenge> requestPhoneOtp(String phoneNumber);
 
@@ -30,17 +42,44 @@ abstract interface class AuthGateway {
 
   Future<AuthSession> signIn(AuthProvider provider);
 
+  Future<AuthSession> signInWithDesktopBrowser({
+    required void Function(String code) onConfirmationCode,
+  });
+
   Future<void> signOut();
 }
 
 final class UnconfiguredAuthGateway implements AuthGateway {
-  const UnconfiguredAuthGateway();
+  const UnconfiguredAuthGateway([
+    this.configurationFailure = const AuthFailure(
+      AuthErrorCode.configurationMissing,
+      'Firebase configuration is missing',
+    ),
+  ]);
+
+  @override
+  final AuthFailure configurationFailure;
 
   @override
   bool get isConfigured => false;
 
   @override
+  bool get supportsPhoneOtp => false;
+
+  @override
+  bool get supportsDesktopBrowserHandoff => false;
+
+  @override
   AuthSession? get currentSession => null;
+
+  @override
+  Stream<AuthSession?> get sessionChanges => const Stream.empty();
+
+  @override
+  Future<AuthSession?> restoreSession() async => null;
+
+  @override
+  Future<AuthSession?> refreshSession() async => null;
 
   @override
   Future<AuthSession> confirmPhoneOtp({
@@ -55,6 +94,11 @@ final class UnconfiguredAuthGateway implements AuthGateway {
   @override
   Future<AuthSession> signIn(AuthProvider provider) =>
       throw AuthConfigurationException();
+
+  @override
+  Future<AuthSession> signInWithDesktopBrowser({
+    required void Function(String code) onConfirmationCode,
+  }) => throw AuthConfigurationException();
 
   @override
   Future<void> signOut() => throw AuthConfigurationException();

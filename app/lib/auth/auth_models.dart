@@ -1,3 +1,5 @@
+import 'consent_store.dart';
+
 enum AuthProvider { phone, google, apple }
 
 enum AuthPhase {
@@ -19,6 +21,8 @@ enum AuthErrorCode {
   cancelled,
   rateLimited,
   configurationMissing,
+  unsupportedPlatform,
+  consentPersistence,
   network,
   unknown,
 }
@@ -42,10 +46,15 @@ final class AuthSession {
 }
 
 final class PhoneOtpChallenge {
-  const PhoneOtpChallenge({required this.verificationId, this.resendToken});
+  const PhoneOtpChallenge({
+    required this.verificationId,
+    this.resendToken,
+    this.completedSession,
+  });
 
   final String verificationId;
   final int? resendToken;
+  final AuthSession? completedSession;
 }
 
 final class AuthFailure {
@@ -62,6 +71,7 @@ final class AuthSnapshot {
     this.session,
     this.challenge,
     this.failure,
+    this.processingConsent,
   });
 
   const AuthSnapshot.initial()
@@ -69,11 +79,16 @@ final class AuthSnapshot {
       consentGranted = false,
       session = null,
       challenge = null,
-      failure = null;
+      failure = null,
+      processingConsent = null;
 
   final AuthPhase phase;
   final bool consentGranted;
   final AuthSession? session;
   final PhoneOtpChallenge? challenge;
   final AuthFailure? failure;
+  final ProcessingConsentReceipt? processingConsent;
+
+  bool get hasProcessingAuthority =>
+      session != null && processingConsent?.authorizes(session!.uid) == true;
 }

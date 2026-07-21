@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { requireAuth } from "./auth";
+import desktopAuth from "./desktop-auth";
 import routes from "./routes";
 import type { AppEnv } from "./types";
 import webhooks from "./webhooks";
@@ -10,6 +11,7 @@ app.get("/health", (context) =>
   context.json({ service: "omi-v4-api", status: "ok" }),
 );
 app.route("/v1/webhooks", webhooks);
+app.route("/v1/auth/desktop", desktopAuth);
 app.use("/v1/*", requireAuth);
 app.route("/v1", routes);
 app.notFound((context) => context.json({ error: "Not found" }, 404));
