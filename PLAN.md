@@ -57,7 +57,7 @@ The reusable memory engine lives in the public [`tschk/zkr`](https://github.com/
 - [ ] Connect the durable Telegram/Blooio inbox and app/web chat to one Firebase-UID-scoped conversation transport; channel storage and delivery exist, but live desktop-session routing, replay cursors, and multi-client conflict handling do not.
 - [ ] Implement the first evidence-backed Current end to end: candidate generation, ranking, feedback, approved action handoff, and outcome learning. The domain model and empty-state screen exist; persistence and orchestration do not.
 - [ ] Complete the audited live-STT slice between the implemented bounded Omi BLE/Rinf stream and idempotent final-transcript memory capture; Rust session ownership, provider routing, reconnect semantics, and physical-device proof remain.
-- [ ] Prove Android, iOS without signing, macOS, Windows, and web release builds in CI; workflows exist, but no green combined multi-platform run has been recorded for this tree.
+- [x] Prove Android, iOS without signing, macOS, Windows, and web release builds in CI; exact-head run 29842868977 passed with Worker and Rust gates on 2026-07-21.
 - [ ] Wire Firebase Auth, real channel delivery, physical Omi hardware, desktop permissions/computer use, and model routes against real credentials and devices.
 
 ## Initial modules
@@ -289,7 +289,7 @@ Keep `grok-composer-2.5-fast` only when the authenticated xAI catalog returns it
 | SaaS backend | Firebase-token boundary, D1 memory/settings, Stripe entitlements, Telegram, Blooio, cited retrieval, and durable outbound delivery with per-account/channel serialization | Real Firebase/Stripe/channel credentials and preview deployment |
 | Shared conversation | App/native assistant streaming and durable channel inbox/outbox are implemented independently | UID-scoped conversation persistence, desktop/app/web synchronization, channel-to-agent dispatch, replay cursors, and offline recovery |
 | Currents and reflection | Validated Current state model, native signal shape, memory evidence/review primitives, and empty-state UI | Candidate generation/ranking, D1 persistence, feedback/action lifecycle, outcome learning, and idempotent nightly Daily Review orchestration |
-| Platform packages | Web release, Android release APK, universal macOS 12 release app, and a prior green Android/iOS/macOS/Windows/web CI run | Repeat the combined CI run for the current authentication and relay tree |
+| Platform packages | Web release, Android release APK, universal macOS 12 release app, Windows release, and exact-head Android/iOS/macOS/Windows/web CI proof | Signed physical-device installation and release-channel distribution |
 
 Do not count a compiled adapter as a deployed integration. Credentialed provider tests, physical-device tests, release packages, CI, and public deployment remain separate proof layers.
 
