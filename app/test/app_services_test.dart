@@ -9,6 +9,7 @@ import 'package:omi/auth/auth.dart';
 import 'package:omi/device/device.dart';
 import 'package:omi/conversations/conversations.dart';
 import 'package:omi/features/chat_screen.dart';
+import 'package:omi/keyboard/keyboard.dart';
 import 'package:omi/native/generated/signals/signals.dart';
 import 'package:omi/native/native_hub.dart';
 
@@ -1356,6 +1357,225 @@ void main() {
       await adapter.close();
     },
   );
+
+  test('desktop voice drains PCM and cancel stops before EOS', () async {
+    final hub = _FakeHub()..terminalTranscript = '  plan the launch  ';
+    var audio = StreamController<Uint8List>();
+    var stopCalls = 0;
+    final capture = DesktopVoiceCapture(
+      hub: hub,
+      startAudio: () async => audio.stream,
+      stopAudio: () async {
+        stopCalls += 1;
+        await audio.close();
+      },
+    );
+
+    await capture.start(
+      auth: const TranscriptionAuthManaged(
+        endpoint: 'wss://worker.example.test/stt',
+        firebaseToken: 'token',
+      ),
+      authorityId: 'g1',
+    );
+    final firstStreamId = hub.transcriptionStartRequests.keys.single;
+    hub.eventsController
+      ..add(
+        NativeEventTranscriptDelta(
+          value: TranscriptDelta(
+            requestId: hub.transcriptionStartRequests[firstStreamId]!,
+            audioStreamId: firstStreamId,
+            segmentId: '$firstStreamId:segment:1',
+            segmentSequence: Uint64.fromBigInt(BigInt.one),
+            sttEpoch: 0,
+            deviceId: 'desktop-microphone',
+            provider: 'managed',
+            startMs: 1,
+            endMs: 2,
+            occurredAtMs: 2,
+            text: 'second',
+            finalSegment: true,
+          ),
+        ),
+      )
+      ..add(
+        NativeEventTranscriptDelta(
+          value: TranscriptDelta(
+            requestId: hub.transcriptionStartRequests[firstStreamId]!,
+            audioStreamId: firstStreamId,
+            segmentId: '$firstStreamId:segment:0',
+            segmentSequence: Uint64.fromBigInt(BigInt.zero),
+            sttEpoch: 0,
+            deviceId: 'desktop-microphone',
+            provider: 'managed',
+            startMs: 0,
+            endMs: 1,
+            occurredAtMs: 1,
+            text: 'ignore interim',
+            finalSegment: false,
+          ),
+        ),
+      );
+    audio.add(Uint8List.fromList([1, 2, 3, 4]));
+    await Future<void>.delayed(Duration.zero);
+    final transcript = await capture.stop();
+
+    expect(transcript, 'plan the launch second');
+    expect(hub.audio.map((chunk) => chunk.endOfStream), [false, true]);
+    expect(hub.audio.first.encoding, AudioEncoding.pcmS16Le);
+    expect(hub.audio.first.sampleRateHz, DesktopVoiceCapture.sampleRateHz);
+
+    audio = StreamController<Uint8List>();
+    await capture.start(
+      auth: const TranscriptionAuthManaged(
+        endpoint: 'wss://worker.example.test/stt',
+        firebaseToken: 'token',
+      ),
+      authorityId: 'g1',
+    );
+    final eosBeforeCancel = hub.audio
+        .where((chunk) => chunk.endOfStream)
+        .length;
+    await capture.cancel();
+
+    expect(stopCalls, 2);
+    expect(hub.stoppedAudioStreams, 1);
+    expect(
+      hub.audio.where((chunk) => chunk.endOfStream).length,
+      eosBeforeCancel,
+    );
+    await capture.dispose();
+
+    audio = StreamController<Uint8List>();
+    final failedStop = DesktopVoiceCapture(
+      hub: hub,
+      startAudio: () async => audio.stream,
+      stopAudio: () async => throw StateError('microphone failed'),
+    );
+    await failedStop.start(
+      auth: const TranscriptionAuthManaged(
+        endpoint: 'wss://worker.example.test/stt',
+        firebaseToken: 'token',
+      ),
+      authorityId: 'g1',
+    );
+    await expectLater(failedStop.stop(), throwsStateError);
+    expect(failedStop.active, isFalse);
+    expect(hub.stoppedAudioStreams, 2);
+    await failedStop.dispose();
+    await audio.close();
+
+    audio = StreamController<Uint8List>();
+    final terminalCapture = DesktopVoiceCapture(
+      hub: hub,
+      startAudio: () async => audio.stream,
+      stopAudio: () async {
+        stopCalls += 1;
+        await audio.close();
+      },
+    );
+    await terminalCapture.start(
+      auth: const TranscriptionAuthManaged(
+        endpoint: 'wss://worker.example.test/stt',
+        firebaseToken: 'token',
+      ),
+      authorityId: 'g1',
+    );
+    final terminalStreamId = hub.transcriptionStartRequests.keys.single;
+    hub.eventsController.add(
+      NativeEventError(
+        value: NativeError(
+          requestId: terminalStreamId,
+          code: 'transcription_connection_lost',
+          message: 'provider disconnected',
+          retryable: false,
+        ),
+      ),
+    );
+    await _waitFor(() => !terminalCapture.active);
+    expect(hub.stoppedAudioStreams, 3);
+    await terminalCapture.dispose();
+
+    audio = StreamController<Uint8List>();
+    final cancelledCapture = DesktopVoiceCapture(
+      hub: hub,
+      startAudio: () async => audio.stream,
+      stopAudio: audio.close,
+    );
+    await cancelledCapture.start(
+      auth: const TranscriptionAuthManaged(
+        endpoint: 'wss://worker.example.test/stt',
+        firebaseToken: 'token',
+      ),
+      authorityId: 'g1',
+    );
+    final cancelledStreamId = hub.transcriptionStartRequests.keys.single;
+    hub.eventsController.add(
+      NativeEventTranscriptionStatus(
+        value: TranscriptionStatus(
+          requestId: hub.transcriptionStartRequests[cancelledStreamId]!,
+          audioStreamId: cancelledStreamId,
+          state: TranscriptionState.cancelled,
+          sttEpoch: 0,
+        ),
+      ),
+    );
+    await _waitFor(() => !cancelledCapture.active);
+    expect(hub.stoppedAudioStreams, 4);
+    await cancelledCapture.dispose();
+    await hub.close();
+  });
+
+  test('desktop voice permission and start-stop race stay fenced', () async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    final auth = AuthController(
+      _FakeAuthGateway(_session('user-a')),
+      consentStore: VolatileConsentStore()..receipt = _receipt('user-a'),
+    );
+    await auth.restoreSession();
+    final hub = _FakeHub()..terminalTranscript = 'voice request';
+    final managedStt = _FakeManagedStt(_managedSession('user-a'));
+    var permission = false;
+    final audio = StreamController<Uint8List>();
+    final voice = DesktopVoiceCapture(
+      hub: hub,
+      permissionCheck: () async => permission,
+      startAudio: () async => audio.stream,
+      stopAudio: audio.close,
+    );
+    final services = AppServices.forTesting(
+      auth: auth,
+      nativeHub: hub,
+      deviceRelay: DeviceRelayService(
+        role: DeviceRelayRole.desktopObserver,
+        adapter: const UnavailableDeviceRelayAdapter(),
+      ),
+      memoryDatabasePath: (uid) => '/tmp/$uid.sqlite3',
+      managedStt: managedStt,
+      desktopVoice: voice,
+    );
+    await services.initialize();
+
+    await expectLater(services.startDesktopVoice(), throwsStateError);
+    expect(managedStt.requests, isEmpty);
+
+    permission = true;
+    managedStt.barrier = Completer<void>();
+    final starting = services.startDesktopVoice();
+    await _waitFor(() => managedStt.requests.length == 1);
+    final stopping = services.stopDesktopVoice();
+    managedStt.barrier!.complete();
+    await starting;
+    final submission = await stopping;
+
+    expect(voice.active, isFalse);
+    expect(submission?.text, 'voice request');
+    expect(hub.messages.single.$2, 'voice request');
+    expect(hub.captures, isEmpty);
+    services.dispose();
+    await hub.close();
+  });
 }
 
 final class _FakeConversationTransport implements ConversationTransport {
@@ -1547,6 +1767,17 @@ final class _FakeHub implements NativeHub {
   final transcriptionEncoding = <AudioEncoding>[];
   final transcriptionStartRequests = <String, String>{};
   int stoppedAudioStreams = 0;
+  String? terminalTranscript;
+  final audio =
+      <
+        ({
+          String requestId,
+          int sequence,
+          int sampleRateHz,
+          AudioEncoding encoding,
+          bool endOfStream,
+        })
+      >[];
   bool failCancel = false;
   bool failAtomicApproval = false;
   bool rejectAtomicApproval = false;
@@ -1590,6 +1821,7 @@ final class _FakeHub implements NativeHub {
     required String ingestionKey,
     required CaptureSource source,
     required int occurredAtMs,
+    required int recordedAtMs,
     String? text,
     String? application,
     String? windowTitle,
@@ -1601,6 +1833,7 @@ final class _FakeHub implements NativeHub {
         ingestionKey: ingestionKey,
         source: source,
         occurredAtMs: occurredAtMs,
+        recordedAtMs: recordedAtMs,
         text: text,
         transcriptLocator: transcriptLocator,
       ),
@@ -1621,6 +1854,7 @@ final class _FakeHub implements NativeHub {
     required String text,
     required String value,
     required int occurredAtMs,
+    required int recordedAtMs,
   }) {}
 
   @override
@@ -1681,7 +1915,47 @@ final class _FakeHub implements NativeHub {
     required AudioEncoding encoding,
     required bool endOfStream,
     required Uint8List bytes,
-  }) {}
+  }) {
+    audio.add((
+      requestId: requestId,
+      sequence: sequence,
+      sampleRateHz: sampleRateHz,
+      encoding: encoding,
+      endOfStream: endOfStream,
+    ));
+    final text = terminalTranscript;
+    if (!endOfStream || text == null) return;
+    final startRequestId = transcriptionStartRequests.remove(requestId)!;
+    eventsController
+      ..add(
+        NativeEventTranscriptDelta(
+          value: TranscriptDelta(
+            requestId: startRequestId,
+            audioStreamId: requestId,
+            segmentId: '$requestId:segment:0',
+            segmentSequence: Uint64.fromBigInt(BigInt.zero),
+            sttEpoch: 0,
+            deviceId: 'desktop-microphone',
+            provider: 'managed',
+            startMs: 0,
+            endMs: 1,
+            occurredAtMs: 1,
+            text: text,
+            finalSegment: true,
+          ),
+        ),
+      )
+      ..add(
+        NativeEventTranscriptionStatus(
+          value: TranscriptionStatus(
+            requestId: startRequestId,
+            audioStreamId: requestId,
+            state: TranscriptionState.finished,
+            sttEpoch: 0,
+          ),
+        ),
+      );
+  }
 
   @override
   void startTranscription({
@@ -1801,6 +2075,7 @@ final class _Capture {
     required this.ingestionKey,
     required this.source,
     required this.occurredAtMs,
+    required this.recordedAtMs,
     required this.text,
     required this.transcriptLocator,
   });
@@ -1809,6 +2084,7 @@ final class _Capture {
   final String ingestionKey;
   final CaptureSource source;
   final int occurredAtMs;
+  final int recordedAtMs;
   final String? text;
   final TranscriptLocator? transcriptLocator;
 }
@@ -1876,6 +2152,7 @@ final class _FakeManagedStt implements ManagedSttClient {
   @override
   final Uri trustedWorkerOrigin;
   final requests = <_ManagedSttRequest>[];
+  Completer<void>? barrier;
 
   @override
   Future<ManagedSttSession> createSession({
@@ -1894,6 +2171,7 @@ final class _FakeManagedStt implements ManagedSttClient {
       sampleRate: sampleRate,
       channels: channels,
     ));
+    await barrier?.future;
     return result;
   }
 }

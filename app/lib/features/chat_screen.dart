@@ -83,18 +83,57 @@ class _ChatScreenState extends State<ChatScreen> {
       case ShiftGestureAction.submitText:
         await _send();
       case ShiftGestureAction.cancel:
-        if (_activeRequestId != null) {
+        if (widget.services.desktopVoice.active) {
+          await widget.services.cancelDesktopVoice();
+          if (mounted) setState(() => _progress = 'Cancelled');
+        } else if (_activeRequestId != null) {
           _cancel();
         } else {
           _input.clear();
           _inputFocus.unfocus();
         }
-      case ShiftGestureAction.startVoice ||
-          ShiftGestureAction.continueVoice ||
-          ShiftGestureAction.stopVoice:
-        setState(() {
-          _error = 'Desktop microphone capture is not connected yet.';
-        });
+      case ShiftGestureAction.startVoice:
+        if (_activeRequestId != null || _sending) {
+          setState(() => _error = 'Finish the current request first.');
+          return;
+        }
+        try {
+          await widget.services.startDesktopVoice();
+          if (!mounted) {
+            await widget.services.cancelDesktopVoice();
+            return;
+          }
+          setState(() => _progress = 'Listening');
+        } catch (failure) {
+          if (mounted) setState(() => _error = failure.toString());
+        }
+      case ShiftGestureAction.continueVoice:
+        try {
+          await widget.services.continueDesktopVoice();
+          if (mounted) setState(() => _progress = 'Listening');
+        } catch (failure) {
+          if (mounted) setState(() => _error = failure.toString());
+        }
+      case ShiftGestureAction.stopVoice:
+        try {
+          final submission = await widget.services.stopDesktopVoice();
+          if (!mounted) return;
+          setState(() {
+            _progress = submission == null ? null : 'Thinking';
+            if (submission != null) {
+              _messages.add(
+                _ChatMessage(
+                  requestId: submission.requestId,
+                  text: submission.text,
+                  fromUser: true,
+                ),
+              );
+              _activeRequestId = submission.requestId;
+            }
+          });
+        } catch (failure) {
+          if (mounted) setState(() => _error = failure.toString());
+        }
     }
   }
 
@@ -128,6 +167,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
   @override
   void dispose() {
+    unawaited(widget.services.cancelDesktopVoice());
     unawaited(_events?.cancel());
     unawaited(_authorityChanges?.cancel());
     unawaited(_desktopGestureActions?.cancel());

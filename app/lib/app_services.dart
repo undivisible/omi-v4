@@ -14,6 +14,7 @@ import 'channels/channels.dart';
 import 'conversations/conversations.dart';
 import 'currents/currents.dart';
 import 'device/device.dart';
+import 'keyboard/keyboard.dart';
 import 'memory/memory.dart';
 import 'native/generated/signals/signals.dart' show NativeError;
 import 'native/native_hub.dart';
@@ -117,6 +118,7 @@ final class AppServices {
     this._approvalAcknowledgementTimeout =
         _defaultApprovalAcknowledgementTimeout,
     this._inboxPollInterval = _defaultInboxPollInterval,
+    DesktopVoiceCapture? desktopVoice,
   }) : currents = currentsClient == null
            ? null
            : CurrentsController(currentsClient),
@@ -125,7 +127,9 @@ final class AppServices {
        capabilities = PlatformDesktopCapabilityGateway(
          workspaceRoots: workspaceRoots,
        ),
-       _now = now ?? DateTime.now;
+       _now = now ?? DateTime.now {
+    this.desktopVoice = desktopVoice ?? DesktopVoiceCapture(hub: nativeHub);
+  }
 
   factory AppServices.fromEnvironment() {
     final auth = AuthController(const UnconfiguredAuthGateway());
@@ -228,6 +232,7 @@ final class AppServices {
     Duration approvalAcknowledgementTimeout =
         _defaultApprovalAcknowledgementTimeout,
     Duration inboxPollInterval = _defaultInboxPollInterval,
+    DesktopVoiceCapture? desktopVoice,
   }) => AppServices._(
     auth: auth,
     nativeHub: nativeHub,
@@ -247,12 +252,14 @@ final class AppServices {
     assistantMinimumRefreshDelay: assistantMinimumRefreshDelay,
     approvalAcknowledgementTimeout: approvalAcknowledgementTimeout,
     inboxPollInterval: inboxPollInterval,
+    desktopVoice: desktopVoice,
   );
 
   final AuthController auth;
   final NativeHub nativeHub;
   final DeviceRelayService deviceRelay;
   final DeviceAudioForwarder deviceAudio;
+  late final DesktopVoiceCapture desktopVoice;
   final WorkspaceRootStore workspaceRoots;
   final PlatformDesktopCapabilityGateway capabilities;
   final String configurationMessage;
@@ -303,6 +310,8 @@ final class AppServices {
   bool _inboxPollRunning = false;
   bool _disposed = false;
   Future<void> _lifecycle = Future.value();
+  Future<void> _desktopVoiceLifecycle = Future.value();
+  int _desktopVoiceGeneration = 0;
 
   Stream<NativeEvent> get nativeEvents => _nativeEvents.stream;
   Stream<int> get chatAuthorityChanges => _chatAuthorityChanges.stream;
@@ -397,6 +406,83 @@ final class AppServices {
 
   Future<String> sendChatMessage({required String text}) =>
       _sendChatMessage(text: text);
+
+  Future<void> startDesktopVoice() {
+    final voiceGeneration = ++_desktopVoiceGeneration;
+    return _queueDesktopVoice(() => _startDesktopVoice(voiceGeneration));
+  }
+
+  Future<void> _startDesktopVoice(int voiceGeneration) async {
+    if (kIsWeb ||
+        (defaultTargetPlatform != TargetPlatform.macOS &&
+            defaultTargetPlatform != TargetPlatform.windows)) {
+      throw StateError('Desktop voice is available on macOS and Windows only.');
+    }
+    final session = auth.snapshot.session;
+    final generation = _authorityGeneration;
+    if (!chatReady || session == null) {
+      throw StateError('Sign in and connect native services first.');
+    }
+    if (!await desktopVoice.hasPermission()) {
+      throw StateError('Microphone permission is required for desktop voice.');
+    }
+    if (voiceGeneration != _desktopVoiceGeneration) return;
+    final transcriptionAuth = await _managedTranscriptionAuthFor(
+      uid: session.uid,
+      deviceId: 'desktop-microphone',
+      encoding: ManagedSttEncoding.linear16,
+      sampleRate: DesktopVoiceCapture.sampleRateHz,
+    );
+    if (generation != _authorityGeneration ||
+        voiceGeneration != _desktopVoiceGeneration ||
+        auth.snapshot.session?.uid != session.uid) {
+      throw StateError('Account authority changed while starting voice.');
+    }
+    await desktopVoice.start(
+      auth: transcriptionAuth,
+      authorityId: 'g$generation',
+    );
+    if (generation != _authorityGeneration ||
+        voiceGeneration != _desktopVoiceGeneration ||
+        auth.snapshot.session?.uid != session.uid) {
+      await desktopVoice.cancel();
+      throw StateError('Account authority changed while starting voice.');
+    }
+  }
+
+  Future<void> continueDesktopVoice() =>
+      _queueDesktopVoice(() async => desktopVoice.continueCapture());
+
+  Future<({String requestId, String text})?> stopDesktopVoice() =>
+      _queueDesktopVoice(_stopDesktopVoice);
+
+  Future<({String requestId, String text})?> _stopDesktopVoice() async {
+    final uid = auth.snapshot.session?.uid;
+    final generation = _authorityGeneration;
+    final text = await desktopVoice.stop();
+    if (text.isEmpty) return null;
+    if (generation != _authorityGeneration ||
+        uid == null ||
+        auth.snapshot.session?.uid != uid) {
+      return null;
+    }
+    final requestId = await _sendChatMessage(text: text);
+    return (requestId: requestId, text: text);
+  }
+
+  Future<void> cancelDesktopVoice() {
+    _desktopVoiceGeneration += 1;
+    return desktopVoice.cancel();
+  }
+
+  Future<T> _queueDesktopVoice<T>(Future<T> Function() operation) {
+    final result = _desktopVoiceLifecycle.then(
+      (_) => operation(),
+      onError: (_, _) => operation(),
+    );
+    _desktopVoiceLifecycle = result.then<void>((_) {}, onError: (_, _) {});
+    return result;
+  }
 
   Future<String> _sendChatMessage({
     required String text,
@@ -656,6 +742,7 @@ final class AppServices {
       return;
     }
     if (event case NativeEventTranscriptDelta(:final value)) {
+      if (value.deviceId == 'desktop-microphone') return;
       final uid = auth.snapshot.session?.uid;
       final text = value.text.trim();
       if (!value.finalSegment ||
@@ -712,6 +799,7 @@ final class AppServices {
           ingestionKey: ingestionKey,
           source: CaptureSource.omiDevice,
           occurredAtMs: value.occurredAtMs,
+          recordedAtMs: _now().millisecondsSinceEpoch,
           text: text,
           transcriptLocator: fingerprint.locator,
         );
@@ -1086,6 +1174,7 @@ final class AppServices {
 
   void _fenceTranscriptCaptures() {
     _authorityGeneration += 1;
+    unawaited(cancelDesktopVoice());
     _inboxPollTimer?.cancel();
     _inboxPollTimer = null;
     _activeInboxItem = null;
@@ -1230,13 +1319,7 @@ final class AppServices {
   Future<TranscriptionAuthManaged> _managedTranscriptionAuth(
     RelayDevice device,
     String uid,
-  ) async {
-    final managedStt = _managedStt;
-    if (managedStt == null) {
-      throw StateError(
-        'Managed transcription is not configured. Configure BYOK transcription instead.',
-      );
-    }
+  ) {
     final encoding = switch (device.audioCodec) {
       DeviceAudioCodec.pcm8 ||
       DeviceAudioCodec.pcm16 => ManagedSttEncoding.linear16,
@@ -1249,17 +1332,37 @@ final class AppServices {
         'Managed transcription does not support this device audio format.',
       );
     }
+    return _managedTranscriptionAuthFor(
+      uid: uid,
+      deviceId: device.id,
+      encoding: encoding,
+      sampleRate: device.audioCodec.sampleRate,
+    );
+  }
+
+  Future<TranscriptionAuthManaged> _managedTranscriptionAuthFor({
+    required String uid,
+    required String deviceId,
+    required ManagedSttEncoding encoding,
+    required int sampleRate,
+  }) async {
+    final managedStt = _managedStt;
+    if (managedStt == null) {
+      throw StateError(
+        'Managed transcription is not configured. Configure BYOK transcription instead.',
+      );
+    }
     final nonce = DateTime.now().microsecondsSinceEpoch;
     final idempotencyKey = sha256
-        .convert(utf8.encode('$uid\u0000${device.id}\u0000$nonce'))
+        .convert(utf8.encode('$uid\u0000$deviceId\u0000$nonce'))
         .toString();
-    final managedDeviceId = sha256.convert(utf8.encode(device.id)).toString();
+    final managedDeviceId = sha256.convert(utf8.encode(deviceId)).toString();
     final result = await managedStt.createSession(
       idempotencyKey: idempotencyKey,
       deviceId: managedDeviceId,
       language: 'multi',
       encoding: encoding,
-      sampleRate: device.audioCodec.sampleRate,
+      sampleRate: sampleRate,
       channels: 1,
     );
     if (result.session.uid != uid || result.session.idToken.isEmpty) {
@@ -1292,10 +1395,12 @@ final class AppServices {
     unawaited(
       _lifecycle
           .then((_) async {
+            await desktopVoice.dispose();
             await _nativeEvents.close();
             await _chatAuthorityChanges.close();
           })
           .onError((_, _) async {
+            await desktopVoice.dispose();
             await _nativeEvents.close();
             await _chatAuthorityChanges.close();
           }),
