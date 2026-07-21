@@ -1,6 +1,9 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../app_services.dart';
+import '../keyboard/keyboard.dart';
 import '../ui/omi_ui.dart';
 import 'chat_screen.dart';
 import 'currents_screen.dart';
@@ -9,10 +12,18 @@ import 'memory_screen.dart';
 import 'setup_account_screens.dart';
 
 class OmiShell extends StatefulWidget {
-  const OmiShell({required this.services, this.previewMode = false, super.key});
+  const OmiShell({
+    required this.services,
+    this.previewMode = false,
+    this.desktopKeyboard,
+    this.desktopGesture,
+    super.key,
+  });
 
   final AppServices services;
   final bool previewMode;
+  final DesktopKeyboard? desktopKeyboard;
+  final DesktopGestureController? desktopGesture;
 
   @override
   State<OmiShell> createState() => _OmiShellState();
@@ -20,6 +31,10 @@ class OmiShell extends StatefulWidget {
 
 class _OmiShellState extends State<OmiShell> {
   var selected = 0;
+  final _chatKey = GlobalKey<ChatScreenState>();
+  late final _desktopKeyboard = widget.desktopKeyboard ?? DesktopKeyboard();
+  DesktopGestureController? _desktopGesture;
+  StreamSubscription<ShiftGestureAction>? _desktopGestureActions;
 
   static const destinations = [
     (Icons.chat_bubble_outline_rounded, 'Chat'),
@@ -29,6 +44,40 @@ class _OmiShellState extends State<OmiShell> {
     (Icons.checklist_rounded, 'Setup'),
     (Icons.person_outline_rounded, 'Account'),
   ];
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.previewMode) return;
+    final gesture =
+        widget.desktopGesture ??
+        (_desktopKeyboard.supported
+            ? DesktopGestureController(keyboard: _desktopKeyboard)
+            : null);
+    if (gesture == null) return;
+    _desktopGesture = gesture..start();
+    _desktopGestureActions = gesture.actions.listen(_handleDesktopGesture);
+  }
+
+  Future<void> _handleDesktopGesture(ShiftGestureAction action) async {
+    if (!mounted) return;
+    if (selected != 0) {
+      setState(() => selected = 0);
+      await WidgetsBinding.instance.endOfFrame;
+    }
+    await _chatKey.currentState?.handleDesktopGesture(action);
+  }
+
+  @override
+  void dispose() {
+    unawaited(_disposeDesktopGesture());
+    super.dispose();
+  }
+
+  Future<void> _disposeDesktopGesture() async {
+    await _desktopGestureActions?.cancel();
+    await _desktopGesture?.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -48,6 +97,9 @@ class _OmiShellState extends State<OmiShell> {
                   index: selected,
                   services: widget.services,
                   previewMode: widget.previewMode,
+                  chatKey: _chatKey,
+                  desktopKeyboard: _desktopKeyboard,
+                  onDesktopGestureReset: _desktopGesture?.reset,
                   onOpenChat: () => setState(() => selected = 0),
                 ),
               ),
@@ -180,18 +232,30 @@ class _Screen extends StatelessWidget {
     required this.index,
     required this.services,
     required this.previewMode,
+    required this.chatKey,
+    required this.desktopKeyboard,
+    required this.onDesktopGestureReset,
     required this.onOpenChat,
   });
 
   final int index;
   final AppServices services;
   final bool previewMode;
+  final GlobalKey<ChatScreenState> chatKey;
+  final DesktopKeyboard desktopKeyboard;
+  final VoidCallback? onDesktopGestureReset;
   final VoidCallback onOpenChat;
 
   @override
   Widget build(BuildContext context) {
     return switch (index) {
-      0 => ChatScreen(services: services, previewMode: previewMode),
+      0 => ChatScreen(
+        key: chatKey,
+        services: services,
+        previewMode: previewMode,
+        desktopKeyboard: desktopKeyboard,
+        onDesktopGestureReset: onDesktopGestureReset,
+      ),
       1 => MemoryScreen(services: services, previewMode: previewMode),
       2 => CurrentsScreen(
         controller: previewMode ? null : services.currents,

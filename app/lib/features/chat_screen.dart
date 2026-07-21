@@ -13,27 +13,29 @@ class ChatScreen extends StatefulWidget {
   const ChatScreen({
     required this.services,
     this.previewMode = false,
+    this.desktopKeyboard,
+    this.onDesktopGestureReset,
     super.key,
   });
 
   final AppServices services;
   final bool previewMode;
+  final DesktopKeyboard? desktopKeyboard;
+  final VoidCallback? onDesktopGestureReset;
 
   @override
-  State<ChatScreen> createState() => _ChatScreenState();
+  State<ChatScreen> createState() => ChatScreenState();
 }
 
-class _ChatScreenState extends State<ChatScreen> {
+class ChatScreenState extends State<ChatScreen> {
   final _input = TextEditingController();
   final _inputFocus = FocusNode();
-  final _desktopKeyboard = DesktopKeyboard();
+  late final _desktopKeyboard = widget.desktopKeyboard ?? DesktopKeyboard();
   final _messages = <_ChatMessage>[];
   final _proposals = <String, ActionProposal>{};
   final _proposalExpiryTimers = <String, Timer>{};
   StreamSubscription<NativeEvent>? _events;
   StreamSubscription<int>? _authorityChanges;
-  DesktopGestureController? _desktopGesture;
-  StreamSubscription<ShiftGestureAction>? _desktopGestureActions;
   Timer? _conversationRefreshTimer;
   final _conversationLoads = <int>{};
   String? _activeRequestId;
@@ -70,17 +72,10 @@ class _ChatScreenState extends State<ChatScreen> {
           unawaited(_loadConversation());
         }
       });
-      if (_desktopKeyboard.supported) {
-        _desktopGesture = DesktopGestureController(keyboard: _desktopKeyboard)
-          ..start();
-        _desktopGestureActions = _desktopGesture!.actions.listen(
-          _handleDesktopGesture,
-        );
-      }
     }
   }
 
-  Future<void> _handleDesktopGesture(ShiftGestureAction action) async {
+  Future<void> handleDesktopGesture(ShiftGestureAction action) async {
     if (!mounted) return;
     switch (action) {
       case ShiftGestureAction.openTextInput:
@@ -101,6 +96,7 @@ class _ChatScreenState extends State<ChatScreen> {
       case ShiftGestureAction.startVoice:
         if (_activeRequestId != null || _sending) {
           setState(() => _error = 'Finish the current request first.');
+          widget.onDesktopGestureReset?.call();
           return;
         }
         try {
@@ -111,6 +107,7 @@ class _ChatScreenState extends State<ChatScreen> {
           }
           setState(() => _progress = 'Listening');
         } catch (failure) {
+          widget.onDesktopGestureReset?.call();
           if (mounted) setState(() => _error = failure.toString());
         }
       case ShiftGestureAction.continueVoice:
@@ -118,6 +115,7 @@ class _ChatScreenState extends State<ChatScreen> {
           await widget.services.continueDesktopVoice();
           if (mounted) setState(() => _progress = 'Listening');
         } catch (failure) {
+          widget.onDesktopGestureReset?.call();
           if (mounted) setState(() => _error = failure.toString());
         }
       case ShiftGestureAction.stopVoice:
@@ -194,11 +192,10 @@ class _ChatScreenState extends State<ChatScreen> {
   void dispose() {
     _conversationLoadGeneration += 1;
     _conversationRefreshTimer?.cancel();
+    widget.onDesktopGestureReset?.call();
     unawaited(widget.services.cancelDesktopVoice());
     unawaited(_events?.cancel());
     unawaited(_authorityChanges?.cancel());
-    unawaited(_desktopGestureActions?.cancel());
-    unawaited(_desktopGesture?.dispose());
     for (final timer in _proposalExpiryTimers.values) {
       timer.cancel();
     }

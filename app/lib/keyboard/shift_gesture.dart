@@ -119,6 +119,8 @@ class ShiftGestureMachine {
     return const [ShiftGestureAction.cancel];
   }
 
+  void reset() => _reset();
+
   void _clearChordWhenReleased() {
     if (!_leftDown && !_rightDown) _chordConsumed = false;
   }

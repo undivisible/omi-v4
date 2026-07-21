@@ -58,6 +58,12 @@ final class DesktopGestureController {
     }
   }
 
+  void reset() {
+    _holdTimer?.cancel();
+    _holdTimer = null;
+    _machine.reset();
+  }
+
   Future<void> dispose() async {
     _holdTimer?.cancel();
     await _subscription?.cancel();

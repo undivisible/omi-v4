@@ -57,4 +57,53 @@ void main() {
     await controller.dispose();
     await events.close();
   });
+
+  test('reset reconciles a failed voice start', () async {
+    final events = StreamController<DesktopKeyboardEvent>();
+    var now = DateTime.fromMillisecondsSinceEpoch(0);
+    final controller = DesktopGestureController(
+      events: events.stream,
+      now: () => now,
+    );
+    final actions = <ShiftGestureAction>[];
+    final subscription = controller.actions.listen(actions.add);
+    controller.start();
+
+    events.add(const DesktopShiftEvent(key: PhysicalShift.left, pressed: true));
+    events.add(
+      const DesktopShiftEvent(key: PhysicalShift.right, pressed: true),
+    );
+    await Future<void>.delayed(Duration.zero);
+    now = DateTime.fromMillisecondsSinceEpoch(400);
+    events.add(
+      const DesktopShiftEvent(key: PhysicalShift.left, pressed: false),
+    );
+    await Future<void>.delayed(Duration.zero);
+    expect(actions, [
+      ShiftGestureAction.startVoice,
+      ShiftGestureAction.continueVoice,
+    ]);
+
+    controller.reset();
+    actions.clear();
+    events.add(
+      const DesktopShiftEvent(key: PhysicalShift.right, pressed: false),
+    );
+    now = DateTime.fromMillisecondsSinceEpoch(500);
+    events.add(const DesktopShiftEvent(key: PhysicalShift.left, pressed: true));
+    events.add(
+      const DesktopShiftEvent(key: PhysicalShift.right, pressed: true),
+    );
+    await Future<void>.delayed(Duration.zero);
+    now = DateTime.fromMillisecondsSinceEpoch(550);
+    events.add(
+      const DesktopShiftEvent(key: PhysicalShift.left, pressed: false),
+    );
+    await Future<void>.delayed(Duration.zero);
+
+    expect(actions, [ShiftGestureAction.openTextInput]);
+    await subscription.cancel();
+    await controller.dispose();
+    await events.close();
+  });
 }
