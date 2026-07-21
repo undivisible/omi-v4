@@ -105,6 +105,10 @@ final class DesktopVoiceCapture {
   Future<String> stop() async {
     final session = _session;
     if (session == null) return '';
+    return session.teardown ??= _finish(session);
+  }
+
+  Future<String> _finish(_DesktopVoiceSession session) async {
     session.stopping = true;
     try {
       await (_stopAudio?.call() ?? _recorder!.stop().then((_) {}));
@@ -125,7 +129,9 @@ final class DesktopVoiceCapture {
       if (status.state != TranscriptionState.finished) return '';
       return session.segments.values.join(' ').trim();
     } catch (_) {
-      await _abort(session);
+      try {
+        await _stopNative(session);
+      } catch (_) {}
       rethrow;
     } finally {
       await _release(session);
@@ -201,6 +207,10 @@ final class DesktopVoiceCapture {
   }
 
   Future<void> _abort(_DesktopVoiceSession session) async {
+    await (session.teardown ??= _cancelSession(session));
+  }
+
+  Future<String> _cancelSession(_DesktopVoiceSession session) async {
     session.stopping = true;
     try {
       await (_stopAudio?.call() ?? _recorder!.stop().then((_) {}));
@@ -209,6 +219,7 @@ final class DesktopVoiceCapture {
       await _stopNative(session);
     } catch (_) {}
     await _release(session);
+    return '';
   }
 
   Future<void> _stopNative(_DesktopVoiceSession session) async {
@@ -255,4 +266,5 @@ final class _DesktopVoiceSession {
   StreamSubscription<Uint8List>? audio;
   int sequence = 0;
   bool stopping = false;
+  Future<String>? teardown;
 }
