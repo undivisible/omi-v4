@@ -10,10 +10,19 @@ export 'generated/signals/signals.dart'
     show
         AudioEncoding,
         CaptureSource,
+        ActionProposal,
+        ApprovalDecision,
+        AssistantDelta,
+        AssistantProvider,
         NativeEvent,
+        NativeEventActionProposal,
+        NativeEventAssistantDelta,
         NativeEventError,
         NativeEventMemoryCaptured,
+        NativeEventToolProgress,
         NativeEventTranscriptDelta,
+        ToolProgress,
+        ToolStatus,
         TranscriptDelta;
 
 abstract interface class NativeHub {
@@ -40,6 +49,28 @@ abstract interface class NativeHub {
     required String requestId,
     required String query,
     int limit = 12,
+  });
+  void sendMessage({
+    required String requestId,
+    required String text,
+    String? conversationId,
+  });
+  void configureAssistant({
+    required String requestId,
+    required AssistantProvider provider,
+    required String model,
+    required String credential,
+    String? endpoint,
+  });
+  void configureTrustedAssistant({
+    required String requestId,
+    required String managedWorkerOrigin,
+  });
+  void clearAssistant(String requestId);
+  void decideApproval({
+    required String requestId,
+    required String proposalId,
+    required ApprovalDecision decision,
   });
   void cancel(String requestId);
   void sendAudio({
@@ -107,6 +138,38 @@ final class UnavailableNativeHub implements NativeHub {
     required String requestId,
     required String query,
     int limit = 12,
+  }) => _unavailable();
+
+  @override
+  void sendMessage({
+    required String requestId,
+    required String text,
+    String? conversationId,
+  }) => _unavailable();
+
+  @override
+  void configureAssistant({
+    required String requestId,
+    required AssistantProvider provider,
+    required String model,
+    required String credential,
+    String? endpoint,
+  }) => _unavailable();
+
+  @override
+  void configureTrustedAssistant({
+    required String requestId,
+    required String managedWorkerOrigin,
+  }) => _unavailable();
+
+  @override
+  void clearAssistant(String requestId) => _unavailable();
+
+  @override
+  void decideApproval({
+    required String requestId,
+    required String proposalId,
+    required ApprovalDecision decision,
   }) => _unavailable();
 
   @override
@@ -193,6 +256,56 @@ final class RinfNativeHub implements NativeHub {
     required String query,
     int limit = 12,
   }) => _send(requestId, CommandSearchMemory(query: query, limit: limit));
+
+  @override
+  void sendMessage({
+    required String requestId,
+    required String text,
+    String? conversationId,
+  }) => _send(
+    requestId,
+    CommandSendMessage(text: text, conversationId: conversationId),
+  );
+
+  @override
+  void configureAssistant({
+    required String requestId,
+    required AssistantProvider provider,
+    required String model,
+    required String credential,
+    String? endpoint,
+  }) => _send(
+    requestId,
+    CommandConfigureAssistant(
+      provider: provider,
+      model: model,
+      endpoint: endpoint,
+      credential: credential,
+    ),
+  );
+
+  @override
+  void configureTrustedAssistant({
+    required String requestId,
+    required String managedWorkerOrigin,
+  }) => _send(
+    requestId,
+    CommandConfigureTrustedAssistant(managedWorkerOrigin: managedWorkerOrigin),
+  );
+
+  @override
+  void clearAssistant(String requestId) =>
+      _send(requestId, const CommandClearAssistant());
+
+  @override
+  void decideApproval({
+    required String requestId,
+    required String proposalId,
+    required ApprovalDecision decision,
+  }) => _send(
+    requestId,
+    CommandApprovalDecision(proposalId: proposalId, decision: decision),
+  );
 
   @override
   void cancel(String requestId) => _send(requestId, const CommandCancel());

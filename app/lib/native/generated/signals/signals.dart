@@ -18,6 +18,7 @@ part 'action_proposal.dart';
 part 'action_risk.dart';
 part 'approval_decision.dart';
 part 'assistant_delta.dart';
+part 'assistant_provider.dart';
 part 'audio_chunk.dart';
 part 'audio_encoding.dart';
 part 'capture_source.dart';

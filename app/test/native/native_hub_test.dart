@@ -12,6 +12,16 @@ void main() {
         tenantId: 'tenant',
         personId: 'person',
       ),
+      const CommandConfigureAssistant(
+        provider: AssistantProvider.worker,
+        model: 'managed-chat',
+        endpoint: 'https://assistant.example.test/v1',
+        credential: 'runtime-token',
+      ),
+      const CommandConfigureTrustedAssistant(
+        managedWorkerOrigin: 'https://assistant.example.test',
+      ),
+      const CommandClearAssistant(),
       const CommandCaptureEvent(
         ingestionKey: 'stable-capture',
         source: CaptureSource.screen,
@@ -29,6 +39,8 @@ void main() {
         message,
       );
     }
+    expect(commands[1].toString(), contains('credential: [REDACTED]'));
+    expect(commands[1].toString(), isNot(contains('runtime-token')));
   });
 
   test('generated audio contract keeps bytes separate', () {

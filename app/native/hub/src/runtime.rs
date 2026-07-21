@@ -1,19 +1,28 @@
 use crate::signals::{
-    AudioChunk, CaptureSource, ClientCommand, Command, MemoryCaptured, MemorySearchItem,
-    MemorySearchResults, NativeError, NativeEvent, RuntimePhase, RuntimeStatus, ToolProgress,
-    ToolStatus,
+    ActionProposal, ActionRisk, ApprovalDecision, AssistantDelta,
+    AssistantProvider as ProviderKind, AudioChunk, CaptureSource, ClientCommand, Command,
+    MemoryCaptured, MemorySearchItem, MemorySearchResults, NativeError, NativeEvent, RuntimePhase,
+    RuntimeStatus, ToolProgress, ToolStatus,
 };
+use futures::StreamExt;
+use rs_ai_core::StreamEvent;
 use std::collections::{HashMap, VecDeque, hash_map::Entry};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::{Arc, Mutex as StdMutex};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::{Mutex, mpsc};
 use tokio::task::{JoinError, JoinHandle, JoinSet, spawn_blocking};
 use tokio_util::sync::CancellationToken;
+use url::{Host, Url};
 use zkr::{MemoryDb, MemoryRef, PersonId, RememberInput, SearchInput, SourceKind, TenantId};
 
 const COMMAND_QUEUE_CAPACITY: usize = 32;
 const MAX_ACTIVE_COMMANDS: usize = 32;
 const COMPLETED_CAPTURE_CAPACITY: usize = 256;
+const PENDING_PROPOSAL_CAPACITY: usize = 64;
+const TERMINAL_PROPOSAL_CAPACITY: usize = 256;
+const PROVIDER_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+const PROVIDER_EVENT_TIMEOUT: Duration = Duration::from_secs(45);
 const AUDIO_QUEUE_CAPACITY: usize = 32;
 const MAX_ACTIVE_AUDIO_SESSIONS: usize = 8;
 const AUDIO_SESSION_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
@@ -28,6 +37,9 @@ struct MemoryContext {
 struct RuntimeState {
     memory: Option<Arc<StdMutex<MemoryContext>>>,
     configuration_generation: u64,
+    authority_uid: Option<String>,
+    proposals: ProposalRegistry,
+    managed_worker_origin: Option<String>,
 }
 
 struct AudioSession {
@@ -70,6 +82,418 @@ struct ActiveCommand {
     authority_generation: u64,
 }
 
+#[allow(dead_code)]
+enum AssistantProviderEvent {
+    Delta { text: String, final_segment: bool },
+    Proposal(ActionProposal),
+}
+
+enum ProviderReceive {
+    Event(Result<AssistantProviderEvent, String>),
+    Closed,
+    Cancelled,
+    TimedOut,
+}
+
+async fn receive_provider_event(
+    events: &mut mpsc::Receiver<Result<AssistantProviderEvent, String>>,
+    cancellation: &CancellationToken,
+    timeout: Duration,
+) -> ProviderReceive {
+    tokio::select! {
+        () = cancellation.cancelled() => ProviderReceive::Cancelled,
+        result = tokio::time::timeout(timeout, events.recv()) => match result {
+            Ok(Some(event)) => ProviderReceive::Event(event),
+            Ok(None) => ProviderReceive::Closed,
+            Err(_) => ProviderReceive::TimedOut,
+        },
+    }
+}
+
+trait AssistantProvider: Send + Sync {
+    fn dispatch(
+        &self,
+        request_id: String,
+        text: String,
+        cancellation: CancellationToken,
+    ) -> mpsc::Receiver<Result<AssistantProviderEvent, String>>;
+}
+
+struct UnavailableAssistantProvider {
+    reason: String,
+}
+
+impl AssistantProvider for UnavailableAssistantProvider {
+    fn dispatch(
+        &self,
+        _request_id: String,
+        _text: String,
+        _cancellation: CancellationToken,
+    ) -> mpsc::Receiver<Result<AssistantProviderEvent, String>> {
+        let (sender, receiver) = mpsc::channel(1);
+        let reason = self.reason.clone();
+        tokio::spawn(async move {
+            let _ = sender.send(Err(reason)).await;
+        });
+        receiver
+    }
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum AssistantProviderKind {
+    OpenAi,
+    Anthropic,
+    Gemini,
+    Xai,
+    Compatible,
+    Worker,
+}
+
+#[derive(Clone)]
+struct AssistantProviderConfig {
+    kind: AssistantProviderKind,
+    model: String,
+    credential: String,
+    endpoint: Option<String>,
+}
+
+#[derive(Clone)]
+struct ValidatedEndpoint {
+    url: String,
+    host: String,
+    port: u16,
+}
+
+impl AssistantProviderConfig {
+    fn from_runtime(
+        provider: ProviderKind,
+        model: String,
+        endpoint: Option<String>,
+        credential: String,
+        managed_worker_origin: Option<&str>,
+    ) -> Result<Self, String> {
+        let kind = match provider {
+            ProviderKind::OpenAi => AssistantProviderKind::OpenAi,
+            ProviderKind::Anthropic => AssistantProviderKind::Anthropic,
+            ProviderKind::Gemini => AssistantProviderKind::Gemini,
+            ProviderKind::Xai => AssistantProviderKind::Xai,
+            ProviderKind::Compatible => AssistantProviderKind::Compatible,
+            ProviderKind::Worker => AssistantProviderKind::Worker,
+        };
+        if model.trim().is_empty() {
+            return Err("assistant model must not be empty".to_owned());
+        }
+        if credential.trim().is_empty() {
+            return Err("assistant credential must not be empty".to_owned());
+        }
+        let endpoint = match kind {
+            AssistantProviderKind::Compatible | AssistantProviderKind::Worker => {
+                let endpoint = endpoint
+                    .filter(|value| !value.trim().is_empty())
+                    .ok_or_else(|| "assistant endpoint is required".to_owned())?;
+                let validated = validate_endpoint(&endpoint, false, None)?;
+                if kind == AssistantProviderKind::Worker {
+                    let trusted = managed_worker_origin
+                        .ok_or_else(|| "managed assistant origin is not configured".to_owned())?;
+                    let expected = managed_worker_base(trusted)?;
+                    if validated.url.trim_end_matches('/') != expected.trim_end_matches('/') {
+                        return Err("managed assistant endpoint is not trusted".to_owned());
+                    }
+                }
+                Some(validated.url)
+            }
+            _ => None,
+        };
+        Ok(Self {
+            kind,
+            model,
+            credential,
+            endpoint,
+        })
+    }
+
+    fn from_values(mut value: impl FnMut(&str) -> Option<String>) -> Result<Option<Self>, String> {
+        let Some(provider) = value("OMI_AI_PROVIDER") else {
+            return Ok(None);
+        };
+        let kind = match provider.trim().to_ascii_lowercase().as_str() {
+            "openai" => AssistantProviderKind::OpenAi,
+            "anthropic" => AssistantProviderKind::Anthropic,
+            "gemini" => AssistantProviderKind::Gemini,
+            "xai" => AssistantProviderKind::Xai,
+            "compatible" => AssistantProviderKind::Compatible,
+            "worker" => AssistantProviderKind::Worker,
+            _ => return Err("OMI_AI_PROVIDER is unsupported".to_owned()),
+        };
+        let model = required_configuration(&mut value, "OMI_AI_MODEL")?;
+        let credential_name = if kind == AssistantProviderKind::Worker {
+            "OMI_AI_AUTH_TOKEN"
+        } else {
+            "OMI_AI_API_KEY"
+        };
+        let credential = required_configuration(&mut value, credential_name)?;
+        let endpoint = match kind {
+            AssistantProviderKind::Compatible | AssistantProviderKind::Worker => {
+                let endpoint = required_configuration(&mut value, "OMI_AI_ENDPOINT")?;
+                let validated = validate_endpoint(
+                    &endpoint,
+                    kind == AssistantProviderKind::Worker,
+                    value("OMI_MANAGED_AI_ORIGINS").as_deref(),
+                )?;
+                Some(validated.url)
+            }
+            _ => None,
+        };
+        Ok(Some(Self {
+            kind,
+            model,
+            credential,
+            endpoint,
+        }))
+    }
+}
+
+fn managed_worker_base(origin: &str) -> Result<String, String> {
+    let validated = validate_endpoint(origin, false, None)?;
+    let parsed =
+        Url::parse(&validated.url).map_err(|_| "managed assistant origin is invalid".to_owned())?;
+    if parsed.path() != "/" {
+        return Err("managed assistant origin must not contain a path".to_owned());
+    }
+    Ok(parsed
+        .join("/v1")
+        .map_err(|_| "managed assistant origin is invalid".to_owned())?
+        .to_string())
+}
+
+fn validate_endpoint(
+    endpoint: &str,
+    managed_worker: bool,
+    managed_allowlist: Option<&str>,
+) -> Result<ValidatedEndpoint, String> {
+    let parsed = Url::parse(endpoint).map_err(|_| "assistant endpoint is invalid".to_owned())?;
+    if parsed.scheme() != "https" {
+        return Err("assistant endpoint must use HTTPS".to_owned());
+    }
+    if !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.query().is_some()
+        || parsed.fragment().is_some()
+    {
+        return Err("assistant endpoint contains forbidden URL components".to_owned());
+    }
+    let host = match parsed.host() {
+        Some(Host::Domain(host)) => host.trim_end_matches('.').to_ascii_lowercase(),
+        Some(Host::Ipv4(_)) | Some(Host::Ipv6(_)) => {
+            return Err("assistant endpoint must not use an IP literal".to_owned());
+        }
+        None => return Err("assistant endpoint host is required".to_owned()),
+    };
+    if host == "localhost" || host.ends_with(".localhost") || host.ends_with(".local") {
+        return Err("assistant endpoint host is not public".to_owned());
+    }
+    let port = parsed.port_or_known_default().unwrap_or(443);
+    if managed_worker {
+        let origin = parsed.origin().ascii_serialization();
+        let allowed = managed_allowlist.is_some_and(|values| {
+            values
+                .split(',')
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .any(|value| value == origin)
+        });
+        if !allowed {
+            return Err("managed assistant origin is not allowlisted".to_owned());
+        }
+    }
+    Ok(ValidatedEndpoint {
+        url: parsed.to_string(),
+        host,
+        port,
+    })
+}
+
+async fn endpoint_resolves_publicly(endpoint: &str) -> Result<(), String> {
+    let validated = validate_endpoint(endpoint, false, None)?;
+    let addresses = tokio::time::timeout(
+        PROVIDER_CONNECT_TIMEOUT,
+        tokio::net::lookup_host((validated.host.as_str(), validated.port)),
+    )
+    .await
+    .map_err(|_| "assistant endpoint resolution timed out".to_owned())?
+    .map_err(|_| "assistant endpoint could not be resolved".to_owned())?
+    .collect::<Vec<_>>();
+    if addresses.is_empty() || addresses.iter().any(|address| !public_ip(address.ip())) {
+        return Err("assistant endpoint did not resolve to public addresses".to_owned());
+    }
+    Ok(())
+}
+
+fn public_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(ip) => public_ipv4(ip),
+        IpAddr::V6(ip) => {
+            if let Some(mapped) = ip.to_ipv4_mapped() {
+                return public_ipv4(mapped);
+            }
+            !ip.is_loopback()
+                && !ip.is_unspecified()
+                && !ip.is_multicast()
+                && !is_unique_local(ip)
+                && !is_link_local(ip)
+        }
+    }
+}
+
+fn public_ipv4(ip: Ipv4Addr) -> bool {
+    !ip.is_private()
+        && !ip.is_loopback()
+        && !ip.is_link_local()
+        && !ip.is_unspecified()
+        && !ip.is_multicast()
+        && ip != Ipv4Addr::BROADCAST
+}
+
+fn is_unique_local(ip: Ipv6Addr) -> bool {
+    ip.octets()[0] & 0xfe == 0xfc
+}
+
+fn is_link_local(ip: Ipv6Addr) -> bool {
+    let octets = ip.octets();
+    octets[0] == 0xfe && octets[1] & 0xc0 == 0x80
+}
+
+fn required_configuration(
+    value: &mut impl FnMut(&str) -> Option<String>,
+    name: &str,
+) -> Result<String, String> {
+    value(name)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| format!("{name} is required"))
+}
+
+struct RsAiAssistantProvider {
+    config: AssistantProviderConfig,
+}
+
+impl AssistantProvider for RsAiAssistantProvider {
+    fn dispatch(
+        &self,
+        _request_id: String,
+        text: String,
+        cancellation: CancellationToken,
+    ) -> mpsc::Receiver<Result<AssistantProviderEvent, String>> {
+        let (sender, receiver) = mpsc::channel(COMMAND_QUEUE_CAPACITY);
+        let config = self.config.clone();
+        tokio::spawn(async move {
+            if let Some(endpoint) = config.endpoint.as_deref() {
+                let preflight = tokio::select! {
+                    () = cancellation.cancelled() => return,
+                    result = endpoint_resolves_publicly(endpoint) => result,
+                };
+                if let Err(message) = preflight {
+                    let _ = sender.send(Err(message)).await;
+                    return;
+                }
+            }
+            let base = match config.kind {
+                AssistantProviderKind::OpenAi => rs_ai::chatgpt(),
+                AssistantProviderKind::Anthropic => rs_ai::claude(),
+                AssistantProviderKind::Gemini => rs_ai::gemini(),
+                AssistantProviderKind::Xai => rs_ai::xai(),
+                AssistantProviderKind::Compatible | AssistantProviderKind::Worker => {
+                    rs_ai::compatible(config.endpoint.unwrap_or_default())
+                }
+            }
+            .model(config.model);
+            let client = base.api_key(config.credential);
+            let connected = tokio::select! {
+                () = cancellation.cancelled() => return,
+                result = tokio::time::timeout(PROVIDER_CONNECT_TIMEOUT, client.stream(text)) => result,
+            };
+            let stream = match connected {
+                Ok(stream) => stream,
+                Err(_) => {
+                    let _ = sender
+                        .send(Err("assistant provider connection timed out".to_owned()))
+                        .await;
+                    return;
+                }
+            };
+            let mut stream = match stream {
+                Ok(stream) => stream,
+                Err(_) => {
+                    let _ = sender
+                        .send(Err("assistant provider connection failed".to_owned()))
+                        .await;
+                    return;
+                }
+            };
+            loop {
+                let next = tokio::select! {
+                    () = cancellation.cancelled() => return,
+                    result = tokio::time::timeout(PROVIDER_EVENT_TIMEOUT, stream.next()) => result,
+                };
+                let Some(next) = (match next {
+                    Ok(next) => next,
+                    Err(_) => {
+                        let _ = sender
+                            .send(Err("assistant provider stream timed out".to_owned()))
+                            .await;
+                        return;
+                    }
+                }) else {
+                    return;
+                };
+                let event = match next {
+                    Ok(StreamEvent::TextDelta { delta }) => Ok(AssistantProviderEvent::Delta {
+                        text: delta,
+                        final_segment: false,
+                    }),
+                    Ok(StreamEvent::MessageEnd { .. }) => Ok(AssistantProviderEvent::Delta {
+                        text: String::new(),
+                        final_segment: true,
+                    }),
+                    Ok(StreamEvent::Error { .. }) => {
+                        Err("assistant provider stream failed".to_owned())
+                    }
+                    Ok(_) => continue,
+                    Err(_) => Err("assistant provider stream failed".to_owned()),
+                };
+                let terminal = event.is_err()
+                    || matches!(
+                        &event,
+                        Ok(AssistantProviderEvent::Delta {
+                            final_segment: true,
+                            ..
+                        })
+                    );
+                if sender.send(event).await.is_err() || terminal {
+                    return;
+                }
+            }
+        });
+        receiver
+    }
+}
+
+fn production_assistant_provider() -> Arc<dyn AssistantProvider> {
+    match configured_assistant_provider(|name| std::env::var(name).ok()) {
+        Ok(Some(provider)) => provider,
+        Ok(None) => Arc::new(UnavailableAssistantProvider {
+            reason: "no model provider is configured".to_owned(),
+        }),
+        Err(reason) => Arc::new(UnavailableAssistantProvider { reason }),
+    }
+}
+
+fn configured_assistant_provider(
+    value: impl FnMut(&str) -> Option<String>,
+) -> Result<Option<Arc<dyn AssistantProvider>>, String> {
+    Ok(AssistantProviderConfig::from_values(value)?
+        .map(|config| Arc::new(RsAiAssistantProvider { config }) as Arc<dyn AssistantProvider>))
+}
+
 #[derive(Default)]
 struct CompletedCaptures {
     entries: HashMap<String, CaptureFingerprint>,
@@ -88,6 +512,221 @@ enum ActivationError {
     Capacity,
     Duplicate,
     Conflict,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ProposalStatus {
+    Pending,
+    Approved,
+    Rejected,
+    Expired,
+    Invalidated,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ProposalFingerprint {
+    uid: String,
+    authority_generation: u64,
+    parent_request_id: String,
+    expires_at_ms: Option<i64>,
+    risk: ActionRisk,
+    title: String,
+    summary: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ProposalRecord {
+    fingerprint: ProposalFingerprint,
+    status: ProposalStatus,
+}
+
+#[derive(Default)]
+struct ProposalRegistry {
+    pending: HashMap<String, ProposalRecord>,
+    terminal: HashMap<String, ProposalRecord>,
+    terminal_order: VecDeque<String>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+enum ProposalRegistration {
+    Registered,
+    ExactReplay,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+enum ProposalDecisionError {
+    NotFound,
+    WrongAuthority,
+    Expired,
+    AlreadyDecided,
+    Capacity,
+    Conflict,
+}
+
+impl ProposalRegistry {
+    fn register(
+        &mut self,
+        uid: &str,
+        authority_generation: u64,
+        proposal: ActionProposal,
+    ) -> Result<ProposalRegistration, ProposalDecisionError> {
+        let now_ms = unix_time_ms();
+        self.purge_expired(now_ms);
+        let fingerprint = ProposalFingerprint {
+            uid: uid.to_owned(),
+            authority_generation,
+            parent_request_id: proposal.request_id.clone(),
+            expires_at_ms: proposal.expires_at_ms,
+            risk: proposal.risk,
+            title: proposal.title.clone(),
+            summary: proposal.summary.clone(),
+        };
+        if let Some(existing) = self
+            .pending
+            .get(&proposal.proposal_id)
+            .or_else(|| self.terminal.get(&proposal.proposal_id))
+        {
+            return if existing.fingerprint == fingerprint {
+                Ok(ProposalRegistration::ExactReplay)
+            } else {
+                Err(ProposalDecisionError::Conflict)
+            };
+        }
+        if self.pending.len() >= PENDING_PROPOSAL_CAPACITY {
+            return Err(ProposalDecisionError::Capacity);
+        }
+        self.pending.insert(
+            proposal.proposal_id.clone(),
+            ProposalRecord {
+                fingerprint,
+                status: ProposalStatus::Pending,
+            },
+        );
+        if proposal
+            .expires_at_ms
+            .is_some_and(|expires| expires <= now_ms)
+        {
+            self.finish(&proposal.proposal_id, ProposalStatus::Expired);
+            return Err(ProposalDecisionError::Expired);
+        }
+        NativeEvent::ActionProposal(proposal).send();
+        Ok(ProposalRegistration::Registered)
+    }
+
+    fn decide(
+        &mut self,
+        proposal_id: &str,
+        uid: &str,
+        authority_generation: u64,
+        decision: ApprovalDecision,
+        now_ms: i64,
+    ) -> Result<ProposalRecord, ProposalDecisionError> {
+        self.purge_expired(now_ms);
+        if let Some(record) = self.terminal.get(proposal_id) {
+            return if record.fingerprint.uid != uid
+                || record.fingerprint.authority_generation != authority_generation
+            {
+                Err(ProposalDecisionError::WrongAuthority)
+            } else if record.status == ProposalStatus::Expired {
+                Err(ProposalDecisionError::Expired)
+            } else {
+                Err(ProposalDecisionError::AlreadyDecided)
+            };
+        }
+        let record = self
+            .pending
+            .get(proposal_id)
+            .ok_or(ProposalDecisionError::NotFound)?;
+        if record.fingerprint.uid != uid
+            || record.fingerprint.authority_generation != authority_generation
+        {
+            return Err(ProposalDecisionError::WrongAuthority);
+        }
+        if record
+            .fingerprint
+            .expires_at_ms
+            .is_some_and(|expires| expires <= now_ms)
+        {
+            self.finish(proposal_id, ProposalStatus::Expired);
+            return Err(ProposalDecisionError::Expired);
+        }
+        let status = match decision {
+            ApprovalDecision::ApproveOnce => ProposalStatus::Approved,
+            ApprovalDecision::Reject => ProposalStatus::Rejected,
+        };
+        self.finish(proposal_id, status)
+            .ok_or(ProposalDecisionError::NotFound)
+    }
+
+    fn invalidate_parent(&mut self, uid: &str, authority_generation: u64, parent: &str) {
+        self.purge_expired(unix_time_ms());
+        let ids = self
+            .pending
+            .iter()
+            .filter(|(_, record)| {
+                record.fingerprint.uid == uid
+                    && record.fingerprint.authority_generation == authority_generation
+                    && record.fingerprint.parent_request_id == parent
+            })
+            .map(|(id, _)| id.clone())
+            .collect::<Vec<_>>();
+        for id in ids {
+            self.finish(&id, ProposalStatus::Invalidated);
+        }
+    }
+
+    fn invalidate_generation(&mut self, uid: &str, authority_generation: u64) {
+        let parents = self
+            .pending
+            .values()
+            .filter(|record| {
+                record.fingerprint.uid == uid
+                    && record.fingerprint.authority_generation == authority_generation
+            })
+            .map(|record| record.fingerprint.parent_request_id.clone())
+            .collect::<Vec<_>>();
+        for parent in parents {
+            self.invalidate_parent(uid, authority_generation, &parent);
+        }
+    }
+
+    fn finish(&mut self, proposal_id: &str, status: ProposalStatus) -> Option<ProposalRecord> {
+        let mut record = self.pending.remove(proposal_id)?;
+        record.status = status;
+        self.terminal.insert(proposal_id.to_owned(), record.clone());
+        self.terminal_order.push_back(proposal_id.to_owned());
+        if self.terminal.len() > TERMINAL_PROPOSAL_CAPACITY
+            && let Some(expired) = self.terminal_order.pop_front()
+        {
+            self.terminal.remove(&expired);
+        }
+        Some(record)
+    }
+
+    fn purge_expired(&mut self, now_ms: i64) {
+        let expired = self
+            .pending
+            .iter()
+            .filter(|(_, record)| {
+                record
+                    .fingerprint
+                    .expires_at_ms
+                    .is_some_and(|expires| expires <= now_ms)
+            })
+            .map(|(id, _)| id.clone())
+            .collect::<Vec<_>>();
+        for id in expired {
+            self.finish(&id, ProposalStatus::Expired);
+        }
+    }
+}
+
+fn unix_time_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| {
+            duration.as_millis().min(i64::MAX as u128) as i64
+        })
 }
 
 impl CompletedCaptures {
@@ -245,6 +884,7 @@ pub struct CommandDispatcher {
     receiver: mpsc::Receiver<ClientCommand>,
     state: Arc<Mutex<RuntimeState>>,
     active: Arc<Mutex<HashMap<String, ActiveCommand>>>,
+    assistant_provider: Arc<StdMutex<Arc<dyn AssistantProvider>>>,
 }
 
 impl CommandDispatcher {
@@ -256,6 +896,7 @@ impl CommandDispatcher {
                 receiver,
                 state: Arc::new(Mutex::new(RuntimeState::default())),
                 active: Arc::new(Mutex::new(HashMap::new())),
+                assistant_provider: Arc::new(StdMutex::new(production_assistant_provider())),
             },
         )
     }
@@ -289,14 +930,182 @@ impl CommandDispatcher {
                 },
             };
             let request_id = command.request_id.clone();
+            if let Command::ConfigureTrustedAssistant {
+                managed_worker_origin,
+            } = &command.command
+            {
+                let trusted = match managed_worker_base(managed_worker_origin) {
+                    Ok(_) => managed_worker_origin.trim_end_matches('/').to_owned(),
+                    Err(message) => {
+                        error(
+                            Some(request_id),
+                            "trusted_assistant_configuration_invalid",
+                            &message,
+                            false,
+                        );
+                        continue;
+                    }
+                };
+                let mut state = self.state.lock().await;
+                match state.managed_worker_origin.as_deref() {
+                    None => state.managed_worker_origin = Some(trusted),
+                    Some(existing) if existing == trusted => {}
+                    Some(_) => {
+                        error(
+                            Some(request_id),
+                            "trusted_assistant_configuration_conflict",
+                            "managed assistant origin is already configured",
+                            false,
+                        );
+                        continue;
+                    }
+                }
+                continue;
+            }
+            if let Command::ConfigureAssistant {
+                provider,
+                model,
+                endpoint,
+                credential,
+            } = &command.command
+            {
+                cancel_all(&self.active).await;
+                let managed_worker_origin = self.state.lock().await.managed_worker_origin.clone();
+                match AssistantProviderConfig::from_runtime(
+                    *provider,
+                    model.clone(),
+                    endpoint.clone(),
+                    credential.clone(),
+                    managed_worker_origin.as_deref(),
+                ) {
+                    Ok(config) => {
+                        *self
+                            .assistant_provider
+                            .lock()
+                            .unwrap_or_else(|failure| failure.into_inner()) =
+                            Arc::new(RsAiAssistantProvider { config });
+                        progress(
+                            &request_id,
+                            "assistant_configuration",
+                            ToolStatus::Complete,
+                            Some("assistant provider configured"),
+                        );
+                    }
+                    Err(message) => error(
+                        Some(request_id),
+                        "assistant_configuration_invalid",
+                        &message,
+                        false,
+                    ),
+                }
+                continue;
+            }
+            if matches!(command.command, Command::ClearAssistant) {
+                cancel_all(&self.active).await;
+                *self
+                    .assistant_provider
+                    .lock()
+                    .unwrap_or_else(|failure| failure.into_inner()) =
+                    Arc::new(UnavailableAssistantProvider {
+                        reason: "no model provider is configured".to_owned(),
+                    });
+                progress(
+                    &request_id,
+                    "assistant_configuration",
+                    ToolStatus::Complete,
+                    Some("assistant provider cleared"),
+                );
+                continue;
+            }
             if matches!(command.command, Command::Cancel) {
+                let mut state = self.state.lock().await;
+                if let Some(uid) = state.authority_uid.clone() {
+                    let generation = state.configuration_generation;
+                    state
+                        .proposals
+                        .invalidate_parent(&uid, generation, &request_id);
+                }
+                drop(state);
                 cancel(&self.active, &request_id).await;
                 continue;
             }
             if matches!(&command.command, Command::ConfigureMemory { .. }) {
+                let mut state = self.state.lock().await;
+                if let Some(uid) = state.authority_uid.clone() {
+                    let generation = state.configuration_generation;
+                    state.proposals.invalidate_generation(&uid, generation);
+                }
+                drop(state);
                 authority_generation = authority_generation.saturating_add(1);
                 completed.clear();
-                cancel_captures(&self.active).await;
+                cancel_all(&self.active).await;
+            }
+            if let Command::ApprovalDecision {
+                proposal_id,
+                decision,
+            } = &command.command
+            {
+                let mut state = self.state.lock().await;
+                let Some(uid) = state.authority_uid.clone() else {
+                    error(
+                        Some(request_id),
+                        "proposal_not_found",
+                        "no action proposal authority is configured",
+                        false,
+                    );
+                    continue;
+                };
+                let generation = state.configuration_generation;
+                match state.proposals.decide(
+                    proposal_id,
+                    &uid,
+                    generation,
+                    *decision,
+                    unix_time_ms(),
+                ) {
+                    Ok(record) => {
+                        let detail = format!(
+                            "{} {:?} proposal for {}",
+                            if record.status == ProposalStatus::Approved {
+                                "approved"
+                            } else {
+                                "rejected"
+                            },
+                            record.fingerprint.risk,
+                            record.fingerprint.parent_request_id
+                        );
+                        progress(&request_id, "approval", ToolStatus::Complete, Some(&detail));
+                    }
+                    Err(failure) => {
+                        let (code, message) = match failure {
+                            ProposalDecisionError::NotFound => (
+                                "proposal_not_found",
+                                "no matching action proposal is active",
+                            ),
+                            ProposalDecisionError::WrongAuthority => (
+                                "proposal_authority_changed",
+                                "the proposal belongs to a different authority",
+                            ),
+                            ProposalDecisionError::Expired => {
+                                ("proposal_expired", "the action proposal has expired")
+                            }
+                            ProposalDecisionError::AlreadyDecided => (
+                                "proposal_already_decided",
+                                "the action proposal was already decided",
+                            ),
+                            ProposalDecisionError::Capacity => (
+                                "proposal_capacity_exceeded",
+                                "too many action proposals are pending",
+                            ),
+                            ProposalDecisionError::Conflict => (
+                                "proposal_id_conflict",
+                                "proposal_id was reused with a different payload",
+                            ),
+                        };
+                        error(Some(request_id), code, message, false);
+                    }
+                }
+                continue;
             }
 
             let cancellation = CancellationToken::new();
@@ -362,15 +1171,24 @@ impl CommandDispatcher {
                     let mut state = self.state.lock().await;
                     state.configuration_generation =
                         state.configuration_generation.saturating_add(1);
+                    if let Command::ConfigureMemory { person_id, .. } = &command.command {
+                        state.authority_uid = Some(person_id.clone());
+                    }
                     Some(state.configuration_generation)
                 } else {
                     None
                 };
             let state = Arc::clone(&self.state);
+            let assistant_provider = self
+                .assistant_provider
+                .lock()
+                .unwrap_or_else(|failure| failure.into_inner())
+                .clone();
             tasks.spawn(async move {
                 let outcome = tokio::spawn(execute(
                     command,
                     state,
+                    assistant_provider,
                     cancellation,
                     configuration_generation,
                 ))
@@ -488,14 +1306,6 @@ async fn reap_joined(
     }
 }
 
-async fn cancel_captures(active: &Mutex<HashMap<String, ActiveCommand>>) {
-    for command in active.lock().await.values() {
-        if command.capture.is_some() {
-            command.cancellation.cancel();
-        }
-    }
-}
-
 async fn cancel_all(active: &Mutex<HashMap<String, ActiveCommand>>) {
     for command in active.lock().await.values() {
         command.cancellation.cancel();
@@ -513,9 +1323,106 @@ pub fn runtime_status(memory_available: bool) -> RuntimeStatus {
     }
 }
 
+async fn dispatch_assistant(
+    request_id: &str,
+    state: &Mutex<RuntimeState>,
+    provider: Arc<dyn AssistantProvider>,
+    text: String,
+    cancellation: &CancellationToken,
+) {
+    let generation = state.lock().await.configuration_generation;
+    let mut events = provider.dispatch(request_id.to_owned(), text, cancellation.clone());
+    loop {
+        let next =
+            match receive_provider_event(&mut events, cancellation, PROVIDER_EVENT_TIMEOUT).await {
+                ProviderReceive::Event(event) => event,
+                ProviderReceive::Closed => return,
+                ProviderReceive::Cancelled => {
+                    cancelled(request_id);
+                    return;
+                }
+                ProviderReceive::TimedOut => {
+                    error(
+                        Some(request_id.to_owned()),
+                        "assistant_provider_timeout",
+                        "assistant provider response timed out",
+                        true,
+                    );
+                    return;
+                }
+            };
+        let mut state = state.lock().await;
+        if state.configuration_generation != generation {
+            cancelled(request_id);
+            return;
+        }
+        let Some(uid) = state.authority_uid.clone() else {
+            error(
+                Some(request_id.to_owned()),
+                "assistant_unavailable",
+                "no assistant authority is configured",
+                false,
+            );
+            return;
+        };
+        let event = match next {
+            Ok(event) => event,
+            Err(message) => {
+                error(
+                    Some(request_id.to_owned()),
+                    "assistant_provider_failed",
+                    &message,
+                    true,
+                );
+                return;
+            }
+        };
+        match event {
+            AssistantProviderEvent::Delta {
+                text,
+                final_segment,
+            } => NativeEvent::AssistantDelta(AssistantDelta {
+                request_id: request_id.to_owned(),
+                text,
+                final_segment,
+            })
+            .send(),
+            AssistantProviderEvent::Proposal(proposal) => {
+                if proposal.request_id != request_id {
+                    error(
+                        Some(request_id.to_owned()),
+                        "proposal_parent_mismatch",
+                        "action proposal parent does not match the assistant request",
+                        false,
+                    );
+                    continue;
+                }
+                if let Err(failure) = state.proposals.register(&uid, generation, proposal) {
+                    let (code, message) = match failure {
+                        ProposalDecisionError::Capacity => (
+                            "proposal_capacity_exceeded",
+                            "too many action proposals are pending",
+                        ),
+                        ProposalDecisionError::Conflict => (
+                            "proposal_id_conflict",
+                            "proposal_id was reused with a different payload",
+                        ),
+                        _ => (
+                            "proposal_registration_failed",
+                            "action proposal could not be registered",
+                        ),
+                    };
+                    error(Some(request_id.to_owned()), code, message, false);
+                }
+            }
+        }
+    }
+}
+
 async fn execute(
     command: ClientCommand,
     state: Arc<Mutex<RuntimeState>>,
+    assistant_provider: Arc<dyn AssistantProvider>,
     cancellation: CancellationToken,
     configuration_generation: Option<u64>,
 ) -> bool {
@@ -568,15 +1475,13 @@ async fn execute(
             search(&request_id, &state, query, limit, &cancellation).await;
             false
         }
-        Command::SendMessage { .. } => {
-            error(
-                Some(request_id),
-                "assistant_unavailable",
-                "no model provider is configured",
-                true,
-            );
+        Command::SendMessage { text, .. } => {
+            dispatch_assistant(&request_id, &state, assistant_provider, text, &cancellation).await;
             false
         }
+        Command::ConfigureAssistant { .. }
+        | Command::ConfigureTrustedAssistant { .. }
+        | Command::ClearAssistant => false,
         Command::ApprovalDecision { .. } => {
             error(
                 Some(request_id),
@@ -989,7 +1894,10 @@ fn error(request_id: Option<String>, code: &str, message: &str, retryable: bool)
     .send();
 }
 
-#[cfg(feature = "computer-use")]
+#[cfg(all(
+    feature = "computer-use",
+    any(target_os = "macos", target_os = "windows", target_os = "linux")
+))]
 fn computer_use_available() -> bool {
     let permissions = rs_peekaboo::Peekaboo::new().permissions();
     permissions
@@ -1002,7 +1910,10 @@ fn computer_use_available() -> bool {
             .unwrap_or(false)
 }
 
-#[cfg(not(feature = "computer-use"))]
+#[cfg(not(all(
+    feature = "computer-use",
+    any(target_os = "macos", target_os = "windows", target_os = "linux")
+)))]
 fn computer_use_available() -> bool {
     false
 }
@@ -1012,6 +1923,195 @@ mod tests {
     use super::*;
     use crate::signals::AudioEncoding;
     use std::sync::atomic::{AtomicBool, Ordering};
+
+    struct FakeAssistantProvider {
+        events: StdMutex<Option<Vec<AssistantProviderEvent>>>,
+    }
+
+    impl AssistantProvider for FakeAssistantProvider {
+        fn dispatch(
+            &self,
+            _request_id: String,
+            _text: String,
+            _cancellation: CancellationToken,
+        ) -> mpsc::Receiver<Result<AssistantProviderEvent, String>> {
+            let events = self
+                .events
+                .lock()
+                .unwrap_or_else(|failure| failure.into_inner())
+                .take()
+                .unwrap_or_default();
+            let (sender, receiver) = mpsc::channel(COMMAND_QUEUE_CAPACITY);
+            tokio::spawn(async move {
+                for event in events {
+                    if sender.send(Ok(event)).await.is_err() {
+                        return;
+                    }
+                }
+            });
+            receiver
+        }
+    }
+
+    struct ReconfiguringAssistantProvider {
+        state: Arc<Mutex<RuntimeState>>,
+        proposal: StdMutex<Option<ActionProposal>>,
+    }
+
+    impl AssistantProvider for ReconfiguringAssistantProvider {
+        fn dispatch(
+            &self,
+            _request_id: String,
+            _text: String,
+            _cancellation: CancellationToken,
+        ) -> mpsc::Receiver<Result<AssistantProviderEvent, String>> {
+            let state = Arc::clone(&self.state);
+            let proposal = self
+                .proposal
+                .lock()
+                .unwrap_or_else(|failure| failure.into_inner())
+                .take()
+                .unwrap_or_else(|| panic!("fake proposal exists"));
+            let (sender, receiver) = mpsc::channel(1);
+            tokio::spawn(async move {
+                state.lock().await.configuration_generation += 1;
+                let _ = sender
+                    .send(Ok(AssistantProviderEvent::Proposal(proposal)))
+                    .await;
+            });
+            receiver
+        }
+    }
+
+    fn action_proposal(id: &str, parent: &str, expires_at_ms: i64) -> ActionProposal {
+        ActionProposal {
+            proposal_id: id.to_owned(),
+            request_id: parent.to_owned(),
+            title: "Create task".to_owned(),
+            summary: "Add a task".to_owned(),
+            risk: ActionRisk::External,
+            expires_at_ms: Some(expires_at_ms),
+        }
+    }
+
+    #[test]
+    fn production_provider_constructor_accepts_byok_and_authenticated_worker_config() {
+        let byok = HashMap::from([
+            ("OMI_AI_PROVIDER", "xai"),
+            ("OMI_AI_MODEL", "grok-4"),
+            ("OMI_AI_API_KEY", "secret-byok"),
+        ]);
+        assert!(
+            configured_assistant_provider(|name| byok.get(name).map(ToString::to_string))
+                .unwrap_or_else(|failure| panic!("BYOK provider configures: {failure}"))
+                .is_some()
+        );
+
+        let worker = HashMap::from([
+            ("OMI_AI_PROVIDER", "worker"),
+            ("OMI_AI_MODEL", "managed-chat"),
+            ("OMI_AI_AUTH_TOKEN", "firebase-session-token"),
+            ("OMI_AI_ENDPOINT", "https://assistant.example.test/v1"),
+            ("OMI_MANAGED_AI_ORIGINS", "https://assistant.example.test"),
+        ]);
+        assert!(
+            configured_assistant_provider(|name| worker.get(name).map(ToString::to_string))
+                .unwrap_or_else(|failure| panic!("Worker provider configures: {failure}"))
+                .is_some()
+        );
+
+        let insecure = AssistantProviderConfig::from_runtime(
+            ProviderKind::Worker,
+            "managed-chat".to_owned(),
+            Some("http://assistant.example.test/v1".to_owned()),
+            "must-not-appear-in-errors".to_owned(),
+            Some("https://assistant.example.test"),
+        );
+        let failure = insecure
+            .err()
+            .unwrap_or_else(|| panic!("insecure Worker endpoint is rejected"));
+        assert!(!failure.contains("must-not-appear-in-errors"));
+        assert!(failure.contains("HTTPS"));
+    }
+
+    #[test]
+    fn assistant_endpoint_policy_rejects_unsafe_urls_and_separates_managed_origins() {
+        for endpoint in [
+            "https://user:pass@example.com/v1",
+            "https://example.com/v1?target=internal",
+            "https://example.com/v1#fragment",
+            "https://127.0.0.1/v1",
+            "https://[::1]/v1",
+            "https://service.local/v1",
+        ] {
+            assert!(validate_endpoint(endpoint, false, None).is_err());
+        }
+        assert!(validate_endpoint("https://api.example.com/v1", false, None).is_ok());
+        assert!(
+            validate_endpoint(
+                "https://managed.example.com/v1",
+                true,
+                Some("https://other.example.com"),
+            )
+            .is_err()
+        );
+        assert!(
+            validate_endpoint(
+                "https://managed.example.com/v1",
+                true,
+                Some("https://managed.example.com"),
+            )
+            .is_ok()
+        );
+        assert!(!public_ip(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1))));
+        assert!(!public_ip(IpAddr::V4(Ipv4Addr::new(169, 254, 1, 1))));
+        assert!(!public_ip(IpAddr::V6(Ipv6Addr::LOCALHOST)));
+        assert!(public_ip(IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1))));
+        assert_eq!(
+            managed_worker_base("https://managed.example.com").as_deref(),
+            Ok("https://managed.example.com/v1")
+        );
+        assert!(
+            AssistantProviderConfig::from_runtime(
+                ProviderKind::Worker,
+                "managed-chat".to_owned(),
+                Some("https://managed.example.com/v1".to_owned()),
+                "session-token".to_owned(),
+                Some("https://managed.example.com"),
+            )
+            .is_ok()
+        );
+        assert!(
+            AssistantProviderConfig::from_runtime(
+                ProviderKind::Worker,
+                "managed-chat".to_owned(),
+                Some("https://attacker.example.com/v1".to_owned()),
+                "session-token".to_owned(),
+                Some("https://managed.example.com"),
+            )
+            .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn stalled_provider_receive_times_out_and_cancellation_wins() {
+        let (_sender, mut receiver) = mpsc::channel(1);
+        assert!(matches!(
+            receive_provider_event(
+                &mut receiver,
+                &CancellationToken::new(),
+                Duration::from_millis(5),
+            )
+            .await,
+            ProviderReceive::TimedOut
+        ));
+        let cancellation = CancellationToken::new();
+        cancellation.cancel();
+        assert!(matches!(
+            receive_provider_event(&mut receiver, &cancellation, Duration::from_secs(1)).await,
+            ProviderReceive::Cancelled
+        ));
+    }
 
     fn fingerprint(text: &str, occurred_at_ms: i64) -> CaptureFingerprint {
         CaptureFingerprint {
@@ -1268,8 +2368,12 @@ mod tests {
             state: Arc::new(Mutex::new(RuntimeState {
                 memory: Some(Arc::clone(&memory)),
                 configuration_generation: 1,
+                ..RuntimeState::default()
             })),
             active: Arc::clone(&active),
+            assistant_provider: Arc::new(StdMutex::new(Arc::new(UnavailableAssistantProvider {
+                reason: "test provider unavailable".to_owned(),
+            }))),
         };
         let running = tokio::spawn(dispatcher.run());
         let capture = |request_id: &str, text: &str, occurred_at_ms| ClientCommand {
@@ -1490,6 +2594,7 @@ mod tests {
         let state = RuntimeState {
             memory: None,
             configuration_generation: 2,
+            ..RuntimeState::default()
         };
         assert!(!configuration_is_current(&state, 1));
         assert!(configuration_is_current(&state, 2));
@@ -1664,5 +2769,234 @@ mod tests {
         assert_eq!(session.next_sequence, u64::MAX);
         assert_eq!(session.accepted_bytes, 7);
         assert_eq!(session.last_seen, previous_seen);
+    }
+
+    #[test]
+    fn proposal_decisions_are_authority_scoped_expiring_and_one_shot() {
+        let mut registry = ProposalRegistry::default();
+        registry
+            .register(
+                "user-a",
+                4,
+                ActionProposal {
+                    proposal_id: "proposal-1".to_owned(),
+                    request_id: "chat-g4-1".to_owned(),
+                    title: "Create task".to_owned(),
+                    summary: "Add a task".to_owned(),
+                    risk: ActionRisk::External,
+                    expires_at_ms: Some(i64::MAX),
+                },
+            )
+            .unwrap_or_else(|failure| panic!("proposal registers: {failure:?}"));
+        assert_eq!(
+            registry.decide(
+                "proposal-1",
+                "user-b",
+                4,
+                ApprovalDecision::ApproveOnce,
+                100,
+            ),
+            Err(ProposalDecisionError::WrongAuthority)
+        );
+        let decided = registry
+            .decide(
+                "proposal-1",
+                "user-a",
+                4,
+                ApprovalDecision::ApproveOnce,
+                100,
+            )
+            .unwrap_or_else(|failure| panic!("proposal is approved: {failure:?}"));
+        assert_eq!(decided.status, ProposalStatus::Approved);
+        assert_eq!(decided.fingerprint.parent_request_id, "chat-g4-1");
+        assert_eq!(decided.fingerprint.risk, ActionRisk::External);
+        assert_eq!(
+            registry.register(
+                "user-a",
+                4,
+                action_proposal("proposal-1", "chat-g4-1", i64::MAX)
+            ),
+            Ok(ProposalRegistration::ExactReplay)
+        );
+        let mut conflicting = action_proposal("proposal-1", "chat-g4-1", i64::MAX);
+        conflicting.summary = "Changed payload".to_owned();
+        assert_eq!(
+            registry.register("user-a", 4, conflicting),
+            Err(ProposalDecisionError::Conflict)
+        );
+        assert_eq!(
+            registry.decide("proposal-1", "user-a", 4, ApprovalDecision::Reject, 100,),
+            Err(ProposalDecisionError::AlreadyDecided)
+        );
+
+        registry
+            .register(
+                "user-a",
+                4,
+                ActionProposal {
+                    proposal_id: "proposal-2".to_owned(),
+                    request_id: "chat-g4-2".to_owned(),
+                    title: "Expired".to_owned(),
+                    summary: "Expired proposal".to_owned(),
+                    risk: ActionRisk::Reversible,
+                    expires_at_ms: Some(unix_time_ms() + 100),
+                },
+            )
+            .unwrap_or_else(|failure| panic!("proposal registers: {failure:?}"));
+        assert_eq!(
+            registry.decide(
+                "proposal-2",
+                "user-a",
+                4,
+                ApprovalDecision::ApproveOnce,
+                i64::MAX,
+            ),
+            Err(ProposalDecisionError::Expired)
+        );
+        assert_eq!(
+            registry.terminal["proposal-2"].status,
+            ProposalStatus::Expired
+        );
+        registry.invalidate_generation("user-a", 4);
+        assert!(registry.pending.is_empty());
+        assert!(!registry.terminal.is_empty());
+    }
+
+    #[test]
+    fn proposal_pending_and_terminal_ledgers_are_bounded() {
+        let mut registry = ProposalRegistry::default();
+        for index in 0..PENDING_PROPOSAL_CAPACITY {
+            registry
+                .register(
+                    "user-a",
+                    1,
+                    action_proposal(&format!("pending-{index}"), "chat-1", i64::MAX),
+                )
+                .unwrap_or_else(|failure| panic!("pending proposal registers: {failure:?}"));
+        }
+        assert_eq!(
+            registry.register(
+                "user-a",
+                1,
+                action_proposal("pending-overflow", "chat-1", i64::MAX),
+            ),
+            Err(ProposalDecisionError::Capacity)
+        );
+        for index in 0..PENDING_PROPOSAL_CAPACITY {
+            registry
+                .decide(
+                    &format!("pending-{index}"),
+                    "user-a",
+                    1,
+                    ApprovalDecision::Reject,
+                    0,
+                )
+                .unwrap_or_else(|failure| panic!("pending proposal rejects: {failure:?}"));
+        }
+        for index in 0..=TERMINAL_PROPOSAL_CAPACITY {
+            let id = format!("terminal-{index}");
+            registry
+                .register("user-a", 1, action_proposal(&id, "chat-2", i64::MAX))
+                .unwrap_or_else(|failure| panic!("terminal proposal registers: {failure:?}"));
+            registry
+                .decide(&id, "user-a", 1, ApprovalDecision::Reject, 0)
+                .unwrap_or_else(|failure| panic!("terminal proposal rejects: {failure:?}"));
+        }
+        assert_eq!(registry.terminal.len(), TERMINAL_PROPOSAL_CAPACITY);
+        assert!(!registry.terminal.contains_key("terminal-0"));
+        assert!(registry.terminal.contains_key("terminal-256"));
+    }
+
+    #[tokio::test]
+    async fn assistant_dispatch_registers_proposals_and_suppresses_cancelled_output() {
+        let state = Arc::new(Mutex::new(RuntimeState {
+            configuration_generation: 7,
+            authority_uid: Some("user-a".to_owned()),
+            ..RuntimeState::default()
+        }));
+        let request_id = "chat-g7-1";
+        let provider: Arc<dyn AssistantProvider> = Arc::new(FakeAssistantProvider {
+            events: StdMutex::new(Some(vec![
+                AssistantProviderEvent::Delta {
+                    text: "ready".to_owned(),
+                    final_segment: false,
+                },
+                AssistantProviderEvent::Proposal(action_proposal(
+                    "proposal-live",
+                    request_id,
+                    i64::MAX,
+                )),
+                AssistantProviderEvent::Delta {
+                    text: "done".to_owned(),
+                    final_segment: true,
+                },
+            ])),
+        });
+        dispatch_assistant(
+            request_id,
+            state.as_ref(),
+            provider,
+            "plan".to_owned(),
+            &CancellationToken::new(),
+        )
+        .await;
+        assert!(
+            state
+                .lock()
+                .await
+                .proposals
+                .pending
+                .contains_key("proposal-live")
+        );
+
+        let cancellation = CancellationToken::new();
+        cancellation.cancel();
+        let cancelled_provider: Arc<dyn AssistantProvider> = Arc::new(FakeAssistantProvider {
+            events: StdMutex::new(Some(vec![AssistantProviderEvent::Proposal(
+                action_proposal("proposal-cancelled", "chat-g7-2", i64::MAX),
+            )])),
+        });
+        dispatch_assistant(
+            "chat-g7-2",
+            state.as_ref(),
+            cancelled_provider,
+            "cancel".to_owned(),
+            &cancellation,
+        )
+        .await;
+        assert!(
+            !state
+                .lock()
+                .await
+                .proposals
+                .pending
+                .contains_key("proposal-cancelled")
+        );
+
+        let reconfiguring_provider: Arc<dyn AssistantProvider> =
+            Arc::new(ReconfiguringAssistantProvider {
+                state: Arc::clone(&state),
+                proposal: StdMutex::new(Some(action_proposal(
+                    "proposal-old-generation",
+                    "chat-g7-3",
+                    i64::MAX,
+                ))),
+            });
+        dispatch_assistant(
+            "chat-g7-3",
+            state.as_ref(),
+            reconfiguring_provider,
+            "reconfigure".to_owned(),
+            &CancellationToken::new(),
+        )
+        .await;
+        assert!(
+            !state
+                .lock()
+                .await
+                .proposals
+                .pending
+                .contains_key("proposal-old-generation")
+        );
     }
 }

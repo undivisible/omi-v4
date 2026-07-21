@@ -1,14 +1,328 @@
 import 'dart:async';
 import 'dart:typed_data';
 
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:omi/app_services.dart';
 import 'package:omi/auth/auth.dart';
 import 'package:omi/device/device.dart';
+import 'package:omi/features/chat_screen.dart';
 import 'package:omi/native/generated/signals/signals.dart';
 import 'package:omi/native/native_hub.dart';
 
 void main() {
+  testWidgets('chat sends, streams progress, cancels, and approves proposals', (
+    tester,
+  ) async {
+    final auth = AuthController(
+      _FakeAuthGateway(_session('user-a')),
+      consentStore: VolatileConsentStore()..receipt = _receipt('user-a'),
+    );
+    await auth.restoreSession();
+    final hub = _FakeHub();
+    final services = AppServices.forTesting(
+      auth: auth,
+      nativeHub: hub,
+      deviceRelay: DeviceRelayService(
+        role: DeviceRelayRole.desktopObserver,
+        adapter: const UnavailableDeviceRelayAdapter(),
+      ),
+      memoryDatabasePath: (uid) => '/tmp/$uid.sqlite3',
+    );
+    await services.initialize();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(body: ChatScreen(services: services)),
+      ),
+    );
+
+    await tester.enterText(find.byKey(const Key('chat_input')), 'Help me plan');
+    await tester.tap(find.byKey(const Key('send_chat')));
+    await tester.pump();
+    final requestId = hub.messages.single.$1;
+    expect(hub.messages.single.$2, 'Help me plan');
+    expect(find.text('Help me plan'), findsOneWidget);
+
+    hub.eventsController.add(
+      const NativeEventActionProposal(
+        value: ActionProposal(
+          proposalId: 'unowned',
+          requestId: 'other-request',
+          title: 'Unowned',
+          summary: 'Must not appear',
+          risk: ActionRisk.reversible,
+        ),
+      ),
+    );
+    hub.eventsController.add(
+      NativeEventActionProposal(
+        value: ActionProposal(
+          proposalId: 'expired',
+          requestId: requestId,
+          title: 'Expired',
+          summary: 'Must not appear',
+          risk: ActionRisk.reversible,
+          expiresAtMs: DateTime.now().millisecondsSinceEpoch - 1,
+        ),
+      ),
+    );
+    await tester.pump();
+    expect(find.text('Unowned'), findsNothing);
+    expect(find.text('Expired'), findsNothing);
+
+    hub.eventsController.add(
+      NativeEventAssistantDelta(
+        value: AssistantDelta(
+          requestId: requestId,
+          text: 'I can ',
+          finalSegment: false,
+        ),
+      ),
+    );
+    hub.eventsController.add(
+      NativeEventAssistantDelta(
+        value: AssistantDelta(
+          requestId: requestId,
+          text: 'help.',
+          finalSegment: false,
+        ),
+      ),
+    );
+    await tester.pump();
+    expect(find.text('I can help.'), findsOneWidget);
+
+    hub.eventsController.add(
+      NativeEventToolProgress(
+        value: ToolProgress(
+          requestId: requestId,
+          tool: 'planner',
+          status: ToolStatus.running,
+          detail: 'Reading tasks',
+        ),
+      ),
+    );
+    await tester.pump();
+    expect(find.text('planner · running · Reading tasks'), findsOneWidget);
+
+    hub.eventsController.add(
+      NativeEventActionProposal(
+        value: ActionProposal(
+          proposalId: 'proposal-1',
+          requestId: requestId,
+          title: 'Create task',
+          summary: 'Add the task to your list.',
+          risk: ActionRisk.reversible,
+        ),
+      ),
+    );
+    await tester.pump();
+    final approve = find.byKey(const ValueKey('approve_proposal-1'));
+    await tester.ensureVisible(approve);
+    await tester.tap(approve);
+    expect(hub.approvals.single.$1, 'proposal-1');
+    expect(hub.approvals.single.$2, ApprovalDecision.approveOnce);
+    hub.eventsController.add(
+      NativeEventActionProposal(
+        value: ActionProposal(
+          proposalId: 'proposal-cancelled',
+          requestId: requestId,
+          title: 'Must disappear',
+          summary: 'This belongs to cancelled work.',
+          risk: ActionRisk.reversible,
+          expiresAtMs: DateTime.now().millisecondsSinceEpoch + 60000,
+        ),
+      ),
+    );
+    await tester.pump();
+    expect(find.text('Must disappear'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('cancel_chat')));
+    expect(hub.cancelled, contains(requestId));
+    await tester.pump();
+    expect(find.text('Must disappear'), findsNothing);
+
+    services.dispose();
+    await tester.pump();
+    await hub.close();
+  });
+
+  testWidgets('preview chat never subscribes or dispatches actions', (
+    tester,
+  ) async {
+    final auth = AuthController(
+      _FakeAuthGateway(_session('user-a')),
+      consentStore: VolatileConsentStore()..receipt = _receipt('user-a'),
+    );
+    await auth.restoreSession();
+    final hub = _FakeHub();
+    final services = AppServices.forTesting(
+      auth: auth,
+      nativeHub: hub,
+      deviceRelay: DeviceRelayService(
+        role: DeviceRelayRole.desktopObserver,
+        adapter: const UnavailableDeviceRelayAdapter(),
+      ),
+      memoryDatabasePath: (uid) => '/tmp/$uid.sqlite3',
+    );
+    await services.initialize();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(body: ChatScreen(services: services, previewMode: true)),
+      ),
+    );
+    hub.eventsController.add(
+      const NativeEventError(
+        value: NativeError(
+          code: 'test_error',
+          message: 'must remain hidden',
+          retryable: false,
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.text('must remain hidden'), findsNothing);
+    expect(
+      tester.widget<TextField>(find.byKey(const Key('chat_input'))).enabled,
+      isFalse,
+    );
+    expect(hub.messages, isEmpty);
+
+    services.dispose();
+    await tester.pump();
+    await hub.close();
+  });
+
+  test('authority fences chat and tombstones late terminal events', () async {
+    final gateway = _FakeAuthGateway(_session('user-a'));
+    final auth = AuthController(
+      gateway,
+      consentStore: VolatileConsentStore()..receipt = _receipt('user-a'),
+    );
+    await auth.restoreSession();
+    final hub = _FakeHub();
+    final services = AppServices.forTesting(
+      auth: auth,
+      nativeHub: hub,
+      deviceRelay: DeviceRelayService(
+        role: DeviceRelayRole.desktopObserver,
+        adapter: const UnavailableDeviceRelayAdapter(),
+      ),
+      memoryDatabasePath: (uid) => '/tmp/$uid.sqlite3',
+    );
+    await services.initialize();
+    final received = <NativeEvent>[];
+    final subscription = services.nativeEvents.listen(received.add);
+    services.configureAssistant(
+      provider: AssistantProvider.worker,
+      model: 'managed-chat',
+      endpoint: 'https://assistant.example.test/v1',
+      credential: 'runtime-session-token',
+    );
+    expect(hub.assistantConfigurations.single.$1, AssistantProvider.worker);
+    expect(hub.assistantConfigurations.single.$2, 'managed-chat');
+    final requestId = services.sendChatMessage(text: 'private request');
+
+    gateway.emit(_session('user-b'));
+    await _waitFor(() => auth.snapshot.session?.uid == 'user-b');
+    hub.eventsController.add(
+      NativeEventAssistantDelta(
+        value: AssistantDelta(
+          requestId: requestId,
+          text: 'late data',
+          finalSegment: true,
+        ),
+      ),
+    );
+    await Future<void>.delayed(Duration.zero);
+    expect(hub.cancelled, contains(requestId));
+    expect(hub.assistantClears, hasLength(1));
+    expect(received.whereType<NativeEventAssistantDelta>(), isEmpty);
+
+    await subscription.cancel();
+    services.dispose();
+    await hub.close();
+  });
+
+  test(
+    'managed assistant refreshes its Firebase token and clears on revoke',
+    () async {
+      final now = DateTime.now();
+      final gateway = _FakeAuthGateway(_session('user-a'))
+        ..refreshResults.addAll([
+          AuthSession(
+            uid: 'user-a',
+            idToken: 'fresh-token-1',
+            expiresAt: now.add(const Duration(milliseconds: 40)),
+          ),
+          AuthSession(
+            uid: 'user-a',
+            idToken: 'fresh-token-2',
+            expiresAt: now.add(const Duration(hours: 1)),
+          ),
+        ]);
+      final auth = AuthController(
+        gateway,
+        consentStore: VolatileConsentStore()..receipt = _receipt('user-a'),
+      );
+      await auth.restoreSession();
+      final hub = _FakeHub();
+      final services = AppServices.forTesting(
+        auth: auth,
+        nativeHub: hub,
+        deviceRelay: DeviceRelayService(
+          role: DeviceRelayRole.desktopObserver,
+          adapter: const UnavailableDeviceRelayAdapter(),
+        ),
+        memoryDatabasePath: (uid) => '/tmp/$uid.sqlite3',
+        workerOrigin: Uri.parse('https://worker.example.test'),
+        assistantRefreshLead: const Duration(milliseconds: 30),
+        assistantMinimumRefreshDelay: const Duration(milliseconds: 5),
+      );
+
+      await services.initialize();
+      expect(hub.assistantConfigurations.single, (
+        AssistantProvider.worker,
+        'mimo-v2.5-pro',
+        'https://worker.example.test/v1',
+        'fresh-token-1',
+      ));
+      expect(hub.trustedAssistantOrigins, ['https://worker.example.test/']);
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      expect(hub.assistantConfigurations, hasLength(2));
+      expect(hub.assistantConfigurations.last.$4, 'fresh-token-2');
+
+      final revocation = auth.revokeProcessingConsent();
+      expect(hub.assistantClears, hasLength(1));
+      await revocation;
+      services.dispose();
+      await hub.close();
+    },
+  );
+
+  test('managed assistant rejects a non-origin Worker URL', () async {
+    final auth = AuthController(
+      _FakeAuthGateway(_session('user-a')),
+      consentStore: VolatileConsentStore()..receipt = _receipt('user-a'),
+    );
+    final hub = _FakeHub();
+
+    expect(
+      () => AppServices.forTesting(
+        auth: auth,
+        nativeHub: hub,
+        deviceRelay: DeviceRelayService(
+          role: DeviceRelayRole.desktopObserver,
+          adapter: const UnavailableDeviceRelayAdapter(),
+        ),
+        memoryDatabasePath: (uid) => '/tmp/$uid.sqlite3',
+        workerOrigin: Uri.parse('https://user@worker.example.test/path'),
+      ),
+      throwsArgumentError,
+    );
+    auth.dispose();
+    await hub.close();
+  });
+
   test('production initialization scopes memory and forwards events', () async {
     final session = _session('user-a');
     final gateway = _FakeAuthGateway(session);
@@ -458,6 +772,7 @@ final class _FakeAuthGateway implements AuthGateway {
   final _changes = StreamController<AuthSession?>.broadcast();
   Completer<void>? signOutBarrier;
   bool didSignOut = false;
+  final refreshResults = <AuthSession>[];
 
   void emit(AuthSession? session) {
     _session = session;
@@ -486,7 +801,10 @@ final class _FakeAuthGateway implements AuthGateway {
   Future<AuthSession?> restoreSession() async => _session;
 
   @override
-  Future<AuthSession?> refreshSession() async => _session;
+  Future<AuthSession?> refreshSession() async {
+    if (refreshResults.isNotEmpty) _session = refreshResults.removeAt(0);
+    return _session;
+  }
 
   @override
   Future<void> signOut() async {
@@ -522,6 +840,12 @@ final class _FakeHub implements NativeHub {
   final personIds = <String>[];
   final captures = <_Capture>[];
   final cancelled = <String>[];
+  final messages = <(String, String)>[];
+  final approvals = <(String, ApprovalDecision)>[];
+  final assistantConfigurations =
+      <(AssistantProvider, String, String?, String)>[];
+  final trustedAssistantOrigins = <String>[];
+  final assistantClears = <String>[];
   bool failCancel = false;
 
   @override
@@ -582,6 +906,48 @@ final class _FakeHub implements NativeHub {
     required String query,
     int limit = 12,
   }) {}
+
+  @override
+  void sendMessage({
+    required String requestId,
+    required String text,
+    String? conversationId,
+  }) {
+    messages.add((requestId, text));
+  }
+
+  @override
+  void decideApproval({
+    required String requestId,
+    required String proposalId,
+    required ApprovalDecision decision,
+  }) {
+    approvals.add((proposalId, decision));
+  }
+
+  @override
+  void configureAssistant({
+    required String requestId,
+    required AssistantProvider provider,
+    required String model,
+    required String credential,
+    String? endpoint,
+  }) {
+    assistantConfigurations.add((provider, model, endpoint, credential));
+  }
+
+  @override
+  void configureTrustedAssistant({
+    required String requestId,
+    required String managedWorkerOrigin,
+  }) {
+    trustedAssistantOrigins.add(managedWorkerOrigin);
+  }
+
+  @override
+  void clearAssistant(String requestId) {
+    assistantClears.add(requestId);
+  }
 
   @override
   void sendAudio({

@@ -5,14 +5,20 @@ import 'package:flutter/services.dart';
 
 import '../app_services.dart';
 import '../auth/auth.dart';
+import '../capabilities/desktop_capabilities.dart';
 import '../onboarding/onboarding_controller.dart';
 import '../ui/omi_ui.dart';
 import 'omi_shell.dart';
 
 class OnboardingScreen extends StatefulWidget {
-  const OnboardingScreen({required this.services, super.key});
+  const OnboardingScreen({
+    required this.services,
+    this.capabilities,
+    super.key,
+  });
 
   final AppServices services;
+  final DesktopCapabilityGateway? capabilities;
 
   @override
   State<OnboardingScreen> createState() => _OnboardingScreenState();
@@ -117,12 +123,21 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                           validationMessage: onboarding.validationMessage,
                           onContinue: _submitAnswer,
                         ),
-                        OnboardingStage.permissions => _ProductionGate(
+                        OnboardingStage.permissions => ProductionGate(
                           key: const ValueKey('permissions'),
                           configurationMessage:
                               widget.services.configurationMessage,
                           auth: widget.services.auth,
+                          capabilities:
+                              widget.capabilities ??
+                              widget.services.capabilities,
                           onOpenPreview: _openPreview,
+                          onFinish: () => Navigator.of(context).pushReplacement(
+                            MaterialPageRoute<void>(
+                              builder: (_) =>
+                                  OmiShell(services: widget.services),
+                            ),
+                          ),
                         ),
                       },
                     ),
@@ -314,17 +329,119 @@ class _ProfileQuestion extends StatelessWidget {
   );
 }
 
-class _ProductionGate extends StatelessWidget {
-  const _ProductionGate({
+class ProductionGate extends StatefulWidget {
+  const ProductionGate({
     required this.configurationMessage,
     required this.auth,
+    required this.capabilities,
     required this.onOpenPreview,
+    required this.onFinish,
     super.key,
   });
 
   final String configurationMessage;
   final AuthController auth;
+  final DesktopCapabilityGateway capabilities;
   final VoidCallback onOpenPreview;
+  final VoidCallback onFinish;
+
+  @override
+  State<ProductionGate> createState() => _ProductionGateState();
+}
+
+class _ProductionGateState extends State<ProductionGate> {
+  Map<CoreCapability, CapabilityStatus> statuses = {
+    for (final capability in CoreCapability.values)
+      capability: const CapabilityStatus(
+        state: CapabilityState.checking,
+        detail: 'Checking capability…',
+      ),
+  };
+  bool refreshing = false;
+  bool finishing = false;
+  final requesting = <CoreCapability>{};
+  int checkGeneration = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.auth.addListener(_refreshView);
+    unawaited(_check());
+  }
+
+  @override
+  void dispose() {
+    widget.auth.removeListener(_refreshView);
+    super.dispose();
+  }
+
+  void _refreshView() {
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _check() async {
+    final generation = ++checkGeneration;
+    setState(() => refreshing = true);
+    Map<CoreCapability, CapabilityStatus> next;
+    try {
+      next = await widget.capabilities.check();
+    } catch (error) {
+      next = {
+        for (final capability in CoreCapability.values)
+          capability: CapabilityStatus(
+            state: CapabilityState.error,
+            detail: 'Could not check this capability: $error',
+          ),
+      };
+    }
+    if (!mounted || generation != checkGeneration) return;
+    setState(() {
+      statuses = next;
+      refreshing = false;
+    });
+  }
+
+  Future<void> _request(CoreCapability capability) async {
+    if (!requesting.add(capability)) return;
+    final generation = checkGeneration;
+    if (mounted) setState(() {});
+    try {
+      await widget.capabilities.request(capability);
+      if (!mounted || generation != checkGeneration) return;
+      await _check();
+    } catch (error) {
+      if (!mounted || generation != checkGeneration) return;
+      setState(() {
+        statuses = {
+          ...statuses,
+          capability: CapabilityStatus(
+            state: CapabilityState.error,
+            detail: 'Could not request this capability: $error',
+          ),
+        };
+      });
+    } finally {
+      requesting.remove(capability);
+      if (mounted) setState(() {});
+    }
+  }
+
+  Future<void> _finish() async {
+    if (finishing) return;
+    setState(() => finishing = true);
+    await _check();
+    if (!mounted) return;
+    final canFinish = ready;
+    setState(() => finishing = false);
+    if (canFinish) widget.onFinish();
+  }
+
+  bool get ready =>
+      widget.auth.snapshot.phase == AuthPhase.signedIn &&
+      widget.auth.snapshot.hasProcessingAuthority &&
+      CoreCapability.values.every(
+        (capability) => statuses[capability]?.acceptable == true,
+      );
 
   @override
   Widget build(BuildContext context) => GlassCard(
@@ -334,41 +451,57 @@ class _ProductionGate extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Text(
-            'Production setup is not ready.',
+            ready
+                ? 'Production setup is ready.'
+                : 'Production setup is not ready.',
             style: Theme.of(context).textTheme.displaySmall,
           ),
           const SizedBox(height: 12),
           Text(
-            'Omi will require a real account, recorded data consent, and validated desktop permissions before production onboarding can finish.',
+            'Omi requires a real account, recorded data consent, and each applicable core capability before production onboarding can finish.',
             style: Theme.of(
               context,
             ).textTheme.bodyLarge?.copyWith(color: Colors.white70),
           ),
           const SizedBox(height: 24),
           AuthenticationGate(
-            auth: auth,
-            configurationMessage: configurationMessage,
+            auth: widget.auth,
+            configurationMessage: widget.configurationMessage,
           ),
           const SizedBox(height: 10),
-          ProcessingConsentGate(auth: auth),
+          ProcessingConsentGate(auth: widget.auth),
           const SizedBox(height: 10),
-          const _ReadinessRow(
-            icon: Icons.desktop_windows_outlined,
-            title: 'Core desktop permissions',
-            detail:
-                'Accessibility, microphone, screen recording, and file access have not been checked.',
-            state: 'Not checked',
+          for (final capability in CoreCapability.values) ...[
+            _CapabilityRow(
+              capability: capability,
+              status: statuses[capability]!,
+              onRequest:
+                  statuses[capability]!.state ==
+                          CapabilityState.actionRequired &&
+                      !requesting.contains(capability)
+                  ? () => unawaited(_request(capability))
+                  : null,
+            ),
+            const SizedBox(height: 10),
+          ],
+          OutlinedButton.icon(
+            key: const Key('refresh_core_capabilities'),
+            onPressed: refreshing || finishing ? null : _check,
+            icon: const Icon(Icons.refresh_rounded),
+            label: const Text('Check capabilities again'),
           ),
           const SizedBox(height: 24),
-          const FilledButton(
-            key: Key('finish_production_onboarding'),
-            onPressed: null,
-            child: Text('Finish production setup'),
+          FilledButton(
+            key: const Key('finish_production_onboarding'),
+            onPressed: ready && !finishing ? _finish : null,
+            child: Text(
+              finishing ? 'Checking setup…' : 'Finish production setup',
+            ),
           ),
           const SizedBox(height: 12),
           OutlinedButton.icon(
             key: const Key('open_interface_preview'),
-            onPressed: onOpenPreview,
+            onPressed: widget.onOpenPreview,
             icon: const Icon(Icons.visibility_outlined),
             label: const Text('Open interface preview (demo)'),
           ),
@@ -376,6 +509,51 @@ class _ProductionGate extends StatelessWidget {
       ),
     ),
   );
+}
+
+class _CapabilityRow extends StatelessWidget {
+  const _CapabilityRow({
+    required this.capability,
+    required this.status,
+    required this.onRequest,
+  });
+
+  final CoreCapability capability;
+  final CapabilityStatus status;
+  final VoidCallback? onRequest;
+
+  @override
+  Widget build(BuildContext context) {
+    final (icon, title) = switch (capability) {
+      CoreCapability.accessibility => (
+        Icons.accessibility_new_rounded,
+        'Accessibility',
+      ),
+      CoreCapability.microphone => (Icons.mic_none_rounded, 'Microphone'),
+      CoreCapability.screenCapture => (
+        Icons.desktop_windows_outlined,
+        'Screen capture',
+      ),
+      CoreCapability.appData => (Icons.storage_outlined, 'Private app data'),
+      CoreCapability.workspaceRoot => (Icons.folder_outlined, 'Workspace root'),
+    };
+    final state = switch (status.state) {
+      CapabilityState.checking => 'Checking',
+      CapabilityState.granted => 'Granted',
+      CapabilityState.actionRequired => 'Action required',
+      CapabilityState.notRequired => 'No grant required',
+      CapabilityState.notApplicable => 'Not applicable',
+      CapabilityState.error => 'Check failed',
+    };
+    return _ReadinessRow(
+      icon: icon,
+      title: title,
+      detail: status.detail,
+      state: state,
+      actionLabel: onRequest == null ? null : 'Review $title access',
+      onAction: onRequest,
+    );
+  }
 }
 
 class ProcessingConsentGate extends StatelessWidget {
@@ -711,12 +889,16 @@ class _ReadinessRow extends StatelessWidget {
     required this.title,
     required this.detail,
     required this.state,
+    this.actionLabel,
+    this.onAction,
   });
 
   final IconData icon;
   final String title;
   final String detail;
   final String state;
+  final String? actionLabel;
+  final VoidCallback? onAction;
 
   @override
   Widget build(BuildContext context) => DecoratedBox(
@@ -744,6 +926,13 @@ class _ReadinessRow extends StatelessWidget {
                 ),
                 const SizedBox(height: 6),
                 Text(state, style: const TextStyle(color: Color(0xffffc66d))),
+                if (onAction != null && actionLabel != null) ...[
+                  const SizedBox(height: 10),
+                  OutlinedButton(
+                    onPressed: onAction,
+                    child: Text(actionLabel!),
+                  ),
+                ],
               ],
             ),
           ),

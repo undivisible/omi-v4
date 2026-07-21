@@ -79,7 +79,11 @@ void main() {
     }
 
     expect(find.text('Production setup is not ready.'), findsOneWidget);
-    expect(find.text('Core desktop permissions'), findsOneWidget);
+    expect(find.text('Accessibility'), findsOneWidget);
+    expect(find.text('Microphone'), findsOneWidget);
+    expect(find.text('Screen capture'), findsOneWidget);
+    expect(find.text('Private app data'), findsOneWidget);
+    expect(find.text('Workspace root'), findsOneWidget);
     expect(
       tester
           .widget<FilledButton>(

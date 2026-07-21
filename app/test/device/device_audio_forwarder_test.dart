@@ -305,6 +305,38 @@ final class _RecordingHub implements NativeHub {
     required String query,
     int limit = 12,
   }) {}
+
+  @override
+  void sendMessage({
+    required String requestId,
+    required String text,
+    String? conversationId,
+  }) {}
+
+  @override
+  void decideApproval({
+    required String requestId,
+    required String proposalId,
+    required ApprovalDecision decision,
+  }) {}
+
+  @override
+  void configureAssistant({
+    required String requestId,
+    required AssistantProvider provider,
+    required String model,
+    required String credential,
+    String? endpoint,
+  }) {}
+
+  @override
+  void clearAssistant(String requestId) {}
+
+  @override
+  void configureTrustedAssistant({
+    required String requestId,
+    required String managedWorkerOrigin,
+  }) {}
 }
 
 final class _AudioAdapter implements DeviceRelayAdapter {

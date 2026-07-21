@@ -188,7 +188,7 @@ class _Screen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return switch (index) {
-      0 => const ChatScreen(),
+      0 => ChatScreen(services: services, previewMode: previewMode),
       1 => MemoryScreen(services: services, previewMode: previewMode),
       2 => const CurrentsScreen(),
       3 => DevicesScreen(services: services, previewMode: previewMode),

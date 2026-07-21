@@ -14,14 +14,20 @@ abstract class Command {
       case 1:
         return CommandSendMessage.load(deserializer);
       case 2:
-        return CommandCaptureEvent.load(deserializer);
+        return CommandConfigureAssistant.load(deserializer);
       case 3:
-        return CommandSearchMemory.load(deserializer);
+        return CommandConfigureTrustedAssistant.load(deserializer);
       case 4:
-        return CommandApprovalDecision.load(deserializer);
+        return CommandClearAssistant.load(deserializer);
       case 5:
-        return CommandDeviceState.load(deserializer);
+        return CommandCaptureEvent.load(deserializer);
       case 6:
+        return CommandSearchMemory.load(deserializer);
+      case 7:
+        return CommandApprovalDecision.load(deserializer);
+      case 8:
+        return CommandDeviceState.load(deserializer);
+      case 9:
         return CommandCancel.load(deserializer);
       default:
         throw Exception(
@@ -190,6 +196,192 @@ class CommandSendMessage extends Command {
 }
 
 @immutable
+class CommandConfigureAssistant extends Command {
+  const CommandConfigureAssistant({
+    required this.provider,
+    required this.model,
+    this.endpoint,
+    required this.credential,
+  }) : super();
+
+  static CommandConfigureAssistant load(BinaryDeserializer deserializer) {
+    deserializer.increaseContainerDepth();
+    final instance = CommandConfigureAssistant(
+      provider: AssistantProviderExtension.deserialize(deserializer),
+      model: deserializer.deserializeString(),
+      endpoint: TraitHelpers.deserializeOptionStr(deserializer),
+      credential: deserializer.deserializeString(),
+    );
+    deserializer.decreaseContainerDepth();
+    return instance;
+  }
+
+  final AssistantProvider provider;
+  final String model;
+  final String? endpoint;
+  final String credential;
+
+  CommandConfigureAssistant copyWith({
+    AssistantProvider? provider,
+    String? model,
+    String? Function()? endpoint,
+    String? credential,
+  }) {
+    return CommandConfigureAssistant(
+      provider: provider ?? this.provider,
+      model: model ?? this.model,
+      endpoint: endpoint == null ? this.endpoint : endpoint(),
+      credential: credential ?? this.credential,
+    );
+  }
+
+  void serialize(BinarySerializer serializer) {
+    serializer.increaseContainerDepth();
+    serializer.serializeVariantIndex(2);
+    provider.serialize(serializer);
+    serializer.serializeString(model);
+    TraitHelpers.serializeOptionStr(endpoint, serializer);
+    serializer.serializeString(credential);
+    serializer.decreaseContainerDepth();
+  }
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    if (other.runtimeType != runtimeType) return false;
+
+    return other is CommandConfigureAssistant &&
+        provider == other.provider &&
+        model == other.model &&
+        endpoint == other.endpoint &&
+        credential == other.credential;
+  }
+
+  @override
+  int get hashCode => Object.hash(provider, model, endpoint, credential);
+
+  @override
+  String toString() {
+    String? fullString;
+
+    assert(() {
+      fullString =
+          '$runtimeType('
+          'provider: $provider, '
+          'model: $model, '
+          'endpoint: $endpoint, '
+          'credential: [REDACTED]'
+          ')';
+      return true;
+    }());
+
+    return fullString ?? 'CommandConfigureAssistant';
+  }
+}
+
+@immutable
+class CommandConfigureTrustedAssistant extends Command {
+  const CommandConfigureTrustedAssistant({required this.managedWorkerOrigin})
+    : super();
+
+  static CommandConfigureTrustedAssistant load(
+    BinaryDeserializer deserializer,
+  ) {
+    deserializer.increaseContainerDepth();
+    final instance = CommandConfigureTrustedAssistant(
+      managedWorkerOrigin: deserializer.deserializeString(),
+    );
+    deserializer.decreaseContainerDepth();
+    return instance;
+  }
+
+  final String managedWorkerOrigin;
+
+  CommandConfigureTrustedAssistant copyWith({String? managedWorkerOrigin}) {
+    return CommandConfigureTrustedAssistant(
+      managedWorkerOrigin: managedWorkerOrigin ?? this.managedWorkerOrigin,
+    );
+  }
+
+  void serialize(BinarySerializer serializer) {
+    serializer.increaseContainerDepth();
+    serializer.serializeVariantIndex(3);
+    serializer.serializeString(managedWorkerOrigin);
+    serializer.decreaseContainerDepth();
+  }
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    if (other.runtimeType != runtimeType) return false;
+
+    return other is CommandConfigureTrustedAssistant &&
+        managedWorkerOrigin == other.managedWorkerOrigin;
+  }
+
+  @override
+  int get hashCode => managedWorkerOrigin.hashCode;
+
+  @override
+  String toString() {
+    String? fullString;
+
+    assert(() {
+      fullString =
+          '$runtimeType('
+          'managedWorkerOrigin: $managedWorkerOrigin'
+          ')';
+      return true;
+    }());
+
+    return fullString ?? 'CommandConfigureTrustedAssistant';
+  }
+}
+
+@immutable
+class CommandClearAssistant extends Command {
+  const CommandClearAssistant() : super();
+
+  static CommandClearAssistant load(BinaryDeserializer deserializer) {
+    deserializer.increaseContainerDepth();
+    final instance = CommandClearAssistant();
+    deserializer.decreaseContainerDepth();
+    return instance;
+  }
+
+  void serialize(BinarySerializer serializer) {
+    serializer.increaseContainerDepth();
+    serializer.serializeVariantIndex(4);
+    serializer.decreaseContainerDepth();
+  }
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    if (other.runtimeType != runtimeType) return false;
+
+    return other is CommandClearAssistant;
+  }
+
+  @override
+  int get hashCode => runtimeType.hashCode;
+
+  @override
+  String toString() {
+    String? fullString;
+
+    assert(() {
+      fullString =
+          '$runtimeType('
+          ')';
+      return true;
+    }());
+
+    return fullString ?? 'CommandClearAssistant';
+  }
+}
+
+@immutable
 class CommandCaptureEvent extends Command {
   const CommandCaptureEvent({
     required this.ingestionKey,
@@ -241,7 +433,7 @@ class CommandCaptureEvent extends Command {
 
   void serialize(BinarySerializer serializer) {
     serializer.increaseContainerDepth();
-    serializer.serializeVariantIndex(2);
+    serializer.serializeVariantIndex(5);
     serializer.serializeString(ingestionKey);
     source.serialize(serializer);
     serializer.serializeInt64(occurredAtMs);
@@ -323,7 +515,7 @@ class CommandSearchMemory extends Command {
 
   void serialize(BinarySerializer serializer) {
     serializer.increaseContainerDepth();
-    serializer.serializeVariantIndex(3);
+    serializer.serializeVariantIndex(6);
     serializer.serializeString(query);
     serializer.serializeUint32(limit);
     serializer.decreaseContainerDepth();
@@ -391,7 +583,7 @@ class CommandApprovalDecision extends Command {
 
   void serialize(BinarySerializer serializer) {
     serializer.increaseContainerDepth();
-    serializer.serializeVariantIndex(4);
+    serializer.serializeVariantIndex(7);
     serializer.serializeString(proposalId);
     decision.serialize(serializer);
     serializer.decreaseContainerDepth();
@@ -473,7 +665,7 @@ class CommandDeviceState extends Command {
 
   void serialize(BinarySerializer serializer) {
     serializer.increaseContainerDepth();
-    serializer.serializeVariantIndex(5);
+    serializer.serializeVariantIndex(8);
     serializer.serializeString(deviceId);
     serializer.serializeBool(connected);
     TraitHelpers.serializeOptionU8(batteryPercent, serializer);
@@ -529,7 +721,7 @@ class CommandCancel extends Command {
 
   void serialize(BinarySerializer serializer) {
     serializer.increaseContainerDepth();
-    serializer.serializeVariantIndex(6);
+    serializer.serializeVariantIndex(9);
     serializer.decreaseContainerDepth();
   }
 

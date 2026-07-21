@@ -1,10 +1,15 @@
 import 'dart:async';
+import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:omi/auth/auth.dart';
+import 'package:omi/capabilities/desktop_capabilities.dart';
 import 'package:omi/features/desktop_auth_screen.dart';
 import 'package:omi/features/onboarding_screen.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
   final session = AuthSession(
@@ -149,7 +154,467 @@ void main() {
     gateway.refreshBarrier!.complete();
     await tester.pumpAndSettle();
   });
+
+  testWidgets('production completion requires every applicable capability', (
+    tester,
+  ) async {
+    final gateway = _Gateway(session, currentSession: session);
+    final auth = AuthController(
+      gateway,
+      consentStore: VolatileConsentStore()..receipt = _receipt('firebase-uid'),
+    );
+    await auth.restoreSession();
+    var finished = false;
+    final capabilities = _Capabilities({
+      for (final capability in CoreCapability.values)
+        capability: const CapabilityStatus(
+          state: CapabilityState.granted,
+          detail: 'Verified',
+        ),
+      CoreCapability.screenCapture: const CapabilityStatus(
+        state: CapabilityState.actionRequired,
+        detail: 'Screen Recording is not granted.',
+      ),
+    });
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SingleChildScrollView(
+            child: ProductionGate(
+              configurationMessage: 'configured',
+              auth: auth,
+              capabilities: capabilities,
+              onOpenPreview: () {},
+              onFinish: () => finished = true,
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      tester
+          .widget<FilledButton>(
+            find.byKey(const Key('finish_production_onboarding')),
+          )
+          .onPressed,
+      isNull,
+    );
+    await tester.ensureVisible(find.text('Review Screen capture access'));
+    await tester.tap(find.text('Review Screen capture access'));
+    await tester.pumpAndSettle();
+    expect(capabilities.requested, [CoreCapability.screenCapture]);
+    expect(
+      tester
+          .widget<FilledButton>(
+            find.byKey(const Key('finish_production_onboarding')),
+          )
+          .onPressed,
+      isNotNull,
+    );
+    await tester.ensureVisible(
+      find.byKey(const Key('finish_production_onboarding')),
+    );
+    await tester.tap(find.byKey(const Key('finish_production_onboarding')));
+    await tester.pumpAndSettle();
+    expect(finished, isTrue);
+  });
+
+  testWidgets('finish rechecks capabilities and blocks a stale ready state', (
+    tester,
+  ) async {
+    final gateway = _Gateway(session, currentSession: session);
+    final auth = AuthController(
+      gateway,
+      consentStore: VolatileConsentStore()..receipt = _receipt('firebase-uid'),
+    );
+    await auth.restoreSession();
+    var finished = false;
+    final capabilities = _Capabilities({
+      for (final capability in CoreCapability.values)
+        capability: const CapabilityStatus(
+          state: CapabilityState.granted,
+          detail: 'Verified',
+        ),
+    });
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SingleChildScrollView(
+            child: ProductionGate(
+              configurationMessage: 'configured',
+              auth: auth,
+              capabilities: capabilities,
+              onOpenPreview: () {},
+              onFinish: () => finished = true,
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    capabilities.statuses[CoreCapability.microphone] = const CapabilityStatus(
+      state: CapabilityState.actionRequired,
+      detail: 'Revoked',
+    );
+
+    await tester.ensureVisible(
+      find.byKey(const Key('finish_production_onboarding')),
+    );
+    await tester.tap(find.byKey(const Key('finish_production_onboarding')));
+    await tester.pumpAndSettle();
+
+    expect(finished, isFalse);
+    expect(find.text('Revoked'), findsOneWidget);
+  });
+
+  testWidgets('duplicate capability requests are ignored while in flight', (
+    tester,
+  ) async {
+    final gateway = _Gateway(session, currentSession: session);
+    final auth = AuthController(
+      gateway,
+      consentStore: VolatileConsentStore()..receipt = _receipt('firebase-uid'),
+    );
+    await auth.restoreSession();
+    final capabilities = _Capabilities({
+      for (final capability in CoreCapability.values)
+        capability: const CapabilityStatus(
+          state: CapabilityState.granted,
+          detail: 'Verified',
+        ),
+      CoreCapability.workspaceRoot: const CapabilityStatus(
+        state: CapabilityState.actionRequired,
+        detail: 'Choose a folder',
+      ),
+    })..requestBarrier = Completer<void>();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SingleChildScrollView(
+            child: ProductionGate(
+              configurationMessage: 'configured',
+              auth: auth,
+              capabilities: capabilities,
+              onOpenPreview: () {},
+              onFinish: () {},
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final button = tester.widget<OutlinedButton>(
+      find.widgetWithText(OutlinedButton, 'Review Workspace root access'),
+    );
+
+    button.onPressed!();
+    button.onPressed!();
+    await tester.pump();
+
+    expect(capabilities.requested, [CoreCapability.workspaceRoot]);
+    capabilities.requestBarrier!.complete();
+    await tester.pumpAndSettle();
+  });
+
+  testWidgets('disposed pending request does not start another check', (
+    tester,
+  ) async {
+    final gateway = _Gateway(session, currentSession: session);
+    final auth = AuthController(
+      gateway,
+      consentStore: VolatileConsentStore()..receipt = _receipt('firebase-uid'),
+    );
+    await auth.restoreSession();
+    final capabilities = _Capabilities({
+      for (final capability in CoreCapability.values)
+        capability: const CapabilityStatus(
+          state: CapabilityState.granted,
+          detail: 'Verified',
+        ),
+      CoreCapability.workspaceRoot: const CapabilityStatus(
+        state: CapabilityState.actionRequired,
+        detail: 'Choose a folder',
+      ),
+    })..requestBarrier = Completer<void>();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SingleChildScrollView(
+            child: ProductionGate(
+              configurationMessage: 'configured',
+              auth: auth,
+              capabilities: capabilities,
+              onOpenPreview: () {},
+              onFinish: () {},
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final button = tester.widget<OutlinedButton>(
+      find.widgetWithText(OutlinedButton, 'Review Workspace root access'),
+    );
+    button.onPressed!();
+    await tester.pump();
+    expect(capabilities.checkCalls, 1);
+
+    await tester.pumpWidget(const SizedBox());
+    capabilities.requestBarrier!.complete();
+    await tester.pumpAndSettle();
+
+    expect(capabilities.checkCalls, 1);
+  });
+
+  testWidgets('stale request error cannot replace a newer capability check', (
+    tester,
+  ) async {
+    final gateway = _Gateway(session, currentSession: session);
+    final auth = AuthController(
+      gateway,
+      consentStore: VolatileConsentStore()..receipt = _receipt('firebase-uid'),
+    );
+    await auth.restoreSession();
+    final capabilities =
+        _Capabilities({
+            for (final capability in CoreCapability.values)
+              capability: const CapabilityStatus(
+                state: CapabilityState.granted,
+                detail: 'Verified',
+              ),
+            CoreCapability.workspaceRoot: const CapabilityStatus(
+              state: CapabilityState.actionRequired,
+              detail: 'Choose a folder',
+            ),
+          })
+          ..requestBarrier = Completer<void>()
+          ..requestError = StateError('stale failure');
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SingleChildScrollView(
+            child: ProductionGate(
+              configurationMessage: 'configured',
+              auth: auth,
+              capabilities: capabilities,
+              onOpenPreview: () {},
+              onFinish: () {},
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    tester
+        .widget<OutlinedButton>(
+          find.widgetWithText(OutlinedButton, 'Review Workspace root access'),
+        )
+        .onPressed!();
+    await tester.pump();
+    capabilities.statuses[CoreCapability.workspaceRoot] =
+        const CapabilityStatus(
+          state: CapabilityState.granted,
+          detail: 'Newer verified result',
+        );
+    await tester.ensureVisible(
+      find.byKey(const Key('refresh_core_capabilities')),
+    );
+    await tester.tap(find.byKey(const Key('refresh_core_capabilities')));
+    await tester.pumpAndSettle();
+
+    capabilities.requestBarrier!.complete();
+    await tester.pumpAndSettle();
+
+    expect(find.text('Newer verified result'), findsOneWidget);
+    expect(find.textContaining('stale failure'), findsNothing);
+  });
+
+  test('mobile marks desktop capabilities not applicable', () async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    final statuses = await PlatformDesktopCapabilityGateway().check();
+    expect(statuses.values, hasLength(CoreCapability.values.length));
+    expect(
+      statuses.values.every(
+        (status) =>
+            status.state == CapabilityState.notApplicable && status.acceptable,
+      ),
+      isTrue,
+    );
+  });
+
+  test(
+    'mobile workspace verification and request do not touch storage',
+    () async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+      addTearDown(() => debugDefaultTargetPlatformOverride = null);
+      final store = _TrackingWorkspaceStore();
+      var pickerCalls = 0;
+      final gateway = PlatformDesktopCapabilityGateway(
+        workspaceRoots: store,
+        directoryPicker: () async {
+          pickerCalls += 1;
+          return '/unsupported';
+        },
+      );
+
+      expect(await gateway.verifiedWorkspaceRoot(), isNull);
+      await gateway.request(CoreCapability.workspaceRoot);
+
+      expect(store.readCalls, 0);
+      expect(store.writeCalls, 0);
+      expect(pickerCalls, 0);
+    },
+  );
+
+  test('Windows requires only the probed microphone and workspace', () async {
+    SharedPreferences.setMockInitialValues({});
+    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    const channel = MethodChannel('omi/core_capabilities');
+    final calls = <MethodCall>[];
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+          calls.add(call);
+          return call.method == 'check' ? {'microphone': true} : null;
+        });
+    addTearDown(
+      () => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, null),
+    );
+    final statuses = await PlatformDesktopCapabilityGateway().check();
+    expect(statuses[CoreCapability.accessibility]?.acceptable, isTrue);
+    expect(statuses[CoreCapability.microphone]?.acceptable, isTrue);
+    expect(statuses[CoreCapability.screenCapture]?.acceptable, isTrue);
+    expect(statuses[CoreCapability.workspaceRoot]?.acceptable, isFalse);
+    expect(
+      statuses[CoreCapability.appData]?.state,
+      anyOf(CapabilityState.granted, CapabilityState.error),
+    );
+    await PlatformDesktopCapabilityGateway().request(CoreCapability.microphone);
+    expect(calls.map((call) => call.method), ['check', 'request']);
+  });
+
+  test('workspace selection persists canonically across recreation', () async {
+    SharedPreferences.setMockInitialValues({});
+    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    final directory = await Directory.systemTemp.createTemp('omi-workspace-');
+    addTearDown(() => directory.delete(recursive: true));
+    final store = PreferencesWorkspaceRootStore();
+    final first = PlatformDesktopCapabilityGateway(
+      workspaceRoots: store,
+      directoryPicker: () async => directory.path,
+    );
+
+    await first.request(CoreCapability.workspaceRoot);
+    final statuses = await PlatformDesktopCapabilityGateway(
+      workspaceRoots: store,
+    ).check();
+
+    expect(
+      statuses[CoreCapability.workspaceRoot]?.state,
+      CapabilityState.granted,
+    );
+    expect(await store.read(), await directory.resolveSymbolicLinks());
+  });
+
+  test(
+    'verified workspace returns the probed canonical path without rereading',
+    () async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+      addTearDown(() => debugDefaultTargetPlatformOverride = null);
+      final directory = await Directory.systemTemp.createTemp('omi-workspace-');
+      addTearDown(() => directory.delete(recursive: true));
+      final canonical = await directory.resolveSymbolicLinks();
+      final store = _TrackingWorkspaceStore(
+        value: canonical,
+        changeAfterRead: true,
+      );
+
+      final result = await PlatformDesktopCapabilityGateway(
+        workspaceRoots: store,
+      ).verifiedWorkspaceRoot();
+
+      expect(result, canonical);
+      expect(store.readCalls, 1);
+    },
+  );
+
+  test('concurrent workspace requests share one picker operation', () async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    final directory = await Directory.systemTemp.createTemp('omi-workspace-');
+    addTearDown(() => directory.delete(recursive: true));
+    final barrier = Completer<void>();
+    var pickerCalls = 0;
+    final gateway = PlatformDesktopCapabilityGateway(
+      workspaceRoots: VolatileWorkspaceRootStore(),
+      directoryPicker: () async {
+        pickerCalls += 1;
+        await barrier.future;
+        return directory.path;
+      },
+    );
+
+    final first = gateway.request(CoreCapability.workspaceRoot);
+    final second = gateway.request(CoreCapability.workspaceRoot);
+    barrier.complete();
+    await Future.wait([first, second]);
+
+    expect(pickerCalls, 1);
+  });
+
+  test(
+    'missing persisted workspace is cleared and requires selection',
+    () async {
+      SharedPreferences.setMockInitialValues({});
+      debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+      addTearDown(() => debugDefaultTargetPlatformOverride = null);
+      final directory = await Directory.systemTemp.createTemp('omi-workspace-');
+      final store = PreferencesWorkspaceRootStore();
+      await store.write(await directory.resolveSymbolicLinks());
+      await directory.delete(recursive: true);
+
+      final statuses = await PlatformDesktopCapabilityGateway(
+        workspaceRoots: store,
+      ).check();
+
+      expect(
+        statuses[CoreCapability.workspaceRoot]?.state,
+        CapabilityState.actionRequired,
+      );
+      expect(await store.read(), isNull);
+    },
+  );
+
+  test('workspace clear failure does not mask verification failure', () async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    final store = _TrackingWorkspaceStore(
+      value: '/definitely/missing/omi-workspace',
+      failClear: true,
+    );
+    final gateway = PlatformDesktopCapabilityGateway(workspaceRoots: store);
+
+    final statuses = await gateway.check();
+
+    expect(
+      statuses[CoreCapability.workspaceRoot]?.state,
+      CapabilityState.actionRequired,
+    );
+    expect(await gateway.verifiedWorkspaceRoot(), isNull);
+    expect(store.clearCalls, 2);
+  });
 }
+
+ProcessingConsentReceipt _receipt(String uid) =>
+    ProcessingConsentReceipt.current(
+      subjectUid: uid,
+      acceptedAt: DateTime.utc(2026, 7, 21),
+    );
 
 Widget _controls(AuthController auth) => MaterialApp(
   theme: ThemeData.dark(),
@@ -230,5 +695,68 @@ final class _Gateway implements AuthGateway {
   Future<void> signOut() async {
     didSignOut = true;
     currentSession = null;
+  }
+}
+
+final class _Capabilities implements DesktopCapabilityGateway {
+  _Capabilities(this.statuses);
+
+  final Map<CoreCapability, CapabilityStatus> statuses;
+  final requested = <CoreCapability>[];
+  Completer<void>? requestBarrier;
+  Object? requestError;
+  int checkCalls = 0;
+
+  @override
+  Future<Map<CoreCapability, CapabilityStatus>> check() async {
+    checkCalls += 1;
+    return statuses;
+  }
+
+  @override
+  Future<void> request(CoreCapability capability) async {
+    requested.add(capability);
+    await requestBarrier?.future;
+    if (requestError case final error?) throw error;
+    statuses[capability] = const CapabilityStatus(
+      state: CapabilityState.granted,
+      detail: 'Verified',
+    );
+  }
+}
+
+final class _TrackingWorkspaceStore implements WorkspaceRootStore {
+  _TrackingWorkspaceStore({
+    this.value,
+    this.changeAfterRead = false,
+    this.failClear = false,
+  });
+
+  String? value;
+  final bool changeAfterRead;
+  final bool failClear;
+  int readCalls = 0;
+  int writeCalls = 0;
+  int clearCalls = 0;
+
+  @override
+  Future<String?> read() async {
+    readCalls += 1;
+    final result = value;
+    if (changeAfterRead) value = null;
+    return result;
+  }
+
+  @override
+  Future<void> write(String path) async {
+    writeCalls += 1;
+    value = path;
+  }
+
+  @override
+  Future<void> clear() async {
+    clearCalls += 1;
+    if (failClear) throw StateError('clear failed');
+    value = null;
   }
 }

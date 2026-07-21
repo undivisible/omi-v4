@@ -4,13 +4,13 @@ use tokio::sync::mpsc;
 
 pub const MAX_AUDIO_CHUNK_BYTES: usize = 256 * 1024;
 
-#[derive(Debug, Deserialize, DartSignal)]
+#[derive(Deserialize, DartSignal)]
 pub struct ClientCommand {
     pub request_id: String,
     pub command: Command,
 }
 
-#[derive(Debug, Deserialize, SignalPiece)]
+#[derive(Deserialize, SignalPiece)]
 pub enum Command {
     ConfigureMemory {
         database_path: String,
@@ -21,6 +21,16 @@ pub enum Command {
         text: String,
         conversation_id: Option<String>,
     },
+    ConfigureAssistant {
+        provider: AssistantProvider,
+        model: String,
+        endpoint: Option<String>,
+        credential: String,
+    },
+    ConfigureTrustedAssistant {
+        managed_worker_origin: String,
+    },
+    ClearAssistant,
     CaptureEvent {
         ingestion_key: String,
         source: CaptureSource,
@@ -46,6 +56,16 @@ pub enum Command {
     Cancel,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, SignalPiece)]
+pub enum AssistantProvider {
+    OpenAi,
+    Anthropic,
+    Gemini,
+    Xai,
+    Compatible,
+    Worker,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, SignalPiece)]
 pub enum CaptureSource {
     Screen,
@@ -55,7 +75,7 @@ pub enum CaptureSource {
     Chat,
 }
 
-#[derive(Debug, Deserialize, SignalPiece)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, SignalPiece)]
 pub enum ApprovalDecision {
     ApproveOnce,
     Reject,
@@ -118,7 +138,7 @@ pub struct CurrentUpdate {
     pub updated_at_ms: i64,
 }
 
-#[derive(Debug, Serialize, SignalPiece)]
+#[derive(Clone, Debug, Serialize, SignalPiece)]
 pub struct ActionProposal {
     pub proposal_id: String,
     pub request_id: String,
@@ -128,7 +148,7 @@ pub struct ActionProposal {
     pub expires_at_ms: Option<i64>,
 }
 
-#[derive(Debug, Serialize, SignalPiece)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, SignalPiece)]
 pub enum ActionRisk {
     Reversible,
     External,
