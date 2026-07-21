@@ -13,6 +13,7 @@ Omi v4 is an ultrasimple thinking partner and second brain that works across eve
 | --- | --- |
 | Application | Flutter for iOS, Android, macOS, Windows, and web; no desktop WebView |
 | Rust bridge | Rinf typed asynchronous signals; binary signals for bounded audio frames |
+| Live STT | Rust owns bounded transcription sessions; Deepgram is the managed/BYOK live route, local STT is the credential-free fallback, and MiMo remains batch-only |
 | Rust runtime | One `hub` crate using `rx4`, `rs_ai`, and platform-gated `rs_peekaboo` |
 | Device ownership | Mobile owns BLE, background hardware relay, firmware, pairing, and device management; desktop owns primary assistant interaction and computer use |
 | Cloud | Bun/TypeScript Hono Worker, D1, R2, Queues, Workflows, Durable Objects where state coordination requires them |
@@ -53,7 +54,9 @@ The reusable memory engine lives in the public [`tschk/zkr`](https://github.com/
 - [x] Verify the Bun/Hono Worker contracts, D1 schema, auth boundary, and channel webhook boundaries.
 - [x] Complete production Dart consumption of generated Rinf signals and published `zkr` memory storage/search.
 - [x] Implement Worker D1 persistence, Stripe entitlement, Telegram linking/ingestion, and Blooio linking/ingestion with fail-closed signatures.
-- [ ] Route the implemented mobile Omi BLE discovery/connection/audio stream through bounded Rinf events into sourced memory; bounded PCM8/PCM16/Opus forwarding and idempotent completed-transcript capture are implemented, while live STT and physical-device proof remain.
+- [ ] Connect the durable Telegram/Blooio inbox and app/web chat to one Firebase-UID-scoped conversation transport; channel storage and delivery exist, but live desktop-session routing, replay cursors, and multi-client conflict handling do not.
+- [ ] Implement the first evidence-backed Current end to end: candidate generation, ranking, feedback, approved action handoff, and outcome learning. The domain model and empty-state screen exist; persistence and orchestration do not.
+- [ ] Complete the audited live-STT slice between the implemented bounded Omi BLE/Rinf stream and idempotent final-transcript memory capture; Rust session ownership, provider routing, reconnect semantics, and physical-device proof remain.
 - [ ] Prove Android, iOS without signing, macOS, Windows, and web release builds in CI; workflows exist, but no green combined multi-platform run has been recorded for this tree.
 - [ ] Wire Firebase Auth, real channel delivery, physical Omi hardware, desktop permissions/computer use, and model routes against real credentials and devices.
 
@@ -75,10 +78,10 @@ Rust owns assistant sessions, provider routing, memory extraction contracts, pro
 
 | Direction | Signals |
 | --- | --- |
-| Dart to Rust | send message, capture event, bounded audio chunk, approval decision, device state, stop/cancel |
-| Rust to Dart | transcript delta, assistant delta, Current update, action proposal, tool progress, error, runtime status |
+| Dart to Rust | send message, capture event, start transcription metadata/config, bounded audio chunk, approval decision, device state, stop/cancel |
+| Rust to Dart | sourced transcript delta, assistant delta, Current update, action proposal, tool progress, error, runtime status |
 
-Native builds link the full hub. Web builds use the same signal schema but compile a wasm-safe hub subset and route inference, memory, and actions to the Worker. `rx4` and `rs_peekaboo` remain disabled on web when their dependency graph is not wasm-safe.
+Native builds link the full hub. Web builds use the same signal schema but compile a wasm-safe hub subset and route inference, memory, and actions to the Worker. `rs_peekaboo` compiles only for macOS, Windows, and Linux desktop targets; iOS, Android, and web never link or initialize it.
 
 ## Onboarding
 
@@ -163,6 +166,17 @@ The nightly cycle creates one editable, idempotent Daily Review per Person, loca
 
 Do not rewrite the proven BLE and microphone bridges through Rinf during v0. Rinf carries their state and bounded audio events into Rust only where Rust processing is useful.
 
+### Minimal live-STT architecture
+
+Flutter sends `StartTranscription` before the first binary audio chunk with the stable audio stream ID, device/source ID, negotiated format, requested BCP-47 language or `multi`, and the selected `managed`, `byok`, or `local` route. Rust owns the bounded session, decoding, provider connection, final drain, cancellation, and transcript emission; Flutter continues to own BLE and platform capture lifecycle.
+
+- Managed sessions use an authenticated, entitled Worker session or proxy. Managed provider credentials never ship to the client.
+- Managed chat uses the OpenAI-compatible streaming contract at `/v1/chat/completions`. `rs_ai` emits `stream_options.include_usage: true`; the Worker applies its bounded default when `max_tokens` is absent and rejects requests above its output-token ceiling.
+- BYOK credentials are loaded from platform secure storage, passed once to the native session, and never placed in preferences, URLs, logs, events, or durable storage. Local STT receives no credential.
+- Deepgram Nova-3 is the first live multilingual route. `multi` means provider auto-detection; unsupported explicit languages fail with a typed error and may fall back only to a route that declares support. Local Whisper/Apple is fallback where its language and device capability are proven. MiMo ASR remains recorded/batch-only.
+- Provider connections use keepalive, bounded jittered retries, and cancellation on EOS, consent revocation, or authority change. During reconnect, retain at most two seconds of newly arriving encoded audio and apply backpressure at capacity. Never replay already-sent unacknowledged audio; increment the STT epoch and emit an explicit source gap if bounded audio is lost.
+- A transcript segment keeps the audio stream ID, deterministic segment ID, immutable logical segment sequence across reconnects, STT epoch, device/source ID, provider, language, audio-derived start/end time, text, and final flag. Revisions reuse the segment identity; only final segments enter `zkr`, keyed by Firebase UID, stream, and logical segment sequence.
+
 ## Desktop both-Shift gesture
 
 The gesture is the chord of both physical Shift keys, not one Shift key.
@@ -242,6 +256,8 @@ Use a same-model subagent only when the task needs independent deep reasoning or
 - MiMo `mimo-v2.5`, `mimo-v2.5-pro`, and compatible `mimo-v2.5-asr` routes.
 - Hosted scheduled work and higher channel/action limits.
 - Stripe webhook entitlement is checked on every managed route.
+- Managed `mimo-v2.5-pro` planning uses Xiaomi's official overseas pay-as-you-go price published at https://platform.xiaomimimo.com/docs/en-US/price/pay-as-you-go and verified 2026-07-21: USD $0.435 per million uncached input tokens and $0.87 per million output tokens. Worker micro-USD price variables remain configurable and fail closed when missing, non-integral, or non-positive.
+- Admission estimates use cache-miss input pricing, the requested output ceiling, UTF-8 content and role bytes, plus fixed per-request and per-message framing reserves. Actual provider usage atomically settles the rolling reservation, including overruns; missing usage retains the conservative reserve and stale requests are reconciled after crashes.
 
 ### Routing
 
@@ -268,9 +284,11 @@ Keep `grok-composer-2.5-fast` only when the authenticated xAI catalog returns it
 | Slice | Implemented | Proof still required |
 | --- | --- | --- |
 | Product shell | Gradient Flutter navigation, onboarding, chat, Memory, Currents, Devices, Setup, and Account | Rendered accessibility/responsive audit on every target |
-| Native hub | Generated Rinf signals, UID-scoped production Dart configuration/event consumption, bounded/reaped command registry, ordered configuration, nonblocking/idempotent `zkr` capture/search, cancellation, bounded audio sessions, `rx4`, and `rs_peekaboo` | Native lifecycle stress and a green CI run of the implemented Rinf generation-drift gate |
-| Mobile relay | Omi-filtered BLE discovery, connect/discover, battery/codec reads, bounded sequenced PCM8/PCM16/Opus forwarding, disconnect/EOS, restart handling, and completed-transcript capture into evidenced `zkr` memory | Live STT, physical iOS/Android sessions, and background recovery |
+| Native hub | Generated Rinf signals, UID-scoped production Dart configuration/event consumption, bounded/reaped command registry, ordered configuration, nonblocking/idempotent `zkr` capture/search, cancellation, bounded audio acceptance, `rx4`, and `rs_peekaboo` | Implement audited STT session ownership, decoding/provider routes, reconnect/gap handling, sourced deltas, native lifecycle stress, and a green Rinf drift run |
+| Mobile relay | Omi-filtered BLE discovery, connect/discover, battery/codec reads, bounded sequenced PCM8/PCM16/Opus forwarding, disconnect/EOS, restart handling, and completed-transcript capture into evidenced `zkr` memory | Credentialed live Deepgram plus local fallback, physical iOS/Android sessions, and background recovery |
 | SaaS backend | Firebase-token boundary, D1 memory/settings, Stripe entitlements, Telegram, Blooio, cited retrieval, and durable outbound delivery with per-account/channel serialization | Real Firebase/Stripe/channel credentials and preview deployment |
+| Shared conversation | App/native assistant streaming and durable channel inbox/outbox are implemented independently | UID-scoped conversation persistence, desktop/app/web synchronization, channel-to-agent dispatch, replay cursors, and offline recovery |
+| Currents and reflection | Validated Current state model, native signal shape, memory evidence/review primitives, and empty-state UI | Candidate generation/ranking, D1 persistence, feedback/action lifecycle, outcome learning, and idempotent nightly Daily Review orchestration |
 | Platform packages | Web release, Android release APK, universal macOS 12 release app, and a prior green Android/iOS/macOS/Windows/web CI run | Repeat the combined CI run for the current authentication and relay tree |
 
 Do not count a compiled adapter as a deployed integration. Credentialed provider tests, physical-device tests, release packages, CI, and public deployment remain separate proof layers.
@@ -287,7 +305,7 @@ Do not count a compiled adapter as a deployed integration. Credentialed provider
 ### Test day 2 — memory, hardware, and actions
 
 1. Exercise Omi BLE/audio and phone microphone on physical iOS and Android devices.
-2. Verify WAL recovery, live Deepgram, local STT, MiMo batch ASR, and transcript normalization separately.
+2. Verify managed and BYOK Deepgram, local fallback, reconnect gaps, deterministic sourced transcript identity, WAL recovery, MiMo batch ASR, and transcript normalization separately.
 3. Test memory evidence, correction, source deletion, sync, export, and account deletion.
 4. Test both-Shift timing, secure-input suppression, computer-use approval, cancellation, and audit records.
 
@@ -301,7 +319,7 @@ Do not count a compiled adapter as a deployed integration. Credentialed provider
 ## v0 acceptance
 
 1. The same account links mobile, desktop, web, Telegram, and Blooio to one Firebase UID and assistant session.
-2. A physical Omi device streams through the mobile app into a sourced conversation and evidenced memory.
+2. A physical Omi device streams through the mobile app into a sourced conversation and evidenced memory with deterministic segment IDs and inspectable device/time ranges.
 3. Currents surfaces one recommendation with reason, source, feedback, and an approved action path.
 4. Telegram and Blooio messages resolve to the desktop chat and can request an audited computer-use action.
 5. Free/BYOK and Omi AI users receive the correct models without exposing managed secrets.
@@ -316,10 +334,12 @@ Do not count a compiled adapter as a deployed integration. Credentialed provider
 - Rinf 8.10's bundled Cargokit uses an API removed by Gradle 9; Android stays on the latest Flutter-supported Gradle 8 line until Rinf publishes a compatible release.
 - Flutter 3.44.6 macOS universal-framework verification currently conflicts with the newer `lipo -verify_arch` argument form; keep any local toolchain shim out of the repository and verify CI on a supported Xcode image.
 - OpenClaw and Hermes evolve independently. Their adapters need host-contract tests and durable ingestion; the neutral `zkr` crate must not absorb agent-specific lifecycle behavior.
+- Telegram and Blooio currently provide authenticated linking, durable ingestion, and bounded delivery, but they are not yet portals into the live desktop assistant session; no cross-client conversation synchronization or replay cursor exists.
+- Currents currently has a validated state model and presentation shell only. No production candidate generator, persistence route, feedback learner, action handoff, or scheduled nightly reflection is wired.
 
 ## Immediate next task
 
-Prove the combined multi-platform CI artifacts for the audited authentication, processing-consent, desktop handoff, Flutter/Rinf/BLE, transcript-memory, outbound-delivery, and accessibility slices. Then exercise Firebase plus preview Cloudflare bindings with real test credentials and physical Omi hardware before calling the product deployed.
+Implement the audited `StartTranscription` contract and Rust live-STT session with fake-provider proofs for multilingual routing, credential isolation, bounded reconnect/gaps, final drain, revocation, and deterministic segment identity. Next, wire one UID-scoped conversation through app/web, Telegram/Blooio, and the desktop agent, then ship one evidence-backed Current through feedback and approved action. After those v0 paths exist, run combined multi-platform CI and separately prove managed/BYOK Deepgram, local fallback, Firebase/Cloudflare bindings, and a physical Omi on iOS and Android before calling the product deployed. Keep nightly Daily Review orchestration as the first v1 follow-on unless it is required for the launch demo.
 
 ## Progress log
 
