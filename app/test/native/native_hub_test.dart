@@ -13,6 +13,7 @@ void main() {
         personId: 'person',
       ),
       const CommandCaptureEvent(
+        ingestionKey: 'stable-capture',
         source: CaptureSource.screen,
         occurredAtMs: 42,
         text: 'remember this',

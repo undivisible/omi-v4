@@ -70,6 +70,221 @@ void main() {
     await hub.close();
   });
 
+  test('in-flight transcripts enforce immutable UID-scoped payloads', () async {
+    final gateway = _FakeAuthGateway(_session('user-a'));
+    final auth = AuthController(
+      gateway,
+      consentStore: VolatileConsentStore()..receipt = _receipt('user-a'),
+    );
+    await auth.restoreSession();
+    final hub = _FakeHub();
+    final services = AppServices.forTesting(
+      auth: auth,
+      nativeHub: hub,
+      deviceRelay: DeviceRelayService(
+        role: DeviceRelayRole.desktopObserver,
+        adapter: const UnavailableDeviceRelayAdapter(),
+      ),
+      memoryDatabasePath: (uid) => '/tmp/$uid.sqlite3',
+    );
+    await services.initialize();
+    final errors = <Object>[];
+    final errorSubscription = services.nativeEvents.listen(
+      (_) {},
+      onError: errors.add,
+    );
+
+    final partial = NativeEventTranscriptDelta(
+      value: TranscriptDelta(
+        requestId: 'audio-1',
+        segmentSequence: Uint64.fromBigInt(BigInt.zero),
+        occurredAtMs: 1000,
+        text: 'unfinished',
+        finalSegment: false,
+      ),
+    );
+    final completed = NativeEventTranscriptDelta(
+      value: TranscriptDelta(
+        requestId: 'audio-1',
+        segmentSequence: Uint64.fromBigInt(BigInt.one),
+        occurredAtMs: 2000,
+        text: ' Remember this ',
+        finalSegment: true,
+        language: 'en',
+      ),
+    );
+    hub.eventsController
+      ..add(partial)
+      ..add(completed)
+      ..add(completed);
+    await _waitFor(() => hub.captures.length == 1);
+    hub.eventsController.add(
+      completed.copyWith(
+        value: completed.value.copyWith(text: 'changed evidence'),
+      ),
+    );
+    await _waitFor(() => errors.isNotEmpty);
+
+    expect(hub.captures.map((capture) => capture.text), ['Remember this']);
+    expect(hub.captures.map((capture) => capture.source), [
+      CaptureSource.omiDevice,
+    ]);
+    expect(hub.captures.single.occurredAtMs, 2000);
+    expect(errors.single, isA<TranscriptCaptureConflict>());
+
+    hub.eventsController.add(
+      NativeEventMemoryCaptured(
+        value: MemoryCaptured(
+          requestId: hub.captures.single.requestId,
+          sourceId: 'source-1',
+          evidenceId: 'evidence-1',
+        ),
+      ),
+    );
+    hub.eventsController.add(completed);
+    await Future<void>.delayed(Duration.zero);
+    expect(hub.captures, hasLength(1));
+    hub.eventsController.add(
+      completed.copyWith(value: completed.value.copyWith(occurredAtMs: 2001)),
+    );
+    await _waitFor(() => errors.length == 2);
+    expect(errors.last, isA<TranscriptCaptureConflict>());
+
+    gateway.emit(_session('user-b'));
+    await _waitFor(() => hub.disposeCalls == 1);
+    hub.eventsController.add(completed);
+    await Future<void>.delayed(Duration.zero);
+    expect(hub.captures, hasLength(1));
+    services.dispose();
+    await errorSubscription.cancel();
+    await hub.close();
+  });
+
+  test('completed transcript ledger evicts its oldest fingerprint', () async {
+    final gateway = _FakeAuthGateway(_session('user-a'));
+    final auth = AuthController(
+      gateway,
+      consentStore: VolatileConsentStore()..receipt = _receipt('user-a'),
+    );
+    await auth.restoreSession();
+    final hub = _FakeHub();
+    final services = AppServices.forTesting(
+      auth: auth,
+      nativeHub: hub,
+      deviceRelay: DeviceRelayService(
+        role: DeviceRelayRole.desktopObserver,
+        adapter: const UnavailableDeviceRelayAdapter(),
+      ),
+      memoryDatabasePath: (uid) => '/tmp/$uid.sqlite3',
+    );
+    await services.initialize();
+
+    NativeEventTranscriptDelta event(int sequence) =>
+        NativeEventTranscriptDelta(
+          value: TranscriptDelta(
+            requestId: 'stream',
+            segmentSequence: Uint64.fromBigInt(BigInt.from(sequence)),
+            occurredAtMs: sequence,
+            text: 'segment $sequence',
+            finalSegment: true,
+          ),
+        );
+    for (var sequence = 0; sequence <= 256; sequence += 1) {
+      hub.eventsController.add(event(sequence));
+      await _waitFor(() => hub.captures.length == sequence + 1);
+      final capture = hub.captures.last;
+      hub.eventsController.add(
+        NativeEventMemoryCaptured(
+          value: MemoryCaptured(
+            requestId: capture.requestId,
+            sourceId: 'source-$sequence',
+            evidenceId: 'evidence-$sequence',
+          ),
+        ),
+      );
+    }
+    await Future<void>.delayed(Duration.zero);
+    hub.eventsController.add(event(0));
+    await _waitFor(() => hub.captures.length == 258);
+
+    services.dispose();
+    await hub.close();
+  });
+
+  test('late revoked completion cannot acknowledge same-UID regrant', () async {
+    final session = _session('user-a');
+    final gateway = _FakeAuthGateway(session);
+    final auth = AuthController(
+      gateway,
+      consentStore: VolatileConsentStore()..receipt = _receipt('user-a'),
+    );
+    await auth.restoreSession();
+    final hub = _FakeHub();
+    final services = AppServices.forTesting(
+      auth: auth,
+      nativeHub: hub,
+      deviceRelay: DeviceRelayService(
+        role: DeviceRelayRole.desktopObserver,
+        adapter: const UnavailableDeviceRelayAdapter(),
+      ),
+      memoryDatabasePath: (uid) => '/tmp/$uid.sqlite3',
+    );
+    await services.initialize();
+    final transcript = NativeEventTranscriptDelta(
+      value: TranscriptDelta(
+        requestId: 'same-stream',
+        segmentSequence: Uint64.fromBigInt(BigInt.one),
+        occurredAtMs: 4000,
+        text: 'same evidence',
+        finalSegment: true,
+      ),
+    );
+
+    hub.eventsController.add(transcript);
+    await _waitFor(() => hub.captures.length == 1);
+    final oldCapture = hub.captures.single;
+    await auth.revokeProcessingConsent();
+    await _waitFor(() => hub.disposeCalls == 1);
+
+    gateway.emit(session);
+    await _waitFor(() => auth.snapshot.phase == AuthPhase.signedIn);
+    await auth.grantProcessingConsent();
+    await _waitFor(() => hub.initializeCalls == 2);
+    hub.eventsController.add(transcript);
+    await _waitFor(() => hub.captures.length == 2);
+    final newCapture = hub.captures.last;
+    expect(newCapture.ingestionKey, oldCapture.ingestionKey);
+    expect(newCapture.requestId, isNot(oldCapture.requestId));
+
+    hub.eventsController.add(
+      NativeEventMemoryCaptured(
+        value: MemoryCaptured(
+          requestId: oldCapture.requestId,
+          sourceId: 'old-source',
+          evidenceId: 'old-evidence',
+        ),
+      ),
+    );
+    hub.eventsController.add(transcript);
+    await Future<void>.delayed(Duration.zero);
+    expect(hub.captures, hasLength(2));
+    hub.eventsController.add(
+      NativeEventMemoryCaptured(
+        value: MemoryCaptured(
+          requestId: newCapture.requestId,
+          sourceId: 'new-source',
+          evidenceId: 'new-evidence',
+        ),
+      ),
+    );
+    hub.eventsController.add(transcript);
+    await Future<void>.delayed(Duration.zero);
+    expect(hub.captures, hasLength(2));
+
+    services.dispose();
+    await hub.close();
+  });
+
   test(
     'account switch removes authority until the new subject consents',
     () async {
@@ -120,11 +335,25 @@ void main() {
       memoryDatabasePath: (uid) => '/tmp/$uid.sqlite3',
     );
     await services.initialize();
+    hub.eventsController.add(
+      NativeEventTranscriptDelta(
+        value: TranscriptDelta(
+          requestId: 'audio-revoked',
+          segmentSequence: Uint64.fromBigInt(BigInt.zero),
+          occurredAtMs: 3000,
+          text: 'must not outlive consent',
+          finalSegment: true,
+        ),
+      ),
+    );
+    await _waitFor(() => hub.captures.length == 1);
+    hub.failCancel = true;
 
     await auth.revokeProcessingConsent();
     await _waitFor(() => hub.disposeCalls == 1);
 
     expect(adapter.disconnectCalls, greaterThanOrEqualTo(2));
+    expect(hub.cancelled, contains(hub.captures.single.requestId));
     await expectLater(
       services.connectDevice('omi-1'),
       throwsA(isA<StateError>()),
@@ -291,6 +520,9 @@ final class _FakeHub implements NativeHub {
   int disposeCalls = 0;
   final databasePaths = <String>[];
   final personIds = <String>[];
+  final captures = <_Capture>[];
+  final cancelled = <String>[];
+  bool failCancel = false;
 
   @override
   bool get available => true;
@@ -318,17 +550,31 @@ final class _FakeHub implements NativeHub {
   Future<void> close() => eventsController.close();
 
   @override
-  void cancel(String requestId) {}
+  void cancel(String requestId) {
+    cancelled.add(requestId);
+    if (failCancel) throw StateError('cancel failed');
+  }
 
   @override
   void capture({
     required String requestId,
+    required String ingestionKey,
     required CaptureSource source,
     required int occurredAtMs,
     String? text,
     String? application,
     String? windowTitle,
-  }) {}
+  }) {
+    captures.add(
+      _Capture(
+        requestId: requestId,
+        ingestionKey: ingestionKey,
+        source: source,
+        occurredAtMs: occurredAtMs,
+        text: text,
+      ),
+    );
+  }
 
   @override
   void search({
@@ -347,6 +593,22 @@ final class _FakeHub implements NativeHub {
     required bool endOfStream,
     required Uint8List bytes,
   }) {}
+}
+
+final class _Capture {
+  const _Capture({
+    required this.requestId,
+    required this.ingestionKey,
+    required this.source,
+    required this.occurredAtMs,
+    required this.text,
+  });
+
+  final String requestId;
+  final String ingestionKey;
+  final CaptureSource source;
+  final int occurredAtMs;
+  final String? text;
 }
 
 final class _DeviceAdapter implements DeviceRelayAdapter {

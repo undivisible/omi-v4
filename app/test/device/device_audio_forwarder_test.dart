@@ -280,6 +280,7 @@ final class _RecordingHub implements NativeHub {
   @override
   void capture({
     required String requestId,
+    required String ingestionKey,
     required CaptureSource source,
     required int occurredAtMs,
     String? text,

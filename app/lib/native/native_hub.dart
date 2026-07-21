@@ -7,7 +7,14 @@ import 'package:rinf/rinf.dart';
 import 'generated/signals/signals.dart';
 
 export 'generated/signals/signals.dart'
-    show AudioEncoding, CaptureSource, NativeEvent;
+    show
+        AudioEncoding,
+        CaptureSource,
+        NativeEvent,
+        NativeEventError,
+        NativeEventMemoryCaptured,
+        NativeEventTranscriptDelta,
+        TranscriptDelta;
 
 abstract interface class NativeHub {
   bool get available;
@@ -22,6 +29,7 @@ abstract interface class NativeHub {
   });
   void capture({
     required String requestId,
+    required String ingestionKey,
     required CaptureSource source,
     required int occurredAtMs,
     String? text,
@@ -86,6 +94,7 @@ final class UnavailableNativeHub implements NativeHub {
   @override
   void capture({
     required String requestId,
+    required String ingestionKey,
     required CaptureSource source,
     required int occurredAtMs,
     String? text,
@@ -160,6 +169,7 @@ final class RinfNativeHub implements NativeHub {
   @override
   void capture({
     required String requestId,
+    required String ingestionKey,
     required CaptureSource source,
     required int occurredAtMs,
     String? text,
@@ -168,6 +178,7 @@ final class RinfNativeHub implements NativeHub {
   }) => _send(
     requestId,
     CommandCaptureEvent(
+      ingestionKey: ingestionKey,
       source: source,
       occurredAtMs: occurredAtMs,
       text: text,

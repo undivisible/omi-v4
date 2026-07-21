@@ -14,6 +14,25 @@ import 'memory/memory.dart';
 import 'native/native_hub.dart';
 import 'settings/settings.dart';
 
+final class TranscriptCaptureConflict implements Exception {
+  const TranscriptCaptureConflict(this.requestId);
+
+  final String requestId;
+}
+
+typedef _TranscriptCaptureFingerprint = ({
+  CaptureSource source,
+  int occurredAtMs,
+  String text,
+});
+
+typedef _PendingTranscriptCapture = ({
+  String requestId,
+  _TranscriptCaptureFingerprint fingerprint,
+});
+
+const _completedTranscriptCapacity = 256;
+
 final class AppServices {
   AppServices._({
     required this.auth,
@@ -123,6 +142,12 @@ final class AppServices {
   final _nativeEvents = StreamController<NativeEvent>.broadcast();
   StreamSubscription<NativeEvent>? _nativeEventSubscription;
   String? _configuredPersonId;
+  final _pendingTranscriptCaptures = <String, _PendingTranscriptCapture>{};
+  final _transcriptIngestionByRequest = <String, String>{};
+  final _completedTranscriptCaptures =
+      <String, _TranscriptCaptureFingerprint>{};
+  int _authorityGeneration = 0;
+  int _transcriptTransportSequence = 0;
   bool _nativeInitialized = false;
   bool _disposed = false;
   Future<void> _lifecycle = Future.value();
@@ -142,7 +167,12 @@ final class AppServices {
         snapshot.hasProcessingAuthority;
   }
 
-  void _authChanged() => unawaited(_queueProductionSync().onError((_, _) {}));
+  void _authChanged() {
+    if (!productionReady || auth.snapshot.session?.uid != _configuredPersonId) {
+      _fenceTranscriptCaptures();
+    }
+    unawaited(_queueProductionSync().onError((_, _) {}));
+  }
 
   Future<void> _queueProductionSync() {
     final operation = _lifecycle
@@ -166,7 +196,7 @@ final class AppServices {
       await nativeHub.initialize();
       if (!nativeHub.available) return;
       _nativeEventSubscription = nativeHub.events.listen(
-        _nativeEvents.add,
+        _handleNativeEvent,
         onError: _nativeEvents.addError,
       );
       _nativeInitialized = true;
@@ -186,6 +216,113 @@ final class AppServices {
     );
   }
 
+  void _handleNativeEvent(NativeEvent event) {
+    _nativeEvents.add(event);
+    if (event case NativeEventMemoryCaptured(:final value)) {
+      final ingestionKey = _transcriptIngestionByRequest.remove(
+        value.requestId,
+      );
+      final pending = ingestionKey == null
+          ? null
+          : _pendingTranscriptCaptures[ingestionKey];
+      if (ingestionKey != null && pending?.requestId == value.requestId) {
+        _pendingTranscriptCaptures.remove(ingestionKey);
+        _completedTranscriptCaptures[ingestionKey] = pending!.fingerprint;
+        if (_completedTranscriptCaptures.length >
+            _completedTranscriptCapacity) {
+          _completedTranscriptCaptures.remove(
+            _completedTranscriptCaptures.keys.first,
+          );
+        }
+      }
+      return;
+    }
+    if (event case NativeEventError(:final value)) {
+      final requestId = value.requestId;
+      if (requestId != null && value.code != 'idempotency_conflict') {
+        final ingestionKey = _transcriptIngestionByRequest.remove(requestId);
+        final pending = ingestionKey == null
+            ? null
+            : _pendingTranscriptCaptures[ingestionKey];
+        if (ingestionKey != null && pending?.requestId == requestId) {
+          _pendingTranscriptCaptures.remove(ingestionKey);
+        }
+      }
+      return;
+    }
+    if (event case NativeEventTranscriptDelta(:final value)) {
+      final uid = auth.snapshot.session?.uid;
+      final text = value.text.trim();
+      if (!value.finalSegment ||
+          text.isEmpty ||
+          !productionReady ||
+          uid == null ||
+          _configuredPersonId != uid) {
+        return;
+      }
+      final generation = _authorityGeneration;
+      final identity = [
+        uid,
+        value.requestId,
+        value.segmentSequence,
+      ].join('\u0000');
+      final ingestionKey =
+          'transcript-${sha256.convert(utf8.encode(identity))}';
+      final fingerprint = (
+        source: CaptureSource.omiDevice,
+        occurredAtMs: value.occurredAtMs,
+        text: text,
+      );
+      final pending = _pendingTranscriptCaptures[ingestionKey];
+      final completed = _completedTranscriptCaptures[ingestionKey];
+      if (pending != null || completed != null) {
+        if ((pending?.fingerprint ?? completed) != fingerprint) {
+          _nativeEvents.addError(TranscriptCaptureConflict(ingestionKey));
+        }
+        return;
+      }
+      final requestId =
+          'transcript-g$_authorityGeneration-a${_transcriptTransportSequence++}-$ingestionKey';
+      _pendingTranscriptCaptures[ingestionKey] = (
+        requestId: requestId,
+        fingerprint: fingerprint,
+      );
+      _transcriptIngestionByRequest[requestId] = ingestionKey;
+      try {
+        if (generation != _authorityGeneration) {
+          _pendingTranscriptCaptures.remove(ingestionKey);
+          _transcriptIngestionByRequest.remove(requestId);
+          return;
+        }
+        nativeHub.capture(
+          requestId: requestId,
+          ingestionKey: ingestionKey,
+          source: CaptureSource.omiDevice,
+          occurredAtMs: value.occurredAtMs,
+          text: text,
+        );
+      } catch (failure, stackTrace) {
+        _pendingTranscriptCaptures.remove(ingestionKey);
+        _transcriptIngestionByRequest.remove(requestId);
+        _nativeEvents.addError(failure, stackTrace);
+      }
+    }
+  }
+
+  void _fenceTranscriptCaptures() {
+    _authorityGeneration += 1;
+    if (_nativeInitialized) {
+      for (final pending in _pendingTranscriptCaptures.values) {
+        try {
+          nativeHub.cancel(pending.requestId);
+        } catch (_) {}
+      }
+    }
+    _pendingTranscriptCaptures.clear();
+    _transcriptIngestionByRequest.clear();
+    _completedTranscriptCaptures.clear();
+  }
+
   Future<void> _stopCapture() async {
     await deviceAudio.stop();
     if (deviceRelay.role == DeviceRelayRole.mobileOwner) {
@@ -196,6 +333,7 @@ final class AppServices {
   }
 
   Future<void> _shutdownNative() async {
+    _fenceTranscriptCaptures();
     _configuredPersonId = null;
     if (!_nativeInitialized) return;
     await _nativeEventSubscription?.cancel();

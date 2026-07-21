@@ -22,6 +22,7 @@ pub enum Command {
         conversation_id: Option<String>,
     },
     CaptureEvent {
+        ingestion_key: String,
         source: CaptureSource,
         occurred_at_ms: i64,
         text: Option<String>,
@@ -45,7 +46,7 @@ pub enum Command {
     Cancel,
 }
 
-#[derive(Debug, Deserialize, SignalPiece)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, SignalPiece)]
 pub enum CaptureSource {
     Screen,
     Clipboard,
@@ -95,6 +96,8 @@ pub enum NativeEvent {
 #[derive(Debug, Serialize, SignalPiece)]
 pub struct TranscriptDelta {
     pub request_id: String,
+    pub segment_sequence: u64,
+    pub occurred_at_ms: i64,
     pub text: String,
     pub final_segment: bool,
     pub language: Option<String>,

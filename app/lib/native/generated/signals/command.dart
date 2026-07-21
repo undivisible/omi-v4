@@ -192,6 +192,7 @@ class CommandSendMessage extends Command {
 @immutable
 class CommandCaptureEvent extends Command {
   const CommandCaptureEvent({
+    required this.ingestionKey,
     required this.source,
     required this.occurredAtMs,
     this.text,
@@ -202,6 +203,7 @@ class CommandCaptureEvent extends Command {
   static CommandCaptureEvent load(BinaryDeserializer deserializer) {
     deserializer.increaseContainerDepth();
     final instance = CommandCaptureEvent(
+      ingestionKey: deserializer.deserializeString(),
       source: CaptureSourceExtension.deserialize(deserializer),
       occurredAtMs: deserializer.deserializeInt64(),
       text: TraitHelpers.deserializeOptionStr(deserializer),
@@ -212,6 +214,7 @@ class CommandCaptureEvent extends Command {
     return instance;
   }
 
+  final String ingestionKey;
   final CaptureSource source;
   final int occurredAtMs;
   final String? text;
@@ -219,6 +222,7 @@ class CommandCaptureEvent extends Command {
   final String? windowTitle;
 
   CommandCaptureEvent copyWith({
+    String? ingestionKey,
     CaptureSource? source,
     int? occurredAtMs,
     String? Function()? text,
@@ -226,6 +230,7 @@ class CommandCaptureEvent extends Command {
     String? Function()? windowTitle,
   }) {
     return CommandCaptureEvent(
+      ingestionKey: ingestionKey ?? this.ingestionKey,
       source: source ?? this.source,
       occurredAtMs: occurredAtMs ?? this.occurredAtMs,
       text: text == null ? this.text : text(),
@@ -237,6 +242,7 @@ class CommandCaptureEvent extends Command {
   void serialize(BinarySerializer serializer) {
     serializer.increaseContainerDepth();
     serializer.serializeVariantIndex(2);
+    serializer.serializeString(ingestionKey);
     source.serialize(serializer);
     serializer.serializeInt64(occurredAtMs);
     TraitHelpers.serializeOptionStr(text, serializer);
@@ -251,6 +257,7 @@ class CommandCaptureEvent extends Command {
     if (other.runtimeType != runtimeType) return false;
 
     return other is CommandCaptureEvent &&
+        ingestionKey == other.ingestionKey &&
         source == other.source &&
         occurredAtMs == other.occurredAtMs &&
         text == other.text &&
@@ -259,8 +266,14 @@ class CommandCaptureEvent extends Command {
   }
 
   @override
-  int get hashCode =>
-      Object.hash(source, occurredAtMs, text, application, windowTitle);
+  int get hashCode => Object.hash(
+    ingestionKey,
+    source,
+    occurredAtMs,
+    text,
+    application,
+    windowTitle,
+  );
 
   @override
   String toString() {
@@ -269,6 +282,7 @@ class CommandCaptureEvent extends Command {
     assert(() {
       fullString =
           '$runtimeType('
+          'ingestionKey: $ingestionKey, '
           'source: $source, '
           'occurredAtMs: $occurredAtMs, '
           'text: $text, '

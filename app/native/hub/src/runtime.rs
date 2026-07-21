@@ -3,7 +3,7 @@ use crate::signals::{
     MemorySearchResults, NativeError, NativeEvent, RuntimePhase, RuntimeStatus, ToolProgress,
     ToolStatus,
 };
-use std::collections::{HashMap, hash_map::Entry};
+use std::collections::{HashMap, VecDeque, hash_map::Entry};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, mpsc};
@@ -13,6 +13,7 @@ use zkr::{MemoryDb, MemoryRef, PersonId, RememberInput, SearchInput, SourceKind,
 
 const COMMAND_QUEUE_CAPACITY: usize = 32;
 const MAX_ACTIVE_COMMANDS: usize = 32;
+const COMPLETED_CAPTURE_CAPACITY: usize = 256;
 const AUDIO_QUEUE_CAPACITY: usize = 32;
 const MAX_ACTIVE_AUDIO_SESSIONS: usize = 8;
 const AUDIO_SESSION_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
@@ -53,10 +54,65 @@ struct AudioAcceptError {
     message: String,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct CaptureFingerprint {
+    ingestion_key: String,
+    source: CaptureSource,
+    occurred_at_ms: i64,
+    text: Option<String>,
+    application: Option<String>,
+    window_title: Option<String>,
+}
+
+struct ActiveCommand {
+    cancellation: CancellationToken,
+    capture: Option<CaptureFingerprint>,
+    authority_generation: u64,
+}
+
+#[derive(Default)]
+struct CompletedCaptures {
+    entries: HashMap<String, CaptureFingerprint>,
+    order: VecDeque<String>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+enum ReplayStatus {
+    Missing,
+    Exact,
+    Conflict,
+}
+
 #[derive(Debug, Eq, PartialEq)]
 enum ActivationError {
     Capacity,
     Duplicate,
+    Conflict,
+}
+
+impl CompletedCaptures {
+    fn status(&self, request_id: &str, fingerprint: &CaptureFingerprint) -> ReplayStatus {
+        match self.entries.get(request_id) {
+            None => ReplayStatus::Missing,
+            Some(stored) if stored == fingerprint => ReplayStatus::Exact,
+            Some(_) => ReplayStatus::Conflict,
+        }
+    }
+
+    fn insert(&mut self, request_id: String, fingerprint: CaptureFingerprint) {
+        self.entries.insert(request_id.clone(), fingerprint);
+        self.order.push_back(request_id);
+        if self.entries.len() > COMPLETED_CAPTURE_CAPACITY
+            && let Some(expired) = self.order.pop_front()
+        {
+            self.entries.remove(&expired);
+        }
+    }
+
+    fn clear(&mut self) {
+        self.entries.clear();
+        self.order.clear();
+    }
 }
 
 pub struct AudioDispatcher {
@@ -188,7 +244,7 @@ impl AudioSessions {
 pub struct CommandDispatcher {
     receiver: mpsc::Receiver<ClientCommand>,
     state: Arc<Mutex<RuntimeState>>,
-    active: Arc<Mutex<HashMap<String, CancellationToken>>>,
+    active: Arc<Mutex<HashMap<String, ActiveCommand>>>,
 }
 
 impl CommandDispatcher {
@@ -206,12 +262,25 @@ impl CommandDispatcher {
 
     pub async fn run(mut self) {
         let mut tasks = JoinSet::new();
+        let mut completed = CompletedCaptures::default();
+        let mut authority_generation = 0_u64;
         loop {
-            reap_ready(&mut tasks, &self.active).await;
+            reap_ready(
+                &mut tasks,
+                &self.active,
+                &mut completed,
+                authority_generation,
+            )
+            .await;
             let command = tokio::select! {
                 biased;
                 joined = tasks.join_next(), if !tasks.is_empty() => {
-                    reap_joined(joined, &self.active).await;
+                    reap_joined(
+                        joined,
+                        &self.active,
+                        &mut completed,
+                        authority_generation,
+                    ).await;
                     continue;
                 }
                 command = self.receiver.recv() => match command {
@@ -224,12 +293,40 @@ impl CommandDispatcher {
                 cancel(&self.active, &request_id).await;
                 continue;
             }
+            if matches!(&command.command, Command::ConfigureMemory { .. }) {
+                authority_generation = authority_generation.saturating_add(1);
+                completed.clear();
+                cancel_captures(&self.active).await;
+            }
 
             let cancellation = CancellationToken::new();
+            let capture = capture_fingerprint(&command.command);
+            if let Some(fingerprint) = &capture {
+                match completed.status(&request_id, fingerprint) {
+                    ReplayStatus::Exact => continue,
+                    ReplayStatus::Conflict => {
+                        error(
+                            Some(request_id),
+                            "idempotency_conflict",
+                            "request_id completed with a different capture payload",
+                            false,
+                        );
+                        continue;
+                    }
+                    ReplayStatus::Missing => {}
+                }
+            }
             {
                 let mut active = self.active.lock().await;
-                match activate(&mut active, request_id.clone(), cancellation.clone()) {
-                    Ok(()) => {}
+                match activate(
+                    &mut active,
+                    request_id.clone(),
+                    cancellation.clone(),
+                    capture,
+                    authority_generation,
+                ) {
+                    Ok(true) => {}
+                    Ok(false) => continue,
                     Err(ActivationError::Capacity) => {
                         error(
                             Some(request_id),
@@ -244,6 +341,15 @@ impl CommandDispatcher {
                             Some(request_id),
                             "duplicate_request",
                             "request_id is already active",
+                            false,
+                        );
+                        continue;
+                    }
+                    Err(ActivationError::Conflict) => {
+                        error(
+                            Some(request_id),
+                            "idempotency_conflict",
+                            "request_id is active with a different capture payload",
                             false,
                         );
                         continue;
@@ -274,52 +380,105 @@ impl CommandDispatcher {
         }
         cancel_all(&self.active).await;
         while let Some(joined) = tasks.join_next().await {
-            reap_joined(Some(joined), &self.active).await;
+            reap_joined(
+                Some(joined),
+                &self.active,
+                &mut completed,
+                authority_generation,
+            )
+            .await;
         }
     }
 }
 
 fn activate(
-    active: &mut HashMap<String, CancellationToken>,
+    active: &mut HashMap<String, ActiveCommand>,
     request_id: String,
     cancellation: CancellationToken,
-) -> Result<(), ActivationError> {
+    capture: Option<CaptureFingerprint>,
+    authority_generation: u64,
+) -> Result<bool, ActivationError> {
     let at_capacity = active.len() >= MAX_ACTIVE_COMMANDS;
     match active.entry(request_id) {
-        Entry::Occupied(_) => Err(ActivationError::Duplicate),
+        Entry::Occupied(entry) => match (&entry.get().capture, &capture) {
+            (Some(active), Some(replay)) if active == replay => Ok(false),
+            (Some(_), Some(_)) => Err(ActivationError::Conflict),
+            _ => Err(ActivationError::Duplicate),
+        },
         Entry::Vacant(_) if at_capacity => Err(ActivationError::Capacity),
         Entry::Vacant(entry) => {
-            entry.insert(cancellation);
-            Ok(())
+            entry.insert(ActiveCommand {
+                cancellation,
+                capture,
+                authority_generation,
+            });
+            Ok(true)
         }
     }
 }
 
-type TrackedTaskResult = Result<(String, Result<(), JoinError>), JoinError>;
+fn capture_fingerprint(command: &Command) -> Option<CaptureFingerprint> {
+    match command {
+        Command::CaptureEvent {
+            ingestion_key,
+            source,
+            occurred_at_ms,
+            text,
+            application,
+            window_title,
+        } => Some(CaptureFingerprint {
+            ingestion_key: ingestion_key.clone(),
+            source: source.clone(),
+            occurred_at_ms: *occurred_at_ms,
+            text: text.clone(),
+            application: application.clone(),
+            window_title: window_title.clone(),
+        }),
+        _ => None,
+    }
+}
+
+type TrackedTaskResult = Result<(String, Result<bool, JoinError>), JoinError>;
 
 async fn reap_ready(
-    tasks: &mut JoinSet<(String, Result<(), JoinError>)>,
-    active: &Mutex<HashMap<String, CancellationToken>>,
+    tasks: &mut JoinSet<(String, Result<bool, JoinError>)>,
+    active: &Mutex<HashMap<String, ActiveCommand>>,
+    completed: &mut CompletedCaptures,
+    authority_generation: u64,
 ) {
     while let Some(joined) = tasks.try_join_next() {
-        reap_joined(Some(joined), active).await;
+        reap_joined(Some(joined), active, completed, authority_generation).await;
     }
 }
 
 async fn reap_joined(
     result: Option<TrackedTaskResult>,
-    active: &Mutex<HashMap<String, CancellationToken>>,
+    active: &Mutex<HashMap<String, ActiveCommand>>,
+    completed: &mut CompletedCaptures,
+    authority_generation: u64,
 ) {
     match result {
         Some(Ok((request_id, outcome))) => {
-            active.lock().await.remove(&request_id);
-            if let Err(error_value) = outcome {
-                error(
+            let command = active.lock().await.remove(&request_id);
+            match outcome {
+                Ok(true) => {
+                    if let Some(ActiveCommand {
+                        capture: Some(fingerprint),
+                        authority_generation: generation,
+                        ..
+                    }) = command
+                        && generation == authority_generation
+                    {
+                        completed.insert(request_id, fingerprint);
+                    }
+                }
+                Ok(false) => {}
+                Err(error_value) => error(
                     Some(request_id),
                     "native_task_failed",
                     &error_value.to_string(),
                     false,
-                );
+                ),
             }
         }
         Some(Err(error_value)) => {
@@ -329,9 +488,17 @@ async fn reap_joined(
     }
 }
 
-async fn cancel_all(active: &Mutex<HashMap<String, CancellationToken>>) {
-    for cancellation in active.lock().await.values() {
-        cancellation.cancel();
+async fn cancel_captures(active: &Mutex<HashMap<String, ActiveCommand>>) {
+    for command in active.lock().await.values() {
+        if command.capture.is_some() {
+            command.cancellation.cancel();
+        }
+    }
+}
+
+async fn cancel_all(active: &Mutex<HashMap<String, ActiveCommand>>) {
+    for command in active.lock().await.values() {
+        command.cancellation.cancel();
     }
 }
 
@@ -351,11 +518,11 @@ async fn execute(
     state: Arc<Mutex<RuntimeState>>,
     cancellation: CancellationToken,
     configuration_generation: Option<u64>,
-) {
+) -> bool {
     let request_id = command.request_id;
     if cancellation.is_cancelled() {
         cancelled(&request_id);
-        return;
+        return false;
     }
 
     match command.command {
@@ -374,8 +541,10 @@ async fn execute(
                 configuration_generation.unwrap_or_default(),
             )
             .await;
+            false
         }
         Command::CaptureEvent {
+            ingestion_key,
             source,
             occurred_at_ms,
             text,
@@ -385,6 +554,7 @@ async fn execute(
             capture(
                 &request_id,
                 &state,
+                ingestion_key,
                 source,
                 occurred_at_ms,
                 text,
@@ -392,30 +562,40 @@ async fn execute(
                 window_title,
                 &cancellation,
             )
-            .await;
+            .await
         }
         Command::SearchMemory { query, limit } => {
             search(&request_id, &state, query, limit, &cancellation).await;
+            false
         }
-        Command::SendMessage { .. } => error(
-            Some(request_id),
-            "assistant_unavailable",
-            "no model provider is configured",
-            true,
-        ),
-        Command::ApprovalDecision { .. } => error(
-            Some(request_id),
-            "proposal_not_found",
-            "no matching action proposal is active",
-            false,
-        ),
-        Command::DeviceState { .. } => progress(
-            &request_id,
-            "device_state",
-            ToolStatus::Complete,
-            Some("device state accepted"),
-        ),
-        Command::Cancel => {}
+        Command::SendMessage { .. } => {
+            error(
+                Some(request_id),
+                "assistant_unavailable",
+                "no model provider is configured",
+                true,
+            );
+            false
+        }
+        Command::ApprovalDecision { .. } => {
+            error(
+                Some(request_id),
+                "proposal_not_found",
+                "no matching action proposal is active",
+                false,
+            );
+            false
+        }
+        Command::DeviceState { .. } => {
+            progress(
+                &request_id,
+                "device_state",
+                ToolStatus::Complete,
+                Some("device state accepted"),
+            );
+            false
+        }
+        Command::Cancel => false,
     }
 }
 
@@ -510,13 +690,23 @@ fn configuration_is_current(state: &RuntimeState, generation: u64) -> bool {
 async fn capture(
     request_id: &str,
     state: &Mutex<RuntimeState>,
+    ingestion_key: String,
     source: CaptureSource,
     occurred_at_ms: i64,
     text: Option<String>,
     application: Option<String>,
     window_title: Option<String>,
     cancellation: &CancellationToken,
-) {
+) -> bool {
+    if ingestion_key.trim().is_empty() {
+        error(
+            Some(request_id.to_owned()),
+            "invalid_capture",
+            "ingestion_key must not be empty",
+            false,
+        );
+        return false;
+    }
     let Some(text) = capture_text(text, application, window_title) else {
         error(
             Some(request_id.to_owned()),
@@ -524,7 +714,7 @@ async fn capture(
             "capture contains no text",
             false,
         );
-        return;
+        return false;
     };
     let Some(memory) = state.lock().await.memory.clone() else {
         error(
@@ -533,30 +723,63 @@ async fn capture(
             "configure memory before capturing events",
             true,
         );
-        return;
+        return false;
     };
-    let ingestion_key = request_id.to_owned();
-    let task = spawn_blocking(move || {
+    let task = spawn_capture(
+        memory,
+        ingestion_key,
+        source,
+        occurred_at_ms,
+        text,
+        cancellation.clone(),
+    );
+    match await_mutating_blocking(task, cancellation).await {
+        BlockingOutcome::Complete(Some(remembered)) => {
+            NativeEvent::MemoryCaptured(MemoryCaptured {
+                request_id: request_id.to_owned(),
+                source_id: remembered.source_id.0,
+                evidence_id: remembered.evidence_id.0,
+            })
+            .send();
+            true
+        }
+        BlockingOutcome::Complete(None) => {
+            cancelled(request_id);
+            false
+        }
+        BlockingOutcome::Failed(error_value) => {
+            error(
+                Some(request_id.to_owned()),
+                "memory_capture_failed",
+                &error_value,
+                false,
+            );
+            false
+        }
+        BlockingOutcome::Cancelled => {
+            cancelled(request_id);
+            false
+        }
+    }
+}
+
+fn spawn_capture(
+    memory: Arc<StdMutex<MemoryContext>>,
+    ingestion_key: String,
+    source: CaptureSource,
+    occurred_at_ms: i64,
+    text: String,
+    cancellation: CancellationToken,
+) -> JoinHandle<Result<Option<zkr::Remembered>, String>> {
+    spawn_blocking(move || {
         let mut memory = memory
             .lock()
             .map_err(|_| "memory database lock was poisoned".to_owned())?;
-        remember_capture(&mut memory, ingestion_key, source, occurred_at_ms, text)
-    });
-    match await_mutating_blocking(task, cancellation).await {
-        BlockingOutcome::Complete(remembered) => NativeEvent::MemoryCaptured(MemoryCaptured {
-            request_id: request_id.to_owned(),
-            source_id: remembered.source_id.0,
-            evidence_id: remembered.evidence_id.0,
-        })
-        .send(),
-        BlockingOutcome::Failed(error_value) => error(
-            Some(request_id.to_owned()),
-            "memory_capture_failed",
-            &error_value,
-            false,
-        ),
-        BlockingOutcome::Cancelled => cancelled(request_id),
-    }
+        if cancellation.is_cancelled() {
+            return Ok(None);
+        }
+        remember_capture(&mut memory, ingestion_key, source, occurred_at_ms, text).map(Some)
+    })
 }
 
 fn remember_capture(
@@ -694,9 +917,9 @@ where
     }
 }
 
-async fn cancel(active: &Mutex<HashMap<String, CancellationToken>>, request_id: &str) {
-    if let Some(cancellation) = active.lock().await.get(request_id) {
-        cancellation.cancel();
+async fn cancel(active: &Mutex<HashMap<String, ActiveCommand>>, request_id: &str) {
+    if let Some(command) = active.lock().await.get(request_id) {
+        command.cancellation.cancel();
     } else {
         error(
             Some(request_id.to_owned()),
@@ -790,6 +1013,25 @@ mod tests {
     use crate::signals::AudioEncoding;
     use std::sync::atomic::{AtomicBool, Ordering};
 
+    fn fingerprint(text: &str, occurred_at_ms: i64) -> CaptureFingerprint {
+        CaptureFingerprint {
+            ingestion_key: "transcript-1".to_owned(),
+            source: CaptureSource::OmiDevice,
+            occurred_at_ms,
+            text: Some(text.to_owned()),
+            application: None,
+            window_title: None,
+        }
+    }
+
+    fn active_command() -> ActiveCommand {
+        ActiveCommand {
+            cancellation: CancellationToken::new(),
+            capture: None,
+            authority_generation: 0,
+        }
+    }
+
     #[test]
     fn capture_preserves_available_context() {
         assert_eq!(
@@ -854,10 +1096,14 @@ mod tests {
     async fn cancellation_targets_active_request() {
         let active = Mutex::new(HashMap::from([(
             "request-1".to_owned(),
-            CancellationToken::new(),
+            ActiveCommand {
+                cancellation: CancellationToken::new(),
+                capture: None,
+                authority_generation: 0,
+            },
         )]));
         cancel(&active, "request-1").await;
-        assert!(active.lock().await["request-1"].is_cancelled());
+        assert!(active.lock().await["request-1"].cancellation.is_cancelled());
     }
 
     #[tokio::test]
@@ -899,16 +1145,20 @@ mod tests {
                 activate(
                     &mut active,
                     format!("request-{index}"),
-                    CancellationToken::new()
+                    CancellationToken::new(),
+                    None,
+                    0,
                 ),
-                Ok(())
+                Ok(true)
             );
         }
         assert_eq!(
             activate(
                 &mut active,
                 "request-0".to_owned(),
-                CancellationToken::new()
+                CancellationToken::new(),
+                None,
+                0,
             ),
             Err(ActivationError::Duplicate)
         );
@@ -916,42 +1166,303 @@ mod tests {
             activate(
                 &mut active,
                 "request-overflow".to_owned(),
-                CancellationToken::new()
+                CancellationToken::new(),
+                None,
+                0,
             ),
             Err(ActivationError::Capacity)
         );
     }
 
+    #[test]
+    fn duplicate_capture_requests_coalesce_while_active() {
+        let mut active = HashMap::new();
+        assert_eq!(
+            activate(
+                &mut active,
+                "capture-1".to_owned(),
+                CancellationToken::new(),
+                Some(fingerprint("remember this", 1)),
+                0,
+            ),
+            Ok(true)
+        );
+        assert_eq!(
+            activate(
+                &mut active,
+                "capture-1".to_owned(),
+                CancellationToken::new(),
+                Some(fingerprint("remember this", 1)),
+                0,
+            ),
+            Ok(false)
+        );
+        assert_eq!(
+            activate(
+                &mut active,
+                "capture-1".to_owned(),
+                CancellationToken::new(),
+                Some(fingerprint("changed", 1)),
+                0,
+            ),
+            Err(ActivationError::Conflict)
+        );
+        assert_eq!(
+            activate(
+                &mut active,
+                "capture-1".to_owned(),
+                CancellationToken::new(),
+                Some(fingerprint("remember this", 2)),
+                0,
+            ),
+            Err(ActivationError::Conflict)
+        );
+        let mut changed_source = fingerprint("remember this", 1);
+        changed_source.source = CaptureSource::Screen;
+        assert_eq!(
+            activate(
+                &mut active,
+                "capture-1".to_owned(),
+                CancellationToken::new(),
+                Some(changed_source),
+                0,
+            ),
+            Err(ActivationError::Conflict)
+        );
+    }
+
+    #[tokio::test]
+    async fn dispatcher_rejects_changed_payload_while_first_capture_holds_database_lock() {
+        let path = std::env::temp_dir().join(format!(
+            "omi-v4-dispatcher-replay-{}-{}.sqlite",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |duration| duration.as_nanos())
+        ));
+        let memory = Arc::new(StdMutex::new(MemoryContext {
+            database: MemoryDb::open(&path)
+                .unwrap_or_else(|error_value| panic!("memory opens: {error_value}")),
+            tenant_id: TenantId::new("tenant-1")
+                .unwrap_or_else(|error_value| panic!("valid tenant: {error_value}")),
+            person_id: PersonId::new("person-1")
+                .unwrap_or_else(|error_value| panic!("valid person: {error_value}")),
+        }));
+        let lock_ready = Arc::new(std::sync::Barrier::new(2));
+        let lock_release = Arc::new(std::sync::Barrier::new(2));
+        let held_memory = Arc::clone(&memory);
+        let holder_ready = Arc::clone(&lock_ready);
+        let holder_release = Arc::clone(&lock_release);
+        let holder = std::thread::spawn(move || {
+            let _held = held_memory
+                .lock()
+                .unwrap_or_else(|error_value| panic!("memory lock: {error_value}"));
+            holder_ready.wait();
+            holder_release.wait();
+        });
+        lock_ready.wait();
+        let (sender, receiver) = mpsc::channel(COMMAND_QUEUE_CAPACITY);
+        let active = Arc::new(Mutex::new(HashMap::new()));
+        let dispatcher = CommandDispatcher {
+            receiver,
+            state: Arc::new(Mutex::new(RuntimeState {
+                memory: Some(Arc::clone(&memory)),
+                configuration_generation: 1,
+            })),
+            active: Arc::clone(&active),
+        };
+        let running = tokio::spawn(dispatcher.run());
+        let capture = |request_id: &str, text: &str, occurred_at_ms| ClientCommand {
+            request_id: request_id.to_owned(),
+            command: Command::CaptureEvent {
+                ingestion_key: "stable-transcript-1".to_owned(),
+                source: CaptureSource::OmiDevice,
+                occurred_at_ms,
+                text: Some(text.to_owned()),
+                application: None,
+                window_title: None,
+            },
+        };
+        sender
+            .send(capture("transcript-1", "remember this", 1))
+            .await
+            .unwrap_or_else(|_| panic!("dispatcher accepts first capture"));
+        while !active.lock().await.contains_key("transcript-1") {
+            tokio::task::yield_now().await;
+        }
+        sender
+            .send(capture("transcript-1", "remember this", 1))
+            .await
+            .unwrap_or_else(|_| panic!("dispatcher accepts duplicate capture"));
+        sender
+            .send(capture("transcript-1", "changed payload", 2))
+            .await
+            .unwrap_or_else(|_| panic!("dispatcher accepts conflicting capture"));
+        tokio::task::yield_now().await;
+        assert_eq!(active.lock().await.len(), 1);
+        lock_release.wait();
+        holder
+            .join()
+            .unwrap_or_else(|_| panic!("memory lock holder exits"));
+        while active.lock().await.contains_key("transcript-1") {
+            tokio::task::yield_now().await;
+        }
+        sender
+            .send(capture("transcript-1", "remember this", 1))
+            .await
+            .unwrap_or_else(|_| panic!("dispatcher accepts completed replay"));
+        sender
+            .send(capture("transcript-1", "changed after completion", 1))
+            .await
+            .unwrap_or_else(|_| panic!("dispatcher accepts completed conflict"));
+        tokio::task::yield_now().await;
+        assert!(active.lock().await.is_empty());
+        sender
+            .send(capture("transcript-2", "remember this", 1))
+            .await
+            .unwrap_or_else(|_| panic!("dispatcher accepts stable ingestion replay"));
+        while active.lock().await.contains_key("transcript-2") {
+            tokio::task::yield_now().await;
+        }
+        drop(sender);
+        running
+            .await
+            .unwrap_or_else(|error_value| panic!("dispatcher exits: {error_value}"));
+        drop(memory);
+
+        let mut reopened = MemoryContext {
+            database: MemoryDb::open(&path)
+                .unwrap_or_else(|error_value| panic!("memory reopens: {error_value}")),
+            tenant_id: TenantId::new("tenant-1")
+                .unwrap_or_else(|error_value| panic!("valid tenant: {error_value}")),
+            person_id: PersonId::new("person-1")
+                .unwrap_or_else(|error_value| panic!("valid person: {error_value}")),
+        };
+        assert!(
+            remember_capture(
+                &mut reopened,
+                "stable-transcript-1".to_owned(),
+                CaptureSource::OmiDevice,
+                1,
+                "changed payload".to_owned(),
+            )
+            .is_err()
+        );
+        drop(reopened);
+        std::fs::remove_file(path)
+            .unwrap_or_else(|error_value| panic!("test database is removed: {error_value}"));
+    }
+
+    #[test]
+    fn completed_capture_ledger_is_bounded_and_clears_with_authority() {
+        let mut completed = CompletedCaptures::default();
+        for index in 0..=COMPLETED_CAPTURE_CAPACITY {
+            completed.insert(
+                format!("capture-{index}"),
+                fingerprint("payload", index as i64),
+            );
+        }
+        assert_eq!(
+            completed.status("capture-0", &fingerprint("payload", 0)),
+            ReplayStatus::Missing
+        );
+        assert_eq!(
+            completed.status("capture-1", &fingerprint("payload", 1)),
+            ReplayStatus::Exact
+        );
+        assert_eq!(
+            completed.status("capture-1", &fingerprint("changed", 1)),
+            ReplayStatus::Conflict
+        );
+        completed.clear();
+        assert!(completed.entries.is_empty());
+        assert!(completed.order.is_empty());
+    }
+
+    #[tokio::test]
+    async fn cancelled_capture_waiting_for_memory_never_writes() {
+        let path = std::env::temp_dir().join(format!(
+            "omi-v4-cancelled-capture-{}-{}.sqlite",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |duration| duration.as_nanos())
+        ));
+        let memory = Arc::new(StdMutex::new(MemoryContext {
+            database: MemoryDb::open(&path)
+                .unwrap_or_else(|error_value| panic!("memory opens: {error_value}")),
+            tenant_id: TenantId::new("tenant-1")
+                .unwrap_or_else(|error_value| panic!("valid tenant: {error_value}")),
+            person_id: PersonId::new("person-1")
+                .unwrap_or_else(|error_value| panic!("valid person: {error_value}")),
+        }));
+        let held = memory
+            .lock()
+            .unwrap_or_else(|error_value| panic!("memory lock: {error_value}"));
+        let cancellation = CancellationToken::new();
+        let task = spawn_capture(
+            Arc::clone(&memory),
+            "transcript-1".to_owned(),
+            CaptureSource::OmiDevice,
+            1,
+            "remember this".to_owned(),
+            cancellation.clone(),
+        );
+        cancellation.cancel();
+        drop(held);
+        assert!(matches!(
+            await_mutating_blocking(task, &cancellation).await,
+            BlockingOutcome::Cancelled
+        ));
+        drop(memory);
+
+        let mut reopened = MemoryContext {
+            database: MemoryDb::open(&path)
+                .unwrap_or_else(|error_value| panic!("memory reopens: {error_value}")),
+            tenant_id: TenantId::new("tenant-1")
+                .unwrap_or_else(|error_value| panic!("valid tenant: {error_value}")),
+            person_id: PersonId::new("person-1")
+                .unwrap_or_else(|error_value| panic!("valid person: {error_value}")),
+        };
+        assert!(
+            remember_capture(
+                &mut reopened,
+                "transcript-1".to_owned(),
+                CaptureSource::OmiDevice,
+                1,
+                "different payload".to_owned(),
+            )
+            .is_ok()
+        );
+        drop(reopened);
+        std::fs::remove_file(path)
+            .unwrap_or_else(|error_value| panic!("test database is removed: {error_value}"));
+    }
+
     #[tokio::test]
     async fn completed_tasks_are_reaped_before_more_work() {
-        let active = Mutex::new(HashMap::from([(
-            "request-1".to_owned(),
-            CancellationToken::new(),
-        )]));
+        let active = Mutex::new(HashMap::from([("request-1".to_owned(), active_command())]));
         let mut tasks = JoinSet::new();
         tasks.spawn(async {
-            let outcome = tokio::spawn(async {}).await;
+            let outcome = tokio::spawn(async { false }).await;
             ("request-1".to_owned(), outcome)
         });
         tokio::task::yield_now().await;
-        reap_ready(&mut tasks, &active).await;
+        reap_ready(&mut tasks, &active, &mut CompletedCaptures::default(), 0).await;
         assert!(tasks.is_empty());
         assert!(active.lock().await.is_empty());
     }
 
     #[tokio::test]
     async fn panicked_tasks_release_their_active_slot() {
-        let active = Mutex::new(HashMap::from([(
-            "request-1".to_owned(),
-            CancellationToken::new(),
-        )]));
+        let active = Mutex::new(HashMap::from([("request-1".to_owned(), active_command())]));
         let mut tasks = JoinSet::new();
         tasks.spawn(async {
             let outcome = tokio::spawn(async { panic!("boom") }).await;
             ("request-1".to_owned(), outcome)
         });
         let joined = tasks.join_next().await;
-        reap_joined(joined, &active).await;
+        reap_joined(joined, &active, &mut CompletedCaptures::default(), 0).await;
         assert!(active.lock().await.is_empty());
     }
 
