@@ -7,6 +7,62 @@ import 'package:omi/api/worker_http.dart';
 import 'package:omi/auth/auth.dart';
 
 void main() {
+  test(
+    'billing decodes entitlement and accepts only safe session URLs',
+    () async {
+      var request = 0;
+      final client = WorkerHttpClient(
+        baseUri: Uri.parse('https://api.example.test'),
+        sessionProvider: () async => AuthSession(
+          uid: 'user-1',
+          idToken: 'firebase-token',
+          expiresAt: DateTime.now().add(const Duration(minutes: 5)),
+        ),
+        client: MockClient((_) async {
+          request += 1;
+          return request == 1
+              ? http.Response('{"plan":"pro","active":true}', 200)
+              : http.Response(
+                  '{"id":"session-1","url":"https://checkout.stripe.com/session-1"}',
+                  201,
+                );
+        }),
+      );
+      final billing = WorkerBillingClient(client);
+
+      final entitlement = await billing.getEntitlement();
+      final portal = await billing.createPortal();
+
+      expect(entitlement.plan, OmiPlan.pro);
+      expect(entitlement.active, isTrue);
+      expect(portal.host, 'checkout.stripe.com');
+      client.close();
+    },
+  );
+
+  test('billing rejects an unsafe session URL', () async {
+    final client = WorkerHttpClient(
+      baseUri: Uri.parse('https://api.example.test'),
+      sessionProvider: () async => AuthSession(
+        uid: 'user-1',
+        idToken: 'firebase-token',
+        expiresAt: DateTime.now().add(const Duration(minutes: 5)),
+      ),
+      client: MockClient(
+        (_) async => http.Response(
+          '{"id":"session-1","url":"javascript:alert(1)"}',
+          201,
+        ),
+      ),
+    );
+
+    await expectLater(
+      WorkerBillingClient(client).createCheckout(),
+      throwsA(isA<WorkerResponseException>()),
+    );
+    client.close();
+  });
+
   test('sends the AuthSession token and JSON to the Worker', () async {
     late http.BaseRequest captured;
     final client = WorkerHttpClient(

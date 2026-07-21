@@ -106,6 +106,7 @@ final class AppServices {
     this.memory,
     this.settings,
     this.channels,
+    this.billing,
     this.conversations,
     this._conversationInbox,
     CurrentsClient? currentsClient,
@@ -162,6 +163,7 @@ final class AppServices {
       memory: MemoryClient(WorkerMemoryTransport(worker)),
       settings: SettingsClient(WorkerSettingsTransport(worker)),
       channels: ChannelClient(WorkerChannelTransport(worker)),
+      billing: WorkerBillingClient(worker),
       conversations: WorkerConversationTransport(worker),
       conversationInbox: WorkerConversationTransport(worker),
       currentsClient: CurrentsClient(WorkerCurrentsTransport(worker)),
@@ -213,6 +215,7 @@ final class AppServices {
       memory: MemoryClient(WorkerMemoryTransport(worker)),
       settings: SettingsClient(WorkerSettingsTransport(worker)),
       channels: ChannelClient(WorkerChannelTransport(worker)),
+      billing: WorkerBillingClient(worker),
       conversations: WorkerConversationTransport(worker),
       conversationInbox: WorkerConversationTransport(worker),
       currentsClient: CurrentsClient(WorkerCurrentsTransport(worker)),
@@ -281,6 +284,7 @@ final class AppServices {
   final MemoryClient? memory;
   final SettingsClient? settings;
   final ChannelClient? channels;
+  final WorkerBillingClient? billing;
   final ConversationTransport? conversations;
   final ConversationInboxTransport? _conversationInbox;
   final CurrentsController? currents;

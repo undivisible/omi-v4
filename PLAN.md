@@ -370,3 +370,4 @@ Prove managed/BYOK Deepgram with real credentials and a physical Omi on iOS and 
 - 2026-07-21: Integrated `zkr` 0.1.7 at the Rinf hub with tenant/person-scoped correction and deletion, cited retrieval, stale-claim suppression, schema-integrity migration, and redacted lifecycle commands.
 - 2026-07-21: Upgraded the Rinf hub to `zkr` 0.2.0 after its isolation, bitemporal, embedding-lifecycle, deletion, plugin, migration, release, and security audits passed.
 - 2026-07-21: Rendered the authenticated, credential-redacted Worker setup-health contract in Flutter Setup so missing Firebase, channels, billing, model routes, and desktop authentication are visible without exposing secrets.
+- 2026-07-21: Replaced the Flutter plan placeholder with strict entitlement loading and external Stripe Checkout or billing-portal handoff for the two-plan SaaS model.

@@ -100,6 +100,81 @@ final class WorkerHttpClient {
   }
 }
 
+enum OmiPlan { byok, pro }
+
+final class BillingEntitlement {
+  const BillingEntitlement({required this.plan, required this.active});
+
+  final OmiPlan plan;
+  final bool active;
+}
+
+final class WorkerBillingClient {
+  const WorkerBillingClient(this._client);
+
+  final WorkerHttpClient _client;
+
+  Future<BillingEntitlement> getEntitlement() async {
+    final response = await _client.send(method: 'GET', path: '/v1/entitlement');
+    final body = _object(response, const {'plan', 'active'});
+    final plan = body['plan'];
+    final active = body['active'];
+    if ((plan != 'byok' && plan != 'pro') || active is! bool) {
+      throw const WorkerResponseException(
+        'Worker returned invalid entitlement',
+      );
+    }
+    return BillingEntitlement(
+      plan: plan == 'pro' ? OmiPlan.pro : OmiPlan.byok,
+      active: active,
+    );
+  }
+
+  Future<Uri> createCheckout() => _session('/v1/payments/stripe/checkout');
+
+  Future<Uri> createPortal() => _session('/v1/payments/stripe/portal');
+
+  Future<Uri> _session(String path) async {
+    final response = await _client.send(method: 'POST', path: path);
+    final body = _object(response, const {'id', 'url'});
+    if (body['id'] is! String || body['url'] is! String) {
+      throw const WorkerResponseException(
+        'Worker returned invalid billing session',
+      );
+    }
+    final uri = Uri.tryParse(body['url']! as String);
+    if (uri == null ||
+        uri.scheme != 'https' ||
+        uri.host.isEmpty ||
+        uri.userInfo.isNotEmpty) {
+      throw const WorkerResponseException('Worker returned unsafe billing URL');
+    }
+    return uri;
+  }
+
+  Map<String, Object?> _object(
+    ({int statusCode, Object? body}) response,
+    Set<String> fields,
+  ) {
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      final body = response.body;
+      final message = body is Map<String, Object?> && body['error'] is String
+          ? body['error']! as String
+          : 'Billing request failed';
+      throw WorkerResponseException(message);
+    }
+    final body = response.body;
+    if (body is! Map<String, Object?> ||
+        body.keys.any((key) => !fields.contains(key)) ||
+        fields.any((key) => !body.containsKey(key))) {
+      throw const WorkerResponseException(
+        'Worker returned invalid billing response',
+      );
+    }
+    return body;
+  }
+}
+
 abstract interface class ManagedSttClient {
   Uri get trustedWorkerOrigin;
 

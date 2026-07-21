@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 
+import '../api/worker_http.dart';
 import '../app_services.dart';
 import '../channels/channels.dart';
 import '../settings/settings.dart';
@@ -144,12 +146,92 @@ class AccountScreen extends StatelessWidget {
         title: 'AI providers',
         detail: 'No provider connected',
       ),
-      const _AccountTile(
-        icon: Icons.credit_card_outlined,
-        title: 'Plan',
-        detail: 'Entitlement has not loaded',
-      ),
+      if (previewMode || services.billing == null)
+        const _AccountTile(
+          icon: Icons.credit_card_outlined,
+          title: 'Plan unavailable',
+          detail: 'Sign in to manage your plan.',
+        )
+      else
+        _PlanTile(client: services.billing!),
     ],
+  );
+}
+
+class _PlanTile extends StatefulWidget {
+  const _PlanTile({required this.client});
+
+  final WorkerBillingClient client;
+
+  @override
+  State<_PlanTile> createState() => _PlanTileState();
+}
+
+class _PlanTileState extends State<_PlanTile> {
+  late Future<BillingEntitlement> entitlement = widget.client.getEntitlement();
+  bool opening = false;
+  String? error;
+
+  Future<void> open(BillingEntitlement value) async {
+    setState(() {
+      opening = true;
+      error = null;
+    });
+    try {
+      final uri = value.plan == OmiPlan.pro && value.active
+          ? await widget.client.createPortal()
+          : await widget.client.createCheckout();
+      if (!await launchUrl(uri, mode: LaunchMode.externalApplication)) {
+        throw StateError('Could not open billing');
+      }
+    } catch (failure) {
+      if (mounted) setState(() => error = '$failure');
+    } finally {
+      if (mounted) setState(() => opening = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => FutureBuilder<BillingEntitlement>(
+    future: entitlement,
+    builder: (context, snapshot) {
+      if (snapshot.connectionState != ConnectionState.done) {
+        return const _AccountTile(
+          icon: Icons.sync_rounded,
+          title: 'Loading plan',
+          detail: 'Checking your entitlement…',
+        );
+      }
+      if (snapshot.hasError) {
+        return _AccountTile(
+          icon: Icons.error_outline_rounded,
+          title: 'Plan could not load',
+          detail: '${snapshot.error}',
+        );
+      }
+      final value = snapshot.data!;
+      return BaseTile(
+        icon: Icons.credit_card_outlined,
+        title: value.plan == OmiPlan.pro && value.active ? 'Omi AI' : 'Omi',
+        detail:
+            error ??
+            (value.plan == OmiPlan.pro && value.active
+                ? 'Managed AI is active'
+                : 'BYOK and local AI'),
+        trailing: IconButton(
+          tooltip: value.plan == OmiPlan.pro && value.active
+              ? 'Manage billing'
+              : 'Upgrade to Omi AI',
+          onPressed: opening ? null : () => open(value),
+          icon: opening
+              ? const SizedBox.square(
+                  dimension: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Icon(Icons.arrow_forward_rounded),
+        ),
+      );
+    },
   );
 }
 
