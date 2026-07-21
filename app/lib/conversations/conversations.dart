@@ -54,7 +54,81 @@ abstract interface class ConversationTransport {
   Future<List<ConversationMessage>> replay({required int after});
 }
 
-final class WorkerConversationTransport implements ConversationTransport {
+final class ConversationInboxItem {
+  const ConversationInboxItem({
+    required this.id,
+    required this.channel,
+    required this.text,
+    required this.channelMessageId,
+    required this.receivedAt,
+    required this.attempt,
+    required this.leaseToken,
+    required this.leaseUntil,
+  });
+
+  factory ConversationInboxItem.fromJson(Map<String, Object?> json) {
+    final id = json['id'];
+    final channel = json['channel'];
+    final text = json['text'];
+    final channelMessageId = json['channelMessageId'];
+    final receivedAt = json['receivedAt'];
+    final attempt = json['attempt'];
+    final leaseToken = json['leaseToken'];
+    final leaseUntil = json['leaseUntil'];
+    if (id is! String ||
+        !RegExp(r'^[A-Za-z0-9._:-]{8,128}$').hasMatch(id) ||
+        (channel != 'telegram' && channel != 'blooio') ||
+        text is! String ||
+        text.trim().isEmpty ||
+        text.length > 20000 ||
+        channelMessageId is! String ||
+        channelMessageId.isEmpty ||
+        receivedAt is! int ||
+        attempt is! int ||
+        attempt < 1 ||
+        leaseToken is! String ||
+        !RegExp(r'^[A-Za-z0-9._:-]{8,256}$').hasMatch(leaseToken) ||
+        leaseUntil is! int ||
+        leaseUntil <= receivedAt) {
+      throw const FormatException('Invalid conversation inbox item');
+    }
+    return ConversationInboxItem(
+      id: id,
+      channel: channel as String,
+      text: text,
+      channelMessageId: channelMessageId,
+      receivedAt: receivedAt,
+      attempt: attempt,
+      leaseToken: leaseToken,
+      leaseUntil: leaseUntil,
+    );
+  }
+
+  final String id;
+  final String channel;
+  final String text;
+  final String channelMessageId;
+  final int receivedAt;
+  final int attempt;
+  final String leaseToken;
+  final int leaseUntil;
+}
+
+enum ConversationInboxOutcome { done, retry }
+
+abstract interface class ConversationInboxTransport {
+  Future<ConversationInboxItem?> claim();
+
+  Future<void> complete(
+    ConversationInboxItem item, {
+    required ConversationInboxOutcome outcome,
+    String? responseText,
+    String? error,
+  });
+}
+
+final class WorkerConversationTransport
+    implements ConversationTransport, ConversationInboxTransport {
   const WorkerConversationTransport(this._worker);
 
   final WorkerHttpClient _worker;
@@ -124,6 +198,60 @@ final class WorkerConversationTransport implements ConversationTransport {
       result.addAll(page);
       if (page.length < 200) return result;
       cursor = nextCursor;
+    }
+  }
+
+  @override
+  Future<ConversationInboxItem?> claim() async {
+    final response = await _worker.send(
+      method: 'POST',
+      path: '/v1/conversations/default/inbox/claim',
+    );
+    final body = response.body;
+    if (response.statusCode != 200 || body is! Map<String, Object?>) {
+      throw StateError('Could not claim a conversation inbox item.');
+    }
+    final item = body['item'];
+    if (item == null) return null;
+    if (item is! Map<String, Object?>) {
+      throw const FormatException('Invalid conversation inbox response');
+    }
+    return ConversationInboxItem.fromJson(item);
+  }
+
+  @override
+  Future<void> complete(
+    ConversationInboxItem item, {
+    required ConversationInboxOutcome outcome,
+    String? responseText,
+    String? error,
+  }) async {
+    final normalizedResponse = responseText?.trim();
+    if ((outcome == ConversationInboxOutcome.done &&
+            (normalizedResponse == null ||
+                normalizedResponse.isEmpty ||
+                normalizedResponse.length > 4096)) ||
+        (outcome == ConversationInboxOutcome.retry && responseText != null) ||
+        (error != null && error.length > 1000)) {
+      throw ArgumentError('Invalid conversation inbox completion');
+    }
+    final response = await _worker.send(
+      method: 'POST',
+      path: '/v1/conversations/default/inbox/${item.id}/complete',
+      body: {
+        'leaseToken': item.leaseToken,
+        'outcome': outcome.name,
+        'responseText': ?normalizedResponse,
+        'error': ?error,
+      },
+    );
+    final body = response.body;
+    final status = body is Map<String, Object?> ? body['status'] : null;
+    final validStatus = outcome == ConversationInboxOutcome.done
+        ? status == 'done'
+        : status == 'pending' || status == 'failed';
+    if (response.statusCode != 200 || !validStatus) {
+      throw StateError('Could not complete a conversation inbox item.');
     }
   }
 }

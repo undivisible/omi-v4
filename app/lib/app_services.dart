@@ -52,6 +52,7 @@ const _managedAssistantModel = 'mimo-v2.5-pro';
 const _defaultAssistantRefreshLead = Duration(minutes: 5);
 const _defaultAssistantMinimumRefreshDelay = Duration(seconds: 30);
 const _defaultApprovalAcknowledgementTimeout = Duration(seconds: 5);
+const _defaultInboxPollInterval = Duration(seconds: 2);
 
 String _randomId() {
   final random = Random.secure();
@@ -61,12 +62,35 @@ String _randomId() {
   ).join();
 }
 
+String _boundedText(String value, int maxLength) {
+  if (value.length <= maxLength) return value;
+  var end = maxLength;
+  final last = value.codeUnitAt(end - 1);
+  if (last >= 0xd800 && last <= 0xdbff) end -= 1;
+  return value.substring(0, end);
+}
+
 final class LocalTranscriptionUnavailable implements Exception {
   const LocalTranscriptionUnavailable();
 
   @override
   String toString() =>
       'LocalTranscriptionUnavailable: Local transcription is not available yet.';
+}
+
+final class _ActiveInboxItem {
+  _ActiveInboxItem({
+    required this.item,
+    required this.requestId,
+    required this.generation,
+  });
+
+  final ConversationInboxItem item;
+  final String requestId;
+  final int generation;
+  final response = StringBuffer();
+  String? approvalResponse;
+  bool completing = false;
 }
 
 final class AppServices {
@@ -82,6 +106,7 @@ final class AppServices {
     this.settings,
     this.channels,
     this.conversations,
+    this._conversationInbox,
     CurrentsClient? currentsClient,
     this._worker,
     this._managedStt,
@@ -91,6 +116,7 @@ final class AppServices {
     this._assistantMinimumRefreshDelay = _defaultAssistantMinimumRefreshDelay,
     this._approvalAcknowledgementTimeout =
         _defaultApprovalAcknowledgementTimeout,
+    this._inboxPollInterval = _defaultInboxPollInterval,
   }) : currents = currentsClient == null
            ? null
            : CurrentsController(currentsClient),
@@ -132,6 +158,7 @@ final class AppServices {
       settings: SettingsClient(WorkerSettingsTransport(worker)),
       channels: ChannelClient(WorkerChannelTransport(worker)),
       conversations: WorkerConversationTransport(worker),
+      conversationInbox: WorkerConversationTransport(worker),
       currentsClient: CurrentsClient(WorkerCurrentsTransport(worker)),
       worker: worker,
       managedStt: WorkerManagedSttClient(worker),
@@ -176,6 +203,7 @@ final class AppServices {
       settings: SettingsClient(WorkerSettingsTransport(worker)),
       channels: ChannelClient(WorkerChannelTransport(worker)),
       conversations: WorkerConversationTransport(worker),
+      conversationInbox: WorkerConversationTransport(worker),
       currentsClient: CurrentsClient(WorkerCurrentsTransport(worker)),
       worker: worker,
       managedStt: WorkerManagedSttClient(worker),
@@ -191,6 +219,7 @@ final class AppServices {
     WorkspaceRootStore? workspaceRoots,
     ManagedSttClient? managedStt,
     ConversationTransport? conversations,
+    ConversationInboxTransport? conversationInbox,
     CurrentsClient? currentsClient,
     DateTime Function()? now,
     Duration assistantRefreshLead = _defaultAssistantRefreshLead,
@@ -198,6 +227,7 @@ final class AppServices {
         _defaultAssistantMinimumRefreshDelay,
     Duration approvalAcknowledgementTimeout =
         _defaultApprovalAcknowledgementTimeout,
+    Duration inboxPollInterval = _defaultInboxPollInterval,
   }) => AppServices._(
     auth: auth,
     nativeHub: nativeHub,
@@ -207,6 +237,7 @@ final class AppServices {
     configurationMessage: 'Test services are not connected.',
     managedStt: managedStt,
     conversations: conversations,
+    conversationInbox: conversationInbox,
     currentsClient: currentsClient,
     workerOrigin: managedStt == null
         ? null
@@ -215,6 +246,7 @@ final class AppServices {
     assistantRefreshLead: assistantRefreshLead,
     assistantMinimumRefreshDelay: assistantMinimumRefreshDelay,
     approvalAcknowledgementTimeout: approvalAcknowledgementTimeout,
+    inboxPollInterval: inboxPollInterval,
   );
 
   final AuthController auth;
@@ -228,6 +260,7 @@ final class AppServices {
   final SettingsClient? settings;
   final ChannelClient? channels;
   final ConversationTransport? conversations;
+  final ConversationInboxTransport? _conversationInbox;
   final CurrentsController? currents;
   final CurrentsClient? _currentsClient;
   final WorkerHttpClient? _worker;
@@ -237,6 +270,7 @@ final class AppServices {
   final Duration _assistantRefreshLead;
   final Duration _assistantMinimumRefreshDelay;
   final Duration _approvalAcknowledgementTimeout;
+  final Duration _inboxPollInterval;
   final Future<String> Function(String uid) memoryDatabasePath;
   final _nativeEvents = StreamController<NativeEvent>.broadcast();
   final _chatAuthorityChanges = StreamController<int>.broadcast(sync: true);
@@ -264,6 +298,9 @@ final class AppServices {
   bool _nativeInitialized = false;
   bool _assistantConfigured = false;
   Timer? _assistantRefreshTimer;
+  Timer? _inboxPollTimer;
+  _ActiveInboxItem? _activeInboxItem;
+  bool _inboxPollRunning = false;
   bool _disposed = false;
   Future<void> _lifecycle = Future.value();
 
@@ -288,6 +325,12 @@ final class AppServices {
   }
 
   bool get chatReady => productionReady && _nativeInitialized;
+
+  bool get _canPollConversationInbox =>
+      _conversationInbox != null &&
+      !kIsWeb &&
+      (defaultTargetPlatform == TargetPlatform.macOS ||
+          defaultTargetPlatform == TargetPlatform.windows);
 
   void configureAssistant({
     required AssistantProvider provider,
@@ -540,6 +583,7 @@ final class AppServices {
       if (_workerOrigin != null && _assistantRefreshTimer == null) {
         await _configureManagedAssistant(session.uid);
       }
+      _scheduleInboxPoll();
       return;
     }
     await _stopCapture();
@@ -572,11 +616,13 @@ final class AppServices {
       personId: session.uid,
     );
     if (_workerOrigin != null) await _configureManagedAssistant(session.uid);
+    _scheduleInboxPoll(Duration.zero);
   }
 
   void _handleNativeEvent(NativeEvent event) {
     if (!_acceptChatEvent(event)) return;
     _nativeEvents.add(event);
+    _handleInboxEvent(event);
     if (event case NativeEventMemoryCaptured(:final value)) {
       final ingestionKey = _transcriptIngestionByRequest.remove(
         value.requestId,
@@ -675,6 +721,191 @@ final class AppServices {
         _nativeEvents.addError(failure, stackTrace);
       }
     }
+  }
+
+  void _scheduleInboxPoll([Duration? delay]) {
+    if (!_canPollConversationInbox ||
+        !chatReady ||
+        _disposed ||
+        _activeInboxItem != null ||
+        _inboxPollRunning ||
+        _inboxPollTimer != null) {
+      return;
+    }
+    _inboxPollTimer = Timer(delay ?? _inboxPollInterval, () {
+      _inboxPollTimer = null;
+      unawaited(_pollConversationInbox());
+    });
+  }
+
+  Future<void> _pollConversationInbox() async {
+    final inbox = _conversationInbox;
+    final uid = auth.snapshot.session?.uid;
+    if (inbox == null ||
+        _disposed ||
+        !chatReady ||
+        uid == null ||
+        _inboxPollRunning) {
+      return;
+    }
+    final generation = _authorityGeneration;
+    _inboxPollRunning = true;
+    try {
+      final item = await inbox.claim();
+      if (_disposed ||
+          generation != _authorityGeneration ||
+          !chatReady ||
+          auth.snapshot.session?.uid != uid ||
+          item == null) {
+        return;
+      }
+      final requestId = 'chat-channel:${item.id}:${item.attempt}';
+      final active = _ActiveInboxItem(
+        item: item,
+        requestId: requestId,
+        generation: generation,
+      );
+      _activeInboxItem = active;
+      _chatRequests[requestId] = (
+        generation: generation,
+        kind: _ChatRequestKind.message,
+      );
+      try {
+        nativeHub.sendMessage(requestId: requestId, text: item.text);
+      } catch (error) {
+        _chatRequests.remove(requestId);
+        _tombstoneChatRequest(requestId);
+        await _finishInboxItem(
+          active,
+          outcome: ConversationInboxOutcome.retry,
+          error: error.toString(),
+        );
+      }
+    } catch (error, stackTrace) {
+      _nativeEvents.addError(error, stackTrace);
+    } finally {
+      _inboxPollRunning = false;
+      _scheduleInboxPoll();
+    }
+  }
+
+  void _handleInboxEvent(NativeEvent event) {
+    final active = _activeInboxItem;
+    if (active == null || active.generation != _authorityGeneration) return;
+    if (event case NativeEventActionProposal(
+      :final value,
+    ) when value.requestId == active.requestId) {
+      active.approvalResponse =
+          'Approval required on desktop: ${value.title} — ${value.summary}';
+      return;
+    }
+    if (event case NativeEventAssistantDelta(
+      :final value,
+    ) when value.requestId == active.requestId) {
+      active.response.write(value.text);
+      if (value.finalSegment) {
+        final streamedResponse = active.response.toString().trim();
+        final response = streamedResponse.isEmpty
+            ? active.approvalResponse ?? ''
+            : streamedResponse;
+        unawaited(
+          _finishInboxItem(
+            active,
+            outcome: response.isEmpty
+                ? ConversationInboxOutcome.retry
+                : ConversationInboxOutcome.done,
+            responseText: response.isEmpty
+                ? null
+                : _boundedText(response, 4096),
+            error: response.isEmpty
+                ? 'Assistant returned an empty reply.'
+                : null,
+          ),
+        );
+      }
+      return;
+    }
+    if (event case NativeEventError(
+      :final value,
+    ) when value.requestId == active.requestId) {
+      unawaited(
+        _finishInboxItem(
+          active,
+          outcome: ConversationInboxOutcome.retry,
+          error: value.message,
+        ),
+      );
+      return;
+    }
+    if (event case NativeEventToolProgress(:final value)
+        when value.requestId == active.requestId &&
+            (value.status == ToolStatus.failed ||
+                value.status == ToolStatus.cancelled)) {
+      unawaited(
+        _finishInboxItem(
+          active,
+          outcome: ConversationInboxOutcome.retry,
+          error: value.detail ?? value.status.name,
+        ),
+      );
+    }
+  }
+
+  Future<void> _finishInboxItem(
+    _ActiveInboxItem active, {
+    required ConversationInboxOutcome outcome,
+    String? responseText,
+    String? error,
+  }) async {
+    if (!identical(_activeInboxItem, active) ||
+        active.generation != _authorityGeneration ||
+        !chatReady ||
+        active.completing) {
+      return;
+    }
+    active.completing = true;
+    try {
+      await _conversationInbox!.complete(
+        active.item,
+        outcome: outcome,
+        responseText: responseText,
+        error: error == null ? null : _boundedText(error, 1000),
+      );
+    } catch (failure, stackTrace) {
+      active.completing = false;
+      _nativeEvents.addError(failure, stackTrace);
+      if (!identical(_activeInboxItem, active) ||
+          active.generation != _authorityGeneration ||
+          !chatReady) {
+        return;
+      }
+      final remaining = active.item.leaseUntil - _now().millisecondsSinceEpoch;
+      if (remaining <= 0) {
+        _activeInboxItem = null;
+        _scheduleInboxPoll(Duration.zero);
+        return;
+      }
+      _inboxPollTimer = Timer(
+        Duration(
+          milliseconds: min(_inboxPollInterval.inMilliseconds, remaining),
+        ),
+        () {
+          _inboxPollTimer = null;
+          unawaited(
+            _finishInboxItem(
+              active,
+              outcome: outcome,
+              responseText: responseText,
+              error: error,
+            ),
+          );
+        },
+      );
+      return;
+    }
+    active.completing = false;
+    if (identical(_activeInboxItem, active)) _activeInboxItem = null;
+    _scheduleInboxPoll(Duration.zero);
   }
 
   bool _acceptChatEvent(NativeEvent event) {
@@ -855,6 +1086,9 @@ final class AppServices {
 
   void _fenceTranscriptCaptures() {
     _authorityGeneration += 1;
+    _inboxPollTimer?.cancel();
+    _inboxPollTimer = null;
+    _activeInboxItem = null;
     _clearAssistant();
     if (_nativeInitialized) {
       for (final pending in _pendingTranscriptCaptures.values) {
@@ -1046,6 +1280,9 @@ final class AppServices {
 
   void dispose() {
     _disposed = true;
+    _inboxPollTimer?.cancel();
+    _inboxPollTimer = null;
+    _activeInboxItem = null;
     auth.removeListener(_authChanged);
     _clearAssistant();
     _lifecycle = _lifecycle

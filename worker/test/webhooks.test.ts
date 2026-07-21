@@ -53,6 +53,7 @@ beforeAll(async () => {
     "migrations/0005_memory_search.sql",
     "migrations/0007_channel_delivery.sql",
     "migrations/0013_conversations.sql",
+    "migrations/0014_channel_inbox_dispatch.sql",
   ]) {
     const sql = (await Bun.file(migration).text()).replace(
       "PRAGMA foreign_keys = ON;",
@@ -202,6 +203,66 @@ describe("channel webhooks", () => {
     expect(await first.json()).toEqual({ accepted: true, queued: true });
     const duplicate = await send();
     expect(await duplicate.json()).toEqual({ accepted: true, duplicate: true });
+    expect(
+      await database
+        .prepare(
+          "SELECT COUNT(*) AS count FROM channel_inbox WHERE event_id = 'message.received:msg_abc123'",
+        )
+        .first(),
+    ).toEqual({ count: 1 });
+  });
+
+  test("repairs a recorded webhook whose durable enqueue was interrupted", async () => {
+    const now = Date.now();
+    const messageId = "opaque/msg/雪";
+    const eventId = `message.received:${messageId}`;
+    await database
+      .prepare(
+        "INSERT INTO webhook_events (channel, event_id, received_at) VALUES ('blooio', ?1, ?2)",
+      )
+      .bind(eventId, now)
+      .run();
+    const body = JSON.stringify({
+      event: "message.received",
+      message_id: messageId,
+      external_id: "+15551234567",
+      sender: "+15551234567",
+      text: "Recover me",
+      is_group: false,
+    });
+    const response = await app.request(
+      "/v1/webhooks/blooio",
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-blooio-signature": await sign(body),
+        },
+        body,
+      },
+      {
+        DB: database,
+        FIREBASE_PROJECT_ID: "test",
+        BLOOIO_WEBHOOK_SIGNING_SECRET: secret,
+      },
+    );
+
+    expect(await response.json()).toEqual({ accepted: true, duplicate: true });
+    expect(
+      await database
+        .prepare(
+          `SELECT i.id AS inbox_id, i.text, m.text AS conversation_text
+           FROM channel_inbox i
+           JOIN conversation_messages m ON m.uid = i.uid AND m.channel_message_id = i.message_id
+           WHERE i.event_id = ?1`,
+        )
+        .bind(eventId)
+        .first(),
+    ).toEqual({
+      inbox_id: expect.stringMatching(/^channel-inbox:[a-f0-9]{64}$/),
+      text: "Recover me",
+      conversation_text: "Recover me",
+    });
   });
 
   test("fails closed on unsigned Blooio input", async () => {
@@ -215,6 +276,67 @@ describe("channel webhooks", () => {
       },
     );
     expect(response.status).toBe(401);
+  });
+
+  test("does not enqueue blank provider messages", async () => {
+    const telegram = await app.request(
+      "/v1/webhooks/telegram",
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-telegram-bot-api-secret-token": "telegram-secret",
+        },
+        body: JSON.stringify({
+          update_id: 40,
+          message: {
+            message_id: 40,
+            text: "   ",
+            from: { id: 42 },
+            chat: { id: 42 },
+          },
+        }),
+      },
+      {
+        DB: database,
+        FIREBASE_PROJECT_ID: "test",
+        TELEGRAM_WEBHOOK_SECRET: "telegram-secret",
+      },
+    );
+    const blooioBody = JSON.stringify({
+      event: "message.received",
+      message_id: "msg_blank",
+      external_id: "+15551234567",
+      sender: "+15551234567",
+      text: "\n\t",
+      is_group: false,
+    });
+    const blooio = await app.request(
+      "/v1/webhooks/blooio",
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-blooio-signature": await sign(blooioBody),
+        },
+        body: blooioBody,
+      },
+      {
+        DB: database,
+        FIREBASE_PROJECT_ID: "test",
+        BLOOIO_WEBHOOK_SIGNING_SECRET: secret,
+      },
+    );
+
+    expect(await telegram.json()).toEqual({ accepted: true, queued: false });
+    expect(await blooio.json()).toEqual({ accepted: true, queued: false });
+    expect(
+      await database
+        .prepare(
+          "SELECT COUNT(*) AS count FROM channel_inbox WHERE event_id IN ('40', 'message.received:msg_blank')",
+        )
+        .first(),
+    ).toEqual({ count: 0 });
   });
 
   test("rejects oversized signed Blooio text before storage", async () => {

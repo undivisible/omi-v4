@@ -1,7 +1,7 @@
 import 'dart:async';
-import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:omi/app_services.dart';
 import 'package:omi/api/worker_http.dart';
@@ -13,6 +13,238 @@ import 'package:omi/native/generated/signals/signals.dart';
 import 'package:omi/native/native_hub.dart';
 
 void main() {
+  test(
+    'desktop channel inbox runs one stable assistant request at a time',
+    () async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+      addTearDown(() => debugDefaultTargetPlatformOverride = null);
+      final auth = AuthController(
+        _FakeAuthGateway(_session('user-a')),
+        consentStore: VolatileConsentStore()..receipt = _receipt('user-a'),
+      );
+      await auth.restoreSession();
+      final hub = _FakeHub();
+      final inbox = _FakeConversationInboxTransport()
+        ..completionFailures = 1
+        ..items.add(
+          const ConversationInboxItem(
+            id: 'inbox-message-1',
+            channel: 'telegram',
+            text: 'What should I focus on?',
+            channelMessageId: 'telegram-message-1',
+            receivedAt: 1,
+            attempt: 2,
+            leaseToken: 'lease-token-1',
+            leaseUntil: 4102444800000,
+          ),
+        )
+        ..items.add(
+          const ConversationInboxItem(
+            id: 'inbox-message-action',
+            channel: 'telegram',
+            text: 'Click the button',
+            channelMessageId: 'telegram-message-action',
+            receivedAt: 2,
+            attempt: 1,
+            leaseToken: 'lease-token-action',
+            leaseUntil: 300002,
+          ),
+        );
+      final services = AppServices.forTesting(
+        auth: auth,
+        nativeHub: hub,
+        deviceRelay: DeviceRelayService(
+          role: DeviceRelayRole.desktopObserver,
+          adapter: const UnavailableDeviceRelayAdapter(),
+        ),
+        memoryDatabasePath: (uid) => '/tmp/$uid.sqlite3',
+        conversationInbox: inbox,
+        inboxPollInterval: const Duration(milliseconds: 1),
+      );
+
+      await services.initialize();
+      await _waitFor(() => hub.messages.isNotEmpty);
+      expect(hub.messages.single, (
+        'chat-channel:inbox-message-1:2',
+        'What should I focus on?',
+      ));
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+      expect(inbox.claims, 1);
+
+      hub.eventsController.add(
+        const NativeEventAssistantDelta(
+          value: AssistantDelta(
+            requestId: 'chat-channel:inbox-message-1:2',
+            text: 'Finish ',
+            finalSegment: false,
+          ),
+        ),
+      );
+      hub.eventsController.add(
+        const NativeEventAssistantDelta(
+          value: AssistantDelta(
+            requestId: 'chat-channel:inbox-message-1:2',
+            text: 'the launch.',
+            finalSegment: true,
+          ),
+        ),
+      );
+      await _waitFor(() => inbox.completed.isNotEmpty);
+      expect(inbox.completed.single.outcome, ConversationInboxOutcome.done);
+      expect(inbox.completed.single.responseText, 'Finish the launch.');
+      expect(inbox.completionCalls, 2);
+      expect(
+        hub.messages
+            .where((message) => message.$1 == 'chat-channel:inbox-message-1:2')
+            .length,
+        1,
+      );
+      await _waitFor(() => hub.messages.length == 2);
+      hub.eventsController.add(
+        const NativeEventActionProposal(
+          value: ActionProposal(
+            proposalId: 'channel-action',
+            requestId: 'chat-channel:inbox-message-action:1',
+            title: 'Click on screen',
+            summary: 'Click at (10, 20)',
+            risk: ActionRisk.external,
+          ),
+        ),
+      );
+      hub.eventsController.add(
+        const NativeEventAssistantDelta(
+          value: AssistantDelta(
+            requestId: 'chat-channel:inbox-message-action:1',
+            text: '',
+            finalSegment: true,
+          ),
+        ),
+      );
+      await _waitFor(() => inbox.completed.length == 2);
+      expect(
+        inbox.completed.last.responseText,
+        'Approval required on desktop: Click on screen — Click at (10, 20)',
+      );
+
+      services.dispose();
+      await hub.close();
+    },
+  );
+
+  test('desktop channel inbox retries terminal assistant failures', () async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    final auth = AuthController(
+      _FakeAuthGateway(_session('user-a')),
+      consentStore: VolatileConsentStore()..receipt = _receipt('user-a'),
+    );
+    await auth.restoreSession();
+    final hub = _FakeHub();
+    final inbox = _FakeConversationInboxTransport()
+      ..items.add(
+        const ConversationInboxItem(
+          id: 'inbox-message-2',
+          channel: 'blooio',
+          text: 'Summarize today',
+          channelMessageId: 'blooio-message-1',
+          receivedAt: 1,
+          attempt: 1,
+          leaseToken: 'lease-token-2',
+          leaseUntil: 300001,
+        ),
+      );
+    final services = AppServices.forTesting(
+      auth: auth,
+      nativeHub: hub,
+      deviceRelay: DeviceRelayService(
+        role: DeviceRelayRole.desktopObserver,
+        adapter: const UnavailableDeviceRelayAdapter(),
+      ),
+      memoryDatabasePath: (uid) => '/tmp/$uid.sqlite3',
+      conversationInbox: inbox,
+      inboxPollInterval: const Duration(milliseconds: 1),
+    );
+
+    await services.initialize();
+    await _waitFor(() => hub.messages.isNotEmpty);
+    hub.eventsController.add(
+      const NativeEventError(
+        value: NativeError(
+          requestId: 'chat-channel:inbox-message-2:1',
+          code: 'provider_unavailable',
+          message: 'Try later',
+          retryable: true,
+        ),
+      ),
+    );
+    await _waitFor(() => inbox.completed.isNotEmpty);
+    expect(inbox.completed.single.outcome, ConversationInboxOutcome.retry);
+    expect(inbox.completed.single.error, 'Try later');
+
+    services.dispose();
+    await hub.close();
+  });
+
+  test(
+    'desktop channel inbox fences late replies after authority loss',
+    () async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+      addTearDown(() => debugDefaultTargetPlatformOverride = null);
+      final gateway = _FakeAuthGateway(_session('user-a'));
+      final auth = AuthController(
+        gateway,
+        consentStore: VolatileConsentStore()..receipt = _receipt('user-a'),
+      );
+      await auth.restoreSession();
+      final hub = _FakeHub();
+      final inbox = _FakeConversationInboxTransport()
+        ..items.add(
+          const ConversationInboxItem(
+            id: 'inbox-message-3',
+            channel: 'telegram',
+            text: 'Private request',
+            channelMessageId: 'telegram-message-3',
+            receivedAt: 1,
+            attempt: 1,
+            leaseToken: 'lease-token-3',
+            leaseUntil: 300001,
+          ),
+        );
+      final services = AppServices.forTesting(
+        auth: auth,
+        nativeHub: hub,
+        deviceRelay: DeviceRelayService(
+          role: DeviceRelayRole.desktopObserver,
+          adapter: const UnavailableDeviceRelayAdapter(),
+        ),
+        memoryDatabasePath: (uid) => '/tmp/$uid.sqlite3',
+        conversationInbox: inbox,
+        inboxPollInterval: const Duration(milliseconds: 1),
+      );
+
+      await services.initialize();
+      await _waitFor(() => hub.messages.isNotEmpty);
+      gateway.emit(null);
+      await _waitFor(
+        () => hub.cancelled.contains('chat-channel:inbox-message-3:1'),
+      );
+      hub.eventsController.add(
+        const NativeEventAssistantDelta(
+          value: AssistantDelta(
+            requestId: 'chat-channel:inbox-message-3:1',
+            text: 'Must not cross accounts',
+            finalSegment: true,
+          ),
+        ),
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+      expect(inbox.completed, isEmpty);
+
+      services.dispose();
+      await hub.close();
+    },
+  );
+
   testWidgets('chat sends, streams progress, cancels, and approves proposals', (
     tester,
   ) async {
@@ -1160,6 +1392,49 @@ final class _FakeConversationTransport implements ConversationTransport {
     final barrier = replayBarrier;
     if (barrier != null) return barrier.future;
     return replayed.where((message) => message.cursor > after).toList();
+  }
+}
+
+final class _FakeConversationInboxTransport
+    implements ConversationInboxTransport {
+  final items = <ConversationInboxItem>[];
+  final completed =
+      <
+        ({
+          ConversationInboxItem item,
+          ConversationInboxOutcome outcome,
+          String? responseText,
+          String? error,
+        })
+      >[];
+  int claims = 0;
+  int completionCalls = 0;
+  int completionFailures = 0;
+
+  @override
+  Future<ConversationInboxItem?> claim() async {
+    claims += 1;
+    return items.isEmpty ? null : items.removeAt(0);
+  }
+
+  @override
+  Future<void> complete(
+    ConversationInboxItem item, {
+    required ConversationInboxOutcome outcome,
+    String? responseText,
+    String? error,
+  }) async {
+    completionCalls += 1;
+    if (completionFailures > 0) {
+      completionFailures -= 1;
+      throw StateError('completion unavailable');
+    }
+    completed.add((
+      item: item,
+      outcome: outcome,
+      responseText: responseText,
+      error: error,
+    ));
   }
 }
 

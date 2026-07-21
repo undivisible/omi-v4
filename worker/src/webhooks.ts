@@ -159,51 +159,53 @@ const enqueue = async (
   if (!binding) return false;
   const uid = String(binding.uid);
   const now = Date.now();
-  const inserted = await database.batch([
-    database
-      .prepare(
-        `INSERT OR IGNORE INTO channel_inbox
-           (id, uid, channel, event_id, message_id, channel_user_id, channel_chat_id, text, payload, received_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)`,
-      )
-      .bind(
-        crypto.randomUUID(),
-        uid,
-        channel,
-        eventId,
-        messageId,
-        channelUserId,
-        channelChatId,
-        text,
-        JSON.stringify(payload),
-        now,
-      ),
-    database
-      .prepare(
-        `INSERT INTO audit_events
-           (id, uid, actor_type, action, target_type, target_id, details, created_at)
-         VALUES (?1, ?2, 'channel', 'channel.message_received', 'message', ?3, ?4, ?5)`,
-      )
-      .bind(
-        crypto.randomUUID(),
-        uid,
-        messageId,
-        JSON.stringify({ channel, channelChatId }),
-        now,
-      ),
-  ]);
-  if (inserted[0].meta.changes === 1) {
-    await appendConversationMessage(database, {
+  const eventHash = await digest(`${channel}\u0000${eventId}`);
+  const message = await appendConversationMessage(
+    database,
+    {
       uid,
-      clientMessageId: `channel:${channel}:${eventId}`,
+      clientMessageId: `channel:${channel}:${eventHash}`,
       role: "user",
       source: channel,
       text,
       channelMessageId: messageId,
       createdAt: now,
-    });
-  }
-  return true;
+    },
+    [
+      database
+        .prepare(
+          `INSERT OR IGNORE INTO channel_inbox
+           (id, uid, channel, event_id, message_id, channel_user_id, channel_chat_id, text, payload, received_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)`,
+        )
+        .bind(
+          `channel-inbox:${eventHash}`,
+          uid,
+          channel,
+          eventId,
+          messageId,
+          channelUserId,
+          channelChatId,
+          text,
+          JSON.stringify(payload),
+          now,
+        ),
+      database
+        .prepare(
+          `INSERT OR IGNORE INTO audit_events
+           (id, uid, actor_type, action, target_type, target_id, details, created_at)
+         VALUES (?1, ?2, 'channel', 'channel.message_received', 'message', ?3, ?4, ?5)`,
+        )
+        .bind(
+          `channel-message:${eventHash}`,
+          uid,
+          messageId,
+          JSON.stringify({ channel, channelChatId }),
+          now,
+        ),
+    ],
+  );
+  return message !== null;
 };
 
 const linkToken = (text: string, telegram = false): string | null => {
@@ -230,8 +232,7 @@ webhooks.post("/telegram", async (context) => {
   if (!Number.isSafeInteger(body?.update_id))
     return context.json({ error: "Invalid update" }, 400);
   const eventId = String(body?.update_id);
-  if (!(await recordWebhook(context.env.DB, "telegram", eventId)))
-    return context.json({ accepted: true, duplicate: true });
+  const fresh = await recordWebhook(context.env.DB, "telegram", eventId);
   const message = body?.message;
   const messageId = message?.message_id;
   const fromId = message?.from?.id;
@@ -244,13 +245,16 @@ webhooks.post("/telegram", async (context) => {
     typeof telegramChatId !== "number" ||
     !Number.isSafeInteger(telegramChatId) ||
     typeof message?.text !== "string" ||
+    message.text.trim().length === 0 ||
     message.text.length > 20_000
   )
     return context.json({ accepted: true, queued: false });
   const userId = String(fromId);
   const chatId = String(telegramChatId);
-  const token = linkToken(message.text.trim(), true);
+  const messageText = message.text.trim();
+  const token = linkToken(messageText, true);
   if (token) {
+    if (!fresh) return context.json({ accepted: true, duplicate: true });
     const linked = await bind(
       context.env.DB,
       "telegram",
@@ -267,9 +271,10 @@ webhooks.post("/telegram", async (context) => {
     String(messageId),
     userId,
     chatId,
-    message.text,
+    messageText,
     body,
   );
+  if (!fresh) return context.json({ accepted: true, duplicate: true });
   return context.json({ accepted: queued, queued });
 });
 
@@ -303,20 +308,21 @@ webhooks.post("/blooio", async (context) => {
     typeof body.message_id !== "string" ||
     typeof body.external_id !== "string" ||
     typeof body.sender !== "string" ||
-    (body.text !== null && typeof body.text !== "string") ||
-    (typeof body.text === "string" && body.text.length > 20_000)
+    typeof body.text !== "string" ||
+    body.text.trim().length === 0 ||
+    body.text.length > 20_000
   )
     return context.json({ accepted: true, queued: false });
   const eventId = `${body.event}:${body.message_id}`;
-  if (!(await recordWebhook(context.env.DB, "blooio", eventId)))
-    return context.json({ accepted: true, duplicate: true });
+  const fresh = await recordWebhook(context.env.DB, "blooio", eventId);
   const chatId =
     body.is_group === true && typeof body.group_id === "string"
       ? body.group_id
       : body.external_id;
-  const messageText = body.text ?? "";
-  const token = linkToken(messageText.trim());
+  const messageText = body.text.trim();
+  const token = linkToken(messageText);
   if (token) {
+    if (!fresh) return context.json({ accepted: true, duplicate: true });
     const linked = await bind(
       context.env.DB,
       "blooio",
@@ -336,6 +342,7 @@ webhooks.post("/blooio", async (context) => {
     messageText,
     body,
   );
+  if (!fresh) return context.json({ accepted: true, duplicate: true });
   return context.json({ accepted: queued, queued });
 });
 

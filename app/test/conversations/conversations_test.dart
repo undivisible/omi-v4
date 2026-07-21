@@ -8,6 +8,57 @@ import 'package:omi/auth/auth.dart';
 import 'package:omi/conversations/conversations.dart';
 
 void main() {
+  test('claims and completes a channel inbox lease', () async {
+    final requests = <http.Request>[];
+    final client = WorkerHttpClient(
+      baseUri: Uri.parse('https://api.example.test'),
+      sessionProvider: () async => AuthSession(
+        uid: 'alpha',
+        idToken: 'token',
+        expiresAt: DateTime.now().add(const Duration(minutes: 5)),
+      ),
+      client: MockClient((request) async {
+        requests.add(request);
+        if (request.url.path.endsWith('/claim')) {
+          return http.Response(
+            jsonEncode({
+              'item': {
+                'id': 'inbox-message-1',
+                'channel': 'telegram',
+                'text': 'Hello',
+                'channelMessageId': 'provider-message-1',
+                'receivedAt': 1,
+                'attempt': 1,
+                'leaseToken': 'lease-token-1',
+                'leaseUntil': 300001,
+              },
+            }),
+            200,
+          );
+        }
+        return http.Response(jsonEncode({'status': 'done'}), 200);
+      }),
+    );
+    final transport = WorkerConversationTransport(client);
+
+    final item = await transport.claim();
+    await transport.complete(
+      item!,
+      outcome: ConversationInboxOutcome.done,
+      responseText: 'Hi back',
+    );
+
+    expect(requests, hasLength(2));
+    expect(requests.first.method, 'POST');
+    expect(requests.last.method, 'POST');
+    expect(jsonDecode(requests.last.body), {
+      'leaseToken': 'lease-token-1',
+      'outcome': 'done',
+      'responseText': 'Hi back',
+    });
+    client.close();
+  });
+
   test('replays every ordered conversation page', () async {
     final requestedAfter = <String?>[];
     final client = WorkerHttpClient(
