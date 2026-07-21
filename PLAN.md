@@ -51,10 +51,10 @@ The reusable memory engine lives in the public [`tschk/zkr`](https://github.com/
 - [x] Verify the `zkr` evidence, temporal-claim, profile, review, and retrieval core.
 - [ ] Verify the Flutter gradient shell and every onboarding, navigation, and product surface on target platforms.
 - [x] Verify the Bun/Hono Worker contracts, D1 schema, auth boundary, and channel webhook boundaries.
-- [ ] Complete production Dart consumption of generated Rinf signals and published `zkr` memory storage/search.
+- [x] Complete production Dart consumption of generated Rinf signals and published `zkr` memory storage/search.
 - [x] Implement Worker D1 persistence, Stripe entitlement, Telegram linking/ingestion, and Blooio linking/ingestion with fail-closed signatures.
-- [ ] Route the implemented mobile Omi BLE discovery/connection/audio stream through bounded Rinf events into sourced memory.
-- [ ] Prove Android, iOS without signing, macOS, Windows, and web release builds in CI and on available local hosts.
+- [ ] Route the implemented mobile Omi BLE discovery/connection/audio stream through bounded Rinf events into sourced memory; bounded PCM8/PCM16/Opus forwarding is implemented, while transcription, sourced-memory capture, and physical-device proof remain.
+- [ ] Prove Android, iOS without signing, macOS, Windows, and web release builds in CI; workflows exist, but no green combined multi-platform run has been recorded for this tree.
 - [ ] Wire Firebase Auth, real channel delivery, physical Omi hardware, desktop permissions/computer use, and model routes against real credentials and devices.
 
 ## Initial modules
@@ -82,13 +82,15 @@ Native builds link the full hub. Web builds use the same signal schema but compi
 
 ## Onboarding
 
-1. Sign in with phone OTP, Google, or Apple; explain memory and AI consent before processing personal data.
+1. Sign in with phone OTP, Google, or Apple; explain Firebase's authentication disclosure separately from memory and AI processing consent.
 2. Ask three conversational questions: identity, current priorities, and what the user wants Omi to notice or help with.
 3. Require each platform's applicable core desktop capabilities, then scan and show editable “what I understand about you” evidence.
 4. Teach voice by asking the user to say “What are my tasks?” and render the real tasks returned by the assistant.
 5. Continue into the main screen with setup tasks for Calendar, Reminders, Contacts, Location, Telegram, Blooio, Notion, providers, and Omi hardware.
 
 Use upstream Flutter's mature consent, name, language, permission, knowledge-graph, and device flows. Use `omi-v3`'s gradient profile conversation as presentation, not application code.
+
+Production memory, screen, audio, AI, and channel processing requires a durable, versioned consent receipt bound to the current Firebase UID and exact enabled scopes. Authentication alone grants no processing authority. Revocation removes local authority before asynchronous provider sign-out, and an account change invalidates a receipt issued to another UID.
 
 ## Desktop capabilities
 
@@ -266,10 +268,10 @@ Keep `grok-composer-2.5-fast` only when the authenticated xAI catalog returns it
 | Slice | Implemented | Proof still required |
 | --- | --- | --- |
 | Product shell | Gradient Flutter navigation, onboarding, chat, Memory, Currents, Devices, Setup, and Account | Rendered accessibility/responsive audit on every target |
-| Native hub | Generated Rinf signals, bounded/reaped command registry, ordered configuration, nonblocking/idempotent `zkr` capture/search, cancellation, bounded audio sessions, `rx4`, and `rs_peekaboo` | Production Dart configuration/event consumption, native lifecycle stress, and Rinf generation-drift CI |
-| Mobile relay | Omi-filtered BLE discovery, connect/discover, battery/codec reads, audio subscription, disconnect | Forward bounded audio into Rinf and sourced memory; physical iOS/Android sessions and background recovery |
+| Native hub | Generated Rinf signals, UID-scoped production Dart configuration/event consumption, bounded/reaped command registry, ordered configuration, nonblocking/idempotent `zkr` capture/search, cancellation, bounded audio sessions, `rx4`, and `rs_peekaboo` | Native lifecycle stress and a green CI run of the implemented Rinf generation-drift gate |
+| Mobile relay | Omi-filtered BLE discovery, connect/discover, battery/codec reads, bounded sequenced PCM8/PCM16/Opus forwarding, disconnect/EOS, and restart handling | Transcription into sourced memory, physical iOS/Android sessions, and background recovery |
 | SaaS backend | Firebase-token boundary, D1 memory/settings, Stripe entitlements, Telegram, Blooio, and cited retrieval | Real Firebase/Stripe/channel credentials, outbound delivery, retries, and preview deployment |
-| Platform packages | Web release, Android release APK, and universal macOS 12 release app proven locally | iOS no-sign release, Windows release, then CI artifacts for every target |
+| Platform packages | Web release, Android release APK, universal macOS 12 release app, and a prior green Android/iOS/macOS/Windows/web CI run | Repeat the combined CI run for the current authentication and relay tree |
 
 Do not count a compiled adapter as a deployed integration. Credentialed provider tests, physical-device tests, release packages, CI, and public deployment remain separate proof layers.
 
@@ -306,7 +308,7 @@ Do not count a compiled adapter as a deployed integration. Credentialed provider
 
 ## Known constraints
 
-- Upstream Firebase configuration lacks Windows support; create and validate it.
+- Firebase phone authentication on macOS and Windows uses the implemented browser handoff with a short-lived PKCE verifier, explicit matching confirmation code, atomic attempt lockout, and single-use custom-token exchange; deployment still requires real Firebase and Worker configuration.
 - Omi hardware capture is mobile-owned in v0 because upstream has no macOS/Windows BLE bridge and browsers cannot provide equivalent background BLE.
 - `rx4` and `rs_peekaboo` need feature-gated audits for mobile and wasm linking.
 - `omi-v3` implements MiMo ASR/translation but not managed MiMo Pro chat, Telegram, Grok voice, or a complete Recommendation Memory lifecycle.
@@ -317,7 +319,7 @@ Do not count a compiled adapter as a deployed integration. Credentialed provider
 
 ## Immediate next task
 
-Commit and push the audited Flutter/Rinf/BLE/platform slices, then prove CI artifacts and the remaining iOS no-sign and Windows release builds. After CI is green, implement real Firebase sign-in and preview Cloudflare bindings before calling the product deployed. Estimated focused time for the current commit/CI checkpoint: 30–60 minutes, dominated by native CI builds.
+Commit and push the audited Firebase authentication, processing-consent, desktop browser handoff, Flutter/Rinf/BLE, and binding-drift slices. Then prove the combined multi-platform CI artifacts and exercise Firebase plus preview Cloudflare bindings with real test credentials before calling the product deployed. Estimated focused time for this commit/CI checkpoint: 30–60 minutes, dominated by native CI builds.
 
 ## Progress log
 
@@ -329,3 +331,4 @@ Commit and push the audited Flutter/Rinf/BLE/platform slices, then prove CI arti
 - 2026-07-21: Published `zkr 0.1.1`, integrated its source/evidence retrieval and projection lifecycle into the Rinf hub, implemented mobile BLE relay and Worker SaaS/channel boundaries, and moved the roadmap from scaffolding to release-build and credentialed-integration proof.
 - 2026-07-21: Replaced the provisional four-boolean desktop permission gate with platform-aware capability states; macOS uses TCC/direct distribution while Windows uses limited UI Automation, privacy-aware microphone access, and per-session capture selection.
 - 2026-07-21: Published `zkr 0.1.2` with idempotent ingestion and hardened OpenClaw/Hermes plugins; audited the Omi runtime for bounded tasks, shutdown, cancellation, audio lifecycle, configuration ordering, and retry-safe capture.
+- 2026-07-21: Published `zkr 0.1.3`, added UID-bound Firebase authentication and versioned processing consent, implemented guarded macOS/Windows browser handoff, and connected bounded BLE PCM8/PCM16/Opus audio with deterministic EOS into the Rinf hub.
