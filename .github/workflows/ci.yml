@@ -19,8 +19,10 @@ jobs:
         with:
           channel: stable
           cache: true
+      - run: cargo install rinf_cli --version 8.10.0 --locked
+      - run: bash tool/check_rinf_bindings.sh
       - run: dart format --output=none --set-exit-if-changed .
-      - run: flutter analyze
+      - run: bash tool/analyze.sh
       - run: flutter test
       - run: flutter build web
       - run: flutter build apk --release
