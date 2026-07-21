@@ -58,7 +58,7 @@ The reusable memory engine lives in the public [`tschk/zkr`](https://github.com/
 - [x] Implement the first evidence-backed Current end to end: cited candidate generation, deterministic ranking, feedback, approved action handoff, and outcome learning.
 - [x] Connect channel messages to the desktop agent with UID-scoped ordered leases, offline retry, atomic conversation persistence, and durable outbound replies.
 - [ ] Prove Telegram and Blooio round trips with real credentials and a continuously connected desktop client.
-- [ ] Finish desktop both-Shift voice capture; native macOS/Windows key events and the shared gesture state machine exist, but the microphone path and physical Windows proof do not.
+- [ ] Finish desktop both-Shift voice capture; the global gesture, microphone/STT path, and failure-safe teardown exist, but physical Windows proof does not.
 - [x] Complete the audited live-STT slice between bounded Omi BLE/Rinf audio and idempotent final-transcript `zkr` capture, including managed/BYOK provider routing, reconnect gaps, final drain, cancellation, and typed stop acknowledgements.
 - [ ] Re-prove Android, iOS without signing, macOS, Windows, and web release builds on the exact release head after this integration lands.
 - [ ] Wire Firebase Auth, real channel delivery, physical Omi hardware, desktop permissions/computer use, and model routes against real credentials and devices.
