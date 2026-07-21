@@ -1,6 +1,7 @@
 #include "flutter_window.h"
 
 #include <UIAutomation.h>
+#include <flutter/event_stream_handler_functions.h>
 #include <shellapi.h>
 
 #include <optional>
