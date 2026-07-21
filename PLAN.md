@@ -238,7 +238,11 @@ MCP, integration, and computer-use schemas are deferred. Search returns compact 
 
 Use direct typed tool calls for one atomic read or mutation. Use sandboxed programmatic tool calling for three or more dependent operations, loops, joins, filtering, aggregation, or large intermediate results. Generated code can call only broker-exposed typed tools; every consequential effect still passes through the same policy, validation, idempotency, and audit boundary.
 
+The task executor records a bounded progress fingerprint after each step. Repeated identical calls, repeated failures, or no material progress stop safe automatic retries and ask the user; an ambiguous side effect is never replayed and remains `unknown` until reconciled or replaced by a newly approved attempt.
+
 Compaction preserves unresolved user constraints, task leases, policy/approval receipts, and tool call/result pairing. Large artifacts and audit records stay outside the prompt behind stable handles and are retrieved on demand.
+
+A typed setup-health report checks Firebase, Worker bindings, channel links, model routes, desktop permissions, memory, and device relay without exposing credentials or running arbitrary shell probes. Onboarding and Settings render the same report.
 
 ### Model delegation boundary
 
@@ -294,6 +298,7 @@ Keep `grok-composer-2.5-fast` only when the authenticated xAI catalog returns it
 | Mobile relay | Omi-filtered BLE discovery, connect/discover, battery/codec reads, bounded sequenced PCM8/PCM16/Opus reassembly, native PCM8-to-linear16 conversion, disconnect/EOS, restart handling, and completed-transcript capture into evidenced `zkr` memory | Credentialed live Deepgram, physical iOS/Android sessions, and background recovery |
 | SaaS backend | Firebase-token boundary, D1 memory/settings, Stripe entitlements, Telegram, Blooio, cited retrieval, durable channel-to-desktop leases, and serialized outbound delivery | Real Firebase/Stripe/channel credentials and preview deployment |
 | Shared conversation | UID-scoped persistence, ordered replay, desktop channel dispatch, offline retry, and atomic outbound replies | Live app/web refresh and credentialed Telegram/Blooio proof |
+| Desktop voice | Both-Shift tap/hold/hands-free state machine, macOS/Windows PCM16 capture, permission-first managed STT, authority fencing, final transcript submission, acknowledged pre-EOS cancellation, and navigation/error cleanup | Physical macOS/Windows shortcut tests, Windows negotiated-format proof, and credentialed managed-STT proof |
 | Currents and reflection | Validated Current state model, native signal shape, memory evidence/review primitives, and empty-state UI | Candidate generation/ranking, D1 persistence, feedback/action lifecycle, outcome learning, and idempotent nightly Daily Review orchestration |
 | Platform packages | Web release, Android release APK, universal macOS 12 release app, Windows release, and exact-head Android/iOS/macOS/Windows/web CI proof | Signed physical-device installation and release-channel distribution |
 
