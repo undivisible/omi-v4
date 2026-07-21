@@ -56,7 +56,7 @@ The reusable memory engine lives in the public [`tschk/zkr`](https://github.com/
 - [x] Implement Worker D1 persistence, Stripe entitlement, Telegram linking/ingestion, and Blooio linking/ingestion with fail-closed signatures.
 - [ ] Connect the durable Telegram/Blooio inbox and app/web chat to one Firebase-UID-scoped conversation transport; channel storage and delivery exist, but live desktop-session routing, replay cursors, and multi-client conflict handling do not.
 - [ ] Implement the first evidence-backed Current end to end: candidate generation, ranking, feedback, approved action handoff, and outcome learning. The domain model and empty-state screen exist; persistence and orchestration do not.
-- [ ] Complete the audited live-STT slice between the implemented bounded Omi BLE/Rinf stream and idempotent final-transcript memory capture; Rust session ownership, provider routing, reconnect semantics, and physical-device proof remain.
+- [x] Complete the audited live-STT slice between bounded Omi BLE/Rinf audio and idempotent final-transcript `zkr` capture, including managed/BYOK provider routing, reconnect gaps, final drain, cancellation, and typed stop acknowledgements.
 - [x] Prove Android, iOS without signing, macOS, Windows, and web release builds in CI; exact-head run 29842868977 passed with Worker and Rust gates on 2026-07-21.
 - [ ] Wire Firebase Auth, real channel delivery, physical Omi hardware, desktop permissions/computer use, and model routes against real credentials and devices.
 
@@ -107,6 +107,8 @@ Model native access as typed states: `unsupported`, `notApplicable`, `unknown`, 
 | Broad file access | Require concrete-root access and guide Full Disk Access | Report actual ACL scope as limited; no equivalent grant | File and workspace discovery for the second brain |
 
 The macOS v0 is notarized direct distribution without App Sandbox because broad workspace discovery conflicts with sandbox scope. Windows remains `asInvoker`; do not request elevation or `uiAccess` merely to satisfy onboarding.
+
+Windows computer use is a first-class `rs_peekaboo` path: it must inspect UI Automation targets and execute policy-approved pointer clicks and keyboard text entry. Process-integrity boundaries may prevent control of elevated applications, but Windows itself is not a read-only or unsupported target.
 
 Calendar, Reminders, Contacts, and Location remain prominent post-onboarding setup tasks. Camera and Photos are omitted until a concrete feature needs them.
 
@@ -174,7 +176,7 @@ Flutter sends `StartTranscription` before the first binary audio chunk with the 
 - Managed chat uses the OpenAI-compatible streaming contract at `/v1/chat/completions`. `rs_ai` emits `stream_options.include_usage: true`; the Worker applies its bounded default when `max_tokens` is absent and rejects requests above its output-token ceiling.
 - BYOK credentials are loaded from platform secure storage, passed once to the native session, and never placed in preferences, URLs, logs, events, or durable storage. Local STT receives no credential.
 - Deepgram Nova-3 is the first live multilingual route. `multi` means provider auto-detection; unsupported explicit languages fail with a typed error and may fall back only to a route that declares support. Local Whisper/Apple is fallback where its language and device capability are proven. MiMo ASR remains recorded/batch-only.
-- Provider connections use keepalive, bounded jittered retries, and cancellation on EOS, consent revocation, or authority change. During reconnect, retain at most two seconds of newly arriving encoded audio and apply backpressure at capacity. Never replay already-sent unacknowledged audio; increment the STT epoch and emit an explicit source gap if bounded audio is lost.
+- Provider connections use keepalive, bounded 250/500/1000 ms BYOK retries, and cancellation on EOS, consent revocation, or authority change. During reconnect, the 64 KiB audio queue remains bounded; disconnected audio that cannot be retained is rejected with an explicit source gap. Never replay already-sent unacknowledged audio; increment the STT epoch when the provider connection changes.
 - A transcript segment keeps the audio stream ID, deterministic segment ID, immutable logical segment sequence across reconnects, STT epoch, device/source ID, provider, language, audio-derived start/end time, text, and final flag. Revisions reuse the segment identity; only final segments enter `zkr`, keyed by Firebase UID, stream, and logical segment sequence.
 
 ## Desktop both-Shift gesture
@@ -257,6 +259,7 @@ Use a same-model subagent only when the task needs independent deep reasoning or
 - Hosted scheduled work and higher channel/action limits.
 - Stripe webhook entitlement is checked on every managed route.
 - Managed `mimo-v2.5-pro` planning uses Xiaomi's official overseas pay-as-you-go price published at https://platform.xiaomimimo.com/docs/en-US/price/pay-as-you-go and verified 2026-07-21: USD $0.435 per million uncached input tokens and $0.87 per million output tokens. Worker micro-USD price variables remain configurable and fail closed when missing, non-integral, or non-positive.
+- Managed Deepgram Nova-3 reservations use a conservative USD $0.01 per minute ceiling. [Deepgram's official pricing](https://deepgram.com/pricing) was verified 2026-07-21 at $0.0077 per minute for monolingual and $0.0092 per minute for multilingual pay-as-you-go transcription; the Worker rounds above both rates and fails closed on an invalid price.
 - Admission estimates use cache-miss input pricing, the requested output ceiling, UTF-8 content and role bytes, plus fixed per-request and per-message framing reserves. Actual provider usage atomically settles the rolling reservation, including overruns; missing usage retains the conservative reserve and stale requests are reconciled after crashes.
 
 ### Routing
@@ -284,8 +287,8 @@ Keep `grok-composer-2.5-fast` only when the authenticated xAI catalog returns it
 | Slice | Implemented | Proof still required |
 | --- | --- | --- |
 | Product shell | Gradient Flutter navigation, onboarding, chat, Memory, Currents, Devices, Setup, and Account | Rendered accessibility/responsive audit on every target |
-| Native hub | Generated Rinf signals, UID-scoped production Dart configuration/event consumption, bounded/reaped command registry, ordered configuration, nonblocking/idempotent `zkr` capture/search, cancellation, bounded audio acceptance, `rx4`, and `rs_peekaboo` | Implement audited STT session ownership, decoding/provider routes, reconnect/gap handling, sourced deltas, native lifecycle stress, and a green Rinf drift run |
-| Mobile relay | Omi-filtered BLE discovery, connect/discover, battery/codec reads, bounded sequenced PCM8/PCM16/Opus forwarding, disconnect/EOS, restart handling, and completed-transcript capture into evidenced `zkr` memory | Credentialed live Deepgram plus local fallback, physical iOS/Android sessions, and background recovery |
+| Native hub | Generated Rinf signals, UID-scoped production Dart configuration/event consumption, bounded/reaped command registry, ordered configuration, nonblocking/idempotent `zkr` 0.1.5 capture/search with transcript locators, managed/BYOK live STT, source gaps, final drain, typed stop acknowledgements, atomic computer-use approval/execution, cancellation, `rx4`, and `rs_peekaboo` | Credentialed live-provider proof, physical-device lifecycle stress, and local STT only after a real provider exists |
+| Mobile relay | Omi-filtered BLE discovery, connect/discover, battery/codec reads, bounded sequenced PCM8/PCM16/Opus reassembly, native PCM8-to-linear16 conversion, disconnect/EOS, restart handling, and completed-transcript capture into evidenced `zkr` memory | Credentialed live Deepgram, physical iOS/Android sessions, and background recovery |
 | SaaS backend | Firebase-token boundary, D1 memory/settings, Stripe entitlements, Telegram, Blooio, cited retrieval, and durable outbound delivery with per-account/channel serialization | Real Firebase/Stripe/channel credentials and preview deployment |
 | Shared conversation | App/native assistant streaming and durable channel inbox/outbox are implemented independently | UID-scoped conversation persistence, desktop/app/web synchronization, channel-to-agent dispatch, replay cursors, and offline recovery |
 | Currents and reflection | Validated Current state model, native signal shape, memory evidence/review primitives, and empty-state UI | Candidate generation/ranking, D1 persistence, feedback/action lifecycle, outcome learning, and idempotent nightly Daily Review orchestration |
@@ -339,7 +342,7 @@ Do not count a compiled adapter as a deployed integration. Credentialed provider
 
 ## Immediate next task
 
-Implement the audited `StartTranscription` contract and Rust live-STT session with fake-provider proofs for multilingual routing, credential isolation, bounded reconnect/gaps, final drain, revocation, and deterministic segment identity. Next, wire one UID-scoped conversation through app/web, Telegram/Blooio, and the desktop agent, then ship one evidence-backed Current through feedback and approved action. After those v0 paths exist, run combined multi-platform CI and separately prove managed/BYOK Deepgram, local fallback, Firebase/Cloudflare bindings, and a physical Omi on iOS and Android before calling the product deployed. Keep nightly Daily Review orchestration as the first v1 follow-on unless it is required for the launch demo.
+Prove managed/BYOK Deepgram with real credentials and a physical Omi on iOS and Android, including PCM8/PCM16/Opus, reconnect gaps, EOS, stop-before-EOS, and revocation. Next, wire one UID-scoped conversation through app/web, Telegram/Blooio, and the desktop agent, then ship one evidence-backed Current through feedback and approved action. After those v0 paths exist, run combined multi-platform CI and separately prove Firebase/Cloudflare bindings before calling the product deployed. Add local STT only when `rs_ai_local` supplies a real supported provider; until then it fails closed. Keep nightly Daily Review orchestration as the first v1 follow-on unless it is required for the launch demo.
 
 ## Progress log
 
@@ -353,3 +356,4 @@ Implement the audited `StartTranscription` contract and Rust live-STT session wi
 - 2026-07-21: Published `zkr 0.1.2` with idempotent ingestion and hardened OpenClaw/Hermes plugins; audited the Omi runtime for bounded tasks, shutdown, cancellation, audio lifecycle, configuration ordering, and retry-safe capture.
 - 2026-07-21: Published `zkr 0.1.3`, added UID-bound Firebase authentication and versioned processing consent, implemented guarded macOS/Windows browser handoff, and connected bounded BLE PCM8/PCM16/Opus audio with deterministic EOS into the Rinf hub.
 - 2026-07-21: Added generation-fenced completed-transcript capture into `zkr`, Durable Object-serialized Telegram/Blooio outbound delivery, iOS 15 Firebase/Rinf packaging, and responsive accessibility coverage.
+- 2026-07-21: Published `zkr` 0.1.5 transcript locators and completed bounded managed/BYOK Deepgram sessions, physical Omi packet reassembly and PCM8 conversion, final-drain/stop acknowledgement, content-redacted Rinf bindings, and atomic approved computer-use execution; local STT now fails closed until a real provider exists.
