@@ -14,11 +14,13 @@ class OnboardingScreen extends StatefulWidget {
   const OnboardingScreen({
     required this.services,
     this.capabilities,
+    this.onFinish,
     super.key,
   });
 
   final AppServices services;
   final DesktopCapabilityGateway? capabilities;
+  final FutureOr<void> Function()? onFinish;
 
   @override
   State<OnboardingScreen> createState() => _OnboardingScreenState();
@@ -81,6 +83,19 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     );
   }
 
+  Future<void> _finish() async {
+    if (widget.onFinish case final onFinish?) {
+      await onFinish();
+      return;
+    }
+    if (!mounted) return;
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute<void>(
+        builder: (_) => OmiShell(services: widget.services),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -132,12 +147,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                               widget.capabilities ??
                               widget.services.capabilities,
                           onOpenPreview: _openPreview,
-                          onFinish: () => Navigator.of(context).pushReplacement(
-                            MaterialPageRoute<void>(
-                              builder: (_) =>
-                                  OmiShell(services: widget.services),
-                            ),
-                          ),
+                          onFinish: _finish,
                         ),
                       },
                     ),
@@ -343,7 +353,7 @@ class ProductionGate extends StatefulWidget {
   final AuthController auth;
   final DesktopCapabilityGateway capabilities;
   final VoidCallback onOpenPreview;
-  final VoidCallback onFinish;
+  final FutureOr<void> Function() onFinish;
 
   @override
   State<ProductionGate> createState() => _ProductionGateState();
@@ -359,6 +369,7 @@ class _ProductionGateState extends State<ProductionGate> {
   };
   bool refreshing = false;
   bool finishing = false;
+  bool finishFailed = false;
   final requesting = <CoreCapability>{};
   int checkGeneration = 0;
 
@@ -428,12 +439,27 @@ class _ProductionGateState extends State<ProductionGate> {
 
   Future<void> _finish() async {
     if (finishing) return;
-    setState(() => finishing = true);
+    setState(() {
+      finishing = true;
+      finishFailed = false;
+    });
     await _check();
     if (!mounted) return;
     final canFinish = ready;
-    setState(() => finishing = false);
-    if (canFinish) widget.onFinish();
+    if (!canFinish) {
+      setState(() => finishing = false);
+      return;
+    }
+    try {
+      await widget.onFinish();
+      if (mounted) setState(() => finishing = false);
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        finishing = false;
+        finishFailed = true;
+      });
+    }
   }
 
   bool get ready =>
@@ -498,6 +524,16 @@ class _ProductionGateState extends State<ProductionGate> {
               finishing ? 'Checking setup…' : 'Finish production setup',
             ),
           ),
+          if (finishFailed) ...[
+            const SizedBox(height: 8),
+            Semantics(
+              liveRegion: true,
+              child: const Text(
+                'Onboarding completion could not be saved. Try again.',
+                style: TextStyle(color: Color(0xffffb4ab)),
+              ),
+            ),
+          ],
           const SizedBox(height: 12),
           OutlinedButton.icon(
             key: const Key('open_interface_preview'),
