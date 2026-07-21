@@ -1,24 +1,30 @@
+mod runtime;
 pub mod signals;
 
 use rinf::{dart_shutdown, write_interface};
-use signals::{AudioChunk, ClientCommand, NativeEvent, RuntimePhase, RuntimeStatus};
+use runtime::{AudioDispatcher, CommandDispatcher, runtime_status};
+use signals::{AudioChunk, ClientCommand, NativeEvent};
 use tokio::spawn;
 
 write_interface!();
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
-    NativeEvent::RuntimeStatus(RuntimeStatus {
-        phase: RuntimePhase::Ready,
-        detail: None,
-        computer_use_available: false,
-        local_ai_available: false,
-    })
-    .send();
+    NativeEvent::RuntimeStatus(runtime_status(false)).send();
 
-    spawn(ClientCommand::listen());
-    spawn(AudioChunk::listen());
+    let (command_sender, dispatcher) = CommandDispatcher::channel();
+    let (audio_sender, audio_dispatcher) = AudioDispatcher::channel();
+    let dispatcher = spawn(dispatcher.run());
+    let audio_dispatcher = spawn(audio_dispatcher.run());
+    let command_listener = spawn(ClientCommand::listen(command_sender));
+    let audio_listener = spawn(AudioChunk::listen(audio_sender));
     dart_shutdown().await;
+    command_listener.abort();
+    audio_listener.abort();
+    let _ = command_listener.await;
+    let _ = audio_listener.await;
+    let _ = dispatcher.await;
+    let _ = audio_dispatcher.await;
 }
 
 #[cfg(test)]

@@ -1,5 +1,6 @@
 use rinf::{DartSignal, DartSignalBinary, RustSignal, SignalPiece};
 use serde::{Deserialize, Serialize};
+use tokio::sync::mpsc;
 
 pub const MAX_AUDIO_CHUNK_BYTES: usize = 256 * 1024;
 
@@ -11,6 +12,11 @@ pub struct ClientCommand {
 
 #[derive(Debug, Deserialize, SignalPiece)]
 pub enum Command {
+    ConfigureMemory {
+        database_path: String,
+        tenant_id: String,
+        person_id: String,
+    },
     SendMessage {
         text: String,
         conversation_id: Option<String>,
@@ -21,6 +27,10 @@ pub enum Command {
         text: Option<String>,
         application: Option<String>,
         window_title: Option<String>,
+    },
+    SearchMemory {
+        query: String,
+        limit: u32,
     },
     ApprovalDecision {
         proposal_id: String,
@@ -62,7 +72,7 @@ pub struct AudioChunk {
     pub bytes: Vec<u8>,
 }
 
-#[derive(Debug, Deserialize, SignalPiece)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, SignalPiece)]
 pub enum AudioEncoding {
     PcmS16Le,
     Opus,
@@ -77,6 +87,8 @@ pub enum NativeEvent {
     ToolProgress(ToolProgress),
     Error(NativeError),
     RuntimeStatus(RuntimeStatus),
+    MemoryCaptured(MemoryCaptured),
+    MemorySearchResults(MemorySearchResults),
 }
 
 #[derive(Debug, Serialize, SignalPiece)]
@@ -151,6 +163,32 @@ pub struct RuntimeStatus {
     pub detail: Option<String>,
     pub computer_use_available: bool,
     pub local_ai_available: bool,
+    pub memory_available: bool,
+    pub agent_harness_available: bool,
+}
+
+#[derive(Debug, Serialize, SignalPiece)]
+pub struct MemoryCaptured {
+    pub request_id: String,
+    pub source_id: String,
+    pub evidence_id: String,
+}
+
+#[derive(Debug, Serialize, SignalPiece)]
+pub struct MemorySearchResults {
+    pub request_id: String,
+    pub query: String,
+    pub items: Vec<MemorySearchItem>,
+    pub gaps: Vec<String>,
+}
+
+#[derive(Debug, Serialize, SignalPiece)]
+pub struct MemorySearchItem {
+    pub kind: String,
+    pub id: String,
+    pub excerpt: String,
+    pub relevance_basis_points: u16,
+    pub evidence_ids: Vec<String>,
 }
 
 #[derive(Debug, Serialize, SignalPiece)]
@@ -172,7 +210,7 @@ pub enum ValidationError {
 }
 
 impl ClientCommand {
-    pub async fn listen() {
+    pub async fn listen(sender: mpsc::Sender<Self>) {
         let receiver = Self::get_dart_signal_receiver();
         while let Some(pack) = receiver.recv().await {
             if pack.message.request_id.trim().is_empty() {
@@ -183,13 +221,15 @@ impl ClientCommand {
                     retryable: false,
                 })
                 .send();
+            } else if sender.send(pack.message).await.is_err() {
+                break;
             }
         }
     }
 }
 
 impl AudioChunk {
-    pub async fn listen() {
+    pub async fn listen(sender: mpsc::Sender<Self>) {
         let receiver = Self::get_dart_signal_receiver();
         while let Some(pack) = receiver.recv().await {
             let mut chunk = pack.message;
@@ -202,6 +242,8 @@ impl AudioChunk {
                     retryable: false,
                 })
                 .send();
+            } else if sender.send(chunk).await.is_err() {
+                break;
             }
         }
     }
