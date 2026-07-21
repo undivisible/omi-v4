@@ -13,8 +13,15 @@ final class UniversalBleDeviceRelayAdapter implements DeviceRelayAdapter {
   static const _batteryLevel = '00002a19-0000-1000-8000-00805f9b34fb';
 
   final _snapshots = StreamController<DeviceRelaySnapshot>.broadcast();
+  final _connectionStates = StreamController<bool>.broadcast();
   final Map<String, BleDevice> _devices = {};
   String? _connectedId;
+  RelayDevice? _connectedDevice;
+  StreamSubscription<bool>? _connectionSubscription;
+  bool _connected = false;
+  bool _restoringNotifications = false;
+  Timer? _restoreRetryTimer;
+  int _restoreAttempts = 0;
 
   @override
   DeviceRelayCapabilities get capabilities => const DeviceRelayCapabilities(
@@ -48,7 +55,13 @@ final class UniversalBleDeviceRelayAdapter implements DeviceRelayAdapter {
       );
     }
 
+    final connectedBleDevice = _connectedId == null
+        ? null
+        : _devices[_connectedId];
     _devices.clear();
+    if (connectedBleDevice != null) {
+      _devices[connectedBleDevice.deviceId] = connectedBleDevice;
+    }
     _snapshots.add(
       DeviceRelaySnapshot(
         phase: DeviceConnectionPhase.scanning,
@@ -73,8 +86,13 @@ final class UniversalBleDeviceRelayAdapter implements DeviceRelayAdapter {
     }
     _snapshots.add(
       DeviceRelaySnapshot(
-        phase: DeviceConnectionPhase.disconnected,
+        phase: _connectedDevice == null
+            ? DeviceConnectionPhase.disconnected
+            : _connected
+            ? DeviceConnectionPhase.connected
+            : DeviceConnectionPhase.connecting,
         capabilities: capabilities,
+        device: _connectedDevice,
       ),
     );
     return _devices.values.map(_relayDevice).toList(growable: false);
@@ -82,6 +100,11 @@ final class UniversalBleDeviceRelayAdapter implements DeviceRelayAdapter {
 
   @override
   Future<RelayDevice> connect(String deviceId) async {
+    if (_connectedId == deviceId && _connectedDevice != null && _connected) {
+      return _connectedDevice!;
+    }
+    if (_connectedId != null) await disconnect();
+    _restoreAttempts = 0;
     final device = _devices[deviceId];
     if (device == null) {
       throw ArgumentError.value(deviceId, 'deviceId', 'Scan before connecting');
@@ -94,7 +117,7 @@ final class UniversalBleDeviceRelayAdapter implements DeviceRelayAdapter {
       ),
     );
     try {
-      await UniversalBle.connect(deviceId);
+      await UniversalBle.connect(deviceId, autoConnect: true);
       _connectedId = deviceId;
       await UniversalBle.discoverServices(deviceId);
       final codec = await _readFirst(deviceId, _omiService, _audioCodec);
@@ -109,6 +132,42 @@ final class UniversalBleDeviceRelayAdapter implements DeviceRelayAdapter {
         _audioStream,
       );
       final connected = _relayDevice(device, codec: codec, battery: battery);
+      _connectedDevice = connected;
+      _connected = true;
+      await _connectionSubscription?.cancel();
+      _connectionSubscription = UniversalBle.connectionStream(deviceId).listen(
+        (connected) {
+          if (connected) {
+            unawaited(_restoreNotifications(deviceId));
+          } else {
+            _connected = false;
+            _restoreRetryTimer?.cancel();
+            _restoreRetryTimer = null;
+            _restoreAttempts = 0;
+            _connectionStates.add(false);
+            _snapshots.add(
+              DeviceRelaySnapshot(
+                phase: DeviceConnectionPhase.connecting,
+                capabilities: capabilities,
+                device: _connectedDevice,
+                message: 'Reconnecting…',
+              ),
+            );
+          }
+        },
+        onError: (Object error, StackTrace stackTrace) {
+          _connected = false;
+          _connectionStates.addError(error, stackTrace);
+          _snapshots.add(
+            DeviceRelaySnapshot(
+              phase: DeviceConnectionPhase.failed,
+              capabilities: capabilities,
+              device: _connectedDevice,
+              message: '$error',
+            ),
+          );
+        },
+      );
       _snapshots.add(
         DeviceRelaySnapshot(
           phase: DeviceConnectionPhase.connected,
@@ -118,8 +177,12 @@ final class UniversalBleDeviceRelayAdapter implements DeviceRelayAdapter {
       );
       return connected;
     } catch (error) {
+      await _connectionSubscription?.cancel();
+      _connectionSubscription = null;
       await UniversalBle.disconnect(deviceId);
       _connectedId = null;
+      _connectedDevice = null;
+      _connected = false;
       _snapshots.add(
         DeviceRelaySnapshot(
           phase: DeviceConnectionPhase.failed,
@@ -149,12 +212,18 @@ final class UniversalBleDeviceRelayAdapter implements DeviceRelayAdapter {
   Future<void> disconnect() async {
     final deviceId = _connectedId;
     if (deviceId == null) return;
+    _connectedId = null;
+    _connectedDevice = null;
+    _connected = false;
+    _restoreRetryTimer?.cancel();
+    _restoreRetryTimer = null;
+    _restoreAttempts = 0;
+    await _connectionSubscription?.cancel();
+    _connectionSubscription = null;
     try {
       await UniversalBle.unsubscribe(deviceId, _omiService, _audioStream);
-    } finally {
-      await UniversalBle.disconnect(deviceId);
-    }
-    _connectedId = null;
+    } catch (_) {}
+    await UniversalBle.disconnect(deviceId);
     _snapshots.add(
       DeviceRelaySnapshot(
         phase: DeviceConnectionPhase.disconnected,
@@ -171,8 +240,57 @@ final class UniversalBleDeviceRelayAdapter implements DeviceRelayAdapter {
       ).map((value) => value.toList(growable: false));
 
   @override
-  Stream<bool> connectionState(String deviceId) =>
-      UniversalBle.connectionStream(deviceId);
+  Stream<bool> connectionState(String deviceId) => _connectionStates.stream;
+
+  Future<void> _restoreNotifications(String deviceId) async {
+    if (_connectedId != deviceId || _restoringNotifications) return;
+    _restoringNotifications = true;
+    try {
+      await UniversalBle.discoverServices(deviceId);
+      await UniversalBle.subscribeNotifications(
+        deviceId,
+        _omiService,
+        _audioStream,
+      );
+      if (_connectedId == deviceId) {
+        _restoreRetryTimer?.cancel();
+        _restoreRetryTimer = null;
+        _restoreAttempts = 0;
+        _connected = true;
+        _connectionStates.add(true);
+        _snapshots.add(
+          DeviceRelaySnapshot(
+            phase: DeviceConnectionPhase.connected,
+            capabilities: capabilities,
+            device: _connectedDevice,
+          ),
+        );
+      }
+    } catch (error) {
+      if (_connectedId == deviceId) {
+        _restoreAttempts += 1;
+        if (_restoreAttempts < 3) {
+          _restoreRetryTimer?.cancel();
+          _restoreRetryTimer = Timer(
+            const Duration(seconds: 1),
+            () => unawaited(_restoreNotifications(deviceId)),
+          );
+        }
+        _snapshots.add(
+          DeviceRelaySnapshot(
+            phase: _restoreAttempts < 3
+                ? DeviceConnectionPhase.connecting
+                : DeviceConnectionPhase.failed,
+            capabilities: capabilities,
+            device: _connectedDevice,
+            message: '$error',
+          ),
+        );
+      }
+    } finally {
+      _restoringNotifications = false;
+    }
+  }
 
   RelayDevice _relayDevice(BleDevice device, {int? codec, int? battery}) =>
       RelayDevice(

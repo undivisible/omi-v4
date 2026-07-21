@@ -1328,6 +1328,50 @@ void main() {
   });
 
   test(
+    'disconnect queued during connect cannot leave device audio active',
+    () async {
+      final auth = AuthController(
+        _FakeAuthGateway(_session('user-a')),
+        consentStore: VolatileConsentStore()..receipt = _receipt('user-a'),
+      );
+      await auth.restoreSession();
+      final hub = _FakeHub();
+      final adapter = _DeviceAdapter()..connectBarrier = Completer<void>();
+      final services = AppServices.forTesting(
+        auth: auth,
+        nativeHub: hub,
+        deviceRelay: DeviceRelayService(
+          role: DeviceRelayRole.mobileOwner,
+          adapter: adapter,
+        ),
+        memoryDatabasePath: (uid) => '/tmp/$uid.sqlite3',
+        managedStt: _FakeManagedStt(
+          ManagedSttSession(
+            websocketUrl:
+                'wss://api.example.test/v1/stt/sessions/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/stream',
+            session: _session('user-a'),
+          ),
+        ),
+      );
+      await services.initialize();
+      final disconnectsBeforeConnect = adapter.disconnectCalls;
+
+      final connection = services.connectDevice('omi-1');
+      await _waitFor(() => adapter.connectCalls == 1);
+      final disconnection = services.disconnectDevice();
+      adapter.connectBarrier!.complete();
+      await connection;
+      await disconnection;
+
+      expect(adapter.disconnectCalls, disconnectsBeforeConnect + 1);
+      expect(services.deviceAudio.active, isFalse);
+      services.dispose();
+      await hub.close();
+      await adapter.close();
+    },
+  );
+
+  test(
     'managed device connection mints typed STT auth and revocation aborts audio',
     () async {
       final gateway = _FakeAuthGateway(_session('user-a'));

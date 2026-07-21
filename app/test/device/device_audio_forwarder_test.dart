@@ -302,6 +302,7 @@ void main() {
         adapter: adapter,
       ),
       hub: hub,
+      reconnectGrace: Duration.zero,
     );
     await forwarder.start(
       const RelayDevice(
@@ -318,6 +319,47 @@ void main() {
     expect(hub.audio.where((item) => item.endOfStream), isEmpty);
     expect(hub.stops, hasLength(1));
     expect(forwarder.active, isFalse);
+    await adapter.close();
+  });
+
+  test('brief disconnect resumes the same transcription session', () async {
+    final adapter = _AudioAdapter();
+    final hub = _RecordingHub();
+    final forwarder = DeviceAudioForwarder(
+      relay: DeviceRelayService(
+        role: DeviceRelayRole.mobileOwner,
+        adapter: adapter,
+      ),
+      hub: hub,
+      reconnectGrace: const Duration(milliseconds: 50),
+    );
+    await forwarder.start(
+      const RelayDevice(
+        id: 'omi-reconnect',
+        name: 'Omi',
+        audioCodec: DeviceAudioCodec.opus,
+      ),
+    );
+
+    adapter.audio.add([10, 0, 0, 1]);
+    adapter.audio.add([11, 0, 0, 2]);
+    await Future<void>.delayed(Duration.zero);
+    adapter.connections.add(false);
+    await Future<void>.delayed(Duration.zero);
+    adapter.connections.add(true);
+    await Future<void>.delayed(Duration.zero);
+    adapter.audio.add([12, 0, 0, 3]);
+    adapter.audio.add([13, 0, 0, 4]);
+    for (var attempt = 0; attempt < 10 && hub.audio.length < 3; attempt += 1) {
+      await Future<void>.delayed(Duration.zero);
+    }
+
+    expect(forwarder.active, isTrue);
+    expect(hub.starts, hasLength(1));
+    expect(hub.stops, isEmpty);
+    expect(hub.audio.where((item) => !item.endOfStream), hasLength(3));
+
+    await forwarder.stop();
     await adapter.close();
   });
 

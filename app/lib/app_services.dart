@@ -1396,8 +1396,14 @@ final class AppServices {
   }
 
   Future<void> disconnectDevice() async {
-    await deviceAudio.stop();
-    await deviceRelay.disconnect();
+    final operation = _lifecycle.then<void>((_) {}, onError: (_, _) {}).then((
+      _,
+    ) async {
+      await deviceAudio.stop();
+      await deviceRelay.disconnect();
+    });
+    _lifecycle = operation.then<void>((_) {}, onError: (_, _) {});
+    await operation;
   }
 
   void dispose() {

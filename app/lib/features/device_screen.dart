@@ -42,9 +42,6 @@ class _DevicesScreenState extends State<DevicesScreen> {
   @override
   void dispose() {
     unawaited(_snapshotSubscription.cancel());
-    if (_mobile) {
-      unawaited(widget.services.disconnectDevice().onError((_, _) {}));
-    }
     super.dispose();
   }
 
@@ -62,6 +59,15 @@ class _DevicesScreenState extends State<DevicesScreen> {
     setState(() => error = null);
     try {
       await widget.services.connectDevice(device.id);
+    } catch (next) {
+      if (mounted) setState(() => error = next);
+    }
+  }
+
+  Future<void> disconnect() async {
+    setState(() => error = null);
+    try {
+      await widget.services.disconnectDevice();
     } catch (next) {
       if (mounted) setState(() => error = next);
     }
@@ -115,9 +121,16 @@ class _DevicesScreenState extends State<DevicesScreen> {
               if (device.batteryLevel case final battery?) '$battery% battery',
             ].join(' · '),
             trailing: IconButton(
-              tooltip: 'Connect',
+              tooltip:
+                  snapshot?.device?.id == device.id &&
+                      phase == DeviceConnectionPhase.connected
+                  ? 'Disconnect'
+                  : 'Connect',
               onPressed: phase == DeviceConnectionPhase.connecting
                   ? null
+                  : snapshot?.device?.id == device.id &&
+                        phase == DeviceConnectionPhase.connected
+                  ? disconnect
                   : () => connect(device),
               icon: Icon(
                 snapshot?.device?.id == device.id &&

@@ -85,6 +85,7 @@ final class DeviceAudioForwarder {
     this.language = 'multi',
     this.startTimeout = const Duration(seconds: 5),
     this.stopTimeout = const Duration(seconds: 5),
+    this.reconnectGrace = const Duration(seconds: 20),
   });
 
   static const maxFrameBytes = 256 * 1024;
@@ -96,6 +97,7 @@ final class DeviceAudioForwarder {
   final String language;
   final Duration startTimeout;
   final Duration stopTimeout;
+  final Duration reconnectGrace;
   _AudioSession? _session;
   int _startGeneration = 0;
   Object? lastError;
@@ -164,7 +166,19 @@ final class DeviceAudioForwarder {
         .connectionState(device.id)
         .listen(
           (connected) {
-            if (!connected) unawaited(_finish(session, abort: true));
+            if (connected) {
+              session.reconnectTimer?.cancel();
+              session.reconnectTimer = null;
+              session.connected = true;
+              session.previousPacketId = null;
+              session.previousPacketIndex = null;
+            } else if (session.connected && session.reconnectTimer == null) {
+              session.connected = false;
+              session.reconnectTimer = Timer(
+                reconnectGrace,
+                () => unawaited(_finish(session, abort: true)),
+              );
+            }
           },
           onError: (Object error, StackTrace stackTrace) {
             lastError = error;
@@ -229,7 +243,7 @@ final class DeviceAudioForwarder {
   }
 
   void _accept(_AudioSession session, DeviceAudioFrame frame) {
-    if (_session != session || !session.accepting) return;
+    if (_session != session || !session.accepting || !session.connected) return;
     final gap = _continuityGap(session, frame);
     if (gap != null) {
       _fail(session, gap);
@@ -354,6 +368,8 @@ final class DeviceAudioForwarder {
     if (session.finishing) return session.finished.future;
     session.finishing = true;
     session.accepting = false;
+    session.reconnectTimer?.cancel();
+    session.reconnectTimer = null;
     if (!session.startCancelled.isCompleted) {
       session.startCancelled.complete();
     }
@@ -447,11 +463,13 @@ final class _AudioSession {
   final startCancelled = Completer<void>();
   StreamSubscription<DeviceAudioFrame>? audioSubscription;
   StreamSubscription<bool>? connectionSubscription;
+  Timer? reconnectTimer;
   Future<void> drain = Future.value();
   int sequence = 0;
   int? previousPacketId;
   int? previousPacketIndex;
   bool accepting = true;
+  bool connected = true;
   bool started = false;
   bool finishing = false;
   bool eosAttempted = false;
