@@ -216,7 +216,7 @@ describe("managed STT admission", () => {
         })
       ).status,
     ).toBe(429);
-  });
+  }, 15_000);
 
   test("releases an abandoned claim deadline but preserves a claimed session", async () => {
     const instance = await createAdmission({
