@@ -31,7 +31,7 @@ enum DeviceAudioCodec {
     _ => DeviceAudioCodec.unknown,
   };
 
-  int get sampleRate => 16000;
+  int get sampleRate => this == DeviceAudioCodec.pcm8 ? 8000 : 16000;
 }
 
 class DeviceRelayCapabilities {

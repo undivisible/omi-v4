@@ -1,14 +1,19 @@
 import 'dart:async';
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
+import '../app_services.dart';
 import '../device/device.dart';
 import '../ui/omi_ui.dart';
 
 class DevicesScreen extends StatefulWidget {
-  const DevicesScreen({this.previewMode = false, super.key});
+  const DevicesScreen({
+    required this.services,
+    this.previewMode = false,
+    super.key,
+  });
 
+  final AppServices services;
   final bool previewMode;
 
   @override
@@ -16,38 +21,30 @@ class DevicesScreen extends StatefulWidget {
 }
 
 class _DevicesScreenState extends State<DevicesScreen> {
-  late final DeviceRelayService relay = DeviceRelayService(
-    role: _mobile
-        ? DeviceRelayRole.mobileOwner
-        : DeviceRelayRole.desktopObserver,
-    adapter: _mobile
-        ? UniversalBleDeviceRelayAdapter()
-        : const UnavailableDeviceRelayAdapter(
-            state: DeviceCapabilityState.unsupported,
-          ),
-  );
+  late final DeviceRelayService relay = widget.services.deviceRelay;
   List<RelayDevice> devices = const [];
   DeviceRelaySnapshot? snapshot;
   Object? error;
   late final StreamSubscription<DeviceRelaySnapshot> _snapshotSubscription;
 
-  bool get _mobile =>
-      !kIsWeb &&
-      (defaultTargetPlatform == TargetPlatform.android ||
-          defaultTargetPlatform == TargetPlatform.iOS);
+  bool get _mobile => relay.role == DeviceRelayRole.mobileOwner;
 
   @override
   void initState() {
     super.initState();
     _snapshotSubscription = relay.snapshots.listen((next) {
-      if (mounted) setState(() => snapshot = next);
+      if (mounted) {
+        setState(() => snapshot = next);
+      }
     });
   }
 
   @override
   void dispose() {
     unawaited(_snapshotSubscription.cancel());
-    if (_mobile) unawaited(relay.disconnect().onError((_, _) {}));
+    if (_mobile) {
+      unawaited(widget.services.disconnectDevice().onError((_, _) {}));
+    }
     super.dispose();
   }
 
@@ -64,7 +61,7 @@ class _DevicesScreenState extends State<DevicesScreen> {
   Future<void> connect(RelayDevice device) async {
     setState(() => error = null);
     try {
-      await relay.connect(device.id);
+      await widget.services.connectDevice(device.id);
     } catch (next) {
       if (mounted) setState(() => error = next);
     }

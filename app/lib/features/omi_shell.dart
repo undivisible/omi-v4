@@ -191,7 +191,7 @@ class _Screen extends StatelessWidget {
       0 => const ChatScreen(),
       1 => MemoryScreen(services: services, previewMode: previewMode),
       2 => const CurrentsScreen(),
-      3 => DevicesScreen(previewMode: previewMode),
+      3 => DevicesScreen(services: services, previewMode: previewMode),
       4 => SetupScreen(services: services, previewMode: previewMode),
       _ => AccountScreen(services: services, previewMode: previewMode),
     };

@@ -16,7 +16,7 @@ final class WorkerHttpClient {
        _client = client ?? http.Client();
 
   final Uri _baseUri;
-  final AuthSession? Function() sessionProvider;
+  final Future<AuthSession?> Function() sessionProvider;
   final http.Client _client;
 
   Future<({int statusCode, Object? body})> send({
@@ -25,7 +25,7 @@ final class WorkerHttpClient {
     Map<String, String> query = const {},
     Map<String, Object?>? body,
   }) async {
-    final session = sessionProvider();
+    final session = await sessionProvider();
     if (session == null || session.idToken.isEmpty) {
       throw const WorkerAuthenticationException('Sign in is required');
     }

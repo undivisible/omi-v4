@@ -75,6 +75,7 @@ pub struct AudioChunk {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, SignalPiece)]
 pub enum AudioEncoding {
     PcmS16Le,
+    PcmU8,
     Opus,
 }
 
@@ -252,7 +253,7 @@ impl AudioChunk {
         if self.request_id.trim().is_empty() {
             return Err(ValidationError::EmptyRequestId);
         }
-        if self.bytes.is_empty() {
+        if self.bytes.is_empty() && !self.end_of_stream {
             return Err(ValidationError::EmptyAudio);
         }
         if self.bytes.len() > MAX_AUDIO_CHUNK_BYTES {

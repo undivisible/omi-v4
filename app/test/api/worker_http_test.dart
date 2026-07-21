@@ -11,7 +11,7 @@ void main() {
     late http.BaseRequest captured;
     final client = WorkerHttpClient(
       baseUri: Uri.parse('https://api.example.test'),
-      sessionProvider: () => AuthSession(
+      sessionProvider: () async => AuthSession(
         uid: 'user-1',
         idToken: 'firebase-token',
         expiresAt: DateTime.now().add(const Duration(minutes: 5)),
@@ -46,7 +46,7 @@ void main() {
   test('does not send a request without an AuthSession', () async {
     final client = WorkerHttpClient(
       baseUri: Uri.parse('https://api.example.test'),
-      sessionProvider: () => null,
+      sessionProvider: () async => null,
       client: MockClient((_) async => http.Response('{}', 200)),
     );
 
@@ -57,11 +57,38 @@ void main() {
     client.close();
   });
 
+  test('does not send a Worker request after consent revocation', () async {
+    var consentGranted = true;
+    var requests = 0;
+    final client = WorkerHttpClient(
+      baseUri: Uri.parse('https://api.example.test'),
+      sessionProvider: () async => consentGranted
+          ? AuthSession(
+              uid: 'user-1',
+              idToken: 'firebase-token',
+              expiresAt: DateTime.now().add(const Duration(minutes: 5)),
+            )
+          : null,
+      client: MockClient((_) async {
+        requests += 1;
+        return http.Response('{}', 200);
+      }),
+    );
+    consentGranted = false;
+
+    await expectLater(
+      client.send(method: 'GET', path: '/v1/me'),
+      throwsA(isA<WorkerAuthenticationException>()),
+    );
+    expect(requests, 0);
+    client.close();
+  });
+
   test('rejects cleartext remote origins before a token can be sent', () {
     expect(
       () => WorkerHttpClient(
         baseUri: Uri.parse('http://api.example.test'),
-        sessionProvider: () => null,
+        sessionProvider: () async => null,
       ),
       throwsArgumentError,
     );
@@ -70,7 +97,7 @@ void main() {
   test('allows cleartext loopback origins for local development', () {
     final client = WorkerHttpClient(
       baseUri: Uri.parse('http://127.0.0.1:8787'),
-      sessionProvider: () => null,
+      sessionProvider: () async => null,
     );
     client.close();
   });

@@ -47,6 +47,9 @@ mod tests {
     fn audio_chunks_are_bounded() {
         assert_eq!(chunk(1).validate(), Ok(()));
         assert_eq!(chunk(0).validate(), Err(ValidationError::EmptyAudio));
+        let mut ended = chunk(0);
+        ended.end_of_stream = true;
+        assert_eq!(ended.validate(), Ok(()));
         assert_eq!(
             chunk(MAX_AUDIO_CHUNK_BYTES + 1).validate(),
             Err(ValidationError::AudioChunkTooLarge)

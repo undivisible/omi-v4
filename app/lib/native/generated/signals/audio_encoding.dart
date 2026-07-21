@@ -1,7 +1,7 @@
 // ignore_for_file: type=lint, type=warning
 part of 'signals.dart';
 
-enum AudioEncoding { pcmS16Le, opus }
+enum AudioEncoding { pcmS16Le, pcmU8, opus }
 
 extension AudioEncodingExtension on AudioEncoding {
   static AudioEncoding deserialize(BinaryDeserializer deserializer) {
@@ -10,6 +10,8 @@ extension AudioEncodingExtension on AudioEncoding {
       case 0:
         return AudioEncoding.pcmS16Le;
       case 1:
+        return AudioEncoding.pcmU8;
+      case 2:
         return AudioEncoding.opus;
       default:
         throw Exception(
@@ -22,8 +24,10 @@ extension AudioEncodingExtension on AudioEncoding {
     switch (this) {
       case AudioEncoding.pcmS16Le:
         return serializer.serializeVariantIndex(0);
-      case AudioEncoding.opus:
+      case AudioEncoding.pcmU8:
         return serializer.serializeVariantIndex(1);
+      case AudioEncoding.opus:
+        return serializer.serializeVariantIndex(2);
     }
   }
 

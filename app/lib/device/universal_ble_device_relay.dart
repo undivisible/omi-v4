@@ -170,6 +170,10 @@ final class UniversalBleDeviceRelayAdapter implements DeviceRelayAdapter {
         _audioStream,
       ).map((value) => value.toList(growable: false));
 
+  @override
+  Stream<bool> connectionState(String deviceId) =>
+      UniversalBle.connectionStream(deviceId);
+
   RelayDevice _relayDevice(BleDevice device, {int? codec, int? battery}) =>
       RelayDevice(
         id: device.deviceId,

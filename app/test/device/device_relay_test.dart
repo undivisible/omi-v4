@@ -91,6 +91,9 @@ class _FakeAdapter implements DeviceRelayAdapter {
   ]);
 
   @override
+  Stream<bool> connectionState(String deviceId) => const Stream.empty();
+
+  @override
   Future<RelayDevice> connect(String deviceId) async => device;
 
   @override

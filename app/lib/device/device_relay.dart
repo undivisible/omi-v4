@@ -10,6 +10,7 @@ abstract interface class DeviceRelayAdapter {
   Future<RelayDevice> connect(String deviceId);
   Future<void> disconnect();
   Stream<List<int>> audioPackets(String deviceId);
+  Stream<bool> connectionState(String deviceId);
 }
 
 class DeviceRelayService {
@@ -67,6 +68,11 @@ class DeviceRelayService {
         .cast();
   }
 
+  Stream<bool> connectionState(String deviceId) =>
+      role == DeviceRelayRole.mobileOwner
+      ? adapter.connectionState(deviceId)
+      : const Stream.empty();
+
   void _require(
     DeviceCapabilityState expected,
     DeviceCapabilityState actual,
@@ -98,6 +104,9 @@ class UnavailableDeviceRelayAdapter implements DeviceRelayAdapter {
 
   @override
   Stream<List<int>> audioPackets(String deviceId) => const Stream.empty();
+
+  @override
+  Stream<bool> connectionState(String deviceId) => const Stream.empty();
 
   @override
   Future<RelayDevice> connect(String deviceId) =>
