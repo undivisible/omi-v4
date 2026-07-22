@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:omi/app_services.dart';
 import 'package:omi/features/onboarding/backdrop.dart';
 import 'package:omi/features/omi_shell.dart';
+import 'package:omi/features/setup_account_screens.dart';
 import 'package:omi/main.dart';
 
 Future<void> tapVisible(WidgetTester tester, Finder finder) async {
@@ -23,17 +24,6 @@ Future<void> openInterfacePreview(WidgetTester tester) async {
   await tester.pumpWidget(
     MaterialApp(home: OmiShell(services: services, previewMode: true)),
   );
-  await tester.pumpAndSettle();
-}
-
-Future<void> openNarrowDestination(WidgetTester tester, int index) async {
-  if (index < 3) {
-    await tester.tap(find.byKey(ValueKey('narrow_destination_$index')));
-  } else {
-    await tester.tap(find.byKey(const ValueKey('narrow_more')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(ValueKey('narrow_destination_$index')));
-  }
   await tester.pumpAndSettle();
 }
 
@@ -140,130 +130,43 @@ void main() {
     );
     expect(find.text('Chat is not connected yet'), findsOneWidget);
     expect(find.byKey(const Key('chat_input')), findsOneWidget);
-
-    for (final destination in [
-      (
-        Icons.auto_stories_outlined,
-        'What Omi knows, with sources you can inspect.',
-      ),
-      (
-        Icons.waves_rounded,
-        'Patterns and opportunities moving through your life.',
-      ),
-      (
-        Icons.devices_other_rounded,
-        'This phone relays Omi audio through managed or BYOK transcription. Local transcription is not available yet.',
-      ),
-      (
-        Icons.checklist_rounded,
-        'Each connection makes your assistant more useful.',
-      ),
-      (
-        Icons.person_outline_rounded,
-        'Identity, plan, providers, and agent control.',
-      ),
-    ]) {
-      await tester.tap(find.byIcon(destination.$1));
-      await tester.pumpAndSettle();
-      expect(find.text(destination.$2), findsOneWidget);
-    }
   });
 
-  testWidgets('stable memory and channel content is not a live region', (
+  testWidgets('preview settings route renders without a connected backend', (
     tester,
   ) async {
-    final semantics = tester.ensureSemantics();
-    await tester.pumpWidget(const OmiApp());
-    await openInterfacePreview(tester);
-
-    await tester.tap(find.byIcon(Icons.auto_stories_outlined));
-    await tester.pumpAndSettle();
-    expect(
-      tester
-          .getSemantics(find.text('Memory is not connected'))
-          .getSemanticsData()
-          .flagsCollection
-          .isLiveRegion,
-      isFalse,
-    );
-
-    await tester.tap(find.byIcon(Icons.checklist_rounded));
-    await tester.pumpAndSettle();
-    expect(
-      tester
-          .getSemantics(find.text('Connect Telegram'))
-          .getSemanticsData()
-          .flagsCollection
-          .isLiveRegion,
-      isFalse,
-    );
-    semantics.dispose();
-  });
-
-  testWidgets('phone preview reaches all surfaces without side effects', (
-    tester,
-  ) async {
-    debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
-    tester.view.physicalSize = const Size(320, 568);
-    tester.view.devicePixelRatio = 1;
-    addTearDown(tester.view.resetPhysicalSize);
-    addTearDown(tester.view.resetDevicePixelRatio);
-    await tester.pumpWidget(const OmiApp());
-    await openInterfacePreview(tester);
-
-    expect(find.byType(NavigationDestination), findsNWidgets(4));
-    for (final destination in [
-      (0, 'Quietly keeping track, so you can stay in the moment.'),
-      (1, 'What Omi knows, with sources you can inspect.'),
-      (2, 'Patterns and opportunities moving through your life.'),
-      (
-        3,
-        'This phone relays Omi audio through managed or BYOK transcription. Local transcription is not available yet.',
+    final services = AppServices.fromEnvironment();
+    addTearDown(services.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SettingsScreen(services: services, previewMode: true),
+        ),
       ),
-      (4, 'Each connection makes your assistant more useful.'),
-      (5, 'Identity, plan, providers, and agent control.'),
-    ]) {
-      await openNarrowDestination(tester, destination.$1);
-      expect(find.text(destination.$2), findsOneWidget);
-      expect(tester.takeException(), isNull);
-    }
+    );
+    await tester.pumpAndSettle();
 
-    await openNarrowDestination(tester, 3);
-    expect(find.text('Device controls unavailable in preview'), findsOneWidget);
-    expect(find.byTooltip('Scan'), findsNothing);
-    expect(find.byTooltip('Connect'), findsNothing);
-    debugDefaultTargetPlatformOverride = null;
+    expect(find.text('Settings'), findsOneWidget);
+    expect(
+      find.text('Account access is disabled in the interface preview.'),
+      findsOneWidget,
+    );
+    expect(tester.takeException(), isNull);
   });
 
-  for (final surface in [
-    (const Size(600, 800), false),
-    (const Size(760, 700), true),
-    (const Size(1050, 700), true),
-  ]) {
+  for (final surface in [const Size(600, 800), const Size(1050, 700)]) {
     testWidgets(
-      'preview navigation is responsive at ${surface.$1.width.toInt()} pixels',
+      'preview chat surface is responsive at ${surface.width.toInt()} pixels',
       (tester) async {
-        tester.view.physicalSize = surface.$1;
+        tester.view.physicalSize = surface;
         tester.view.devicePixelRatio = 1;
         addTearDown(tester.view.resetPhysicalSize);
         addTearDown(tester.view.resetDevicePixelRatio);
         await tester.pumpWidget(const OmiApp());
         await openInterfacePreview(tester);
 
-        expect(
-          find.byType(NavigationRail),
-          surface.$2 ? findsOne : findsNothing,
-        );
-        expect(
-          find.byType(NavigationBar),
-          surface.$2 ? findsNothing : findsOne,
-        );
-        if (surface.$1.width == 1050) {
-          expect(
-            tester.widget<NavigationRail>(find.byType(NavigationRail)).extended,
-            isTrue,
-          );
-        }
+        expect(find.byKey(const Key('warm_paper_hub')), findsOneWidget);
+        expect(find.byKey(const Key('chat_input')), findsOneWidget);
         expect(tester.takeException(), isNull);
       },
     );
@@ -301,11 +204,7 @@ void main() {
     await tester.pumpWidget(const OmiApp());
     await openInterfacePreview(tester);
 
-    await openNarrowDestination(tester, 4);
-    expect(
-      find.text('Each connection makes your assistant more useful.'),
-      findsOneWidget,
-    );
+    expect(find.text('Chat is not connected yet'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 }

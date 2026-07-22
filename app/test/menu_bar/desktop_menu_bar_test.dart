@@ -47,6 +47,7 @@ void main() {
       isListening: () => true,
       onCapture: () async {},
       onToggleListening: () async {},
+      onOpenSettings: () {},
       channel: channel,
     );
 

@@ -10,7 +10,7 @@ import 'package:omi/keyboard/keyboard.dart';
 import 'package:omi/native/native_hub.dart';
 
 void main() {
-  testWidgets('both Shift routes another destination back to Chat', (
+  testWidgets('both Shift keeps the single chat surface usable', (
     tester,
   ) async {
     final events = StreamController<DesktopKeyboardEvent>();
@@ -29,12 +29,8 @@ void main() {
         home: OmiShell(services: services, desktopGesture: gesture),
       ),
     );
-    await tester.tap(find.byIcon(Icons.auto_stories_outlined));
     await tester.pumpAndSettle();
-    expect(
-      find.text('What Omi knows, with sources you can inspect.'),
-      findsOne,
-    );
+    expect(find.byKey(const Key('chat_input')), findsOne);
 
     events.add(const DesktopShiftEvent(key: PhysicalShift.left, pressed: true));
     events.add(

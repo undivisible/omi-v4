@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:omi/app_services.dart';
 import 'package:omi/auth/auth.dart';
@@ -38,7 +39,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('Chat'), findsWidgets);
+    expect(find.byKey(const Key('chat_input')), findsOneWidget);
     expect(find.text('Let’s build your second brain.'), findsNothing);
   });
 
@@ -78,7 +79,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 400));
 
     expect(find.textContaining('Hi, I’m Omi.'), findsOneWidget);
-    expect(find.text('Chat'), findsNothing);
+    expect(find.byKey(const Key('chat_input')), findsNothing);
   });
 }
 

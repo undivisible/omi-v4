@@ -30,9 +30,5 @@ void main() {
     expect(find.byKey(const Key('warm_paper_hub')), findsOneWidget);
     expect(find.byKey(const Key('hub_greeting')), findsOneWidget);
     expect(find.text('Chat is not connected yet'), findsOneWidget);
-
-    await tester.tap(find.byIcon(Icons.auto_stories_outlined));
-    await tester.pumpAndSettle();
-    expect(find.byKey(const Key('warm_paper_hub')), findsNothing);
   });
 }

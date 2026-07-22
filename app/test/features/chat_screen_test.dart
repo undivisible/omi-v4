@@ -1,0 +1,143 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:omi/app_services.dart';
+import 'package:omi/auth/auth.dart';
+import 'package:omi/currents/currents.dart';
+import 'package:omi/device/device.dart';
+import 'package:omi/features/chat_screen.dart';
+import 'package:omi/native/native_hub.dart';
+
+void main() {
+  testWidgets('task rows render from currents and dismiss on complete tap', (
+    tester,
+  ) async {
+    final currents = CurrentsController(CurrentsClient(_Transport()));
+    final createdAt = DateTime.utc(2026, 7, 21, 12);
+    CurrentCard current(String id, String title) => CurrentCard(
+      item: CurrentItem.candidate(
+        id: id,
+        evidence: [
+          CurrentEvidence(sourceId: 'memory-$id', reason: 'Commitment'),
+        ],
+        reason: 'Commitment',
+        timing: CurrentTiming(surfaceAt: createdAt),
+        confidence: .9,
+        proposedNextStep: title,
+        createdAt: createdAt,
+      ).transitionTo(CurrentStatus.surfaced, at: createdAt),
+      title: title,
+      summary: title,
+    );
+    currents.items = [
+      current('first', 'Finish the release'),
+      current('second', 'Reply to Alex'),
+    ];
+
+    final services = AppServices.forTesting(
+      nativeHub: const UnavailableNativeHub('test'),
+      deviceRelay: DeviceRelayService(
+        role: DeviceRelayRole.desktopObserver,
+        adapter: const UnavailableDeviceRelayAdapter(),
+      ),
+      auth: AuthController(const UnconfiguredAuthGateway()),
+      memoryDatabasePath: (uid) => '/tmp/$uid.sqlite3',
+      currentsClient: CurrentsClient(_Transport()),
+    );
+    addTearDown(services.dispose);
+    // Swap in the pre-populated controller so the test controls its items
+    // without depending on a network load.
+    services.currents!.items = currents.items;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(body: ChatScreen(services: services)),
+      ),
+    );
+    await tester.pump();
+    // Re-seed after the screen's own currents.load() call, whose fake
+    // generate/list responses don't match the seeded items.
+    services.currents!.items = currents.items;
+    await tester.pump();
+
+    expect(find.byKey(const Key('task_first')), findsOneWidget);
+    expect(find.byKey(const Key('task_second')), findsOneWidget);
+    expect(find.text('Finish the release'), findsOneWidget);
+    expect(find.text('Reply to Alex'), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('complete_first')));
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.byKey(const Key('task_first')), findsNothing);
+    expect(find.byKey(const Key('task_second')), findsOneWidget);
+  });
+
+  // Full hint rotation only kicks in once chatReady is true, which requires
+  // a fully wired native/auth stack not easily faked here. This checks the
+  // static, not-connected hint that replaced the old prompt ActionChips.
+  testWidgets(
+    'chat input shows the not-connected hint when chat is not ready',
+    (tester) async {
+      final services = AppServices.forTesting(
+        nativeHub: const UnavailableNativeHub('test'),
+        deviceRelay: DeviceRelayService(
+          role: DeviceRelayRole.desktopObserver,
+          adapter: const UnavailableDeviceRelayAdapter(),
+        ),
+        auth: AuthController(const UnconfiguredAuthGateway()),
+        memoryDatabasePath: (uid) => '/tmp/$uid.sqlite3',
+      );
+      addTearDown(services.dispose);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: ChatScreen(services: services, previewMode: true),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      TextField input() =>
+          tester.widget<TextField>(find.byKey(const Key('chat_input')));
+
+      // previewMode means chatReady is false, so the hint stays the
+      // "not connected" copy rather than rotating.
+      expect(
+        input().decoration!.hintText,
+        'Connect an account and model to start chatting',
+      );
+    },
+  );
+}
+
+final class _Transport implements CurrentsTransport {
+  @override
+  Future<CurrentsResponse> send(CurrentsRequest request) async {
+    if (!request.path.endsWith('/feedback')) {
+      return const CurrentsResponse(statusCode: 200, body: {});
+    }
+    final createdAt = DateTime.utc(2026, 7, 21, 12).toIso8601String();
+    return CurrentsResponse(
+      statusCode: 200,
+      body: {
+        'current': {
+          'id': 'echo',
+          'status': 'dismissed',
+          'evidence': [
+            {'sourceId': 'memory-echo', 'reason': 'Commitment'},
+          ],
+          'reason': 'Commitment',
+          'timing': {'surfaceAt': createdAt},
+          'confidence': .9,
+          'proposedNextStep': 'echo',
+          'createdAt': createdAt,
+          'updatedAt': createdAt,
+          'title': 'echo',
+          'summary': 'echo',
+          'feedbackReference': 'feedback-echo',
+        },
+      },
+    );
+  }
+}
