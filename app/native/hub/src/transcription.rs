@@ -80,6 +80,7 @@ pub(crate) struct StartLiveVoice {
     pub(crate) live_stream_id: String,
     pub(crate) ephemeral_token: String,
     pub(crate) model: String,
+    pub(crate) resumption_handle: Option<String>,
 }
 
 pub(crate) enum TranscriptionControl {
@@ -129,7 +130,7 @@ impl LiveSessions {
             live_stream_id: start.live_stream_id.clone(),
             ephemeral_token: start.ephemeral_token,
             model: start.model,
-            resumption_handle: None,
+            resumption_handle: start.resumption_handle,
         };
         if let Err(message) = validate_session(&session) {
             return Err(AudioAcceptError {
@@ -268,88 +269,130 @@ impl LiveSessions {
     }
 }
 
+struct LiveEventTranslator {
+    live_stream_id: String,
+    sequence: u64,
+}
+
+impl LiveEventTranslator {
+    fn new(live_stream_id: String) -> Self {
+        Self {
+            live_stream_id,
+            sequence: 0,
+        }
+    }
+
+    /// Maps a provider event to the signal sent to Dart. `Started` is only
+    /// emitted once the provider acknowledged setup (setupComplete), so the
+    /// UI never shows a live session that failed inside the connect window.
+    /// The returned flag marks terminal events that end the forwarding loop.
+    fn translate(&mut self, event: RealtimeVoiceEvent) -> (NativeEvent, bool) {
+        match event {
+            RealtimeVoiceEvent::Started => (
+                NativeEvent::LiveVoiceState(LiveVoiceState {
+                    live_stream_id: self.live_stream_id.clone(),
+                    state: LiveVoicePhase::Started,
+                    detail: None,
+                    resumption_handle: None,
+                }),
+                false,
+            ),
+            RealtimeVoiceEvent::TranscriptDelta {
+                text,
+                final_segment,
+                assistant,
+            } => (
+                NativeEvent::LiveVoiceTranscript(LiveVoiceTranscript {
+                    live_stream_id: self.live_stream_id.clone(),
+                    text,
+                    final_segment,
+                    assistant,
+                }),
+                false,
+            ),
+            RealtimeVoiceEvent::AudioChunk {
+                sample_rate_hz,
+                bytes,
+            } => {
+                let sequence = self.sequence;
+                self.sequence = self.sequence.saturating_add(1);
+                (
+                    NativeEvent::LiveVoiceAudio(LiveVoiceAudio {
+                        live_stream_id: self.live_stream_id.clone(),
+                        sequence,
+                        sample_rate_hz,
+                        bytes,
+                    }),
+                    false,
+                )
+            }
+            RealtimeVoiceEvent::Interrupted => (
+                NativeEvent::LiveVoiceState(LiveVoiceState {
+                    live_stream_id: self.live_stream_id.clone(),
+                    state: LiveVoicePhase::Interrupted,
+                    detail: None,
+                    resumption_handle: None,
+                }),
+                false,
+            ),
+            RealtimeVoiceEvent::SessionEnded { resumption_handle } => (
+                NativeEvent::LiveVoiceState(LiveVoiceState {
+                    live_stream_id: self.live_stream_id.clone(),
+                    state: LiveVoicePhase::Ended,
+                    detail: None,
+                    resumption_handle,
+                }),
+                true,
+            ),
+            RealtimeVoiceEvent::Error {
+                message,
+                resumption_handle,
+            } => (
+                NativeEvent::LiveVoiceState(LiveVoiceState {
+                    live_stream_id: self.live_stream_id.clone(),
+                    state: LiveVoicePhase::Failed,
+                    detail: Some(message),
+                    resumption_handle,
+                }),
+                true,
+            ),
+        }
+    }
+
+    fn closed(&self) -> NativeEvent {
+        NativeEvent::LiveVoiceState(LiveVoiceState {
+            live_stream_id: self.live_stream_id.clone(),
+            state: LiveVoicePhase::Ended,
+            detail: None,
+            resumption_handle: None,
+        })
+    }
+}
+
 async fn forward_live_events(
     live_stream_id: String,
     mut events: mpsc::Receiver<RealtimeVoiceEvent>,
     sessions: Arc<Mutex<HashMap<String, LiveSession>>>,
 ) {
-    NativeEvent::LiveVoiceState(LiveVoiceState {
-        live_stream_id: live_stream_id.clone(),
-        state: LiveVoicePhase::Started,
-        detail: None,
-        resumption_handle: None,
-    })
-    .send();
     let remove_session = |live_stream_id: &str| {
         sessions
             .lock()
             .unwrap_or_else(|poison| poison.into_inner())
             .remove(live_stream_id);
     };
-    let mut sequence = 0_u64;
+    let mut translator = LiveEventTranslator::new(live_stream_id.clone());
     while let Some(event) = events.recv().await {
-        match event {
-            RealtimeVoiceEvent::TranscriptDelta {
-                text,
-                final_segment,
-            } => NativeEvent::LiveVoiceTranscript(LiveVoiceTranscript {
-                live_stream_id: live_stream_id.clone(),
-                text,
-                final_segment,
-            })
-            .send(),
-            RealtimeVoiceEvent::AudioChunk {
-                sample_rate_hz,
-                bytes,
-            } => {
-                NativeEvent::LiveVoiceAudio(LiveVoiceAudio {
-                    live_stream_id: live_stream_id.clone(),
-                    sequence,
-                    sample_rate_hz,
-                    bytes,
-                })
-                .send();
-                sequence = sequence.saturating_add(1);
-            }
-            RealtimeVoiceEvent::Interrupted => NativeEvent::LiveVoiceState(LiveVoiceState {
-                live_stream_id: live_stream_id.clone(),
-                state: LiveVoicePhase::Interrupted,
-                detail: None,
-                resumption_handle: None,
-            })
-            .send(),
-            RealtimeVoiceEvent::SessionEnded { resumption_handle } => {
-                remove_session(&live_stream_id);
-                NativeEvent::LiveVoiceState(LiveVoiceState {
-                    live_stream_id,
-                    state: LiveVoicePhase::Ended,
-                    detail: None,
-                    resumption_handle,
-                })
-                .send();
-                return;
-            }
-            RealtimeVoiceEvent::Error(message) => {
-                remove_session(&live_stream_id);
-                NativeEvent::LiveVoiceState(LiveVoiceState {
-                    live_stream_id,
-                    state: LiveVoicePhase::Failed,
-                    detail: Some(message),
-                    resumption_handle: None,
-                })
-                .send();
-                return;
-            }
+        let (signal, terminal) = translator.translate(event);
+        if terminal {
+            remove_session(&live_stream_id);
+        }
+        signal.send();
+        if terminal {
+            return;
         }
     }
     remove_session(&live_stream_id);
-    NativeEvent::LiveVoiceState(LiveVoiceState {
-        live_stream_id,
-        state: LiveVoicePhase::Ended,
-        detail: None,
-        resumption_handle: None,
-    })
-    .send();
+    translator.closed().send();
 }
 
 pub struct AudioDispatcher {
@@ -852,5 +895,117 @@ impl AudioSessions {
             status,
             detail,
         }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct CapturingProvider(Mutex<Option<RealtimeVoiceSession>>);
+
+    impl RealtimeVoiceProvider for CapturingProvider {
+        fn open(&self, session: RealtimeVoiceSession) -> Result<RealtimeVoiceHandle, String> {
+            *self.0.lock().unwrap_or_else(|poison| poison.into_inner()) = Some(session.clone());
+            GeminiLiveProvider.open(session)
+        }
+    }
+
+    fn start_request(resumption_handle: Option<String>) -> StartLiveVoice {
+        StartLiveVoice {
+            request_id: "request-1".to_owned(),
+            live_stream_id: "live-1".to_owned(),
+            ephemeral_token: "auth_tokens/abc123".to_owned(),
+            model: "gemini-live".to_owned(),
+            resumption_handle,
+        }
+    }
+
+    #[test]
+    fn live_start_passes_the_resumption_handle_to_the_provider() {
+        let provider = CapturingProvider(Mutex::new(None));
+        let mut sessions = LiveSessions::default();
+        assert!(
+            sessions
+                .start(&provider, start_request(Some("handle-1".to_owned())))
+                .is_ok()
+        );
+        let session = provider
+            .0
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .take()
+            .unwrap_or_else(|| panic!("provider was opened"));
+        assert_eq!(session.resumption_handle.as_deref(), Some("handle-1"));
+
+        let provider = CapturingProvider(Mutex::new(None));
+        let mut sessions = LiveSessions::default();
+        assert!(sessions.start(&provider, start_request(None)).is_ok());
+        let session = provider
+            .0
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .take()
+            .unwrap_or_else(|| panic!("provider was opened"));
+        assert_eq!(session.resumption_handle, None);
+    }
+
+    #[test]
+    fn started_is_emitted_only_after_the_provider_confirms_setup() {
+        let mut translator = LiveEventTranslator::new("live-1".to_owned());
+        // Events that arrive before setupComplete must never surface Started.
+        let (signal, terminal) = translator.translate(RealtimeVoiceEvent::Error {
+            message: "connect failed".to_owned(),
+            resumption_handle: None,
+        });
+        assert!(terminal);
+        assert!(matches!(
+            signal,
+            NativeEvent::LiveVoiceState(LiveVoiceState {
+                state: LiveVoicePhase::Failed,
+                ..
+            })
+        ));
+
+        let mut translator = LiveEventTranslator::new("live-1".to_owned());
+        let (signal, terminal) = translator.translate(RealtimeVoiceEvent::Started);
+        assert!(!terminal);
+        assert!(matches!(
+            signal,
+            NativeEvent::LiveVoiceState(LiveVoiceState {
+                state: LiveVoicePhase::Started,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn transcripts_and_failures_carry_speaker_and_resumption_metadata() {
+        let mut translator = LiveEventTranslator::new("live-1".to_owned());
+        let (signal, _) = translator.translate(RealtimeVoiceEvent::TranscriptDelta {
+            text: "assistant reply".to_owned(),
+            final_segment: true,
+            assistant: true,
+        });
+        assert!(matches!(
+            signal,
+            NativeEvent::LiveVoiceTranscript(LiveVoiceTranscript {
+                assistant: true,
+                final_segment: true,
+                ..
+            })
+        ));
+        let (signal, terminal) = translator.translate(RealtimeVoiceEvent::Error {
+            message: "network".to_owned(),
+            resumption_handle: Some("handle-2".to_owned()),
+        });
+        assert!(terminal);
+        match signal {
+            NativeEvent::LiveVoiceState(state) => {
+                assert!(matches!(state.state, LiveVoicePhase::Failed));
+                assert_eq!(state.resumption_handle.as_deref(), Some("handle-2"));
+            }
+            other => panic!("unexpected signal: {other:?}"),
+        }
     }
 }

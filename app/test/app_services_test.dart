@@ -2347,6 +2347,7 @@ void main() {
               liveStreamId: streamId,
               text: 'plan the ',
               finalSegment: true,
+              assistant: false,
             ),
           ),
         )
@@ -2356,6 +2357,7 @@ void main() {
               liveStreamId: streamId,
               text: 'interim noise',
               finalSegment: false,
+              assistant: false,
             ),
           ),
         )
@@ -2365,6 +2367,7 @@ void main() {
               liveStreamId: streamId,
               text: 'launch',
               finalSegment: true,
+              assistant: false,
             ),
           ),
         );
@@ -2428,6 +2431,7 @@ void main() {
       expect(hub.liveVoiceStartRequests, isEmpty);
       expect(managedStt.requests, hasLength(1));
       expect(desktopVoice.active, isTrue);
+      expect(services.voiceNotice.value, isNull);
 
       final submission = await services.stopDesktopVoice();
       expect(submission?.text, 'fallback request');
@@ -2438,6 +2442,61 @@ void main() {
       await hub.close();
     },
   );
+
+  test('a 403 from the token endpoint surfaces a Pro downgrade note while '
+      'still falling back to managed transcription', () async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    final auth = AuthController(
+      _FakeAuthGateway(_session('user-a')),
+      consentStore: VolatileConsentStore()..receipt = _receipt('user-a'),
+    );
+    await auth.restoreSession();
+    final hub = _FakeHub()..terminalTranscript = 'fallback request';
+    final tokens = _FakeLiveVoiceTokens()
+      ..failure = const WorkerResponseException(
+        'Managed Pro required',
+        statusCode: 403,
+      );
+    final managedStt = _FakeManagedStt(_managedSession('user-a'));
+    final audio = StreamController<Uint8List>();
+    final desktopVoice = DesktopVoiceCapture(
+      hub: hub,
+      permissionCheck: () async => true,
+      startAudio: () async => audio.stream,
+      stopAudio: audio.close,
+    );
+    final liveVoice = LiveVoiceCapture(
+      hub: hub,
+      permissionCheck: () async => true,
+    );
+    final services = AppServices.forTesting(
+      auth: auth,
+      nativeHub: hub,
+      deviceRelay: DeviceRelayService(
+        role: DeviceRelayRole.desktopObserver,
+        adapter: const UnavailableDeviceRelayAdapter(),
+      ),
+      memoryDatabasePath: (uid) => '/tmp/$uid.sqlite3',
+      managedStt: managedStt,
+      desktopVoice: desktopVoice,
+      liveVoice: liveVoice,
+      liveVoiceTokens: tokens,
+    );
+    await services.initialize();
+
+    await services.startDesktopVoice();
+    expect(hub.liveVoiceStartRequests, isEmpty);
+    expect(desktopVoice.active, isTrue);
+    expect(
+      services.voiceNotice.value,
+      'Live voice needs Pro — using transcription only',
+    );
+
+    await services.cancelDesktopVoice();
+    services.dispose();
+    await hub.close();
+  });
 
   test('desktop voice falls back to managed transcription when the live '
       'session itself fails to start after a successful token mint', () async {
@@ -3233,6 +3292,7 @@ final class _FakeHub
     required String liveStreamId,
     required String ephemeralToken,
     required String model,
+    String? resumptionHandle,
   }) {
     liveVoiceModels.add(model);
     liveVoiceTokens.add(ephemeralToken);

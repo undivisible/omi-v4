@@ -14,7 +14,7 @@ final class LiveVoiceCapture {
     this._stopAudio,
     this._disposeAudio,
     this.permissionCheck,
-    this.startTimeout = const Duration(seconds: 8),
+    this.startTimeout = const Duration(seconds: 12),
     this.stopTimeout = const Duration(seconds: 5),
   });
 
@@ -32,7 +32,13 @@ final class LiveVoiceCapture {
   _LiveVoiceSession? _endedSession;
   int _generation = 0;
   int _discardedOutputBytes = 0;
+  String? _ephemeralToken;
+  String? _model;
   final level = ValueNotifier<double>(0);
+
+  /// Running transcript of what the assistant said aloud, surfaced so the
+  /// UI/chat can show the reply text alongside the audio.
+  final assistantTranscript = ValueNotifier<String>('');
 
   bool get active => _session != null;
 
@@ -58,6 +64,9 @@ final class LiveVoiceCapture {
     final live = hub as LiveVoiceHub;
     await cancel();
     final generation = ++_generation;
+    _ephemeralToken = ephemeralToken;
+    _model = model;
+    assistantTranscript.value = '';
     final streamId =
         'live-voice-$authorityId-${DateTime.now().microsecondsSinceEpoch}';
     final session = _LiveVoiceSession(streamId);
@@ -91,8 +100,11 @@ final class LiveVoiceCapture {
         return;
       }
       session.audio = audio.listen(
-        (bytes) => _sendAudio(session, bytes),
-        onError: (_) => unawaited(_abort(session)),
+        (bytes) => _sendAudio(bytes),
+        onError: (_) {
+          final current = _session;
+          if (current != null) unawaited(_abort(current));
+        },
         cancelOnError: true,
       );
     } catch (_) {
@@ -149,8 +161,9 @@ final class LiveVoiceCapture {
     await (_disposeAudio?.call() ?? _recorder?.dispose());
   }
 
-  void _sendAudio(_LiveVoiceSession session, Uint8List bytes) {
-    if (_session != session || bytes.isEmpty) return;
+  void _sendAudio(Uint8List bytes) {
+    final session = _session;
+    if (session == null || session.stopping || bytes.isEmpty) return;
     level.value = pcm16Rms(bytes);
     hub.sendAudio(
       requestId: session.streamId,
@@ -185,13 +198,28 @@ final class LiveVoiceCapture {
               StateError(value.detail ?? 'Live voice session ended.'),
             );
           }
+          // An unexpected death (goAway, network drop) that left a
+          // resumption handle behind is retried once by reconnecting with
+          // that handle before giving up on the session.
+          if (!session.stopping &&
+              !session.resumed &&
+              session.started.isCompleted &&
+              value.resumptionHandle != null) {
+            unawaited(_resume(session, value.resumptionHandle!));
+            return;
+          }
           if (!session.ended.isCompleted) session.ended.complete();
           if (!session.stopping) unawaited(_abort(session));
       }
     } else if (event case NativeEventLiveVoiceTranscript(
       :final value,
     ) when value.liveStreamId == session.streamId) {
-      if (value.finalSegment) session.transcript.write(value.text);
+      if (value.assistant) {
+        session.assistantTranscript.write(value.text);
+        assistantTranscript.value = session.assistantTranscript.toString();
+      } else if (value.finalSegment) {
+        session.transcript.write(value.text);
+      }
     } else if (event case NativeEventLiveVoiceAudio(
       :final value,
     ) when value.liveStreamId == session.streamId) {
@@ -205,6 +233,52 @@ final class LiveVoiceCapture {
     ) when value.requestId == session.streamId) {
       if (!session.ended.isCompleted) session.ended.complete();
       unawaited(_abort(session));
+    }
+  }
+
+  /// Restarts a died session once with the provider's resumption handle,
+  /// carrying the transcript over so the retry is invisible to callers.
+  Future<void> _resume(_LiveVoiceSession dead, String handle) async {
+    final token = _ephemeralToken;
+    final model = _model;
+    if (token == null || model == null || hub is! LiveVoiceHub) {
+      if (!dead.ended.isCompleted) dead.ended.complete();
+      await _abort(dead);
+      return;
+    }
+    final generation = _generation;
+    final live = hub as LiveVoiceHub;
+    final session = _LiveVoiceSession('${dead.streamId}-r')
+      ..resumed = true
+      ..audio = dead.audio;
+    session.transcript.write(dead.transcript);
+    session.assistantTranscript.write(dead.assistantTranscript);
+    dead.audio = null;
+    await dead.events?.cancel();
+    await (dead.playoutOps = dead.playoutOps.then((_) => dead.playout.stop()));
+    if (!dead.cancelled.isCompleted) dead.cancelled.complete();
+    if (generation != _generation || _session != dead) {
+      await session.audio?.cancel();
+      return;
+    }
+    _session = session;
+    session.events = hub.events.listen((event) => _handleEvent(session, event));
+    try {
+      live.startLiveVoice(
+        requestId: session.startRequestId,
+        liveStreamId: session.streamId,
+        ephemeralToken: token,
+        model: model,
+        resumptionHandle: handle,
+      );
+      await Future.any<void>([
+        session.started.future,
+        session.cancelled.future.then(
+          (_) => throw StateError('Live voice resume was cancelled.'),
+        ),
+      ]).timeout(startTimeout);
+    } catch (_) {
+      await _abort(session);
     }
   }
 
@@ -270,6 +344,7 @@ final class _LiveVoiceSession {
   final cancelled = Completer<void>();
   final ended = Completer<void>();
   final transcript = StringBuffer();
+  final assistantTranscript = StringBuffer();
   StreamSubscription<NativeEvent>? events;
   StreamSubscription<Uint8List>? audio;
   final playout = _VoicePlayout();
@@ -277,6 +352,7 @@ final class _LiveVoiceSession {
   int sequence = 0;
   bool stopping = false;
   bool providerEnded = false;
+  bool resumed = false;
   Future<String>? teardown;
 }
 
@@ -287,6 +363,7 @@ final class _VoicePlayout {
   bool _disabled = false;
   bool _started = false;
   int _queuedMs = 0;
+  int _sampleRateHz = 0;
 
   static bool get _supported =>
       !kIsWeb && defaultTargetPlatform == TargetPlatform.macOS;
@@ -297,11 +374,18 @@ final class _VoicePlayout {
   }) async {
     if (!_supported || _disabled) return false;
     try {
+      // The engine format is fixed at start; a mid-session mime rate change
+      // requires reconfiguring the player node at the new rate.
+      if (_started && sampleRateHz != _sampleRateHz) {
+        await _channel.invokeMethod<void>('stop');
+        _started = false;
+      }
       if (!_started) {
         await _channel.invokeMethod<void>('start', {
           'sampleRateHz': sampleRateHz,
         });
         _started = true;
+        _sampleRateHz = sampleRateHz;
         _queuedMs = 0;
       }
       if (_queuedMs > maxQueuedMs) return false;

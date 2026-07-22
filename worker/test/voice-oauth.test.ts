@@ -146,7 +146,9 @@ describe("gemini live tokens", () => {
     expect(body.token).toBe("auth_tokens/ephemeral-123");
     expect(body.model).toBe("gemini-3.1-flash-live-preview");
     expect(JSON.stringify(body)).not.toContain("gemini-secret");
-    expect(upstreamBody?.uses).toBe(1);
+    // Two uses so one automatic resume after an unexpected session death
+    // can authenticate with the same token.
+    expect(upstreamBody?.uses).toBe(2);
     expect(
       (upstreamBody?.liveConnectConstraints as Record<string, unknown>)?.model,
     ).toBe("gemini-3.1-flash-live-preview");

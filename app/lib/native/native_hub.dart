@@ -169,6 +169,7 @@ abstract interface class LiveVoiceHub {
     required String liveStreamId,
     required String ephemeralToken,
     required String model,
+    String? resumptionHandle,
   });
   void stopLiveVoice({required String requestId, required String liveStreamId});
 }
@@ -310,6 +311,7 @@ final class UnavailableNativeHub
     required String liveStreamId,
     required String ephemeralToken,
     required String model,
+    String? resumptionHandle,
   }) => _unavailable();
 
   @override
@@ -658,12 +660,14 @@ final class RinfNativeHub
     required String liveStreamId,
     required String ephemeralToken,
     required String model,
+    String? resumptionHandle,
   }) => _send(
     requestId,
     CommandStartLiveVoice(
       liveStreamId: liveStreamId,
       ephemeralToken: ephemeralToken,
       model: model,
+      resumptionHandle: resumptionHandle,
     ),
   );
 

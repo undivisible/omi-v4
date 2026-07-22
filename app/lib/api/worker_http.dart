@@ -310,6 +310,7 @@ final class WorkerVoiceClient implements LiveVoiceTokenClient {
         body is Map<String, Object?> && body['error'] is String
             ? body['error']! as String
             : 'Live voice is unavailable (${response.statusCode})',
+        statusCode: response.statusCode,
       );
     }
     final body = response.body;
@@ -464,9 +465,12 @@ final class WorkerAuthenticationException implements Exception {
 }
 
 final class WorkerResponseException implements Exception {
-  const WorkerResponseException(this.message);
+  const WorkerResponseException(this.message, {this.statusCode});
 
   final String message;
+
+  /// HTTP status of the failed Worker response, when one was received.
+  final int? statusCode;
 
   @override
   String toString() => message;

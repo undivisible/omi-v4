@@ -75,6 +75,59 @@ void main() {
     await capture.dispose();
   });
 
+  test('assistant transcripts are surfaced separately and never leak into '
+      'the user transcript', () async {
+    final hub = _LiveHub();
+    addTearDown(hub.close);
+    final capture = await startedCapture(hub);
+    hub.emitTranscript('user words', finalSegment: true);
+    hub.emitTranscript('assistant ', finalSegment: false, assistant: true);
+    hub.emitTranscript('reply', finalSegment: true, assistant: true);
+    hub.emitState(LiveVoicePhase.ended);
+    await pumpEventQueue();
+    expect(capture.assistantTranscript.value, 'assistant reply');
+    expect(await capture.stop(), 'user words');
+    await capture.dispose();
+  });
+
+  test('an unexpected session death with a resumption handle restarts once '
+      'with that handle and keeps the transcript', () async {
+    final hub = _LiveHub();
+    addTearDown(hub.close);
+    final capture = await startedCapture(hub);
+    hub.emitTranscript('first half ', finalSegment: true);
+    // Provider dies unexpectedly (goAway/network) but leaves a handle.
+    hub.emitState(LiveVoicePhase.ended, resumptionHandle: 'handle-1');
+    await pumpEventQueue();
+    // The capture reconnected once, passing the handle through.
+    expect(hub.startedStreams, hasLength(2));
+    expect(hub.resumptionHandles, [null, 'handle-1']);
+    expect(capture.active, isTrue);
+    hub.emitState(LiveVoicePhase.started);
+    await pumpEventQueue();
+    hub.emitTranscript('second half', finalSegment: true);
+    hub.emitState(LiveVoicePhase.ended);
+    await pumpEventQueue();
+    expect(await capture.stop(), 'first half second half');
+    await capture.dispose();
+  });
+
+  test('a resumed session that dies again is not resumed twice', () async {
+    final hub = _LiveHub();
+    addTearDown(hub.close);
+    final capture = await startedCapture(hub);
+    hub.emitState(LiveVoicePhase.ended, resumptionHandle: 'handle-1');
+    await pumpEventQueue();
+    expect(hub.startedStreams, hasLength(2));
+    hub.emitState(LiveVoicePhase.started);
+    await pumpEventQueue();
+    hub.emitState(LiveVoicePhase.ended, resumptionHandle: 'handle-2');
+    await pumpEventQueue();
+    expect(hub.startedStreams, hasLength(2));
+    expect(capture.active, isFalse);
+    await capture.dispose();
+  });
+
   test('user cancellation still discards the buffered transcript', () async {
     final hub = _LiveHub();
     addTearDown(hub.close);
@@ -154,6 +207,52 @@ void main() {
     await hub.close();
   });
 
+  test(
+    'a mid-session output rate change reconfigures the playout node',
+    () async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+      final calls = <MethodCall>[];
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(_playoutChannel, (call) async {
+            calls.add(call);
+            return call.method == 'feed' ? 0 : null;
+          });
+      final hub = _FakeHub();
+      final audio = StreamController<Uint8List>();
+      final voice = LiveVoiceCapture(
+        hub: hub,
+        startAudio: () async => audio.stream,
+        stopAudio: audio.close,
+      );
+
+      await voice.start(
+        ephemeralToken: 'token',
+        model: 'model',
+        authorityId: 'user-a',
+      );
+      final streamId = hub.startedStreams.single;
+      hub.emitAudio(streamId, [1, 2], sampleRateHz: 24000);
+      hub.emitAudio(streamId, [3, 4], sampleRateHz: 16000);
+      hub.emitAudio(streamId, [5, 6], sampleRateHz: 16000);
+      await _drain(voice);
+      expect(calls.map((call) => call.method), [
+        'start',
+        'feed',
+        'stop',
+        'start',
+        'feed',
+        'feed',
+      ]);
+      expect(calls.first.arguments, {'sampleRateHz': 24000});
+      expect(calls[3].arguments, {'sampleRateHz': 16000});
+      expect(voice.discardedOutputBytes, 0);
+
+      await voice.stop();
+      await voice.dispose();
+      await hub.close();
+    },
+  );
+
   test('missing playout host is swallowed and chunks are counted', () async {
     debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
@@ -220,29 +319,41 @@ final class _LiveHub implements NativeHub, LiveVoiceHub {
   final _events = StreamController<NativeEvent>.broadcast();
   String? streamId;
   final sentAudio = <Uint8List>[];
+  final startedStreams = <String>[];
+  final resumptionHandles = <String?>[];
   final _started = Completer<void>();
 
   Future<void> startedStream() => _started.future;
 
-  void emitState(LiveVoicePhase state, {String? detail}) {
+  void emitState(
+    LiveVoicePhase state, {
+    String? detail,
+    String? resumptionHandle,
+  }) {
     _events.add(
       NativeEventLiveVoiceState(
         value: LiveVoiceState(
           liveStreamId: streamId!,
           state: state,
           detail: detail,
+          resumptionHandle: resumptionHandle,
         ),
       ),
     );
   }
 
-  void emitTranscript(String text, {required bool finalSegment}) {
+  void emitTranscript(
+    String text, {
+    required bool finalSegment,
+    bool assistant = false,
+  }) {
     _events.add(
       NativeEventLiveVoiceTranscript(
         value: LiveVoiceTranscript(
           liveStreamId: streamId!,
           text: text,
           finalSegment: finalSegment,
+          assistant: assistant,
         ),
       ),
     );
@@ -265,8 +376,11 @@ final class _LiveHub implements NativeHub, LiveVoiceHub {
     required String liveStreamId,
     required String ephemeralToken,
     required String model,
+    String? resumptionHandle,
   }) {
     streamId = liveStreamId;
+    startedStreams.add(liveStreamId);
+    resumptionHandles.add(resumptionHandle);
     if (!_started.isCompleted) _started.complete();
   }
 
@@ -322,6 +436,7 @@ final class _FakeHub implements NativeHub, LiveVoiceHub {
     required String liveStreamId,
     required String ephemeralToken,
     required String model,
+    String? resumptionHandle,
   }) {
     startedStreams.add(liveStreamId);
     emitPhase(liveStreamId, LiveVoicePhase.started);

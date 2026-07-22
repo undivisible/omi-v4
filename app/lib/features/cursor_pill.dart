@@ -236,6 +236,15 @@ class _CursorPillState extends State<CursorPill> {
             const SizedBox(height: 8),
           ],
           _pill(listening),
+          if (listening)
+            if (controller.notice case final notice?) ...[
+              const SizedBox(height: 6),
+              Text(
+                notice,
+                key: const Key('cursor_pill_notice'),
+                style: const TextStyle(fontSize: 12, color: _pillMuted),
+              ),
+            ],
           if (controller.error case final message?) ...[
             const SizedBox(height: 6),
             Text(

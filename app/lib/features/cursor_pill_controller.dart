@@ -205,6 +205,7 @@ final class CursorPillController extends ChangeNotifier {
     required this._cancelVoice,
     required this._sendPrompt,
     required this.level,
+    this._voiceNotice,
     this._openHub,
     Future<bool> Function(Uri link)? launchLink,
     this._presentWindow,
@@ -219,7 +220,9 @@ final class CursorPillController extends ChangeNotifier {
     this.emailLookupTimeout = const Duration(milliseconds: 800),
   }) : _launchLink = launchLink ?? launcher.launchUrl,
        _requestId = requestId ?? _defaultRequestId,
-       _now = now ?? DateTime.now;
+       _now = now ?? DateTime.now {
+    _voiceNotice?.addListener(_notify);
+  }
 
   factory CursorPillController.forServices(
     AppServices services, {
@@ -237,6 +240,7 @@ final class CursorPillController extends ChangeNotifier {
         services.desktopVoice.level,
         services.liveVoice.level,
       ]),
+      voiceNotice: services.voiceNotice,
       openHub: openHub,
       presentWindow: CursorPillWindow.summon,
       dismissWindow: CursorPillWindow.restore,
@@ -267,6 +271,7 @@ final class CursorPillController extends ChangeNotifier {
   final DateTime Function() _now;
   final Duration doubleShiftDebounce;
   final ValueListenable<double> level;
+  final ValueListenable<String?>? _voiceNotice;
   final CurrentsController? _currents;
   final Future<String?> Function(String prompt, Duration timeout)? _draft;
   final Future<void> Function(String currentId)? _automate;
@@ -288,6 +293,10 @@ final class CursorPillController extends ChangeNotifier {
   CursorPillState get state => _state;
   List<PillSuggestion> get suggestions => _suggestions;
   String? get error => _error;
+
+  /// One-line status from the voice pipeline (e.g. a live-voice downgrade
+  /// note), shown while listening.
+  String? get notice => _voiceNotice?.value;
 
   Future<void> handleGesture(ShiftGestureAction action) async {
     switch (action) {
@@ -630,6 +639,7 @@ final class CursorPillController extends ChangeNotifier {
   @override
   void dispose() {
     _disposed = true;
+    _voiceNotice?.removeListener(_notify);
     unawaited(_subscription?.cancel());
     super.dispose();
   }

@@ -25,11 +25,24 @@ const DEFAULT_OUTPUT_SAMPLE_RATE_HZ: u32 = 24_000;
 
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum RealtimeVoiceEvent {
-    TranscriptDelta { text: String, final_segment: bool },
-    AudioChunk { sample_rate_hz: u32, bytes: Vec<u8> },
+    Started,
+    TranscriptDelta {
+        text: String,
+        final_segment: bool,
+        assistant: bool,
+    },
+    AudioChunk {
+        sample_rate_hz: u32,
+        bytes: Vec<u8>,
+    },
     Interrupted,
-    SessionEnded { resumption_handle: Option<String> },
-    Error(String),
+    SessionEnded {
+        resumption_handle: Option<String>,
+    },
+    Error {
+        message: String,
+        resumption_handle: Option<String>,
+    },
 }
 
 #[derive(Clone, Eq, PartialEq)]
@@ -176,6 +189,7 @@ pub(crate) fn setup_message(model: &str, resumption_handle: Option<&str>) -> Str
         },
         "realtimeInputConfig": {},
         "inputAudioTranscription": {},
+        "outputAudioTranscription": {},
     });
     if let Some(handle) = resumption_handle {
         setup["sessionResumption"] = serde_json::json!({ "handle": handle });
@@ -417,7 +431,10 @@ async fn run(
         result = &mut connection => match result {
             Ok(socket) => socket,
             Err(message) => {
-                let _ = events.send(RealtimeVoiceEvent::Error(message)).await;
+                let _ = events.send(RealtimeVoiceEvent::Error {
+                    message,
+                    resumption_handle: None,
+                }).await;
                 return;
             }
         }
@@ -430,9 +447,10 @@ async fn run(
         .is_err()
     {
         let _ = events
-            .send(RealtimeVoiceEvent::Error(
-                "live voice provider rejected setup".to_owned(),
-            ))
+            .send(RealtimeVoiceEvent::Error {
+                message: "live voice provider rejected setup".to_owned(),
+                resumption_handle: None,
+            })
             .await;
         return;
     }
@@ -445,16 +463,18 @@ async fn run(
                     while let Ok(bytes) = audio_receiver.try_recv() {
                         pending_audio_bytes.fetch_sub(bytes.len(), Ordering::AcqRel);
                         if socket.send(Message::Text(realtime_input_message(&bytes).into())).await.is_err() {
-                            let _ = events.send(RealtimeVoiceEvent::Error(
-                                "live voice provider connection was lost".to_owned(),
-                            )).await;
+                            let _ = events.send(RealtimeVoiceEvent::Error {
+                                message: "live voice provider connection was lost".to_owned(),
+                                resumption_handle: resumption_handle.clone(),
+                            }).await;
                             return;
                         }
                     }
                     if socket.send(Message::Text(audio_stream_end_message().into())).await.is_err() {
-                        let _ = events.send(RealtimeVoiceEvent::Error(
-                            "live voice provider connection was lost".to_owned(),
-                        )).await;
+                        let _ = events.send(RealtimeVoiceEvent::Error {
+                            message: "live voice provider connection was lost".to_owned(),
+                            resumption_handle: resumption_handle.clone(),
+                        }).await;
                         return;
                     }
                     draining = true;
@@ -473,9 +493,10 @@ async fn run(
                 if !draining
                     && socket.send(Message::Text(realtime_input_message(&bytes).into())).await.is_err()
                 {
-                    let _ = events.send(RealtimeVoiceEvent::Error(
-                        "live voice provider connection was lost".to_owned(),
-                    )).await;
+                    let _ = events.send(RealtimeVoiceEvent::Error {
+                        message: "live voice provider connection was lost".to_owned(),
+                        resumption_handle: resumption_handle.clone(),
+                    }).await;
                     return;
                 }
             },
@@ -487,7 +508,10 @@ async fn run(
                     }
                 }
                 Some(Err(transport_error)) => {
-                    let _ = events.send(RealtimeVoiceEvent::Error(transport_error)).await;
+                    let _ = events.send(RealtimeVoiceEvent::Error {
+                        message: transport_error,
+                        resumption_handle: resumption_handle.clone(),
+                    }).await;
                     return;
                 }
                 None => {
@@ -537,12 +561,18 @@ async fn dispatch_server_payload(
     let message = match parse_server_message(payload) {
         Ok(message) => message,
         Err(failure) => {
-            let _ = events.send(RealtimeVoiceEvent::Error(failure)).await;
+            let _ = events
+                .send(RealtimeVoiceEvent::Error {
+                    message: failure,
+                    resumption_handle: resumption_handle.clone(),
+                })
+                .await;
             return false;
         }
     };
     match message {
-        ServerMessage::SetupComplete | ServerMessage::Unknown => true,
+        ServerMessage::SetupComplete => events.send(RealtimeVoiceEvent::Started).await.is_ok(),
+        ServerMessage::Unknown => true,
         ServerMessage::SessionResumptionUpdate { handle, resumable } => {
             if resumable {
                 *resumption_handle = Some(handle);
@@ -572,6 +602,7 @@ async fn dispatch_server_payload(
                     .send(RealtimeVoiceEvent::TranscriptDelta {
                         text,
                         final_segment: true,
+                        assistant: false,
                     })
                     .await
                     .is_err()
@@ -595,6 +626,7 @@ async fn dispatch_server_payload(
                     .send(RealtimeVoiceEvent::TranscriptDelta {
                         text,
                         final_segment: turn_complete,
+                        assistant: true,
                     })
                     .await
                     .is_err()
@@ -674,6 +706,10 @@ mod tests {
         assert_eq!(value["setup"]["realtimeInputConfig"], serde_json::json!({}));
         assert_eq!(
             value["setup"]["inputAudioTranscription"],
+            serde_json::json!({})
+        );
+        assert_eq!(
+            value["setup"]["outputAudioTranscription"],
             serde_json::json!({})
         );
         assert!(value["setup"]["sessionResumption"].is_null());
@@ -805,6 +841,73 @@ mod tests {
             audio_receiver.try_recv().map(|bytes| bytes.len()),
             Ok(MAX_PENDING_AUDIO_BYTES)
         );
+    }
+
+    #[test]
+    fn dispatch_emits_started_only_for_setup_complete() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap_or_else(|error| panic!("runtime builds: {error}"));
+        runtime.block_on(async {
+            let (sender, mut receiver) = mpsc::channel(EVENT_QUEUE_CAPACITY);
+            let mut handle = None;
+            let content = serde_json::json!({
+                "serverContent": {
+                    "outputTranscription": {"text": "hi"},
+                    "turnComplete": true,
+                }
+            })
+            .to_string();
+            assert!(dispatch_server_payload(content.as_bytes(), &sender, &mut handle).await);
+            assert_eq!(
+                receiver.try_recv(),
+                Ok(RealtimeVoiceEvent::TranscriptDelta {
+                    text: "hi".to_owned(),
+                    final_segment: true,
+                    assistant: true,
+                })
+            );
+            assert!(receiver.try_recv().is_err());
+            assert!(
+                dispatch_server_payload(br#"{"setupComplete":{}}"#, &sender, &mut handle).await
+            );
+            assert_eq!(receiver.try_recv(), Ok(RealtimeVoiceEvent::Started));
+        });
+    }
+
+    #[test]
+    fn dispatch_marks_input_and_output_transcripts_distinctly() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap_or_else(|error| panic!("runtime builds: {error}"));
+        runtime.block_on(async {
+            let (sender, mut receiver) = mpsc::channel(EVENT_QUEUE_CAPACITY);
+            let mut handle = None;
+            let content = serde_json::json!({
+                "serverContent": {
+                    "inputTranscription": {"text": "user words"},
+                    "outputTranscription": {"text": "assistant words"},
+                }
+            })
+            .to_string();
+            assert!(dispatch_server_payload(content.as_bytes(), &sender, &mut handle).await);
+            assert_eq!(
+                receiver.try_recv(),
+                Ok(RealtimeVoiceEvent::TranscriptDelta {
+                    text: "user words".to_owned(),
+                    final_segment: true,
+                    assistant: false,
+                })
+            );
+            assert_eq!(
+                receiver.try_recv(),
+                Ok(RealtimeVoiceEvent::TranscriptDelta {
+                    text: "assistant words".to_owned(),
+                    final_segment: false,
+                    assistant: true,
+                })
+            );
+        });
     }
 
     #[test]
