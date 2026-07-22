@@ -39,7 +39,7 @@ private class OvalBlurView: NSView {
     super.layout()
     guard shell.bounds.size != maskSize, shell.bounds.width > 0, shell.bounds.height > 0 else { return }
     maskSize = shell.bounds.size
-    shell.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.8).cgColor
+    shell.layer?.backgroundColor = NSColor(calibratedWhite: 0.2, alpha: 0.8).cgColor
     let mask = NSImage(size: maskSize, flipped: false) { bounds in
       guard
         let gradient = CGGradient(
@@ -154,7 +154,11 @@ private final class PermissionDragOverlay: NSView {
     self.capability = capability
     alphaValue = 0
     isHidden = false
-    animator().alphaValue = 1
+    NSAnimationContext.runAnimationGroup { context in
+      context.duration = 0.35
+      context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+      animator().alphaValue = 1
+    }
     permissionTimer?.invalidate()
     let timer = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in
       guard let self, let capability = self.capability,
@@ -169,7 +173,13 @@ private final class PermissionDragOverlay: NSView {
     capability = nil
     permissionTimer?.invalidate()
     permissionTimer = nil
-    isHidden = true
+    NSAnimationContext.runAnimationGroup { context in
+      context.duration = 0.2
+      context.timingFunction = CAMediaTimingFunction(name: .easeIn)
+      animator().alphaValue = 0
+    } completionHandler: { [weak self] in
+      self?.isHidden = true
+    }
   }
 
   func hideIfGranted(
@@ -368,17 +378,22 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
   }
 
   private func hasFullDiskAccess() -> Bool {
-    let mail = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Mail")
-    do {
-      _ = try FileManager.default.contentsOfDirectory(
-        at: mail,
-        includingPropertiesForKeys: nil,
-        options: [.skipsHiddenFiles]
-      )
+    let library = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library")
+    let mail = library.appendingPathComponent("Mail")
+    let notes = library.appendingPathComponent("Group Containers/group.com.apple.notes")
+    if (try? FileManager.default.contentsOfDirectory(at: mail, includingPropertiesForKeys: nil)) != nil {
       return true
-    } catch {
-      return false
     }
+    for store in [
+      notes.appendingPathComponent("NoteStore.sqlite"),
+      notes.appendingPathComponent("Accounts/LocalAccount/NoteStore.sqlite"),
+    ] {
+      if let handle = try? FileHandle(forReadingFrom: store) {
+        try? handle.close()
+        return true
+      }
+    }
+    return false
   }
 
   private func openPrivacyPane(_ pane: String) {
