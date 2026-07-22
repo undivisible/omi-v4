@@ -193,7 +193,19 @@ routes.get("/setup-health", (context) => {
       configured(context.env.APP_URL),
     models: {
       managedChat: configured(context.env.MIMO_API_KEY),
+      // Legacy Deepgram interactive STT path (`stt.ts`).
       managedStt: configured(context.env.DEEPGRAM_API_KEY),
+      // Gemini Live realtime duplex voice (`voice.ts`) — the primary live
+      // voice path; reports unconfigured independently of the legacy
+      // Deepgram flag above so a missing Gemini key isn't masked by it.
+      managedLiveVoice:
+        configured(context.env.GEMINI_API_KEY) &&
+        configured(context.env.GEMINI_LIVE_MODEL),
+      // MiMo batch ASR for long-form/meeting transcription (`asr.ts`),
+      // shares MIMO_API_KEY with managed chat.
+      managedAsr:
+        configured(context.env.MIMO_API_KEY) &&
+        configured(context.env.MIMO_CHAT_COMPLETIONS_URL),
     },
     desktopAuth:
       configured(context.env.FIREBASE_SERVICE_ACCOUNT_EMAIL) &&

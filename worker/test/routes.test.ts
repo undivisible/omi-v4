@@ -118,8 +118,32 @@ describe("setup health", () => {
       memory: true,
       channels: { telegram: true, blooio: false },
       billing: false,
-      models: { managedChat: true, managedStt: false },
+      models: {
+        managedChat: true,
+        managedStt: false,
+        managedLiveVoice: false,
+        managedAsr: false,
+      },
       desktopAuth: false,
+    });
+    expect(JSON.stringify(body)).not.toContain("secret");
+  });
+
+  test("reports Gemini Live and MiMo ASR readiness independently of Deepgram", async () => {
+    const response = await request("alpha", "/setup-health", undefined, {
+      MIMO_API_KEY: "mimo-secret",
+      MIMO_CHAT_COMPLETIONS_URL:
+        "https://token-plan-sgp.xiaomimimo.com/v1/chat/completions",
+      GEMINI_API_KEY: "gemini-secret",
+      GEMINI_LIVE_MODEL: "gemini-3.1-flash-live-preview",
+    });
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as Record<string, unknown>;
+    expect(body.models).toEqual({
+      managedChat: true,
+      managedStt: false,
+      managedLiveVoice: true,
+      managedAsr: true,
     });
     expect(JSON.stringify(body)).not.toContain("secret");
   });

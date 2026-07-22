@@ -363,12 +363,27 @@ pub fn install(sender: mpsc::Sender<MeetingControl>) {
         .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(sender);
 }
 
-fn notify(control: MeetingControl) -> bool {
+fn control_sender() -> Option<mpsc::Sender<MeetingControl>> {
     CONTROLS
         .read()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .as_ref()
-        .is_some_and(|sender| sender.try_send(control).is_ok())
+        .clone()
+}
+
+fn notify(control: MeetingControl) -> bool {
+    let Some(sender) = control_sender() else {
+        return false;
+    };
+    match sender.try_send(control) {
+        Ok(()) => true,
+        Err(mpsc::error::TrySendError::Full(_)) => {
+            eprintln!(
+                "omi meeting control queue is full ({CONTROL_QUEUE_CAPACITY} slots); dropping a non-critical event"
+            );
+            false
+        }
+        Err(mpsc::error::TrySendError::Closed(_)) => false,
+    }
 }
 
 pub fn request_start(title: Option<String>) -> bool {
@@ -397,11 +412,34 @@ pub fn set_mode(mode: SystemAudioCaptureMode) {
     notify(MeetingControl::SetMode { mode });
 }
 
-pub fn observe_final_segment(text: &str) {
-    if !text.trim().is_empty() {
-        notify(MeetingControl::FinalSegment {
-            text: text.to_owned(),
-        });
+/// Delivers a final transcript segment to the meeting runtime.
+///
+/// Unlike `notify`, this must not silently drop the segment when the control
+/// queue is momentarily full: losing final transcript text is worse than a
+/// bit of latency, so a full queue falls back to a blocking send.
+pub async fn observe_final_segment(text: &str) {
+    if text.trim().is_empty() {
+        return;
+    }
+    let Some(sender) = control_sender() else {
+        return;
+    };
+    let control = MeetingControl::FinalSegment {
+        text: text.to_owned(),
+    };
+    match sender.try_send(control) {
+        Ok(()) => {}
+        Err(mpsc::error::TrySendError::Full(control)) => {
+            eprintln!(
+                "omi meeting control queue is full ({CONTROL_QUEUE_CAPACITY} slots); blocking to deliver a final transcript segment"
+            );
+            if sender.send(control).await.is_err() {
+                eprintln!("omi meeting control queue closed; final transcript segment lost");
+            }
+        }
+        Err(mpsc::error::TrySendError::Closed(_)) => {
+            eprintln!("omi meeting control queue closed; final transcript segment lost");
+        }
     }
 }
 

@@ -122,8 +122,12 @@ describe("asr transcription", () => {
   });
 
   test("413 when the base64 payload exceeds the cap", async () => {
+    // The cap targets ~10 MiB of *decoded* audio; base64 encodes 3 raw bytes
+    // as 4 characters, so the allowed base64 character length is scaled up
+    // by 4/3 accordingly.
+    const maximumAudioBase64Chars = Math.ceil((10 * 1024 * 1024 * 4) / 3);
     const response = await transcribe("pro", {
-      audio: "A".repeat(10 * 1024 * 1024 + 1),
+      audio: "A".repeat(maximumAudioBase64Chars + 1),
       format: "wav",
     });
     expect(response.status).toBe(413);

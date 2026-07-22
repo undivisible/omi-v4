@@ -160,7 +160,7 @@ fn detect_call_window() -> Option<MeetingApp> {
     if !browser_process_running() {
         return None;
     }
-    let script = "tell application \"System Events\"\nset outputText to \"\"\nrepeat with processRef in (every application process whose background only is false)\nset windowTitle to \"\"\ntry\nset windowTitle to name of window 1 of processRef\nend try\nset outputText to outputText & (name of processRef) & tab & (bundle identifier of processRef) & tab & windowTitle & linefeed\nend repeat\nreturn outputText\nend tell";
+    let script = "tell application \"System Events\"\nset outputText to \"\"\nrepeat with processRef in (every application process whose background only is false)\nset windowTitle to \"\"\ntry\nset windowTitle to name of window 1 of processRef\nend try\nset bundleId to \"\"\ntry\nset bundleId to bundle identifier of processRef\nend try\nset outputText to outputText & (name of processRef) & tab & bundleId & tab & windowTitle & linefeed\nend repeat\nreturn outputText\nend tell";
     let output = std::process::Command::new("/usr/bin/osascript")
         .args(["-e", script])
         .output()

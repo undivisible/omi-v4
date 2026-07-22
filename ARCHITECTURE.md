@@ -306,13 +306,13 @@ sequenceDiagram
     participant D1 as D1 entitlements
     participant Stripe as Stripe API
 
-    App->>W: POST /v1/billing/checkout
+    App->>W: POST /v1/payments/stripe/checkout
     W->>D1: look up stripe_customer_id for uid
     W->>Stripe: POST checkout/sessions (mode=subscription,<br/>client_reference_id=uid, metadata.firebase_uid=uid)
     Stripe-->>W: session {id, url}
     W-->>App: 201 {id, url} — app opens external Stripe Checkout
     Note over App,Stripe: Elsewhere: Stripe webhook -> entitlements table<br/>(plan, status, valid_until) — not shown, handled in webhooks.ts
-    App->>W: POST /v1/billing/portal
+    App->>W: POST /v1/payments/stripe/portal
     W->>D1: require existing stripe_customer_id
     W->>Stripe: POST billing_portal/sessions
     Stripe-->>W: session {id, url}

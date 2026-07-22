@@ -9,8 +9,12 @@ import type { AppEnv } from "./types";
 
 const asr = new Hono<AppEnv>();
 const asrModel = "mimo-v2.5-asr";
-const maximumAudioBase64Bytes = 10 * 1024 * 1024;
-const maximumBodyBytes = maximumAudioBase64Bytes + 64 * 1024;
+// Target ceiling on the *decoded* audio payload. Base64 encodes 3 raw bytes
+// as 4 characters, so the base64 *character* length allowed must be scaled
+// up by 4/3 for real (decoded) audio to be able to reach this size.
+const maximumDecodedAudioBytes = 10 * 1024 * 1024;
+const maximumAudioBase64Chars = Math.ceil((maximumDecodedAudioBytes * 4) / 3);
+const maximumBodyBytes = maximumAudioBase64Chars + 64 * 1024;
 const formats = new Set(["wav", "mp3"]);
 const languages = new Set(["auto", "zh", "en"]);
 
@@ -29,12 +33,17 @@ asr.post("/transcribe", async (context) => {
   const declared = Number(context.req.raw.headers.get("content-length"));
   if (Number.isFinite(declared) && declared > maximumBodyBytes)
     return context.json({ error: "Audio too large" }, 413);
+  // Reject non-Pro requests before parsing/buffering the (potentially
+  // multi-megabyte) body, so ineligible requests are cheap.
+  const auth = context.get("auth");
+  if (!(await hasActivePro(context.env, auth.uid)))
+    return context.json({ error: "Managed Pro required" }, 403);
   const body = await boundedJson(context.req.raw, maximumBodyBytes);
   if (!body) return context.json({ error: "Invalid request" }, 400);
   const audio = body.audio;
   const format = body.format;
   const language = body.language;
-  if (typeof audio === "string" && audio.length > maximumAudioBase64Bytes)
+  if (typeof audio === "string" && audio.length > maximumAudioBase64Chars)
     return context.json({ error: "Audio too large" }, 413);
   if (
     typeof audio !== "string" ||
@@ -45,9 +54,6 @@ asr.post("/transcribe", async (context) => {
       (typeof language !== "string" || !languages.has(language)))
   )
     return context.json({ error: "Invalid request" }, 400);
-  const auth = context.get("auth");
-  if (!(await hasActivePro(context.env, auth.uid)))
-    return context.json({ error: "Managed Pro required" }, 403);
   const now = Date.now();
   const requestId = crypto.randomUUID();
   try {
