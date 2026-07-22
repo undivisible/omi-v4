@@ -323,8 +323,7 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
           self.openPrivacyPane("Privacy_Accessibility")
           result(nil)
         case "microphone":
-          self.openPrivacyPane("Privacy_Microphone")
-          result(nil)
+          AVCaptureDevice.requestAccess(for: .audio) { _ in result(nil) }
         case "screenCapture":
           permissionOverlay.show(for: capability)
           self.openPrivacyPane("Privacy_ScreenCapture")

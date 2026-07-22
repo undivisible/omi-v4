@@ -9,6 +9,7 @@ PRODUCT_NAME = omi
 
 // The application's bundle identifier
 PRODUCT_BUNDLE_IDENTIFIER = com.omi.omi
+DEVELOPMENT_TEAM = LZ3NL5434Q
 
 // The copyright displayed in application information
 PRODUCT_COPYRIGHT = Copyright © 2026 com.omi. All rights reserved.
