@@ -153,10 +153,44 @@ class _OmiAppState extends State<OmiApp> {
     const background = Color(0xff0b1013);
     const surface = Color(0xff151c20);
     const accent = Color(0xfffffcec);
+    const paper = Color(0xfff7f6f1);
+    const paperSurface = Color(0xfffffefa);
+    const ink = Color(0xff171716);
+    const textTheme = TextTheme(
+      displaySmall: TextStyle(fontWeight: FontWeight.w600, letterSpacing: -1),
+      headlineMedium: TextStyle(
+        fontWeight: FontWeight.w600,
+        letterSpacing: -.5,
+      ),
+      titleMedium: TextStyle(fontWeight: FontWeight.w600),
+      bodyLarge: TextStyle(height: 1.45),
+    );
     return MaterialApp(
       title: 'Omi',
       debugShowCheckedModeBanner: false,
+      themeMode: ThemeMode.system,
       theme: ThemeData(
+        brightness: Brightness.light,
+        scaffoldBackgroundColor: paper,
+        colorScheme: const ColorScheme.light(
+          primary: ink,
+          surface: paperSurface,
+          onSurface: ink,
+          onSurfaceVariant: Color(0xff706e68),
+          secondary: Color(0xff2f9d8a),
+        ),
+        fontFamily: 'SF Pro Display',
+        textTheme: textTheme,
+        inputDecorationTheme: InputDecorationTheme(
+          filled: true,
+          fillColor: Colors.black.withValues(alpha: .05),
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(18),
+            borderSide: BorderSide.none,
+          ),
+        ),
+      ),
+      darkTheme: ThemeData(
         brightness: Brightness.dark,
         scaffoldBackgroundColor: background,
         colorScheme: const ColorScheme.dark(
@@ -165,18 +199,7 @@ class _OmiAppState extends State<OmiApp> {
           onSurface: Color(0xfff4f7f6),
         ),
         fontFamily: 'SF Pro Display',
-        textTheme: const TextTheme(
-          displaySmall: TextStyle(
-            fontWeight: FontWeight.w600,
-            letterSpacing: -1,
-          ),
-          headlineMedium: TextStyle(
-            fontWeight: FontWeight.w600,
-            letterSpacing: -.5,
-          ),
-          titleMedium: TextStyle(fontWeight: FontWeight.w600),
-          bodyLarge: TextStyle(height: 1.45),
-        ),
+        textTheme: textTheme,
         inputDecorationTheme: InputDecorationTheme(
           filled: true,
           fillColor: Colors.white.withValues(alpha: .06),
