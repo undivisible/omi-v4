@@ -300,6 +300,11 @@ final class AppServices {
     if (nativeHub is! OnboardingScanHub) {
       throw StateError('Native scanning is not connected.');
     }
+    if (!await _ensureNativeInitialized()) {
+      throw const NativeHubUnavailable(
+        'Private scanning is unavailable on this platform.',
+      );
+    }
     final root = await selectedWorkspaceRoot;
     final requestId = 'onboarding-scan-${_randomId()}';
     (nativeHub as OnboardingScanHub).scanOnboarding(
@@ -599,21 +604,7 @@ final class AppServices {
       return;
     }
     await _stopCapture();
-    if (!_nativeInitialized) {
-      await nativeHub.initialize();
-      if (!nativeHub.available) return;
-      _nativeEventSubscription = nativeHub.events.listen(
-        _handleNativeEvent,
-        onError: _nativeEvents.addError,
-      );
-      _nativeInitialized = true;
-      if (_workerOrigin != null) {
-        nativeHub.configureTrustedAssistant(
-          requestId: 'configure-trusted-assistant',
-          managedWorkerOrigin: _workerOrigin.toString(),
-        );
-      }
-    }
+    if (!await _ensureNativeInitialized()) return;
     final databasePath = await memoryDatabasePath(session.uid);
     if (_disposed ||
         !productionReady ||
@@ -634,6 +625,24 @@ final class AppServices {
     memorySyncPump?.start(session.uid);
     if (_workerOrigin != null) await _configureSelectedAssistant(session.uid);
     _conversationController.scheduleInboxPoll(Duration.zero);
+  }
+
+  Future<bool> _ensureNativeInitialized() async {
+    if (_nativeInitialized) return true;
+    await nativeHub.initialize();
+    if (!nativeHub.available) return false;
+    _nativeEventSubscription = nativeHub.events.listen(
+      _handleNativeEvent,
+      onError: _nativeEvents.addError,
+    );
+    _nativeInitialized = true;
+    if (_workerOrigin != null) {
+      nativeHub.configureTrustedAssistant(
+        requestId: 'configure-trusted-assistant',
+        managedWorkerOrigin: _workerOrigin.toString(),
+      );
+    }
+    return true;
   }
 
   void _handleNativeEvent(NativeEvent event) {

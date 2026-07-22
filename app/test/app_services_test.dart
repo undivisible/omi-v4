@@ -956,6 +956,32 @@ void main() {
     await hub.close();
   });
 
+  test(
+    'onboarding scan starts native services without memory authority',
+    () async {
+      final auth = AuthController(_FakeAuthGateway(null));
+      final hub = _FakeHub();
+      final services = AppServices.forTesting(
+        auth: auth,
+        nativeHub: hub,
+        deviceRelay: DeviceRelayService(
+          role: DeviceRelayRole.desktopObserver,
+          adapter: const UnavailableDeviceRelayAdapter(),
+        ),
+        memoryDatabasePath: (uid) => '/tmp/$uid.sqlite3',
+      );
+
+      await services.initialize();
+      final requestId = await services.scanOnboardingSources();
+
+      expect(hub.initializeCalls, 1);
+      expect(hub.databasePaths, isEmpty);
+      expect(hub.scanRequests.single.requestId, requestId);
+      services.dispose();
+      await hub.close();
+    },
+  );
+
   test('in-flight transcripts enforce immutable UID-scoped payloads', () async {
     final gateway = _FakeAuthGateway(_session('user-a'));
     final auth = AuthController(
@@ -1913,7 +1939,7 @@ final class _FakeAuthGateway implements AuthGateway {
   }) async => _session!;
 }
 
-final class _FakeHub implements NativeHub {
+final class _FakeHub implements NativeHub, OnboardingScanHub {
   final eventsController = StreamController<NativeEvent>.broadcast();
   int initializeCalls = 0;
   int disposeCalls = 0;
@@ -1933,6 +1959,16 @@ final class _FakeHub implements NativeHub {
   final transcriptionAuth = <TranscriptionAuth>[];
   final transcriptionEncoding = <AudioEncoding>[];
   final transcriptionStartRequests = <String, String>{};
+  final scanRequests =
+      <
+        ({
+          String requestId,
+          List<String> roots,
+          bool includeAppleNotes,
+          bool includeAppleMail,
+          int recordedAtMs,
+        })
+      >[];
   int stoppedAudioStreams = 0;
   String? terminalTranscript;
   final audio =
@@ -1982,6 +2018,23 @@ final class _FakeHub implements NativeHub {
 
   @override
   void listMemoryItems({required String requestId, int limit = 50}) {}
+
+  @override
+  void scanOnboarding({
+    required String requestId,
+    required List<String> roots,
+    required bool includeAppleNotes,
+    required bool includeAppleMail,
+    required int recordedAtMs,
+  }) {
+    scanRequests.add((
+      requestId: requestId,
+      roots: roots,
+      includeAppleNotes: includeAppleNotes,
+      includeAppleMail: includeAppleMail,
+      recordedAtMs: recordedAtMs,
+    ));
+  }
 
   @override
   void dispose() => disposeCalls += 1;
