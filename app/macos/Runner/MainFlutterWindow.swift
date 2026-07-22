@@ -4,34 +4,50 @@ import ApplicationServices
 import Carbon.HIToolbox
 import FlutterMacOS
 
-private class RadialBlurView: NSVisualEffectView {
-  private var maskSize = NSSize.zero
+private class OvalBlurView: NSView {
+  private let shell = NSView()
+  private let effect = NSVisualEffectView()
+
+  init(frame frameRect: NSRect, blendingMode: NSVisualEffectView.BlendingMode) {
+    super.init(frame: frameRect)
+    shell.wantsLayer = true
+    shell.translatesAutoresizingMaskIntoConstraints = false
+    effect.wantsLayer = true
+    effect.material = .underWindowBackground
+    effect.blendingMode = blendingMode
+    effect.state = .active
+    effect.translatesAutoresizingMaskIntoConstraints = false
+    shell.addSubview(effect)
+    addSubview(shell)
+    NSLayoutConstraint.activate([
+      shell.centerXAnchor.constraint(equalTo: centerXAnchor),
+      shell.centerYAnchor.constraint(equalTo: centerYAnchor),
+      shell.widthAnchor.constraint(equalTo: widthAnchor, multiplier: 0.88),
+      shell.heightAnchor.constraint(equalTo: heightAnchor, multiplier: 0.76),
+      effect.leadingAnchor.constraint(equalTo: shell.leadingAnchor),
+      effect.trailingAnchor.constraint(equalTo: shell.trailingAnchor),
+      effect.topAnchor.constraint(equalTo: shell.topAnchor),
+      effect.bottomAnchor.constraint(equalTo: shell.bottomAnchor),
+    ])
+  }
+
+  required init?(coder: NSCoder) { nil }
 
   override func layout() {
     super.layout()
-    guard bounds.size != maskSize, bounds.width > 0, bounds.height > 0 else { return }
-    maskSize = bounds.size
-    let mask = NSImage(size: bounds.size)
-    mask.lockFocus()
-    NSGradient(
-      colorsAndLocations:
-        (NSColor.black, 0),
-        (NSColor.black, 0.42),
-        (NSColor.black.withAlphaComponent(0.72), 0.62),
-        (NSColor.clear, 1)
-    )?.draw(
-      in: NSRect(
-        x: bounds.width * 0.06,
-        y: bounds.height * 0.12,
-        width: bounds.width * 0.88,
-        height: bounds.height * 0.76),
-      relativeCenterPosition: .zero)
-    mask.unlockFocus()
-    maskImage = mask
+    let radius = shell.bounds.height / 2
+    shell.layer?.cornerRadius = radius
+    shell.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.1).cgColor
+    shell.layer?.shadowColor = NSColor.black.withAlphaComponent(0.2).cgColor
+    shell.layer?.shadowOpacity = 1
+    shell.layer?.shadowRadius = 56
+    shell.layer?.shadowOffset = .zero
+    effect.layer?.cornerRadius = radius
+    effect.layer?.masksToBounds = true
   }
 }
 
-private final class OnboardingBlurView: RadialBlurView {
+private final class OnboardingBlurView: OvalBlurView {
   override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 
@@ -62,15 +78,18 @@ private final class ShortcutDragView: NSImageView, NSDraggingSource {
   }
 }
 
-private final class FullDiskAccessDragOverlay: RadialBlurView {
+private final class PermissionDragOverlay: NSView {
+  private var capability: String?
+
   init(frame frameRect: NSRect, shortcutURL: URL) {
     super.init(frame: frameRect)
     autoresizingMask = [.width, .height]
-    material = .underWindowBackground
-    blendingMode = .withinWindow
-    state = .active
 
-    let title = NSTextField(labelWithString: "Drag into Settings")
+    let blur = OvalBlurView(frame: bounds, blendingMode: .withinWindow)
+    blur.autoresizingMask = [.width, .height]
+    addSubview(blur)
+
+    let title = NSTextField(labelWithString: "Drag this shortcut into Settings")
     title.font = .systemFont(ofSize: 24, weight: .semibold)
     title.textColor = .white
     title.alignment = .center
@@ -96,18 +115,28 @@ private final class FullDiskAccessDragOverlay: RadialBlurView {
 
   required init?(coder: NSCoder) { nil }
 
-  override func mouseDown(with event: NSEvent) {
-    hide()
-  }
-
-  func show() {
+  func show(for capability: String) {
+    self.capability = capability
     alphaValue = 0
     isHidden = false
     animator().alphaValue = 1
   }
 
-  func hide() {
-    isHidden = true
+  func hideIfGranted(
+    accessibility: Bool,
+    screenCapture: Bool,
+    fullDiskAccess: Bool
+  ) {
+    let granted = switch capability {
+    case "accessibility": accessibility
+    case "screenCapture": screenCapture
+    case "appData": fullDiskAccess
+    default: false
+    }
+    if granted {
+      capability = nil
+      isHidden = true
+    }
   }
 }
 
@@ -176,20 +205,17 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
     self.contentViewController = rootViewController
     self.setFrame(windowFrame, display: true)
 
-    let blur = OnboardingBlurView(frame: rootView.bounds)
+    let blur = OnboardingBlurView(frame: rootView.bounds, blendingMode: .behindWindow)
     blur.autoresizingMask = [.width, .height]
-    blur.material = .underWindowBackground
-    blur.blendingMode = .behindWindow
-    blur.state = .active
     blur.alphaValue = 0
     flutterViewController.view.frame = rootView.bounds
     flutterViewController.view.autoresizingMask = [.width, .height]
     rootView.addSubview(blur)
     rootView.addSubview(flutterViewController.view)
-    let fullDiskAccessOverlay = FullDiskAccessDragOverlay(
+    let permissionOverlay = PermissionDragOverlay(
       frame: rootView.bounds,
       shortcutURL: fullDiskAccessShortcut())
-    rootView.addSubview(fullDiskAccessOverlay)
+    rootView.addSubview(permissionOverlay)
 
     RegisterGeneratedPlugins(registry: flutterViewController)
     eventKitBridge = AppleEventKitBridge(binaryMessenger: flutterViewController.engine.binaryMessenger)
@@ -225,12 +251,17 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
       }
       switch call.method {
       case "check":
+        let accessibility = AXIsProcessTrusted()
+        let screenCapture = CGPreflightScreenCaptureAccess()
         let fullDiskAccess = self.hasFullDiskAccess()
-        if fullDiskAccess { fullDiskAccessOverlay.hide() }
+        permissionOverlay.hideIfGranted(
+          accessibility: accessibility,
+          screenCapture: screenCapture,
+          fullDiskAccess: fullDiskAccess)
         result([
-          "accessibility": AXIsProcessTrusted(),
+          "accessibility": accessibility,
           "microphone": AVCaptureDevice.authorizationStatus(for: .audio) == .authorized,
-          "screenCapture": CGPreflightScreenCaptureAccess(),
+          "screenCapture": screenCapture,
           "fullDiskAccess": fullDiskAccess,
         ])
       case "request":
@@ -240,19 +271,21 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
         }
         switch capability {
         case "accessibility":
+          permissionOverlay.show(for: capability)
           let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true]
           AXIsProcessTrustedWithOptions(options as CFDictionary)
+          self.openPrivacyPane("Privacy_Accessibility")
           result(nil)
         case "microphone":
           AVCaptureDevice.requestAccess(for: .audio) { _ in result(nil) }
         case "screenCapture":
+          permissionOverlay.show(for: capability)
           CGRequestScreenCaptureAccess()
+          self.openPrivacyPane("Privacy_ScreenCapture")
           result(nil)
         case "appData":
-          fullDiskAccessOverlay.show()
-          if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles") {
-            NSWorkspace.shared.open(url)
-          }
+          permissionOverlay.show(for: capability)
+          self.openPrivacyPane("Privacy_AllFiles")
           result(nil)
         default:
           result(FlutterError(code: "invalid_capability", message: nil, details: nil))
@@ -307,6 +340,12 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
       return true
     } catch {
       return false
+    }
+  }
+
+  private func openPrivacyPane(_ pane: String) {
+    if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(pane)") {
+      NSWorkspace.shared.open(url)
     }
   }
 
