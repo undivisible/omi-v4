@@ -486,6 +486,19 @@ final class CursorPillController extends ChangeNotifier {
   }
 
   void _handleEvent(NativeEvent event) {
+    // A live voice session that dies while the pill is listening (provider
+    // hung up, connection lost) would otherwise leave the pill stuck on
+    // "Listening…" with a dead waveform: the capture layer tears the session
+    // down silently. Treat it as a stop so the pill closes cleanly and any
+    // transcript that was already received still routes (hub intent included).
+    if (event case NativeEventLiveVoiceState(
+      value: LiveVoiceState(
+        state: LiveVoicePhase.ended || LiveVoicePhase.failed,
+      ),
+    ) when _state == CursorPillState.listening) {
+      unawaited(finishListening());
+      return;
+    }
     if (event case NativeEventMemorySearchResults(
       :final value,
     ) when value.requestId == _emailLookupRequestId) {

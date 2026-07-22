@@ -308,6 +308,92 @@ void main() {
     },
   );
 
+  testWidgets('hidden pill renders nothing at all', (tester) async {
+    final harness = _Harness();
+    final controller = harness.controller();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(body: CursorPill(controller: controller)),
+      ),
+    );
+
+    expect(controller.state, CursorPillState.hidden);
+    expect(find.byKey(const Key('cursor_pill')), findsNothing);
+    expect(find.byType(LiquidGlass), findsNothing);
+    expect(find.byType(TextField), findsNothing);
+
+    await controller.summon();
+    await tester.pump();
+    expect(find.byKey(const Key('cursor_pill')), findsOneWidget);
+
+    await controller.dismiss();
+    await tester.pump();
+    expect(find.byKey(const Key('cursor_pill')), findsNothing);
+    expect(find.byType(LiquidGlass), findsNothing);
+
+    await tester.pumpWidget(const SizedBox());
+    controller.dispose();
+    await harness.close();
+  });
+
+  test('a live session dying while listening closes the pill', () async {
+    final harness = _Harness(stopTranscript: 'show me my currents');
+    final controller = harness.controller();
+
+    await controller.doubleShift();
+    harness.advance(const Duration(seconds: 1));
+    await controller.doubleShift();
+    expect(controller.state, CursorPillState.listening);
+
+    harness.hub.add(
+      NativeEventLiveVoiceState(
+        value: LiveVoiceState(
+          liveStreamId: 'live-1',
+          state: LiveVoicePhase.failed,
+          detail: 'connection lost',
+        ),
+      ),
+    );
+    await pumpEventQueue();
+
+    expect(controller.state, CursorPillState.hidden);
+    expect(harness.voiceStops, 1);
+    expect(harness.hubOpens, 1);
+
+    controller.dispose();
+    await harness.close();
+  });
+
+  testWidgets('waveform bars are center-weighted and react to the level', (
+    tester,
+  ) async {
+    final level = ValueNotifier<double>(0);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MediaQuery(
+          data: const MediaQueryData(disableAnimations: true),
+          child: Scaffold(body: PillWaveform(level: level)),
+        ),
+      ),
+    );
+
+    expect(PillWaveform.barProfile, [0.55, 0.8, 1.0, 0.8, 0.55]);
+    CustomPaint paintOf() => tester.widget<CustomPaint>(
+      find.descendant(
+        of: find.byType(PillWaveform),
+        matching: find.byType(CustomPaint),
+      ),
+    );
+    expect((paintOf().painter! as PillWaveformPainter).level, 0);
+
+    level.value = 0.9;
+    await tester.pump();
+    expect((paintOf().painter! as PillWaveformPainter).level, 0.9);
+
+    await tester.pumpWidget(const SizedBox());
+    level.dispose();
+  });
+
   testWidgets('pill renders as a compact liquid-glass surface', (tester) async {
     final harness = _Harness();
     final controller = harness.controller();
