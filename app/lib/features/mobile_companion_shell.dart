@@ -19,6 +19,13 @@ const _teal = Color(0xff2f9d8a);
 const _coral = Color(0xffd97757);
 const _inkSheet = Color(0xff1c1c1a);
 
+// Mirrors the pendant firmware LED semantics (set_led_state in the upstream
+// firmware): solid blue while connected, red while disconnected. The charging
+// LED states (solid or blinking green) cannot be mirrored because charging
+// state is not surfaced over BLE by the relay today.
+const _stateBlue = Color(0xff4a8fdd);
+const _stateRed = Color(0xffd9564a);
+
 bool _darkMode(BuildContext context) =>
     Theme.of(context).brightness == Brightness.dark;
 
@@ -380,7 +387,7 @@ class MobilePendantPageState extends State<MobilePendantPage> {
         _PaperTile(
           key: const Key('companion_connection_tile'),
           icon: Icons.bluetooth_connected_rounded,
-          iconColor: _teal,
+          iconColor: _stateBlue,
           title: device?.name ?? 'No device connected',
           detail: [_phaseLabel(phase), ?snapshot?.message].join(' · '),
           trailing: IconButton(
@@ -696,6 +703,11 @@ class _PendantHeroState extends State<_PendantHero>
       );
     }
     final glowSize = pendantWidth * 1.3;
+    final stateColor = connected
+        ? _stateBlue
+        : (widget.busy ? null : _stateRed);
+    Color glow(Color warm, double blend) =>
+        stateColor == null ? warm : Color.lerp(warm, stateColor, blend)!;
     return Column(
       children: [
         Align(
@@ -713,12 +725,14 @@ class _PendantHeroState extends State<_PendantHero>
                     decoration: BoxDecoration(
                       gradient: RadialGradient(
                         colors: [
-                          connected
-                              ? const Color(0x52f2a78f)
-                              : const Color(0x24f2a78f),
-                          connected
-                              ? const Color(0x2af6c9a0)
-                              : const Color(0x12f6c9a0),
+                          glow(
+                            const Color(0xfff2a78f),
+                            .3,
+                          ).withValues(alpha: connected ? .32 : .14),
+                          glow(
+                            const Color(0xfff6c9a0),
+                            .22,
+                          ).withValues(alpha: connected ? .16 : .07),
                           const Color(0x00f2a78f),
                         ],
                         stops: const [0, .45, 1],
@@ -769,7 +783,9 @@ class _PendantHeroState extends State<_PendantHero>
                     key: const Key('companion_disconnected_label'),
                     style: TextStyle(
                       fontSize: 15,
-                      color: _pageInkSoft(context),
+                      color: widget.busy
+                          ? _pageInkSoft(context)
+                          : Color.lerp(_pageInkSoft(context), _stateRed, .6),
                     ),
                   ),
                 ),
@@ -807,7 +823,7 @@ class _PendantHeroState extends State<_PendantHero>
                         : '${widget.deviceName} · ${widget.phaseLabel}',
                     style: TextStyle(
                       fontSize: 15,
-                      color: _pageInkSoft(context),
+                      color: Color.lerp(_pageInkSoft(context), _stateBlue, .55),
                     ),
                   ),
                 ),
