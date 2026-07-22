@@ -651,21 +651,51 @@ class _PendantHeroState extends State<_PendantHero>
         ),
       );
     }
+    final glowSize = pendantWidth * 1.3;
     return Column(
       children: [
         Align(
-          child: AnimatedBuilder(
-            animation: _sway,
-            child: pendant,
-            builder: (context, child) {
-              final t = _sway.value * 2 * math.pi;
-              final angle = animationsDisabled ? 0.0 : math.sin(t) * .012;
-              return Transform.rotate(
-                angle: angle,
-                alignment: Alignment.topCenter,
-                child: child,
-              );
-            },
+          child: Stack(
+            alignment: Alignment.center,
+            children: [
+              Positioned(
+                top: pendantWidth * .18,
+                child: IgnorePointer(
+                  child: Container(
+                    key: const Key('companion_pendant_glow'),
+                    width: glowSize,
+                    height: glowSize,
+                    decoration: BoxDecoration(
+                      gradient: RadialGradient(
+                        colors: [
+                          connected
+                              ? const Color(0x52f2a78f)
+                              : const Color(0x24f2a78f),
+                          connected
+                              ? const Color(0x2af6c9a0)
+                              : const Color(0x12f6c9a0),
+                          const Color(0x00f7f6f1),
+                        ],
+                        stops: const [0, .45, 1],
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              AnimatedBuilder(
+                animation: _sway,
+                child: pendant,
+                builder: (context, child) {
+                  final t = _sway.value * 2 * math.pi;
+                  final angle = animationsDisabled ? 0.0 : math.sin(t) * .012;
+                  return Transform.rotate(
+                    angle: angle,
+                    alignment: Alignment.topCenter,
+                    child: child,
+                  );
+                },
+              ),
+            ],
           ),
         ),
         Transform.translate(
