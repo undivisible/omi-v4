@@ -236,6 +236,38 @@ void main() {
     expect(find.text('Continue'), findsNothing);
   });
 
+  testWidgets(
+    'granted permissions advance automatically with an unconfigured backend',
+    (tester) async {
+      final auth = AuthController(const UnconfiguredAuthGateway());
+      var finished = false;
+      final capabilities = _Capabilities({
+        for (final capability in CoreCapability.values)
+          capability: const CapabilityStatus(
+            state: CapabilityState.granted,
+            detail: 'Verified',
+          ),
+      });
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SingleChildScrollView(
+              child: ProductionGate(
+                configurationMessage: 'configured',
+                auth: auth,
+                capabilities: capabilities,
+                onOpenPreview: () {},
+                onFinish: () => finished = true,
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(finished, isTrue);
+    },
+  );
+
   testWidgets('processing consent is required before completion', (
     tester,
   ) async {

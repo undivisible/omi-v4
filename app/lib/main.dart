@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import 'app_services.dart';
+import 'auth/auth.dart';
 import 'features/desktop_auth_screen.dart';
 import 'features/omi_shell.dart';
 import 'features/onboarding_screen.dart';
@@ -34,6 +35,10 @@ class _OmiAppState extends State<OmiApp> {
   bool _checkingCompletion = false;
   bool _onboardingComplete = false;
   int _completionGeneration = 0;
+  // Firebase can be entirely unconfigured (no backend to authenticate
+  // against) for local/offline testing builds; completion in that case has
+  // no account to persist against, so it is tracked only for this run.
+  bool _localTestOnboardingComplete = false;
 
   @override
   void initState() {
@@ -44,8 +49,19 @@ class _OmiAppState extends State<OmiApp> {
 
   void _authChanged() => _refreshCompletion(notify: true);
 
+  bool get _authUnavailable =>
+      services.auth.snapshot.phase == AuthPhase.unavailable;
+
   void _refreshCompletion({bool notify = false}) {
     final snapshot = services.auth.snapshot;
+    if (_authUnavailable) {
+      _completionGeneration += 1;
+      _checkedUid = null;
+      _checkingCompletion = false;
+      _onboardingComplete = _localTestOnboardingComplete;
+      if (notify && mounted) setState(() {});
+      return;
+    }
     final uid = snapshot.hasProcessingAuthority ? snapshot.session!.uid : null;
     if (uid == null) {
       _completionGeneration += 1;
@@ -79,6 +95,10 @@ class _OmiAppState extends State<OmiApp> {
   }
 
   Future<void> _completeOnboarding() async {
+    if (_authUnavailable) {
+      if (mounted) setState(() => _localTestOnboardingComplete = true);
+      return;
+    }
     final snapshot = services.auth.snapshot;
     if (!snapshot.hasProcessingAuthority) {
       throw StateError('Processing authority is required');

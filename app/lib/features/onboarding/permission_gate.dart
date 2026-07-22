@@ -159,8 +159,15 @@ class _ProductionGateState extends State<ProductionGate>
     }
   }
 
+  // Firebase can be entirely unconfigured (local/testing builds with no
+  // backend); there is no sign-in flow to satisfy in that case, so don't
+  // block forever waiting for processing authority that can never arrive.
+  bool get _authSatisfied =>
+      widget.auth.snapshot.phase == AuthPhase.unavailable ||
+      widget.auth.snapshot.hasProcessingAuthority;
+
   bool get ready =>
-      widget.auth.snapshot.hasProcessingAuthority &&
+      _authSatisfied &&
       permissionCapabilities.every(
         (capability) => statuses[capability]?.acceptable == true,
       );
