@@ -1,8 +1,10 @@
+#[cfg(target_os = "macos")]
 use rusqlite::{Connection, OpenFlags};
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
+#[cfg(target_os = "macos")]
 const LIMIT: usize = 200;
 const MAX_FILES: usize = 50_000;
 const MARKERS: &[&str] = &[
