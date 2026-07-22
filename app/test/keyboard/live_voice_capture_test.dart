@@ -8,9 +8,12 @@ import 'package:omi/native/native_hub.dart';
 const _playoutChannel = MethodChannel('omi/voice_playout');
 
 void main() {
-  Future<LiveVoiceCapture> startedCapture(_LiveHub hub) async {
-    final audio = StreamController<Uint8List>();
-    addTearDown(audio.close);
+  Future<LiveVoiceCapture> startedCapture(
+    _LiveHub hub, {
+    StreamController<Uint8List>? mic,
+  }) async {
+    final audio = mic ?? StreamController<Uint8List>();
+    if (mic == null) addTearDown(audio.close);
     final capture = LiveVoiceCapture(
       hub: hub,
       startAudio: () async => audio.stream,
@@ -41,6 +44,34 @@ void main() {
     await pumpEventQueue();
     expect(await capture.stop(), 'hello world');
     expect(capture.active, isFalse);
+    await capture.dispose();
+  });
+
+  test('mic audio streams to the hub, drives the level, and transcripts '
+      'come back', () async {
+    final hub = _LiveHub();
+    addTearDown(hub.close);
+    final mic = StreamController<Uint8List>();
+    addTearDown(mic.close);
+    final capture = await startedCapture(hub, mic: mic);
+    final levels = <double>[];
+    capture.level.addListener(() => levels.add(capture.level.value));
+
+    // A loud PCM16 frame must reach the hub as-is and raise the level.
+    final loud = Uint8List.fromList(
+      List.generate(320, (i) => i.isEven ? 0x00 : 0x40),
+    );
+    mic.add(loud);
+    await pumpEventQueue();
+    expect(hub.sentAudio, [loud]);
+    expect(levels, isNotEmpty);
+    expect(levels.last, greaterThan(0.3));
+
+    hub.emitTranscript('show me my currents', finalSegment: true);
+    hub.emitState(LiveVoicePhase.ended);
+    await pumpEventQueue();
+    expect(await capture.stop(), 'show me my currents');
+    expect(capture.level.value, 0);
     await capture.dispose();
   });
 
@@ -188,6 +219,7 @@ void main() {
 final class _LiveHub implements NativeHub, LiveVoiceHub {
   final _events = StreamController<NativeEvent>.broadcast();
   String? streamId;
+  final sentAudio = <Uint8List>[];
   final _started = Completer<void>();
 
   Future<void> startedStream() => _started.future;
@@ -253,7 +285,9 @@ final class _LiveHub implements NativeHub, LiveVoiceHub {
     required AudioEncoding encoding,
     required bool endOfStream,
     required Uint8List bytes,
-  }) {}
+  }) {
+    if (bytes.isNotEmpty) sentAudio.add(bytes);
+  }
 
   @override
   void dispose() {}

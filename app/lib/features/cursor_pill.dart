@@ -3,6 +3,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 
 import 'cursor_pill_controller.dart';
@@ -16,19 +17,17 @@ const pillHeight = 36.0;
 
 /// The blur/material itself is rendered natively (NSGlassEffectView on
 /// macOS 26+, NSVisualEffectView otherwise) below the transparent Flutter
-/// view; this widget only paints the specular border and, when listening,
-/// a faint tint wash over transparent content.
+/// view; this widget only paints a thin specular border and soft shadow —
+/// no fills, tints, or gradients of its own.
 class LiquidGlass extends StatelessWidget {
   const LiquidGlass({
     required this.child,
     this.radius = pillHeight / 2,
-    this.tint,
     super.key,
   });
 
   final Widget child;
   final double radius;
-  final Color? tint;
 
   @override
   Widget build(BuildContext context) {
@@ -36,24 +35,18 @@ class LiquidGlass extends StatelessWidget {
     return DecoratedBox(
       decoration: BoxDecoration(
         borderRadius: borderRadius,
-        gradient: const LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [Color(0x8cffffff), Color(0x1affffff), Color(0x4dffffff)],
-          stops: [0, 0.55, 1],
-        ),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.all(1),
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(radius - 1),
-          child: DecoratedBox(
-            decoration: BoxDecoration(
-              color: tint?.withValues(alpha: 0.14) ?? Colors.transparent,
-            ),
-            child: child,
+        border: Border.all(color: const Color(0x47ffffff)),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x33000000),
+            blurRadius: 18,
+            offset: Offset(0, 6),
           ),
-        ),
+        ],
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(radius - 1),
+        child: child,
       ),
     );
   }
@@ -77,7 +70,7 @@ class _CursorPillState extends State<CursorPill> {
   final _text = TextEditingController();
   final _focus = FocusNode();
   final _pillKey = GlobalKey();
-  final _rowKeys = <GlobalKey>[];
+  final _chipKeys = <GlobalKey>[];
   String _lastGlassSignature = '';
 
   @override
@@ -156,7 +149,7 @@ class _CursorPillState extends State<CursorPill> {
   void _reportGlassRegions() {
     if (!mounted) return;
     final regions = <({double x, double y, double w, double h, double r})>[];
-    for (final key in _rowKeys) {
+    for (final key in _chipKeys) {
       final rect = _rectOf(key);
       if (rect != null) {
         regions.add((
@@ -164,7 +157,7 @@ class _CursorPillState extends State<CursorPill> {
           y: rect.top,
           w: rect.width,
           h: rect.height,
-          r: 14,
+          r: rect.height / 2,
         ));
       }
     }
@@ -193,13 +186,20 @@ class _CursorPillState extends State<CursorPill> {
   @override
   Widget build(BuildContext context) {
     final controller = widget.controller;
-    final listening = controller.state == CursorPillState.listening;
-    final rowCount = listening ? 0 : controller.suggestions.length;
-    while (_rowKeys.length > rowCount) {
-      _rowKeys.removeLast();
+    if (controller.state == CursorPillState.hidden) {
+      if (_lastGlassSignature.isNotEmpty) {
+        _lastGlassSignature = '';
+        unawaited(CursorPillWindow.updateGlass(const []));
+      }
+      return const SizedBox.shrink();
     }
-    while (_rowKeys.length < rowCount) {
-      _rowKeys.add(GlobalKey());
+    final listening = controller.state == CursorPillState.listening;
+    final chipCount = listening ? 0 : controller.suggestions.length;
+    while (_chipKeys.length > chipCount) {
+      _chipKeys.removeLast();
+    }
+    while (_chipKeys.length < chipCount) {
+      _chipKeys.add(GlobalKey());
     }
     WidgetsBinding.instance.addPostFrameCallback((_) => _reportGlassRegions());
     return Focus(
@@ -207,19 +207,27 @@ class _CursorPillState extends State<CursorPill> {
       child: Column(
         key: const Key('cursor_pill'),
         mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          if (!listening)
-            for (final (index, suggestion) in controller.suggestions.indexed)
-              KeyedSubtree(
-                key: _rowKeys[index],
-                child: _SuggestionRow(
-                  suggestion: suggestion,
-                  onTap: () => unawaited(controller.choose(suggestion)),
-                ),
-              ),
-          if (controller.suggestions.isNotEmpty && !listening)
-            const SizedBox(height: 6),
+          if (!listening && controller.suggestions.isNotEmpty) ...[
+            Wrap(
+              key: const Key('cursor_pill_chips'),
+              spacing: 6,
+              runSpacing: 6,
+              children: [
+                for (final (index, suggestion)
+                    in controller.suggestions.indexed)
+                  KeyedSubtree(
+                    key: _chipKeys[index],
+                    child: _SuggestionChip(
+                      suggestion: suggestion,
+                      onTap: () => unawaited(controller.choose(suggestion)),
+                    ),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 8),
+          ],
           _pill(listening),
           if (controller.error case final message?) ...[
             const SizedBox(height: 6),
@@ -236,13 +244,12 @@ class _CursorPillState extends State<CursorPill> {
 
   Widget _pill(bool listening) => LiquidGlass(
     key: _pillKey,
-    tint: listening ? _pillGreen : null,
     child: AnimatedContainer(
       duration: MediaQuery.disableAnimationsOf(context)
           ? Duration.zero
           : const Duration(milliseconds: 160),
       curve: Curves.easeOut,
-      height: pillHeight - 2,
+      height: pillHeight,
       padding: const EdgeInsets.symmetric(horizontal: 14),
       child: _pillContent(listening),
     ),
@@ -252,14 +259,14 @@ class _CursorPillState extends State<CursorPill> {
       ? Row(
           key: const Key('cursor_pill_listening'),
           children: [
-            const Icon(Icons.mic_rounded, size: 18, color: _pillGreen),
+            const Icon(Icons.mic_rounded, size: 16, color: _pillGreen),
             const SizedBox(width: 8),
             const Expanded(
               child: Text(
                 'Listening…',
                 style: TextStyle(
                   color: _pillGreen,
-                  fontSize: 14,
+                  fontSize: 13,
                   fontWeight: FontWeight.w600,
                 ),
               ),
@@ -299,6 +306,7 @@ class _CursorPillState extends State<CursorPill> {
               focusNode: _focus,
               autofocus: widget.autofocus,
               maxLines: 1,
+              cursorColor: _pillInk,
               style: const TextStyle(color: _pillInk, fontSize: 14),
               decoration: const InputDecoration(
                 isDense: true,
@@ -316,48 +324,47 @@ class _CursorPillState extends State<CursorPill> {
         );
 }
 
-class _SuggestionRow extends StatelessWidget {
-  const _SuggestionRow({required this.suggestion, required this.onTap});
+class _SuggestionChip extends StatelessWidget {
+  const _SuggestionChip({required this.suggestion, required this.onTap});
 
   final PillSuggestion suggestion;
   final VoidCallback onTap;
 
   @override
-  Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.only(bottom: 4),
-    child: LiquidGlass(
-      radius: 14,
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          customBorder: const StadiumBorder(),
-          onTap: onTap,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-            child: Row(
-              children: [
-                Icon(
-                  suggestion.link == null
-                      ? Icons.bolt_rounded
-                      : Icons.mail_outline_rounded,
-                  size: 15,
-                  color: _pillMuted,
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    suggestion.label,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      color: _pillInk,
-                      fontSize: 13,
-                      fontWeight: FontWeight.w500,
-                    ),
+  Widget build(BuildContext context) => LiquidGlass(
+    radius: 13,
+    child: Material(
+      color: Colors.transparent,
+      child: InkWell(
+        customBorder: const StadiumBorder(),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                suggestion.link == null
+                    ? Icons.bolt_rounded
+                    : Icons.mail_outline_rounded,
+                size: 13,
+                color: _pillMuted,
+              ),
+              const SizedBox(width: 6),
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 240),
+                child: Text(
+                  suggestion.label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: _pillInk,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500,
                   ),
                 ),
-              ],
-            ),
+              ),
+            ],
           ),
         ),
       ),
@@ -365,24 +372,28 @@ class _SuggestionRow extends StatelessWidget {
   );
 }
 
+/// Five slim, center-weighted bars next to the mic — the clicky look. The
+/// bars ride a gentle idle pulse so the waveform visibly breathes even in
+/// silence, and stretch with the live audio level while the user speaks.
 class PillWaveform extends StatefulWidget {
-  const PillWaveform({
-    required this.level,
-    this.color = _pillGreen,
-    this.bars = 9,
-    super.key,
-  });
+  const PillWaveform({required this.level, this.color = _pillGreen, super.key});
+
+  static const barProfile = [0.55, 0.8, 1.0, 0.8, 0.55];
 
   final ValueListenable<double> level;
   final Color color;
-  final int bars;
 
   @override
   State<PillWaveform> createState() => _PillWaveformState();
 }
 
-class _PillWaveformState extends State<PillWaveform> {
-  late final List<double> _history = List.filled(widget.bars, 0);
+class _PillWaveformState extends State<PillWaveform>
+    with SingleTickerProviderStateMixin {
+  Ticker? _ticker;
+  double _phase = 0;
+  double _eased = 0;
+
+  bool get _animated => !MediaQuery.disableAnimationsOf(context);
 
   @override
   void initState() {
@@ -391,45 +402,77 @@ class _PillWaveformState extends State<PillWaveform> {
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_animated) {
+      _ticker ??= createTicker(_tick)..start();
+    } else {
+      _ticker?.dispose();
+      _ticker = null;
+    }
+  }
+
+  @override
   void dispose() {
     widget.level.removeListener(_levelChanged);
+    _ticker?.dispose();
     super.dispose();
   }
 
-  void _levelChanged() {
-    if (!mounted) return;
+  void _tick(Duration elapsed) {
     setState(() {
-      for (var i = 0; i < _history.length - 1; i++) {
-        _history[i] = _history[i + 1];
-      }
-      _history[_history.length - 1] = widget.level.value.clamp(0, 1);
+      _phase = elapsed.inMicroseconds / Duration.microsecondsPerSecond;
+      final target = widget.level.value.clamp(0.0, 1.0);
+      // Fast attack, slow release, so speech snaps up and decays smoothly.
+      _eased = target > _eased
+          ? _eased + (target - _eased) * 0.55
+          : _eased + (target - _eased) * 0.12;
     });
+  }
+
+  void _levelChanged() {
+    // The ticker consumes the level every frame; without a ticker (reduced
+    // motion), rebuild directly from the latest level.
+    if (_ticker == null && mounted) {
+      setState(() => _eased = widget.level.value.clamp(0.0, 1.0));
+    }
   }
 
   @override
   Widget build(BuildContext context) => CustomPaint(
-    size: const Size(52, 22),
-    painter: _WaveformPainter(List.of(_history), widget.color),
+    size: const Size(26, 20),
+    painter: PillWaveformPainter(
+      level: _eased,
+      phase: _animated ? _phase : null,
+      color: widget.color,
+    ),
   );
 }
 
-class _WaveformPainter extends CustomPainter {
-  _WaveformPainter(this.levels, this.color);
+class PillWaveformPainter extends CustomPainter {
+  PillWaveformPainter({required this.level, required this.phase, this.color});
 
-  final List<double> levels;
-  final Color color;
+  static const _barWidth = 2.5;
+  final double level;
+  final double? phase;
+  final Color? color;
 
   @override
   void paint(Canvas canvas, Size size) {
-    if (levels.isEmpty) return;
+    final profile = PillWaveform.barProfile;
     final paint = Paint()
-      ..color = color
-      ..strokeWidth = 3
+      ..color = color ?? _pillGreen
+      ..strokeWidth = _barWidth
       ..strokeCap = StrokeCap.round;
-    final step = size.width / levels.length;
-    for (var i = 0; i < levels.length; i++) {
+    final step = size.width / profile.length;
+    final reactive = math.pow(level.clamp(0.0, 1.0), 0.76).toDouble();
+    for (var i = 0; i < profile.length; i++) {
       final x = step * i + step / 2;
-      final half = math.max(1.5, levels[i] * size.height / 2);
+      final idle = phase == null
+          ? 0.0
+          : (math.sin(phase! * 3.6 + i * 0.35) + 1) / 2 * 1.5;
+      final height = 3 + idle + reactive * (size.height - 5) * profile[i];
+      final half = math.min(height, size.height) / 2;
       canvas.drawLine(
         Offset(x, size.height / 2 - half),
         Offset(x, size.height / 2 + half),
@@ -439,6 +482,6 @@ class _WaveformPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(_WaveformPainter old) =>
-      !listEquals(old.levels, levels) || old.color != color;
+  bool shouldRepaint(PillWaveformPainter old) =>
+      old.level != level || old.phase != phase || old.color != color;
 }
