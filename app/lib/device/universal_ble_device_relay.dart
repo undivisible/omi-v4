@@ -1,16 +1,20 @@
 import 'dart:async';
+import 'dart:typed_data';
 
 import 'package:universal_ble/universal_ble.dart';
 
 import 'device_relay.dart';
 import 'device_models.dart';
 
-final class UniversalBleDeviceRelayAdapter implements DeviceRelayAdapter {
+final class UniversalBleDeviceRelayAdapter
+    implements DeviceRelayAdapter, DeviceRelayHaptics {
   static const _omiService = '19b10000-e8f2-537e-4f6c-d104768a1214';
   static const _audioStream = '19b10001-e8f2-537e-4f6c-d104768a1214';
   static const _audioCodec = '19b10002-e8f2-537e-4f6c-d104768a1214';
   static const _batteryService = '0000180f-0000-1000-8000-00805f9b34fb';
   static const _batteryLevel = '00002a19-0000-1000-8000-00805f9b34fb';
+  static const _speakerService = 'cab1ab95-2ea5-4f4d-bb56-874b72cfc984';
+  static const _speakerHaptic = 'cab1ab96-2ea5-4f4d-bb56-874b72cfc984';
 
   final _snapshots = StreamController<DeviceRelaySnapshot>.broadcast();
   final _connectionStates = StreamController<bool>.broadcast();
@@ -205,6 +209,23 @@ final class UniversalBleDeviceRelayAdapter implements DeviceRelayAdapter {
       return value.isEmpty ? null : value.first;
     } catch (_) {
       return null;
+    }
+  }
+
+  @override
+  Future<bool> sendHaptic(int level) async {
+    final deviceId = _connectedId;
+    if (deviceId == null || !_connected) return false;
+    try {
+      await UniversalBle.write(
+        deviceId,
+        _speakerService,
+        _speakerHaptic,
+        Uint8List.fromList([level & 0xff]),
+      );
+      return true;
+    } catch (_) {
+      return false;
     }
   }
 

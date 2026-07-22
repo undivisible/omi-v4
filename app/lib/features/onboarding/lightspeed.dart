@@ -9,12 +9,14 @@ class LightspeedTransition extends StatefulWidget {
     required this.mode,
     required this.onCompleted,
     this.child,
+    this.endColor,
     super.key,
   });
 
   final LightspeedMode mode;
   final VoidCallback onCompleted;
   final Widget? child;
+  final Color? endColor;
 
   @override
   State<LightspeedTransition> createState() => _LightspeedTransitionState();
@@ -65,24 +67,36 @@ class _LightspeedTransitionState extends State<LightspeedTransition>
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
     animation: controller,
-    builder: (context, _) => Stack(
-      fit: StackFit.expand,
-      children: [
-        const ColoredBox(color: Color(0xff171716)),
-        if (widget.mode == LightspeedMode.lightspeed)
-          CustomPaint(
-            key: const Key('lightspeed_paint'),
-            painter: LightspeedPainter(progress: controller.value),
-          )
-        else
-          Opacity(
-            key: const Key('lightspeed_fade'),
-            opacity: 1 - Curves.easeOut.transform(controller.value),
-            child: const ColoredBox(color: Color(0x66000000)),
-          ),
-        if (widget.child case final child?) Center(child: child),
-      ],
-    ),
+    builder: (context, _) {
+      final endColor = widget.endColor;
+      final settle = endColor == null
+          ? 0.0
+          : ((controller.value - .7) / .3).clamp(0.0, 1.0);
+      return Stack(
+        fit: StackFit.expand,
+        children: [
+          const ColoredBox(color: Color(0xff171716)),
+          if (widget.mode == LightspeedMode.lightspeed)
+            CustomPaint(
+              key: const Key('lightspeed_paint'),
+              painter: LightspeedPainter(progress: controller.value),
+            )
+          else
+            Opacity(
+              key: const Key('lightspeed_fade'),
+              opacity: 1 - Curves.easeOut.transform(controller.value),
+              child: const ColoredBox(color: Color(0x66000000)),
+            ),
+          if (endColor != null && settle > 0)
+            Opacity(
+              key: const Key('lightspeed_settle'),
+              opacity: Curves.easeInOut.transform(settle),
+              child: ColoredBox(color: endColor),
+            ),
+          if (widget.child case final child?) Center(child: child),
+        ],
+      );
+    },
   );
 }
 

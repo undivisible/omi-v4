@@ -17,6 +17,15 @@ const _inkSoft = Color(0xff706e68);
 const _hairline = Color(0x14171716);
 const _teal = Color(0xff2f9d8a);
 const _coral = Color(0xffd97757);
+const _inkSheet = Color(0xff1c1c1a);
+
+bool _darkMode(BuildContext context) =>
+    Theme.of(context).brightness == Brightness.dark;
+
+Color _pageInk(BuildContext context) => _darkMode(context) ? _cream : _ink;
+
+Color _pageInkSoft(BuildContext context) =>
+    _darkMode(context) ? const Color(0xffa6a49c) : _inkSoft;
 
 class MobileCompanionShell extends StatefulWidget {
   const MobileCompanionShell({
@@ -67,49 +76,53 @@ class _MobileCompanionShellState extends State<MobileCompanionShell> {
   }
 
   @override
-  Widget build(BuildContext context) => Theme(
-    data: Theme.of(context).copyWith(
-      brightness: Brightness.light,
-      colorScheme: const ColorScheme.light(
-        primary: _ink,
-        surface: _surface,
-        onSurface: _ink,
-        onSurfaceVariant: _inkSoft,
-        secondary: _teal,
-      ),
-      textTheme: Theme.of(
-        context,
-      ).textTheme.apply(bodyColor: _ink, displayColor: _ink),
-      iconTheme: const IconThemeData(color: _inkSoft),
-      switchTheme: SwitchThemeData(
-        thumbColor: WidgetStateProperty.resolveWith(
-          (states) => states.contains(WidgetState.selected) ? _cream : _surface,
-        ),
-        trackColor: WidgetStateProperty.resolveWith(
-          (states) => states.contains(WidgetState.selected)
-              ? _teal
-              : const Color(0x22171716),
-        ),
-      ),
-      dividerColor: _hairline,
-    ),
-    child: Scaffold(
-      key: const Key('companion_home'),
-      backgroundColor: _paper,
-      body: Stack(
-        fit: StackFit.expand,
-        children: [
-          const _WarmGlows(),
-          MobilePendantPage(
-            services: widget.services,
-            pairedDevices: _pairedDevices,
-            transcripts: _transcripts,
-            previewMode: widget.previewMode,
+  Widget build(BuildContext context) {
+    final dark = _darkMode(context);
+    return Theme(
+      data: Theme.of(context).copyWith(
+        brightness: dark ? Brightness.dark : Brightness.light,
+        colorScheme: const ColorScheme.light(
+          primary: _ink,
+          surface: _surface,
+          onSurface: _ink,
+          onSurfaceVariant: _inkSoft,
+          secondary: _teal,
+        ).copyWith(brightness: dark ? Brightness.dark : Brightness.light),
+        textTheme: Theme.of(
+          context,
+        ).textTheme.apply(bodyColor: _ink, displayColor: _ink),
+        iconTheme: const IconThemeData(color: _inkSoft),
+        switchTheme: SwitchThemeData(
+          thumbColor: WidgetStateProperty.resolveWith(
+            (states) =>
+                states.contains(WidgetState.selected) ? _cream : _surface,
           ),
-        ],
+          trackColor: WidgetStateProperty.resolveWith(
+            (states) => states.contains(WidgetState.selected)
+                ? _teal
+                : const Color(0x22171716),
+          ),
+        ),
+        dividerColor: _hairline,
       ),
-    ),
-  );
+      child: Scaffold(
+        key: const Key('companion_home'),
+        backgroundColor: dark ? _ink : _paper,
+        body: Stack(
+          fit: StackFit.expand,
+          children: [
+            Opacity(opacity: dark ? .38 : 1, child: const _WarmGlows()),
+            MobilePendantPage(
+              services: widget.services,
+              pairedDevices: _pairedDevices,
+              transcripts: _transcripts,
+              previewMode: widget.previewMode,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 class _WarmGlows extends StatelessWidget {
@@ -482,50 +495,81 @@ class MobilePendantPageState extends State<MobilePendantPage> {
         phase == DeviceConnectionPhase.scanning ||
         phase == DeviceConnectionPhase.connecting ||
         phase == DeviceConnectionPhase.disconnecting;
-    final list = ListView(
-      padding: EdgeInsets.zero,
-      children: [
-        _PendantHero(
-          deviceName: device?.name,
-          phaseLabel: _phaseLabel(phase),
-          connected: connected,
-          batteryLevel: connected ? device?.batteryLevel : null,
-          busy: busy,
-          onReconnect: () => unawaited(reconnect()),
-        ),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(18, 8, 18, 24),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              _StatsRow(
-                capturedSegments: capturedSegments,
-                capturedMinutes: (capturedMs / 60000).ceil(),
-                capturing: capturing,
-              ),
-              const SizedBox(height: 22),
-              const _SectionLabel('DEVICE'),
-              ..._withGaps(
-                _deviceTiles(phase, device, connected, capturing, lastError),
-              ),
-              if (_desktopNoticeDismissed == false) ...[
-                const SizedBox(height: 22),
-                _DesktopCta(
-                  onDismiss: () => unawaited(_dismissDesktopNotice()),
+    final body = LayoutBuilder(
+      builder: (context, constraints) {
+        final pendantWidth = math.min(constraints.maxWidth * .82, 420.0);
+        final heroHeight = math.min(
+          constraints.maxHeight * .46,
+          pendantWidth * .78 + 190,
+        );
+        return Column(
+          key: const Key('companion_pendant_column'),
+          children: [
+            SizedBox(
+              height: heroHeight,
+              child: OverflowBox(
+                maxHeight: double.infinity,
+                alignment: Alignment.bottomCenter,
+                child: _PendantHero(
+                  deviceName: device?.name,
+                  phaseLabel: _phaseLabel(phase),
+                  connected: connected,
+                  batteryLevel: connected ? device?.batteryLevel : null,
+                  busy: busy,
+                  onReconnect: () => unawaited(reconnect()),
                 ),
-              ],
-              const SizedBox(height: 22),
-              const _SectionLabel('THIS SESSION'),
-              ..._withGaps(_transcriptTiles()),
-              const SizedBox(height: 8),
-            ],
-          ),
-        ),
-      ],
+              ),
+            ),
+            Expanded(
+              child: ListView(
+                key: const Key('companion_page_sections'),
+                physics: const NeverScrollableScrollPhysics(),
+                padding: const EdgeInsets.fromLTRB(18, 8, 18, 24),
+                children: [
+                  _StatsRow(
+                    capturedSegments: capturedSegments,
+                    capturedMinutes: (capturedMs / 60000).ceil(),
+                    capturing: capturing,
+                  ),
+                  const SizedBox(height: 22),
+                  const _SectionLabel('DEVICE'),
+                  ..._withGaps(
+                    _deviceTiles(
+                      phase,
+                      device,
+                      connected,
+                      capturing,
+                      lastError,
+                    ),
+                  ),
+                  if (_desktopNoticeDismissed == false) ...[
+                    const SizedBox(height: 22),
+                    _DesktopCta(
+                      onDismiss: () => unawaited(_dismissDesktopNotice()),
+                    ),
+                  ],
+                  const SizedBox(height: 22),
+                  const _SectionLabel('THIS SESSION'),
+                  SizedBox(
+                    height: 232,
+                    child: ListView(
+                      key: const Key('companion_session_list'),
+                      padding: EdgeInsets.zero,
+                      children: [..._withGaps(_transcriptTiles())],
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                ],
+              ),
+            ),
+          ],
+        );
+      },
     );
     return Stack(
+      clipBehavior: Clip.none,
       children: [
-        list,
+        body,
         Positioned(
           top: 0,
           right: 0,
@@ -556,7 +600,7 @@ class MobilePendantPageState extends State<MobilePendantPage> {
     unawaited(
       showModalBottomSheet<void>(
         context: context,
-        backgroundColor: _paper,
+        backgroundColor: _darkMode(context) ? _inkSheet : _paper,
         isScrollControlled: true,
         useSafeArea: true,
         shape: const RoundedRectangleBorder(
@@ -657,9 +701,10 @@ class _PendantHeroState extends State<_PendantHero>
         Align(
           child: Stack(
             alignment: Alignment.center,
+            clipBehavior: Clip.none,
             children: [
               Positioned(
-                top: pendantWidth * .18,
+                top: pendantWidth * .55 - glowSize / 2,
                 child: IgnorePointer(
                   child: Container(
                     key: const Key('companion_pendant_glow'),
@@ -674,7 +719,7 @@ class _PendantHeroState extends State<_PendantHero>
                           connected
                               ? const Color(0x2af6c9a0)
                               : const Color(0x12f6c9a0),
-                          const Color(0x00f7f6f1),
+                          const Color(0x00f2a78f),
                         ],
                         stops: const [0, .45, 1],
                       ),
@@ -704,13 +749,13 @@ class _PendantHeroState extends State<_PendantHero>
             children: [
               Semantics(
                 header: true,
-                child: const Text(
+                child: Text(
                   'Omi',
                   style: TextStyle(
                     fontSize: 46,
                     fontWeight: FontWeight.w700,
                     letterSpacing: -1,
-                    color: _ink,
+                    color: _pageInk(context),
                   ),
                 ),
               ),
@@ -722,7 +767,10 @@ class _PendantHeroState extends State<_PendantHero>
                   child: Text(
                     widget.busy ? widget.phaseLabel : 'Omi disconnected',
                     key: const Key('companion_disconnected_label'),
-                    style: const TextStyle(fontSize: 15, color: _inkSoft),
+                    style: TextStyle(
+                      fontSize: 15,
+                      color: _pageInkSoft(context),
+                    ),
                   ),
                 ),
                 const SizedBox(height: 14),
@@ -757,7 +805,10 @@ class _PendantHeroState extends State<_PendantHero>
                     widget.deviceName == null
                         ? widget.phaseLabel
                         : '${widget.deviceName} · ${widget.phaseLabel}',
-                    style: const TextStyle(fontSize: 15, color: _inkSoft),
+                    style: TextStyle(
+                      fontSize: 15,
+                      color: _pageInkSoft(context),
+                    ),
                   ),
                 ),
               if (widget.batteryLevel case final battery?) ...[
@@ -916,11 +967,11 @@ class _SectionLabel extends StatelessWidget {
     padding: const EdgeInsets.only(left: 4),
     child: Text(
       text,
-      style: const TextStyle(
+      style: TextStyle(
         fontSize: 11,
         fontWeight: FontWeight.w600,
         letterSpacing: 1.43,
-        color: _inkSoft,
+        color: _pageInkSoft(context),
       ),
     ),
   );
@@ -1046,6 +1097,74 @@ class _SettingsSheet extends StatefulWidget {
 }
 
 class _SettingsSheetState extends State<_SettingsSheet> {
+  bool _deleting = false;
+
+  Future<bool> _confirm({
+    required String title,
+    required String message,
+    required String action,
+    required Key confirmKey,
+  }) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text(title),
+        content: Text(message),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            key: confirmKey,
+            style: TextButton.styleFrom(foregroundColor: _coral),
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: Text(action),
+          ),
+        ],
+      ),
+    );
+    return confirmed ?? false;
+  }
+
+  Future<void> _resetPendant() async {
+    final confirmed = await _confirm(
+      title: 'Reset pendant?',
+      message:
+          'This disconnects your pendant and forgets it on this phone. '
+          'You can pair it again any time.',
+      action: 'Reset',
+      confirmKey: const Key('companion_reset_pendant_confirm'),
+    );
+    if (!confirmed) return;
+    await widget.onForget();
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _deleteAccount() async {
+    final confirmed = await _confirm(
+      title: 'Delete account?',
+      message:
+          'This permanently deletes your account and everything Omi has '
+          'learned. This cannot be undone.',
+      action: 'Delete',
+      confirmKey: const Key('companion_delete_account_confirm'),
+    );
+    if (!confirmed || _deleting) return;
+    setState(() => _deleting = true);
+    try {
+      await widget.services.deleteAccount();
+      if (mounted) Navigator.of(context).pop();
+    } catch (error) {
+      if (mounted) {
+        setState(() => _deleting = false);
+        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+          SnackBar(content: Text('Could not delete account: $error')),
+        );
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final remembered = widget.rememberedDeviceId();
@@ -1082,6 +1201,40 @@ class _SettingsSheetState extends State<_SettingsSheet> {
                     }),
                   ),
                   icon: const Icon(Icons.delete_outline_rounded),
+                ),
+              ),
+              _PaperTile(
+                key: const Key('companion_reset_pendant'),
+                icon: Icons.restart_alt_rounded,
+                iconColor: _coral,
+                title: 'Reset pendant',
+                detail: 'Disconnect and forget this pendant.',
+                trailing: IconButton(
+                  key: const Key('companion_reset_pendant_button'),
+                  tooltip: 'Reset pendant',
+                  onPressed: () => unawaited(_resetPendant()),
+                  icon: const Icon(Icons.restart_alt_rounded, color: _coral),
+                ),
+              ),
+            ]),
+          ],
+          if (!widget.previewMode) ...[
+            const SizedBox(height: 22),
+            const _SectionLabel('DANGER ZONE'),
+            ..._withGaps([
+              _PaperTile(
+                key: const Key('companion_delete_account'),
+                icon: Icons.delete_forever_rounded,
+                iconColor: _coral,
+                title: 'Delete account',
+                detail: 'Permanently delete your account and data.',
+                trailing: IconButton(
+                  key: const Key('companion_delete_account_button'),
+                  tooltip: 'Delete account',
+                  onPressed: _deleting
+                      ? null
+                      : () => unawaited(_deleteAccount()),
+                  icon: const Icon(Icons.delete_forever_rounded, color: _coral),
                 ),
               ),
             ]),

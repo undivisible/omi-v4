@@ -173,7 +173,9 @@ class _OmiShellState extends State<OmiShell> {
     );
     final pill = _cursorPill;
     return Scaffold(
-      backgroundColor: const Color(0xfff7f6f1),
+      backgroundColor: Theme.of(context).brightness == Brightness.dark
+          ? const Color(0xff171716)
+          : const Color(0xfff7f6f1),
       body: pill == null
           ? paddedBody
           : Stack(
@@ -195,40 +197,54 @@ class _WarmPaperHub extends StatelessWidget {
   final Widget child;
 
   @override
-  Widget build(BuildContext context) => Theme(
-    data: Theme.of(context).copyWith(
-      brightness: Brightness.light,
-      colorScheme: const ColorScheme.light(
-        primary: Color(0xff171716),
-        surface: Color(0xfffffefa),
-        onSurface: Color(0xff171716),
-        onSurfaceVariant: Color(0xff706e68),
-      ),
-      inputDecorationTheme: InputDecorationTheme(
-        filled: true,
-        fillColor: const Color(0xfffffefa),
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(20),
-          borderSide: const BorderSide(color: Color(0x1a000000)),
+  Widget build(BuildContext context) {
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    return Theme(
+      data: Theme.of(context).copyWith(
+        brightness: dark ? Brightness.dark : Brightness.light,
+        colorScheme: dark
+            ? const ColorScheme.dark(
+                primary: Color(0xfffffcec),
+                surface: Color(0xff232321),
+                onSurface: Color(0xfff4f2ea),
+                onSurfaceVariant: Color(0xffa6a49c),
+              )
+            : const ColorScheme.light(
+                primary: Color(0xff171716),
+                surface: Color(0xfffffefa),
+                onSurface: Color(0xff171716),
+                onSurfaceVariant: Color(0xff706e68),
+              ),
+        inputDecorationTheme: InputDecorationTheme(
+          filled: true,
+          fillColor: dark ? const Color(0xff232321) : const Color(0xfffffefa),
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(20),
+            borderSide: BorderSide(
+              color: dark ? const Color(0x1affffff) : const Color(0x1a000000),
+            ),
+          ),
+          enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(20),
+            borderSide: BorderSide(
+              color: dark ? const Color(0x1affffff) : const Color(0x1a000000),
+            ),
+          ),
         ),
-        enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(20),
-          borderSide: const BorderSide(color: Color(0x1a000000)),
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(28),
+        child: ColoredBox(
+          key: const Key('warm_paper_hub'),
+          color: dark ? const Color(0xff1c1c1a) : const Color(0xfff7f6f1),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            child: child,
+          ),
         ),
       ),
-    ),
-    child: ClipRRect(
-      borderRadius: BorderRadius.circular(28),
-      child: ColoredBox(
-        key: const Key('warm_paper_hub'),
-        color: const Color(0xfff7f6f1),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-          child: child,
-        ),
-      ),
-    ),
-  );
+    );
+  }
 }
 
 class _PreviewNotice extends StatelessWidget {
