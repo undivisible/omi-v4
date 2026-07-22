@@ -272,14 +272,17 @@ final class CursorPillController extends ChangeNotifier {
       }
       if (!currents.loading) {
         unawaited(
-          currents.load().then((_) {
-            if (_disposed || _state != CursorPillState.input) return;
-            final loaded = _actionableCurrents(currents);
-            if (loaded.isNotEmpty) {
-              _suggestions = loaded;
-              _notify();
-            }
-          }).catchError((_) {}),
+          currents
+              .load()
+              .then((_) {
+                if (_disposed || _state != CursorPillState.input) return;
+                final loaded = _actionableCurrents(currents);
+                if (loaded.isNotEmpty) {
+                  _suggestions = loaded;
+                  _notify();
+                }
+              })
+              .catchError((_) {}),
         );
       }
     }
