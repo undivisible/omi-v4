@@ -116,8 +116,7 @@ class LightspeedPainter extends CustomPainter {
       final travel = (accelerated * speed).clamp(0.0, 1.0);
       final outer = maxRadius * startFraction * (1 - travel);
       final length =
-          maxRadius * (.06 + .3 * accelerated) * (1 - travel) +
-          maxRadius * .02;
+          maxRadius * (.06 + .3 * accelerated) * (1 - travel) + maxRadius * .02;
       final inner = (outer - length).clamp(0.0, outer);
       if (outer <= maxRadius * .04) continue;
       final direction = Offset(math.cos(angle), math.sin(angle));

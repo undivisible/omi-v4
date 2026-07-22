@@ -93,7 +93,10 @@ class SettingsScreen extends StatelessWidget {
           previewMode: previewMode,
         ),
       if (!kIsWeb && defaultTargetPlatform == TargetPlatform.macOS)
-        SystemAudioCaptureModeTile(services: services, previewMode: previewMode),
+        SystemAudioCaptureModeTile(
+          services: services,
+          previewMode: previewMode,
+        ),
       if (!kIsWeb && defaultTargetPlatform == TargetPlatform.macOS)
         for (final source in AppleEventKitSource.values)
           AppleEventKitConnectionTile(
@@ -278,7 +281,8 @@ class _SystemAudioCaptureModeTileState
     setState(() => saving = true);
     try {
       await widget.services.setSystemAudioCaptureMode(value);
-    } catch (_) {} finally {
+    } catch (_) {
+    } finally {
       if (mounted) {
         setState(() {
           saving = false;

@@ -38,8 +38,9 @@ class _MobileCompanionShellState extends State<MobileCompanionShell> {
   void initState() {
     super.initState();
     _nativeEventSubscription = widget.services.nativeEvents.listen((event) {
-      if (event case NativeEventTranscriptDelta(:final value)
-          when value.finalSegment) {
+      if (event case NativeEventTranscriptDelta(
+        :final value,
+      ) when value.finalSegment) {
         if (!mounted) return;
         setState(() {
           _transcripts.insert(0, value);
