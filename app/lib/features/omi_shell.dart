@@ -31,10 +31,12 @@ class OmiShell extends StatefulWidget {
 
 class _OmiShellState extends State<OmiShell> {
   var selected = 0;
+  var _showOpeningGradient = true;
   final _chatKey = GlobalKey<ChatScreenState>();
   late final _desktopKeyboard = widget.desktopKeyboard ?? DesktopKeyboard();
   DesktopGestureController? _desktopGesture;
   StreamSubscription<ShiftGestureAction>? _desktopGestureActions;
+  Timer? _openingGradientTimer;
 
   static const destinations = [
     (Icons.chat_bubble_outline_rounded, 'Chat'),
@@ -48,6 +50,9 @@ class _OmiShellState extends State<OmiShell> {
   @override
   void initState() {
     super.initState();
+    _openingGradientTimer = Timer(const Duration(milliseconds: 1800), () {
+      if (mounted) setState(() => _showOpeningGradient = false);
+    });
     if (widget.previewMode) return;
     final gesture =
         widget.desktopGesture ??
@@ -70,6 +75,7 @@ class _OmiShellState extends State<OmiShell> {
 
   @override
   void dispose() {
+    _openingGradientTimer?.cancel();
     unawaited(_disposeDesktopGesture());
     super.dispose();
   }
@@ -82,45 +88,76 @@ class _OmiShellState extends State<OmiShell> {
   @override
   Widget build(BuildContext context) {
     final wide = MediaQuery.sizeOf(context).width >= 760;
-    final body = GradientBackground(
-      child: SafeArea(
-        left: !wide,
-        child: Padding(
-          padding: EdgeInsets.fromLTRB(wide ? 32 : 18, 20, wide ? 32 : 18, 12),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              if (widget.previewMode) const _PreviewNotice(),
-              if (widget.previewMode) const SizedBox(height: 12),
-              Expanded(
-                child: _Screen(
-                  index: selected,
-                  services: widget.services,
-                  previewMode: widget.previewMode,
-                  chatKey: _chatKey,
-                  desktopKeyboard: _desktopKeyboard,
-                  onDesktopGestureReset: _desktopGesture?.reset,
-                  onOpenChat: () => setState(() => selected = 0),
-                ),
-              ),
-            ],
-          ),
+    final screen = _Screen(
+      index: selected,
+      services: widget.services,
+      previewMode: widget.previewMode,
+      chatKey: _chatKey,
+      desktopKeyboard: _desktopKeyboard,
+      onDesktopGestureReset: _desktopGesture?.reset,
+      onOpenChat: () => setState(() => selected = 0),
+    );
+    final body = selected == 0
+        ? _WarmPaperHub(
+            showOpeningGradient: _showOpeningGradient,
+            child: screen,
+          )
+        : GradientBackground(child: screen);
+    final paddedBody = SafeArea(
+      left: !wide,
+      child: Padding(
+        padding: EdgeInsets.fromLTRB(wide ? 32 : 18, 20, wide ? 32 : 18, 12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            if (widget.previewMode) const _PreviewNotice(),
+            if (widget.previewMode) const SizedBox(height: 12),
+            Expanded(child: body),
+          ],
         ),
       ),
     );
     return Scaffold(
+      backgroundColor: selected == 0
+          ? const Color(0xfff7f6f1)
+          : const Color(0xff0b1013),
       body: wide
           ? Row(
               children: [
                 NavigationRail(
-                  backgroundColor: const Color(0xff0b1013),
+                  backgroundColor: selected == 0
+                      ? const Color(0xffefeee9)
+                      : const Color(0xff0b1013),
                   selectedIndex: selected,
                   onDestinationSelected: (value) =>
                       setState(() => selected = value),
                   extended: MediaQuery.sizeOf(context).width >= 1050,
-                  leading: const Padding(
+                  selectedIconTheme: IconThemeData(
+                    color: selected == 0
+                        ? const Color(0xff171716)
+                        : const Color(0xff73d5c4),
+                  ),
+                  unselectedIconTheme: IconThemeData(
+                    color: selected == 0
+                        ? const Color(0xff8d8980)
+                        : Colors.white54,
+                  ),
+                  selectedLabelTextStyle: TextStyle(
+                    color: selected == 0
+                        ? const Color(0xff171716)
+                        : Colors.white,
+                    fontWeight: FontWeight.w600,
+                  ),
+                  unselectedLabelTextStyle: TextStyle(
+                    color: selected == 0
+                        ? const Color(0xff706e68)
+                        : Colors.white60,
+                  ),
+                  leading: Padding(
                     padding: EdgeInsets.symmetric(vertical: 20),
-                    child: OmiMark(),
+                    child: selected == 0
+                        ? const _WarmOmiMark()
+                        : const OmiMark(),
                   ),
                   destinations: [
                     for (final destination in destinations)
@@ -130,14 +167,21 @@ class _OmiShellState extends State<OmiShell> {
                       ),
                   ],
                 ),
-                const VerticalDivider(width: 1, color: Color(0x22ffffff)),
-                Expanded(child: body),
+                VerticalDivider(
+                  width: 1,
+                  color: selected == 0
+                      ? const Color(0x14000000)
+                      : const Color(0x22ffffff),
+                ),
+                Expanded(child: paddedBody),
               ],
             )
-          : body,
+          : paddedBody,
       bottomNavigationBar: wide
           ? null
           : NavigationBar(
+              backgroundColor: selected == 0 ? const Color(0xfff7f6f1) : null,
+              indicatorColor: selected == 0 ? const Color(0x14171716) : null,
               selectedIndex: selected < 3 ? selected : 3,
               onDestinationSelected: (value) {
                 if (value < 3) {
@@ -194,6 +238,137 @@ class _OmiShellState extends State<OmiShell> {
     );
     if (next != null && mounted) setState(() => selected = next);
   }
+}
+
+class _WarmOmiMark extends StatelessWidget {
+  const _WarmOmiMark();
+
+  @override
+  Widget build(BuildContext context) => const Row(
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      Icon(Icons.blur_on_rounded, color: Color(0xff171716), size: 28),
+      SizedBox(width: 10),
+      Text(
+        'omi',
+        style: TextStyle(
+          color: Color(0xff171716),
+          fontSize: 20,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+    ],
+  );
+}
+
+class _WarmPaperHub extends StatelessWidget {
+  const _WarmPaperHub({required this.showOpeningGradient, required this.child});
+
+  final bool showOpeningGradient;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) => Theme(
+    data: Theme.of(context).copyWith(
+      brightness: Brightness.light,
+      colorScheme: const ColorScheme.light(
+        primary: Color(0xff171716),
+        surface: Color(0xfffffefa),
+        onSurface: Color(0xff171716),
+        onSurfaceVariant: Color(0xff706e68),
+      ),
+      inputDecorationTheme: InputDecorationTheme(
+        filled: true,
+        fillColor: const Color(0xfffffefa),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(20),
+          borderSide: const BorderSide(color: Color(0x1a000000)),
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(20),
+          borderSide: const BorderSide(color: Color(0x1a000000)),
+        ),
+      ),
+    ),
+    child: ClipRRect(
+      borderRadius: BorderRadius.circular(28),
+      child: Stack(
+        key: const Key('warm_paper_hub'),
+        fit: StackFit.expand,
+        children: [
+          const ColoredBox(color: Color(0xfff7f6f1)),
+          const IgnorePointer(child: _EdgeGradient()),
+          AnimatedOpacity(
+            key: const Key('hub_opening_gradient'),
+            opacity: showOpeningGradient ? 1 : 0,
+            duration: const Duration(milliseconds: 700),
+            child: const IgnorePointer(
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: RadialGradient(
+                    radius: 1.05,
+                    colors: [Color(0xfffffcec), Color(0x00fffcec)],
+                    stops: [0, 1],
+                  ),
+                ),
+              ),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            child: child,
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
+class _EdgeGradient extends StatelessWidget {
+  const _EdgeGradient();
+
+  @override
+  Widget build(BuildContext context) => Stack(
+    fit: StackFit.expand,
+    children: const [
+      DecoratedBox(
+        decoration: BoxDecoration(
+          gradient: RadialGradient(
+            center: Alignment(-1.15, -1.1),
+            radius: .9,
+            colors: [Color(0x55f25e6b), Color(0x00f25e6b)],
+          ),
+        ),
+      ),
+      DecoratedBox(
+        decoration: BoxDecoration(
+          gradient: RadialGradient(
+            center: Alignment(1.15, -.9),
+            radius: .9,
+            colors: [Color(0x5596c4ff), Color(0x0096c4ff)],
+          ),
+        ),
+      ),
+      DecoratedBox(
+        decoration: BoxDecoration(
+          gradient: RadialGradient(
+            center: Alignment(.9, 1.15),
+            radius: .9,
+            colors: [Color(0x55d3e081), Color(0x00d3e081)],
+          ),
+        ),
+      ),
+      DecoratedBox(
+        decoration: BoxDecoration(
+          gradient: RadialGradient(
+            center: Alignment(-1.1, 1.05),
+            radius: .9,
+            colors: [Color(0x55f2c2ac), Color(0x00f2c2ac)],
+          ),
+        ),
+      ),
+    ],
+  );
 }
 
 class _PreviewNotice extends StatelessWidget {

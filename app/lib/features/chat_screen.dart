@@ -424,23 +424,56 @@ class ChatScreenState extends State<ChatScreen> {
             currents.items.isNotEmpty
         ? currents.items.first
         : null;
+    final colors = Theme.of(context).colorScheme;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Expanded(
-              child: PageTitle(
-                title: 'Omi',
-                subtitle:
-                    'Quietly keeping track, so you can stay in the moment.',
-              ),
+        if (MediaQuery.sizeOf(context).width >= 500)
+          Center(
+            child: Column(
+              children: [
+                OmiActivityOrb(state: orbState),
+                const SizedBox(height: 12),
+                Text(
+                  _greeting(),
+                  key: const Key('hub_greeting'),
+                  textAlign: TextAlign.center,
+                  style: Theme.of(context).textTheme.displaySmall,
+                ),
+                const SizedBox(height: 5),
+                Text(
+                  'Quietly keeping track, so you can stay in the moment.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: colors.onSurfaceVariant),
+                ),
+              ],
             ),
-            const SizedBox(width: 16),
-            OmiActivityOrb(state: orbState),
-          ],
-        ),
+          )
+        else
+          Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      _greeting(),
+                      key: const Key('hub_greeting'),
+                      style: Theme.of(context).textTheme.headlineMedium,
+                    ),
+                    Text(
+                      'Quietly keeping track, so you can stay in the moment.',
+                      style: TextStyle(
+                        color: colors.onSurfaceVariant,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              OmiActivityOrb(state: orbState),
+            ],
+          ),
         const SizedBox(height: 20),
         Expanded(
           child: ListView(
@@ -542,6 +575,14 @@ class ChatScreenState extends State<ChatScreen> {
       ],
     );
   }
+
+  String _greeting() {
+    final hour = DateTime.now().hour;
+    if (hour < 5 || hour >= 22) return 'Late night';
+    if (hour < 12) return 'Good morning';
+    if (hour < 17) return 'Good afternoon';
+    return 'Good evening';
+  }
 }
 
 class _ChatHome extends StatelessWidget {
@@ -556,102 +597,109 @@ class _ChatHome extends StatelessWidget {
   final ValueChanged<String> onPrompt;
 
   @override
-  Widget build(BuildContext context) => Center(
-    child: ConstrainedBox(
-      constraints: const BoxConstraints(maxWidth: 620),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 28),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              ready
-                  ? 'What can I take off your mind?'
-                  : 'Chat is not connected yet',
-              textAlign: TextAlign.center,
-              style: Theme.of(context).textTheme.headlineMedium,
-            ),
-            const SizedBox(height: 8),
-            Text(
-              ready
-                  ? 'Ask naturally. Omi remembers the context and brings the next useful thing forward.'
-                  : 'Finish account, consent, and model setup before sending your first message.',
-              textAlign: TextAlign.center,
-              style: const TextStyle(color: Colors.white60, height: 1.45),
-            ),
-            if (current case final value?) ...[
-              const SizedBox(height: 24),
-              GlassCard(
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 18, 12, 14),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Padding(
-                        padding: EdgeInsets.only(top: 2),
-                        child: Icon(
-                          Icons.waves_rounded,
-                          color: Color(0xffb9e4d6),
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    return Center(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 620),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 28),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                ready ? 'What matters next' : 'Chat is not connected yet',
+                textAlign: TextAlign.center,
+                style: Theme.of(context).textTheme.headlineMedium,
+              ),
+              const SizedBox(height: 8),
+              Text(
+                ready
+                    ? 'Ask naturally. Omi remembers the context and brings the next useful thing forward.'
+                    : 'Finish account, consent, and model setup before sending your first message.',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: colors.onSurfaceVariant, height: 1.45),
+              ),
+              if (current case final value?) ...[
+                const SizedBox(height: 24),
+                Container(
+                  decoration: BoxDecoration(
+                    color: colors.surface.withValues(alpha: .82),
+                    border: Border.all(color: const Color(0x1a000000)),
+                    borderRadius: BorderRadius.circular(18),
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(20, 18, 12, 14),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Padding(
+                          padding: EdgeInsets.only(top: 2),
+                          child: Icon(
+                            Icons.waves_rounded,
+                            color: Color(0xff3139fb),
+                          ),
                         ),
-                      ),
-                      const SizedBox(width: 14),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            const OmiLabel('WORTH YOUR ATTENTION'),
-                            const SizedBox(height: 7),
-                            Text(
-                              value.title,
-                              style: Theme.of(context).textTheme.titleMedium,
-                            ),
-                            const SizedBox(height: 4),
-                            Text(
-                              value.summary,
-                              style: const TextStyle(
-                                color: Colors.white60,
-                                height: 1.4,
+                        const SizedBox(width: 14),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const OmiLabel('WORTH YOUR ATTENTION'),
+                              const SizedBox(height: 7),
+                              Text(
+                                value.title,
+                                style: Theme.of(context).textTheme.titleMedium,
                               ),
-                            ),
-                          ],
+                              const SizedBox(height: 4),
+                              Text(
+                                value.summary,
+                                style: TextStyle(
+                                  color: colors.onSurfaceVariant,
+                                  height: 1.4,
+                                ),
+                              ),
+                            ],
+                          ),
                         ),
-                      ),
-                      IconButton(
-                        key: const Key('discuss_current'),
-                        tooltip: 'Talk this through with Omi',
-                        onPressed: () => onPrompt(value.item.proposedNextStep),
-                        icon: const Icon(Icons.arrow_forward_rounded),
-                      ),
-                    ],
+                        IconButton(
+                          key: const Key('discuss_current'),
+                          tooltip: 'Talk this through with Omi',
+                          onPressed: () =>
+                              onPrompt(value.item.proposedNextStep),
+                          icon: const Icon(Icons.arrow_forward_rounded),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
-              ),
+              ],
+              if (ready) ...[
+                const SizedBox(height: 20),
+                Wrap(
+                  alignment: WrapAlignment.center,
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    for (final prompt in const [
+                      'What deserves my attention?',
+                      'What did I leave unfinished?',
+                      'Help me plan today',
+                    ])
+                      ActionChip(
+                        key: ValueKey('chat_prompt_$prompt'),
+                        label: Text(prompt),
+                        onPressed: () => onPrompt(prompt),
+                      ),
+                  ],
+                ),
+              ],
             ],
-            if (ready) ...[
-              const SizedBox(height: 20),
-              Wrap(
-                alignment: WrapAlignment.center,
-                spacing: 8,
-                runSpacing: 8,
-                children: [
-                  for (final prompt in const [
-                    'What deserves my attention?',
-                    'What did I leave unfinished?',
-                    'Help me plan today',
-                  ])
-                    ActionChip(
-                      key: ValueKey('chat_prompt_$prompt'),
-                      label: Text(prompt),
-                      onPressed: () => onPrompt(prompt),
-                    ),
-                ],
-              ),
-            ],
-          ],
+          ),
         ),
       ),
-    ),
-  );
+    );
+  }
 }
 
 final class _ChatMessage {
