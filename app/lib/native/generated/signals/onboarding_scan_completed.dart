@@ -6,6 +6,7 @@ class OnboardingScanCompleted {
   const OnboardingScanCompleted({
     required this.requestId,
     required this.sources,
+    this.summary,
   });
 
   static OnboardingScanCompleted deserialize(BinaryDeserializer deserializer) {
@@ -13,6 +14,7 @@ class OnboardingScanCompleted {
     final instance = OnboardingScanCompleted(
       requestId: deserializer.deserializeString(),
       sources: TraitHelpers.deserializeVectorOnboardingScanSource(deserializer),
+      summary: TraitHelpers.deserializeOptionStr(deserializer),
     );
     deserializer.decreaseContainerDepth();
     return instance;
@@ -29,14 +31,17 @@ class OnboardingScanCompleted {
 
   final String requestId;
   final List<OnboardingScanSource> sources;
+  final String? summary;
 
   OnboardingScanCompleted copyWith({
     String? requestId,
     List<OnboardingScanSource>? sources,
+    String? Function()? summary,
   }) {
     return OnboardingScanCompleted(
       requestId: requestId ?? this.requestId,
       sources: sources ?? this.sources,
+      summary: summary == null ? this.summary : summary(),
     );
   }
 
@@ -44,6 +49,7 @@ class OnboardingScanCompleted {
     serializer.increaseContainerDepth();
     serializer.serializeString(requestId);
     TraitHelpers.serializeVectorOnboardingScanSource(sources, serializer);
+    TraitHelpers.serializeOptionStr(summary, serializer);
     serializer.decreaseContainerDepth();
   }
 
@@ -60,11 +66,12 @@ class OnboardingScanCompleted {
 
     return other is OnboardingScanCompleted &&
         requestId == other.requestId &&
-        listEquals(sources, other.sources);
+        listEquals(sources, other.sources) &&
+        summary == other.summary;
   }
 
   @override
-  int get hashCode => Object.hash(requestId, sources);
+  int get hashCode => Object.hash(requestId, sources, summary);
 
   @override
   String toString() {
@@ -74,7 +81,8 @@ class OnboardingScanCompleted {
       fullString =
           '$runtimeType('
           'requestId: $requestId, '
-          'sources: $sources'
+          'sources: $sources, '
+          'summary: [REDACTED]'
           ')';
       return true;
     }());

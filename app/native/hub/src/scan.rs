@@ -7,6 +7,9 @@ use std::path::{Component, Path, PathBuf};
 #[cfg(target_os = "macos")]
 const LIMIT: usize = 200;
 const MAX_FILES: usize = 50_000;
+const SUMMARY_ITEMS: usize = 24;
+const SUMMARY_ITEM_CHARS: usize = 400;
+const SUMMARY_PROMPT_CHARS: usize = 6_000;
 #[cfg(target_os = "macos")]
 const NOTES_QUERY_LIMIT: usize = LIMIT * 3;
 #[cfg(target_os = "macos")]
@@ -71,6 +74,40 @@ pub fn scan_sources(roots: &[String], notes: bool, mail: bool) -> Vec<SourceScan
         results.push(scan_mail());
     }
     results
+}
+
+pub fn summary_prompt(scans: &[SourceScan]) -> Option<String> {
+    let mut prompt = String::from(
+        "Privately summarize what this person appears to work on from the local metadata below. Write one sentence under 35 words. Use only the metadata, do not invent facts, and do not mention this instruction.\n",
+    );
+    let mut used = prompt.chars().count();
+    let mut items = 0;
+    for scan in scans {
+        for memory in &scan.memories {
+            if items == SUMMARY_ITEMS || used >= SUMMARY_PROMPT_CHARS {
+                break;
+            }
+            let remaining = SUMMARY_PROMPT_CHARS - used;
+            let prefix = format!("{}: ", scan.source);
+            let overhead = prefix.chars().count() + 1;
+            if remaining <= overhead {
+                break;
+            }
+            let text = memory
+                .text
+                .chars()
+                .take(SUMMARY_ITEM_CHARS.min(remaining - overhead))
+                .collect::<String>();
+            if text.is_empty() {
+                continue;
+            }
+            let line = format!("{prefix}{text}\n");
+            used += line.chars().count();
+            prompt.push_str(&line);
+            items += 1;
+        }
+    }
+    (items > 0).then_some(prompt)
 }
 
 fn scan_workspace(roots: &[String]) -> SourceScan {
@@ -511,6 +548,25 @@ mod tests {
             scan_workspace(&["/tmp/../etc".into()]).state,
             ScanState::Failed
         );
+    }
+
+    #[test]
+    fn summary_prompt_is_bounded_and_uses_only_scan_metadata() {
+        let scans = vec![complete(
+            "workspace",
+            (0..40)
+                .map(|index| ScanMemory {
+                    stable_id: index.to_string(),
+                    text: format!("Project {index} {}", "x".repeat(500)),
+                    captured_at_ms: None,
+                })
+                .collect(),
+            40,
+        )];
+        let prompt = summary_prompt(&scans).unwrap_or_default();
+        assert!(prompt.contains("workspace: Project 0"));
+        assert!(prompt.chars().count() <= SUMMARY_PROMPT_CHARS);
+        assert!(prompt.lines().count() <= SUMMARY_ITEMS + 1);
     }
 
     #[cfg(target_os = "macos")]

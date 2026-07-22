@@ -184,6 +184,7 @@ void main(List<String> arguments) {
   for (final entry in {
     'memory_export_commit.dart': ['recordsJson'],
     'memory_item.dart': ['title', 'body'],
+    'onboarding_scan_completed.dart': ['summary'],
   }.entries) {
     final memoryFile = File('${arguments.single}/signals/${entry.key}');
     var memorySource = memoryFile.readAsStringSync();

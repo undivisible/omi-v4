@@ -30,6 +30,9 @@ zkr = "0.3.0"
 [target.'cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))'.dependencies]
 rs_peekaboo = { version = "0.3.3", optional = true }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+rs_ai_local = { version = "0.2.21", features = ["foundationmodels"] }
+
 [lints.rust]
 unsafe_code = "forbid"
 

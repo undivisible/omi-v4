@@ -1239,7 +1239,7 @@ pub fn runtime_status(memory_available: bool) -> RuntimeStatus {
         phase: RuntimePhase::Ready,
         detail: Some(format!("rx4 {}", rx4::VERSION)),
         computer_use_available: computer_use_available(),
-        local_ai_available: false,
+        local_ai_available: crate::local_ai::is_available(),
         memory_available,
         agent_harness_available: true,
     }
@@ -1546,6 +1546,7 @@ async fn scan_onboarding(
         if scan_cancellation.is_cancelled() {
             return Ok(None);
         }
+        let summary_prompt = crate::scan::summary_prompt(&scans);
         let mut sources = Vec::with_capacity(scans.len());
         for scan in scans {
             let mut memory_source_id = None;
@@ -1597,13 +1598,25 @@ async fn scan_onboarding(
                 memory_source_id,
             });
         }
-        Ok(Some(sources))
+        Ok(Some((sources, summary_prompt)))
     });
     match await_blocking(task, cancellation).await {
-        BlockingOutcome::Complete(Some(sources)) => {
+        BlockingOutcome::Complete(Some((sources, summary_prompt))) => {
+            let summary = if let Some(prompt) = summary_prompt {
+                tokio::select! {
+                    () = cancellation.cancelled() => {
+                        cancelled(request_id);
+                        return;
+                    }
+                    value = crate::local_ai::summarize(&prompt) => value,
+                }
+            } else {
+                None
+            };
             NativeEvent::OnboardingScanCompleted(OnboardingScanCompleted {
                 request_id: request_id.to_owned(),
                 sources,
+                summary,
             })
             .send()
         }

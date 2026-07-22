@@ -444,6 +444,7 @@ pub struct MemoryItem {
 pub struct OnboardingScanCompleted {
     pub request_id: String,
     pub sources: Vec<OnboardingScanSource>,
+    pub summary: Option<String>,
 }
 
 #[derive(Debug, Serialize, SignalPiece)]
