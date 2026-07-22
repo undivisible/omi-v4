@@ -19,6 +19,8 @@ import '../native/generated/signals/signals.dart'
         ComputerUseSessionIsolation,
         ComputerUseTargetProvenance;
 import '../native/native_hub.dart';
+import '../onboarding/hub_checklist.dart';
+import '../ui/omi_ui.dart';
 
 class ChatScreen extends StatefulWidget {
   const ChatScreen({
@@ -26,6 +28,7 @@ class ChatScreen extends StatefulWidget {
     this.previewMode = false,
     this.desktopKeyboard,
     this.onDesktopGestureReset,
+    this.checklistStore,
     super.key,
   });
 
@@ -33,15 +36,22 @@ class ChatScreen extends StatefulWidget {
   final bool previewMode;
   final DesktopKeyboard? desktopKeyboard;
   final VoidCallback? onDesktopGestureReset;
+  final HubChecklistStore? checklistStore;
 
   @override
   State<ChatScreen> createState() => ChatScreenState();
 }
 
+const _kInk = Color(0xff171716);
+const _kMuted = Color(0xff8d8980);
+const _kHairline = Color(0x1a000000);
+const _kHintBlue = Color(0xff3139fb);
+
 const _kPlaceholderPrompts = [
-  'What deserves my attention?',
-  'What did I leave unfinished?',
-  'Help me plan today',
+  'Turn today’s notes into a plan',
+  'What should I do next?',
+  'What did I do last week in the terminal?',
+  'Draft the desktop handoff',
 ];
 
 class ChatScreenState extends State<ChatScreen> {
@@ -71,10 +81,14 @@ class ChatScreenState extends State<ChatScreen> {
   DateTime _lastShakeReversalAt = DateTime.fromMillisecondsSinceEpoch(0);
   double _shakeProgress = 0;
   bool _activatingShakeVoice = false;
+  late final HubChecklistStore _checklist =
+      widget.checklistStore ?? PreferencesHubChecklistStore();
+  bool _setupTaskDone = true;
 
   @override
   void initState() {
     super.initState();
+    unawaited(_loadChecklist());
     _placeholderTimer = Timer.periodic(const Duration(milliseconds: 3200), (_) {
       if (!mounted || MediaQuery.disableAnimationsOf(context)) return;
       setState(
@@ -119,6 +133,25 @@ class ChatScreenState extends State<ChatScreen> {
 
   void _currentsChanged() {
     if (mounted) setState(() {});
+  }
+
+  Future<void> _loadChecklist() async {
+    bool done;
+    try {
+      done = await _checklist.isSetupComplete();
+    } catch (_) {
+      done = true;
+    }
+    if (mounted && done != _setupTaskDone) {
+      setState(() => _setupTaskDone = done);
+    }
+  }
+
+  void _toggleSetupTask() {
+    setState(() => _setupTaskDone = !_setupTaskDone);
+    unawaited(
+      _checklist.setSetupComplete(_setupTaskDone).catchError((Object _) {}),
+    );
   }
 
   Future<void> _refreshCurrents() async {
@@ -618,62 +651,52 @@ class ChatScreenState extends State<ChatScreen> {
       onHover: ready ? (event) => _trackShake(event.localPosition) : null,
       child: Stack(
         children: [
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Text(
-                _greeting(),
-                key: const Key('hub_greeting'),
-                style: Theme.of(context).textTheme.headlineMedium,
+          Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 680),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Expanded(
+                    child: ListView.builder(
+                      key: const Key('chat_messages'),
+                      reverse: true,
+                      itemCount: history.length + 1,
+                      itemBuilder: (context, index) {
+                        if (index == 0) {
+                          return _ChatHome(
+                            greeting: _greeting(),
+                            setupTaskDone: _setupTaskDone,
+                            onToggleSetupTask: _toggleSetupTask,
+                            tasks: tasks,
+                            onComplete: currents == null
+                                ? null
+                                : (id) => unawaited(currents.dismiss(id)),
+                            onPrompt: _usePrompt,
+                          );
+                        }
+                        return history[index - 1]();
+                      },
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  _Reveal(
+                    delayMs: 900,
+                    child: _ChatInputCard(
+                      controller: _input,
+                      focusNode: _inputFocus,
+                      enabled: ready,
+                      busy: _activeRequestId != null,
+                      hintText: ready
+                          ? _kPlaceholderPrompts[_placeholderIndex]
+                          : 'Connect an account and model to start chatting',
+                      onSend: _send,
+                      onCancel: _cancel,
+                    ),
+                  ),
+                ],
               ),
-              const SizedBox(height: 20),
-              Expanded(
-                child: ListView.builder(
-                  key: const Key('chat_messages'),
-                  reverse: true,
-                  itemCount: history.length + 1,
-                  itemBuilder: (context, index) {
-                    if (index == 0) {
-                      return _ChatHome(
-                        ready: ready,
-                        tasks: tasks,
-                        onComplete: currents == null
-                            ? null
-                            : (id) => unawaited(currents.dismiss(id)),
-                        onPrompt: _usePrompt,
-                      );
-                    }
-                    return history[index - 1]();
-                  },
-                ),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                key: const Key('chat_input'),
-                controller: _input,
-                focusNode: _inputFocus,
-                enabled: ready,
-                readOnly: _activeRequestId != null,
-                onSubmitted: (_) => _send(),
-                decoration: InputDecoration(
-                  hintText: ready
-                      ? _kPlaceholderPrompts[_placeholderIndex]
-                      : 'Connect an account and model to start chatting',
-                  prefixIcon: const Icon(Icons.add_circle_outline_rounded),
-                  suffixIcon: _activeRequestId == null
-                      ? IconButton(
-                          key: const Key('send_chat'),
-                          onPressed: ready ? _send : null,
-                          icon: const Icon(Icons.arrow_upward_rounded),
-                        )
-                      : IconButton(
-                          key: const Key('cancel_chat'),
-                          onPressed: _cancel,
-                          icon: const Icon(Icons.stop_circle_outlined),
-                        ),
-                ),
-              ),
-            ],
+            ),
           ),
           if (_shakeProgress > 0)
             IgnorePointer(
@@ -810,10 +833,20 @@ class ChatScreenState extends State<ChatScreen> {
 
   String _greeting() {
     final hour = DateTime.now().hour;
-    if (hour < 5 || hour >= 22) return 'Late night';
-    if (hour < 12) return 'Good morning';
-    if (hour < 17) return 'Good afternoon';
-    return 'Good evening';
+    final salutation = hour < 5 || hour >= 22
+        ? 'Late night'
+        : hour < 12
+        ? 'Good morning'
+        : hour < 17
+        ? 'Good afternoon'
+        : 'Good evening';
+    final displayName = widget.previewMode
+        ? null
+        : widget.services.auth.snapshot.session?.displayName?.trim();
+    final name = displayName == null || displayName.isEmpty
+        ? null
+        : displayName.split(RegExp(r'\s+')).first;
+    return name == null ? '$salutation!' : '$salutation, $name!';
   }
 }
 
@@ -895,117 +928,343 @@ class _ShakeGlow extends StatelessWidget {
 
 class _ChatHome extends StatelessWidget {
   const _ChatHome({
-    required this.ready,
+    required this.greeting,
+    required this.setupTaskDone,
+    required this.onToggleSetupTask,
     required this.tasks,
     required this.onComplete,
     required this.onPrompt,
   });
 
-  final bool ready;
+  final String greeting;
+  final bool setupTaskDone;
+  final VoidCallback onToggleSetupTask;
   final List<CurrentCard> tasks;
   final ValueChanged<String>? onComplete;
   final ValueChanged<String> onPrompt;
 
   @override
-  Widget build(BuildContext context) {
-    final colors = Theme.of(context).colorScheme;
-    return Center(
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 620),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 28),
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.symmetric(vertical: 28),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _Reveal(
+          delayMs: 0,
           child: Column(
-            mainAxisSize: MainAxisSize.min,
             children: [
+              const OmiActivityOrb(state: OmiOrbState.idle, size: 48),
+              const SizedBox(height: 16),
               Text(
-                ready ? 'What matters next' : 'Chat is not connected yet',
+                greeting,
+                key: const Key('hub_greeting'),
                 textAlign: TextAlign.center,
-                style: Theme.of(context).textTheme.headlineMedium,
+                style: const TextStyle(
+                  fontSize: 44,
+                  fontWeight: FontWeight.w500,
+                  letterSpacing: -1.98,
+                  color: _kInk,
+                ),
               ),
-              const SizedBox(height: 8),
-              Text(
-                ready
-                    ? 'Ask naturally. Omi remembers the context and brings the next useful thing forward.'
-                    : 'Finish account, consent, and model setup before sending your first message.',
-                textAlign: TextAlign.center,
-                style: TextStyle(color: colors.onSurfaceVariant, height: 1.45),
+            ],
+          ),
+        ),
+        const SizedBox(height: 36),
+        _Reveal(
+          delayMs: 420,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const Padding(
+                padding: EdgeInsets.only(bottom: 12),
+                child: Text(
+                  'WHAT MATTERS NEXT',
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                    letterSpacing: 1.43,
+                    color: _kMuted,
+                  ),
+                ),
               ),
-              if (tasks.isNotEmpty) ...[
-                const SizedBox(height: 24),
-                Column(
-                  children: [
-                    for (final task in tasks)
-                      _TaskRow(
-                        key: ValueKey('task_${task.item.id}'),
-                        task: task,
-                        onComplete: onComplete == null
-                            ? null
-                            : () => onComplete!(task.item.id),
-                        onDiscuss: () => onPrompt(task.item.proposedNextStep),
+              _TaskRow(
+                key: const Key('task_setup_omi'),
+                title: 'Set up Omi.',
+                done: setupTaskDone,
+                completeKey: const Key('complete_setup_omi'),
+                onComplete: onToggleSetupTask,
+                onTap: onToggleSetupTask,
+              ),
+              for (final task in tasks)
+                _TaskRow(
+                  key: ValueKey('task_${task.item.id}'),
+                  title: task.title,
+                  done: false,
+                  sourceTag: task.sourceKind,
+                  completeKey: ValueKey('complete_${task.item.id}'),
+                  onComplete: onComplete == null
+                      ? null
+                      : () => onComplete!(task.item.id),
+                  onTap: () => onPrompt(task.item.proposedNextStep),
+                ),
+              const _HintRow(),
+            ],
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
+class _TaskRow extends StatelessWidget {
+  const _TaskRow({
+    required this.title,
+    required this.done,
+    required this.completeKey,
+    required this.onComplete,
+    required this.onTap,
+    this.sourceTag,
+    super.key,
+  });
+
+  final String title;
+  final bool done;
+  final Key completeKey;
+  final VoidCallback? onComplete;
+  final VoidCallback onTap;
+  final String? sourceTag;
+
+  @override
+  Widget build(BuildContext context) => DecoratedBox(
+    decoration: const BoxDecoration(
+      border: Border(top: BorderSide(color: _kHairline)),
+    ),
+    child: InkWell(
+      onTap: onTap,
+      child: Opacity(
+        opacity: done ? .45 : 1,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 16),
+          child: Row(
+            children: [
+              InkWell(
+                key: completeKey,
+                onTap: onComplete,
+                customBorder: const CircleBorder(),
+                child: Container(
+                  width: 16,
+                  height: 16,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    border: Border.all(color: _kMuted),
+                  ),
+                  child: done
+                      ? const Text(
+                          '✓',
+                          style: TextStyle(fontSize: 10, color: _kInk),
+                        )
+                      : null,
+                ),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Text(
+                  title,
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                    color: _kInk,
+                    decoration: done
+                        ? TextDecoration.lineThrough
+                        : TextDecoration.none,
+                  ),
+                ),
+              ),
+              if (sourceTag case final tag?) ...[
+                const SizedBox(width: 16),
+                DecoratedBox(
+                  decoration: BoxDecoration(
+                    border: Border.all(color: _kHairline),
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 2,
+                    ),
+                    child: Text(
+                      tag.toUpperCase(),
+                      style: const TextStyle(
+                        fontSize: 9,
+                        fontWeight: FontWeight.w600,
+                        letterSpacing: 1.17,
+                        color: _kMuted,
                       ),
-                  ],
+                    ),
+                  ),
                 ),
               ],
             ],
           ),
         ),
       ),
-    );
-  }
+    ),
+  );
 }
 
-class _TaskRow extends StatelessWidget {
-  const _TaskRow({
-    required this.task,
-    required this.onComplete,
-    required this.onDiscuss,
-    super.key,
+class _HintRow extends StatelessWidget {
+  const _HintRow();
+
+  @override
+  Widget build(BuildContext context) => const DecoratedBox(
+    decoration: BoxDecoration(
+      border: Border(
+        top: BorderSide(color: _kHairline),
+        bottom: BorderSide(color: _kHairline),
+      ),
+    ),
+    child: Padding(
+      padding: EdgeInsets.symmetric(vertical: 16),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: EdgeInsets.only(top: 2),
+            child: Text('↳', style: TextStyle(fontSize: 14, color: _kHintBlue)),
+          ),
+          SizedBox(width: 16),
+          Expanded(
+            child: Text(
+              'By the way, if you bring your own keys, Omi becomes free.',
+              style: TextStyle(
+                fontSize: 12,
+                height: 20 / 12,
+                color: _kHintBlue,
+              ),
+            ),
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
+class _ChatInputCard extends StatelessWidget {
+  const _ChatInputCard({
+    required this.controller,
+    required this.focusNode,
+    required this.enabled,
+    required this.busy,
+    required this.hintText,
+    required this.onSend,
+    required this.onCancel,
   });
 
-  final CurrentCard task;
-  final VoidCallback? onComplete;
-  final VoidCallback onDiscuss;
+  final TextEditingController controller;
+  final FocusNode focusNode;
+  final bool enabled;
+  final bool busy;
+  final String hintText;
+  final VoidCallback onSend;
+  final VoidCallback onCancel;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    decoration: BoxDecoration(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(20),
+      border: Border.all(color: _kHairline),
+      boxShadow: const [
+        BoxShadow(
+          color: Color(0x0a000000),
+          offset: Offset(0, 14),
+          blurRadius: 44,
+        ),
+      ],
+    ),
+    padding: const EdgeInsets.fromLTRB(20, 13, 13, 13),
+    child: Row(
+      children: [
+        Expanded(
+          child: TextField(
+            key: const Key('chat_input'),
+            controller: controller,
+            focusNode: focusNode,
+            enabled: enabled,
+            readOnly: busy,
+            onSubmitted: (_) => onSend(),
+            style: const TextStyle(fontSize: 15, color: _kInk),
+            decoration: InputDecoration(
+              isDense: true,
+              filled: false,
+              border: InputBorder.none,
+              enabledBorder: InputBorder.none,
+              focusedBorder: InputBorder.none,
+              disabledBorder: InputBorder.none,
+              contentPadding: EdgeInsets.zero,
+              hintText: hintText,
+              hintStyle: const TextStyle(fontSize: 15, color: _kMuted),
+            ),
+          ),
+        ),
+        const SizedBox(width: 12),
+        SizedBox(
+          width: 38,
+          height: 38,
+          child: busy
+              ? IconButton(
+                  key: const Key('cancel_chat'),
+                  onPressed: onCancel,
+                  padding: EdgeInsets.zero,
+                  style: IconButton.styleFrom(
+                    backgroundColor: _kInk,
+                    foregroundColor: Colors.white,
+                    shape: const CircleBorder(),
+                  ),
+                  icon: const Icon(Icons.stop_rounded, size: 18),
+                )
+              : IconButton(
+                  key: const Key('send_chat'),
+                  onPressed: enabled ? onSend : null,
+                  padding: EdgeInsets.zero,
+                  style: IconButton.styleFrom(
+                    backgroundColor: _kInk,
+                    foregroundColor: Colors.white,
+                    disabledBackgroundColor: const Color(0x33171716),
+                    disabledForegroundColor: Colors.white,
+                    shape: const CircleBorder(),
+                  ),
+                  icon: const Icon(Icons.arrow_upward_rounded, size: 18),
+                ),
+        ),
+      ],
+    ),
+  );
+}
+
+class _Reveal extends StatelessWidget {
+  const _Reveal({required this.delayMs, required this.child});
+
+  final int delayMs;
+  final Widget child;
 
   @override
   Widget build(BuildContext context) {
-    final colors = Theme.of(context).colorScheme;
-    return DecoratedBox(
-      decoration: const BoxDecoration(
-        border: Border(top: BorderSide(color: Color(0x1a000000))),
-      ),
-      child: InkWell(
-        onTap: onDiscuss,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 14),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              IconButton(
-                key: ValueKey('complete_${task.item.id}'),
-                tooltip: 'Mark done',
-                onPressed: onComplete,
-                icon: Container(
-                  width: 16,
-                  height: 16,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    border: Border.all(color: colors.onSurfaceVariant),
-                  ),
-                ),
-              ),
-              Expanded(
-                child: Padding(
-                  padding: const EdgeInsets.only(top: 12),
-                  child: Text(
-                    task.title,
-                    style: Theme.of(context).textTheme.titleMedium,
-                  ),
-                ),
-              ),
-            ],
-          ),
+    if (MediaQuery.disableAnimationsOf(context)) return child;
+    final total = delayMs + 650;
+    return TweenAnimationBuilder<double>(
+      tween: Tween(begin: 0, end: 1),
+      duration: Duration(milliseconds: total),
+      curve: Interval(delayMs / total, 1, curve: const Cubic(.22, 1, .36, 1)),
+      builder: (context, value, child) => Opacity(
+        opacity: value,
+        child: Transform.translate(
+          offset: Offset(0, 10 * (1 - value)),
+          child: child,
         ),
       ),
+      child: child,
     );
   }
 }

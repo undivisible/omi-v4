@@ -10,6 +10,7 @@ import 'features/mobile_companion_shell.dart';
 import 'features/mobile_onboarding_screen.dart';
 import 'features/omi_shell.dart';
 import 'features/onboarding_screen.dart';
+import 'onboarding/hub_checklist.dart';
 import 'onboarding/onboarding_completion.dart';
 
 Future<void> main() async {
@@ -110,6 +111,9 @@ class _OmiAppState extends State<OmiApp> {
   }
 
   Future<void> _completeOnboarding() async {
+    try {
+      await PreferencesHubChecklistStore().setSetupComplete(true);
+    } catch (_) {}
     if (_authUnavailable) {
       if (mounted) {
         setState(() {
