@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../app_services.dart';
 import '../currents/currents.dart';
 import '../keyboard/keyboard.dart';
+import '../keyboard/shake_gesture.dart';
 import '../native/generated/signals/signals.dart'
     show
         ActionRisk,
@@ -63,6 +64,13 @@ class ChatScreenState extends State<ChatScreen> {
   bool _sending = false;
   int _conversationLoadGeneration = 0;
   int _conversationCursor = 0;
+  Timer? _shakeDecayTimer;
+  double? _lastShakeX;
+  Offset _lastShakePosition = Offset.zero;
+  int _lastShakeDirection = 0;
+  DateTime _lastShakeReversalAt = DateTime.fromMillisecondsSinceEpoch(0);
+  double _shakeProgress = 0;
+  bool _activatingShakeVoice = false;
 
   @override
   void initState() {
@@ -73,6 +81,10 @@ class ChatScreenState extends State<ChatScreen> {
         () => _placeholderIndex =
             (_placeholderIndex + 1) % _kPlaceholderPrompts.length,
       );
+    });
+    _shakeDecayTimer = Timer.periodic(const Duration(milliseconds: 120), (_) {
+      if (!mounted || _shakeProgress <= 0) return;
+      setState(() => _shakeProgress = (_shakeProgress - 8).clamp(0, 100));
     });
     if (!widget.previewMode) {
       widget.services.currents?.addListener(_currentsChanged);
@@ -241,9 +253,44 @@ class ChatScreenState extends State<ChatScreen> {
       timer.cancel();
     }
     _placeholderTimer?.cancel();
+    _shakeDecayTimer?.cancel();
     _input.dispose();
     _inputFocus.dispose();
     super.dispose();
+  }
+
+  void _trackShake(Offset position) {
+    _lastShakePosition = position;
+    final now = DateTime.now();
+    final lastX = _lastShakeX;
+    _lastShakeX = position.dx;
+    if (lastX == null) return;
+    final movement = position.dx - lastX;
+    if (movement.abs() < 7) return;
+    final direction = movement.isNegative ? -1 : 1;
+    final elapsedMs = now.difference(_lastShakeReversalAt).inMilliseconds;
+    if (isShakeReversal(_lastShakeDirection, direction, elapsedMs, movement)) {
+      final progress = advanceShakeProgress(_shakeProgress, movement);
+      setState(() => _shakeProgress = progress);
+      if (progress >= 100) unawaited(_activateShakeVoice());
+      _lastShakeReversalAt = now;
+    } else if (direction != _lastShakeDirection) {
+      _lastShakeReversalAt = now;
+    }
+    _lastShakeDirection = direction;
+  }
+
+  Future<void> _activateShakeVoice() async {
+    if (_activatingShakeVoice) return;
+    _activatingShakeVoice = true;
+    setState(() => _shakeProgress = 0);
+    try {
+      await handleDesktopGesture(ShiftGestureAction.startVoice);
+      if (!mounted) return;
+      await handleDesktopGesture(ShiftGestureAction.continueVoice);
+    } finally {
+      _activatingShakeVoice = false;
+    }
   }
 
   void _handleEvent(NativeEvent event) {
@@ -548,62 +595,77 @@ class ChatScreenState extends State<ChatScreen> {
         ? currents.items.take(4).toList()
         : const <CurrentCard>[];
     final history = _historyBuildersNewestFirst();
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Text(
-          _greeting(),
-          key: const Key('hub_greeting'),
-          style: Theme.of(context).textTheme.headlineMedium,
-        ),
-        const SizedBox(height: 20),
-        Expanded(
-          child: ListView.builder(
-            key: const Key('chat_messages'),
-            reverse: true,
-            itemCount: history.length + 1,
-            itemBuilder: (context, index) {
-              if (index == 0) {
-                return _ChatHome(
-                  ready: ready,
-                  tasks: tasks,
-                  onComplete: currents == null
-                      ? null
-                      : (id) => unawaited(currents.dismiss(id)),
-                  onPrompt: _usePrompt,
-                );
-              }
-              return history[index - 1]();
-            },
+    return MouseRegion(
+      onHover: ready ? (event) => _trackShake(event.localPosition) : null,
+      child: Stack(
+        children: [
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                _greeting(),
+                key: const Key('hub_greeting'),
+                style: Theme.of(context).textTheme.headlineMedium,
+              ),
+              const SizedBox(height: 20),
+              Expanded(
+                child: ListView.builder(
+                  key: const Key('chat_messages'),
+                  reverse: true,
+                  itemCount: history.length + 1,
+                  itemBuilder: (context, index) {
+                    if (index == 0) {
+                      return _ChatHome(
+                        ready: ready,
+                        tasks: tasks,
+                        onComplete: currents == null
+                            ? null
+                            : (id) => unawaited(currents.dismiss(id)),
+                        onPrompt: _usePrompt,
+                      );
+                    }
+                    return history[index - 1]();
+                  },
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                key: const Key('chat_input'),
+                controller: _input,
+                focusNode: _inputFocus,
+                enabled: ready,
+                readOnly: _activeRequestId != null,
+                onSubmitted: (_) => _send(),
+                decoration: InputDecoration(
+                  hintText: ready
+                      ? _kPlaceholderPrompts[_placeholderIndex]
+                      : 'Connect an account and model to start chatting',
+                  prefixIcon: const Icon(Icons.add_circle_outline_rounded),
+                  suffixIcon: _activeRequestId == null
+                      ? IconButton(
+                          key: const Key('send_chat'),
+                          onPressed: ready ? _send : null,
+                          icon: const Icon(Icons.arrow_upward_rounded),
+                        )
+                      : IconButton(
+                          key: const Key('cancel_chat'),
+                          onPressed: _cancel,
+                          icon: const Icon(Icons.stop_circle_outlined),
+                        ),
+                ),
+              ),
+            ],
           ),
-        ),
-        const SizedBox(height: 12),
-        TextField(
-          key: const Key('chat_input'),
-          controller: _input,
-          focusNode: _inputFocus,
-          enabled: ready,
-          readOnly: _activeRequestId != null,
-          onSubmitted: (_) => _send(),
-          decoration: InputDecoration(
-            hintText: ready
-                ? _kPlaceholderPrompts[_placeholderIndex]
-                : 'Connect an account and model to start chatting',
-            prefixIcon: const Icon(Icons.add_circle_outline_rounded),
-            suffixIcon: _activeRequestId == null
-                ? IconButton(
-                    key: const Key('send_chat'),
-                    onPressed: ready ? _send : null,
-                    icon: const Icon(Icons.arrow_upward_rounded),
-                  )
-                : IconButton(
-                    key: const Key('cancel_chat'),
-                    onPressed: _cancel,
-                    icon: const Icon(Icons.stop_circle_outlined),
-                  ),
-          ),
-        ),
-      ],
+          if (_shakeProgress > 0)
+            IgnorePointer(
+              child: _ShakeGlow(
+                key: const Key('shake_glow'),
+                position: _lastShakePosition,
+                progress: _shakeProgress / 100,
+              ),
+            ),
+        ],
+      ),
     );
   }
 
@@ -781,6 +843,35 @@ class _VoiceEdgeGradient extends StatelessWidget {
       ),
     ],
   );
+}
+
+class _ShakeGlow extends StatelessWidget {
+  const _ShakeGlow({required this.position, required this.progress, super.key});
+
+  final Offset position;
+  final double progress;
+
+  @override
+  Widget build(BuildContext context) {
+    final size = 120 + progress * 360;
+    return Positioned(
+      left: position.dx - size / 2,
+      top: position.dy - size / 2,
+      width: size,
+      height: size,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          gradient: RadialGradient(
+            colors: [
+              const Color(0xff96c4ff).withValues(alpha: progress * .55),
+              const Color(0x0096c4ff),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class _ChatHome extends StatelessWidget {
