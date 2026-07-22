@@ -13,8 +13,9 @@ private class OvalBlurView: NSView {
     shell.wantsLayer = true
     shell.translatesAutoresizingMaskIntoConstraints = false
     effect.wantsLayer = true
-    effect.material = .underWindowBackground
+    effect.material = .hudWindow
     effect.blendingMode = blendingMode
+    effect.isEmphasized = true
     effect.state = .active
     effect.translatesAutoresizingMaskIntoConstraints = false
     shell.addSubview(effect)
@@ -207,7 +208,6 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
 
     let blur = OnboardingBlurView(frame: rootView.bounds, blendingMode: .behindWindow)
     blur.autoresizingMask = [.width, .height]
-    blur.alphaValue = 0
     flutterViewController.view.frame = rootView.bounds
     flutterViewController.view.autoresizingMask = [.width, .height]
     rootView.addSubview(blur)
@@ -220,22 +220,6 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
     RegisterGeneratedPlugins(registry: flutterViewController)
     eventKitBridge = AppleEventKitBridge(binaryMessenger: flutterViewController.engine.binaryMessenger)
     menuBarBridge = MenuBarBridge(binaryMessenger: flutterViewController.engine.binaryMessenger, window: self)
-
-    let windowEffects = FlutterMethodChannel(
-      name: "omi/window_effects",
-      binaryMessenger: flutterViewController.engine.binaryMessenger)
-    windowEffects.setMethodCallHandler { call, result in
-      guard call.method == "setOnboardingBlur", let enabled = call.arguments as? Bool else {
-        result(FlutterMethodNotImplemented)
-        return
-      }
-      NSAnimationContext.runAnimationGroup { context in
-        context.duration = 2.5
-        context.timingFunction = CAMediaTimingFunction(name: .easeOut)
-        blur.animator().alphaValue = enabled ? 0.72 : 0
-      }
-      result(nil)
-    }
 
     let capabilities = FlutterMethodChannel(
       name: "omi/core_capabilities",

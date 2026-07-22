@@ -30,7 +30,6 @@ class OnboardingScreen extends StatefulWidget {
 }
 
 class _OnboardingScreenState extends State<OnboardingScreen> {
-  static const windowEffects = MethodChannel('omi/window_effects');
   final answerController = TextEditingController();
   final onboarding = OnboardingController();
   StreamSubscription<NativeEvent>? scanEvents;
@@ -38,7 +37,6 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   String? scanRequestId;
   String? scanError;
   bool scanStarting = false;
-  bool? windowBlurEnabled;
 
   static const prompts = [
     (
@@ -63,7 +61,6 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
 
   @override
   void dispose() {
-    if (windowBlurEnabled == true) unawaited(_setWindowBlur(false));
     unawaited(scanEvents?.cancel());
     onboarding.removeListener(_refresh);
     widget.services.auth.removeListener(_refresh);
@@ -73,7 +70,6 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   }
 
   void _refresh() {
-    _syncWindowBlur();
     if (onboarding.stage == OnboardingStage.scan &&
         scanRequestId == null &&
         !scanStarting &&
@@ -81,22 +77,6 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       unawaited(_startScan());
     }
     setState(() {});
-  }
-
-  void _syncWindowBlur() {
-    if (kIsWeb || defaultTargetPlatform != TargetPlatform.macOS) return;
-    final enabled = onboarding.stage.index >= OnboardingStage.scan.index;
-    if (windowBlurEnabled == enabled) return;
-    windowBlurEnabled = enabled;
-    unawaited(_setWindowBlur(enabled));
-  }
-
-  Future<void> _setWindowBlur(bool enabled) async {
-    try {
-      await windowEffects.invokeMethod<void>('setOnboardingBlur', enabled);
-    } on MissingPluginException {
-      return;
-    }
   }
 
   Future<void> _startScan() async {
