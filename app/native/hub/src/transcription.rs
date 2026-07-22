@@ -10,7 +10,7 @@ use crate::signals::{
 };
 use crate::stt::{self, SttConfig, SttHandle};
 use std::collections::{HashMap, VecDeque};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 
@@ -117,7 +117,7 @@ struct LiveSession {
 }
 
 #[derive(Default)]
-pub(crate) struct LiveSessions(HashMap<String, LiveSession>);
+pub(crate) struct LiveSessions(Arc<Mutex<HashMap<String, LiveSession>>>);
 
 impl LiveSessions {
     pub(crate) fn start(
@@ -129,6 +129,7 @@ impl LiveSessions {
             live_stream_id: start.live_stream_id.clone(),
             ephemeral_token: start.ephemeral_token,
             model: start.model,
+            resumption_handle: None,
         };
         if let Err(message) = validate_session(&session) {
             return Err(AudioAcceptError {
@@ -137,14 +138,15 @@ impl LiveSessions {
                 message,
             });
         }
-        if self.0.contains_key(&start.live_stream_id) {
+        let mut sessions = self.0.lock().unwrap_or_else(|poison| poison.into_inner());
+        if sessions.contains_key(&start.live_stream_id) {
             return Err(AudioAcceptError {
                 request_id: start.request_id,
                 code: "live_voice_start_conflict",
                 message: "live voice stream was already started".to_owned(),
             });
         }
-        if self.0.len() >= MAX_ACTIVE_LIVE_SESSIONS {
+        if sessions.len() >= MAX_ACTIVE_LIVE_SESSIONS {
             return Err(AudioAcceptError {
                 request_id: start.request_id,
                 code: "live_voice_capacity_exceeded",
@@ -157,9 +159,13 @@ impl LiveSessions {
             message,
         })?;
         if let Some(events) = handle.take_events() {
-            tokio::spawn(forward_live_events(start.live_stream_id.clone(), events));
+            tokio::spawn(forward_live_events(
+                start.live_stream_id.clone(),
+                events,
+                Arc::clone(&self.0),
+            ));
         }
-        self.0.insert(
+        sessions.insert(
             start.live_stream_id,
             LiveSession {
                 handle,
@@ -170,7 +176,8 @@ impl LiveSessions {
     }
 
     pub(crate) fn stop(&mut self, stream_id: &str) -> bool {
-        match self.0.remove(stream_id) {
+        let mut sessions = self.0.lock().unwrap_or_else(|poison| poison.into_inner());
+        match sessions.remove(stream_id) {
             Some(session) => {
                 session.handle.cancel();
                 true
@@ -180,24 +187,34 @@ impl LiveSessions {
     }
 
     pub(crate) fn cancel_all(&mut self) {
-        for (stream_id, session) in self.0.drain() {
+        let drained: Vec<_> = self
+            .0
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .drain()
+            .collect();
+        for (stream_id, session) in drained {
             session.handle.cancel();
             NativeEvent::LiveVoiceState(LiveVoiceState {
                 live_stream_id: stream_id,
                 state: LiveVoicePhase::Ended,
                 detail: Some("live voice session was fenced".to_owned()),
+                resumption_handle: None,
             })
             .send();
         }
     }
 
     pub(crate) fn contains(&self, stream_id: &str) -> bool {
-        self.0.contains_key(stream_id)
+        self.0
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .contains_key(stream_id)
     }
 
     pub(crate) fn accept(&mut self, chunk: AudioChunk) -> Result<(), AudioAcceptError> {
-        let session = self
-            .0
+        let mut sessions = self.0.lock().unwrap_or_else(|poison| poison.into_inner());
+        let session = sessions
             .get_mut(&chunk.request_id)
             .ok_or_else(|| AudioAcceptError {
                 request_id: chunk.request_id.clone(),
@@ -235,7 +252,7 @@ impl LiveSessions {
                 })?;
         if chunk.end_of_stream {
             let stream_id = chunk.request_id;
-            if let Some(session) = self.0.remove(&stream_id) {
+            if let Some(session) = sessions.remove(&stream_id) {
                 session.handle.finish();
             }
             return Ok(());
@@ -254,13 +271,21 @@ impl LiveSessions {
 async fn forward_live_events(
     live_stream_id: String,
     mut events: mpsc::Receiver<RealtimeVoiceEvent>,
+    sessions: Arc<Mutex<HashMap<String, LiveSession>>>,
 ) {
     NativeEvent::LiveVoiceState(LiveVoiceState {
         live_stream_id: live_stream_id.clone(),
         state: LiveVoicePhase::Started,
         detail: None,
+        resumption_handle: None,
     })
     .send();
+    let remove_session = |live_stream_id: &str| {
+        sessions
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .remove(live_stream_id);
+    };
     let mut sequence = 0_u64;
     while let Some(event) = events.recv().await {
         match event {
@@ -290,32 +315,39 @@ async fn forward_live_events(
                 live_stream_id: live_stream_id.clone(),
                 state: LiveVoicePhase::Interrupted,
                 detail: None,
+                resumption_handle: None,
             })
             .send(),
-            RealtimeVoiceEvent::SessionEnded => {
+            RealtimeVoiceEvent::SessionEnded { resumption_handle } => {
+                remove_session(&live_stream_id);
                 NativeEvent::LiveVoiceState(LiveVoiceState {
                     live_stream_id,
                     state: LiveVoicePhase::Ended,
                     detail: None,
+                    resumption_handle,
                 })
                 .send();
                 return;
             }
             RealtimeVoiceEvent::Error(message) => {
+                remove_session(&live_stream_id);
                 NativeEvent::LiveVoiceState(LiveVoiceState {
                     live_stream_id,
                     state: LiveVoicePhase::Failed,
                     detail: Some(message),
+                    resumption_handle: None,
                 })
                 .send();
                 return;
             }
         }
     }
+    remove_session(&live_stream_id);
     NativeEvent::LiveVoiceState(LiveVoiceState {
         live_stream_id,
         state: LiveVoicePhase::Ended,
         detail: None,
+        resumption_handle: None,
     })
     .send();
 }

@@ -345,6 +345,7 @@ pub struct LiveVoiceState {
     pub live_stream_id: String,
     pub state: LiveVoicePhase,
     pub detail: Option<String>,
+    pub resumption_handle: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, SignalPiece)]

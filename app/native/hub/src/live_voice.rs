@@ -6,7 +6,7 @@ use futures::{SinkExt, StreamExt};
 use serde::Deserialize;
 use std::sync::{
     Arc,
-    atomic::{AtomicUsize, Ordering},
+    atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 use tokio::sync::mpsc;
 use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
@@ -28,7 +28,7 @@ pub(crate) enum RealtimeVoiceEvent {
     TranscriptDelta { text: String, final_segment: bool },
     AudioChunk { sample_rate_hz: u32, bytes: Vec<u8> },
     Interrupted,
-    SessionEnded,
+    SessionEnded { resumption_handle: Option<String> },
     Error(String),
 }
 
@@ -37,6 +37,7 @@ pub(crate) struct RealtimeVoiceSession {
     pub(crate) live_stream_id: String,
     pub(crate) ephemeral_token: String,
     pub(crate) model: String,
+    pub(crate) resumption_handle: Option<String>,
 }
 
 impl std::fmt::Debug for RealtimeVoiceSession {
@@ -63,6 +64,7 @@ pub(crate) struct RealtimeVoiceHandle {
     audio_sender: Option<mpsc::UnboundedSender<Vec<u8>>>,
     control_sender: Option<mpsc::UnboundedSender<LiveControl>>,
     pending_audio_bytes: Arc<AtomicUsize>,
+    draining: Arc<AtomicBool>,
     events: Option<mpsc::Receiver<RealtimeVoiceEvent>>,
 }
 
@@ -71,6 +73,9 @@ impl RealtimeVoiceHandle {
         let Some(sender) = &self.audio_sender else {
             return Ok(());
         };
+        if self.draining.load(Ordering::Acquire) {
+            return Err("live voice session is draining and cannot accept more audio".to_owned());
+        }
         let previous = self
             .pending_audio_bytes
             .fetch_add(bytes.len(), Ordering::AcqRel);
@@ -150,23 +155,24 @@ pub(crate) fn live_endpoint(ephemeral_token: &str) -> Result<Url, String> {
     Ok(endpoint)
 }
 
-pub(crate) fn setup_message(model: &str) -> String {
+pub(crate) fn setup_message(model: &str, resumption_handle: Option<&str>) -> String {
     let model = if model.starts_with("models/") {
         model.to_owned()
     } else {
         format!("models/{model}")
     };
-    serde_json::json!({
-        "setup": {
-            "model": model,
-            "generationConfig": {
-                "responseModalities": ["AUDIO"],
-            },
-            "realtimeInputConfig": {},
-            "inputAudioTranscription": {},
-        }
-    })
-    .to_string()
+    let mut setup = serde_json::json!({
+        "model": model,
+        "generationConfig": {
+            "responseModalities": ["AUDIO"],
+        },
+        "realtimeInputConfig": {},
+        "inputAudioTranscription": {},
+    });
+    if let Some(handle) = resumption_handle {
+        setup["sessionResumption"] = serde_json::json!({ "handle": handle });
+    }
+    serde_json::json!({ "setup": setup }).to_string()
 }
 
 pub(crate) fn realtime_input_message(bytes: &[u8]) -> String {
@@ -191,6 +197,16 @@ struct ServerFrame {
     setup_complete: Option<serde_json::Value>,
     server_content: Option<ServerContent>,
     go_away: Option<serde_json::Value>,
+    session_resumption_update: Option<SessionResumptionUpdate>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SessionResumptionUpdate {
+    #[serde(default)]
+    new_handle: Option<String>,
+    #[serde(default)]
+    resumable: bool,
 }
 
 #[derive(Deserialize)]
@@ -244,6 +260,10 @@ pub(crate) enum ServerMessage {
         turn_complete: bool,
     },
     GoAway,
+    SessionResumptionUpdate {
+        handle: String,
+        resumable: bool,
+    },
     Unknown,
 }
 
@@ -264,6 +284,15 @@ pub(crate) fn parse_server_message(payload: &[u8]) -> Result<ServerMessage, Stri
     }
     if frame.go_away.is_some() {
         return Ok(ServerMessage::GoAway);
+    }
+    if let Some(update) = frame.session_resumption_update {
+        return Ok(match update.new_handle {
+            Some(handle) => ServerMessage::SessionResumptionUpdate {
+                handle,
+                resumable: update.resumable,
+            },
+            None => ServerMessage::Unknown,
+        });
     }
     let Some(content) = frame.server_content else {
         return Ok(ServerMessage::Unknown);
@@ -309,6 +338,7 @@ impl RealtimeVoiceProvider for GeminiLiveProvider {
         let (control_sender, control_receiver) = mpsc::unbounded_channel();
         let (event_sender, event_receiver) = mpsc::channel(EVENT_QUEUE_CAPACITY);
         let pending_audio_bytes = Arc::new(AtomicUsize::new(0));
+        let draining = Arc::new(AtomicBool::new(false));
         tokio::spawn(run(
             session,
             endpoint,
@@ -316,11 +346,13 @@ impl RealtimeVoiceProvider for GeminiLiveProvider {
             control_receiver,
             event_sender,
             Arc::clone(&pending_audio_bytes),
+            Arc::clone(&draining),
         ));
         Ok(RealtimeVoiceHandle {
             audio_sender: Some(audio_sender),
             control_sender: Some(control_sender),
             pending_audio_bytes,
+            draining,
             events: Some(event_receiver),
         })
     }
@@ -335,6 +367,7 @@ impl RealtimeVoiceProvider for GeminiLiveProvider {
             audio_sender: None,
             control_sender: None,
             pending_audio_bytes: Arc::new(AtomicUsize::new(0)),
+            draining: Arc::new(AtomicBool::new(false)),
             events: None,
         })
     }
@@ -348,8 +381,11 @@ async fn run(
     mut control_receiver: mpsc::UnboundedReceiver<LiveControl>,
     events: mpsc::Sender<RealtimeVoiceEvent>,
     pending_audio_bytes: Arc<AtomicUsize>,
+    draining_flag: Arc<AtomicBool>,
 ) {
     let model = session.model;
+    let initial_resumption_handle = session.resumption_handle;
+    let mut resumption_handle: Option<String> = None;
     let connection = async {
         let (socket, _) = tokio::time::timeout(CONNECT_TIMEOUT, connect_async(endpoint.as_str()))
             .await
@@ -363,7 +399,9 @@ async fn run(
         control = control_receiver.recv() => {
             match control {
                 Some(LiveControl::Finish) | Some(LiveControl::Cancel) | None => {
-                    let _ = events.send(RealtimeVoiceEvent::SessionEnded).await;
+                    let _ = events.send(RealtimeVoiceEvent::SessionEnded {
+                        resumption_handle: None,
+                    }).await;
                 }
             }
             return;
@@ -377,7 +415,9 @@ async fn run(
         }
     };
     if socket
-        .send(Message::Text(setup_message(&model).into()))
+        .send(Message::Text(
+            setup_message(&model, initial_resumption_handle.as_deref()).into(),
+        ))
         .await
         .is_err()
     {
@@ -410,10 +450,13 @@ async fn run(
                         return;
                     }
                     draining = true;
+                    draining_flag.store(true, Ordering::Release);
                 }
                 Some(LiveControl::Cancel) | None => {
                     let _ = socket.close(None).await;
-                    let _ = events.send(RealtimeVoiceEvent::SessionEnded).await;
+                    let _ = events.send(RealtimeVoiceEvent::SessionEnded {
+                        resumption_handle: resumption_handle.clone(),
+                    }).await;
                     return;
                 }
             },
@@ -430,14 +473,19 @@ async fn run(
             },
             message = message_with_drain_timeout(&mut socket, draining) => match message {
                 Some(Ok(payload)) => {
-                    if !dispatch_server_payload(&payload, &events).await {
+                    if !dispatch_server_payload(&payload, &events, &mut resumption_handle).await {
                         let _ = socket.close(None).await;
                         return;
                     }
                 }
-                Some(Err(())) => {}
+                Some(Err(transport_error)) => {
+                    let _ = events.send(RealtimeVoiceEvent::Error(transport_error)).await;
+                    return;
+                }
                 None => {
-                    let _ = events.send(RealtimeVoiceEvent::SessionEnded).await;
+                    let _ = events.send(RealtimeVoiceEvent::SessionEnded {
+                        resumption_handle: resumption_handle.clone(),
+                    }).await;
                     return;
                 }
             }
@@ -449,7 +497,7 @@ async fn run(
 async fn message_with_drain_timeout(
     socket: &mut (impl StreamExt<Item = Result<Message, tokio_tungstenite::tungstenite::Error>> + Unpin),
     draining: bool,
-) -> Option<Result<Vec<u8>, ()>> {
+) -> Option<Result<Vec<u8>, String>> {
     let next = async {
         loop {
             return match socket.next().await {
@@ -457,7 +505,9 @@ async fn message_with_drain_timeout(
                 Some(Ok(Message::Binary(bytes))) => Some(Ok(bytes.to_vec())),
                 Some(Ok(Message::Close(_))) | None => None,
                 Some(Ok(_)) => continue,
-                Some(Err(_)) => None,
+                Some(Err(failure)) => Some(Err(format!(
+                    "live voice provider connection failed: {failure}"
+                ))),
             };
         }
     };
@@ -474,6 +524,7 @@ async fn message_with_drain_timeout(
 async fn dispatch_server_payload(
     payload: &[u8],
     events: &mpsc::Sender<RealtimeVoiceEvent>,
+    resumption_handle: &mut Option<String>,
 ) -> bool {
     let message = match parse_server_message(payload) {
         Ok(message) => message,
@@ -484,8 +535,18 @@ async fn dispatch_server_payload(
     };
     match message {
         ServerMessage::SetupComplete | ServerMessage::Unknown => true,
+        ServerMessage::SessionResumptionUpdate { handle, resumable } => {
+            if resumable {
+                *resumption_handle = Some(handle);
+            }
+            true
+        }
         ServerMessage::GoAway => {
-            let _ = events.send(RealtimeVoiceEvent::SessionEnded).await;
+            let _ = events
+                .send(RealtimeVoiceEvent::SessionEnded {
+                    resumption_handle: resumption_handle.clone(),
+                })
+                .await;
             false
         }
         ServerMessage::Content {
@@ -546,6 +607,7 @@ mod tests {
             live_stream_id: "live-1".to_owned(),
             ephemeral_token: "auth_tokens/abc123".to_owned(),
             model: "gemini-2.5-flash-native-audio-preview".to_owned(),
+            resumption_handle: None,
         }
     }
 
@@ -585,7 +647,7 @@ mod tests {
     #[test]
     fn setup_message_requests_audio_with_default_server_vad() {
         let value: serde_json::Value =
-            serde_json::from_str(&setup_message("gemini-live")).unwrap_or_default();
+            serde_json::from_str(&setup_message("gemini-live", None)).unwrap_or_default();
         assert_eq!(
             value["setup"]["model"],
             serde_json::json!("models/gemini-live")
@@ -599,11 +661,23 @@ mod tests {
             value["setup"]["inputAudioTranscription"],
             serde_json::json!({})
         );
+        assert!(value["setup"]["sessionResumption"].is_null());
         let prefixed: serde_json::Value =
-            serde_json::from_str(&setup_message("models/gemini-live")).unwrap_or_default();
+            serde_json::from_str(&setup_message("models/gemini-live", None)).unwrap_or_default();
         assert_eq!(
             prefixed["setup"]["model"],
             serde_json::json!("models/gemini-live")
+        );
+    }
+
+    #[test]
+    fn setup_message_includes_session_resumption_handle_when_provided() {
+        let value: serde_json::Value =
+            serde_json::from_str(&setup_message("gemini-live", Some("handle-1")))
+                .unwrap_or_default();
+        assert_eq!(
+            value["setup"]["sessionResumption"]["handle"],
+            serde_json::json!("handle-1")
         );
     }
 
@@ -670,6 +744,13 @@ mod tests {
             parse_server_message(
                 br#"{"sessionResumptionUpdate":{"newHandle":"h1","resumable":true}}"#
             ),
+            Ok(ServerMessage::SessionResumptionUpdate {
+                handle: "h1".to_owned(),
+                resumable: true,
+            })
+        );
+        assert_eq!(
+            parse_server_message(br#"{"sessionResumptionUpdate":{"resumable":false}}"#),
             Ok(ServerMessage::Unknown)
         );
         assert_eq!(
@@ -700,6 +781,7 @@ mod tests {
             audio_sender: Some(audio_sender),
             control_sender: None,
             pending_audio_bytes: Arc::new(AtomicUsize::new(0)),
+            draining: Arc::new(AtomicBool::new(false)),
             events: None,
         };
         assert_eq!(handle.send_audio(&vec![0; MAX_PENDING_AUDIO_BYTES]), Ok(()));
@@ -708,5 +790,18 @@ mod tests {
             audio_receiver.try_recv().map(|bytes| bytes.len()),
             Ok(MAX_PENDING_AUDIO_BYTES)
         );
+    }
+
+    #[test]
+    fn send_audio_is_rejected_once_the_session_is_draining() {
+        let (audio_sender, _audio_receiver) = mpsc::unbounded_channel();
+        let handle = RealtimeVoiceHandle {
+            audio_sender: Some(audio_sender),
+            control_sender: None,
+            pending_audio_bytes: Arc::new(AtomicUsize::new(0)),
+            draining: Arc::new(AtomicBool::new(true)),
+            events: None,
+        };
+        assert!(handle.send_audio(&[1, 2, 3]).is_err());
     }
 }

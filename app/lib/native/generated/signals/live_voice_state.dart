@@ -7,6 +7,7 @@ class LiveVoiceState {
     required this.liveStreamId,
     required this.state,
     this.detail,
+    this.resumptionHandle,
   });
 
   static LiveVoiceState deserialize(BinaryDeserializer deserializer) {
@@ -15,6 +16,7 @@ class LiveVoiceState {
       liveStreamId: deserializer.deserializeString(),
       state: LiveVoicePhaseExtension.deserialize(deserializer),
       detail: TraitHelpers.deserializeOptionStr(deserializer),
+      resumptionHandle: TraitHelpers.deserializeOptionStr(deserializer),
     );
     deserializer.decreaseContainerDepth();
     return instance;
@@ -32,16 +34,21 @@ class LiveVoiceState {
   final String liveStreamId;
   final LiveVoicePhase state;
   final String? detail;
+  final String? resumptionHandle;
 
   LiveVoiceState copyWith({
     String? liveStreamId,
     LiveVoicePhase? state,
     String? Function()? detail,
+    String? Function()? resumptionHandle,
   }) {
     return LiveVoiceState(
       liveStreamId: liveStreamId ?? this.liveStreamId,
       state: state ?? this.state,
       detail: detail == null ? this.detail : detail(),
+      resumptionHandle: resumptionHandle == null
+          ? this.resumptionHandle
+          : resumptionHandle(),
     );
   }
 
@@ -50,6 +57,7 @@ class LiveVoiceState {
     serializer.serializeString(liveStreamId);
     state.serialize(serializer);
     TraitHelpers.serializeOptionStr(detail, serializer);
+    TraitHelpers.serializeOptionStr(resumptionHandle, serializer);
     serializer.decreaseContainerDepth();
   }
 
@@ -67,11 +75,13 @@ class LiveVoiceState {
     return other is LiveVoiceState &&
         liveStreamId == other.liveStreamId &&
         state == other.state &&
-        detail == other.detail;
+        detail == other.detail &&
+        resumptionHandle == other.resumptionHandle;
   }
 
   @override
-  int get hashCode => Object.hash(liveStreamId, state, detail);
+  int get hashCode =>
+      Object.hash(liveStreamId, state, detail, resumptionHandle);
 
   @override
   String toString() {
@@ -82,7 +92,8 @@ class LiveVoiceState {
           '$runtimeType('
           'liveStreamId: $liveStreamId, '
           'state: $state, '
-          'detail: $detail'
+          'detail: $detail, '
+          'resumptionHandle: $resumptionHandle'
           ')';
       return true;
     }());
