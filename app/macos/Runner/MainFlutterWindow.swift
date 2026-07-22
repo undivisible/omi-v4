@@ -272,6 +272,8 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
   private var pillGlassView: PillGlassView?
   private weak var hostContentView: NSView?
   private weak var flutterContentView: NSView?
+  private weak var onboardingBlurView: NSView?
+  private var pillPreviousBlurHidden = true
 
   func requestSettings() {
     NSApp.activate(ignoringOtherApps: true)
@@ -345,6 +347,7 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
     flutterViewController.view.autoresizingMask = [.width, .height]
     rootView.addSubview(blur)
     rootView.addSubview(flutterViewController.view)
+    onboardingBlurView = blur
     hostContentView = rootView
     flutterContentView = flutterViewController.view
     let permissionOverlay = PermissionDragOverlay(
@@ -484,6 +487,10 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
   }
 
   private func enterHubChrome() {
+    // The onboarding backdrop must never bleed into the hub (or the pill):
+    // its grey radial-gradient blur shows through wherever Flutter is
+    // transparent.
+    onboardingBlurView?.isHidden = true
     styleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
     // Mutating styleMask rebuilds the theme frame, which can bring back the
     // default titlebar chrome — re-assert every property that keeps the bar
@@ -502,6 +509,7 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
   }
 
   private func enterOnboardingChrome() {
+    onboardingBlurView?.isHidden = false
     styleMask = [.borderless, .resizable, .miniaturizable]
     titlebarAppearsTransparent = true
     titleVisibility = .hidden
@@ -555,7 +563,12 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
       pillPreviousFrame = frame
       pillPreviousLevel = level
       pillPreviousCollectionBehavior = collectionBehavior
+      pillPreviousBlurHidden = onboardingBlurView?.isHidden ?? true
     }
+    // Only the native Liquid Glass may render behind the pill — the
+    // onboarding blur otherwise shows as a grey gradient wash inside the
+    // summoned window.
+    onboardingBlurView?.isHidden = true
     let target = pillFrame(cursor: NSEvent.mouseLocation, width: width, height: height)
     level = .floating
     collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
@@ -604,6 +617,7 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
     pillGlassView = nil
     guard let previousFrame = pillPreviousFrame else { return }
     pillPreviousFrame = nil
+    onboardingBlurView?.isHidden = pillPreviousBlurHidden
     level = pillPreviousLevel
     collectionBehavior = pillPreviousCollectionBehavior
     setFrame(previousFrame, display: true)
