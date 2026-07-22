@@ -1,12 +1,15 @@
+mod approval;
 mod runtime;
 mod scan;
 pub mod signals;
 mod stt;
+mod transcription;
 
 use rinf::{dart_shutdown, write_interface};
-use runtime::{AudioDispatcher, CommandDispatcher, runtime_status};
+use runtime::{CommandDispatcher, runtime_status};
 use signals::{AudioChunk, ClientCommand, NativeEvent};
 use tokio::spawn;
+use transcription::AudioDispatcher;
 
 write_interface!();
 
