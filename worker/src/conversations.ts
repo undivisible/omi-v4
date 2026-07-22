@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { dispatchChannelMessage } from "./delivery";
+import { memoryContextFor } from "./memory-vectors";
 import type { AppEnv, Channel } from "./types";
 
 const conversations = new Hono<AppEnv>();
@@ -136,6 +137,9 @@ conversations.post("/conversations/default/inbox/claim", async (context) => {
   )
     .bind(uid, now + leaseMs, leaseToken, now)
     .first<Record<string, unknown>>();
+  const memoryContext = item
+    ? await memoryContextFor(context.env, uid, String(item.text))
+    : null;
   return context.json({
     item: item
       ? {
@@ -147,6 +151,7 @@ conversations.post("/conversations/default/inbox/claim", async (context) => {
           attempt: Number(item.attempts),
           leaseToken: String(item.lease_token),
           leaseUntil: Number(item.lease_until),
+          memoryContext,
         }
       : null,
   });
