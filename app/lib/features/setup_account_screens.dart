@@ -13,8 +13,8 @@ import '../providers/providers.dart';
 import '../settings/settings.dart';
 import '../ui/omi_ui.dart';
 
-class SetupScreen extends StatelessWidget {
-  const SetupScreen({
+class SettingsScreen extends StatelessWidget {
+  const SettingsScreen({
     required this.services,
     this.previewMode = false,
     super.key,
@@ -25,17 +25,51 @@ class SetupScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => PageList(
-    title: 'Finish setup',
-    subtitle: 'Each connection makes your assistant more useful.',
+    title: 'Settings',
+    subtitle: 'Identity, plan, providers, connections, and agent control.',
     children: [
+      _AccountTile(
+        icon: Icons.person_outline_rounded,
+        title: 'Sign in',
+        detail: previewMode
+            ? 'Account access is disabled in the interface preview.'
+            : services.auth.snapshot.session?.displayName ??
+                  services.configurationMessage,
+      ),
+      if (previewMode || services.billing == null)
+        const _AccountTile(
+          icon: Icons.credit_card_outlined,
+          title: 'Plan unavailable',
+          detail: 'Sign in to manage your plan.',
+        )
+      else
+        _PlanTile(client: services.billing!),
+      if (previewMode || kIsWeb)
+        const _AccountTile(
+          icon: Icons.key_outlined,
+          title: 'AI providers',
+          detail: 'Configure BYOK securely from a native Omi app.',
+        )
+      else ...[
+        _ProviderTile(services: services),
+        const _AccountTile(
+          icon: Icons.savings_outlined,
+          title: 'Bring your own key',
+          detail:
+              'Managed Omi AI runs about \$35/mo of usage. A personal xAI/Grok '
+              'key runs the same usage for about \$5/mo — configure it above.',
+        ),
+      ],
+      if (previewMode || !services.canUseApi)
+        const _AccountTile(
+          icon: Icons.shield_outlined,
+          title: 'Agent control unavailable',
+          detail: 'Sign in to load your approval policy.',
+        )
+      else
+        _AgentControlTile(client: services.settings!),
       if (!previewMode && services.settings != null)
         _ProductionHealthTile(client: services.settings!),
-      const _SetupTile(
-        icon: Icons.mic_none_rounded,
-        title: 'Try voice',
-        detail: 'Ask “what are my tasks?”',
-        state: 'Not completed',
-      ),
       if (!kIsWeb &&
           (defaultTargetPlatform == TargetPlatform.macOS ||
               defaultTargetPlatform == TargetPlatform.windows))
@@ -50,19 +84,6 @@ class SetupScreen extends StatelessWidget {
             source: source,
             previewMode: previewMode,
           ),
-      for (final provider in ChannelProvider.values)
-        ChannelConnectionTile(
-          client: !previewMode && services.canUseApi ? services.channels : null,
-          provider: provider,
-          previewMode: previewMode,
-          unavailableMessage: services.configurationMessage,
-        ),
-      const _SetupTile(
-        icon: Icons.description_outlined,
-        title: 'Connect Notion',
-        detail: 'Bring your workspace into memory',
-        state: 'Not connected',
-      ),
     ],
   );
 }
@@ -311,57 +332,6 @@ class _AppleEventKitConnectionTileState
         actionTooltip: connected ? 'Import Apple $name' : 'Connect Apple $name',
       );
     },
-  );
-}
-
-class AccountScreen extends StatelessWidget {
-  const AccountScreen({
-    required this.services,
-    this.previewMode = false,
-    super.key,
-  });
-
-  final AppServices services;
-  final bool previewMode;
-
-  @override
-  Widget build(BuildContext context) => PageList(
-    title: 'Account',
-    subtitle: 'Identity, plan, providers, and agent control.',
-    children: [
-      _AccountTile(
-        icon: Icons.person_outline_rounded,
-        title: 'Sign in',
-        detail: previewMode
-            ? 'Account access is disabled in the interface preview.'
-            : services.auth.snapshot.session?.displayName ??
-                  services.configurationMessage,
-      ),
-      if (previewMode || !services.canUseApi)
-        const _AccountTile(
-          icon: Icons.shield_outlined,
-          title: 'Agent control unavailable',
-          detail: 'Sign in to load your approval policy.',
-        )
-      else
-        _AgentControlTile(client: services.settings!),
-      if (previewMode || kIsWeb)
-        const _AccountTile(
-          icon: Icons.key_outlined,
-          title: 'AI providers',
-          detail: 'Configure BYOK securely from a native Omi app.',
-        )
-      else
-        _ProviderTile(services: services),
-      if (previewMode || services.billing == null)
-        const _AccountTile(
-          icon: Icons.credit_card_outlined,
-          title: 'Plan unavailable',
-          detail: 'Sign in to manage your plan.',
-        )
-      else
-        _PlanTile(client: services.billing!),
-    ],
   );
 }
 
