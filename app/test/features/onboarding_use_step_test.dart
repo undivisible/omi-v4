@@ -141,6 +141,92 @@ void main() {
     await transcripts.close();
     await harness.close();
   });
+
+  testWidgets('×2 hint and shimmer show while double-shift is expected', (
+    tester,
+  ) async {
+    final harness = _Harness();
+    final controller = harness.controller();
+    final transcripts = StreamController<String>.broadcast(sync: true);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: OnboardingUseStep(
+            pill: controller,
+            transcripts: transcripts.stream,
+            finishing: false,
+            error: null,
+            onFinish: () {},
+          ),
+        ),
+      ),
+    );
+
+    expect(find.byKey(const Key('shift_times_two')), findsOneWidget);
+    expect(find.byType(KeycapShimmer), findsNWidgets(2));
+    expect(
+      tester
+          .widgetList<KeycapShimmer>(find.byType(KeycapShimmer))
+          .every((shimmer) => shimmer.enabled),
+      isTrue,
+    );
+    expect(find.byType(ShaderMask), findsNWidgets(2));
+
+    await chord(tester);
+    expect(controller.state, CursorPillState.input);
+    expect(find.byKey(const Key('shift_times_two')), findsOneWidget);
+    expect(find.byType(ShaderMask), findsNWidgets(2));
+
+    harness.advance(const Duration(seconds: 1));
+    await chord(tester);
+    expect(controller.state, CursorPillState.listening);
+    expect(find.byKey(const Key('shift_times_two')), findsNothing);
+    expect(
+      tester
+          .widgetList<KeycapShimmer>(find.byType(KeycapShimmer))
+          .every((shimmer) => shimmer.enabled),
+      isFalse,
+    );
+
+    await tester.pumpWidget(const SizedBox());
+    controller.dispose();
+    await transcripts.close();
+    await harness.close();
+  });
+
+  testWidgets('shimmer stays static when animations are disabled', (
+    tester,
+  ) async {
+    final harness = _Harness();
+    final controller = harness.controller();
+    final transcripts = StreamController<String>.broadcast(sync: true);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MediaQuery(
+          data: const MediaQueryData(disableAnimations: true),
+          child: Scaffold(
+            body: OnboardingUseStep(
+              pill: controller,
+              transcripts: transcripts.stream,
+              finishing: false,
+              error: null,
+              onFinish: () {},
+            ),
+          ),
+        ),
+      ),
+    );
+
+    expect(find.byKey(const Key('shift_times_two')), findsOneWidget);
+    expect(find.byType(ShaderMask), findsNothing);
+
+    await tester.pumpWidget(const SizedBox());
+    controller.dispose();
+    await transcripts.close();
+    await harness.close();
+  });
 }
 
 final class _Harness {

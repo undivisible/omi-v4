@@ -172,7 +172,9 @@ void main() {
       await tester.ensureVisible(button);
 
       await tester.tap(button);
-      await tester.pumpAndSettle();
+      for (var i = 0; i < 10; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
 
       // Access (login + permissions) is reused, then completing it must
       // skip straight to the tutorial ("use" stage) rather than the fresh
