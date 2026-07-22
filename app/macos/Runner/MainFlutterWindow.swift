@@ -311,7 +311,7 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
       shortcutURL: fullDiskAccessShortcut()
     ) { [weak self] capability in
       switch capability {
-      case "accessibility": AXIsProcessTrusted()
+      case "accessibility": self?.hasAccessibilityAccess() == true
       case "screenCapture": CGPreflightScreenCaptureAccess()
       case "appData": self?.hasFullDiskAccess() == true
       default: false
@@ -339,7 +339,7 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
       }
       switch call.method {
       case "check":
-        let accessibility = AXIsProcessTrusted()
+        let accessibility = self.hasAccessibilityAccess()
         let screenCapture = CGPreflightScreenCaptureAccess()
         let fullDiskAccess = self.hasFullDiskAccess()
         permissionOverlay.hideIfGranted(
@@ -421,23 +421,37 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
     if let globalKeyboardMonitor { NSEvent.removeMonitor(globalKeyboardMonitor) }
   }
 
+  private func hasAccessibilityAccess() -> Bool {
+    if AXIsProcessTrusted() { return true }
+    let tap = CGEvent.tapCreate(
+      tap: .cgSessionEventTap,
+      place: .tailAppendEventTap,
+      options: .defaultTap,
+      eventsOfInterest: CGEventMask(1 << CGEventType.keyDown.rawValue),
+      callback: { _, _, event, _ in Unmanaged.passUnretained(event) },
+      userInfo: nil)
+    if let tap { CFMachPortInvalidate(tap) }
+    return tap != nil
+  }
+
   private func hasFullDiskAccess() -> Bool {
     let library = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library")
     let notes = library.appendingPathComponent("Group Containers/group.com.apple.notes")
+    for file in [
+      library.appendingPathComponent("Application Support/com.apple.TCC/TCC.db"),
+      notes.appendingPathComponent("NoteStore.sqlite"),
+      notes.appendingPathComponent("Accounts/LocalAccount/NoteStore.sqlite"),
+    ] {
+      if let handle = try? FileHandle(forReadingFrom: file) {
+        try? handle.close()
+        return true
+      }
+    }
     for directory in ["Safari", "Mail", "Messages"] {
       if (try? FileManager.default.contentsOfDirectory(
         at: library.appendingPathComponent(directory),
         includingPropertiesForKeys: nil
       )) != nil {
-        return true
-      }
-    }
-    for store in [
-      notes.appendingPathComponent("NoteStore.sqlite"),
-      notes.appendingPathComponent("Accounts/LocalAccount/NoteStore.sqlite"),
-    ] {
-      if let handle = try? FileHandle(forReadingFrom: store) {
-        try? handle.close()
         return true
       }
     }
