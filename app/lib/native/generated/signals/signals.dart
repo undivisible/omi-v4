@@ -35,6 +35,7 @@ part 'computer_use_permission.dart';
 part 'computer_use_session_isolation.dart';
 part 'computer_use_target_provenance.dart';
 part 'current_update.dart';
+part 'meeting_state_changed.dart';
 part 'memory_captured.dart';
 part 'memory_corrected.dart';
 part 'memory_export_commit.dart';

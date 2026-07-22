@@ -271,6 +271,13 @@ pub enum NativeEvent {
     MemoryExported(MemoryExported),
     MemoryItems(MemoryItems),
     OnboardingScanCompleted(OnboardingScanCompleted),
+    MeetingStateChanged(MeetingStateChanged),
+}
+
+#[derive(Debug, Serialize, SignalPiece)]
+pub struct MeetingStateChanged {
+    pub active: bool,
+    pub suggested_title: Option<String>,
 }
 
 #[derive(Debug, Serialize, SignalPiece)]
