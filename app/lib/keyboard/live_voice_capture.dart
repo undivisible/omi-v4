@@ -1,6 +1,6 @@
 import 'dart:async';
-import 'dart:typed_data';
-
+import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:record/record.dart';
 
 import '../native/native_hub.dart';
@@ -34,8 +34,9 @@ final class LiveVoiceCapture {
 
   bool get active => _session != null;
 
-  /// Output audio playback is not wired yet; received chunks are counted and
-  /// dropped so the session stays drained until a playback path exists.
+  /// Output audio chunks that cannot be played — no playout host on this
+  /// platform, or the playout backlog exceeded its cap — are counted and
+  /// dropped so the session stays drained.
   int get discardedOutputBytes => _discardedOutputBytes;
 
   Future<bool> hasPermission() =>
@@ -168,7 +169,9 @@ final class LiveVoiceCapture {
         case LiveVoicePhase.started:
           if (!session.started.isCompleted) session.started.complete();
         case LiveVoicePhase.interrupted:
-          break;
+          session.playoutOps = session.playoutOps.then(
+            (_) => session.playout.flush(),
+          );
         case LiveVoicePhase.ended || LiveVoicePhase.failed:
           if (value.state == LiveVoicePhase.ended &&
               session.started.isCompleted) {
@@ -189,7 +192,7 @@ final class LiveVoiceCapture {
     } else if (event case NativeEventLiveVoiceAudio(
       :final value,
     ) when value.liveStreamId == session.streamId) {
-      _discardedOutputBytes += value.bytes.length;
+      _playOutput(session, value);
     } else if (event case NativeEventError(:final value)
         when value.requestId == session.startRequestId &&
             !session.started.isCompleted) {
@@ -200,6 +203,19 @@ final class LiveVoiceCapture {
       if (!session.ended.isCompleted) session.ended.complete();
       unawaited(_abort(session));
     }
+  }
+
+  void _playOutput(_LiveVoiceSession session, LiveVoiceAudio chunk) {
+    final bytes = Uint8List.fromList(chunk.bytes);
+    session.playoutOps = session.playoutOps.then((_) async {
+      final played =
+          _session == session &&
+          await session.playout.play(
+            sampleRateHz: chunk.sampleRateHz,
+            bytes: bytes,
+          );
+      if (!played) _discardedOutputBytes += bytes.length;
+    });
   }
 
   Future<void> _abort(_LiveVoiceSession session) async {
@@ -229,6 +245,9 @@ final class LiveVoiceCapture {
 
   Future<void> _release(_LiveVoiceSession session) async {
     if (!session.cancelled.isCompleted) session.cancelled.complete();
+    await (session.playoutOps = session.playoutOps.then(
+      (_) => session.playout.stop(),
+    ));
     await session.audio?.cancel();
     await session.events?.cancel();
     if (_session == session) _session = null;
@@ -247,8 +266,74 @@ final class _LiveVoiceSession {
   final transcript = StringBuffer();
   StreamSubscription<NativeEvent>? events;
   StreamSubscription<Uint8List>? audio;
+  final playout = _VoicePlayout();
+  Future<void> playoutOps = Future.value();
   int sequence = 0;
   bool stopping = false;
   bool providerEnded = false;
   Future<String>? teardown;
+}
+
+final class _VoicePlayout {
+  static const _channel = MethodChannel('omi/voice_playout');
+  static const maxQueuedMs = 2000;
+
+  bool _disabled = false;
+  bool _started = false;
+  int _queuedMs = 0;
+
+  static bool get _supported =>
+      !kIsWeb && defaultTargetPlatform == TargetPlatform.macOS;
+
+  Future<bool> play({
+    required int sampleRateHz,
+    required Uint8List bytes,
+  }) async {
+    if (!_supported || _disabled) return false;
+    try {
+      if (!_started) {
+        await _channel.invokeMethod<void>('start', {
+          'sampleRateHz': sampleRateHz,
+        });
+        _started = true;
+        _queuedMs = 0;
+      }
+      if (_queuedMs > maxQueuedMs) return false;
+      final queuedMs = await _channel.invokeMethod<int>('feed', {
+        'bytes': bytes,
+      });
+      _queuedMs = queuedMs ?? 0;
+      return true;
+    } on MissingPluginException {
+      _disabled = true;
+      return false;
+    } on PlatformException {
+      return false;
+    }
+  }
+
+  Future<void> flush() async {
+    if (!_started || _disabled) return;
+    _queuedMs = 0;
+    try {
+      await _channel.invokeMethod<void>('flush');
+    } on MissingPluginException {
+      _disabled = true;
+    } on PlatformException {
+      // Playback teardown failures must never break the voice session.
+    }
+  }
+
+  Future<void> stop() async {
+    if (!_started || _disabled) return;
+    _started = false;
+    _queuedMs = 0;
+    try {
+      await _channel.invokeMethod<void>('stop');
+    } on MissingPluginException {
+      _disabled = true;
+    } on PlatformException {
+      // Playback teardown failures must never break the voice session.
+    }
+  }
 }
