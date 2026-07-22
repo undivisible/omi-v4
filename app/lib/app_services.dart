@@ -23,17 +23,6 @@ import 'settings/settings.dart';
 
 export 'memory/transcript_memory_ingestor.dart' show TranscriptCaptureConflict;
 
-enum _ChatRequestKind { message, approval }
-
-typedef _ChatRequest = ({int generation, _ChatRequestKind kind});
-typedef _ChatProposal = ({int generation, String parentRequestId});
-typedef _PendingApproval = ({
-  String proposalId,
-  ApprovalDecision decision,
-  CurrentActionHandoff? handoff,
-});
-
-const _completedChatRequestCapacity = 256;
 const _managedAssistantModel = 'mimo-v2.5-pro';
 const _defaultAssistantRefreshLead = Duration(minutes: 5);
 const _defaultAssistantMinimumRefreshDelay = Duration(seconds: 30);
@@ -47,35 +36,12 @@ String _randomId() {
   ).join();
 }
 
-String _boundedText(String value, int maxLength) {
-  if (value.length <= maxLength) return value;
-  var end = maxLength;
-  final last = value.codeUnitAt(end - 1);
-  if (last >= 0xd800 && last <= 0xdbff) end -= 1;
-  return value.substring(0, end);
-}
-
 final class LocalTranscriptionUnavailable implements Exception {
   const LocalTranscriptionUnavailable();
 
   @override
   String toString() =>
       'LocalTranscriptionUnavailable: Local transcription is not available yet.';
-}
-
-final class _ActiveInboxItem {
-  _ActiveInboxItem({
-    required this.item,
-    required this.requestId,
-    required this.generation,
-  });
-
-  final ConversationInboxItem item;
-  final String requestId;
-  final int generation;
-  final response = StringBuffer();
-  String? approvalResponse;
-  bool completing = false;
 }
 
 final class AppServices {
@@ -93,7 +59,7 @@ final class AppServices {
     this.channels,
     this.billing,
     this.conversations,
-    this._conversationInbox,
+    ConversationInboxTransport? conversationInbox,
     CurrentsClient? currentsClient,
     this._worker,
     this.memorySyncPump,
@@ -102,12 +68,11 @@ final class AppServices {
     DateTime Function()? now,
     this._assistantRefreshLead = _defaultAssistantRefreshLead,
     this._assistantMinimumRefreshDelay = _defaultAssistantMinimumRefreshDelay,
-    this._inboxPollInterval = _defaultInboxPollInterval,
+    Duration inboxPollInterval = _defaultInboxPollInterval,
     DesktopVoiceCapture? desktopVoice,
   }) : currents = currentsClient == null
            ? null
            : CurrentsController(currentsClient),
-       _currentsClient = currentsClient,
        deviceAudio = DeviceAudioForwarder(relay: deviceRelay, hub: nativeHub),
        capabilities = PlatformDesktopCapabilityGateway(
          workspaceRoots: workspaceRoots,
@@ -118,6 +83,25 @@ final class AppServices {
       nativeHub,
       _now,
       _nativeEvents.addError,
+    );
+    _conversationController = ConversationController(
+      nativeHub: nativeHub,
+      transport: conversations,
+      inbox: conversationInbox,
+      currents: currentsClient,
+      source: _conversationSource,
+      now: _now,
+      isReady: () => chatReady,
+      isDisposed: () => _disposed,
+      currentUid: () => auth.snapshot.session?.uid,
+      canPollInbox:
+          conversationInbox != null &&
+          !kIsWeb &&
+          (defaultTargetPlatform == TargetPlatform.macOS ||
+              defaultTargetPlatform == TargetPlatform.windows),
+      addError: (error, stackTrace) =>
+          _nativeEvents.addError(error, stackTrace),
+      inboxPollInterval: inboxPollInterval,
     );
   }
 
@@ -279,9 +263,7 @@ final class AppServices {
   final ChannelClient? channels;
   final WorkerBillingClient? billing;
   final ConversationTransport? conversations;
-  final ConversationInboxTransport? _conversationInbox;
   final CurrentsController? currents;
-  final CurrentsClient? _currentsClient;
   final WorkerHttpClient? _worker;
   final MemorySyncPump? memorySyncPump;
   final ManagedSttClient? _managedStt;
@@ -289,37 +271,26 @@ final class AppServices {
   final DateTime Function() _now;
   final Duration _assistantRefreshLead;
   final Duration _assistantMinimumRefreshDelay;
-  final Duration _inboxPollInterval;
   final Future<String> Function(String uid) memoryDatabasePath;
   final _nativeEvents = StreamController<NativeEvent>.broadcast();
-  final _chatAuthorityChanges = StreamController<int>.broadcast(sync: true);
   StreamSubscription<NativeEvent>? _nativeEventSubscription;
   String? _configuredPersonId;
   late final TranscriptMemoryIngestor _transcriptMemoryIngestor;
-  final String _chatSessionId = _randomId();
-  int _authorityGeneration = 0;
-  int _chatTransportSequence = 0;
-  final _chatRequests = <String, _ChatRequest>{};
-  final _chatProposals = <String, _ChatProposal>{};
-  final _pendingApprovals = <String, _PendingApproval>{};
-  final _approvalRequestByProposal = <String, String>{};
-  final _currentHandoffsByChatRequest = <String, CurrentActionHandoff>{};
-  final _currentHandoffsByProposal = <String, CurrentActionHandoff>{};
-  final _currentApprovalSyncByRequest = <String, Future<void>>{};
-  final _terminalChatRequests = <String>{};
+  late final ConversationController _conversationController;
+  int _assistantTransportSequence = 0;
   bool _nativeInitialized = false;
   bool _assistantConfigured = false;
   Timer? _assistantRefreshTimer;
-  Timer? _inboxPollTimer;
-  _ActiveInboxItem? _activeInboxItem;
-  bool _inboxPollRunning = false;
   bool _disposed = false;
   Future<void> _lifecycle = Future.value();
   Future<void> _desktopVoiceLifecycle = Future.value();
   int _desktopVoiceGeneration = 0;
 
   Stream<NativeEvent> get nativeEvents => _nativeEvents.stream;
-  Stream<int> get chatAuthorityChanges => _chatAuthorityChanges.stream;
+  Stream<int> get chatAuthorityChanges =>
+      _conversationController.authorityChanges;
+
+  int get _authorityGeneration => _conversationController.authorityGeneration;
 
   Future<String?> get selectedWorkspaceRoot =>
       capabilities.verifiedWorkspaceRoot();
@@ -378,12 +349,6 @@ final class AppServices {
     await _queueProductionSync();
   }
 
-  bool get _canPollConversationInbox =>
-      _conversationInbox != null &&
-      !kIsWeb &&
-      (defaultTargetPlatform == TargetPlatform.macOS ||
-          defaultTargetPlatform == TargetPlatform.windows);
-
   void configureAssistant({
     required AssistantProvider provider,
     required String model,
@@ -395,7 +360,7 @@ final class AppServices {
     }
     nativeHub.configureAssistant(
       requestId:
-          'configure-assistant-g$_authorityGeneration-${_chatTransportSequence++}',
+          'configure-assistant-g$_authorityGeneration-${_assistantTransportSequence++}',
       provider: provider,
       model: model,
       credential: credential,
@@ -474,7 +439,7 @@ final class AppServices {
     if (!_nativeInitialized || !_assistantConfigured) return;
     try {
       nativeHub.clearAssistant(
-        'clear-assistant-g$_authorityGeneration-${_chatTransportSequence++}',
+        'clear-assistant-g$_authorityGeneration-${_assistantTransportSequence++}',
       );
     } catch (_) {}
     _assistantConfigured = false;
@@ -563,58 +528,22 @@ final class AppServices {
   Future<String> _sendChatMessage({
     required String text,
     CurrentActionHandoff? currentHandoff,
-  }) async {
-    if (!chatReady) {
-      throw StateError(
-        'Sign in, grant consent, and connect native services first.',
-      );
-    }
-    final requestId =
-        'chat-$_chatSessionId-g$_authorityGeneration-${_chatTransportSequence++}';
-    _chatRequests[requestId] = (
-      generation: _authorityGeneration,
-      kind: _ChatRequestKind.message,
-    );
-    if (currentHandoff != null) {
-      _currentHandoffsByChatRequest[requestId] = currentHandoff;
-    }
-    try {
-      await conversations?.append(
-        clientMessageId: requestId,
-        role: 'user',
-        source: _conversationSource,
-        text: text,
-      );
-      nativeHub.sendMessage(requestId: requestId, text: text);
-      return requestId;
-    } catch (_) {
-      _chatRequests.remove(requestId);
-      _currentHandoffsByChatRequest.remove(requestId);
-      rethrow;
-    }
-  }
+  }) =>
+      _conversationController.send(text: text, currentHandoff: currentHandoff);
 
   Future<void> saveAssistantMessage({
     required String requestId,
     required String text,
-  }) async {
-    await conversations?.append(
-      clientMessageId: 'assistant:$requestId',
-      role: 'assistant',
-      source: _conversationSource,
-      text: text,
-    );
-  }
+  }) => _conversationController.saveAssistantMessage(
+    requestId: requestId,
+    text: text,
+  );
 
   Future<List<ConversationMessage>> replayConversation({int after = 0}) =>
-      conversations?.replay(after: after) ?? Future.value(const []);
+      _conversationController.replay(after: after);
 
-  Future<String> handoffCurrentAction(CurrentActionHandoff handoff) async {
-    if (_currentsClient == null) {
-      throw StateError('Currents are not connected.');
-    }
-    return _sendChatMessage(text: handoff.instruction, currentHandoff: handoff);
-  }
+  Future<String> handoffCurrentAction(CurrentActionHandoff handoff) =>
+      _conversationController.handoff(handoff);
 
   String get _conversationSource => kIsWeb
       ? 'web'
@@ -628,57 +557,13 @@ final class AppServices {
   String decideChatApproval({
     required String proposalId,
     required ApprovalDecision decision,
-  }) {
-    if (!chatReady) {
-      throw StateError('Native services are not connected.');
-    }
-    final proposal = _chatProposals[proposalId];
-    if (proposal == null || proposal.generation != _authorityGeneration) {
-      throw StateError('This action proposal is unavailable.');
-    }
-    if (_approvalRequestByProposal.containsKey(proposalId)) {
-      throw StateError('This action proposal is already being decided.');
-    }
-    final requestId =
-        'approval-g$_authorityGeneration-${_chatTransportSequence++}';
-    _chatRequests[requestId] = (
-      generation: _authorityGeneration,
-      kind: _ChatRequestKind.approval,
-    );
-    _pendingApprovals[requestId] = (
-      proposalId: proposalId,
-      decision: decision,
-      handoff: _currentHandoffsByProposal[proposalId],
-    );
-    _approvalRequestByProposal[proposalId] = requestId;
-    try {
-      nativeHub.decideApproval(
-        requestId: requestId,
-        proposalId: proposalId,
-        decision: decision,
-      );
-    } catch (_) {
-      _chatRequests.remove(requestId);
-      _pendingApprovals.remove(requestId);
-      _approvalRequestByProposal.remove(proposalId);
-      rethrow;
-    }
-    return requestId;
-  }
+  }) => _conversationController.decide(
+    proposalId: proposalId,
+    decision: decision,
+  );
 
-  void cancelChatRequest(String requestId) {
-    final request = _chatRequests[requestId];
-    if (request == null || request.generation != _authorityGeneration) return;
-    final pendingApproval = _pendingApprovals[requestId];
-    if (pendingApproval != null) {
-      _finishApprovalCorrelation(requestId, pendingApproval.proposalId);
-    } else {
-      _chatRequests.remove(requestId);
-      _tombstoneChatRequest(requestId);
-      _invalidateChatProposals(requestId);
-    }
-    if (chatReady) nativeHub.cancel(requestId);
-  }
+  void cancelChatRequest(String requestId) =>
+      _conversationController.cancel(requestId);
 
   void _authChanged() {
     if (!productionReady || auth.snapshot.session?.uid != _configuredPersonId) {
@@ -710,7 +595,7 @@ final class AppServices {
       if (_workerOrigin != null && _assistantRefreshTimer == null) {
         await _configureSelectedAssistant(session.uid);
       }
-      _scheduleInboxPoll();
+      _conversationController.scheduleInboxPoll();
       return;
     }
     await _stopCapture();
@@ -748,423 +633,25 @@ final class AppServices {
     );
     memorySyncPump?.start(session.uid);
     if (_workerOrigin != null) await _configureSelectedAssistant(session.uid);
-    _scheduleInboxPoll(Duration.zero);
+    _conversationController.scheduleInboxPoll(Duration.zero);
   }
 
   void _handleNativeEvent(NativeEvent event) {
-    if (!_acceptChatEvent(event)) return;
+    if (!_conversationController.handleNativeEvent(event)) return;
     _nativeEvents.add(event);
-    _handleInboxEvent(event);
     _transcriptMemoryIngestor.handle(event);
   }
 
-  void _scheduleInboxPoll([Duration? delay]) {
-    if (!_canPollConversationInbox ||
-        !chatReady ||
-        _disposed ||
-        _activeInboxItem != null ||
-        _inboxPollRunning ||
-        _inboxPollTimer != null) {
-      return;
-    }
-    _inboxPollTimer = Timer(delay ?? _inboxPollInterval, () {
-      _inboxPollTimer = null;
-      unawaited(_pollConversationInbox());
-    });
-  }
-
-  Future<void> _pollConversationInbox() async {
-    final inbox = _conversationInbox;
-    final uid = auth.snapshot.session?.uid;
-    if (inbox == null ||
-        _disposed ||
-        !chatReady ||
-        uid == null ||
-        _inboxPollRunning) {
-      return;
-    }
-    final generation = _authorityGeneration;
-    _inboxPollRunning = true;
-    try {
-      final item = await inbox.claim();
-      if (_disposed ||
-          generation != _authorityGeneration ||
-          !chatReady ||
-          auth.snapshot.session?.uid != uid ||
-          item == null) {
-        return;
-      }
-      final requestId = 'chat-channel:${item.id}:${item.attempt}';
-      final active = _ActiveInboxItem(
-        item: item,
-        requestId: requestId,
-        generation: generation,
-      );
-      _activeInboxItem = active;
-      _chatRequests[requestId] = (
-        generation: generation,
-        kind: _ChatRequestKind.message,
-      );
-      try {
-        nativeHub.sendMessage(requestId: requestId, text: item.text);
-      } catch (error) {
-        _chatRequests.remove(requestId);
-        _tombstoneChatRequest(requestId);
-        await _finishInboxItem(
-          active,
-          outcome: ConversationInboxOutcome.retry,
-          error: error.toString(),
-        );
-      }
-    } catch (error, stackTrace) {
-      _nativeEvents.addError(error, stackTrace);
-    } finally {
-      _inboxPollRunning = false;
-      _scheduleInboxPoll();
-    }
-  }
-
-  void _handleInboxEvent(NativeEvent event) {
-    final active = _activeInboxItem;
-    if (active == null || active.generation != _authorityGeneration) return;
-    if (event case NativeEventActionProposal(
-      :final value,
-    ) when value.requestId == active.requestId) {
-      active.approvalResponse =
-          'Approval required on desktop: ${value.title} — ${value.summary}';
-      return;
-    }
-    if (event case NativeEventAssistantDelta(
-      :final value,
-    ) when value.requestId == active.requestId) {
-      active.response.write(value.text);
-      if (value.finalSegment) {
-        final streamedResponse = active.response.toString().trim();
-        final response = streamedResponse.isEmpty
-            ? active.approvalResponse ?? ''
-            : streamedResponse;
-        unawaited(
-          _finishInboxItem(
-            active,
-            outcome: response.isEmpty
-                ? ConversationInboxOutcome.retry
-                : ConversationInboxOutcome.done,
-            responseText: response.isEmpty
-                ? null
-                : _boundedText(response, 4096),
-            error: response.isEmpty
-                ? 'Assistant returned an empty reply.'
-                : null,
-          ),
-        );
-      }
-      return;
-    }
-    if (event case NativeEventError(
-      :final value,
-    ) when value.requestId == active.requestId) {
-      unawaited(
-        _finishInboxItem(
-          active,
-          outcome: ConversationInboxOutcome.retry,
-          error: value.message,
-        ),
-      );
-      return;
-    }
-    if (event case NativeEventToolProgress(:final value)
-        when value.requestId == active.requestId &&
-            (value.status == ToolStatus.failed ||
-                value.status == ToolStatus.cancelled)) {
-      unawaited(
-        _finishInboxItem(
-          active,
-          outcome: ConversationInboxOutcome.retry,
-          error: value.detail ?? value.status.name,
-        ),
-      );
-    }
-  }
-
-  Future<void> _finishInboxItem(
-    _ActiveInboxItem active, {
-    required ConversationInboxOutcome outcome,
-    String? responseText,
-    String? error,
-  }) async {
-    if (!identical(_activeInboxItem, active) ||
-        active.generation != _authorityGeneration ||
-        !chatReady ||
-        active.completing) {
-      return;
-    }
-    active.completing = true;
-    try {
-      await _conversationInbox!.complete(
-        active.item,
-        outcome: outcome,
-        responseText: responseText,
-        error: error == null ? null : _boundedText(error, 1000),
-      );
-    } catch (failure, stackTrace) {
-      active.completing = false;
-      _nativeEvents.addError(failure, stackTrace);
-      if (!identical(_activeInboxItem, active) ||
-          active.generation != _authorityGeneration ||
-          !chatReady) {
-        return;
-      }
-      final remaining = active.item.leaseUntil - _now().millisecondsSinceEpoch;
-      if (remaining <= 0) {
-        _activeInboxItem = null;
-        _scheduleInboxPoll(Duration.zero);
-        return;
-      }
-      _inboxPollTimer = Timer(
-        Duration(
-          milliseconds: min(_inboxPollInterval.inMilliseconds, remaining),
-        ),
-        () {
-          _inboxPollTimer = null;
-          unawaited(
-            _finishInboxItem(
-              active,
-              outcome: outcome,
-              responseText: responseText,
-              error: error,
-            ),
-          );
-        },
-      );
-      return;
-    }
-    active.completing = false;
-    if (identical(_activeInboxItem, active)) _activeInboxItem = null;
-    _scheduleInboxPoll(Duration.zero);
-  }
-
-  bool _acceptChatEvent(NativeEvent event) {
-    if (event case NativeEventApprovalDecisionAcknowledged(:final value)) {
-      final pending = _pendingApprovals[value.requestId];
-      if (pending == null ||
-          pending.proposalId != value.proposalId ||
-          pending.decision != value.decision) {
-        return false;
-      }
-      if (!value.accepted) {
-        _finishApprovalCorrelation(value.requestId, pending.proposalId);
-        return true;
-      }
-      _chatProposals.remove(pending.proposalId);
-      _currentHandoffsByProposal.remove(pending.proposalId);
-      final handoff = pending.handoff;
-      if (handoff != null && _currentsClient != null) {
-        if (pending.decision == ApprovalDecision.approveOnce &&
-            value.executionPending) {
-          final sync = _currentsClient.approve(handoff);
-          _currentApprovalSyncByRequest[value.requestId] = sync;
-          unawaited(
-            sync.onError((error, stack) {
-              _nativeEvents.addError(
-                error ?? StateError('Currents approval failed.'),
-                stack,
-              );
-            }),
-          );
-        } else {
-          unawaited(
-            _currentsClient.reject(handoff).onError((error, stack) {
-              _nativeEvents.addError(
-                error ?? StateError('Currents rejection failed.'),
-                stack,
-              );
-            }),
-          );
-        }
-      }
-      if (!value.executionPending) {
-        _finishApprovalCorrelation(value.requestId, pending.proposalId);
-      }
-      return true;
-    }
-    if (event case NativeEventActionProposal(:final value)) {
-      final parent = _chatRequests[value.requestId];
-      if (parent == null ||
-          parent.kind != _ChatRequestKind.message ||
-          parent.generation != _authorityGeneration ||
-          _chatProposals.containsKey(value.proposalId) ||
-          _terminalChatRequests.contains(value.requestId) ||
-          (value.expiresAtMs != null &&
-              value.expiresAtMs! <= DateTime.now().millisecondsSinceEpoch)) {
-        return false;
-      }
-      _chatProposals[value.proposalId] = (
-        generation: _authorityGeneration,
-        parentRequestId: value.requestId,
-      );
-      final handoff = _currentHandoffsByChatRequest[value.requestId];
-      if (handoff != null) {
-        _currentHandoffsByProposal[value.proposalId] = handoff;
-      }
-      return true;
-    }
-    String? requestId;
-    var terminal = false;
-    var requiresMessage = false;
-    if (event case NativeEventAssistantDelta(:final value)) {
-      requestId = value.requestId;
-      terminal = value.finalSegment;
-      requiresMessage = true;
-    } else if (event case NativeEventToolProgress(:final value)) {
-      requestId = value.requestId;
-      final request = _chatRequests[requestId];
-      terminal =
-          value.status == ToolStatus.failed ||
-          value.status == ToolStatus.cancelled ||
-          (request?.kind == _ChatRequestKind.approval &&
-              value.status == ToolStatus.complete);
-    } else if (event case NativeEventError(:final value)) {
-      requestId = value.requestId;
-      if (requestId == null ||
-          (!requestId.startsWith('chat-') &&
-              !requestId.startsWith('approval-'))) {
-        return true;
-      }
-      terminal = true;
-    } else {
-      return true;
-    }
-    final request = _chatRequests[requestId];
-    if (request == null ||
-        request.generation != _authorityGeneration ||
-        (requiresMessage && request.kind != _ChatRequestKind.message) ||
-        _terminalChatRequests.contains(requestId)) {
-      return false;
-    }
-    if (terminal) {
-      final pendingApproval = _pendingApprovals[requestId];
-      final currentHandoff = pendingApproval?.handoff;
-      final currentApproval = _currentApprovalSyncByRequest.remove(requestId);
-      if (currentHandoff != null &&
-          currentApproval != null &&
-          _currentsClient != null) {
-        final outcome =
-            event is NativeEventToolProgress &&
-                event.value.status == ToolStatus.complete
-            ? CurrentExecutionOutcome.succeeded
-            : CurrentExecutionOutcome.failed;
-        final detail = event is NativeEventToolProgress
-            ? [
-                event.value.tool,
-                event.value.status.name,
-                if (event.value.detail != null) event.value.detail!,
-              ].join(' · ')
-            : 'Native execution failed.';
-        unawaited(
-          currentApproval
-              .then(
-                (_) => _currentsClient.recordOutcome(
-                  currentHandoff,
-                  outcome,
-                  detail,
-                ),
-              )
-              .onError((error, stack) {
-                _nativeEvents.addError(
-                  error ?? StateError('Currents outcome failed.'),
-                  stack,
-                );
-              }),
-        );
-      }
-      if (pendingApproval != null) {
-        _finishApprovalCorrelation(requestId, pendingApproval.proposalId);
-      } else {
-        _chatRequests.remove(requestId);
-        _tombstoneChatRequest(requestId);
-      }
-      final failedParent =
-          event is NativeEventError ||
-          (event is NativeEventToolProgress &&
-              (event.value.status == ToolStatus.failed ||
-                  event.value.status == ToolStatus.cancelled));
-      if (failedParent) _invalidateChatProposals(requestId);
-      if (request.kind == _ChatRequestKind.message) {
-        final pendingCurrent = _currentHandoffsByChatRequest.remove(requestId);
-        final hasProposal = _chatProposals.values.any(
-          (proposal) => proposal.parentRequestId == requestId,
-        );
-        if (pendingCurrent != null && !hasProposal && _currentsClient != null) {
-          unawaited(
-            _currentsClient.reject(pendingCurrent).onError((error, stack) {
-              _nativeEvents.addError(
-                error ?? StateError('Currents rejection failed.'),
-                stack,
-              );
-            }),
-          );
-        }
-      }
-    }
-    return true;
-  }
-
-  void _tombstoneChatRequest(String requestId) {
-    _terminalChatRequests.add(requestId);
-    if (_terminalChatRequests.length > _completedChatRequestCapacity) {
-      _terminalChatRequests.remove(_terminalChatRequests.first);
-    }
-  }
-
-  void _invalidateChatProposals(String parentRequestId) {
-    final proposalIds = _chatProposals.entries
-        .where((entry) => entry.value.parentRequestId == parentRequestId)
-        .map((entry) => entry.key)
-        .toList();
-    for (final proposalId in proposalIds) {
-      _chatProposals.remove(proposalId);
-      _currentHandoffsByProposal.remove(proposalId);
-    }
-  }
-
-  void _finishApprovalCorrelation(String requestId, String proposalId) {
-    _pendingApprovals.remove(requestId);
-    if (_approvalRequestByProposal[proposalId] == requestId) {
-      _approvalRequestByProposal.remove(proposalId);
-    }
-    _chatRequests.remove(requestId);
-    _tombstoneChatRequest(requestId);
-  }
-
   void _fenceTranscriptCaptures() {
-    _authorityGeneration += 1;
-    unawaited(cancelDesktopVoice());
-    _inboxPollTimer?.cancel();
-    _inboxPollTimer = null;
-    _activeInboxItem = null;
-    _clearAssistant();
-    _transcriptMemoryIngestor.fence(
-      authorityGeneration: _authorityGeneration,
+    final generation = _conversationController.fence(
       cancelPending: _nativeInitialized,
     );
-    if (_nativeInitialized) {
-      for (final requestId in _chatRequests.keys) {
-        try {
-          nativeHub.cancel(requestId);
-        } catch (_) {}
-      }
-    }
-    for (final requestId in _chatRequests.keys) {
-      _tombstoneChatRequest(requestId);
-    }
-    _chatRequests.clear();
-    _chatProposals.clear();
-    _pendingApprovals.clear();
-    _approvalRequestByProposal.clear();
-    _currentHandoffsByChatRequest.clear();
-    _currentHandoffsByProposal.clear();
-    _currentApprovalSyncByRequest.clear();
-    _chatAuthorityChanges.add(_authorityGeneration);
+    unawaited(cancelDesktopVoice());
+    _clearAssistant();
+    _transcriptMemoryIngestor.fence(
+      authorityGeneration: generation,
+      cancelPending: _nativeInitialized,
+    );
   }
 
   Future<void> _stopCapture() async {
@@ -1306,9 +793,6 @@ final class AppServices {
   void dispose() {
     _disposed = true;
     memorySyncPump?.dispose();
-    _inboxPollTimer?.cancel();
-    _inboxPollTimer = null;
-    _activeInboxItem = null;
     auth.removeListener(_authChanged);
     _clearAssistant();
     _lifecycle = _lifecycle
@@ -1320,12 +804,12 @@ final class AppServices {
           .then((_) async {
             await desktopVoice.dispose();
             await _nativeEvents.close();
-            await _chatAuthorityChanges.close();
+            await _conversationController.dispose();
           })
           .onError((_, _) async {
             await desktopVoice.dispose();
             await _nativeEvents.close();
-            await _chatAuthorityChanges.close();
+            await _conversationController.dispose();
           }),
     );
     _worker?.close();

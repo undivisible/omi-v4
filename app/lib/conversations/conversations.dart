@@ -1,5 +1,7 @@
 import '../api/worker_http.dart';
 
+export 'conversation_controller.dart';
+
 final class ConversationMessage {
   const ConversationMessage({
     required this.cursor,
