@@ -26,6 +26,10 @@ export type Bindings = {
   MIMO_GLOBAL_TOKEN_BUDGET?: string;
   MIMO_UID_COST_BUDGET_MICROUSD?: string;
   MIMO_GLOBAL_COST_BUDGET_MICROUSD?: string;
+  GEMINI_API_KEY?: string;
+  GEMINI_LIVE_MODEL?: string;
+  OPENAI_OAUTH_CLIENT_ID?: string;
+  XAI_OAUTH_CLIENT_ID?: string;
   DEEPGRAM_API_KEY?: string;
   STT_MAX_SESSION_SECONDS?: string;
   STT_COST_MICROUSD_PER_MINUTE?: string;

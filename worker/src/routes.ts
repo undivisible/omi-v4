@@ -4,7 +4,9 @@ import billing from "./billing";
 import currents from "./currents";
 import memorySync from "./memory-sync";
 import { ensureZkrMemoryProjected } from "./memory-projection";
+import oauthBroker from "./oauth-broker";
 import stt from "./stt";
+import voice from "./voice";
 import conversations, { appendConversationMessage } from "./conversations";
 import { dispatchChannelMessage, dispatchChannelUnlink } from "./delivery";
 import type {
@@ -30,6 +32,8 @@ routes.use("/memories", async (context, next) => {
 routes.route("/", assistant);
 routes.route("/payments/stripe", billing);
 routes.route("/stt", stt);
+routes.route("/voice", voice);
+routes.route("/oauth", oauthBroker);
 routes.route("/currents", currents);
 routes.route("/memory/zkr-sync", memorySync);
 routes.route("/", conversations);

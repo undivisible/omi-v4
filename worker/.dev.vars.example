@@ -1,1 +1,5 @@
 MIMO_API_KEY=your-mimo-api-key-here
+MIMO_CHAT_COMPLETIONS_URL=https://token-plan-sgp.xiaomimimo.com/v1/chat/completions
+GEMINI_API_KEY=your-gemini-api-key-here
+OPENAI_OAUTH_CLIENT_ID=app_EMoamEEZ73f0CkXaXp7hrann
+XAI_OAUTH_CLIENT_ID=your-xai-oauth-client-id-here
