@@ -18,7 +18,7 @@ flowchart TD
     subgraph Hub["Rust Hub (Rinf) — app/native/hub/src"]
         RT["runtime.rs<br/>CommandDispatcher"]
         ZKR["zkr crate<br/>Personal Memory engine"]
-        STT["stt.rs<br/>Deepgram live STT session"]
+        STT["stt.rs + live_voice.rs<br/>legacy Deepgram STT and Gemini Live duplex voice"]
         CU["computer_use.rs + approval.rs<br/>praefectus semantic actions"]
         SCAN["scan.rs<br/>workspace / Notes / Mail scan"]
         LOCAL["local_ai.rs<br/>Apple FoundationModels (aarch64 macOS only)"]
@@ -28,7 +28,7 @@ flowchart TD
         AUTH["auth.ts<br/>Firebase ID token verify"]
         ROUTES["routes.ts, conversations.ts,<br/>memory-sync.ts, memory-projection.ts"]
         AST["assistant.ts / assistant-admission.ts<br/>managed chat proxy + cost admission"]
-        STTW["stt.ts / stt-admission.ts<br/>managed Deepgram session issuance"]
+        STTW["stt.ts / voice.ts / asr.ts<br/>legacy STT sessions, Gemini Live tokens,<br/>mimo-v2.5-asr batch transcription"]
         CURR["currents.ts<br/>candidate/rank/feedback/execution"]
         BILL["billing.ts<br/>Stripe checkout/portal"]
         DELIV["delivery.ts (Durable Object)<br/>Telegram/Blooio outbound"]
@@ -38,7 +38,7 @@ flowchart TD
 
     subgraph External["External providers"]
         FB["Firebase Auth"]
-        DG["Deepgram (live STT)"]
+        DG["Gemini Live (realtime voice)<br/>MiMo mimo-v2.5-asr (batch)<br/>Deepgram (legacy STT)"]
         LLM["Claude / GPT / Gemini / xAI / MiMo"]
         STRIPE["Stripe"]
         TG["Telegram Bot API"]
@@ -162,7 +162,7 @@ sequenceDiagram
     participant Mic as BLE device / phone mic / desktop mic
     participant App as Flutter (device/, keyboard/desktop_voice_capture.dart)
     participant Hub as Rust hub (stt.rs)
-    participant DG as Deepgram (wss)
+    participant DG as STT provider (wss)
     participant W as Worker stt.ts (managed only)
 
     App->>Hub: StartTranscription (stream id, format, language, route)
@@ -181,7 +181,7 @@ sequenceDiagram
     Hub-->>App: TranscriptionStatus(Finished/Cancelled/Failed)
 ```
 
-Deepgram Nova-3 is the only implemented live STT provider (`stt.rs`); local STT is a typed `SttError::Unavailable`/`TranscriptionAuth::Local` path that fails closed, exactly as `PLAN.md` states, until a real local provider exists. Managed sessions get a `wss://` URL pinned to the trusted Worker origin with a strict path shape check (`v1/stt/sessions/<64-hex>/stream`) and are marked non-reconnectable (`reconnectable: false`) — losing that socket ends the session rather than silently reusing a stale credential. BYOK sessions connect directly to `api.deepgram.com/v1/listen` with the user's own API key and *are* reconnectable, using bounded 250/500/1000 ms backoff (`recover()`), a 64 KiB pending-audio ceiling enforced by an atomic counter (`SttHandle::send_audio`), and an explicit `TranscriptGap` event on any dropped span since already-sent audio is never replayed. Every transcript segment carries a stable `segment_id` of the form `{stream}:epoch:{n}:segment:{m}`, a monotonic STT epoch that increments on reconnect, and a final/interim flag; only final segments are captured into `zkr` (`transcription.rs`/`runtime.rs` capture path). PCM8 is upsampled to 16-bit little-endian before being sent (`encode_audio`). The desktop both-Shift gesture (`app/lib/keyboard/shift_gesture.dart`, `desktop_gesture_controller.dart`, `desktop_voice_capture.dart`) drives `AppServices.startDesktopVoice/continueDesktopVoice/stopDesktopVoice`, which requests microphone permission, mints a managed transcription auth via the Worker, and fences the whole flow against Firebase-account/authority-generation changes mid-flight. Mobile capture is BLE-relayed through `app/lib/device/` (`UniversalBleDeviceRelayAdapter`), decoupled from Rust except for the bounded audio-chunk signal path. **Status**: architecture and unit-tested logic are complete; `PLAN.md` explicitly still requires credentialed live-provider proof and physical-device stress testing (both mobile Omi hardware and desktop Windows/macOS shortcuts).
+Live voice now has two paths: the new realtime duplex session (`live_voice.rs`, `RealtimeVoiceProvider` trait) connects to the Gemini Live API with Worker-minted ephemeral tokens (`worker/src/voice.ts`) for interactive conversation with built-in transcription and barge-in, while long-form/batch transcription (hardware device recordings, meeting audio) goes through `mimo-v2.5-asr` via the Worker (`worker/src/asr.ts`, base64 wav/mp3 — MiMo has no streaming ASR input). The original Deepgram session machinery (`stt.rs`) remains as the legacy interactive path until the Gemini Live migration replaces its call sites; local STT stays a typed `SttError::Unavailable`/`TranscriptionAuth::Local` fail-closed path because no real on-device speech model exists yet. Managed sessions get a `wss://` URL pinned to the trusted Worker origin with a strict path shape check (`v1/stt/sessions/<64-hex>/stream`) and are marked non-reconnectable (`reconnectable: false`) — losing that socket ends the session rather than silently reusing a stale credential. BYOK sessions connect directly to `api.deepgram.com/v1/listen` with the user's own API key and *are* reconnectable, using bounded 250/500/1000 ms backoff (`recover()`), a 64 KiB pending-audio ceiling enforced by an atomic counter (`SttHandle::send_audio`), and an explicit `TranscriptGap` event on any dropped span since already-sent audio is never replayed. Every transcript segment carries a stable `segment_id` of the form `{stream}:epoch:{n}:segment:{m}`, a monotonic STT epoch that increments on reconnect, and a final/interim flag; only final segments are captured into `zkr` (`transcription.rs`/`runtime.rs` capture path). PCM8 is upsampled to 16-bit little-endian before being sent (`encode_audio`). The desktop both-Shift gesture (`app/lib/keyboard/shift_gesture.dart`, `desktop_gesture_controller.dart`, `desktop_voice_capture.dart`) drives `AppServices.startDesktopVoice/continueDesktopVoice/stopDesktopVoice`, which requests microphone permission, mints a managed transcription auth via the Worker, and fences the whole flow against Firebase-account/authority-generation changes mid-flight. Mobile capture is BLE-relayed through `app/lib/device/` (`UniversalBleDeviceRelayAdapter`), decoupled from Rust except for the bounded audio-chunk signal path. **Status**: architecture and unit-tested logic are complete; `PLAN.md` explicitly still requires credentialed live-provider proof and physical-device stress testing (both mobile Omi hardware and desktop Windows/macOS shortcuts).
 
 ### 3.5 Computer use (praefectus)
 
@@ -319,7 +319,7 @@ sequenceDiagram
     W-->>App: 201 {id, url}
 ```
 
-Two plans exist per `PLAN.md`: **Omi** (no managed inference — BYOK/local models only, Omi never pays the user's inference bill) and **Omi AI** (adds managed MiMo chat/ASR quotas, Stripe-gated). `worker/src/billing.ts` only opens Stripe Checkout/Billing-Portal sessions and immediately hands the URL back to the client for an external redirect — it never touches card data (`PLAN.md`'s Stripe webhook state, referenced but not read here, is what actually flips `entitlements.plan/status`). Every managed route (`assistant.ts`, `stt.ts`) re-checks `entitlements.plan === 'pro' && status === 'active'` (and non-expired `valid_until`) on every call — the plan is not cached client-side as authoritative. `AppServices._configureSelectedAssistant` (`app/lib/app_services.dart`) only configures the managed assistant route when a BYOK credential is absent *and* the account's entitlement is a currently-active `pro` plan, mirroring the server-side check. Managed cost accounting (`assistant.ts`, `assistant-admission.ts`) reserves a conservative cost/token budget before every managed call and settles it against the requested-vs-actual token usage, using published MiMo and Deepgram list pricing with fixed micro-USD-per-million-token Worker configuration that fails closed if unset or invalid (`PLAN.md` "Models and cost policy"). **Status**: implemented; requires a live Stripe account/webhook and the entitlements table populated by that webhook (not reviewed in this pass) to exercise for real.
+Two plans exist per `PLAN.md`: **Omi** (no managed inference — BYOK/local models only, Omi never pays the user's inference bill) and **Omi AI** (adds managed MiMo chat/ASR quotas, Stripe-gated). `worker/src/billing.ts` only opens Stripe Checkout/Billing-Portal sessions and immediately hands the URL back to the client for an external redirect — it never touches card data (`PLAN.md`'s Stripe webhook state, referenced but not read here, is what actually flips `entitlements.plan/status`). Every managed route (`assistant.ts`, `stt.ts`) re-checks `entitlements.plan === 'pro' && status === 'active'` (and non-expired `valid_until`) on every call — the plan is not cached client-side as authoritative. `AppServices._configureSelectedAssistant` (`app/lib/app_services.dart`) only configures the managed assistant route when a BYOK credential is absent *and* the account's entitlement is a currently-active `pro` plan, mirroring the server-side check. Managed cost accounting (`assistant.ts`, `assistant-admission.ts`) reserves a conservative cost/token budget before every managed call and settles it against the requested-vs-actual token usage, using published MiMo list pricing (Deepgram pricing retained for the legacy STT route) with fixed micro-USD-per-million-token Worker configuration that fails closed if unset or invalid (`PLAN.md` "Models and cost policy"). **Status**: implemented; requires a live Stripe account/webhook and the entitlements table populated by that webhook (not reviewed in this pass) to exercise for real.
 
 ### 3.10 macOS platform integration
 
@@ -369,7 +369,7 @@ The Firebase UID is the sole tenant key on both sides of the system. On the Work
 
 Directly from `PLAN.md`'s "Active build checklist," "Current release train," and "Known constraints," corroborated by the code read in this pass:
 
-- **No credentialed live-provider proof yet.** Deepgram (managed/BYOK), Firebase, Stripe, Telegram, Blooio, and the model routes are all implemented against real protocols but have not been exercised against live provider credentials in this repository state.
+- **No credentialed live-provider proof yet.** Gemini Live, MiMo (chat and ASR), Deepgram (legacy), Firebase, Stripe, Telegram, Blooio, and the model routes are all implemented against real protocols but have not been exercised against live provider credentials in this repository state.
 - **No physical-device proof.** Omi BLE hardware capture, iOS/Android transcription lifecycle, and macOS/Windows both-Shift gesture timing are implemented but only unit/logic-tested, not run against real hardware or OS input.
 - **`rx4` and `rotary` are not yet real extraction/ranking engines** in the hub — `rx4` usage is currently limited to version reporting; `rotary` integration has not started.
 - **Local STT does not exist.** `TranscriptionAuth::Local` and `SttError::Unavailable` are deliberate fail-closed stand-ins until a real local STT provider (`rs_ai_local` or similar) is integrated; MiMo remains batch-only ASR.
