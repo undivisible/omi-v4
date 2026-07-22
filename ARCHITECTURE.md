@@ -349,6 +349,7 @@ flowchart TD
     UID --> D1E["D1 entitlements table<br/>(plan, status, valid_until, stripe_customer_id)"]
     UID --> D1C["D1 conversations / channel_inbox<br/>UID-scoped ordered messages, idempotent client ids"]
     UID --> D1M["D1 memory_* tables<br/>(claims, evidence, profile entries) — projection only"]
+    UID --> VEC["Vectorize omi-memory-claims<br/>claim embeddings (Workers AI bge-base-en-v1.5), uid metadata filter on every query"]
     UID --> D1CUR["D1 currents / current_executions<br/>UID-scoped candidates + approval receipts"]
     UID --> D1CH["D1 channel_bindings<br/>(channel, channel_user_id) -> uid, one row per link"]
 

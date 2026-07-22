@@ -90,6 +90,7 @@ beforeAll(async () => {
   await migration("migrations/0007_channel_delivery.sql");
   await migration("migrations/0013_conversations.sql");
   await migration("migrations/0014_channel_inbox_dispatch.sql");
+  await migration("migrations/0021_memory_vectors.sql");
   const now = Date.now();
   await database
     .prepare(

@@ -128,7 +128,10 @@ describe("managed assistant", () => {
 
   test("validates configured planning prices and Wrangler defaults", async () => {
     const config = JSON.parse(
-      await Bun.file("wrangler.jsonc").text(),
+      (await Bun.file("wrangler.jsonc").text())
+        .split("\n")
+        .filter((line) => !line.trimStart().startsWith("//"))
+        .join("\n"),
     ) as Record<string, unknown>;
     const variables = config.vars as Record<string, string>;
     expect(variables.MIMO_INPUT_MICROUSD_PER_MILLION_TOKENS).toBe("435000");
