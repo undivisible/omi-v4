@@ -4,35 +4,6 @@ import ApplicationServices
 import Carbon.HIToolbox
 import FlutterMacOS
 
-private final class RadialBlurView: NSVisualEffectView {
-  private let radialMask = CAGradientLayer()
-
-  override init(frame frameRect: NSRect) {
-    super.init(frame: frameRect)
-    wantsLayer = true
-    radialMask.type = .radial
-    radialMask.colors = [
-      NSColor.black.cgColor,
-      NSColor.black.cgColor,
-      NSColor.black.withAlphaComponent(0.2).cgColor,
-      NSColor.clear.cgColor,
-    ]
-    radialMask.locations = [0, 0.24, 0.56, 0.82]
-    radialMask.startPoint = CGPoint(x: 0.5, y: 0.5)
-    radialMask.endPoint = CGPoint(x: 1, y: 0.5)
-    layer?.mask = radialMask
-  }
-
-  required init?(coder: NSCoder) {
-    super.init(coder: coder)
-  }
-
-  override func layout() {
-    super.layout()
-    radialMask.frame = bounds
-  }
-}
-
 class MainFlutterWindow: NSWindow, FlutterStreamHandler {
   private var eventKitBridge: AppleEventKitBridge?
   private var menuBarBridge: MenuBarBridge?
@@ -98,15 +69,8 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
     self.contentViewController = rootViewController
     self.setFrame(windowFrame, display: true)
 
-    let blur = RadialBlurView(frame: rootView.bounds)
-    blur.autoresizingMask = [.width, .height]
-    blur.material = .underWindowBackground
-    blur.blendingMode = .behindWindow
-    blur.state = .active
-    blur.alphaValue = 0.72
     flutterViewController.view.frame = rootView.bounds
     flutterViewController.view.autoresizingMask = [.width, .height]
-    rootView.addSubview(blur)
     rootView.addSubview(flutterViewController.view)
 
     RegisterGeneratedPlugins(registry: flutterViewController)
