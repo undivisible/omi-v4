@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../currents/currents.dart';
+import '../ui/markdown_text.dart';
 import '../ui/omi_ui.dart';
 
 class CurrentsScreen extends StatefulWidget {
@@ -110,9 +111,9 @@ class _CurrentTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) => BaseTile(
     icon: Icons.waves_rounded,
-    title: card.title,
+    title: stripInlineMarkdown(card.title),
     detail:
-        '${card.summary}\n${card.item.reason} · Source: ${card.item.evidence.firstOrNull?.sourceId ?? '—'}',
+        '${stripInlineMarkdown(card.summary)}\n${stripInlineMarkdown(card.item.reason)} · Source: ${card.item.evidence.firstOrNull?.sourceId ?? '—'}',
     trailing: Wrap(
       children: [
         IconButton(

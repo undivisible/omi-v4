@@ -93,6 +93,97 @@ void main() {
     expect(find.textContaining('Hi, I’m Omi.'), findsOneWidget);
     expect(find.byKey(const Key('chat_input')), findsNothing);
   });
+
+  test('layered store treats the account record as source of truth', () async {
+    final local = VolatileOnboardingCompletionStore();
+    final remote = VolatileOnboardingCompletionStore();
+    await remote.complete('user-a');
+    final store = LayeredOnboardingCompletionStore(
+      local: local,
+      remote: remote,
+    );
+
+    expect(await store.isComplete('user-a'), isTrue);
+    expect(local.completedUids, contains('user-a'));
+    expect(await store.isComplete('user-b'), isFalse);
+  });
+
+  test('layered store writes both sides on completion', () async {
+    final local = VolatileOnboardingCompletionStore();
+    final remote = VolatileOnboardingCompletionStore();
+    final store = LayeredOnboardingCompletionStore(
+      local: local,
+      remote: remote,
+    );
+
+    await store.complete('user-a');
+
+    expect(local.completedUids, contains('user-a'));
+    expect(remote.completedUids, contains('user-a'));
+  });
+
+  test(
+    'layered store retries the account write and keeps local on failure',
+    () async {
+      final local = VolatileOnboardingCompletionStore();
+      final remote = _FlakyStore(failuresBeforeSuccess: 1);
+      final store = LayeredOnboardingCompletionStore(
+        local: local,
+        remote: remote,
+      );
+
+      await store.complete('user-a');
+      expect(local.completedUids, contains('user-a'));
+      expect(remote.inner.completedUids, contains('user-a'));
+
+      final broken = LayeredOnboardingCompletionStore(
+        local: VolatileOnboardingCompletionStore()..completedUids.clear(),
+        remote: _FlakyStore(failuresBeforeSuccess: 99),
+      );
+      await broken.complete('user-b');
+      expect(await broken.local.isComplete('user-b'), isTrue);
+    },
+  );
+
+  test(
+    'layered store falls back to local when the account is unreachable',
+    () async {
+      final local = VolatileOnboardingCompletionStore();
+      await local.complete('user-a');
+      final store = LayeredOnboardingCompletionStore(
+        local: local,
+        remote: _FlakyStore(failuresBeforeSuccess: 99),
+      );
+
+      expect(await store.isComplete('user-a'), isTrue);
+      expect(await store.isComplete('user-b'), isFalse);
+    },
+  );
+}
+
+final class _FlakyStore implements OnboardingCompletionStore {
+  _FlakyStore({required this.failuresBeforeSuccess});
+
+  int failuresBeforeSuccess;
+  final inner = VolatileOnboardingCompletionStore();
+
+  @override
+  Future<bool> isComplete(String uid) async {
+    if (failuresBeforeSuccess > 0) {
+      failuresBeforeSuccess -= 1;
+      throw StateError('offline');
+    }
+    return inner.isComplete(uid);
+  }
+
+  @override
+  Future<void> complete(String uid) async {
+    if (failuresBeforeSuccess > 0) {
+      failuresBeforeSuccess -= 1;
+      throw StateError('offline');
+    }
+    await inner.complete(uid);
+  }
 }
 
 final _gateways = Expando<_Gateway>();

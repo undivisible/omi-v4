@@ -39,8 +39,7 @@ class OmiApp extends StatefulWidget {
 class _OmiAppState extends State<OmiApp> {
   late final services = widget.services ?? AppServices.fromEnvironment();
   late final onboardingCompletionStore =
-      widget.onboardingCompletionStore ??
-      PreferencesOnboardingCompletionStore();
+      widget.onboardingCompletionStore ?? services.onboardingCompletion;
   String? _checkedUid;
   bool _checkingCompletion = false;
   bool _onboardingComplete = false;

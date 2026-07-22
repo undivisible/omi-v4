@@ -60,6 +60,57 @@ void main() {
     });
     await menuBar.dispose();
   });
+
+  test('strips markdown markers from the published Current title', () async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    const channel = MethodChannel('omi/menu_bar_strip_test');
+    final calls = <MethodCall>[];
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+          calls.add(call);
+          return null;
+        });
+    addTearDown(
+      () => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, null),
+    );
+    final currents = CurrentsController(CurrentsClient(_Transport()));
+    final createdAt = DateTime.utc(2026, 7, 21, 12);
+    currents.items = [
+      CurrentCard(
+        item: CurrentItem.candidate(
+          id: 'first',
+          evidence: [
+            CurrentEvidence(sourceId: 'memory-first', reason: 'Commitment'),
+          ],
+          reason: 'Commitment',
+          timing: CurrentTiming(surfaceAt: createdAt),
+          confidence: .9,
+          proposedNextStep: 'Finish the `release`',
+          createdAt: createdAt,
+        ).transitionTo(CurrentStatus.surfaced, at: createdAt),
+        title: '**Finish** the `release`',
+        summary: '**Finish** the `release`',
+      ),
+    ];
+    final menuBar = DesktopMenuBarController(
+      currents: currents,
+      isListening: () => false,
+      onCapture: () async {},
+      onToggleListening: () async {},
+      onOpenSettings: () {},
+      channel: channel,
+    );
+
+    await menuBar.start();
+
+    expect(calls.single.arguments, {
+      'task': 'Finish the release',
+      'listening': false,
+    });
+    await menuBar.dispose();
+  });
 }
 
 final class _Transport implements CurrentsTransport {
