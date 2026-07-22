@@ -21,6 +21,11 @@ import 'package:omi/settings/system_audio_capture_mode_store.dart'
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
+  // Dev-key resolution reads real files (worker/.dev.vars relative to cwd),
+  // which would make signed-out behavior depend on the machine running the
+  // tests. Every test starts with no dev key; opt in per test.
+  setUp(() => DevGemini.debugOverride = null);
+  tearDownAll(() => DevGemini.debugOverride = null);
   test('onboarding profile capture sends a chat memory event', () async {
     final auth = AuthController(
       _FakeAuthGateway(_session('user-a')),
