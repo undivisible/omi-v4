@@ -863,6 +863,44 @@ class _OnboardingUseStepState extends State<OnboardingUseStep> {
     ),
   );
 
+  /// The keycaps start close together; once the pill is up and the user is
+  /// asked to press both Shift keys again, they slide apart while the ×2
+  /// hint fades and scales in between them.
+  Widget _timesTwoReveal({required bool shown}) {
+    final duration = MediaQuery.disableAnimationsOf(context)
+        ? Duration.zero
+        : const Duration(milliseconds: 350);
+    return AnimatedContainer(
+      duration: duration,
+      curve: Curves.easeOutCubic,
+      width: shown ? 52 : 22,
+      alignment: Alignment.center,
+      child: AnimatedScale(
+        scale: shown ? 1 : 0.6,
+        duration: duration,
+        curve: Curves.easeOutCubic,
+        child: AnimatedOpacity(
+          opacity: shown ? 1 : 0,
+          duration: duration,
+          curve: Curves.easeOutCubic,
+          child: shown
+              ? const Text(
+                  '×2',
+                  key: Key('shift_times_two'),
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: Color(0xb3fffcec),
+                    fontFamily: 'Avenir Next',
+                    fontSize: 21,
+                    fontWeight: FontWeight.w600,
+                  ),
+                )
+              : const SizedBox.shrink(),
+        ),
+      ),
+    );
+  }
+
   String get _prompt => switch (widget.pill.state) {
     CursorPillState.hidden =>
       'Press both Shift keys at the same time — or shake your cursor.',
@@ -890,23 +928,9 @@ class _OnboardingUseStepState extends State<OnboardingUseStep> {
                 listening: listening,
                 shimmer: expectingDoubleShift,
               ),
-              if (expectingDoubleShift)
-                const SizedBox(
-                  width: 52,
-                  child: Text(
-                    '×2',
-                    key: Key('shift_times_two'),
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      color: Color(0xb3fffcec),
-                      fontFamily: 'Avenir Next',
-                      fontSize: 21,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                )
-              else
-                const SizedBox(width: 22),
+              _timesTwoReveal(
+                shown: widget.pill.state == CursorPillState.input,
+              ),
               _shiftKey(
                 key: const Key('shift_right'),
                 pressed: rightShiftDown,

@@ -163,7 +163,7 @@ void main() {
       ),
     );
 
-    expect(find.byKey(const Key('shift_times_two')), findsOneWidget);
+    expect(find.byKey(const Key('shift_times_two')), findsNothing);
     expect(find.byType(KeycapShimmer), findsNWidgets(2));
     expect(
       tester
@@ -175,6 +175,7 @@ void main() {
 
     await chord(tester);
     expect(controller.state, CursorPillState.input);
+    await tester.pump(const Duration(milliseconds: 400));
     expect(find.byKey(const Key('shift_times_two')), findsOneWidget);
     expect(find.byType(ShaderMask), findsNWidgets(2));
 
@@ -219,7 +220,7 @@ void main() {
       ),
     );
 
-    expect(find.byKey(const Key('shift_times_two')), findsOneWidget);
+    expect(find.byKey(const Key('shift_times_two')), findsNothing);
     expect(find.byType(ShaderMask), findsNothing);
 
     await tester.pumpWidget(const SizedBox());
