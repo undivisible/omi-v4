@@ -43,10 +43,60 @@ class ChatScreen extends StatefulWidget {
   State<ChatScreen> createState() => ChatScreenState();
 }
 
-const _kInk = Color(0xff171716);
-const _kMuted = Color(0xff8d8980);
-const _kHairline = Color(0x1a000000);
-const _kHintBlue = Color(0xff3139fb);
+class _HubColors {
+  const _HubColors._({
+    required this.ink,
+    required this.muted,
+    required this.hairline,
+    required this.hintBlue,
+    required this.cardBg,
+    required this.cardShadow,
+    required this.sendBg,
+    required this.sendFg,
+    required this.sendDisabledBg,
+  });
+
+  const _HubColors.light()
+    : this._(
+        ink: const Color(0xff171716),
+        muted: const Color(0xff8d8980),
+        hairline: const Color(0x1a000000),
+        hintBlue: const Color(0xff3139fb),
+        cardBg: Colors.white,
+        cardShadow: const Color(0x0a000000),
+        sendBg: const Color(0xff171716),
+        sendFg: Colors.white,
+        sendDisabledBg: const Color(0x33171716),
+      );
+
+  const _HubColors.dark()
+    : this._(
+        ink: const Color(0xfff4f2ea),
+        muted: const Color(0xffa6a49c),
+        hairline: const Color(0x1affffff),
+        hintBlue: const Color(0xff9aa0ff),
+        cardBg: const Color(0xff232321),
+        cardShadow: const Color(0x33000000),
+        sendBg: const Color(0xfffffcec),
+        sendFg: const Color(0xff171716),
+        sendDisabledBg: const Color(0x33fffcec),
+      );
+
+  final Color ink;
+  final Color muted;
+  final Color hairline;
+  final Color hintBlue;
+  final Color cardBg;
+  final Color cardShadow;
+  final Color sendBg;
+  final Color sendFg;
+  final Color sendDisabledBg;
+
+  static _HubColors of(BuildContext context) =>
+      Theme.of(context).brightness == Brightness.dark
+      ? const _HubColors.dark()
+      : const _HubColors.light();
+}
 
 const _kPlaceholderPrompts = [
   'Turn today’s notes into a plan',
@@ -664,12 +714,14 @@ class ChatScreenState extends State<ChatScreen> {
             child: ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 680),
               child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Expanded(
+                  Flexible(
                     child: ListView.builder(
                       key: const Key('chat_messages'),
                       reverse: true,
+                      shrinkWrap: true,
                       itemCount: history.length + 1,
                       itemBuilder: (context, index) {
                         if (index == 0) {
@@ -958,76 +1010,79 @@ class _ChatHome extends StatelessWidget {
   final ValueChanged<String> onPrompt;
 
   @override
-  Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.symmetric(vertical: 28),
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        _Reveal(
-          delayMs: 0,
-          child: Column(
-            children: [
-              const OmiActivityOrb(state: OmiOrbState.idle, size: 48),
-              const SizedBox(height: 16),
-              Text(
-                greeting,
-                key: const Key('hub_greeting'),
-                textAlign: TextAlign.center,
-                style: const TextStyle(
-                  fontSize: 44,
-                  fontWeight: FontWeight.w500,
-                  letterSpacing: -1.98,
-                  color: _kInk,
-                ),
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 36),
-        _Reveal(
-          delayMs: 420,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              const Padding(
-                padding: EdgeInsets.only(bottom: 12),
-                child: Text(
-                  'WHAT MATTERS NEXT',
+  Widget build(BuildContext context) {
+    final colors = _HubColors.of(context);
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 28),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _Reveal(
+            delayMs: 0,
+            child: Column(
+              children: [
+                const OmiActivityOrb(state: OmiOrbState.idle, size: 48),
+                const SizedBox(height: 16),
+                Text(
+                  greeting,
+                  key: const Key('hub_greeting'),
+                  textAlign: TextAlign.center,
                   style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w600,
-                    letterSpacing: 1.43,
-                    color: _kMuted,
+                    fontSize: 44,
+                    fontWeight: FontWeight.w500,
+                    letterSpacing: -1.98,
+                    color: colors.ink,
                   ),
                 ),
-              ),
-              _TaskRow(
-                key: const Key('task_setup_omi'),
-                title: 'Set up Omi.',
-                done: setupTaskDone,
-                completeKey: const Key('complete_setup_omi'),
-                onComplete: onToggleSetupTask,
-                onTap: onToggleSetupTask,
-              ),
-              for (final task in tasks)
-                _TaskRow(
-                  key: ValueKey('task_${task.item.id}'),
-                  title: task.title,
-                  done: false,
-                  sourceTag: task.sourceKind,
-                  completeKey: ValueKey('complete_${task.item.id}'),
-                  onComplete: onComplete == null
-                      ? null
-                      : () => onComplete!(task.item.id),
-                  onTap: () => onPrompt(task.item.proposedNextStep),
-                ),
-              const _HintRow(),
-            ],
+              ],
+            ),
           ),
-        ),
-      ],
-    ),
-  );
+          const SizedBox(height: 36),
+          _Reveal(
+            delayMs: 420,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: Text(
+                    'WHAT MATTERS NEXT',
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      letterSpacing: 1.43,
+                      color: colors.muted,
+                    ),
+                  ),
+                ),
+                _TaskRow(
+                  key: const Key('task_setup_omi'),
+                  title: 'Set up Omi.',
+                  done: setupTaskDone,
+                  completeKey: const Key('complete_setup_omi'),
+                  onComplete: onToggleSetupTask,
+                  onTap: onToggleSetupTask,
+                ),
+                for (final task in tasks)
+                  _TaskRow(
+                    key: ValueKey('task_${task.item.id}'),
+                    title: task.title,
+                    done: false,
+                    sourceTag: task.sourceKind,
+                    completeKey: ValueKey('complete_${task.item.id}'),
+                    onComplete: onComplete == null
+                        ? null
+                        : () => onComplete!(task.item.id),
+                    onTap: () => onPrompt(task.item.proposedNextStep),
+                  ),
+                const _HintRow(),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 class _TaskRow extends StatelessWidget {
@@ -1049,119 +1104,128 @@ class _TaskRow extends StatelessWidget {
   final String? sourceTag;
 
   @override
-  Widget build(BuildContext context) => DecoratedBox(
-    decoration: const BoxDecoration(
-      border: Border(top: BorderSide(color: _kHairline)),
-    ),
-    child: InkWell(
-      onTap: onTap,
-      child: Opacity(
-        opacity: done ? .45 : 1,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 16),
-          child: Row(
-            children: [
-              InkWell(
-                key: completeKey,
-                onTap: onComplete,
-                customBorder: const CircleBorder(),
-                child: Container(
-                  width: 16,
-                  height: 16,
-                  alignment: Alignment.center,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    border: Border.all(color: _kMuted),
-                  ),
-                  child: done
-                      ? const Text(
-                          '✓',
-                          style: TextStyle(fontSize: 10, color: _kInk),
-                        )
-                      : null,
-                ),
-              ),
-              const SizedBox(width: 16),
-              Expanded(
-                child: Text(
-                  title,
-                  style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600,
-                    color: _kInk,
-                    decoration: done
-                        ? TextDecoration.lineThrough
-                        : TextDecoration.none,
-                  ),
-                ),
-              ),
-              if (sourceTag case final tag?) ...[
-                const SizedBox(width: 16),
-                DecoratedBox(
-                  decoration: BoxDecoration(
-                    border: Border.all(color: _kHairline),
-                    borderRadius: BorderRadius.circular(999),
-                  ),
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 8,
-                      vertical: 2,
+  Widget build(BuildContext context) {
+    final colors = _HubColors.of(context);
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        border: Border(top: BorderSide(color: colors.hairline)),
+      ),
+      child: InkWell(
+        onTap: onTap,
+        child: Opacity(
+          opacity: done ? .45 : 1,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 16),
+            child: Row(
+              children: [
+                InkWell(
+                  key: completeKey,
+                  onTap: onComplete,
+                  customBorder: const CircleBorder(),
+                  child: Container(
+                    width: 16,
+                    height: 16,
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      border: Border.all(color: colors.muted),
                     ),
-                    child: Text(
-                      tag.toUpperCase(),
-                      style: const TextStyle(
-                        fontSize: 9,
-                        fontWeight: FontWeight.w600,
-                        letterSpacing: 1.17,
-                        color: _kMuted,
+                    child: done
+                        ? Text(
+                            '✓',
+                            style: TextStyle(fontSize: 10, color: colors.ink),
+                          )
+                        : null,
+                  ),
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: Text(
+                    title,
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      color: colors.ink,
+                      decoration: done
+                          ? TextDecoration.lineThrough
+                          : TextDecoration.none,
+                    ),
+                  ),
+                ),
+                if (sourceTag case final tag?) ...[
+                  const SizedBox(width: 16),
+                  DecoratedBox(
+                    decoration: BoxDecoration(
+                      border: Border.all(color: colors.hairline),
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 2,
+                      ),
+                      child: Text(
+                        tag.toUpperCase(),
+                        style: TextStyle(
+                          fontSize: 9,
+                          fontWeight: FontWeight.w600,
+                          letterSpacing: 1.17,
+                          color: colors.muted,
+                        ),
                       ),
                     ),
                   ),
-                ),
+                ],
               ],
-            ],
+            ),
           ),
         ),
       ),
-    ),
-  );
+    );
+  }
 }
 
 class _HintRow extends StatelessWidget {
   const _HintRow();
 
   @override
-  Widget build(BuildContext context) => const DecoratedBox(
-    decoration: BoxDecoration(
-      border: Border(
-        top: BorderSide(color: _kHairline),
-        bottom: BorderSide(color: _kHairline),
+  Widget build(BuildContext context) {
+    final colors = _HubColors.of(context);
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        border: Border(
+          top: BorderSide(color: colors.hairline),
+          bottom: BorderSide(color: colors.hairline),
+        ),
       ),
-    ),
-    child: Padding(
-      padding: EdgeInsets.symmetric(vertical: 16),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Padding(
-            padding: EdgeInsets.only(top: 2),
-            child: Text('↳', style: TextStyle(fontSize: 14, color: _kHintBlue)),
-          ),
-          SizedBox(width: 16),
-          Expanded(
-            child: Text(
-              'By the way, if you bring your own keys, Omi becomes free.',
-              style: TextStyle(
-                fontSize: 12,
-                height: 20 / 12,
-                color: _kHintBlue,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 16),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.only(top: 2),
+              child: Text(
+                '↳',
+                style: TextStyle(fontSize: 14, color: colors.hintBlue),
               ),
             ),
-          ),
-        ],
+            const SizedBox(width: 16),
+            Expanded(
+              child: Text(
+                'By the way, if you bring your own keys, Omi becomes free.',
+                style: TextStyle(
+                  fontSize: 12,
+                  height: 20 / 12,
+                  color: colors.hintBlue,
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
-    ),
-  );
+    );
+  }
 }
 
 class _ChatInputCard extends StatelessWidget {
@@ -1184,77 +1248,80 @@ class _ChatInputCard extends StatelessWidget {
   final VoidCallback onCancel;
 
   @override
-  Widget build(BuildContext context) => Container(
-    decoration: BoxDecoration(
-      color: Colors.white,
-      borderRadius: BorderRadius.circular(20),
-      border: Border.all(color: _kHairline),
-      boxShadow: const [
-        BoxShadow(
-          color: Color(0x0a000000),
-          offset: Offset(0, 14),
-          blurRadius: 44,
-        ),
-      ],
-    ),
-    padding: const EdgeInsets.fromLTRB(20, 13, 13, 13),
-    child: Row(
-      children: [
-        Expanded(
-          child: TextField(
-            key: const Key('chat_input'),
-            controller: controller,
-            focusNode: focusNode,
-            enabled: enabled,
-            readOnly: busy,
-            onSubmitted: (_) => onSend(),
-            style: const TextStyle(fontSize: 15, color: _kInk),
-            decoration: InputDecoration(
-              isDense: true,
-              filled: false,
-              border: InputBorder.none,
-              enabledBorder: InputBorder.none,
-              focusedBorder: InputBorder.none,
-              disabledBorder: InputBorder.none,
-              contentPadding: EdgeInsets.zero,
-              hintText: hintText,
-              hintStyle: const TextStyle(fontSize: 15, color: _kMuted),
+  Widget build(BuildContext context) {
+    final colors = _HubColors.of(context);
+    return Container(
+      decoration: BoxDecoration(
+        color: colors.cardBg,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: colors.hairline),
+        boxShadow: [
+          BoxShadow(
+            color: colors.cardShadow,
+            offset: const Offset(0, 14),
+            blurRadius: 44,
+          ),
+        ],
+      ),
+      padding: const EdgeInsets.fromLTRB(20, 13, 13, 13),
+      child: Row(
+        children: [
+          Expanded(
+            child: TextField(
+              key: const Key('chat_input'),
+              controller: controller,
+              focusNode: focusNode,
+              enabled: enabled,
+              readOnly: busy,
+              onSubmitted: (_) => onSend(),
+              style: TextStyle(fontSize: 15, color: colors.ink),
+              decoration: InputDecoration(
+                isDense: true,
+                filled: false,
+                border: InputBorder.none,
+                enabledBorder: InputBorder.none,
+                focusedBorder: InputBorder.none,
+                disabledBorder: InputBorder.none,
+                contentPadding: EdgeInsets.zero,
+                hintText: hintText,
+                hintStyle: TextStyle(fontSize: 15, color: colors.muted),
+              ),
             ),
           ),
-        ),
-        const SizedBox(width: 12),
-        SizedBox(
-          width: 38,
-          height: 38,
-          child: busy
-              ? IconButton(
-                  key: const Key('cancel_chat'),
-                  onPressed: onCancel,
-                  padding: EdgeInsets.zero,
-                  style: IconButton.styleFrom(
-                    backgroundColor: _kInk,
-                    foregroundColor: Colors.white,
-                    shape: const CircleBorder(),
+          const SizedBox(width: 12),
+          SizedBox(
+            width: 38,
+            height: 38,
+            child: busy
+                ? IconButton(
+                    key: const Key('cancel_chat'),
+                    onPressed: onCancel,
+                    padding: EdgeInsets.zero,
+                    style: IconButton.styleFrom(
+                      backgroundColor: colors.sendBg,
+                      foregroundColor: colors.sendFg,
+                      shape: const CircleBorder(),
+                    ),
+                    icon: const Icon(Icons.stop_rounded, size: 18),
+                  )
+                : IconButton(
+                    key: const Key('send_chat'),
+                    onPressed: enabled ? onSend : null,
+                    padding: EdgeInsets.zero,
+                    style: IconButton.styleFrom(
+                      backgroundColor: colors.sendBg,
+                      foregroundColor: colors.sendFg,
+                      disabledBackgroundColor: colors.sendDisabledBg,
+                      disabledForegroundColor: colors.sendFg,
+                      shape: const CircleBorder(),
+                    ),
+                    icon: const Icon(Icons.arrow_upward_rounded, size: 18),
                   ),
-                  icon: const Icon(Icons.stop_rounded, size: 18),
-                )
-              : IconButton(
-                  key: const Key('send_chat'),
-                  onPressed: enabled ? onSend : null,
-                  padding: EdgeInsets.zero,
-                  style: IconButton.styleFrom(
-                    backgroundColor: _kInk,
-                    foregroundColor: Colors.white,
-                    disabledBackgroundColor: const Color(0x33171716),
-                    disabledForegroundColor: Colors.white,
-                    shape: const CircleBorder(),
-                  ),
-                  icon: const Icon(Icons.arrow_upward_rounded, size: 18),
-                ),
-        ),
-      ],
-    ),
-  );
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 class _Reveal extends StatelessWidget {
