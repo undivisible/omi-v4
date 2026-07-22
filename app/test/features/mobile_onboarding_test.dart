@@ -232,6 +232,11 @@ void main() {
     tester,
   ) async {
     SharedPreferences.setMockInitialValues({});
+    tester.binding.platformDispatcher.accessibilityFeaturesTestValue =
+        const FakeAccessibilityFeatures(disableAnimations: true);
+    addTearDown(
+      tester.binding.platformDispatcher.clearAccessibilityFeaturesTestValue,
+    );
     await tester.binding.setSurfaceSize(const Size(800, 1600));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final services = _unavailableAuthServices();
@@ -254,6 +259,9 @@ void main() {
       findsOneWidget,
     );
 
+    await tester.ensureVisible(
+      find.byKey(const Key('companion_desktop_notice_dismiss')),
+    );
     await tester.tap(find.byKey(const Key('companion_desktop_notice_dismiss')));
     await tester.pumpAndSettle();
     expect(

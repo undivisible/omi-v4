@@ -13,6 +13,15 @@ import 'package:omi/native/native_hub.dart';
 import 'package:omi/onboarding/onboarding_completion.dart';
 
 void main() {
+  final binding = TestWidgetsFlutterBinding.ensureInitialized();
+  setUp(() {
+    binding.platformDispatcher.accessibilityFeaturesTestValue =
+        const FakeAccessibilityFeatures(disableAnimations: true);
+  });
+  tearDown(() {
+    binding.platformDispatcher.clearAccessibilityFeaturesTestValue();
+  });
+
   test('probe connectDevice completes', () async {
     final fixture = await _mobileFixture('user-a');
     final device = await fixture.services
@@ -36,7 +45,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.byKey(const Key('companion_tab_device')), findsOneWidget);
+    expect(find.byKey(const Key('companion_home')), findsOneWidget);
     expect(find.byKey(const Key('chat_input')), findsNothing);
   });
 
@@ -55,7 +64,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.byKey(const Key('chat_input')), findsOneWidget);
-    expect(find.byKey(const Key('companion_tab_device')), findsNothing);
+    expect(find.byKey(const Key('companion_home')), findsNothing);
   });
 
   testWidgets('pairing flow scans, connects, remembers, and shows status', (
@@ -76,10 +85,14 @@ void main() {
     );
     await tester.pumpAndSettle();
 
+    await tester.ensureVisible(find.byKey(const Key('companion_scan')));
     await tester.tap(find.byKey(const Key('companion_scan')));
     await tester.pumpAndSettle();
     expect(find.text('Omi Pendant'), findsOneWidget);
 
+    await tester.ensureVisible(
+      find.byKey(const Key('companion_connect_omi-1')),
+    );
     await tester.tap(find.byKey(const Key('companion_connect_omi-1')));
     await tester.runAsync(
       () => Future<void>.delayed(const Duration(milliseconds: 50)),
@@ -97,6 +110,7 @@ void main() {
     );
     expect(captureSwitch.value, isTrue);
 
+    await tester.ensureVisible(find.byKey(const Key('companion_disconnect')));
     await tester.tap(find.byKey(const Key('companion_disconnect')));
     await tester.runAsync(
       () => Future<void>.delayed(const Duration(milliseconds: 50)),
@@ -109,9 +123,11 @@ void main() {
     fixture.services.dispose();
   });
 
-  testWidgets('capture tab lists only final transcript segments', (
+  testWidgets('session list shows only final transcript segments', (
     tester,
   ) async {
+    await tester.binding.setSurfaceSize(const Size(800, 2400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
     final fixture = await _mobileFixture('user-a');
 
     await tester.pumpWidget(
@@ -124,8 +140,6 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byKey(const Key('companion_tab_capture')));
-    await tester.pumpAndSettle();
     expect(
       find.byKey(const Key('companion_transcripts_empty')),
       findsOneWidget,
@@ -147,12 +161,15 @@ void main() {
     expect(find.text('hello from the pendant'), findsOneWidget);
     expect(find.text('still speaking'), findsNothing);
     expect(find.byKey(const Key('companion_transcripts_empty')), findsNothing);
+    expect(find.byKey(const Key('companion_stat_segments')), findsOneWidget);
     fixture.services.dispose();
   });
 
-  testWidgets('settings tab shows account, consent, route, and version', (
+  testWidgets('settings section shows account, consent, route, and version', (
     tester,
   ) async {
+    await tester.binding.setSurfaceSize(const Size(800, 2400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
     final fixture = await _mobileFixture('user-a');
 
     await tester.pumpWidget(
@@ -163,9 +180,6 @@ void main() {
         ),
       ),
     );
-    await tester.pumpAndSettle();
-
-    await tester.tap(find.byKey(const Key('companion_tab_settings')));
     await tester.pumpAndSettle();
 
     expect(find.byKey(const Key('companion_account_tile')), findsOneWidget);
