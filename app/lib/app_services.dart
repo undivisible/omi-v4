@@ -16,27 +16,12 @@ import 'currents/currents.dart';
 import 'device/device.dart';
 import 'keyboard/keyboard.dart';
 import 'memory/memory.dart';
+import 'memory/transcript_memory_ingestor.dart';
 import 'native/native_hub.dart';
 import 'providers/providers.dart';
 import 'settings/settings.dart';
 
-final class TranscriptCaptureConflict implements Exception {
-  const TranscriptCaptureConflict(this.requestId);
-
-  final String requestId;
-}
-
-typedef _TranscriptCaptureFingerprint = ({
-  CaptureSource source,
-  int occurredAtMs,
-  String text,
-  TranscriptLocator locator,
-});
-
-typedef _PendingTranscriptCapture = ({
-  String requestId,
-  _TranscriptCaptureFingerprint fingerprint,
-});
+export 'memory/transcript_memory_ingestor.dart' show TranscriptCaptureConflict;
 
 enum _ChatRequestKind { message, approval }
 
@@ -48,7 +33,7 @@ typedef _PendingApproval = ({
   CurrentActionHandoff? handoff,
 });
 
-const _completedTranscriptCapacity = 256;
+const _completedChatRequestCapacity = 256;
 const _managedAssistantModel = 'mimo-v2.5-pro';
 const _defaultAssistantRefreshLead = Duration(minutes: 5);
 const _defaultAssistantMinimumRefreshDelay = Duration(seconds: 30);
@@ -129,6 +114,11 @@ final class AppServices {
        ),
        _now = now ?? DateTime.now {
     this.desktopVoice = desktopVoice ?? DesktopVoiceCapture(hub: nativeHub);
+    _transcriptMemoryIngestor = TranscriptMemoryIngestor(
+      nativeHub,
+      _now,
+      _nativeEvents.addError,
+    );
   }
 
   factory AppServices.fromEnvironment() {
@@ -305,13 +295,9 @@ final class AppServices {
   final _chatAuthorityChanges = StreamController<int>.broadcast(sync: true);
   StreamSubscription<NativeEvent>? _nativeEventSubscription;
   String? _configuredPersonId;
-  final _pendingTranscriptCaptures = <String, _PendingTranscriptCapture>{};
-  final _transcriptIngestionByRequest = <String, String>{};
-  final _completedTranscriptCaptures =
-      <String, _TranscriptCaptureFingerprint>{};
+  late final TranscriptMemoryIngestor _transcriptMemoryIngestor;
   final String _chatSessionId = _randomId();
   int _authorityGeneration = 0;
-  int _transcriptTransportSequence = 0;
   int _chatTransportSequence = 0;
   final _chatRequests = <String, _ChatRequest>{};
   final _chatProposals = <String, _ChatProposal>{};
@@ -756,6 +742,10 @@ final class AppServices {
       tenantId: session.uid,
       personId: session.uid,
     );
+    _transcriptMemoryIngestor.configure(
+      personId: session.uid,
+      authorityGeneration: _authorityGeneration,
+    );
     memorySyncPump?.start(session.uid);
     if (_workerOrigin != null) await _configureSelectedAssistant(session.uid);
     _scheduleInboxPoll(Duration.zero);
@@ -765,106 +755,7 @@ final class AppServices {
     if (!_acceptChatEvent(event)) return;
     _nativeEvents.add(event);
     _handleInboxEvent(event);
-    if (event case NativeEventMemoryCaptured(:final value)) {
-      final ingestionKey = _transcriptIngestionByRequest.remove(
-        value.requestId,
-      );
-      final pending = ingestionKey == null
-          ? null
-          : _pendingTranscriptCaptures[ingestionKey];
-      if (ingestionKey != null && pending?.requestId == value.requestId) {
-        _pendingTranscriptCaptures.remove(ingestionKey);
-        _completedTranscriptCaptures[ingestionKey] = pending!.fingerprint;
-        if (_completedTranscriptCaptures.length >
-            _completedTranscriptCapacity) {
-          _completedTranscriptCaptures.remove(
-            _completedTranscriptCaptures.keys.first,
-          );
-        }
-      }
-      return;
-    }
-    if (event case NativeEventError(:final value)) {
-      final requestId = value.requestId;
-      if (requestId != null && value.code != 'idempotency_conflict') {
-        final ingestionKey = _transcriptIngestionByRequest.remove(requestId);
-        final pending = ingestionKey == null
-            ? null
-            : _pendingTranscriptCaptures[ingestionKey];
-        if (ingestionKey != null && pending?.requestId == requestId) {
-          _pendingTranscriptCaptures.remove(ingestionKey);
-        }
-      }
-      return;
-    }
-    if (event case NativeEventTranscriptDelta(:final value)) {
-      if (value.deviceId == 'desktop-microphone') return;
-      final uid = auth.snapshot.session?.uid;
-      final text = value.text.trim();
-      if (!value.finalSegment ||
-          text.isEmpty ||
-          !productionReady ||
-          uid == null ||
-          _configuredPersonId != uid) {
-        return;
-      }
-      final generation = _authorityGeneration;
-      final identity = [
-        uid,
-        value.audioStreamId,
-        value.segmentId,
-      ].join('\u0000');
-      final ingestionKey =
-          'transcript-${sha256.convert(utf8.encode(identity))}';
-      final fingerprint = (
-        source: CaptureSource.omiDevice,
-        occurredAtMs: value.occurredAtMs,
-        text: text,
-        locator: TranscriptLocator(
-          deviceId: value.deviceId,
-          provider: value.provider,
-          streamId: value.audioStreamId,
-          segmentId: value.segmentId,
-          startMs: value.startMs,
-          endMs: value.endMs,
-        ),
-      );
-      final pending = _pendingTranscriptCaptures[ingestionKey];
-      final completed = _completedTranscriptCaptures[ingestionKey];
-      if (pending != null || completed != null) {
-        if ((pending?.fingerprint ?? completed) != fingerprint) {
-          _nativeEvents.addError(TranscriptCaptureConflict(ingestionKey));
-        }
-        return;
-      }
-      final requestId =
-          'transcript-g$_authorityGeneration-a${_transcriptTransportSequence++}-$ingestionKey';
-      _pendingTranscriptCaptures[ingestionKey] = (
-        requestId: requestId,
-        fingerprint: fingerprint,
-      );
-      _transcriptIngestionByRequest[requestId] = ingestionKey;
-      try {
-        if (generation != _authorityGeneration) {
-          _pendingTranscriptCaptures.remove(ingestionKey);
-          _transcriptIngestionByRequest.remove(requestId);
-          return;
-        }
-        nativeHub.capture(
-          requestId: requestId,
-          ingestionKey: ingestionKey,
-          source: CaptureSource.omiDevice,
-          occurredAtMs: value.occurredAtMs,
-          recordedAtMs: _now().millisecondsSinceEpoch,
-          text: text,
-          transcriptLocator: fingerprint.locator,
-        );
-      } catch (failure, stackTrace) {
-        _pendingTranscriptCaptures.remove(ingestionKey);
-        _transcriptIngestionByRequest.remove(requestId);
-        _nativeEvents.addError(failure, stackTrace);
-      }
-    }
+    _transcriptMemoryIngestor.handle(event);
   }
 
   void _scheduleInboxPoll([Duration? delay]) {
@@ -1220,7 +1111,7 @@ final class AppServices {
 
   void _tombstoneChatRequest(String requestId) {
     _terminalChatRequests.add(requestId);
-    if (_terminalChatRequests.length > _completedTranscriptCapacity) {
+    if (_terminalChatRequests.length > _completedChatRequestCapacity) {
       _terminalChatRequests.remove(_terminalChatRequests.first);
     }
   }
@@ -1252,16 +1143,10 @@ final class AppServices {
     _inboxPollTimer = null;
     _activeInboxItem = null;
     _clearAssistant();
-    if (_nativeInitialized) {
-      for (final pending in _pendingTranscriptCaptures.values) {
-        try {
-          nativeHub.cancel(pending.requestId);
-        } catch (_) {}
-      }
-    }
-    _pendingTranscriptCaptures.clear();
-    _transcriptIngestionByRequest.clear();
-    _completedTranscriptCaptures.clear();
+    _transcriptMemoryIngestor.fence(
+      authorityGeneration: _authorityGeneration,
+      cancelPending: _nativeInitialized,
+    );
     if (_nativeInitialized) {
       for (final requestId in _chatRequests.keys) {
         try {
