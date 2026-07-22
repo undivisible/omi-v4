@@ -3,6 +3,7 @@ pub mod capture_policy;
 mod computer_use;
 mod daily_review;
 mod dev_gemini;
+mod evidence;
 mod extraction;
 mod live_voice;
 mod local_ai;

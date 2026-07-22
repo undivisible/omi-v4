@@ -1825,7 +1825,7 @@ async fn scan_onboarding(
         if scan_cancellation.is_cancelled() {
             return Ok(None);
         }
-        let summary_prompt = crate::scan::summary_prompt(&scans);
+        let summary_prompts = crate::scan::summary_prompts(&scans, recorded_at_ms);
         let detected_name = crate::scan::detected_name();
         let detected_languages = crate::scan::detected_languages(&scans);
         let mut sources = Vec::with_capacity(scans.len());
@@ -1881,7 +1881,7 @@ async fn scan_onboarding(
         }
         Ok(Some((
             sources,
-            summary_prompt,
+            summary_prompts,
             detected_name,
             detected_languages,
         )))
@@ -1889,17 +1889,17 @@ async fn scan_onboarding(
     match await_blocking(task, cancellation).await {
         BlockingOutcome::Complete(Some((
             sources,
-            summary_prompt,
+            summary_prompts,
             detected_name,
             detected_languages,
         ))) => {
-            let summary = if let Some(prompt) = summary_prompt {
+            let summary = if let Some(prompts) = summary_prompts {
                 tokio::select! {
                     () = cancellation.cancelled() => {
                         cancelled(request_id);
                         return;
                     }
-                    value = crate::local_ai::summarize_with_dev_fallback(&prompt) => value,
+                    value = crate::local_ai::summarize_with_dev_fallback(&prompts.local, &prompts.fallback) => value,
                 }
             } else {
                 None
