@@ -1,5 +1,6 @@
 mod approval;
 mod computer_use;
+mod daily_review;
 mod extraction;
 mod live_voice;
 mod local_ai;

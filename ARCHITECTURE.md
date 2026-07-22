@@ -174,7 +174,7 @@ sequenceDiagram
     Hub->>DG: wss connect (Bearer managed token / Token BYOK key)
     DG-->>Hub: interim/final transcript JSON
     Hub-->>App: TranscriptDelta (segment id, epoch, final flag)
-    Note over Hub,DG: On disconnect: BYOK reconnects with<br/>250/500/1000ms backoff; managed sessions<br/>are one-shot and fail closed on drop
+    Note over Hub,DG: On disconnect - BYOK reconnects with<br/>250/500/1000ms backoff, managed sessions<br/>are one-shot and fail closed on drop
     Hub-->>App: TranscriptGap (unsent audio not replayed)
     App->>Hub: Finish / Cancel control
     Hub->>DG: Finalize + CloseStream, drain remaining results
@@ -196,7 +196,7 @@ sequenceDiagram
     LLM-->>Hub: ToolCallEnd(computer_invoke/computer_set_value)
     Hub->>CU: bind(action) [background, spawn_blocking]
     CU->>Exec: observe_semantic() — snapshot accessible UI elements
-    CU->>CU: match unique element by exact name;<br/>route_action() validates action is legal for target
+    CU->>CU: match unique element by exact name,<br/>route_action validates action is legal for target
     CU-->>Hub: BoundComputerUseAction (target ref, provenance, expiry)
     Hub->>Hub: prepare() — build unsigned ActionRequest,<br/>compute normalized_action_hash
     Hub-->>App: ActionProposal (title, summary, risk, action_hash, expiry)
@@ -259,7 +259,7 @@ sequenceDiagram
     Hub-->>App: OnboardingScanCompleted (per-source state: Complete/Denied/Unavailable/Failed)
     App-->>U: Editable "what I understand about you" evidence
     U->>App: "What are my tasks?" voice teaching moment
-    App->>App: Continue into single-chat hub;<br/>Calendar/Reminders/Contacts/Telegram/Blooio<br/>become post-onboarding Settings tasks
+    App->>App: Continue into single-chat hub,<br/>Calendar/Reminders/Contacts/Telegram/Blooio<br/>become post-onboarding Settings tasks
 ```
 
 Onboarding scanning is native and read-only (`scan.rs`): workspace scanning walks only explicitly-approved absolute roots (rejecting relative paths or `..` components), skips VCS/build/dependency directories, and only records file counts and detected project names via known manifest markers (`Cargo.toml`, `package.json`, `pubspec.yaml`, etc.) — file contents are never read or transmitted, verified by an inline test (`workspace_keeps_metadata_not_contents`). On macOS only, `scan_notes()` and `scan_mail()` open the platform's Notes/Mail SQLite databases read-only (`SQLITE_OPEN_READ_ONLY`), detect Full-Disk-Access denial vs. absence, and filter out attachment/scan artifacts using upstream-derived heuristics. All scan results feed a strictly bounded prompt (`summary_prompt`: max 6,000 chars, 24 items, 400 chars/item) that is metadata-only and never invents facts. Where available (Apple Silicon macOS, gated by `#[cfg(all(target_os = "macos", target_arch = "aarch64"))]`), a local Apple FoundationModels model (`rs_ai_local` dependency) can turn that into a private on-device one-sentence summary with no network call at all; everywhere else `local_ai::summarize` returns `None`. `AppServices.scanOnboardingSources` (`app/lib/app_services.dart`) requires native initialization and reads the approved workspace root from `PlatformDesktopCapabilityGateway` before invoking the scan. Onboarding is gated by platform capability states (`unsupported/notApplicable/unknown/notDetermined/denied/requiresSettings/requiresSelection/limited/granted`, `app/lib/capabilities/desktop_capabilities.dart`) rather than plain booleans. **Status**: scan logic and local summarization are implemented and unit-tested; end-to-end onboarding flow rendering/accessibility across platforms is still flagged unverified in `PLAN.md`.
@@ -287,7 +287,7 @@ sequenceDiagram
     Hook->>Hook: recordWebhook() dedupes by event_id
     Hook->>D1: appendConversationMessage() into shared,<br/>UID-scoped ordered conversation
     Desktop->>D1: Poll/replay inbox (ConversationController)
-    Desktop->>Desktop: Assistant plans; may propose<br/>computer-use action (approval required)
+    Desktop->>Desktop: Assistant plans, may propose<br/>computer-use action (approval required)
     Desktop->>D1: Append assistant reply
     D1->>Coord: dispatchChannelMessage() — per (uid, channel) DO instance,<br/>FIFO lease per channel_chat_id
     Coord->>Provider: POST sendMessage / chats/.../messages

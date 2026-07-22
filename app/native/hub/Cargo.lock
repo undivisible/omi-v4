@@ -1206,6 +1206,7 @@ name = "hub"
 version = "0.1.0"
 dependencies = [
  "base64",
+ "chrono",
  "ed25519-dalek",
  "futures",
  "getrandom 0.3.4",
