@@ -412,15 +412,43 @@ List<String> _deviceLanguageNames() {
 
 String? _sanitizeScanSummary(String? summary) {
   if (summary == null) return null;
-  final cleaned = summary
-      .replaceAll('**', '')
-      .replaceAll('*', '')
-      .replaceAll('`', '')
-      .replaceAll('#', '')
-      .replaceAllMapped(RegExp(r'_+([^_]*)_+'), (match) => match.group(1) ?? '')
-      .replaceAll(RegExp(r'\s+'), ' ')
-      .trim();
+  final cleaned = summary.replaceAll(RegExp(r'\s+'), ' ').trim();
   return cleaned.isEmpty ? null : cleaned;
+}
+
+const scanSummaryEmphasisStyle = TextStyle(
+  color: Color(0xfffffcec),
+  fontWeight: FontWeight.w600,
+);
+const scanSummaryDimmedStyle = TextStyle(color: Color(0x80fffcec));
+
+String _stripScanSummaryMarkdown(String value) => value
+    .replaceAll('*', '')
+    .replaceAll('`', '')
+    .replaceAll('#', '')
+    .replaceAllMapped(RegExp(r'_+([^_]*)_+'), (match) => match.group(1) ?? '');
+
+@visibleForTesting
+List<(String, TextStyle?)> parseScanSummarySegments(String summary) {
+  final parts = summary.split('**');
+  if (parts.length < 3) {
+    final whole = _stripScanSummaryMarkdown(
+      summary,
+    ).replaceAll(RegExp(r'\s+'), ' ').trim();
+    return whole.isEmpty ? const [] : [(whole, null)];
+  }
+  final balanced = parts.length.isOdd;
+  final segments = <(String, TextStyle?)>[];
+  for (var index = 0; index < parts.length; index++) {
+    final text = _stripScanSummaryMarkdown(parts[index]);
+    if (text.isEmpty) continue;
+    final emphasized = index.isOdd && (balanced || index < parts.length - 1);
+    segments.add((
+      text,
+      emphasized ? scanSummaryEmphasisStyle : scanSummaryDimmedStyle,
+    ));
+  }
+  return segments;
 }
 
 class OnboardingProfileStep extends StatefulWidget {
@@ -607,7 +635,7 @@ class _OnboardingProfileStepState extends State<OnboardingProfileStep> {
           const SizedBox(height: 26),
           RandomizedText(
             key: ValueKey(value),
-            segments: [(value, null)],
+            segments: parseScanSummarySegments(value),
             textAlign: TextAlign.center,
             style: const TextStyle(
               color: _cream,

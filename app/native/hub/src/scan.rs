@@ -1,6 +1,6 @@
 #[cfg(target_os = "macos")]
 use rusqlite::{Connection, OpenFlags};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
@@ -9,9 +9,11 @@ const LIMIT: usize = 500;
 const MAX_FILES: usize = 200_000;
 const MAX_WALK_DEPTH: usize = 5;
 const MAX_PROJECT_NAMES: usize = 48;
-const SUMMARY_ITEMS: usize = 48;
-const SUMMARY_ITEM_CHARS: usize = 400;
+const SUMMARY_ITEMS: usize = 96;
 const SUMMARY_PROMPT_CHARS: usize = 12_000;
+const CORROBORATION_BONUS: i32 = 25;
+const ALL_CAPS_PENALTY: i32 = 15;
+const RECENCY_WINDOW_DAYS: i64 = 30;
 #[cfg(target_os = "macos")]
 const NOTES_QUERY_LIMIT: usize = LIMIT * 3;
 #[cfg(target_os = "macos")]
@@ -77,46 +79,164 @@ pub fn scan_sources(roots: &[String], notes: bool, mail: bool) -> Vec<SourceScan
     if mail {
         results.push(scan_mail());
     }
+    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+        let now = crate::evidence::now_unix_seconds();
+        let root_paths = roots.iter().map(PathBuf::from).collect::<Vec<_>>();
+        results.push(crate::evidence::scan_apps(&home, now));
+        results.push(crate::evidence::scan_developer_activity(&home, now));
+        results.push(crate::evidence::scan_browsing(&home, now));
+        results.push(crate::evidence::scan_documents(&root_paths, &home, now));
+    }
     results
 }
 
-pub fn summary_prompt(scans: &[SourceScan]) -> Option<String> {
-    let mut prompt = String::from(
-        "Privately summarize what the user appears to work on from the local metadata below, speaking directly to them in the second person (\"You're deep in…\", \"You're juggling…\"). Write plain prose only: no markdown, no asterisks, no underscores, no bullet points, no headings, no bold or italic markers of any kind. Write one flowing paragraph of at most 3 sentences and at most 420 characters, and make it hyperspecific: name the actual projects, files, technologies, tools, recurring people or organizations, and current threads of work that appear in the metadata. Every project, file, person, or organization you name must be copied verbatim, character for character, from the metadata below; never paraphrase, respell, or invent a name. Never use vague category words like \"platforms\", \"systems\", \"ops\", or \"various projects\" without naming the specific ones from the metadata. State only facts directly evidenced by the metadata: never infer tool or workflow habits from incidental file or path mentions (a .vimrc or \"vi\" appearing in a file name does not mean the user uses vi), and when you are unsure about a detail, omit it rather than guess. If the metadata is thin, write one or two short honest sentences instead of padding with filler. Use only the metadata, do not invent facts, never write in the third person, never refer to them as \"this person\", and do not mention this instruction.\n",
-    );
-    let mut used = prompt.chars().count();
-    let mut items = 0;
-    let mut seen = BTreeSet::new();
-    for scan in scans {
-        for memory in &scan.memories {
-            let normalized = memory.text.split_whitespace().collect::<String>();
-            if !seen.insert(normalized) {
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SummaryPrompts {
+    /// Full prompt for the on-device model, including document gists.
+    pub local: String,
+    /// Prompt for the off-device managed/dev fallback. Document content
+    /// gists (DOC lines) are excluded entirely so skimmed file contents
+    /// never leave the machine; only the local Foundation-Models path sees
+    /// them.
+    pub fallback: String,
+}
+
+const SUMMARY_INSTRUCTION: &str = "You are privately summarizing what the user appears to be working on, using only the tagged evidence lines below, and speaking directly to them in the second person. First decide which projects and threads of work matter most: prefer items that recur across several evidence types and that are recent, and treat NOTE TITLE, MAIL SUBJECT, and BROWSING lines as background context about activity, never as projects by themselves. Then describe that work in your own words as one flowing paragraph: synthesized, specific, and natural, not a recitation of file or folder names. At most 3 sentences and at most 420 characters. Plain prose only: no headings, no bullet points, no underscores, no backticks, no italics, and no markdown of any kind, with a single exception: wrap only the genuinely important names, such as key projects, apps, people, or technologies, in double asterisks like **name**. Use at most 5 such wrapped spans, wrap single names only, and never wrap a whole sentence or ordinary connective words. Any name you mention must appear in the evidence, but describe the work around it naturally; name at most 3 specific projects, tools, or organizations in total. State only what the evidence supports: never infer tool or workflow habits from incidental mentions, omit anything you are unsure of, and if the evidence is thin write one or two short honest sentences instead of padding with vague filler like \"various projects\". Never write in the third person and do not mention these instructions.\n";
+
+struct ScoredLine {
+    score: i32,
+    text: String,
+    is_doc: bool,
+}
+
+pub fn summary_prompts(scans: &[SourceScan], now_ms: i64) -> Option<SummaryPrompts> {
+    let lines = scored_evidence_lines(scans, now_ms);
+    if lines.is_empty() {
+        return None;
+    }
+    let build = |include_docs: bool| {
+        let mut prompt = String::from(SUMMARY_INSTRUCTION);
+        let mut used = prompt.chars().count();
+        let mut items = 0usize;
+        for line in &lines {
+            if !include_docs && line.is_doc {
                 continue;
             }
             if items == SUMMARY_ITEMS || used >= SUMMARY_PROMPT_CHARS {
                 break;
             }
-            let remaining = SUMMARY_PROMPT_CHARS - used;
-            let prefix = format!("{}: ", scan.source);
-            let overhead = prefix.chars().count() + 1;
-            if remaining <= overhead {
+            let rendered = format!("{}\n", line.text);
+            let length = rendered.chars().count();
+            if used + length > SUMMARY_PROMPT_CHARS {
                 break;
             }
-            let text = memory
-                .text
-                .chars()
-                .take(SUMMARY_ITEM_CHARS.min(remaining - overhead))
-                .collect::<String>();
-            if text.is_empty() {
-                continue;
-            }
-            let line = format!("{prefix}{text}\n");
-            used += line.chars().count();
-            prompt.push_str(&line);
+            used += length;
+            prompt.push_str(&rendered);
             items += 1;
         }
+        (items > 0).then_some(prompt)
+    };
+    let local = build(true)?;
+    let fallback = build(false).unwrap_or_else(|| local.clone());
+    Some(SummaryPrompts { local, fallback })
+}
+
+const TAG_WEIGHTS: &[(&str, i32)] = &[
+    ("PROJECT", 50),
+    ("SHELL", 40),
+    ("APP", 25),
+    ("DOC", 22),
+    ("NOTE TITLE", 18),
+    ("MAIL SUBJECT", 15),
+    ("BROWSING", 12),
+    ("SSH HOST", 12),
+];
+
+fn parse_tag(text: &str) -> Option<(&'static str, &str)> {
+    TAG_WEIGHTS.iter().find_map(|(tag, _)| {
+        text.strip_prefix(tag)
+            .and_then(|rest| rest.strip_prefix(": "))
+            .map(|rest| (*tag, rest))
+    })
+}
+
+fn evidence_name(body: &str) -> String {
+    let name = body
+        .split(" — ")
+        .next()
+        .unwrap_or(body)
+        .split(" (")
+        .next()
+        .unwrap_or(body);
+    crate::evidence::normalize_line(name).to_lowercase()
+}
+
+fn is_all_caps_label(body: &str) -> bool {
+    let letters: Vec<char> = body
+        .chars()
+        .filter(|character| character.is_alphabetic())
+        .collect();
+    letters.len() > 3 && letters.iter().all(|character| character.is_uppercase())
+}
+
+fn scored_evidence_lines(scans: &[SourceScan], now_ms: i64) -> Vec<ScoredLine> {
+    let mut source_names: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for scan in scans {
+        for memory in &scan.memories {
+            if let Some((_, body)) = parse_tag(&memory.text) {
+                let name = evidence_name(body);
+                if name.len() >= 3 {
+                    source_names
+                        .entry(name)
+                        .or_default()
+                        .insert(scan.source.clone());
+                }
+            }
+        }
     }
-    (items > 0).then_some(prompt)
+    let mut seen = BTreeSet::new();
+    let mut lines = Vec::new();
+    for scan in scans {
+        for memory in &scan.memories {
+            let text = crate::evidence::normalize_line(&memory.text);
+            if text.is_empty() || !seen.insert(text.to_lowercase()) {
+                continue;
+            }
+            let (tag, body) = parse_tag(&text).unwrap_or(("", text.as_str()));
+            if crate::evidence::is_pure_numeric(body) {
+                continue;
+            }
+            let base = TAG_WEIGHTS
+                .iter()
+                .find(|(candidate, _)| *candidate == tag)
+                .map(|(_, weight)| *weight)
+                .unwrap_or(10);
+            let mut score = base;
+            if let Some(captured) = memory.captured_at_ms {
+                let days = ((now_ms - captured).max(0)) / 86_400_000;
+                if days <= RECENCY_WINDOW_DAYS {
+                    score += (RECENCY_WINDOW_DAYS - days) as i32;
+                }
+            }
+            let name = evidence_name(body);
+            if name.len() >= 3
+                && let Some(sources) = source_names.get(&name)
+                && sources.len() > 1
+            {
+                score += CORROBORATION_BONUS * (sources.len() as i32 - 1);
+            }
+            if is_all_caps_label(body) {
+                score -= ALL_CAPS_PENALTY;
+            }
+            lines.push(ScoredLine {
+                score,
+                text,
+                is_doc: tag == "DOC",
+            });
+        }
+    }
+    lines.sort_by(|a, b| b.score.cmp(&a.score).then_with(|| a.text.cmp(&b.text)));
+    lines
 }
 
 pub fn detected_name() -> Option<String> {
@@ -148,41 +268,59 @@ fn parse_git_user_name(contents: &str) -> Option<String> {
     None
 }
 
-const LANGUAGE_SCRIPT_THRESHOLD: usize = 8;
+/// Language detection thresholds. A language is claimed only when its
+/// script both clears a minimum total character count and appears with at
+/// least LANGUAGE_MIN_SOURCE_CHARS characters in two or more distinct scan
+/// sources; a stray run of characters in a single note is no longer enough
+/// (stray kana previously produced a false Japanese claim). Han characters
+/// without a kana claim map to Mandarin only; Cantonese stays honestly
+/// undetectable from script alone.
+const LANGUAGE_MIN_TOTAL_CHARS: usize = 24;
+const LANGUAGE_MIN_SOURCE_CHARS: usize = 4;
+const LANGUAGE_MIN_SOURCES: usize = 2;
 
 pub fn detected_languages(scans: &[SourceScan]) -> Vec<String> {
-    let mut latin = 0usize;
-    let mut han = 0usize;
-    let mut cyrillic = 0usize;
-    let mut kana = 0usize;
-    let mut hangul = 0usize;
+    const SCRIPTS: usize = 5;
+    let mut totals = [0usize; SCRIPTS];
+    let mut sources = [0usize; SCRIPTS];
     for scan in scans {
+        let mut per_scan = [0usize; SCRIPTS];
         for memory in &scan.memories {
             for character in memory.text.chars() {
-                match character {
-                    'a'..='z' | 'A'..='Z' => latin += 1,
-                    '\u{4e00}'..='\u{9fff}' | '\u{3400}'..='\u{4dbf}' => han += 1,
-                    '\u{0400}'..='\u{04ff}' => cyrillic += 1,
-                    '\u{3040}'..='\u{30ff}' => kana += 1,
-                    '\u{ac00}'..='\u{d7af}' => hangul += 1,
-                    _ => {}
-                }
+                let index = match character {
+                    'a'..='z' | 'A'..='Z' => 0,
+                    '\u{4e00}'..='\u{9fff}' | '\u{3400}'..='\u{4dbf}' => 1,
+                    '\u{0400}'..='\u{04ff}' => 2,
+                    '\u{3040}'..='\u{30ff}' => 3,
+                    '\u{ac00}'..='\u{d7af}' => 4,
+                    _ => continue,
+                };
+                per_scan[index] += 1;
+            }
+        }
+        for index in 0..SCRIPTS {
+            totals[index] += per_scan[index];
+            if per_scan[index] >= LANGUAGE_MIN_SOURCE_CHARS {
+                sources[index] += 1;
             }
         }
     }
+    let strong = |index: usize| {
+        totals[index] >= LANGUAGE_MIN_TOTAL_CHARS && sources[index] >= LANGUAGE_MIN_SOURCES
+    };
     let mut languages = Vec::new();
-    if latin >= LANGUAGE_SCRIPT_THRESHOLD {
+    if strong(0) {
         languages.push("English".to_owned());
     }
-    if kana >= LANGUAGE_SCRIPT_THRESHOLD {
+    if strong(3) {
         languages.push("Japanese".to_owned());
-    } else if han >= LANGUAGE_SCRIPT_THRESHOLD {
+    } else if strong(1) {
         languages.push("Mandarin".to_owned());
     }
-    if cyrillic >= LANGUAGE_SCRIPT_THRESHOLD {
+    if strong(2) {
         languages.push("Russian".to_owned());
     }
-    if hangul >= LANGUAGE_SCRIPT_THRESHOLD {
+    if strong(4) {
         languages.push("Korean".to_owned());
     }
     languages
@@ -224,21 +362,20 @@ fn scan_workspace(roots: &[String]) -> SourceScan {
             "Access to the approved workspace roots was denied.",
         );
     }
-    let names = projects
+    let memories = projects
         .into_iter()
         .take(MAX_PROJECT_NAMES)
-        .collect::<Vec<_>>()
-        .join(", ");
-    let text = format!("Workspace scan mapped {files} files. Projects: {names}.");
-    complete(
-        "workspace",
-        vec![ScanMemory {
-            stable_id: "approved-roots".into(),
-            text,
+        .filter(|name| !crate::evidence::is_pure_numeric(name))
+        .map(|name| ScanMemory {
+            stable_id: format!("approved-roots:{name}"),
+            text: format!(
+                "PROJECT: {} (approved workspace)",
+                crate::evidence::cap_chars(&crate::evidence::normalize_line(&name), 48)
+            ),
             captured_at_ms: None,
-        }],
-        files,
-    )
+        })
+        .collect::<Vec<_>>();
+    complete("workspace", memories, files)
 }
 
 fn walk(
@@ -365,14 +502,17 @@ fn scan_notes() -> SourceScan {
             if title.is_empty() || is_likely_note_attachment(&title, &summary) {
                 return None;
             }
-            let summary = summary.chars().take(500).collect::<String>();
+            let summary = summary.chars().take(120).collect::<String>();
             Some(ScanMemory {
                 stable_id: id.to_string(),
-                text: if summary.is_empty() {
-                    format!("Apple Note: {title}")
-                } else {
-                    format!("Apple Note: {title} — {summary}")
-                },
+                text: crate::evidence::cap_chars(
+                    &if summary.is_empty() {
+                        format!("NOTE TITLE: {title}")
+                    } else {
+                        format!("NOTE TITLE: {title} — {summary}")
+                    },
+                    160,
+                ),
                 captured_at_ms: apple_time(modified),
             })
         })
@@ -596,7 +736,10 @@ fn scan_mail() -> SourceScan {
             };
             ScanMemory {
                 stable_id: id.to_string(),
-                text: format!("Apple Mail from {from}: {subject}"),
+                text: crate::evidence::cap_chars(
+                    &format!("MAIL SUBJECT: {subject} (from {from})"),
+                    160,
+                ),
                 captured_at_ms: Some(received.saturating_mul(1_000)),
             }
         })
@@ -764,23 +907,118 @@ mod tests {
     fn summary_prompt_is_bounded_and_uses_only_scan_metadata() {
         let scans = vec![complete(
             "workspace",
-            (0..40)
+            (0..120)
                 .map(|index| ScanMemory {
                     stable_id: index.to_string(),
-                    text: format!("Project {index} {}", "x".repeat(500)),
+                    text: format!("PROJECT: alpha{index} (git repo)"),
                     captured_at_ms: None,
                 })
                 .collect(),
-            40,
+            120,
         )];
-        let prompt = summary_prompt(&scans).unwrap_or_default();
-        assert!(prompt.contains("workspace: Project 0"));
-        assert!(prompt.contains("hyperspecific"));
-        assert!(prompt.contains("at most 3 sentences"));
-        assert!(prompt.contains("second person"));
-        assert!(prompt.contains("do not invent facts"));
-        assert!(prompt.chars().count() <= SUMMARY_PROMPT_CHARS);
-        assert!(prompt.lines().count() <= SUMMARY_ITEMS + 1);
+        let prompts = summary_prompts(&scans, 0).unwrap_or_else(|| SummaryPrompts {
+            local: String::new(),
+            fallback: String::new(),
+        });
+        assert!(prompts.local.contains("PROJECT: alpha0"));
+        assert!(prompts.local.contains("At most 3 sentences"));
+        assert!(prompts.local.contains("second person"));
+        assert!(prompts.local.contains("in your own words"));
+        assert!(prompts.local.contains("**name**"));
+        assert!(prompts.local.contains("at most 5"));
+        assert!(!prompts.local.contains("verbatim"));
+        assert!(prompts.local.chars().count() <= SUMMARY_PROMPT_CHARS);
+        assert!(prompts.local.lines().count() <= SUMMARY_ITEMS + 20);
+    }
+
+    #[test]
+    fn corroborated_recent_projects_outrank_stale_and_bulk_evidence() {
+        let now_ms = 1_800_000_000_000i64;
+        let scans = vec![
+            complete(
+                "workspace",
+                vec![
+                    ScanMemory {
+                        stable_id: "1".into(),
+                        text: "PROJECT: omi-v4 (git repo, active this week)".into(),
+                        captured_at_ms: Some(now_ms - 86_400_000),
+                    },
+                    ScanMemory {
+                        stable_id: "2".into(),
+                        text: "PROJECT: old-blog (git repo)".into(),
+                        captured_at_ms: Some(now_ms - 400 * 86_400_000),
+                    },
+                ],
+                2,
+            ),
+            complete(
+                "developer",
+                vec![ScanMemory {
+                    stable_id: "3".into(),
+                    text: "PROJECT: omi-v4 (open in editor recently)".into(),
+                    captured_at_ms: Some(now_ms),
+                }],
+                1,
+            ),
+            complete(
+                "apple_notes",
+                vec![
+                    ScanMemory {
+                        stable_id: "4".into(),
+                        text: "NOTE TITLE: MEETING TEMPLATES".into(),
+                        captured_at_ms: Some(now_ms),
+                    },
+                    ScanMemory {
+                        stable_id: "5".into(),
+                        text: "NOTE TITLE: 20260101".into(),
+                        captured_at_ms: Some(now_ms),
+                    },
+                ],
+                2,
+            ),
+        ];
+        let lines = scored_evidence_lines(&scans, now_ms);
+        assert!(lines[0].text.contains("omi-v4"));
+        let position = |needle: &str| {
+            lines
+                .iter()
+                .position(|line| line.text.contains(needle))
+                .unwrap_or(usize::MAX)
+        };
+        assert!(position("omi-v4") < position("old-blog"));
+        assert!(position("old-blog") < position("MEETING TEMPLATES"));
+        assert!(!lines.iter().any(|line| line.text.contains("20260101")));
+    }
+
+    #[test]
+    fn fallback_prompt_excludes_document_gists() {
+        let scans = vec![
+            complete(
+                "documents",
+                vec![ScanMemory {
+                    stable_id: "1".into(),
+                    text: "DOC: roadmap — ship the onboarding rewrite".into(),
+                    captured_at_ms: None,
+                }],
+                1,
+            ),
+            complete(
+                "workspace",
+                vec![ScanMemory {
+                    stable_id: "2".into(),
+                    text: "PROJECT: omi-v4 (approved workspace)".into(),
+                    captured_at_ms: None,
+                }],
+                1,
+            ),
+        ];
+        let prompts = summary_prompts(&scans, 0).unwrap_or_else(|| SummaryPrompts {
+            local: String::new(),
+            fallback: String::new(),
+        });
+        assert!(prompts.local.contains("DOC: roadmap"));
+        assert!(!prompts.fallback.contains("DOC: roadmap"));
+        assert!(prompts.fallback.contains("PROJECT: omi-v4"));
     }
 
     #[test]
@@ -802,32 +1040,61 @@ mod tests {
 
     #[test]
     fn languages_are_detected_from_scanned_scripts() {
-        let scans = vec![complete(
-            "apple_notes",
-            vec![
-                ScanMemory {
-                    stable_id: "1".into(),
-                    text: "Weekly planning notes for the hub rewrite".into(),
-                    captured_at_ms: None,
-                },
-                ScanMemory {
-                    stable_id: "2".into(),
-                    text: "會議記錄:項目計劃和時間表安排進度".into(),
-                    captured_at_ms: None,
-                },
-                ScanMemory {
-                    stable_id: "3".into(),
-                    text: "Заметки о поездке в Москву весной".into(),
-                    captured_at_ms: None,
-                },
-            ],
-            3,
-        )];
+        let memory = |id: &str, text: &str| ScanMemory {
+            stable_id: id.into(),
+            text: text.into(),
+            captured_at_ms: None,
+        };
+        let scans = vec![
+            complete(
+                "apple_notes",
+                vec![
+                    memory("1", "Weekly planning notes for the hub rewrite"),
+                    memory("2", "會議記錄:項目計劃和時間表安排進度規劃"),
+                    memory("3", "Заметки о поездке в Москву весной"),
+                ],
+                3,
+            ),
+            complete(
+                "apple_mail",
+                vec![
+                    memory("4", "Follow up on the roadmap review"),
+                    memory("5", "項目進度更新和季度計劃討論安排"),
+                    memory("6", "Планы на квартал и заметки"),
+                ],
+                3,
+            ),
+        ];
         assert_eq!(
             detected_languages(&scans),
             ["English", "Mandarin", "Russian"]
         );
         assert!(detected_languages(&[]).is_empty());
+    }
+
+    #[test]
+    fn stray_single_source_scripts_are_not_claimed_as_languages() {
+        let scans = vec![
+            complete(
+                "apple_notes",
+                vec![ScanMemory {
+                    stable_id: "1".into(),
+                    text: "Trip ideas こんにちはこんにちはこんにちはこんにちは".into(),
+                    captured_at_ms: None,
+                }],
+                1,
+            ),
+            complete(
+                "apple_mail",
+                vec![ScanMemory {
+                    stable_id: "2".into(),
+                    text: "Quarterly report and planning follow ups".into(),
+                    captured_at_ms: None,
+                }],
+                1,
+            ),
+        ];
+        assert_eq!(detected_languages(&scans), ["English"]);
     }
 
     #[cfg(target_os = "macos")]
@@ -890,29 +1157,32 @@ mod tests {
     }
 
     #[test]
-    fn summary_prompt_forbids_markdown_and_caps_length() {
+    fn summary_prompt_forbids_markdown_and_dedupes_lines() {
         let scans = vec![complete(
             "workspace",
             vec![
                 ScanMemory {
                     stable_id: "1".into(),
-                    text: "Workspace scan mapped 12 files. Projects: omi.".into(),
+                    text: "PROJECT: omi (approved workspace)".into(),
                     captured_at_ms: None,
                 },
                 ScanMemory {
                     stable_id: "2".into(),
-                    text: "Workspace scan mapped 12 files. Projects: omi.".into(),
+                    text: "PROJECT:  omi  (approved workspace)".into(),
                     captured_at_ms: None,
                 },
             ],
             2,
         )];
-        let prompt = summary_prompt(&scans).unwrap_or_default();
-        assert!(prompt.contains("no markdown"));
-        assert!(prompt.contains("420 characters"));
-        assert!(prompt.contains("at most 3 sentences"));
-        assert!(prompt.contains("verbatim"));
-        assert_eq!(prompt.matches("Projects: omi").count(), 1);
+        let prompts = summary_prompts(&scans, 0).unwrap_or_else(|| SummaryPrompts {
+            local: String::new(),
+            fallback: String::new(),
+        });
+        assert!(prompts.local.contains("no markdown of any kind"));
+        assert!(prompts.local.contains("420 characters"));
+        assert!(prompts.local.contains("At most 3 sentences"));
+        assert!(prompts.local.contains("double asterisks"));
+        assert_eq!(prompts.local.matches("PROJECT: omi").count(), 1);
     }
 
     #[cfg(target_os = "macos")]

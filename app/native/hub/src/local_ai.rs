@@ -73,24 +73,52 @@ pub async fn respond(prompt: &str) -> Option<String> {
 
 /// Summarize with the on-device model, falling back to the dev-only direct
 /// Gemini path when local AI is unavailable and a developer key is present.
-pub async fn summarize_with_dev_fallback(prompt: &str) -> Option<String> {
-    if let Some(value) = summarize(prompt).await {
+/// The fallback prompt is a redacted variant (no document gists) because it
+/// leaves the device; see scan::SummaryPrompts.
+pub async fn summarize_with_dev_fallback(
+    local_prompt: &str,
+    fallback_prompt: &str,
+) -> Option<String> {
+    if let Some(value) = summarize(local_prompt).await {
         return Some(value);
     }
     let key = crate::dev_gemini::api_key()?;
-    crate::dev_gemini::generate(&key, prompt)
+    crate::dev_gemini::generate(&key, fallback_prompt)
         .await
         .and_then(|value| clean_summary(&value))
 }
 
+/// Emphasis markers: `**name**` spans are a machine protocol the renderer
+/// turns into full-opacity text, so balanced double asterisks survive
+/// cleanup while every other markdown character is stripped. Unbalanced or
+/// excessive (> MAX_EMPHASIS_SPANS) markers are stripped entirely so stray
+/// asterisks never reach the screen.
+const MAX_EMPHASIS_SPANS: usize = 5;
+const EMPHASIS_PLACEHOLDER: char = '\u{1f}';
+
 fn clean_summary(value: &str) -> Option<String> {
+    let value = value.replace("**", &EMPHASIS_PLACEHOLDER.to_string());
     let value = value
         .replace(['*', '`', '#'], "")
         .split_whitespace()
         .map(|word| word.trim_matches('_'))
         .collect::<Vec<_>>()
         .join(" ");
+    let markers = value.matches(EMPHASIS_PLACEHOLDER).count();
+    let keep_markers =
+        markers > 0 && markers.is_multiple_of(2) && markers / 2 <= MAX_EMPHASIS_SPANS;
+    let value = if keep_markers {
+        value.replace(EMPHASIS_PLACEHOLDER, "**")
+    } else {
+        value.replace(EMPHASIS_PLACEHOLDER, "")
+    };
     let value = truncate_at_sentence(&value, SUMMARY_CHARS);
+    let trailing = value.matches("**").count();
+    let value = if trailing.is_multiple_of(2) {
+        value
+    } else {
+        value.replace("**", "")
+    };
     (!value.is_empty()).then_some(value)
 }
 
@@ -126,10 +154,25 @@ mod tests {
     }
 
     #[test]
-    fn summaries_drop_markdown_markers() {
+    fn summaries_drop_markdown_but_keep_emphasis_protocol() {
         let summary =
             clean_summary("**Quote Stage** and `code` with _emphasis_ # done").unwrap_or_default();
-        assert_eq!(summary, "Quote Stage and code with emphasis done");
+        assert_eq!(summary, "**Quote Stage** and code with emphasis done");
+        let stray = clean_summary("a * lone marker `x`").unwrap_or_default();
+        assert_eq!(stray, "a lone marker x");
+    }
+
+    #[test]
+    fn unbalanced_or_excessive_emphasis_markers_are_stripped() {
+        let unbalanced = clean_summary("You ship **omi-v4 daily").unwrap_or_default();
+        assert_eq!(unbalanced, "You ship omi-v4 daily");
+        let excessive = (0..7)
+            .map(|index| format!("**word{index}**"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let cleaned = clean_summary(&excessive).unwrap_or_default();
+        assert!(!cleaned.contains('*'));
+        assert!(cleaned.contains("word0"));
     }
 
     #[test]
