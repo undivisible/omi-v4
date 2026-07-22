@@ -4,17 +4,44 @@ import ApplicationServices
 import Carbon.HIToolbox
 import FlutterMacOS
 
-private final class OnboardingBlurView: NSVisualEffectView {
+private class RadialBlurView: NSVisualEffectView {
+  private var maskSize = NSSize.zero
+
+  override func layout() {
+    super.layout()
+    guard bounds.size != maskSize, bounds.width > 0, bounds.height > 0 else { return }
+    maskSize = bounds.size
+    let mask = NSImage(size: bounds.size)
+    mask.lockFocus()
+    NSGradient(
+      colorsAndLocations:
+        (NSColor.black, 0),
+        (NSColor.black, 0.42),
+        (NSColor.black.withAlphaComponent(0.72), 0.62),
+        (NSColor.clear, 1)
+    )?.draw(
+      in: NSRect(
+        x: bounds.width * 0.06,
+        y: bounds.height * 0.12,
+        width: bounds.width * 0.88,
+        height: bounds.height * 0.76),
+      relativeCenterPosition: .zero)
+    mask.unlockFocus()
+    maskImage = mask
+  }
+}
+
+private final class OnboardingBlurView: RadialBlurView {
   override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 
-private final class AppBundleDragView: NSImageView, NSDraggingSource {
-  private let appURL: URL
+private final class ShortcutDragView: NSImageView, NSDraggingSource {
+  private let shortcutURL: URL
 
-  init(appURL: URL) {
-    self.appURL = appURL
+  init(shortcutURL: URL) {
+    self.shortcutURL = shortcutURL
     super.init(frame: .zero)
-    image = NSWorkspace.shared.icon(forFile: appURL.path)
+    image = NSWorkspace.shared.icon(forFile: shortcutURL.path)
     imageScaling = .scaleProportionallyUpOrDown
     translatesAutoresizingMaskIntoConstraints = false
   }
@@ -22,7 +49,7 @@ private final class AppBundleDragView: NSImageView, NSDraggingSource {
   required init?(coder: NSCoder) { nil }
 
   override func mouseDragged(with event: NSEvent) {
-    let item = NSDraggingItem(pasteboardWriter: appURL as NSURL)
+    let item = NSDraggingItem(pasteboardWriter: shortcutURL as NSURL)
     item.setDraggingFrame(bounds, contents: image)
     beginDraggingSession(with: [item], event: event, source: self)
   }
@@ -35,11 +62,11 @@ private final class AppBundleDragView: NSImageView, NSDraggingSource {
   }
 }
 
-private final class FullDiskAccessDragOverlay: NSVisualEffectView {
-  init(frame frameRect: NSRect, appURL: URL) {
+private final class FullDiskAccessDragOverlay: RadialBlurView {
+  init(frame frameRect: NSRect, shortcutURL: URL) {
     super.init(frame: frameRect)
     autoresizingMask = [.width, .height]
-    material = .hudWindow
+    material = .underWindowBackground
     blendingMode = .withinWindow
     state = .active
 
@@ -48,7 +75,7 @@ private final class FullDiskAccessDragOverlay: NSVisualEffectView {
     title.textColor = .white
     title.alignment = .center
 
-    let icon = AppBundleDragView(appURL: appURL)
+    let icon = ShortcutDragView(shortcutURL: shortcutURL)
     NSLayoutConstraint.activate([
       icon.widthAnchor.constraint(equalToConstant: 112),
       icon.heightAnchor.constraint(equalToConstant: 112),
@@ -161,7 +188,7 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
     rootView.addSubview(flutterViewController.view)
     let fullDiskAccessOverlay = FullDiskAccessDragOverlay(
       frame: rootView.bounds,
-      appURL: Bundle.main.bundleURL)
+      shortcutURL: fullDiskAccessShortcut())
     rootView.addSubview(fullDiskAccessOverlay)
 
     RegisterGeneratedPlugins(registry: flutterViewController)
@@ -281,6 +308,22 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
     } catch {
       return false
     }
+  }
+
+  private func fullDiskAccessShortcut() -> URL {
+    let manager = FileManager.default
+    let directory = manager.temporaryDirectory.appendingPathComponent(
+      "com.omi.permission-shortcut",
+      isDirectory: true)
+    try? manager.createDirectory(at: directory, withIntermediateDirectories: true)
+    let shortcut = directory.appendingPathComponent("Omi — drag into Settings.app")
+    if (try? manager.destinationOfSymbolicLink(atPath: shortcut.path)) != nil {
+      try? manager.removeItem(at: shortcut)
+    }
+    if !manager.fileExists(atPath: shortcut.path) {
+      try? manager.createSymbolicLink(at: shortcut, withDestinationURL: Bundle.main.bundleURL)
+    }
+    return manager.fileExists(atPath: shortcut.path) ? shortcut : Bundle.main.bundleURL
   }
 
 }
