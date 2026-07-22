@@ -36,6 +36,11 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   String? scanRequestId;
   String? scanError;
   bool scanStarting = false;
+  // Monotonic generation, bumped on every scan start (initial and each
+  // retry). Used to make the async continuation of _startScan a no-op once
+  // a newer attempt has superseded it, independent of scanRequestId's
+  // nullability.
+  int _scanGeneration = 0;
   bool previewing = false;
   bool finishing = false;
   String? finishError;
@@ -68,19 +73,20 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   }
 
   Future<void> _startScan() async {
+    final generation = ++_scanGeneration;
     setState(() {
       scanStarting = true;
       scanError = null;
     });
     try {
       final requestId = await widget.services.scanOnboardingSources();
-      if (!mounted) return;
+      if (!mounted || generation != _scanGeneration) return;
       setState(() {
         scanRequestId = requestId;
         scanStarting = false;
       });
     } catch (_) {
-      if (!mounted) return;
+      if (!mounted || generation != _scanGeneration) return;
       setState(() {
         scanStarting = false;
         scanError = 'I couldn’t start the private scan. Try again.';
@@ -90,9 +96,13 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
 
   void _handleNativeEvent(NativeEvent event) {
     if (event case NativeEventOnboardingScanCompleted(:final value)) {
+      // Reject any event whose requestId doesn't match the one we're
+      // currently expecting — including while scanRequestId is null (a scan
+      // is starting or was just retried). Relying on nullability here let a
+      // stale scan's completion slip through while a retry was in flight.
       if (!mounted ||
           onboarding.stage != OnboardingStage.scan ||
-          (scanRequestId != null && value.requestId != scanRequestId)) {
+          value.requestId != scanRequestId) {
         return;
       }
       setState(() {
@@ -104,7 +114,20 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     }
   }
 
+  void _useReturningUserFlow() {
+    // Eagerly trigger a full resync of the existing account's memory/profile
+    // (instead of lazily on the next auth change), since a returning user
+    // skips the fresh on-device scan entirely and needs their existing data
+    // pulled from the backend as soon as this flow starts.
+    unawaited(widget.services.resyncAccount().onError((_, _) {}));
+    onboarding.beginReturningUserFlow();
+  }
+
   void _retryScan() {
+    // Bump the generation immediately (synchronously) so any in-flight
+    // completion for the superseded scan is ignored by _startScan's own
+    // continuation, even before the new scan's requestId is known.
+    _scanGeneration += 1;
     setState(() {
       scanRequestId = null;
       scanSources = null;
@@ -210,6 +233,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                     OnboardingStage.introduction => _Introduction(
                       key: const ValueKey('introduction'),
                       onContinue: onboarding.continueFromIntroduction,
+                      onAlreadyHaveAccount: _useReturningUserFlow,
                     ),
                     OnboardingStage.access => ProductionGate(
                       key: const ValueKey('access'),
@@ -254,13 +278,19 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
 }
 
 class _Introduction extends StatelessWidget {
-  const _Introduction({required this.onContinue, super.key});
+  const _Introduction({
+    required this.onContinue,
+    required this.onAlreadyHaveAccount,
+    super.key,
+  });
 
   final VoidCallback onContinue;
+  final VoidCallback onAlreadyHaveAccount;
 
   @override
   Widget build(BuildContext context) => Column(
     mainAxisSize: MainAxisSize.min,
+    crossAxisAlignment: CrossAxisAlignment.center,
     children: [
       const RandomizedText(
         segments: [
@@ -291,10 +321,28 @@ class _Introduction extends StatelessWidget {
         ),
       ),
       const SizedBox(height: 40),
-      OmiButton(
-        key: const Key('continue_preview_intro'),
-        onPressed: onContinue,
-        child: const Text('Hi Omi!'),
+      Center(
+        child: OmiButton(
+          key: const Key('continue_preview_intro'),
+          onPressed: onContinue,
+          child: const Text('Hi Omi!'),
+        ),
+      ),
+      const SizedBox(height: 10),
+      Center(
+        child: TextButton(
+          key: const Key('already_have_account'),
+          style: TextButton.styleFrom(
+            foregroundColor: const Color(0xb3fffcec),
+            textStyle: const TextStyle(
+              fontFamily: 'Avenir Next',
+              fontSize: 14,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+          onPressed: onAlreadyHaveAccount,
+          child: const Text('Already have an account?'),
+        ),
       ),
     ],
   );

@@ -69,6 +69,16 @@ class _MobileOnboardingScreenState extends State<MobileOnboardingScreen> {
 
   void _advance(MobileOnboardingStage next) => setState(() => stage = next);
 
+  // Returning users already have an account (and its memory/profile) on the
+  // backend. Skip the device-pairing step (the closest mobile equivalent of
+  // the fresh on-device scan desktop skips) and go straight to the short
+  // tutorial, while eagerly resyncing their existing data instead of
+  // lazily waiting on the next auth change.
+  void _useReturningUserFlow() {
+    unawaited(widget.services.resyncAccount().onError((_, _) {}));
+    _advance(MobileOnboardingStage.teach);
+  }
+
   // Worker-side memory counts are not reachable from this screen without a
   // network round-trip, so desktop data is inferred from the honest local
   // signal: a pendant connected right now plus granted processing authority.
@@ -134,80 +144,85 @@ class _MobileOnboardingScreenState extends State<MobileOnboardingScreen> {
       );
     }
     return Scaffold(
-    backgroundColor: Colors.transparent,
-    body: OnboardingBackdrop(
-      baseColor: _ink,
-      bright: stage.index >= MobileOnboardingStage.pair.index,
-      searching:
-          stage == MobileOnboardingStage.pair &&
-          relaySnapshot?.phase == DeviceConnectionPhase.scanning,
-      settled: stage.index >= MobileOnboardingStage.teach.index,
-      child: SafeArea(
-        child: Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 620),
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 44),
-              child: AnimatedSwitcher(
-                duration: const Duration(milliseconds: 240),
-                transitionBuilder: (child, animation) {
-                  final eased = CurvedAnimation(
-                    parent: animation,
-                    curve: Curves.easeOutCubic,
-                  );
-                  return FadeTransition(
-                    opacity: eased,
-                    child: SlideTransition(
-                      position: Tween(
-                        begin: const Offset(0, .015),
-                        end: Offset.zero,
-                      ).animate(eased),
-                      child: child,
+      backgroundColor: Colors.transparent,
+      body: OnboardingBackdrop(
+        baseColor: _ink,
+        bright: stage.index >= MobileOnboardingStage.pair.index,
+        searching:
+            stage == MobileOnboardingStage.pair &&
+            relaySnapshot?.phase == DeviceConnectionPhase.scanning,
+        settled: stage.index >= MobileOnboardingStage.teach.index,
+        child: SafeArea(
+          child: Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 620),
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 28,
+                  vertical: 44,
+                ),
+                child: AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 240),
+                  transitionBuilder: (child, animation) {
+                    final eased = CurvedAnimation(
+                      parent: animation,
+                      curve: Curves.easeOutCubic,
+                    );
+                    return FadeTransition(
+                      opacity: eased,
+                      child: SlideTransition(
+                        position: Tween(
+                          begin: const Offset(0, .015),
+                          end: Offset.zero,
+                        ).animate(eased),
+                        child: child,
+                      ),
+                    );
+                  },
+                  child: switch (stage) {
+                    MobileOnboardingStage.account => _AccountStage(
+                      key: const ValueKey('mobile_account'),
+                      auth: widget.services.auth,
+                      configurationMessage:
+                          widget.services.configurationMessage,
+                      satisfied: _authSatisfied,
+                      buttonStyle: _stadium,
+                      onContinue: () => _advance(MobileOnboardingStage.pair),
+                      onAlreadyHaveAccount: _useReturningUserFlow,
                     ),
-                  );
-                },
-                child: switch (stage) {
-                  MobileOnboardingStage.account => _AccountStage(
-                    key: const ValueKey('mobile_account'),
-                    auth: widget.services.auth,
-                    configurationMessage: widget.services.configurationMessage,
-                    satisfied: _authSatisfied,
-                    buttonStyle: _stadium,
-                    onContinue: () => _advance(MobileOnboardingStage.pair),
-                  ),
-                  MobileOnboardingStage.pair => _PairStage(
-                    key: const ValueKey('mobile_pair'),
-                    services: widget.services,
-                    pairedDevices: _pairedDevices,
-                    buttonStyle: _stadium,
-                    onContinue: () => _advance(MobileOnboardingStage.teach),
-                  ),
-                  MobileOnboardingStage.teach => _TeachStage(
-                    key: ValueKey('mobile_teach_$teachPage'),
-                    page: teachPage,
-                    buttonStyle: _stadium,
-                    onContinue: () {
-                      if (teachPage < _TeachStage.pages.length - 1) {
-                        setState(() => teachPage += 1);
-                      } else {
-                        _advance(MobileOnboardingStage.finish);
-                      }
-                    },
-                  ),
-                  MobileOnboardingStage.finish => _FinishStage(
-                    key: const ValueKey('mobile_finish'),
-                    finishing: finishing,
-                    error: finishError,
-                    buttonStyle: _stadium,
-                    onFinish: _finish,
-                  ),
-                },
+                    MobileOnboardingStage.pair => _PairStage(
+                      key: const ValueKey('mobile_pair'),
+                      services: widget.services,
+                      pairedDevices: _pairedDevices,
+                      buttonStyle: _stadium,
+                      onContinue: () => _advance(MobileOnboardingStage.teach),
+                    ),
+                    MobileOnboardingStage.teach => _TeachStage(
+                      key: ValueKey('mobile_teach_$teachPage'),
+                      page: teachPage,
+                      buttonStyle: _stadium,
+                      onContinue: () {
+                        if (teachPage < _TeachStage.pages.length - 1) {
+                          setState(() => teachPage += 1);
+                        } else {
+                          _advance(MobileOnboardingStage.finish);
+                        }
+                      },
+                    ),
+                    MobileOnboardingStage.finish => _FinishStage(
+                      key: const ValueKey('mobile_finish'),
+                      finishing: finishing,
+                      error: finishError,
+                      buttonStyle: _stadium,
+                      onFinish: _finish,
+                    ),
+                  },
+                ),
               ),
             ),
           ),
         ),
       ),
-    ),
     );
   }
 }
@@ -278,6 +293,7 @@ class _AccountStage extends StatelessWidget {
     required this.satisfied,
     required this.buttonStyle,
     required this.onContinue,
+    required this.onAlreadyHaveAccount,
     super.key,
   });
 
@@ -286,6 +302,7 @@ class _AccountStage extends StatelessWidget {
   final bool satisfied;
   final ButtonStyle buttonStyle;
   final VoidCallback onContinue;
+  final VoidCallback onAlreadyHaveAccount;
 
   @override
   Widget build(BuildContext context) => Column(
@@ -306,7 +323,10 @@ class _AccountStage extends StatelessWidget {
         ),
       ),
       const SizedBox(height: 26),
-      AuthenticationGate(auth: auth, configurationMessage: configurationMessage),
+      AuthenticationGate(
+        auth: auth,
+        configurationMessage: configurationMessage,
+      ),
       if (auth.snapshot.phase == AuthPhase.signedIn &&
           !auth.snapshot.hasProcessingAuthority) ...[
         const SizedBox(height: 8),
@@ -317,11 +337,29 @@ class _AccountStage extends StatelessWidget {
         ),
       ],
       const SizedBox(height: 24),
-      FilledButton(
-        key: const Key('mobile_onboarding_account_continue'),
-        onPressed: satisfied ? onContinue : null,
-        style: buttonStyle,
-        child: const Text('Continue'),
+      Center(
+        child: FilledButton(
+          key: const Key('mobile_onboarding_account_continue'),
+          onPressed: satisfied ? onContinue : null,
+          style: buttonStyle,
+          child: const Text('Continue'),
+        ),
+      ),
+      const SizedBox(height: 10),
+      Center(
+        child: TextButton(
+          key: const Key('mobile_already_have_account'),
+          style: TextButton.styleFrom(
+            foregroundColor: const Color(0xb3fffcec),
+            textStyle: const TextStyle(
+              fontFamily: 'Avenir Next',
+              fontSize: 14,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+          onPressed: onAlreadyHaveAccount,
+          child: const Text('Already have an account?'),
+        ),
       ),
     ],
   );
