@@ -784,9 +784,20 @@ impl AssistantProvider for RsAiAssistantProvider {
 fn production_assistant_provider() -> Arc<dyn AssistantProvider> {
     match configured_assistant_provider(|name| std::env::var(name).ok()) {
         Ok(Some(provider)) => provider,
-        Ok(None) => Arc::new(UnavailableAssistantProvider {
-            reason: "no model provider is configured".to_owned(),
-        }),
+        Ok(None) => match crate::dev_gemini::api_key() {
+            Some(key) => Arc::new(RsAiAssistantProvider {
+                config: AssistantProviderConfig {
+                    kind: AssistantProviderKind::Gemini,
+                    model: crate::dev_gemini::DEV_GEMINI_MODEL.to_owned(),
+                    credential: key.0,
+                    endpoint: None,
+                },
+                computer_use_enabled: computer_use_available(),
+            }),
+            None => Arc::new(UnavailableAssistantProvider {
+                reason: "no model provider is configured".to_owned(),
+            }),
+        },
         Err(reason) => Arc::new(UnavailableAssistantProvider { reason }),
     }
 }
@@ -1888,7 +1899,7 @@ async fn scan_onboarding(
                         cancelled(request_id);
                         return;
                     }
-                    value = crate::local_ai::summarize(&prompt) => value,
+                    value = crate::local_ai::summarize_with_dev_fallback(&prompt) => value,
                 }
             } else {
                 None
