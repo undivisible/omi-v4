@@ -85,6 +85,8 @@ beforeAll(async () => {
   await migration("migrations/0003_align_kr_model.sql");
   await migration("migrations/0004_saas_foundations.sql");
   await migration("migrations/0005_memory_search.sql");
+  await migration("migrations/0016_zkr_sync.sql");
+  await migration("migrations/0017_zkr_read_projection.sql");
   await migration("migrations/0007_channel_delivery.sql");
   await migration("migrations/0013_conversations.sql");
   await migration("migrations/0014_channel_inbox_dispatch.sql");

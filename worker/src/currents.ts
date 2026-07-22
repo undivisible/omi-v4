@@ -1,7 +1,13 @@
 import { Hono } from "hono";
+import { ensureZkrMemoryProjected } from "./memory-projection";
 import type { AppEnv } from "./types";
 
 const currents = new Hono<AppEnv>();
+
+currents.use("*", async (context, next) => {
+  await ensureZkrMemoryProjected(context.env.DB, context.get("auth").uid);
+  await next();
+});
 
 const object = async (request: Request) => {
   try {
@@ -62,7 +68,7 @@ const selectCurrent = async (
      JOIN memory_evidence e ON e.id = c.evidence_id AND e.uid = c.uid
      JOIN memory_source_revisions r ON r.id = e.source_revision_id AND r.uid = e.uid
      JOIN memory_sources s ON s.id = r.source_id AND s.uid = r.uid
-     WHERE c.id = ?1 AND c.uid = ?2 AND s.tombstoned_at IS NULL`,
+     WHERE c.id = ?1 AND c.uid = ?2 AND e.tombstoned_at IS NULL AND s.tombstoned_at IS NULL`,
   )
     .bind(id, uid)
     .first<Record<string, unknown>>();
@@ -96,11 +102,17 @@ currents.post("/generate", async (context) => {
        AND existing.generation_key = 'claim:' || c.id
      WHERE p.uid = ?1 AND p.profile_kind = 'current' AND p.status != 'archived'
        AND c.status = 'accepted' AND c.retracted_at IS NULL
+       AND (c.valid_from IS NULL OR c.valid_from <= ?2)
+       AND (c.valid_to IS NULL OR c.valid_to > ?2)
+       AND (c.recorded_until IS NULL OR c.recorded_until > ?2)
+       AND (c.zkr_tier IS NULL OR c.zkr_tier != 'archive')
+       AND (c.zkr_processing_state IS NULL OR c.zkr_processing_state = 'processed')
+       AND ce.relation = 'supports' AND e.tombstoned_at IS NULL
        AND s.tombstoned_at IS NULL AND existing.id IS NULL
      ORDER BY p.updated_at DESC, ce.confidence_basis_points DESC, c.id, e.id
      LIMIT 1`,
   )
-    .bind(uid)
+    .bind(uid, Date.now())
     .first<Record<string, unknown>>();
   if (!source) return context.json({ current: null });
   const claimId = String(source.claim_id);
@@ -187,7 +199,7 @@ currents.post("/candidates", async (context) => {
     `SELECT e.id FROM memory_evidence e
      JOIN memory_source_revisions r ON r.id = e.source_revision_id AND r.uid = e.uid
      JOIN memory_sources s ON s.id = r.source_id AND s.uid = r.uid
-     WHERE e.id = ?1 AND e.uid = ?2 AND s.tombstoned_at IS NULL`,
+     WHERE e.id = ?1 AND e.uid = ?2 AND e.tombstoned_at IS NULL AND s.tombstoned_at IS NULL`,
   )
     .bind(evidenceId, uid)
     .first();
@@ -264,6 +276,7 @@ currents.get("/", async (context) => {
      JOIN memory_source_revisions r ON r.id = e.source_revision_id AND r.uid = e.uid
      JOIN memory_sources s ON s.id = r.source_id AND s.uid = r.uid
      WHERE c.uid = ?1 AND s.tombstoned_at IS NULL
+       AND e.tombstoned_at IS NULL
        AND c.status IN ('surfaced', 'accepted')
      ORDER BY c.confidence_basis_points + learned_adjustment DESC, c.updated_at DESC, c.id ASC LIMIT 100`,
   )

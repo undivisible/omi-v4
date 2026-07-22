@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { projectZkrMemory } from "./memory-projection";
 import type { AppEnv } from "./types";
 
 type JsonObject = Record<string, unknown>;
@@ -142,13 +143,13 @@ const recordIdentity = (
       ? { kind, id: canonicalJson([oldId, newId]), deletedAt: null }
       : null;
   }
-  const target = object(record.target);
-  const targetEntry = target ? Object.entries(target) : [];
-  const deletedAt = integer(record.deleted_at, 0);
-  return targetEntry.length === 1 &&
-    text(targetEntry[0]?.[1], 500) &&
-    deletedAt !== null
-    ? { kind, id: canonicalJson(record.target), deletedAt }
+  const deletion = deletionTarget(value);
+  return deletion
+    ? {
+        kind,
+        id: canonicalJson(record.target),
+        deletedAt: deletion.deletedAt,
+      }
     : null;
 };
 
@@ -157,11 +158,16 @@ const deletionTarget = (
 ): { kind: string; id: string; deletedAt: number } | null => {
   if (record.kind !== "deletion") return null;
   const target = object(record.record.target);
+  const taggedKind = text(target?.kind, 100);
+  const taggedId = text(target?.id, 500);
   const entry = target ? Object.entries(target)[0] : undefined;
-  const id = text(entry?.[1], 500);
+  const id = taggedId ?? text(entry?.[1], 500);
   const deletedAt = integer(record.record.deleted_at, 0);
-  if (!entry || !id || deletedAt === null) return null;
-  const kind = entry[0].replaceAll(/([a-z])([A-Z])/g, "$1_$2").toLowerCase();
+  if (!id || deletedAt === null) return null;
+  const kind = (taggedKind ?? entry?.[0] ?? "")
+    .replaceAll(/([a-z])([A-Z])/g, "$1_$2")
+    .toLowerCase()
+    .replace("profile_entry", "profile");
   return recordKinds.has(kind) ? { kind, id, deletedAt } : null;
 };
 
@@ -177,8 +183,10 @@ const applyCommit = async (
     )
     .bind(uid, replicaId, commit.sequence)
     .first<{ applied_at: number | null }>();
-  if (existing?.applied_at !== null && existing?.applied_at !== undefined)
+  if (existing?.applied_at !== null && existing?.applied_at !== undefined) {
+    await projectZkrMemory(db, uid, replicaId);
     return "replayed";
+  }
   const rows = await db
     .prepare(
       "SELECT event_index, payload FROM zkr_sync_events WHERE uid = ?1 AND replica_id = ?2 AND commit_sequence = ?3 ORDER BY event_index",
@@ -240,14 +248,14 @@ const applyCommit = async (
           ),
       );
   }
-  statements.push(
-    db
-      .prepare(
-        "UPDATE zkr_sync_commits SET applied_at = ?1 WHERE uid = ?2 AND replica_id = ?3 AND sequence = ?4 AND applied_at IS NULL",
-      )
-      .bind(now, uid, replicaId, commit.sequence),
-  );
   await db.batch(statements);
+  await projectZkrMemory(db, uid, replicaId);
+  await db
+    .prepare(
+      "UPDATE zkr_sync_commits SET applied_at = ?1 WHERE uid = ?2 AND replica_id = ?3 AND sequence = ?4 AND applied_at IS NULL",
+    )
+    .bind(now, uid, replicaId, commit.sequence)
+    .run();
   return "applied";
 };
 

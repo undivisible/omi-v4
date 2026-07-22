@@ -3,6 +3,7 @@ import assistant from "./assistant";
 import billing from "./billing";
 import currents from "./currents";
 import memorySync from "./memory-sync";
+import { ensureZkrMemoryProjected } from "./memory-projection";
 import stt from "./stt";
 import conversations, { appendConversationMessage } from "./conversations";
 import { dispatchChannelMessage, dispatchChannelUnlink } from "./delivery";
@@ -16,6 +17,15 @@ import type {
 } from "./types";
 
 const routes = new Hono<AppEnv>();
+
+routes.use("/memory/*", async (context, next) => {
+  await ensureZkrMemoryProjected(context.env.DB, context.get("auth").uid);
+  await next();
+});
+routes.use("/memories", async (context, next) => {
+  await ensureZkrMemoryProjected(context.env.DB, context.get("auth").uid);
+  await next();
+});
 
 routes.route("/", assistant);
 routes.route("/payments/stripe", billing);
@@ -93,9 +103,14 @@ const retrieveMemory = async (context: Context<AppEnv>) => {
      JOIN memory_claims c ON c.id = memory_claims_fts.id AND c.uid = memory_claims_fts.uid
      WHERE memory_claims_fts.uid = ?1 AND memory_claims_fts MATCH ?2
        AND c.status = 'accepted' AND c.retracted_at IS NULL
+       AND (c.valid_from IS NULL OR c.valid_from <= ?4)
+       AND (c.valid_to IS NULL OR c.valid_to > ?4)
+       AND (c.recorded_until IS NULL OR c.recorded_until > ?4)
+       AND (c.zkr_tier IS NULL OR c.zkr_tier != 'archive')
+       AND (c.zkr_processing_state IS NULL OR c.zkr_processing_state = 'processed')
      ORDER BY score, c.recorded_at DESC LIMIT ?3`,
   )
-    .bind(context.get("auth").uid, match, limit)
+    .bind(context.get("auth").uid, match, limit, Date.now())
     .all();
   const candidates = rows.results ?? [];
   const citations =
@@ -108,7 +123,8 @@ const retrieveMemory = async (context: Context<AppEnv>) => {
            JOIN memory_evidence e ON e.id = ce.evidence_id AND e.uid = ce.uid
            JOIN memory_source_revisions r ON r.id = e.source_revision_id AND r.uid = e.uid
            JOIN memory_sources s ON s.id = r.source_id AND s.uid = r.uid
-           WHERE ce.claim_id = ?1 AND ce.uid = ?2 AND s.tombstoned_at IS NULL`,
+           WHERE ce.claim_id = ?1 AND ce.uid = ?2 AND ce.relation = 'supports'
+             AND e.tombstoned_at IS NULL AND s.tombstoned_at IS NULL`,
             ).bind(row.id, context.get("auth").uid),
           ),
         );
@@ -188,10 +204,16 @@ routes.get("/memories", async (context) => {
      JOIN memory_evidence e ON e.id = ce.evidence_id AND e.uid = ce.uid
      JOIN memory_source_revisions r ON r.id = e.source_revision_id AND r.uid = e.uid
      JOIN memory_sources s ON s.id = r.source_id AND s.uid = r.uid
-     WHERE p.uid = ?1 AND p.status != 'archived' AND c.status = 'accepted' AND c.retracted_at IS NULL AND s.tombstoned_at IS NULL
+     WHERE p.uid = ?1 AND p.status != 'archived' AND c.status = 'accepted' AND c.retracted_at IS NULL
+       AND (c.valid_from IS NULL OR c.valid_from <= ?2)
+       AND (c.valid_to IS NULL OR c.valid_to > ?2)
+       AND (c.recorded_until IS NULL OR c.recorded_until > ?2)
+       AND (c.zkr_tier IS NULL OR c.zkr_tier != 'archive')
+       AND (c.zkr_processing_state IS NULL OR c.zkr_processing_state = 'processed')
+       AND ce.relation = 'supports' AND e.tombstoned_at IS NULL AND s.tombstoned_at IS NULL
      ORDER BY p.updated_at DESC LIMIT 500`,
   )
-    .bind(context.get("auth").uid)
+    .bind(context.get("auth").uid, Date.now())
     .all();
   const indexed = new Map<string, PersonalMemory>();
   for (const row of rows.results ?? []) {

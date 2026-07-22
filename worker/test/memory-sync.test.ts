@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { Hono } from "hono";
 import { Miniflare } from "miniflare";
 import memorySync from "../src/memory-sync";
+import routes from "../src/routes";
 import type { AppEnv } from "../src/types";
 
 const miniflare = new Miniflare({
@@ -28,6 +29,16 @@ const request = (uid: string, body: Record<string, unknown>) => {
     },
     { DB: database } as AppEnv["Bindings"],
   );
+};
+
+const routeRequest = (uid: string, path: string, init?: RequestInit) => {
+  const app = new Hono<AppEnv>();
+  app.use("*", async (context, next) => {
+    context.set("auth", { uid, email: null });
+    await next();
+  });
+  app.route("/", routes);
+  return app.request(path, init, { DB: database } as AppEnv["Bindings"]);
 };
 
 const source = (uid: string, id: string, content: string) => ({
@@ -66,6 +77,62 @@ const claim = (uid: string, id: string, status = "accepted") => ({
   },
 });
 
+const evidence = (
+  uid: string,
+  id: string,
+  sourceId: string,
+  quote: string,
+) => ({
+  kind: "evidence",
+  record: {
+    evidence: {
+      id,
+      tenant_id: uid,
+      person_id: uid,
+      source_id: sourceId,
+      source_revision: 1,
+      quote,
+      byte_range: null,
+      recorded_at: 11,
+    },
+    locator: {
+      device_id: "desktop",
+      provider: "omi",
+      stream_id: "stream",
+      segment_id: "segment",
+      start_ms: 0,
+      end_ms: 1000,
+    },
+    deleted_at: null,
+  },
+});
+
+const claimEvidence = (uid: string, claimId: string, evidenceId: string) => ({
+  kind: "claim_evidence",
+  record: {
+    tenant_id: uid,
+    person_id: uid,
+    claim_id: claimId,
+    evidence_id: evidenceId,
+    relation: "supports",
+    confidence_basis_points: 9000,
+  },
+});
+
+const profile = (uid: string, id: string, claimId: string, value: string) => ({
+  kind: "profile",
+  record: {
+    id,
+    tenant_id: uid,
+    person_id: uid,
+    key: "priority",
+    value,
+    stability: "current",
+    claim_id: claimId,
+    recorded_at: 11,
+  },
+});
+
 const page = (
   replicaId: string,
   sequence: number,
@@ -90,7 +157,16 @@ const page = (
 
 beforeAll(async () => {
   database = await miniflare.getD1Database("DB");
-  for (const name of ["0001_initial.sql", "0016_zkr_sync.sql"]) {
+  for (const name of [
+    "0001_initial.sql",
+    "0002_memory_and_policy.sql",
+    "0003_align_kr_model.sql",
+    "0005_memory_search.sql",
+    "0012_currents.sql",
+    "0015_currents_generation.sql",
+    "0016_zkr_sync.sql",
+    "0017_zkr_read_projection.sql",
+  ]) {
     const sql = (await Bun.file(`migrations/${name}`).text()).replace(
       "PRAGMA foreign_keys = ON;",
       "",
@@ -229,5 +305,159 @@ describe("zkr memory sync", () => {
       "correction",
       "deletion",
     ]);
+  });
+
+  test("projects cited synced memory into retrieval, the portal, and Currents without crossing UIDs", async () => {
+    const records = [
+      source("alpha", "projection-source", "Ship the concise release"),
+      evidence(
+        "alpha",
+        "projection-evidence",
+        "projection-source",
+        "Ship the concise release",
+      ),
+      {
+        ...claim("alpha", "projection-claim"),
+        record: {
+          ...claim("alpha", "projection-claim").record,
+          subject: "Sam",
+          predicate: "priority",
+          value: "Ship the concise release",
+          kind: "task",
+        },
+      },
+      claimEvidence("alpha", "projection-claim", "projection-evidence"),
+      profile(
+        "alpha",
+        "projection-profile",
+        "projection-claim",
+        "Ship the concise release",
+      ),
+    ];
+    const synced = await request(
+      "alpha",
+      page("projection", 1, records.length, 0, records),
+    );
+    expect(await synced.json()).toEqual({
+      replica_id: "projection",
+      commits: [{ sequence: 1, status: "applied" }],
+    });
+
+    const memories = (await (
+      await routeRequest("alpha", "/memories")
+    ).json()) as {
+      memories: Array<{
+        content: string;
+        evidence: Array<{ quote: string; locator: unknown }>;
+      }>;
+    };
+    expect(memories.memories).toEqual([
+      expect.objectContaining({
+        content: "Ship the concise release",
+        evidence: [
+          expect.objectContaining({
+            quote: "Ship the concise release",
+            locator: expect.objectContaining({ segment_id: "segment" }),
+          }),
+        ],
+      }),
+    ]);
+    const retrieval = (await (
+      await routeRequest("alpha", "/memory/retrieve?q=concise%20release")
+    ).json()) as { items: Array<{ evidence_ids: string[] }> };
+    expect(retrieval.items).toHaveLength(1);
+    expect(retrieval.items[0]?.evidence_ids).toHaveLength(1);
+    expect(await (await routeRequest("beta", "/memories")).json()).toEqual({
+      memories: [],
+    });
+    expect(
+      await (
+        await routeRequest("beta", "/memory/retrieve?q=concise%20release")
+      ).json(),
+    ).toEqual({
+      query: "concise release",
+      items: [],
+      gaps: ["No cited memory matched the query."],
+    });
+
+    const generated = await routeRequest("alpha", "/currents/generate", {
+      method: "POST",
+    });
+    expect(generated.status).toBe(201);
+    expect(await generated.json()).toMatchObject({
+      current: {
+        title: "Revisit: Ship the concise release",
+        evidence: [expect.objectContaining({})],
+      },
+    });
+  });
+
+  test("reprojects corrections and tagged deletions without leaving visible or eligible memory", async () => {
+    const corrected = [
+      {
+        ...claim("alpha", "projection-claim", "superseded"),
+        record: {
+          ...claim("alpha", "projection-claim", "superseded").record,
+          subject: "Sam",
+          predicate: "priority",
+          value: "Ship the concise release",
+          kind: "task",
+          recorded_time: { from: 11, until: 21 },
+        },
+      },
+      {
+        kind: "correction",
+        record: {
+          tenant_id: "alpha",
+          person_id: "alpha",
+          superseded_claim_id: "projection-claim",
+          claim_id: "replacement-claim",
+          source_id: "projection-source",
+          evidence_id: "projection-evidence",
+          valid_at: 20,
+          recorded_at: 21,
+        },
+      },
+      {
+        kind: "deletion",
+        record: {
+          tenant_id: "alpha",
+          person_id: "alpha",
+          target: { kind: "evidence", id: "projection-evidence" },
+          deleted_at: 22,
+        },
+      },
+    ];
+    expect(
+      await (
+        await request(
+          "alpha",
+          page("projection", 2, corrected.length, 0, corrected),
+        )
+      ).json(),
+    ).toEqual({
+      replica_id: "projection",
+      commits: [{ sequence: 2, status: "applied" }],
+    });
+    expect(await (await routeRequest("alpha", "/memories")).json()).toEqual({
+      memories: [],
+    });
+    expect(
+      await (
+        await routeRequest("alpha", "/memory/retrieve?q=concise%20release")
+      ).json(),
+    ).toEqual({
+      query: "concise release",
+      items: [],
+      gaps: ["No cited memory matched the query."],
+    });
+    expect(
+      await (
+        await routeRequest("alpha", "/currents/generate", { method: "POST" })
+      ).json(),
+    ).toEqual({ current: null });
+    expect(await (await routeRequest("alpha", "/currents")).json()).toEqual({
+      currents: [],
+    });
   });
 });
