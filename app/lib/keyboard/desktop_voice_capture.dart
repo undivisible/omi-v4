@@ -1,13 +1,26 @@
 import 'dart:async';
 import 'dart:collection';
-import 'dart:typed_data';
+import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart';
 import 'package:record/record.dart';
 
 import '../native/native_hub.dart';
 
 typedef DesktopAudioStart = Future<Stream<Uint8List>> Function();
 typedef DesktopAudioStop = Future<void> Function();
+
+double pcm16Rms(Uint8List bytes) {
+  final samples = bytes.length ~/ 2;
+  if (samples == 0) return 0;
+  final data = ByteData.sublistView(bytes, 0, samples * 2);
+  var sum = 0.0;
+  for (var i = 0; i < samples; i++) {
+    final sample = data.getInt16(i * 2, Endian.little) / 32768.0;
+    sum += sample * sample;
+  }
+  return math.min(1.0, math.sqrt(sum / samples) * 4);
+}
 
 final class DesktopVoiceCapture {
   DesktopVoiceCapture({
@@ -34,6 +47,7 @@ final class DesktopVoiceCapture {
   final Future<bool> Function()? permissionCheck;
   _DesktopVoiceSession? _session;
   int _generation = 0;
+  final level = ValueNotifier<double>(0);
 
   bool get active => _session != null;
 
@@ -151,6 +165,7 @@ final class DesktopVoiceCapture {
 
   void _sendAudio(_DesktopVoiceSession session, Uint8List bytes) {
     if (_session != session || bytes.isEmpty) return;
+    level.value = pcm16Rms(bytes);
     hub.sendAudio(
       requestId: session.streamId,
       sequence: session.sequence++,
@@ -247,7 +262,10 @@ final class DesktopVoiceCapture {
     if (!session.cancelled.isCompleted) session.cancelled.complete();
     await session.audio?.cancel();
     await session.events?.cancel();
-    if (_session == session) _session = null;
+    if (_session == session) {
+      _session = null;
+      level.value = 0;
+    }
   }
 }
 

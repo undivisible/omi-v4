@@ -213,6 +213,9 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
   private let permissionService = MacPermissionService()
   private var permissionOverlay: PermissionDragOverlay?
   private var windowChromeChannel: FlutterMethodChannel?
+  private var pillPreviousFrame: NSRect?
+  private var pillPreviousLevel: NSWindow.Level = .normal
+  private var pillPreviousCollectionBehavior: NSWindow.CollectionBehavior = []
 
   func requestSettings() {
     NSApp.activate(ignoringOtherApps: true)
@@ -387,6 +390,15 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
       case "enterOnboarding":
         self?.enterOnboardingChrome()
         result(nil)
+      case "summonPill":
+        let arguments = call.arguments as? [String: Any]
+        self?.summonPill(
+          width: arguments?["width"] as? Double ?? 420,
+          height: arguments?["height"] as? Double ?? 230)
+        result(nil)
+      case "restoreFromPill":
+        self?.restoreFromPill()
+        result(nil)
       default:
         result(FlutterMethodNotImplemented)
       }
@@ -424,6 +436,40 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
     hasShadow = false
     level = .floating
     collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+  }
+
+  private func summonPill(width: Double, height: Double) {
+    if pillPreviousFrame == nil {
+      pillPreviousFrame = frame
+      pillPreviousLevel = level
+      pillPreviousCollectionBehavior = collectionBehavior
+    }
+    let cursor = NSEvent.mouseLocation
+    var target = NSRect(
+      x: cursor.x + 12,
+      y: cursor.y - height + 24,
+      width: width,
+      height: height)
+    let screen =
+      NSScreen.screens.first { NSMouseInRect(cursor, $0.frame, false) }
+      ?? NSScreen.main
+    if let visible = screen?.visibleFrame {
+      target.origin.x = min(max(target.origin.x, visible.minX), visible.maxX - width)
+      target.origin.y = min(max(target.origin.y, visible.minY), visible.maxY - height)
+    }
+    level = .floating
+    collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+    setFrame(target, display: true)
+    NSApp.activate(ignoringOtherApps: true)
+    makeKeyAndOrderFront(nil)
+  }
+
+  private func restoreFromPill() {
+    guard let previousFrame = pillPreviousFrame else { return }
+    pillPreviousFrame = nil
+    level = pillPreviousLevel
+    collectionBehavior = pillPreviousCollectionBehavior
+    setFrame(previousFrame, display: true)
   }
 
   private func restart() {

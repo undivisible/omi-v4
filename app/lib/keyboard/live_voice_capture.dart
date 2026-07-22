@@ -4,7 +4,8 @@ import 'package:flutter/services.dart';
 import 'package:record/record.dart';
 
 import '../native/native_hub.dart';
-import 'desktop_voice_capture.dart' show DesktopAudioStart, DesktopAudioStop;
+import 'desktop_voice_capture.dart'
+    show DesktopAudioStart, DesktopAudioStop, pcm16Rms;
 
 final class LiveVoiceCapture {
   LiveVoiceCapture({
@@ -31,6 +32,7 @@ final class LiveVoiceCapture {
   _LiveVoiceSession? _endedSession;
   int _generation = 0;
   int _discardedOutputBytes = 0;
+  final level = ValueNotifier<double>(0);
 
   bool get active => _session != null;
 
@@ -149,6 +151,7 @@ final class LiveVoiceCapture {
 
   void _sendAudio(_LiveVoiceSession session, Uint8List bytes) {
     if (_session != session || bytes.isEmpty) return;
+    level.value = pcm16Rms(bytes);
     hub.sendAudio(
       requestId: session.streamId,
       sequence: session.sequence++,
@@ -250,7 +253,10 @@ final class LiveVoiceCapture {
     ));
     await session.audio?.cancel();
     await session.events?.cancel();
-    if (_session == session) _session = null;
+    if (_session == session) {
+      _session = null;
+      level.value = 0;
+    }
   }
 }
 

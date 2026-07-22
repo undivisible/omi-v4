@@ -310,6 +310,7 @@ final class AppServices {
   Future<void> _desktopVoiceLifecycle = Future.value();
   int _desktopVoiceGeneration = 0;
   bool _desktopVoiceRouteIsLive = false;
+  bool Function(String text)? desktopVoiceIntentInterceptor;
   Future<void> _liveVoiceLifecycle = Future.value();
   int _liveVoiceGeneration = 0;
   final SystemAudioCaptureModeStore _captureModeStore;
@@ -685,6 +686,9 @@ final class AppServices {
         : await desktopVoice.stop();
     _desktopVoiceRouteIsLive = false;
     if (text.isEmpty) return null;
+    if (desktopVoiceIntentInterceptor?.call(text) ?? false) {
+      return (requestId: '', text: text);
+    }
     if (generation != _authorityGeneration ||
         uid == null ||
         auth.snapshot.session?.uid != uid) {
