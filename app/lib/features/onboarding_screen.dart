@@ -665,6 +665,7 @@ class _ProductionGateState extends State<ProductionGate>
   bool finishFailed = false;
   final requesting = <CoreCapability>{};
   int checkGeneration = 0;
+  Timer? permissionPoll;
 
   @override
   void initState() {
@@ -676,6 +677,7 @@ class _ProductionGateState extends State<ProductionGate>
 
   @override
   void dispose() {
+    permissionPoll?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     widget.auth.removeListener(_refreshView);
     super.dispose();
@@ -712,7 +714,11 @@ class _ProductionGateState extends State<ProductionGate>
       statuses = next;
       refreshing = false;
     });
-    if (ready && !finishing) await _finish();
+    if (ready) {
+      permissionPoll?.cancel();
+      permissionPoll = null;
+      if (!finishing) await _finish();
+    }
   }
 
   Future<void> _request(CoreCapability capability) async {
@@ -723,6 +729,7 @@ class _ProductionGateState extends State<ProductionGate>
       await widget.capabilities.request(capability);
       if (!mounted || generation != checkGeneration) return;
       await _check();
+      if (!ready) _startPermissionPoll();
     } catch (error) {
       if (!mounted || generation != checkGeneration) return;
       setState(() {
@@ -738,6 +745,12 @@ class _ProductionGateState extends State<ProductionGate>
       requesting.remove(capability);
       if (mounted) setState(() {});
     }
+  }
+
+  void _startPermissionPoll() {
+    permissionPoll ??= Timer.periodic(const Duration(milliseconds: 500), (_) {
+      if (mounted && !refreshing && !finishing) unawaited(_check());
+    });
   }
 
   Future<void> _finish() async {
