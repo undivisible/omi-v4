@@ -60,8 +60,7 @@ class _OmiAppState extends State<OmiApp> {
   bool get _mobileCompanion {
     if (kIsWeb) return false;
     final platform = widget.platformOverride ?? defaultTargetPlatform;
-    return platform == TargetPlatform.android ||
-        platform == TargetPlatform.iOS;
+    return platform == TargetPlatform.android || platform == TargetPlatform.iOS;
   }
 
   bool get _authUnavailable =>
@@ -111,7 +110,12 @@ class _OmiAppState extends State<OmiApp> {
 
   Future<void> _completeOnboarding() async {
     if (_authUnavailable) {
-      if (mounted) setState(() => _localTestOnboardingComplete = true);
+      if (mounted) {
+        setState(() {
+          _localTestOnboardingComplete = true;
+          _onboardingComplete = true;
+        });
+      }
       return;
     }
     final snapshot = services.auth.snapshot;
