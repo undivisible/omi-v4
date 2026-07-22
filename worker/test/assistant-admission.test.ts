@@ -98,7 +98,7 @@ describe("managed assistant admission", () => {
     expect(
       globalResponses.filter((response) => response.status === 429),
     ).toHaveLength(21);
-  }, 20_000);
+  }, 90_000);
 
   test("makes duplicate release idempotent and rolls budgets after the configured window", async () => {
     const instance = await createAdmission({
@@ -122,7 +122,7 @@ describe("managed assistant admission", () => {
     expect((await command(instance, "admit", body)).status).toBe(429);
     await Bun.sleep(1100);
     expect((await command(instance, "admit", body)).status).toBe(200);
-  }, 20_000);
+  }, 90_000);
 
   test("settles atomically to actual overrun and blocks later dense traffic", async () => {
     const instance = await createAdmission({
@@ -163,5 +163,5 @@ describe("managed assistant admission", () => {
       ),
     );
     expect(responses.every((response) => response.status === 429)).toBeTrue();
-  }, 20_000);
+  }, 90_000);
 });

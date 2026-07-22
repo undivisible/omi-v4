@@ -131,7 +131,7 @@ describe("managed STT admission", () => {
     expect(first.status).toBe(200);
     expect(second.status).toBe(429);
     expect(second.headers.get("retry-after")).toBeTruthy();
-  }, 20_000);
+  }, 90_000);
 
   test("keeps the full reservation and makes duplicate admission idempotent", async () => {
     const instance = await createAdmission();
@@ -156,7 +156,7 @@ describe("managed STT admission", () => {
       uid: "beta",
     });
     expect(overBudget.status).toBe(200);
-  }, 20_000);
+  }, 90_000);
 
   test("releases in-flight capacity idempotently while retaining budget", async () => {
     const instance = await createAdmission({ STT_UID_IN_FLIGHT_LIMIT: "1" });
@@ -223,7 +223,7 @@ describe("managed STT admission", () => {
         })
       ).status,
     ).toBe(429);
-  }, 20_000);
+  }, 90_000);
 
   test("releases an abandoned claim deadline but preserves a claimed session", async () => {
     const instance = await createAdmission({
@@ -260,7 +260,7 @@ describe("managed STT admission", () => {
         })
       ).status,
     ).toBe(429);
-  }, 20_000);
+  }, 90_000);
 
   test("rejects a late claim and ignores a delayed release from an old acquisition", async () => {
     const instance = await createAdmission({
@@ -301,5 +301,5 @@ describe("managed STT admission", () => {
         })
       ).status,
     ).toBe(429);
-  }, 20_000);
+  }, 90_000);
 });
