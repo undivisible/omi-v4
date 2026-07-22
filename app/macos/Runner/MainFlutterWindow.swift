@@ -8,6 +8,82 @@ private final class OnboardingBlurView: NSVisualEffectView {
   override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 
+private final class AppBundleDragView: NSImageView, NSDraggingSource {
+  private let appURL: URL
+
+  init(appURL: URL) {
+    self.appURL = appURL
+    super.init(frame: .zero)
+    image = NSWorkspace.shared.icon(forFile: appURL.path)
+    imageScaling = .scaleProportionallyUpOrDown
+    translatesAutoresizingMaskIntoConstraints = false
+  }
+
+  required init?(coder: NSCoder) { nil }
+
+  override func mouseDragged(with event: NSEvent) {
+    let item = NSDraggingItem(pasteboardWriter: appURL as NSURL)
+    item.setDraggingFrame(bounds, contents: image)
+    beginDraggingSession(with: [item], event: event, source: self)
+  }
+
+  func draggingSession(
+    _ session: NSDraggingSession,
+    sourceOperationMaskFor context: NSDraggingContext
+  ) -> NSDragOperation {
+    .copy
+  }
+}
+
+private final class FullDiskAccessDragOverlay: NSVisualEffectView {
+  init(frame frameRect: NSRect, appURL: URL) {
+    super.init(frame: frameRect)
+    autoresizingMask = [.width, .height]
+    material = .hudWindow
+    blendingMode = .withinWindow
+    state = .active
+
+    let title = NSTextField(labelWithString: "Drag into Settings")
+    title.font = .systemFont(ofSize: 24, weight: .semibold)
+    title.textColor = .white
+    title.alignment = .center
+
+    let icon = AppBundleDragView(appURL: appURL)
+    NSLayoutConstraint.activate([
+      icon.widthAnchor.constraint(equalToConstant: 112),
+      icon.heightAnchor.constraint(equalToConstant: 112),
+    ])
+
+    let stack = NSStackView(views: [title, icon])
+    stack.orientation = .vertical
+    stack.alignment = .centerX
+    stack.spacing = 22
+    stack.translatesAutoresizingMaskIntoConstraints = false
+    addSubview(stack)
+    NSLayoutConstraint.activate([
+      stack.centerXAnchor.constraint(equalTo: centerXAnchor),
+      stack.centerYAnchor.constraint(equalTo: centerYAnchor),
+    ])
+    isHidden = true
+  }
+
+  required init?(coder: NSCoder) { nil }
+
+  override func mouseDown(with event: NSEvent) {
+    hide()
+  }
+
+  func show() {
+    alphaValue = 0
+    isHidden = false
+    animator().alphaValue = 1
+  }
+
+  func hide() {
+    isHidden = true
+  }
+}
+
 class MainFlutterWindow: NSWindow, FlutterStreamHandler {
   private var eventKitBridge: AppleEventKitBridge?
   private var menuBarBridge: MenuBarBridge?
@@ -83,6 +159,10 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
     flutterViewController.view.autoresizingMask = [.width, .height]
     rootView.addSubview(blur)
     rootView.addSubview(flutterViewController.view)
+    let fullDiskAccessOverlay = FullDiskAccessDragOverlay(
+      frame: rootView.bounds,
+      appURL: Bundle.main.bundleURL)
+    rootView.addSubview(fullDiskAccessOverlay)
 
     RegisterGeneratedPlugins(registry: flutterViewController)
     eventKitBridge = AppleEventKitBridge(binaryMessenger: flutterViewController.engine.binaryMessenger)
@@ -118,11 +198,13 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
       }
       switch call.method {
       case "check":
+        let fullDiskAccess = self.hasFullDiskAccess()
+        if fullDiskAccess { fullDiskAccessOverlay.hide() }
         result([
           "accessibility": AXIsProcessTrusted(),
           "microphone": AVCaptureDevice.authorizationStatus(for: .audio) == .authorized,
           "screenCapture": CGPreflightScreenCaptureAccess(),
-          "fullDiskAccess": self.hasFullDiskAccess(),
+          "fullDiskAccess": fullDiskAccess,
         ])
       case "request":
         guard let capability = call.arguments as? String else {
@@ -140,7 +222,7 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
           CGRequestScreenCaptureAccess()
           result(nil)
         case "appData":
-          self.revealFullDiskAccessDragTarget()
+          fullDiskAccessOverlay.show()
           if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles") {
             NSWorkspace.shared.open(url)
           }
@@ -201,20 +283,4 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
     }
   }
 
-  private func revealFullDiskAccessDragTarget() {
-    let app = Bundle.main.bundleURL
-    var target = app
-    if let desktop = FileManager.default.urls(for: .desktopDirectory, in: .userDomainMask).first {
-      let name = app.deletingPathExtension().lastPathComponent
-      let shortcut = desktop.appendingPathComponent("\(name) — drag into Settings.app")
-      if (try? FileManager.default.destinationOfSymbolicLink(atPath: shortcut.path)) != nil {
-        try? FileManager.default.removeItem(at: shortcut)
-      }
-      if !FileManager.default.fileExists(atPath: shortcut.path),
-         (try? FileManager.default.createSymbolicLink(at: shortcut, withDestinationURL: app)) != nil {
-        target = shortcut
-      }
-    }
-    NSWorkspace.shared.activateFileViewerSelecting([target])
-  }
 }
