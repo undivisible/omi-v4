@@ -7,7 +7,7 @@ import FlutterMacOS
 private class OvalBlurView: NSView {
   private let shell = NSView()
   private let effect = NSVisualEffectView()
-  private let fadeMask = CAGradientLayer()
+  private var maskSize = NSSize.zero
 
   init(frame frameRect: NSRect, blendingMode: NSVisualEffectView.BlendingMode) {
     super.init(frame: frameRect)
@@ -19,17 +19,6 @@ private class OvalBlurView: NSView {
     effect.isEmphasized = true
     effect.state = .active
     effect.translatesAutoresizingMaskIntoConstraints = false
-    fadeMask.type = .radial
-    fadeMask.colors = [
-      NSColor.black.cgColor,
-      NSColor.black.withAlphaComponent(0.95).cgColor,
-      NSColor.black.withAlphaComponent(0.72).cgColor,
-      NSColor.black.withAlphaComponent(0.32).cgColor,
-      NSColor.clear.cgColor,
-    ]
-    fadeMask.locations = [0, 0.32, 0.58, 0.8, 1]
-    fadeMask.startPoint = CGPoint(x: 0.5, y: 0.5)
-    fadeMask.endPoint = CGPoint(x: 1, y: 1)
     shell.addSubview(effect)
     addSubview(shell)
     NSLayoutConstraint.activate([
@@ -48,9 +37,41 @@ private class OvalBlurView: NSView {
 
   override func layout() {
     super.layout()
+    guard shell.bounds.size != maskSize, shell.bounds.width > 0, shell.bounds.height > 0 else { return }
+    maskSize = shell.bounds.size
     shell.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.8).cgColor
-    fadeMask.frame = shell.bounds
-    shell.layer?.mask = fadeMask
+    let mask = NSImage(size: maskSize, flipped: false) { bounds in
+      guard
+        let gradient = CGGradient(
+          colorsSpace: CGColorSpaceCreateDeviceGray(),
+          colors: [
+            CGColor(gray: 1, alpha: 1),
+            CGColor(gray: 1, alpha: 0.95),
+            CGColor(gray: 1, alpha: 0.72),
+            CGColor(gray: 1, alpha: 0.32),
+            CGColor(gray: 1, alpha: 0),
+          ] as CFArray,
+          locations: [0, 0.32, 0.58, 0.8, 1]
+        )
+      else { return false }
+      let context = NSGraphicsContext.current!.cgContext
+      context.translateBy(x: bounds.midX, y: bounds.midY)
+      context.scaleBy(x: bounds.width / 2, y: bounds.height / 2)
+      context.drawRadialGradient(
+        gradient,
+        startCenter: .zero,
+        startRadius: 0,
+        endCenter: .zero,
+        endRadius: 1,
+        options: [.drawsAfterEndLocation])
+      return true
+    }
+    effect.maskImage = mask
+    let fillMask = CALayer()
+    fillMask.frame = shell.bounds
+    var proposedRect = NSRect(origin: .zero, size: maskSize)
+    fillMask.contents = mask.cgImage(forProposedRect: &proposedRect, context: nil, hints: nil)
+    shell.layer?.mask = fillMask
   }
 }
 
@@ -87,8 +108,15 @@ private final class ShortcutDragView: NSImageView, NSDraggingSource {
 
 private final class PermissionDragOverlay: NSView {
   private var capability: String?
+  private var permissionTimer: Timer?
+  private let permissionCheck: (String) -> Bool
 
-  init(frame frameRect: NSRect, shortcutURL: URL) {
+  init(
+    frame frameRect: NSRect,
+    shortcutURL: URL,
+    permissionCheck: @escaping (String) -> Bool
+  ) {
+    self.permissionCheck = permissionCheck
     super.init(frame: frameRect)
     autoresizingMask = [.width, .height]
 
@@ -127,6 +155,21 @@ private final class PermissionDragOverlay: NSView {
     alphaValue = 0
     isHidden = false
     animator().alphaValue = 1
+    permissionTimer?.invalidate()
+    let timer = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in
+      guard let self, let capability = self.capability,
+            self.permissionCheck(capability) else { return }
+      self.hide()
+    }
+    permissionTimer = timer
+    RunLoop.main.add(timer, forMode: .common)
+  }
+
+  private func hide() {
+    capability = nil
+    permissionTimer?.invalidate()
+    permissionTimer = nil
+    isHidden = true
   }
 
   func hideIfGranted(
@@ -140,10 +183,7 @@ private final class PermissionDragOverlay: NSView {
     case "appData": fullDiskAccess
     default: false
     }
-    if granted {
-      capability = nil
-      isHidden = true
-    }
+    if granted { hide() }
   }
 }
 
@@ -220,7 +260,15 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
     rootView.addSubview(flutterViewController.view)
     let permissionOverlay = PermissionDragOverlay(
       frame: rootView.bounds,
-      shortcutURL: fullDiskAccessShortcut())
+      shortcutURL: fullDiskAccessShortcut()
+    ) { [weak self] capability in
+      switch capability {
+      case "accessibility": AXIsProcessTrusted()
+      case "screenCapture": CGPreflightScreenCaptureAccess()
+      case "appData": self?.hasFullDiskAccess() == true
+      default: false
+      }
+    }
     rootView.addSubview(permissionOverlay)
 
     RegisterGeneratedPlugins(registry: flutterViewController)
