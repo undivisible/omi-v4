@@ -1628,8 +1628,10 @@ class CommandStopMeeting extends Command {
 
 @immutable
 class CommandProvideMeetingAuth extends Command {
-  const CommandProvideMeetingAuth({required this.auth, this.trustedWorkerOrigin})
-    : super();
+  const CommandProvideMeetingAuth({
+    required this.auth,
+    this.trustedWorkerOrigin,
+  }) : super();
 
   static CommandProvideMeetingAuth load(BinaryDeserializer deserializer) {
     deserializer.increaseContainerDepth();
@@ -1698,7 +1700,9 @@ class CommandProvideMeetingAuth extends Command {
 class CommandSetSystemAudioCaptureMode extends Command {
   const CommandSetSystemAudioCaptureMode({required this.mode}) : super();
 
-  static CommandSetSystemAudioCaptureMode load(BinaryDeserializer deserializer) {
+  static CommandSetSystemAudioCaptureMode load(
+    BinaryDeserializer deserializer,
+  ) {
     deserializer.increaseContainerDepth();
     final instance = CommandSetSystemAudioCaptureMode(
       mode: SystemAudioCaptureModeExtension.deserialize(deserializer),
