@@ -10,7 +10,8 @@ import '../capabilities/desktop_capabilities.dart';
 import '../channels/channels.dart';
 import '../integrations/apple_eventkit.dart';
 import '../integrations/apple_eventkit_import.dart';
-import '../native/generated/signals/signals.dart' show AssistantProvider;
+import '../native/generated/signals/signals.dart'
+    show AssistantProvider, SystemAudioCaptureMode;
 import '../providers/providers.dart';
 import '../settings/settings.dart';
 import '../ui/omi_ui.dart';
@@ -91,6 +92,8 @@ class SettingsScreen extends StatelessWidget {
           gateway: services.capabilities,
           previewMode: previewMode,
         ),
+      if (!kIsWeb && defaultTargetPlatform == TargetPlatform.macOS)
+        SystemAudioCaptureModeTile(services: services, previewMode: previewMode),
       if (!kIsWeb && defaultTargetPlatform == TargetPlatform.macOS)
         for (final source in AppleEventKitSource.values)
           AppleEventKitConnectionTile(
@@ -241,6 +244,80 @@ class _ScreenCaptureSetupTileState extends State<ScreenCaptureSetupTile> {
         actionTooltip: 'Review screen-capture access',
       );
     },
+  );
+}
+
+class SystemAudioCaptureModeTile extends StatefulWidget {
+  const SystemAudioCaptureModeTile({
+    required this.services,
+    required this.previewMode,
+    super.key,
+  });
+
+  final AppServices services;
+  final bool previewMode;
+
+  @override
+  State<SystemAudioCaptureModeTile> createState() =>
+      _SystemAudioCaptureModeTileState();
+}
+
+class _SystemAudioCaptureModeTileState
+    extends State<SystemAudioCaptureModeTile> {
+  late Future<SystemAudioCaptureMode> mode =
+      widget.services.systemAudioCaptureMode;
+  bool saving = false;
+
+  static const _labels = {
+    SystemAudioCaptureMode.always: 'Always',
+    SystemAudioCaptureMode.onlyDuringMeetings: 'Only during meetings',
+    SystemAudioCaptureMode.never: 'Never',
+  };
+
+  Future<void> _select(SystemAudioCaptureMode value) async {
+    setState(() => saving = true);
+    try {
+      await widget.services.setSystemAudioCaptureMode(value);
+    } catch (_) {} finally {
+      if (mounted) {
+        setState(() {
+          saving = false;
+          mode = widget.services.systemAudioCaptureMode;
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => FutureBuilder<SystemAudioCaptureMode>(
+    future: mode,
+    builder: (context, snapshot) => BaseTile(
+      icon: Icons.speaker_group_outlined,
+      title: 'System audio capture',
+      detail: widget.previewMode
+          ? 'Native capture is disabled in the interface preview.'
+          : 'Choose when Omi may transcribe meeting and system audio.',
+      trailing: widget.previewMode || snapshot.data == null || saving
+          ? Text(
+              snapshot.data == null ? 'Loading' : _labels[snapshot.data]!,
+              style: const TextStyle(color: Colors.white54),
+            )
+          : DropdownButton<SystemAudioCaptureMode>(
+              value: snapshot.data,
+              underline: const SizedBox.shrink(),
+              items: SystemAudioCaptureMode.values
+                  .map(
+                    (value) => DropdownMenuItem(
+                      value: value,
+                      child: Text(_labels[value]!),
+                    ),
+                  )
+                  .toList(),
+              onChanged: (value) {
+                if (value != null) _select(value);
+              },
+            ),
+    ),
   );
 }
 

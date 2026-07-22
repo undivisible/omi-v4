@@ -51,6 +51,10 @@ abstract class Command {
         return CommandStartMeeting.load(deserializer);
       case 20:
         return CommandStopMeeting.load(deserializer);
+      case 21:
+        return CommandProvideMeetingAuth.load(deserializer);
+      case 22:
+        return CommandSetSystemAudioCaptureMode.load(deserializer);
       default:
         throw Exception(
           'Unknown variant index for Command: ' + index.toString(),
@@ -1619,5 +1623,126 @@ class CommandStopMeeting extends Command {
     }());
 
     return fullString ?? 'CommandStopMeeting';
+  }
+}
+
+@immutable
+class CommandProvideMeetingAuth extends Command {
+  const CommandProvideMeetingAuth({required this.auth, this.trustedWorkerOrigin})
+    : super();
+
+  static CommandProvideMeetingAuth load(BinaryDeserializer deserializer) {
+    deserializer.increaseContainerDepth();
+    final instance = CommandProvideMeetingAuth(
+      auth: TranscriptionAuth.deserialize(deserializer),
+      trustedWorkerOrigin: TraitHelpers.deserializeOptionStr(deserializer),
+    );
+    deserializer.decreaseContainerDepth();
+    return instance;
+  }
+
+  final TranscriptionAuth auth;
+  final String? trustedWorkerOrigin;
+
+  CommandProvideMeetingAuth copyWith({
+    TranscriptionAuth? auth,
+    String? Function()? trustedWorkerOrigin,
+  }) {
+    return CommandProvideMeetingAuth(
+      auth: auth ?? this.auth,
+      trustedWorkerOrigin: trustedWorkerOrigin == null
+          ? this.trustedWorkerOrigin
+          : trustedWorkerOrigin(),
+    );
+  }
+
+  void serialize(BinarySerializer serializer) {
+    serializer.increaseContainerDepth();
+    serializer.serializeVariantIndex(21);
+    auth.serialize(serializer);
+    TraitHelpers.serializeOptionStr(trustedWorkerOrigin, serializer);
+    serializer.decreaseContainerDepth();
+  }
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    if (other.runtimeType != runtimeType) return false;
+
+    return other is CommandProvideMeetingAuth &&
+        auth == other.auth &&
+        trustedWorkerOrigin == other.trustedWorkerOrigin;
+  }
+
+  @override
+  int get hashCode => Object.hash(auth, trustedWorkerOrigin);
+
+  @override
+  String toString() {
+    String? fullString;
+
+    assert(() {
+      fullString =
+          '$runtimeType('
+          'auth: $auth, '
+          'trustedWorkerOrigin: $trustedWorkerOrigin'
+          ')';
+      return true;
+    }());
+
+    return fullString ?? 'CommandProvideMeetingAuth';
+  }
+}
+
+@immutable
+class CommandSetSystemAudioCaptureMode extends Command {
+  const CommandSetSystemAudioCaptureMode({required this.mode}) : super();
+
+  static CommandSetSystemAudioCaptureMode load(BinaryDeserializer deserializer) {
+    deserializer.increaseContainerDepth();
+    final instance = CommandSetSystemAudioCaptureMode(
+      mode: SystemAudioCaptureModeExtension.deserialize(deserializer),
+    );
+    deserializer.decreaseContainerDepth();
+    return instance;
+  }
+
+  final SystemAudioCaptureMode mode;
+
+  CommandSetSystemAudioCaptureMode copyWith({SystemAudioCaptureMode? mode}) {
+    return CommandSetSystemAudioCaptureMode(mode: mode ?? this.mode);
+  }
+
+  void serialize(BinarySerializer serializer) {
+    serializer.increaseContainerDepth();
+    serializer.serializeVariantIndex(22);
+    mode.serialize(serializer);
+    serializer.decreaseContainerDepth();
+  }
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    if (other.runtimeType != runtimeType) return false;
+
+    return other is CommandSetSystemAudioCaptureMode && mode == other.mode;
+  }
+
+  @override
+  int get hashCode => mode.hashCode;
+
+  @override
+  String toString() {
+    String? fullString;
+
+    assert(() {
+      fullString =
+          '$runtimeType('
+          'mode: $mode'
+          ')';
+      return true;
+    }());
+
+    return fullString ?? 'CommandSetSystemAudioCaptureMode';
   }
 }

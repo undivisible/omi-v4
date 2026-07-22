@@ -72,7 +72,11 @@ final class AppServices {
     DesktopVoiceCapture? desktopVoice,
     LiveVoiceCapture? liveVoice,
     this.liveVoiceTokens,
-  }) : currents = currentsClient == null
+    SystemAudioCaptureModeStore? captureModeStore,
+    this._meetingMic,
+  }) : _captureModeStore =
+           captureModeStore ?? PreferencesSystemAudioCaptureModeStore(),
+       currents = currentsClient == null
            ? null
            : CurrentsController(currentsClient),
        deviceAudio = DeviceAudioForwarder(relay: deviceRelay, hub: nativeHub),
@@ -233,6 +237,8 @@ final class AppServices {
     LiveVoiceCapture? liveVoice,
     LiveVoiceTokenClient? liveVoiceTokens,
     MemorySyncPump? memorySync,
+    SystemAudioCaptureModeStore? captureModeStore,
+    MeetingMicCapture? meetingMic,
   }) => AppServices._(
     auth: auth,
     nativeHub: nativeHub,
@@ -257,6 +263,8 @@ final class AppServices {
     liveVoice: liveVoice,
     liveVoiceTokens: liveVoiceTokens,
     memorySyncPump: memorySync,
+    captureModeStore: captureModeStore ?? VolatileSystemAudioCaptureModeStore(),
+    meetingMic: meetingMic,
   );
 
   final AuthController auth;
@@ -303,6 +311,10 @@ final class AppServices {
   bool _desktopVoiceRouteIsLive = false;
   Future<void> _liveVoiceLifecycle = Future.value();
   int _liveVoiceGeneration = 0;
+  final SystemAudioCaptureModeStore _captureModeStore;
+  MeetingMicCapture? _meetingMic;
+  bool _meetingActive = false;
+  int _meetingAuthSequence = 0;
 
   Stream<NativeEvent> get nativeEvents => _nativeEvents.stream;
   Stream<int> get chatAuthorityChanges =>
@@ -821,11 +833,94 @@ final class AppServices {
         managedWorkerOrigin: _workerOrigin.toString(),
       );
     }
+    final hub = nativeHub;
+    if (hub is MeetingCaptureHub) {
+      final mode = await _captureModeStore.read();
+      (hub as MeetingCaptureHub).setSystemAudioCaptureMode(
+        requestId: 'set-system-audio-capture-mode-${_meetingAuthSequence++}',
+        mode: mode,
+      );
+    }
     return true;
+  }
+
+  Future<SystemAudioCaptureMode> get systemAudioCaptureMode =>
+      _captureModeStore.read();
+
+  Future<void> setSystemAudioCaptureMode(SystemAudioCaptureMode mode) async {
+    await _captureModeStore.write(mode);
+    final hub = nativeHub;
+    if (_nativeInitialized && hub is MeetingCaptureHub) {
+      (hub as MeetingCaptureHub).setSystemAudioCaptureMode(
+        requestId: 'set-system-audio-capture-mode-${_meetingAuthSequence++}',
+        mode: mode,
+      );
+    }
+  }
+
+  Future<void> _provideMeetingAuth() async {
+    final session = auth.snapshot.session;
+    final hub = nativeHub;
+    if (!chatReady ||
+        session == null ||
+        hub is! MeetingCaptureHub ||
+        _managedStt == null) {
+      return;
+    }
+    final transcriptionAuth = await _managedTranscriptionAuthFor(
+      uid: session.uid,
+      deviceId: 'meeting-capture',
+      encoding: ManagedSttEncoding.linear16,
+      sampleRate: 16000,
+    );
+    if (_disposed || !_meetingActive || auth.snapshot.session?.uid != session.uid) {
+      return;
+    }
+    (hub as MeetingCaptureHub).provideMeetingAuth(
+      requestId: 'provide-meeting-auth-${_meetingAuthSequence++}',
+      auth: transcriptionAuth,
+      trustedWorkerOrigin: _workerOrigin?.toString(),
+    );
+  }
+
+  Future<void> _startMeetingMicFallback() async {
+    final session = auth.snapshot.session;
+    if (!chatReady || session == null || _managedStt == null) return;
+    final mic = _meetingMic ??= MeetingMicCapture(hub: nativeHub);
+    if (mic.active || !await mic.hasPermission()) return;
+    final transcriptionAuth = await _managedTranscriptionAuthFor(
+      uid: session.uid,
+      deviceId: 'meeting-capture',
+      encoding: ManagedSttEncoding.linear16,
+      sampleRate: MeetingMicCapture.sampleRateHz,
+    );
+    if (_disposed || !_meetingActive || auth.snapshot.session?.uid != session.uid) {
+      return;
+    }
+    await mic.start(auth: transcriptionAuth);
+  }
+
+  void _handleMeetingEvent(NativeEvent event) {
+    if (event case NativeEventMeetingStateChanged(:final value)) {
+      _meetingActive = value.active;
+      if (value.active) {
+        unawaited(_provideMeetingAuth().onError((_, _) {}));
+      } else {
+        final mic = _meetingMic;
+        if (mic != null) unawaited(mic.stop());
+      }
+    } else if (event case NativeEventError(:final value) when _meetingActive) {
+      if (value.code == 'meeting_capture_session_lost') {
+        unawaited(_provideMeetingAuth().onError((_, _) {}));
+      } else if (value.code == 'meeting_system_audio_unavailable') {
+        unawaited(_startMeetingMicFallback().onError((_, _) {}));
+      }
+    }
   }
 
   void _handleNativeEvent(NativeEvent event) {
     if (!_conversationController.handleNativeEvent(event)) return;
+    _handleMeetingEvent(event);
     _nativeEvents.add(event);
     _transcriptMemoryIngestor.handle(event);
   }
@@ -836,6 +931,9 @@ final class AppServices {
     );
     unawaited(cancelDesktopVoice());
     unawaited(cancelLiveVoice());
+    _meetingActive = false;
+    final meetingMic = _meetingMic;
+    if (meetingMic != null) unawaited(meetingMic.stop());
     _clearAssistant();
     _transcriptMemoryIngestor.fence(
       authorityGeneration: generation,
@@ -991,12 +1089,14 @@ final class AppServices {
     unawaited(
       _lifecycle
           .then((_) async {
+            await _meetingMic?.dispose();
             await desktopVoice.dispose();
             await liveVoice.dispose();
             await _nativeEvents.close();
             await _conversationController.dispose();
           })
           .onError((_, _) async {
+            await _meetingMic?.dispose();
             await desktopVoice.dispose();
             await liveVoice.dispose();
             await _nativeEvents.close();

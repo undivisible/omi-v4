@@ -41,6 +41,7 @@ export 'generated/signals/signals.dart'
         NativeEventLiveVoiceAudio,
         NativeEventLiveVoiceState,
         NativeEventLiveVoiceTranscript,
+        SystemAudioCaptureMode,
         NativeEventTranscriptGap,
         NativeEventToolProgress,
         NativeEventTranscriptDelta,
@@ -176,6 +177,18 @@ abstract interface class MeetingHub {
   void stopMeeting(String requestId);
 }
 
+abstract interface class MeetingCaptureHub {
+  void provideMeetingAuth({
+    required String requestId,
+    required TranscriptionAuth auth,
+    String? trustedWorkerOrigin,
+  });
+  void setSystemAudioCaptureMode({
+    required String requestId,
+    required SystemAudioCaptureMode mode,
+  });
+}
+
 abstract interface class OnboardingScanHub {
   void scanOnboarding({
     required String requestId,
@@ -200,7 +213,12 @@ final class NativeHubUnavailable implements Exception {
 }
 
 final class UnavailableNativeHub
-    implements NativeHub, OnboardingScanHub, LiveVoiceHub, MeetingHub {
+    implements
+        NativeHub,
+        OnboardingScanHub,
+        LiveVoiceHub,
+        MeetingHub,
+        MeetingCaptureHub {
   const UnavailableNativeHub(this.reason);
 
   final String reason;
@@ -358,6 +376,19 @@ final class UnavailableNativeHub
   void stopMeeting(String requestId) => _unavailable();
 
   @override
+  void provideMeetingAuth({
+    required String requestId,
+    required TranscriptionAuth auth,
+    String? trustedWorkerOrigin,
+  }) => _unavailable();
+
+  @override
+  void setSystemAudioCaptureMode({
+    required String requestId,
+    required SystemAudioCaptureMode mode,
+  }) => _unavailable();
+
+  @override
   void cancel(String requestId) => _unavailable();
 
   @override
@@ -376,7 +407,12 @@ final class UnavailableNativeHub
 }
 
 final class RinfNativeHub
-    implements NativeHub, OnboardingScanHub, LiveVoiceHub, MeetingHub {
+    implements
+        NativeHub,
+        OnboardingScanHub,
+        LiveVoiceHub,
+        MeetingHub,
+        MeetingCaptureHub {
   bool _initialized = false;
 
   @override
@@ -637,6 +673,25 @@ final class RinfNativeHub
   @override
   void stopMeeting(String requestId) =>
       _send(requestId, const CommandStopMeeting());
+
+  @override
+  void provideMeetingAuth({
+    required String requestId,
+    required TranscriptionAuth auth,
+    String? trustedWorkerOrigin,
+  }) => _send(
+    requestId,
+    CommandProvideMeetingAuth(
+      auth: auth,
+      trustedWorkerOrigin: trustedWorkerOrigin,
+    ),
+  );
+
+  @override
+  void setSystemAudioCaptureMode({
+    required String requestId,
+    required SystemAudioCaptureMode mode,
+  }) => _send(requestId, CommandSetSystemAudioCaptureMode(mode: mode));
 
   @override
   void cancel(String requestId) => _send(requestId, const CommandCancel());
