@@ -2125,6 +2125,203 @@ void main() {
       await hub.close();
     },
   );
+
+  test(
+    'desktop voice prefers gemini live and submits accumulated finals',
+    () async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+      addTearDown(() => debugDefaultTargetPlatformOverride = null);
+      final auth = AuthController(
+        _FakeAuthGateway(_session('user-a')),
+        consentStore: VolatileConsentStore()..receipt = _receipt('user-a'),
+      );
+      await auth.restoreSession();
+      final hub = _FakeHub();
+      final tokens = _FakeLiveVoiceTokens();
+      final managedStt = _FakeManagedStt(_managedSession('user-a'));
+      final audio = StreamController<Uint8List>();
+      final liveVoice = LiveVoiceCapture(
+        hub: hub,
+        startAudio: () async => audio.stream,
+        stopAudio: audio.close,
+      );
+      final desktopVoice = DesktopVoiceCapture(
+        hub: hub,
+        permissionCheck: () async => true,
+      );
+      final services = AppServices.forTesting(
+        auth: auth,
+        nativeHub: hub,
+        deviceRelay: DeviceRelayService(
+          role: DeviceRelayRole.desktopObserver,
+          adapter: const UnavailableDeviceRelayAdapter(),
+        ),
+        memoryDatabasePath: (uid) => '/tmp/$uid.sqlite3',
+        managedStt: managedStt,
+        desktopVoice: desktopVoice,
+        liveVoice: liveVoice,
+        liveVoiceTokens: tokens,
+      );
+      await services.initialize();
+
+      await services.startDesktopVoice();
+      expect(tokens.calls, 1);
+      expect(managedStt.requests, isEmpty);
+      expect(liveVoice.active, isTrue);
+      expect(desktopVoice.active, isFalse);
+      final streamId = hub.liveVoiceStartRequests.keys.single;
+
+      await services.continueDesktopVoice();
+      hub.eventsController
+        ..add(
+          NativeEventLiveVoiceTranscript(
+            value: LiveVoiceTranscript(
+              liveStreamId: streamId,
+              text: 'plan the ',
+              finalSegment: true,
+            ),
+          ),
+        )
+        ..add(
+          NativeEventLiveVoiceTranscript(
+            value: LiveVoiceTranscript(
+              liveStreamId: streamId,
+              text: 'interim noise',
+              finalSegment: false,
+            ),
+          ),
+        )
+        ..add(
+          NativeEventLiveVoiceTranscript(
+            value: LiveVoiceTranscript(
+              liveStreamId: streamId,
+              text: 'launch',
+              finalSegment: true,
+            ),
+          ),
+        );
+      await Future<void>.delayed(Duration.zero);
+
+      final submission = await services.stopDesktopVoice();
+      expect(submission?.text, 'plan the launch');
+      expect(hub.messages.single.$2, 'plan the launch');
+      expect(liveVoice.active, isFalse);
+      expect(hub.transcriptionStartRequests, isEmpty);
+
+      services.dispose();
+      await hub.close();
+    },
+  );
+
+  test(
+    'desktop voice falls back to managed transcription when tokens fail',
+    () async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+      addTearDown(() => debugDefaultTargetPlatformOverride = null);
+      final auth = AuthController(
+        _FakeAuthGateway(_session('user-a')),
+        consentStore: VolatileConsentStore()..receipt = _receipt('user-a'),
+      );
+      await auth.restoreSession();
+      final hub = _FakeHub()..terminalTranscript = 'fallback request';
+      final tokens = _FakeLiveVoiceTokens()
+        ..failure = const WorkerResponseException(
+          'Live voice is unavailable (503)',
+        );
+      final managedStt = _FakeManagedStt(_managedSession('user-a'));
+      final audio = StreamController<Uint8List>();
+      final desktopVoice = DesktopVoiceCapture(
+        hub: hub,
+        permissionCheck: () async => true,
+        startAudio: () async => audio.stream,
+        stopAudio: audio.close,
+      );
+      final liveVoice = LiveVoiceCapture(
+        hub: hub,
+        permissionCheck: () async => true,
+      );
+      final services = AppServices.forTesting(
+        auth: auth,
+        nativeHub: hub,
+        deviceRelay: DeviceRelayService(
+          role: DeviceRelayRole.desktopObserver,
+          adapter: const UnavailableDeviceRelayAdapter(),
+        ),
+        memoryDatabasePath: (uid) => '/tmp/$uid.sqlite3',
+        managedStt: managedStt,
+        desktopVoice: desktopVoice,
+        liveVoice: liveVoice,
+        liveVoiceTokens: tokens,
+      );
+      await services.initialize();
+
+      await services.startDesktopVoice();
+      expect(tokens.calls, 1);
+      expect(hub.liveVoiceStartRequests, isEmpty);
+      expect(managedStt.requests, hasLength(1));
+      expect(desktopVoice.active, isTrue);
+
+      final submission = await services.stopDesktopVoice();
+      expect(submission?.text, 'fallback request');
+      expect(hub.messages.single.$2, 'fallback request');
+      expect(desktopVoice.active, isFalse);
+
+      services.dispose();
+      await hub.close();
+    },
+  );
+
+  test(
+    'desktop voice live route cancels when authority changes mid-start',
+    () async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+      addTearDown(() => debugDefaultTargetPlatformOverride = null);
+      final auth = AuthController(
+        _FakeAuthGateway(_session('user-a')),
+        consentStore: VolatileConsentStore()..receipt = _receipt('user-a'),
+      );
+      await auth.restoreSession();
+      final hub = _FakeHub();
+      final tokens = _FakeLiveVoiceTokens();
+      final audio = StreamController<Uint8List>();
+      final liveVoice = LiveVoiceCapture(
+        hub: hub,
+        startAudio: () async => audio.stream,
+        stopAudio: audio.close,
+      );
+      final desktopVoice = DesktopVoiceCapture(
+        hub: hub,
+        permissionCheck: () async => true,
+      );
+      final services = AppServices.forTesting(
+        auth: auth,
+        nativeHub: hub,
+        deviceRelay: DeviceRelayService(
+          role: DeviceRelayRole.desktopObserver,
+          adapter: const UnavailableDeviceRelayAdapter(),
+        ),
+        memoryDatabasePath: (uid) => '/tmp/$uid.sqlite3',
+        desktopVoice: desktopVoice,
+        liveVoice: liveVoice,
+        liveVoiceTokens: tokens,
+      );
+      await services.initialize();
+
+      tokens.barrier = Completer<void>();
+      final starting = services.startDesktopVoice();
+      await _waitFor(() => tokens.calls == 1);
+      await services.cancelDesktopVoice();
+      tokens.barrier!.complete();
+      await expectLater(starting, throwsStateError);
+      expect(liveVoice.active, isFalse);
+      expect(desktopVoice.active, isFalse);
+      expect(hub.liveVoiceStartRequests, isEmpty);
+      expect(await services.stopDesktopVoice(), isNull);
+
+      services.dispose();
+      await hub.close();
+    },
+  );
 }
 
 final class _FakeConversationTransport implements ConversationTransport {
@@ -2212,11 +2409,14 @@ final class _FakeConversationInboxTransport
 final class _FakeLiveVoiceTokens implements LiveVoiceTokenClient {
   int calls = 0;
   Completer<void>? barrier;
+  Object? failure;
 
   @override
   Future<GeminiLiveToken> createGeminiToken() async {
     calls += 1;
     if (barrier != null) await barrier!.future;
+    final failure = this.failure;
+    if (failure != null) throw failure;
     return GeminiLiveToken(
       token: 'auth_tokens/fake-live-token',
       model: 'gemini-live-test-model',

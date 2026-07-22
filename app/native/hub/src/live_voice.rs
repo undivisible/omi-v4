@@ -167,6 +167,7 @@ pub(crate) fn setup_message(model: &str) -> String {
                 "responseModalities": ["AUDIO"],
             },
             "realtimeInputConfig": {},
+            "inputAudioTranscription": {},
         }
     })
     .to_string()
@@ -205,6 +206,7 @@ struct ServerContent {
     interrupted: bool,
     #[serde(default)]
     turn_complete: bool,
+    input_transcription: Option<OutputTranscription>,
     output_transcription: Option<OutputTranscription>,
 }
 
@@ -250,6 +252,7 @@ pub(crate) enum ServerMessage {
     SetupComplete,
     Content {
         audio: Vec<(u32, Vec<u8>)>,
+        input_transcript: Option<String>,
         transcript: Option<String>,
         interrupted: bool,
         turn_complete: bool,
@@ -302,12 +305,17 @@ pub(crate) fn parse_server_message(payload: &[u8]) -> Result<ServerMessage, Stri
             audio.push((pcm_sample_rate(&inline.mime_type), bytes));
         }
     }
+    let input_transcript = content
+        .input_transcription
+        .map(|value| value.text)
+        .filter(|text| !text.trim().is_empty());
     let transcript = content
         .output_transcription
         .map(|value| value.text)
         .filter(|text| !text.trim().is_empty());
     Ok(ServerMessage::Content {
         audio,
+        input_transcript,
         transcript,
         interrupted: content.interrupted,
         turn_complete: content.turn_complete,
@@ -506,11 +514,23 @@ async fn dispatch_server_payload(
         }
         ServerMessage::Content {
             audio,
+            input_transcript,
             transcript,
             interrupted,
             turn_complete,
         } => {
             if interrupted && events.send(RealtimeVoiceEvent::Interrupted).await.is_err() {
+                return false;
+            }
+            if let Some(text) = input_transcript
+                && events
+                    .send(RealtimeVoiceEvent::TranscriptDelta {
+                        text,
+                        final_segment: true,
+                    })
+                    .await
+                    .is_err()
+            {
                 return false;
             }
             for (sample_rate_hz, bytes) in audio {
@@ -599,6 +619,10 @@ mod tests {
             serde_json::json!(["AUDIO"])
         );
         assert_eq!(value["setup"]["realtimeInputConfig"], serde_json::json!({}));
+        assert_eq!(
+            value["setup"]["inputAudioTranscription"],
+            serde_json::json!({})
+        );
         let prefixed: serde_json::Value =
             serde_json::from_str(&setup_message("models/gemini-live")).unwrap_or_default();
         assert_eq!(
@@ -639,6 +663,7 @@ mod tests {
                 },
                 "interrupted": true,
                 "turnComplete": true,
+                "inputTranscription": {"text": "plan the launch"},
                 "outputTranscription": {"text": "hello"},
             }
         })
@@ -647,6 +672,7 @@ mod tests {
             parse_server_message(payload.as_bytes()),
             Ok(ServerMessage::Content {
                 audio: vec![(24_000, vec![9, 8])],
+                input_transcript: Some("plan the launch".to_owned()),
                 transcript: Some("hello".to_owned()),
                 interrupted: true,
                 turn_complete: true,

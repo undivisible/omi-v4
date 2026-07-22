@@ -97,13 +97,13 @@ final class LiveVoiceCapture {
     }
   }
 
-  Future<void> stop() async {
+  Future<String> stop() async {
     final session = _session;
-    if (session == null) return;
-    await (session.teardown ??= _finish(session));
+    if (session == null) return '';
+    return session.teardown ??= _finish(session);
   }
 
-  Future<void> _finish(_LiveVoiceSession session) async {
+  Future<String> _finish(_LiveVoiceSession session) async {
     session.stopping = true;
     try {
       await (_stopAudio?.call() ?? _recorder!.stop().then((_) {}));
@@ -128,6 +128,7 @@ final class LiveVoiceCapture {
     } finally {
       await _release(session);
     }
+    return session.transcript.toString().trim();
   }
 
   Future<void> cancel() async {
@@ -173,6 +174,10 @@ final class LiveVoiceCapture {
           if (!session.ended.isCompleted) session.ended.complete();
           if (!session.stopping) unawaited(_abort(session));
       }
+    } else if (event case NativeEventLiveVoiceTranscript(
+      :final value,
+    ) when value.liveStreamId == session.streamId) {
+      if (value.finalSegment) session.transcript.write(value.text);
     } else if (event case NativeEventLiveVoiceAudio(
       :final value,
     ) when value.liveStreamId == session.streamId) {
@@ -193,7 +198,7 @@ final class LiveVoiceCapture {
     await (session.teardown ??= _cancelSession(session));
   }
 
-  Future<void> _cancelSession(_LiveVoiceSession session) async {
+  Future<String> _cancelSession(_LiveVoiceSession session) async {
     session.stopping = true;
     try {
       await (_stopAudio?.call() ?? _recorder!.stop().then((_) {}));
@@ -202,6 +207,7 @@ final class LiveVoiceCapture {
       _stopNative(session);
     } catch (_) {}
     await _release(session);
+    return '';
   }
 
   void _stopNative(_LiveVoiceSession session) {
@@ -229,9 +235,10 @@ final class _LiveVoiceSession {
   final started = Completer<void>();
   final cancelled = Completer<void>();
   final ended = Completer<void>();
+  final transcript = StringBuffer();
   StreamSubscription<NativeEvent>? events;
   StreamSubscription<Uint8List>? audio;
   int sequence = 0;
   bool stopping = false;
-  Future<void>? teardown;
+  Future<String>? teardown;
 }
