@@ -317,9 +317,11 @@ void main() {
     expect(pillHeight, 36.0);
     final glass = find.byType(LiquidGlass);
     expect(glass, findsOneWidget);
+    // The glass material is native (below the Flutter view); the widget
+    // itself must not paint a fake blur.
     expect(
       find.descendant(of: glass, matching: find.byType(BackdropFilter)),
-      findsOneWidget,
+      findsNothing,
     );
     final box = tester.getSize(glass);
     expect(box.height, pillHeight);

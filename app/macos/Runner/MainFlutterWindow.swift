@@ -77,6 +77,57 @@ private final class OnboardingBlurView: OvalBlurView {
   override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 
+/// Native Liquid Glass backing for the cursor pill. On macOS 26+ this hosts
+/// the real NSGlassEffectView (looked up dynamically so older SDKs still
+/// build); earlier systems fall back to a behind-window NSVisualEffectView.
+/// The glass is masked to the pill's rounded-rect regions, which Dart
+/// reports through the omi/window_chrome channel so the native shape always
+/// matches the Flutter layout above it.
+private final class PillGlassView: NSView {
+  private let glass: NSView
+  private let maskLayer = CAShapeLayer()
+
+  override init(frame frameRect: NSRect) {
+    if let glassClass = NSClassFromString("NSGlassEffectView") as? NSView.Type {
+      glass = glassClass.init(frame: frameRect)
+    } else {
+      let effect = NSVisualEffectView(frame: frameRect)
+      effect.material = .hudWindow
+      effect.blendingMode = .behindWindow
+      effect.state = .active
+      effect.isEmphasized = true
+      glass = effect
+    }
+    super.init(frame: frameRect)
+    wantsLayer = true
+    glass.wantsLayer = true
+    glass.autoresizingMask = [.width, .height]
+    glass.frame = bounds
+    addSubview(glass)
+    layer?.mask = maskLayer
+    maskLayer.fillRule = .evenOdd
+    setRegions([], radius: 18)
+  }
+
+  required init?(coder: NSCoder) { nil }
+
+  override var isFlipped: Bool { true }
+
+  override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+  func setRegions(_ regions: [(rect: CGRect, radius: CGFloat)], radius fallback: CGFloat) {
+    let path = CGMutablePath()
+    for region in regions {
+      let radius = min(region.radius > 0 ? region.radius : fallback,
+                       min(region.rect.width, region.rect.height) / 2)
+      path.addRoundedRect(in: region.rect, cornerWidth: radius, cornerHeight: radius)
+    }
+    maskLayer.frame = bounds
+    maskLayer.fillRule = .nonZero
+    maskLayer.path = path
+  }
+}
+
 private final class ShortcutDragView: NSImageView, NSDraggingSource {
   private let shortcutURL: URL
 
@@ -218,6 +269,9 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
   private var pillPreviousCollectionBehavior: NSWindow.CollectionBehavior = []
   private var pillLocalMouseMonitor: Any?
   private var pillGlobalMouseMonitor: Any?
+  private var pillGlassView: PillGlassView?
+  private weak var hostContentView: NSView?
+  private weak var flutterContentView: NSView?
 
   func requestSettings() {
     NSApp.activate(ignoringOtherApps: true)
@@ -291,6 +345,8 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
     flutterViewController.view.autoresizingMask = [.width, .height]
     rootView.addSubview(blur)
     rootView.addSubview(flutterViewController.view)
+    hostContentView = rootView
+    flutterContentView = flutterViewController.view
     let permissionOverlay = PermissionDragOverlay(
       frame: rootView.bounds,
       appBundleURL: permissionService.bundleURL
@@ -401,6 +457,12 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
       case "restoreFromPill":
         self?.restoreFromPill()
         result(nil)
+      case "updatePillGlass":
+        let arguments = call.arguments as? [String: Any]
+        self?.updatePillGlass(
+          regions: arguments?["regions"] as? [[String: Any]] ?? [],
+          radius: arguments?["radius"] as? Double ?? 18)
+        result(nil)
       default:
         result(FlutterMethodNotImplemented)
       }
@@ -423,12 +485,20 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
 
   private func enterHubChrome() {
     styleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
+    // Mutating styleMask rebuilds the theme frame, which can bring back the
+    // default titlebar chrome — re-assert every property that keeps the bar
+    // invisible so only the floating traffic lights remain over content.
+    toolbar = nil
     titlebarAppearsTransparent = true
     titleVisibility = .hidden
+    titlebarSeparatorStyle = .none
+    isOpaque = false
+    backgroundColor = .clear
     isMovableByWindowBackground = true
     hasShadow = true
     level = .normal
     collectionBehavior = [.fullScreenAuxiliary]
+    invalidateShadow()
   }
 
   private func enterOnboardingChrome() {
@@ -490,14 +560,48 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
     level = .floating
     collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
     setFrame(target, display: true)
+    attachPillGlass()
     NSApp.activate(ignoringOtherApps: true)
     makeKeyAndOrderFront(nil)
     stopFollowingCursor()
     followCursor(width: width, height: height)
   }
 
+  private func attachPillGlass() {
+    guard pillGlassView == nil, let host = hostContentView else { return }
+    let glass = PillGlassView(frame: host.bounds)
+    glass.autoresizingMask = [.width, .height]
+    if let flutterView = flutterContentView {
+      host.addSubview(glass, positioned: .below, relativeTo: flutterView)
+    } else {
+      host.addSubview(glass)
+    }
+    pillGlassView = glass
+  }
+
+  private func updatePillGlass(regions: [[String: Any]], radius: Double) {
+    guard pillPreviousFrame != nil else { return }
+    attachPillGlass()
+    let parsed: [(rect: CGRect, radius: CGFloat)] = regions.compactMap { region in
+      guard
+        let x = region["x"] as? Double,
+        let y = region["y"] as? Double,
+        let width = region["w"] as? Double,
+        let height = region["h"] as? Double,
+        width > 0, height > 0
+      else { return nil }
+      return (
+        rect: CGRect(x: x, y: y, width: width, height: height),
+        radius: CGFloat(region["r"] as? Double ?? 0)
+      )
+    }
+    pillGlassView?.setRegions(parsed, radius: CGFloat(radius))
+  }
+
   private func restoreFromPill() {
     stopFollowingCursor()
+    pillGlassView?.removeFromSuperview()
+    pillGlassView = nil
     guard let previousFrame = pillPreviousFrame else { return }
     pillPreviousFrame = nil
     level = pillPreviousLevel
