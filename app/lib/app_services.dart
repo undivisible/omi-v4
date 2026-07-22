@@ -349,6 +349,40 @@ final class AppServices {
 
   bool get canUseApi => _worker != null && auth.snapshot.hasProcessingAuthority;
 
+  Future<void> captureOnboardingProfile({
+    String? name,
+    required List<String> languages,
+  }) async {
+    final snapshot = auth.snapshot;
+    if (snapshot.phase != AuthPhase.unavailable &&
+        !snapshot.hasProcessingAuthority) {
+      return;
+    }
+    if (name == null && languages.isEmpty) return;
+    try {
+      if (!await _ensureNativeInitialized()) return;
+    } catch (_) {
+      return;
+    }
+    final spoken = languages.join(', ');
+    final text = name == null
+        ? 'The user speaks $spoken.'
+        : languages.isEmpty
+        ? 'The user’s name is $name.'
+        : 'The user’s name is $name. They speak $spoken.';
+    final occurredAtMs = _now().millisecondsSinceEpoch;
+    try {
+      nativeHub.capture(
+        requestId: 'onboarding-profile-${_randomId()}',
+        ingestionKey: 'onboarding-profile-$occurredAtMs',
+        source: CaptureSource.chat,
+        occurredAtMs: occurredAtMs,
+        recordedAtMs: occurredAtMs,
+        text: text,
+      );
+    } catch (_) {}
+  }
+
   Future<void> initialize() async {
     auth.addListener(_authChanged);
     await capabilities.verifiedWorkspaceRoot();

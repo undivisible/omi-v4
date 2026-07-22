@@ -18,6 +18,65 @@ import 'package:omi/settings/system_audio_capture_mode_store.dart'
     show VolatileSystemAudioCaptureModeStore;
 
 void main() {
+  test('onboarding profile capture sends a chat memory event', () async {
+    final auth = AuthController(
+      _FakeAuthGateway(_session('user-a')),
+      consentStore: VolatileConsentStore()..receipt = _receipt('user-a'),
+    );
+    await auth.restoreSession();
+    final hub = _FakeHub();
+    final services = AppServices.forTesting(
+      auth: auth,
+      nativeHub: hub,
+      deviceRelay: DeviceRelayService(
+        role: DeviceRelayRole.desktopObserver,
+        adapter: const UnavailableDeviceRelayAdapter(),
+      ),
+      memoryDatabasePath: (uid) => '/tmp/$uid.sqlite3',
+    );
+    await services.initialize();
+
+    await services.captureOnboardingProfile(
+      name: 'Ada',
+      languages: ['English', 'French'],
+    );
+
+    final capture = hub.captures.single;
+    expect(capture.source, CaptureSource.chat);
+    expect(
+      capture.text,
+      'The user’s name is Ada. They speak English, French.',
+    );
+    services.dispose();
+  });
+
+  test('onboarding profile capture skips without processing authority', () async {
+    final auth = AuthController(
+      _FakeAuthGateway(_session('user-a')),
+      consentStore: VolatileConsentStore(),
+    );
+    await auth.restoreSession();
+    final hub = _FakeHub();
+    final services = AppServices.forTesting(
+      auth: auth,
+      nativeHub: hub,
+      deviceRelay: DeviceRelayService(
+        role: DeviceRelayRole.desktopObserver,
+        adapter: const UnavailableDeviceRelayAdapter(),
+      ),
+      memoryDatabasePath: (uid) => '/tmp/$uid.sqlite3',
+    );
+    await services.initialize();
+
+    await services.captureOnboardingProfile(
+      name: 'Ada',
+      languages: ['English'],
+    );
+
+    expect(hub.captures, isEmpty);
+    services.dispose();
+  });
+
   test(
     'system audio capture mode is resent on connect and meeting auth is '
     'minted when a meeting becomes active',

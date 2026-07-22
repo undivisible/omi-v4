@@ -6,6 +6,7 @@ import '../app_services.dart';
 import '../capabilities/desktop_capabilities.dart';
 import '../native/native_hub.dart';
 import '../onboarding/onboarding_controller.dart';
+import '../ui/omi_ui.dart';
 import 'onboarding/backdrop.dart';
 import 'onboarding/permission_gate.dart';
 import 'onboarding/randomized_text.dart';
@@ -135,6 +136,25 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     }
   }
 
+  String get _defaultProfileName {
+    final displayName = widget.services.auth.snapshot.session?.displayName
+        ?.trim();
+    return (displayName == null || displayName.isEmpty) ? 'there' : displayName;
+  }
+
+  void _completeProfile(String name, List<String> languages) {
+    final trimmed = name.trim();
+    unawaited(
+      widget.services
+          .captureOnboardingProfile(
+            name: trimmed.isEmpty || trimmed == 'there' ? null : trimmed,
+            languages: languages,
+          )
+          .onError((_, _) {}),
+    );
+    onboarding.completeProfile();
+  }
+
   @override
   Widget build(BuildContext context) {
     if (previewing) {
@@ -209,10 +229,12 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                       onRetry: _retryScan,
                       onContinue: onboarding.completeScan,
                     ),
-                    OnboardingStage.profile => _ProfileNotice(
+                    OnboardingStage.profile => OnboardingProfileStep(
                       key: const ValueKey('profile'),
                       notice: scanSummary,
-                      onContinue: onboarding.completeProfile,
+                      defaultName: _defaultProfileName,
+                      defaultLanguages: [_deviceLanguageName()],
+                      onContinue: _completeProfile,
                     ),
                     OnboardingStage.use => _UseStep(
                       key: const ValueKey('use'),
@@ -269,70 +291,233 @@ class _Introduction extends StatelessWidget {
         ),
       ),
       const SizedBox(height: 40),
-      FilledButton(
+      OmiButton(
         key: const Key('continue_preview_intro'),
         onPressed: onContinue,
-        style: FilledButton.styleFrom(
-          minimumSize: const Size(0, 56),
-          padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
-          backgroundColor: const Color(0xfffffcec),
-          foregroundColor: const Color(0xff171716),
-          shape: const StadiumBorder(),
-          textStyle: const TextStyle(
-            fontFamily: 'Avenir Next',
-            fontSize: 16,
-            fontWeight: FontWeight.w600,
-          ),
-        ),
         child: const Text('Hi Omi!'),
       ),
     ],
   );
 }
 
-class _ProfileNotice extends StatelessWidget {
-  const _ProfileNotice({
+const _profileLanguageNames = {
+  'en': 'English',
+  'es': 'Spanish',
+  'fr': 'French',
+  'de': 'German',
+  'ja': 'Japanese',
+  'zh': 'Mandarin',
+};
+
+String _deviceLanguageName() {
+  final code = WidgetsBinding.instance.platformDispatcher.locale.languageCode;
+  return _profileLanguageNames[code] ?? 'English';
+}
+
+class OnboardingProfileStep extends StatefulWidget {
+  const OnboardingProfileStep({
     required this.notice,
+    required this.defaultName,
+    required this.defaultLanguages,
     required this.onContinue,
     super.key,
   });
 
   final String? notice;
-  final VoidCallback onContinue;
+  final String defaultName;
+  final List<String> defaultLanguages;
+  final void Function(String name, List<String> languages) onContinue;
 
   @override
-  Widget build(BuildContext context) => Column(
-    mainAxisSize: MainAxisSize.min,
-    crossAxisAlignment: CrossAxisAlignment.center,
-    children: [
-      RandomizedText(
-        key: ValueKey(notice ?? 'noticing'),
-        segments: [(notice ?? 'Here’s what I noticed.', null)],
-        textAlign: TextAlign.center,
-        style: const TextStyle(
-          color: Color(0xfffffcec),
-          fontFamily: 'Avenir Next',
-          fontSize: 32,
-          fontWeight: FontWeight.w500,
-          height: 1.35,
-          letterSpacing: -.6,
+  State<OnboardingProfileStep> createState() => _OnboardingProfileStepState();
+}
+
+class _OnboardingProfileStepState extends State<OnboardingProfileStep> {
+  static const _cream = Color(0xfffffcec);
+  static const _ink = Color(0xff171716);
+
+  late String name = widget.defaultName;
+  late final List<String> languages = List.of(widget.defaultLanguages);
+  late final nameController = TextEditingController(text: widget.defaultName);
+  bool editingName = false;
+  bool pickingLanguages = false;
+
+  List<String> get _languageOptions => [
+    ...widget.defaultLanguages,
+    for (final option in _profileLanguageNames.values)
+      if (!widget.defaultLanguages.contains(option)) option,
+  ];
+
+  @override
+  void dispose() {
+    nameController.dispose();
+    super.dispose();
+  }
+
+  void _commitName() {
+    final value = nameController.text.trim();
+    setState(() {
+      editingName = false;
+      if (value.isNotEmpty) name = value;
+      nameController.text = name;
+    });
+  }
+
+  Widget _chip({
+    required Key key,
+    required String label,
+    required VoidCallback onTap,
+  }) => Material(
+    key: key,
+    color: _cream,
+    shape: const StadiumBorder(),
+    child: InkWell(
+      customBorder: const StadiumBorder(),
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              label,
+              style: const TextStyle(
+                color: _ink,
+                fontFamily: 'Avenir Next',
+                fontSize: 20,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(width: 6),
+            const Icon(Icons.edit_rounded, size: 15, color: _ink),
+          ],
         ),
       ),
-      const SizedBox(height: 36),
-      FilledButton(
-        key: const Key('keep_profile'),
-        onPressed: onContinue,
-        style: FilledButton.styleFrom(
-          minimumSize: const Size(0, 56),
-          padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
-          backgroundColor: const Color(0xfffffcec),
-          foregroundColor: const Color(0xff171716),
-          shape: const StadiumBorder(),
-        ),
-        child: const Text('Continue'),
-      ),
-    ],
+    ),
   );
+
+  @override
+  Widget build(BuildContext context) {
+    const prose = TextStyle(
+      color: _cream,
+      fontFamily: 'Avenir Next',
+      fontSize: 24,
+      fontWeight: FontWeight.w500,
+      height: 1.5,
+      letterSpacing: -.4,
+    );
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        const RandomizedText(
+          segments: [('Here’s what I noticed.', null)],
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            color: _cream,
+            fontFamily: 'Avenir Next',
+            fontSize: 38,
+            fontWeight: FontWeight.w500,
+            height: 1.2,
+            letterSpacing: -1.2,
+          ),
+        ),
+        const SizedBox(height: 28),
+        Wrap(
+          alignment: WrapAlignment.center,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          runSpacing: 10,
+          children: [
+            const Text('I think you’re ', style: prose),
+            if (editingName)
+              SizedBox(
+                width: 200,
+                child: TextField(
+                  key: const Key('profile_name_field'),
+                  controller: nameController,
+                  autofocus: true,
+                  style: const TextStyle(
+                    color: _cream,
+                    fontFamily: 'Avenir Next',
+                    fontSize: 20,
+                    fontWeight: FontWeight.w600,
+                  ),
+                  decoration: const InputDecoration(isDense: true),
+                  onSubmitted: (_) => _commitName(),
+                  onTapOutside: (_) => _commitName(),
+                ),
+              )
+            else
+              _chip(
+                key: const Key('profile_name_chip'),
+                label: name,
+                onTap: () => setState(() => editingName = true),
+              ),
+            const Text('. You speak ', style: prose),
+            _chip(
+              key: const Key('profile_languages_chip'),
+              label: languages.join(', '),
+              onTap: () => setState(() => pickingLanguages = !pickingLanguages),
+            ),
+            const Text('.', style: prose),
+          ],
+        ),
+        if (pickingLanguages) ...[
+          const SizedBox(height: 18),
+          Wrap(
+            alignment: WrapAlignment.center,
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              for (final option in _languageOptions)
+                FilterChip(
+                  key: Key('profile_language_$option'),
+                  label: Text(option),
+                  selected: languages.contains(option),
+                  showCheckmark: true,
+                  selectedColor: _cream,
+                  checkmarkColor: _ink,
+                  labelStyle: TextStyle(
+                    color: languages.contains(option) ? _ink : _cream,
+                    fontWeight: FontWeight.w600,
+                  ),
+                  side: const BorderSide(color: Color(0x59fffcec)),
+                  backgroundColor: Colors.transparent,
+                  onSelected: (selected) => setState(() {
+                    if (selected) {
+                      languages.add(option);
+                    } else if (languages.length > 1) {
+                      languages.remove(option);
+                    }
+                  }),
+                ),
+            ],
+          ),
+        ],
+        if (widget.notice case final value?) ...[
+          const SizedBox(height: 26),
+          RandomizedText(
+            key: ValueKey(value),
+            segments: [(value, null)],
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              color: _cream,
+              fontFamily: 'Avenir Next',
+              fontSize: 20,
+              fontWeight: FontWeight.w500,
+              height: 1.5,
+            ),
+          ),
+        ],
+        const SizedBox(height: 36),
+        OmiButton(
+          key: const Key('keep_profile'),
+          onPressed: () => widget.onContinue(name, List.of(languages)),
+          child: const Text('Continue'),
+        ),
+      ],
+    );
+  }
 }
 
 class _ScanStep extends StatelessWidget {
@@ -433,9 +618,22 @@ class _ScanStep extends StatelessWidget {
         Text(message, style: const TextStyle(color: Color(0xffffb4ab))),
       const SizedBox(height: 24),
       if (sources != null)
-        FilledButton(onPressed: onContinue, child: const Text('Continue'))
+        Align(
+          alignment: Alignment.centerLeft,
+          child: OmiButton(
+            onPressed: onContinue,
+            child: const Text('Continue'),
+          ),
+        )
       else if (error != null)
-        OutlinedButton(onPressed: onRetry, child: const Text('Try again'))
+        Align(
+          alignment: Alignment.centerLeft,
+          child: OmiButton(
+            variant: OmiButtonVariant.secondary,
+            onPressed: onRetry,
+            child: const Text('Try again'),
+          ),
+        )
       else
         const LinearProgressIndicator(),
     ],
@@ -479,10 +677,13 @@ class _UseStep extends StatelessWidget {
         style: TextStyle(color: Color(0xffd0cec6), fontSize: 18, height: 1.5),
       ),
       const SizedBox(height: 32),
-      FilledButton(
-        key: const Key('finish_voice_lesson'),
-        onPressed: finishing ? null : () async => onFinish(),
-        child: const Text('Take me to Omi'),
+      Align(
+        alignment: Alignment.centerLeft,
+        child: OmiButton(
+          key: const Key('finish_voice_lesson'),
+          onPressed: finishing ? null : () async => onFinish(),
+          child: const Text('Take me to Omi'),
+        ),
       ),
       if (error case final message?) ...[
         const SizedBox(height: 12),

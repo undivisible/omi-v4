@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../../auth/auth.dart';
 import '../../capabilities/desktop_capabilities.dart';
+import '../../ui/omi_ui.dart';
 import 'authentication_gate.dart';
 
 class ProductionGate extends StatefulWidget {
@@ -195,7 +196,7 @@ class _ProductionGateState extends State<ProductionGate>
       if (widget.auth.snapshot.phase == AuthPhase.signedIn &&
           !widget.auth.snapshot.hasProcessingAuthority) ...[
         const SizedBox(height: 8),
-        FilledButton(
+        OmiButton(
           key: const Key('grant_processing_consent'),
           onPressed: () => unawaited(widget.auth.grantProcessingConsent()),
           child: const Text('Allow Omi to process my data'),
