@@ -13,9 +13,28 @@ import '../native/generated/signals/signals.dart'
     show AssistantProvider, SystemAudioCaptureMode;
 import '../providers/providers.dart';
 import '../settings/settings.dart';
-import '../ui/omi_ui.dart';
 
-class SettingsScreen extends StatelessWidget {
+enum SettingsSection {
+  account('Account', Icons.person_outline_rounded),
+  plan('Plan & Billing', Icons.credit_card_outlined),
+  providers('AI Providers', Icons.key_outlined),
+  permissions('Permissions', Icons.lock_outline_rounded),
+  calendar('Calendar', Icons.calendar_today_outlined),
+  advanced('Advanced', Icons.tune_rounded);
+
+  const SettingsSection(this.label, this.icon);
+
+  final String label;
+  final IconData icon;
+}
+
+bool get _isWindowsStyle =>
+    !kIsWeb && defaultTargetPlatform == TargetPlatform.windows;
+
+bool get _isMacDesktop =>
+    !kIsWeb && defaultTargetPlatform == TargetPlatform.macOS;
+
+class SettingsScreen extends StatefulWidget {
   const SettingsScreen({
     required this.services,
     this.previewMode = false,
@@ -26,97 +45,469 @@ class SettingsScreen extends StatelessWidget {
   final bool previewMode;
 
   @override
-  Widget build(BuildContext context) => PageList(
-    title: 'Settings',
-    subtitle: 'Identity, plan, providers, connections, and agent control.',
-    children: [
-      _AccountTile(
-        icon: Icons.person_outline_rounded,
-        title: 'Sign in',
-        detail: previewMode
-            ? 'Account access is disabled in the interface preview.'
-            : services.auth.snapshot.session?.displayName ??
-                  services.configurationMessage,
-      ),
-      if (previewMode || services.billing == null)
-        const _AccountTile(
-          icon: Icons.credit_card_outlined,
-          title: 'Plan unavailable',
-          detail: 'Sign in to manage your plan.',
-        )
-      else
-        _PlanTile(client: services.billing!),
-      if (previewMode || kIsWeb)
-        const _AccountTile(
-          icon: Icons.key_outlined,
-          title: 'AI providers',
-          detail: 'Configure BYOK securely from a native Omi app.',
-        )
-      else ...[
-        _ProviderTile(services: services),
-        const _AccountTile(
-          icon: Icons.savings_outlined,
-          title: 'Bring your own key',
-          detail:
-              'Managed Omi AI runs about \$35/mo of usage. A personal API key '
-              'runs the same usage for about \$5/mo — configure it above.',
+  State<SettingsScreen> createState() => _SettingsScreenState();
+}
+
+class _SettingsScreenState extends State<SettingsScreen> {
+  SettingsSection selected = SettingsSection.account;
+
+  List<SettingsSection> get sections => [
+    SettingsSection.account,
+    SettingsSection.plan,
+    SettingsSection.providers,
+    if (_isMacDesktop || _isWindowsStyle) SettingsSection.permissions,
+    if (_isMacDesktop) SettingsSection.calendar,
+    SettingsSection.advanced,
+  ];
+
+  List<Widget> _tiles(SettingsSection section) {
+    final services = widget.services;
+    final previewMode = widget.previewMode;
+    return switch (section) {
+      SettingsSection.account => [
+        _InfoTile(
+          icon: Icons.person_outline_rounded,
+          title: 'Sign in',
+          detail: previewMode
+              ? 'Account access is disabled in the interface preview.'
+              : services.auth.snapshot.session?.displayName ??
+                    services.configurationMessage,
         ),
+        if (!previewMode && services.auth.snapshot.session != null) ...[
+          _Tile(
+            icon: Icons.logout_rounded,
+            title: 'Sign out',
+            detail: 'Sign out of this device. Your account data stays intact.',
+            trailing: TextButton(
+              key: const Key('sign_out'),
+              onPressed: () => unawaited(services.auth.signOut()),
+              child: const Text('Sign out'),
+            ),
+          ),
+          DeleteAccountTile(services: services),
+        ],
       ],
-      if (!previewMode && services.oauthConnections != null) ...[
-        _SubscriptionSignInTile(
-          client: services.oauthConnections!,
-          provider: 'openai',
-          title: 'Sign in with ChatGPT',
-        ),
-        _SubscriptionSignInTile(
-          client: services.oauthConnections!,
-          provider: 'xai',
-          title: 'Sign in with xAI',
-        ),
+      SettingsSection.plan => [
+        if (previewMode || services.billing == null)
+          const _InfoTile(
+            icon: Icons.credit_card_outlined,
+            title: 'Plan unavailable',
+            detail: 'Sign in to manage your plan.',
+          )
+        else
+          _PlanTile(client: services.billing!),
       ],
-      if (previewMode || !services.canUseApi)
-        const _AccountTile(
-          icon: Icons.shield_outlined,
-          title: 'Agent control unavailable',
-          detail: 'Sign in to load your approval policy.',
-        )
-      else
-        _AgentControlTile(client: services.settings!),
-      if (!previewMode && services.settings != null)
-        _ProductionHealthTile(client: services.settings!),
-      if (!kIsWeb &&
-          (defaultTargetPlatform == TargetPlatform.macOS ||
-              defaultTargetPlatform == TargetPlatform.windows))
+      SettingsSection.providers => [
+        if (previewMode || kIsWeb)
+          const _InfoTile(
+            icon: Icons.key_outlined,
+            title: 'AI providers',
+            detail: 'Configure BYOK securely from a native Omi app.',
+          )
+        else ...[
+          _ProviderTile(services: services),
+          const _InfoTile(
+            icon: Icons.savings_outlined,
+            title: 'Bring your own key',
+            detail:
+                'Managed Omi AI runs about \$35/mo of usage. A personal API '
+                'key runs the same usage for about \$5/mo — configure it '
+                'above.',
+          ),
+        ],
+        if (!previewMode && services.oauthConnections != null) ...[
+          _SubscriptionSignInTile(
+            client: services.oauthConnections!,
+            provider: 'openai',
+            title: 'Sign in with ChatGPT',
+          ),
+          _SubscriptionSignInTile(
+            client: services.oauthConnections!,
+            provider: 'xai',
+            title: 'Sign in with xAI',
+          ),
+        ],
+      ],
+      SettingsSection.permissions => [
         ScreenCaptureSetupTile(
           gateway: services.capabilities,
           previewMode: previewMode,
         ),
-      if (!kIsWeb && defaultTargetPlatform == TargetPlatform.macOS)
-        SystemAudioCaptureModeTile(
-          services: services,
-          previewMode: previewMode,
-        ),
-      if (!kIsWeb && defaultTargetPlatform == TargetPlatform.macOS)
+        if (_isMacDesktop)
+          SystemAudioCaptureModeTile(
+            services: services,
+            previewMode: previewMode,
+          ),
+      ],
+      SettingsSection.calendar => [
         for (final source in AppleEventKitSource.values)
           AppleEventKitConnectionTile(
             services: services,
             source: source,
             previewMode: previewMode,
           ),
-      if (!previewMode && services.auth.snapshot.session != null) ...[
-        BaseTile(
-          icon: Icons.logout_rounded,
-          title: 'Sign out',
-          detail: 'Sign out of this device. Your account data stays intact.',
-          trailing: TextButton(
-            key: const Key('sign_out'),
-            onPressed: () => unawaited(services.auth.signOut()),
-            child: const Text('Sign out'),
+      ],
+      SettingsSection.advanced => [
+        if (previewMode || !services.canUseApi)
+          const _InfoTile(
+            icon: Icons.shield_outlined,
+            title: 'Agent control unavailable',
+            detail: 'Sign in to load your approval policy.',
+          )
+        else
+          _AgentControlTile(client: services.settings!),
+        if (!previewMode && services.settings != null)
+          _ProductionHealthTile(client: services.settings!),
+      ],
+    };
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final windows = _isWindowsStyle;
+    final hairline = scheme.onSurface.withValues(alpha: .12);
+    final available = sections;
+    final active = available.contains(selected) ? selected : available.first;
+    return Scaffold(
+      body: SafeArea(
+        child: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 760, maxHeight: 560),
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  color: scheme.surface,
+                  borderRadius: BorderRadius.circular(windows ? 8 : 12),
+                  border: Border.all(color: hairline),
+                ),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(windows ? 8 : 12),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      SizedBox(
+                        width: 192,
+                        child: ColoredBox(
+                          color: scheme.onSurface.withValues(alpha: .03),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              Padding(
+                                padding: const EdgeInsets.fromLTRB(
+                                  16,
+                                  16,
+                                  16,
+                                  10,
+                                ),
+                                child: Semantics(
+                                  header: true,
+                                  child: Text(
+                                    'Settings',
+                                    style: TextStyle(
+                                      fontSize: 15,
+                                      fontWeight: FontWeight.w700,
+                                      color: scheme.onSurface,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              for (final section in available)
+                                _SidebarItem(
+                                  section: section,
+                                  selected: section == active,
+                                  windows: windows,
+                                  onTap: () =>
+                                      setState(() => selected = section),
+                                ),
+                            ],
+                          ),
+                        ),
+                      ),
+                      VerticalDivider(width: 1, color: hairline),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            Padding(
+                              padding: const EdgeInsets.fromLTRB(20, 12, 8, 12),
+                              child: Row(
+                                children: [
+                                  Expanded(
+                                    child: Text(
+                                      active.label,
+                                      style: TextStyle(
+                                        fontSize: 15,
+                                        fontWeight: FontWeight.w600,
+                                        color: scheme.onSurface,
+                                      ),
+                                    ),
+                                  ),
+                                  if (Navigator.of(context).canPop())
+                                    IconButton(
+                                      key: const Key('settings_close'),
+                                      tooltip: 'Close settings',
+                                      iconSize: 18,
+                                      onPressed: () =>
+                                          Navigator.of(context).maybePop(),
+                                      icon: const Icon(Icons.close_rounded),
+                                    ),
+                                ],
+                              ),
+                            ),
+                            Divider(height: 1, color: hairline),
+                            Expanded(
+                              child: ListView(
+                                padding: const EdgeInsets.all(16),
+                                children: [
+                                  _SettingsGroup(children: _tiles(active)),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
           ),
         ),
-        DeleteAccountTile(services: services),
+      ),
+    );
+  }
+}
+
+class _SidebarItem extends StatelessWidget {
+  const _SidebarItem({
+    required this.section,
+    required this.selected,
+    required this.windows,
+    required this.onTap,
+  });
+
+  final SettingsSection section;
+  final bool selected;
+  final bool windows;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final foreground = selected
+        ? scheme.onSurface
+        : scheme.onSurface.withValues(alpha: .72);
+    final label = Row(
+      children: [
+        if (windows)
+          Container(
+            width: 3,
+            height: 16,
+            margin: const EdgeInsets.only(right: 9),
+            decoration: BoxDecoration(
+              color: selected ? scheme.primary : Colors.transparent,
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+        Icon(section.icon, size: 16, color: foreground),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(
+            section.label,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
+              color: foreground,
+            ),
+          ),
+        ),
       ],
-    ],
+    );
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 1),
+      child: Material(
+        color: selected && !windows
+            ? scheme.primary.withValues(alpha: .14)
+            : selected
+            ? scheme.onSurface.withValues(alpha: .06)
+            : Colors.transparent,
+        borderRadius: BorderRadius.circular(windows ? 4 : 6),
+        child: InkWell(
+          key: Key('settings_section_${section.name}'),
+          borderRadius: BorderRadius.circular(windows ? 4 : 6),
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
+            child: label,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _SettingsGroup extends StatelessWidget {
+  const _SettingsGroup({required this.children});
+
+  final List<Widget> children;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final hairline = scheme.onSurface.withValues(alpha: .1);
+    if (_isWindowsStyle) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          for (final child in children)
+            Container(
+              margin: const EdgeInsets.only(bottom: 6),
+              decoration: BoxDecoration(
+                color: scheme.onSurface.withValues(alpha: .03),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: hairline),
+              ),
+              child: child,
+            ),
+        ],
+      );
+    }
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: scheme.onSurface.withValues(alpha: .03),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: hairline),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          for (var index = 0; index < children.length; index += 1) ...[
+            if (index > 0) Divider(height: 1, indent: 42, color: hairline),
+            children[index],
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _Tile extends StatelessWidget {
+  const _Tile({
+    required this.icon,
+    required this.title,
+    required this.detail,
+    required this.trailing,
+    super.key,
+  });
+
+  final IconData icon;
+  final String title;
+  final String detail;
+  final Widget trailing;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Material(
+      type: MaterialType.transparency,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        child: Row(
+          children: [
+            Icon(icon, size: 18, color: scheme.onSurface),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: scheme.onSurface,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    detail,
+                    style: TextStyle(
+                      fontSize: 12,
+                      height: 1.35,
+                      color: scheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 12),
+            trailing,
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _InfoTile extends StatelessWidget {
+  const _InfoTile({
+    required this.icon,
+    required this.title,
+    required this.detail,
+  });
+
+  final IconData icon;
+  final String title;
+  final String detail;
+
+  @override
+  Widget build(BuildContext context) => _Tile(
+    icon: icon,
+    title: title,
+    detail: detail,
+    trailing: const SizedBox.shrink(),
+  );
+}
+
+class _StateTile extends StatelessWidget {
+  const _StateTile({
+    required this.icon,
+    required this.title,
+    required this.detail,
+    required this.state,
+    this.onPressed,
+    this.actionTooltip,
+  });
+
+  final IconData icon;
+  final String title;
+  final String detail;
+  final String state;
+  final VoidCallback? onPressed;
+  final String? actionTooltip;
+
+  @override
+  Widget build(BuildContext context) => _Tile(
+    icon: icon,
+    title: title,
+    detail: detail,
+    trailing: onPressed == null
+        ? Text(
+            state,
+            style: TextStyle(
+              fontSize: 12,
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+            ),
+          )
+        : IconButton(
+            tooltip: actionTooltip ?? 'Connect',
+            iconSize: 18,
+            onPressed: onPressed,
+            icon: const Icon(Icons.arrow_forward_rounded),
+          ),
   );
 }
 
@@ -173,7 +564,7 @@ class _DeleteAccountTileState extends State<DeleteAccountTile> {
   }
 
   @override
-  Widget build(BuildContext context) => BaseTile(
+  Widget build(BuildContext context) => _Tile(
     icon: Icons.delete_forever_outlined,
     title: 'Delete account',
     detail:
@@ -216,7 +607,7 @@ class _ProductionHealthTileState extends State<_ProductionHealthTile> {
     future: health,
     builder: (context, snapshot) {
       if (snapshot.connectionState != ConnectionState.done) {
-        return const _SetupTile(
+        return const _StateTile(
           icon: Icons.cloud_sync_outlined,
           title: 'Production services',
           detail: 'Checking backend availability…',
@@ -224,7 +615,7 @@ class _ProductionHealthTileState extends State<_ProductionHealthTile> {
         );
       }
       if (snapshot.hasError) {
-        return _SetupTile(
+        return _StateTile(
           icon: Icons.cloud_off_outlined,
           title: 'Production services',
           detail: '${snapshot.error}',
@@ -236,7 +627,7 @@ class _ProductionHealthTileState extends State<_ProductionHealthTile> {
           .where((entry) => !entry.value)
           .map((entry) => entry.key)
           .join(', ');
-      return _SetupTile(
+      return _StateTile(
         icon: Icons.cloud_done_outlined,
         title: 'Production services',
         detail: missing.isEmpty ? 'Everything is ready' : missing,
@@ -310,7 +701,7 @@ class _ScreenCaptureSetupTileState extends State<ScreenCaptureSetupTile> {
               CapabilityState.error => 'Check failed',
               _ => 'Checking',
             };
-      return _SetupTile(
+      return _StateTile(
         icon: Icons.lock_outline_rounded,
         title: 'Allow screen understanding',
         detail: widget.previewMode
@@ -378,7 +769,7 @@ class _SystemAudioCaptureModeTileState
   @override
   Widget build(BuildContext context) => FutureBuilder<SystemAudioCaptureMode>(
     future: mode,
-    builder: (context, snapshot) => BaseTile(
+    builder: (context, snapshot) => _Tile(
       icon: Icons.speaker_group_outlined,
       title: 'System audio capture',
       detail: widget.previewMode
@@ -387,11 +778,18 @@ class _SystemAudioCaptureModeTileState
       trailing: widget.previewMode || snapshot.data == null || saving
           ? Text(
               snapshot.data == null ? 'Loading' : _labels[snapshot.data]!,
-              style: const TextStyle(color: Colors.white54),
+              style: TextStyle(
+                fontSize: 12,
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
             )
           : DropdownButton<SystemAudioCaptureMode>(
               value: snapshot.data,
               underline: const SizedBox.shrink(),
+              style: TextStyle(
+                fontSize: 13,
+                color: Theme.of(context).colorScheme.onSurface,
+              ),
               items: SystemAudioCaptureMode.values
                   .map(
                     (value) => DropdownMenuItem(
@@ -495,7 +893,7 @@ class _AppleEventKitConnectionTileState
                     value == AppleEventKitAuthorization.restricted
               ? 'Enable $name in System Settings → Privacy & Security'
               : 'Add your Apple $name context to memory');
-      return _SetupTile(
+      return _StateTile(
         icon: widget.source == AppleEventKitSource.calendar
             ? Icons.calendar_today_outlined
             : Icons.check_circle_outline_rounded,
@@ -538,21 +936,21 @@ class _AgentControlTileState extends State<_AgentControlTile> {
     future: snapshot,
     builder: (context, snapshot) {
       if (snapshot.connectionState != ConnectionState.done) {
-        return const _AccountTile(
+        return const _InfoTile(
           icon: Icons.sync_rounded,
           title: 'Loading agent control',
           detail: 'Retrieving your approval policy…',
         );
       }
       if (snapshot.hasError) {
-        return _AccountTile(
+        return _InfoTile(
           icon: Icons.error_outline_rounded,
           title: 'Agent control could not load',
           detail: '${snapshot.error}',
         );
       }
       final settings = snapshot.data!.effectivePolicy;
-      return _AccountTile(
+      return _InfoTile(
         icon: Icons.shield_outlined,
         title: 'Agent control',
         detail:
@@ -690,7 +1088,7 @@ class _ProviderTileState extends State<_ProviderTile> {
       return Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          BaseTile(
+          _Tile(
             icon: Icons.key_outlined,
             title: 'Bring your own AI',
             detail: !loaded
@@ -713,18 +1111,19 @@ class _ProviderTileState extends State<_ProviderTile> {
           ),
           if (expanded && loaded) ...[
             for (final value in values)
-              BaseTile(
+              _Tile(
                 key: ValueKey('provider_${value.provider.name}'),
                 icon: Icons.subdirectory_arrow_right_rounded,
                 title: '${value.provider.name} · ${value.model}',
                 detail: value.endpoint ?? 'Key stored securely on this device',
                 trailing: IconButton(
                   tooltip: 'Edit provider',
+                  iconSize: 18,
                   onPressed: () => configure(value),
                   icon: const Icon(Icons.edit_outlined),
                 ),
               ),
-            BaseTile(
+            _Tile(
               key: const Key('add_provider'),
               icon: Icons.add_rounded,
               title: 'Add a provider',
@@ -733,6 +1132,7 @@ class _ProviderTileState extends State<_ProviderTile> {
                   'routes automatically.',
               trailing: IconButton(
                 tooltip: 'Add provider',
+                iconSize: 18,
                 onPressed: () => configure(null),
                 icon: const Icon(Icons.arrow_forward_rounded),
               ),
@@ -851,7 +1251,7 @@ class _SubscriptionSignInTileState extends State<_SubscriptionSignInTile> {
     future: connected,
     builder: (context, snapshot) {
       final isConnected = snapshot.data?.contains(widget.provider) ?? false;
-      return BaseTile(
+      return _Tile(
         icon: Icons.link_rounded,
         title: widget.title,
         detail: error != null
@@ -920,21 +1320,21 @@ class _PlanTileState extends State<_PlanTile> {
     future: entitlement,
     builder: (context, snapshot) {
       if (snapshot.connectionState != ConnectionState.done) {
-        return const _AccountTile(
+        return const _InfoTile(
           icon: Icons.sync_rounded,
           title: 'Loading plan',
           detail: 'Checking your entitlement…',
         );
       }
       if (snapshot.hasError) {
-        return _AccountTile(
+        return _InfoTile(
           icon: Icons.error_outline_rounded,
           title: 'Plan could not load',
           detail: '${snapshot.error}',
         );
       }
       final value = snapshot.data!;
-      return BaseTile(
+      return _Tile(
         icon: Icons.credit_card_outlined,
         title: value.plan == OmiPlan.pro && value.active ? 'Omi AI' : 'Omi',
         detail:
@@ -946,6 +1346,7 @@ class _PlanTileState extends State<_PlanTile> {
           tooltip: value.plan == OmiPlan.pro && value.active
               ? 'Manage billing'
               : 'Upgrade to Omi AI',
+          iconSize: 18,
           onPressed: opening ? null : () => open(value),
           icon: opening
               ? const SizedBox.square(
@@ -956,57 +1357,5 @@ class _PlanTileState extends State<_PlanTile> {
         ),
       );
     },
-  );
-}
-
-class _SetupTile extends StatelessWidget {
-  const _SetupTile({
-    required this.icon,
-    required this.title,
-    required this.detail,
-    required this.state,
-    this.onPressed,
-    this.actionTooltip,
-  });
-
-  final IconData icon;
-  final String title;
-  final String detail;
-  final String state;
-  final VoidCallback? onPressed;
-  final String? actionTooltip;
-
-  @override
-  Widget build(BuildContext context) => BaseTile(
-    icon: icon,
-    title: title,
-    detail: detail,
-    trailing: onPressed == null
-        ? Text(state, style: const TextStyle(color: Colors.white54))
-        : IconButton(
-            tooltip: actionTooltip ?? 'Connect',
-            onPressed: onPressed,
-            icon: const Icon(Icons.arrow_forward_rounded),
-          ),
-  );
-}
-
-class _AccountTile extends StatelessWidget {
-  const _AccountTile({
-    required this.icon,
-    required this.title,
-    required this.detail,
-  });
-
-  final IconData icon;
-  final String title;
-  final String detail;
-
-  @override
-  Widget build(BuildContext context) => BaseTile(
-    icon: icon,
-    title: title,
-    detail: detail,
-    trailing: const SizedBox.shrink(),
   );
 }
