@@ -19,7 +19,7 @@ void main() {
     'updatedAt': '2026-07-22T07:00:00Z',
     'title': 'Task $id',
     'summary': 'Summary for $id',
-    if (sourceKind != null) 'sourceKind': sourceKind,
+    'sourceKind': ?sourceKind,
   };
 
   testWidgets('lists all currents with states, tags, and setup row', (
