@@ -194,7 +194,7 @@ private final class PermissionDragOverlay: NSView {
     let timer = Timer(timeInterval: 2, repeats: true) { [weak self] _ in
       guard let self, let capability = self.capability,
             self.permissionCheck(capability) else { return }
-      if capability == "screenCapture" || capability == "appData" {
+      if capability == "screenCapture" {
         self.restart()
       } else {
         self.hide()
