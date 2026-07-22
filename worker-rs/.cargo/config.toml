@@ -1,0 +1,5 @@
+# Enable wasm reference-types + multivalue so wasm-bindgen can emit the
+# externref table its catch wrappers need. Scoped to the wasm target so host
+# `cargo test`/`cargo clippy` are unaffected.
+[target.wasm32-unknown-unknown]
+rustflags = ["-C", "target-feature=+reference-types,+multivalue"]
