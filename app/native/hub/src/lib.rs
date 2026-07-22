@@ -1,4 +1,5 @@
 mod approval;
+mod computer_use;
 mod runtime;
 mod scan;
 pub mod signals;

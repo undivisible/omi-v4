@@ -3,6 +3,7 @@ use crate::approval::{
     PENDING_PROPOSAL_CAPACITY, ProposalRegistration, TERMINAL_PROPOSAL_CAPACITY,
 };
 use crate::approval::{ProposalDecisionError, ProposalRegistry, ProposalStatus, unix_time_ms};
+use crate::computer_use::{available as computer_use_available, execute as execute_computer_use};
 use crate::signals::{
     ActionProposal, ActionRisk, ApprovalDecision, ApprovalDecisionAcknowledgement, AssistantDelta,
     AssistantProvider as ProviderKind, CaptureSource, ClientCommand, Command, ComputerUseAction,
@@ -24,7 +25,7 @@ use rs_ai_core::{StreamEvent, ToolChoice, ToolDefinition};
 use std::collections::{HashMap, VecDeque, hash_map::Entry};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::{Arc, Mutex as StdMutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tokio::sync::{Mutex, mpsc};
 use tokio::task::{JoinError, JoinHandle, JoinSet, spawn_blocking};
 use tokio_util::sync::CancellationToken;
@@ -41,7 +42,6 @@ const COMPLETED_CAPTURE_CAPACITY: usize = 256;
 const PROVIDER_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const PROVIDER_EVENT_TIMEOUT: Duration = Duration::from_secs(45);
 const COMPUTER_USE_PROPOSAL_TTL_MS: i64 = 5 * 60 * 1_000;
-const MAX_COMPUTER_TYPE_DURATION_MS: u64 = 30_000;
 const COMPUTER_CLICK_TOOL: &str = "computer_click";
 const COMPUTER_TYPE_TOOL: &str = "computer_type";
 #[cfg(test)]
@@ -455,16 +455,6 @@ fn valid_computer_tool_identity(call_id: &str, tool_name: &str) -> bool {
         && matches!(tool_name, COMPUTER_CLICK_TOOL | COMPUTER_TYPE_TOOL)
 }
 
-fn valid_computer_type(text: &str, delay_ms: Option<u64>) -> bool {
-    if text.is_empty() || text.len() > 16 * 1024 || delay_ms.is_some_and(|delay| delay > 1_000) {
-        return false;
-    }
-    let character_count = u64::try_from(text.chars().count()).unwrap_or(u64::MAX);
-    character_count
-        .checked_mul(delay_ms.unwrap_or_default())
-        .is_some_and(|duration| duration <= MAX_COMPUTER_TYPE_DURATION_MS)
-}
-
 fn computer_use_proposal(
     request_id: &str,
     call_id: &str,
@@ -504,7 +494,7 @@ fn computer_use_proposal(
             let args: ComputerTypeArgs = serde_json::from_value(arguments).map_err(|_| {
                 "assistant provider returned an invalid computer-use tool call".to_owned()
             })?;
-            if !valid_computer_type(&args.text, args.delay_ms) {
+            if !crate::computer_use::valid_type(&args.text, args.delay_ms) {
                 return Err(
                     "assistant provider returned an invalid computer-use tool call".to_owned(),
                 );
@@ -2590,126 +2580,12 @@ fn acknowledge_approval_rejection(command: &Command, request_id: &str) {
     }
 }
 
-#[cfg(all(
-    feature = "computer-use",
-    any(target_os = "macos", target_os = "windows", target_os = "linux")
-))]
-fn computer_use_available() -> bool {
-    let permissions = rs_peekaboo::Peekaboo::new().permissions();
-    permissions
-        .get("accessibility")
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(false)
-        && permissions
-            .get("screen_recording")
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false)
-}
-
-#[cfg(not(all(
-    feature = "computer-use",
-    any(target_os = "macos", target_os = "windows", target_os = "linux")
-)))]
-fn computer_use_available() -> bool {
-    false
-}
-
-#[cfg(all(
-    feature = "computer-use",
-    any(target_os = "macos", target_os = "windows", target_os = "linux")
-))]
-fn execute_computer_use(
-    action: ComputerUseAction,
-    cancellation: &CancellationToken,
-) -> Result<(), String> {
-    if cancellation.is_cancelled() {
-        return Err("computer action was cancelled".to_owned());
-    }
-    let peekaboo = rs_peekaboo::Peekaboo::new();
-    let result = match action {
-        ComputerUseAction::Click {
-            x,
-            y,
-            button,
-            count,
-        } => {
-            if !(1..=3).contains(&count) {
-                return Err("click count must be between 1 and 3".to_owned());
-            }
-            let button = match button {
-                crate::signals::MouseButton::Left => "left",
-                crate::signals::MouseButton::Right => "right",
-                crate::signals::MouseButton::Middle => "middle",
-            };
-            peekaboo.click(
-                rs_peekaboo::automation::Target::Point(rs_peekaboo::Point { x, y }),
-                button,
-                count,
-            )
-        }
-        ComputerUseAction::TypeText {
-            text,
-            clear,
-            press_return,
-            delay_ms,
-        } => {
-            if !valid_computer_type(&text, delay_ms) {
-                return Err("type action parameters are invalid".to_owned());
-            }
-            let deadline = Instant::now() + Duration::from_millis(MAX_COMPUTER_TYPE_DURATION_MS);
-            if clear {
-                peekaboo
-                    .type_text("", true, false, None, None)
-                    .map_err(|failure| failure.to_string())?;
-            }
-            let chunk_chars = if delay_ms.is_some() { 1 } else { 64 };
-            let mut chunk = String::new();
-            for character in text.chars() {
-                if cancellation.is_cancelled() || Instant::now() >= deadline {
-                    return Err("computer action was cancelled".to_owned());
-                }
-                chunk.push(character);
-                if chunk.chars().count() == chunk_chars {
-                    peekaboo
-                        .type_text(&chunk, false, false, delay_ms, None)
-                        .map_err(|failure| failure.to_string())?;
-                    chunk.clear();
-                }
-            }
-            if !chunk.is_empty() {
-                peekaboo
-                    .type_text(&chunk, false, false, delay_ms, None)
-                    .map_err(|failure| failure.to_string())?;
-            }
-            if cancellation.is_cancelled() || Instant::now() >= deadline {
-                return Err("computer action was cancelled".to_owned());
-            }
-            if press_return {
-                peekaboo.type_text("", false, true, None, None)
-            } else {
-                Ok(serde_json::Value::Null)
-            }
-        }
-    };
-    result.map(|_| ()).map_err(|failure| failure.to_string())
-}
-
-#[cfg(not(all(
-    feature = "computer-use",
-    any(target_os = "macos", target_os = "windows", target_os = "linux")
-)))]
-fn execute_computer_use(
-    _action: ComputerUseAction,
-    _cancellation: &CancellationToken,
-) -> Result<(), String> {
-    Err("computer use is unavailable on this platform".to_owned())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::signals::AudioEncoding;
     use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::Instant;
 
     fn lifecycle_memory(label: &str) -> (std::path::PathBuf, MemoryContext, zkr::Remembered) {
         let path = std::env::temp_dir().join(format!(
@@ -4343,15 +4219,6 @@ mod tests {
         let (duplicate, status) = sessions.stop("stop-2", "voice-1");
         assert!(!duplicate.accepted);
         assert!(status.is_none());
-    }
-
-    #[test]
-    fn computer_typing_duration_is_bounded() {
-        assert!(valid_computer_type("hello", Some(10)));
-        assert!(valid_computer_type("hello", None));
-        assert!(!valid_computer_type("", None));
-        assert!(!valid_computer_type(&"x".repeat(31), Some(1_000)));
-        assert!(!valid_computer_type("x", Some(1_001)));
     }
 
     #[test]
