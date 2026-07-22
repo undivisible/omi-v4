@@ -686,6 +686,94 @@ routes.put("/settings", async (context) => {
   });
 });
 
+routes.get("/profile/onboarding", async (context) => {
+  const row = await context.env.DB.prepare(
+    "SELECT onboarding_completed_at FROM users WHERE uid = ?1",
+  )
+    .bind(context.get("auth").uid)
+    .first();
+  const completedAt =
+    row?.onboarding_completed_at === null ||
+    row?.onboarding_completed_at === undefined
+      ? null
+      : Number(row.onboarding_completed_at);
+  return context.json({ complete: completedAt !== null, completedAt });
+});
+
+routes.put("/profile/onboarding", async (context) => {
+  const body = await json(context.req.raw);
+  if (body?.complete !== true)
+    return context.json({ error: "Invalid onboarding state" }, 400);
+  const auth = context.get("auth");
+  const now = Date.now();
+  await context.env.DB.prepare(
+    `INSERT INTO users (uid, email, created_at, updated_at, onboarding_completed_at)
+     VALUES (?1, ?2, ?3, ?3, ?3)
+     ON CONFLICT(uid) DO UPDATE SET
+       onboarding_completed_at = COALESCE(users.onboarding_completed_at, excluded.onboarding_completed_at),
+       updated_at = excluded.updated_at`,
+  )
+    .bind(auth.uid, auth.email ?? null, now)
+    .run();
+  const row = await context.env.DB.prepare(
+    "SELECT onboarding_completed_at FROM users WHERE uid = ?1",
+  )
+    .bind(auth.uid)
+    .first();
+  return context.json({
+    complete: true,
+    completedAt: Number(row?.onboarding_completed_at ?? now),
+  });
+});
+
+const uidScopedTables = [
+  "memory_daily_review_citations",
+  "memory_daily_reviews",
+  "memory_claim_evidence",
+  "memory_profile_entries",
+  "memory_claims_fts",
+  "memory_claims",
+  "memory_evidence",
+  "memory_source_revisions",
+  "memory_sources",
+  "zkr_sync_events",
+  "zkr_sync_commits",
+  "zkr_memory_records",
+  "zkr_memory_projection_state",
+  "conversation_replay_cursors",
+  "conversation_messages",
+  "conversations",
+  "channel_inbox_completions",
+  "channel_inbox",
+  "channel_deliveries",
+  "channel_bindings",
+  "channel_link_tokens",
+  "current_feedback",
+  "current_executions",
+  "currents",
+  "legacy_currents_uncited",
+  "managed_ai_requests",
+  "managed_stt_sessions",
+  "oauth_connections",
+  "owner_confirmation_receipts",
+  "setting_scopes",
+  "user_settings",
+  "entitlements",
+  "desktop_auth_sessions",
+  "audit_events",
+  "users",
+];
+
+routes.delete("/account", async (context) => {
+  const uid = context.get("auth").uid;
+  await context.env.DB.batch(
+    uidScopedTables.map((table) =>
+      context.env.DB.prepare(`DELETE FROM ${table} WHERE uid = ?1`).bind(uid),
+    ),
+  );
+  return context.body(null, 204);
+});
+
 routes.get("/entitlement", async (context) => {
   const pro = await hasActivePro(context.env, context.get("auth").uid);
   return context.json({ plan: pro ? "pro" : "byok", active: pro });
