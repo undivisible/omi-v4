@@ -73,7 +73,6 @@ void main() {
       'expiresAt': 9000,
     });
   });
-
 }
 
 SettingsJson settingsJson({
