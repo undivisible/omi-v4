@@ -78,11 +78,21 @@ rinf:
   gen_output_dir: lib/native/generated
 
 dependency_overrides:
+  flutter_secure_storage_darwin: 0.4.0
+  hooks: 2.1.0
+  intl: 0.20.3
+  matcher: 0.12.20
+  meta: 1.19.0
+  package_config: 3.0.0
   record_macos:
     git:
       url: https://github.com/tschk/record.git
       ref: 21ac6275ab6256de2c90980e40de7aa97e132a83
       path: record_macos
+  record_use: 1.0.0
+  test_api: 0.7.13
+  vector_math: 2.4.0
+  xml: 7.0.1
 
   # To add assets to your application, add an assets section, like this:
   # assets:
