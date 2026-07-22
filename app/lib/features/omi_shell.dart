@@ -8,6 +8,9 @@ import '../app_services.dart';
 import '../keyboard/keyboard.dart';
 import '../menu_bar/desktop_menu_bar.dart';
 import 'chat_screen.dart';
+import 'cursor_pill.dart';
+import 'cursor_pill_controller.dart';
+import 'hub_opener.dart';
 import 'setup_account_screens.dart';
 
 class OmiShell extends StatefulWidget {
@@ -36,6 +39,7 @@ class _OmiShellState extends State<OmiShell> {
   DesktopGestureController? _desktopGesture;
   StreamSubscription<ShiftGestureAction>? _desktopGestureActions;
   DesktopMenuBarController? _menuBar;
+  CursorPillController? _cursorPill;
 
   static const _windowChromeChannel = MethodChannel('omi/window_chrome');
   bool _windowChromeHandlerSet = false;
@@ -52,6 +56,10 @@ class _OmiShellState extends State<OmiShell> {
       _windowChromeChannel.setMethodCallHandler(_handleWindowChromeCall);
       _windowChromeHandlerSet = true;
     }
+    _cursorPill = CursorPillController.forServices(
+      widget.services,
+      openHub: () => unawaited(openHubWindow()),
+    );
     _menuBar = DesktopMenuBarController(
       currents: widget.services.currents,
       isListening: () => widget.services.desktopVoice.active,
@@ -106,6 +114,11 @@ class _OmiShellState extends State<OmiShell> {
 
   Future<void> _handleDesktopGesture(ShiftGestureAction action) async {
     if (!mounted) return;
+    final pill = _cursorPill;
+    if (pill != null) {
+      await pill.handleGesture(action);
+      return;
+    }
     await _chatKey.currentState?.handleDesktopGesture(action);
   }
 
@@ -116,6 +129,7 @@ class _OmiShellState extends State<OmiShell> {
     }
     unawaited(_menuBar?.dispose());
     unawaited(_disposeDesktopGesture());
+    _cursorPill?.dispose();
     super.dispose();
   }
 
@@ -157,7 +171,21 @@ class _OmiShellState extends State<OmiShell> {
         ),
       ),
     );
-    return Scaffold(backgroundColor: const Color(0xfff7f6f1), body: paddedBody);
+    final pill = _cursorPill;
+    return Scaffold(
+      backgroundColor: const Color(0xfff7f6f1),
+      body: pill == null
+          ? paddedBody
+          : Stack(
+              children: [
+                paddedBody,
+                Align(
+                  alignment: Alignment.topLeft,
+                  child: CursorPill(controller: pill),
+                ),
+              ],
+            ),
+    );
   }
 }
 
