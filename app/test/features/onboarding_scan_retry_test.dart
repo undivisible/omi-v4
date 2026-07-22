@@ -171,7 +171,8 @@ void main() {
       // Access (login + permissions) is reused, then completing it must
       // skip straight to the tutorial ("use" stage) rather than the fresh
       // on-device scan.
-      expect(find.byKey(const Key('finish_voice_lesson')), findsOneWidget);
+      expect(find.byKey(const Key('shift_left')), findsOneWidget);
+      expect(find.byKey(const Key('shift_right')), findsOneWidget);
       expect(hub.scanRequests, isEmpty);
     },
   );

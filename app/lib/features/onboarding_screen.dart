@@ -1,8 +1,10 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../app_services.dart';
+import '../keyboard/shake_gesture.dart';
 import '../capabilities/desktop_capabilities.dart';
 import '../native/native_hub.dart';
 import '../onboarding/onboarding_controller.dart';
@@ -111,6 +113,10 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         scanSummary = value.summary;
         scanError = null;
       });
+      // The scan stage is a pure waiting state ("Learning about you…"); the
+      // results themselves are presented on the profile step, so advance as
+      // soon as the scan lands rather than showing an intermediate slide.
+      onboarding.completeScan();
     }
   }
 
@@ -246,12 +252,9 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                       onFinish: onboarding.completeAccess,
                     ),
                     OnboardingStage.scan => _ScanStep(
-                      key: ValueKey('scan'),
-                      sources: scanSources,
-                      summary: scanSummary,
+                      key: const ValueKey('scan'),
                       error: scanError,
                       onRetry: _retryScan,
-                      onContinue: onboarding.completeScan,
                     ),
                     OnboardingStage.profile => OnboardingProfileStep(
                       key: const ValueKey('profile'),
@@ -569,133 +572,54 @@ class _OnboardingProfileStepState extends State<OnboardingProfileStep> {
 }
 
 class _ScanStep extends StatelessWidget {
-  const _ScanStep({
-    required this.sources,
-    required this.summary,
-    required this.error,
-    required this.onRetry,
-    required this.onContinue,
-    super.key,
-  });
+  const _ScanStep({required this.error, required this.onRetry, super.key});
 
-  final List<OnboardingScanSource>? sources;
-  final String? summary;
   final String? error;
   final VoidCallback onRetry;
-  final VoidCallback onContinue;
 
   @override
   Widget build(BuildContext context) => Column(
-    crossAxisAlignment: CrossAxisAlignment.start,
+    mainAxisSize: MainAxisSize.min,
+    crossAxisAlignment: CrossAxisAlignment.center,
     children: [
       Semantics(
         liveRegion: true,
         child: RandomizedText(
-          key: ValueKey(
-            sources == null && error == null
-                ? 'Give me a second…'
-                : 'Here’s what I could read.',
-          ),
-          segments: [
-            (
-              sources == null && error == null
-                  ? 'Give me a second…'
-                  : 'Here’s what I could read.',
-              null,
-            ),
-          ],
-          style:
-              Theme.of(context).textTheme.displaySmall?.copyWith(
-                color: const Color(0xfffffcec),
-                fontSize: 44,
-                letterSpacing: -1.6,
-              ) ??
-              const TextStyle(color: Color(0xfffffcec), fontSize: 44),
-        ),
-      ),
-      const SizedBox(height: 24),
-      if (summary case final value?) ...[
-        RandomizedText(
-          key: ValueKey(value),
-          segments: [(value, null)],
+          key: ValueKey(error == null ? 'learning' : 'scan_error'),
+          segments: [(error == null ? 'Learning about you…' : error!, null)],
+          textAlign: TextAlign.center,
           style: const TextStyle(
             color: Color(0xfffffcec),
-            fontSize: 20,
-            height: 1.45,
+            fontFamily: 'Avenir Next',
+            fontSize: 38,
+            fontWeight: FontWeight.w500,
+            height: 1.2,
+            letterSpacing: -1.2,
+            shadows: [
+              Shadow(
+                color: Color(0x80000000),
+                blurRadius: 18,
+                offset: Offset(0, 1),
+              ),
+            ],
           ),
         ),
-        const SizedBox(height: 18),
-      ],
-      if (sources case final results?)
-        for (final source in results)
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 10),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Icon(
-                  source.state == OnboardingScanState.complete
-                      ? Icons.check_rounded
-                      : Icons.info_outline_rounded,
-                  color: const Color(0xfffffcec),
-                ),
-                const SizedBox(width: 14),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        _sourceName(source.source),
-                        style: const TextStyle(
-                          color: Color(0xfffffcec),
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        source.detail,
-                        style: const TextStyle(color: Color(0xffd0cec6)),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-      if (error case final message?)
-        Text(message, style: const TextStyle(color: Color(0xffffb4ab))),
-      const SizedBox(height: 24),
-      if (sources != null)
-        Align(
-          alignment: Alignment.centerLeft,
-          child: OmiButton(
-            onPressed: onContinue,
-            child: const Text('Continue'),
-          ),
-        )
-      else if (error != null)
-        Align(
-          alignment: Alignment.centerLeft,
+      ),
+      if (error != null) ...[
+        const SizedBox(height: 28),
+        Center(
           child: OmiButton(
             variant: OmiButtonVariant.secondary,
             onPressed: onRetry,
             child: const Text('Try again'),
           ),
-        )
-      else
-        const LinearProgressIndicator(),
+        ),
+      ],
     ],
   );
-
-  static String _sourceName(String source) => switch (source) {
-    'workspace' => 'Workspace',
-    'apple_notes' => 'Apple Notes',
-    'apple_mail' => 'Apple Mail',
-    _ => source,
-  };
 }
 
-class _UseStep extends StatelessWidget {
+class _UseStep extends StatefulWidget {
   const _UseStep({
     required this.finishing,
     required this.error,
@@ -708,41 +632,168 @@ class _UseStep extends StatelessWidget {
   final FutureOr<void> Function() onFinish;
 
   @override
-  Widget build(BuildContext context) => Column(
-    crossAxisAlignment: CrossAxisAlignment.start,
-    children: [
-      Text(
-        'Omi is always within reach.',
-        style: Theme.of(context).textTheme.displaySmall?.copyWith(
-          color: const Color(0xfffffcec),
-          fontSize: 44,
-          letterSpacing: -1.6,
+  State<_UseStep> createState() => _UseStepState();
+}
+
+class _UseStepState extends State<_UseStep> {
+  bool leftShiftDown = false;
+  bool rightShiftDown = false;
+  bool completed = false;
+  double shakeProgress = 0;
+  double? lastPointerX;
+  int lastPointerDirection = 0;
+  int lastReversalAtMs = 0;
+  final shakeClock = Stopwatch()..start();
+  Timer? shakeDecay;
+
+  @override
+  void initState() {
+    super.initState();
+    HardwareKeyboard.instance.addHandler(_handleKey);
+    shakeDecay = Timer.periodic(const Duration(milliseconds: 120), (_) {
+      if (shakeProgress > 0 && !completed) {
+        setState(() => shakeProgress = (shakeProgress - 8).clamp(0, 100));
+      }
+    });
+  }
+
+  @override
+  void didUpdateWidget(covariant _UseStep old) {
+    super.didUpdateWidget(old);
+    // A failed finish surfaces an error and stops finishing; re-arm the
+    // gesture so the user can trigger it again.
+    if (widget.error != null && !widget.finishing) completed = false;
+  }
+
+  @override
+  void dispose() {
+    HardwareKeyboard.instance.removeHandler(_handleKey);
+    shakeDecay?.cancel();
+    super.dispose();
+  }
+
+  bool _handleKey(KeyEvent event) {
+    final physical = event.physicalKey;
+    final isLeft = physical == PhysicalKeyboardKey.shiftLeft;
+    final isRight = physical == PhysicalKeyboardKey.shiftRight;
+    if (!isLeft && !isRight) return false;
+    final down = event is KeyDownEvent;
+    if (event is KeyRepeatEvent) return false;
+    setState(() {
+      if (isLeft) leftShiftDown = down;
+      if (isRight) rightShiftDown = down;
+    });
+    if (leftShiftDown && rightShiftDown) _complete();
+    return false;
+  }
+
+  void _trackPointer(PointerHoverEvent event) {
+    if (completed) return;
+    final x = event.position.dx;
+    final previous = lastPointerX;
+    lastPointerX = x;
+    if (previous == null) return;
+    final movement = x - previous;
+    if (movement.abs() < 7) return;
+    final direction = movement.sign.toInt();
+    final now = shakeClock.elapsedMilliseconds;
+    if (isShakeReversal(
+      lastPointerDirection,
+      direction,
+      now - lastReversalAtMs,
+      movement,
+    )) {
+      setState(() {
+        shakeProgress = advanceShakeProgress(shakeProgress, movement);
+      });
+      lastReversalAtMs = now;
+      if (shakeProgress >= 100) _complete();
+    } else if (direction != lastPointerDirection) {
+      lastReversalAtMs = now;
+    }
+    lastPointerDirection = direction;
+  }
+
+  void _complete() {
+    if (completed || widget.finishing) return;
+    completed = true;
+    unawaited(Future<void>.value(widget.onFinish()));
+  }
+
+  Widget _shiftKey({required Key key, required bool pressed}) =>
+      AnimatedContainer(
+        key: key,
+        duration: const Duration(milliseconds: 120),
+        curve: Curves.easeOut,
+        width: 132,
+        height: 64,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: pressed ? const Color(0xfffffcec) : const Color(0x14fffcec),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(
+            color: pressed ? const Color(0xfffffcec) : const Color(0x59fffcec),
+            width: 1.5,
+          ),
+          boxShadow: pressed
+              ? const [BoxShadow(color: Color(0x66fffcec), blurRadius: 28)]
+              : const [],
         ),
-      ),
-      const SizedBox(height: 18),
-      const Text(
-        'Tap both Shift keys to open Omi. Hold them to talk, then let go when you’re finished. Try asking: “What tasks do I have today?”',
-        style: TextStyle(color: Color(0xffd0cec6), fontSize: 18, height: 1.5),
-      ),
-      const SizedBox(height: 32),
-      Align(
-        alignment: Alignment.centerLeft,
-        child: OmiButton(
-          key: const Key('finish_voice_lesson'),
-          onPressed: finishing ? null : () async => onFinish(),
-          child: const Text('Take me to Omi'),
-        ),
-      ),
-      if (error case final message?) ...[
-        const SizedBox(height: 12),
-        Semantics(
-          liveRegion: true,
-          child: Text(
-            message,
-            style: const TextStyle(color: Color(0xffffb4ab)),
+        child: Text(
+          '⇧ shift',
+          style: TextStyle(
+            color: pressed ? const Color(0xff171716) : const Color(0xb3fffcec),
+            fontFamily: 'Avenir Next',
+            fontSize: 19,
+            fontWeight: FontWeight.w600,
           ),
         ),
+      );
+
+  @override
+  Widget build(BuildContext context) => MouseRegion(
+    onHover: _trackPointer,
+    child: Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            _shiftKey(key: const Key('shift_left'), pressed: leftShiftDown),
+            const SizedBox(width: 22),
+            _shiftKey(key: const Key('shift_right'), pressed: rightShiftDown),
+          ],
+        ),
+        const SizedBox(height: 26),
+        AnimatedOpacity(
+          duration: const Duration(milliseconds: 200),
+          opacity: shakeProgress > 0 ? 1 : .55,
+          child: Text(
+            shakeProgress > 0
+                ? '${shakeProgress.round()}%'
+                : 'Press both Shift keys — or shake your cursor.',
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              color: Color(0xb3fffcec),
+              fontFamily: 'Avenir Next',
+              fontSize: 15,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ),
+        if (widget.error case final message?) ...[
+          const SizedBox(height: 12),
+          Semantics(
+            liveRegion: true,
+            child: Text(
+              message,
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: Color(0xffffb4ab)),
+            ),
+          ),
+        ],
       ],
-    ],
+    ),
   );
 }
