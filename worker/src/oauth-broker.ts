@@ -14,6 +14,119 @@ export type ProviderConfig = {
   scope: string;
 };
 
+const encoder = new TextEncoder();
+const decoder = new TextDecoder();
+
+const fromBase64 = (value: string): Uint8Array | null => {
+  try {
+    const binary = atob(value);
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index += 1)
+      bytes[index] = binary.charCodeAt(index);
+    return bytes;
+  } catch {
+    return null;
+  }
+};
+
+const toBase64 = (bytes: Uint8Array): string => {
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
+};
+
+export const importOauthTokenKey = async (
+  secret: string,
+): Promise<CryptoKey | null> => {
+  const raw = fromBase64(secret);
+  if (!raw || raw.length !== 32) return null;
+  try {
+    return await crypto.subtle.importKey("raw", raw, "AES-GCM", false, [
+      "encrypt",
+      "decrypt",
+    ]);
+  } catch {
+    return null;
+  }
+};
+
+export const encryptOauthToken = async (
+  key: CryptoKey,
+  plaintext: string,
+): Promise<string> => {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ciphertext = new Uint8Array(
+    await crypto.subtle.encrypt(
+      { name: "AES-GCM", iv },
+      key,
+      encoder.encode(plaintext),
+    ),
+  );
+  const combined = new Uint8Array(iv.length + ciphertext.length);
+  combined.set(iv);
+  combined.set(ciphertext, iv.length);
+  return toBase64(combined);
+};
+
+export const decryptOauthToken = async (
+  key: CryptoKey,
+  stored: string,
+): Promise<string | null> => {
+  const combined = fromBase64(stored);
+  if (!combined || combined.length <= 12) return null;
+  try {
+    const plaintext = await crypto.subtle.decrypt(
+      { name: "AES-GCM", iv: combined.slice(0, 12) },
+      key,
+      combined.slice(12),
+    );
+    return decoder.decode(plaintext);
+  } catch {
+    return null;
+  }
+};
+
+const validXaiEndpoint = (value: unknown): value is string => {
+  if (typeof value !== "string") return false;
+  try {
+    const url = new URL(value);
+    return (
+      url.protocol === "https:" &&
+      (url.hostname === "x.ai" || url.hostname.endsWith(".x.ai"))
+    );
+  } catch {
+    return false;
+  }
+};
+
+type XaiEndpoints = { deviceEndpoint: string; tokenEndpoint: string };
+
+let xaiDiscovery: Promise<XaiEndpoints | null> | null = null;
+
+const discoverXaiEndpoints = async (): Promise<XaiEndpoints | null> => {
+  try {
+    const discovery = await fetch(
+      "https://auth.x.ai/.well-known/openid-configuration",
+    );
+    if (!discovery.ok) return null;
+    const document = (await discovery.json()) as {
+      device_authorization_endpoint?: unknown;
+      token_endpoint?: unknown;
+    };
+    if (
+      !validXaiEndpoint(document.device_authorization_endpoint) ||
+      !validXaiEndpoint(document.token_endpoint)
+    )
+      return null;
+    return {
+      deviceEndpoint: document.device_authorization_endpoint,
+      tokenEndpoint: document.token_endpoint,
+    };
+  } catch {
+    return null;
+  }
+};
+
 export const providerConfig = async (
   provider: string,
   env: AppEnv["Bindings"],
@@ -31,23 +144,17 @@ export const providerConfig = async (
   if (provider === "xai") {
     const clientId = env.XAI_OAUTH_CLIENT_ID;
     if (!clientId) return null;
-    const discovery = await fetch(
-      "https://auth.x.ai/.well-known/openid-configuration",
-    );
-    if (!discovery.ok) return null;
-    const document = (await discovery.json()) as {
-      device_authorization_endpoint?: unknown;
-      token_endpoint?: unknown;
-    };
-    if (
-      typeof document.device_authorization_endpoint !== "string" ||
-      typeof document.token_endpoint !== "string"
-    )
-      return null;
+    if (!xaiDiscovery)
+      xaiDiscovery = discoverXaiEndpoints().then((endpoints) => {
+        if (!endpoints) xaiDiscovery = null;
+        return endpoints;
+      });
+    const endpoints = await xaiDiscovery;
+    if (!endpoints) return null;
     return {
       clientId,
-      deviceEndpoint: document.device_authorization_endpoint,
-      tokenEndpoint: document.token_endpoint,
+      deviceEndpoint: endpoints.deviceEndpoint,
+      tokenEndpoint: endpoints.tokenEndpoint,
       scope: "openid profile offline_access",
     };
   }
@@ -86,10 +193,22 @@ broker.post("/:provider/device/start", async (context) => {
   });
 });
 
+const pollErrorAllowlist = new Set([
+  "authorization_pending",
+  "slow_down",
+  "expired_token",
+  "access_denied",
+]);
+const accountIdPattern = /^[A-Za-z0-9_-]{1,128}$/;
+
 broker.post("/:provider/device/poll", async (context) => {
   const provider = context.req.param("provider");
   const config = await providerConfig(provider, context.env);
   if (!config) return context.json({ error: "Provider unavailable" }, 503);
+  const tokenKey = context.env.OAUTH_TOKEN_KEY
+    ? await importOauthTokenKey(context.env.OAUTH_TOKEN_KEY)
+    : null;
+  if (!tokenKey) return context.json({ error: "Provider unavailable" }, 503);
   let deviceCode: unknown;
   try {
     deviceCode = ((await context.req.json()) as Record<string, unknown>)
@@ -110,7 +229,10 @@ broker.post("/:provider/device/poll", async (context) => {
   });
   const body = (await response.json()) as Record<string, unknown>;
   if (!response.ok || typeof body.access_token !== "string") {
-    const error = typeof body.error === "string" ? body.error : "failed";
+    const error =
+      typeof body.error === "string" && pollErrorAllowlist.has(body.error)
+        ? body.error
+        : "failed";
     if (error === "authorization_pending" || error === "slow_down")
       return context.json({ pending: true, error }, 202);
     return context.json({ error }, 400);
@@ -120,12 +242,11 @@ broker.post("/:provider/device/poll", async (context) => {
     typeof body.expires_in === "number" ? now + body.expires_in * 1000 : null;
   await context.env.DB.prepare(
     `INSERT INTO oauth_connections
-       (uid, provider, access_token, refresh_token, id_token, account_id, expires_at, created_at, updated_at)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)
+       (uid, provider, access_token, refresh_token, account_id, expires_at, created_at, updated_at)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)
      ON CONFLICT (uid, provider) DO UPDATE SET
        access_token = excluded.access_token,
        refresh_token = excluded.refresh_token,
-       id_token = excluded.id_token,
        account_id = excluded.account_id,
        expires_at = excluded.expires_at,
        updated_at = excluded.updated_at`,
@@ -133,10 +254,14 @@ broker.post("/:provider/device/poll", async (context) => {
     .bind(
       context.get("auth").uid,
       provider,
-      body.access_token,
-      typeof body.refresh_token === "string" ? body.refresh_token : null,
-      typeof body.id_token === "string" ? body.id_token : null,
-      typeof body.account_id === "string" ? body.account_id : null,
+      await encryptOauthToken(tokenKey, body.access_token),
+      typeof body.refresh_token === "string"
+        ? await encryptOauthToken(tokenKey, body.refresh_token)
+        : null,
+      typeof body.account_id === "string" &&
+        accountIdPattern.test(body.account_id)
+        ? body.account_id
+        : null,
       expiresAt,
       now,
     )
