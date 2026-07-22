@@ -10,6 +10,7 @@ class OnboardingBackdrop extends StatefulWidget {
     required this.bright,
     required this.searching,
     required this.settled,
+    this.baseColor,
     super.key,
   });
 
@@ -17,6 +18,7 @@ class OnboardingBackdrop extends StatefulWidget {
   final bool bright;
   final bool searching;
   final bool settled;
+  final Color? baseColor;
 
   @override
   State<OnboardingBackdrop> createState() => _OnboardingBackdropState();
@@ -39,7 +41,9 @@ class _OnboardingBackdropState extends State<OnboardingBackdrop> {
     return Stack(
       fit: StackFit.expand,
       children: [
-        if (kIsWeb || defaultTargetPlatform != TargetPlatform.macOS)
+        if (widget.baseColor case final color?)
+          ColoredBox(color: color)
+        else if (kIsWeb || defaultTargetPlatform != TargetPlatform.macOS)
           const ColoredBox(color: Color(0xff9ba0a3)),
         AnimatedOpacity(
           duration: reduceMotion

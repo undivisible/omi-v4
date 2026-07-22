@@ -7,6 +7,7 @@ import 'app_services.dart';
 import 'auth/auth.dart';
 import 'features/desktop_auth_screen.dart';
 import 'features/mobile_companion_shell.dart';
+import 'features/mobile_onboarding_screen.dart';
 import 'features/omi_shell.dart';
 import 'features/onboarding_screen.dart';
 import 'onboarding/onboarding_completion.dart';
@@ -192,6 +193,11 @@ class _OmiAppState extends State<OmiApp> {
           ? _mobileCompanion
                 ? MobileCompanionShell(services: services)
                 : OmiShell(services: services)
+          : _mobileCompanion
+          ? MobileOnboardingScreen(
+              services: services,
+              onFinish: _completeOnboarding,
+            )
           : OnboardingScreen(services: services, onFinish: _completeOnboarding),
     );
   }
