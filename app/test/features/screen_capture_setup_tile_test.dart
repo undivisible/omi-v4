@@ -43,4 +43,7 @@ final class _Gateway implements DesktopCapabilityGateway {
   Future<void> request(CoreCapability capability) async {
     requests.add(capability);
   }
+
+  @override
+  Future<void> dismissOverlay() async {}
 }

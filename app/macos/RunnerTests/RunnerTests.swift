@@ -5,56 +5,27 @@ import XCTest
 
 class RunnerTests: XCTestCase {
 
-  func testExample() {
-    // If you add code to the Runner application, consider adding tests here.
-    // See https://developer.apple.com/documentation/xctest for more information about using XCTest.
-  }
-
-  func testAccessibilityPolicyRequiresLivePermissionAndFunctionalAX() {
-    XCTAssertFalse(
-      AccessibilityPermissionPolicy.isGranted(
-        trusted: false,
-        eventTapAvailable: false,
-        axFunctional: true))
-    XCTAssertTrue(
-      AccessibilityPermissionPolicy.isGranted(
-        trusted: false,
-        eventTapAvailable: true,
-        axFunctional: true))
-    XCTAssertFalse(
-      AccessibilityPermissionPolicy.isGranted(
-        trusted: true,
-        eventTapAvailable: false,
-        axFunctional: false))
-  }
-
-  func testAccessibilityProbeClassifiesPermissionErrors() {
-    XCTAssertEqual(AccessibilityPermissionPolicy.isFunctional(.success), true)
-    XCTAssertEqual(AccessibilityPermissionPolicy.isFunctional(.noValue), true)
-    XCTAssertEqual(AccessibilityPermissionPolicy.isFunctional(.apiDisabled), false)
-    XCTAssertNil(AccessibilityPermissionPolicy.isFunctional(.cannotComplete))
-  }
-
-  func testMicrophonePolicyUsesTheSystemPromptOnlyWhenAvailable() {
-    XCTAssertEqual(MicrophonePermissionPolicy.action(for: .notDetermined), .request)
-    XCTAssertEqual(MicrophonePermissionPolicy.action(for: .denied), .openSettings)
-    XCTAssertEqual(MicrophonePermissionPolicy.action(for: .restricted), .openSettings)
-    XCTAssertEqual(MicrophonePermissionPolicy.action(for: .authorized), .complete)
-  }
-
-  func testFullDiskPolicyUsesOnlyScannedOmiSources() {
-    let library = URL(fileURLWithPath: "/Users/example/Library", isDirectory: true)
+  func testProbeErrorsDistinguishAbsentFromDenied() {
+    XCTAssertEqual(MacPermissionService.classifyProbeError(code: NSFileReadNoSuchFileError), "absent")
+    XCTAssertEqual(MacPermissionService.classifyProbeError(code: NSFileNoSuchFileError), "absent")
     XCTAssertEqual(
-      FullDiskAccessProbePolicy.files(in: library).map(\.path),
-      [
-        "/Users/example/Library/Group Containers/group.com.apple.notes/NoteStore.sqlite",
-        "/Users/example/Library/Group Containers/group.com.apple.notes/Accounts/LocalAccount/NoteStore.sqlite",
-      ])
+      MacPermissionService.classifyProbeError(code: NSFileReadNoPermissionError), "denied")
+  }
+
+  func testOnlyKnownPrivacyPanesOpen() {
     XCTAssertEqual(
-      FullDiskAccessProbePolicy.directories(in: library).map(\.path),
-      ["/Users/example/Library/Mail"])
-    XCTAssertFalse(FullDiskAccessProbePolicy.isGranted([false, false, false]))
-    XCTAssertTrue(FullDiskAccessProbePolicy.isGranted([false, true, false]))
+      MacPermissionService.privacyPanes,
+      ["Privacy_Accessibility", "Privacy_Microphone", "Privacy_ScreenCapture", "Privacy_AllFiles"])
+    XCTAssertFalse(MacPermissionService().openPrivacyPane("Privacy_Unknown"))
+  }
+
+  func testRawSnapshotReportsEveryProbedCapability() {
+    let snapshot = MacPermissionService().rawSnapshot()
+    XCTAssertNotNil(snapshot["accessibility"] as? Bool)
+    XCTAssertNotNil(snapshot["microphone"] as? String)
+    XCTAssertNotNil(snapshot["screenCapture"] as? Bool)
+    XCTAssertNotNil(snapshot["screenCaptureAtLaunch"] as? Bool)
+    XCTAssertEqual((snapshot["fullDiskProbes"] as? [String])?.count, 4)
   }
 
 }

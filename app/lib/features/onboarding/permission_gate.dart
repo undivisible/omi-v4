@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../../auth/auth.dart';
 import '../../capabilities/desktop_capabilities.dart';
+import 'authentication_gate.dart';
 
 class ProductionGate extends StatefulWidget {
   const ProductionGate({
@@ -52,6 +53,7 @@ class _ProductionGateState extends State<ProductionGate>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     widget.auth.addListener(_refreshView);
+    unawaited(widget.capabilities.dismissOverlay());
     unawaited(_check());
     _startPermissionPoll();
   }
@@ -72,7 +74,13 @@ class _ProductionGateState extends State<ProductionGate>
   }
 
   void _refreshView() {
-    if (mounted) setState(() {});
+    if (!mounted) return;
+    setState(() {});
+    if (ready && !finishing && !refreshing) {
+      permissionPoll?.cancel();
+      permissionPoll = null;
+      unawaited(_finish());
+    }
   }
 
   Future<void> _check() async {
@@ -104,15 +112,14 @@ class _ProductionGateState extends State<ProductionGate>
 
   Future<void> _request(CoreCapability capability) async {
     if (!requesting.add(capability)) return;
-    final generation = checkGeneration;
     if (mounted) setState(() {});
     try {
       await widget.capabilities.request(capability);
-      if (!mounted || generation != checkGeneration) return;
+      if (!mounted) return;
       await _check();
       if (!ready) _startPermissionPoll();
     } catch (error) {
-      if (!mounted || generation != checkGeneration) return;
+      if (!mounted || statuses[capability]?.acceptable == true) return;
       setState(() {
         statuses = {
           ...statuses,
@@ -152,9 +159,11 @@ class _ProductionGateState extends State<ProductionGate>
     }
   }
 
-  bool get ready => permissionCapabilities.every(
-    (capability) => statuses[capability]?.acceptable == true,
-  );
+  bool get ready =>
+      widget.auth.snapshot.hasProcessingAuthority &&
+      permissionCapabilities.every(
+        (capability) => statuses[capability]?.acceptable == true,
+      );
 
   @override
   Widget build(BuildContext context) => Column(
@@ -172,6 +181,20 @@ class _ProductionGateState extends State<ProductionGate>
         ),
       ),
       const SizedBox(height: 26),
+      AuthenticationGate(
+        auth: widget.auth,
+        configurationMessage: widget.configurationMessage,
+      ),
+      if (widget.auth.snapshot.phase == AuthPhase.signedIn &&
+          !widget.auth.snapshot.hasProcessingAuthority) ...[
+        const SizedBox(height: 8),
+        FilledButton(
+          key: const Key('grant_processing_consent'),
+          onPressed: () => unawaited(widget.auth.grantProcessingConsent()),
+          child: const Text('Allow Omi to process my data'),
+        ),
+      ],
+      const SizedBox(height: 18),
       for (final capability in permissionCapabilities)
         _CapabilityRow(
           capability: capability,
@@ -182,6 +205,12 @@ class _ProductionGateState extends State<ProductionGate>
               ? () => unawaited(_request(capability))
               : null,
         ),
+      const SizedBox(height: 14),
+      TextButton(
+        key: const Key('open_interface_preview'),
+        onPressed: widget.onOpenPreview,
+        child: const Text('Explore the interface preview'),
+      ),
       if (finishFailed) ...[
         const SizedBox(height: 8),
         Semantics(

@@ -2,91 +2,17 @@ import ApplicationServices
 import AVFoundation
 import Cocoa
 
-enum MacPermissionCapability: String {
-  case accessibility
-  case microphone
-  case screenCapture
-  case appData
-}
-
-struct MacPermissionSnapshot: Equatable {
-  let accessibility: Bool
-  let microphone: Bool
-  let screenCapture: Bool
-  let fullDiskAccess: Bool
-
-  var dictionary: [String: Bool] {
-    [
-      "accessibility": accessibility,
-      "microphone": microphone,
-      "screenCapture": screenCapture,
-      "fullDiskAccess": fullDiskAccess,
-    ]
-  }
-
-  func grants(_ capability: MacPermissionCapability) -> Bool {
-    switch capability {
-    case .accessibility: accessibility
-    case .microphone: microphone
-    case .screenCapture: screenCapture
-    case .appData: fullDiskAccess
-    }
-  }
-}
-
-enum AccessibilityPermissionPolicy {
-  static func isGranted(trusted: Bool, eventTapAvailable: Bool, axFunctional: Bool) -> Bool {
-    (trusted || eventTapAvailable) && axFunctional
-  }
-
-  static func isFunctional(_ result: AXError) -> Bool? {
-    switch result {
-    case .success, .noValue, .notImplemented, .attributeUnsupported: true
-    case .apiDisabled: false
-    case .cannotComplete: nil
-    default: true
-    }
-  }
-}
-
-enum MicrophonePermissionAction: Equatable {
-  case request
-  case openSettings
-  case complete
-}
-
-enum MicrophonePermissionPolicy {
-  static func action(for status: AVAuthorizationStatus) -> MicrophonePermissionAction {
-    switch status {
-    case .notDetermined: .request
-    case .denied, .restricted: .openSettings
-    case .authorized: .complete
-    @unknown default: .openSettings
-    }
-  }
-}
-
-enum FullDiskAccessProbePolicy {
-  static func files(in library: URL) -> [URL] {
-    let notes = library.appendingPathComponent("Group Containers/group.com.apple.notes")
-    return [
-      notes.appendingPathComponent("NoteStore.sqlite"),
-      notes.appendingPathComponent("Accounts/LocalAccount/NoteStore.sqlite"),
-    ]
-  }
-
-  static func directories(in library: URL) -> [URL] {
-    [library.appendingPathComponent("Mail", isDirectory: true)]
-  }
-
-  static func isGranted(_ readableSources: [Bool]) -> Bool {
-    readableSources.contains(true)
-  }
-}
-
 final class MacPermissionService {
+  static let privacyPanes: Set<String> = [
+    "Privacy_Accessibility",
+    "Privacy_Microphone",
+    "Privacy_ScreenCapture",
+    "Privacy_AllFiles",
+  ]
+
   let bundleURL: URL
   private let libraryURL: URL
+  private let screenCaptureGrantedAtLaunch: Bool
 
   init(
     bundleURL: URL = Bundle.main.bundleURL,
@@ -94,103 +20,84 @@ final class MacPermissionService {
   ) {
     self.bundleURL = bundleURL
     libraryURL = homeDirectory.appendingPathComponent("Library", isDirectory: true)
+    screenCaptureGrantedAtLaunch = CGPreflightScreenCaptureAccess()
   }
 
-  func snapshot() -> MacPermissionSnapshot {
-    MacPermissionSnapshot(
-      accessibility: hasAccessibilityAccess(),
-      microphone: AVCaptureDevice.authorizationStatus(for: .audio) == .authorized,
-      screenCapture: CGPreflightScreenCaptureAccess(),
-      fullDiskAccess: hasFullDiskAccess())
+  func rawSnapshot() -> [String: Any] {
+    [
+      "accessibility": AXIsProcessTrusted(),
+      "microphone": microphoneStatus(),
+      "screenCapture": CGPreflightScreenCaptureAccess(),
+      "screenCaptureAtLaunch": screenCaptureGrantedAtLaunch,
+      "fullDiskProbes": fullDiskProbes(),
+    ]
   }
 
-  func request(_ capability: MacPermissionCapability, completion: @escaping () -> Void) {
-    switch capability {
-    case .accessibility:
-      let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true]
-      AXIsProcessTrustedWithOptions(options as CFDictionary)
-      openPrivacyPane("Privacy_Accessibility")
-      completion()
-    case .microphone:
-      switch MicrophonePermissionPolicy.action(
-        for: AVCaptureDevice.authorizationStatus(for: .audio))
-      {
-      case .request:
-        AVCaptureDevice.requestAccess(for: .audio) { _ in completion() }
-      case .openSettings:
-        openPrivacyPane("Privacy_Microphone")
-        completion()
-      case .complete:
-        completion()
-      }
-    case .screenCapture:
-      CGRequestScreenCaptureAccess()
-      openPrivacyPane("Privacy_ScreenCapture")
-      completion()
-    case .appData:
-      openPrivacyPane("Privacy_AllFiles")
-      completion()
-    }
+  func promptAccessibility() {
+    let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true]
+    AXIsProcessTrustedWithOptions(options as CFDictionary)
   }
 
-  private func hasAccessibilityAccess() -> Bool {
-    AccessibilityPermissionPolicy.isGranted(
-      trusted: AXIsProcessTrusted(),
-      eventTapAvailable: probeAccessibilityViaEventTap(),
-      axFunctional: testAccessibilityPermission())
+  func requestMicrophone(completion: @escaping () -> Void) {
+    AVCaptureDevice.requestAccess(for: .audio) { _ in completion() }
   }
 
-  private func probeAccessibilityViaEventTap() -> Bool {
-    let tap = CGEvent.tapCreate(
-      tap: .cgSessionEventTap,
-      place: .tailAppendEventTap,
-      options: .listenOnly,
-      eventsOfInterest: CGEventMask(1 << CGEventType.mouseMoved.rawValue),
-      callback: { _, _, event, _ in Unmanaged.passUnretained(event) },
-      userInfo: nil)
-    if let tap { CFMachPortInvalidate(tap) }
-    return tap != nil
+  func promptScreenCapture() {
+    CGRequestScreenCaptureAccess()
   }
 
-  private func testAccessibilityPermission() -> Bool {
-    guard let frontmost = NSWorkspace.shared.frontmostApplication else { return true }
-    let result = focusedWindowResult(for: frontmost.processIdentifier)
-    if let functional = AccessibilityPermissionPolicy.isFunctional(result) { return functional }
+  func openPrivacyPane(_ pane: String) -> Bool {
     guard
-      let finder = NSRunningApplication.runningApplications(
-        withBundleIdentifier: "com.apple.finder"
-      ).first
-    else { return probeAccessibilityViaEventTap() }
-    return AccessibilityPermissionPolicy.isFunctional(
-      focusedWindowResult(for: finder.processIdentifier)) ?? false
-  }
-
-  private func focusedWindowResult(for processIdentifier: pid_t) -> AXError {
-    var focusedWindow: CFTypeRef?
-    return AXUIElementCopyAttributeValue(
-      AXUIElementCreateApplication(processIdentifier),
-      kAXFocusedWindowAttribute as CFString,
-      &focusedWindow)
-  }
-
-  private func hasFullDiskAccess() -> Bool {
-    let files = FullDiskAccessProbePolicy.files(in: libraryURL).map { file in
-      guard let handle = try? FileHandle(forReadingFrom: file) else { return false }
-      try? handle.close()
-      return true
-    }
-    let directories = FullDiskAccessProbePolicy.directories(in: libraryURL).map {
-      (try? FileManager.default.contentsOfDirectory(
-        at: $0,
-        includingPropertiesForKeys: nil)) != nil
-    }
-    return FullDiskAccessProbePolicy.isGranted(files + directories)
-  }
-
-  private func openPrivacyPane(_ pane: String) {
-    guard
+      Self.privacyPanes.contains(pane),
       let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(pane)")
-    else { return }
+    else { return false }
     NSWorkspace.shared.open(url)
+    return true
+  }
+
+  static func classifyProbeError(code: Int) -> String {
+    switch code {
+    case NSFileReadNoSuchFileError, NSFileNoSuchFileError: "absent"
+    default: "denied"
+    }
+  }
+
+  private func microphoneStatus() -> String {
+    switch AVCaptureDevice.authorizationStatus(for: .audio) {
+    case .notDetermined: "notDetermined"
+    case .denied: "denied"
+    case .restricted: "restricted"
+    case .authorized: "authorized"
+    @unknown default: "unknown"
+    }
+  }
+
+  private func fullDiskProbes() -> [String] {
+    let notes = libraryURL.appendingPathComponent("Group Containers/group.com.apple.notes")
+    let files = [
+      libraryURL.appendingPathComponent("Application Support/com.apple.TCC/TCC.db"),
+      notes.appendingPathComponent("NoteStore.sqlite"),
+      notes.appendingPathComponent("Accounts/LocalAccount/NoteStore.sqlite"),
+    ].map { file in
+      do {
+        let handle = try FileHandle(forReadingFrom: file)
+        try? handle.close()
+        return "readable"
+      } catch let error as NSError {
+        return Self.classifyProbeError(code: error.code)
+      }
+    }
+    let directories = [libraryURL.appendingPathComponent("Mail", isDirectory: true)].map {
+      directory in
+      do {
+        _ = try FileManager.default.contentsOfDirectory(
+          at: directory,
+          includingPropertiesForKeys: nil)
+        return "readable"
+      } catch let error as NSError {
+        return Self.classifyProbeError(code: error.code)
+      }
+    }
+    return files + directories
   }
 }

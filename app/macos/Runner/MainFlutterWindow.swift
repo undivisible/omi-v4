@@ -105,7 +105,6 @@ private final class ShortcutDragView: NSImageView, NSDraggingSource {
 }
 
 private final class PermissionDragOverlay: NSView {
-  private var capability: MacPermissionCapability?
   private var restartTimer: Timer?
   private let restart: () -> Void
   private let restartButton = NSButton(title: "Restart Omi", target: nil, action: nil)
@@ -161,8 +160,11 @@ private final class PermissionDragOverlay: NSView {
     restart()
   }
 
-  func show(for capability: MacPermissionCapability) {
-    self.capability = capability
+  override func mouseDown(with event: NSEvent) {
+    dismiss()
+  }
+
+  func show() {
     alphaValue = 0
     isHidden = false
     NSAnimationContext.runAnimationGroup { context in
@@ -186,8 +188,8 @@ private final class PermissionDragOverlay: NSView {
     RunLoop.main.add(restartTimer, forMode: .common)
   }
 
-  private func hide() {
-    capability = nil
+  func dismiss() {
+    guard !isHidden else { return }
     restartTimer?.invalidate()
     restartTimer = nil
     NSAnimationContext.runAnimationGroup { context in
@@ -199,11 +201,6 @@ private final class PermissionDragOverlay: NSView {
     }
   }
 
-  func consume(_ snapshot: MacPermissionSnapshot) {
-    guard let capability, snapshot.grants(capability) else { return }
-    hide()
-    if capability == .screenCapture { restart() }
-  }
 }
 
 class MainFlutterWindow: NSWindow, FlutterStreamHandler {
@@ -213,6 +210,7 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
   private var localKeyboardMonitor: Any?
   private var globalKeyboardMonitor: Any?
   private let permissionService = MacPermissionService()
+  private var permissionOverlay: PermissionDragOverlay?
 
   override var canBecomeKey: Bool { true }
   override var canBecomeMain: Bool { true }
@@ -232,6 +230,7 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
     emitSecureInput()
     if IsSecureEventInputEnabled() { return }
     if event.type == .keyDown && event.keyCode == 53 {
+      permissionOverlay?.dismiss()
       keyboardSink?(["type": "escape"])
       return
     }
@@ -286,6 +285,7 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
       self?.restart()
     }
     rootView.addSubview(permissionOverlay)
+    self.permissionOverlay = permissionOverlay
 
     RegisterGeneratedPlugins(registry: flutterViewController)
     eventKitBridge = AppleEventKitBridge(binaryMessenger: flutterViewController.engine.binaryMessenger)
@@ -294,7 +294,7 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
     let capabilities = FlutterMethodChannel(
       name: "omi/core_capabilities",
       binaryMessenger: flutterViewController.engine.binaryMessenger)
-    capabilities.setMethodCallHandler { call, rawResult in
+    capabilities.setMethodCallHandler { [weak self] call, rawResult in
       var completed = false
       let result: FlutterResult = { value in
         DispatchQueue.main.async {
@@ -303,23 +303,39 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
           rawResult(value)
         }
       }
+      guard let self else {
+        result(FlutterError(code: "window_unavailable", message: nil, details: nil))
+        return
+      }
       switch call.method {
       case "check":
-        let snapshot = self.permissionService.snapshot()
-        permissionOverlay.consume(snapshot)
-        result(snapshot.dictionary)
-      case "request":
+        result(self.permissionService.rawSnapshot())
+      case "promptAccessibility":
+        self.permissionService.promptAccessibility()
+        result(nil)
+      case "requestMicrophone":
+        self.permissionService.requestMicrophone { result(nil) }
+      case "promptScreenCapture":
+        self.permissionService.promptScreenCapture()
+        result(nil)
+      case "openSettingsPane":
         guard
-          let value = call.arguments as? String,
-          let capability = MacPermissionCapability(rawValue: value)
+          let pane = call.arguments as? String,
+          self.permissionService.openPrivacyPane(pane)
         else {
-          result(FlutterError(code: "invalid_capability", message: nil, details: nil))
+          result(FlutterError(code: "invalid_pane", message: nil, details: nil))
           return
         }
-        if capability != .microphone {
-          permissionOverlay.show(for: capability)
-        }
-        self.permissionService.request(capability) { result(nil) }
+        result(nil)
+      case "showOverlay":
+        self.permissionOverlay?.show()
+        result(nil)
+      case "dismissOverlay":
+        self.permissionOverlay?.dismiss()
+        result(nil)
+      case "restart":
+        self.restart()
+        result(nil)
       default:
         result(FlutterMethodNotImplemented)
       }

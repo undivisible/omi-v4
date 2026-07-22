@@ -39,6 +39,8 @@ abstract interface class DesktopCapabilityGateway {
   Future<Map<CoreCapability, CapabilityStatus>> check();
 
   Future<void> request(CoreCapability capability);
+
+  Future<void> dismissOverlay();
 }
 
 abstract interface class WorkspaceRootStore {
@@ -87,6 +89,26 @@ final class VolatileWorkspaceRootStore implements WorkspaceRootStore {
   Future<void> clear() async => value = null;
 }
 
+enum MacRequestAction { promptSystem, openSettings, none }
+
+abstract final class MacPermissionPolicy {
+  static bool microphoneGranted(Object? status) => status == 'authorized';
+
+  static MacRequestAction microphoneAction(Object? status) => switch (status) {
+    'notDetermined' => MacRequestAction.promptSystem,
+    'authorized' => MacRequestAction.none,
+    _ => MacRequestAction.openSettings,
+  };
+
+  static bool screenCaptureRestartRequired({
+    required bool granted,
+    required bool grantedAtLaunch,
+  }) => granted && !grantedAtLaunch;
+
+  static bool fullDiskGranted(List<Object?> probes) =>
+      probes.contains('readable');
+}
+
 final class PlatformDesktopCapabilityGateway
     implements DesktopCapabilityGateway {
   PlatformDesktopCapabilityGateway({
@@ -99,6 +121,9 @@ final class PlatformDesktopCapabilityGateway
   final WorkspaceRootStore workspaceRoots;
   final Future<String?> Function() _directoryPicker;
   Future<void>? _workspaceRequest;
+  bool _accessibilityPrompted = false;
+  bool _screenCapturePrompted = false;
+  CoreCapability? _overlayShownFor;
 
   Future<String?> verifiedWorkspaceRoot() async {
     if (!_supportsWorkspace) return null;
@@ -185,22 +210,46 @@ final class PlatformDesktopCapabilityGateway
       };
     }
     try {
-      final values = await _channel.invokeMapMethod<String, bool>('check');
+      final values = await _channel.invokeMapMethod<String, Object?>('check');
+      final accessibility = values?['accessibility'] == true;
+      final microphone = MacPermissionPolicy.microphoneGranted(
+        values?['microphone'],
+      );
+      final screenCapture = values?['screenCapture'] == true;
+      final restartRequired = MacPermissionPolicy.screenCaptureRestartRequired(
+        granted: screenCapture,
+        grantedAtLaunch: values?['screenCaptureAtLaunch'] == true,
+      );
+      final fullDisk = MacPermissionPolicy.fullDiskGranted(
+        (values?['fullDiskProbes'] as List?) ?? const [],
+      );
+      await _reconcileOverlay(
+        accessibility: accessibility,
+        screenCapture: screenCapture,
+        restartRequired: restartRequired,
+        fullDisk: fullDisk,
+      );
       return {
         CoreCapability.accessibility: _permission(
-          values?['accessibility'] == true,
+          accessibility,
           'Accessibility lets Omi identify and act in the active app.',
         ),
         CoreCapability.microphone: _permission(
-          values?['microphone'] == true,
+          microphone,
           'Microphone access is required for voice and meeting capture.',
         ),
-        CoreCapability.screenCapture: _permission(
-          values?['screenCapture'] == true,
-          'Screen Recording lets Omi understand visible work.',
-        ),
+        CoreCapability.screenCapture: restartRequired
+            ? const CapabilityStatus(
+                state: CapabilityState.actionRequired,
+                detail:
+                    'Screen Recording is granted. Restart Omi to activate it.',
+              )
+            : _permission(
+                screenCapture,
+                'Screen Recording lets Omi understand visible work.',
+              ),
         CoreCapability.appData: _permission(
-          values?['fullDiskAccess'] == true,
+          fullDisk,
           'Full Disk Access lets Omi read Apple Mail and Notes for your local memory.',
         ),
         CoreCapability.workspaceRoot: workspaceRoot,
@@ -236,17 +285,100 @@ final class PlatformDesktopCapabilityGateway
       }
       return;
     }
-    if ((defaultTargetPlatform != TargetPlatform.macOS &&
-            defaultTargetPlatform != TargetPlatform.windows) ||
-        capability == CoreCapability.appData &&
-            defaultTargetPlatform != TargetPlatform.macOS) {
+    if (defaultTargetPlatform == TargetPlatform.macOS) {
+      await _requestMac(capability);
       return;
     }
     if (defaultTargetPlatform == TargetPlatform.windows &&
-        capability != CoreCapability.microphone) {
+        capability == CoreCapability.microphone) {
+      await _channel.invokeMethod<void>('request', capability.name);
+    }
+  }
+
+  Future<void> _requestMac(CoreCapability capability) async {
+    switch (capability) {
+      case CoreCapability.accessibility:
+        if (!_accessibilityPrompted) {
+          _accessibilityPrompted = true;
+          await _channel.invokeMethod<void>('promptAccessibility');
+        } else {
+          await _openSettingsPane('Privacy_Accessibility', capability);
+        }
+      case CoreCapability.microphone:
+        final values = await _channel.invokeMapMethod<String, Object?>('check');
+        switch (MacPermissionPolicy.microphoneAction(values?['microphone'])) {
+          case MacRequestAction.promptSystem:
+            await _channel.invokeMethod<void>('requestMicrophone');
+          case MacRequestAction.openSettings:
+            await _openSettingsPane('Privacy_Microphone', null);
+          case MacRequestAction.none:
+            break;
+        }
+      case CoreCapability.screenCapture:
+        final values = await _channel.invokeMapMethod<String, Object?>('check');
+        final granted = values?['screenCapture'] == true;
+        if (MacPermissionPolicy.screenCaptureRestartRequired(
+          granted: granted,
+          grantedAtLaunch: values?['screenCaptureAtLaunch'] == true,
+        )) {
+          await _channel.invokeMethod<void>('restart');
+        } else if (!_screenCapturePrompted) {
+          _screenCapturePrompted = true;
+          await _channel.invokeMethod<void>('promptScreenCapture');
+        } else {
+          await _openSettingsPane('Privacy_ScreenCapture', capability);
+        }
+      case CoreCapability.appData:
+        await _openSettingsPane('Privacy_AllFiles', capability);
+      case CoreCapability.workspaceRoot:
+        return;
+    }
+  }
+
+  Future<void> _openSettingsPane(
+    String pane,
+    CoreCapability? overlayFor,
+  ) async {
+    await _channel.invokeMethod<void>('openSettingsPane', pane);
+    if (overlayFor != null) {
+      await _channel.invokeMethod<void>('showOverlay');
+      _overlayShownFor = overlayFor;
+    }
+  }
+
+  Future<void> _reconcileOverlay({
+    required bool accessibility,
+    required bool screenCapture,
+    required bool restartRequired,
+    required bool fullDisk,
+  }) async {
+    final shown = _overlayShownFor;
+    if (shown == null) return;
+    final granted = switch (shown) {
+      CoreCapability.accessibility => accessibility,
+      CoreCapability.screenCapture => screenCapture,
+      CoreCapability.appData => fullDisk,
+      _ => false,
+    };
+    if (!granted) return;
+    _overlayShownFor = null;
+    await _channel.invokeMethod<void>('dismissOverlay');
+    if (shown == CoreCapability.screenCapture && restartRequired) {
+      await _channel.invokeMethod<void>('restart');
+    }
+  }
+
+  @override
+  Future<void> dismissOverlay() async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.macOS) return;
+    _overlayShownFor = null;
+    try {
+      await _channel.invokeMethod<void>('dismissOverlay');
+    } on PlatformException {
+      return;
+    } on MissingPluginException {
       return;
     }
-    await _channel.invokeMethod<void>('request', capability.name);
   }
 
   Future<void> _selectWorkspaceRoot() async {

@@ -236,6 +236,51 @@ void main() {
     expect(find.text('Continue'), findsNothing);
   });
 
+  testWidgets('processing consent is required before completion', (
+    tester,
+  ) async {
+    final gateway = _Gateway(session, currentSession: session);
+    final auth = AuthController(gateway, consentStore: VolatileConsentStore());
+    await auth.restoreSession();
+    var finished = false;
+    var previewOpened = false;
+    final capabilities = _Capabilities({
+      for (final capability in CoreCapability.values)
+        capability: const CapabilityStatus(
+          state: CapabilityState.granted,
+          detail: 'Verified',
+        ),
+    });
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SingleChildScrollView(
+            child: ProductionGate(
+              configurationMessage: 'configured',
+              auth: auth,
+              capabilities: capabilities,
+              onOpenPreview: () => previewOpened = true,
+              onFinish: () => finished = true,
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(finished, isFalse);
+
+    await tester.ensureVisible(find.byKey(const Key('open_interface_preview')));
+    await tester.tap(find.byKey(const Key('open_interface_preview')));
+    expect(previewOpened, isTrue);
+
+    await tester.ensureVisible(
+      find.byKey(const Key('grant_processing_consent')),
+    );
+    await tester.tap(find.byKey(const Key('grant_processing_consent')));
+    await tester.pumpAndSettle();
+    expect(finished, isTrue);
+  });
+
   testWidgets('microphone permission row requests microphone access', (
     tester,
   ) async {
@@ -304,12 +349,16 @@ void main() {
     });
     await tester.pumpWidget(
       MaterialApp(
-        home: ProductionGate(
-          configurationMessage: 'configured',
-          auth: auth,
-          capabilities: capabilities,
-          onOpenPreview: () {},
-          onFinish: () => finished = true,
+        home: Scaffold(
+          body: SingleChildScrollView(
+            child: ProductionGate(
+              configurationMessage: 'configured',
+              auth: auth,
+              capabilities: capabilities,
+              onOpenPreview: () {},
+              onFinish: () => finished = true,
+            ),
+          ),
         ),
       ),
     );
@@ -486,6 +535,57 @@ void main() {
     expect(find.textContaining('stale failure'), findsNothing);
   });
 
+  testWidgets('request completion refreshes even after background polls', (
+    tester,
+  ) async {
+    final gateway = _Gateway(session, currentSession: session);
+    final auth = AuthController(
+      gateway,
+      consentStore: VolatileConsentStore()..receipt = _receipt('firebase-uid'),
+    );
+    await auth.restoreSession();
+    final capabilities = _Capabilities({
+      for (final capability in CoreCapability.values)
+        capability: const CapabilityStatus(
+          state: CapabilityState.granted,
+          detail: 'Verified',
+        ),
+      CoreCapability.microphone: const CapabilityStatus(
+        state: CapabilityState.actionRequired,
+        detail: 'Grant microphone',
+      ),
+    })..requestBarrier = Completer<void>();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SingleChildScrollView(
+            child: ProductionGate(
+              configurationMessage: 'configured',
+              auth: auth,
+              capabilities: capabilities,
+              onOpenPreview: () {},
+              onFinish: () {},
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(capabilities.dismissCalls, 1);
+    final microphone = find.text(
+      'I would like to use your microphone so we can talk.',
+    );
+    await tester.ensureVisible(microphone);
+    await tester.tap(microphone);
+    await tester.pump(const Duration(seconds: 5));
+
+    capabilities.requestBarrier!.complete();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+
+    expect(find.text('Granted'), findsNWidgets(4));
+  });
+
   test('mobile marks desktop capabilities not applicable', () async {
     debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
     addTearDown(() => debugDefaultTargetPlatformOverride = null);
@@ -550,6 +650,159 @@ void main() {
     );
     await PlatformDesktopCapabilityGateway().request(CoreCapability.microphone);
     expect(calls.map((call) => call.method), ['check', 'request']);
+  });
+
+  test('macOS reports restart-required screen recording as action', () async {
+    SharedPreferences.setMockInitialValues({});
+    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    const channel = MethodChannel('omi/core_capabilities');
+    final calls = <MethodCall>[];
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+          calls.add(call);
+          return call.method == 'check'
+              ? {
+                  'accessibility': true,
+                  'microphone': 'authorized',
+                  'screenCapture': true,
+                  'screenCaptureAtLaunch': false,
+                  'fullDiskProbes': ['absent', 'readable', 'absent', 'denied'],
+                }
+              : null;
+        });
+    addTearDown(
+      () => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, null),
+    );
+    final gateway = PlatformDesktopCapabilityGateway();
+    final statuses = await gateway.check();
+    expect(
+      statuses[CoreCapability.screenCapture]?.state,
+      CapabilityState.actionRequired,
+    );
+    expect(
+      statuses[CoreCapability.screenCapture]?.detail,
+      contains('Restart Omi'),
+    );
+    expect(statuses[CoreCapability.accessibility]?.acceptable, isTrue);
+    expect(statuses[CoreCapability.microphone]?.acceptable, isTrue);
+    expect(statuses[CoreCapability.appData]?.acceptable, isTrue);
+    await gateway.request(CoreCapability.screenCapture);
+    await gateway.dismissOverlay();
+    expect(calls.map((call) => call.method), [
+      'check',
+      'check',
+      'restart',
+      'dismissOverlay',
+    ]);
+  });
+
+  test('macOS accessibility asks the system first, then Settings', () async {
+    SharedPreferences.setMockInitialValues({});
+    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    const channel = MethodChannel('omi/core_capabilities');
+    final calls = <MethodCall>[];
+    var accessibility = false;
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+          calls.add(call);
+          return call.method == 'check'
+              ? {
+                  'accessibility': accessibility,
+                  'microphone': 'denied',
+                  'screenCapture': false,
+                  'screenCaptureAtLaunch': false,
+                  'fullDiskProbes': ['denied', 'absent', 'absent', 'denied'],
+                }
+              : null;
+        });
+    addTearDown(
+      () => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, null),
+    );
+    final gateway = PlatformDesktopCapabilityGateway();
+    await gateway.request(CoreCapability.accessibility);
+    await gateway.request(CoreCapability.accessibility);
+    await gateway.request(CoreCapability.microphone);
+    accessibility = true;
+    final statuses = await gateway.check();
+    expect(statuses[CoreCapability.accessibility]?.acceptable, isTrue);
+    expect(statuses[CoreCapability.appData]?.acceptable, isFalse);
+    expect(calls.map((call) => call.method), [
+      'promptAccessibility',
+      'openSettingsPane',
+      'showOverlay',
+      'check',
+      'openSettingsPane',
+      'check',
+      'dismissOverlay',
+    ]);
+    expect(
+      calls
+          .where((call) => call.method == 'openSettingsPane')
+          .map((call) => call.arguments),
+      ['Privacy_Accessibility', 'Privacy_Microphone'],
+    );
+  });
+
+  test('microphone action policy maps every authorization status', () {
+    expect(
+      MacPermissionPolicy.microphoneAction('notDetermined'),
+      MacRequestAction.promptSystem,
+    );
+    expect(
+      MacPermissionPolicy.microphoneAction('denied'),
+      MacRequestAction.openSettings,
+    );
+    expect(
+      MacPermissionPolicy.microphoneAction('restricted'),
+      MacRequestAction.openSettings,
+    );
+    expect(
+      MacPermissionPolicy.microphoneAction('authorized'),
+      MacRequestAction.none,
+    );
+    expect(
+      MacPermissionPolicy.microphoneAction(null),
+      MacRequestAction.openSettings,
+    );
+    expect(MacPermissionPolicy.microphoneGranted('authorized'), isTrue);
+    expect(MacPermissionPolicy.microphoneGranted('denied'), isFalse);
+  });
+
+  test('screen recording restart is required only for mid-run grants', () {
+    expect(
+      MacPermissionPolicy.screenCaptureRestartRequired(
+        granted: true,
+        grantedAtLaunch: true,
+      ),
+      isFalse,
+    );
+    expect(
+      MacPermissionPolicy.screenCaptureRestartRequired(
+        granted: true,
+        grantedAtLaunch: false,
+      ),
+      isTrue,
+    );
+    expect(
+      MacPermissionPolicy.screenCaptureRestartRequired(
+        granted: false,
+        grantedAtLaunch: false,
+      ),
+      isFalse,
+    );
+  });
+
+  test('full disk access needs one readable probe, not merely present', () {
+    expect(
+      MacPermissionPolicy.fullDiskGranted(['absent', 'absent', 'denied']),
+      isFalse,
+    );
+    expect(MacPermissionPolicy.fullDiskGranted(['absent', 'readable']), isTrue);
+    expect(MacPermissionPolicy.fullDiskGranted([]), isFalse);
   });
 
   test('workspace selection persists canonically across recreation', () async {
@@ -760,6 +1013,7 @@ final class _Capabilities implements DesktopCapabilityGateway {
   Completer<void>? requestBarrier;
   Object? requestError;
   int checkCalls = 0;
+  int dismissCalls = 0;
 
   @override
   Future<Map<CoreCapability, CapabilityStatus>> check() async {
@@ -776,6 +1030,11 @@ final class _Capabilities implements DesktopCapabilityGateway {
       state: CapabilityState.granted,
       detail: 'Verified',
     );
+  }
+
+  @override
+  Future<void> dismissOverlay() async {
+    dismissCalls += 1;
   }
 }
 
