@@ -56,8 +56,8 @@ class SettingsScreen extends StatelessWidget {
           icon: Icons.savings_outlined,
           title: 'Bring your own key',
           detail:
-              'Managed Omi AI runs about \$35/mo of usage. A personal xAI/Grok '
-              'key runs the same usage for about \$5/mo — configure it above.',
+              'Managed Omi AI runs about \$35/mo of usage. A personal API key '
+              'runs the same usage for about \$5/mo — configure it above.',
         ),
       ],
       if (previewMode || !services.canUseApi)
@@ -394,11 +394,12 @@ class _ProviderTile extends StatefulWidget {
 }
 
 class _ProviderTileState extends State<_ProviderTile> {
-  late Future<ProviderCredential?> credential =
-      widget.services.providerCredential;
+  late Future<List<ProviderCredential>> credentials =
+      widget.services.allProviderCredentials;
+  bool expanded = false;
 
   void refresh() => setState(() {
-    credential = widget.services.providerCredential;
+    credentials = widget.services.allProviderCredentials;
   });
 
   Future<void> configure(ProviderCredential? existing) async {
@@ -461,10 +462,12 @@ class _ProviderTileState extends State<_ProviderTile> {
             if (existing != null)
               TextButton(
                 onPressed: () async {
-                  await widget.services.clearProviderCredential();
+                  await widget.services.removeProviderCredential(
+                    existing.provider,
+                  );
                   if (context.mounted) Navigator.pop(context);
                 },
-                child: const Text('Use plan default'),
+                child: const Text('Remove'),
               ),
             TextButton(
               onPressed: () => Navigator.pop(context),
@@ -501,27 +504,63 @@ class _ProviderTileState extends State<_ProviderTile> {
   }
 
   @override
-  Widget build(BuildContext context) => FutureBuilder<ProviderCredential?>(
-    future: credential,
+  Widget build(BuildContext context) => FutureBuilder<List<ProviderCredential>>(
+    future: credentials,
     builder: (context, snapshot) {
-      final value = snapshot.data;
-      return BaseTile(
-        icon: Icons.key_outlined,
-        title: 'AI provider',
-        detail: snapshot.connectionState != ConnectionState.done
-            ? 'Checking secure storage…'
-            : snapshot.hasError
-            ? '${snapshot.error}'
-            : value == null
-            ? 'Using your plan default'
-            : '${value.provider.name} · ${value.model}',
-        trailing: IconButton(
-          tooltip: 'Configure AI provider',
-          onPressed: snapshot.connectionState == ConnectionState.done
-              ? () => configure(value)
-              : null,
-          icon: const Icon(Icons.arrow_forward_rounded),
-        ),
+      final values = snapshot.data ?? const <ProviderCredential>[];
+      final loaded = snapshot.connectionState == ConnectionState.done;
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          BaseTile(
+            icon: Icons.key_outlined,
+            title: 'Bring your own AI',
+            detail: !loaded
+                ? 'Checking secure storage…'
+                : snapshot.hasError
+                ? '${snapshot.error}'
+                : values.isEmpty
+                ? 'Using your plan default'
+                : values.length == 1
+                ? '${values.first.provider.name} · ${values.first.model}'
+                : '${values.length} providers · '
+                      '${values.first.provider.name} routes first',
+            trailing: TextButton(
+              key: const Key('toggle_byok'),
+              onPressed: loaded
+                  ? () => setState(() => expanded = !expanded)
+                  : null,
+              child: Text(expanded ? 'Hide' : 'Show'),
+            ),
+          ),
+          if (expanded && loaded) ...[
+            for (final value in values)
+              BaseTile(
+                key: ValueKey('provider_${value.provider.name}'),
+                icon: Icons.subdirectory_arrow_right_rounded,
+                title: '${value.provider.name} · ${value.model}',
+                detail: value.endpoint ?? 'Key stored securely on this device',
+                trailing: IconButton(
+                  tooltip: 'Edit provider',
+                  onPressed: () => configure(value),
+                  icon: const Icon(Icons.edit_outlined),
+                ),
+              ),
+            BaseTile(
+              key: const Key('add_provider'),
+              icon: Icons.add_rounded,
+              title: 'Add a provider',
+              detail:
+                  'Add multiple providers or custom endpoints; the newest '
+                  'routes automatically.',
+              trailing: IconButton(
+                tooltip: 'Add provider',
+                onPressed: () => configure(null),
+                icon: const Icon(Icons.arrow_forward_rounded),
+              ),
+            ),
+          ],
+        ],
       );
     },
   );

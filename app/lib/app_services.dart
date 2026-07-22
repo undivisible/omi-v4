@@ -339,6 +339,18 @@ final class AppServices {
     return uid == null ? null : providerCredentials.read(uid);
   }
 
+  Future<List<ProviderCredential>> get allProviderCredentials async {
+    final uid = auth.snapshot.session?.uid;
+    return uid == null ? const [] : providerCredentials.readAll(uid);
+  }
+
+  Future<void> removeProviderCredential(AssistantProvider provider) async {
+    final uid = auth.snapshot.session?.uid;
+    if (uid == null) return;
+    await providerCredentials.remove(uid, provider);
+    await _queueProductionSync();
+  }
+
   Future<void> saveProviderCredential(ProviderCredential value) async {
     final uid = auth.snapshot.session?.uid;
     if (!productionReady || uid == null) {

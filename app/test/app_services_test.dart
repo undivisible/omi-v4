@@ -1026,11 +1026,13 @@ void main() {
     await auth.restoreSession();
     final hub = _FakeHub();
     final credentials = VolatileProviderCredentialStore()
-      ..values['user-a'] = const ProviderCredential(
-        provider: AssistantProvider.xai,
-        model: 'grok-4.5',
-        credential: 'user-key',
-      );
+      ..values['user-a'] = const [
+        ProviderCredential(
+          provider: AssistantProvider.xai,
+          model: 'grok-4.5',
+          credential: 'user-key',
+        ),
+      ];
     final services = AppServices.forTesting(
       auth: auth,
       nativeHub: hub,
