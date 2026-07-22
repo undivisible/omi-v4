@@ -26,6 +26,7 @@ class RunnerTests: XCTestCase {
     XCTAssertNotNil(snapshot["screenCapture"] as? Bool)
     XCTAssertNotNil(snapshot["screenCaptureAtLaunch"] as? Bool)
     XCTAssertEqual((snapshot["fullDiskProbes"] as? [String])?.count, 4)
+    XCTAssertNotNil(snapshot["fullDiskGrantedOutOfProcess"] as? Bool)
   }
 
   func testVoicePlayoutQueueTracksQueuedMilliseconds() {

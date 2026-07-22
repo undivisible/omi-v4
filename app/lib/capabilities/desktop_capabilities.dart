@@ -107,6 +107,11 @@ abstract final class MacPermissionPolicy {
 
   static bool fullDiskGranted(List<Object?> probes) =>
       probes.contains('readable');
+
+  static bool fullDiskRestartRequired({
+    required bool granted,
+    required bool grantedOutOfProcess,
+  }) => !granted && grantedOutOfProcess;
 }
 
 final class PlatformDesktopCapabilityGateway
@@ -223,11 +228,17 @@ final class PlatformDesktopCapabilityGateway
       final fullDisk = MacPermissionPolicy.fullDiskGranted(
         (values?['fullDiskProbes'] as List?) ?? const [],
       );
+      final fullDiskRestartRequired =
+          MacPermissionPolicy.fullDiskRestartRequired(
+            granted: fullDisk,
+            grantedOutOfProcess: values?['fullDiskGrantedOutOfProcess'] == true,
+          );
       await _reconcileOverlay(
         accessibility: accessibility,
         screenCapture: screenCapture,
         restartRequired: restartRequired,
         fullDisk: fullDisk,
+        fullDiskRestartRequired: fullDiskRestartRequired,
       );
       return {
         CoreCapability.accessibility: _permission(
@@ -248,10 +259,16 @@ final class PlatformDesktopCapabilityGateway
                 screenCapture,
                 'Screen Recording lets Omi understand visible work.',
               ),
-        CoreCapability.appData: _permission(
-          fullDisk,
-          'Full Disk Access lets Omi read Apple Mail and Notes for your local memory.',
-        ),
+        CoreCapability.appData: fullDiskRestartRequired
+            ? const CapabilityStatus(
+                state: CapabilityState.actionRequired,
+                detail:
+                    'Full Disk Access is granted. Restart Omi to activate it.',
+              )
+            : _permission(
+                fullDisk,
+                'Full Disk Access lets Omi read Apple Mail and Notes for your local memory.',
+              ),
         CoreCapability.workspaceRoot: workspaceRoot,
       };
     } catch (error) {
@@ -329,7 +346,17 @@ final class PlatformDesktopCapabilityGateway
           await _openSettingsPane('Privacy_ScreenCapture', capability);
         }
       case CoreCapability.appData:
-        await _openSettingsPane('Privacy_AllFiles', capability);
+        final values = await _channel.invokeMapMethod<String, Object?>('check');
+        if (MacPermissionPolicy.fullDiskRestartRequired(
+          granted: MacPermissionPolicy.fullDiskGranted(
+            (values?['fullDiskProbes'] as List?) ?? const [],
+          ),
+          grantedOutOfProcess: values?['fullDiskGrantedOutOfProcess'] == true,
+        )) {
+          await _channel.invokeMethod<void>('restart');
+        } else {
+          await _openSettingsPane('Privacy_AllFiles', capability);
+        }
       case CoreCapability.workspaceRoot:
         return;
     }
@@ -351,13 +378,14 @@ final class PlatformDesktopCapabilityGateway
     required bool screenCapture,
     required bool restartRequired,
     required bool fullDisk,
+    required bool fullDiskRestartRequired,
   }) async {
     final shown = _overlayShownFor;
     if (shown == null) return;
     final granted = switch (shown) {
       CoreCapability.accessibility => accessibility,
       CoreCapability.screenCapture => screenCapture,
-      CoreCapability.appData => fullDisk,
+      CoreCapability.appData => fullDisk || fullDiskRestartRequired,
       _ => false,
     };
     if (!granted) return;

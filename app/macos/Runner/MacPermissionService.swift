@@ -18,6 +18,8 @@ final class MacPermissionService {
   private let screenCaptureGrantedAtLaunch: Bool
   private var cachedFullDiskProbes: [String]?
   private var lastFullDiskProbeAt: Date?
+  private var cachedOutOfProcessGrant: Bool?
+  private var lastOutOfProcessProbeAt: Date?
 
   init(
     bundleURL: URL = Bundle.main.bundleURL,
@@ -29,12 +31,15 @@ final class MacPermissionService {
   }
 
   func rawSnapshot() -> [String: Any] {
-    [
+    let probes = fullDiskProbes()
+    return [
       "accessibility": AXIsProcessTrusted() || tccAccessibilityAllowed(),
       "microphone": microphoneStatus(),
       "screenCapture": CGPreflightScreenCaptureAccess(),
       "screenCaptureAtLaunch": screenCaptureGrantedAtLaunch,
-      "fullDiskProbes": fullDiskProbes(),
+      "fullDiskProbes": probes,
+      "fullDiskGrantedOutOfProcess": probes.contains("readable")
+        || outOfProcessFullDiskGrant(),
     ]
   }
 
@@ -143,5 +148,37 @@ final class MacPermissionService {
     cachedFullDiskProbes = result
     lastFullDiskProbeAt = Date()
     return result
+  }
+
+  private func outOfProcessFullDiskGrant() -> Bool {
+    if let cached = cachedOutOfProcessGrant,
+      let lastProbe = lastOutOfProcessProbeAt,
+      Date().timeIntervalSince(lastProbe) < Self.fullDiskProbeMinInterval
+    {
+      return cached
+    }
+    let targets = [
+      libraryURL.appendingPathComponent("Mail", isDirectory: true),
+      libraryURL.appendingPathComponent(
+        "Group Containers/group.com.apple.notes", isDirectory: true),
+    ]
+    let granted = targets.contains { target in
+      guard FileManager.default.fileExists(atPath: target.path) else { return false }
+      let process = Process()
+      process.executableURL = URL(fileURLWithPath: "/bin/ls")
+      process.arguments = [target.path]
+      process.standardOutput = FileHandle.nullDevice
+      process.standardError = FileHandle.nullDevice
+      do {
+        try process.run()
+        process.waitUntilExit()
+        return process.terminationStatus == 0
+      } catch {
+        return false
+      }
+    }
+    cachedOutOfProcessGrant = granted
+    lastOutOfProcessProbeAt = Date()
+    return granted
   }
 }

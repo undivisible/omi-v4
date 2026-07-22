@@ -804,6 +804,104 @@ void main() {
     expect(MacPermissionPolicy.microphoneGranted('denied'), isFalse);
   });
 
+  test('full disk restart is required only for out-of-process grants', () {
+    expect(
+      MacPermissionPolicy.fullDiskRestartRequired(
+        granted: false,
+        grantedOutOfProcess: true,
+      ),
+      isTrue,
+    );
+    expect(
+      MacPermissionPolicy.fullDiskRestartRequired(
+        granted: true,
+        grantedOutOfProcess: true,
+      ),
+      isFalse,
+    );
+    expect(
+      MacPermissionPolicy.fullDiskRestartRequired(
+        granted: false,
+        grantedOutOfProcess: false,
+      ),
+      isFalse,
+    );
+  });
+
+  test('macOS reports pending-restart full disk access as action', () async {
+    SharedPreferences.setMockInitialValues({});
+    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    const channel = MethodChannel('omi/core_capabilities');
+    final calls = <MethodCall>[];
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+          calls.add(call);
+          return call.method == 'check'
+              ? {
+                  'accessibility': true,
+                  'microphone': 'authorized',
+                  'screenCapture': true,
+                  'screenCaptureAtLaunch': true,
+                  'fullDiskProbes': ['denied', 'absent', 'absent', 'denied'],
+                  'fullDiskGrantedOutOfProcess': true,
+                }
+              : null;
+        });
+    addTearDown(
+      () => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, null),
+    );
+    final gateway = PlatformDesktopCapabilityGateway();
+    final statuses = await gateway.check();
+    expect(
+      statuses[CoreCapability.appData]?.state,
+      CapabilityState.actionRequired,
+    );
+    expect(statuses[CoreCapability.appData]?.detail, contains('Restart Omi'));
+    await gateway.request(CoreCapability.appData);
+    expect(calls.map((call) => call.method), ['check', 'check', 'restart']);
+  });
+
+  test('macOS opens Settings when full disk access is fully absent', () async {
+    SharedPreferences.setMockInitialValues({});
+    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    const channel = MethodChannel('omi/core_capabilities');
+    final calls = <MethodCall>[];
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+          calls.add(call);
+          return call.method == 'check'
+              ? {
+                  'accessibility': true,
+                  'microphone': 'authorized',
+                  'screenCapture': true,
+                  'screenCaptureAtLaunch': true,
+                  'fullDiskProbes': ['denied', 'absent', 'absent', 'denied'],
+                  'fullDiskGrantedOutOfProcess': false,
+                }
+              : null;
+        });
+    addTearDown(
+      () => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, null),
+    );
+    final gateway = PlatformDesktopCapabilityGateway();
+    await gateway.request(CoreCapability.appData);
+    expect(calls.map((call) => call.method), [
+      'check',
+      'openSettingsPane',
+      'showOverlay',
+    ]);
+    expect(
+      calls
+          .where((call) => call.method == 'openSettingsPane')
+          .map((call) => call.arguments),
+      ['Privacy_AllFiles'],
+    );
+  });
+
   test('screen recording restart is required only for mid-run grants', () {
     expect(
       MacPermissionPolicy.screenCaptureRestartRequired(
