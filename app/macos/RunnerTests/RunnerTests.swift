@@ -28,4 +28,11 @@ class RunnerTests: XCTestCase {
     XCTAssertEqual((snapshot["fullDiskProbes"] as? [String])?.count, 4)
   }
 
+  func testFullDiskProbeIsCachedWithinTheMinimumInterval() {
+    let service = MacPermissionService()
+    let first = service.rawSnapshot()["fullDiskProbes"] as? [String]
+    let second = service.rawSnapshot()["fullDiskProbes"] as? [String]
+    XCTAssertEqual(first, second)
+  }
+
 }
