@@ -1345,21 +1345,6 @@ final class AppServices {
     );
   }
 
-  Future<void> deleteAccount() async {
-    final worker = _worker;
-    if (worker == null) {
-      throw StateError('Account deletion requires the managed backend.');
-    }
-    final response = await worker.send(method: 'DELETE', path: '/v1/account');
-    if (response.statusCode != 200 && response.statusCode != 204) {
-      throw StateError('Account deletion failed (${response.statusCode}).');
-    }
-    await auth.signOut();
-    try {
-      await (await SharedPreferences.getInstance()).clear();
-    } catch (_) {}
-  }
-
   Future<void> disconnectDevice() async {
     final operation = _lifecycle.then<void>((_) {}, onError: (_, _) {}).then((
       _,
