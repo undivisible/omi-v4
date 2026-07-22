@@ -2,8 +2,11 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:omi/api/dev_gemini.dart';
+import 'package:omi/api/worker_http.dart';
 import 'package:omi/app_services.dart';
 import 'package:omi/auth/auth.dart';
+import 'package:omi/conversations/conversations.dart';
 import 'package:omi/currents/currents.dart';
 import 'package:omi/device/device.dart';
 import 'package:omi/features/chat_screen.dart';
@@ -214,6 +217,117 @@ void main() {
     },
   );
 
+  testWidgets(
+    'localMode enables chat with rotating prompts and skips currents network',
+    (tester) async {
+      DevGemini.debugOverride = 'AIzaTestDevKey';
+      addTearDown(() => DevGemini.debugOverride = null);
+      final currentsTransport = _CountingCurrentsTransport();
+      final conversationTransport = _ThrowingConversationTransport();
+      final services = AppServices.forTesting(
+        nativeHub: _MeetingEventHub(),
+        deviceRelay: DeviceRelayService(
+          role: DeviceRelayRole.desktopObserver,
+          adapter: const UnavailableDeviceRelayAdapter(),
+        ),
+        auth: AuthController(const UnconfiguredAuthGateway()),
+        memoryDatabasePath: (uid) => '/tmp/$uid.sqlite3',
+        currentsClient: CurrentsClient(currentsTransport),
+        conversations: conversationTransport,
+      );
+      addTearDown(services.dispose);
+      await services.initialize();
+      expect(services.localMode, isTrue);
+      expect(services.chatReady, isFalse);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: ChatScreen(
+              services: services,
+              checklistStore: VolatileHubChecklistStore(),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+
+      final input = tester.widget<TextField>(
+        find.byKey(const Key('chat_input')),
+      );
+      expect(input.enabled, isTrue);
+      expect(input.decoration!.hintText, 'Turn today’s notes into a plan');
+      expect(
+        find.text('Connect an account and model to start chatting'),
+        findsNothing,
+      );
+      expect(find.byKey(const Key('chat_error')), findsNothing);
+      expect(find.textContaining('Instance of'), findsNothing);
+      expect(currentsTransport.calls, 0);
+      expect(conversationTransport.replayCalls, 0);
+      expect(find.byKey(const Key('task_setup_omi')), findsOneWidget);
+
+      await tester.enterText(find.byKey(const Key('chat_input')), 'hello');
+      await tester.tap(find.byKey(const Key('send_chat')));
+      await tester.pump();
+      expect(find.text('hello'), findsOneWidget);
+      expect(conversationTransport.appendCalls, 0);
+      expect(find.byKey(const Key('chat_error')), findsNothing);
+    },
+  );
+
+  testWidgets(
+    'a WorkerAuthenticationException surfaces as friendly copy, never raw',
+    (tester) async {
+      final auth = AuthController(
+        _SignedInGateway(),
+        consentStore: VolatileConsentStore()
+          ..receipt = ProcessingConsentReceipt.current(
+            subjectUid: 'user-meeting',
+            acceptedAt: DateTime.utc(2026, 7, 21),
+          ),
+      );
+      await auth.restoreSession();
+      final conversationTransport = _ThrowingConversationTransport();
+      final services = AppServices.forTesting(
+        nativeHub: _MeetingEventHub(),
+        deviceRelay: DeviceRelayService(
+          role: DeviceRelayRole.desktopObserver,
+          adapter: const UnavailableDeviceRelayAdapter(),
+        ),
+        auth: auth,
+        memoryDatabasePath: (uid) => '/tmp/$uid.sqlite3',
+        conversations: conversationTransport,
+      );
+      addTearDown(services.dispose);
+      await services.initialize();
+      expect(services.chatReady, isTrue);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: ChatScreen(
+              services: services,
+              checklistStore: VolatileHubChecklistStore(),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+
+      expect(conversationTransport.replayCalls, greaterThan(0));
+      expect(find.textContaining('Instance of'), findsNothing);
+      expect(
+        find.text(
+          'Sign in to sync with your account, or keep chatting locally.',
+        ),
+        findsOneWidget,
+      );
+    },
+  );
+
   testWidgets('meeting events surface progress and a local summary message', (
     tester,
   ) async {
@@ -344,6 +458,38 @@ final class _SignedInGateway implements AuthGateway {
 
   @override
   dynamic noSuchMethod(Invocation invocation) => null;
+}
+
+final class _CountingCurrentsTransport implements CurrentsTransport {
+  int calls = 0;
+
+  @override
+  Future<CurrentsResponse> send(CurrentsRequest request) async {
+    calls += 1;
+    return const CurrentsResponse(statusCode: 200, body: {});
+  }
+}
+
+final class _ThrowingConversationTransport implements ConversationTransport {
+  int appendCalls = 0;
+  int replayCalls = 0;
+
+  @override
+  Future<ConversationMessage> append({
+    required String clientMessageId,
+    required String role,
+    required String source,
+    required String text,
+  }) async {
+    appendCalls += 1;
+    throw const WorkerAuthenticationException('Sign in is required');
+  }
+
+  @override
+  Future<List<ConversationMessage>> replay({required int after}) async {
+    replayCalls += 1;
+    throw const WorkerAuthenticationException('Sign in is required');
+  }
 }
 
 final class _Transport implements CurrentsTransport {
