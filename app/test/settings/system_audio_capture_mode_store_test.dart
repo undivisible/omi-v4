@@ -27,8 +27,10 @@ void main() {
       systemAudioCaptureModeFromName('garbage'),
       SystemAudioCaptureMode.onlyDuringMeetings,
     );
-    expect(systemAudioCaptureModeFromName(null),
-        SystemAudioCaptureMode.onlyDuringMeetings);
+    expect(
+      systemAudioCaptureModeFromName(null),
+      SystemAudioCaptureMode.onlyDuringMeetings,
+    );
     for (final mode in SystemAudioCaptureMode.values) {
       expect(
         systemAudioCaptureModeFromName(systemAudioCaptureModeName(mode)),

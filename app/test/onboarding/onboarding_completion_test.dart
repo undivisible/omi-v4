@@ -35,7 +35,11 @@ void main() {
     final first = await _authorizedServices('user-a');
 
     await tester.pumpWidget(
-      OmiApp(services: first, onboardingCompletionStore: store, platformOverride: TargetPlatform.macOS),
+      OmiApp(
+        services: first,
+        onboardingCompletionStore: store,
+        platformOverride: TargetPlatform.macOS,
+      ),
     );
     await tester.pumpAndSettle();
 
@@ -51,7 +55,11 @@ void main() {
     final services = await _authorizedServices('user-a');
 
     await tester.pumpWidget(
-      OmiApp(services: services, onboardingCompletionStore: store, platformOverride: TargetPlatform.macOS),
+      OmiApp(
+        services: services,
+        onboardingCompletionStore: store,
+        platformOverride: TargetPlatform.macOS,
+      ),
     );
     await tester.pumpAndSettle();
     final gateway = _gateways[services]!;
@@ -72,7 +80,11 @@ void main() {
     final services = await _authorizedServices('user-a');
 
     await tester.pumpWidget(
-      OmiApp(services: services, onboardingCompletionStore: store, platformOverride: TargetPlatform.macOS),
+      OmiApp(
+        services: services,
+        onboardingCompletionStore: store,
+        platformOverride: TargetPlatform.macOS,
+      ),
     );
     await tester.pumpAndSettle();
     await services.auth.revokeProcessingConsent();

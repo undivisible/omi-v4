@@ -105,10 +105,7 @@ void main() {
 
     expect(fixture.services.deviceAudio.active, isFalse);
     expect(find.byKey(const Key('companion_scan_tile')), findsOneWidget);
-    expect(
-      find.byKey(const Key('companion_remembered_tile')),
-      findsOneWidget,
-    );
+    expect(find.byKey(const Key('companion_remembered_tile')), findsOneWidget);
     fixture.services.dispose();
   });
 

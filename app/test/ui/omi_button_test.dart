@@ -21,14 +21,8 @@ void main() {
     );
 
     final button = tester.widget<FilledButton>(find.byType(FilledButton));
-    expect(
-      button.style?.backgroundColor?.resolve({}),
-      const Color(0xfffffcec),
-    );
-    expect(
-      button.style?.foregroundColor?.resolve({}),
-      const Color(0xff171716),
-    );
+    expect(button.style?.backgroundColor?.resolve({}), const Color(0xfffffcec));
+    expect(button.style?.foregroundColor?.resolve({}), const Color(0xff171716));
     expect(button.style?.shape?.resolve({}), isA<StadiumBorder>());
     await tester.tap(find.text('Continue'));
     expect(pressed, isTrue);
@@ -52,10 +46,7 @@ void main() {
     );
 
     final button = tester.widget<OutlinedButton>(find.byType(OutlinedButton));
-    expect(
-      button.style?.foregroundColor?.resolve({}),
-      const Color(0xfffffcec),
-    );
+    expect(button.style?.foregroundColor?.resolve({}), const Color(0xfffffcec));
     expect(button.style?.shape?.resolve({}), isA<StadiumBorder>());
   });
 
@@ -77,13 +68,7 @@ void main() {
     );
 
     final button = tester.widget<FilledButton>(find.byType(FilledButton));
-    expect(
-      button.style?.backgroundColor?.resolve({}),
-      const Color(0xffb42318),
-    );
-    expect(
-      button.style?.foregroundColor?.resolve({}),
-      const Color(0xfffffcec),
-    );
+    expect(button.style?.backgroundColor?.resolve({}), const Color(0xffb42318));
+    expect(button.style?.foregroundColor?.resolve({}), const Color(0xfffffcec));
   });
 }

@@ -27,10 +27,7 @@ void main() {
     expect(find.byKey(const Key('profile_languages_chip')), findsOneWidget);
     expect(find.text('Ada'), findsOneWidget);
     expect(find.text('English'), findsOneWidget);
-    expect(
-      find.textContaining('You keep meticulous notes'),
-      findsOneWidget,
-    );
+    expect(find.textContaining('You keep meticulous notes'), findsOneWidget);
   });
 
   testWidgets('editing the name updates the paragraph', (tester) async {
