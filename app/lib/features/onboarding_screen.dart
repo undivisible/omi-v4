@@ -499,10 +499,20 @@ class _OnboardingBackdrop extends StatelessWidget {
       if (kIsWeb || defaultTargetPlatform != TargetPlatform.macOS)
         const ColoredBox(color: Color(0xff9ba0a3)),
       AnimatedOpacity(
-        duration: const Duration(milliseconds: 900),
-        curve: Curves.easeOutCubic,
-        opacity: bright ? .7 : .46,
-        child: const _OnboardingEdgeGradient(),
+        duration: const Duration(milliseconds: 2500),
+        curve: Curves.easeOutQuart,
+        opacity: bright ? .7 : 0,
+        child: AnimatedSlide(
+          duration: const Duration(milliseconds: 2500),
+          curve: Curves.easeOutQuart,
+          offset: bright ? Offset.zero : const Offset(0, .34),
+          child: AnimatedScale(
+            duration: const Duration(milliseconds: 2500),
+            curve: Curves.easeOutQuart,
+            scale: bright ? 1 : 1.12,
+            child: const _OnboardingEdgeGradient(),
+          ),
+        ),
       ),
       child,
     ],
@@ -827,52 +837,75 @@ class _CapabilityRow extends StatelessWidget {
       CapabilityState.error => 'Check failed',
     };
     final granted = status.acceptable;
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: onRequest,
+    return Semantics(
+      button: true,
+      enabled: onRequest != null,
+      label: copy,
+      value: granted ? 'Granted' : state,
+      onTap: onRequest,
+      child: ExcludeSemantics(
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 15),
-          child: Row(
-            children: [
-              AnimatedContainer(
-                duration: const Duration(milliseconds: 180),
-                width: 20,
-                height: 20,
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(6),
-                  color: granted ? const Color(0xfffffcec) : Colors.transparent,
-                  border: Border.all(color: const Color(0x73ffffff)),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+          child: Material(
+            color: const Color(0x0dffffff),
+            borderRadius: BorderRadius.circular(16),
+            clipBehavior: Clip.antiAlias,
+            child: InkWell(
+              borderRadius: BorderRadius.circular(16),
+              onTap: onRequest,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 14,
                 ),
-                child: granted
-                    ? const Icon(
-                        Icons.check_rounded,
-                        size: 14,
-                        color: Color(0xff171716),
-                      )
-                    : null,
-              ),
-              const SizedBox(width: 13),
-              Expanded(
-                child: Text(
-                  copy,
-                  style: const TextStyle(
-                    color: Color(0xd1ffffff),
-                    fontSize: 15,
-                    height: 1.35,
-                  ),
+                child: Row(
+                  children: [
+                    AnimatedContainer(
+                      duration: const Duration(milliseconds: 180),
+                      width: 20,
+                      height: 20,
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(6),
+                        color: granted
+                            ? const Color(0xfffffcec)
+                            : Colors.transparent,
+                        border: Border.all(color: const Color(0x73ffffff)),
+                      ),
+                      child: granted
+                          ? const Icon(
+                              Icons.check_rounded,
+                              size: 14,
+                              color: Color(0xff171716),
+                            )
+                          : null,
+                    ),
+                    const SizedBox(width: 13),
+                    Expanded(
+                      child: Text(
+                        copy,
+                        style: const TextStyle(
+                          color: Color(0xd1ffffff),
+                          fontSize: 15,
+                          height: 1.35,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Text(
+                      granted
+                          ? 'Granted'
+                          : onRequest == null
+                          ? state
+                          : 'Open',
+                      style: const TextStyle(
+                        color: Color(0x73ffffff),
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
                 ),
               ),
-              const SizedBox(width: 12),
-              Text(
-                granted
-                    ? 'Granted'
-                    : onRequest == null
-                    ? state
-                    : 'Open',
-                style: const TextStyle(color: Color(0x73ffffff), fontSize: 12),
-              ),
-            ],
+            ),
           ),
         ),
       ),

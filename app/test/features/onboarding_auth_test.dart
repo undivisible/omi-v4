@@ -194,12 +194,19 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(finished, isFalse);
-    await tester.ensureVisible(
-      find.text('I would like to see your screen so I can give relevant help.'),
+    final permission = find.bySemanticsLabel(
+      'I would like to see your screen so I can give relevant help.',
     );
-    await tester.tap(
-      find.text('I would like to see your screen so I can give relevant help.'),
+    await tester.ensureVisible(permission);
+    expect(
+      tester
+          .getSemantics(permission)
+          .getSemanticsData()
+          .flagsCollection
+          .isButton,
+      isTrue,
     );
+    await tester.tap(permission);
     await tester.pumpAndSettle();
     expect(capabilities.requested, [CoreCapability.screenCapture]);
     expect(finished, isTrue);
