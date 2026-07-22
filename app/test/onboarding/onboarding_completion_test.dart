@@ -57,7 +57,7 @@ void main() {
     gateway.currentSession = _session('user-b');
     await services.auth.setConsent(true);
     await services.auth.grantProcessingConsent();
-    await tester.pumpAndSettle();
+    await tester.pump(const Duration(milliseconds: 400));
 
     expect(find.textContaining('Hi, I’m Omi.'), findsOneWidget);
     expect(await store.isComplete('user-b'), isFalse);
@@ -75,7 +75,7 @@ void main() {
     );
     await tester.pumpAndSettle();
     await services.auth.revokeProcessingConsent();
-    await tester.pumpAndSettle();
+    await tester.pump(const Duration(milliseconds: 400));
 
     expect(find.textContaining('Hi, I’m Omi.'), findsOneWidget);
     expect(find.text('Chat'), findsNothing);

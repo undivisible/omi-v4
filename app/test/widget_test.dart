@@ -7,13 +7,13 @@ import 'package:omi/main.dart';
 
 Future<void> tapVisible(WidgetTester tester, Finder finder) async {
   await tester.ensureVisible(finder);
-  await tester.pumpAndSettle();
+  await tester.pump(const Duration(milliseconds: 400));
   await tester.tap(finder);
 }
 
 Future<void> reachPreviewGate(WidgetTester tester) async {
   await tapVisible(tester, find.byKey(const Key('continue_preview_intro')));
-  await tester.pumpAndSettle();
+  await tester.pump(const Duration(milliseconds: 400));
 }
 
 Future<void> openInterfacePreview(WidgetTester tester) async {
@@ -53,7 +53,7 @@ void main() {
     );
 
     await tapVisible(tester, find.byKey(const Key('continue_preview_intro')));
-    await tester.pumpAndSettle();
+    await tester.pump(const Duration(milliseconds: 400));
 
     expect(find.text('Before I begin'), findsNothing);
     expect(

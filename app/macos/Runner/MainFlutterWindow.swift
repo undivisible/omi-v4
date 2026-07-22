@@ -14,10 +14,10 @@ private final class RadialBlurView: NSVisualEffectView {
     radialMask.colors = [
       NSColor.black.cgColor,
       NSColor.black.cgColor,
-      NSColor.black.withAlphaComponent(0.42).cgColor,
+      NSColor.black.withAlphaComponent(0.2).cgColor,
       NSColor.clear.cgColor,
     ]
-    radialMask.locations = [0, 0.3, 0.7, 1]
+    radialMask.locations = [0, 0.24, 0.56, 0.82]
     radialMask.startPoint = CGPoint(x: 0.5, y: 0.5)
     radialMask.endPoint = CGPoint(x: 1, y: 0.5)
     layer?.mask = radialMask
@@ -39,6 +39,9 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
   private var keyboardSink: FlutterEventSink?
   private var localKeyboardMonitor: Any?
   private var globalKeyboardMonitor: Any?
+
+  override var canBecomeKey: Bool { true }
+  override var canBecomeMain: Bool { true }
 
   func onListen(withArguments arguments: Any?, eventSink events: @escaping FlutterEventSink) -> FlutterError? {
     keyboardSink = events
@@ -79,7 +82,7 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
     self.hasShadow = false
     self.titleVisibility = .hidden
     self.titlebarAppearsTransparent = true
-    self.isMovableByWindowBackground = true
+    self.isMovableByWindowBackground = false
     self.level = .floating
     self.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
     flutterViewController.backgroundColor = .clear
