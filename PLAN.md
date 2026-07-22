@@ -305,6 +305,14 @@ When a paid plan is reintroduced, offer a subscription tier (e.g. riding an xAI 
 - **STT**: let the user pick among OpenAI, xAI, Gemini, and Deepgram (Deepgram remains the only one implemented today; the others are future BYOK routes).
 - Keep this deliberately out of scope until the testing phase above is done — the goal now is zero payment complexity, not a polished pricing page.
 
+### Future: Google Calendar/Tasks sync via the Worker (deferred)
+
+Once the EventKit proactive sync (macOS/iOS opt-in that mirrors due-bearing currents into Apple Calendar events and Reminders) ships, the cross-platform successor is Google Calendar and Google Tasks sync brokered by the Worker over OAuth: the Worker holds the refresh token, performs the idempotent upsert/complete/remove pass server-side on currents changes, and Windows/Android/web clients get the same proactive behavior without any native calendar bridge. Explicitly deferred until EventKit sync has proven the sync contract.
+
+### Future: remote channel-triggered computer-use (being scoped separately)
+
+Allow a message on a linked channel (Telegram/Blooio) to trigger a computer-use action on the user's desktop, with every individual action gated by the existing per-action approval receipt flow — no channel message ever executes without a fresh on-device approval. Scoping happens in its own track; nothing in the current channel pipeline may bypass the proposal/approval fence.
+
 ## Cloud and migration
 
 1. Keep Firebase Auth and verify Firebase ID tokens at the Worker.
