@@ -3,7 +3,7 @@ import { hasActivePro } from "./entitlement";
 import { consumeRateLimit } from "./rate-limit";
 import type { AppEnv } from "./types";
 
-// Live voice runs over Gemini's Live API. The Worker mints single-use
+// Live voice runs over Gemini's Live API. The Worker mints short-lived
 // ephemeral tokens locked to the configured live model so clients connect
 // to Google directly without ever holding the real API key.
 const voice = new Hono<AppEnv>();
@@ -68,7 +68,11 @@ voice.post("/gemini/token", async (context) => {
         "x-goog-api-key": key,
       },
       body: JSON.stringify({
-        uses: 1,
+        // Two uses: the initial connection plus one automatic client
+        // reconnect with a sessionResumption handle after an unexpected
+        // session death (goAway/network). Each Live connection consumes
+        // one use of the token.
+        uses: 2,
         expireTime,
         newSessionExpireTime,
         liveConnectConstraints: { model },
