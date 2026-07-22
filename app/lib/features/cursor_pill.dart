@@ -210,21 +210,28 @@ class _CursorPillState extends State<CursorPill> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           if (!listening && controller.suggestions.isNotEmpty) ...[
-            Wrap(
+            SingleChildScrollView(
               key: const Key('cursor_pill_chips'),
-              spacing: 6,
-              runSpacing: 6,
-              children: [
-                for (final (index, suggestion)
-                    in controller.suggestions.indexed)
-                  KeyedSubtree(
-                    key: _chipKeys[index],
-                    child: _SuggestionChip(
-                      suggestion: suggestion,
-                      onTap: () => unawaited(controller.choose(suggestion)),
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  for (final (index, suggestion)
+                      in controller.suggestions.indexed) ...[
+                    if (index > 0) const SizedBox(width: 6),
+                    KeyedSubtree(
+                      key: _chipKeys[index],
+                      child: _ChipEntrance(
+                        index: index,
+                        child: _SuggestionChip(
+                          suggestion: suggestion,
+                          onTap: () => unawaited(controller.choose(suggestion)),
+                        ),
+                      ),
                     ),
-                  ),
-              ],
+                  ],
+                ],
+              ),
             ),
             const SizedBox(height: 8),
           ],
@@ -322,6 +329,94 @@ class _CursorPillState extends State<CursorPill> {
             ),
           ],
         );
+}
+
+/// Animates a suggestion chip into view: a quick fade/rise plus a single
+/// diagonal gradient shimmer sweeping across the chip, staggered ~80ms per
+/// chip. With animations disabled the chip appears instantly, no sweep.
+class _ChipEntrance extends StatefulWidget {
+  const _ChipEntrance({required this.index, required this.child});
+
+  final int index;
+  final Widget child;
+
+  @override
+  State<_ChipEntrance> createState() => _ChipEntranceState();
+}
+
+class _ChipEntranceState extends State<_ChipEntrance>
+    with SingleTickerProviderStateMixin {
+  static const _staggerMs = 80;
+  static const _sweepMs = 420;
+
+  AnimationController? _controller;
+  bool _decided = false;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_decided) return;
+    _decided = true;
+    if (MediaQuery.disableAnimationsOf(context)) return;
+    _controller = AnimationController(
+      vsync: this,
+      duration: Duration(milliseconds: widget.index * _staggerMs + _sweepMs),
+    )..forward();
+  }
+
+  @override
+  void dispose() {
+    _controller?.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final controller = _controller;
+    if (controller == null) return widget.child;
+    final total = widget.index * _staggerMs + _sweepMs;
+    final entrance = CurvedAnimation(
+      parent: controller,
+      curve: Interval(
+        widget.index * _staggerMs / total,
+        1,
+        curve: Curves.easeOutCubic,
+      ),
+    );
+    return AnimatedBuilder(
+      animation: controller,
+      builder: (context, child) {
+        final t = entrance.value;
+        if (t >= 1) return child!;
+        final sweep = -0.35 + t * 1.7;
+        return Opacity(
+          opacity: t,
+          child: Transform.translate(
+            offset: Offset(0, (1 - t) * 6),
+            child: ShaderMask(
+              blendMode: BlendMode.srcATop,
+              shaderCallback: (bounds) => LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: const [
+                  Color(0x00ffffff),
+                  Color(0x59ffffff),
+                  Color(0x00ffffff),
+                ],
+                stops: [
+                  (sweep - 0.35).clamp(0.0, 1.0),
+                  sweep.clamp(0.0, 1.0),
+                  (sweep + 0.35).clamp(0.0, 1.0),
+                ],
+              ).createShader(bounds),
+              child: child,
+            ),
+          ),
+        );
+      },
+      child: widget.child,
+    );
+  }
 }
 
 class _SuggestionChip extends StatelessWidget {
