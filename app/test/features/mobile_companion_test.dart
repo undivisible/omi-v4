@@ -3,6 +3,8 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 import 'package:omi/api/worker_http.dart';
 import 'package:omi/app_services.dart';
 import 'package:omi/auth/auth.dart';
@@ -11,6 +13,7 @@ import 'package:omi/features/mobile_companion_shell.dart';
 import 'package:omi/main.dart';
 import 'package:omi/native/native_hub.dart';
 import 'package:omi/onboarding/onboarding_completion.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
   final binding = TestWidgetsFlutterBinding.ensureInitialized();
@@ -205,6 +208,199 @@ void main() {
     fixture.services.dispose();
   });
 
+  testWidgets('pendant page does not scroll and bounds the session list', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(800, 1600));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final fixture = await _mobileFixture('user-a');
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MobileCompanionShell(
+          services: fixture.services,
+          pairedDevices: VolatilePairedDeviceStore(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final sections = tester.widget<ListView>(
+      find.byKey(const Key('companion_page_sections')),
+    );
+    expect(sections.physics, isA<NeverScrollableScrollPhysics>());
+    expect(find.byKey(const Key('companion_session_list')), findsOneWidget);
+    fixture.services.dispose();
+  });
+
+  testWidgets('pendant glow is present and its stack does not clip', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(800, 1600));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final fixture = await _mobileFixture('user-a');
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MobileCompanionShell(
+          services: fixture.services,
+          pairedDevices: VolatilePairedDeviceStore(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final glow = find.byKey(const Key('companion_pendant_glow'));
+    expect(glow, findsOneWidget);
+    final heroStack = tester.widget<Stack>(
+      find.ancestor(of: glow, matching: find.byType(Stack)).first,
+    );
+    expect(heroStack.clipBehavior, Clip.none);
+    fixture.services.dispose();
+  });
+
+  testWidgets('app follows the system theme mode', (tester) async {
+    final services = await _authorizedServices('user-a');
+    final store = VolatileOnboardingCompletionStore();
+    await store.complete('user-a');
+
+    await tester.pumpWidget(
+      OmiApp(
+        services: services,
+        onboardingCompletionStore: store,
+        platformOverride: TargetPlatform.iOS,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final app = tester.widget<MaterialApp>(find.byType(MaterialApp));
+    expect(app.themeMode, ThemeMode.system);
+    expect(app.theme?.brightness, Brightness.light);
+    expect(app.darkTheme?.brightness, Brightness.dark);
+  });
+
+  testWidgets('companion shell adapts its background to dark mode', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(800, 1600));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final fixture = await _mobileFixture('user-a');
+
+    await tester.pumpWidget(
+      MaterialApp(
+        themeMode: ThemeMode.dark,
+        darkTheme: ThemeData(brightness: Brightness.dark),
+        home: MobileCompanionShell(
+          services: fixture.services,
+          pairedDevices: VolatilePairedDeviceStore(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final scaffold = tester.widget<Scaffold>(
+      find.byKey(const Key('companion_home')),
+    );
+    expect(scaffold.backgroundColor, const Color(0xff171716));
+    fixture.services.dispose();
+  });
+
+  testWidgets('delete account confirms, calls the worker, and signs out', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    await tester.binding.setSurfaceSize(const Size(800, 2400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final requests = <({String method, String path})>[];
+    final worker = WorkerHttpClient(
+      baseUri: Uri.parse('https://api.example.test'),
+      sessionProvider: () async => _session('user-a'),
+      client: MockClient((request) async {
+        requests.add((method: request.method, path: request.url.path));
+        return http.Response('', 204);
+      }),
+    );
+    final fixture = await _mobileFixture('user-a', worker: worker);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MobileCompanionShell(
+          services: fixture.services,
+          pairedDevices: VolatilePairedDeviceStore(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('companion_settings_button')));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('companion_delete_account')), findsOneWidget);
+    await tester.ensureVisible(
+      find.byKey(const Key('companion_delete_account_button')),
+    );
+    await tester.tap(find.byKey(const Key('companion_delete_account_button')));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const Key('companion_delete_account_confirm')),
+      findsOneWidget,
+    );
+    expect(requests, isEmpty);
+    await tester.tap(find.byKey(const Key('companion_delete_account_confirm')));
+    await tester.pumpAndSettle();
+
+    expect(requests, [(method: 'DELETE', path: '/v1/account')]);
+    expect(fixture.services.auth.snapshot.session, isNull);
+    fixture.services.dispose();
+  });
+
+  testWidgets('reset pendant confirms, forgets, and disconnects', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(800, 2400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final fixture = await _mobileFixture('user-a');
+    final pairedDevices = VolatilePairedDeviceStore();
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MobileCompanionShell(
+          services: fixture.services,
+          pairedDevices: pairedDevices,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('companion_reconnect')));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(
+      find.byKey(const Key('companion_connect_omi-1')),
+    );
+    await tester.tap(find.byKey(const Key('companion_connect_omi-1')));
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 50)),
+    );
+    await tester.pumpAndSettle();
+    expect(await pairedDevices.read(), 'omi-1');
+
+    await tester.tap(find.byKey(const Key('companion_settings_button')));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(
+      find.byKey(const Key('companion_reset_pendant_button')),
+    );
+    await tester.tap(find.byKey(const Key('companion_reset_pendant_button')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('companion_reset_pendant_confirm')));
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 50)),
+    );
+    await tester.pumpAndSettle();
+
+    expect(await pairedDevices.read(), isNull);
+    expect(fixture.services.deviceAudio.active, isFalse);
+    fixture.services.dispose();
+  });
+
   testWidgets('settings sheet opens from the top-right button', (tester) async {
     await tester.binding.setSurfaceSize(const Size(800, 2400));
     addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -279,8 +475,9 @@ Future<AppServices> _authorizedServices(String uid) async {
 }
 
 Future<({AppServices services, _Hub hub, _Adapter adapter})> _mobileFixture(
-  String uid,
-) async {
+  String uid, {
+  WorkerHttpClient? worker,
+}) async {
   final auth = await _authorizedAuth(uid);
   final hub = _Hub();
   final adapter = _Adapter();
@@ -291,6 +488,7 @@ Future<({AppServices services, _Hub hub, _Adapter adapter})> _mobileFixture(
       adapter: adapter,
     ),
     auth: auth,
+    worker: worker,
     memoryDatabasePath: (uid) => '/tmp/$uid.sqlite3',
     managedStt: _ManagedStt(
       ManagedSttSession(

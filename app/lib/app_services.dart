@@ -5,6 +5,7 @@ import 'dart:math';
 import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'api/worker_http.dart';
 import 'auth/auth.dart';
@@ -254,8 +255,10 @@ final class AppServices {
     MemorySyncPump? memorySync,
     SystemAudioCaptureModeStore? captureModeStore,
     MeetingMicCapture? meetingMic,
+    WorkerHttpClient? worker,
   }) => AppServices._(
     auth: auth,
+    worker: worker,
     nativeHub: nativeHub,
     deviceRelay: deviceRelay,
     memoryDatabasePath: (uid) async => memoryDatabasePath(uid),
@@ -1201,6 +1204,21 @@ final class AppServices {
       endpoint: result.websocketUrl,
       firebaseToken: result.session.idToken,
     );
+  }
+
+  Future<void> deleteAccount() async {
+    final worker = _worker;
+    if (worker == null) {
+      throw StateError('Account deletion requires the managed backend.');
+    }
+    final response = await worker.send(method: 'DELETE', path: '/v1/account');
+    if (response.statusCode != 200 && response.statusCode != 204) {
+      throw StateError('Account deletion failed (${response.statusCode}).');
+    }
+    await auth.signOut();
+    try {
+      await (await SharedPreferences.getInstance()).clear();
+    } catch (_) {}
   }
 
   Future<void> disconnectDevice() async {
