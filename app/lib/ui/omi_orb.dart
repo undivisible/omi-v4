@@ -82,10 +82,10 @@ class _OmiActivityOrbState extends State<OmiActivityOrb>
                       gradient: LinearGradient(
                         begin: Alignment.topLeft,
                         end: Alignment.bottomRight,
-                        colors: [Color(0xffb9e4d6), Color(0xff8eb9ed)],
+                        colors: [Color(0xfffffcec), Color(0xffe9e4cf)],
                       ),
                       boxShadow: [
-                        BoxShadow(color: Color(0x5573d5c4), blurRadius: 30),
+                        BoxShadow(color: Color(0x40fffcec), blurRadius: 30),
                       ],
                     ),
                   ),
@@ -100,7 +100,7 @@ class _OmiActivityOrbState extends State<OmiActivityOrb>
                     opacity: 1 - morph,
                     child: const Icon(
                       Icons.blur_on_rounded,
-                      color: Color(0xff10201e),
+                      color: Color(0xff171716),
                     ),
                   ),
                 ],

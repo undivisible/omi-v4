@@ -91,7 +91,7 @@ class GradientBackground extends StatelessWidget {
               gradient: RadialGradient(
                 center: Alignment(-1.15, -1.05),
                 radius: 1.05,
-                colors: [Color(0x8073d5c4), Color(0x0010181b)],
+                colors: [Color(0x40fffcec), Color(0x0010181b)],
                 stops: [0, .74],
               ),
             ),
@@ -166,12 +166,12 @@ class OmiMark extends StatelessWidget {
           decoration: const BoxDecoration(
             shape: BoxShape.circle,
             gradient: LinearGradient(
-              colors: [Color(0xff73d5c4), Color(0xffbce8a8)],
+              colors: [Color(0xfffffcec), Color(0xffe9e4cf)],
             ),
           ),
           child: const Icon(
             Icons.blur_on_rounded,
-            color: Color(0xff10201e),
+            color: Color(0xff171716),
             size: 19,
           ),
         ),
@@ -247,7 +247,7 @@ class OmiLabel extends StatelessWidget {
     return Text(
       text,
       style: const TextStyle(
-        color: Color(0xff73d5c4),
+        color: Color(0xccfffcec),
         fontSize: 11,
         fontWeight: FontWeight.w700,
         letterSpacing: 1.2,
@@ -277,7 +277,7 @@ class BaseTile extends StatelessWidget {
     return GlassCard(
       child: ListTile(
         contentPadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
-        leading: Icon(icon, color: iconColor ?? const Color(0xff73d5c4)),
+        leading: Icon(icon, color: iconColor ?? const Color(0xfffffcec)),
         title: Text(title),
         subtitle: Padding(
           padding: const EdgeInsets.only(top: 4),
