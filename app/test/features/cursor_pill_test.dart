@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:omi/app_services.dart';
 import 'package:omi/features/cursor_pill.dart';
 import 'package:omi/features/cursor_pill_controller.dart';
 import 'package:omi/features/voice_intents.dart';
@@ -252,16 +253,92 @@ void main() {
     controller.dispose();
     await harness.close();
   });
+
+  test('voice start errors map to specific actionable messages', () {
+    String messageFor(VoiceStartFailure failure) =>
+        CursorPillController.voiceStartErrorMessage(
+          VoiceStartException(failure, 'internal detail'),
+        );
+    expect(
+      messageFor(VoiceStartFailure.microphonePermission),
+      contains('System Settings'),
+    );
+    expect(messageFor(VoiceStartFailure.signedOut), contains('sign in'));
+    expect(
+      messageFor(VoiceStartFailure.backendNotConfigured),
+      contains('No voice service is set up'),
+    );
+    expect(messageFor(VoiceStartFailure.network), contains('connection'));
+    expect(
+      messageFor(VoiceStartFailure.unsupportedPlatform),
+      contains('platform'),
+    );
+    expect(
+      CursorPillController.voiceStartErrorMessage(StateError('anything')),
+      'I couldn’t start listening. Check the microphone.',
+    );
+  });
+
+  test(
+    'failed voice start surfaces the mapped error and returns to input',
+    () async {
+      final harness = _Harness(
+        startVoiceError: VoiceStartException(
+          VoiceStartFailure.microphonePermission,
+          'Microphone permission is required for desktop voice.',
+        ),
+      );
+      final controller = harness.controller();
+
+      await controller.doubleShift();
+      harness.advance(const Duration(seconds: 1));
+      await controller.doubleShift();
+
+      expect(controller.state, CursorPillState.input);
+      expect(controller.error, contains('Privacy & Security'));
+
+      controller.dispose();
+      await harness.close();
+    },
+  );
+
+  testWidgets('pill renders as a compact liquid-glass surface', (tester) async {
+    final harness = _Harness();
+    final controller = harness.controller();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(body: CursorPill(controller: controller)),
+      ),
+    );
+
+    await controller.summon();
+    await tester.pump();
+
+    expect(pillHeight, 36.0);
+    final glass = find.byType(LiquidGlass);
+    expect(glass, findsOneWidget);
+    expect(
+      find.descendant(of: glass, matching: find.byType(BackdropFilter)),
+      findsOneWidget,
+    );
+    final box = tester.getSize(glass);
+    expect(box.height, pillHeight);
+
+    await tester.pumpWidget(const SizedBox());
+    controller.dispose();
+    await harness.close();
+  });
 }
 
 final class _Harness {
-  _Harness({this.stopTranscript = ''});
+  _Harness({this.stopTranscript = '', this.startVoiceError});
 
   final hub = _FakeNativeHub();
   final level = ValueNotifier<double>(0);
   final prompts = <String>[];
   final launchedLinks = <Uri>[];
   final String stopTranscript;
+  final Object? startVoiceError;
   int voiceStarts = 0;
   int voiceStops = 0;
   int voiceCancels = 0;
@@ -273,7 +350,10 @@ final class _Harness {
   CursorPillController controller() => CursorPillController(
     hub: hub,
     events: hub.events,
-    startVoice: () async => voiceStarts += 1,
+    startVoice: () async {
+      if (startVoiceError case final error?) throw error;
+      voiceStarts += 1;
+    },
     stopVoice: () async {
       voiceStops += 1;
       return stopTranscript;

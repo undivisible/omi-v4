@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:math' as math;
+import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -7,11 +8,73 @@ import 'package:flutter/services.dart';
 
 import 'cursor_pill_controller.dart';
 
-const _pillInk = Color(0xff171716);
-const _pillPaper = Color(0xfffffefa);
-const _pillMuted = Color(0xff706e68);
-const _pillGreen = Color(0xff2e8b57);
-const _pillGreenSoft = Color(0x1a2e8b57);
+const _pillInk = Color(0xfffffefa);
+const _pillMuted = Color(0xb3f4f2ec);
+const _pillGreen = Color(0xff43c47e);
+
+const pillHeight = 36.0;
+const pillBlurSigma = 24.0;
+
+class LiquidGlass extends StatelessWidget {
+  const LiquidGlass({
+    required this.child,
+    this.radius = pillHeight / 2,
+    this.tint,
+    super.key,
+  });
+
+  final Widget child;
+  final double radius;
+  final Color? tint;
+
+  @override
+  Widget build(BuildContext context) {
+    final borderRadius = BorderRadius.circular(radius);
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        borderRadius: borderRadius,
+        gradient: const LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [Color(0x8cffffff), Color(0x1affffff), Color(0x4dffffff)],
+          stops: [0, 0.55, 1],
+        ),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x33000000),
+            blurRadius: 22,
+            offset: Offset(0, 8),
+          ),
+        ],
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(1),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(radius - 1),
+          child: BackdropFilter(
+            filter: ui.ImageFilter.blur(
+              sigmaX: pillBlurSigma,
+              sigmaY: pillBlurSigma,
+            ),
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [
+                    (tint ?? Colors.white).withValues(alpha: 0.20),
+                    (tint ?? Colors.white).withValues(alpha: 0.08),
+                  ],
+                ),
+              ),
+              child: child,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
 
 class CursorPill extends StatefulWidget {
   const CursorPill({
@@ -128,95 +191,85 @@ class _CursorPillState extends State<CursorPill> {
     );
   }
 
-  Widget _pill(bool listening) => AnimatedContainer(
-    duration: MediaQuery.disableAnimationsOf(context)
-        ? Duration.zero
-        : const Duration(milliseconds: 160),
-    curve: Curves.easeOut,
-    height: 48,
-    decoration: BoxDecoration(
-      color: listening ? _pillGreenSoft : _pillPaper,
-      borderRadius: BorderRadius.circular(24),
-      border: Border.all(
-        color: listening ? _pillGreen : const Color(0x33171716),
-        width: listening ? 1.6 : 1,
-      ),
-      boxShadow: const [
-        BoxShadow(
-          color: Color(0x22000000),
-          blurRadius: 18,
-          offset: Offset(0, 6),
-        ),
-      ],
+  Widget _pill(bool listening) => LiquidGlass(
+    tint: listening ? _pillGreen : null,
+    child: AnimatedContainer(
+      duration: MediaQuery.disableAnimationsOf(context)
+          ? Duration.zero
+          : const Duration(milliseconds: 160),
+      curve: Curves.easeOut,
+      height: pillHeight - 2,
+      padding: const EdgeInsets.symmetric(horizontal: 14),
+      child: _pillContent(listening),
     ),
-    padding: const EdgeInsets.symmetric(horizontal: 16),
-    child: listening
-        ? Row(
-            key: const Key('cursor_pill_listening'),
-            children: [
-              const Icon(Icons.mic_rounded, size: 18, color: _pillGreen),
-              const SizedBox(width: 8),
-              const Expanded(
-                child: Text(
-                  'Listening…',
-                  style: TextStyle(
-                    color: _pillGreen,
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ),
-              PillWaveform(
-                key: const Key('cursor_pill_waveform'),
-                level: widget.controller.level,
-              ),
-            ],
-          )
-        : Stack(
-            alignment: Alignment.centerLeft,
-            children: [
-              if (_ghostRemainder case final remainder?)
-                IgnorePointer(
-                  child: Text.rich(
-                    TextSpan(
-                      children: [
-                        TextSpan(
-                          text: _text.text,
-                          style: const TextStyle(color: Colors.transparent),
-                        ),
-                        TextSpan(
-                          text: remainder,
-                          style: const TextStyle(color: _pillMuted),
-                        ),
-                      ],
-                    ),
-                    maxLines: 1,
-                    overflow: TextOverflow.clip,
-                    style: const TextStyle(fontSize: 14),
-                  ),
-                ),
-              TextField(
-                key: const Key('cursor_pill_input'),
-                controller: _text,
-                focusNode: _focus,
-                autofocus: widget.autofocus,
-                maxLines: 1,
-                style: const TextStyle(color: _pillInk, fontSize: 14),
-                decoration: const InputDecoration(
-                  isDense: true,
-                  border: InputBorder.none,
-                  enabledBorder: InputBorder.none,
-                  focusedBorder: InputBorder.none,
-                  filled: false,
-                  hintText: 'Ask me anything…',
-                  hintStyle: TextStyle(color: _pillMuted, fontSize: 14),
-                ),
-                onSubmitted: (value) =>
-                    unawaited(widget.controller.submit(value)),
-              ),
-            ],
-          ),
   );
+
+  Widget _pillContent(bool listening) => listening
+      ? Row(
+          key: const Key('cursor_pill_listening'),
+          children: [
+            const Icon(Icons.mic_rounded, size: 18, color: _pillGreen),
+            const SizedBox(width: 8),
+            const Expanded(
+              child: Text(
+                'Listening…',
+                style: TextStyle(
+                  color: _pillGreen,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+            PillWaveform(
+              key: const Key('cursor_pill_waveform'),
+              level: widget.controller.level,
+            ),
+          ],
+        )
+      : Stack(
+          alignment: Alignment.centerLeft,
+          children: [
+            if (_ghostRemainder case final remainder?)
+              IgnorePointer(
+                child: Text.rich(
+                  TextSpan(
+                    children: [
+                      TextSpan(
+                        text: _text.text,
+                        style: const TextStyle(color: Colors.transparent),
+                      ),
+                      TextSpan(
+                        text: remainder,
+                        style: const TextStyle(color: _pillMuted),
+                      ),
+                    ],
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.clip,
+                  style: const TextStyle(fontSize: 14),
+                ),
+              ),
+            TextField(
+              key: const Key('cursor_pill_input'),
+              controller: _text,
+              focusNode: _focus,
+              autofocus: widget.autofocus,
+              maxLines: 1,
+              style: const TextStyle(color: _pillInk, fontSize: 14),
+              decoration: const InputDecoration(
+                isDense: true,
+                border: InputBorder.none,
+                enabledBorder: InputBorder.none,
+                focusedBorder: InputBorder.none,
+                filled: false,
+                hintText: 'Ask me anything…',
+                hintStyle: TextStyle(color: _pillMuted, fontSize: 14),
+              ),
+              onSubmitted: (value) =>
+                  unawaited(widget.controller.submit(value)),
+            ),
+          ],
+        );
 }
 
 class _SuggestionRow extends StatelessWidget {
@@ -228,37 +281,39 @@ class _SuggestionRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Padding(
     padding: const EdgeInsets.only(bottom: 4),
-    child: Material(
-      color: _pillPaper,
-      shape: const StadiumBorder(side: BorderSide(color: Color(0x1a171716))),
-      child: InkWell(
-        customBorder: const StadiumBorder(),
-        onTap: onTap,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-          child: Row(
-            children: [
-              Icon(
-                suggestion.link == null
-                    ? Icons.bolt_rounded
-                    : Icons.mail_outline_rounded,
-                size: 15,
-                color: _pillMuted,
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  suggestion.label,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: _pillInk,
-                    fontSize: 13,
-                    fontWeight: FontWeight.w500,
+    child: LiquidGlass(
+      radius: 14,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          customBorder: const StadiumBorder(),
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            child: Row(
+              children: [
+                Icon(
+                  suggestion.link == null
+                      ? Icons.bolt_rounded
+                      : Icons.mail_outline_rounded,
+                  size: 15,
+                  color: _pillMuted,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    suggestion.label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: _pillInk,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w500,
+                    ),
                   ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),
