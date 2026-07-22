@@ -63,7 +63,7 @@ class _DesktopAuthScreenState extends State<DesktopAuthScreen> {
       completing = true;
       error = null;
     });
-    const origin = String.fromEnvironment('OMI_API_ORIGIN');
+    final origin = AppServices.apiOrigin();
     final code = confirmationCode.text.trim();
     if (!RegExp(r'^\d{6}$').hasMatch(code)) {
       setState(() {

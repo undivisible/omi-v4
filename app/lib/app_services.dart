@@ -136,19 +136,7 @@ final class AppServices {
     final auth = AuthController(const UnconfiguredAuthGateway());
     final nativeHub = createNativeHub();
     final deviceRelay = _createDeviceRelay();
-    const origin = String.fromEnvironment('OMI_API_ORIGIN');
-    if (origin.isEmpty) {
-      return AppServices._(
-        auth: auth,
-        nativeHub: nativeHub,
-        deviceRelay: deviceRelay,
-        memoryDatabasePath: _defaultMemoryDatabasePath,
-        workspaceRoots: PreferencesWorkspaceRootStore(),
-        providerCredentials: const SecureProviderCredentialStore(),
-        configurationMessage:
-            'Set OMI_API_ORIGIN and configure Firebase to connect.',
-      );
-    }
+    final origin = apiOrigin();
     final worker = WorkerHttpClient(
       baseUri: Uri.parse(origin),
       sessionProvider: auth.validSession,
@@ -190,18 +178,7 @@ final class AppServices {
     await auth.restoreSession();
     final nativeHub = createNativeHub();
     final deviceRelay = _createDeviceRelay();
-    const origin = String.fromEnvironment('OMI_API_ORIGIN');
-    if (origin.isEmpty) {
-      return AppServices._(
-        auth: auth,
-        nativeHub: nativeHub,
-        deviceRelay: deviceRelay,
-        memoryDatabasePath: _defaultMemoryDatabasePath,
-        workspaceRoots: PreferencesWorkspaceRootStore(),
-        providerCredentials: const SecureProviderCredentialStore(),
-        configurationMessage: 'Set OMI_API_ORIGIN to connect.',
-      );
-    }
+    final origin = apiOrigin();
     final worker = WorkerHttpClient(
       baseUri: Uri.parse(origin),
       sessionProvider: auth.validSession,
@@ -320,25 +297,29 @@ final class AppServices {
   Future<void> deleteAccount() async {
     final worker = _worker;
     final uid = auth.snapshot.session?.uid;
-    if (worker == null || uid == null) {
-      throw StateError('Sign in before deleting your account.');
+    // Signed in with a backend: delete server-side first, then wipe locally.
+    // Signed out (or no backend configured): deleting the account degrades to
+    // wiping everything local instead of failing.
+    if (worker != null && uid != null) {
+      final response = await worker.send(method: 'DELETE', path: '/v1/account');
+      if (response.statusCode != 204 && response.statusCode != 200) {
+        final body = response.body;
+        throw WorkerResponseException(
+          body is Map<String, Object?> && body['error'] is String
+              ? body['error']! as String
+              : 'Account deletion failed (${response.statusCode})',
+        );
+      }
     }
-    final response = await worker.send(method: 'DELETE', path: '/v1/account');
-    if (response.statusCode != 204 && response.statusCode != 200) {
-      final body = response.body;
-      throw WorkerResponseException(
-        body is Map<String, Object?> && body['error'] is String
-            ? body['error']! as String
-            : 'Account deletion failed (${response.statusCode})',
-      );
+    if (uid != null) {
+      try {
+        await providerCredentials.delete(uid);
+      } catch (_) {}
     }
-    try {
-      await providerCredentials.delete(uid);
-    } catch (_) {}
     try {
       await (await SharedPreferences.getInstance()).clear();
     } catch (_) {}
-    await auth.signOut();
+    if (uid != null) await auth.signOut();
   }
 
   final MemorySyncPump? memorySyncPump;
@@ -348,6 +329,16 @@ final class AppServices {
   final Duration _assistantRefreshLead;
   final Duration _assistantMinimumRefreshDelay;
   final Future<String> Function(String uid) memoryDatabasePath;
+
+  /// The deployed worker is the default backend; OMI_API_ORIGIN overrides it
+  /// (e.g. http://127.0.0.1:8787 against `wrangler dev`).
+  static const defaultApiOrigin = 'https://omi.tsc.hk';
+
+  static String apiOrigin() {
+    const origin = String.fromEnvironment('OMI_API_ORIGIN');
+    return origin.isEmpty ? defaultApiOrigin : origin;
+  }
+
   final _nativeEvents = StreamController<NativeEvent>.broadcast();
   StreamSubscription<NativeEvent>? _nativeEventSubscription;
   String? _configuredPersonId;

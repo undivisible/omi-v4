@@ -4,6 +4,7 @@ import 'package:firebase_auth/firebase_auth.dart' as firebase;
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/foundation.dart';
 
+import '../app_services.dart';
 import 'auth_gateway.dart';
 import 'auth_models.dart';
 import 'desktop_auth_handoff.dart';
@@ -21,13 +22,14 @@ Future<AuthGateway> initializeFirebaseAuth() async {
     final app = await Firebase.initializeApp(options: options.firebaseOptions);
     final auth = firebase.FirebaseAuth.instanceFor(app: app);
     if (kIsWeb) await auth.setPersistence(firebase.Persistence.LOCAL);
-    const apiOrigin = String.fromEnvironment('OMI_API_ORIGIN');
-    const appOrigin = String.fromEnvironment('OMI_APP_ORIGIN');
+    final apiOrigin = AppServices.apiOrigin();
+    const appOrigin = String.fromEnvironment(
+      'OMI_APP_ORIGIN',
+      defaultValue: AppServices.defaultApiOrigin,
+    );
     final desktopHandoff =
         (options.platform == FirebaseClientPlatform.macos ||
-                options.platform == FirebaseClientPlatform.windows) &&
-            apiOrigin.isNotEmpty &&
-            appOrigin.isNotEmpty
+            options.platform == FirebaseClientPlatform.windows)
         ? DesktopAuthHandoff(
             apiOrigin: Uri.parse(apiOrigin),
             appOrigin: Uri.parse(appOrigin),
