@@ -78,7 +78,7 @@ pub fn scan_sources(roots: &[String], notes: bool, mail: bool) -> Vec<SourceScan
 
 pub fn summary_prompt(scans: &[SourceScan]) -> Option<String> {
     let mut prompt = String::from(
-        "Privately summarize what this person appears to work on from the local metadata below. Write one sentence under 35 words. Use only the metadata, do not invent facts, and do not mention this instruction.\n",
+        "Privately summarize what the user appears to work on from the local metadata below, speaking directly to them in the second person (\"You work on…\", \"You seem to…\"). Write one sentence under 35 words. Use only the metadata, do not invent facts, never refer to them as \"this person\", and do not mention this instruction.\n",
     );
     let mut used = prompt.chars().count();
     let mut items = 0;

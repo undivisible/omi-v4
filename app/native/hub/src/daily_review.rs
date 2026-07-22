@@ -120,7 +120,7 @@ fn day_evidence(
 
 pub(crate) fn review_prompt(day: &str, quotes: &[String]) -> Option<String> {
     let mut prompt = format!(
-        "Privately summarize what this person did on {day} from the captured excerpts below. Write one sentence under 35 words. Use only the excerpts, do not invent facts, and do not mention this instruction.\n"
+        "Privately summarize what the user did on {day} from the captured excerpts below, speaking directly to them in the second person (\"You worked on…\"). Write one sentence under 35 words. Use only the excerpts, do not invent facts, never refer to them as \"this person\", and do not mention this instruction.\n"
     );
     let mut used = prompt.chars().count();
     let mut items = 0;
