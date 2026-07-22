@@ -23,6 +23,7 @@ import '../native/native_hub.dart';
 import '../onboarding/hub_checklist.dart';
 import '../ui/markdown_text.dart';
 import '../ui/omi_ui.dart';
+import 'tasks_screen.dart';
 
 class ChatScreen extends StatefulWidget {
   const ChatScreen({
@@ -751,6 +752,9 @@ class ChatScreenState extends State<ChatScreen> {
                                 ? null
                                 : (id) => unawaited(currents.dismiss(id)),
                             onPrompt: _usePrompt,
+                            onAllTasks: currents == null
+                                ? null
+                                : () => _openAllTasks(currents),
                           );
                         }
                         return history[index - 1]();
@@ -911,6 +915,23 @@ class ChatScreenState extends State<ChatScreen> {
     return history.reversed.toList(growable: false);
   }
 
+  void _openAllTasks(CurrentsController currents) {
+    unawaited(
+      Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (context) => TasksScreen(
+            controller: currents,
+            checklistStore: _checklist,
+            onAccept: (task) {
+              Navigator.of(context).maybePop();
+              _usePrompt(task.item.proposedNextStep);
+            },
+          ),
+        ),
+      ),
+    );
+  }
+
   String _greeting() {
     final hour = DateTime.now().hour;
     final salutation = hour < 5 || hour >= 22
@@ -1017,6 +1038,7 @@ class _ChatHome extends StatelessWidget {
     required this.tasks,
     required this.onComplete,
     required this.onPrompt,
+    this.onAllTasks,
   });
 
   final String greeting;
@@ -1025,6 +1047,7 @@ class _ChatHome extends StatelessWidget {
   final List<CurrentCard> tasks;
   final ValueChanged<String>? onComplete;
   final ValueChanged<String> onPrompt;
+  final VoidCallback? onAllTasks;
 
   @override
   Widget build(BuildContext context) {
@@ -1091,6 +1114,27 @@ class _ChatHome extends StatelessWidget {
                         ? null
                         : () => onComplete!(task.item.id),
                     onTap: () => onPrompt(task.item.proposedNextStep),
+                  ),
+                if (onAllTasks != null)
+                  DecoratedBox(
+                    decoration: BoxDecoration(
+                      border: Border(top: BorderSide(color: colors.hairline)),
+                    ),
+                    child: InkWell(
+                      key: const Key('hub_all_tasks'),
+                      onTap: onAllTasks,
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 10),
+                        child: Text(
+                          'All tasks →',
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: colors.muted,
+                          ),
+                        ),
+                      ),
+                    ),
                   ),
                 const _HintRow(),
               ],
