@@ -1,6 +1,9 @@
+#[cfg(target_os = "macos")]
 use std::time::Duration;
 
+#[cfg(target_os = "macos")]
 const SUMMARY_TIMEOUT: Duration = Duration::from_secs(12);
+#[cfg(any(target_os = "macos", test))]
 const SUMMARY_CHARS: usize = 280;
 
 pub fn is_available() -> bool {
@@ -40,6 +43,7 @@ pub async fn summarize(prompt: &str) -> Option<String> {
     }
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn clean_summary(value: &str) -> Option<String> {
     let value = value.split_whitespace().collect::<Vec<_>>().join(" ");
     let value = value.chars().take(SUMMARY_CHARS).collect::<String>();
