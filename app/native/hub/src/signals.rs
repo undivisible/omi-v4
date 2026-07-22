@@ -47,6 +47,7 @@ pub enum Command {
         live_stream_id: String,
         ephemeral_token: String,
         model: String,
+        resumption_handle: Option<String>,
     },
     StopLiveVoice {
         live_stream_id: String,
@@ -361,6 +362,7 @@ pub struct LiveVoiceTranscript {
     pub live_stream_id: String,
     pub text: String,
     pub final_segment: bool,
+    pub assistant: bool,
 }
 
 impl std::fmt::Debug for LiveVoiceTranscript {
@@ -370,6 +372,7 @@ impl std::fmt::Debug for LiveVoiceTranscript {
             .field("live_stream_id", &self.live_stream_id)
             .field("text", &"[redacted]")
             .field("final_segment", &self.final_segment)
+            .field("assistant", &self.assistant)
             .finish()
     }
 }

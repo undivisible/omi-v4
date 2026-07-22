@@ -1014,6 +1014,7 @@ impl CommandDispatcher {
                 live_stream_id,
                 ephemeral_token,
                 model,
+                resumption_handle,
             } = &command.command
             {
                 let Some(transcription) = &self.transcription else {
@@ -1030,6 +1031,7 @@ impl CommandDispatcher {
                     live_stream_id: live_stream_id.clone(),
                     ephemeral_token: ephemeral_token.clone(),
                     model: model.clone(),
+                    resumption_handle: resumption_handle.clone(),
                 };
                 if transcription
                     .send(TranscriptionControl::StartLive(start))
