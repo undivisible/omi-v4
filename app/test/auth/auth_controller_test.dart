@@ -113,6 +113,40 @@ void main() {
     },
   );
 
+  test('auto-grant flag records processing consent at sign-in', () async {
+    final controller = AuthController(
+      _FakeAuthGateway(session),
+      autoGrantConsent: true,
+    );
+    await controller.setConsent(true);
+
+    await controller.signIn(AuthProvider.google);
+    await Future<void>.delayed(Duration.zero);
+
+    expect(controller.snapshot.phase, AuthPhase.signedIn);
+    expect(controller.snapshot.processingConsent, isNotNull);
+    expect(controller.snapshot.hasProcessingAuthority, isTrue);
+  });
+
+  test('auto-grant flag off keeps explicit-consent behavior', () async {
+    final controller = AuthController(
+      _FakeAuthGateway(session),
+      autoGrantConsent: false,
+    );
+    await controller.setConsent(true);
+
+    await controller.signIn(AuthProvider.google);
+    await Future<void>.delayed(Duration.zero);
+
+    expect(controller.snapshot.phase, AuthPhase.signedIn);
+    expect(controller.snapshot.processingConsent, isNull);
+    expect(controller.snapshot.hasProcessingAuthority, isFalse);
+  });
+
+  test('auto-grant default flag stays disabled for now', () {
+    expect(autoGrantProcessingConsent, isFalse);
+  });
+
   test('sign out clears the local session boundary', () async {
     final gateway = _FakeAuthGateway(session, initialSession: session);
     final controller = AuthController(gateway);
