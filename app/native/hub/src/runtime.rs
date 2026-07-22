@@ -2779,12 +2779,43 @@ async fn decide_approval(
     generation: u64,
     cancellation: &CancellationToken,
 ) {
+    decide_approval_with_availability(
+        request_id,
+        state,
+        proposal_id,
+        decision,
+        authority_receipt,
+        ApprovalExecutionContext {
+            generation,
+            computer_use_is_available: computer_use_available(),
+        },
+        cancellation,
+    )
+    .await;
+}
+
+#[derive(Clone, Copy)]
+struct ApprovalExecutionContext {
+    generation: u64,
+    computer_use_is_available: bool,
+}
+
+async fn decide_approval_with_availability(
+    request_id: &str,
+    state: &Mutex<RuntimeState>,
+    proposal_id: &str,
+    decision: ApprovalDecision,
+    authority_receipt: Option<ComputerUseAuthorityReceipt>,
+    execution: ApprovalExecutionContext,
+    cancellation: &CancellationToken,
+) {
+    let generation = execution.generation;
+    let computer_use_is_available = execution.computer_use_is_available;
     if cancellation.is_cancelled() {
         approval_decision_acknowledgement(request_id, proposal_id, decision, false, false);
         cancelled(request_id);
         return;
     }
-    let computer_use_is_available = computer_use_available();
     let result = {
         let mut state = state.lock().await;
         if cancellation.is_cancelled() {
@@ -3779,13 +3810,16 @@ mod tests {
         let state = Mutex::new(runtime);
         let attempts = crate::computer_use::authority_mint_attempts();
 
-        decide_approval(
+        decide_approval_with_availability(
             "approval-claim-failure",
             &state,
             "claim-failure",
             ApprovalDecision::ApproveOnce,
             Some(receipt),
-            7,
+            ApprovalExecutionContext {
+                generation: 7,
+                computer_use_is_available: true,
+            },
             &CancellationToken::new(),
         )
         .await;
