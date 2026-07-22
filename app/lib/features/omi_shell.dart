@@ -16,6 +16,7 @@ class OmiShell extends StatefulWidget {
   const OmiShell({
     required this.services,
     this.previewMode = false,
+    this.onExitPreview,
     this.desktopKeyboard,
     this.desktopGesture,
     super.key,
@@ -23,6 +24,7 @@ class OmiShell extends StatefulWidget {
 
   final AppServices services;
   final bool previewMode;
+  final VoidCallback? onExitPreview;
   final DesktopKeyboard? desktopKeyboard;
   final DesktopGestureController? desktopGesture;
 
@@ -124,7 +126,8 @@ class _OmiShellState extends State<OmiShell> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            if (widget.previewMode) const _PreviewNotice(),
+            if (widget.previewMode)
+              _PreviewNotice(onExit: widget.onExitPreview),
             if (widget.previewMode) const SizedBox(height: 12),
             Expanded(child: body),
           ],
@@ -386,7 +389,9 @@ class _EdgeGradient extends StatelessWidget {
 }
 
 class _PreviewNotice extends StatelessWidget {
-  const _PreviewNotice();
+  const _PreviewNotice({this.onExit});
+
+  final VoidCallback? onExit;
 
   @override
   Widget build(BuildContext context) => Semantics(
@@ -397,18 +402,28 @@ class _PreviewNotice extends StatelessWidget {
         border: Border.all(color: const Color(0x66ffc66d)),
         borderRadius: BorderRadius.circular(14),
       ),
-      child: const Padding(
-        padding: EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
         child: Row(
           children: [
-            Icon(Icons.visibility_outlined, size: 18, color: Color(0xffffc66d)),
-            SizedBox(width: 10),
-            Expanded(
+            const Icon(
+              Icons.visibility_outlined,
+              size: 18,
+              color: Color(0xffffc66d),
+            ),
+            const SizedBox(width: 10),
+            const Expanded(
               child: Text(
                 'INTERFACE PREVIEW · Account, memory, AI, permissions, and actions are not connected.',
                 style: TextStyle(fontSize: 12, color: Color(0xffffd99a)),
               ),
             ),
+            if (onExit != null)
+              TextButton(
+                key: const Key('exit_interface_preview'),
+                onPressed: onExit,
+                child: const Text('Back to setup'),
+              ),
           ],
         ),
       ),

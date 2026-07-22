@@ -14,14 +14,14 @@ import 'omi_shell.dart';
 class OnboardingScreen extends StatefulWidget {
   const OnboardingScreen({
     required this.services,
+    required this.onFinish,
     this.capabilities,
-    this.onFinish,
     super.key,
   });
 
   final AppServices services;
   final DesktopCapabilityGateway? capabilities;
-  final FutureOr<void> Function()? onFinish;
+  final FutureOr<void> Function() onFinish;
 
   @override
   State<OnboardingScreen> createState() => _OnboardingScreenState();
@@ -36,6 +36,9 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   String? scanRequestId;
   String? scanError;
   bool scanStarting = false;
+  bool previewing = false;
+  bool finishing = false;
+  String? finishError;
 
   static const prompts = [
     (
@@ -135,28 +138,36 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   }
 
   void _openPreview() {
-    Navigator.of(context).pushReplacement(
-      MaterialPageRoute<void>(
-        builder: (_) => OmiShell(services: widget.services, previewMode: true),
-      ),
-    );
+    setState(() => previewing = true);
   }
 
   Future<void> _finish() async {
-    if (widget.onFinish case final onFinish?) {
-      await onFinish();
-      return;
+    if (finishing) return;
+    setState(() {
+      finishing = true;
+      finishError = null;
+    });
+    try {
+      await widget.onFinish();
+      if (mounted) setState(() => finishing = false);
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        finishing = false;
+        finishError = 'I couldn’t save your setup. Try again.';
+      });
     }
-    if (!mounted) return;
-    Navigator.of(context).pushReplacement(
-      MaterialPageRoute<void>(
-        builder: (_) => OmiShell(services: widget.services),
-      ),
-    );
   }
 
   @override
   Widget build(BuildContext context) {
+    if (previewing) {
+      return OmiShell(
+        services: widget.services,
+        previewMode: true,
+        onExitPreview: () => setState(() => previewing = false),
+      );
+    }
     return Scaffold(
       backgroundColor: Colors.transparent,
       body: OnboardingBackdrop(
@@ -232,6 +243,8 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                     ),
                     OnboardingStage.use => _UseStep(
                       key: const ValueKey('use'),
+                      finishing: finishing,
+                      error: finishError,
                       onFinish: _finish,
                     ),
                   },
@@ -481,8 +494,15 @@ class _ScanStep extends StatelessWidget {
 }
 
 class _UseStep extends StatelessWidget {
-  const _UseStep({required this.onFinish, super.key});
+  const _UseStep({
+    required this.finishing,
+    required this.error,
+    required this.onFinish,
+    super.key,
+  });
 
+  final bool finishing;
+  final String? error;
   final FutureOr<void> Function() onFinish;
 
   @override
@@ -505,9 +525,19 @@ class _UseStep extends StatelessWidget {
       const SizedBox(height: 32),
       FilledButton(
         key: const Key('finish_voice_lesson'),
-        onPressed: () async => onFinish(),
+        onPressed: finishing ? null : () async => onFinish(),
         child: const Text('Take me to Omi'),
       ),
+      if (error case final message?) ...[
+        const SizedBox(height: 12),
+        Semantics(
+          liveRegion: true,
+          child: Text(
+            message,
+            style: const TextStyle(color: Color(0xffffb4ab)),
+          ),
+        ),
+      ],
     ],
   );
 }
