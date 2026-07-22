@@ -5,13 +5,17 @@ use std::fs;
 use std::path::{Component, Path, PathBuf};
 
 #[cfg(target_os = "macos")]
-const LIMIT: usize = 200;
-const MAX_FILES: usize = 50_000;
-const SUMMARY_ITEMS: usize = 24;
+const LIMIT: usize = 500;
+const MAX_FILES: usize = 200_000;
+const MAX_WALK_DEPTH: usize = 5;
+const MAX_PROJECT_NAMES: usize = 48;
+const SUMMARY_ITEMS: usize = 48;
 const SUMMARY_ITEM_CHARS: usize = 400;
-const SUMMARY_PROMPT_CHARS: usize = 6_000;
+const SUMMARY_PROMPT_CHARS: usize = 12_000;
 #[cfg(target_os = "macos")]
 const NOTES_QUERY_LIMIT: usize = LIMIT * 3;
+#[cfg(target_os = "macos")]
+const MAIL_QUERY_LIMIT: usize = LIMIT * 4;
 #[cfg(target_os = "macos")]
 const NOTES_CLASSIFIER_NOISE: &[&str] = &[
     "Document Documents Papers Written Document Written Documents",
@@ -78,12 +82,17 @@ pub fn scan_sources(roots: &[String], notes: bool, mail: bool) -> Vec<SourceScan
 
 pub fn summary_prompt(scans: &[SourceScan]) -> Option<String> {
     let mut prompt = String::from(
-        "Privately summarize what the user appears to work on from the local metadata below, speaking directly to them in the second person (\"You're deep in…\", \"You're juggling…\"). Write one flowing paragraph of 3 to 5 sentences, and make it hyperspecific: name the actual projects, files, technologies, tools, recurring people or organizations, and current threads of work that appear in the metadata. Never use vague category words like \"platforms\", \"systems\", \"ops\", or \"various projects\" without naming the specific ones from the metadata. State only facts directly evidenced by the metadata: never infer tool or workflow habits from incidental file or path mentions (a .vimrc or \"vi\" appearing in a file name does not mean the user uses vi), and when you are unsure about a detail, omit it rather than guess. Use only the metadata, do not invent facts, never write in the third person, never refer to them as \"this person\", and do not mention this instruction.\n",
+        "Privately summarize what the user appears to work on from the local metadata below, speaking directly to them in the second person (\"You're deep in…\", \"You're juggling…\"). Write plain prose only: no markdown, no asterisks, no underscores, no bullet points, no headings, no bold or italic markers of any kind. Write one flowing paragraph of at most 3 sentences and at most 420 characters, and make it hyperspecific: name the actual projects, files, technologies, tools, recurring people or organizations, and current threads of work that appear in the metadata. Every project, file, person, or organization you name must be copied verbatim, character for character, from the metadata below; never paraphrase, respell, or invent a name. Never use vague category words like \"platforms\", \"systems\", \"ops\", or \"various projects\" without naming the specific ones from the metadata. State only facts directly evidenced by the metadata: never infer tool or workflow habits from incidental file or path mentions (a .vimrc or \"vi\" appearing in a file name does not mean the user uses vi), and when you are unsure about a detail, omit it rather than guess. If the metadata is thin, write one or two short honest sentences instead of padding with filler. Use only the metadata, do not invent facts, never write in the third person, never refer to them as \"this person\", and do not mention this instruction.\n",
     );
     let mut used = prompt.chars().count();
     let mut items = 0;
+    let mut seen = BTreeSet::new();
     for scan in scans {
         for memory in &scan.memories {
+            let normalized = memory.text.split_whitespace().collect::<String>();
+            if !seen.insert(normalized) {
+                continue;
+            }
             if items == SUMMARY_ITEMS || used >= SUMMARY_PROMPT_CHARS {
                 break;
             }
@@ -215,7 +224,11 @@ fn scan_workspace(roots: &[String]) -> SourceScan {
             "Access to the approved workspace roots was denied.",
         );
     }
-    let names = projects.into_iter().take(24).collect::<Vec<_>>().join(", ");
+    let names = projects
+        .into_iter()
+        .take(MAX_PROJECT_NAMES)
+        .collect::<Vec<_>>()
+        .join(", ");
     let text = format!("Workspace scan mapped {files} files. Projects: {names}.");
     complete(
         "workspace",
@@ -235,7 +248,7 @@ fn walk(
     projects: &mut BTreeSet<String>,
     denied: &mut bool,
 ) {
-    if depth > 3 || *files >= MAX_FILES {
+    if depth > MAX_WALK_DEPTH || *files >= MAX_FILES {
         return;
     }
     let entries = match fs::read_dir(path) {
@@ -378,6 +391,91 @@ fn scan_notes() -> SourceScan {
     )
 }
 
+const MAIL_FLAG_ANSWERED: i64 = 0x4;
+const MAIL_FLAG_FLAGGED: i64 = 0x10;
+const MAIL_SCORE_FLOOR: i32 = -40;
+const MAIL_PROMO_KEYWORDS: &[&str] = &[
+    "% off",
+    "black friday",
+    "coupon",
+    "deal of",
+    "discount",
+    "flash sale",
+    "free shipping",
+    "last chance",
+    "limited time",
+    "newsletter",
+    "promo",
+    "sale",
+    "special offer",
+    "unsubscribe",
+    "your order has shipped",
+];
+const MAIL_BULK_SENDERS: &[&str] = &[
+    "bounce",
+    "campaign",
+    "donotreply",
+    "do-not-reply",
+    "info@",
+    "mailer",
+    "marketing",
+    "news@",
+    "newsletter",
+    "no-reply",
+    "noreply",
+    "notifications@",
+    "offers@",
+    "promo",
+    "support@",
+    "updates@",
+];
+
+pub struct MailEvidence<'a> {
+    pub subject: &'a str,
+    pub sender_address: &'a str,
+    pub sender_name: &'a str,
+    pub replied: bool,
+    pub flagged: bool,
+    pub age_days: i64,
+}
+
+pub fn score_mail(evidence: &MailEvidence<'_>) -> i32 {
+    let subject = evidence.subject.to_lowercase();
+    let address = evidence.sender_address.to_lowercase();
+    let mut score = 0i32;
+    for keyword in MAIL_PROMO_KEYWORDS {
+        if subject.contains(keyword) {
+            score -= 25;
+        }
+    }
+    if MAIL_BULK_SENDERS
+        .iter()
+        .any(|marker| address.contains(marker))
+    {
+        score -= 40;
+    }
+    let name = evidence.sender_name.trim();
+    let looks_human = name.split_whitespace().count() >= 2
+        && name.chars().all(|character| {
+            character.is_alphabetic()
+                || character.is_whitespace()
+                || character == '\''
+                || character == '-'
+                || character == '.'
+        });
+    if looks_human {
+        score += 20;
+    }
+    if evidence.replied {
+        score += 40;
+    }
+    if evidence.flagged {
+        score += 35;
+    }
+    score += (30 - evidence.age_days).clamp(-30, 30) as i32 / 3;
+    score
+}
+
 #[cfg(target_os = "macos")]
 fn scan_mail() -> SourceScan {
     let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
@@ -423,8 +521,21 @@ fn scan_mail() -> SourceScan {
             "Apple Mail schema is unsupported.",
         );
     }
+    let flags = if message_columns.contains("flags") {
+        "COALESCE(m.flags, 0)"
+    } else {
+        "0"
+    };
+    let comment = if columns(&connection, "addresses")
+        .map(|names| names.contains("comment"))
+        .unwrap_or(false)
+    {
+        "COALESCE(a.comment, '')"
+    } else {
+        "''"
+    };
     let query = format!(
-        "SELECT m.ROWID, COALESCE(s.subject, ''), COALESCE(a.address, ''), m.date_received FROM messages m LEFT JOIN subjects s ON m.subject=s.ROWID LEFT JOIN addresses a ON m.sender=a.ROWID ORDER BY m.date_received DESC LIMIT {LIMIT}"
+        "SELECT m.ROWID, COALESCE(s.subject, ''), COALESCE(a.address, ''), {comment}, m.date_received, {flags} FROM messages m LEFT JOIN subjects s ON m.subject=s.ROWID LEFT JOIN addresses a ON m.sender=a.ROWID ORDER BY m.date_received DESC LIMIT {MAIL_QUERY_LIMIT}"
     );
     let mut statement = match connection.prepare(&query) {
         Ok(value) => value,
@@ -435,7 +546,9 @@ fn scan_mail() -> SourceScan {
             row.get::<_, i64>(0)?,
             row.get::<_, String>(1)?,
             row.get::<_, String>(2)?,
-            row.get::<_, i64>(3)?,
+            row.get::<_, String>(3)?,
+            row.get::<_, i64>(4)?,
+            row.get::<_, i64>(5)?,
         ))
     }) {
         Ok(value) => value,
@@ -445,19 +558,47 @@ fn scan_mail() -> SourceScan {
         Ok(value) => value,
         Err(error) => return result("apple_mail", ScanState::Failed, error.to_string()),
     };
-    let memories = rows
+    let newest = rows.iter().map(|row| row.4).max().unwrap_or(0);
+    let mut seen = BTreeSet::new();
+    let mut candidates = rows
         .into_iter()
-        .filter_map(|(id, subject, sender, received)| {
-            let subject = subject.trim();
-            let sender = sender.trim();
+        .filter_map(|(id, subject, sender, sender_name, received, flags)| {
+            let subject = subject.trim().to_owned();
+            let sender = sender.trim().to_owned();
+            let sender_name = sender_name.trim().to_owned();
             if subject.is_empty() && sender.is_empty() {
                 return None;
             }
-            Some(ScanMemory {
+            if !seen.insert(format!("{}\u{1f}{}", sender.to_lowercase(), subject)) {
+                return None;
+            }
+            let score = score_mail(&MailEvidence {
+                subject: &subject,
+                sender_address: &sender,
+                sender_name: &sender_name,
+                replied: flags & MAIL_FLAG_ANSWERED != 0,
+                flagged: flags & MAIL_FLAG_FLAGGED != 0,
+                age_days: (newest - received).max(0) / 86_400,
+            });
+            Some((score, id, subject, sender, sender_name, received))
+        })
+        .collect::<Vec<_>>();
+    candidates.sort_by(|a, b| b.0.cmp(&a.0).then(b.5.cmp(&a.5)));
+    let memories = candidates
+        .into_iter()
+        .filter(|(score, ..)| *score > MAIL_SCORE_FLOOR)
+        .take(LIMIT)
+        .map(|(_, id, subject, sender, sender_name, received)| {
+            let from = if sender_name.is_empty() {
+                sender
+            } else {
+                format!("{sender_name} <{sender}>")
+            };
+            ScanMemory {
                 stable_id: id.to_string(),
-                text: format!("Apple Mail from {sender}: {subject}"),
+                text: format!("Apple Mail from {from}: {subject}"),
                 captured_at_ms: Some(received.saturating_mul(1_000)),
-            })
+            }
         })
         .collect::<Vec<_>>();
     let count = memories.len();
@@ -635,7 +776,7 @@ mod tests {
         let prompt = summary_prompt(&scans).unwrap_or_default();
         assert!(prompt.contains("workspace: Project 0"));
         assert!(prompt.contains("hyperspecific"));
-        assert!(prompt.contains("3 to 5 sentences"));
+        assert!(prompt.contains("at most 3 sentences"));
         assert!(prompt.contains("second person"));
         assert!(prompt.contains("do not invent facts"));
         assert!(prompt.chars().count() <= SUMMARY_PROMPT_CHARS);
@@ -703,6 +844,75 @@ mod tests {
         assert!(is_likely_note_attachment("exec", ""));
         assert!(is_likely_note_attachment("Scan of document", ""));
         assert!(is_likely_note_attachment("receipt.pdf", ""));
+    }
+
+    #[test]
+    fn promotional_mail_scores_below_personal_threads() {
+        let promotional = score_mail(&MailEvidence {
+            subject: "Last chance: 40% off everything — flash sale ends tonight",
+            sender_address: "no-reply@marketing.example.com",
+            sender_name: "Example Deals",
+            replied: false,
+            flagged: false,
+            age_days: 1,
+        });
+        let newsletter = score_mail(&MailEvidence {
+            subject: "Your weekly newsletter — unsubscribe anytime",
+            sender_address: "news@updates.example.com",
+            sender_name: "",
+            replied: false,
+            flagged: false,
+            age_days: 0,
+        });
+        let personal = score_mail(&MailEvidence {
+            subject: "Re: dinner on Friday?",
+            sender_address: "ana.silva@example.com",
+            sender_name: "Ana Silva",
+            replied: true,
+            flagged: false,
+            age_days: 2,
+        });
+        let flagged = score_mail(&MailEvidence {
+            subject: "Contract draft for review",
+            sender_address: "james.lee@example.com",
+            sender_name: "James Lee",
+            replied: false,
+            flagged: true,
+            age_days: 5,
+        });
+        assert!(promotional < personal);
+        assert!(promotional < flagged);
+        assert!(newsletter < personal);
+        assert!(promotional <= MAIL_SCORE_FLOOR);
+        assert!(newsletter <= MAIL_SCORE_FLOOR);
+        assert!(personal > MAIL_SCORE_FLOOR);
+        assert!(flagged > MAIL_SCORE_FLOOR);
+    }
+
+    #[test]
+    fn summary_prompt_forbids_markdown_and_caps_length() {
+        let scans = vec![complete(
+            "workspace",
+            vec![
+                ScanMemory {
+                    stable_id: "1".into(),
+                    text: "Workspace scan mapped 12 files. Projects: omi.".into(),
+                    captured_at_ms: None,
+                },
+                ScanMemory {
+                    stable_id: "2".into(),
+                    text: "Workspace scan mapped 12 files. Projects: omi.".into(),
+                    captured_at_ms: None,
+                },
+            ],
+            2,
+        )];
+        let prompt = summary_prompt(&scans).unwrap_or_default();
+        assert!(prompt.contains("no markdown"));
+        assert!(prompt.contains("420 characters"));
+        assert!(prompt.contains("at most 3 sentences"));
+        assert!(prompt.contains("verbatim"));
+        assert_eq!(prompt.matches("Projects: omi").count(), 1);
     }
 
     #[cfg(target_os = "macos")]
