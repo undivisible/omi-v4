@@ -102,10 +102,69 @@ void main() {
     },
   );
 
-  testWidgets('pair stage connects and persists the device', (tester) async {
+  testWidgets(
+    'pair stage detects, auto-connects, persists, and auto-advances',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(800, 1600));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final adapter = _Adapter();
+      final services = await _authorizedMobileServices('user-a', adapter);
+      await services.initialize();
+      final pairedDevices = VolatilePairedDeviceStore();
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: MobileOnboardingScreen(
+            services: services,
+            pairedDevices: pairedDevices,
+            onFinish: () {},
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const Key('mobile_onboarding_intro_continue')),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const Key('mobile_onboarding_account_continue')),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const Key('mobile_pair_scan')));
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 50)),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+
+      expect(find.text('Omi detected!'), findsOneWidget);
+      expect(await pairedDevices.read(), 'omi-1');
+      expect(adapter.haptics, [2]);
+      expect(find.byKey(const Key('mobile_pair_continue')), findsOneWidget);
+      expect(find.byKey(const Key('mobile_pair_skip')), findsNothing);
+      expect(find.byKey(const Key('mobile_pair_not_this_one')), findsOneWidget);
+      final scale = tester.widget<AnimatedScale>(
+        find.byWidgetPredicate(
+          (widget) => widget is AnimatedScale && widget.child is PendantVisual,
+        ),
+      );
+      expect(scale.scale, 1.3);
+
+      await tester.pump(const Duration(milliseconds: 1300));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('mobile_teach_continue_0')), findsOneWidget);
+      services.dispose();
+    },
+  );
+
+  testWidgets('not-this-one excludes the candidate and picks the next Omi', (
+    tester,
+  ) async {
     await tester.binding.setSurfaceSize(const Size(800, 1600));
     addTearDown(() => tester.binding.setSurfaceSize(null));
-    final services = await _authorizedMobileServices('user-a');
+    final adapter = _Adapter(devices: const [_omi1, _omi2]);
+    final services = await _authorizedMobileServices('user-a', adapter);
     await services.initialize();
     final pairedDevices = VolatilePairedDeviceStore();
 
@@ -127,18 +186,31 @@ void main() {
     await tester.pumpAndSettle();
 
     await tester.tap(find.byKey(const Key('mobile_pair_scan')));
-    await tester.pumpAndSettle();
-    expect(find.text('Omi Pendant'), findsOneWidget);
-
-    await tester.tap(find.byKey(const Key('mobile_pair_connect_omi-1')));
     await tester.runAsync(
       () => Future<void>.delayed(const Duration(milliseconds: 50)),
     );
-    await tester.pumpAndSettle();
-
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
     expect(await pairedDevices.read(), 'omi-1');
-    expect(find.byKey(const Key('mobile_pair_continue')), findsOneWidget);
-    expect(find.byKey(const Key('mobile_pair_skip')), findsNothing);
+    expect(find.text('Omi detected!'), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('mobile_pair_not_this_one')));
+    for (var round = 0; round < 4; round += 1) {
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 50)),
+      );
+      await tester.pump();
+    }
+    await tester.pump(const Duration(milliseconds: 300));
+
+    expect(adapter.disconnects, greaterThanOrEqualTo(1));
+    expect(await pairedDevices.read(), 'omi-2');
+    expect(find.text('Omi detected!'), findsOneWidget);
+    expect(adapter.haptics, [2, 2]);
+
+    await tester.pump(const Duration(milliseconds: 1300));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('mobile_teach_continue_0')), findsOneWidget);
     services.dispose();
   });
 
@@ -169,12 +241,11 @@ void main() {
     await tester.pumpAndSettle();
 
     await tester.tap(find.byKey(const Key('mobile_pair_scan')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('mobile_pair_connect_omi-1')));
     await tester.runAsync(
       () => Future<void>.delayed(const Duration(milliseconds: 50)),
     );
-    await tester.pumpAndSettle();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
     await tester.tap(find.byKey(const Key('mobile_pair_continue')));
     await tester.pumpAndSettle();
 
@@ -343,8 +414,6 @@ void main() {
     );
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('mobile_pair_scan')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('mobile_pair_connect_omi-1')));
     await tester.runAsync(
       () => Future<void>.delayed(const Duration(milliseconds: 50)),
     );
@@ -527,8 +596,30 @@ final class _Gateway implements AuthGateway {
   Future<void> signOut() async => currentSession = null;
 }
 
+const _omi1 = RelayDevice(
+  id: 'omi-1',
+  name: 'Omi Pendant',
+  signalStrength: -52,
+  batteryLevel: 87,
+  firmwareRevision: '1.0.3',
+  audioCodec: DeviceAudioCodec.opus,
+);
+
+const _omi2 = RelayDevice(
+  id: 'omi-2',
+  name: 'Omi Pendant',
+  signalStrength: -61,
+  batteryLevel: 64,
+  firmwareRevision: '1.0.3',
+  audioCodec: DeviceAudioCodec.opus,
+);
+
 final class _Adapter implements DeviceRelayAdapter, DeviceRelayHaptics {
+  _Adapter({this.devices = const [_omi1]});
+
+  final List<RelayDevice> devices;
   final haptics = <int>[];
+  var disconnects = 0;
   final _snapshots = StreamController<DeviceRelaySnapshot>.broadcast();
   final _audio = StreamController<List<int>>.broadcast();
   final _connections = StreamController<bool>.broadcast();
@@ -538,15 +629,6 @@ final class _Adapter implements DeviceRelayAdapter, DeviceRelayHaptics {
     haptics.add(level);
     return true;
   }
-
-  static const _device = RelayDevice(
-    id: 'omi-1',
-    name: 'Omi Pendant',
-    signalStrength: -52,
-    batteryLevel: 87,
-    firmwareRevision: '1.0.3',
-    audioCodec: DeviceAudioCodec.opus,
-  );
 
   @override
   DeviceRelayCapabilities get capabilities => const DeviceRelayCapabilities(
@@ -559,22 +641,24 @@ final class _Adapter implements DeviceRelayAdapter, DeviceRelayHaptics {
   Stream<DeviceRelaySnapshot> get snapshots => _snapshots.stream;
 
   @override
-  Future<List<RelayDevice>> scan() async => const [_device];
+  Future<List<RelayDevice>> scan() async => devices;
 
   @override
   Future<RelayDevice> connect(String deviceId) async {
+    final device = devices.firstWhere((next) => next.id == deviceId);
     _snapshots.add(
       DeviceRelaySnapshot(
         phase: DeviceConnectionPhase.connected,
         capabilities: capabilities,
-        device: _device,
+        device: device,
       ),
     );
-    return _device;
+    return device;
   }
 
   @override
   Future<void> disconnect() async {
+    disconnects += 1;
     _snapshots.add(
       DeviceRelaySnapshot(
         phase: DeviceConnectionPhase.disconnected,
