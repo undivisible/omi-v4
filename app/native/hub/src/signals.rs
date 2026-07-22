@@ -20,6 +20,7 @@ pub enum Command {
     SendMessage {
         text: String,
         conversation_id: Option<String>,
+        memory_context: Option<String>,
     },
     ConfigureAssistant {
         provider: AssistantProvider,
