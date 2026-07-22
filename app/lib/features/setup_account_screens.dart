@@ -9,6 +9,7 @@ import '../app_services.dart';
 import '../capabilities/desktop_capabilities.dart';
 import '../integrations/apple_eventkit.dart';
 import '../integrations/apple_eventkit_import.dart';
+import '../integrations/eventkit_task_sync.dart';
 import '../native/generated/signals/signals.dart'
     show AssistantProvider, SystemAudioCaptureMode;
 import '../providers/providers.dart';
@@ -146,6 +147,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             source: source,
             previewMode: previewMode,
           ),
+        EventKitProactiveSyncTile(previewMode: previewMode),
       ],
       SettingsSection.advanced => [
         if (previewMode || !services.canUseApi)
@@ -908,6 +910,108 @@ class _AppleEventKitConnectionTileState
         actionTooltip: connected ? 'Import Apple $name' : 'Connect Apple $name',
       );
     },
+  );
+}
+
+class EventKitProactiveSyncTile extends StatefulWidget {
+  const EventKitProactiveSyncTile({
+    required this.previewMode,
+    this.eventKit,
+    this.store,
+    super.key,
+  });
+
+  final bool previewMode;
+  final AppleEventKitWriter? eventKit;
+  final EventKitTaskSyncStore? store;
+
+  @override
+  State<EventKitProactiveSyncTile> createState() =>
+      _EventKitProactiveSyncTileState();
+}
+
+class _EventKitProactiveSyncTileState extends State<EventKitProactiveSyncTile> {
+  late final AppleEventKitWriter eventKit =
+      widget.eventKit ?? AppleEventKitService();
+  late final EventKitTaskSyncStore store =
+      widget.store ?? PreferencesEventKitTaskSyncStore();
+  bool enabled = false;
+  bool needsPermission = false;
+  bool busy = false;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(
+      store
+          .enabled()
+          .then((value) {
+            if (mounted) setState(() => enabled = value);
+          })
+          .catchError((Object _) {}),
+    );
+  }
+
+  Future<void> _toggle(bool value) async {
+    if (busy) return;
+    setState(() {
+      busy = true;
+      needsPermission = false;
+    });
+    try {
+      if (!value) {
+        await store.setEnabled(false);
+        if (mounted) setState(() => enabled = false);
+        return;
+      }
+      var granted = true;
+      for (final source in AppleEventKitSource.values) {
+        var authorization = await eventKit.status(source);
+        if (authorization == AppleEventKitAuthorization.notDetermined) {
+          authorization = await eventKit.request(source);
+        }
+        if (authorization != AppleEventKitAuthorization.fullAccess) {
+          granted = false;
+        }
+      }
+      if (!granted) {
+        await store.setEnabled(false);
+        if (mounted) {
+          setState(() {
+            enabled = false;
+            needsPermission = true;
+          });
+        }
+        return;
+      }
+      await store.setEnabled(true);
+      if (mounted) setState(() => enabled = true);
+    } catch (_) {
+      if (mounted) setState(() => needsPermission = true);
+    } finally {
+      if (mounted) setState(() => busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => _Tile(
+    icon: Icons.event_available_outlined,
+    title: 'Let Omi add to Calendar & Reminders',
+    detail: widget.previewMode || !eventKit.available
+        ? 'Available on a native Omi app with EventKit access.'
+        : needsPermission
+        ? 'Needs permission — enable Calendar and Reminders access in '
+              'System Settings → Privacy & Security.'
+        : enabled
+        ? 'Tasks with a due time are added to your Calendar and Reminders.'
+        : 'Off. Turn on to mirror due tasks into Calendar and Reminders.',
+    trailing: Switch(
+      key: const Key('eventkit_proactive_sync_switch'),
+      value: enabled,
+      onChanged: widget.previewMode || !eventKit.available || busy
+          ? null
+          : (value) => unawaited(_toggle(value)),
+    ),
   );
 }
 

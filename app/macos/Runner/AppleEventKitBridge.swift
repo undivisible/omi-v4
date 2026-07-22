@@ -39,9 +39,89 @@ final class AppleEventKitBridge {
       case .reminders:
         return await readReminders(limit: limit)
       }
+    case "upsertItem":
+      try await requireAccess(source)
+      return try upsertItem(source: source, arguments: arguments)
+    case "completeItem":
+      try await requireAccess(source)
+      return try completeItem(arguments: arguments)
+    case "removeItem":
+      try await requireAccess(source)
+      return try removeItem(source: source, arguments: arguments)
     default:
       throw BridgeError.invalidMethod
     }
+  }
+
+  private func upsertItem(source: Source, arguments: [String: Any]) throws -> [String: Any] {
+    guard let currentId = arguments["currentId"] as? String, !currentId.isEmpty,
+      let title = arguments["title"] as? String
+    else { throw BridgeError.invalidArguments }
+    let notes = arguments["notes"] as? String ?? ""
+    let nativeId = arguments["nativeId"] as? String
+    switch source {
+    case .calendar:
+      guard let startAt = date(arguments["startAt"]), let endAt = date(arguments["endAt"]) else {
+        throw BridgeError.invalidArguments
+      }
+      let event =
+        nativeId.flatMap { store.event(withIdentifier: $0) }
+        ?? EKEvent(eventStore: store)
+      if event.calendar == nil { event.calendar = store.defaultCalendarForNewEvents }
+      event.title = title
+      event.notes = notes
+      event.startDate = startAt
+      event.endDate = endAt
+      event.url = URL(string: "omi://current/\(currentId)")
+      try store.save(event, span: .thisEvent, commit: true)
+      return ["nativeId": event.eventIdentifier ?? event.calendarItemIdentifier]
+    case .reminders:
+      let reminder =
+        nativeId.flatMap { store.calendarItem(withIdentifier: $0) as? EKReminder }
+        ?? EKReminder(eventStore: store)
+      if reminder.calendar == nil { reminder.calendar = store.defaultCalendarForNewReminders() }
+      reminder.title = title
+      reminder.notes = notes
+      if let dueAt = date(arguments["dueAt"]) {
+        reminder.dueDateComponents = Calendar.current.dateComponents(
+          [.year, .month, .day, .hour, .minute], from: dueAt)
+      } else {
+        reminder.dueDateComponents = nil
+      }
+      try store.save(reminder, commit: true)
+      return ["nativeId": reminder.calendarItemIdentifier]
+    }
+  }
+
+  private func completeItem(arguments: [String: Any]) throws -> [String: Any] {
+    guard let nativeId = arguments["nativeId"] as? String,
+      let reminder = store.calendarItem(withIdentifier: nativeId) as? EKReminder
+    else { return ["completed": false] }
+    reminder.isCompleted = true
+    try store.save(reminder, commit: true)
+    return ["completed": true]
+  }
+
+  private func removeItem(source: Source, arguments: [String: Any]) throws -> [String: Any] {
+    guard let nativeId = arguments["nativeId"] as? String else {
+      throw BridgeError.invalidArguments
+    }
+    switch source {
+    case .calendar:
+      guard let event = store.event(withIdentifier: nativeId) else { return ["removed": false] }
+      try store.remove(event, span: .thisEvent, commit: true)
+    case .reminders:
+      guard let reminder = store.calendarItem(withIdentifier: nativeId) as? EKReminder else {
+        return ["removed": false]
+      }
+      try store.remove(reminder, commit: true)
+    }
+    return ["removed": true]
+  }
+
+  private func date(_ value: Any?) -> Date? {
+    guard let raw = value as? String else { return nil }
+    return ISO8601DateFormatter().date(from: raw)
   }
 
   private func source(from arguments: [String: Any]) throws -> Source {
@@ -162,12 +242,14 @@ final class AppleEventKitBridge {
     case accessRequired(String)
     case invalidMethod
     case invalidSource
+    case invalidArguments
 
     var errorDescription: String? {
       switch self {
       case .accessRequired(let source): return "Full \(source) access is required."
       case .invalidMethod: return "Unknown EventKit operation."
       case .invalidSource: return "Calendar or reminders must be selected."
+      case .invalidArguments: return "EventKit write arguments are incomplete."
       }
     }
   }

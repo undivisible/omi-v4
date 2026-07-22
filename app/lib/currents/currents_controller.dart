@@ -1,11 +1,14 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 
 import 'currents.dart';
 
 final class CurrentsController extends ChangeNotifier {
-  CurrentsController(this._client);
+  CurrentsController(this._client, {this.onItemsRefreshed});
 
   final CurrentsClient _client;
+  final Future<void> Function(List<CurrentCard> items)? onItemsRefreshed;
   List<CurrentCard> items = const [];
   String? error;
   bool loading = false;
@@ -20,6 +23,7 @@ final class CurrentsController extends ChangeNotifier {
     try {
       await _client.generate();
       items = await _client.list();
+      _notifyItemsRefreshed();
     } on CurrentsClientException catch (failure) {
       error = failure.message;
     } finally {
@@ -43,6 +47,13 @@ final class CurrentsController extends ChangeNotifier {
   }) async {
     await _client.feedback(id, status, snoozedUntil: snoozedUntil);
     items = List.unmodifiable(items.where((item) => item.item.id != id));
+    _notifyItemsRefreshed();
     notifyListeners();
+  }
+
+  void _notifyItemsRefreshed() {
+    final hook = onItemsRefreshed;
+    if (hook == null) return;
+    unawaited(hook(items).catchError((Object _) {}));
   }
 }

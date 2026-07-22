@@ -16,6 +16,7 @@ import 'channels/channels.dart';
 import 'conversations/conversations.dart';
 import 'currents/currents.dart';
 import 'device/device.dart';
+import 'integrations/eventkit_task_sync.dart';
 import 'keyboard/keyboard.dart';
 import 'memory/memory.dart';
 import 'memory/transcript_memory_ingestor.dart';
@@ -80,6 +81,7 @@ final class AppServices {
     this.conversations,
     ConversationInboxTransport? conversationInbox,
     CurrentsClient? currentsClient,
+    EventKitTaskSync? currentsTaskSync,
     this._worker,
     this.memorySyncPump,
     this._managedStt,
@@ -97,7 +99,10 @@ final class AppServices {
            captureModeStore ?? PreferencesSystemAudioCaptureModeStore(),
        currents = currentsClient == null
            ? null
-           : CurrentsController(currentsClient),
+           : CurrentsController(
+               currentsClient,
+               onItemsRefreshed: currentsTaskSync?.apply,
+             ),
        deviceAudio = DeviceAudioForwarder(relay: deviceRelay, hub: nativeHub),
        capabilities = PlatformDesktopCapabilityGateway(
          workspaceRoots: workspaceRoots,
@@ -157,6 +162,7 @@ final class AppServices {
       conversations: WorkerConversationTransport(worker),
       conversationInbox: WorkerConversationTransport(worker),
       currentsClient: CurrentsClient(WorkerCurrentsTransport(worker)),
+      currentsTaskSync: EventKitTaskSync.platformDefault(),
       worker: worker,
       memorySyncPump: MemorySyncPump(
         hub: nativeHub,
@@ -201,6 +207,7 @@ final class AppServices {
       conversations: WorkerConversationTransport(worker),
       conversationInbox: WorkerConversationTransport(worker),
       currentsClient: CurrentsClient(WorkerCurrentsTransport(worker)),
+      currentsTaskSync: EventKitTaskSync.platformDefault(),
       worker: worker,
       memorySyncPump: MemorySyncPump(
         hub: nativeHub,
@@ -225,6 +232,7 @@ final class AppServices {
     ConversationTransport? conversations,
     ConversationInboxTransport? conversationInbox,
     CurrentsClient? currentsClient,
+    EventKitTaskSync? currentsTaskSync,
     DateTime Function()? now,
     Duration assistantRefreshLead = _defaultAssistantRefreshLead,
     Duration assistantMinimumRefreshDelay =
@@ -251,6 +259,7 @@ final class AppServices {
     conversations: conversations,
     conversationInbox: conversationInbox,
     currentsClient: currentsClient,
+    currentsTaskSync: currentsTaskSync,
     workerOrigin: managedStt == null
         ? null
         : _validateWorkerOrigin(managedStt.trustedWorkerOrigin),
