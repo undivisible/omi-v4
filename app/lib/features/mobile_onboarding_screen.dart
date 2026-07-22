@@ -524,9 +524,11 @@ class _PairStage extends StatefulWidget {
 
 class _PairStageState extends State<_PairStage> {
   late final DeviceRelayService relay = widget.services.deviceRelay;
-  List<RelayDevice> devices = const [];
   DeviceRelaySnapshot? snapshot;
   Object? error;
+  RelayDevice? detected;
+  final Set<String> _excluded = {};
+  Timer? _advanceTimer;
   StreamSubscription<DeviceRelaySnapshot>? _snapshotSubscription;
 
   DeviceConnectionPhase get _phase =>
@@ -544,15 +546,28 @@ class _PairStageState extends State<_PairStage> {
 
   @override
   void dispose() {
+    _advanceTimer?.cancel();
     unawaited(_snapshotSubscription?.cancel());
     super.dispose();
   }
 
   Future<void> _scan() async {
-    setState(() => error = null);
+    setState(() {
+      error = null;
+      detected = null;
+    });
     try {
       final found = await relay.scan();
-      if (mounted) setState(() => devices = found);
+      if (!mounted) return;
+      RelayDevice? candidate;
+      for (final device in found) {
+        if (!_excluded.contains(device.id)) {
+          candidate = device;
+          break;
+        }
+      }
+      setState(() => detected = candidate);
+      if (candidate != null) await _connect(candidate);
     } catch (next) {
       if (mounted) setState(() => error = next);
     }
@@ -564,10 +579,27 @@ class _PairStageState extends State<_PairStage> {
       await widget.services.connectDevice(device.id);
       await widget.pairedDevices.save(device.id);
       unawaited(relay.sendHaptic(2));
-      if (mounted) setState(() {});
+      if (!mounted) return;
+      setState(() {});
+      _advanceTimer?.cancel();
+      _advanceTimer = Timer(const Duration(milliseconds: 1200), () {
+        if (mounted && _connected) widget.onContinue();
+      });
     } catch (next) {
       if (mounted) setState(() => error = next);
     }
+  }
+
+  Future<void> _notThisOne() async {
+    _advanceTimer?.cancel();
+    final current = detected;
+    if (current == null) return;
+    _excluded.add(current.id);
+    setState(() => detected = null);
+    try {
+      await widget.services.disconnectDevice();
+    } catch (_) {}
+    if (mounted) await _scan();
   }
 
   String _phaseLabel(DeviceConnectionPhase phase) => switch (phase) {
@@ -593,15 +625,29 @@ class _PairStageState extends State<_PairStage> {
 
   @override
   Widget build(BuildContext context) => _StageLayout(
-    heading: const RandomizedText(
-      segments: [('Pair your pendant.', null)],
+    heading: RandomizedText(
+      key: ValueKey(
+        detected == null ? 'mobile_pair_heading' : 'mobile_pair_detected',
+      ),
+      segments: [
+        (detected == null ? 'Pair your pendant.' : 'Omi detected!', null),
+      ],
       maxLines: 2,
       style: _headingStyle,
     ),
     body: Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Center(child: PendantVisual(size: 110, glowTint: _stateColor)),
+        Center(
+          child: AnimatedScale(
+            scale: detected == null ? 1 : 1.3,
+            duration: MediaQuery.disableAnimationsOf(context)
+                ? Duration.zero
+                : const Duration(milliseconds: 450),
+            curve: Curves.easeOutCubic,
+            child: PendantVisual(size: 110, glowTint: _stateColor),
+          ),
+        ),
         const SizedBox(height: 8),
         Text(
           [_phaseLabel(_phase), ?snapshot?.message].join(' · '),
@@ -616,41 +662,15 @@ class _PairStageState extends State<_PairStage> {
           ),
         ),
         const SizedBox(height: 18),
-        if (!_connected) ...[
+        if (!_connected && detected == null) ...[
           OutlinedButton.icon(
             key: const Key('mobile_pair_scan'),
-            onPressed: _phase == DeviceConnectionPhase.scanning ? null : _scan,
+            onPressed: _phase == DeviceConnectionPhase.scanning
+                ? null
+                : () => unawaited(_scan()),
             icon: const Icon(Icons.bluetooth_searching_rounded),
             label: const Text('Scan for my Omi'),
           ),
-          const SizedBox(height: 8),
-          for (final found in devices)
-            ListTile(
-              key: Key('mobile_pair_connect_${found.id}'),
-              leading: const Icon(
-                Icons.watch_outlined,
-                color: Color(0xfffffcec),
-              ),
-              title: Text(
-                found.name,
-                style: const TextStyle(color: Color(0xfffffcec)),
-              ),
-              subtitle: Text(
-                [
-                  if (found.signalStrength case final signal?) '$signal dBm',
-                  if (found.batteryLevel case final battery?)
-                    '$battery% battery',
-                ].join(' · '),
-                style: const TextStyle(color: Color(0xffdedcd3)),
-              ),
-              trailing: const Icon(
-                Icons.add_circle_outline_rounded,
-                color: Color(0xfffffcec),
-              ),
-              onTap: _phase == DeviceConnectionPhase.connecting
-                  ? null
-                  : () => unawaited(_connect(found)),
-            ),
         ],
         if (error case final message?) ...[
           const SizedBox(height: 8),
@@ -671,7 +691,21 @@ class _PairStageState extends State<_PairStage> {
             style: widget.buttonStyle,
             child: const Text('Continue'),
           ),
-    secondary: _connected
+    secondary: detected != null
+        ? TextButton(
+            key: const Key('mobile_pair_not_this_one'),
+            style: TextButton.styleFrom(
+              foregroundColor: _secondaryCream,
+              textStyle: const TextStyle(
+                fontFamily: 'Avenir Next',
+                fontSize: 14,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+            onPressed: () => unawaited(_notThisOne()),
+            child: const Text('Not this one?'),
+          )
+        : _connected
         ? null
         : TextButton(
             key: const Key('mobile_pair_skip'),
