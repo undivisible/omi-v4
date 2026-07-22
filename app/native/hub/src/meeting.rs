@@ -3,7 +3,7 @@ use crate::signals::{
     CaptureSource, ClientCommand, Command, MeetingCompleted, MeetingInsight, NativeEvent,
 };
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -227,6 +227,13 @@ impl MeetingSession {
     pub fn title(&self) -> &str {
         self.title.as_deref().unwrap_or(DEFAULT_TITLE)
     }
+
+    pub fn upgrade_to_manual(&mut self, title: Option<String>) {
+        self.manual = true;
+        if let Some(title) = title.filter(|value| !value.trim().is_empty()) {
+            self.title = Some(title);
+        }
+    }
 }
 
 pub fn should_auto_start(mode: SystemAudioCaptureMode, meeting_active: bool) -> bool {
@@ -286,24 +293,28 @@ pub enum MeetingControl {
     },
 }
 
-static CONTROLS: OnceLock<mpsc::Sender<MeetingControl>> = OnceLock::new();
+static CONTROLS: RwLock<Option<mpsc::Sender<MeetingControl>>> = RwLock::new(None);
 
 pub fn install(sender: mpsc::Sender<MeetingControl>) {
-    let _ = CONTROLS.set(sender);
+    *CONTROLS
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(sender);
 }
 
-fn notify(control: MeetingControl) {
-    if let Some(sender) = CONTROLS.get() {
-        let _ = sender.try_send(control);
-    }
+fn notify(control: MeetingControl) -> bool {
+    CONTROLS
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .as_ref()
+        .is_some_and(|sender| sender.try_send(control).is_ok())
 }
 
-pub fn request_start(title: Option<String>) {
-    notify(MeetingControl::Start { title });
+pub fn request_start(title: Option<String>) -> bool {
+    notify(MeetingControl::Start { title })
 }
 
-pub fn request_stop() {
-    notify(MeetingControl::Stop);
+pub fn request_stop() -> bool {
+    notify(MeetingControl::Stop)
 }
 
 pub fn observe_gate(active: bool, suggested_title: Option<String>) {
@@ -357,11 +368,10 @@ impl MeetingRuntime {
                 },
             };
             match control {
-                MeetingControl::Start { title } => {
-                    if session.is_none() {
-                        session = Some(MeetingSession::new(title, true));
-                    }
-                }
+                MeetingControl::Start { title } => match &mut session {
+                    Some(current) => current.upgrade_to_manual(title),
+                    None => session = Some(MeetingSession::new(title, true)),
+                },
                 MeetingControl::Stop => {
                     if let Some(finished) = session.take() {
                         self.finish(finished);
@@ -425,6 +435,10 @@ impl MeetingRuntime {
             if session.transcript().trim().is_empty() {
                 return;
             }
+            let now_ms = chrono::Utc::now().timestamp_millis();
+            let (_, capture) =
+                compose_completion(&session, fallback_summary(session.transcript()), now_ms);
+            let _ = captures.send(capture).await;
             let prompt = summary_prompt(session.transcript());
             let output = tokio::select! {
                 () = cancellation.cancelled() => return,
@@ -434,9 +448,7 @@ impl MeetingRuntime {
                 .as_deref()
                 .and_then(parse_summary)
                 .unwrap_or_else(|| fallback_summary(session.transcript()));
-            let (completed, capture) =
-                compose_completion(&session, summary, chrono::Utc::now().timestamp_millis());
-            let _ = captures.send(capture).await;
+            let (completed, _) = compose_completion(&session, summary, now_ms);
             NativeEvent::MeetingCompleted(completed).send();
         });
     }
@@ -547,6 +559,20 @@ mod tests {
         assert!(session.transcript().starts_with("hello team\n"));
         assert!(session.transcript().chars().count() <= RAW_TRANSCRIPT_CHARS);
         assert!(!session.transcript().contains("overflow"));
+    }
+
+    #[test]
+    fn manual_start_upgrades_an_auto_session_and_adopts_the_title() {
+        let mut session = MeetingSession::new(Some("Zoom".to_owned()), false);
+        session.push_final("early context");
+        session.upgrade_to_manual(Some("Quarterly Review".to_owned()));
+        assert!(session.is_manual());
+        assert_eq!(session.title(), "Quarterly Review");
+        assert!(session.transcript().contains("early context"));
+        session.upgrade_to_manual(Some("  ".to_owned()));
+        assert_eq!(session.title(), "Quarterly Review");
+        session.upgrade_to_manual(None);
+        assert_eq!(session.title(), "Quarterly Review");
     }
 
     #[test]

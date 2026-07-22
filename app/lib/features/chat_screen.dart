@@ -376,6 +376,25 @@ class ChatScreenState extends State<ChatScreen> {
           }
         case NativeEventRuntimeStatus(:final value):
           _computerUseCapabilities = value.computerUseCapabilities;
+        case NativeEventMeetingStateChanged(:final value):
+          if (value.active) {
+            _progress =
+                'Meeting detected: ${value.suggestedTitle ?? 'Meeting'}';
+          }
+        case NativeEventMeetingInsight(:final value):
+          _progress = value.text;
+        case NativeEventMeetingCompleted(:final value):
+          _messages.add(
+            _ChatMessage(
+              requestId:
+                  'meeting-summary-${DateTime.now().microsecondsSinceEpoch}',
+              text: [
+                'Meeting summary: ${value.summary}',
+                for (final action in value.actions) '• $action',
+              ].join('\n'),
+              fromUser: false,
+            ),
+          );
         default:
           break;
       }

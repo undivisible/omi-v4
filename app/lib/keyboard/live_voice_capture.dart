@@ -28,6 +28,7 @@ final class LiveVoiceCapture {
   final DesktopAudioStop? _stopAudio;
   final Future<void> Function()? _disposeAudio;
   _LiveVoiceSession? _session;
+  _LiveVoiceSession? _endedSession;
   int _generation = 0;
   int _discardedOutputBytes = 0;
 
@@ -98,7 +99,8 @@ final class LiveVoiceCapture {
   }
 
   Future<String> stop() async {
-    final session = _session;
+    final session = _session ?? _endedSession;
+    _endedSession = null;
     if (session == null) return '';
     return session.teardown ??= _finish(session);
   }
@@ -133,8 +135,10 @@ final class LiveVoiceCapture {
 
   Future<void> cancel() async {
     _generation += 1;
+    _endedSession = null;
     final session = _session;
     if (session != null) await _abort(session);
+    _endedSession = null;
   }
 
   Future<void> dispose() async {
@@ -166,6 +170,10 @@ final class LiveVoiceCapture {
         case LiveVoicePhase.interrupted:
           break;
         case LiveVoicePhase.ended || LiveVoicePhase.failed:
+          if (value.state == LiveVoicePhase.ended &&
+              session.started.isCompleted) {
+            session.providerEnded = true;
+          }
           if (!session.started.isCompleted) {
             session.started.completeError(
               StateError(value.detail ?? 'Live voice session ended.'),
@@ -206,8 +214,9 @@ final class LiveVoiceCapture {
     try {
       _stopNative(session);
     } catch (_) {}
+    if (session.providerEnded) _endedSession = session;
     await _release(session);
-    return '';
+    return session.providerEnded ? session.transcript.toString().trim() : '';
   }
 
   void _stopNative(_LiveVoiceSession session) {
@@ -240,5 +249,6 @@ final class _LiveVoiceSession {
   StreamSubscription<Uint8List>? audio;
   int sequence = 0;
   bool stopping = false;
+  bool providerEnded = false;
   Future<String>? teardown;
 }

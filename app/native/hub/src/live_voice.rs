@@ -71,21 +71,17 @@ impl RealtimeVoiceHandle {
         let Some(sender) = &self.audio_sender else {
             return Ok(());
         };
-        let mut current = self.pending_audio_bytes.load(Ordering::Acquire);
-        loop {
-            let next = current
-                .checked_add(bytes.len())
-                .filter(|value| *value <= MAX_PENDING_AUDIO_BYTES)
-                .ok_or_else(|| "live voice audio queue is full".to_owned())?;
-            match self.pending_audio_bytes.compare_exchange_weak(
-                current,
-                next,
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            ) {
-                Ok(_) => break,
-                Err(observed) => current = observed,
-            }
+        let previous = self
+            .pending_audio_bytes
+            .fetch_add(bytes.len(), Ordering::AcqRel);
+        if previous
+            .checked_add(bytes.len())
+            .filter(|value| *value <= MAX_PENDING_AUDIO_BYTES)
+            .is_none()
+        {
+            self.pending_audio_bytes
+                .fetch_sub(bytes.len(), Ordering::AcqRel);
+            return Err("live voice audio queue is full".to_owned());
         }
         let result = sender
             .send(bytes.to_vec())
@@ -195,7 +191,6 @@ struct ServerFrame {
     setup_complete: Option<serde_json::Value>,
     server_content: Option<ServerContent>,
     go_away: Option<serde_json::Value>,
-    session_resumption_update: Option<SessionResumptionUpdate>,
 }
 
 #[derive(Deserialize)]
@@ -238,15 +233,6 @@ struct OutputTranscription {
     text: String,
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct SessionResumptionUpdate {
-    #[serde(default)]
-    new_handle: String,
-    #[serde(default)]
-    resumable: bool,
-}
-
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum ServerMessage {
     SetupComplete,
@@ -258,9 +244,6 @@ pub(crate) enum ServerMessage {
         turn_complete: bool,
     },
     GoAway,
-    SessionResumption {
-        resumable: bool,
-    },
     Unknown,
 }
 
@@ -281,11 +264,6 @@ pub(crate) fn parse_server_message(payload: &[u8]) -> Result<ServerMessage, Stri
     }
     if frame.go_away.is_some() {
         return Ok(ServerMessage::GoAway);
-    }
-    if let Some(update) = frame.session_resumption_update {
-        return Ok(ServerMessage::SessionResumption {
-            resumable: update.resumable && !update.new_handle.is_empty(),
-        });
     }
     let Some(content) = frame.server_content else {
         return Ok(ServerMessage::Unknown);
@@ -505,9 +483,7 @@ async fn dispatch_server_payload(
         }
     };
     match message {
-        ServerMessage::SetupComplete
-        | ServerMessage::SessionResumption { .. }
-        | ServerMessage::Unknown => true,
+        ServerMessage::SetupComplete | ServerMessage::Unknown => true,
         ServerMessage::GoAway => {
             let _ = events.send(RealtimeVoiceEvent::SessionEnded).await;
             false
@@ -694,7 +670,7 @@ mod tests {
             parse_server_message(
                 br#"{"sessionResumptionUpdate":{"newHandle":"h1","resumable":true}}"#
             ),
-            Ok(ServerMessage::SessionResumption { resumable: true })
+            Ok(ServerMessage::Unknown)
         );
         assert_eq!(
             parse_server_message(br#"{"usageMetadata":{"totalTokenCount":3}}"#),
