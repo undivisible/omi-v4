@@ -195,13 +195,31 @@ final class CursorPillController extends ChangeNotifier {
     _notify();
     try {
       await _startVoice();
-    } catch (_) {
+    } catch (error) {
       if (_disposed || _state != CursorPillState.listening) return;
       _state = CursorPillState.input;
-      _error = 'I couldn’t start listening. Check the microphone.';
+      _error = voiceStartErrorMessage(error);
       _notify();
     }
   }
+
+  static String voiceStartErrorMessage(Object error) =>
+      switch (error is VoiceStartException ? error.failure : null) {
+        VoiceStartFailure.microphonePermission =>
+          'Microphone access is off for Omi. Enable it in System Settings → '
+              'Privacy & Security → Microphone, then try again.',
+        VoiceStartFailure.signedOut =>
+          'Voice needs a signed-in session. Open Omi and sign in first.',
+        VoiceStartFailure.backendNotConfigured =>
+          'No voice service is set up yet. Add a transcription provider in '
+              'Settings to use voice.',
+        VoiceStartFailure.network =>
+          'I couldn’t reach the voice service. Check your connection and try '
+              'again.',
+        VoiceStartFailure.unsupportedPlatform =>
+          'Voice isn’t available on this platform.',
+        null => 'I couldn’t start listening. Check the microphone.',
+      };
 
   Future<void> finishListening() async {
     if (_state != CursorPillState.listening) return;
