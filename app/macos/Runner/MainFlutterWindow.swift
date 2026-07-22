@@ -7,6 +7,7 @@ import FlutterMacOS
 private class OvalBlurView: NSView {
   private let shell = NSView()
   private let effect = NSVisualEffectView()
+  private let fadeMask = CAGradientLayer()
 
   init(frame frameRect: NSRect, blendingMode: NSVisualEffectView.BlendingMode) {
     super.init(frame: frameRect)
@@ -18,6 +19,17 @@ private class OvalBlurView: NSView {
     effect.isEmphasized = true
     effect.state = .active
     effect.translatesAutoresizingMaskIntoConstraints = false
+    fadeMask.type = .radial
+    fadeMask.colors = [
+      NSColor.black.cgColor,
+      NSColor.black.withAlphaComponent(0.95).cgColor,
+      NSColor.black.withAlphaComponent(0.72).cgColor,
+      NSColor.black.withAlphaComponent(0.32).cgColor,
+      NSColor.clear.cgColor,
+    ]
+    fadeMask.locations = [0, 0.32, 0.58, 0.8, 1]
+    fadeMask.startPoint = CGPoint(x: 0.5, y: 0.5)
+    fadeMask.endPoint = CGPoint(x: 1, y: 1)
     shell.addSubview(effect)
     addSubview(shell)
     NSLayoutConstraint.activate([
@@ -36,15 +48,9 @@ private class OvalBlurView: NSView {
 
   override func layout() {
     super.layout()
-    let radius = shell.bounds.height / 2
-    shell.layer?.cornerRadius = radius
     shell.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.8).cgColor
-    shell.layer?.shadowColor = NSColor.black.withAlphaComponent(0.2).cgColor
-    shell.layer?.shadowOpacity = 1
-    shell.layer?.shadowRadius = 56
-    shell.layer?.shadowOffset = .zero
-    effect.layer?.cornerRadius = radius
-    effect.layer?.masksToBounds = true
+    fadeMask.frame = shell.bounds
+    shell.layer?.mask = fadeMask
   }
 }
 
