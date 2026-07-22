@@ -1,8 +1,10 @@
 #[cfg(target_os = "macos")]
 use crate::signals::{MeetingStateChanged, NativeEvent};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 pub const MEETING_POLL_INTERVAL: Duration = Duration::from_secs(4);
+pub const MEETING_POLL_INTERVAL_IDLE: Duration = Duration::from_secs(15);
+pub const BROWSER_GATE_IDLE_AFTER: Duration = Duration::from_secs(60);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MeetingApp {
@@ -37,6 +39,30 @@ impl MeetingGate {
 
     pub fn has_observed_state(&self) -> bool {
         self.observed
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct BrowserGate {
+    inactive_since: Option<Instant>,
+}
+
+impl BrowserGate {
+    pub fn observe(&mut self, active: bool, now: Instant) {
+        if active {
+            self.inactive_since = None;
+        } else {
+            self.inactive_since.get_or_insert(now);
+        }
+    }
+
+    pub fn interval(&self, now: Instant) -> Duration {
+        match self.inactive_since {
+            Some(since) if now.saturating_duration_since(since) > BROWSER_GATE_IDLE_AFTER => {
+                MEETING_POLL_INTERVAL_IDLE
+            }
+            _ => MEETING_POLL_INTERVAL,
+        }
     }
 }
 
@@ -82,10 +108,6 @@ fn is_native_call_app(app: &MeetingApp) -> bool {
         })
 }
 
-fn is_mic_owner_call_app(app: &MeetingApp) -> bool {
-    is_native_call_app(app)
-}
-
 #[cfg(test)]
 fn is_call_window(app: &MeetingApp, title: &str) -> bool {
     if is_native_call_app(app) {
@@ -115,7 +137,23 @@ fn parse_running_apps(output: &str) -> impl Iterator<Item = MeetingApp> + '_ {
 }
 
 #[cfg(target_os = "macos")]
+fn browser_process_running() -> bool {
+    std::process::Command::new("/usr/bin/pgrep")
+        .args([
+            "-x",
+            "Safari|Google Chrome|Arc|firefox|Microsoft Edge|Brave Browser|Opera",
+        ])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
+#[cfg(target_os = "macos")]
 fn detect_call_window() -> Option<MeetingApp> {
+    if !browser_process_running() {
+        return None;
+    }
     let script = "tell application \"System Events\"\nset outputText to \"\"\nrepeat with processRef in (every application process whose background only is false)\nset windowTitle to \"\"\ntry\nset windowTitle to name of window 1 of processRef\nend try\nset outputText to outputText & (name of processRef) & tab & (bundle identifier of processRef) & tab & windowTitle & linefeed\nend repeat\nreturn outputText\nend tell";
     let output = std::process::Command::new("/usr/bin/osascript")
         .args(["-e", script])
@@ -149,7 +187,7 @@ fn detect_mic_owner() -> Option<MeetingApp> {
         name: owner.name,
         bundle_id: owner.bundle_id?,
     };
-    is_mic_owner_call_app(&app).then_some(app)
+    is_native_call_app(&app).then_some(app)
 }
 
 #[cfg(target_os = "macos")]
@@ -169,10 +207,15 @@ pub fn suggested_title() -> Option<String> {
 #[cfg(target_os = "macos")]
 pub async fn run_meeting_poll() {
     let mut gate = MeetingGate::default();
+    let mut browser_gate = BrowserGate::default();
     let mut last_active = false;
     let mut elapsed = Duration::ZERO;
     loop {
-        let detected = tokio::task::spawn_blocking(detect).await.ok().flatten();
+        let polled = tokio::task::spawn_blocking(|| (detect(), browser_process_running()))
+            .await
+            .ok();
+        let (detected, browser_running) = polled.unwrap_or((None, false));
+        browser_gate.observe(browser_running || detected.is_some(), Instant::now());
         let active = gate.apply(detected.is_some(), elapsed);
         if gate.has_observed_state() && active != last_active {
             last_active = active;
@@ -184,18 +227,20 @@ pub async fn run_meeting_poll() {
             })
             .send();
         }
-        tokio::time::sleep(MEETING_POLL_INTERVAL).await;
-        elapsed = MEETING_POLL_INTERVAL;
+        let interval = browser_gate.interval(Instant::now());
+        tokio::time::sleep(interval).await;
+        elapsed = interval;
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        MeetingApp, MeetingGate, is_browser_call_window, is_call_window, is_mic_owner_call_app,
-        is_native_call_app, parse_running_apps,
+        BROWSER_GATE_IDLE_AFTER, BrowserGate, MEETING_POLL_INTERVAL, MEETING_POLL_INTERVAL_IDLE,
+        MeetingApp, MeetingGate, is_browser_call_window, is_call_window, is_native_call_app,
+        parse_running_apps,
     };
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     #[test]
     fn keeps_a_meeting_active_until_the_off_grace_period_elapses() {
@@ -215,14 +260,40 @@ mod tests {
 
     #[test]
     fn accepts_only_native_call_apps_as_microphone_owners() {
-        assert!(is_mic_owner_call_app(&MeetingApp {
+        assert!(is_native_call_app(&MeetingApp {
             name: "Zoom".into(),
             bundle_id: "us.zoom.xos.helper".into(),
         }));
-        assert!(!is_mic_owner_call_app(&MeetingApp {
+        assert!(!is_native_call_app(&MeetingApp {
             name: "Google Chrome".into(),
             bundle_id: "com.google.Chrome".into(),
         }));
+    }
+
+    #[test]
+    fn poll_interval_relaxes_after_a_minute_without_browser_or_meeting_activity() {
+        let start = Instant::now();
+        let mut gate = BrowserGate::default();
+        gate.observe(false, start);
+        assert_eq!(gate.interval(start), MEETING_POLL_INTERVAL);
+        assert_eq!(
+            gate.interval(start + BROWSER_GATE_IDLE_AFTER),
+            MEETING_POLL_INTERVAL
+        );
+        assert_eq!(
+            gate.interval(start + BROWSER_GATE_IDLE_AFTER + Duration::from_secs(1)),
+            MEETING_POLL_INTERVAL_IDLE
+        );
+        gate.observe(false, start + Duration::from_secs(90));
+        assert_eq!(
+            gate.interval(start + Duration::from_secs(90)),
+            MEETING_POLL_INTERVAL_IDLE
+        );
+        gate.observe(true, start + Duration::from_secs(91));
+        assert_eq!(
+            gate.interval(start + Duration::from_secs(91)),
+            MEETING_POLL_INTERVAL
+        );
     }
 
     #[test]

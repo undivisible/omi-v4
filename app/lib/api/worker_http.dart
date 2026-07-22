@@ -181,13 +181,17 @@ final class OAuthDeviceStart {
     required this.userCode,
     required this.verificationUri,
     required this.interval,
+    required this.expiresIn,
   });
 
   final String deviceCode;
   final String userCode;
   final String verificationUri;
   final int interval;
+  final int expiresIn;
 }
+
+enum OAuthDevicePoll { connected, pending, slowDown }
 
 final class WorkerOAuthClient {
   const WorkerOAuthClient(this._client);
@@ -217,17 +221,25 @@ final class WorkerOAuthClient {
           ? body['verificationUri']! as String
           : '',
       interval: body['interval'] is int ? body['interval']! as int : 5,
+      expiresIn: body['expiresIn'] is int ? body['expiresIn']! as int : 300,
     );
   }
 
-  /// Returns true when connected, false while authorization is pending.
-  Future<bool> pollDevice(String provider, String deviceCode) async {
+  /// Returns connected on success, pending while authorization is pending,
+  /// and slowDown when the provider asked for a longer poll interval.
+  Future<OAuthDevicePoll> pollDevice(String provider, String deviceCode) async {
     final response = await _client.send(
       method: 'POST',
       path: '/v1/oauth/$provider/device/poll',
       body: {'deviceCode': deviceCode},
     );
-    if (response.statusCode == 202) return false;
+    if (response.statusCode == 202) {
+      final pendingBody = response.body;
+      return pendingBody is Map<String, Object?> &&
+              pendingBody['error'] == 'slow_down'
+          ? OAuthDevicePoll.slowDown
+          : OAuthDevicePoll.pending;
+    }
     final body = response.body;
     if (response.statusCode != 200 ||
         body is! Map<String, Object?> ||
@@ -238,7 +250,7 @@ final class WorkerOAuthClient {
             : 'Sign-in failed',
       );
     }
-    return true;
+    return OAuthDevicePoll.connected;
   }
 
   Future<List<String>> connectedProviders() async {

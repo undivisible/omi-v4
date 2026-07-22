@@ -629,30 +629,50 @@ class _SubscriptionSignInTileState extends State<_SubscriptionSignInTile> {
       }
     }
     poll?.cancel();
-    poll = Timer.periodic(Duration(seconds: start.interval), (timer) async {
-      final bool done;
-      try {
-        done = await widget.client.pollDevice(
-          widget.provider,
-          start.deviceCode,
-        );
-      } catch (failure) {
-        timer.cancel();
-        if (mounted) {
+    var interval = start.interval;
+    final deadline = DateTime.now().add(Duration(seconds: start.expiresIn));
+    void schedule() {
+      poll = Timer(Duration(seconds: interval), () async {
+        if (!mounted) return;
+        if (DateTime.now().isAfter(deadline)) {
           setState(() {
-            error = '$failure';
+            error = 'Code expired — try again.';
             userCode = null;
           });
+          return;
         }
-        return;
-      }
-      if (!done || !mounted) return;
-      timer.cancel();
-      setState(() {
-        userCode = null;
-        connected = widget.client.connectedProviders();
+        final OAuthDevicePoll status;
+        try {
+          status = await widget.client.pollDevice(
+            widget.provider,
+            start.deviceCode,
+          );
+        } catch (failure) {
+          if (mounted) {
+            setState(() {
+              error = '$failure';
+              userCode = null;
+            });
+          }
+          return;
+        }
+        if (!mounted) return;
+        switch (status) {
+          case OAuthDevicePoll.connected:
+            setState(() {
+              userCode = null;
+              connected = widget.client.connectedProviders();
+            });
+          case OAuthDevicePoll.slowDown:
+            interval += 5;
+            schedule();
+          case OAuthDevicePoll.pending:
+            schedule();
+        }
       });
-    });
+    }
+
+    schedule();
   }
 
   Future<void> disconnect() async {

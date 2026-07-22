@@ -28,6 +28,12 @@ export 'generated/signals/signals.dart'
         OnboardingScanCompleted,
         OnboardingScanSource,
         OnboardingScanState,
+        MeetingCompleted,
+        MeetingInsight,
+        MeetingStateChanged,
+        NativeEventMeetingCompleted,
+        NativeEventMeetingInsight,
+        NativeEventMeetingStateChanged,
         LiveVoiceAudio,
         LiveVoicePhase,
         LiveVoiceState,
@@ -165,6 +171,11 @@ abstract interface class LiveVoiceHub {
   void stopLiveVoice({required String requestId, required String liveStreamId});
 }
 
+abstract interface class MeetingHub {
+  void startMeeting({required String requestId, String? title});
+  void stopMeeting(String requestId);
+}
+
 abstract interface class OnboardingScanHub {
   void scanOnboarding({
     required String requestId,
@@ -189,7 +200,7 @@ final class NativeHubUnavailable implements Exception {
 }
 
 final class UnavailableNativeHub
-    implements NativeHub, OnboardingScanHub, LiveVoiceHub {
+    implements NativeHub, OnboardingScanHub, LiveVoiceHub, MeetingHub {
   const UnavailableNativeHub(this.reason);
 
   final String reason;
@@ -340,6 +351,13 @@ final class UnavailableNativeHub
   }) => _unavailable();
 
   @override
+  void startMeeting({required String requestId, String? title}) =>
+      _unavailable();
+
+  @override
+  void stopMeeting(String requestId) => _unavailable();
+
+  @override
   void cancel(String requestId) => _unavailable();
 
   @override
@@ -358,7 +376,7 @@ final class UnavailableNativeHub
 }
 
 final class RinfNativeHub
-    implements NativeHub, OnboardingScanHub, LiveVoiceHub {
+    implements NativeHub, OnboardingScanHub, LiveVoiceHub, MeetingHub {
   bool _initialized = false;
 
   @override
@@ -611,6 +629,14 @@ final class RinfNativeHub
     required String requestId,
     required String liveStreamId,
   }) => _send(requestId, CommandStopLiveVoice(liveStreamId: liveStreamId));
+
+  @override
+  void startMeeting({required String requestId, String? title}) =>
+      _send(requestId, CommandStartMeeting(title: title));
+
+  @override
+  void stopMeeting(String requestId) =>
+      _send(requestId, const CommandStopMeeting());
 
   @override
   void cancel(String requestId) => _send(requestId, const CommandCancel());

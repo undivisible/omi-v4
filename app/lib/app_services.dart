@@ -480,6 +480,23 @@ final class AppServices {
     _assistantConfigured = false;
   }
 
+  void startMeeting({String? title}) {
+    if (!chatReady || nativeHub is! MeetingHub) {
+      throw StateError('Native services are not connected.');
+    }
+    (nativeHub as MeetingHub).startMeeting(
+      requestId: 'meeting-start-${_randomId()}',
+      title: title,
+    );
+  }
+
+  void stopMeeting() {
+    if (!chatReady || nativeHub is! MeetingHub) {
+      throw StateError('Native services are not connected.');
+    }
+    (nativeHub as MeetingHub).stopMeeting('meeting-stop-${_randomId()}');
+  }
+
   Future<String> sendChatMessage({required String text}) =>
       _sendChatMessage(text: text);
 
@@ -487,6 +504,16 @@ final class AppServices {
     final voiceGeneration = ++_desktopVoiceGeneration;
     return _queueDesktopVoice(() => _startDesktopVoice(voiceGeneration));
   }
+
+  bool _voiceAuthorityChanged({
+    required int generation,
+    required int voiceGeneration,
+    required int currentVoiceGeneration,
+    required String uid,
+  }) =>
+      generation != _authorityGeneration ||
+      voiceGeneration != currentVoiceGeneration ||
+      auth.snapshot.session?.uid != uid;
 
   Future<void> _startDesktopVoice(int voiceGeneration) async {
     if (kIsWeb ||
@@ -513,9 +540,12 @@ final class AppServices {
         grant = null;
       }
       if (grant != null) {
-        if (generation != _authorityGeneration ||
-            voiceGeneration != _desktopVoiceGeneration ||
-            auth.snapshot.session?.uid != session.uid) {
+        if (_voiceAuthorityChanged(
+          generation: generation,
+          voiceGeneration: voiceGeneration,
+          currentVoiceGeneration: _desktopVoiceGeneration,
+          uid: session.uid,
+        )) {
           throw StateError('Account authority changed while starting voice.');
         }
         await liveVoice.start(
@@ -523,9 +553,12 @@ final class AppServices {
           model: grant.model,
           authorityId: 'g$generation',
         );
-        if (generation != _authorityGeneration ||
-            voiceGeneration != _desktopVoiceGeneration ||
-            auth.snapshot.session?.uid != session.uid) {
+        if (_voiceAuthorityChanged(
+          generation: generation,
+          voiceGeneration: voiceGeneration,
+          currentVoiceGeneration: _desktopVoiceGeneration,
+          uid: session.uid,
+        )) {
           await liveVoice.cancel();
           throw StateError('Account authority changed while starting voice.');
         }
@@ -539,18 +572,24 @@ final class AppServices {
       encoding: ManagedSttEncoding.linear16,
       sampleRate: DesktopVoiceCapture.sampleRateHz,
     );
-    if (generation != _authorityGeneration ||
-        voiceGeneration != _desktopVoiceGeneration ||
-        auth.snapshot.session?.uid != session.uid) {
+    if (_voiceAuthorityChanged(
+      generation: generation,
+      voiceGeneration: voiceGeneration,
+      currentVoiceGeneration: _desktopVoiceGeneration,
+      uid: session.uid,
+    )) {
       throw StateError('Account authority changed while starting voice.');
     }
     await desktopVoice.start(
       auth: transcriptionAuth,
       authorityId: 'g$generation',
     );
-    if (generation != _authorityGeneration ||
-        voiceGeneration != _desktopVoiceGeneration ||
-        auth.snapshot.session?.uid != session.uid) {
+    if (_voiceAuthorityChanged(
+      generation: generation,
+      voiceGeneration: voiceGeneration,
+      currentVoiceGeneration: _desktopVoiceGeneration,
+      uid: session.uid,
+    )) {
       await desktopVoice.cancel();
       throw StateError('Account authority changed while starting voice.');
     }
@@ -621,9 +660,12 @@ final class AppServices {
     }
     if (voiceGeneration != _liveVoiceGeneration) return;
     final grant = await tokens.createGeminiToken();
-    if (generation != _authorityGeneration ||
-        voiceGeneration != _liveVoiceGeneration ||
-        auth.snapshot.session?.uid != session.uid) {
+    if (_voiceAuthorityChanged(
+      generation: generation,
+      voiceGeneration: voiceGeneration,
+      currentVoiceGeneration: _liveVoiceGeneration,
+      uid: session.uid,
+    )) {
       throw StateError('Account authority changed while starting live voice.');
     }
     await liveVoice.start(
@@ -631,9 +673,12 @@ final class AppServices {
       model: grant.model,
       authorityId: 'g$generation',
     );
-    if (generation != _authorityGeneration ||
-        voiceGeneration != _liveVoiceGeneration ||
-        auth.snapshot.session?.uid != session.uid) {
+    if (_voiceAuthorityChanged(
+      generation: generation,
+      voiceGeneration: voiceGeneration,
+      currentVoiceGeneration: _liveVoiceGeneration,
+      uid: session.uid,
+    )) {
       await liveVoice.cancel();
       throw StateError('Account authority changed while starting live voice.');
     }

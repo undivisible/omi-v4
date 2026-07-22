@@ -1728,23 +1728,39 @@ async fn execute(
         }
         Command::Cancel => false,
         Command::StartMeeting { title } => {
-            crate::meeting::request_start(title);
-            progress(
-                &request_id,
-                "meeting",
-                ToolStatus::Complete,
-                Some("meeting start requested"),
-            );
+            if crate::meeting::request_start(title) {
+                progress(
+                    &request_id,
+                    "meeting",
+                    ToolStatus::Complete,
+                    Some("meeting start requested"),
+                );
+            } else {
+                progress(
+                    &request_id,
+                    "meeting",
+                    ToolStatus::Failed,
+                    Some("meeting runtime is unavailable"),
+                );
+            }
             false
         }
         Command::StopMeeting => {
-            crate::meeting::request_stop();
-            progress(
-                &request_id,
-                "meeting",
-                ToolStatus::Complete,
-                Some("meeting stop requested"),
-            );
+            if crate::meeting::request_stop() {
+                progress(
+                    &request_id,
+                    "meeting",
+                    ToolStatus::Complete,
+                    Some("meeting stop requested"),
+                );
+            } else {
+                progress(
+                    &request_id,
+                    "meeting",
+                    ToolStatus::Failed,
+                    Some("meeting runtime is unavailable"),
+                );
+            }
             false
         }
     }
