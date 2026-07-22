@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../app_services.dart';
+import '../currents/currents.dart';
 import '../device/device.dart';
 import '../native/native_hub.dart';
 import '../providers/providers.dart';
@@ -221,6 +222,10 @@ class MobilePendantPageState extends State<MobilePendantPage> {
     });
     if (!widget.previewMode && _mobile) unawaited(_restorePairing());
     unawaited(_loadDesktopNotice());
+    if (!widget.previewMode && widget.services.productionReady) {
+      final currents = widget.services.currents;
+      if (currents != null) unawaited(currents.load());
+    }
   }
 
   Future<void> _loadDesktopNotice() async {
@@ -538,6 +543,10 @@ class MobilePendantPageState extends State<MobilePendantPage> {
                     capturedMinutes: (capturedMs / 60000).ceil(),
                     capturing: capturing,
                   ),
+                  if (!widget.previewMode &&
+                      widget.services.productionReady &&
+                      widget.services.currents != null)
+                    _MobileTasksSection(currents: widget.services.currents!),
                   const SizedBox(height: 22),
                   const _SectionLabel('DEVICE'),
                   ..._withGaps(
@@ -622,6 +631,47 @@ class MobilePendantPageState extends State<MobilePendantPage> {
       ),
     );
   }
+}
+
+class _MobileTasksSection extends StatelessWidget {
+  const _MobileTasksSection({required this.currents});
+
+  final CurrentsController currents;
+
+  @override
+  Widget build(BuildContext context) => ListenableBuilder(
+    listenable: currents,
+    builder: (context, _) {
+      if (currents.error != null || currents.items.isEmpty) {
+        return const SizedBox.shrink();
+      }
+      final tasks = currents.items.take(2).toList();
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const SizedBox(height: 22),
+          const _SectionLabel('TASKS'),
+          ..._withGaps([
+            for (final task in tasks)
+              _PaperTile(
+                key: ValueKey('companion_task_${task.item.id}'),
+                icon: Icons.radio_button_unchecked_rounded,
+                title: task.title,
+                detail: task.sourceKind == null
+                    ? task.summary
+                    : '${task.summary} · ${task.sourceKind!.toUpperCase()}',
+                trailing: IconButton(
+                  key: ValueKey('companion_task_complete_${task.item.id}'),
+                  tooltip: 'Complete',
+                  onPressed: () => unawaited(currents.dismiss(task.item.id)),
+                  icon: const Icon(Icons.check_circle_outline_rounded),
+                ),
+              ),
+          ]),
+        ],
+      );
+    },
+  );
 }
 
 List<Widget> _withGaps(List<Widget> tiles) => [
