@@ -7,7 +7,6 @@ import 'package:url_launcher/url_launcher.dart';
 import '../api/worker_http.dart';
 import '../app_services.dart';
 import '../capabilities/desktop_capabilities.dart';
-import '../channels/channels.dart';
 import '../integrations/apple_eventkit.dart';
 import '../integrations/apple_eventkit_import.dart';
 import '../native/generated/signals/signals.dart'
@@ -958,130 +957,6 @@ class _PlanTileState extends State<_PlanTile> {
       );
     },
   );
-}
-
-class ChannelConnectionTile extends StatefulWidget {
-  const ChannelConnectionTile({
-    required this.client,
-    required this.provider,
-    required this.previewMode,
-    required this.unavailableMessage,
-    super.key,
-  });
-
-  final ChannelClient? client;
-  final ChannelProvider provider;
-  final bool previewMode;
-  final String unavailableMessage;
-
-  @override
-  State<ChannelConnectionTile> createState() => _ChannelTileState();
-}
-
-class _ChannelTileState extends State<ChannelConnectionTile> {
-  Future<bool>? linked;
-  ChannelLinkState state = const ChannelLinkState.unlinked();
-
-  @override
-  void initState() {
-    super.initState();
-    if (widget.client != null) {
-      linked = widget.client!.isLinked(widget.provider);
-    }
-  }
-
-  @override
-  void didUpdateWidget(ChannelConnectionTile oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.client != widget.client ||
-        oldWidget.provider != widget.provider) {
-      state = const ChannelLinkState.unlinked();
-      linked = widget.client?.isLinked(widget.provider);
-    }
-  }
-
-  Future<void> requestLink() async {
-    setState(() => state = const ChannelLinkState.requesting());
-    try {
-      final token = await widget.client!.requestLink(widget.provider);
-      if (!mounted) return;
-      setState(() => state = ChannelLinkState.awaitingConfirmation(token));
-    } catch (error) {
-      if (!mounted) return;
-      setState(() => state = ChannelLinkState.failed('$error'));
-    }
-  }
-
-  void recheckLink() {
-    setState(() {
-      state = const ChannelLinkState.unlinked();
-      linked = widget.client!.isLinked(widget.provider);
-    });
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final name = switch (widget.provider) {
-      ChannelProvider.telegram => 'Telegram',
-      ChannelProvider.blooio => 'Blooio',
-    };
-    if (linked == null) {
-      return _SetupTile(
-        icon: widget.provider == ChannelProvider.telegram
-            ? Icons.send_outlined
-            : Icons.chat_bubble_outline_rounded,
-        title: 'Connect $name',
-        detail: widget.previewMode
-            ? 'Connections are disabled in the interface preview.'
-            : widget.unavailableMessage,
-        state: 'Unavailable',
-      );
-    }
-    return FutureBuilder<bool>(
-      future: linked,
-      builder: (context, snapshot) {
-        final waiting =
-            snapshot.connectionState != ConnectionState.done ||
-            state.phase == ChannelLinkPhase.requesting;
-        final detail = switch (state.phase) {
-          ChannelLinkPhase.awaitingConfirmation =>
-            'Link code: ${state.token!.token}',
-          ChannelLinkPhase.failed => state.error!,
-          _ when snapshot.hasError => '${snapshot.error}',
-          _ when waiting => 'Checking connection…',
-          _ when snapshot.data == true => 'Connected',
-          _ => 'Use the same assistant from any device',
-        };
-        final connectionState = snapshot.data == true
-            ? 'Connected'
-            : 'Not connected';
-        final announce =
-            waiting ||
-            snapshot.hasError ||
-            state.phase == ChannelLinkPhase.failed ||
-            state.phase == ChannelLinkPhase.awaitingConfirmation;
-        return Semantics(
-          liveRegion: announce,
-          child: _SetupTile(
-            icon: widget.provider == ChannelProvider.telegram
-                ? Icons.send_outlined
-                : Icons.chat_bubble_outline_rounded,
-            title: 'Connect $name',
-            detail: detail,
-            state: connectionState,
-            onPressed: waiting || snapshot.data == true
-                ? null
-                : state.phase == ChannelLinkPhase.awaitingConfirmation
-                ? recheckLink
-                : requestLink,
-            actionTooltip: state.phase == ChannelLinkPhase.awaitingConfirmation
-                ? 'Check $name connection'
-                : 'Connect $name',
-          ),
-        );
-      },
-    );
-  }
 }
 
 class _SetupTile extends StatelessWidget {
