@@ -764,6 +764,7 @@ dependencies = [
  "rs_ai",
  "rs_ai_core",
  "rs_peekaboo",
+ "rusqlite",
  "rx4",
  "serde",
  "serde_json",
@@ -2722,9 +2723,9 @@ dependencies = [
 
 [[package]]
 name = "zkr"
-version = "0.2.3"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "49ff6030cdd93ae07edbc5c6576a9572def6e920db23941ea340b5efd4c360cc"
+checksum = "dfeb1fb2ea2ba1cd2a26d4047de282cf703682a48bff184ed43c47253af5a1fa"
 dependencies = [
  "rusqlite",
  "serde",

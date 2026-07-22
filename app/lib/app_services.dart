@@ -18,6 +18,7 @@ import 'keyboard/keyboard.dart';
 import 'memory/memory.dart';
 import 'native/generated/signals/signals.dart' show NativeError;
 import 'native/native_hub.dart';
+import 'providers/providers.dart';
 import 'settings/settings.dart';
 
 final class TranscriptCaptureConflict implements Exception {
@@ -102,6 +103,7 @@ final class AppServices {
     required this.deviceRelay,
     required this.memoryDatabasePath,
     required this.workspaceRoots,
+    required this.providerCredentials,
     required this.configurationMessage,
     this.memory,
     this.settings,
@@ -145,6 +147,7 @@ final class AppServices {
         deviceRelay: deviceRelay,
         memoryDatabasePath: _defaultMemoryDatabasePath,
         workspaceRoots: PreferencesWorkspaceRootStore(),
+        providerCredentials: const SecureProviderCredentialStore(),
         configurationMessage:
             'Set OMI_API_ORIGIN and configure Firebase to connect.',
       );
@@ -159,6 +162,7 @@ final class AppServices {
       deviceRelay: deviceRelay,
       memoryDatabasePath: _defaultMemoryDatabasePath,
       workspaceRoots: PreferencesWorkspaceRootStore(),
+      providerCredentials: const SecureProviderCredentialStore(),
       configurationMessage: 'Configure Firebase to sign in and connect.',
       memory: MemoryClient(WorkerMemoryTransport(worker)),
       settings: SettingsClient(WorkerSettingsTransport(worker)),
@@ -196,6 +200,7 @@ final class AppServices {
         deviceRelay: deviceRelay,
         memoryDatabasePath: _defaultMemoryDatabasePath,
         workspaceRoots: PreferencesWorkspaceRootStore(),
+        providerCredentials: const SecureProviderCredentialStore(),
         configurationMessage: 'Set OMI_API_ORIGIN to connect.',
       );
     }
@@ -209,6 +214,7 @@ final class AppServices {
       deviceRelay: deviceRelay,
       memoryDatabasePath: _defaultMemoryDatabasePath,
       workspaceRoots: PreferencesWorkspaceRootStore(),
+      providerCredentials: const SecureProviderCredentialStore(),
       configurationMessage: gateway.isConfigured
           ? 'Sign in to connect.'
           : 'Configure Firebase to sign in and connect.',
@@ -237,6 +243,7 @@ final class AppServices {
     required AuthController auth,
     required String Function(String uid) memoryDatabasePath,
     WorkspaceRootStore? workspaceRoots,
+    ProviderCredentialStore? providerCredentials,
     ManagedSttClient? managedStt,
     ConversationTransport? conversations,
     ConversationInboxTransport? conversationInbox,
@@ -256,6 +263,8 @@ final class AppServices {
     deviceRelay: deviceRelay,
     memoryDatabasePath: (uid) async => memoryDatabasePath(uid),
     workspaceRoots: workspaceRoots ?? VolatileWorkspaceRootStore(),
+    providerCredentials:
+        providerCredentials ?? VolatileProviderCredentialStore(),
     configurationMessage: 'Test services are not connected.',
     managedStt: managedStt,
     conversations: conversations,
@@ -279,6 +288,7 @@ final class AppServices {
   final DeviceAudioForwarder deviceAudio;
   late final DesktopVoiceCapture desktopVoice;
   final WorkspaceRootStore workspaceRoots;
+  final ProviderCredentialStore providerCredentials;
   final PlatformDesktopCapabilityGateway capabilities;
   final String configurationMessage;
   final MemoryClient? memory;
@@ -339,6 +349,23 @@ final class AppServices {
   Future<String?> get selectedWorkspaceRoot =>
       capabilities.verifiedWorkspaceRoot();
 
+  Future<String> scanOnboardingSources() async {
+    await _queueProductionSync();
+    if (!chatReady || nativeHub is! OnboardingScanHub) {
+      throw StateError('Native scanning is not connected.');
+    }
+    final root = await selectedWorkspaceRoot;
+    final requestId = 'onboarding-scan-${_randomId()}';
+    (nativeHub as OnboardingScanHub).scanOnboarding(
+      requestId: requestId,
+      roots: [?root],
+      includeAppleNotes: defaultTargetPlatform == TargetPlatform.macOS,
+      includeAppleMail: defaultTargetPlatform == TargetPlatform.macOS,
+      recordedAtMs: _now().millisecondsSinceEpoch,
+    );
+    return requestId;
+  }
+
   bool get canUseApi => _worker != null && auth.snapshot.hasProcessingAuthority;
 
   Future<void> initialize() async {
@@ -354,6 +381,27 @@ final class AppServices {
   }
 
   bool get chatReady => productionReady && _nativeInitialized;
+
+  Future<ProviderCredential?> get providerCredential async {
+    final uid = auth.snapshot.session?.uid;
+    return uid == null ? null : providerCredentials.read(uid);
+  }
+
+  Future<void> saveProviderCredential(ProviderCredential value) async {
+    final uid = auth.snapshot.session?.uid;
+    if (!productionReady || uid == null) {
+      throw StateError('Sign in before configuring a provider.');
+    }
+    await providerCredentials.write(uid, value);
+    await _queueProductionSync();
+  }
+
+  Future<void> clearProviderCredential() async {
+    final uid = auth.snapshot.session?.uid;
+    if (uid == null) return;
+    await providerCredentials.delete(uid);
+    await _queueProductionSync();
+  }
 
   bool get _canPollConversationInbox =>
       _conversationInbox != null &&
@@ -379,6 +427,39 @@ final class AppServices {
       endpoint: endpoint,
     );
     _assistantConfigured = true;
+  }
+
+  Future<void> _configureSelectedAssistant(String expectedUid) async {
+    ProviderCredential? credential;
+    try {
+      credential = await providerCredentials.read(expectedUid);
+    } catch (_) {
+      _clearAssistant();
+      return;
+    }
+    if (_disposed || auth.snapshot.session?.uid != expectedUid) return;
+    if (credential != null) {
+      configureAssistant(
+        provider: credential.provider,
+        model: credential.model,
+        endpoint: credential.endpoint,
+        credential: credential.credential,
+      );
+      return;
+    }
+    BillingEntitlement? entitlement;
+    try {
+      entitlement = billing == null ? null : await billing!.getEntitlement();
+    } catch (_) {
+      _clearAssistant();
+      return;
+    }
+    if (billing != null &&
+        (entitlement?.plan != OmiPlan.pro || entitlement?.active != true)) {
+      _clearAssistant();
+      return;
+    }
+    await _configureManagedAssistant(expectedUid);
   }
 
   Future<void> _configureManagedAssistant(String expectedUid) async {
@@ -689,7 +770,7 @@ final class AppServices {
     if (_configuredPersonId == session.uid && _nativeInitialized) {
       memorySyncPump?.start(session.uid);
       if (_workerOrigin != null && _assistantRefreshTimer == null) {
-        await _configureManagedAssistant(session.uid);
+        await _configureSelectedAssistant(session.uid);
       }
       _scheduleInboxPoll();
       return;
@@ -724,7 +805,7 @@ final class AppServices {
       personId: session.uid,
     );
     memorySyncPump?.start(session.uid);
-    if (_workerOrigin != null) await _configureManagedAssistant(session.uid);
+    if (_workerOrigin != null) await _configureSelectedAssistant(session.uid);
     _scheduleInboxPoll(Duration.zero);
   }
 

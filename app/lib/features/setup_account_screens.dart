@@ -1,9 +1,12 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../api/worker_http.dart';
 import '../app_services.dart';
 import '../channels/channels.dart';
+import '../native/generated/signals/signals.dart' show AssistantProvider;
+import '../providers/providers.dart';
 import '../settings/settings.dart';
 import '../ui/omi_ui.dart';
 
@@ -141,11 +144,14 @@ class AccountScreen extends StatelessWidget {
             );
           },
         ),
-      const _AccountTile(
-        icon: Icons.key_outlined,
-        title: 'AI providers',
-        detail: 'No provider connected',
-      ),
+      if (previewMode || kIsWeb)
+        const _AccountTile(
+          icon: Icons.key_outlined,
+          title: 'AI providers',
+          detail: 'Configure BYOK securely from a native Omi app.',
+        )
+      else
+        _ProviderTile(services: services),
       if (previewMode || services.billing == null)
         const _AccountTile(
           icon: Icons.credit_card_outlined,
@@ -155,6 +161,149 @@ class AccountScreen extends StatelessWidget {
       else
         _PlanTile(client: services.billing!),
     ],
+  );
+}
+
+class _ProviderTile extends StatefulWidget {
+  const _ProviderTile({required this.services});
+
+  final AppServices services;
+
+  @override
+  State<_ProviderTile> createState() => _ProviderTileState();
+}
+
+class _ProviderTileState extends State<_ProviderTile> {
+  late Future<ProviderCredential?> credential =
+      widget.services.providerCredential;
+
+  void refresh() => setState(() {
+    credential = widget.services.providerCredential;
+  });
+
+  Future<void> configure(ProviderCredential? existing) async {
+    var provider = existing?.provider ?? AssistantProvider.openAi;
+    final model = TextEditingController(text: existing?.model);
+    final secret = TextEditingController();
+    final endpoint = TextEditingController(text: existing?.endpoint);
+    String? error;
+    await showDialog<void>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, update) => AlertDialog(
+          title: const Text('Bring your own model'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                DropdownButtonFormField<AssistantProvider>(
+                  initialValue: provider,
+                  decoration: const InputDecoration(labelText: 'Provider'),
+                  items: AssistantProvider.values
+                      .where((value) => value != AssistantProvider.worker)
+                      .map(
+                        (value) => DropdownMenuItem(
+                          value: value,
+                          child: Text(value.name),
+                        ),
+                      )
+                      .toList(),
+                  onChanged: (value) => update(() => provider = value!),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: model,
+                  decoration: const InputDecoration(labelText: 'Model'),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: secret,
+                  obscureText: true,
+                  decoration: const InputDecoration(labelText: 'API key'),
+                ),
+                if (provider == AssistantProvider.compatible) ...[
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: endpoint,
+                    decoration: const InputDecoration(
+                      labelText: 'HTTPS endpoint',
+                    ),
+                  ),
+                ],
+                if (error != null) ...[
+                  const SizedBox(height: 12),
+                  Text(error!, style: const TextStyle(color: Colors.redAccent)),
+                ],
+              ],
+            ),
+          ),
+          actions: [
+            if (existing != null)
+              TextButton(
+                onPressed: () async {
+                  await widget.services.clearProviderCredential();
+                  if (context.mounted) Navigator.pop(context);
+                },
+                child: const Text('Use plan default'),
+              ),
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () async {
+                try {
+                  await widget.services.saveProviderCredential(
+                    ProviderCredential(
+                      provider: provider,
+                      model: model.text,
+                      credential: secret.text,
+                      endpoint: provider == AssistantProvider.compatible
+                          ? endpoint.text
+                          : null,
+                    ),
+                  );
+                  if (context.mounted) Navigator.pop(context);
+                } catch (failure) {
+                  update(() => error = '$failure');
+                }
+              },
+              child: const Text('Save'),
+            ),
+          ],
+        ),
+      ),
+    );
+    model.dispose();
+    secret.dispose();
+    endpoint.dispose();
+    if (mounted) refresh();
+  }
+
+  @override
+  Widget build(BuildContext context) => FutureBuilder<ProviderCredential?>(
+    future: credential,
+    builder: (context, snapshot) {
+      final value = snapshot.data;
+      return BaseTile(
+        icon: Icons.key_outlined,
+        title: 'AI provider',
+        detail: snapshot.connectionState != ConnectionState.done
+            ? 'Checking secure storage…'
+            : snapshot.hasError
+            ? '${snapshot.error}'
+            : value == null
+            ? 'Using your plan default'
+            : '${value.provider.name} · ${value.model}',
+        trailing: IconButton(
+          tooltip: 'Configure AI provider',
+          onPressed: snapshot.connectionState == ConnectionState.done
+              ? () => configure(value)
+              : null,
+          icon: const Icon(Icons.arrow_forward_rounded),
+        ),
+      );
+    },
   );
 }
 

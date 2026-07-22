@@ -2,26 +2,23 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:omi/onboarding/onboarding_controller.dart';
 
 void main() {
-  test('preview acknowledgement is required before profile questions', () {
+  test('introduction advances to real access setup', () {
     final controller = OnboardingController();
     addTearDown(controller.dispose);
 
     controller.continueFromIntroduction();
 
-    expect(controller.stage, OnboardingStage.introduction);
-    expect(controller.validationMessage, isNotNull);
-
-    controller.setPreviewAcknowledged(true);
-    controller.continueFromIntroduction();
-
-    expect(controller.stage, OnboardingStage.profile);
+    expect(controller.stage, OnboardingStage.access);
   });
 
-  test('answers are validated and remain volatile controller state', () {
+  test('access, scan, and profile answers advance in order', () {
     final controller = OnboardingController();
     addTearDown(controller.dispose);
-    controller.setPreviewAcknowledged(true);
     controller.continueFromIntroduction();
+    controller.completeAccess();
+    expect(controller.stage, OnboardingStage.scan);
+    controller.completeScan();
+    expect(controller.stage, OnboardingStage.profile);
 
     expect(controller.submitAnswer('   ', questionCount: 2), isFalse);
     expect(controller.questionIndex, 0);
@@ -35,7 +32,7 @@ void main() {
       controller.submitAnswer('Protect my focus', questionCount: 2),
       isTrue,
     );
-    expect(controller.stage, OnboardingStage.permissions);
+    expect(controller.stage, OnboardingStage.use);
     expect(controller.answers, ['Alex', 'Protect my focus']);
   });
 }

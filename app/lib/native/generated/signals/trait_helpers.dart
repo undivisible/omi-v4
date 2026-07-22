@@ -177,6 +177,26 @@ class TraitHelpers {
     );
   }
 
+  static void serializeVectorOnboardingScanSource(
+    List<OnboardingScanSource> value,
+    BinarySerializer serializer,
+  ) {
+    serializer.serializeLength(value.length);
+    for (final item in value) {
+      item.serialize(serializer);
+    }
+  }
+
+  static List<OnboardingScanSource> deserializeVectorOnboardingScanSource(
+    BinaryDeserializer deserializer,
+  ) {
+    final length = deserializer.deserializeLength();
+    return List.generate(
+      length,
+      (_) => OnboardingScanSource.deserialize(deserializer),
+    );
+  }
+
   static void serializeVectorStr(
     List<String> value,
     BinarySerializer serializer,

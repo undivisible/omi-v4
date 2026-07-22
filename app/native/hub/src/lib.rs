@@ -1,4 +1,5 @@
 mod runtime;
+mod scan;
 pub mod signals;
 mod stt;
 

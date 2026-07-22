@@ -3,9 +3,10 @@ use crate::signals::{
     AssistantProvider as ProviderKind, AudioChunk, AudioEncoding, CaptureSource, ClientCommand,
     Command, ComputerUseAction, MemoryCaptured, MemoryCorrected, MemoryExportCommit,
     MemoryExported, MemoryItem, MemoryItems, MemorySearchItem, MemorySearchResults,
-    MemorySourceDeleted, NativeError, NativeEvent, RuntimePhase, RuntimeStatus, ToolProgress,
-    ToolStatus, TranscriptDelta, TranscriptGap, TranscriptLocator, TranscriptionAuth,
-    TranscriptionRoute, TranscriptionState, TranscriptionStatus, TranscriptionStopAcknowledgement,
+    MemorySourceDeleted, NativeError, NativeEvent, OnboardingScanCompleted, OnboardingScanSource,
+    OnboardingScanState, RuntimePhase, RuntimeStatus, ToolProgress, ToolStatus, TranscriptDelta,
+    TranscriptGap, TranscriptLocator, TranscriptionAuth, TranscriptionRoute, TranscriptionState,
+    TranscriptionStatus, TranscriptionStopAcknowledgement,
 };
 use crate::stt::{self, SttConfig, SttHandle};
 use futures::StreamExt;
@@ -2330,6 +2331,24 @@ async fn execute(
                 .await;
             false
         }
+        Command::ScanOnboarding {
+            roots,
+            include_apple_notes,
+            include_apple_mail,
+            recorded_at_ms,
+        } => {
+            scan_onboarding(
+                &request_id,
+                &state,
+                roots,
+                include_apple_notes,
+                include_apple_mail,
+                recorded_at_ms,
+                &cancellation,
+            )
+            .await;
+            false
+        }
         Command::SendMessage { text, .. } => {
             dispatch_assistant(&request_id, &state, assistant_provider, text, &cancellation).await;
             false
@@ -2369,6 +2388,102 @@ async fn execute(
             false
         }
         Command::Cancel => false,
+    }
+}
+
+async fn scan_onboarding(
+    request_id: &str,
+    state: &Mutex<RuntimeState>,
+    roots: Vec<String>,
+    notes: bool,
+    mail: bool,
+    recorded_at_ms: i64,
+    cancellation: &CancellationToken,
+) {
+    if recorded_at_ms <= 0 {
+        error(
+            Some(request_id.to_owned()),
+            "invalid_onboarding_scan",
+            "recorded_at_ms must be positive",
+            false,
+        );
+        return;
+    }
+    let memory = state.lock().await.memory.clone();
+    let scan_cancellation = cancellation.clone();
+    let task = spawn_blocking(move || {
+        let scans = crate::scan::scan_sources(&roots, notes, mail);
+        if scan_cancellation.is_cancelled() {
+            return Ok(None);
+        }
+        let mut sources = Vec::with_capacity(scans.len());
+        for scan in scans {
+            let mut memory_source_id = None;
+            if let Some(memory) = &memory {
+                for item in &scan.memories {
+                    if scan_cancellation.is_cancelled() {
+                        return Ok(None);
+                    }
+                    let mut memory = memory
+                        .lock()
+                        .map_err(|_| "memory database lock was poisoned".to_owned())?;
+                    let tenant_id = memory.tenant_id.clone();
+                    let person_id = memory.person_id.clone();
+                    let remembered = memory
+                        .database
+                        .remember(RememberInput {
+                            tenant_id,
+                            person_id,
+                            ingestion_key: Some(format!(
+                                "onboarding-scan:{}:{}:{recorded_at_ms}",
+                                scan.source, item.stable_id
+                            )),
+                            kind: if scan.source == "workspace" {
+                                SourceKind::Document
+                            } else {
+                                SourceKind::Integration
+                            },
+                            text: item.text.clone(),
+                            captured_at: item.captured_at_ms.unwrap_or(recorded_at_ms),
+                            recorded_at: recorded_at_ms,
+                            claim: None,
+                        })
+                        .map_err(|error| error.to_string())?;
+                    if memory_source_id.is_none() {
+                        memory_source_id = Some(remembered.source_id.0);
+                    }
+                }
+            }
+            sources.push(OnboardingScanSource {
+                source: scan.source,
+                state: match scan.state {
+                    crate::scan::ScanState::Complete => OnboardingScanState::Complete,
+                    crate::scan::ScanState::Denied => OnboardingScanState::Denied,
+                    crate::scan::ScanState::Unavailable => OnboardingScanState::Unavailable,
+                    crate::scan::ScanState::Failed => OnboardingScanState::Failed,
+                },
+                items_found: scan.items_found,
+                detail: scan.detail,
+                memory_source_id,
+            });
+        }
+        Ok(Some(sources))
+    });
+    match await_blocking(task, cancellation).await {
+        BlockingOutcome::Complete(Some(sources)) => {
+            NativeEvent::OnboardingScanCompleted(OnboardingScanCompleted {
+                request_id: request_id.to_owned(),
+                sources,
+            })
+            .send()
+        }
+        BlockingOutcome::Complete(None) | BlockingOutcome::Cancelled => cancelled(request_id),
+        BlockingOutcome::Failed(message) => error(
+            Some(request_id.to_owned()),
+            "onboarding_scan_failed",
+            &message,
+            false,
+        ),
     }
 }
 
@@ -3140,6 +3255,11 @@ fn source_kind(source: CaptureSource) -> SourceKind {
         }
         CaptureSource::OmiDevice => SourceKind::Audio,
         CaptureSource::Chat => SourceKind::Conversation,
+        CaptureSource::Workspace => SourceKind::Document,
+        CaptureSource::AppleNotes
+        | CaptureSource::AppleMail
+        | CaptureSource::AppleCalendar
+        | CaptureSource::AppleReminders => SourceKind::Integration,
     }
 }
 
@@ -3451,6 +3571,8 @@ mod tests {
                     value: "Acme".to_owned(),
                     kind: zkr::ClaimKind::Fact,
                     valid_from: 10,
+                    tier: zkr::MemoryTier::LongTerm,
+                    processing_state: zkr::MemoryProcessingState::Processed,
                 }),
             })
             .unwrap_or_else(|error_value| panic!("memory is seeded: {error_value}"));
@@ -3496,6 +3618,8 @@ mod tests {
                     value: "Acme".to_owned(),
                     kind: zkr::ClaimKind::ProfileFact,
                     valid_from: 10,
+                    tier: zkr::MemoryTier::LongTerm,
+                    processing_state: zkr::MemoryProcessingState::Processed,
                 }),
             })
             .unwrap_or_else(|error_value| panic!("memory seeds: {error_value}"));
@@ -3590,6 +3714,8 @@ mod tests {
                         value: "Outside".to_owned(),
                         kind: zkr::ClaimKind::Fact,
                         valid_from: 10,
+                        tier: zkr::MemoryTier::LongTerm,
+                        processing_state: zkr::MemoryProcessingState::Processed,
                     }),
                 })
                 .unwrap_or_else(|error_value| panic!("outside memory is seeded: {error_value}"));

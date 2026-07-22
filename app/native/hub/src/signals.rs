@@ -82,6 +82,12 @@ pub enum Command {
         source_id: String,
         deleted_at_ms: i64,
     },
+    ScanOnboarding {
+        roots: Vec<String>,
+        include_apple_notes: bool,
+        include_apple_mail: bool,
+        recorded_at_ms: i64,
+    },
     ApprovalDecision {
         proposal_id: String,
         decision: ApprovalDecision,
@@ -112,6 +118,11 @@ pub enum CaptureSource {
     Accessibility,
     OmiDevice,
     Chat,
+    Workspace,
+    AppleNotes,
+    AppleMail,
+    AppleCalendar,
+    AppleReminders,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, SignalPiece)]
@@ -211,6 +222,7 @@ pub enum NativeEvent {
     MemorySourceDeleted(MemorySourceDeleted),
     MemoryExported(MemoryExported),
     MemoryItems(MemoryItems),
+    OnboardingScanCompleted(OnboardingScanCompleted),
 }
 
 #[derive(Debug, Serialize, SignalPiece)]
@@ -427,6 +439,29 @@ pub struct MemoryItem {
     pub body: String,
     pub recorded_at_ms: i64,
     pub evidence_ids: Vec<String>,
+}
+
+#[derive(Debug, Serialize, SignalPiece)]
+pub struct OnboardingScanCompleted {
+    pub request_id: String,
+    pub sources: Vec<OnboardingScanSource>,
+}
+
+#[derive(Debug, Serialize, SignalPiece)]
+pub struct OnboardingScanSource {
+    pub source: String,
+    pub state: OnboardingScanState,
+    pub items_found: u64,
+    pub detail: String,
+    pub memory_source_id: Option<String>,
+}
+
+#[derive(Debug, Serialize, SignalPiece)]
+pub enum OnboardingScanState {
+    Complete,
+    Denied,
+    Unavailable,
+    Failed,
 }
 
 #[derive(Debug, Serialize, SignalPiece)]

@@ -5,6 +5,7 @@ import Carbon.HIToolbox
 import FlutterMacOS
 
 class MainFlutterWindow: NSWindow, FlutterStreamHandler {
+  private var eventKitBridge: AppleEventKitBridge?
   private var keyboardSink: FlutterEventSink?
   private var localKeyboardMonitor: Any?
   private var globalKeyboardMonitor: Any?
@@ -46,6 +47,7 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
     self.setFrame(windowFrame, display: true)
 
     RegisterGeneratedPlugins(registry: flutterViewController)
+    eventKitBridge = AppleEventKitBridge(binaryMessenger: flutterViewController.engine.binaryMessenger)
 
     let capabilities = FlutterMethodChannel(
       name: "omi/core_capabilities",

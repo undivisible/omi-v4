@@ -10,20 +10,8 @@ Future<void> tapVisible(WidgetTester tester, Finder finder) async {
 }
 
 Future<void> reachPreviewGate(WidgetTester tester) async {
-  await tapVisible(tester, find.byKey(const Key('preview_acknowledgement')));
-  await tester.pumpAndSettle();
   await tapVisible(tester, find.byKey(const Key('continue_preview_intro')));
   await tester.pumpAndSettle();
-
-  for (final answer in [
-    'Alex, building a focused product.',
-    'Remember decisions and surface loose ends.',
-    'What are my tasks?',
-  ]) {
-    await tester.enterText(find.byKey(const Key('onboarding_input')), answer);
-    await tapVisible(tester, find.byKey(const Key('continue_onboarding')));
-    await tester.pumpAndSettle();
-  }
 }
 
 Future<void> openInterfacePreview(WidgetTester tester) async {
@@ -49,36 +37,18 @@ void main() {
   ) async {
     await tester.pumpWidget(const OmiApp());
 
-    expect(find.text('Let’s build your second brain.'), findsOneWidget);
-    expect(find.text('INTERFACE PREVIEW'), findsOneWidget);
+    expect(find.textContaining('Hi, I’m Omi.'), findsOneWidget);
     expect(
       tester
           .widget<FilledButton>(find.byKey(const Key('continue_preview_intro')))
           .onPressed,
-      isNull,
+      isNotNull,
     );
 
-    await tapVisible(tester, find.byKey(const Key('preview_acknowledgement')));
-    await tester.pumpAndSettle();
     await tapVisible(tester, find.byKey(const Key('continue_preview_intro')));
     await tester.pumpAndSettle();
 
-    await tapVisible(tester, find.byKey(const Key('continue_onboarding')));
-    await tester.pumpAndSettle();
-    expect(find.text('Enter an answer before continuing.'), findsOneWidget);
-    expect(find.text('PREVIEW QUESTION 1 OF 3'), findsOneWidget);
-
-    for (final answer in [
-      'Alex, building a focused product.',
-      'Remember decisions and surface loose ends.',
-      'What are my tasks?',
-    ]) {
-      await tester.enterText(find.byKey(const Key('onboarding_input')), answer);
-      await tapVisible(tester, find.byKey(const Key('continue_onboarding')));
-      await tester.pumpAndSettle();
-    }
-
-    expect(find.text('Production setup is not ready.'), findsOneWidget);
+    expect(find.text('Before I begin'), findsOneWidget);
     expect(find.text('Accessibility'), findsOneWidget);
     expect(find.text('Microphone'), findsOneWidget);
     expect(find.text('Screen capture'), findsOneWidget);
@@ -246,7 +216,7 @@ void main() {
     await tester.pumpWidget(const OmiApp());
 
     await reachPreviewGate(tester);
-    expect(find.text('Production setup is not ready.'), findsOneWidget);
+    expect(find.text('Before I begin'), findsOneWidget);
     expect(find.byKey(const Key('open_interface_preview')), findsOneWidget);
     expect(tester.takeException(), isNull);
   });

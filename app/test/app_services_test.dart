@@ -12,6 +12,7 @@ import 'package:omi/features/chat_screen.dart';
 import 'package:omi/keyboard/keyboard.dart';
 import 'package:omi/native/generated/signals/signals.dart';
 import 'package:omi/native/native_hub.dart';
+import 'package:omi/providers/providers.dart';
 
 void main() {
   test(
@@ -819,6 +820,46 @@ void main() {
       await hub.close();
     },
   );
+
+  test('UID-scoped BYOK overrides the managed assistant route', () async {
+    final auth = AuthController(
+      _FakeAuthGateway(_session('user-a')),
+      consentStore: VolatileConsentStore()..receipt = _receipt('user-a'),
+    );
+    await auth.restoreSession();
+    final hub = _FakeHub();
+    final credentials = VolatileProviderCredentialStore()
+      ..values['user-a'] = const ProviderCredential(
+        provider: AssistantProvider.xai,
+        model: 'grok-4.5',
+        credential: 'user-key',
+      );
+    final services = AppServices.forTesting(
+      auth: auth,
+      nativeHub: hub,
+      deviceRelay: DeviceRelayService(
+        role: DeviceRelayRole.desktopObserver,
+        adapter: const UnavailableDeviceRelayAdapter(),
+      ),
+      memoryDatabasePath: (uid) => '/tmp/$uid.sqlite3',
+      providerCredentials: credentials,
+      managedStt: _FakeManagedStt(
+        _managedSession('user-a'),
+        trustedWorkerOrigin: Uri.parse('https://worker.example.test'),
+      ),
+    );
+
+    await services.initialize();
+
+    expect(hub.assistantConfigurations.single, (
+      AssistantProvider.xai,
+      'grok-4.5',
+      null,
+      'user-key',
+    ));
+    services.dispose();
+    await hub.close();
+  });
 
   test('managed assistant rejects a non-origin Worker URL', () async {
     final auth = AuthController(

@@ -59,7 +59,7 @@ void main() {
     await services.auth.grantProcessingConsent();
     await tester.pumpAndSettle();
 
-    expect(find.text('Let’s build your second brain.'), findsOneWidget);
+    expect(find.textContaining('Hi, I’m Omi.'), findsOneWidget);
     expect(await store.isComplete('user-b'), isFalse);
   });
 
@@ -77,7 +77,7 @@ void main() {
     await services.auth.revokeProcessingConsent();
     await tester.pumpAndSettle();
 
-    expect(find.text('Let’s build your second brain.'), findsOneWidget);
+    expect(find.textContaining('Hi, I’m Omi.'), findsOneWidget);
     expect(find.text('Chat'), findsNothing);
   });
 }

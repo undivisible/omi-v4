@@ -21,7 +21,7 @@ Omi v4 is an ultrasimple thinking partner and second brain that works across eve
 | Data | New SaaS data goes to D1; no Firestore/D1 dual-write; import upstream Firestore data only through explicit jobs |
 | Memory | Personal Memory and Recommendation Memory remain separate domains |
 | Billing | Stripe webhook state controls two plans tied to Firebase UID |
-| UI reference | `omi-v3` main provides functional behavior; `codex/onboarding-web-demo` provides gradient and profile-conversation visuals only |
+| UI reference | `omi-v3` main and upstream Omi provide production behavior; `codex/onboarding-web-demo` provides the borderless five-beat onboarding and warm-paper hub interaction model |
 
 ## Product surfaces
 
@@ -91,11 +91,11 @@ Native builds link the full hub. Web builds use the same signal schema but compi
 
 1. Sign in with phone OTP, Google, or Apple; explain Firebase's authentication disclosure separately from memory and AI processing consent.
 2. Ask three conversational questions: identity, current priorities, and what the user wants Omi to notice or help with.
-3. Require each platform's applicable core desktop capabilities, then scan and show editable “what I understand about you” evidence.
+3. Require each platform's applicable core desktop capabilities, then run bounded native scans of approved workspace roots and available Apple Notes/Mail stores with explicit per-source results before showing editable “what I understand about you” evidence.
 4. Teach voice by asking the user to say “What are my tasks?” and render the real tasks returned by the assistant.
 5. Continue into the main screen with setup tasks for Calendar, Reminders, Contacts, Location, Telegram, Blooio, Notion, providers, and Omi hardware.
 
-Use upstream Flutter's mature consent, name, language, permission, knowledge-graph, and device flows. Use `omi-v3`'s gradient profile conversation as presentation, not application code.
+Use upstream Flutter's mature consent, name, language, permission, knowledge-graph, and device flows. Use `omi-v3`'s borderless gradient sequence and warm-paper hub as the presentation and interaction reference while retaining v4's real service boundaries.
 
 Production memory, screen, audio, AI, and channel processing requires a durable, versioned consent receipt bound to the current Firebase UID and exact enabled scopes. Authentication alone grants no processing authority. Revocation removes local authority before asynchronous provider sign-out, and an account change invalidates a receipt issued to another UID.
 
@@ -114,7 +114,7 @@ The macOS v0 is notarized direct distribution without App Sandbox because broad 
 
 Windows computer use is a first-class `rs_peekaboo` path: it must inspect UI Automation targets and execute policy-approved pointer clicks and keyboard text entry. Process-integrity boundaries may prevent control of elevated applications, but Windows itself is not a read-only or unsupported target.
 
-Calendar, Reminders, Contacts, and Location remain prominent post-onboarding setup tasks. Camera and Photos are omitted until a concrete feature needs them.
+Calendar and Reminders use the native EventKit bridge and remain prominent post-onboarding setup tasks alongside Contacts and Location. Camera and Photos are omitted until a concrete feature needs them.
 
 ## Personal Memory
 

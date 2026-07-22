@@ -21,6 +21,10 @@ export 'generated/signals/signals.dart'
         NativeEventAssistantDelta,
         NativeEventError,
         NativeEventMemoryCaptured,
+        NativeEventOnboardingScanCompleted,
+        OnboardingScanCompleted,
+        OnboardingScanSource,
+        OnboardingScanState,
         NativeEventTranscriptGap,
         NativeEventToolProgress,
         NativeEventTranscriptDelta,
@@ -143,6 +147,16 @@ abstract interface class NativeHub {
   void dispose();
 }
 
+abstract interface class OnboardingScanHub {
+  void scanOnboarding({
+    required String requestId,
+    required List<String> roots,
+    required bool includeAppleNotes,
+    required bool includeAppleMail,
+    required int recordedAtMs,
+  });
+}
+
 NativeHub createNativeHub() => kIsWeb
     ? const UnavailableNativeHub('Native capture is unavailable on web.')
     : RinfNativeHub();
@@ -156,7 +170,7 @@ final class NativeHubUnavailable implements Exception {
   String toString() => 'NativeHubUnavailable: $message';
 }
 
-final class UnavailableNativeHub implements NativeHub {
+final class UnavailableNativeHub implements NativeHub, OnboardingScanHub {
   const UnavailableNativeHub(this.reason);
 
   final String reason;
@@ -233,6 +247,15 @@ final class UnavailableNativeHub implements NativeHub {
   }) => _unavailable();
 
   @override
+  void scanOnboarding({
+    required String requestId,
+    required List<String> roots,
+    required bool includeAppleNotes,
+    required bool includeAppleMail,
+    required int recordedAtMs,
+  }) => _unavailable();
+
+  @override
   void sendMessage({
     required String requestId,
     required String text,
@@ -306,7 +329,7 @@ final class UnavailableNativeHub implements NativeHub {
   void dispose() {}
 }
 
-final class RinfNativeHub implements NativeHub {
+final class RinfNativeHub implements NativeHub, OnboardingScanHub {
   bool _initialized = false;
 
   @override
@@ -342,6 +365,23 @@ final class RinfNativeHub implements NativeHub {
       databasePath: databasePath,
       tenantId: tenantId,
       personId: personId,
+    ),
+  );
+
+  @override
+  void scanOnboarding({
+    required String requestId,
+    required List<String> roots,
+    required bool includeAppleNotes,
+    required bool includeAppleMail,
+    required int recordedAtMs,
+  }) => _send(
+    requestId,
+    CommandScanOnboarding(
+      roots: roots,
+      includeAppleNotes: includeAppleNotes,
+      includeAppleMail: includeAppleMail,
+      recordedAtMs: recordedAtMs,
     ),
   );
 

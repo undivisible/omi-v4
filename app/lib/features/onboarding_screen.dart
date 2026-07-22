@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import '../app_services.dart';
 import '../auth/auth.dart';
 import '../capabilities/desktop_capabilities.dart';
+import '../native/native_hub.dart';
 import '../onboarding/onboarding_controller.dart';
 import '../ui/omi_ui.dart';
 import 'omi_shell.dart';
@@ -29,10 +30,15 @@ class OnboardingScreen extends StatefulWidget {
 class _OnboardingScreenState extends State<OnboardingScreen> {
   final answerController = TextEditingController();
   final onboarding = OnboardingController();
+  StreamSubscription<NativeEvent>? scanEvents;
+  List<OnboardingScanSource>? scanSources;
+  String? scanRequestId;
+  String? scanError;
+  bool scanStarting = false;
 
   static const prompts = [
     (
-      'Introduce yourself.',
+      'Here’s what I noticed.',
       'What should Omi call you, and what are you focused on right now?',
       'I’m Alex. I’m building a product and want help staying focused.',
     ),
@@ -41,11 +47,6 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       'What would you want Omi to notice, remember, or help with?',
       'Remember decisions, surface loose ends, and protect my focus.',
     ),
-    (
-      'Preview the voice lesson.',
-      'Type the phrase the connected assistant will use during voice onboarding.',
-      'What are my tasks?',
-    ),
   ];
 
   @override
@@ -53,10 +54,12 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     super.initState();
     onboarding.addListener(_refresh);
     widget.services.auth.addListener(_refresh);
+    scanEvents = widget.services.nativeEvents.listen(_handleNativeEvent);
   }
 
   @override
   void dispose() {
+    unawaited(scanEvents?.cancel());
     onboarding.removeListener(_refresh);
     widget.services.auth.removeListener(_refresh);
     onboarding.dispose();
@@ -64,7 +67,60 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     super.dispose();
   }
 
-  void _refresh() => setState(() {});
+  void _refresh() {
+    if (onboarding.stage == OnboardingStage.scan &&
+        scanRequestId == null &&
+        !scanStarting &&
+        scanSources == null) {
+      unawaited(_startScan());
+    }
+    setState(() {});
+  }
+
+  Future<void> _startScan() async {
+    setState(() {
+      scanStarting = true;
+      scanError = null;
+    });
+    try {
+      final requestId = await widget.services.scanOnboardingSources();
+      if (!mounted) return;
+      setState(() {
+        scanRequestId = requestId;
+        scanStarting = false;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        scanStarting = false;
+        scanError = error.toString();
+      });
+    }
+  }
+
+  void _handleNativeEvent(NativeEvent event) {
+    if (event case NativeEventOnboardingScanCompleted(:final value)) {
+      if (!mounted ||
+          onboarding.stage != OnboardingStage.scan ||
+          (scanRequestId != null && value.requestId != scanRequestId)) {
+        return;
+      }
+      setState(() {
+        scanRequestId = value.requestId;
+        scanSources = value.sources;
+        scanError = null;
+      });
+    }
+  }
+
+  void _retryScan() {
+    setState(() {
+      scanRequestId = null;
+      scanSources = null;
+      scanError = null;
+    });
+    unawaited(_startScan());
+  }
 
   void _submitAnswer() {
     if (onboarding.submitAnswer(
@@ -99,35 +155,60 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: GradientBackground(
+      backgroundColor: const Color(0xff171716),
+      body: _OnboardingBackdrop(
+        bright: onboarding.stage.index >= OnboardingStage.scan.index,
         child: SafeArea(
           child: Center(
             child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 720),
+              constraints: const BoxConstraints(maxWidth: 820),
               child: SingleChildScrollView(
-                padding: const EdgeInsets.all(24),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 36,
+                  vertical: 44,
+                ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    const Wrap(
-                      alignment: WrapAlignment.spaceBetween,
-                      crossAxisAlignment: WrapCrossAlignment.center,
-                      spacing: 12,
-                      runSpacing: 12,
-                      children: [OmiMark(), _PreviewBadge()],
+                    const Align(
+                      alignment: Alignment.centerLeft,
+                      child: OmiMark(),
                     ),
-                    const SizedBox(height: 48),
+                    const SizedBox(height: 72),
                     AnimatedSwitcher(
-                      duration: const Duration(milliseconds: 220),
+                      duration: const Duration(milliseconds: 350),
+                      transitionBuilder: (child, animation) => FadeTransition(
+                        opacity: animation,
+                        child: SlideTransition(
+                          position: Tween(
+                            begin: const Offset(0, .025),
+                            end: Offset.zero,
+                          ).animate(animation),
+                          child: child,
+                        ),
+                      ),
                       child: switch (onboarding.stage) {
                         OnboardingStage.introduction => _Introduction(
                           key: const ValueKey('introduction'),
-                          acknowledged: onboarding.previewAcknowledged,
-                          validationMessage: onboarding.validationMessage,
+                          onContinue: onboarding.continueFromIntroduction,
+                        ),
+                        OnboardingStage.access => ProductionGate(
+                          key: const ValueKey('access'),
                           configurationMessage:
                               widget.services.configurationMessage,
-                          onAcknowledged: onboarding.setPreviewAcknowledged,
-                          onContinue: onboarding.continueFromIntroduction,
+                          auth: widget.services.auth,
+                          capabilities:
+                              widget.capabilities ??
+                              widget.services.capabilities,
+                          onOpenPreview: _openPreview,
+                          onFinish: onboarding.completeAccess,
+                        ),
+                        OnboardingStage.scan => _ScanStep(
+                          key: ValueKey('scan'),
+                          sources: scanSources,
+                          error: scanError,
+                          onRetry: _retryScan,
+                          onContinue: onboarding.completeScan,
                         ),
                         OnboardingStage.profile => _ProfileQuestion(
                           key: ValueKey(onboarding.questionIndex),
@@ -138,26 +219,11 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                           validationMessage: onboarding.validationMessage,
                           onContinue: _submitAnswer,
                         ),
-                        OnboardingStage.permissions => ProductionGate(
-                          key: const ValueKey('permissions'),
-                          configurationMessage:
-                              widget.services.configurationMessage,
-                          auth: widget.services.auth,
-                          capabilities:
-                              widget.capabilities ??
-                              widget.services.capabilities,
-                          onOpenPreview: _openPreview,
+                        OnboardingStage.use => _UseStep(
+                          key: const ValueKey('use'),
                           onFinish: _finish,
                         ),
                       },
-                    ),
-                    const SizedBox(height: 24),
-                    Text(
-                      'Preview answers exist only in memory until this screen closes. Nothing is saved to an account or memory store.',
-                      textAlign: TextAlign.center,
-                      style: Theme.of(
-                        context,
-                      ).textTheme.bodySmall?.copyWith(color: Colors.white54),
                     ),
                   ],
                 ),
@@ -170,105 +236,37 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   }
 }
 
-class _PreviewBadge extends StatelessWidget {
-  const _PreviewBadge();
-
-  @override
-  Widget build(BuildContext context) => DecoratedBox(
-    decoration: BoxDecoration(
-      color: const Color(0x1fffffff),
-      border: Border.all(color: const Color(0x33ffffff)),
-      borderRadius: BorderRadius.circular(999),
-    ),
-    child: const Padding(
-      padding: EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-      child: Text('INTERFACE PREVIEW', style: TextStyle(fontSize: 11)),
-    ),
-  );
-}
-
 class _Introduction extends StatelessWidget {
-  const _Introduction({
-    required this.acknowledged,
-    required this.validationMessage,
-    required this.configurationMessage,
-    required this.onAcknowledged,
-    required this.onContinue,
-    super.key,
-  });
+  const _Introduction({required this.onContinue, super.key});
 
-  final bool acknowledged;
-  final String? validationMessage;
-  final String configurationMessage;
-  final ValueChanged<bool> onAcknowledged;
   final VoidCallback onContinue;
 
   @override
-  Widget build(BuildContext context) => GlassCard(
-    child: Padding(
-      padding: const EdgeInsets.all(28),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Text(
-            'Let’s build your second brain.',
-            style: Theme.of(context).textTheme.displaySmall,
-          ),
-          const SizedBox(height: 12),
-          Text(
-            'This build demonstrates the onboarding and product interface. Production account, consent storage, and desktop permission checks are not connected.',
-            style: Theme.of(
-              context,
-            ).textTheme.bodyLarge?.copyWith(color: Colors.white70),
-          ),
-          const SizedBox(height: 24),
-          _ReadinessRow(
-            icon: Icons.person_off_outlined,
-            title: 'Authentication unavailable',
-            detail: configurationMessage,
-            state: 'Unavailable',
-          ),
-          const SizedBox(height: 10),
-          const _ReadinessRow(
-            icon: Icons.policy_outlined,
-            title: 'Production consent unavailable',
-            detail:
-                'This preview cannot record consent or process personal data.',
-            state: 'Not recorded',
-          ),
-          const SizedBox(height: 18),
-          Material(
-            color: Colors.transparent,
-            child: CheckboxListTile(
-              key: const Key('preview_acknowledgement'),
-              contentPadding: EdgeInsets.zero,
-              value: acknowledged,
-              onChanged: (value) => onAcknowledged(value ?? false),
-              title: const Text('I understand this is an unsaved preview'),
-              subtitle: const Text(
-                'Do not enter sensitive or private information.',
-              ),
-              controlAffinity: ListTileControlAffinity.leading,
-            ),
-          ),
-          if (validationMessage != null) ...[
-            const SizedBox(height: 8),
-            Text(
-              validationMessage!,
-              key: const Key('onboarding_validation'),
-              style: const TextStyle(color: Color(0xffffb4ab)),
-            ),
-          ],
-          const SizedBox(height: 18),
-          FilledButton.icon(
-            key: const Key('continue_preview_intro'),
-            onPressed: acknowledged ? onContinue : null,
-            icon: const Icon(Icons.arrow_forward_rounded),
-            label: const Text('Continue preview'),
-          ),
-        ],
+  Widget build(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
+      Text(
+        'Hi, I’m Omi. I’m a second brain you can actually trust—built to surface what’s important in your life and help you get things done.',
+        style: Theme.of(context).textTheme.displaySmall?.copyWith(
+          color: const Color(0xfffffcec),
+          fontSize: 44,
+          height: 1.08,
+          letterSpacing: -1.8,
+        ),
       ),
-    ),
+      const SizedBox(height: 36),
+      Align(
+        alignment: Alignment.centerLeft,
+        child: FilledButton(
+          key: const Key('continue_preview_intro'),
+          onPressed: onContinue,
+          child: const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+            child: Text('Hi Omi!'),
+          ),
+        ),
+      ),
+    ],
   );
 }
 
@@ -291,51 +289,196 @@ class _ProfileQuestion extends StatelessWidget {
   final VoidCallback onContinue;
 
   @override
-  Widget build(BuildContext context) => GlassCard(
-    child: Padding(
-      padding: const EdgeInsets.all(28),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            'PREVIEW QUESTION ${index + 1} OF $count',
-            style: const TextStyle(
-              color: Color(0xff73d5c4),
-              fontSize: 11,
-              letterSpacing: 1.2,
+  Widget build(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Text(
+        'PROFILE ${index + 1} OF $count',
+        style: const TextStyle(
+          color: Color(0xffd0cec6),
+          fontSize: 11,
+          letterSpacing: 1.2,
+        ),
+      ),
+      const SizedBox(height: 12),
+      Text(prompt.$1, style: Theme.of(context).textTheme.displaySmall),
+      const SizedBox(height: 12),
+      Text(
+        prompt.$2,
+        style: Theme.of(
+          context,
+        ).textTheme.bodyLarge?.copyWith(color: Colors.white70),
+      ),
+      const SizedBox(height: 28),
+      TextField(
+        key: const Key('onboarding_input'),
+        controller: controller,
+        minLines: 2,
+        maxLines: 4,
+        autofocus: true,
+        decoration: InputDecoration(
+          hintText: prompt.$3,
+          errorText: validationMessage,
+          suffixIcon: IconButton(
+            key: const Key('continue_onboarding'),
+            tooltip: 'Continue',
+            onPressed: onContinue,
+            icon: const Icon(Icons.arrow_upward_rounded),
+          ),
+        ),
+        onSubmitted: (_) => onContinue(),
+      ),
+    ],
+  );
+}
+
+class _ScanStep extends StatelessWidget {
+  const _ScanStep({
+    required this.sources,
+    required this.error,
+    required this.onRetry,
+    required this.onContinue,
+    super.key,
+  });
+
+  final List<OnboardingScanSource>? sources;
+  final String? error;
+  final VoidCallback onRetry;
+  final VoidCallback onContinue;
+
+  @override
+  Widget build(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Semantics(
+        liveRegion: true,
+        child: Text(
+          sources == null && error == null
+              ? 'Give me a second…'
+              : 'Here’s what I could read.',
+          style: Theme.of(context).textTheme.displaySmall?.copyWith(
+            color: const Color(0xfffffcec),
+            fontSize: 44,
+            letterSpacing: -1.6,
+          ),
+        ),
+      ),
+      const SizedBox(height: 24),
+      if (sources case final results?)
+        for (final source in results)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 10),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(
+                  source.state == OnboardingScanState.complete
+                      ? Icons.check_rounded
+                      : Icons.info_outline_rounded,
+                  color: const Color(0xfffffcec),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        _sourceName(source.source),
+                        style: const TextStyle(
+                          color: Color(0xfffffcec),
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        source.detail,
+                        style: const TextStyle(color: Color(0xffd0cec6)),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
             ),
           ),
-          const SizedBox(height: 12),
-          Text(prompt.$1, style: Theme.of(context).textTheme.displaySmall),
-          const SizedBox(height: 12),
-          Text(
-            prompt.$2,
-            style: Theme.of(
-              context,
-            ).textTheme.bodyLarge?.copyWith(color: Colors.white70),
-          ),
-          const SizedBox(height: 28),
-          TextField(
-            key: const Key('onboarding_input'),
-            controller: controller,
-            minLines: 2,
-            maxLines: 4,
-            autofocus: true,
-            decoration: InputDecoration(
-              hintText: prompt.$3,
-              errorText: validationMessage,
-              suffixIcon: IconButton(
-                key: const Key('continue_onboarding'),
-                tooltip: 'Continue',
-                onPressed: onContinue,
-                icon: const Icon(Icons.arrow_upward_rounded),
-              ),
-            ),
-            onSubmitted: (_) => onContinue(),
-          ),
-        ],
+      if (error case final message?)
+        Text(message, style: const TextStyle(color: Color(0xffffb4ab))),
+      const SizedBox(height: 24),
+      if (sources != null)
+        FilledButton(onPressed: onContinue, child: const Text('Continue'))
+      else if (error != null)
+        OutlinedButton(onPressed: onRetry, child: const Text('Try again'))
+      else
+        const LinearProgressIndicator(),
+    ],
+  );
+
+  static String _sourceName(String source) => switch (source) {
+    'workspace' => 'Workspace',
+    'apple_notes' => 'Apple Notes',
+    'apple_mail' => 'Apple Mail',
+    _ => source,
+  };
+}
+
+class _UseStep extends StatelessWidget {
+  const _UseStep({required this.onFinish, super.key});
+
+  final FutureOr<void> Function() onFinish;
+
+  @override
+  Widget build(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Text(
+        'Omi is always within reach.',
+        style: Theme.of(context).textTheme.displaySmall?.copyWith(
+          color: const Color(0xfffffcec),
+          fontSize: 44,
+          letterSpacing: -1.6,
+        ),
+      ),
+      const SizedBox(height: 18),
+      const Text(
+        'Tap both Shift keys to open Omi. Hold them to talk, then let go when you’re finished. Try asking: “What tasks do I have today?”',
+        style: TextStyle(color: Color(0xffd0cec6), fontSize: 18, height: 1.5),
+      ),
+      const SizedBox(height: 32),
+      FilledButton(
+        key: const Key('finish_voice_lesson'),
+        onPressed: () async => onFinish(),
+        child: const Text('Take me to Omi'),
+      ),
+    ],
+  );
+}
+
+class _OnboardingBackdrop extends StatelessWidget {
+  const _OnboardingBackdrop({required this.child, required this.bright});
+
+  final Widget child;
+  final bool bright;
+
+  @override
+  Widget build(BuildContext context) => AnimatedContainer(
+    duration: const Duration(milliseconds: 900),
+    curve: Curves.easeOutCubic,
+    decoration: BoxDecoration(
+      color: const Color(0xff171716),
+      gradient: RadialGradient(
+        center: bright ? const Alignment(0, 1.3) : const Alignment(-1.2, -1.1),
+        radius: bright ? 1.35 : 1.05,
+        colors: bright
+            ? const [
+                Color(0xb3f25e6b),
+                Color(0x7096c4ff),
+                Color(0x38d3e081),
+                Color(0xff171716),
+              ]
+            : const [Color(0x5096c4ff), Color(0xff171716)],
+        stops: bright ? const [0, .32, .62, 1] : const [0, .78],
       ),
     ),
+    child: child,
   );
 }
 
@@ -470,80 +613,80 @@ class _ProductionGateState extends State<ProductionGate> {
       );
 
   @override
-  Widget build(BuildContext context) => GlassCard(
-    child: Padding(
-      padding: const EdgeInsets.all(28),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Text(
-            ready
-                ? 'Production setup is ready.'
-                : 'Production setup is not ready.',
-            style: Theme.of(context).textTheme.displaySmall,
-          ),
-          const SizedBox(height: 12),
-          Text(
-            'Omi requires a real account, recorded data consent, and each applicable core capability before production onboarding can finish.',
-            style: Theme.of(
-              context,
-            ).textTheme.bodyLarge?.copyWith(color: Colors.white70),
-          ),
-          const SizedBox(height: 24),
-          AuthenticationGate(
-            auth: widget.auth,
-            configurationMessage: widget.configurationMessage,
-          ),
-          const SizedBox(height: 10),
-          ProcessingConsentGate(auth: widget.auth),
-          const SizedBox(height: 10),
-          for (final capability in CoreCapability.values) ...[
-            _CapabilityRow(
-              capability: capability,
-              status: statuses[capability]!,
-              onRequest:
-                  statuses[capability]!.state ==
-                          CapabilityState.actionRequired &&
-                      !requesting.contains(capability)
-                  ? () => unawaited(_request(capability))
-                  : null,
-            ),
-            const SizedBox(height: 10),
-          ],
-          OutlinedButton.icon(
-            key: const Key('refresh_core_capabilities'),
-            onPressed: refreshing || finishing ? null : _check,
-            icon: const Icon(Icons.refresh_rounded),
-            label: const Text('Check capabilities again'),
-          ),
-          const SizedBox(height: 24),
-          FilledButton(
-            key: const Key('finish_production_onboarding'),
-            onPressed: ready && !finishing ? _finish : null,
-            child: Text(
-              finishing ? 'Checking setup…' : 'Finish production setup',
-            ),
-          ),
-          if (finishFailed) ...[
-            const SizedBox(height: 8),
-            Semantics(
-              liveRegion: true,
-              child: const Text(
-                'Onboarding completion could not be saved. Try again.',
-                style: TextStyle(color: Color(0xffffb4ab)),
-              ),
-            ),
-          ],
-          const SizedBox(height: 12),
-          OutlinedButton.icon(
-            key: const Key('open_interface_preview'),
-            onPressed: widget.onOpenPreview,
-            icon: const Icon(Icons.visibility_outlined),
-            label: const Text('Open interface preview (demo)'),
-          ),
-        ],
+  Widget build(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
+      Text(
+        'Before I begin',
+        style: Theme.of(context).textTheme.displaySmall?.copyWith(
+          color: const Color(0xfffffcec),
+          fontSize: 44,
+          letterSpacing: -1.6,
+        ),
       ),
-    ),
+      const SizedBox(height: 12),
+      Text(
+        'Sign in, choose what Omi may process, and grant the access needed to remember and act across your computer.',
+        style: Theme.of(
+          context,
+        ).textTheme.bodyLarge?.copyWith(color: Colors.white70),
+      ),
+      const SizedBox(height: 24),
+      AuthenticationGate(
+        auth: widget.auth,
+        configurationMessage: widget.configurationMessage,
+      ),
+      const SizedBox(height: 10),
+      ProcessingConsentGate(auth: widget.auth),
+      const SizedBox(height: 10),
+      for (final capability in CoreCapability.values) ...[
+        _CapabilityRow(
+          capability: capability,
+          status: statuses[capability]!,
+          onRequest:
+              statuses[capability]!.state == CapabilityState.actionRequired &&
+                  !requesting.contains(capability)
+              ? () => unawaited(_request(capability))
+              : null,
+        ),
+        const SizedBox(height: 10),
+      ],
+      OutlinedButton.icon(
+        key: const Key('refresh_core_capabilities'),
+        onPressed: refreshing || finishing ? null : _check,
+        icon: const Icon(Icons.refresh_rounded),
+        label: const Text('Check capabilities again'),
+      ),
+      const SizedBox(height: 24),
+      FilledButton(
+        key: const Key('finish_production_onboarding'),
+        onPressed: ready && !finishing ? _finish : null,
+        child: Text(finishing ? 'Checking access…' : 'Continue'),
+      ),
+      if (finishFailed) ...[
+        const SizedBox(height: 8),
+        Semantics(
+          liveRegion: true,
+          child: const Text(
+            'Onboarding completion could not be saved. Try again.',
+            style: TextStyle(color: Color(0xffffb4ab)),
+          ),
+        ),
+      ],
+      const SizedBox(height: 12),
+      OutlinedButton.icon(
+        key: const Key('open_interface_preview'),
+        onPressed: widget.onOpenPreview,
+        icon: const Icon(Icons.visibility_outlined),
+        label: const Text('Open interface preview (demo)'),
+      ),
+      const SizedBox(height: 18),
+      const Text(
+        'Omi is open source and private by design. You choose what I can read.',
+        textAlign: TextAlign.center,
+        style: TextStyle(color: Color(0xffd0cec6), fontSize: 12),
+      ),
+    ],
   );
 }
 
@@ -602,47 +745,40 @@ class ProcessingConsentGate extends StatelessWidget {
     final snapshot = auth.snapshot;
     final granted = snapshot.hasProcessingAuthority;
     final signedIn = snapshot.phase == AuthPhase.signedIn;
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: Colors.black.withValues(alpha: .18),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.white.withValues(alpha: .07)),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            const Text(
-              'Omi processing consent',
-              style: TextStyle(fontWeight: FontWeight.w600),
-            ),
-            const SizedBox(height: 6),
-            const Text(
-              'Allow Omi to process your conversations, screen context, device audio, and connected-service data for memory and assistant features. This versioned consent can be revoked at any time.',
-              style: TextStyle(color: Colors.white60, height: 1.35),
-            ),
-            const SizedBox(height: 12),
-            if (!granted)
-              FilledButton(
-                key: const Key('grant_processing_consent'),
-                onPressed: signedIn
-                    ? () => unawaited(auth.grantProcessingConsent())
-                    : null,
-                child: Text(
-                  signedIn
-                      ? 'Grant processing consent v1'
-                      : 'Sign in before granting consent',
-                ),
-              )
-            else
-              OutlinedButton(
-                key: const Key('revoke_processing_consent'),
-                onPressed: () => unawaited(auth.revokeProcessingConsent()),
-                child: const Text('Revoke processing consent'),
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const Text(
+            'Omi processing consent',
+            style: TextStyle(fontWeight: FontWeight.w600),
+          ),
+          const SizedBox(height: 6),
+          const Text(
+            'Allow Omi to process your conversations, screen context, device audio, and connected-service data for memory and assistant features. This versioned consent can be revoked at any time.',
+            style: TextStyle(color: Colors.white60, height: 1.35),
+          ),
+          const SizedBox(height: 12),
+          if (!granted)
+            FilledButton(
+              key: const Key('grant_processing_consent'),
+              onPressed: signedIn
+                  ? () => unawaited(auth.grantProcessingConsent())
+                  : null,
+              child: Text(
+                signedIn
+                    ? 'Grant processing consent v1'
+                    : 'Sign in before granting consent',
               ),
-          ],
-        ),
+            )
+          else
+            OutlinedButton(
+              key: const Key('revoke_processing_consent'),
+              onPressed: () => unawaited(auth.revokeProcessingConsent()),
+              child: const Text('Revoke processing consent'),
+            ),
+        ],
       ),
     );
   }
@@ -712,118 +848,58 @@ class _AuthenticationGateState extends State<AuthenticationGate> {
       AuthPhase.signingIn,
       AuthPhase.signingOut,
     }.contains(snapshot.phase);
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: Colors.black.withValues(alpha: .18),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.white.withValues(alpha: .07)),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            const Text(
-              'Firebase account',
-              style: TextStyle(fontWeight: FontWeight.w600),
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const Text(
+            'Firebase account',
+            style: TextStyle(fontWeight: FontWeight.w600),
+          ),
+          Material(
+            color: Colors.transparent,
+            child: CheckboxListTile(
+              key: const Key('firebase_auth_acknowledgement'),
+              contentPadding: EdgeInsets.zero,
+              value: snapshot.consentGranted,
+              onChanged: busy
+                  ? null
+                  : (value) =>
+                        unawaited(widget.auth.setConsent(value ?? false)),
+              title: const Text('I agree to Firebase account authentication'),
+              controlAffinity: ListTileControlAffinity.leading,
             ),
-            Material(
-              color: Colors.transparent,
-              child: CheckboxListTile(
-                key: const Key('firebase_auth_acknowledgement'),
-                contentPadding: EdgeInsets.zero,
-                value: snapshot.consentGranted,
-                onChanged: busy
-                    ? null
-                    : (value) =>
-                          unawaited(widget.auth.setConsent(value ?? false)),
-                title: const Text('I agree to Firebase account authentication'),
-                controlAffinity: ListTileControlAffinity.leading,
-              ),
+          ),
+          if (snapshot.phase == AuthPhase.awaitingOtp) ...[
+            TextField(
+              key: const Key('auth_otp'),
+              controller: code,
+              keyboardType: TextInputType.number,
+              autofillHints: const [AutofillHints.oneTimeCode],
+              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+              textInputAction: TextInputAction.done,
+              decoration: const InputDecoration(labelText: 'Verification code'),
+              onSubmitted: busy
+                  ? null
+                  : (_) => widget.auth.confirmPhoneOtp(code.text),
             ),
-            if (snapshot.phase == AuthPhase.awaitingOtp) ...[
-              TextField(
-                key: const Key('auth_otp'),
-                controller: code,
-                keyboardType: TextInputType.number,
-                autofillHints: const [AutofillHints.oneTimeCode],
-                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                textInputAction: TextInputAction.done,
-                decoration: const InputDecoration(
-                  labelText: 'Verification code',
-                ),
-                onSubmitted: busy
-                    ? null
-                    : (_) => widget.auth.confirmPhoneOtp(code.text),
+            const SizedBox(height: 10),
+            FilledButton(
+              key: const Key('confirm_phone_otp'),
+              onPressed: busy
+                  ? null
+                  : () => widget.auth.confirmPhoneOtp(code.text),
+              child: const Text('Verify phone'),
+            ),
+          ] else ...[
+            if (widget.auth.supportsPhoneOtp) ...[
+              const Text(
+                'For abuse prevention, Firebase sends your phone number to Google and Google stores it under its authentication terms.',
               ),
-              const SizedBox(height: 10),
-              FilledButton(
-                key: const Key('confirm_phone_otp'),
-                onPressed: busy
-                    ? null
-                    : () => widget.auth.confirmPhoneOtp(code.text),
-                child: const Text('Verify phone'),
-              ),
-            ] else ...[
-              if (widget.auth.supportsPhoneOtp) ...[
-                const Text(
-                  'For abuse prevention, Firebase sends your phone number to Google and Google stores it under its authentication terms.',
-                ),
-                Material(
-                  color: Colors.transparent,
-                  child: CheckboxListTile(
-                    key: const Key('firebase_phone_disclosure'),
-                    contentPadding: EdgeInsets.zero,
-                    value: phoneDisclosureAcknowledged,
-                    onChanged: busy
-                        ? null
-                        : (value) => setState(
-                            () => phoneDisclosureAcknowledged = value ?? false,
-                          ),
-                    title: const Text(
-                      'I understand this Firebase phone-number disclosure',
-                    ),
-                    controlAffinity: ListTileControlAffinity.leading,
-                  ),
-                ),
-                const SizedBox(height: 10),
-                TextField(
-                  key: const Key('auth_phone'),
-                  controller: phone,
-                  keyboardType: TextInputType.phone,
-                  autofillHints: const [AutofillHints.telephoneNumber],
-                  textInputAction: TextInputAction.send,
-                  decoration: const InputDecoration(
-                    labelText: 'Phone number',
-                    hintText: '+1 555 555 0123',
-                  ),
-                  onSubmitted:
-                      busy ||
-                          !snapshot.consentGranted ||
-                          !phoneDisclosureAcknowledged
-                      ? null
-                      : (_) => widget.auth.requestPhoneOtp(phone.text),
-                ),
-                const SizedBox(height: 10),
-                FilledButton(
-                  key: const Key('request_phone_otp'),
-                  onPressed:
-                      busy ||
-                          !snapshot.consentGranted ||
-                          !phoneDisclosureAcknowledged
-                      ? null
-                      : () => widget.auth.requestPhoneOtp(phone.text),
-                  child: const Text('Text me a code'),
-                ),
-              ] else if (widget.auth.supportsDesktopBrowserHandoff) ...[
-                const Text(
-                  'Phone verification opens in your browser. The browser returns a one-time Firebase sign-in token only to this desktop.',
-                ),
-                const SizedBox(height: 8),
-                const Text(
-                  'Completing browser sign-in does not grant Omi processing consent. You will review that separately after returning to Omi.',
-                ),
-                CheckboxListTile(
+              Material(
+                color: Colors.transparent,
+                child: CheckboxListTile(
                   key: const Key('firebase_phone_disclosure'),
                   contentPadding: EdgeInsets.zero,
                   value: phoneDisclosureAcknowledged,
@@ -833,87 +909,138 @@ class _AuthenticationGateState extends State<AuthenticationGate> {
                           () => phoneDisclosureAcknowledged = value ?? false,
                         ),
                   title: const Text(
-                    'I understand Firebase sends my phone number to Google for abuse prevention',
+                    'I understand this Firebase phone-number disclosure',
                   ),
                   controlAffinity: ListTileControlAffinity.leading,
                 ),
-                FilledButton.icon(
-                  key: const Key('desktop_browser_sign_in'),
-                  onPressed:
-                      busy ||
-                          !snapshot.consentGranted ||
-                          !phoneDisclosureAcknowledged
-                      ? null
-                      : () => widget.auth.signInWithDesktopBrowser(),
-                  icon: const Icon(Icons.open_in_browser_rounded),
-                  label: const Text('Continue securely in browser'),
-                ),
-                if (widget.auth.desktopConfirmationCode case final code?) ...[
-                  const SizedBox(height: 12),
-                  SelectableText(
-                    code,
-                    key: const Key('desktop_confirmation_code'),
-                    textAlign: TextAlign.center,
-                    style: Theme.of(context).textTheme.headlineMedium,
-                  ),
-                  const Text(
-                    'Enter this code in the browser to confirm it is your desktop.',
-                    textAlign: TextAlign.center,
-                  ),
-                ],
-              ] else
-                const _ReadinessRow(
-                  icon: Icons.phone_disabled_outlined,
-                  title: 'Phone sign-in',
-                  detail: 'Secure browser handoff is not configured.',
-                  state: 'Unavailable',
-                ),
+              ),
               const SizedBox(height: 10),
-              Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton(
-                      key: const Key('sign_in_google'),
-                      onPressed: busy || !snapshot.consentGranted
-                          ? null
-                          : () => widget.auth.signIn(AuthProvider.google),
-                      child: const Text('Google'),
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: OutlinedButton(
-                      key: const Key('sign_in_apple'),
-                      onPressed: busy || !snapshot.consentGranted
-                          ? null
-                          : () => widget.auth.signIn(AuthProvider.apple),
-                      child: const Text('Apple'),
-                    ),
-                  ),
-                ],
-              ),
-            ],
-            if (busy)
-              Semantics(
-                liveRegion: true,
-                label: 'Authentication in progress',
-                child: SizedBox.shrink(),
-              ),
-            if (snapshot.failure case final failure?) ...[
-              const SizedBox(height: 10),
-              Semantics(
-                liveRegion: true,
-                label: 'Authentication error. ${failure.message}',
-                excludeSemantics: true,
-                child: Text(
-                  failure.message,
-                  key: const Key('auth_failure'),
-                  style: const TextStyle(color: Color(0xffffb4ab)),
+              TextField(
+                key: const Key('auth_phone'),
+                controller: phone,
+                keyboardType: TextInputType.phone,
+                autofillHints: const [AutofillHints.telephoneNumber],
+                textInputAction: TextInputAction.send,
+                decoration: const InputDecoration(
+                  labelText: 'Phone number',
+                  hintText: '+1 555 555 0123',
                 ),
+                onSubmitted:
+                    busy ||
+                        !snapshot.consentGranted ||
+                        !phoneDisclosureAcknowledged
+                    ? null
+                    : (_) => widget.auth.requestPhoneOtp(phone.text),
               ),
-            ],
+              const SizedBox(height: 10),
+              FilledButton(
+                key: const Key('request_phone_otp'),
+                onPressed:
+                    busy ||
+                        !snapshot.consentGranted ||
+                        !phoneDisclosureAcknowledged
+                    ? null
+                    : () => widget.auth.requestPhoneOtp(phone.text),
+                child: const Text('Text me a code'),
+              ),
+            ] else if (widget.auth.supportsDesktopBrowserHandoff) ...[
+              const Text(
+                'Phone verification opens in your browser. The browser returns a one-time Firebase sign-in token only to this desktop.',
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                'Completing browser sign-in does not grant Omi processing consent. You will review that separately after returning to Omi.',
+              ),
+              CheckboxListTile(
+                key: const Key('firebase_phone_disclosure'),
+                contentPadding: EdgeInsets.zero,
+                value: phoneDisclosureAcknowledged,
+                onChanged: busy
+                    ? null
+                    : (value) => setState(
+                        () => phoneDisclosureAcknowledged = value ?? false,
+                      ),
+                title: const Text(
+                  'I understand Firebase sends my phone number to Google for abuse prevention',
+                ),
+                controlAffinity: ListTileControlAffinity.leading,
+              ),
+              FilledButton.icon(
+                key: const Key('desktop_browser_sign_in'),
+                onPressed:
+                    busy ||
+                        !snapshot.consentGranted ||
+                        !phoneDisclosureAcknowledged
+                    ? null
+                    : () => widget.auth.signInWithDesktopBrowser(),
+                icon: const Icon(Icons.open_in_browser_rounded),
+                label: const Text('Continue securely in browser'),
+              ),
+              if (widget.auth.desktopConfirmationCode case final code?) ...[
+                const SizedBox(height: 12),
+                SelectableText(
+                  code,
+                  key: const Key('desktop_confirmation_code'),
+                  textAlign: TextAlign.center,
+                  style: Theme.of(context).textTheme.headlineMedium,
+                ),
+                const Text(
+                  'Enter this code in the browser to confirm it is your desktop.',
+                  textAlign: TextAlign.center,
+                ),
+              ],
+            ] else
+              const _ReadinessRow(
+                icon: Icons.phone_disabled_outlined,
+                title: 'Phone sign-in',
+                detail: 'Secure browser handoff is not configured.',
+                state: 'Unavailable',
+              ),
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton(
+                    key: const Key('sign_in_google'),
+                    onPressed: busy || !snapshot.consentGranted
+                        ? null
+                        : () => widget.auth.signIn(AuthProvider.google),
+                    child: const Text('Google'),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: OutlinedButton(
+                    key: const Key('sign_in_apple'),
+                    onPressed: busy || !snapshot.consentGranted
+                        ? null
+                        : () => widget.auth.signIn(AuthProvider.apple),
+                    child: const Text('Apple'),
+                  ),
+                ),
+              ],
+            ),
           ],
-        ),
+          if (busy)
+            Semantics(
+              liveRegion: true,
+              label: 'Authentication in progress',
+              child: SizedBox.shrink(),
+            ),
+          if (snapshot.failure case final failure?) ...[
+            const SizedBox(height: 10),
+            Semantics(
+              liveRegion: true,
+              label: 'Authentication error. ${failure.message}',
+              excludeSemantics: true,
+              child: Text(
+                failure.message,
+                key: const Key('auth_failure'),
+                style: const TextStyle(color: Color(0xffffb4ab)),
+              ),
+            ),
+          ],
+        ],
       ),
     );
   }
@@ -937,43 +1064,33 @@ class _ReadinessRow extends StatelessWidget {
   final VoidCallback? onAction;
 
   @override
-  Widget build(BuildContext context) => DecoratedBox(
-    decoration: BoxDecoration(
-      color: Colors.black.withValues(alpha: .18),
-      borderRadius: BorderRadius.circular(16),
-      border: Border.all(color: Colors.white.withValues(alpha: .07)),
-    ),
-    child: Padding(
-      padding: const EdgeInsets.all(16),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(icon, size: 20, color: Colors.white70),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(title, style: Theme.of(context).textTheme.titleMedium),
-                const SizedBox(height: 4),
-                Text(
-                  detail,
-                  style: const TextStyle(color: Colors.white60, height: 1.35),
-                ),
-                const SizedBox(height: 6),
-                Text(state, style: const TextStyle(color: Color(0xffffc66d))),
-                if (onAction != null && actionLabel != null) ...[
-                  const SizedBox(height: 10),
-                  OutlinedButton(
-                    onPressed: onAction,
-                    child: Text(actionLabel!),
-                  ),
-                ],
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.symmetric(vertical: 13),
+    child: Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(icon, size: 20, color: Colors.white70),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(title, style: Theme.of(context).textTheme.titleMedium),
+              const SizedBox(height: 4),
+              Text(
+                detail,
+                style: const TextStyle(color: Colors.white60, height: 1.35),
+              ),
+              const SizedBox(height: 6),
+              Text(state, style: const TextStyle(color: Color(0xffffc66d))),
+              if (onAction != null && actionLabel != null) ...[
+                const SizedBox(height: 10),
+                OutlinedButton(onPressed: onAction, child: Text(actionLabel!)),
               ],
-            ),
+            ],
           ),
-        ],
-      ),
+        ),
+      ],
     ),
   );
 }

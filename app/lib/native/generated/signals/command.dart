@@ -38,10 +38,12 @@ abstract class Command {
       case 13:
         return CommandDeleteMemorySource.load(deserializer);
       case 14:
-        return CommandApprovalDecision.load(deserializer);
+        return CommandScanOnboarding.load(deserializer);
       case 15:
-        return CommandDeviceState.load(deserializer);
+        return CommandApprovalDecision.load(deserializer);
       case 16:
+        return CommandDeviceState.load(deserializer);
+      case 17:
         return CommandCancel.load(deserializer);
       default:
         throw Exception(
@@ -1146,6 +1148,91 @@ class CommandDeleteMemorySource extends Command {
 }
 
 @immutable
+class CommandScanOnboarding extends Command {
+  const CommandScanOnboarding({
+    required this.roots,
+    required this.includeAppleNotes,
+    required this.includeAppleMail,
+    required this.recordedAtMs,
+  }) : super();
+
+  static CommandScanOnboarding load(BinaryDeserializer deserializer) {
+    deserializer.increaseContainerDepth();
+    final instance = CommandScanOnboarding(
+      roots: TraitHelpers.deserializeVectorStr(deserializer),
+      includeAppleNotes: deserializer.deserializeBool(),
+      includeAppleMail: deserializer.deserializeBool(),
+      recordedAtMs: deserializer.deserializeInt64(),
+    );
+    deserializer.decreaseContainerDepth();
+    return instance;
+  }
+
+  final List<String> roots;
+  final bool includeAppleNotes;
+  final bool includeAppleMail;
+  final int recordedAtMs;
+
+  CommandScanOnboarding copyWith({
+    List<String>? roots,
+    bool? includeAppleNotes,
+    bool? includeAppleMail,
+    int? recordedAtMs,
+  }) {
+    return CommandScanOnboarding(
+      roots: roots ?? this.roots,
+      includeAppleNotes: includeAppleNotes ?? this.includeAppleNotes,
+      includeAppleMail: includeAppleMail ?? this.includeAppleMail,
+      recordedAtMs: recordedAtMs ?? this.recordedAtMs,
+    );
+  }
+
+  void serialize(BinarySerializer serializer) {
+    serializer.increaseContainerDepth();
+    serializer.serializeVariantIndex(14);
+    TraitHelpers.serializeVectorStr(roots, serializer);
+    serializer.serializeBool(includeAppleNotes);
+    serializer.serializeBool(includeAppleMail);
+    serializer.serializeInt64(recordedAtMs);
+    serializer.decreaseContainerDepth();
+  }
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    if (other.runtimeType != runtimeType) return false;
+
+    return other is CommandScanOnboarding &&
+        listEquals(roots, other.roots) &&
+        includeAppleNotes == other.includeAppleNotes &&
+        includeAppleMail == other.includeAppleMail &&
+        recordedAtMs == other.recordedAtMs;
+  }
+
+  @override
+  int get hashCode =>
+      Object.hash(roots, includeAppleNotes, includeAppleMail, recordedAtMs);
+
+  @override
+  String toString() {
+    String? fullString;
+
+    assert(() {
+      fullString =
+          '$runtimeType('
+          'roots: $roots, '
+          'includeAppleNotes: $includeAppleNotes, '
+          'includeAppleMail: $includeAppleMail, '
+          'recordedAtMs: $recordedAtMs'
+          ')';
+      return true;
+    }());
+
+    return fullString ?? 'CommandScanOnboarding';
+  }
+}
+
+@immutable
 class CommandApprovalDecision extends Command {
   const CommandApprovalDecision({
     required this.proposalId,
@@ -1177,7 +1264,7 @@ class CommandApprovalDecision extends Command {
 
   void serialize(BinarySerializer serializer) {
     serializer.increaseContainerDepth();
-    serializer.serializeVariantIndex(14);
+    serializer.serializeVariantIndex(15);
     serializer.serializeString(proposalId);
     decision.serialize(serializer);
     serializer.decreaseContainerDepth();
@@ -1259,7 +1346,7 @@ class CommandDeviceState extends Command {
 
   void serialize(BinarySerializer serializer) {
     serializer.increaseContainerDepth();
-    serializer.serializeVariantIndex(15);
+    serializer.serializeVariantIndex(16);
     serializer.serializeString(deviceId);
     serializer.serializeBool(connected);
     TraitHelpers.serializeOptionU8(batteryPercent, serializer);
@@ -1315,7 +1402,7 @@ class CommandCancel extends Command {
 
   void serialize(BinarySerializer serializer) {
     serializer.increaseContainerDepth();
-    serializer.serializeVariantIndex(16);
+    serializer.serializeVariantIndex(17);
     serializer.decreaseContainerDepth();
   }
 
