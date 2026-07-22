@@ -426,8 +426,8 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
     let tap = CGEvent.tapCreate(
       tap: .cgSessionEventTap,
       place: .tailAppendEventTap,
-      options: .defaultTap,
-      eventsOfInterest: CGEventMask(1 << CGEventType.keyDown.rawValue),
+      options: .listenOnly,
+      eventsOfInterest: CGEventMask(1 << CGEventType.mouseMoved.rawValue),
       callback: { _, _, event, _ in Unmanaged.passUnretained(event) },
       userInfo: nil)
     if let tap { CFMachPortInvalidate(tap) }
@@ -438,7 +438,8 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
     let library = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library")
     let notes = library.appendingPathComponent("Group Containers/group.com.apple.notes")
     for file in [
-      library.appendingPathComponent("Application Support/com.apple.TCC/TCC.db"),
+      library.appendingPathComponent("Safari/History.db"),
+      library.appendingPathComponent("Messages/chat.db"),
       notes.appendingPathComponent("NoteStore.sqlite"),
       notes.appendingPathComponent("Accounts/LocalAccount/NoteStore.sqlite"),
     ] {
