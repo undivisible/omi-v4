@@ -320,15 +320,13 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
         switch capability {
         case "accessibility":
           permissionOverlay.show(for: capability)
-          let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true]
-          AXIsProcessTrustedWithOptions(options as CFDictionary)
           self.openPrivacyPane("Privacy_Accessibility")
           result(nil)
         case "microphone":
-          AVCaptureDevice.requestAccess(for: .audio) { _ in result(nil) }
+          self.openPrivacyPane("Privacy_Microphone")
+          result(nil)
         case "screenCapture":
           permissionOverlay.show(for: capability)
-          CGRequestScreenCaptureAccess()
           self.openPrivacyPane("Privacy_ScreenCapture")
           result(nil)
         case "appData":
@@ -379,10 +377,14 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
 
   private func hasFullDiskAccess() -> Bool {
     let library = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library")
-    let mail = library.appendingPathComponent("Mail")
     let notes = library.appendingPathComponent("Group Containers/group.com.apple.notes")
-    if (try? FileManager.default.contentsOfDirectory(at: mail, includingPropertiesForKeys: nil)) != nil {
-      return true
+    for directory in ["Safari", "Mail", "Messages"] {
+      if (try? FileManager.default.contentsOfDirectory(
+        at: library.appendingPathComponent(directory),
+        includingPropertiesForKeys: nil
+      )) != nil {
+        return true
+      }
     }
     for store in [
       notes.appendingPathComponent("NoteStore.sqlite"),
