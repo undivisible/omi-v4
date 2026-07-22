@@ -1,0 +1,308 @@
+import 'dart:async';
+
+import 'package:flutter/material.dart';
+
+import '../../auth/auth.dart';
+import '../../capabilities/desktop_capabilities.dart';
+
+class ProductionGate extends StatefulWidget {
+  const ProductionGate({
+    required this.configurationMessage,
+    required this.auth,
+    required this.capabilities,
+    required this.onOpenPreview,
+    required this.onFinish,
+    super.key,
+  });
+
+  final String configurationMessage;
+  final AuthController auth;
+  final DesktopCapabilityGateway capabilities;
+  final VoidCallback onOpenPreview;
+  final FutureOr<void> Function() onFinish;
+
+  @override
+  State<ProductionGate> createState() => _ProductionGateState();
+}
+
+class _ProductionGateState extends State<ProductionGate>
+    with WidgetsBindingObserver {
+  static const permissionCapabilities = [
+    CoreCapability.microphone,
+    CoreCapability.accessibility,
+    CoreCapability.screenCapture,
+    CoreCapability.appData,
+  ];
+  Map<CoreCapability, CapabilityStatus> statuses = {
+    for (final capability in CoreCapability.values)
+      capability: const CapabilityStatus(
+        state: CapabilityState.checking,
+        detail: 'Checking capability…',
+      ),
+  };
+  bool refreshing = false;
+  bool finishing = false;
+  bool finishFailed = false;
+  final requesting = <CoreCapability>{};
+  int checkGeneration = 0;
+  Timer? permissionPoll;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    widget.auth.addListener(_refreshView);
+    unawaited(_check());
+    _startPermissionPoll();
+  }
+
+  @override
+  void dispose() {
+    permissionPoll?.cancel();
+    WidgetsBinding.instance.removeObserver(this);
+    widget.auth.removeListener(_refreshView);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && !refreshing && !finishing) {
+      unawaited(_check());
+    }
+  }
+
+  void _refreshView() {
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _check() async {
+    final generation = ++checkGeneration;
+    setState(() => refreshing = true);
+    Map<CoreCapability, CapabilityStatus> next;
+    try {
+      next = await widget.capabilities.check();
+    } catch (error) {
+      next = {
+        for (final capability in CoreCapability.values)
+          capability: CapabilityStatus(
+            state: CapabilityState.error,
+            detail: 'Could not check this capability: $error',
+          ),
+      };
+    }
+    if (!mounted || generation != checkGeneration) return;
+    setState(() {
+      statuses = next;
+      refreshing = false;
+    });
+    if (ready) {
+      permissionPoll?.cancel();
+      permissionPoll = null;
+      if (!finishing) await _finish();
+    }
+  }
+
+  Future<void> _request(CoreCapability capability) async {
+    if (!requesting.add(capability)) return;
+    final generation = checkGeneration;
+    if (mounted) setState(() {});
+    try {
+      await widget.capabilities.request(capability);
+      if (!mounted || generation != checkGeneration) return;
+      await _check();
+      if (!ready) _startPermissionPoll();
+    } catch (error) {
+      if (!mounted || generation != checkGeneration) return;
+      setState(() {
+        statuses = {
+          ...statuses,
+          capability: CapabilityStatus(
+            state: CapabilityState.error,
+            detail: 'Could not request this capability: $error',
+          ),
+        };
+      });
+    } finally {
+      requesting.remove(capability);
+      if (mounted) setState(() {});
+    }
+  }
+
+  void _startPermissionPoll() {
+    permissionPoll ??= Timer.periodic(const Duration(seconds: 2), (_) {
+      if (mounted && !refreshing && !finishing) unawaited(_check());
+    });
+  }
+
+  Future<void> _finish() async {
+    if (finishing) return;
+    setState(() {
+      finishing = true;
+      finishFailed = false;
+    });
+    try {
+      await widget.onFinish();
+      if (mounted) setState(() => finishing = false);
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        finishing = false;
+        finishFailed = true;
+      });
+    }
+  }
+
+  bool get ready => permissionCapabilities.every(
+    (capability) => statuses[capability]?.acceptable == true,
+  );
+
+  @override
+  Widget build(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
+      const Text(
+        'First…',
+        textAlign: TextAlign.left,
+        style: TextStyle(
+          color: Color(0xfffffcec),
+          fontFamily: 'Avenir Next',
+          fontSize: 38,
+          fontWeight: FontWeight.w500,
+          letterSpacing: -1.5,
+        ),
+      ),
+      const SizedBox(height: 26),
+      for (final capability in permissionCapabilities)
+        _CapabilityRow(
+          capability: capability,
+          status: statuses[capability]!,
+          onRequest:
+              statuses[capability]!.state == CapabilityState.actionRequired &&
+                  !requesting.contains(capability)
+              ? () => unawaited(_request(capability))
+              : null,
+        ),
+      if (finishFailed) ...[
+        const SizedBox(height: 8),
+        Semantics(
+          liveRegion: true,
+          child: const Text(
+            'Onboarding completion could not be saved. Try again.',
+            style: TextStyle(color: Color(0xffffb4ab)),
+          ),
+        ),
+      ],
+    ],
+  );
+}
+
+class _CapabilityRow extends StatelessWidget {
+  const _CapabilityRow({
+    required this.capability,
+    required this.status,
+    required this.onRequest,
+  });
+
+  final CoreCapability capability;
+  final CapabilityStatus status;
+  final VoidCallback? onRequest;
+
+  @override
+  Widget build(BuildContext context) {
+    final copy = switch (capability) {
+      CoreCapability.microphone =>
+        'I would like to use your microphone so we can talk.',
+      CoreCapability.screenCapture =>
+        'I would like to see your screen so I can give relevant help.',
+      CoreCapability.accessibility =>
+        'I would like accessibility access so I can act when you ask.',
+      CoreCapability.appData =>
+        'I would like Full Disk Access to learn more about you.',
+      CoreCapability.workspaceRoot => throw StateError(
+        'Workspace selection is not an operating-system permission.',
+      ),
+    };
+    final state = switch (status.state) {
+      CapabilityState.checking => 'Checking',
+      CapabilityState.granted => 'Granted',
+      CapabilityState.actionRequired => 'Action required',
+      CapabilityState.notRequired => 'No grant required',
+      CapabilityState.notApplicable => 'Not applicable',
+      CapabilityState.error => 'Check failed',
+    };
+    final granted = status.acceptable;
+    return Semantics(
+      button: true,
+      enabled: onRequest != null,
+      label: copy,
+      value: granted ? 'Granted' : state,
+      onTap: onRequest,
+      child: ExcludeSemantics(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+          child: Material(
+            color: const Color(0x0dffffff),
+            borderRadius: BorderRadius.circular(16),
+            clipBehavior: Clip.antiAlias,
+            child: InkWell(
+              borderRadius: BorderRadius.circular(16),
+              onTap: onRequest,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 14,
+                ),
+                child: Row(
+                  children: [
+                    AnimatedContainer(
+                      duration: const Duration(milliseconds: 180),
+                      width: 20,
+                      height: 20,
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(6),
+                        color: granted
+                            ? const Color(0xfffffcec)
+                            : Colors.transparent,
+                        border: Border.all(color: const Color(0x73ffffff)),
+                      ),
+                      child: granted
+                          ? const Icon(
+                              Icons.check_rounded,
+                              size: 14,
+                              color: Color(0xff171716),
+                            )
+                          : null,
+                    ),
+                    const SizedBox(width: 13),
+                    Expanded(
+                      child: Text(
+                        copy,
+                        style: const TextStyle(
+                          color: Color(0xd1ffffff),
+                          fontSize: 15,
+                          height: 1.35,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Text(
+                      granted
+                          ? 'Granted'
+                          : onRequest == null
+                          ? state
+                          : 'Open',
+                      style: const TextStyle(
+                        color: Color(0x73ffffff),
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}

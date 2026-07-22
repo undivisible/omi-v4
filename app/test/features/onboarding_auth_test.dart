@@ -8,7 +8,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:omi/auth/auth.dart';
 import 'package:omi/capabilities/desktop_capabilities.dart';
 import 'package:omi/features/desktop_auth_screen.dart';
-import 'package:omi/features/onboarding_screen.dart';
+import 'package:omi/features/onboarding/authentication_gate.dart';
+import 'package:omi/features/onboarding/permission_gate.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
@@ -19,55 +20,43 @@ void main() {
     phoneNumber: '+15555550123',
   );
 
-  testWidgets(
-    'processing consent and Firebase phone disclosure stay separate',
-    (tester) async {
-      final gateway = _Gateway(session);
-      final store = VolatileConsentStore();
-      final auth = AuthController(gateway, consentStore: store);
+  testWidgets('Firebase authentication and phone disclosure stay separate', (
+    tester,
+  ) async {
+    final gateway = _Gateway(session);
+    final auth = AuthController(gateway);
 
-      await tester.pumpWidget(_controls(auth));
-      expect(
-        tester
-            .widget<FilledButton>(find.byKey(const Key('request_phone_otp')))
-            .onPressed,
-        isNull,
-      );
+    await tester.pumpWidget(_controls(auth));
+    expect(
+      tester
+          .widget<FilledButton>(find.byKey(const Key('request_phone_otp')))
+          .onPressed,
+      isNull,
+    );
 
-      await tester.tap(find.byKey(const Key('firebase_auth_acknowledgement')));
-      await tester.pumpAndSettle();
-      expect(auth.snapshot.consentGranted, isTrue);
-      expect(await store.currentReceipt(), isNull);
-      expect(
-        tester
-            .widget<FilledButton>(find.byKey(const Key('request_phone_otp')))
-            .onPressed,
-        isNull,
-      );
+    await tester.tap(find.byKey(const Key('firebase_auth_acknowledgement')));
+    await tester.pumpAndSettle();
+    expect(auth.snapshot.consentGranted, isTrue);
+    expect(
+      tester
+          .widget<FilledButton>(find.byKey(const Key('request_phone_otp')))
+          .onPressed,
+      isNull,
+    );
 
-      await tester.tap(find.byKey(const Key('firebase_phone_disclosure')));
-      await tester.pumpAndSettle();
-      expect(
-        tester
-            .widget<FilledButton>(find.byKey(const Key('request_phone_otp')))
-            .onPressed,
-        isNotNull,
-      );
+    await tester.tap(find.byKey(const Key('firebase_phone_disclosure')));
+    await tester.pumpAndSettle();
+    expect(
+      tester
+          .widget<FilledButton>(find.byKey(const Key('request_phone_otp')))
+          .onPressed,
+      isNotNull,
+    );
 
-      await tester.tap(find.byKey(const Key('sign_in_google')));
-      await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const Key('grant_processing_consent')));
-      await tester.pumpAndSettle();
-      expect(auth.snapshot.hasProcessingAuthority, isTrue);
-      expect((await store.currentReceipt())?.subjectUid, 'firebase-uid');
-
-      await tester.tap(find.byKey(const Key('revoke_processing_consent')));
-      await tester.pumpAndSettle();
-      expect(auth.snapshot.consentGranted, isFalse);
-      expect(await store.currentReceipt(), isNull);
-      expect(gateway.didSignOut, isTrue);
-    },
-  );
+    await tester.tap(find.byKey(const Key('sign_in_google')));
+    await tester.pumpAndSettle();
+    expect(auth.snapshot.phase, AuthPhase.signedIn);
+  });
 
   testWidgets('sign out does not silently revoke processing consent', (
     tester,
@@ -642,7 +631,6 @@ Widget _controls(AuthController auth) => MaterialApp(
       listenable: auth,
       builder: (context, _) => ListView(
         children: [
-          ProcessingConsentGate(auth: auth),
           AuthenticationGate(auth: auth, configurationMessage: 'configured'),
         ],
       ),

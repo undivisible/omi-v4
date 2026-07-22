@@ -7,7 +7,7 @@ import 'package:http/http.dart' as http;
 
 import '../app_services.dart';
 import '../auth/auth.dart';
-import 'onboarding_screen.dart';
+import 'onboarding/authentication_gate.dart';
 
 class DesktopAuthScreen extends StatefulWidget {
   DesktopAuthScreen({
