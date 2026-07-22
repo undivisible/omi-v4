@@ -4,8 +4,38 @@ import ApplicationServices
 import Carbon.HIToolbox
 import FlutterMacOS
 
+private final class RadialBlurView: NSVisualEffectView {
+  private let radialMask = CAGradientLayer()
+
+  override init(frame frameRect: NSRect) {
+    super.init(frame: frameRect)
+    wantsLayer = true
+    radialMask.type = .radial
+    radialMask.colors = [
+      NSColor.black.cgColor,
+      NSColor.black.cgColor,
+      NSColor.black.withAlphaComponent(0.42).cgColor,
+      NSColor.clear.cgColor,
+    ]
+    radialMask.locations = [0, 0.3, 0.7, 1]
+    radialMask.startPoint = CGPoint(x: 0.5, y: 0.5)
+    radialMask.endPoint = CGPoint(x: 1, y: 0.5)
+    layer?.mask = radialMask
+  }
+
+  required init?(coder: NSCoder) {
+    super.init(coder: coder)
+  }
+
+  override func layout() {
+    super.layout()
+    radialMask.frame = bounds
+  }
+}
+
 class MainFlutterWindow: NSWindow, FlutterStreamHandler {
   private var eventKitBridge: AppleEventKitBridge?
+  private var menuBarBridge: MenuBarBridge?
   private var keyboardSink: FlutterEventSink?
   private var localKeyboardMonitor: Any?
   private var globalKeyboardMonitor: Any?
@@ -43,11 +73,42 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
   override func awakeFromNib() {
     let flutterViewController = FlutterViewController()
     let windowFrame = self.frame
-    self.contentViewController = flutterViewController
+    self.styleMask = [.borderless, .resizable, .miniaturizable]
+    self.isOpaque = false
+    self.backgroundColor = .clear
+    self.hasShadow = false
+    self.titleVisibility = .hidden
+    self.titlebarAppearsTransparent = true
+    self.isMovableByWindowBackground = true
+    self.level = .floating
+    self.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+    flutterViewController.backgroundColor = .clear
+    flutterViewController.view.wantsLayer = true
+    flutterViewController.view.layer?.backgroundColor = NSColor.clear.cgColor
+
+    let rootViewController = NSViewController()
+    let rootView = NSView(frame: NSRect(origin: .zero, size: windowFrame.size))
+    rootView.wantsLayer = true
+    rootView.layer?.backgroundColor = NSColor.clear.cgColor
+    rootViewController.view = rootView
+    rootViewController.addChild(flutterViewController)
+    self.contentViewController = rootViewController
     self.setFrame(windowFrame, display: true)
+
+    let blur = RadialBlurView(frame: rootView.bounds)
+    blur.autoresizingMask = [.width, .height]
+    blur.material = .underWindowBackground
+    blur.blendingMode = .behindWindow
+    blur.state = .active
+    blur.alphaValue = 0.72
+    flutterViewController.view.frame = rootView.bounds
+    flutterViewController.view.autoresizingMask = [.width, .height]
+    rootView.addSubview(blur)
+    rootView.addSubview(flutterViewController.view)
 
     RegisterGeneratedPlugins(registry: flutterViewController)
     eventKitBridge = AppleEventKitBridge(binaryMessenger: flutterViewController.engine.binaryMessenger)
+    menuBarBridge = MenuBarBridge(binaryMessenger: flutterViewController.engine.binaryMessenger, window: self)
 
     let capabilities = FlutterMethodChannel(
       name: "omi/core_capabilities",
@@ -67,6 +128,7 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
           "accessibility": AXIsProcessTrusted(),
           "microphone": AVCaptureDevice.authorizationStatus(for: .audio) == .authorized,
           "screenCapture": CGPreflightScreenCaptureAccess(),
+          "fullDiskAccess": self.hasFullDiskAccess(),
         ])
       case "request":
         guard let capability = call.arguments as? String else {
@@ -82,6 +144,11 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
           AVCaptureDevice.requestAccess(for: .audio) { _ in result(nil) }
         case "screenCapture":
           CGRequestScreenCaptureAccess()
+          result(nil)
+        case "appData":
+          if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles") {
+            NSWorkspace.shared.open(url)
+          }
           result(nil)
         default:
           result(FlutterError(code: "invalid_capability", message: nil, details: nil))
@@ -123,5 +190,19 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
   deinit {
     if let localKeyboardMonitor { NSEvent.removeMonitor(localKeyboardMonitor) }
     if let globalKeyboardMonitor { NSEvent.removeMonitor(globalKeyboardMonitor) }
+  }
+
+  private func hasFullDiskAccess() -> Bool {
+    let mail = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Mail")
+    do {
+      _ = try FileManager.default.contentsOfDirectory(
+        at: mail,
+        includingPropertiesForKeys: nil,
+        options: [.skipsHiddenFiles]
+      )
+      return true
+    } catch {
+      return false
+    }
   }
 }

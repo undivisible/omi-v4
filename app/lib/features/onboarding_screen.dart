@@ -1,5 +1,7 @@
 import 'dart:async';
+import 'dart:ui';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -8,7 +10,6 @@ import '../auth/auth.dart';
 import '../capabilities/desktop_capabilities.dart';
 import '../native/native_hub.dart';
 import '../onboarding/onboarding_controller.dart';
-import '../ui/omi_ui.dart';
 import 'omi_shell.dart';
 
 class OnboardingScreen extends StatefulWidget {
@@ -155,77 +156,70 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xff171716),
+      backgroundColor: Colors.transparent,
       body: _OnboardingBackdrop(
         bright: onboarding.stage.index >= OnboardingStage.scan.index,
         child: SafeArea(
           child: Center(
             child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 820),
+              constraints: BoxConstraints(
+                maxWidth: onboarding.stage == OnboardingStage.access
+                    ? 620
+                    : 820,
+              ),
               child: SingleChildScrollView(
                 padding: const EdgeInsets.symmetric(
-                  horizontal: 36,
-                  vertical: 44,
+                  horizontal: 45,
+                  vertical: 58,
                 ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    const Align(
-                      alignment: Alignment.centerLeft,
-                      child: OmiMark(),
+                child: AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 350),
+                  transitionBuilder: (child, animation) => FadeTransition(
+                    opacity: animation,
+                    child: SlideTransition(
+                      position: Tween(
+                        begin: const Offset(0, .025),
+                        end: Offset.zero,
+                      ).animate(animation),
+                      child: child,
                     ),
-                    const SizedBox(height: 72),
-                    AnimatedSwitcher(
-                      duration: const Duration(milliseconds: 350),
-                      transitionBuilder: (child, animation) => FadeTransition(
-                        opacity: animation,
-                        child: SlideTransition(
-                          position: Tween(
-                            begin: const Offset(0, .025),
-                            end: Offset.zero,
-                          ).animate(animation),
-                          child: child,
-                        ),
-                      ),
-                      child: switch (onboarding.stage) {
-                        OnboardingStage.introduction => _Introduction(
-                          key: const ValueKey('introduction'),
-                          onContinue: onboarding.continueFromIntroduction,
-                        ),
-                        OnboardingStage.access => ProductionGate(
-                          key: const ValueKey('access'),
-                          configurationMessage:
-                              widget.services.configurationMessage,
-                          auth: widget.services.auth,
-                          capabilities:
-                              widget.capabilities ??
-                              widget.services.capabilities,
-                          onOpenPreview: _openPreview,
-                          onFinish: onboarding.completeAccess,
-                        ),
-                        OnboardingStage.scan => _ScanStep(
-                          key: ValueKey('scan'),
-                          sources: scanSources,
-                          error: scanError,
-                          onRetry: _retryScan,
-                          onContinue: onboarding.completeScan,
-                        ),
-                        OnboardingStage.profile => _ProfileQuestion(
-                          key: ValueKey(onboarding.questionIndex),
-                          prompt: prompts[onboarding.questionIndex],
-                          index: onboarding.questionIndex,
-                          count: prompts.length,
-                          controller: answerController,
-                          validationMessage: onboarding.validationMessage,
-                          onContinue: _submitAnswer,
-                        ),
-                        OnboardingStage.use => _UseStep(
-                          key: const ValueKey('use'),
-                          onFinish: _finish,
-                        ),
-                      },
+                  ),
+                  child: switch (onboarding.stage) {
+                    OnboardingStage.introduction => _Introduction(
+                      key: const ValueKey('introduction'),
+                      onContinue: onboarding.continueFromIntroduction,
                     ),
-                  ],
+                    OnboardingStage.access => ProductionGate(
+                      key: const ValueKey('access'),
+                      configurationMessage:
+                          widget.services.configurationMessage,
+                      auth: widget.services.auth,
+                      capabilities:
+                          widget.capabilities ?? widget.services.capabilities,
+                      onOpenPreview: _openPreview,
+                      onFinish: onboarding.completeAccess,
+                    ),
+                    OnboardingStage.scan => _ScanStep(
+                      key: ValueKey('scan'),
+                      sources: scanSources,
+                      error: scanError,
+                      onRetry: _retryScan,
+                      onContinue: onboarding.completeScan,
+                    ),
+                    OnboardingStage.profile => _ProfileQuestion(
+                      key: ValueKey(onboarding.questionIndex),
+                      prompt: prompts[onboarding.questionIndex],
+                      index: onboarding.questionIndex,
+                      count: prompts.length,
+                      controller: answerController,
+                      validationMessage: onboarding.validationMessage,
+                      onContinue: _submitAnswer,
+                    ),
+                    OnboardingStage.use => _UseStep(
+                      key: const ValueKey('use'),
+                      onFinish: _finish,
+                    ),
+                  },
                 ),
               ),
             ),
@@ -243,28 +237,67 @@ class _Introduction extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Column(
-    crossAxisAlignment: CrossAxisAlignment.stretch,
+    mainAxisSize: MainAxisSize.min,
     children: [
-      Text(
-        'Hi, I’m Omi. I’m a second brain you can actually trust—built to surface what’s important in your life and help you get things done.',
-        style: Theme.of(context).textTheme.displaySmall?.copyWith(
-          color: const Color(0xfffffcec),
-          fontSize: 44,
+      Text.rich(
+        TextSpan(
+          children: [
+            const TextSpan(text: 'Hi, I’m Omi. I’m a '),
+            const TextSpan(
+              text: 'second brain',
+              style: TextStyle(fontWeight: FontWeight.w700),
+            ),
+            const TextSpan(text: ' you can '),
+            const TextSpan(
+              text: 'actually trust',
+              style: TextStyle(fontStyle: FontStyle.italic),
+            ),
+            const TextSpan(text: '—built to '),
+            const TextSpan(
+              text: 'surface what’s important',
+              style: TextStyle(fontWeight: FontWeight.w700),
+            ),
+            const TextSpan(text: ' in your life and help you '),
+            const TextSpan(
+              text: 'get things done.',
+              style: TextStyle(fontWeight: FontWeight.w700),
+            ),
+          ],
+        ),
+        textAlign: TextAlign.center,
+        style: const TextStyle(
+          color: Color(0xfffffcec),
+          fontFamily: 'Avenir Next',
+          fontSize: 46,
+          fontWeight: FontWeight.w500,
           height: 1.08,
-          letterSpacing: -1.8,
+          letterSpacing: -2.07,
+          shadows: [
+            Shadow(
+              color: Color(0x80000000),
+              blurRadius: 18,
+              offset: Offset(0, 1),
+            ),
+          ],
         ),
       ),
-      const SizedBox(height: 36),
-      Align(
-        alignment: Alignment.centerLeft,
-        child: FilledButton(
-          key: const Key('continue_preview_intro'),
-          onPressed: onContinue,
-          child: const Padding(
-            padding: EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-            child: Text('Hi Omi!'),
+      const SizedBox(height: 40),
+      FilledButton(
+        key: const Key('continue_preview_intro'),
+        onPressed: onContinue,
+        style: FilledButton.styleFrom(
+          minimumSize: const Size(0, 56),
+          padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
+          backgroundColor: const Color(0xfffffcec),
+          foregroundColor: const Color(0xff171716),
+          shape: const StadiumBorder(),
+          textStyle: const TextStyle(
+            fontFamily: 'Avenir Next',
+            fontSize: 16,
+            fontWeight: FontWeight.w600,
           ),
         ),
+        child: const Text('Hi Omi!'),
       ),
     ],
   );
@@ -459,26 +492,77 @@ class _OnboardingBackdrop extends StatelessWidget {
   final bool bright;
 
   @override
-  Widget build(BuildContext context) => AnimatedContainer(
-    duration: const Duration(milliseconds: 900),
-    curve: Curves.easeOutCubic,
-    decoration: BoxDecoration(
-      color: const Color(0xff171716),
-      gradient: RadialGradient(
-        center: bright ? const Alignment(0, 1.3) : const Alignment(-1.2, -1.1),
-        radius: bright ? 1.35 : 1.05,
-        colors: bright
-            ? const [
-                Color(0xb3f25e6b),
-                Color(0x7096c4ff),
-                Color(0x38d3e081),
-                Color(0xff171716),
-              ]
-            : const [Color(0x5096c4ff), Color(0xff171716)],
-        stops: bright ? const [0, .32, .62, 1] : const [0, .78],
+  Widget build(BuildContext context) => Stack(
+    fit: StackFit.expand,
+    children: [
+      if (kIsWeb || defaultTargetPlatform != TargetPlatform.macOS)
+        const ColoredBox(color: Color(0xff9ba0a3)),
+      ClipRect(
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 34, sigmaY: 34),
+          child: const ColoredBox(color: Colors.transparent),
+        ),
+      ),
+      AnimatedOpacity(
+        duration: const Duration(milliseconds: 900),
+        curve: Curves.easeOutCubic,
+        opacity: bright ? .7 : .46,
+        child: const _OnboardingEdgeGradient(),
+      ),
+      child,
+    ],
+  );
+}
+
+class _OnboardingEdgeGradient extends StatelessWidget {
+  const _OnboardingEdgeGradient();
+
+  @override
+  Widget build(BuildContext context) => IgnorePointer(
+    child: ShaderMask(
+      blendMode: BlendMode.dstIn,
+      shaderCallback: (bounds) => const RadialGradient(
+        radius: 1,
+        colors: [Colors.white, Colors.white, Colors.transparent],
+        stops: [0, .62, 1],
+      ).createShader(bounds),
+      child: ImageFiltered(
+        imageFilter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
+        child: Stack(
+          fit: StackFit.expand,
+          children: const [
+            _EdgeColor(Alignment(-1.25, -1.2), Color(0xfff25e6b)),
+            _EdgeColor(Alignment(-.25, -1.25), Color(0xfff2c2ac)),
+            _EdgeColor(Alignment(.35, -1.25), Color(0xffffd0b8)),
+            _EdgeColor(Alignment(1.2, -1.05), Color(0xff96c4ff)),
+            _EdgeColor(Alignment(1.25, .05), Color(0xffb9d6ff)),
+            _EdgeColor(Alignment(1.2, 1.15), Color(0xffd3e081)),
+            _EdgeColor(Alignment(.05, 1.25), Color(0xfff4d69f)),
+            _EdgeColor(Alignment(-.75, 1.2), Color(0xfff2c2ac)),
+            _EdgeColor(Alignment(-1.25, .45), Color(0xffff9a91)),
+          ],
+        ),
       ),
     ),
-    child: child,
+  );
+}
+
+class _EdgeColor extends StatelessWidget {
+  const _EdgeColor(this.center, this.color);
+
+  final Alignment center;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) => DecoratedBox(
+    decoration: BoxDecoration(
+      gradient: RadialGradient(
+        center: center,
+        radius: .65,
+        colors: [color, color.withValues(alpha: 0)],
+        stops: const [0, 1],
+      ),
+    ),
   );
 }
 
@@ -502,7 +586,14 @@ class ProductionGate extends StatefulWidget {
   State<ProductionGate> createState() => _ProductionGateState();
 }
 
-class _ProductionGateState extends State<ProductionGate> {
+class _ProductionGateState extends State<ProductionGate>
+    with WidgetsBindingObserver {
+  static const permissionCapabilities = [
+    CoreCapability.microphone,
+    CoreCapability.screenCapture,
+    CoreCapability.accessibility,
+    CoreCapability.appData,
+  ];
   Map<CoreCapability, CapabilityStatus> statuses = {
     for (final capability in CoreCapability.values)
       capability: const CapabilityStatus(
@@ -519,14 +610,23 @@ class _ProductionGateState extends State<ProductionGate> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     widget.auth.addListener(_refreshView);
     unawaited(_check());
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     widget.auth.removeListener(_refreshView);
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && !refreshing && !finishing) {
+      unawaited(_check());
+    }
   }
 
   void _refreshView() {
@@ -553,6 +653,7 @@ class _ProductionGateState extends State<ProductionGate> {
       statuses = next;
       refreshing = false;
     });
+    if (ready && !finishing) await _finish();
   }
 
   Future<void> _request(CoreCapability capability) async {
@@ -586,13 +687,6 @@ class _ProductionGateState extends State<ProductionGate> {
       finishing = true;
       finishFailed = false;
     });
-    await _check();
-    if (!mounted) return;
-    final canFinish = ready;
-    if (!canFinish) {
-      setState(() => finishing = false);
-      return;
-    }
     try {
       await widget.onFinish();
       if (mounted) setState(() => finishing = false);
@@ -605,41 +699,27 @@ class _ProductionGateState extends State<ProductionGate> {
     }
   }
 
-  bool get ready =>
-      widget.auth.snapshot.phase == AuthPhase.signedIn &&
-      widget.auth.snapshot.hasProcessingAuthority &&
-      CoreCapability.values.every(
-        (capability) => statuses[capability]?.acceptable == true,
-      );
+  bool get ready => permissionCapabilities.every(
+    (capability) => statuses[capability]?.acceptable == true,
+  );
 
   @override
   Widget build(BuildContext context) => Column(
     crossAxisAlignment: CrossAxisAlignment.stretch,
     children: [
-      Text(
-        'Before I begin',
-        style: Theme.of(context).textTheme.displaySmall?.copyWith(
-          color: const Color(0xfffffcec),
-          fontSize: 44,
-          letterSpacing: -1.6,
+      const Text(
+        'First…',
+        textAlign: TextAlign.left,
+        style: TextStyle(
+          color: Color(0xfffffcec),
+          fontFamily: 'Avenir Next',
+          fontSize: 38,
+          fontWeight: FontWeight.w500,
+          letterSpacing: -1.5,
         ),
       ),
-      const SizedBox(height: 12),
-      Text(
-        'Sign in, choose what Omi may process, and grant the access needed to remember and act across your computer.',
-        style: Theme.of(
-          context,
-        ).textTheme.bodyLarge?.copyWith(color: Colors.white70),
-      ),
-      const SizedBox(height: 24),
-      AuthenticationGate(
-        auth: widget.auth,
-        configurationMessage: widget.configurationMessage,
-      ),
-      const SizedBox(height: 10),
-      ProcessingConsentGate(auth: widget.auth),
-      const SizedBox(height: 10),
-      for (final capability in CoreCapability.values) ...[
+      const SizedBox(height: 26),
+      for (final capability in permissionCapabilities)
         _CapabilityRow(
           capability: capability,
           status: statuses[capability]!,
@@ -649,20 +729,6 @@ class _ProductionGateState extends State<ProductionGate> {
               ? () => unawaited(_request(capability))
               : null,
         ),
-        const SizedBox(height: 10),
-      ],
-      OutlinedButton.icon(
-        key: const Key('refresh_core_capabilities'),
-        onPressed: refreshing || finishing ? null : _check,
-        icon: const Icon(Icons.refresh_rounded),
-        label: const Text('Check capabilities again'),
-      ),
-      const SizedBox(height: 24),
-      FilledButton(
-        key: const Key('finish_production_onboarding'),
-        onPressed: ready && !finishing ? _finish : null,
-        child: Text(finishing ? 'Checking access…' : 'Continue'),
-      ),
       if (finishFailed) ...[
         const SizedBox(height: 8),
         Semantics(
@@ -673,19 +739,6 @@ class _ProductionGateState extends State<ProductionGate> {
           ),
         ),
       ],
-      const SizedBox(height: 12),
-      OutlinedButton.icon(
-        key: const Key('open_interface_preview'),
-        onPressed: widget.onOpenPreview,
-        icon: const Icon(Icons.visibility_outlined),
-        label: const Text('Open interface preview (demo)'),
-      ),
-      const SizedBox(height: 18),
-      const Text(
-        'Omi is open source and private by design. You choose what I can read.',
-        textAlign: TextAlign.center,
-        style: TextStyle(color: Color(0xffd0cec6), fontSize: 12),
-      ),
     ],
   );
 }
@@ -703,18 +756,18 @@ class _CapabilityRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final (icon, title) = switch (capability) {
-      CoreCapability.accessibility => (
-        Icons.accessibility_new_rounded,
-        'Accessibility',
+    final copy = switch (capability) {
+      CoreCapability.microphone =>
+        'I would like to use your microphone so we can talk.',
+      CoreCapability.screenCapture =>
+        'I would like to see your screen so I can give relevant help.',
+      CoreCapability.accessibility =>
+        'I would like accessibility access so I can act when you ask.',
+      CoreCapability.appData =>
+        'I would like Full Disk Access to learn more about you.',
+      CoreCapability.workspaceRoot => throw StateError(
+        'Workspace selection is not an operating-system permission.',
       ),
-      CoreCapability.microphone => (Icons.mic_none_rounded, 'Microphone'),
-      CoreCapability.screenCapture => (
-        Icons.desktop_windows_outlined,
-        'Screen capture',
-      ),
-      CoreCapability.appData => (Icons.storage_outlined, 'Private app data'),
-      CoreCapability.workspaceRoot => (Icons.folder_outlined, 'Workspace root'),
     };
     final state = switch (status.state) {
       CapabilityState.checking => 'Checking',
@@ -724,13 +777,56 @@ class _CapabilityRow extends StatelessWidget {
       CapabilityState.notApplicable => 'Not applicable',
       CapabilityState.error => 'Check failed',
     };
-    return _ReadinessRow(
-      icon: icon,
-      title: title,
-      detail: status.detail,
-      state: state,
-      actionLabel: onRequest == null ? null : 'Review $title access',
-      onAction: onRequest,
+    final granted = status.acceptable;
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onRequest,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 15),
+          child: Row(
+            children: [
+              AnimatedContainer(
+                duration: const Duration(milliseconds: 180),
+                width: 20,
+                height: 20,
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(6),
+                  color: granted ? const Color(0xfffffcec) : Colors.transparent,
+                  border: Border.all(color: const Color(0x73ffffff)),
+                ),
+                child: granted
+                    ? const Icon(
+                        Icons.check_rounded,
+                        size: 14,
+                        color: Color(0xff171716),
+                      )
+                    : null,
+              ),
+              const SizedBox(width: 13),
+              Expanded(
+                child: Text(
+                  copy,
+                  style: const TextStyle(
+                    color: Color(0xd1ffffff),
+                    fontSize: 15,
+                    height: 1.35,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Text(
+                granted
+                    ? 'Granted'
+                    : onRequest == null
+                    ? state
+                    : 'Open',
+                style: const TextStyle(color: Color(0x73ffffff), fontSize: 12),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
@@ -1052,16 +1148,12 @@ class _ReadinessRow extends StatelessWidget {
     required this.title,
     required this.detail,
     required this.state,
-    this.actionLabel,
-    this.onAction,
   });
 
   final IconData icon;
   final String title;
   final String detail;
   final String state;
-  final String? actionLabel;
-  final VoidCallback? onAction;
 
   @override
   Widget build(BuildContext context) => Padding(
@@ -1083,10 +1175,6 @@ class _ReadinessRow extends StatelessWidget {
               ),
               const SizedBox(height: 6),
               Text(state, style: const TextStyle(color: Color(0xffffc66d))),
-              if (onAction != null && actionLabel != null) ...[
-                const SizedBox(height: 10),
-                OutlinedButton(onPressed: onAction, child: Text(actionLabel!)),
-              ],
             ],
           ),
         ),

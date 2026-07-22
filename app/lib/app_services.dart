@@ -351,7 +351,7 @@ final class AppServices {
 
   Future<String> scanOnboardingSources() async {
     await _queueProductionSync();
-    if (!chatReady || nativeHub is! OnboardingScanHub) {
+    if (nativeHub is! OnboardingScanHub) {
       throw StateError('Native scanning is not connected.');
     }
     final root = await selectedWorkspaceRoot;

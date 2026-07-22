@@ -7,6 +7,17 @@ use std::path::{Component, Path, PathBuf};
 #[cfg(target_os = "macos")]
 const LIMIT: usize = 200;
 const MAX_FILES: usize = 50_000;
+#[cfg(target_os = "macos")]
+const NOTES_QUERY_LIMIT: usize = LIMIT * 3;
+#[cfg(target_os = "macos")]
+const NOTES_CLASSIFIER_NOISE: &[&str] = &[
+    "Document Documents Papers Written Document Written Documents",
+    "Chart Charts Graph Graphs",
+    "Machine Apparatus Machines",
+    "Consumer Electronics Electronic Device Electronic Devices Electronics",
+    "Computer Computers Computing Device Computing Devices Computing Machine Computing Machines",
+    "Electronic Computer Electronic Computers",
+];
 const MARKERS: &[&str] = &[
     "Cargo.toml",
     "Package.swift",
@@ -206,7 +217,7 @@ fn scan_notes() -> SourceScan {
         ""
     };
     let query = format!(
-        "SELECT Z_PK, ZTITLE, {summary}, ZMODIFICATIONDATE FROM ZICCLOUDSYNCINGOBJECT WHERE ZNOTE IS NOT NULL AND ZTITLE IS NOT NULL {deleted} ORDER BY ZMODIFICATIONDATE DESC LIMIT {LIMIT}"
+        "SELECT Z_PK, ZTITLE, {summary}, ZMODIFICATIONDATE FROM ZICCLOUDSYNCINGOBJECT WHERE ZNOTE IS NOT NULL AND ZTITLE IS NOT NULL {deleted} ORDER BY ZMODIFICATIONDATE DESC LIMIT {NOTES_QUERY_LIMIT}"
     );
     let mut statement = match connection.prepare(&query) {
         Ok(value) => value,
@@ -223,14 +234,19 @@ fn scan_notes() -> SourceScan {
         Ok(value) => value,
         Err(error) => return result("apple_notes", ScanState::Failed, error.to_string()),
     };
+    let rows = match rows.collect::<Result<Vec<_>, _>>() {
+        Ok(value) => value,
+        Err(error) => return result("apple_notes", ScanState::Failed, error.to_string()),
+    };
     let memories = rows
-        .filter_map(Result::ok)
+        .into_iter()
         .filter_map(|(id, title, summary, modified)| {
-            let title = title.trim();
-            if title.is_empty() || title == "New Note" {
+            let title = normalize_note_field(&title);
+            let summary = normalize_note_field(&summary);
+            if title.is_empty() || is_likely_note_attachment(&title, &summary) {
                 return None;
             }
-            let summary = summary.trim().chars().take(500).collect::<String>();
+            let summary = summary.chars().take(500).collect::<String>();
             Some(ScanMemory {
                 stable_id: id.to_string(),
                 text: if summary.is_empty() {
@@ -241,6 +257,7 @@ fn scan_notes() -> SourceScan {
                 captured_at_ms: apple_time(modified),
             })
         })
+        .take(LIMIT)
         .collect::<Vec<_>>();
     let count = memories.len();
     complete("apple_notes", memories, count)
@@ -318,8 +335,12 @@ fn scan_mail() -> SourceScan {
         Ok(value) => value,
         Err(error) => return result("apple_mail", ScanState::Failed, error.to_string()),
     };
+    let rows = match rows.collect::<Result<Vec<_>, _>>() {
+        Ok(value) => value,
+        Err(error) => return result("apple_mail", ScanState::Failed, error.to_string()),
+    };
     let memories = rows
-        .filter_map(Result::ok)
+        .into_iter()
         .filter_map(|(id, subject, sender, received)| {
             let subject = subject.trim();
             let sender = sender.trim();
@@ -382,7 +403,12 @@ fn columns(connection: &Connection, table: &str) -> Result<BTreeSet<String>, Str
 
 #[cfg(target_os = "macos")]
 fn envelope(root: &Path) -> std::io::Result<Option<PathBuf>> {
-    let mut versions = fs::read_dir(root)?
+    let entries = match fs::read_dir(root) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    let mut versions = entries
         .filter_map(Result::ok)
         .filter_map(|entry| {
             let name = entry.file_name().to_string_lossy().into_owned();
@@ -395,6 +421,38 @@ fn envelope(root: &Path) -> std::io::Result<Option<PathBuf>> {
         .collect::<Vec<_>>();
     versions.sort_by_key(|(version, _)| std::cmp::Reverse(*version));
     Ok(versions.into_iter().next().map(|(_, path)| path))
+}
+
+#[cfg(target_os = "macos")]
+fn normalize_note_field(value: &str) -> String {
+    NOTES_CLASSIFIER_NOISE
+        .iter()
+        .fold(value.to_owned(), |text, noise| text.replace(noise, ""))
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+#[cfg(target_os = "macos")]
+fn is_likely_note_attachment(title: &str, summary: &str) -> bool {
+    let combined = format!("{title} {summary}");
+    if combined.is_empty()
+        || combined.contains("SOLITE")
+        || combined.contains("kMDItem")
+        || combined
+            .split(|character: char| !character.is_alphanumeric())
+            .any(|word| word.eq_ignore_ascii_case("exec"))
+    {
+        return true;
+    }
+    let title = title.to_ascii_lowercase();
+    [".png", ".jpg", ".jpeg", ".heic", ".pdf", ".mov", ".mp4"]
+        .iter()
+        .any(|extension| title.ends_with(extension))
+        || title.starts_with("cleanshot ")
+        || title.starts_with("image ")
+        || (title.contains("scan") && title.contains("document"))
+        || (title.chars().count() < 3 && summary.chars().count() < 12)
 }
 
 #[cfg(target_os = "macos")]
@@ -453,5 +511,29 @@ mod tests {
             scan_workspace(&["/tmp/../etc".into()]).state,
             ScanState::Failed
         );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn note_metadata_matches_upstream_filtering() {
+        assert_eq!(
+            normalize_note_field("  Launch\n  checklist  "),
+            "Launch checklist"
+        );
+        assert!(!is_likely_note_attachment(
+            "Executive planning",
+            "Q3 execution details"
+        ));
+        assert!(is_likely_note_attachment("exec", ""));
+        assert!(is_likely_note_attachment("Scan of document", ""));
+        assert!(is_likely_note_attachment("receipt.pdf", ""));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn missing_mail_store_is_unavailable() {
+        let root =
+            std::env::temp_dir().join(format!("omi-missing-mail-store-{}", std::process::id()));
+        assert_eq!(envelope(&root).unwrap_or(None), None);
     }
 }

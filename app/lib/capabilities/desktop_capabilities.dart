@@ -199,7 +199,10 @@ final class PlatformDesktopCapabilityGateway
           values?['screenCapture'] == true,
           'Screen Recording lets Omi understand visible work.',
         ),
-        CoreCapability.appData: appData,
+        CoreCapability.appData: _permission(
+          values?['fullDiskAccess'] == true,
+          'Full Disk Access lets Omi read Apple Mail and Notes for your local memory.',
+        ),
         CoreCapability.workspaceRoot: workspaceRoot,
       };
     } catch (error) {
@@ -235,7 +238,8 @@ final class PlatformDesktopCapabilityGateway
     }
     if ((defaultTargetPlatform != TargetPlatform.macOS &&
             defaultTargetPlatform != TargetPlatform.windows) ||
-        capability == CoreCapability.appData) {
+        capability == CoreCapability.appData &&
+            defaultTargetPlatform != TargetPlatform.macOS) {
       return;
     }
     if (defaultTargetPlatform == TargetPlatform.windows &&

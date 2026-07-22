@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../app_services.dart';
 import '../keyboard/keyboard.dart';
+import '../menu_bar/desktop_menu_bar.dart';
 import '../ui/omi_ui.dart';
 import 'chat_screen.dart';
 import 'currents_screen.dart';
@@ -36,6 +37,7 @@ class _OmiShellState extends State<OmiShell> {
   late final _desktopKeyboard = widget.desktopKeyboard ?? DesktopKeyboard();
   DesktopGestureController? _desktopGesture;
   StreamSubscription<ShiftGestureAction>? _desktopGestureActions;
+  DesktopMenuBarController? _menuBar;
   Timer? _openingGradientTimer;
 
   static const destinations = [
@@ -54,6 +56,17 @@ class _OmiShellState extends State<OmiShell> {
       if (mounted) setState(() => _showOpeningGradient = false);
     });
     if (widget.previewMode) return;
+    _menuBar = DesktopMenuBarController(
+      currents: widget.services.currents,
+      isListening: () => widget.services.desktopVoice.active,
+      onCapture: () => _handleDesktopGesture(ShiftGestureAction.openTextInput),
+      onToggleListening: () => _handleDesktopGesture(
+        widget.services.desktopVoice.active
+            ? ShiftGestureAction.stopVoice
+            : ShiftGestureAction.startVoice,
+      ),
+    );
+    unawaited(_menuBar!.start());
     final gesture =
         widget.desktopGesture ??
         (_desktopKeyboard.supported
@@ -76,6 +89,7 @@ class _OmiShellState extends State<OmiShell> {
   @override
   void dispose() {
     _openingGradientTimer?.cancel();
+    unawaited(_menuBar?.dispose());
     unawaited(_disposeDesktopGesture());
     super.dispose();
   }

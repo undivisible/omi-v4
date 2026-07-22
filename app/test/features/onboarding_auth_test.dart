@@ -193,37 +193,19 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(
-      tester
-          .widget<FilledButton>(
-            find.byKey(const Key('finish_production_onboarding')),
-          )
-          .onPressed,
-      isNull,
+    expect(finished, isFalse);
+    await tester.ensureVisible(
+      find.text('I would like to see your screen so I can give relevant help.'),
     );
-    await tester.ensureVisible(find.text('Review Screen capture access'));
-    await tester.tap(find.text('Review Screen capture access'));
+    await tester.tap(
+      find.text('I would like to see your screen so I can give relevant help.'),
+    );
     await tester.pumpAndSettle();
     expect(capabilities.requested, [CoreCapability.screenCapture]);
-    expect(
-      tester
-          .widget<FilledButton>(
-            find.byKey(const Key('finish_production_onboarding')),
-          )
-          .onPressed,
-      isNotNull,
-    );
-    await tester.ensureVisible(
-      find.byKey(const Key('finish_production_onboarding')),
-    );
-    await tester.tap(find.byKey(const Key('finish_production_onboarding')));
-    await tester.pumpAndSettle();
     expect(finished, isTrue);
   });
 
-  testWidgets('finish rechecks capabilities and blocks a stale ready state', (
-    tester,
-  ) async {
+  testWidgets('granted permissions advance automatically once', (tester) async {
     final gateway = _Gateway(session, currentSession: session);
     final auth = AuthController(
       gateway,
@@ -254,19 +236,8 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    capabilities.statuses[CoreCapability.microphone] = const CapabilityStatus(
-      state: CapabilityState.actionRequired,
-      detail: 'Revoked',
-    );
-
-    await tester.ensureVisible(
-      find.byKey(const Key('finish_production_onboarding')),
-    );
-    await tester.tap(find.byKey(const Key('finish_production_onboarding')));
-    await tester.pumpAndSettle();
-
-    expect(finished, isFalse);
-    expect(find.text('Revoked'), findsOneWidget);
+    expect(finished, isTrue);
+    expect(find.text('Continue'), findsNothing);
   });
 
   testWidgets('duplicate capability requests are ignored while in flight', (
@@ -284,9 +255,9 @@ void main() {
           state: CapabilityState.granted,
           detail: 'Verified',
         ),
-      CoreCapability.workspaceRoot: const CapabilityStatus(
+      CoreCapability.screenCapture: const CapabilityStatus(
         state: CapabilityState.actionRequired,
-        detail: 'Choose a folder',
+        detail: 'Grant screen recording',
       ),
     })..requestBarrier = Completer<void>();
     await tester.pumpWidget(
@@ -305,15 +276,15 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    final button = tester.widget<OutlinedButton>(
-      find.widgetWithText(OutlinedButton, 'Review Workspace root access'),
+    final row = find.text(
+      'I would like to see your screen so I can give relevant help.',
     );
-
-    button.onPressed!();
-    button.onPressed!();
+    await tester.ensureVisible(row);
+    await tester.tap(row);
+    await tester.tap(row);
     await tester.pump();
 
-    expect(capabilities.requested, [CoreCapability.workspaceRoot]);
+    expect(capabilities.requested, [CoreCapability.screenCapture]);
     capabilities.requestBarrier!.complete();
     await tester.pumpAndSettle();
   });
@@ -333,9 +304,9 @@ void main() {
           state: CapabilityState.granted,
           detail: 'Verified',
         ),
-      CoreCapability.workspaceRoot: const CapabilityStatus(
+      CoreCapability.screenCapture: const CapabilityStatus(
         state: CapabilityState.actionRequired,
-        detail: 'Choose a folder',
+        detail: 'Grant screen recording',
       ),
     })..requestBarrier = Completer<void>();
     await tester.pumpWidget(
@@ -354,10 +325,11 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    final button = tester.widget<OutlinedButton>(
-      find.widgetWithText(OutlinedButton, 'Review Workspace root access'),
+    final workspace = find.text(
+      'I would like to see your screen so I can give relevant help.',
     );
-    button.onPressed!();
+    await tester.ensureVisible(workspace);
+    await tester.tap(workspace);
     await tester.pump();
     expect(capabilities.checkCalls, 1);
 
@@ -384,9 +356,9 @@ void main() {
                 state: CapabilityState.granted,
                 detail: 'Verified',
               ),
-            CoreCapability.workspaceRoot: const CapabilityStatus(
+            CoreCapability.screenCapture: const CapabilityStatus(
               state: CapabilityState.actionRequired,
-              detail: 'Choose a folder',
+              detail: 'Grant screen recording',
             ),
           })
           ..requestBarrier = Completer<void>()
@@ -407,27 +379,23 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    tester
-        .widget<OutlinedButton>(
-          find.widgetWithText(OutlinedButton, 'Review Workspace root access'),
-        )
-        .onPressed!();
+    final workspace = find.text(
+      'I would like to see your screen so I can give relevant help.',
+    );
+    await tester.ensureVisible(workspace);
+    await tester.tap(workspace);
     await tester.pump();
-    capabilities.statuses[CoreCapability.workspaceRoot] =
+    capabilities.statuses[CoreCapability.screenCapture] =
         const CapabilityStatus(
           state: CapabilityState.granted,
           detail: 'Newer verified result',
         );
-    await tester.ensureVisible(
-      find.byKey(const Key('refresh_core_capabilities')),
-    );
-    await tester.tap(find.byKey(const Key('refresh_core_capabilities')));
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
     await tester.pumpAndSettle();
 
     capabilities.requestBarrier!.complete();
     await tester.pumpAndSettle();
 
-    expect(find.text('Newer verified result'), findsOneWidget);
     expect(find.textContaining('stale failure'), findsNothing);
   });
 

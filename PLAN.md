@@ -60,6 +60,7 @@ The reusable memory engine lives in the public [`tschk/zkr`](https://github.com/
 - [x] Connect channel messages to the desktop agent with UID-scoped ordered leases, offline retry, atomic conversation persistence, and durable outbound replies.
 - [ ] Prove Telegram and Blooio round trips with real credentials and a continuously connected desktop client.
 - [ ] Finish desktop both-Shift voice capture; the global gesture, microphone/STT path, and failure-safe teardown exist, but physical Windows proof does not.
+- [ ] Add the desktop menu-bar companion: show the single most important current task first, with capture and listening state/actions directly beneath it; keep it a compact portal into the same desktop agent session rather than a separate assistant.
 - [x] Complete the audited live-STT slice between bounded Omi BLE/Rinf audio and idempotent final-transcript `zkr` capture, including managed/BYOK provider routing, reconnect gaps, final drain, cancellation, and typed stop acknowledgements.
 - [ ] Re-prove Android, iOS without signing, macOS, Windows, and web release builds on the exact release head after this integration lands.
 - [ ] Wire Firebase Auth, real channel delivery, physical Omi hardware, desktop permissions/computer use, and model routes against real credentials and devices.
@@ -358,6 +359,7 @@ Prove managed/BYOK Deepgram with real credentials and a physical Omi on iOS and 
 - 2026-07-21: Established proactive second-brain direction, separate memory domains, Firebase-compatible D1 transition, and two-plan cost model.
 - 2026-07-21: Replaced React Native/UniFFI with Flutter/Rinf, selected device-first capture and cross-platform clients, added Telegram/Blooio, onboarding, model routing, both-Shift gesture, build sprint, and three validation days.
 - 2026-07-21: Locked desktop-first assistant roles, mobile hardware relay, web memory portal, four-permission desktop gate, voice-created first tasks, deferred connection tasks, and channel-triggered desktop actions.
+- 2026-07-21: Locked the desktop menu-bar hierarchy to the most important current task first, followed by capture and live listening controls backed by the same agent and voice session.
 - 2026-07-21: Added task-scoped authority, ask-when-blocked behavior, chat-controlled typed settings, progressive tool disclosure, and hybrid direct/programmatic tool execution.
 - 2026-07-21: Added evidence-backed temporal claims, bounded hot profile, retrieval packs, inspected skills, `rs_gbrain` reuse limits, and cited Daily Reviews with separately validated memory/task/skill candidates.
 - 2026-07-21: Published `zkr 0.1.1`, integrated its source/evidence retrieval and projection lifecycle into the Rinf hub, implemented mobile BLE relay and Worker SaaS/channel boundaries, and moved the roadmap from scaffolding to release-build and credentialed-integration proof.

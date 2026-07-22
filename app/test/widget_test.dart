@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:omi/app_services.dart';
+import 'package:omi/features/omi_shell.dart';
 import 'package:omi/main.dart';
 
 Future<void> tapVisible(WidgetTester tester, Finder finder) async {
@@ -15,8 +17,11 @@ Future<void> reachPreviewGate(WidgetTester tester) async {
 }
 
 Future<void> openInterfacePreview(WidgetTester tester) async {
-  await reachPreviewGate(tester);
-  await tapVisible(tester, find.byKey(const Key('open_interface_preview')));
+  final services = AppServices.fromEnvironment();
+  addTearDown(services.dispose);
+  await tester.pumpWidget(
+    MaterialApp(home: OmiShell(services: services, previewMode: true)),
+  );
   await tester.pumpAndSettle();
 }
 
@@ -35,6 +40,8 @@ void main() {
   testWidgets('onboarding blocks empty answers and production completion', (
     tester,
   ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
     await tester.pumpWidget(const OmiApp());
 
     expect(find.textContaining('Hi, I’m Omi.'), findsOneWidget);
@@ -48,21 +55,29 @@ void main() {
     await tapVisible(tester, find.byKey(const Key('continue_preview_intro')));
     await tester.pumpAndSettle();
 
-    expect(find.text('Before I begin'), findsOneWidget);
-    expect(find.text('Accessibility'), findsOneWidget);
-    expect(find.text('Microphone'), findsOneWidget);
-    expect(find.text('Screen capture'), findsOneWidget);
-    expect(find.text('Private app data'), findsOneWidget);
-    expect(find.text('Workspace root'), findsOneWidget);
+    expect(find.text('Before I begin'), findsNothing);
     expect(
-      tester
-          .widget<FilledButton>(
-            find.byKey(const Key('finish_production_onboarding')),
-          )
-          .onPressed,
-      isNull,
+      find.text('I would like accessibility access so I can act when you ask.'),
+      findsOneWidget,
     );
+    expect(
+      find.text('I would like to use your microphone so we can talk.'),
+      findsOneWidget,
+    );
+    expect(
+      find.text('I would like to see your screen so I can give relevant help.'),
+      findsOneWidget,
+    );
+    expect(
+      find.text('I would like Full Disk Access to learn more about you.'),
+      findsOneWidget,
+    );
+    expect(find.textContaining('Firebase'), findsNothing);
+    expect(find.textContaining('consent'), findsNothing);
+    expect(find.textContaining('workspace'), findsNothing);
+    expect(find.text('Continue'), findsNothing);
     expect(find.text('Chat'), findsNothing);
+    debugDefaultTargetPlatformOverride = null;
   });
 
   testWidgets('explicit demo path opens an honestly disconnected shell', (
@@ -209,6 +224,8 @@ void main() {
   testWidgets('onboarding remains scrollable at short desktop height', (
     tester,
   ) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
     tester.view.physicalSize = const Size(800, 360);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
@@ -216,9 +233,12 @@ void main() {
     await tester.pumpWidget(const OmiApp());
 
     await reachPreviewGate(tester);
-    expect(find.text('Before I begin'), findsOneWidget);
-    expect(find.byKey(const Key('open_interface_preview')), findsOneWidget);
+    expect(
+      find.text('I would like to use your microphone so we can talk.'),
+      findsOneWidget,
+    );
     expect(tester.takeException(), isNull);
+    debugDefaultTargetPlatformOverride = null;
   });
 
   testWidgets('preview remains usable at 200 percent text scale', (
