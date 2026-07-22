@@ -140,7 +140,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       setState(() {
         scanRequestId = value.requestId;
         scanSources = value.sources;
-        scanSummary = value.summary;
+        scanSummary = _sanitizeScanSummary(value.summary);
         scanDetectedName = value.detectedName;
         scanDetectedLanguages = value.detectedLanguages;
         scanError = null;
@@ -207,9 +207,8 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     return (displayName == null || displayName.isEmpty) ? 'there' : displayName;
   }
 
-  List<String> get _defaultProfileLanguages => scanDetectedLanguages.isEmpty
-      ? [_deviceLanguageName()]
-      : scanDetectedLanguages;
+  List<String> get _defaultProfileLanguages =>
+      {...scanDetectedLanguages, ..._deviceLanguageNames()}.toList();
 
   void _completeProfile(String name, List<String> languages) {
     final trimmed = name.trim();
@@ -404,9 +403,25 @@ const _profileLanguageNames = {
   'zh': 'Mandarin',
 };
 
-String _deviceLanguageName() {
-  final code = WidgetsBinding.instance.platformDispatcher.locale.languageCode;
-  return _profileLanguageNames[code] ?? 'English';
+List<String> _deviceLanguageNames() {
+  final names = <String>{
+    for (final locale in WidgetsBinding.instance.platformDispatcher.locales)
+      ?_profileLanguageNames[locale.languageCode],
+  };
+  return names.isEmpty ? ['English'] : names.toList();
+}
+
+String? _sanitizeScanSummary(String? summary) {
+  if (summary == null) return null;
+  final cleaned = summary
+      .replaceAll('**', '')
+      .replaceAll('*', '')
+      .replaceAll('`', '')
+      .replaceAll('#', '')
+      .replaceAllMapped(RegExp(r'_+([^_]*)_+'), (match) => match.group(1) ?? '')
+      .replaceAll(RegExp(r'\s+'), ' ')
+      .trim();
+  return cleaned.isEmpty ? null : cleaned;
 }
 
 class OnboardingProfileStep extends StatefulWidget {
