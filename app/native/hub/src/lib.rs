@@ -1,5 +1,6 @@
 mod approval;
 mod computer_use;
+mod extraction;
 mod local_ai;
 mod runtime;
 mod scan;

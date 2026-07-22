@@ -1940,6 +1940,9 @@ async fn capture(
         );
         return false;
     };
+    let extraction_input = (crate::local_ai::is_available()
+        && matches!(source, CaptureSource::OmiDevice | CaptureSource::Chat))
+    .then(|| (Arc::clone(&memory), ingestion_key.clone(), text.clone()));
     let task = spawn_capture(
         memory,
         ingestion_key,
@@ -1958,6 +1961,16 @@ async fn capture(
                 evidence_id: remembered.evidence_id.0,
             })
             .send();
+            if let Some((memory, ingestion_key, text)) = extraction_input {
+                spawn_transcript_extraction(
+                    memory,
+                    ingestion_key,
+                    occurred_at_ms,
+                    recorded_at_ms,
+                    text,
+                    cancellation.clone(),
+                );
+            }
             true
         }
         BlockingOutcome::Complete(None) => {
@@ -2050,6 +2063,78 @@ fn remember_capture(
             locator,
         )
         .map_err(|error_value| error_value.to_string())
+}
+
+fn spawn_transcript_extraction(
+    memory: Arc<StdMutex<MemoryContext>>,
+    ingestion_key: String,
+    occurred_at_ms: i64,
+    recorded_at_ms: i64,
+    text: String,
+    cancellation: CancellationToken,
+) {
+    let Some(prompt) = crate::extraction::extraction_prompt(&text) else {
+        return;
+    };
+    tokio::spawn(async move {
+        let output = tokio::select! {
+            () = cancellation.cancelled() => return,
+            value = crate::local_ai::summarize(&prompt) => value,
+        };
+        let Some(output) = output else {
+            return;
+        };
+        let claims = crate::extraction::candidate_claims(&output, occurred_at_ms);
+        if claims.is_empty() {
+            return;
+        }
+        let _ = spawn_blocking(move || {
+            if cancellation.is_cancelled() {
+                return Ok(0);
+            }
+            let mut memory = memory
+                .lock()
+                .map_err(|_| "memory database lock was poisoned".to_owned())?;
+            store_candidate_claims(
+                &mut memory,
+                &ingestion_key,
+                occurred_at_ms,
+                recorded_at_ms,
+                claims,
+            )
+        })
+        .await;
+    });
+}
+
+fn store_candidate_claims(
+    memory: &mut MemoryContext,
+    ingestion_key: &str,
+    occurred_at_ms: i64,
+    recorded_at_ms: i64,
+    claims: Vec<zkr::ClaimInput>,
+) -> Result<usize, String> {
+    let mut stored = 0;
+    for (index, claim) in claims.into_iter().enumerate() {
+        let text = format!("{} {} {}", claim.subject, claim.predicate, claim.value);
+        let remembered = memory
+            .database
+            .remember(RememberInput {
+                tenant_id: memory.tenant_id.clone(),
+                person_id: memory.person_id.clone(),
+                ingestion_key: Some(format!("{ingestion_key}:extract:{index}")),
+                kind: SourceKind::Conversation,
+                text,
+                captured_at: occurred_at_ms,
+                recorded_at: recorded_at_ms,
+                claim: Some(claim),
+            })
+            .map_err(|error_value| error_value.to_string())?;
+        if remembered.claim_id.is_some() {
+            stored += 1;
+        }
+    }
+    Ok(stored)
 }
 
 async fn search(
@@ -3169,6 +3254,25 @@ mod tests {
             })
             .unwrap_or_else(|error_value| panic!("memory is seeded: {error_value}"));
         (path, memory, remembered)
+    }
+
+    #[test]
+    fn extracted_candidate_claims_are_stored_with_derived_ingestion_keys() {
+        let (path, mut memory, _) = lifecycle_memory("extraction");
+        let output = r#"[
+            {"title":"book flight","description":"to Berlin","priority":8,"action":"open airline site"},
+            {"title":"email Sam","description":"about the review","priority":3,"action":"send draft"}
+        ]"#;
+        let claims = crate::extraction::candidate_claims(output, 10);
+        assert_eq!(claims.len(), 2);
+        let stored = store_candidate_claims(&mut memory, "transcript-1", 10, 11, claims)
+            .unwrap_or_else(|error_value| panic!("claims store: {error_value}"));
+        assert_eq!(stored, 2);
+        let replayed = crate::extraction::candidate_claims(output, 10);
+        store_candidate_claims(&mut memory, "transcript-1", 10, 11, replayed)
+            .unwrap_or_else(|error_value| panic!("claims replay: {error_value}"));
+        drop(memory);
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]
