@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:omi/app_services.dart';
+import 'package:omi/currents/currents.dart';
 import 'package:omi/features/cursor_pill.dart';
 import 'package:omi/features/cursor_pill_controller.dart';
 import 'package:omi/features/voice_intents.dart';
@@ -422,10 +423,362 @@ void main() {
     controller.dispose();
     await harness.close();
   });
+
+  test('sanitizer strips evidence tags and sender metadata', () {
+    expect(
+      sanitizeEvidenceText(
+        'MAIL SUBJECT: Follow up from Maincode – Next Round '
+        '(from Luke Borgnolo <luke@maincode.ai>)',
+      ),
+      'Follow up from Maincode – Next Round',
+    );
+    // Truncation can lose the closing paren; the sanitizer must not.
+    expect(
+      sanitizeEvidenceText(
+        'MAIL SUBJECT: Follow up from Maincode – Next Round '
+        '(from Luke Borgnolo …',
+      ),
+      'Follow up from Maincode – Next Round',
+    );
+    expect(
+      sanitizeEvidenceText('NOTE TITLE: Quarterly planning — draft'),
+      'Quarterly planning — draft',
+    );
+    expect(
+      sanitizeEvidenceText('Call the dentist back'),
+      'Call the dentist back',
+    );
+    expect(sanitizeEvidenceText('a' * 100).length, lessThanOrEqualTo(72));
+    expect(sanitizeEvidenceText('a' * 100), endsWith('…'));
+  });
+
+  test('email subject prefers a clean reply subject from mail evidence', () {
+    const suggestion = PillSuggestion(
+      label: 'Follow up with Luke',
+      prompt: 'Follow up with Luke',
+      kind: PillSuggestionKind.email,
+      email: 'luke@maincode.ai',
+      evidence:
+          'MAIL SUBJECT: Re: Next Round (from Luke Borgnolo '
+          '<luke@maincode.ai>)',
+    );
+    expect(suggestion.emailSubject, 'Re: Next Round');
+    const bare = PillSuggestion(
+      label: 'Follow up with Luke',
+      prompt: 'Follow up with Luke',
+      kind: PillSuggestionKind.email,
+    );
+    expect(bare.emailSubject, 'Follow up with Luke');
+  });
+
+  test(
+    'email dispatch launches a mailto with clean subject and drafted body',
+    () async {
+      final harness = _Harness();
+      final controller = harness.controller(
+        draftBody:
+            'Hi Luke,\n\nThanks for the update on the next round — I wanted to '
+            'follow up on where things stand. Let me know what you need from '
+            'me to move forward.\n\nBest,\nMax',
+      );
+      const suggestion = PillSuggestion(
+        label: 'Follow up with Luke',
+        prompt: 'Help me with this task: Follow up with Luke.',
+        kind: PillSuggestionKind.email,
+        email: 'luke@maincode.ai',
+        personHint: 'Luke',
+        evidence:
+            'MAIL SUBJECT: Follow up from Maincode – Next Round '
+            '(from Luke Borgnolo <luke@maincode.ai>)',
+      );
+
+      await controller.summon();
+      final choosing = controller.choose(suggestion);
+      await pumpEventQueue();
+      final lookup = harness.hub.searches.last;
+      harness.hub.add(
+        NativeEventMemorySearchResults(
+          value: MemorySearchResults(
+            requestId: lookup.requestId,
+            query: lookup.query,
+            items: const [
+              MemorySearchItem(
+                kind: 'claim',
+                id: 'thread',
+                excerpt:
+                    'MAIL SUBJECT: Follow up from Maincode – Next Round '
+                    '(from Luke Borgnolo <luke@maincode.ai>)',
+                relevanceBasisPoints: 9000,
+                evidenceIds: [],
+              ),
+            ],
+            gaps: [],
+          ),
+        ),
+      );
+      await choosing;
+
+      final mailto = harness.launchedLinks.single;
+      expect(mailto.scheme, 'mailto');
+      expect(mailto.path, 'luke@maincode.ai');
+      expect(
+        mailto.queryParameters['subject'],
+        'Re: Follow up from Maincode – Next Round',
+      );
+      expect(
+        mailto.queryParameters['subject'],
+        isNot(contains('MAIL SUBJECT')),
+      );
+      expect(mailto.queryParameters['subject'], isNot(contains('(from')));
+      expect(mailto.queryParameters['body'], startsWith('Hi Luke,'));
+      expect(mailto.queryParameters['body'], contains('Best,'));
+      // The draft prompt carries the thread evidence as context.
+      expect(harness.draftPrompts.single, contains('Next Round'));
+
+      controller.dispose();
+      await harness.close();
+    },
+  );
+
+  test(
+    'memory items fill remaining slots after currents suggestions',
+    () async {
+      final harness = _Harness();
+      final currents = CurrentsController(
+        const CurrentsClient(_UnusedTransport()),
+      )..items = [_card('Follow up with Luke about the next round')];
+      final controller = harness.controller(currents: currents);
+
+      await controller.summon();
+      expect(controller.suggestions, hasLength(1));
+      harness.hub.add(
+        NativeEventMemorySearchResults(
+          value: MemorySearchResults(
+            requestId: harness.hub.searches.first.requestId,
+            query: CursorPillController.suggestionQuery,
+            items: const [
+              MemorySearchItem(
+                kind: 'claim',
+                id: 'a',
+                excerpt: 'Finish the quarterly report',
+                relevanceBasisPoints: 9000,
+                evidenceIds: [],
+              ),
+              MemorySearchItem(
+                kind: 'claim',
+                id: 'b',
+                excerpt: 'Follow up with Luke about the next round',
+                relevanceBasisPoints: 8500,
+                evidenceIds: [],
+              ),
+              MemorySearchItem(
+                kind: 'claim',
+                id: 'c',
+                excerpt: 'Call the dentist back',
+                relevanceBasisPoints: 8000,
+                evidenceIds: [],
+              ),
+            ],
+            gaps: [],
+          ),
+        ),
+      );
+
+      expect(controller.suggestions, hasLength(3));
+      expect(
+        controller.suggestions.first.label,
+        'Follow up with Luke about the next round',
+      );
+      expect(controller.suggestions.first.currentId, 'current-1');
+      // The duplicate memory item is skipped; distinct items fill the slots.
+      expect(controller.suggestions[1].label, 'Finish the quarterly report');
+      expect(controller.suggestions[2].label, 'Call the dentist back');
+
+      controller.dispose();
+      await harness.close();
+      currents.dispose();
+    },
+  );
+
+  testWidgets('chips render in a single horizontal row', (tester) async {
+    final harness = _Harness();
+    final controller = harness.controller();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(body: CursorPill(controller: controller)),
+      ),
+    );
+
+    await controller.summon();
+    harness.hub.add(
+      NativeEventMemorySearchResults(
+        value: MemorySearchResults(
+          requestId: harness.hub.searches.single.requestId,
+          query: CursorPillController.suggestionQuery,
+          items: const [
+            MemorySearchItem(
+              kind: 'claim',
+              id: 'a',
+              excerpt: 'Finish the quarterly report',
+              relevanceBasisPoints: 9000,
+              evidenceIds: [],
+            ),
+            MemorySearchItem(
+              kind: 'claim',
+              id: 'b',
+              excerpt: 'Call the dentist back',
+              relevanceBasisPoints: 8000,
+              evidenceIds: [],
+            ),
+            MemorySearchItem(
+              kind: 'claim',
+              id: 'c',
+              excerpt: 'Reply to the design review thread',
+              relevanceBasisPoints: 7000,
+              evidenceIds: [],
+            ),
+          ],
+          gaps: [],
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(controller.suggestions, hasLength(3));
+    final chips = find.byKey(const Key('cursor_pill_chips'));
+    expect(
+      tester.widget<SingleChildScrollView>(chips).scrollDirection,
+      Axis.horizontal,
+    );
+    final tops = [
+      tester.getTopLeft(find.textContaining('quarterly report')).dy,
+      tester.getTopLeft(find.textContaining('dentist')).dy,
+      tester.getTopLeft(find.textContaining('design review')).dy,
+    ];
+    expect(tops.toSet(), hasLength(1));
+
+    await tester.pumpWidget(const SizedBox());
+    controller.dispose();
+    await harness.close();
+  });
+
+  testWidgets('chip shimmer entrance honors disabled animations', (
+    tester,
+  ) async {
+    final harness = _Harness();
+    final controller = harness.controller();
+    Future<void> pumpPill({required bool disableAnimations}) =>
+        tester.pumpWidget(
+          MaterialApp(
+            home: MediaQuery(
+              data: MediaQueryData(disableAnimations: disableAnimations),
+              child: Scaffold(body: CursorPill(controller: controller)),
+            ),
+          ),
+        );
+
+    await pumpPill(disableAnimations: true);
+    await controller.summon();
+    harness.hub.add(
+      NativeEventMemorySearchResults(
+        value: MemorySearchResults(
+          requestId: harness.hub.searches.single.requestId,
+          query: CursorPillController.suggestionQuery,
+          items: const [
+            MemorySearchItem(
+              kind: 'claim',
+              id: 'a',
+              excerpt: 'Finish the quarterly report',
+              relevanceBasisPoints: 9000,
+              evidenceIds: [],
+            ),
+          ],
+          gaps: [],
+        ),
+      ),
+    );
+    await tester.pump();
+    // Reduced motion: the chip appears instantly with no shimmer sweep.
+    expect(find.textContaining('quarterly report'), findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('cursor_pill_chips')),
+        matching: find.byType(ShaderMask),
+      ),
+      findsNothing,
+    );
+
+    await controller.dismiss();
+    await tester.pump();
+    await pumpPill(disableAnimations: false);
+    await controller.summon();
+    harness.hub.add(
+      NativeEventMemorySearchResults(
+        value: MemorySearchResults(
+          requestId: harness.hub.searches.last.requestId,
+          query: CursorPillController.suggestionQuery,
+          items: const [
+            MemorySearchItem(
+              kind: 'claim',
+              id: 'a',
+              excerpt: 'Finish the quarterly report',
+              relevanceBasisPoints: 9000,
+              evidenceIds: [],
+            ),
+          ],
+          gaps: [],
+        ),
+      ),
+    );
+    await tester.pump();
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('cursor_pill_chips')),
+        matching: find.byType(ShaderMask),
+      ),
+      findsOneWidget,
+    );
+    await tester.pumpAndSettle();
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('cursor_pill_chips')),
+        matching: find.byType(ShaderMask),
+      ),
+      findsNothing,
+    );
+
+    await tester.pumpWidget(const SizedBox());
+    controller.dispose();
+    await harness.close();
+  });
+}
+
+CurrentCard _card(String title) => CurrentCard(
+  title: title,
+  summary: 'Reply to the latest message in the thread.',
+  item: CurrentItem.candidate(
+    id: 'current-1',
+    evidence: [CurrentEvidence(sourceId: 'mail-1', reason: 'recent thread')],
+    reason: 'recent thread',
+    timing: CurrentTiming(surfaceAt: DateTime.utc(2026, 7, 22)),
+    confidence: 0.9,
+    proposedNextStep: 'Reply to Luke',
+    createdAt: DateTime.utc(2026, 7, 22),
+  ),
+);
+
+final class _UnusedTransport implements CurrentsTransport {
+  const _UnusedTransport();
+
+  @override
+  Future<CurrentsResponse> send(CurrentsRequest request) async =>
+      throw StateError('transport must not be used');
 }
 
 final class _Harness {
   _Harness({this.stopTranscript = '', this.startVoiceError});
+
+  final draftPrompts = <String>[];
 
   final hub = _FakeNativeHub();
   final level = ValueNotifier<double>(0);
@@ -441,8 +794,18 @@ final class _Harness {
 
   void advance(Duration duration) => now = now.add(duration);
 
-  CursorPillController controller() => CursorPillController(
+  CursorPillController controller({
+    String? draftBody,
+    CurrentsController? currents,
+  }) => CursorPillController(
     hub: hub,
+    currents: currents,
+    draft: draftBody == null
+        ? null
+        : (prompt, timeout) async {
+            draftPrompts.add(prompt);
+            return draftBody;
+          },
     events: hub.events,
     startVoice: () async {
       if (startVoiceError case final error?) throw error;
