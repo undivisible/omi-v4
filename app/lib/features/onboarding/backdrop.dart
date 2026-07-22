@@ -43,7 +43,7 @@ class _OnboardingBackdropState extends State<OnboardingBackdrop> {
     final progress = widget.progress;
     final opacity = progress == null
         ? (widget.bright ? .74 : .16)
-        : .16 + .64 * progress.clamp(0.0, 1.0);
+        : .22 + .6 * progress.clamp(0.0, 1.0);
     final riseEnd = progress == null
         ? (widget.bright ? 1.0 : 0.0)
         : (progress * 1.6).clamp(0.0, 1.0);

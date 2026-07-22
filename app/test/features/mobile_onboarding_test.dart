@@ -35,6 +35,9 @@ void main() {
     );
     await tester.pumpAndSettle();
 
+    await tester.tap(find.byKey(const Key('mobile_onboarding_intro_continue')));
+    await tester.pumpAndSettle();
+
     final accountContinue = tester.widget<FilledButton>(
       find.byKey(const Key('mobile_onboarding_account_continue')),
     );
@@ -116,6 +119,8 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('mobile_onboarding_intro_continue')));
+    await tester.pumpAndSettle();
     await tester.tap(
       find.byKey(const Key('mobile_onboarding_account_continue')),
     );
@@ -155,6 +160,8 @@ void main() {
         ),
       ),
     );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('mobile_onboarding_intro_continue')));
     await tester.pumpAndSettle();
     await tester.tap(
       find.byKey(const Key('mobile_onboarding_account_continue')),
@@ -223,9 +230,48 @@ void main() {
 
     expect(find.byType(MobileOnboardingScreen), findsOneWidget);
     expect(
+      find.byKey(const Key('mobile_onboarding_intro_continue')),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('intro hero renders and advances to the account stage', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(800, 1600));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final services = _unavailableAuthServices();
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MobileOnboardingScreen(
+          services: services,
+          pairedDevices: VolatilePairedDeviceStore(),
+          onFinish: () {},
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('second brain'), findsOneWidget);
+    expect(find.text('Hi Omi!'), findsOneWidget);
+    expect(
+      find.byKey(const Key('mobile_already_have_account')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const Key('mobile_onboarding_account_continue')),
+      findsNothing,
+    );
+
+    await tester.tap(find.byKey(const Key('mobile_onboarding_intro_continue')));
+    await tester.pumpAndSettle();
+
+    expect(
       find.byKey(const Key('mobile_onboarding_account_continue')),
       findsOneWidget,
     );
+    services.dispose();
   });
 
   testWidgets('primary button keeps a fixed position across stages', (
@@ -244,6 +290,9 @@ void main() {
         ),
       ),
     );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('mobile_onboarding_intro_continue')));
     await tester.pumpAndSettle();
 
     Rect slot() =>
@@ -286,6 +335,8 @@ void main() {
         ),
       ),
     );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('mobile_onboarding_intro_continue')));
     await tester.pumpAndSettle();
     await tester.tap(
       find.byKey(const Key('mobile_onboarding_account_continue')),

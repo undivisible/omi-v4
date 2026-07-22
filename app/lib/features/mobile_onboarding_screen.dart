@@ -10,7 +10,7 @@ import 'onboarding/backdrop.dart';
 import 'onboarding/lightspeed.dart';
 import 'onboarding/randomized_text.dart';
 
-enum MobileOnboardingStage { account, pair, teach, finish }
+enum MobileOnboardingStage { intro, account, pair, teach, finish }
 
 const _headingStyle = TextStyle(
   color: Color(0xfffffcec),
@@ -21,6 +21,9 @@ const _headingStyle = TextStyle(
   letterSpacing: -1,
 );
 const _headingZoneHeight = 72.0;
+const _secondaryCream = Color(0xccfffcec);
+const _stateBlue = Color(0xff5aa7ff);
+const _stateRed = Color(0xffff6a58);
 
 class MobileOnboardingScreen extends StatefulWidget {
   const MobileOnboardingScreen({
@@ -41,10 +44,11 @@ class MobileOnboardingScreen extends StatefulWidget {
 class _MobileOnboardingScreenState extends State<MobileOnboardingScreen> {
   static const _cream = Color(0xfffffcec);
   static const _ink = Color(0xff171716);
+  static const _backdropInk = Color(0xff23221e);
 
   late final PairedDeviceStore _pairedDevices =
       widget.pairedDevices ?? PreferencesPairedDeviceStore();
-  MobileOnboardingStage stage = MobileOnboardingStage.account;
+  MobileOnboardingStage stage = MobileOnboardingStage.intro;
   int teachPage = 0;
   bool finishing = false;
   String? finishError;
@@ -130,6 +134,8 @@ class _MobileOnboardingScreenState extends State<MobileOnboardingScreen> {
     padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
     backgroundColor: _cream,
     foregroundColor: _ink,
+    elevation: 6,
+    shadowColor: const Color(0x59000000),
     shape: const StadiumBorder(),
     textStyle: const TextStyle(
       fontFamily: 'Avenir Next',
@@ -139,7 +145,8 @@ class _MobileOnboardingScreenState extends State<MobileOnboardingScreen> {
   );
 
   double get _stageProgress => switch (stage) {
-    MobileOnboardingStage.account => 0,
+    MobileOnboardingStage.intro => 0,
+    MobileOnboardingStage.account => .18,
     MobileOnboardingStage.pair => .35,
     MobileOnboardingStage.teach =>
       .6 + .1 * (teachPage / (_TeachStage.pages.length - 1)),
@@ -167,7 +174,7 @@ class _MobileOnboardingScreenState extends State<MobileOnboardingScreen> {
     return Scaffold(
       backgroundColor: Colors.transparent,
       body: OnboardingBackdrop(
-        baseColor: _ink,
+        baseColor: _backdropInk,
         bright: stage.index >= MobileOnboardingStage.pair.index,
         searching:
             stage == MobileOnboardingStage.pair &&
@@ -180,8 +187,8 @@ class _MobileOnboardingScreenState extends State<MobileOnboardingScreen> {
               constraints: const BoxConstraints(maxWidth: 620),
               child: Padding(
                 padding: const EdgeInsets.symmetric(
-                  horizontal: 28,
-                  vertical: 24,
+                  horizontal: 32,
+                  vertical: 28,
                 ),
                 child: AnimatedSwitcher(
                   duration: const Duration(milliseconds: 240),
@@ -202,6 +209,12 @@ class _MobileOnboardingScreenState extends State<MobileOnboardingScreen> {
                     );
                   },
                   child: switch (stage) {
+                    MobileOnboardingStage.intro => _IntroStage(
+                      key: const ValueKey('mobile_intro'),
+                      buttonStyle: _stadium,
+                      onContinue: () => _advance(MobileOnboardingStage.account),
+                      onAlreadyHaveAccount: _useReturningUserFlow,
+                    ),
                     MobileOnboardingStage.account => _AccountStage(
                       key: const ValueKey('mobile_account'),
                       auth: widget.services.auth,
@@ -210,7 +223,6 @@ class _MobileOnboardingScreenState extends State<MobileOnboardingScreen> {
                       satisfied: _authSatisfied,
                       buttonStyle: _stadium,
                       onContinue: () => _advance(MobileOnboardingStage.pair),
-                      onAlreadyHaveAccount: _useReturningUserFlow,
                     ),
                     MobileOnboardingStage.pair => _PairStage(
                       key: const ValueKey('mobile_pair'),
@@ -291,9 +303,10 @@ class _StageLayout extends StatelessWidget {
 }
 
 class PendantVisual extends StatelessWidget {
-  const PendantVisual({required this.size, super.key});
+  const PendantVisual({required this.size, this.glowTint, super.key});
 
   final double size;
+  final Color? glowTint;
 
   @override
   Widget build(BuildContext context) => SizedBox(
@@ -307,8 +320,16 @@ class PendantVisual extends StatelessWidget {
             shape: BoxShape.circle,
             gradient: RadialGradient(
               colors: [
-                const Color(0xfff2c2ac).withValues(alpha: .38),
-                const Color(0xff96c4ff).withValues(alpha: .12),
+                (Color.lerp(
+                  const Color(0xfff2c2ac),
+                  glowTint,
+                  glowTint == null ? 0 : .45,
+                )!).withValues(alpha: .38),
+                (Color.lerp(
+                  const Color(0xff96c4ff),
+                  glowTint,
+                  glowTint == null ? 0 : .35,
+                )!).withValues(alpha: .12),
                 Colors.transparent,
               ],
               stops: const [0, .55, 1],
@@ -349,6 +370,87 @@ class PendantVisual extends StatelessWidget {
   );
 }
 
+class _IntroStage extends StatelessWidget {
+  const _IntroStage({
+    required this.buttonStyle,
+    required this.onContinue,
+    required this.onAlreadyHaveAccount,
+    super.key,
+  });
+
+  final ButtonStyle buttonStyle;
+  final VoidCallback onContinue;
+  final VoidCallback onAlreadyHaveAccount;
+
+  @override
+  Widget build(BuildContext context) => Center(
+    child: SingleChildScrollView(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          const RandomizedText(
+            segments: [
+              ('Hi, I’m Omi. I’m a ', null),
+              ('second brain', TextStyle(fontWeight: FontWeight.w700)),
+              (' you can ', null),
+              ('actually trust', TextStyle(fontStyle: FontStyle.italic)),
+              ('—built to ', null),
+              (
+                'surface what’s important',
+                TextStyle(fontWeight: FontWeight.w700),
+              ),
+              (' in your life and help you ', null),
+              ('get things done.', TextStyle(fontWeight: FontWeight.w700)),
+            ],
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: Color(0xfffffcec),
+              fontFamily: 'Avenir Next',
+              fontSize: 33,
+              fontWeight: FontWeight.w500,
+              height: 1.12,
+              letterSpacing: -1.3,
+              shadows: [
+                Shadow(
+                  color: Color(0x80000000),
+                  blurRadius: 18,
+                  offset: Offset(0, 1),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 36),
+          Center(
+            child: FilledButton(
+              key: const Key('mobile_onboarding_intro_continue'),
+              onPressed: onContinue,
+              style: buttonStyle,
+              child: const Text('Hi Omi!'),
+            ),
+          ),
+          const SizedBox(height: 10),
+          Center(
+            child: TextButton(
+              key: const Key('mobile_already_have_account'),
+              style: TextButton.styleFrom(
+                foregroundColor: _secondaryCream,
+                textStyle: const TextStyle(
+                  fontFamily: 'Avenir Next',
+                  fontSize: 14,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+              onPressed: onAlreadyHaveAccount,
+              child: const Text('Already have an account?'),
+            ),
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
 class _AccountStage extends StatelessWidget {
   const _AccountStage({
     required this.auth,
@@ -356,7 +458,6 @@ class _AccountStage extends StatelessWidget {
     required this.satisfied,
     required this.buttonStyle,
     required this.onContinue,
-    required this.onAlreadyHaveAccount,
     super.key,
   });
 
@@ -365,7 +466,6 @@ class _AccountStage extends StatelessWidget {
   final bool satisfied;
   final ButtonStyle buttonStyle;
   final VoidCallback onContinue;
-  final VoidCallback onAlreadyHaveAccount;
 
   @override
   Widget build(BuildContext context) => _StageLayout(
@@ -400,19 +500,6 @@ class _AccountStage extends StatelessWidget {
       onPressed: satisfied ? onContinue : null,
       style: buttonStyle,
       child: const Text('Continue'),
-    ),
-    secondary: TextButton(
-      key: const Key('mobile_already_have_account'),
-      style: TextButton.styleFrom(
-        foregroundColor: const Color(0xb3fffcec),
-        textStyle: const TextStyle(
-          fontFamily: 'Avenir Next',
-          fontSize: 14,
-          fontWeight: FontWeight.w500,
-        ),
-      ),
-      onPressed: onAlreadyHaveAccount,
-      child: const Text('Already have an account?'),
     ),
   );
 }
@@ -493,6 +580,17 @@ class _PairStageState extends State<_PairStage> {
     DeviceConnectionPhase.failed => 'Connection failed',
   };
 
+  // The pendant firmware LED shows solid blue while connected and red while
+  // disconnected (set_led_state in the upstream firmware). Charging state is
+  // not surfaced over BLE by the relay today, so the green charging states
+  // cannot be mirrored here yet.
+  Color? get _stateColor => switch (_phase) {
+    DeviceConnectionPhase.connected => _stateBlue,
+    DeviceConnectionPhase.disconnected ||
+    DeviceConnectionPhase.failed => _stateRed,
+    _ => null,
+  };
+
   @override
   Widget build(BuildContext context) => _StageLayout(
     heading: const RandomizedText(
@@ -503,13 +601,19 @@ class _PairStageState extends State<_PairStage> {
     body: Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        const Center(child: PendantVisual(size: 110)),
+        Center(child: PendantVisual(size: 110, glowTint: _stateColor)),
         const SizedBox(height: 8),
         Text(
           [_phaseLabel(_phase), ?snapshot?.message].join(' · '),
           key: const Key('mobile_pair_status'),
           textAlign: TextAlign.center,
-          style: const TextStyle(color: Color(0xffd0cec6), height: 1.4),
+          style: TextStyle(
+            color: switch (_stateColor) {
+              final state? => Color.lerp(const Color(0xffdedcd3), state, .6)!,
+              null => const Color(0xffdedcd3),
+            },
+            height: 1.4,
+          ),
         ),
         const SizedBox(height: 18),
         if (!_connected) ...[
@@ -537,7 +641,7 @@ class _PairStageState extends State<_PairStage> {
                   if (found.batteryLevel case final battery?)
                     '$battery% battery',
                 ].join(' · '),
-                style: const TextStyle(color: Color(0xffd0cec6)),
+                style: const TextStyle(color: Color(0xffdedcd3)),
               ),
               trailing: const Icon(
                 Icons.add_circle_outline_rounded,
