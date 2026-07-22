@@ -5,7 +5,9 @@ import 'dart:math';
 import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
+import 'api/dev_gemini.dart';
 import 'api/worker_http.dart';
 import 'auth/auth.dart';
 import 'auth/firebase_bootstrap.dart';
@@ -25,6 +27,7 @@ export 'memory/transcript_memory_ingestor.dart' show TranscriptCaptureConflict;
 
 const _managedAssistantModel = 'mimo-v2.5-pro';
 const _localOfflinePersonId = 'local-offline';
+const _localProfileNameKey = 'omi_local_profile_name';
 const _defaultAssistantRefreshLead = Duration(minutes: 5);
 const _defaultAssistantMinimumRefreshDelay = Duration(seconds: 30);
 const _defaultInboxPollInterval = Duration(seconds: 2);
@@ -113,7 +116,7 @@ final class AppServices {
       currents: currentsClient,
       source: _conversationSource,
       now: _now,
-      isReady: () => chatReady,
+      isReady: () => chatReady || localMode,
       isDisposed: () => _disposed,
       currentUid: () => auth.snapshot.session?.uid,
       currentIdToken: () async => (await auth.validSession())?.idToken,
@@ -382,6 +385,14 @@ final class AppServices {
       return;
     }
     if (name == null && languages.isEmpty) return;
+    if (name != null && name.trim().isNotEmpty) {
+      try {
+        await (await SharedPreferences.getInstance()).setString(
+          _localProfileNameKey,
+          name.trim(),
+        );
+      } catch (_) {}
+    }
     // Ensure memory (production or local/offline) is configured before the
     // native hub is asked to capture — otherwise this can race ahead of
     // configureMemory, especially on a cold start or when auth is
@@ -411,6 +422,20 @@ final class AppServices {
     } catch (_) {}
   }
 
+  /// Name captured during onboarding, used to greet the user when there is
+  /// no signed-in session (or the session lacks a display name).
+  Future<String?> localProfileName() async {
+    try {
+      final value = (await SharedPreferences.getInstance()).getString(
+        _localProfileNameKey,
+      );
+      final trimmed = value?.trim();
+      return trimmed == null || trimmed.isEmpty ? null : trimmed;
+    } catch (_) {
+      return null;
+    }
+  }
+
   Future<void> initialize() async {
     auth.addListener(_authChanged);
     await capabilities.verifiedWorkspaceRoot();
@@ -424,6 +449,14 @@ final class AppServices {
   }
 
   bool get chatReady => productionReady && _nativeInitialized;
+
+  /// Dev/no-account mode: the native hub is configured against the
+  /// local/offline memory store and a developer Gemini key is available, so
+  /// chat and live voice can run directly without a signed-in session.
+  bool get localMode =>
+      _nativeInitialized &&
+      _configuredPersonId == _localOfflinePersonId &&
+      DevGemini.apiKey != null;
 
   Future<ProviderCredential?> get providerCredential async {
     final uid = auth.snapshot.session?.uid;
@@ -571,6 +604,47 @@ final class AppServices {
     (nativeHub as MeetingHub).stopMeeting('meeting-stop-${_randomId()}');
   }
 
+  /// One-shot assistant completion outside the conversation flow, used for
+  /// quick drafts (e.g. pre-filling an email body from the cursor pill).
+  /// Returns null on timeout or failure — callers must degrade gracefully.
+  Future<String?> generateDraft(String prompt, Duration timeout) async {
+    if (!_nativeInitialized) return null;
+    final requestId = 'draft-${_randomId()}';
+    final buffer = StringBuffer();
+    final completer = Completer<String?>();
+    final subscription = nativeEvents.listen((event) {
+      if (event case NativeEventAssistantDelta(
+        :final value,
+      ) when value.requestId == requestId) {
+        buffer.write(value.text);
+        if (value.finalSegment && !completer.isCompleted) {
+          completer.complete(buffer.toString().trim());
+        }
+      } else if (event case NativeEventError(
+        :final value,
+      ) when value.requestId == requestId) {
+        if (!completer.isCompleted) completer.complete(null);
+      }
+    });
+    try {
+      nativeHub.sendMessage(requestId: requestId, text: prompt);
+    } catch (_) {
+      await subscription.cancel();
+      return null;
+    }
+    try {
+      final value = await completer.future.timeout(timeout);
+      return value == null || value.isEmpty ? null : value;
+    } on TimeoutException {
+      try {
+        nativeHub.cancel(requestId);
+      } catch (_) {}
+      return null;
+    } finally {
+      await subscription.cancel();
+    }
+  }
+
   Future<String> sendChatMessage({required String text}) =>
       _sendChatMessage(text: text);
 
@@ -601,6 +675,10 @@ final class AppServices {
     final session = auth.snapshot.session;
     final generation = _authorityGeneration;
     if (!chatReady || session == null) {
+      if (localMode && nativeHub is LiveVoiceHub) {
+        await _startDesktopVoiceLocal(voiceGeneration);
+        return;
+      }
       throw VoiceStartException(
         VoiceStartFailure.signedOut,
         'Sign in and connect native services first.',
@@ -707,6 +785,36 @@ final class AppServices {
     }
   }
 
+  /// Dev/no-account live voice: connect straight to the Gemini Live API
+  /// with the developer key instead of a Worker-minted ephemeral token.
+  Future<void> _startDesktopVoiceLocal(int voiceGeneration) async {
+    final key = DevGemini.apiKey;
+    if (key == null) {
+      throw VoiceStartException(
+        VoiceStartFailure.signedOut,
+        'Sign in and connect native services first.',
+      );
+    }
+    if (!await desktopVoice.hasPermission()) {
+      throw VoiceStartException(
+        VoiceStartFailure.microphonePermission,
+        'Microphone permission is required for desktop voice.',
+      );
+    }
+    if (voiceGeneration != _desktopVoiceGeneration) return;
+    _desktopVoiceRouteIsLive = false;
+    await liveVoice.start(
+      ephemeralToken: key,
+      model: DevGemini.liveModel,
+      authorityId: 'g$_authorityGeneration',
+    );
+    if (voiceGeneration != _desktopVoiceGeneration) {
+      await liveVoice.cancel();
+      return;
+    }
+    _desktopVoiceRouteIsLive = true;
+  }
+
   Future<void> continueDesktopVoice() => _queueDesktopVoice(() async {
     if (_desktopVoiceRouteIsLive) {
       if (!liveVoice.active) throw StateError('Desktop voice is not active.');
@@ -730,8 +838,7 @@ final class AppServices {
       return (requestId: '', text: text);
     }
     if (generation != _authorityGeneration ||
-        uid == null ||
-        auth.snapshot.session?.uid != uid) {
+        (!localMode && (uid == null || auth.snapshot.session?.uid != uid))) {
       return null;
     }
     final requestId = await _sendChatMessage(text: text);

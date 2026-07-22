@@ -139,9 +139,17 @@ pub(crate) fn validate_session(session: &RealtimeVoiceSession) -> Result<(), Str
 pub(crate) fn live_endpoint(ephemeral_token: &str) -> Result<Url, String> {
     let mut endpoint = Url::parse(&format!("wss://{GEMINI_LIVE_HOST}{GEMINI_LIVE_PATH}"))
         .map_err(|_| "live voice endpoint is invalid".to_owned())?;
+    // Ephemeral tokens minted by the Worker are named "auth_tokens/…" and
+    // authenticate via access_token. A raw developer API key (dev-only
+    // direct mode, no account) authenticates via the key parameter instead.
+    let credential_parameter = if ephemeral_token.starts_with("auth_tokens/") {
+        "access_token"
+    } else {
+        "key"
+    };
     endpoint
         .query_pairs_mut()
-        .append_pair("access_token", ephemeral_token);
+        .append_pair(credential_parameter, ephemeral_token);
     if endpoint.scheme() != "wss"
         || endpoint.host_str() != Some(GEMINI_LIVE_HOST)
         || endpoint.port_or_known_default() != Some(443)
@@ -619,6 +627,13 @@ mod tests {
         assert_eq!(endpoint.scheme(), "wss");
         assert_eq!(endpoint.path(), GEMINI_LIVE_PATH);
         assert_eq!(endpoint.query(), Some("access_token=auth_tokens%2Fabc123"));
+    }
+
+    #[test]
+    fn raw_api_keys_use_the_key_parameter() {
+        let endpoint = live_endpoint("AIzaDevKey")
+            .unwrap_or_else(|error| panic!("endpoint is valid: {error}"));
+        assert_eq!(endpoint.query(), Some("key=AIzaDevKey"));
     }
 
     #[test]

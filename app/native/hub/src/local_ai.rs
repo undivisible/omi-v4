@@ -5,7 +5,6 @@ use std::time::Duration;
 const SUMMARY_TIMEOUT: Duration = Duration::from_secs(12);
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 const RESPONSE_TIMEOUT: Duration = Duration::from_secs(20);
-#[cfg(any(all(target_os = "macos", target_arch = "aarch64"), test))]
 const SUMMARY_CHARS: usize = 420;
 
 pub fn is_available() -> bool {
@@ -72,7 +71,18 @@ pub async fn respond(prompt: &str) -> Option<String> {
     }
 }
 
-#[cfg(any(all(target_os = "macos", target_arch = "aarch64"), test))]
+/// Summarize with the on-device model, falling back to the dev-only direct
+/// Gemini path when local AI is unavailable and a developer key is present.
+pub async fn summarize_with_dev_fallback(prompt: &str) -> Option<String> {
+    if let Some(value) = summarize(prompt).await {
+        return Some(value);
+    }
+    let key = crate::dev_gemini::api_key()?;
+    crate::dev_gemini::generate(&key, prompt)
+        .await
+        .and_then(|value| clean_summary(&value))
+}
+
 fn clean_summary(value: &str) -> Option<String> {
     let value = value
         .replace(['*', '`', '#'], "")
@@ -84,7 +94,6 @@ fn clean_summary(value: &str) -> Option<String> {
     (!value.is_empty()).then_some(value)
 }
 
-#[cfg(any(all(target_os = "macos", target_arch = "aarch64"), test))]
 fn truncate_at_sentence(value: &str, limit: usize) -> String {
     if value.chars().count() <= limit {
         return value.to_owned();

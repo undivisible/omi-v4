@@ -59,6 +59,7 @@ class ChatScreenState extends State<ChatScreen> {
   final _inputFocus = FocusNode();
   Timer? _placeholderTimer;
   int _placeholderIndex = 0;
+  String? _localName;
   late final _desktopKeyboard = widget.desktopKeyboard ?? DesktopKeyboard();
   final _messages = <_ChatMessage>[];
   final _proposals = <String, ActionProposal>{};
@@ -89,6 +90,13 @@ class ChatScreenState extends State<ChatScreen> {
   void initState() {
     super.initState();
     unawaited(_loadChecklist());
+    if (!widget.previewMode) {
+      unawaited(
+        widget.services.localProfileName().then((value) {
+          if (mounted && value != null) setState(() => _localName = value);
+        }),
+      );
+    }
     _placeholderTimer = Timer.periodic(const Duration(milliseconds: 3200), (_) {
       if (!mounted || MediaQuery.disableAnimationsOf(context)) return;
       setState(
@@ -840,12 +848,15 @@ class ChatScreenState extends State<ChatScreen> {
         : hour < 17
         ? 'Good afternoon'
         : 'Good evening';
-    final displayName = widget.previewMode
+    final sessionName = widget.previewMode
         ? null
         : widget.services.auth.snapshot.session?.displayName?.trim();
-    final name = displayName == null || displayName.isEmpty
+    final displayName = sessionName == null || sessionName.isEmpty
+        ? _localName
+        : sessionName;
+    final name = displayName == null || displayName.trim().isEmpty
         ? null
-        : displayName.split(RegExp(r'\s+')).first;
+        : displayName.trim().split(RegExp(r'\s+')).first;
     return name == null ? '$salutation!' : '$salutation, $name!';
   }
 }

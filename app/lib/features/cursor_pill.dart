@@ -1,20 +1,23 @@
 import 'dart:async';
 import 'dart:math' as math;
-import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'cursor_pill_controller.dart';
+import 'cursor_pill_window.dart';
 
 const _pillInk = Color(0xfffffefa);
 const _pillMuted = Color(0xb3f4f2ec);
 const _pillGreen = Color(0xff43c47e);
 
 const pillHeight = 36.0;
-const pillBlurSigma = 24.0;
 
+/// The blur/material itself is rendered natively (NSGlassEffectView on
+/// macOS 26+, NSVisualEffectView otherwise) below the transparent Flutter
+/// view; this widget only paints the specular border and, when listening,
+/// a faint tint wash over transparent content.
 class LiquidGlass extends StatelessWidget {
   const LiquidGlass({
     required this.child,
@@ -39,36 +42,16 @@ class LiquidGlass extends StatelessWidget {
           colors: [Color(0x8cffffff), Color(0x1affffff), Color(0x4dffffff)],
           stops: [0, 0.55, 1],
         ),
-        boxShadow: const [
-          BoxShadow(
-            color: Color(0x33000000),
-            blurRadius: 22,
-            offset: Offset(0, 8),
-          ),
-        ],
       ),
       child: Padding(
         padding: const EdgeInsets.all(1),
         child: ClipRRect(
           borderRadius: BorderRadius.circular(radius - 1),
-          child: BackdropFilter(
-            filter: ui.ImageFilter.blur(
-              sigmaX: pillBlurSigma,
-              sigmaY: pillBlurSigma,
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              color: tint?.withValues(alpha: 0.14) ?? Colors.transparent,
             ),
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: [
-                    (tint ?? Colors.white).withValues(alpha: 0.20),
-                    (tint ?? Colors.white).withValues(alpha: 0.08),
-                  ],
-                ),
-              ),
-              child: child,
-            ),
+            child: child,
           ),
         ),
       ),
@@ -93,6 +76,9 @@ class CursorPill extends StatefulWidget {
 class _CursorPillState extends State<CursorPill> {
   final _text = TextEditingController();
   final _focus = FocusNode();
+  final _pillKey = GlobalKey();
+  final _rowKeys = <GlobalKey>[];
+  String _lastGlassSignature = '';
 
   @override
   void initState() {
@@ -158,10 +144,64 @@ class _CursorPillState extends State<CursorPill> {
     return KeyEventResult.ignored;
   }
 
+  static Rect? _rectOf(GlobalKey key) {
+    final box = key.currentContext?.findRenderObject();
+    if (box is! RenderBox || !box.attached || !box.hasSize) return null;
+    final origin = box.localToGlobal(Offset.zero);
+    return origin & box.size;
+  }
+
+  /// Reports the rounded-rect frames of the glass surfaces to the native
+  /// layer after each frame, so the real Liquid Glass mask tracks layout.
+  void _reportGlassRegions() {
+    if (!mounted) return;
+    final regions = <({double x, double y, double w, double h, double r})>[];
+    for (final key in _rowKeys) {
+      final rect = _rectOf(key);
+      if (rect != null) {
+        regions.add((
+          x: rect.left,
+          y: rect.top,
+          w: rect.width,
+          h: rect.height,
+          r: 14,
+        ));
+      }
+    }
+    final pillRect = _rectOf(_pillKey);
+    if (pillRect != null) {
+      regions.add((
+        x: pillRect.left,
+        y: pillRect.top,
+        w: pillRect.width,
+        h: pillRect.height,
+        r: pillHeight / 2,
+      ));
+    }
+    final signature = regions
+        .map(
+          (region) =>
+              '${region.x.round()},${region.y.round()},'
+              '${region.w.round()},${region.h.round()},${region.r}',
+        )
+        .join(';');
+    if (signature == _lastGlassSignature) return;
+    _lastGlassSignature = signature;
+    unawaited(CursorPillWindow.updateGlass(regions));
+  }
+
   @override
   Widget build(BuildContext context) {
     final controller = widget.controller;
     final listening = controller.state == CursorPillState.listening;
+    final rowCount = listening ? 0 : controller.suggestions.length;
+    while (_rowKeys.length > rowCount) {
+      _rowKeys.removeLast();
+    }
+    while (_rowKeys.length < rowCount) {
+      _rowKeys.add(GlobalKey());
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) => _reportGlassRegions());
     return Focus(
       onKeyEvent: _handleKey,
       child: Column(
@@ -170,10 +210,13 @@ class _CursorPillState extends State<CursorPill> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           if (!listening)
-            for (final suggestion in controller.suggestions)
-              _SuggestionRow(
-                suggestion: suggestion,
-                onTap: () => unawaited(controller.choose(suggestion)),
+            for (final (index, suggestion) in controller.suggestions.indexed)
+              KeyedSubtree(
+                key: _rowKeys[index],
+                child: _SuggestionRow(
+                  suggestion: suggestion,
+                  onTap: () => unawaited(controller.choose(suggestion)),
+                ),
               ),
           if (controller.suggestions.isNotEmpty && !listening)
             const SizedBox(height: 6),
@@ -192,6 +235,7 @@ class _CursorPillState extends State<CursorPill> {
   }
 
   Widget _pill(bool listening) => LiquidGlass(
+    key: _pillKey,
     tint: listening ? _pillGreen : null,
     child: AnimatedContainer(
       duration: MediaQuery.disableAnimationsOf(context)
