@@ -57,6 +57,10 @@ final class MenuBarBridge: NSObject {
     listeningItem.target = self
     listeningItem.state = listening ? .on : .off
     menu.addItem(listeningItem)
+    menu.addItem(.separator())
+    let settings = NSMenuItem(title: "Settings…", action: #selector(openSettings), keyEquivalent: ",")
+    settings.target = self
+    menu.addItem(settings)
     statusItem?.menu = menu
   }
 
@@ -77,5 +81,10 @@ final class MenuBarBridge: NSObject {
 
   @objc private func toggleListening() {
     channel.invokeMethod("toggleListening", arguments: nil)
+  }
+
+  @objc private func openSettings() {
+    showApp()
+    channel.invokeMethod("openSettings", arguments: nil)
   }
 }

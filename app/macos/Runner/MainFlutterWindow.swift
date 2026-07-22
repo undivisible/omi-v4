@@ -211,6 +211,13 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
   private var globalKeyboardMonitor: Any?
   private let permissionService = MacPermissionService()
   private var permissionOverlay: PermissionDragOverlay?
+  private var windowChromeChannel: FlutterMethodChannel?
+
+  func requestSettings() {
+    NSApp.activate(ignoringOtherApps: true)
+    makeKeyAndOrderFront(nil)
+    windowChromeChannel?.invokeMethod("openSettings", arguments: nil)
+  }
 
   override var canBecomeKey: Bool { true }
   override var canBecomeMain: Bool { true }
@@ -367,6 +374,23 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
       matching: [.flagsChanged, .keyDown]
     ) { [weak self] event in self?.keyboardEvent(event) }
 
+    let windowChrome = FlutterMethodChannel(
+      name: "omi/window_chrome",
+      binaryMessenger: flutterViewController.engine.binaryMessenger)
+    windowChrome.setMethodCallHandler { [weak self] call, result in
+      switch call.method {
+      case "enterHub":
+        self?.enterHubChrome()
+        result(nil)
+      case "enterOnboarding":
+        self?.enterOnboardingChrome()
+        result(nil)
+      default:
+        result(FlutterMethodNotImplemented)
+      }
+    }
+    windowChromeChannel = windowChrome
+
     super.awakeFromNib()
     NSAnimationContext.runAnimationGroup { context in
       context.duration = 0.45
@@ -378,6 +402,26 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
   deinit {
     if let localKeyboardMonitor { NSEvent.removeMonitor(localKeyboardMonitor) }
     if let globalKeyboardMonitor { NSEvent.removeMonitor(globalKeyboardMonitor) }
+  }
+
+  private func enterHubChrome() {
+    styleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
+    titlebarAppearsTransparent = true
+    titleVisibility = .hidden
+    isMovableByWindowBackground = true
+    hasShadow = true
+    level = .normal
+    collectionBehavior = [.fullScreenAuxiliary]
+  }
+
+  private func enterOnboardingChrome() {
+    styleMask = [.borderless, .resizable, .miniaturizable]
+    titlebarAppearsTransparent = true
+    titleVisibility = .hidden
+    isMovableByWindowBackground = false
+    hasShadow = false
+    level = .floating
+    collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
   }
 
   private func restart() {

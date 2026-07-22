@@ -10,4 +10,9 @@ class AppDelegate: FlutterAppDelegate {
   override func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool {
     return true
   }
+
+  @IBAction func openSettings(_ sender: Any?) {
+    guard let window = mainFlutterWindow as? MainFlutterWindow else { return }
+    window.requestSettings()
+  }
 }
