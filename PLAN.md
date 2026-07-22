@@ -114,7 +114,7 @@ The macOS v0 is notarized direct distribution without App Sandbox because broad 
 
 Windows computer use is a first-class `rs_peekaboo` path: it must inspect UI Automation targets and execute policy-approved pointer clicks and keyboard text entry. Process-integrity boundaries may prevent control of elevated applications, but Windows itself is not a read-only or unsupported target.
 
-Calendar and Reminders use the native EventKit bridge and remain prominent post-onboarding setup tasks alongside Contacts and Location. Camera and Photos are omitted until a concrete feature needs them.
+Calendar and Reminders use the native EventKit bridge and are actionable post-onboarding setup tasks that import bounded evidence into `zkr`. Contacts and Location remain later setup tasks. Camera and Photos are omitted until a concrete feature needs them.
 
 ## Personal Memory
 

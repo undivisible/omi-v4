@@ -5,6 +5,8 @@ import 'package:url_launcher/url_launcher.dart';
 import '../api/worker_http.dart';
 import '../app_services.dart';
 import '../channels/channels.dart';
+import '../integrations/apple_eventkit.dart';
+import '../integrations/apple_eventkit_import.dart';
 import '../native/generated/signals/signals.dart' show AssistantProvider;
 import '../providers/providers.dart';
 import '../settings/settings.dart';
@@ -71,6 +73,13 @@ class SetupScreen extends StatelessWidget {
         detail: 'Keep visual memory under your control',
         state: 'Not granted',
       ),
+      if (!kIsWeb && defaultTargetPlatform == TargetPlatform.macOS)
+        for (final source in AppleEventKitSource.values)
+          AppleEventKitConnectionTile(
+            services: services,
+            source: source,
+            previewMode: previewMode,
+          ),
       for (final provider in ChannelProvider.values)
         ChannelConnectionTile(
           client: !previewMode && services.canUseApi ? services.channels : null,
@@ -85,6 +94,111 @@ class SetupScreen extends StatelessWidget {
         state: 'Not connected',
       ),
     ],
+  );
+}
+
+class AppleEventKitConnectionTile extends StatefulWidget {
+  const AppleEventKitConnectionTile({
+    required this.services,
+    required this.source,
+    required this.previewMode,
+    this.eventKit,
+    super.key,
+  });
+
+  final AppServices services;
+  final AppleEventKitSource source;
+  final bool previewMode;
+  final AppleEventKitService? eventKit;
+
+  @override
+  State<AppleEventKitConnectionTile> createState() =>
+      _AppleEventKitConnectionTileState();
+}
+
+class _AppleEventKitConnectionTileState
+    extends State<AppleEventKitConnectionTile> {
+  late final eventKit = widget.eventKit ?? AppleEventKitService();
+  late Future<AppleEventKitAuthorization> authorization = eventKit.status(
+    widget.source,
+  );
+  bool busy = false;
+  int? imported;
+  String? error;
+
+  Future<void> connect() async {
+    final uid = widget.services.auth.snapshot.session?.uid;
+    if (!widget.services.chatReady || uid == null) {
+      setState(() => error = 'Sign in and finish native setup first.');
+      return;
+    }
+    setState(() {
+      busy = true;
+      error = null;
+    });
+    try {
+      var value = await eventKit.status(widget.source);
+      if (value == AppleEventKitAuthorization.notDetermined) {
+        value = await eventKit.request(widget.source);
+      }
+      if (value != AppleEventKitAuthorization.fullAccess) {
+        if (mounted) setState(() => authorization = Future.value(value));
+        return;
+      }
+      final count = await AppleEventKitImportCoordinator(
+        eventKit: eventKit,
+        hub: widget.services.nativeHub,
+        personId: uid,
+      ).import(widget.source);
+      if (mounted) {
+        setState(() {
+          authorization = Future.value(value);
+          imported = count;
+        });
+      }
+    } catch (failure) {
+      if (mounted) setState(() => error = '$failure');
+    } finally {
+      if (mounted) setState(() => busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => FutureBuilder(
+    future: authorization,
+    builder: (context, snapshot) {
+      final name = widget.source == AppleEventKitSource.calendar
+          ? 'Calendar'
+          : 'Reminders';
+      final value = snapshot.data;
+      final connected = value == AppleEventKitAuthorization.fullAccess;
+      final detail =
+          error ??
+          (widget.previewMode
+              ? 'Native access is disabled in the interface preview.'
+              : imported != null
+              ? '$imported items queued for memory'
+              : connected
+              ? 'Ready to add recent $name data to memory'
+              : value == AppleEventKitAuthorization.denied ||
+                    value == AppleEventKitAuthorization.restricted
+              ? 'Enable $name in System Settings → Privacy & Security'
+              : 'Add your Apple $name context to memory');
+      return _SetupTile(
+        icon: widget.source == AppleEventKitSource.calendar
+            ? Icons.calendar_today_outlined
+            : Icons.check_circle_outline_rounded,
+        title: 'Connect Apple $name',
+        detail: busy ? 'Importing…' : detail,
+        state: imported != null
+            ? 'Connected'
+            : connected
+            ? 'Access granted'
+            : 'Not connected',
+        onPressed: widget.previewMode || busy ? null : connect,
+        actionTooltip: connected ? 'Import Apple $name' : 'Connect Apple $name',
+      );
+    },
   );
 }
 
