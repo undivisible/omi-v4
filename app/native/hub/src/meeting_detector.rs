@@ -66,6 +66,7 @@ impl BrowserGate {
     }
 }
 
+#[cfg(any(target_os = "macos", test))]
 const NATIVE_CALL_APP_NAMES: &[&str] = &[
     "microsoft teams",
     "zoom.us",
@@ -76,6 +77,7 @@ const NATIVE_CALL_APP_NAMES: &[&str] = &[
     "gotomeeting",
 ];
 
+#[cfg(any(target_os = "macos", test))]
 const NATIVE_CALL_BUNDLE_IDS: &[&str] = &[
     "us.zoom.xos",
     "com.microsoft.teams",
@@ -88,6 +90,7 @@ const NATIVE_CALL_BUNDLE_IDS: &[&str] = &[
     "com.logmein.goto",
 ];
 
+#[cfg(any(target_os = "macos", test))]
 const BROWSER_APP_NAMES: &[&str] = &[
     "google chrome",
     "arc",
@@ -97,8 +100,10 @@ const BROWSER_APP_NAMES: &[&str] = &[
     "brave browser",
     "opera",
 ];
+#[cfg(any(target_os = "macos", test))]
 const BROWSER_CALL_KEYWORDS: &[&str] = &["google meet", "meet.google.com", "teams - microsoft"];
 
+#[cfg(any(target_os = "macos", test))]
 fn is_native_call_app(app: &MeetingApp) -> bool {
     let name = app.name.to_ascii_lowercase();
     let bundle_id = app.bundle_id.to_ascii_lowercase();
@@ -116,6 +121,7 @@ fn is_call_window(app: &MeetingApp, title: &str) -> bool {
     is_browser_call_window(app, title)
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn is_browser_call_window(app: &MeetingApp, title: &str) -> bool {
     let name = app.name.to_ascii_lowercase();
     let title = title.to_ascii_lowercase();
