@@ -1899,7 +1899,12 @@ async fn scan_onboarding(
                         cancelled(request_id);
                         return;
                     }
-                    value = crate::local_ai::summarize_with_dev_fallback(&prompts.local, &prompts.fallback) => value,
+                    value = crate::local_ai::summarize_with_dev_fallback(&prompts.local, &prompts.fallback) => value.map(|summary| {
+                        crate::scan::ensure_summary_emphasis(
+                            &summary,
+                            &prompts.emphasis_candidates,
+                        )
+                    }),
                 }
             } else {
                 None

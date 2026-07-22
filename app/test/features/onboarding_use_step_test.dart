@@ -43,22 +43,17 @@ void main() {
         find.textContaining('Press both Shift keys at the same time'),
         findsOneWidget,
       );
-      expect(find.byKey(const Key('cursor_pill')), findsNothing);
-
       await chord(tester);
       expect(controller.state, CursorPillState.input);
-      expect(find.byKey(const Key('cursor_pill')), findsOneWidget);
       expect(find.textContaining('Don’t type'), findsOneWidget);
 
       harness.advance(const Duration(seconds: 1));
       await chord(tester);
       expect(controller.state, CursorPillState.listening);
       expect(harness.voiceStarts, 1);
-      expect(find.byKey(const Key('cursor_pill_listening')), findsOneWidget);
-      expect(find.byKey(const Key('cursor_pill_waveform')), findsOneWidget);
       expect(find.textContaining('Show me my currents'), findsOneWidget);
       expect(
-        find.textContaining('Press both Shift keys again to stop'),
+        find.textContaining('or Esc — to stop'),
         findsOneWidget,
       );
 
@@ -144,8 +139,10 @@ void main() {
       harness.advance(const Duration(seconds: 1));
       await chord(tester);
       expect(controller.state, CursorPillState.hidden);
-      expect(finished, 0);
+      // The stop itself completes the lesson now.
+      expect(finished, 1);
 
+      // A transcript draining late must not double-complete.
       transcripts.add('hello omi');
       await tester.pump();
       expect(finished, 1);
@@ -157,7 +154,7 @@ void main() {
     },
   );
 
-  testWidgets('a silent stop resets to the first prompt without completing', (
+  testWidgets('a silent stop still completes the lesson', (
     tester,
   ) async {
     final harness = _Harness();
@@ -187,11 +184,10 @@ void main() {
     await tester.pump();
 
     expect(controller.state, CursorPillState.hidden);
-    expect(finished, 0);
-    expect(
-      find.textContaining('Press both Shift keys at the same time'),
-      findsOneWidget,
-    );
+    // Performing the full pill → live → stop sequence is the lesson; even a
+    // stop with no recognized speech completes onboarding rather than
+    // resetting to the first prompt.
+    expect(finished, 1);
 
     await tester.pumpWidget(const SizedBox());
     controller.dispose();

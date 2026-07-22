@@ -99,6 +99,44 @@ pub struct SummaryPrompts {
     /// never leave the machine; only the local Foundation-Models path sees
     /// them.
     pub fallback: String,
+    /// Top-scored evidence names (original casing), used to add the
+    /// **name** emphasis markers after the fact when the model ignores the
+    /// marker instruction, so the rendered summary always pops.
+    pub emphasis_candidates: Vec<String>,
+}
+
+/// Small models routinely drop the ** marker protocol; when the summary
+/// comes back unmarked, wrap the evidence names that actually appear in it
+/// (longest first so substrings don't split larger names, five spans max).
+pub fn ensure_summary_emphasis(summary: &str, candidates: &[String]) -> String {
+    if summary.contains("**") {
+        return summary.to_owned();
+    }
+    let mut ordered: Vec<&String> = candidates.iter().collect();
+    ordered.sort_by_key(|name| std::cmp::Reverse(name.chars().count()));
+    let mut result = summary.to_owned();
+    let mut wrapped = 0usize;
+    for name in ordered {
+        if wrapped == 5 || name.len() < 3 {
+            continue;
+        }
+        let lower = result.to_lowercase();
+        let target = name.to_lowercase();
+        if let Some(start) = lower.find(&target) {
+            let end = start + target.len();
+            if !result.is_char_boundary(start) || !result.is_char_boundary(end) {
+                continue;
+            }
+            let already = result[..start].ends_with("**");
+            if already {
+                continue;
+            }
+            let original = result[start..end].to_owned();
+            result.replace_range(start..end, &format!("**{original}**"));
+            wrapped += 1;
+        }
+    }
+    result
 }
 
 const SUMMARY_INSTRUCTION: &str = "You are privately summarizing what the user appears to be working on, using only the tagged evidence lines below, and speaking directly to them in the second person. First decide which projects and threads of work matter most: prefer items that recur across several evidence types and that are recent, and treat NOTE TITLE, MAIL SUBJECT, and BROWSING lines as background context about activity, never as projects by themselves. Then describe that work in your own words as one flowing paragraph: synthesized, specific, and natural, not a recitation of file or folder names. At most 3 sentences and at most 420 characters. Plain prose only: no headings, no bullet points, no underscores, no backticks, no italics, and no markdown of any kind, with a single exception: wrap only the genuinely important names, such as key projects, apps, people, or technologies, in double asterisks like **name**. Use at most 5 such wrapped spans, wrap single names only, and never wrap a whole sentence or ordinary connective words. Any name you mention must appear in the evidence, but describe the work around it naturally; name at most 3 specific projects, tools, or organizations in total. State only what the evidence supports: never infer tool or workflow habits from incidental mentions, omit anything you are unsure of, and if the evidence is thin write one or two short honest sentences instead of padding with vague filler like \"various projects\". Never write in the third person and do not mention these instructions.\n";
@@ -138,7 +176,30 @@ pub fn summary_prompts(scans: &[SourceScan], now_ms: i64) -> Option<SummaryPromp
     };
     let local = build(true)?;
     let fallback = build(false).unwrap_or_else(|| local.clone());
-    Some(SummaryPrompts { local, fallback })
+    let emphasis_candidates = lines
+        .iter()
+        .filter_map(|line| {
+            parse_tag(&line.text).and_then(|(tag, body)| {
+                matches!(tag, "PROJECT" | "APP" | "SHELL").then(|| {
+                    body.split(" — ")
+                        .next()
+                        .unwrap_or(body)
+                        .split(" (")
+                        .next()
+                        .unwrap_or(body)
+                        .trim()
+                        .to_owned()
+                })
+            })
+        })
+        .filter(|name| name.len() >= 3)
+        .take(8)
+        .collect();
+    Some(SummaryPrompts {
+        local,
+        fallback,
+        emphasis_candidates,
+    })
 }
 
 const TAG_WEIGHTS: &[(&str, i32)] = &[
@@ -919,6 +980,7 @@ mod tests {
         let prompts = summary_prompts(&scans, 0).unwrap_or_else(|| SummaryPrompts {
             local: String::new(),
             fallback: String::new(),
+            emphasis_candidates: Vec::new(),
         });
         assert!(prompts.local.contains("PROJECT: alpha0"));
         assert!(prompts.local.contains("At most 3 sentences"));
@@ -1015,6 +1077,7 @@ mod tests {
         let prompts = summary_prompts(&scans, 0).unwrap_or_else(|| SummaryPrompts {
             local: String::new(),
             fallback: String::new(),
+            emphasis_candidates: Vec::new(),
         });
         assert!(prompts.local.contains("DOC: roadmap"));
         assert!(!prompts.fallback.contains("DOC: roadmap"));
@@ -1177,6 +1240,7 @@ mod tests {
         let prompts = summary_prompts(&scans, 0).unwrap_or_else(|| SummaryPrompts {
             local: String::new(),
             fallback: String::new(),
+            emphasis_candidates: Vec::new(),
         });
         assert!(prompts.local.contains("no markdown of any kind"));
         assert!(prompts.local.contains("420 characters"));

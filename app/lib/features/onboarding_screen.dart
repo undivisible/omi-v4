@@ -70,8 +70,54 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         widget.services.liveVoice.level,
       ]),
     );
+    controller.addListener(_refresh);
     _pillController = controller;
     return controller;
+  }
+
+  Offset? _pointerPosition;
+
+  // The lesson's pill floats at the bottom-right of the cursor and follows
+  // it, matching the real summoned pill's behavior.
+  Widget _withCursorPillOverlay(Widget base) {
+    final pill = _pillController;
+    final showPill =
+        pill != null &&
+        pill.state != CursorPillState.hidden &&
+        onboarding.stage == OnboardingStage.use;
+    return MouseRegion(
+      opaque: false,
+      onHover: (event) => setState(() => _pointerPosition = event.position),
+      child: Stack(
+        children: [
+          base,
+          if (showPill)
+            Builder(
+              builder: (context) {
+                final size = MediaQuery.sizeOf(context);
+                final pointer =
+                    _pointerPosition ?? Offset(size.width / 2, size.height / 2);
+                final left = (pointer.dx + 18).clamp(
+                  0.0,
+                  (size.width - 340).clamp(0.0, size.width),
+                );
+                final top = (pointer.dy + 18).clamp(
+                  0.0,
+                  (size.height - 120).clamp(0.0, size.height),
+                );
+                return Positioned(
+                  left: left,
+                  top: top,
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 420),
+                    child: CursorPill(controller: pill, autofocus: false),
+                  ),
+                );
+              },
+            ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -242,76 +288,78 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         settled:
             (onboarding.stage == OnboardingStage.scan && scanSources != null) ||
             onboarding.stage == OnboardingStage.profile,
-        child: SafeArea(
-          child: Center(
-            child: ConstrainedBox(
-              constraints: BoxConstraints(
-                maxWidth: onboarding.stage == OnboardingStage.access
-                    ? 620
-                    : 820,
-              ),
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 45,
-                  vertical: 58,
+        child: _withCursorPillOverlay(
+          SafeArea(
+            child: Center(
+              child: ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxWidth: onboarding.stage == OnboardingStage.access
+                      ? 620
+                      : 820,
                 ),
-                child: AnimatedSwitcher(
-                  duration: const Duration(milliseconds: 240),
-                  transitionBuilder: (child, animation) {
-                    final eased = CurvedAnimation(
-                      parent: animation,
-                      curve: Curves.easeOutCubic,
-                    );
-                    return FadeTransition(
-                      opacity: eased,
-                      child: SlideTransition(
-                        position: Tween(
-                          begin: const Offset(0, .015),
-                          end: Offset.zero,
-                        ).animate(eased),
-                        child: child,
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 45,
+                    vertical: 58,
+                  ),
+                  child: AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 240),
+                    transitionBuilder: (child, animation) {
+                      final eased = CurvedAnimation(
+                        parent: animation,
+                        curve: Curves.easeOutCubic,
+                      );
+                      return FadeTransition(
+                        opacity: eased,
+                        child: SlideTransition(
+                          position: Tween(
+                            begin: const Offset(0, .015),
+                            end: Offset.zero,
+                          ).animate(eased),
+                          child: child,
+                        ),
+                      );
+                    },
+                    child: switch (onboarding.stage) {
+                      OnboardingStage.introduction => _Introduction(
+                        key: const ValueKey('introduction'),
+                        onContinue: onboarding.continueFromIntroduction,
+                        onAlreadyHaveAccount: _useReturningUserFlow,
                       ),
-                    );
-                  },
-                  child: switch (onboarding.stage) {
-                    OnboardingStage.introduction => _Introduction(
-                      key: const ValueKey('introduction'),
-                      onContinue: onboarding.continueFromIntroduction,
-                      onAlreadyHaveAccount: _useReturningUserFlow,
-                    ),
-                    OnboardingStage.access => ProductionGate(
-                      key: const ValueKey('access'),
-                      configurationMessage:
-                          widget.services.configurationMessage,
-                      auth: widget.services.auth,
-                      capabilities:
-                          widget.capabilities ?? widget.services.capabilities,
-                      onOpenPreview: _openPreview,
-                      onFinish: onboarding.completeAccess,
-                    ),
-                    OnboardingStage.scan => _ScanStep(
-                      key: const ValueKey('scan'),
-                      error: scanError,
-                      onRetry: _retryScan,
-                    ),
-                    OnboardingStage.profile => OnboardingProfileStep(
-                      key: const ValueKey('profile'),
-                      notice: scanSummary,
-                      defaultName: _defaultProfileName,
-                      defaultLanguages: _defaultProfileLanguages,
-                      onContinue: _completeProfile,
-                    ),
-                    OnboardingStage.use => OnboardingUseStep(
-                      key: const ValueKey('use'),
-                      pill: _usePillController,
-                      transcripts: finalVoiceTranscripts(
-                        widget.services.nativeEvents,
+                      OnboardingStage.access => ProductionGate(
+                        key: const ValueKey('access'),
+                        configurationMessage:
+                            widget.services.configurationMessage,
+                        auth: widget.services.auth,
+                        capabilities:
+                            widget.capabilities ?? widget.services.capabilities,
+                        onOpenPreview: _openPreview,
+                        onFinish: onboarding.completeAccess,
                       ),
-                      finishing: finishing,
-                      error: finishError,
-                      onFinish: _finish,
-                    ),
-                  },
+                      OnboardingStage.scan => _ScanStep(
+                        key: const ValueKey('scan'),
+                        error: scanError,
+                        onRetry: _retryScan,
+                      ),
+                      OnboardingStage.profile => OnboardingProfileStep(
+                        key: const ValueKey('profile'),
+                        notice: scanSummary,
+                        defaultName: _defaultProfileName,
+                        defaultLanguages: _defaultProfileLanguages,
+                        onContinue: _completeProfile,
+                      ),
+                      OnboardingStage.use => OnboardingUseStep(
+                        key: const ValueKey('use'),
+                        pill: _usePillController,
+                        transcripts: finalVoiceTranscripts(
+                          widget.services.nativeEvents,
+                        ),
+                        finishing: finishing,
+                        error: finishError,
+                        onFinish: _finish,
+                      ),
+                    },
+                  ),
                 ),
               ),
             ),
@@ -759,20 +807,18 @@ class _OnboardingUseStepState extends State<OnboardingUseStep> {
     super.dispose();
   }
 
-  /// A double-shift while listening stops the session and hides the pill.
-  /// If anything was heard at all, that stop is the lesson completing — the
-  /// user did what the prompt asked — so finish onboarding instead of
-  /// resetting to the "press both Shift keys" prompt. Only a stop with no
-  /// speech at all re-arms the flow.
+  /// A double-shift (or Esc) while listening stops the session and hides
+  /// the pill. Performing that stop IS the lesson completing — the user
+  /// walked the whole pill → live → stop sequence — so finish onboarding
+  /// rather than resetting to the "press both Shift keys" prompt, even when
+  /// speech recognition produced no transcript (the live route can drain
+  /// late or be unavailable entirely in offline setups).
   void _pillChanged() {
     if (!mounted) return;
     final state = widget.pill.state;
     final wasListening = lastPillState == CursorPillState.listening;
     lastPillState = state;
-    if (wasListening &&
-        state == CursorPillState.hidden &&
-        heardTranscript &&
-        !completed) {
+    if (wasListening && state == CursorPillState.hidden && !completed) {
       _complete();
     }
     setState(() {});
@@ -916,7 +962,7 @@ class _OnboardingUseStepState extends State<OnboardingUseStep> {
     CursorPillState.hidden => 'Press both Shift keys at the same time.',
     CursorPillState.input => 'Don’t type — press both Shift keys again.',
     CursorPillState.listening =>
-      'Say “Show me my currents.” Press both Shift keys again to stop.',
+      'Say “Show me my currents.” Press both Shift keys — or Esc — to stop.',
   };
 
   @override
@@ -945,13 +991,6 @@ class _OnboardingUseStepState extends State<OnboardingUseStep> {
             ),
           ],
         ),
-        if (widget.pill.state != CursorPillState.hidden) ...[
-          const SizedBox(height: 26),
-          ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 420),
-            child: CursorPill(controller: widget.pill, autofocus: false),
-          ),
-        ],
         const SizedBox(height: 26),
         Opacity(
           opacity: .55,
