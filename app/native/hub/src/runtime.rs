@@ -58,10 +58,10 @@ const AUDIO_SESSION_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 #[cfg(test)]
 const MAX_RECONNECT_BUFFER_BYTES: usize = 64 * 1024;
 
-struct MemoryContext {
-    database: MemoryDb,
-    tenant_id: TenantId,
-    person_id: PersonId,
+pub(crate) struct MemoryContext {
+    pub(crate) database: MemoryDb,
+    pub(crate) tenant_id: TenantId,
+    pub(crate) person_id: PersonId,
 }
 
 #[derive(Default)]
@@ -1848,10 +1848,21 @@ async fn configure_memory(
                 );
                 return;
             }
-            state.memory = Some(Arc::new(StdMutex::new(memory)));
+            let memory = Arc::new(StdMutex::new(memory));
+            state.memory = Some(Arc::clone(&memory));
             state.computer_use_ledger_path = computer_use_ledger_path;
             drop(state);
             NativeEvent::RuntimeStatus(runtime_status(true)).send();
+            let review_cancellation = cancellation.clone();
+            tokio::spawn(async move {
+                tokio::select! {
+                    () = review_cancellation.cancelled() => {}
+                    _ = crate::daily_review::ensure_daily_review(
+                        memory,
+                        chrono::Local::now().fixed_offset(),
+                    ) => {}
+                }
+            });
             progress(
                 request_id,
                 "memory",
