@@ -1,6 +1,4 @@
 import Cocoa
-import AVFoundation
-import ApplicationServices
 import Carbon.HIToolbox
 import FlutterMacOS
 
@@ -107,20 +105,16 @@ private final class ShortcutDragView: NSImageView, NSDraggingSource {
 }
 
 private final class PermissionDragOverlay: NSView {
-  private var capability: String?
-  private var permissionTimer: Timer?
+  private var capability: MacPermissionCapability?
   private var restartTimer: Timer?
-  private let permissionCheck: (String) -> Bool
   private let restart: () -> Void
   private let restartButton = NSButton(title: "Restart Omi", target: nil, action: nil)
 
   init(
     frame frameRect: NSRect,
-    shortcutURL: URL,
-    permissionCheck: @escaping (String) -> Bool,
+    appBundleURL: URL,
     restart: @escaping () -> Void
   ) {
-    self.permissionCheck = permissionCheck
     self.restart = restart
     super.init(frame: frameRect)
     autoresizingMask = [.width, .height]
@@ -134,7 +128,7 @@ private final class PermissionDragOverlay: NSView {
     title.textColor = .white
     title.alignment = .center
 
-    let icon = ShortcutDragView(shortcutURL: shortcutURL)
+    let icon = ShortcutDragView(shortcutURL: appBundleURL)
     NSLayoutConstraint.activate([
       icon.widthAnchor.constraint(equalToConstant: 112),
       icon.heightAnchor.constraint(equalToConstant: 112),
@@ -167,7 +161,7 @@ private final class PermissionDragOverlay: NSView {
     restart()
   }
 
-  func show(for capability: String) {
+  func show(for capability: MacPermissionCapability) {
     self.capability = capability
     alphaValue = 0
     isHidden = false
@@ -176,7 +170,6 @@ private final class PermissionDragOverlay: NSView {
       context.timingFunction = CAMediaTimingFunction(name: .easeOut)
       animator().alphaValue = 1
     }
-    permissionTimer?.invalidate()
     restartTimer?.invalidate()
     restartButton.alphaValue = 0
     restartButton.isHidden = true
@@ -191,23 +184,10 @@ private final class PermissionDragOverlay: NSView {
     }
     self.restartTimer = restartTimer
     RunLoop.main.add(restartTimer, forMode: .common)
-    let timer = Timer(timeInterval: 2, repeats: true) { [weak self] _ in
-      guard let self, let capability = self.capability,
-            self.permissionCheck(capability) else { return }
-      if capability == "screenCapture" {
-        self.restart()
-      } else {
-        self.hide()
-      }
-    }
-    permissionTimer = timer
-    RunLoop.main.add(timer, forMode: .common)
   }
 
   private func hide() {
     capability = nil
-    permissionTimer?.invalidate()
-    permissionTimer = nil
     restartTimer?.invalidate()
     restartTimer = nil
     NSAnimationContext.runAnimationGroup { context in
@@ -219,18 +199,10 @@ private final class PermissionDragOverlay: NSView {
     }
   }
 
-  func hideIfGranted(
-    accessibility: Bool,
-    screenCapture: Bool,
-    fullDiskAccess: Bool
-  ) {
-    let granted = switch capability {
-    case "accessibility": accessibility
-    case "screenCapture": screenCapture
-    case "appData": fullDiskAccess
-    default: false
-    }
-    if granted { hide() }
+  func consume(_ snapshot: MacPermissionSnapshot) {
+    guard let capability, snapshot.grants(capability) else { return }
+    hide()
+    if capability == .screenCapture { restart() }
   }
 }
 
@@ -240,6 +212,7 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
   private var keyboardSink: FlutterEventSink?
   private var localKeyboardMonitor: Any?
   private var globalKeyboardMonitor: Any?
+  private let permissionService = MacPermissionService()
 
   override var canBecomeKey: Bool { true }
   override var canBecomeMain: Bool { true }
@@ -308,15 +281,8 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
     rootView.addSubview(flutterViewController.view)
     let permissionOverlay = PermissionDragOverlay(
       frame: rootView.bounds,
-      shortcutURL: fullDiskAccessShortcut()
-    ) { [weak self] capability in
-      switch capability {
-      case "accessibility": self?.hasAccessibilityAccess() == true
-      case "screenCapture": CGPreflightScreenCaptureAccess()
-      case "appData": self?.hasFullDiskAccess() == true
-      default: false
-      }
-    } restart: { [weak self] in
+      appBundleURL: permissionService.bundleURL
+    ) { [weak self] in
       self?.restart()
     }
     rootView.addSubview(permissionOverlay)
@@ -339,44 +305,21 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
       }
       switch call.method {
       case "check":
-        let accessibility = self.hasAccessibilityAccess()
-        let screenCapture = CGPreflightScreenCaptureAccess()
-        let fullDiskAccess = self.hasFullDiskAccess()
-        permissionOverlay.hideIfGranted(
-          accessibility: accessibility,
-          screenCapture: screenCapture,
-          fullDiskAccess: fullDiskAccess)
-        result([
-          "accessibility": accessibility,
-          "microphone": AVCaptureDevice.authorizationStatus(for: .audio) == .authorized,
-          "screenCapture": screenCapture,
-          "fullDiskAccess": fullDiskAccess,
-        ])
+        let snapshot = self.permissionService.snapshot()
+        permissionOverlay.consume(snapshot)
+        result(snapshot.dictionary)
       case "request":
-        guard let capability = call.arguments as? String else {
+        guard
+          let value = call.arguments as? String,
+          let capability = MacPermissionCapability(rawValue: value)
+        else {
           result(FlutterError(code: "invalid_capability", message: nil, details: nil))
           return
         }
-        switch capability {
-        case "accessibility":
+        if capability != .microphone {
           permissionOverlay.show(for: capability)
-          let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true]
-          AXIsProcessTrustedWithOptions(options as CFDictionary)
-          self.openPrivacyPane("Privacy_Accessibility")
-          result(nil)
-        case "microphone":
-          AVCaptureDevice.requestAccess(for: .audio) { _ in result(nil) }
-        case "screenCapture":
-          permissionOverlay.show(for: capability)
-          self.openPrivacyPane("Privacy_ScreenCapture")
-          result(nil)
-        case "appData":
-          permissionOverlay.show(for: capability)
-          self.openPrivacyPane("Privacy_AllFiles")
-          result(nil)
-        default:
-          result(FlutterError(code: "invalid_capability", message: nil, details: nil))
         }
+        self.permissionService.request(capability) { result(nil) }
       default:
         result(FlutterMethodNotImplemented)
       }
@@ -421,50 +364,6 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
     if let globalKeyboardMonitor { NSEvent.removeMonitor(globalKeyboardMonitor) }
   }
 
-  private func hasAccessibilityAccess() -> Bool {
-    if AXIsProcessTrusted() { return true }
-    let tap = CGEvent.tapCreate(
-      tap: .cgSessionEventTap,
-      place: .tailAppendEventTap,
-      options: .listenOnly,
-      eventsOfInterest: CGEventMask(1 << CGEventType.mouseMoved.rawValue),
-      callback: { _, _, event, _ in Unmanaged.passUnretained(event) },
-      userInfo: nil)
-    if let tap { CFMachPortInvalidate(tap) }
-    return tap != nil
-  }
-
-  private func hasFullDiskAccess() -> Bool {
-    let library = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library")
-    let notes = library.appendingPathComponent("Group Containers/group.com.apple.notes")
-    for file in [
-      library.appendingPathComponent("Safari/History.db"),
-      library.appendingPathComponent("Messages/chat.db"),
-      notes.appendingPathComponent("NoteStore.sqlite"),
-      notes.appendingPathComponent("Accounts/LocalAccount/NoteStore.sqlite"),
-    ] {
-      if let handle = try? FileHandle(forReadingFrom: file) {
-        try? handle.close()
-        return true
-      }
-    }
-    for directory in ["Safari", "Mail", "Messages"] {
-      if (try? FileManager.default.contentsOfDirectory(
-        at: library.appendingPathComponent(directory),
-        includingPropertiesForKeys: nil
-      )) != nil {
-        return true
-      }
-    }
-    return false
-  }
-
-  private func openPrivacyPane(_ pane: String) {
-    if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(pane)") {
-      NSWorkspace.shared.open(url)
-    }
-  }
-
   private func restart() {
     let configuration = NSWorkspace.OpenConfiguration()
     configuration.activates = true
@@ -478,22 +377,6 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
         DispatchQueue.main.async { NSApp.terminate(nil) }
       }
     }
-  }
-
-  private func fullDiskAccessShortcut() -> URL {
-    let manager = FileManager.default
-    let directory = manager.temporaryDirectory.appendingPathComponent(
-      "com.omi.permission-shortcut",
-      isDirectory: true)
-    try? manager.createDirectory(at: directory, withIntermediateDirectories: true)
-    let shortcut = directory.appendingPathComponent("Omi — drag into Settings.app")
-    if (try? manager.destinationOfSymbolicLink(atPath: shortcut.path)) != nil {
-      try? manager.removeItem(at: shortcut)
-    }
-    if !manager.fileExists(atPath: shortcut.path) {
-      try? manager.createSymbolicLink(at: shortcut, withDestinationURL: Bundle.main.bundleURL)
-    }
-    return manager.fileExists(atPath: shortcut.path) ? shortcut : Bundle.main.bundleURL
   }
 
 }
