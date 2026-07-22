@@ -68,6 +68,37 @@ void main() {
     services.dispose();
   });
 
+  testWidgets(
+    '"Already have an account?" is tappable and skips straight to the '
+    'tutorial, not the fresh pairing step',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(800, 1600));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final services = _unavailableAuthServices();
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: MobileOnboardingScreen(
+            services: services,
+            pairedDevices: VolatilePairedDeviceStore(),
+            onFinish: () {},
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final button = find.byKey(const Key('mobile_already_have_account'));
+      expect(button, findsOneWidget);
+      await tester.ensureVisible(button);
+      await tester.tap(button);
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('mobile_pair_scan')), findsNothing);
+      expect(find.byKey(Key('mobile_teach_continue_0')), findsOneWidget);
+      services.dispose();
+    },
+  );
+
   testWidgets('pair stage connects and persists the device', (tester) async {
     await tester.binding.setSurfaceSize(const Size(800, 1600));
     addTearDown(() => tester.binding.setSurfaceSize(null));

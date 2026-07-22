@@ -24,6 +24,7 @@ import 'settings/settings.dart';
 export 'memory/transcript_memory_ingestor.dart' show TranscriptCaptureConflict;
 
 const _managedAssistantModel = 'mimo-v2.5-pro';
+const _localOfflinePersonId = 'local-offline';
 const _defaultAssistantRefreshLead = Duration(minutes: 5);
 const _defaultAssistantMinimumRefreshDelay = Duration(seconds: 30);
 const _defaultInboxPollInterval = Duration(seconds: 2);
@@ -349,6 +350,13 @@ final class AppServices {
 
   bool get canUseApi => _worker != null && auth.snapshot.hasProcessingAuthority;
 
+  /// Eagerly resyncs the signed-in account's existing memory/profile from
+  /// the backend, for returning users who already have an account and skip
+  /// the fresh on-device scan step during onboarding. This reuses the same
+  /// production-sync path that normally runs lazily on auth changes and
+  /// after sign-in.
+  Future<void> resyncAccount() => _queueProductionSync();
+
   Future<void> captureOnboardingProfile({
     String? name,
     required List<String> languages,
@@ -359,6 +367,11 @@ final class AppServices {
       return;
     }
     if (name == null && languages.isEmpty) return;
+    // Ensure memory (production or local/offline) is configured before the
+    // native hub is asked to capture — otherwise this can race ahead of
+    // configureMemory, especially on a cold start or when auth is
+    // unavailable, and land the capture nowhere.
+    await _queueProductionSync();
     try {
       if (!await _ensureNativeInitialized()) return;
     } catch (_) {
@@ -594,22 +607,34 @@ final class AppServices {
         )) {
           throw StateError('Account authority changed while starting voice.');
         }
-        await liveVoice.start(
-          ephemeralToken: grant.token,
-          model: grant.model,
-          authorityId: 'g$generation',
-        );
-        if (_voiceAuthorityChanged(
-          generation: generation,
-          voiceGeneration: voiceGeneration,
-          currentVoiceGeneration: _desktopVoiceGeneration,
-          uid: session.uid,
-        )) {
+        // Minting the ephemeral token is not the only way this route can
+        // fail — liveVoice.start itself can throw (network blip, model
+        // rejection). Fall back to managed STT in that case too, the same
+        // as when the token mint fails above.
+        var liveStarted = false;
+        try {
+          await liveVoice.start(
+            ephemeralToken: grant.token,
+            model: grant.model,
+            authorityId: 'g$generation',
+          );
+          liveStarted = true;
+        } catch (_) {
           await liveVoice.cancel();
-          throw StateError('Account authority changed while starting voice.');
         }
-        _desktopVoiceRouteIsLive = true;
-        return;
+        if (liveStarted) {
+          if (_voiceAuthorityChanged(
+            generation: generation,
+            voiceGeneration: voiceGeneration,
+            currentVoiceGeneration: _desktopVoiceGeneration,
+            uid: session.uid,
+          )) {
+            await liveVoice.cancel();
+            throw StateError('Account authority changed while starting voice.');
+          }
+          _desktopVoiceRouteIsLive = true;
+          return;
+        }
       }
     }
     final transcriptionAuth = await _managedTranscriptionAuthFor(
@@ -813,6 +838,36 @@ final class AppServices {
 
   Future<void> _syncProductionState() async {
     if (_disposed) return;
+    // Auth can be entirely unconfigured (local/testing builds with no
+    // backend). There is no production session to configure memory for in
+    // that case, but onboarding capture still needs somewhere to land, so
+    // configure a local/offline memory store keyed by a stable local id
+    // instead of skipping memory configuration outright.
+    if (auth.snapshot.phase == AuthPhase.unavailable) {
+      memorySyncPump?.stop();
+      if (_configuredPersonId == _localOfflinePersonId && _nativeInitialized) {
+        _conversationController.scheduleInboxPoll();
+        return;
+      }
+      await _stopCapture();
+      if (!await _ensureNativeInitialized()) return;
+      if (_disposed || auth.snapshot.phase != AuthPhase.unavailable) return;
+      final databasePath = await memoryDatabasePath(_localOfflinePersonId);
+      if (_disposed || auth.snapshot.phase != AuthPhase.unavailable) return;
+      _configuredPersonId = _localOfflinePersonId;
+      nativeHub.configureMemory(
+        requestId: 'configure-memory-$_localOfflinePersonId',
+        databasePath: databasePath,
+        tenantId: _localOfflinePersonId,
+        personId: _localOfflinePersonId,
+      );
+      _transcriptMemoryIngestor.configure(
+        personId: _localOfflinePersonId,
+        authorityGeneration: _authorityGeneration,
+      );
+      _conversationController.scheduleInboxPoll(Duration.zero);
+      return;
+    }
     final session = productionReady ? auth.snapshot.session : null;
     if (session == null) {
       memorySyncPump?.stop();
@@ -907,7 +962,9 @@ final class AppServices {
       encoding: ManagedSttEncoding.linear16,
       sampleRate: 16000,
     );
-    if (_disposed || !_meetingActive || auth.snapshot.session?.uid != session.uid) {
+    if (_disposed ||
+        !_meetingActive ||
+        auth.snapshot.session?.uid != session.uid) {
       return;
     }
     (hub as MeetingCaptureHub).provideMeetingAuth(
@@ -928,7 +985,9 @@ final class AppServices {
       encoding: ManagedSttEncoding.linear16,
       sampleRate: MeetingMicCapture.sampleRateHz,
     );
-    if (_disposed || !_meetingActive || auth.snapshot.session?.uid != session.uid) {
+    if (_disposed ||
+        !_meetingActive ||
+        auth.snapshot.session?.uid != session.uid) {
       return;
     }
     await mic.start(auth: transcriptionAuth);

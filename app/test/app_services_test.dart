@@ -43,55 +43,16 @@ void main() {
 
     final capture = hub.captures.single;
     expect(capture.source, CaptureSource.chat);
-    expect(
-      capture.text,
-      'The user’s name is Ada. They speak English, French.',
-    );
-    services.dispose();
-  });
-
-  test('onboarding profile capture skips without processing authority', () async {
-    final auth = AuthController(
-      _FakeAuthGateway(_session('user-a')),
-      consentStore: VolatileConsentStore(),
-    );
-    await auth.restoreSession();
-    final hub = _FakeHub();
-    final services = AppServices.forTesting(
-      auth: auth,
-      nativeHub: hub,
-      deviceRelay: DeviceRelayService(
-        role: DeviceRelayRole.desktopObserver,
-        adapter: const UnavailableDeviceRelayAdapter(),
-      ),
-      memoryDatabasePath: (uid) => '/tmp/$uid.sqlite3',
-    );
-    await services.initialize();
-
-    await services.captureOnboardingProfile(
-      name: 'Ada',
-      languages: ['English'],
-    );
-
-    expect(hub.captures, isEmpty);
+    expect(capture.text, 'The user’s name is Ada. They speak English, French.');
     services.dispose();
   });
 
   test(
-    'system audio capture mode is resent on connect and meeting auth is '
-    'minted when a meeting becomes active',
+    'onboarding profile capture configures local memory before capturing '
+    'when auth is unavailable, instead of skipping memory configuration',
     () async {
-      debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
-      addTearDown(() => debugDefaultTargetPlatformOverride = null);
-      final auth = AuthController(
-        _FakeAuthGateway(_session('user-a')),
-        consentStore: VolatileConsentStore()..receipt = _receipt('user-a'),
-      );
-      await auth.restoreSession();
+      final auth = AuthController(const UnconfiguredAuthGateway());
       final hub = _FakeHub();
-      final store = VolatileSystemAudioCaptureModeStore()
-        ..value = SystemAudioCaptureMode.always;
-      final managedStt = _FakeManagedStt(_managedSession('user-a'));
       final services = AppServices.forTesting(
         auth: auth,
         nativeHub: hub,
@@ -100,49 +61,115 @@ void main() {
           adapter: const UnavailableDeviceRelayAdapter(),
         ),
         memoryDatabasePath: (uid) => '/tmp/$uid.sqlite3',
-        managedStt: managedStt,
-        captureModeStore: store,
+      );
+
+      // No services.initialize() call: this reproduces the cold-start race
+      // where captureOnboardingProfile can run before configureMemory has.
+      await services.captureOnboardingProfile(
+        name: 'Ada',
+        languages: ['English'],
+      );
+
+      expect(hub.databasePaths, isNotEmpty);
+      expect(
+        hub.captures.single.text,
+        'The user’s name is Ada. They speak English.',
+      );
+      services.dispose();
+      await hub.close();
+    },
+  );
+
+  test(
+    'onboarding profile capture skips without processing authority',
+    () async {
+      final auth = AuthController(
+        _FakeAuthGateway(_session('user-a')),
+        consentStore: VolatileConsentStore(),
+      );
+      await auth.restoreSession();
+      final hub = _FakeHub();
+      final services = AppServices.forTesting(
+        auth: auth,
+        nativeHub: hub,
+        deviceRelay: DeviceRelayService(
+          role: DeviceRelayRole.desktopObserver,
+          adapter: const UnavailableDeviceRelayAdapter(),
+        ),
+        memoryDatabasePath: (uid) => '/tmp/$uid.sqlite3',
       );
       await services.initialize();
-      await _waitFor(() => hub.captureModes.isNotEmpty);
-      expect(hub.captureModes.single, SystemAudioCaptureMode.always);
 
-      await services.setSystemAudioCaptureMode(SystemAudioCaptureMode.never);
-      expect(store.value, SystemAudioCaptureMode.never);
-      expect(hub.captureModes.last, SystemAudioCaptureMode.never);
-      expect(
-        await services.systemAudioCaptureMode,
-        SystemAudioCaptureMode.never,
+      await services.captureOnboardingProfile(
+        name: 'Ada',
+        languages: ['English'],
       );
 
-      hub.eventsController.add(
-        const NativeEventMeetingStateChanged(
-          value: MeetingStateChanged(active: true, suggestedTitle: null),
-        ),
-      );
-      await _waitFor(() => hub.meetingAuth.isNotEmpty);
-      final request = managedStt.requests.single;
-      expect(request.sampleRate, 16000);
-      expect(request.channels, 1);
-      expect(request.encoding, ManagedSttEncoding.linear16);
-      final (mintedAuth, origin) = hub.meetingAuth.single;
-      expect(mintedAuth, isA<TranscriptionAuthManaged>());
-      expect(origin, 'https://api.example.test/');
-
-      hub.eventsController.add(
-        const NativeEventError(
-          value: NativeError(
-            requestId: 'meeting-capture',
-            code: 'meeting_capture_session_lost',
-            message: 'meeting capture transcription session was lost',
-            retryable: true,
-          ),
-        ),
-      );
-      await _waitFor(() => hub.meetingAuth.length == 2);
+      expect(hub.captures, isEmpty);
       services.dispose();
     },
   );
+
+  test('system audio capture mode is resent on connect and meeting auth is '
+      'minted when a meeting becomes active', () async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    final auth = AuthController(
+      _FakeAuthGateway(_session('user-a')),
+      consentStore: VolatileConsentStore()..receipt = _receipt('user-a'),
+    );
+    await auth.restoreSession();
+    final hub = _FakeHub();
+    final store = VolatileSystemAudioCaptureModeStore()
+      ..value = SystemAudioCaptureMode.always;
+    final managedStt = _FakeManagedStt(_managedSession('user-a'));
+    final services = AppServices.forTesting(
+      auth: auth,
+      nativeHub: hub,
+      deviceRelay: DeviceRelayService(
+        role: DeviceRelayRole.desktopObserver,
+        adapter: const UnavailableDeviceRelayAdapter(),
+      ),
+      memoryDatabasePath: (uid) => '/tmp/$uid.sqlite3',
+      managedStt: managedStt,
+      captureModeStore: store,
+    );
+    await services.initialize();
+    await _waitFor(() => hub.captureModes.isNotEmpty);
+    expect(hub.captureModes.single, SystemAudioCaptureMode.always);
+
+    await services.setSystemAudioCaptureMode(SystemAudioCaptureMode.never);
+    expect(store.value, SystemAudioCaptureMode.never);
+    expect(hub.captureModes.last, SystemAudioCaptureMode.never);
+    expect(await services.systemAudioCaptureMode, SystemAudioCaptureMode.never);
+
+    hub.eventsController.add(
+      const NativeEventMeetingStateChanged(
+        value: MeetingStateChanged(active: true, suggestedTitle: null),
+      ),
+    );
+    await _waitFor(() => hub.meetingAuth.isNotEmpty);
+    final request = managedStt.requests.single;
+    expect(request.sampleRate, 16000);
+    expect(request.channels, 1);
+    expect(request.encoding, ManagedSttEncoding.linear16);
+    final (mintedAuth, origin) = hub.meetingAuth.single;
+    expect(mintedAuth, isA<TranscriptionAuthManaged>());
+    expect(origin, 'https://api.example.test/');
+
+    hub.eventsController.add(
+      const NativeEventError(
+        value: NativeError(
+          requestId: 'meeting-capture',
+          code: 'meeting_capture_session_lost',
+          message: 'meeting capture transcription session was lost',
+          retryable: true,
+        ),
+      ),
+    );
+    await _waitFor(() => hub.meetingAuth.length == 2);
+    services.dispose();
+  });
 
   test(
     'desktop channel inbox runs one stable assistant request at a time',
@@ -2399,6 +2426,64 @@ void main() {
     },
   );
 
+  test('desktop voice falls back to managed transcription when the live '
+      'session itself fails to start after a successful token mint', () async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    final auth = AuthController(
+      _FakeAuthGateway(_session('user-a')),
+      consentStore: VolatileConsentStore()..receipt = _receipt('user-a'),
+    );
+    await auth.restoreSession();
+    final hub = _FakeHub()
+      ..terminalTranscript = 'fallback after live start failure'
+      ..failLiveVoiceStart = true;
+    final tokens = _FakeLiveVoiceTokens();
+    final managedStt = _FakeManagedStt(_managedSession('user-a'));
+    final audio = StreamController<Uint8List>();
+    final desktopVoice = DesktopVoiceCapture(
+      hub: hub,
+      permissionCheck: () async => true,
+      startAudio: () async => audio.stream,
+      stopAudio: audio.close,
+    );
+    final liveVoice = LiveVoiceCapture(
+      hub: hub,
+      permissionCheck: () async => true,
+    );
+    final services = AppServices.forTesting(
+      auth: auth,
+      nativeHub: hub,
+      deviceRelay: DeviceRelayService(
+        role: DeviceRelayRole.desktopObserver,
+        adapter: const UnavailableDeviceRelayAdapter(),
+      ),
+      memoryDatabasePath: (uid) => '/tmp/$uid.sqlite3',
+      managedStt: managedStt,
+      desktopVoice: desktopVoice,
+      liveVoice: liveVoice,
+      liveVoiceTokens: tokens,
+    );
+    await services.initialize();
+
+    // The token mint succeeds (tokens.calls == 1), but liveVoice.start
+    // itself throws. The call must not throw all the way out — it should
+    // fall back to managed STT, the same as when the token mint fails.
+    await services.startDesktopVoice();
+    expect(tokens.calls, 1);
+    expect(liveVoice.active, isFalse);
+    expect(managedStt.requests, hasLength(1));
+    expect(desktopVoice.active, isTrue);
+
+    final submission = await services.stopDesktopVoice();
+    expect(submission?.text, 'fallback after live start failure');
+    expect(hub.messages.single.$2, 'fallback after live start failure');
+    expect(desktopVoice.active, isFalse);
+
+    services.dispose();
+    await hub.close();
+  });
+
   test(
     'desktop voice live route cancels when authority changes mid-start',
     () async {
@@ -2694,6 +2779,7 @@ final class _FakeHub
         })
       >[];
   bool failCancel = false;
+  bool failLiveVoiceStart = false;
   bool failAtomicApproval = false;
   bool rejectAtomicApproval = false;
   bool rejectAtomicApprovalWithoutFollowup = false;
@@ -3024,9 +3110,24 @@ final class _FakeHub
     required String ephemeralToken,
     required String model,
   }) {
-    liveVoiceStartRequests[liveStreamId] = requestId;
     liveVoiceModels.add(model);
     liveVoiceTokens.add(ephemeralToken);
+    if (failLiveVoiceStart) {
+      // Simulate the ephemeral token minting fine but the live session
+      // itself failing to start (network blip, model rejection): no
+      // "started" state ever arrives, only a failure.
+      eventsController.add(
+        NativeEventLiveVoiceState(
+          value: LiveVoiceState(
+            liveStreamId: liveStreamId,
+            state: LiveVoicePhase.failed,
+            detail: 'live session rejected',
+          ),
+        ),
+      );
+      return;
+    }
+    liveVoiceStartRequests[liveStreamId] = requestId;
     eventsController.add(
       NativeEventLiveVoiceState(
         value: LiveVoiceState(
