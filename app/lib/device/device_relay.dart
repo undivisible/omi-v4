@@ -3,6 +3,10 @@ import 'dart:async';
 import 'device_audio_frame.dart';
 import 'device_models.dart';
 
+abstract interface class DeviceRelayHaptics {
+  Future<bool> sendHaptic(int level);
+}
+
 abstract interface class DeviceRelayAdapter {
   DeviceRelayCapabilities get capabilities;
   Stream<DeviceRelaySnapshot> get snapshots;
@@ -53,6 +57,17 @@ class DeviceRelayService {
       'disconnect',
     );
     return adapter.disconnect();
+  }
+
+  Future<bool> sendHaptic(int level) async {
+    if (role != DeviceRelayRole.mobileOwner) return false;
+    final Object haptics = adapter;
+    if (haptics is! DeviceRelayHaptics) return false;
+    try {
+      return await haptics.sendHaptic(level);
+    } catch (_) {
+      return false;
+    }
   }
 
   Stream<DeviceAudioFrame> audioFrames(String deviceId) {
