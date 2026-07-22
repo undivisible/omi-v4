@@ -37,7 +37,7 @@ private class OvalBlurView: NSView {
     super.layout()
     let radius = shell.bounds.height / 2
     shell.layer?.cornerRadius = radius
-    shell.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.1).cgColor
+    shell.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.8).cgColor
     shell.layer?.shadowColor = NSColor.black.withAlphaComponent(0.2).cgColor
     shell.layer?.shadowOpacity = 1
     shell.layer?.shadowRadius = 56
