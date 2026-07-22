@@ -143,7 +143,7 @@ class _OmiAppState extends State<OmiApp> {
   Widget build(BuildContext context) {
     const background = Color(0xff0b1013);
     const surface = Color(0xff151c20);
-    const accent = Color(0xff73d5c4);
+    const accent = Color(0xfffffcec);
     return MaterialApp(
       title: 'Omi',
       debugShowCheckedModeBanner: false,

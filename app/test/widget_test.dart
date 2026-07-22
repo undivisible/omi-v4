@@ -6,6 +6,7 @@ import 'package:omi/features/onboarding/backdrop.dart';
 import 'package:omi/features/omi_shell.dart';
 import 'package:omi/features/setup_account_screens.dart';
 import 'package:omi/main.dart';
+import 'package:omi/ui/omi_ui.dart';
 
 Future<void> tapVisible(WidgetTester tester, Finder finder) async {
   await tester.ensureVisible(finder);
@@ -85,7 +86,7 @@ void main() {
     expect(find.textContaining('Hi, I’m Omi.'), findsOneWidget);
     expect(
       tester
-          .widget<FilledButton>(find.byKey(const Key('continue_preview_intro')))
+          .widget<OmiButton>(find.byKey(const Key('continue_preview_intro')))
           .onPressed,
       isNotNull,
     );
