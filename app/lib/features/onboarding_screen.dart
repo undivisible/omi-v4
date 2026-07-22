@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../app_services.dart';
-import '../keyboard/shake_gesture.dart';
 import '../keyboard/voice_transcripts.dart';
 import '../capabilities/desktop_capabilities.dart';
 import '../native/native_hub.dart';
@@ -703,25 +702,17 @@ class _OnboardingUseStepState extends State<OnboardingUseStep> {
   bool rightShiftDown = false;
   bool chordDown = false;
   bool completed = false;
-  double shakeProgress = 0;
-  double? lastPointerX;
-  int lastPointerDirection = 0;
-  int lastReversalAtMs = 0;
-  final shakeClock = Stopwatch()..start();
-  Timer? shakeDecay;
+  bool heardTranscript = false;
+  CursorPillState lastPillState = CursorPillState.hidden;
   StreamSubscription<String>? transcriptEvents;
 
   @override
   void initState() {
     super.initState();
+    lastPillState = widget.pill.state;
     HardwareKeyboard.instance.addHandler(_handleKey);
-    widget.pill.addListener(_refresh);
+    widget.pill.addListener(_pillChanged);
     transcriptEvents = widget.transcripts.listen(_handleTranscript);
-    shakeDecay = Timer.periodic(const Duration(milliseconds: 120), (_) {
-      if (shakeProgress > 0 && !completed) {
-        setState(() => shakeProgress = (shakeProgress - 8).clamp(0, 100));
-      }
-    });
   }
 
   @override
@@ -735,14 +726,28 @@ class _OnboardingUseStepState extends State<OnboardingUseStep> {
   @override
   void dispose() {
     HardwareKeyboard.instance.removeHandler(_handleKey);
-    widget.pill.removeListener(_refresh);
+    widget.pill.removeListener(_pillChanged);
     unawaited(transcriptEvents?.cancel());
-    shakeDecay?.cancel();
     super.dispose();
   }
 
-  void _refresh() {
-    if (mounted) setState(() {});
+  /// A double-shift while listening stops the session and hides the pill.
+  /// If anything was heard at all, that stop is the lesson completing — the
+  /// user did what the prompt asked — so finish onboarding instead of
+  /// resetting to the "press both Shift keys" prompt. Only a stop with no
+  /// speech at all re-arms the flow.
+  void _pillChanged() {
+    if (!mounted) return;
+    final state = widget.pill.state;
+    final wasListening = lastPillState == CursorPillState.listening;
+    lastPillState = state;
+    if (wasListening &&
+        state == CursorPillState.hidden &&
+        heardTranscript &&
+        !completed) {
+      _complete();
+    }
+    setState(() {});
   }
 
   bool _handleKey(KeyEvent event) {
@@ -771,39 +776,17 @@ class _OnboardingUseStepState extends State<OnboardingUseStep> {
   }
 
   void _handleTranscript(String text) {
-    if (completed || !matchesShowHubIntent(text)) return;
-    unawaited(widget.pill.dismiss());
-    _complete();
-  }
-
-  void _trackPointer(PointerHoverEvent event) {
+    heardTranscript = true;
     if (completed) return;
-    final x = event.position.dx;
-    final previous = lastPointerX;
-    lastPointerX = x;
-    if (previous == null) return;
-    final movement = x - previous;
-    if (movement.abs() < 7) return;
-    final direction = movement.sign.toInt();
-    final now = shakeClock.elapsedMilliseconds;
-    if (isShakeReversal(
-      lastPointerDirection,
-      direction,
-      now - lastReversalAtMs,
-      movement,
-    )) {
-      setState(() {
-        shakeProgress = advanceShakeProgress(shakeProgress, movement);
-      });
-      lastReversalAtMs = now;
-      if (shakeProgress >= 100) {
-        unawaited(widget.pill.dismiss());
-        _complete();
-      }
-    } else if (direction != lastPointerDirection) {
-      lastReversalAtMs = now;
+    if (matchesShowHubIntent(text)) {
+      unawaited(widget.pill.dismiss());
+      _complete();
+      return;
     }
-    lastPointerDirection = direction;
+    // Final transcripts can land after the stop already hid the pill (the
+    // provider drains asynchronously); a late transcript still counts as
+    // the lesson being satisfied.
+    if (widget.pill.state == CursorPillState.hidden) _complete();
   }
 
   void _complete() {
@@ -902,8 +885,7 @@ class _OnboardingUseStepState extends State<OnboardingUseStep> {
   }
 
   String get _prompt => switch (widget.pill.state) {
-    CursorPillState.hidden =>
-      'Press both Shift keys at the same time — or shake your cursor.',
+    CursorPillState.hidden => 'Press both Shift keys at the same time.',
     CursorPillState.input => 'Don’t type — press both Shift keys again.',
     CursorPillState.listening =>
       'Say “Show me my currents.” Press both Shift keys again to stop.',
@@ -913,71 +895,65 @@ class _OnboardingUseStepState extends State<OnboardingUseStep> {
   Widget build(BuildContext context) {
     final listening = widget.pill.state == CursorPillState.listening;
     final expectingDoubleShift = !listening;
-    return MouseRegion(
-      onHover: _trackPointer,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              _shiftKey(
-                key: const Key('shift_left'),
-                pressed: leftShiftDown,
-                listening: listening,
-                shimmer: expectingDoubleShift,
-              ),
-              _timesTwoReveal(
-                shown: widget.pill.state == CursorPillState.input,
-              ),
-              _shiftKey(
-                key: const Key('shift_right'),
-                pressed: rightShiftDown,
-                listening: listening,
-                shimmer: expectingDoubleShift,
-              ),
-            ],
-          ),
-          if (widget.pill.state != CursorPillState.hidden) ...[
-            const SizedBox(height: 26),
-            ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 420),
-              child: CursorPill(controller: widget.pill, autofocus: false),
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            _shiftKey(
+              key: const Key('shift_left'),
+              pressed: leftShiftDown,
+              listening: listening,
+              shimmer: expectingDoubleShift,
+            ),
+            _timesTwoReveal(shown: widget.pill.state == CursorPillState.input),
+            _shiftKey(
+              key: const Key('shift_right'),
+              pressed: rightShiftDown,
+              listening: listening,
+              shimmer: expectingDoubleShift,
             ),
           ],
+        ),
+        if (widget.pill.state != CursorPillState.hidden) ...[
           const SizedBox(height: 26),
-          AnimatedOpacity(
-            duration: const Duration(milliseconds: 200),
-            opacity: shakeProgress > 0 ? 1 : .55,
-            child: Semantics(
-              liveRegion: true,
-              child: Text(
-                shakeProgress > 0 ? '${shakeProgress.round()}%' : _prompt,
-                key: const Key('use_step_prompt'),
-                textAlign: TextAlign.center,
-                style: const TextStyle(
-                  color: Color(0xb3fffcec),
-                  fontFamily: 'Avenir Next',
-                  fontSize: 15,
-                  fontWeight: FontWeight.w500,
-                ),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 420),
+            child: CursorPill(controller: widget.pill, autofocus: false),
+          ),
+        ],
+        const SizedBox(height: 26),
+        Opacity(
+          opacity: .55,
+          child: Semantics(
+            liveRegion: true,
+            child: Text(
+              _prompt,
+              key: const Key('use_step_prompt'),
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                color: Color(0xb3fffcec),
+                fontFamily: 'Avenir Next',
+                fontSize: 15,
+                fontWeight: FontWeight.w500,
               ),
             ),
           ),
-          if (widget.error case final message?) ...[
-            const SizedBox(height: 12),
-            Semantics(
-              liveRegion: true,
-              child: Text(
-                message,
-                textAlign: TextAlign.center,
-                style: const TextStyle(color: Color(0xffffb4ab)),
-              ),
+        ),
+        if (widget.error case final message?) ...[
+          const SizedBox(height: 12),
+          Semantics(
+            liveRegion: true,
+            child: Text(
+              message,
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: Color(0xffffb4ab)),
             ),
-          ],
+          ),
         ],
-      ),
+      ],
     );
   }
 }
