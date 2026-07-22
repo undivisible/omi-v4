@@ -4,6 +4,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../api/worker_http.dart';
 import '../app_services.dart';
+import '../capabilities/desktop_capabilities.dart';
 import '../channels/channels.dart';
 import '../integrations/apple_eventkit.dart';
 import '../integrations/apple_eventkit_import.dart';
@@ -67,12 +68,13 @@ class SetupScreen extends StatelessWidget {
         detail: 'Ask “what are my tasks?”',
         state: 'Not completed',
       ),
-      const _SetupTile(
-        icon: Icons.lock_outline_rounded,
-        title: 'Allow screen understanding',
-        detail: 'Keep visual memory under your control',
-        state: 'Not granted',
-      ),
+      if (!kIsWeb &&
+          (defaultTargetPlatform == TargetPlatform.macOS ||
+              defaultTargetPlatform == TargetPlatform.windows))
+        ScreenCaptureSetupTile(
+          gateway: services.capabilities,
+          previewMode: previewMode,
+        ),
       if (!kIsWeb && defaultTargetPlatform == TargetPlatform.macOS)
         for (final source in AppleEventKitSource.values)
           AppleEventKitConnectionTile(
@@ -94,6 +96,92 @@ class SetupScreen extends StatelessWidget {
         state: 'Not connected',
       ),
     ],
+  );
+}
+
+class ScreenCaptureSetupTile extends StatefulWidget {
+  const ScreenCaptureSetupTile({
+    required this.gateway,
+    required this.previewMode,
+    super.key,
+  });
+
+  final DesktopCapabilityGateway gateway;
+  final bool previewMode;
+
+  @override
+  State<ScreenCaptureSetupTile> createState() => _ScreenCaptureSetupTileState();
+}
+
+class _ScreenCaptureSetupTileState extends State<ScreenCaptureSetupTile> {
+  late Future<CapabilityStatus> status = _check();
+  bool requesting = false;
+
+  Future<CapabilityStatus> _check() async =>
+      (await widget.gateway.check())[CoreCapability.screenCapture] ??
+      const CapabilityStatus(
+        state: CapabilityState.error,
+        detail: 'Screen-capture capability status is missing.',
+      );
+
+  Future<void> request() async {
+    setState(() => requesting = true);
+    try {
+      await widget.gateway.request(CoreCapability.screenCapture);
+      if (mounted) status = _check();
+    } catch (error) {
+      if (mounted) {
+        status = Future.value(
+          CapabilityStatus(
+            state: CapabilityState.error,
+            detail: 'Could not request screen-capture access: $error',
+          ),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          requesting = false;
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => FutureBuilder(
+    future: status,
+    builder: (context, snapshot) {
+      final value = snapshot.data;
+      final state = snapshot.hasError
+          ? 'Check failed'
+          : switch (value?.state) {
+              CapabilityState.granted => 'Granted',
+              CapabilityState.notRequired => 'Per capture',
+              CapabilityState.notApplicable => 'Not applicable',
+              CapabilityState.actionRequired => 'Action required',
+              CapabilityState.error => 'Check failed',
+              _ => 'Checking',
+            };
+      return _SetupTile(
+        icon: Icons.lock_outline_rounded,
+        title: 'Allow screen understanding',
+        detail: widget.previewMode
+            ? 'Native access is disabled in the interface preview.'
+            : requesting
+            ? 'Requesting access…'
+            : snapshot.hasError
+            ? 'Could not check screen-capture access: ${snapshot.error}'
+            : value?.detail ?? 'Checking screen-capture access…',
+        state: state,
+        onPressed:
+            !widget.previewMode &&
+                !requesting &&
+                value?.state == CapabilityState.actionRequired
+            ? request
+            : null,
+        actionTooltip: 'Review screen-capture access',
+      );
+    },
   );
 }
 
