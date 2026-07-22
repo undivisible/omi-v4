@@ -86,7 +86,30 @@ final class AppleEventKitItem {
   }
 }
 
-final class AppleEventKitService {
+abstract interface class AppleEventKitWriter {
+  bool get available;
+
+  Future<AppleEventKitAuthorization> status(AppleEventKitSource source);
+
+  Future<AppleEventKitAuthorization> request(AppleEventKitSource source);
+
+  Future<String?> upsertItem({
+    required AppleEventKitSource source,
+    required String currentId,
+    required String title,
+    required String notes,
+    String? nativeId,
+    DateTime? startAt,
+    DateTime? endAt,
+    DateTime? dueAt,
+  });
+
+  Future<void> completeItem(AppleEventKitSource source, String nativeId);
+
+  Future<void> removeItem(AppleEventKitSource source, String nativeId);
+}
+
+final class AppleEventKitService implements AppleEventKitWriter {
   factory AppleEventKitService({MethodChannel? channel, bool? available}) =>
       AppleEventKitService._(
         channel ?? const MethodChannel('omi/apple_eventkit'),
@@ -98,9 +121,11 @@ final class AppleEventKitService {
   final MethodChannel _channel;
   final bool? _available;
 
+  @override
   bool get available =>
       _available ?? (!kIsWeb && defaultTargetPlatform == TargetPlatform.macOS);
 
+  @override
   Future<AppleEventKitAuthorization> status(AppleEventKitSource source) async {
     if (!available) return AppleEventKitAuthorization.unavailable;
     final result = await _channel.invokeMapMethod<String, Object?>('status', {
@@ -109,6 +134,7 @@ final class AppleEventKitService {
     return _authorization(result?['status']);
   }
 
+  @override
   Future<AppleEventKitAuthorization> request(AppleEventKitSource source) async {
     if (!available) return AppleEventKitAuthorization.unavailable;
     final result = await _channel.invokeMapMethod<String, Object?>('request', {
@@ -135,6 +161,50 @@ final class AppleEventKitService {
         (row) => AppleEventKitItem.fromMap(row! as Map<Object?, Object?>),
       ),
     );
+  }
+
+  @override
+  Future<String?> upsertItem({
+    required AppleEventKitSource source,
+    required String currentId,
+    required String title,
+    required String notes,
+    String? nativeId,
+    DateTime? startAt,
+    DateTime? endAt,
+    DateTime? dueAt,
+  }) async {
+    if (!available) return null;
+    final result = await _channel
+        .invokeMapMethod<String, Object?>('upsertItem', {
+          'source': source.name,
+          'currentId': currentId,
+          'title': title,
+          'notes': notes,
+          'nativeId': nativeId,
+          'startAt': startAt?.toUtc().toIso8601String(),
+          'endAt': endAt?.toUtc().toIso8601String(),
+          'dueAt': dueAt?.toUtc().toIso8601String(),
+        });
+    return result?['nativeId'] as String?;
+  }
+
+  @override
+  Future<void> completeItem(AppleEventKitSource source, String nativeId) async {
+    if (!available) return;
+    await _channel.invokeMapMethod<String, Object?>('completeItem', {
+      'source': source.name,
+      'nativeId': nativeId,
+    });
+  }
+
+  @override
+  Future<void> removeItem(AppleEventKitSource source, String nativeId) async {
+    if (!available) return;
+    await _channel.invokeMapMethod<String, Object?>('removeItem', {
+      'source': source.name,
+      'nativeId': nativeId,
+    });
   }
 
   AppleEventKitAuthorization _authorization(Object? value) => switch (value) {

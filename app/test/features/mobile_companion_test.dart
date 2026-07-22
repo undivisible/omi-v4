@@ -8,6 +8,7 @@ import 'package:http/testing.dart';
 import 'package:omi/api/worker_http.dart';
 import 'package:omi/app_services.dart';
 import 'package:omi/auth/auth.dart';
+import 'package:omi/currents/currents.dart';
 import 'package:omi/device/device.dart';
 import 'package:omi/features/mobile_companion_shell.dart';
 import 'package:omi/main.dart';
@@ -430,6 +431,125 @@ void main() {
     expect(find.byKey(const Key('companion_sign_out')), findsOneWidget);
     fixture.services.dispose();
   });
+
+  testWidgets('signed-in pendant page lists currents tasks with complete', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(800, 2400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final auth = await _authorizedAuth('user-a');
+    final transport = _CurrentsTransport();
+    final services = AppServices.forTesting(
+      nativeHub: const UnavailableNativeHub('test'),
+      deviceRelay: DeviceRelayService(
+        role: DeviceRelayRole.mobileOwner,
+        adapter: _Adapter(),
+      ),
+      auth: auth,
+      currentsClient: CurrentsClient(transport),
+      memoryDatabasePath: (uid) => '/tmp/$uid.sqlite3',
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MobileCompanionShell(
+          services: services,
+          pairedDevices: VolatilePairedDeviceStore(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('TASKS'), findsOneWidget);
+    expect(find.byKey(const Key('companion_task_current-1')), findsOneWidget);
+    expect(find.text('Reply to Sam'), findsOneWidget);
+
+    await tester.tap(
+      find.byKey(const Key('companion_task_complete_current-1')),
+    );
+    await tester.pumpAndSettle();
+
+    expect(transport.feedbackKinds, ['dismissed']);
+    expect(find.text('TASKS'), findsNothing);
+    services.dispose();
+  });
+
+  testWidgets('signed-out pendant page skips the tasks section', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(800, 2400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final services = AppServices.forTesting(
+      nativeHub: const UnavailableNativeHub('test'),
+      deviceRelay: DeviceRelayService(
+        role: DeviceRelayRole.mobileOwner,
+        adapter: _Adapter(),
+      ),
+      auth: AuthController(const UnconfiguredAuthGateway()),
+      currentsClient: CurrentsClient(_CurrentsTransport()),
+      memoryDatabasePath: (uid) => '/tmp/$uid.sqlite3',
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MobileCompanionShell(
+          services: services,
+          pairedDevices: VolatilePairedDeviceStore(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('TASKS'), findsNothing);
+    services.dispose();
+  });
+}
+
+final class _CurrentsTransport implements CurrentsTransport {
+  final feedbackKinds = <String>[];
+  var _dismissed = false;
+
+  @override
+  Future<CurrentsResponse> send(CurrentsRequest request) async {
+    if (request.path == '/v1/currents/generate') {
+      return const CurrentsResponse(statusCode: 200, body: <String, Object?>{});
+    }
+    if (request.path == '/v1/currents') {
+      return CurrentsResponse(
+        statusCode: 200,
+        body: {
+          'currents': [if (!_dismissed) _card('surfaced', null)],
+        },
+      );
+    }
+    if (request.path == '/v1/currents/current-1/feedback') {
+      feedbackKinds.add(request.body!['kind']! as String);
+      _dismissed = true;
+      return CurrentsResponse(
+        statusCode: 200,
+        body: {'current': _card('dismissed', 'feedback-1')},
+      );
+    }
+    return const CurrentsResponse(statusCode: 404, body: {'error': 'missing'});
+  }
+
+  Map<String, Object?> _card(String status, String? feedbackReference) => {
+    'id': 'current-1',
+    'status': status,
+    'evidence': [
+      {'sourceId': 'src-1', 'reason': 'observed'},
+    ],
+    'reason': 'Sam is waiting on a reply',
+    'timing': {'surfaceAt': '2026-07-22T08:00:00Z'},
+    'confidence': 0.9,
+    'proposedNextStep': 'Reply to Sam about the handoff',
+    'createdAt': '2026-07-22T07:00:00Z',
+    'updatedAt': '2026-07-22T07:00:00Z',
+    'feedbackReference': feedbackReference,
+    'title': 'Reply to Sam',
+    'summary': 'Sam asked about the handoff yesterday.',
+    'sourceKind': 'telegram',
+  };
 }
 
 TranscriptDelta _delta(String text, {required bool finalSegment}) =>
