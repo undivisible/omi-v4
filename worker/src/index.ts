@@ -3,6 +3,7 @@ import { requireAuth } from "./auth";
 import desktopAuth from "./desktop-auth";
 import { reconcileManagedAssistantRequests } from "./assistant";
 import { deliverDueChannelMessages } from "./delivery";
+import { backfillClaimVectors, drainPendingEmbeddings } from "./memory-vectors";
 export { AssistantAdmission } from "./assistant-admission";
 export { SttAdmission } from "./stt-admission";
 export { DeliveryCoordinator } from "./delivery";
@@ -33,6 +34,9 @@ export default {
       Promise.all([
         deliverDueChannelMessages(env),
         reconcileManagedAssistantRequests(env),
+        backfillClaimVectors(env)
+          .then(() => drainPendingEmbeddings(env))
+          .catch(() => undefined),
       ]).then(() => undefined),
     );
   },

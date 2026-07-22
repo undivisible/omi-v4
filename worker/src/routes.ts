@@ -6,6 +6,13 @@ import billing from "./billing";
 import currents from "./currents";
 import memorySync from "./memory-sync";
 import { ensureZkrMemoryProjected } from "./memory-projection";
+import {
+  deferVectorWork,
+  deleteClaimVectors,
+  drainPendingEmbeddings,
+  enqueueClaimEmbeddings,
+  searchMemoryClaims,
+} from "./memory-vectors";
 import oauthBroker from "./oauth-broker";
 import oauthProxy from "./oauth-proxy";
 import stt from "./stt";
@@ -169,6 +176,20 @@ const retrieveMemory = async (context: Context<AppEnv>) => {
 
 routes.get("/memory/retrieve", retrieveMemory);
 routes.post("/memory/retrieve", retrieveMemory);
+
+routes.get("/memory/semantic-search", async (context) => {
+  const query = text(context.req.query("q"), 500);
+  const limit = Number(context.req.query("limit") ?? 8);
+  if (!query || !Number.isSafeInteger(limit) || limit < 1 || limit > 20)
+    return context.json({ error: "Invalid retrieval" }, 400);
+  const items = await searchMemoryClaims(
+    context.env,
+    context.get("auth").uid,
+    query,
+    limit,
+  );
+  return context.json({ query, items });
+});
 
 routes.get("/me", async (context) => {
   const auth = context.get("auth");
@@ -357,7 +378,12 @@ routes.post("/memories", async (context) => {
          (id, uid, claim_id, profile_kind, profile_key, profile_value, created_at, updated_at)
        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)`,
     ).bind(id, uid, claimId, profileKind, profileKey, content, now),
+    ...enqueueClaimEmbeddings(context.env.DB, uid, [claimId], now),
   ]);
+  deferVectorWork(
+    () => drainPendingEmbeddings(context.env),
+    (promise) => context.executionCtx.waitUntil(promise),
+  );
   return context.json({ id, sourceId, claimId }, 201);
 });
 
@@ -445,6 +471,21 @@ routes.delete("/memory/sources/:sourceId", async (context) => {
        )`,
     ).bind(now, uid, sourceId),
   ]);
+  const retracted = await context.env.DB.prepare(
+    "SELECT id FROM memory_claims WHERE uid = ?1 AND retracted_at = ?2",
+  )
+    .bind(uid, now)
+    .all<{ id: string }>();
+  const retractedIds = (retracted.results ?? []).map((row) => String(row.id));
+  if (retractedIds.length > 0) {
+    await context.env.DB.batch(
+      enqueueClaimEmbeddings(context.env.DB, uid, retractedIds, now),
+    );
+    deferVectorWork(
+      () => drainPendingEmbeddings(context.env),
+      (promise) => context.executionCtx.waitUntil(promise),
+    );
+  }
   return context.body(null, 204);
 });
 
@@ -727,6 +768,7 @@ routes.put("/profile/onboarding", async (context) => {
 });
 
 const uidScopedTables = [
+  "pending_embeddings",
   "memory_daily_review_citations",
   "memory_daily_reviews",
   "memory_claim_evidence",
@@ -766,10 +808,20 @@ const uidScopedTables = [
 
 routes.delete("/account", async (context) => {
   const uid = context.get("auth").uid;
+  const claims = await context.env.DB.prepare(
+    "SELECT id FROM memory_claims WHERE uid = ?1",
+  )
+    .bind(uid)
+    .all<{ id: string }>();
+  const claimIds = (claims.results ?? []).map((row) => String(row.id));
   await context.env.DB.batch(
     uidScopedTables.map((table) =>
       context.env.DB.prepare(`DELETE FROM ${table} WHERE uid = ?1`).bind(uid),
     ),
+  );
+  deferVectorWork(
+    () => deleteClaimVectors(context.env, claimIds),
+    (promise) => context.executionCtx.waitUntil(promise),
   );
   return context.body(null, 204);
 });

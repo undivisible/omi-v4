@@ -1,5 +1,11 @@
 import { Hono } from "hono";
 import { projectZkrMemory } from "./memory-projection";
+import {
+  deferVectorWork,
+  drainPendingEmbeddings,
+  enqueueClaimEmbeddings,
+  projectedClaimId,
+} from "./memory-vectors";
 import type { AppEnv } from "./types";
 
 type JsonObject = Record<string, unknown>;
@@ -171,12 +177,35 @@ const deletionTarget = (
   return recordKinds.has(kind) ? { kind, id, deletedAt } : null;
 };
 
+const touchedClaimIds = (
+  uid: string,
+  replicaId: string,
+  records: SyncRecord[],
+): string[] => {
+  const rawIds = new Set<string>();
+  for (const record of records) {
+    if (record.kind === "claim") {
+      const id = text(record.record.id, 500);
+      if (id) rawIds.add(id);
+    }
+    if (record.kind === "correction") {
+      const superseded = text(record.record.superseded_claim_id, 500);
+      const replacement = text(record.record.claim_id, 500);
+      if (superseded) rawIds.add(superseded);
+      if (replacement) rawIds.add(replacement);
+    }
+    const target = deletionTarget(record);
+    if (target?.kind === "claim") rawIds.add(target.id);
+  }
+  return [...rawIds].map((id) => projectedClaimId(uid, replicaId, id));
+};
+
 const applyCommit = async (
   db: D1Database,
   uid: string,
   replicaId: string,
   commit: SyncCommit,
-): Promise<"applied" | "replayed"> => {
+): Promise<{ status: "applied" | "replayed"; claimIds: string[] }> => {
   const existing = await db
     .prepare(
       "SELECT applied_at FROM zkr_sync_commits WHERE uid = ?1 AND replica_id = ?2 AND sequence = ?3",
@@ -185,7 +214,7 @@ const applyCommit = async (
     .first<{ applied_at: number | null }>();
   if (existing?.applied_at !== null && existing?.applied_at !== undefined) {
     await projectZkrMemory(db, uid, replicaId);
-    return "replayed";
+    return { status: "replayed", claimIds: [] };
   }
   const rows = await db
     .prepare(
@@ -197,7 +226,7 @@ const applyCommit = async (
     rows.results.length !== commit.eventCount ||
     rows.results.some((row, index) => Number(row.event_index) !== index)
   )
-    return "replayed";
+    return { status: "replayed", claimIds: [] };
   const records = rows.results.map(
     (row) => JSON.parse(row.payload) as SyncRecord,
   );
@@ -256,7 +285,10 @@ const applyCommit = async (
     )
     .bind(now, uid, replicaId, commit.sequence)
     .run();
-  return "applied";
+  return {
+    status: "applied",
+    claimIds: touchedClaimIds(uid, replicaId, records),
+  };
 };
 
 memorySync.post("/", async (context) => {
@@ -274,6 +306,7 @@ memorySync.post("/", async (context) => {
   if (commits.some((commit) => commit === null))
     return context.json({ error: "Invalid or foreign zkr scope" }, 400);
   const statuses: Array<{ sequence: number; status: string }> = [];
+  const pendingClaimIds = new Set<string>();
   for (const commit of commits as SyncCommit[]) {
     const existingCommit = await context.env.DB.prepare(
       "SELECT recorded_at, event_count, applied_at FROM zkr_sync_commits WHERE uid = ?1 AND replica_id = ?2 AND sequence = ?3",
@@ -357,10 +390,18 @@ memorySync.post("/", async (context) => {
       statuses.push({ sequence: commit.sequence, status: "staged" });
       continue;
     }
-    statuses.push({
-      sequence: commit.sequence,
-      status: await applyCommit(context.env.DB, uid, replicaId, commit),
-    });
+    const applied = await applyCommit(context.env.DB, uid, replicaId, commit);
+    for (const claimId of applied.claimIds) pendingClaimIds.add(claimId);
+    statuses.push({ sequence: commit.sequence, status: applied.status });
+  }
+  if (pendingClaimIds.size > 0) {
+    await context.env.DB.batch(
+      enqueueClaimEmbeddings(context.env.DB, uid, [...pendingClaimIds]),
+    );
+    deferVectorWork(
+      () => drainPendingEmbeddings(context.env),
+      (promise) => context.executionCtx.waitUntil(promise),
+    );
   }
   return context.json({ replica_id: replicaId, commits: statuses });
 });

@@ -224,7 +224,10 @@ describe("managed STT sessions", () => {
 
   test("pins the conservative managed Deepgram reservation price", async () => {
     const config = JSON.parse(
-      await Bun.file("wrangler.jsonc").text(),
+      (await Bun.file("wrangler.jsonc").text())
+        .split("\n")
+        .filter((line) => !line.trimStart().startsWith("//"))
+        .join("\n"),
     ) as Record<string, unknown>;
     const variables = config.vars as Record<string, string>;
     expect(variables.STT_COST_MICROUSD_PER_MINUTE).toBe("10000");

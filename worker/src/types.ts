@@ -1,5 +1,9 @@
 export type Bindings = {
   DB: D1Database;
+  MEMORY_VECTORS?: VectorizeIndex;
+  AI?: {
+    run(model: string, inputs: Record<string, unknown>): Promise<unknown>;
+  };
   DELIVERY_COORDINATOR: DurableObjectNamespace;
   ASSISTANT_ADMISSION: DurableObjectNamespace;
   STT_ADMISSION: DurableObjectNamespace;
