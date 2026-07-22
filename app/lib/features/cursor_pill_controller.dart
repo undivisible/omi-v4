@@ -59,6 +59,42 @@ final _personPattern = RegExp(
 
 enum PillSuggestionKind { chat, email, link }
 
+final _evidenceTagPattern = RegExp(
+  r'\b(?:MAIL SUBJECT|NOTE TITLE|BROWSING|FILE|FOLDER|EVENT|APP|DOC(?:UMENT)?)'
+  r'\s*:\s*',
+);
+final _senderMetaPattern = RegExp(
+  r'\s*\((?:from|to|with|via|sent|cc)\b[^)]*(?:\)|$)',
+  caseSensitive: false,
+);
+final _angleAddressPattern = RegExp(r'\s*<[^<>\s]+@[^<>\s]+>');
+final _replyPrefixPattern = RegExp(
+  r'^(?:re|fwd?)\s*:\s*',
+  caseSensitive: false,
+);
+
+/// Strips internal evidence formatting from a string before it is shown to
+/// the user or handed to anything external (chip labels, mailto subjects,
+/// prompts): the uppercase evidence tags the scanner emits ("MAIL SUBJECT:",
+/// "NOTE TITLE:", …), sender-metadata parentheticals ("(from Luke …)", even
+/// when truncation lost the closing paren), bare angle-bracket addresses,
+/// and collapsed whitespace, capped at [maxLength].
+String sanitizeEvidenceText(String text, {int maxLength = 72}) {
+  var cleaned = text
+      .replaceAll(_evidenceTagPattern, '')
+      .replaceAll(_senderMetaPattern, '')
+      .replaceAll(_angleAddressPattern, '')
+      .replaceAll(RegExp(r'\s+'), ' ')
+      .trim();
+  cleaned = cleaned
+      .replaceAll(RegExp(r'^[\s\-–—…]+'), '')
+      .replaceAll(RegExp(r'[\s\-–—…]+$'), '');
+  if (cleaned.length > maxLength) {
+    cleaned = '${cleaned.substring(0, maxLength - 1).trimRight()}…';
+  }
+  return cleaned;
+}
+
 @immutable
 final class PillSuggestion {
   const PillSuggestion({
@@ -69,6 +105,7 @@ final class PillSuggestion {
     this.currentId,
     this.personHint,
     this.email,
+    this.evidence,
   });
 
   final String label;
@@ -79,19 +116,23 @@ final class PillSuggestion {
   final String? personHint;
   final String? email;
 
+  /// The raw evidence text the suggestion was derived from. Never shown or
+  /// sent anywhere external verbatim — it feeds subject extraction and gives
+  /// the draft model context about the underlying thread.
+  final String? evidence;
+
   static PillSuggestion? fromMemory(MemorySearchItem item) {
-    final excerpt = item.excerpt.trim().replaceAll(RegExp(r'\s+'), ' ');
-    if (excerpt.isEmpty) return null;
-    final label = excerpt.length > 72
-        ? '${excerpt.substring(0, 71)}…'
-        : excerpt;
+    final excerpt = item.excerpt.trim();
+    final label = sanitizeEvidenceText(excerpt);
+    if (label.isEmpty) return null;
     final email = _emailPattern.firstMatch(excerpt)?.group(0);
     return PillSuggestion(
       label: label,
-      prompt: excerpt,
+      prompt: sanitizeEvidenceText(excerpt, maxLength: 280),
       kind: email == null ? PillSuggestionKind.chat : PillSuggestionKind.email,
       email: email,
       link: email == null ? null : Uri(scheme: 'mailto', path: email),
+      evidence: excerpt,
     );
   }
 
@@ -102,35 +143,56 @@ final class PillSuggestion {
         '${card.title} ${card.summary} ${card.item.proposedNextStep}';
     final url = _urlPattern.firstMatch(haystack)?.group(0);
     final email = _emailPattern.firstMatch(haystack)?.group(0);
-    final title = card.title.trim();
-    final label = title.length > 72 ? '${title.substring(0, 71)}…' : title;
+    final label = sanitizeEvidenceText(card.title);
+    final summary = sanitizeEvidenceText(card.summary, maxLength: 280);
+    final prompt = 'Help me with this task: $label. $summary';
     if (url != null) {
       final link = Uri.tryParse(url);
       if (link != null && (link.scheme == 'https' || link.scheme == 'http')) {
         return PillSuggestion(
           label: label,
-          prompt: 'Help me with this task: $title. ${card.summary}',
+          prompt: prompt,
           kind: PillSuggestionKind.link,
           link: link,
           currentId: card.item.id,
+          evidence: haystack,
         );
       }
     }
     if (email != null || _emailIntentPattern.hasMatch(haystack)) {
       return PillSuggestion(
         label: label,
-        prompt: 'Help me with this task: $title. ${card.summary}',
+        prompt: prompt,
         kind: PillSuggestionKind.email,
         email: email,
-        personHint: _personPattern.firstMatch(title)?.group(1),
+        personHint: _personPattern.firstMatch(label)?.group(1),
         currentId: card.item.id,
+        evidence: haystack,
       );
     }
     return PillSuggestion(
       label: label,
-      prompt: 'Help me with this task: $title. ${card.summary}',
+      prompt: prompt,
       currentId: card.item.id,
+      evidence: haystack,
     );
+  }
+
+  /// A clean subject for an outgoing email about this suggestion: when the
+  /// evidence carries a known mail thread ("MAIL SUBJECT: …"), a reply
+  /// subject on that thread; otherwise the sanitized task label.
+  String get emailSubject {
+    final tagged = RegExp(
+      r'MAIL SUBJECT:\s*([^\n]+)',
+    ).firstMatch(evidence ?? '');
+    if (tagged != null) {
+      final thread = sanitizeEvidenceText(
+        tagged.group(1)!.replaceFirst(_replyPrefixPattern, ''),
+        maxLength: 120,
+      );
+      if (thread.isNotEmpty) return 'Re: $thread';
+    }
+    return sanitizeEvidenceText(label, maxLength: 120);
   }
 }
 
@@ -216,6 +278,8 @@ final class CursorPillController extends ChangeNotifier {
   DateTime? _lastTransitionAt;
   CursorPillState _state = CursorPillState.hidden;
   List<PillSuggestion> _suggestions = const [];
+  List<PillSuggestion> _currentSuggestions = const [];
+  List<PillSuggestion> _memorySuggestions = const [];
   String? _error;
   String? _searchRequestId;
   StreamSubscription<NativeEvent>? _subscription;
@@ -259,6 +323,8 @@ final class CursorPillController extends ChangeNotifier {
     _state = CursorPillState.input;
     _error = null;
     _suggestions = const [];
+    _currentSuggestions = const [];
+    _memorySuggestions = const [];
     _notify();
     await _presentWindow?.call();
     _subscription ??= _events.listen(_handleEvent);
@@ -266,11 +332,10 @@ final class CursorPillController extends ChangeNotifier {
     if (currents != null) {
       final actionable = _actionableCurrents(currents);
       if (actionable.isNotEmpty) {
-        _suggestions = actionable;
+        _currentSuggestions = actionable;
+        _mergeSuggestions();
         _notify();
-        return;
-      }
-      if (!currents.loading) {
+      } else if (!currents.loading) {
         unawaited(
           currents
               .load()
@@ -278,7 +343,8 @@ final class CursorPillController extends ChangeNotifier {
                 if (_disposed || _state != CursorPillState.input) return;
                 final loaded = _actionableCurrents(currents);
                 if (loaded.isNotEmpty) {
-                  _suggestions = loaded;
+                  _currentSuggestions = loaded;
+                  _mergeSuggestions();
                   _notify();
                 }
               })
@@ -303,6 +369,21 @@ final class CursorPillController extends ChangeNotifier {
         .take(3)
         .map(PillSuggestion.fromCurrent),
   );
+
+  /// Task suggestions from the Currents pipeline take priority; when fewer
+  /// than three are available, memory-search-derived items fill the
+  /// remaining slots (deduplicated by label).
+  void _mergeSuggestions() {
+    final seen = <String>{};
+    final merged = <PillSuggestion>[];
+    for (final suggestion in _currentSuggestions.followedBy(
+      _memorySuggestions,
+    )) {
+      if (merged.length == 3) break;
+      if (seen.add(suggestion.label.toLowerCase())) merged.add(suggestion);
+    }
+    _suggestions = List.unmodifiable(merged);
+  }
 
   Future<void> beginListening() async {
     if (_state != CursorPillState.input) return;
@@ -400,9 +481,19 @@ final class CursorPillController extends ChangeNotifier {
 
   Future<void> _dispatchEmail(PillSuggestion suggestion) async {
     await _hide();
-    final address =
-        suggestion.email ??
-        await _resolveEmail(suggestion.personHint ?? suggestion.label);
+    var address = suggestion.email;
+    final draft = _draft;
+    var contextItems = const <MemorySearchItem>[];
+    if (address == null || draft != null) {
+      final person = suggestion.personHint ?? suggestion.label;
+      contextItems = await _searchMemory('$person ${suggestion.label} email');
+      if (address == null) {
+        for (final item in contextItems) {
+          address = _emailPattern.firstMatch(item.excerpt)?.group(0);
+          if (address != null) break;
+        }
+      }
+    }
     if (address == null) {
       try {
         await _sendPrompt(suggestion.prompt);
@@ -410,13 +501,24 @@ final class CursorPillController extends ChangeNotifier {
       return;
     }
     String? body;
-    final draft = _draft;
     if (draft != null) {
+      final context = <String>[
+        if (suggestion.evidence?.trim() case final evidence?
+            when evidence.isNotEmpty)
+          evidence,
+        for (final item in contextItems.take(3))
+          if (item.excerpt.trim() case final excerpt when excerpt.isNotEmpty)
+            excerpt.length > 300 ? excerpt.substring(0, 300) : excerpt,
+      ];
       try {
         body = await draft(
-          'Draft a short, friendly 2-3 sentence email for this task: '
-          '"${suggestion.prompt}". Reply with only the email body text — '
-          'no subject line, no signature, no placeholders.',
+          'Write a complete, ready-to-send email for this task: '
+          '"${suggestion.label}". Include a natural greeting, a friendly '
+          '3-6 sentence body that references the relevant details from the '
+          'context below, and a brief sign-off. Reply with only the email '
+          'text — no subject line and no placeholders.\n'
+          'Context from my notes and mail:\n'
+          '${context.map((line) => '- $line').join('\n')}',
           draftTimeout,
         );
       } catch (_) {
@@ -424,7 +526,7 @@ final class CursorPillController extends ChangeNotifier {
       }
     }
     final query = StringBuffer(
-      'subject=${Uri.encodeComponent(suggestion.label)}',
+      'subject=${Uri.encodeComponent(suggestion.emailSubject)}',
     );
     if (body != null && body.trim().isNotEmpty) {
       query.write('&body=${Uri.encodeComponent(body.trim())}');
@@ -438,32 +540,26 @@ final class CursorPillController extends ChangeNotifier {
     } catch (_) {}
   }
 
-  Future<String?> _resolveEmail(String person) async {
+  Future<List<MemorySearchItem>> _searchMemory(String query) async {
     final requestId = _requestId();
     final completer = Completer<List<MemorySearchItem>>();
     _emailLookup = completer;
     _emailLookupRequestId = requestId;
     try {
-      _hub.search(requestId: requestId, query: '$person email', limit: 8);
+      _hub.search(requestId: requestId, query: query, limit: 8);
     } catch (_) {
       _emailLookup = null;
       _emailLookupRequestId = null;
-      return null;
+      return const [];
     }
-    List<MemorySearchItem> items;
     try {
-      items = await completer.future.timeout(emailLookupTimeout);
+      return await completer.future.timeout(emailLookupTimeout);
     } on TimeoutException {
-      items = const [];
+      return const [];
     } finally {
       _emailLookup = null;
       _emailLookupRequestId = null;
     }
-    for (final item in items) {
-      final email = _emailPattern.firstMatch(item.excerpt)?.group(0);
-      if (email != null) return email;
-    }
-    return null;
   }
 
   Future<void> dismiss() async {
@@ -480,6 +576,8 @@ final class CursorPillController extends ChangeNotifier {
     _state = CursorPillState.hidden;
     _searchRequestId = null;
     _suggestions = const [];
+    _currentSuggestions = const [];
+    _memorySuggestions = const [];
     _error = null;
     _notify();
     await _dismissWindow?.call();
@@ -513,16 +611,14 @@ final class CursorPillController extends ChangeNotifier {
     if (event case NativeEventMemorySearchResults(
       :final value,
     ) when value.requestId == _searchRequestId) {
-      // Task suggestions from the Currents pipeline take priority; memory
-      // search results only fill in when no task cards are available.
-      if (_suggestions.any((item) => item.currentId != null)) return;
       final items = List.of(value.items)
         ..sort(
           (a, b) => b.relevanceBasisPoints.compareTo(a.relevanceBasisPoints),
         );
-      _suggestions = List.unmodifiable(
+      _memorySuggestions = List.unmodifiable(
         items.map(PillSuggestion.fromMemory).nonNulls.take(3),
       );
+      _mergeSuggestions();
       _notify();
     }
   }
