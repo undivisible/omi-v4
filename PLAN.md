@@ -289,6 +289,18 @@ Use a same-model subagent only when the task needs independent deep reasoning or
 
 Keep `grok-composer-2.5-fast` only when the authenticated xAI catalog returns it. Existing ChatGPT/Codex and xAI OAuth code is a reference, not proof that consumer subscriptions may fund third-party API traffic. Unsupported subscription-token reuse does not ship; OpenAI API access otherwise uses documented API credentials.
 
+### Payments stay disabled during testing
+
+Stripe is intentionally unconfigured (`STRIPE_SECRET_KEY`/`STRIPE_PRO_PRICE_ID` unset) so `_PlanTile`'s checkout/portal actions fail closed with no live charge path; `AppServices.canUseApi` (`app/lib/app_services.dart:321`) gates chat/API access on auth and processing consent only, never on plan or entitlement, so the app stays fully usable for free during this testing phase. Do not wire real Stripe credentials until the provider-choice model below is designed and approved.
+
+### Future: provider choice under a SuperGrok/subscription plan (not yet designed)
+
+When a paid plan is reintroduced, offer a subscription tier (e.g. riding an xAI SuperGrok-style subscription) with a visible "or use your own API keys" fallback next to it, plus explicit provider choice rather than one fixed managed stack:
+
+- **Embeddings**: offer a small set of provider choices, or compute them ourselves if cost allows, or run them fully local (candidates to evaluate: OpenAI, Voyage, Cohere, a local model) — survey how comparable agent products (e.g. Pi) structure this choice before committing to one.
+- **STT**: let the user pick among OpenAI, xAI, Gemini, and Deepgram (Deepgram remains the only one implemented today; the others are future BYOK routes).
+- Keep this deliberately out of scope until the testing phase above is done — the goal now is zero payment complexity, not a polished pricing page.
+
 ## Cloud and migration
 
 1. Keep Firebase Auth and verify Firebase ID tokens at the Worker.
