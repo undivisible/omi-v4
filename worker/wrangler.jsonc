@@ -4,6 +4,8 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-07-21",
   "compatibility_flags": ["nodejs_compat"],
+  "routes": [{ "pattern": "omi.tsc.hk", "custom_domain": true }],
+  "assets": { "directory": "./public" },
   "vars": {
     "FIREBASE_PROJECT_ID": "based-hardware",
     "MIMO_CHAT_COMPLETIONS_URL": "https://token-plan-sgp.xiaomimimo.com/v1/chat/completions",
