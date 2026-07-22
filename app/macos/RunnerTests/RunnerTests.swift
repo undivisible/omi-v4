@@ -28,6 +28,26 @@ class RunnerTests: XCTestCase {
     XCTAssertEqual((snapshot["fullDiskProbes"] as? [String])?.count, 4)
   }
 
+  func testVoicePlayoutQueueTracksQueuedMilliseconds() {
+    let queue = VoicePlayoutQueue(sampleRateHz: 24000)
+    XCTAssertEqual(queue.queuedMs, 0)
+    queue.scheduled(frames: 24000)
+    XCTAssertEqual(queue.queuedMs, 1000)
+    queue.scheduled(frames: 12000)
+    XCTAssertEqual(queue.queuedMs, 1500)
+    queue.completed(frames: 24000)
+    XCTAssertEqual(queue.queuedMs, 500)
+  }
+
+  func testVoicePlayoutQueueClampsCompletionUnderflow() {
+    let queue = VoicePlayoutQueue(sampleRateHz: 24000)
+    queue.scheduled(frames: 100)
+    queue.completed(frames: 500)
+    XCTAssertEqual(queue.queuedMs, 0)
+    queue.scheduled(frames: 240)
+    XCTAssertEqual(queue.queuedMs, 10)
+  }
+
   func testFullDiskProbeIsCachedWithinTheMinimumInterval() {
     let service = MacPermissionService()
     let first = service.rawSnapshot()["fullDiskProbes"] as? [String]

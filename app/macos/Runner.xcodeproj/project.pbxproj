@@ -30,6 +30,7 @@
 		A417E0052F22000100A417E0 /* MacPermissionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A417E0062F22000100A417E0 /* MacPermissionService.swift */; };
 		A417E0012F21000100A417E0 /* AppleEventKitBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = A417E0022F21000100A417E0 /* AppleEventKitBridge.swift */; };
 		A417E0032F21000100A417E0 /* MenuBarBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = A417E0042F21000100A417E0 /* MenuBarBridge.swift */; };
+		A417E0092F23000100A417E0 /* VoicePlayoutBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = A417E0082F23000100A417E0 /* VoicePlayoutBridge.swift */; };
 		58C680C7D5738E6F0DF14401 /* Pods_RunnerTests.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = CED00773D45318311563DA5B /* Pods_RunnerTests.framework */; };
 		7606AEDFFD18E7E56FE7E7A5 /* Pods_Runner.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 4B36B2D50732A414EC17F176 /* Pods_Runner.framework */; };
 		78A318202AECB46A00862997 /* FlutterGeneratedPluginSwiftPackage in Frameworks */ = {isa = PBXBuildFile; productRef = 78A3181F2AECB46A00862997 /* FlutterGeneratedPluginSwiftPackage */; };
@@ -82,6 +83,7 @@
 		A417E0062F22000100A417E0 /* MacPermissionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacPermissionService.swift; sourceTree = "<group>"; };
 		A417E0022F21000100A417E0 /* AppleEventKitBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleEventKitBridge.swift; sourceTree = "<group>"; };
 		A417E0042F21000100A417E0 /* MenuBarBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarBridge.swift; sourceTree = "<group>"; };
+		A417E0082F23000100A417E0 /* VoicePlayoutBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoicePlayoutBridge.swift; sourceTree = "<group>"; };
 		33CEB47222A05771004F2AC0 /* Flutter-Debug.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = "Flutter-Debug.xcconfig"; sourceTree = "<group>"; };
 		33CEB47422A05771004F2AC0 /* Flutter-Release.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = "Flutter-Release.xcconfig"; sourceTree = "<group>"; };
 		33CEB47722A0578A004F2AC0 /* Flutter-Generated.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; name = "Flutter-Generated.xcconfig"; path = "ephemeral/Flutter-Generated.xcconfig"; sourceTree = "<group>"; };
@@ -190,6 +192,7 @@
 				A417E0062F22000100A417E0 /* MacPermissionService.swift */,
 				A417E0022F21000100A417E0 /* AppleEventKitBridge.swift */,
 				A417E0042F21000100A417E0 /* MenuBarBridge.swift */,
+				A417E0082F23000100A417E0 /* VoicePlayoutBridge.swift */,
 				33E51913231747F40026EE4D /* DebugProfile.entitlements */,
 				33E51914231749380026EE4D /* Release.entitlements */,
 				33CC11242044D66E0003C045 /* Resources */,
@@ -460,6 +463,7 @@
 				A417E0052F22000100A417E0 /* MacPermissionService.swift in Sources */,
 				A417E0012F21000100A417E0 /* AppleEventKitBridge.swift in Sources */,
 				A417E0032F21000100A417E0 /* MenuBarBridge.swift in Sources */,
+				A417E0092F23000100A417E0 /* VoicePlayoutBridge.swift in Sources */,
 				33CC10F12044A3C60003C045 /* AppDelegate.swift in Sources */,
 				335BBD1B22A9A15E00E9071D /* GeneratedPluginRegistrant.swift in Sources */,
 			);
