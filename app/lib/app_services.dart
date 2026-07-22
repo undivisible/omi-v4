@@ -355,6 +355,10 @@ final class AppServices {
   int _desktopVoiceGeneration = 0;
   bool _desktopVoiceRouteIsLive = false;
   bool Function(String text)? desktopVoiceIntentInterceptor;
+
+  /// One-line status shown in the voice UI when the live voice route was
+  /// downgraded (e.g. "Live voice needs Pro — using transcription only").
+  final voiceNotice = ValueNotifier<String?>(null);
   Future<void> _liveVoiceLifecycle = Future.value();
   int _liveVoiceGeneration = 0;
   final SystemAudioCaptureModeStore _captureModeStore;
@@ -727,13 +731,20 @@ final class AppServices {
     }
     if (voiceGeneration != _desktopVoiceGeneration) return;
     _desktopVoiceRouteIsLive = false;
+    voiceNotice.value = null;
     final tokens = liveVoiceTokens;
     if (tokens != null && nativeHub is LiveVoiceHub) {
       GeminiLiveToken? grant;
       try {
         grant = await tokens.createGeminiToken();
-      } catch (_) {
+      } catch (error) {
         grant = null;
+        // A 403 means the account lacks the Pro entitlement. The fallback
+        // to managed STT below still happens, but the downgrade must not
+        // be silent — surface a one-line note in the voice UI.
+        if (error is WorkerResponseException && error.statusCode == 403) {
+          voiceNotice.value = 'Live voice needs Pro — using transcription only';
+        }
       }
       if (grant != null) {
         if (_voiceAuthorityChanged(

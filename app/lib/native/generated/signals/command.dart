@@ -585,6 +585,7 @@ class CommandStartLiveVoice extends Command {
     required this.liveStreamId,
     required this.ephemeralToken,
     required this.model,
+    this.resumptionHandle,
   }) : super();
 
   static CommandStartLiveVoice load(BinaryDeserializer deserializer) {
@@ -593,6 +594,7 @@ class CommandStartLiveVoice extends Command {
       liveStreamId: deserializer.deserializeString(),
       ephemeralToken: deserializer.deserializeString(),
       model: deserializer.deserializeString(),
+      resumptionHandle: TraitHelpers.deserializeOptionStr(deserializer),
     );
     deserializer.decreaseContainerDepth();
     return instance;
@@ -601,16 +603,21 @@ class CommandStartLiveVoice extends Command {
   final String liveStreamId;
   final String ephemeralToken;
   final String model;
+  final String? resumptionHandle;
 
   CommandStartLiveVoice copyWith({
     String? liveStreamId,
     String? ephemeralToken,
     String? model,
+    String? Function()? resumptionHandle,
   }) {
     return CommandStartLiveVoice(
       liveStreamId: liveStreamId ?? this.liveStreamId,
       ephemeralToken: ephemeralToken ?? this.ephemeralToken,
       model: model ?? this.model,
+      resumptionHandle: resumptionHandle == null
+          ? this.resumptionHandle
+          : resumptionHandle(),
     );
   }
 
@@ -620,6 +627,7 @@ class CommandStartLiveVoice extends Command {
     serializer.serializeString(liveStreamId);
     serializer.serializeString(ephemeralToken);
     serializer.serializeString(model);
+    TraitHelpers.serializeOptionStr(resumptionHandle, serializer);
     serializer.decreaseContainerDepth();
   }
 
@@ -631,11 +639,13 @@ class CommandStartLiveVoice extends Command {
     return other is CommandStartLiveVoice &&
         liveStreamId == other.liveStreamId &&
         ephemeralToken == other.ephemeralToken &&
-        model == other.model;
+        model == other.model &&
+        resumptionHandle == other.resumptionHandle;
   }
 
   @override
-  int get hashCode => Object.hash(liveStreamId, ephemeralToken, model);
+  int get hashCode =>
+      Object.hash(liveStreamId, ephemeralToken, model, resumptionHandle);
 
   @override
   String toString() {
@@ -646,7 +656,8 @@ class CommandStartLiveVoice extends Command {
           '$runtimeType('
           'liveStreamId: $liveStreamId, '
           'ephemeralToken: [REDACTED], '
-          'model: $model'
+          'model: $model, '
+          'resumptionHandle: $resumptionHandle'
           ')';
       return true;
     }());

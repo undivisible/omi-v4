@@ -7,6 +7,7 @@ class LiveVoiceTranscript {
     required this.liveStreamId,
     required this.text,
     required this.finalSegment,
+    required this.assistant,
   });
 
   static LiveVoiceTranscript deserialize(BinaryDeserializer deserializer) {
@@ -15,6 +16,7 @@ class LiveVoiceTranscript {
       liveStreamId: deserializer.deserializeString(),
       text: deserializer.deserializeString(),
       finalSegment: deserializer.deserializeBool(),
+      assistant: deserializer.deserializeBool(),
     );
     deserializer.decreaseContainerDepth();
     return instance;
@@ -32,16 +34,19 @@ class LiveVoiceTranscript {
   final String liveStreamId;
   final String text;
   final bool finalSegment;
+  final bool assistant;
 
   LiveVoiceTranscript copyWith({
     String? liveStreamId,
     String? text,
     bool? finalSegment,
+    bool? assistant,
   }) {
     return LiveVoiceTranscript(
       liveStreamId: liveStreamId ?? this.liveStreamId,
       text: text ?? this.text,
       finalSegment: finalSegment ?? this.finalSegment,
+      assistant: assistant ?? this.assistant,
     );
   }
 
@@ -50,6 +55,7 @@ class LiveVoiceTranscript {
     serializer.serializeString(liveStreamId);
     serializer.serializeString(text);
     serializer.serializeBool(finalSegment);
+    serializer.serializeBool(assistant);
     serializer.decreaseContainerDepth();
   }
 
@@ -67,11 +73,12 @@ class LiveVoiceTranscript {
     return other is LiveVoiceTranscript &&
         liveStreamId == other.liveStreamId &&
         text == other.text &&
-        finalSegment == other.finalSegment;
+        finalSegment == other.finalSegment &&
+        assistant == other.assistant;
   }
 
   @override
-  int get hashCode => Object.hash(liveStreamId, text, finalSegment);
+  int get hashCode => Object.hash(liveStreamId, text, finalSegment, assistant);
 
   @override
   String toString() {
@@ -82,7 +89,8 @@ class LiveVoiceTranscript {
           '$runtimeType('
           'liveStreamId: $liveStreamId, '
           'text: [REDACTED], '
-          'finalSegment: $finalSegment'
+          'finalSegment: $finalSegment, '
+          'assistant: $assistant'
           ')';
       return true;
     }());
