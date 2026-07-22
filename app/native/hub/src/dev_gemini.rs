@@ -5,7 +5,10 @@
 //! The key is resolved, in order, from:
 //!   1. the `GEMINI_API_KEY` environment variable
 //!   2. `~/.config/omi/dev.env` (`KEY=value` lines)
-//!   3. `worker/.dev.vars` or `../worker/.dev.vars` relative to the working
+//!   3. `~/Library/Application Support/omi/dev.env` (macOS; the stable
+//!      location the Dart side persists a discovered key to, so launches via
+//!      Finder/`open` — empty shell env, `cwd=/` — still find it)
+//!   4. `worker/.dev.vars` or `../worker/.dev.vars` relative to the working
 //!      directory (the same file the Worker uses in dev)
 //!
 //! This path is for local development only. The key is never logged and is
@@ -44,9 +47,16 @@ pub(crate) fn api_key() -> Option<DevGeminiKey> {
 }
 
 fn candidate_files() -> Vec<PathBuf> {
+    candidate_files_for_home(std::env::var_os("HOME").as_deref())
+}
+
+fn candidate_files_for_home(home: Option<&std::ffi::OsStr>) -> Vec<PathBuf> {
     let mut files = Vec::new();
-    if let Some(home) = std::env::var_os("HOME") {
-        files.push(Path::new(&home).join(".config/omi/dev.env"));
+    if let Some(home) = home {
+        files.push(Path::new(home).join(".config/omi/dev.env"));
+        if cfg!(target_os = "macos") {
+            files.push(Path::new(home).join("Library/Application Support/omi/dev.env"));
+        }
     }
     files.push(PathBuf::from("worker/.dev.vars"));
     files.push(PathBuf::from("../worker/.dev.vars"));
@@ -145,6 +155,25 @@ mod tests {
         );
         assert_eq!(parse_env_value("GEMINI_API_KEY=", "GEMINI_API_KEY"), None);
         assert_eq!(parse_env_value("", "GEMINI_API_KEY"), None);
+    }
+
+    #[test]
+    fn candidate_files_include_stable_absolute_locations() {
+        let files = candidate_files_for_home(Some(std::ffi::OsStr::new("/home/dev")));
+        assert_eq!(
+            files.first(),
+            Some(&PathBuf::from("/home/dev/.config/omi/dev.env"))
+        );
+        if cfg!(target_os = "macos") {
+            assert!(files.contains(&PathBuf::from(
+                "/home/dev/Library/Application Support/omi/dev.env"
+            )));
+        }
+        assert!(files.contains(&PathBuf::from("worker/.dev.vars")));
+        assert!(files.contains(&PathBuf::from("../worker/.dev.vars")));
+
+        let no_home = candidate_files_for_home(None);
+        assert_eq!(no_home.first(), Some(&PathBuf::from("worker/.dev.vars")));
     }
 
     #[test]
