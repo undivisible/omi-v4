@@ -34,6 +34,14 @@ routes.use("/memories", async (context, next) => {
 
 routes.route("/", assistant);
 routes.route("/asr", asr);
+routes.use("/oauth/*", async (context, next) => {
+  if (context.env.ENABLE_DEV_OAUTH_BROKER !== "true")
+    return context.json(
+      { error: "Disabled: dev/testing only OAuth broker is not enabled" },
+      404,
+    );
+  await next();
+});
 routes.route("/oauth", oauthProxy);
 routes.route("/payments/stripe", billing);
 routes.route("/stt", stt);
