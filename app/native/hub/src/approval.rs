@@ -1,3 +1,4 @@
+use crate::computer_use::BoundComputerUseAction;
 use crate::signals::{
     ActionProposal, ActionRisk, ApprovalDecision, ComputerUseAction, NativeEvent,
 };
@@ -14,7 +15,11 @@ pub(crate) enum ProposalStatus {
     Rejected,
     Expired,
     Invalidated,
-    Executed,
+    Succeeded,
+    Failed,
+    CancelledBeforeEffect,
+    ExpiredBeforeEffect,
+    OutcomeUnknown,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -27,6 +32,7 @@ pub(crate) struct ProposalFingerprint {
     pub(crate) title: String,
     pub(crate) summary: String,
     pub(crate) computer_action: Option<ComputerUseAction>,
+    pub(crate) bound_computer_action: Option<BoundComputerUseAction>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -60,14 +66,30 @@ pub(crate) enum ProposalDecisionError {
 }
 
 impl ProposalRegistry {
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn register(
         &mut self,
         uid: &str,
         authority_generation: u64,
         proposal: ActionProposal,
     ) -> Result<ProposalRegistration, ProposalDecisionError> {
+        self.register_bound(uid, authority_generation, proposal, None)
+    }
+
+    pub(crate) fn register_bound(
+        &mut self,
+        uid: &str,
+        authority_generation: u64,
+        proposal: ActionProposal,
+        bound_computer_action: Option<BoundComputerUseAction>,
+    ) -> Result<ProposalRegistration, ProposalDecisionError> {
         let now_ms = unix_time_ms();
         self.purge_expired(now_ms);
+        if bound_computer_action.as_ref().map(|bound| &bound.display)
+            != proposal.computer_action.as_ref()
+        {
+            return Err(ProposalDecisionError::Conflict);
+        }
         let fingerprint = ProposalFingerprint {
             uid: uid.to_owned(),
             authority_generation,
@@ -77,6 +99,7 @@ impl ProposalRegistry {
             title: proposal.title.clone(),
             summary: proposal.summary.clone(),
             computer_action: proposal.computer_action.clone(),
+            bound_computer_action,
         };
         if let Some(existing) = self
             .pending
@@ -118,7 +141,7 @@ impl ProposalRegistry {
         decision: ApprovalDecision,
         now_ms: i64,
         computer_use_available: bool,
-    ) -> Result<(ProposalRecord, Option<ComputerUseAction>), ProposalDecisionError> {
+    ) -> Result<(ProposalRecord, Option<BoundComputerUseAction>), ProposalDecisionError> {
         self.purge_expired(now_ms);
         if let Some(record) = self.terminal.get(proposal_id) {
             return if record.fingerprint.uid != uid
@@ -149,20 +172,37 @@ impl ProposalRegistry {
             return Err(ProposalDecisionError::Expired);
         }
         let action = match decision {
-            ApprovalDecision::ApproveOnce => record.fingerprint.computer_action.clone(),
+            ApprovalDecision::ApproveOnce => record.fingerprint.bound_computer_action.clone(),
             ApprovalDecision::Reject => None,
         };
-        if action.is_some() && !computer_use_available {
+        if matches!(decision, ApprovalDecision::ApproveOnce)
+            && record.fingerprint.computer_action.is_some()
+            && (!computer_use_available || action.is_none())
+        {
             return Err(ProposalDecisionError::ExecutionUnavailable);
         }
-        let status = match (decision, action.is_some()) {
-            (ApprovalDecision::ApproveOnce, true) => ProposalStatus::Executed,
-            (ApprovalDecision::ApproveOnce, false) => ProposalStatus::Approved,
-            (ApprovalDecision::Reject, _) => ProposalStatus::Rejected,
+        let status = match decision {
+            ApprovalDecision::ApproveOnce => ProposalStatus::Approved,
+            ApprovalDecision::Reject => ProposalStatus::Rejected,
         };
         self.finish(proposal_id, status)
             .map(|record| (record, action))
             .ok_or(ProposalDecisionError::NotFound)
+    }
+
+    pub(crate) fn finish_execution(&mut self, proposal_id: &str, status: ProposalStatus) {
+        if matches!(
+            status,
+            ProposalStatus::Succeeded
+                | ProposalStatus::Failed
+                | ProposalStatus::CancelledBeforeEffect
+                | ProposalStatus::ExpiredBeforeEffect
+                | ProposalStatus::OutcomeUnknown
+        ) && let Some(record) = self.terminal.get_mut(proposal_id)
+            && record.status == ProposalStatus::Approved
+        {
+            record.status = status;
+        }
     }
 
     pub(crate) fn invalidate_parent(&mut self, uid: &str, authority_generation: u64, parent: &str) {

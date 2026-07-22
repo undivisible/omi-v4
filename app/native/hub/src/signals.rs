@@ -128,27 +128,39 @@ pub enum ApprovalDecision {
     Reject,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, SignalPiece)]
+#[derive(Clone, Deserialize, Eq, PartialEq, Serialize, SignalPiece)]
 pub enum ComputerUseAction {
-    Click {
-        x: i64,
-        y: i64,
-        button: MouseButton,
-        count: u32,
+    Invoke {
+        target_name: String,
+        background_only: bool,
     },
-    TypeText {
-        text: String,
-        clear: bool,
-        press_return: bool,
-        delay_ms: Option<u64>,
+    SetValue {
+        target_name: String,
+        value: String,
+        background_only: bool,
     },
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, SignalPiece)]
-pub enum MouseButton {
-    Left,
-    Right,
-    Middle,
+impl std::fmt::Debug for ComputerUseAction {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Invoke {
+                background_only, ..
+            } => formatter
+                .debug_struct("Invoke")
+                .field("target_name", &"[redacted]")
+                .field("background_only", background_only)
+                .finish(),
+            Self::SetValue {
+                background_only, ..
+            } => formatter
+                .debug_struct("SetValue")
+                .field("target_name", &"[redacted]")
+                .field("value", &"[redacted]")
+                .field("background_only", background_only)
+                .finish(),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, DartSignalBinary)]
@@ -308,7 +320,7 @@ pub struct CurrentUpdate {
     pub updated_at_ms: i64,
 }
 
-#[derive(Clone, Debug, Serialize, SignalPiece)]
+#[derive(Clone, Serialize, SignalPiece)]
 pub struct ActionProposal {
     pub proposal_id: String,
     pub request_id: String,
@@ -317,6 +329,21 @@ pub struct ActionProposal {
     pub risk: ActionRisk,
     pub computer_action: Option<ComputerUseAction>,
     pub expires_at_ms: Option<i64>,
+}
+
+impl std::fmt::Debug for ActionProposal {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ActionProposal")
+            .field("proposal_id", &self.proposal_id)
+            .field("request_id", &self.request_id)
+            .field("title", &self.title)
+            .field("summary", &"[redacted]")
+            .field("risk", &self.risk)
+            .field("computer_action", &self.computer_action)
+            .field("expires_at_ms", &self.expires_at_ms)
+            .finish()
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, SignalPiece)]
@@ -556,5 +583,26 @@ impl ValidationError {
             Self::InvalidSampleRate => "sample rate must be between 8000 and 96000 Hz",
             Self::InvalidChannels => "audio must have one or two channels",
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ComputerUseAction;
+
+    #[test]
+    fn computer_use_debug_redacts_target_and_value() {
+        let debug = format!(
+            "{:?}",
+            ComputerUseAction::SetValue {
+                target_name: "Private field".to_owned(),
+                value: "credential-value".to_owned(),
+                background_only: false,
+            }
+        );
+
+        assert!(!debug.contains("Private field"));
+        assert!(!debug.contains("credential-value"));
+        assert!(debug.contains("[redacted]"));
     }
 }

@@ -10,9 +10,9 @@ abstract class ComputerUseAction {
     int index = deserializer.deserializeVariantIndex();
     switch (index) {
       case 0:
-        return ComputerUseActionClick.load(deserializer);
+        return ComputerUseActionInvoke.load(deserializer);
       case 1:
-        return ComputerUseActionTypeText.load(deserializer);
+        return ComputerUseActionSetValue.load(deserializer);
       default:
         throw Exception(
           'Unknown variant index for ComputerUseAction: ' + index.toString(),
@@ -37,52 +37,37 @@ abstract class ComputerUseAction {
 }
 
 @immutable
-class ComputerUseActionClick extends ComputerUseAction {
-  const ComputerUseActionClick({
-    required this.x,
-    required this.y,
-    required this.button,
-    required this.count,
+class ComputerUseActionInvoke extends ComputerUseAction {
+  const ComputerUseActionInvoke({
+    required this.targetName,
+    required this.backgroundOnly,
   }) : super();
 
-  static ComputerUseActionClick load(BinaryDeserializer deserializer) {
+  static ComputerUseActionInvoke load(BinaryDeserializer deserializer) {
     deserializer.increaseContainerDepth();
-    final instance = ComputerUseActionClick(
-      x: deserializer.deserializeInt64(),
-      y: deserializer.deserializeInt64(),
-      button: MouseButtonExtension.deserialize(deserializer),
-      count: deserializer.deserializeUint32(),
+    final instance = ComputerUseActionInvoke(
+      targetName: deserializer.deserializeString(),
+      backgroundOnly: deserializer.deserializeBool(),
     );
     deserializer.decreaseContainerDepth();
     return instance;
   }
 
-  final int x;
-  final int y;
-  final MouseButton button;
-  final int count;
+  final String targetName;
+  final bool backgroundOnly;
 
-  ComputerUseActionClick copyWith({
-    int? x,
-    int? y,
-    MouseButton? button,
-    int? count,
-  }) {
-    return ComputerUseActionClick(
-      x: x ?? this.x,
-      y: y ?? this.y,
-      button: button ?? this.button,
-      count: count ?? this.count,
+  ComputerUseActionInvoke copyWith({String? targetName, bool? backgroundOnly}) {
+    return ComputerUseActionInvoke(
+      targetName: targetName ?? this.targetName,
+      backgroundOnly: backgroundOnly ?? this.backgroundOnly,
     );
   }
 
   void serialize(BinarySerializer serializer) {
     serializer.increaseContainerDepth();
     serializer.serializeVariantIndex(0);
-    serializer.serializeInt64(x);
-    serializer.serializeInt64(y);
-    button.serialize(serializer);
-    serializer.serializeUint32(count);
+    serializer.serializeString(targetName);
+    serializer.serializeBool(backgroundOnly);
     serializer.decreaseContainerDepth();
   }
 
@@ -91,15 +76,13 @@ class ComputerUseActionClick extends ComputerUseAction {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is ComputerUseActionClick &&
-        x == other.x &&
-        y == other.y &&
-        button == other.button &&
-        count == other.count;
+    return other is ComputerUseActionInvoke &&
+        targetName == other.targetName &&
+        backgroundOnly == other.backgroundOnly;
   }
 
   @override
-  int get hashCode => Object.hash(x, y, button, count);
+  int get hashCode => Object.hash(targetName, backgroundOnly);
 
   @override
   String toString() {
@@ -108,65 +91,57 @@ class ComputerUseActionClick extends ComputerUseAction {
     assert(() {
       fullString =
           '$runtimeType('
-          'x: $x, '
-          'y: $y, '
-          'button: $button, '
-          'count: $count'
+          'targetName: [REDACTED], '
+          'backgroundOnly: $backgroundOnly'
           ')';
       return true;
     }());
 
-    return fullString ?? 'ComputerUseActionClick';
+    return fullString ?? 'ComputerUseActionInvoke';
   }
 }
 
 @immutable
-class ComputerUseActionTypeText extends ComputerUseAction {
-  const ComputerUseActionTypeText({
-    required this.text,
-    required this.clear,
-    required this.pressReturn,
-    this.delayMs,
+class ComputerUseActionSetValue extends ComputerUseAction {
+  const ComputerUseActionSetValue({
+    required this.targetName,
+    required this.value,
+    required this.backgroundOnly,
   }) : super();
 
-  static ComputerUseActionTypeText load(BinaryDeserializer deserializer) {
+  static ComputerUseActionSetValue load(BinaryDeserializer deserializer) {
     deserializer.increaseContainerDepth();
-    final instance = ComputerUseActionTypeText(
-      text: deserializer.deserializeString(),
-      clear: deserializer.deserializeBool(),
-      pressReturn: deserializer.deserializeBool(),
-      delayMs: TraitHelpers.deserializeOptionU64(deserializer),
+    final instance = ComputerUseActionSetValue(
+      targetName: deserializer.deserializeString(),
+      value: deserializer.deserializeString(),
+      backgroundOnly: deserializer.deserializeBool(),
     );
     deserializer.decreaseContainerDepth();
     return instance;
   }
 
-  final String text;
-  final bool clear;
-  final bool pressReturn;
-  final Uint64? delayMs;
+  final String targetName;
+  final String value;
+  final bool backgroundOnly;
 
-  ComputerUseActionTypeText copyWith({
-    String? text,
-    bool? clear,
-    bool? pressReturn,
-    Uint64? Function()? delayMs,
+  ComputerUseActionSetValue copyWith({
+    String? targetName,
+    String? value,
+    bool? backgroundOnly,
   }) {
-    return ComputerUseActionTypeText(
-      text: text ?? this.text,
-      clear: clear ?? this.clear,
-      pressReturn: pressReturn ?? this.pressReturn,
-      delayMs: delayMs == null ? this.delayMs : delayMs(),
+    return ComputerUseActionSetValue(
+      targetName: targetName ?? this.targetName,
+      value: value ?? this.value,
+      backgroundOnly: backgroundOnly ?? this.backgroundOnly,
     );
   }
 
   void serialize(BinarySerializer serializer) {
     serializer.increaseContainerDepth();
     serializer.serializeVariantIndex(1);
-    serializer.serializeString(text);
-    serializer.serializeBool(clear);
-    serializer.serializeBool(pressReturn);
-    TraitHelpers.serializeOptionU64(delayMs, serializer);
+    serializer.serializeString(targetName);
+    serializer.serializeString(value);
+    serializer.serializeBool(backgroundOnly);
     serializer.decreaseContainerDepth();
   }
 
@@ -175,15 +150,14 @@ class ComputerUseActionTypeText extends ComputerUseAction {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is ComputerUseActionTypeText &&
-        text == other.text &&
-        clear == other.clear &&
-        pressReturn == other.pressReturn &&
-        delayMs == other.delayMs;
+    return other is ComputerUseActionSetValue &&
+        targetName == other.targetName &&
+        value == other.value &&
+        backgroundOnly == other.backgroundOnly;
   }
 
   @override
-  int get hashCode => Object.hash(text, clear, pressReturn, delayMs);
+  int get hashCode => Object.hash(targetName, value, backgroundOnly);
 
   @override
   String toString() {
@@ -192,14 +166,13 @@ class ComputerUseActionTypeText extends ComputerUseAction {
     assert(() {
       fullString =
           '$runtimeType('
-          'text: [REDACTED], '
-          'clear: $clear, '
-          'pressReturn: $pressReturn, '
-          'delayMs: $delayMs'
+          'targetName: [REDACTED], '
+          'value: [REDACTED], '
+          'backgroundOnly: $backgroundOnly'
           ')';
       return true;
     }());
 
-    return fullString ?? 'ComputerUseActionTypeText';
+    return fullString ?? 'ComputerUseActionSetValue';
   }
 }

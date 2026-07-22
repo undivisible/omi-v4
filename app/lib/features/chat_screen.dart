@@ -6,7 +6,7 @@ import '../app_services.dart';
 import '../currents/currents.dart';
 import '../keyboard/keyboard.dart';
 import '../native/generated/signals/signals.dart'
-    show ComputerUseAction, ComputerUseActionClick, ComputerUseActionTypeText;
+    show ComputerUseAction, ComputerUseActionInvoke, ComputerUseActionSetValue;
 import '../native/native_hub.dart';
 import '../ui/omi_ui.dart';
 
@@ -376,28 +376,24 @@ class ChatScreenState extends State<ChatScreen> {
   }
 
   Widget _computerActionDetails(ComputerUseAction action) => switch (action) {
-    ComputerUseActionClick(:final x, :final y, :final button, :final count) =>
-      Text(
-        'Click ${button.name} at ($x, $y) ${count == 1 ? 'once' : '$count times'}',
-        key: const Key('computer_action_details'),
-      ),
-    ComputerUseActionTypeText(
-      :final text,
-      :final clear,
-      :final pressReturn,
-      :final delayMs,
+    ComputerUseActionInvoke(:final targetName, :final backgroundOnly) => Text(
+      'Invoke “$targetName” · ${backgroundOnly ? 'Background only' : 'Interactive'}',
+      key: const Key('computer_action_details'),
+    ),
+    ComputerUseActionSetValue(
+      :final targetName,
+      :final value,
+      :final backgroundOnly,
     ) =>
       Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text('Exact text to type'),
+          Text('Set “$targetName” to'),
           const SizedBox(height: 4),
-          SelectableText(text, key: const Key('computer_action_text')),
+          SelectableText(value, key: const Key('computer_action_text')),
           const SizedBox(height: 6),
           Text(
-            '${clear ? 'Clears the focused field first' : 'Keeps existing field contents'} · '
-            '${pressReturn ? 'Presses Return after typing' : 'Does not press Return'} · '
-            'Delay: ${delayMs?.toString() ?? 'default'} ms',
+            backgroundOnly ? 'Background only' : 'Interactive',
             key: const Key('computer_action_details'),
           ),
         ],

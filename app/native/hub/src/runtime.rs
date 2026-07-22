@@ -3,7 +3,9 @@ use crate::approval::{
     PENDING_PROPOSAL_CAPACITY, ProposalRegistration, TERMINAL_PROPOSAL_CAPACITY,
 };
 use crate::approval::{ProposalDecisionError, ProposalRegistry, ProposalStatus, unix_time_ms};
-use crate::computer_use::{available as computer_use_available, execute as execute_computer_use};
+use crate::computer_use::{
+    BoundComputerUseAction, ComputerUseError, ExecutionOutcome, available as computer_use_available,
+};
 use crate::signals::{
     ActionProposal, ActionRisk, ApprovalDecision, ApprovalDecisionAcknowledgement, AssistantDelta,
     AssistantProvider as ProviderKind, CaptureSource, ClientCommand, Command, ComputerUseAction,
@@ -24,6 +26,7 @@ use futures::StreamExt;
 use rs_ai_core::{StreamEvent, ToolChoice, ToolDefinition};
 use std::collections::{HashMap, VecDeque, hash_map::Entry};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 use tokio::sync::{Mutex, mpsc};
@@ -42,8 +45,8 @@ const COMPLETED_CAPTURE_CAPACITY: usize = 256;
 const PROVIDER_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const PROVIDER_EVENT_TIMEOUT: Duration = Duration::from_secs(45);
 const COMPUTER_USE_PROPOSAL_TTL_MS: i64 = 5 * 60 * 1_000;
-const COMPUTER_CLICK_TOOL: &str = "computer_click";
-const COMPUTER_TYPE_TOOL: &str = "computer_type";
+const COMPUTER_INVOKE_TOOL: &str = "computer_invoke";
+const COMPUTER_SET_VALUE_TOOL: &str = "computer_set_value";
 #[cfg(test)]
 const MAX_ACTIVE_AUDIO_SESSIONS: usize = 8;
 #[cfg(test)]
@@ -64,6 +67,7 @@ struct RuntimeState {
     authority_uid: Option<String>,
     proposals: ProposalRegistry,
     managed_worker_origin: Option<String>,
+    computer_use_ledger_path: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -87,7 +91,12 @@ struct ActiveCommand {
 #[allow(dead_code)]
 enum AssistantProviderEvent {
     Delta { text: String, final_segment: bool },
-    Proposal(ActionProposal),
+    Proposal(Box<BoundActionProposal>),
+}
+
+struct BoundActionProposal {
+    proposal: ActionProposal,
+    bound_computer_action: Option<BoundComputerUseAction>,
 }
 
 enum ProviderReceive {
@@ -381,61 +390,47 @@ struct RsAiAssistantProvider {
 
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
-struct ComputerClickArgs {
-    x: i64,
-    y: i64,
-    button: ComputerClickButton,
-    count: u32,
-}
-
-#[derive(serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-enum ComputerClickButton {
-    Left,
-    Right,
-    Middle,
+struct ComputerInvokeArgs {
+    target_name: String,
+    background_only: bool,
 }
 
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
-struct ComputerTypeArgs {
-    text: String,
-    clear: bool,
-    press_return: bool,
-    delay_ms: Option<u64>,
+struct ComputerSetValueArgs {
+    target_name: String,
+    value: String,
+    background_only: bool,
 }
 
 fn computer_use_tools() -> Vec<ToolDefinition> {
     vec![
         ToolDefinition {
-            name: COMPUTER_CLICK_TOOL.to_owned(),
-            description: "Propose clicking a screen coordinate after user approval".to_owned(),
+            name: COMPUTER_INVOKE_TOOL.to_owned(),
+            description: "Propose invoking the unique accessible element with this exact name after user approval".to_owned(),
             parameters: serde_json::json!({
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
-                    "x": {"type": "integer"},
-                    "y": {"type": "integer"},
-                    "button": {"type": "string", "enum": ["left", "right", "middle"]},
-                    "count": {"type": "integer", "minimum": 1, "maximum": 3}
+                    "target_name": {"type": "string", "minLength": 1, "maxLength": 1024},
+                    "background_only": {"type": "boolean"}
                 },
-                "required": ["x", "y", "button", "count"]
+                "required": ["target_name", "background_only"]
             }),
             examples: None,
         },
         ToolDefinition {
-            name: COMPUTER_TYPE_TOOL.to_owned(),
-            description: "Propose typing text after user approval".to_owned(),
+            name: COMPUTER_SET_VALUE_TOOL.to_owned(),
+            description: "Propose setting the value of the unique editable accessible element with this exact name after user approval".to_owned(),
             parameters: serde_json::json!({
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
-                    "text": {"type": "string", "minLength": 1, "maxLength": 16384},
-                    "clear": {"type": "boolean"},
-                    "press_return": {"type": "boolean"},
-                    "delay_ms": {"type": ["integer", "null"], "minimum": 0, "maximum": 1000}
+                    "target_name": {"type": "string", "minLength": 1, "maxLength": 1024},
+                    "value": {"type": "string", "maxLength": 16384},
+                    "background_only": {"type": "boolean"}
                 },
-                "required": ["text", "clear", "press_return"]
+                "required": ["target_name", "value", "background_only"]
             }),
             examples: None,
         },
@@ -452,7 +447,7 @@ fn valid_computer_tool_identity(call_id: &str, tool_name: &str) -> bool {
         && call_id
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
-        && matches!(tool_name, COMPUTER_CLICK_TOOL | COMPUTER_TYPE_TOOL)
+        && matches!(tool_name, COMPUTER_INVOKE_TOOL | COMPUTER_SET_VALUE_TOOL)
 }
 
 fn computer_use_proposal(
@@ -465,51 +460,55 @@ fn computer_use_proposal(
         return Err("assistant provider returned an invalid computer-use tool call".to_owned());
     }
     let (title, summary, action) = match tool_name {
-        COMPUTER_CLICK_TOOL => {
-            let args: ComputerClickArgs = serde_json::from_value(arguments).map_err(|_| {
+        COMPUTER_INVOKE_TOOL => {
+            let args: ComputerInvokeArgs = serde_json::from_value(arguments).map_err(|_| {
                 "assistant provider returned an invalid computer-use tool call".to_owned()
             })?;
-            if !(1..=3).contains(&args.count) {
-                return Err(
-                    "assistant provider returned an invalid computer-use tool call".to_owned(),
-                );
-            }
-            let button = match args.button {
-                ComputerClickButton::Left => crate::signals::MouseButton::Left,
-                ComputerClickButton::Right => crate::signals::MouseButton::Right,
-                ComputerClickButton::Middle => crate::signals::MouseButton::Middle,
+            let summary = format!(
+                "Invoke {}{}",
+                args.target_name,
+                if args.background_only {
+                    " in the background"
+                } else {
+                    ""
+                }
+            );
+            let action = ComputerUseAction::Invoke {
+                target_name: args.target_name,
+                background_only: args.background_only,
             };
-            (
-                "Click on screen".to_owned(),
-                format!("Click at ({}, {})", args.x, args.y),
-                ComputerUseAction::Click {
-                    x: args.x,
-                    y: args.y,
-                    button,
-                    count: args.count,
-                },
-            )
-        }
-        COMPUTER_TYPE_TOOL => {
-            let args: ComputerTypeArgs = serde_json::from_value(arguments).map_err(|_| {
-                "assistant provider returned an invalid computer-use tool call".to_owned()
-            })?;
-            if !crate::computer_use::valid_type(&args.text, args.delay_ms) {
+            if !crate::computer_use::valid_action(&action) {
                 return Err(
                     "assistant provider returned an invalid computer-use tool call".to_owned(),
                 );
             }
-            let summary = format!("Type {} bytes", args.text.len());
-            (
-                "Type text".to_owned(),
-                summary,
-                ComputerUseAction::TypeText {
-                    text: args.text,
-                    clear: args.clear,
-                    press_return: args.press_return,
-                    delay_ms: args.delay_ms,
-                },
-            )
+            ("Invoke interface element".to_owned(), summary, action)
+        }
+        COMPUTER_SET_VALUE_TOOL => {
+            let args: ComputerSetValueArgs = serde_json::from_value(arguments).map_err(|_| {
+                "assistant provider returned an invalid computer-use tool call".to_owned()
+            })?;
+            let summary = format!(
+                "Set {} to {} bytes{}",
+                args.target_name,
+                args.value.len(),
+                if args.background_only {
+                    " in the background"
+                } else {
+                    ""
+                }
+            );
+            let action = ComputerUseAction::SetValue {
+                target_name: args.target_name,
+                value: args.value,
+                background_only: args.background_only,
+            };
+            if !crate::computer_use::valid_action(&action) {
+                return Err(
+                    "assistant provider returned an invalid computer-use tool call".to_owned(),
+                );
+            }
+            ("Set interface value".to_owned(), summary, action)
         }
         _ => {
             return Err("assistant provider returned an invalid computer-use tool call".to_owned());
@@ -524,6 +523,44 @@ fn computer_use_proposal(
         computer_action: Some(action),
         expires_at_ms: Some(unix_time_ms().saturating_add(COMPUTER_USE_PROPOSAL_TTL_MS)),
     })
+}
+
+#[cfg(all(
+    feature = "computer-use",
+    any(target_os = "macos", target_os = "windows", target_os = "linux")
+))]
+async fn bind_computer_use_action(
+    action: ComputerUseAction,
+    cancellation: &CancellationToken,
+) -> Result<BoundComputerUseAction, String> {
+    let protocol_cancellation = crate::computer_use::cancellation_token();
+    if cancellation.is_cancelled() {
+        crate::computer_use::cancel(&protocol_cancellation);
+    }
+    let watcher_source = cancellation.clone();
+    let watcher_target = protocol_cancellation.clone();
+    let watcher = tokio::spawn(async move {
+        watcher_source.cancelled().await;
+        crate::computer_use::cancel(&watcher_target);
+    });
+    let task = spawn_blocking(move || crate::computer_use::bind(action, &protocol_cancellation));
+    let result = task
+        .await
+        .map_err(|_| "semantic computer target observation failed".to_owned())?
+        .map_err(|_| "semantic computer target is unavailable or ambiguous".to_owned());
+    watcher.abort();
+    result
+}
+
+#[cfg(not(all(
+    feature = "computer-use",
+    any(target_os = "macos", target_os = "windows", target_os = "linux")
+)))]
+async fn bind_computer_use_action(
+    _action: ComputerUseAction,
+    _cancellation: &CancellationToken,
+) -> Result<BoundComputerUseAction, String> {
+    Err("computer use is unavailable on this platform".to_owned())
 }
 
 impl AssistantProvider for RsAiAssistantProvider {
@@ -634,8 +671,36 @@ impl AssistantProvider for RsAiAssistantProvider {
                                 .await;
                             return;
                         };
-                        computer_use_proposal(&request_id, &call_id, &tool_name, arguments)
-                            .map(AssistantProviderEvent::Proposal)
+                        match computer_use_proposal(&request_id, &call_id, &tool_name, arguments) {
+                            Ok(mut proposal) => match proposal.computer_action.clone() {
+                                Some(action) => {
+                                    match bind_computer_use_action(action, &cancellation).await {
+                                        Ok(bound_computer_action) => {
+                                            proposal.expires_at_ms = Some(
+                                                proposal
+                                                    .expires_at_ms
+                                                    .unwrap_or(i64::MAX)
+                                                    .min(bound_computer_action.expires_at_ms),
+                                            );
+                                            Ok(AssistantProviderEvent::Proposal(Box::new(
+                                                BoundActionProposal {
+                                                    proposal,
+                                                    bound_computer_action: Some(
+                                                        bound_computer_action,
+                                                    ),
+                                                },
+                                            )))
+                                        }
+                                        Err(message) => Err(message),
+                                    }
+                                }
+                                None => Err(
+                                    "assistant provider returned an invalid computer-use tool call"
+                                        .to_owned(),
+                                ),
+                            },
+                            Err(message) => Err(message),
+                        }
                     }
                     Ok(StreamEvent::MessageEnd { .. }) => {
                         if tool_names.is_empty() {
@@ -1309,7 +1374,11 @@ async fn dispatch_assistant(
                 final_segment,
             })
             .send(),
-            AssistantProviderEvent::Proposal(proposal) => {
+            AssistantProviderEvent::Proposal(bound) => {
+                let BoundActionProposal {
+                    proposal,
+                    bound_computer_action,
+                } = *bound;
                 if proposal.request_id != request_id {
                     error(
                         Some(request_id.to_owned()),
@@ -1319,7 +1388,12 @@ async fn dispatch_assistant(
                     );
                     continue;
                 }
-                if let Err(failure) = state.proposals.register(&uid, generation, proposal) {
+                if let Err(failure) = state.proposals.register_bound(
+                    &uid,
+                    generation,
+                    proposal,
+                    bound_computer_action,
+                ) {
                     let (code, message) = match failure {
                         ProposalDecisionError::Capacity => (
                             "proposal_capacity_exceeded",
@@ -1681,6 +1755,7 @@ async fn configure_memory(
             return;
         }
     };
+    let computer_use_ledger_path = computer_use_ledger_path(&database_path);
     let task = spawn_blocking(move || {
         MemoryDb::open(database_path)
             .map(|database| MemoryContext {
@@ -1703,6 +1778,7 @@ async fn configure_memory(
                 return;
             }
             state.memory = Some(Arc::new(StdMutex::new(memory)));
+            state.computer_use_ledger_path = computer_use_ledger_path;
             drop(state);
             NativeEvent::RuntimeStatus(runtime_status(true)).send();
             progress(
@@ -1720,6 +1796,17 @@ async fn configure_memory(
         ),
         BlockingOutcome::Cancelled => cancelled(request_id),
     }
+}
+
+fn computer_use_ledger_path(database_path: &str) -> Option<PathBuf> {
+    let database_path = Path::new(database_path);
+    database_path.is_absolute().then(|| {
+        database_path
+            .parent()
+            .unwrap_or(database_path)
+            .join("praefectus")
+            .join("operations.jsonl")
+    })
 }
 
 fn firebase_memory_scope<'a>(tenant_id: &'a str, person_id: &str) -> Result<&'a str, &'static str> {
@@ -2435,6 +2522,61 @@ fn error(request_id: Option<String>, code: &str, message: &str, retryable: bool)
     .send();
 }
 
+#[cfg(all(
+    feature = "computer-use",
+    any(target_os = "macos", target_os = "windows", target_os = "linux")
+))]
+async fn execute_bound_computer_use(
+    action: BoundComputerUseAction,
+    proposal_id: String,
+    uid: String,
+    generation: u64,
+    risk: ActionRisk,
+    ledger_path: PathBuf,
+    cancellation: &CancellationToken,
+) -> Result<ExecutionOutcome, ComputerUseError> {
+    let protocol_cancellation = crate::computer_use::cancellation_token();
+    if cancellation.is_cancelled() {
+        crate::computer_use::cancel(&protocol_cancellation);
+    }
+    let watcher_source = cancellation.clone();
+    let watcher_target = protocol_cancellation.clone();
+    let watcher = tokio::spawn(async move {
+        watcher_source.cancelled().await;
+        crate::computer_use::cancel(&watcher_target);
+    });
+    let task = spawn_blocking(move || {
+        crate::computer_use::execute(
+            action,
+            &proposal_id,
+            &uid,
+            generation,
+            risk,
+            &ledger_path,
+            &protocol_cancellation,
+        )
+    });
+    let result = task.await.map_err(|_| ComputerUseError::Protocol)?;
+    watcher.abort();
+    result
+}
+
+#[cfg(not(all(
+    feature = "computer-use",
+    any(target_os = "macos", target_os = "windows", target_os = "linux")
+)))]
+async fn execute_bound_computer_use(
+    _action: BoundComputerUseAction,
+    _proposal_id: String,
+    _uid: String,
+    _generation: u64,
+    _risk: ActionRisk,
+    _ledger_path: PathBuf,
+    _cancellation: &CancellationToken,
+) -> Result<ExecutionOutcome, ComputerUseError> {
+    Err(ComputerUseError::TargetUnavailable)
+}
+
 async fn decide_approval(
     request_id: &str,
     state: &Mutex<RuntimeState>,
@@ -2471,6 +2613,7 @@ async fn decide_approval(
             );
             return;
         };
+        let ledger_path = state.computer_use_ledger_path.clone();
         state
             .proposals
             .decide(
@@ -2479,8 +2622,9 @@ async fn decide_approval(
                 generation,
                 decision,
                 unix_time_ms(),
-                computer_use_is_available,
+                computer_use_is_available && ledger_path.is_some(),
             )
+            .map(|(record, action)| (record, action, uid, ledger_path))
             .map_err(|failure| match failure {
                 ProposalDecisionError::NotFound => (
                     "proposal_not_found",
@@ -2505,7 +2649,7 @@ async fn decide_approval(
                 ),
             })
     };
-    let (record, action) = match result {
+    let (record, action, uid, ledger_path) = match result {
         Ok(result) => result,
         Err((code, message)) => {
             approval_decision_acknowledgement(request_id, proposal_id, decision, false, false);
@@ -2533,37 +2677,104 @@ async fn decide_approval(
         progress(request_id, "approval", ToolStatus::Complete, Some(&detail));
         return;
     };
-    if cancellation.is_cancelled() {
-        cancelled(request_id);
+    let Some(ledger_path) = ledger_path else {
+        state
+            .lock()
+            .await
+            .proposals
+            .finish_execution(proposal_id, ProposalStatus::Failed);
+        error(
+            Some(request_id.to_owned()),
+            "computer_use_unavailable",
+            "computer use host state is unavailable",
+            false,
+        );
         return;
-    }
-    let worker_cancellation = cancellation.clone();
-    let task = spawn_blocking(move || execute_computer_use(action, &worker_cancellation));
-    match await_blocking(task, cancellation).await {
-        BlockingOutcome::Complete(()) => {
-            if state.lock().await.configuration_generation == generation
-                && !cancellation.is_cancelled()
-            {
-                progress(
-                    request_id,
-                    "computer_use",
-                    ToolStatus::Complete,
-                    Some("approved computer action completed"),
-                );
-            } else {
-                cancelled(request_id);
-            }
+    };
+    let outcome = execute_bound_computer_use(
+        action,
+        proposal_id.to_owned(),
+        uid,
+        generation,
+        record.fingerprint.risk,
+        ledger_path,
+        cancellation,
+    )
+    .await;
+    let status = match outcome {
+        Ok(ExecutionOutcome::Succeeded) => {
+            progress(
+                request_id,
+                "computer_use",
+                ToolStatus::Complete,
+                Some("approved computer action completed"),
+            );
+            ProposalStatus::Succeeded
         }
-        BlockingOutcome::Failed(message) => {
+        Ok(ExecutionOutcome::OutcomeUnknown) => {
+            error(
+                Some(request_id.to_owned()),
+                "computer_use_outcome_unknown",
+                "the approved computer action outcome is unknown and must not be retried automatically",
+                false,
+            );
+            ProposalStatus::OutcomeUnknown
+        }
+        Ok(ExecutionOutcome::Rejected) => {
+            error(
+                Some(request_id.to_owned()),
+                "computer_use_rejected",
+                "the semantic computer action was rejected before an effect",
+                false,
+            );
+            ProposalStatus::Failed
+        }
+        Ok(ExecutionOutcome::Failed) => {
             error(
                 Some(request_id.to_owned()),
                 "computer_use_failed",
-                &message,
+                "the approved computer action failed verification",
                 false,
             );
+            ProposalStatus::Failed
         }
-        BlockingOutcome::Cancelled => cancelled(request_id),
-    }
+        Ok(ExecutionOutcome::CancelledBeforeEffect) => {
+            cancelled(request_id);
+            ProposalStatus::CancelledBeforeEffect
+        }
+        Ok(ExecutionOutcome::ExpiredBeforeEffect) => {
+            error(
+                Some(request_id.to_owned()),
+                "computer_use_expired",
+                "the approved computer action expired before an effect",
+                false,
+            );
+            ProposalStatus::ExpiredBeforeEffect
+        }
+        Err(ComputerUseError::AuthorityUnavailable) => {
+            error(
+                Some(request_id.to_owned()),
+                "computer_use_authority_unavailable",
+                "host computer-use authority is unavailable",
+                false,
+            );
+            ProposalStatus::Failed
+        }
+        Err(ComputerUseError::Protocol | ComputerUseError::TargetUnavailable) => {
+            error(
+                Some(request_id.to_owned()),
+                "computer_use_failed",
+                "the approved computer action could not be executed safely",
+                false,
+            );
+            ProposalStatus::Failed
+        }
+    };
+    state
+        .lock()
+        .await
+        .proposals
+        .finish_execution(proposal_id, status);
 }
 
 fn approval_decision_acknowledgement(
@@ -3085,7 +3296,12 @@ mod tests {
             tokio::spawn(async move {
                 state.lock().await.configuration_generation += 1;
                 let _ = sender
-                    .send(Ok(AssistantProviderEvent::Proposal(proposal)))
+                    .send(Ok(AssistantProviderEvent::Proposal(Box::new(
+                        BoundActionProposal {
+                            proposal,
+                            bound_computer_action: None,
+                        },
+                    ))))
                     .await;
             });
             receiver
@@ -3109,12 +3325,10 @@ mod tests {
         let proposal = computer_use_proposal(
             "chat-1",
             "call_1",
-            COMPUTER_CLICK_TOOL,
+            COMPUTER_INVOKE_TOOL,
             serde_json::json!({
-                "x": -20,
-                "y": 40,
-                "button": "left",
-                "count": 2
+                "target_name": "Save",
+                "background_only": true
             }),
         )
         .unwrap_or_else(|failure| panic!("valid click proposal: {failure}"));
@@ -3124,11 +3338,9 @@ mod tests {
         assert_eq!(proposal.risk, ActionRisk::External);
         assert_eq!(
             proposal.computer_action,
-            Some(ComputerUseAction::Click {
-                x: -20,
-                y: 40,
-                button: crate::signals::MouseButton::Left,
-                count: 2,
+            Some(ComputerUseAction::Invoke {
+                target_name: "Save".to_owned(),
+                background_only: true,
             })
         );
         assert!(proposal.expires_at_ms.is_some());
@@ -3138,37 +3350,35 @@ mod tests {
     fn computer_use_tool_calls_reject_unknown_or_unsafe_arguments() {
         for arguments in [
             serde_json::json!({
-                "text": "hello",
-                "clear": false,
-                "press_return": false,
+                "target_name": "Email",
+                "value": "hello",
+                "background_only": false,
                 "unexpected": true
             }),
             serde_json::json!({
-                "text": "",
-                "clear": false,
-                "press_return": false
+                "target_name": "",
+                "value": "hello",
+                "background_only": false
             }),
             serde_json::json!({
-                "text": "hello",
-                "clear": false,
-                "press_return": false,
-                "delay_ms": 1001
+                "target_name": "Email",
+                "value": "x".repeat(16 * 1024 + 1),
+                "background_only": false
             }),
         ] {
             assert!(
-                computer_use_proposal("chat-1", "call_1", COMPUTER_TYPE_TOOL, arguments).is_err()
+                computer_use_proposal("chat-1", "call_1", COMPUTER_SET_VALUE_TOOL, arguments)
+                    .is_err()
             );
         }
         assert!(
             computer_use_proposal(
                 "chat-1",
                 "call/1",
-                COMPUTER_CLICK_TOOL,
+                COMPUTER_INVOKE_TOOL,
                 serde_json::json!({
-                    "x": 1,
-                    "y": 2,
-                    "button": "left",
-                    "count": 1
+                    "target_name": "Save",
+                    "background_only": false
                 }),
             )
             .is_err()
@@ -4384,14 +4594,14 @@ mod tests {
     #[test]
     fn computer_action_is_approved_and_consumed_in_one_transition() {
         let mut registry = ProposalRegistry::default();
-        let action = ComputerUseAction::TypeText {
-            text: "approved text".to_owned(),
-            clear: true,
-            press_return: false,
-            delay_ms: Some(5),
+        let action = ComputerUseAction::SetValue {
+            target_name: "Message".to_owned(),
+            value: "approved text".to_owned(),
+            background_only: false,
         };
+        let bound = crate::computer_use::test_bound(action.clone());
         registry
-            .register(
+            .register_bound(
                 "user-a",
                 7,
                 ActionProposal {
@@ -4403,6 +4613,7 @@ mod tests {
                     computer_action: Some(action.clone()),
                     expires_at_ms: Some(i64::MAX),
                 },
+                Some(bound.clone()),
             )
             .unwrap_or_else(|failure| panic!("proposal registers: {failure:?}"));
         assert_eq!(
@@ -4426,7 +4637,7 @@ mod tests {
                 100,
                 true,
             ),
-            Ok((registry.terminal["computer-1"].clone(), Some(action)))
+            Ok((registry.terminal["computer-1"].clone(), Some(bound)))
         );
         assert_eq!(
             registry.decide(
@@ -4441,7 +4652,12 @@ mod tests {
         );
         assert_eq!(
             registry.terminal["computer-1"].status,
-            ProposalStatus::Executed
+            ProposalStatus::Approved
+        );
+        registry.finish_execution("computer-1", ProposalStatus::Succeeded);
+        assert_eq!(
+            registry.terminal["computer-1"].status,
+            ProposalStatus::Succeeded
         );
         registry
             .register(
@@ -4476,12 +4692,11 @@ mod tests {
 
     #[tokio::test]
     async fn cancellation_before_acceptance_preserves_the_pending_proposal() {
-        let action = ComputerUseAction::Click {
-            x: 10,
-            y: 20,
-            button: crate::signals::MouseButton::Left,
-            count: 1,
+        let action = ComputerUseAction::Invoke {
+            target_name: "Save".to_owned(),
+            background_only: false,
         };
+        let bound = crate::computer_use::test_bound(action.clone());
         let mut runtime = RuntimeState {
             configuration_generation: 3,
             authority_uid: Some("user-a".to_owned()),
@@ -4489,7 +4704,7 @@ mod tests {
         };
         runtime
             .proposals
-            .register(
+            .register_bound(
                 "user-a",
                 3,
                 ActionProposal {
@@ -4501,6 +4716,7 @@ mod tests {
                     computer_action: Some(action),
                     expires_at_ms: Some(i64::MAX),
                 },
+                Some(bound),
             )
             .unwrap_or_else(|failure| panic!("proposal registers: {failure:?}"));
         let state = Mutex::new(runtime);
@@ -4592,11 +4808,10 @@ mod tests {
                     text: "ready".to_owned(),
                     final_segment: false,
                 },
-                AssistantProviderEvent::Proposal(action_proposal(
-                    "proposal-live",
-                    request_id,
-                    i64::MAX,
-                )),
+                AssistantProviderEvent::Proposal(Box::new(BoundActionProposal {
+                    proposal: action_proposal("proposal-live", request_id, i64::MAX),
+                    bound_computer_action: None,
+                })),
                 AssistantProviderEvent::Delta {
                     text: "done".to_owned(),
                     final_segment: true,
@@ -4623,9 +4838,12 @@ mod tests {
         let cancellation = CancellationToken::new();
         cancellation.cancel();
         let cancelled_provider: Arc<dyn AssistantProvider> = Arc::new(FakeAssistantProvider {
-            events: StdMutex::new(Some(vec![AssistantProviderEvent::Proposal(
-                action_proposal("proposal-cancelled", "chat-g7-2", i64::MAX),
-            )])),
+            events: StdMutex::new(Some(vec![AssistantProviderEvent::Proposal(Box::new(
+                BoundActionProposal {
+                    proposal: action_proposal("proposal-cancelled", "chat-g7-2", i64::MAX),
+                    bound_computer_action: None,
+                },
+            ))])),
         });
         dispatch_assistant(
             "chat-g7-2",

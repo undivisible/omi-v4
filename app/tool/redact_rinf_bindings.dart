@@ -48,18 +48,21 @@ void main(List<String> arguments) {
   final actionFile = File(
     '${arguments.single}/signals/computer_use_action.dart',
   );
-  final actionSource = actionFile.readAsStringSync();
+  var actionSource = actionFile.readAsStringSync();
   const exposedText = "'text: \$text, '";
   const redactedText = "'text: [REDACTED], '";
-  if (exposedText.allMatches(actionSource).length != 1 ||
-      redactedText.allMatches(actionSource).isNotEmpty) {
-    stderr.writeln('expected exactly one generated computer-use text field');
-    exitCode = 1;
-    return;
+  for (final entry in {'targetName': 2, 'value': 1}.entries) {
+    final exposedAction = "'${entry.key}: \$${entry.key}, '";
+    final redactedAction = "'${entry.key}: [REDACTED], '";
+    if (exposedAction.allMatches(actionSource).length != entry.value ||
+        redactedAction.allMatches(actionSource).isNotEmpty) {
+      stderr.writeln('unexpected generated computer-use ${entry.key} fields');
+      exitCode = 1;
+      return;
+    }
+    actionSource = actionSource.replaceAll(exposedAction, redactedAction);
   }
-  actionFile.writeAsStringSync(
-    actionSource.replaceFirst(exposedText, redactedText),
-  );
+  actionFile.writeAsStringSync(actionSource);
 
   final commandCaptureSource = file.readAsStringSync();
   const captureStartMarker = 'class CommandCaptureEvent extends Command {';

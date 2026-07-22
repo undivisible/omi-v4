@@ -65,12 +65,15 @@ for field in text value; do
 done
 
 action_file="$generated_dir/signals/computer_use_action.dart"
-if grep -Fq "'text: \$text, '" "$action_file"; then
-  echo "generated computer-use text debug output is not redacted" >&2
-  exit 1
-fi
-if [[ "$(grep -Fc "'text: [REDACTED], '" "$action_file")" -ne 1 ]]; then
-  echo "generated computer-use text redaction is missing or ambiguous" >&2
+for field in targetName value; do
+  if grep -Fq "'$field: \$$field, '" "$action_file"; then
+    echo "generated computer-use $field debug output is not redacted" >&2
+    exit 1
+  fi
+done
+if [[ "$(grep -Fc "'targetName: [REDACTED], '" "$action_file")" -ne 2 ]] ||
+   [[ "$(grep -Fc "'value: [REDACTED], '" "$action_file")" -ne 1 ]]; then
+  echo "generated computer-use redaction is missing or ambiguous" >&2
   exit 1
 fi
 

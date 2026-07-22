@@ -355,11 +355,9 @@ void main() {
           title: 'Create task',
           summary: 'Add the task to your list.',
           risk: ActionRisk.reversible,
-          computerAction: const ComputerUseActionClick(
-            x: 10,
-            y: 20,
-            button: MouseButton.left,
-            count: 1,
+          computerAction: const ComputerUseActionInvoke(
+            targetName: 'Save',
+            backgroundOnly: false,
           ),
         ),
       ),
@@ -372,23 +370,18 @@ void main() {
           title: 'Type response',
           summary: 'Type 23 bytes',
           risk: ActionRisk.external,
-          computerAction: const ComputerUseActionTypeText(
-            text: 'send the exact response',
-            clear: true,
-            pressReturn: true,
-            delayMs: null,
+          computerAction: const ComputerUseActionSetValue(
+            targetName: 'Response',
+            value: 'send the exact response',
+            backgroundOnly: true,
           ),
         ),
       ),
     );
     await tester.pump();
     expect(find.text('send the exact response'), findsOneWidget);
-    expect(
-      find.textContaining('Clears the focused field first'),
-      findsOneWidget,
-    );
-    expect(find.textContaining('Presses Return after typing'), findsOneWidget);
-    expect(find.text('Click left at (10, 20) once'), findsOneWidget);
+    expect(find.text('Background only'), findsOneWidget);
+    expect(find.text('Invoke “Save” · Interactive'), findsOneWidget);
     hub.executableProposals.add('proposal-1');
     final approve = find.byKey(const ValueKey('approve_proposal-1'));
     await tester.ensureVisible(approve);
@@ -642,11 +635,9 @@ void main() {
           title: 'Click',
           summary: 'Click once',
           risk: ActionRisk.reversible,
-          computerAction: const ComputerUseActionClick(
-            x: 4,
-            y: 8,
-            button: MouseButton.left,
-            count: 1,
+          computerAction: const ComputerUseActionInvoke(
+            targetName: 'Save',
+            backgroundOnly: false,
           ),
         ),
       ),
