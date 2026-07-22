@@ -1,6 +1,7 @@
+use rinf::SignalPiece;
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Serialize, SignalPiece)]
 #[serde(rename_all = "camelCase")]
 pub enum SystemAudioCaptureMode {
     Always,

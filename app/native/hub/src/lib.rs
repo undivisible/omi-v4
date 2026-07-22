@@ -6,6 +6,7 @@ mod extraction;
 mod live_voice;
 mod local_ai;
 pub mod meeting;
+mod meeting_capture;
 pub mod meeting_detector;
 mod runtime;
 mod scan;

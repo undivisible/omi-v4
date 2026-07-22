@@ -109,6 +109,13 @@ pub enum Command {
         title: Option<String>,
     },
     StopMeeting,
+    ProvideMeetingAuth {
+        auth: TranscriptionAuth,
+        trusted_worker_origin: Option<String>,
+    },
+    SetSystemAudioCaptureMode {
+        mode: crate::capture_policy::SystemAudioCaptureMode,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, SignalPiece)]

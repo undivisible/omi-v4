@@ -1747,6 +1747,29 @@ async fn execute(
             );
             false
         }
+        Command::ProvideMeetingAuth {
+            auth,
+            trusted_worker_origin,
+        } => {
+            crate::meeting::provide_auth(auth, trusted_worker_origin);
+            progress(
+                &request_id,
+                "meeting",
+                ToolStatus::Complete,
+                Some("meeting capture auth accepted"),
+            );
+            false
+        }
+        Command::SetSystemAudioCaptureMode { mode } => {
+            crate::meeting::set_mode(mode);
+            progress(
+                &request_id,
+                "meeting",
+                ToolStatus::Complete,
+                Some("system audio capture mode updated"),
+            );
+            false
+        }
     }
 }
 

@@ -1,6 +1,7 @@
-use crate::capture_policy::{SystemAudioCaptureMode, capture_plan};
+use crate::capture_policy::{CapturePlan, SystemAudioCaptureMode, capture_plan};
 use crate::signals::{
-    CaptureSource, ClientCommand, Command, MeetingCompleted, MeetingInsight, NativeEvent,
+    CaptureSource, ClientCommand, Command, MeetingCompleted, MeetingInsight, NativeError,
+    NativeEvent, TranscriptionAuth,
 };
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
@@ -284,6 +285,67 @@ pub enum MeetingControl {
     FinalSegment {
         text: String,
     },
+    ProvideAuth {
+        auth: TranscriptionAuth,
+        trusted_worker_origin: Option<String>,
+    },
+    SetMode {
+        mode: SystemAudioCaptureMode,
+    },
+}
+
+pub fn capture_allowed(mode: SystemAudioCaptureMode, session_active: bool) -> bool {
+    capture_plan(mode, true, session_active).system_audio && session_active
+}
+
+#[derive(Default)]
+pub struct CaptureSlot<H> {
+    handle: Option<H>,
+    pending: Option<(TranscriptionAuth, Option<String>)>,
+}
+
+impl<H> CaptureSlot<H> {
+    pub fn new() -> Self {
+        Self {
+            handle: None,
+            pending: None,
+        }
+    }
+
+    pub fn provide(&mut self, auth: TranscriptionAuth, trusted_worker_origin: Option<String>) {
+        self.handle = None;
+        self.pending = Some((auth, trusted_worker_origin));
+    }
+
+    pub fn sync(
+        &mut self,
+        mode: SystemAudioCaptureMode,
+        session_active: bool,
+        start: impl FnOnce(CapturePlan, TranscriptionAuth, Option<String>) -> Option<H>,
+    ) {
+        if !capture_allowed(mode, session_active) {
+            self.handle = None;
+            return;
+        }
+        if self.handle.is_none()
+            && let Some((auth, trusted_worker_origin)) = self.pending.take()
+        {
+            self.handle = start(
+                capture_plan(mode, true, session_active),
+                auth,
+                trusted_worker_origin,
+            );
+        }
+    }
+
+    pub fn stop(&mut self) {
+        self.handle = None;
+        self.pending = None;
+    }
+
+    pub fn active(&self) -> bool {
+        self.handle.is_some()
+    }
 }
 
 static CONTROLS: OnceLock<mpsc::Sender<MeetingControl>> = OnceLock::new();
@@ -313,6 +375,17 @@ pub fn observe_gate(active: bool, suggested_title: Option<String>) {
     });
 }
 
+pub fn provide_auth(auth: TranscriptionAuth, trusted_worker_origin: Option<String>) {
+    notify(MeetingControl::ProvideAuth {
+        auth,
+        trusted_worker_origin,
+    });
+}
+
+pub fn set_mode(mode: SystemAudioCaptureMode) {
+    notify(MeetingControl::SetMode { mode });
+}
+
 pub fn observe_final_segment(text: &str) {
     if !text.trim().is_empty() {
         notify(MeetingControl::FinalSegment {
@@ -327,6 +400,7 @@ pub struct MeetingRuntime {
     mode: SystemAudioCaptureMode,
     cancellation: CancellationToken,
     classifying: Arc<AtomicBool>,
+    capture: CaptureSlot<crate::meeting_capture::MeetingCaptureHandle>,
 }
 
 pub fn channel(
@@ -341,6 +415,7 @@ pub fn channel(
             mode: SystemAudioCaptureMode::default(),
             cancellation: CancellationToken::new(),
             classifying: Arc::new(AtomicBool::new(false)),
+            capture: CaptureSlot::new(),
         },
     )
 }
@@ -361,8 +436,10 @@ impl MeetingRuntime {
                     if session.is_none() {
                         session = Some(MeetingSession::new(title, true));
                     }
+                    self.sync_capture(session.is_some());
                 }
                 MeetingControl::Stop => {
+                    self.capture.stop();
                     if let Some(finished) = session.take() {
                         self.finish(finished);
                     }
@@ -374,11 +451,13 @@ impl MeetingRuntime {
                     if session.is_none() && should_auto_start(self.mode, true) {
                         session = Some(MeetingSession::new(suggested_title, false));
                     }
+                    self.sync_capture(session.is_some());
                 }
                 MeetingControl::Gate { active: false, .. } => {
                     if session.as_ref().is_some_and(|current| !current.is_manual())
                         && let Some(finished) = session.take()
                     {
+                        self.capture.stop();
                         self.finish(finished);
                     }
                 }
@@ -388,9 +467,44 @@ impl MeetingRuntime {
                         self.maybe_classify(current, &text);
                     }
                 }
+                MeetingControl::ProvideAuth {
+                    auth,
+                    trusted_worker_origin,
+                } => {
+                    self.capture.provide(auth, trusted_worker_origin);
+                    self.sync_capture(session.is_some());
+                }
+                MeetingControl::SetMode { mode } => {
+                    self.mode = mode;
+                    self.sync_capture(session.is_some());
+                }
             }
         }
+        self.capture.stop();
         self.cancellation.cancel();
+    }
+
+    fn sync_capture(&mut self, session_active: bool) {
+        self.capture
+            .sync(self.mode, session_active, |plan, auth, origin| {
+                match crate::meeting_capture::start(plan, auth, origin) {
+                    Ok(handle) => Some(handle),
+                    Err(message) => {
+                        if plan.microphone {
+                            NativeEvent::Error(NativeError {
+                                request_id: Some(
+                                    crate::meeting_capture::CAPTURE_STREAM_ID.to_owned(),
+                                ),
+                                code: "meeting_system_audio_unavailable".to_owned(),
+                                message,
+                                retryable: true,
+                            })
+                            .send();
+                        }
+                        None
+                    }
+                }
+            });
     }
 
     fn maybe_classify(&self, session: &mut MeetingSession, text: &str) {
@@ -560,6 +674,65 @@ mod tests {
             false
         ));
         assert!(should_auto_start(SystemAudioCaptureMode::Always, true));
+    }
+
+    #[test]
+    fn capture_slot_starts_only_with_auth_and_an_active_session() {
+        struct FakeHandle(std::sync::Arc<AtomicBool>);
+        impl Drop for FakeHandle {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::Release);
+            }
+        }
+        let stopped = std::sync::Arc::new(AtomicBool::new(false));
+        let mut slot: CaptureSlot<FakeHandle> = CaptureSlot::new();
+        slot.sync(
+            SystemAudioCaptureMode::OnlyDuringMeetings,
+            true,
+            |_, _, _| panic!("capture must not start without auth"),
+        );
+        slot.provide(TranscriptionAuth::Local, None);
+        slot.sync(
+            SystemAudioCaptureMode::OnlyDuringMeetings,
+            false,
+            |_, _, _| panic!("capture must not start without a session"),
+        );
+        slot.sync(SystemAudioCaptureMode::OnlyDuringMeetings, true, {
+            let stopped = stopped.clone();
+            move |plan, auth, origin| {
+                assert!(plan.system_audio);
+                assert!(matches!(auth, TranscriptionAuth::Local));
+                assert_eq!(origin, None);
+                Some(FakeHandle(stopped))
+            }
+        });
+        assert!(slot.active());
+        slot.sync(SystemAudioCaptureMode::Never, true, |_, _, _| {
+            panic!("mode change must stop instead of starting")
+        });
+        assert!(!slot.active());
+        assert!(stopped.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn capture_slot_stops_when_the_session_ends() {
+        let mut slot: CaptureSlot<()> = CaptureSlot::new();
+        slot.provide(
+            TranscriptionAuth::Local,
+            Some("https://api.omi.example".to_owned()),
+        );
+        slot.sync(SystemAudioCaptureMode::Always, true, |_, _, origin| {
+            assert_eq!(origin.as_deref(), Some("https://api.omi.example"));
+            Some(())
+        });
+        assert!(slot.active());
+        slot.sync(SystemAudioCaptureMode::Always, false, |_, _, _| {
+            panic!("capture must not restart after the session ends")
+        });
+        assert!(!slot.active());
+        assert!(!capture_allowed(SystemAudioCaptureMode::Always, false));
+        assert!(!capture_allowed(SystemAudioCaptureMode::Never, true));
+        assert!(capture_allowed(SystemAudioCaptureMode::Always, true));
     }
 
     #[test]

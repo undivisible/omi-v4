@@ -58,6 +58,7 @@ part 'onboarding_scan_source.dart';
 part 'onboarding_scan_state.dart';
 part 'runtime_phase.dart';
 part 'runtime_status.dart';
+part 'system_audio_capture_mode.dart';
 part 'tool_progress.dart';
 part 'tool_status.dart';
 part 'transcript_delta.dart';

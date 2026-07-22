@@ -14,8 +14,77 @@ import 'package:omi/keyboard/keyboard.dart';
 import 'package:omi/native/generated/signals/signals.dart';
 import 'package:omi/native/native_hub.dart';
 import 'package:omi/providers/providers.dart';
+import 'package:omi/settings/system_audio_capture_mode_store.dart'
+    show VolatileSystemAudioCaptureModeStore;
 
 void main() {
+  test(
+    'system audio capture mode is resent on connect and meeting auth is '
+    'minted when a meeting becomes active',
+    () async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+      addTearDown(() => debugDefaultTargetPlatformOverride = null);
+      final auth = AuthController(
+        _FakeAuthGateway(_session('user-a')),
+        consentStore: VolatileConsentStore()..receipt = _receipt('user-a'),
+      );
+      await auth.restoreSession();
+      final hub = _FakeHub();
+      final store = VolatileSystemAudioCaptureModeStore()
+        ..value = SystemAudioCaptureMode.always;
+      final managedStt = _FakeManagedStt(_managedSession('user-a'));
+      final services = AppServices.forTesting(
+        auth: auth,
+        nativeHub: hub,
+        deviceRelay: DeviceRelayService(
+          role: DeviceRelayRole.desktopObserver,
+          adapter: const UnavailableDeviceRelayAdapter(),
+        ),
+        memoryDatabasePath: (uid) => '/tmp/$uid.sqlite3',
+        managedStt: managedStt,
+        captureModeStore: store,
+      );
+      await services.initialize();
+      await _waitFor(() => hub.captureModes.isNotEmpty);
+      expect(hub.captureModes.single, SystemAudioCaptureMode.always);
+
+      await services.setSystemAudioCaptureMode(SystemAudioCaptureMode.never);
+      expect(store.value, SystemAudioCaptureMode.never);
+      expect(hub.captureModes.last, SystemAudioCaptureMode.never);
+      expect(
+        await services.systemAudioCaptureMode,
+        SystemAudioCaptureMode.never,
+      );
+
+      hub.eventsController.add(
+        const NativeEventMeetingStateChanged(
+          value: MeetingStateChanged(active: true, suggestedTitle: null),
+        ),
+      );
+      await _waitFor(() => hub.meetingAuth.isNotEmpty);
+      final request = managedStt.requests.single;
+      expect(request.sampleRate, 16000);
+      expect(request.channels, 1);
+      expect(request.encoding, ManagedSttEncoding.linear16);
+      final (mintedAuth, origin) = hub.meetingAuth.single;
+      expect(mintedAuth, isA<TranscriptionAuthManaged>());
+      expect(origin, 'https://api.example.test/');
+
+      hub.eventsController.add(
+        const NativeEventError(
+          value: NativeError(
+            requestId: 'meeting-capture',
+            code: 'meeting_capture_session_lost',
+            message: 'meeting capture transcription session was lost',
+            retryable: true,
+          ),
+        ),
+      );
+      await _waitFor(() => hub.meetingAuth.length == 2);
+      services.dispose();
+    },
+  );
+
   test(
     'desktop channel inbox runs one stable assistant request at a time',
     () async {
@@ -2515,8 +2584,11 @@ final class _FakeAuthGateway implements AuthGateway {
   }) async => _session!;
 }
 
-final class _FakeHub implements NativeHub, OnboardingScanHub, LiveVoiceHub {
+final class _FakeHub
+    implements NativeHub, OnboardingScanHub, LiveVoiceHub, MeetingCaptureHub {
   final eventsController = StreamController<NativeEvent>.broadcast();
+  final meetingAuth = <(TranscriptionAuth, String?)>[];
+  final captureModes = <SystemAudioCaptureMode>[];
   int initializeCalls = 0;
   int disposeCalls = 0;
   final databasePaths = <String>[];
@@ -2576,6 +2648,23 @@ final class _FakeHub implements NativeHub, OnboardingScanHub, LiveVoiceHub {
 
   @override
   Future<void> initialize() async => initializeCalls += 1;
+
+  @override
+  void provideMeetingAuth({
+    required String requestId,
+    required TranscriptionAuth auth,
+    String? trustedWorkerOrigin,
+  }) {
+    meetingAuth.add((auth, trustedWorkerOrigin));
+  }
+
+  @override
+  void setSystemAudioCaptureMode({
+    required String requestId,
+    required SystemAudioCaptureMode mode,
+  }) {
+    captureModes.add(mode);
+  }
 
   @override
   void configureMemory({
