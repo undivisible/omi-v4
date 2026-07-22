@@ -100,7 +100,7 @@ class _OmiAppState extends State<OmiApp> {
   @override
   void dispose() {
     services.auth.removeListener(_authChanged);
-    services.dispose();
+    if (widget.services == null) services.dispose();
     super.dispose();
   }
 

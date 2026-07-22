@@ -35,14 +35,18 @@ class _MemoryScreenState extends State<MemoryScreen> {
       )..start();
       widget.services.auth.addListener(_authChanged);
       _searchNativeIfReady();
-    } else if (!widget.previewMode && widget.services.canUseApi) {
-      retrieval = widget.services.memory!.retrieve(query: 'profile');
+    } else if (!widget.previewMode) {
+      widget.services.auth.addListener(_apiAuthChanged);
+      if (widget.services.canUseApi) {
+        retrieval = widget.services.memory!.retrieve(query: 'profile');
+      }
     }
   }
 
   @override
   void dispose() {
     widget.services.auth.removeListener(_authChanged);
+    widget.services.auth.removeListener(_apiAuthChanged);
     nativeMemory?.dispose();
     searchController.dispose();
     super.dispose();
@@ -51,6 +55,15 @@ class _MemoryScreenState extends State<MemoryScreen> {
   void _authChanged() {
     if (!mounted) return;
     setState(_searchNativeIfReady);
+  }
+
+  void _apiAuthChanged() {
+    if (!mounted) return;
+    setState(() {
+      retrieval = widget.services.canUseApi
+          ? widget.services.memory!.retrieve(query: searchController.text)
+          : null;
+    });
   }
 
   void _searchNativeIfReady() {

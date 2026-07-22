@@ -112,7 +112,7 @@ class _CurrentTile extends StatelessWidget {
     icon: Icons.waves_rounded,
     title: card.title,
     detail:
-        '${card.summary}\n${card.item.reason} · Source: ${card.item.evidence.first.sourceId}',
+        '${card.summary}\n${card.item.reason} · Source: ${card.item.evidence.firstOrNull?.sourceId ?? '—'}',
     trailing: Wrap(
       children: [
         IconButton(

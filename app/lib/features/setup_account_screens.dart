@@ -29,39 +29,7 @@ class SetupScreen extends StatelessWidget {
     subtitle: 'Each connection makes your assistant more useful.',
     children: [
       if (!previewMode && services.settings != null)
-        FutureBuilder<SetupHealth>(
-          future: services.settings!.getSetupHealth(),
-          builder: (context, snapshot) {
-            if (snapshot.connectionState != ConnectionState.done) {
-              return const _SetupTile(
-                icon: Icons.cloud_sync_outlined,
-                title: 'Production services',
-                detail: 'Checking backend availability…',
-                state: 'Checking',
-              );
-            }
-            if (snapshot.hasError) {
-              return _SetupTile(
-                icon: Icons.cloud_off_outlined,
-                title: 'Production services',
-                detail: '${snapshot.error}',
-                state: 'Unavailable',
-              );
-            }
-            final services = snapshot.data!.services;
-            final missing = services.entries
-                .where((entry) => !entry.value)
-                .map((entry) => entry.key)
-                .join(', ');
-            return _SetupTile(
-              icon: Icons.cloud_done_outlined,
-              title: 'Production services',
-              detail: missing.isEmpty ? 'Everything is ready' : missing,
-              state:
-                  '${services.values.where((ready) => ready).length}/${services.length} ready',
-            );
-          },
-        ),
+        _ProductionHealthTile(client: services.settings!),
       const _SetupTile(
         icon: Icons.mic_none_rounded,
         title: 'Try voice',
@@ -96,6 +64,62 @@ class SetupScreen extends StatelessWidget {
         state: 'Not connected',
       ),
     ],
+  );
+}
+
+class _ProductionHealthTile extends StatefulWidget {
+  const _ProductionHealthTile({required this.client});
+
+  final SettingsClient client;
+
+  @override
+  State<_ProductionHealthTile> createState() => _ProductionHealthTileState();
+}
+
+class _ProductionHealthTileState extends State<_ProductionHealthTile> {
+  late Future<SetupHealth> health = widget.client.getSetupHealth();
+
+  @override
+  void didUpdateWidget(_ProductionHealthTile oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.client != widget.client) {
+      health = widget.client.getSetupHealth();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => FutureBuilder<SetupHealth>(
+    future: health,
+    builder: (context, snapshot) {
+      if (snapshot.connectionState != ConnectionState.done) {
+        return const _SetupTile(
+          icon: Icons.cloud_sync_outlined,
+          title: 'Production services',
+          detail: 'Checking backend availability…',
+          state: 'Checking',
+        );
+      }
+      if (snapshot.hasError) {
+        return _SetupTile(
+          icon: Icons.cloud_off_outlined,
+          title: 'Production services',
+          detail: '${snapshot.error}',
+          state: 'Unavailable',
+        );
+      }
+      final services = snapshot.data!.services;
+      final missing = services.entries
+          .where((entry) => !entry.value)
+          .map((entry) => entry.key)
+          .join(', ');
+      return _SetupTile(
+        icon: Icons.cloud_done_outlined,
+        title: 'Production services',
+        detail: missing.isEmpty ? 'Everything is ready' : missing,
+        state:
+            '${services.values.where((ready) => ready).length}/${services.length} ready',
+      );
+    },
   );
 }
 
@@ -320,32 +344,7 @@ class AccountScreen extends StatelessWidget {
           detail: 'Sign in to load your approval policy.',
         )
       else
-        FutureBuilder<SettingsSnapshot>(
-          future: services.settings!.getSettings(),
-          builder: (context, snapshot) {
-            if (snapshot.connectionState != ConnectionState.done) {
-              return const _AccountTile(
-                icon: Icons.sync_rounded,
-                title: 'Loading agent control',
-                detail: 'Retrieving your approval policy…',
-              );
-            }
-            if (snapshot.hasError) {
-              return _AccountTile(
-                icon: Icons.error_outline_rounded,
-                title: 'Agent control could not load',
-                detail: '${snapshot.error}',
-              );
-            }
-            final settings = snapshot.data!.effectivePolicy;
-            return _AccountTile(
-              icon: Icons.shield_outlined,
-              title: 'Agent control',
-              detail:
-                  '${settings.approvalMode.name} approvals · Proactive ${settings.proactiveRecommendations ? 'on' : 'off'}',
-            );
-          },
-        ),
+        _AgentControlTile(client: services.settings!),
       if (previewMode || kIsWeb)
         const _AccountTile(
           icon: Icons.key_outlined,
@@ -363,6 +362,55 @@ class AccountScreen extends StatelessWidget {
       else
         _PlanTile(client: services.billing!),
     ],
+  );
+}
+
+class _AgentControlTile extends StatefulWidget {
+  const _AgentControlTile({required this.client});
+
+  final SettingsClient client;
+
+  @override
+  State<_AgentControlTile> createState() => _AgentControlTileState();
+}
+
+class _AgentControlTileState extends State<_AgentControlTile> {
+  late Future<SettingsSnapshot> snapshot = widget.client.getSettings();
+
+  @override
+  void didUpdateWidget(_AgentControlTile oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.client != widget.client) {
+      snapshot = widget.client.getSettings();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => FutureBuilder<SettingsSnapshot>(
+    future: snapshot,
+    builder: (context, snapshot) {
+      if (snapshot.connectionState != ConnectionState.done) {
+        return const _AccountTile(
+          icon: Icons.sync_rounded,
+          title: 'Loading agent control',
+          detail: 'Retrieving your approval policy…',
+        );
+      }
+      if (snapshot.hasError) {
+        return _AccountTile(
+          icon: Icons.error_outline_rounded,
+          title: 'Agent control could not load',
+          detail: '${snapshot.error}',
+        );
+      }
+      final settings = snapshot.data!.effectivePolicy;
+      return _AccountTile(
+        icon: Icons.shield_outlined,
+        title: 'Agent control',
+        detail:
+            '${settings.approvalMode.name} approvals · Proactive ${settings.proactiveRecommendations ? 'on' : 'off'}',
+      );
+    },
   );
 }
 
@@ -613,6 +661,16 @@ class _ChannelTileState extends State<ChannelConnectionTile> {
     super.initState();
     if (widget.client != null) {
       linked = widget.client!.isLinked(widget.provider);
+    }
+  }
+
+  @override
+  void didUpdateWidget(ChannelConnectionTile oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.client != widget.client ||
+        oldWidget.provider != widget.provider) {
+      state = const ChannelLinkState.unlinked();
+      linked = widget.client?.isLinked(widget.provider);
     }
   }
 

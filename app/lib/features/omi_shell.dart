@@ -104,21 +104,37 @@ class _OmiShellState extends State<OmiShell> {
   @override
   Widget build(BuildContext context) {
     final wide = MediaQuery.sizeOf(context).width >= 760;
-    final screen = _Screen(
-      index: selected,
-      services: widget.services,
-      previewMode: widget.previewMode,
-      chatKey: _chatKey,
-      desktopKeyboard: _desktopKeyboard,
-      onDesktopGestureReset: _desktopGesture?.reset,
-      onOpenChat: () => setState(() => selected = 0),
+    final chat = _WarmPaperHub(
+      showOpeningGradient: _showOpeningGradient,
+      child: ChatScreen(
+        key: _chatKey,
+        services: widget.services,
+        previewMode: widget.previewMode,
+        desktopKeyboard: _desktopKeyboard,
+        onDesktopGestureReset: _desktopGesture?.reset,
+      ),
     );
-    final body = selected == 0
-        ? _WarmPaperHub(
-            showOpeningGradient: _showOpeningGradient,
-            child: screen,
-          )
-        : GradientBackground(child: screen);
+    final body = Stack(
+      fit: StackFit.expand,
+      children: [
+        Offstage(
+          offstage: selected != 0,
+          child: TickerMode(enabled: selected == 0, child: chat),
+        ),
+        if (selected != 0)
+          GradientBackground(
+            child: _Screen(
+              index: selected,
+              services: widget.services,
+              previewMode: widget.previewMode,
+              chatKey: _chatKey,
+              desktopKeyboard: _desktopKeyboard,
+              onDesktopGestureReset: _desktopGesture?.reset,
+              onOpenChat: () => setState(() => selected = 0),
+            ),
+          ),
+      ],
+    );
     final paddedBody = SafeArea(
       left: !wide,
       child: Padding(

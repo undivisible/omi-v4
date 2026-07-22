@@ -34,29 +34,36 @@ class _OnboardingBackdropState extends State<OnboardingBackdrop> {
   }
 
   @override
-  Widget build(BuildContext context) => Stack(
-    fit: StackFit.expand,
-    children: [
-      if (kIsWeb || defaultTargetPlatform != TargetPlatform.macOS)
-        const ColoredBox(color: Color(0xff9ba0a3)),
-      AnimatedOpacity(
-        duration: const Duration(milliseconds: 900),
-        curve: Curves.easeOutCubic,
-        opacity: entered ? (widget.bright ? .74 : .16) : 0,
-        child: TweenAnimationBuilder<double>(
-          duration: const Duration(milliseconds: 1800),
+  Widget build(BuildContext context) {
+    final reduceMotion = MediaQuery.disableAnimationsOf(context);
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        if (kIsWeb || defaultTargetPlatform != TargetPlatform.macOS)
+          const ColoredBox(color: Color(0xff9ba0a3)),
+        AnimatedOpacity(
+          duration: reduceMotion
+              ? Duration.zero
+              : const Duration(milliseconds: 900),
           curve: Curves.easeOutCubic,
-          tween: Tween(end: widget.bright ? 1 : 0),
-          builder: (context, rise, child) => _OnboardingEdgeGradient(
-            rise: rise,
-            active: widget.searching,
-            settled: widget.settled,
+          opacity: entered ? (widget.bright ? .74 : .16) : 0,
+          child: TweenAnimationBuilder<double>(
+            duration: reduceMotion
+                ? Duration.zero
+                : const Duration(milliseconds: 1800),
+            curve: Curves.easeOutCubic,
+            tween: Tween(end: widget.bright ? 1 : 0),
+            builder: (context, rise, child) => _OnboardingEdgeGradient(
+              rise: rise,
+              active: widget.searching,
+              settled: widget.settled,
+            ),
           ),
         ),
-      ),
-      widget.child,
-    ],
-  );
+        widget.child,
+      ],
+    );
+  }
 }
 
 class _OnboardingEdgeGradient extends StatefulWidget {
