@@ -20,6 +20,7 @@ import '../native/generated/signals/signals.dart'
         ComputerUseTargetProvenance;
 import '../native/native_hub.dart';
 import '../onboarding/hub_checklist.dart';
+import '../ui/markdown_text.dart';
 import '../ui/omi_ui.dart';
 
 class ChatScreen extends StatefulWidget {
@@ -750,7 +751,9 @@ class ChatScreenState extends State<ChatScreen> {
           child: Card(
             child: Padding(
               padding: const EdgeInsets.all(12),
-              child: Text(message.text),
+              child: message.fromUser
+                  ? Text(message.text)
+                  : AssistantMarkdown(message.text),
             ),
           ),
         ),

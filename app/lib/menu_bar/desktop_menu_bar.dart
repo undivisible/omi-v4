@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 import '../currents/currents.dart';
+import '../ui/markdown_text.dart';
 
 final class DesktopMenuBarController {
   DesktopMenuBarController({
@@ -60,7 +61,7 @@ final class DesktopMenuBarController {
     if (!_started) return;
     final items = currents?.items ?? const <CurrentCard>[];
     await _channel.invokeMethod<void>('update', {
-      'task': items.isEmpty ? null : items.first.title,
+      'task': items.isEmpty ? null : stripInlineMarkdown(items.first.title),
       'listening': isListening(),
     });
   }
