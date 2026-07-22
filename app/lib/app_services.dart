@@ -300,6 +300,7 @@ final class AppServices {
   Future<void> _lifecycle = Future.value();
   Future<void> _desktopVoiceLifecycle = Future.value();
   int _desktopVoiceGeneration = 0;
+  bool _desktopVoiceRouteIsLive = false;
   Future<void> _liveVoiceLifecycle = Future.value();
   int _liveVoiceGeneration = 0;
 
@@ -502,6 +503,36 @@ final class AppServices {
       throw StateError('Microphone permission is required for desktop voice.');
     }
     if (voiceGeneration != _desktopVoiceGeneration) return;
+    _desktopVoiceRouteIsLive = false;
+    final tokens = liveVoiceTokens;
+    if (tokens != null && nativeHub is LiveVoiceHub) {
+      GeminiLiveToken? grant;
+      try {
+        grant = await tokens.createGeminiToken();
+      } catch (_) {
+        grant = null;
+      }
+      if (grant != null) {
+        if (generation != _authorityGeneration ||
+            voiceGeneration != _desktopVoiceGeneration ||
+            auth.snapshot.session?.uid != session.uid) {
+          throw StateError('Account authority changed while starting voice.');
+        }
+        await liveVoice.start(
+          ephemeralToken: grant.token,
+          model: grant.model,
+          authorityId: 'g$generation',
+        );
+        if (generation != _authorityGeneration ||
+            voiceGeneration != _desktopVoiceGeneration ||
+            auth.snapshot.session?.uid != session.uid) {
+          await liveVoice.cancel();
+          throw StateError('Account authority changed while starting voice.');
+        }
+        _desktopVoiceRouteIsLive = true;
+        return;
+      }
+    }
     final transcriptionAuth = await _managedTranscriptionAuthFor(
       uid: session.uid,
       deviceId: 'desktop-microphone',
@@ -525,8 +556,13 @@ final class AppServices {
     }
   }
 
-  Future<void> continueDesktopVoice() =>
-      _queueDesktopVoice(() async => desktopVoice.continueCapture());
+  Future<void> continueDesktopVoice() => _queueDesktopVoice(() async {
+    if (_desktopVoiceRouteIsLive) {
+      if (!liveVoice.active) throw StateError('Desktop voice is not active.');
+      return;
+    }
+    desktopVoice.continueCapture();
+  });
 
   Future<({String requestId, String text})?> stopDesktopVoice() =>
       _queueDesktopVoice(_stopDesktopVoice);
@@ -534,7 +570,10 @@ final class AppServices {
   Future<({String requestId, String text})?> _stopDesktopVoice() async {
     final uid = auth.snapshot.session?.uid;
     final generation = _authorityGeneration;
-    final text = await desktopVoice.stop();
+    final text = _desktopVoiceRouteIsLive
+        ? await liveVoice.stop()
+        : await desktopVoice.stop();
+    _desktopVoiceRouteIsLive = false;
     if (text.isEmpty) return null;
     if (generation != _authorityGeneration ||
         uid == null ||
@@ -547,6 +586,13 @@ final class AppServices {
 
   Future<void> cancelDesktopVoice() {
     _desktopVoiceGeneration += 1;
+    if (_desktopVoiceRouteIsLive) {
+      _desktopVoiceRouteIsLive = false;
+      return Future.wait([
+        liveVoice.cancel(),
+        desktopVoice.cancel(),
+      ]).then((_) {});
+    }
     return desktopVoice.cancel();
   }
 
