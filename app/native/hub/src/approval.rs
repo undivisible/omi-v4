@@ -1,4 +1,4 @@
-use crate::computer_use::BoundComputerUseAction;
+use crate::computer_use::PreparedComputerUseAction;
 use crate::signals::{
     ActionProposal, ActionRisk, ApprovalDecision, ComputerUseAction, NativeEvent,
 };
@@ -32,7 +32,7 @@ pub(crate) struct ProposalFingerprint {
     pub(crate) title: String,
     pub(crate) summary: String,
     pub(crate) computer_action: Option<ComputerUseAction>,
-    pub(crate) bound_computer_action: Option<BoundComputerUseAction>,
+    pub(crate) bound_computer_action: Option<PreparedComputerUseAction>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -81,11 +81,13 @@ impl ProposalRegistry {
         uid: &str,
         authority_generation: u64,
         proposal: ActionProposal,
-        bound_computer_action: Option<BoundComputerUseAction>,
+        bound_computer_action: Option<PreparedComputerUseAction>,
     ) -> Result<ProposalRegistration, ProposalDecisionError> {
         let now_ms = unix_time_ms();
         self.purge_expired(now_ms);
-        if bound_computer_action.as_ref().map(|bound| &bound.display)
+        if bound_computer_action
+            .as_ref()
+            .map(|prepared| &prepared.bound.display)
             != proposal.computer_action.as_ref()
         {
             return Err(ProposalDecisionError::Conflict);
@@ -141,7 +143,7 @@ impl ProposalRegistry {
         decision: ApprovalDecision,
         now_ms: i64,
         computer_use_available: bool,
-    ) -> Result<(ProposalRecord, Option<BoundComputerUseAction>), ProposalDecisionError> {
+    ) -> Result<(ProposalRecord, Option<PreparedComputerUseAction>), ProposalDecisionError> {
         self.purge_expired(now_ms);
         if let Some(record) = self.terminal.get(proposal_id) {
             return if record.fingerprint.uid != uid

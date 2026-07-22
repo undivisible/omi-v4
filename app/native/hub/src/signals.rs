@@ -88,6 +88,7 @@ pub enum Command {
     ApprovalDecision {
         proposal_id: String,
         decision: ApprovalDecision,
+        authority_receipt: Option<ComputerUseAuthorityReceipt>,
     },
     DeviceState {
         device_id: String,
@@ -139,6 +140,44 @@ pub enum ComputerUseAction {
         value: String,
         background_only: bool,
     },
+}
+
+#[derive(Clone, Deserialize, Eq, PartialEq, Serialize, SignalPiece)]
+pub struct ComputerUseAuthorityReceipt {
+    pub version: String,
+    pub execution_id: String,
+    pub receipt_id: String,
+    pub receipt_token: String,
+    pub firebase_token: String,
+    pub subject: String,
+    pub policy_generation: u64,
+    pub operation_id: String,
+    pub proposal_id: String,
+    pub action_hash: String,
+    pub risk: ActionRisk,
+    pub issued_at_ms: i64,
+    pub expires_at_ms: i64,
+}
+
+impl std::fmt::Debug for ComputerUseAuthorityReceipt {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ComputerUseAuthorityReceipt")
+            .field("version", &self.version)
+            .field("execution_id", &self.execution_id)
+            .field("receipt_id", &self.receipt_id)
+            .field("receipt_token", &"[redacted]")
+            .field("firebase_token", &"[redacted]")
+            .field("subject", &"[redacted]")
+            .field("policy_generation", &self.policy_generation)
+            .field("operation_id", &self.operation_id)
+            .field("proposal_id", &self.proposal_id)
+            .field("action_hash", &self.action_hash)
+            .field("risk", &self.risk)
+            .field("issued_at_ms", &self.issued_at_ms)
+            .field("expires_at_ms", &self.expires_at_ms)
+            .finish()
+    }
 }
 
 impl std::fmt::Debug for ComputerUseAction {
@@ -328,7 +367,32 @@ pub struct ActionProposal {
     pub summary: String,
     pub risk: ActionRisk,
     pub computer_action: Option<ComputerUseAction>,
+    pub operation_id: Option<String>,
+    pub action_hash: Option<String>,
+    pub target_provenance: Option<ComputerUseTargetProvenance>,
     pub expires_at_ms: Option<i64>,
+}
+
+#[derive(Clone, Deserialize, Eq, PartialEq, Serialize, SignalPiece)]
+pub struct ComputerUseTargetProvenance {
+    pub process_id: u32,
+    pub process_generation: String,
+    pub window_id: String,
+    pub role: String,
+    pub observation_generation: u64,
+}
+
+impl std::fmt::Debug for ComputerUseTargetProvenance {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ComputerUseTargetProvenance")
+            .field("process_id", &"[redacted]")
+            .field("process_generation", &"[redacted]")
+            .field("window_id", &"[redacted]")
+            .field("role", &self.role)
+            .field("observation_generation", &self.observation_generation)
+            .finish()
+    }
 }
 
 impl std::fmt::Debug for ActionProposal {
@@ -341,12 +405,15 @@ impl std::fmt::Debug for ActionProposal {
             .field("summary", &"[redacted]")
             .field("risk", &self.risk)
             .field("computer_action", &self.computer_action)
+            .field("operation_id", &self.operation_id)
+            .field("action_hash", &self.action_hash)
+            .field("target_provenance", &self.target_provenance)
             .field("expires_at_ms", &self.expires_at_ms)
             .finish()
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, SignalPiece)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, SignalPiece)]
 pub enum ActionRisk {
     Reversible,
     External,
@@ -384,9 +451,55 @@ pub struct RuntimeStatus {
     pub phase: RuntimePhase,
     pub detail: Option<String>,
     pub computer_use_available: bool,
+    pub computer_use_capabilities: Option<ComputerUseCapabilities>,
     pub local_ai_available: bool,
     pub memory_available: bool,
     pub agent_harness_available: bool,
+}
+
+#[derive(Debug, Serialize, SignalPiece)]
+pub struct ComputerUseCapabilities {
+    pub platform: String,
+    pub backend: String,
+    pub session_isolation: ComputerUseSessionIsolation,
+    pub permissions: Vec<ComputerUsePermission>,
+    pub actions: Vec<ComputerUseActionCapability>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, SignalPiece)]
+pub enum ComputerUseSessionIsolation {
+    SharedDesktop,
+    HostIsolated,
+    Unknown,
+}
+
+#[derive(Debug, Serialize, SignalPiece)]
+pub struct ComputerUsePermission {
+    pub name: String,
+    pub granted: bool,
+}
+
+#[derive(Debug, Serialize, SignalPiece)]
+pub struct ComputerUseActionCapability {
+    pub name: String,
+    pub available: bool,
+    pub delivery_route: ComputerUseDeliveryRoute,
+    pub background_support: ComputerUseBackgroundSupport,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, SignalPiece)]
+pub enum ComputerUseDeliveryRoute {
+    TargetAddressed,
+    Pointer,
+    Unknown,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, SignalPiece)]
+pub enum ComputerUseBackgroundSupport {
+    Guarded,
+    HostIsolatedOnly,
+    Unavailable,
+    Unknown,
 }
 
 #[derive(Debug, Serialize, SignalPiece)]
@@ -588,7 +701,7 @@ impl ValidationError {
 
 #[cfg(test)]
 mod tests {
-    use super::ComputerUseAction;
+    use super::{ActionRisk, ComputerUseAction, ComputerUseAuthorityReceipt};
 
     #[test]
     fn computer_use_debug_redacts_target_and_value() {
@@ -603,6 +716,33 @@ mod tests {
 
         assert!(!debug.contains("Private field"));
         assert!(!debug.contains("credential-value"));
+        assert!(debug.contains("[redacted]"));
+    }
+
+    #[test]
+    fn computer_use_receipt_debug_redacts_credentials_and_subject() {
+        let debug = format!(
+            "{:?}",
+            ComputerUseAuthorityReceipt {
+                version: "omi-current-authority-v1".to_owned(),
+                execution_id: "execution-1".to_owned(),
+                receipt_id: "receipt-1".to_owned(),
+                receipt_token: "receipt-secret".to_owned(),
+                firebase_token: "firebase-secret".to_owned(),
+                subject: "private-user".to_owned(),
+                policy_generation: 1,
+                operation_id: "operation-1".to_owned(),
+                proposal_id: "proposal-1".to_owned(),
+                action_hash: "a".repeat(64),
+                risk: ActionRisk::Destructive,
+                issued_at_ms: 1,
+                expires_at_ms: 2,
+            }
+        );
+
+        assert!(!debug.contains("receipt-secret"));
+        assert!(!debug.contains("firebase-secret"));
+        assert!(!debug.contains("private-user"));
         assert!(debug.contains("[redacted]"));
     }
 }

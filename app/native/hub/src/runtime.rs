@@ -4,15 +4,17 @@ use crate::approval::{
 };
 use crate::approval::{ProposalDecisionError, ProposalRegistry, ProposalStatus, unix_time_ms};
 use crate::computer_use::{
-    BoundComputerUseAction, ComputerUseError, ExecutionOutcome, available as computer_use_available,
+    BoundComputerUseAction, ComputerUseError, ExecutionOutcome, PreparedComputerUseAction,
+    available as computer_use_available, capabilities as computer_use_capabilities,
 };
 use crate::signals::{
     ActionProposal, ActionRisk, ApprovalDecision, ApprovalDecisionAcknowledgement, AssistantDelta,
     AssistantProvider as ProviderKind, CaptureSource, ClientCommand, Command, ComputerUseAction,
-    MemoryCaptured, MemoryCorrected, MemoryExportCommit, MemoryExported, MemoryItem, MemoryItems,
-    MemorySearchItem, MemorySearchResults, MemorySourceDeleted, NativeError, NativeEvent,
-    OnboardingScanCompleted, OnboardingScanSource, OnboardingScanState, RuntimePhase,
-    RuntimeStatus, ToolProgress, ToolStatus, TranscriptLocator, TranscriptionStopAcknowledgement,
+    ComputerUseAuthorityReceipt, MemoryCaptured, MemoryCorrected, MemoryExportCommit,
+    MemoryExported, MemoryItem, MemoryItems, MemorySearchItem, MemorySearchResults,
+    MemorySourceDeleted, NativeError, NativeEvent, OnboardingScanCompleted, OnboardingScanSource,
+    OnboardingScanState, RuntimePhase, RuntimeStatus, ToolProgress, ToolStatus, TranscriptLocator,
+    TranscriptionStopAcknowledgement,
 };
 #[cfg(test)]
 use crate::signals::{AudioChunk, TranscriptionAuth, TranscriptionRoute};
@@ -47,6 +49,8 @@ const PROVIDER_EVENT_TIMEOUT: Duration = Duration::from_secs(45);
 const COMPUTER_USE_PROPOSAL_TTL_MS: i64 = 5 * 60 * 1_000;
 const COMPUTER_INVOKE_TOOL: &str = "computer_invoke";
 const COMPUTER_SET_VALUE_TOOL: &str = "computer_set_value";
+const COMPUTER_USE_RECEIPT_VERSION: &str = "omi-current-authority-v1";
+const MAX_APPROVAL_RESPONSE_BYTES: usize = 32 * 1024;
 #[cfg(test)]
 const MAX_ACTIVE_AUDIO_SESSIONS: usize = 8;
 #[cfg(test)]
@@ -97,6 +101,42 @@ enum AssistantProviderEvent {
 struct BoundActionProposal {
     proposal: ActionProposal,
     bound_computer_action: Option<BoundComputerUseAction>,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ApprovalReceiptClaim<'a> {
+    receipt_token: &'a str,
+    subject: &'a str,
+    policy_generation: u64,
+    proposal_id: &'a str,
+    operation_id: &'a str,
+    action_hash: &'a str,
+    risk: &'a str,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ApprovalReceiptClaimResponse {
+    execution_id: String,
+    state: String,
+    receipt: ClaimedApprovalReceipt,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ClaimedApprovalReceipt {
+    version: String,
+    receipt_id: String,
+    subject: String,
+    policy_generation: u64,
+    proposal_id: String,
+    operation_id: String,
+    action_hash: String,
+    risk: String,
+    issued_at_ms: i64,
+    expires_at_ms: i64,
+    claimed_at_ms: i64,
 }
 
 enum ProviderReceive {
@@ -519,8 +559,11 @@ fn computer_use_proposal(
         request_id: request_id.to_owned(),
         title,
         summary,
-        risk: ActionRisk::External,
+        risk: ActionRisk::Destructive,
         computer_action: Some(action),
+        operation_id: None,
+        action_hash: None,
+        target_provenance: None,
         expires_at_ms: Some(unix_time_ms().saturating_add(COMPUTER_USE_PROPOSAL_TTL_MS)),
     })
 }
@@ -1304,6 +1347,7 @@ pub fn runtime_status(memory_available: bool) -> RuntimeStatus {
         phase: RuntimePhase::Ready,
         detail: Some(format!("rx4 {}", rx4::VERSION)),
         computer_use_available: computer_use_available(),
+        computer_use_capabilities: computer_use_capabilities(),
         local_ai_available: crate::local_ai::is_available(),
         memory_available,
         agent_harness_available: true,
@@ -1376,7 +1420,7 @@ async fn dispatch_assistant(
             .send(),
             AssistantProviderEvent::Proposal(bound) => {
                 let BoundActionProposal {
-                    proposal,
+                    mut proposal,
                     bound_computer_action,
                 } = *bound;
                 if proposal.request_id != request_id {
@@ -1388,11 +1432,36 @@ async fn dispatch_assistant(
                     );
                     continue;
                 }
+                let prepared_computer_action = match bound_computer_action {
+                    Some(bound) => match crate::computer_use::prepare(
+                        bound,
+                        &proposal.proposal_id,
+                        &uid,
+                        proposal.risk,
+                    ) {
+                        Ok(prepared) => {
+                            proposal.operation_id = Some(prepared.operation_id.clone());
+                            proposal.action_hash = Some(prepared.action_hash().to_owned());
+                            proposal.target_provenance = Some(prepared.bound.provenance.clone());
+                            Some(prepared)
+                        }
+                        Err(_) => {
+                            error(
+                                Some(request_id.to_owned()),
+                                "computer_use_binding_failed",
+                                "the semantic computer action could not be bound safely",
+                                false,
+                            );
+                            continue;
+                        }
+                    },
+                    None => None,
+                };
                 if let Err(failure) = state.proposals.register_bound(
                     &uid,
                     generation,
                     proposal,
-                    bound_computer_action,
+                    prepared_computer_action,
                 ) {
                     let (code, message) = match failure {
                         ProposalDecisionError::Capacity => (
@@ -1565,12 +1634,14 @@ async fn execute(
         Command::ApprovalDecision {
             proposal_id,
             decision,
+            authority_receipt,
         } => {
             decide_approval(
                 &request_id,
                 &state,
                 &proposal_id,
                 decision,
+                authority_receipt,
                 execution_generation,
                 &cancellation,
             )
@@ -2527,11 +2598,9 @@ fn error(request_id: Option<String>, code: &str, message: &str, retryable: bool)
     any(target_os = "macos", target_os = "windows", target_os = "linux")
 ))]
 async fn execute_bound_computer_use(
-    action: BoundComputerUseAction,
-    proposal_id: String,
-    uid: String,
-    generation: u64,
-    risk: ActionRisk,
+    action: PreparedComputerUseAction,
+    policy_generation: u64,
+    authority_expires_at_ms: i64,
     ledger_path: PathBuf,
     cancellation: &CancellationToken,
 ) -> Result<ExecutionOutcome, ComputerUseError> {
@@ -2548,10 +2617,8 @@ async fn execute_bound_computer_use(
     let task = spawn_blocking(move || {
         crate::computer_use::execute(
             action,
-            &proposal_id,
-            &uid,
-            generation,
-            risk,
+            policy_generation,
+            authority_expires_at_ms,
             &ledger_path,
             &protocol_cancellation,
         )
@@ -2566,15 +2633,141 @@ async fn execute_bound_computer_use(
     any(target_os = "macos", target_os = "windows", target_os = "linux")
 )))]
 async fn execute_bound_computer_use(
-    _action: BoundComputerUseAction,
-    _proposal_id: String,
-    _uid: String,
-    _generation: u64,
-    _risk: ActionRisk,
+    _action: PreparedComputerUseAction,
+    _policy_generation: u64,
+    _authority_expires_at_ms: i64,
     _ledger_path: PathBuf,
     _cancellation: &CancellationToken,
 ) -> Result<ExecutionOutcome, ComputerUseError> {
     Err(ComputerUseError::TargetUnavailable)
+}
+
+fn computer_use_risk_name(risk: ActionRisk) -> &'static str {
+    match risk {
+        ActionRisk::Reversible => "reversible",
+        ActionRisk::External => "external",
+        ActionRisk::Destructive => "destructive",
+    }
+}
+
+fn valid_receipt_identifier(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 256
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+}
+
+fn valid_receipt_hash(value: &str) -> bool {
+    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn validate_computer_use_receipt(
+    receipt: &ComputerUseAuthorityReceipt,
+    proposal_id: &str,
+    uid: &str,
+    risk: ActionRisk,
+    action: &PreparedComputerUseAction,
+) -> bool {
+    receipt.version == COMPUTER_USE_RECEIPT_VERSION
+        && receipt.subject == uid
+        && receipt.proposal_id == proposal_id
+        && receipt.operation_id == action.operation_id
+        && receipt.action_hash == action.action_hash()
+        && receipt.risk == risk
+        && receipt.issued_at_ms > 0
+        && receipt.expires_at_ms > receipt.issued_at_ms
+        && receipt.expires_at_ms.saturating_sub(receipt.issued_at_ms) <= 60_000
+        && unix_time_ms() < receipt.expires_at_ms
+        && unix_time_ms() < action.bound.expires_at_ms
+        && valid_receipt_identifier(&receipt.execution_id)
+        && valid_receipt_identifier(&receipt.receipt_id)
+        && valid_receipt_hash(&receipt.action_hash)
+        && receipt.receipt_token.len() >= 32
+        && receipt.receipt_token.len() <= 512
+        && receipt
+            .receipt_token
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+        && !receipt.firebase_token.trim().is_empty()
+        && receipt.firebase_token.len() <= 16 * 1024
+}
+
+async fn claim_computer_use_receipt(
+    managed_worker_origin: &str,
+    receipt: &ComputerUseAuthorityReceipt,
+    cancellation: &CancellationToken,
+) -> Result<(), ComputerUseError> {
+    let endpoint = Url::parse(managed_worker_origin)
+        .and_then(|origin| {
+            origin.join(&format!(
+                "/v1/currents/executions/{}/receipts/{}/claim",
+                receipt.execution_id, receipt.receipt_id
+            ))
+        })
+        .map_err(|_| ComputerUseError::Protocol)?;
+    let endpoint_value = endpoint.to_string();
+    tokio::select! {
+        () = cancellation.cancelled() => return Err(ComputerUseError::Protocol),
+        result = endpoint_resolves_publicly(&endpoint_value) => {
+            result.map_err(|_| ComputerUseError::Protocol)?;
+        }
+    }
+    let risk = computer_use_risk_name(receipt.risk);
+    let request = reqwest::Client::new()
+        .post(endpoint)
+        .bearer_auth(&receipt.firebase_token)
+        .json(&ApprovalReceiptClaim {
+            receipt_token: &receipt.receipt_token,
+            subject: &receipt.subject,
+            policy_generation: receipt.policy_generation,
+            proposal_id: &receipt.proposal_id,
+            operation_id: &receipt.operation_id,
+            action_hash: &receipt.action_hash,
+            risk,
+        });
+    let response = tokio::select! {
+        () = cancellation.cancelled() => return Err(ComputerUseError::Protocol),
+        result = tokio::time::timeout(Duration::from_secs(10), request.send()) => {
+            result.map_err(|_| ComputerUseError::Protocol)?
+                .map_err(|_| ComputerUseError::Protocol)?
+        }
+    };
+    if !response.status().is_success()
+        || response
+            .content_length()
+            .is_some_and(|length| length > MAX_APPROVAL_RESPONSE_BYTES as u64)
+    {
+        return Err(ComputerUseError::Protocol);
+    }
+    let bytes = tokio::select! {
+        () = cancellation.cancelled() => return Err(ComputerUseError::Protocol),
+        result = response.bytes() => result.map_err(|_| ComputerUseError::Protocol)?,
+    };
+    if bytes.len() > MAX_APPROVAL_RESPONSE_BYTES {
+        return Err(ComputerUseError::Protocol);
+    }
+    let claimed: ApprovalReceiptClaimResponse =
+        serde_json::from_slice(&bytes).map_err(|_| ComputerUseError::Protocol)?;
+    let claimed_receipt = claimed.receipt;
+    if claimed.execution_id != receipt.execution_id
+        || claimed.state != "claimed"
+        || claimed_receipt.version != receipt.version
+        || claimed_receipt.receipt_id != receipt.receipt_id
+        || claimed_receipt.subject != receipt.subject
+        || claimed_receipt.policy_generation != receipt.policy_generation
+        || claimed_receipt.proposal_id != receipt.proposal_id
+        || claimed_receipt.operation_id != receipt.operation_id
+        || claimed_receipt.action_hash != receipt.action_hash
+        || claimed_receipt.risk != risk
+        || claimed_receipt.issued_at_ms != receipt.issued_at_ms
+        || claimed_receipt.expires_at_ms != receipt.expires_at_ms
+        || claimed_receipt.claimed_at_ms < claimed_receipt.issued_at_ms
+        || claimed_receipt.claimed_at_ms >= claimed_receipt.expires_at_ms
+    {
+        return Err(ComputerUseError::Protocol);
+    }
+    Ok(())
 }
 
 async fn decide_approval(
@@ -2582,6 +2775,7 @@ async fn decide_approval(
     state: &Mutex<RuntimeState>,
     proposal_id: &str,
     decision: ApprovalDecision,
+    authority_receipt: Option<ComputerUseAuthorityReceipt>,
     generation: u64,
     cancellation: &CancellationToken,
 ) {
@@ -2614,6 +2808,7 @@ async fn decide_approval(
             return;
         };
         let ledger_path = state.computer_use_ledger_path.clone();
+        let managed_worker_origin = state.managed_worker_origin.clone();
         state
             .proposals
             .decide(
@@ -2624,7 +2819,7 @@ async fn decide_approval(
                 unix_time_ms(),
                 computer_use_is_available && ledger_path.is_some(),
             )
-            .map(|(record, action)| (record, action, uid, ledger_path))
+            .map(|(record, action)| (record, action, uid, ledger_path, managed_worker_origin))
             .map_err(|failure| match failure {
                 ProposalDecisionError::NotFound => (
                     "proposal_not_found",
@@ -2649,7 +2844,7 @@ async fn decide_approval(
                 ),
             })
     };
-    let (record, action, uid, ledger_path) = match result {
+    let (record, action, uid, ledger_path, managed_worker_origin) = match result {
         Ok(result) => result,
         Err((code, message)) => {
             approval_decision_acknowledgement(request_id, proposal_id, decision, false, false);
@@ -2664,6 +2859,15 @@ async fn decide_approval(
     };
     approval_decision_acknowledgement(request_id, proposal_id, decision, true, action.is_some());
     let Some(action) = action else {
+        if authority_receipt.is_some() {
+            error(
+                Some(request_id.to_owned()),
+                "computer_use_authority_invalid",
+                "computer-use authority was supplied for a non-computer decision",
+                false,
+            );
+            return;
+        }
         let detail = format!(
             "{} {:?} proposal for {}",
             if record.status == ProposalStatus::Approved {
@@ -2677,6 +2881,91 @@ async fn decide_approval(
         progress(request_id, "approval", ToolStatus::Complete, Some(&detail));
         return;
     };
+    let Some(authority_receipt) = authority_receipt else {
+        state
+            .lock()
+            .await
+            .proposals
+            .finish_execution(proposal_id, ProposalStatus::Failed);
+        error(
+            Some(request_id.to_owned()),
+            "computer_use_authority_required",
+            "server-consumed computer-use approval is required",
+            false,
+        );
+        return;
+    };
+    if !validate_computer_use_receipt(
+        &authority_receipt,
+        proposal_id,
+        &uid,
+        record.fingerprint.risk,
+        &action,
+    ) {
+        state
+            .lock()
+            .await
+            .proposals
+            .finish_execution(proposal_id, ProposalStatus::Failed);
+        error(
+            Some(request_id.to_owned()),
+            "computer_use_authority_invalid",
+            "server-consumed computer-use approval does not match the action",
+            false,
+        );
+        return;
+    }
+    let Some(managed_worker_origin) = managed_worker_origin else {
+        state
+            .lock()
+            .await
+            .proposals
+            .finish_execution(proposal_id, ProposalStatus::Failed);
+        error(
+            Some(request_id.to_owned()),
+            "computer_use_authority_unavailable",
+            "trusted computer-use approval service is unavailable",
+            false,
+        );
+        return;
+    };
+    if claim_computer_use_receipt(&managed_worker_origin, &authority_receipt, cancellation)
+        .await
+        .is_err()
+    {
+        let cancelled_before_effect = cancellation.is_cancelled();
+        let expired_before_effect = !cancelled_before_effect
+            && (unix_time_ms() >= authority_receipt.expires_at_ms
+                || unix_time_ms() >= action.bound.expires_at_ms);
+        state.lock().await.proposals.finish_execution(
+            proposal_id,
+            if cancelled_before_effect {
+                ProposalStatus::CancelledBeforeEffect
+            } else if expired_before_effect {
+                ProposalStatus::ExpiredBeforeEffect
+            } else {
+                ProposalStatus::Failed
+            },
+        );
+        if cancelled_before_effect {
+            cancelled(request_id);
+        } else if expired_before_effect {
+            error(
+                Some(request_id.to_owned()),
+                "computer_use_expired",
+                "the approved computer action expired before an effect",
+                false,
+            );
+        } else {
+            error(
+                Some(request_id.to_owned()),
+                "computer_use_authority_rejected",
+                "server-consumed computer-use approval could not be claimed",
+                false,
+            );
+        }
+        return;
+    }
     let Some(ledger_path) = ledger_path else {
         state
             .lock()
@@ -2691,12 +2980,13 @@ async fn decide_approval(
         );
         return;
     };
+    let authority_expires_at_ms = authority_receipt
+        .expires_at_ms
+        .min(action.bound.expires_at_ms);
     let outcome = execute_bound_computer_use(
         action,
-        proposal_id.to_owned(),
-        uid,
-        generation,
-        record.fingerprint.risk,
+        authority_receipt.policy_generation,
+        authority_expires_at_ms,
         ledger_path,
         cancellation,
     )
@@ -2798,6 +3088,7 @@ fn acknowledge_approval_rejection(command: &Command, request_id: &str) {
     if let Command::ApprovalDecision {
         proposal_id,
         decision,
+        ..
     } = command
     {
         approval_decision_acknowledgement(request_id, proposal_id, *decision, false, false);
@@ -3316,6 +3607,9 @@ mod tests {
             summary: "Add a task".to_owned(),
             risk: ActionRisk::External,
             computer_action: None,
+            operation_id: None,
+            action_hash: None,
+            target_provenance: None,
             expires_at_ms: Some(expires_at_ms),
         }
     }
@@ -3335,7 +3629,7 @@ mod tests {
 
         assert_eq!(proposal.proposal_id, "chat-1:tool:call_1");
         assert_eq!(proposal.request_id, "chat-1");
-        assert_eq!(proposal.risk, ActionRisk::External);
+        assert_eq!(proposal.risk, ActionRisk::Destructive);
         assert_eq!(
             proposal.computer_action,
             Some(ComputerUseAction::Invoke {
@@ -3382,6 +3676,124 @@ mod tests {
                 }),
             )
             .is_err()
+        );
+    }
+
+    #[test]
+    fn computer_use_receipt_must_match_the_prepared_action() {
+        let action = crate::computer_use::test_bound(
+            ComputerUseAction::Invoke {
+                target_name: "Save".to_owned(),
+                background_only: false,
+            },
+            ActionRisk::Destructive,
+        );
+        let now = unix_time_ms();
+        let mut receipt = ComputerUseAuthorityReceipt {
+            version: COMPUTER_USE_RECEIPT_VERSION.to_owned(),
+            execution_id: "11111111-1111-1111-1111-111111111111".to_owned(),
+            receipt_id: "22222222-2222-2222-2222-222222222222".to_owned(),
+            receipt_token: "a".repeat(43),
+            firebase_token: "firebase-token".to_owned(),
+            subject: "user-a".to_owned(),
+            policy_generation: 7,
+            operation_id: action.operation_id.clone(),
+            proposal_id: "proposal-1".to_owned(),
+            action_hash: action.action_hash().to_owned(),
+            risk: ActionRisk::Destructive,
+            issued_at_ms: now,
+            expires_at_ms: now.saturating_add(30_000),
+        };
+
+        assert!(validate_computer_use_receipt(
+            &receipt,
+            "proposal-1",
+            "user-a",
+            ActionRisk::Destructive,
+            &action,
+        ));
+        receipt.operation_id = "different-operation".to_owned();
+        assert!(!validate_computer_use_receipt(
+            &receipt,
+            "proposal-1",
+            "user-a",
+            ActionRisk::Destructive,
+            &action,
+        ));
+    }
+
+    #[cfg(all(
+        feature = "computer-use",
+        any(target_os = "macos", target_os = "windows", target_os = "linux")
+    ))]
+    #[tokio::test]
+    async fn failed_receipt_claim_cannot_reach_authority_mint() {
+        let action = ComputerUseAction::Invoke {
+            target_name: "Save".to_owned(),
+            background_only: false,
+        };
+        let bound = crate::computer_use::test_bound(action.clone(), ActionRisk::Destructive);
+        let now = unix_time_ms();
+        let receipt = ComputerUseAuthorityReceipt {
+            version: COMPUTER_USE_RECEIPT_VERSION.to_owned(),
+            execution_id: "execution-1".to_owned(),
+            receipt_id: "receipt-1".to_owned(),
+            receipt_token: "a".repeat(43),
+            firebase_token: "firebase-token".to_owned(),
+            subject: "user-a".to_owned(),
+            policy_generation: 7,
+            operation_id: bound.operation_id.clone(),
+            proposal_id: "claim-failure".to_owned(),
+            action_hash: bound.action_hash().to_owned(),
+            risk: ActionRisk::Destructive,
+            issued_at_ms: now,
+            expires_at_ms: now.saturating_add(30_000),
+        };
+        let mut runtime = RuntimeState {
+            configuration_generation: 7,
+            authority_uid: Some("user-a".to_owned()),
+            managed_worker_origin: Some("https://localhost".to_owned()),
+            computer_use_ledger_path: Some(PathBuf::from("unused-ledger.jsonl")),
+            ..RuntimeState::default()
+        };
+        runtime
+            .proposals
+            .register_bound(
+                "user-a",
+                7,
+                ActionProposal {
+                    proposal_id: "claim-failure".to_owned(),
+                    request_id: "chat-g7-1".to_owned(),
+                    title: "Invoke interface element".to_owned(),
+                    summary: "Invoke Save".to_owned(),
+                    risk: ActionRisk::Destructive,
+                    computer_action: Some(action),
+                    operation_id: Some(bound.operation_id.clone()),
+                    action_hash: Some(bound.action_hash().to_owned()),
+                    target_provenance: Some(bound.bound.provenance.clone()),
+                    expires_at_ms: Some(bound.bound.expires_at_ms),
+                },
+                Some(bound),
+            )
+            .unwrap_or_else(|failure| panic!("proposal registers: {failure:?}"));
+        let state = Mutex::new(runtime);
+        let attempts = crate::computer_use::authority_mint_attempts();
+
+        decide_approval(
+            "approval-claim-failure",
+            &state,
+            "claim-failure",
+            ApprovalDecision::ApproveOnce,
+            Some(receipt),
+            7,
+            &CancellationToken::new(),
+        )
+        .await;
+
+        assert_eq!(crate::computer_use::authority_mint_attempts(), attempts);
+        assert_eq!(
+            state.lock().await.proposals.terminal["claim-failure"].status,
+            ProposalStatus::Failed
         );
     }
 
@@ -4452,6 +4864,21 @@ mod tests {
         assert!(!should_enable_computer_tools(false, false));
     }
 
+    #[test]
+    fn runtime_computer_use_availability_matches_structured_capabilities() {
+        let status = runtime_status(false);
+        assert_eq!(
+            status.computer_use_available,
+            status
+                .computer_use_capabilities
+                .as_ref()
+                .is_some_and(|capabilities| capabilities
+                    .actions
+                    .iter()
+                    .any(|action| action.available)),
+        );
+    }
+
     struct ScriptedProvider {
         calls: Vec<&'static str>,
     }
@@ -4500,6 +4927,9 @@ mod tests {
                     summary: "Add a task".to_owned(),
                     risk: ActionRisk::External,
                     computer_action: None,
+                    operation_id: None,
+                    action_hash: None,
+                    target_provenance: None,
                     expires_at_ms: Some(i64::MAX),
                 },
             )
@@ -4567,6 +4997,9 @@ mod tests {
                     summary: "Expired proposal".to_owned(),
                     risk: ActionRisk::Reversible,
                     computer_action: None,
+                    operation_id: None,
+                    action_hash: None,
+                    target_provenance: None,
                     expires_at_ms: Some(unix_time_ms() + 100),
                 },
             )
@@ -4599,7 +5032,7 @@ mod tests {
             value: "approved text".to_owned(),
             background_only: false,
         };
-        let bound = crate::computer_use::test_bound(action.clone());
+        let bound = crate::computer_use::test_bound(action.clone(), ActionRisk::External);
         registry
             .register_bound(
                 "user-a",
@@ -4611,6 +5044,9 @@ mod tests {
                     summary: "Replace the focused field".to_owned(),
                     risk: ActionRisk::External,
                     computer_action: Some(action.clone()),
+                    operation_id: Some(bound.operation_id.clone()),
+                    action_hash: Some(bound.action_hash().to_owned()),
+                    target_provenance: Some(bound.bound.provenance.clone()),
                     expires_at_ms: Some(i64::MAX),
                 },
                 Some(bound.clone()),
@@ -4670,6 +5106,9 @@ mod tests {
                     summary: "No side effect".to_owned(),
                     risk: ActionRisk::Reversible,
                     computer_action: None,
+                    operation_id: None,
+                    action_hash: None,
+                    target_provenance: None,
                     expires_at_ms: Some(i64::MAX),
                 },
             )
@@ -4696,7 +5135,7 @@ mod tests {
             target_name: "Save".to_owned(),
             background_only: false,
         };
-        let bound = crate::computer_use::test_bound(action.clone());
+        let bound = crate::computer_use::test_bound(action.clone(), ActionRisk::Reversible);
         let mut runtime = RuntimeState {
             configuration_generation: 3,
             authority_uid: Some("user-a".to_owned()),
@@ -4714,6 +5153,9 @@ mod tests {
                     summary: "Click once".to_owned(),
                     risk: ActionRisk::Reversible,
                     computer_action: Some(action),
+                    operation_id: Some(bound.operation_id.clone()),
+                    action_hash: Some(bound.action_hash().to_owned()),
+                    target_provenance: Some(bound.bound.provenance.clone()),
                     expires_at_ms: Some(i64::MAX),
                 },
                 Some(bound),
@@ -4728,6 +5170,7 @@ mod tests {
             &state,
             "cancel-before-accept",
             ApprovalDecision::ApproveOnce,
+            None,
             3,
             &cancellation,
         )

@@ -1209,6 +1209,7 @@ dependencies = [
  "futures",
  "getrandom 0.3.4",
  "praefectus",
+ "reqwest",
  "rinf",
  "rs_ai",
  "rs_ai_core",

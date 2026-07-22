@@ -1,10 +1,15 @@
-use crate::signals::ComputerUseAction;
+use crate::signals::{
+    ActionRisk, ComputerUseAction, ComputerUseCapabilities, ComputerUseTargetProvenance,
+};
 
 #[cfg(all(
     feature = "computer-use",
     any(target_os = "macos", target_os = "windows", target_os = "linux")
 ))]
-use crate::signals::ActionRisk;
+use crate::signals::{
+    ComputerUseActionCapability, ComputerUseBackgroundSupport, ComputerUseDeliveryRoute,
+    ComputerUsePermission, ComputerUseSessionIsolation,
+};
 
 #[cfg(all(
     feature = "computer-use",
@@ -23,8 +28,8 @@ use praefectus::semantic::{self, SemanticTargetRef};
 use praefectus::{
     AckState, Action, ActionRequest, AuthorityGrant, BackgroundSupport, CancellationToken,
     DeliveryRoute, Ed25519AuthorityVerifier, Engine, Executor, InteractionMode, NativeExecutor,
-    PROTOCOL_VERSION, SafetyClass, SignedAuthority, TargetRef, Terminal, VerificationPolicy,
-    canonical_authority_bytes, normalized_action_hash,
+    PROTOCOL_VERSION, SafetyClass, SessionIsolation, SignedAuthority, TargetRef, Terminal,
+    VerificationPolicy, canonical_authority_bytes, normalized_action_hash,
 };
 #[cfg(all(
     feature = "computer-use",
@@ -42,6 +47,12 @@ use std::path::Path;
 ))]
 use std::sync::OnceLock;
 #[cfg(all(
+    test,
+    feature = "computer-use",
+    any(target_os = "macos", target_os = "windows", target_os = "linux")
+))]
+use std::sync::atomic::{AtomicUsize, Ordering};
+#[cfg(all(
     feature = "computer-use",
     any(target_os = "macos", target_os = "windows", target_os = "linux")
 ))]
@@ -49,6 +60,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 const MAX_COMPUTER_VALUE_BYTES: usize = 16 * 1024;
 const MAX_TARGET_NAME_BYTES: usize = 1_024;
+#[cfg(all(
+    test,
+    feature = "computer-use",
+    any(target_os = "macos", target_os = "windows", target_os = "linux")
+))]
+static AUTHORITY_MINT_ATTEMPTS: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct BoundComputerUseAction {
@@ -58,7 +75,28 @@ pub(crate) struct BoundComputerUseAction {
         any(target_os = "macos", target_os = "windows", target_os = "linux")
     ))]
     target: SemanticTargetRef,
+    pub(crate) provenance: ComputerUseTargetProvenance,
     pub(crate) expires_at_ms: i64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PreparedComputerUseAction {
+    pub(crate) bound: BoundComputerUseAction,
+    pub(crate) operation_id: String,
+    subject: String,
+    session_id: String,
+    action_hash: String,
+    #[cfg(all(
+        feature = "computer-use",
+        any(target_os = "macos", target_os = "windows", target_os = "linux")
+    ))]
+    safety: SafetyClass,
+}
+
+impl PreparedComputerUseAction {
+    pub(crate) fn action_hash(&self) -> &str {
+        &self.action_hash
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -115,14 +153,53 @@ fn valid_target_name(target_name: &str) -> bool {
     any(target_os = "macos", target_os = "windows", target_os = "linux")
 ))]
 pub(crate) fn available() -> bool {
-    NativeExecutor::default()
-        .capabilities()
-        .is_ok_and(|capabilities| {
-            capabilities
-                .supported_actions
-                .iter()
-                .any(|action| action == "invoke" || action == "set_value")
-        })
+    capabilities()
+        .is_some_and(|capabilities| capabilities.actions.iter().any(|action| action.available))
+}
+
+#[cfg(all(
+    feature = "computer-use",
+    any(target_os = "macos", target_os = "windows", target_os = "linux")
+))]
+pub(crate) fn capabilities() -> Option<ComputerUseCapabilities> {
+    let native = NativeExecutor::default().capabilities().ok()?;
+    let supported_actions = &native.supported_actions;
+    Some(ComputerUseCapabilities {
+        platform: native.platform,
+        backend: native.backend,
+        session_isolation: match native.session_isolation {
+            SessionIsolation::SharedDesktop => ComputerUseSessionIsolation::SharedDesktop,
+            SessionIsolation::HostIsolated => ComputerUseSessionIsolation::HostIsolated,
+            SessionIsolation::Unknown => ComputerUseSessionIsolation::Unknown,
+        },
+        permissions: native
+            .permissions
+            .into_iter()
+            .map(|(name, granted)| ComputerUsePermission { name, granted })
+            .collect(),
+        actions: native
+            .action_capabilities
+            .into_iter()
+            .map(|capability| ComputerUseActionCapability {
+                available: supported_actions
+                    .iter()
+                    .any(|action| action == &capability.action),
+                name: capability.action,
+                delivery_route: match capability.delivery_route {
+                    DeliveryRoute::TargetAddressed => ComputerUseDeliveryRoute::TargetAddressed,
+                    DeliveryRoute::Pointer => ComputerUseDeliveryRoute::Pointer,
+                    DeliveryRoute::Unknown => ComputerUseDeliveryRoute::Unknown,
+                },
+                background_support: match capability.background_support {
+                    BackgroundSupport::Guarded => ComputerUseBackgroundSupport::Guarded,
+                    BackgroundSupport::HostIsolatedOnly => {
+                        ComputerUseBackgroundSupport::HostIsolatedOnly
+                    }
+                    BackgroundSupport::Unavailable => ComputerUseBackgroundSupport::Unavailable,
+                },
+            })
+            .collect(),
+    })
 }
 
 #[cfg(not(all(
@@ -131,6 +208,14 @@ pub(crate) fn available() -> bool {
 )))]
 pub(crate) fn available() -> bool {
     false
+}
+
+#[cfg(not(all(
+    feature = "computer-use",
+    any(target_os = "macos", target_os = "windows", target_os = "linux")
+)))]
+pub(crate) fn capabilities() -> Option<ComputerUseCapabilities> {
+    None
 }
 
 #[cfg(all(
@@ -200,6 +285,13 @@ pub(crate) fn bind(
     let target = observation
         .target(&element.tag)
         .map_err(|_| ComputerUseError::TargetUnavailable)?;
+    let provenance = ComputerUseTargetProvenance {
+        process_id: observation.provenance.process_id,
+        process_generation: observation.provenance.process_generation.clone(),
+        window_id: observation.provenance.window_id.clone(),
+        role: element.role.clone(),
+        observation_generation: observation.generation,
+    };
     let action = match &display {
         ComputerUseAction::Invoke { .. } => Action::Invoke,
         ComputerUseAction::SetValue { value, .. } => Action::SetValue {
@@ -211,6 +303,7 @@ pub(crate) fn bind(
     Ok(BoundComputerUseAction {
         display,
         target,
+        provenance,
         expires_at_ms: observation.expires_at_ms,
     })
 }
@@ -235,24 +328,74 @@ pub(crate) fn cancel(token: &CancellationToken) {
     feature = "computer-use",
     any(target_os = "macos", target_os = "windows", target_os = "linux")
 ))]
-pub(crate) fn execute(
+pub(crate) fn prepare(
     bound: BoundComputerUseAction,
     operation_source: &str,
     uid: &str,
-    policy_generation: u64,
     risk: ActionRisk,
-    ledger_path: &Path,
-    cancellation: &CancellationToken,
-) -> Result<ExecutionOutcome, ComputerUseError> {
-    let authority = host_authority()?;
+) -> Result<PreparedComputerUseAction, ComputerUseError> {
+    let session_id = host_session_id()?;
     let operation_id = hashed_identifier("omi-op", operation_source);
     let subject = hashed_identifier("omi-user", uid);
-    let policy_generation = format!("omi-policy:{policy_generation}");
-    let safety = match risk {
+    let safety = safety_class(risk);
+    let request = unsigned_request(
+        &bound,
+        &operation_id,
+        &subject,
+        session_id,
+        safety,
+        bound.expires_at_ms,
+        "unissued",
+    );
+    let action_hash = normalized_action_hash(&request).map_err(|_| ComputerUseError::Protocol)?;
+    Ok(PreparedComputerUseAction {
+        bound,
+        operation_id,
+        subject,
+        session_id: session_id.to_owned(),
+        action_hash,
+        safety,
+    })
+}
+
+#[cfg(not(all(
+    feature = "computer-use",
+    any(target_os = "macos", target_os = "windows", target_os = "linux")
+)))]
+pub(crate) fn prepare(
+    _bound: BoundComputerUseAction,
+    _operation_source: &str,
+    _uid: &str,
+    _risk: ActionRisk,
+) -> Result<PreparedComputerUseAction, ComputerUseError> {
+    Err(ComputerUseError::TargetUnavailable)
+}
+
+#[cfg(all(
+    feature = "computer-use",
+    any(target_os = "macos", target_os = "windows", target_os = "linux")
+))]
+fn safety_class(risk: ActionRisk) -> SafetyClass {
+    match risk {
         ActionRisk::Reversible => SafetyClass::Reversible,
         ActionRisk::External => SafetyClass::External,
         ActionRisk::Destructive => SafetyClass::Destructive,
-    };
+    }
+}
+
+#[cfg(all(
+    feature = "computer-use",
+    any(target_os = "macos", target_os = "windows", target_os = "linux")
+))]
+fn unsigned_request(
+    bound: &BoundComputerUseAction,
+    operation_id: &str,
+    subject: &str,
+    session_id: &str,
+    safety: SafetyClass,
+    authority_expires_at_ms: i64,
+    policy_generation: &str,
+) -> ActionRequest {
     let interaction_mode = match &bound.display {
         ComputerUseAction::Invoke {
             background_only, ..
@@ -274,40 +417,76 @@ pub(crate) fn execute(
         },
         _ => VerificationPolicy::None,
     };
-    let mut request = ActionRequest {
+    ActionRequest {
         protocol_version: PROTOCOL_VERSION,
         action_version: PROTOCOL_VERSION,
         target_version: PROTOCOL_VERSION,
         verification_version: PROTOCOL_VERSION,
-        operation_id: operation_id.clone(),
-        subject: subject.clone(),
-        session_id: authority.session_id.clone(),
+        operation_id: operation_id.to_owned(),
+        subject: subject.to_owned(),
+        session_id: session_id.to_owned(),
         authority: SignedAuthority {
             grant: AuthorityGrant {
                 protocol_version: PROTOCOL_VERSION,
                 issuer: "omi-v4".to_owned(),
                 key_id: "process-key".to_owned(),
-                operation_id,
-                subject,
-                session_id: authority.session_id.clone(),
+                operation_id: operation_id.to_owned(),
+                subject: subject.to_owned(),
+                session_id: session_id.to_owned(),
                 risk: safety,
-                expires_at_ms: bound.expires_at_ms,
-                policy_generation: policy_generation.clone(),
+                expires_at_ms: authority_expires_at_ms,
+                policy_generation: policy_generation.to_owned(),
                 action_hash: String::new(),
             },
             signature: String::new(),
         },
         action,
         target: TargetRef::Element {
-            target: bound.target,
+            target: bound.target.clone(),
         },
         interaction_mode,
         deadline_at_ms: bound.expires_at_ms,
         verification,
         safety,
-    };
-    request.authority.grant.action_hash =
-        normalized_action_hash(&request).map_err(|_| ComputerUseError::Protocol)?;
+    }
+}
+
+#[cfg(all(
+    feature = "computer-use",
+    any(target_os = "macos", target_os = "windows", target_os = "linux")
+))]
+pub(crate) fn execute(
+    prepared: PreparedComputerUseAction,
+    policy_generation: u64,
+    authority_expires_at_ms: i64,
+    ledger_path: &Path,
+    cancellation: &CancellationToken,
+) -> Result<ExecutionOutcome, ComputerUseError> {
+    #[cfg(test)]
+    AUTHORITY_MINT_ATTEMPTS.fetch_add(1, Ordering::SeqCst);
+    let authority = host_authority()?;
+    if host_session_id()? != prepared.session_id
+        || now_ms() >= authority_expires_at_ms
+        || authority_expires_at_ms > prepared.bound.expires_at_ms
+    {
+        return Err(ComputerUseError::Protocol);
+    }
+    let policy_generation = format!("omi-policy:{policy_generation}");
+    let mut request = unsigned_request(
+        &prepared.bound,
+        &prepared.operation_id,
+        &prepared.subject,
+        &prepared.session_id,
+        prepared.safety,
+        authority_expires_at_ms,
+        &policy_generation,
+    );
+    if normalized_action_hash(&request).map_err(|_| ComputerUseError::Protocol)?
+        != prepared.action_hash
+    {
+        return Err(ComputerUseError::Protocol);
+    }
+    request.authority.grant.action_hash = prepared.action_hash;
     request.authority.signature = lower_hex(
         &authority
             .signing_key
@@ -346,12 +525,20 @@ pub(crate) fn execute(
 }
 
 #[cfg(all(
+    test,
+    feature = "computer-use",
+    any(target_os = "macos", target_os = "windows", target_os = "linux")
+))]
+pub(crate) fn authority_mint_attempts() -> usize {
+    AUTHORITY_MINT_ATTEMPTS.load(Ordering::SeqCst)
+}
+
+#[cfg(all(
     feature = "computer-use",
     any(target_os = "macos", target_os = "windows", target_os = "linux")
 ))]
 struct HostAuthority {
     signing_key: SigningKey,
-    session_id: String,
 }
 
 #[cfg(all(
@@ -364,15 +551,30 @@ fn host_authority() -> Result<&'static HostAuthority, ComputerUseError> {
         return Ok(authority);
     }
     let mut key_bytes = [0_u8; 32];
-    let mut session_bytes = [0_u8; 16];
     getrandom::fill(&mut key_bytes).map_err(|_| ComputerUseError::AuthorityUnavailable)?;
-    getrandom::fill(&mut session_bytes).map_err(|_| ComputerUseError::AuthorityUnavailable)?;
     let _ = HOST_AUTHORITY.set(HostAuthority {
         signing_key: SigningKey::from_bytes(&key_bytes),
-        session_id: format!("omi-session:{}", lower_hex(&session_bytes)),
     });
     HOST_AUTHORITY
         .get()
+        .ok_or(ComputerUseError::AuthorityUnavailable)
+}
+
+#[cfg(all(
+    feature = "computer-use",
+    any(target_os = "macos", target_os = "windows", target_os = "linux")
+))]
+fn host_session_id() -> Result<&'static str, ComputerUseError> {
+    static HOST_SESSION_ID: OnceLock<String> = OnceLock::new();
+    if let Some(session_id) = HOST_SESSION_ID.get() {
+        return Ok(session_id);
+    }
+    let mut session_bytes = [0_u8; 16];
+    getrandom::fill(&mut session_bytes).map_err(|_| ComputerUseError::AuthorityUnavailable)?;
+    let _ = HOST_SESSION_ID.set(format!("omi-session:{}", lower_hex(&session_bytes)));
+    HOST_SESSION_ID
+        .get()
+        .map(String::as_str)
         .ok_or(ComputerUseError::AuthorityUnavailable)
 }
 
@@ -404,22 +606,48 @@ fn now_ms() -> i64 {
         })
 }
 
-#[cfg(all(
-    test,
-    feature = "computer-use",
-    any(target_os = "macos", target_os = "windows", target_os = "linux")
-))]
-pub(crate) fn test_bound(display: ComputerUseAction) -> BoundComputerUseAction {
-    BoundComputerUseAction {
-        display,
-        target: SemanticTargetRef {
-            observation_id: "1".repeat(64),
-            generation: 1,
-            provenance_hash: "2".repeat(64),
-            element_id: "3".repeat(64),
-            fingerprint_hash: "4".repeat(64),
+#[cfg(test)]
+pub(crate) fn test_bound(
+    display: ComputerUseAction,
+    risk: ActionRisk,
+) -> PreparedComputerUseAction {
+    #[cfg(not(all(
+        feature = "computer-use",
+        any(target_os = "macos", target_os = "windows", target_os = "linux")
+    )))]
+    let _ = risk;
+    PreparedComputerUseAction {
+        bound: BoundComputerUseAction {
+            display,
+            #[cfg(all(
+                feature = "computer-use",
+                any(target_os = "macos", target_os = "windows", target_os = "linux")
+            ))]
+            target: SemanticTargetRef {
+                observation_id: "1".repeat(64),
+                generation: 1,
+                provenance_hash: "2".repeat(64),
+                element_id: "3".repeat(64),
+                fingerprint_hash: "4".repeat(64),
+            },
+            provenance: ComputerUseTargetProvenance {
+                process_id: 1,
+                process_generation: "test-process".to_owned(),
+                window_id: "test-window".to_owned(),
+                role: "button".to_owned(),
+                observation_generation: 1,
+            },
+            expires_at_ms: i64::MAX,
         },
-        expires_at_ms: i64::MAX,
+        operation_id: "omi-op:test".to_owned(),
+        subject: "omi-user:test".to_owned(),
+        session_id: "omi-session:test".to_owned(),
+        action_hash: "5".repeat(64),
+        #[cfg(all(
+            feature = "computer-use",
+            any(target_os = "macos", target_os = "windows", target_os = "linux")
+        ))]
+        safety: safety_class(risk),
     }
 }
 
