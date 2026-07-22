@@ -70,6 +70,8 @@ final class AppServices {
     this._assistantMinimumRefreshDelay = _defaultAssistantMinimumRefreshDelay,
     Duration inboxPollInterval = _defaultInboxPollInterval,
     DesktopVoiceCapture? desktopVoice,
+    LiveVoiceCapture? liveVoice,
+    this.liveVoiceTokens,
   }) : currents = currentsClient == null
            ? null
            : CurrentsController(currentsClient),
@@ -79,6 +81,7 @@ final class AppServices {
        ),
        _now = now ?? DateTime.now {
     this.desktopVoice = desktopVoice ?? DesktopVoiceCapture(hub: nativeHub);
+    this.liveVoice = liveVoice ?? LiveVoiceCapture(hub: nativeHub);
     _transcriptMemoryIngestor = TranscriptMemoryIngestor(
       nativeHub,
       _now,
@@ -151,6 +154,7 @@ final class AppServices {
       ),
       managedStt: WorkerManagedSttClient(worker),
       workerOrigin: worker.trustedOrigin,
+      liveVoiceTokens: WorkerVoiceClient(worker),
     );
   }
 
@@ -205,6 +209,7 @@ final class AppServices {
       ),
       managedStt: WorkerManagedSttClient(worker),
       workerOrigin: worker.trustedOrigin,
+      liveVoiceTokens: WorkerVoiceClient(worker),
     );
   }
 
@@ -225,6 +230,8 @@ final class AppServices {
         _defaultAssistantMinimumRefreshDelay,
     Duration inboxPollInterval = _defaultInboxPollInterval,
     DesktopVoiceCapture? desktopVoice,
+    LiveVoiceCapture? liveVoice,
+    LiveVoiceTokenClient? liveVoiceTokens,
     MemorySyncPump? memorySync,
   }) => AppServices._(
     auth: auth,
@@ -247,14 +254,18 @@ final class AppServices {
     assistantMinimumRefreshDelay: assistantMinimumRefreshDelay,
     inboxPollInterval: inboxPollInterval,
     desktopVoice: desktopVoice,
+    liveVoice: liveVoice,
+    liveVoiceTokens: liveVoiceTokens,
     memorySyncPump: memorySync,
   );
 
   final AuthController auth;
+  final LiveVoiceTokenClient? liveVoiceTokens;
   final NativeHub nativeHub;
   final DeviceRelayService deviceRelay;
   final DeviceAudioForwarder deviceAudio;
   late final DesktopVoiceCapture desktopVoice;
+  late final LiveVoiceCapture liveVoice;
   final WorkspaceRootStore workspaceRoots;
   final ProviderCredentialStore providerCredentials;
   final PlatformDesktopCapabilityGateway capabilities;
@@ -289,6 +300,8 @@ final class AppServices {
   Future<void> _lifecycle = Future.value();
   Future<void> _desktopVoiceLifecycle = Future.value();
   int _desktopVoiceGeneration = 0;
+  Future<void> _liveVoiceLifecycle = Future.value();
+  int _liveVoiceGeneration = 0;
 
   Stream<NativeEvent> get nativeEvents => _nativeEvents.stream;
   Stream<int> get chatAuthorityChanges =>
@@ -537,6 +550,65 @@ final class AppServices {
     return desktopVoice.cancel();
   }
 
+  Future<void> startLiveVoice() {
+    final voiceGeneration = ++_liveVoiceGeneration;
+    return _queueLiveVoice(() => _startLiveVoice(voiceGeneration));
+  }
+
+  Future<void> _startLiveVoice(int voiceGeneration) async {
+    if (kIsWeb ||
+        (defaultTargetPlatform != TargetPlatform.macOS &&
+            defaultTargetPlatform != TargetPlatform.windows)) {
+      throw StateError('Live voice is available on macOS and Windows only.');
+    }
+    final session = auth.snapshot.session;
+    final generation = _authorityGeneration;
+    if (!chatReady || session == null) {
+      throw StateError('Sign in and connect native services first.');
+    }
+    final tokens = liveVoiceTokens;
+    if (tokens == null) {
+      throw StateError('Live voice requires the managed Worker.');
+    }
+    if (!await liveVoice.hasPermission()) {
+      throw StateError('Microphone permission is required for live voice.');
+    }
+    if (voiceGeneration != _liveVoiceGeneration) return;
+    final grant = await tokens.createGeminiToken();
+    if (generation != _authorityGeneration ||
+        voiceGeneration != _liveVoiceGeneration ||
+        auth.snapshot.session?.uid != session.uid) {
+      throw StateError('Account authority changed while starting live voice.');
+    }
+    await liveVoice.start(
+      ephemeralToken: grant.token,
+      model: grant.model,
+      authorityId: 'g$generation',
+    );
+    if (generation != _authorityGeneration ||
+        voiceGeneration != _liveVoiceGeneration ||
+        auth.snapshot.session?.uid != session.uid) {
+      await liveVoice.cancel();
+      throw StateError('Account authority changed while starting live voice.');
+    }
+  }
+
+  Future<void> stopLiveVoice() => _queueLiveVoice(() => liveVoice.stop());
+
+  Future<void> cancelLiveVoice() {
+    _liveVoiceGeneration += 1;
+    return liveVoice.cancel();
+  }
+
+  Future<T> _queueLiveVoice<T>(Future<T> Function() operation) {
+    final result = _liveVoiceLifecycle.then(
+      (_) => operation(),
+      onError: (_, _) => operation(),
+    );
+    _liveVoiceLifecycle = result.then<void>((_) {}, onError: (_, _) {});
+    return result;
+  }
+
   Future<T> _queueDesktopVoice<T>(Future<T> Function() operation) {
     final result = _desktopVoiceLifecycle.then(
       (_) => operation(),
@@ -672,6 +744,7 @@ final class AppServices {
       cancelPending: _nativeInitialized,
     );
     unawaited(cancelDesktopVoice());
+    unawaited(cancelLiveVoice());
     _clearAssistant();
     _transcriptMemoryIngestor.fence(
       authorityGeneration: generation,
@@ -828,11 +901,13 @@ final class AppServices {
       _lifecycle
           .then((_) async {
             await desktopVoice.dispose();
+            await liveVoice.dispose();
             await _nativeEvents.close();
             await _conversationController.dispose();
           })
           .onError((_, _) async {
             await desktopVoice.dispose();
+            await liveVoice.dispose();
             await _nativeEvents.close();
             await _conversationController.dispose();
           }),

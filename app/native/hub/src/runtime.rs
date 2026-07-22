@@ -999,6 +999,68 @@ impl CommandDispatcher {
                 }
                 continue;
             }
+            if let Command::StartLiveVoice {
+                live_stream_id,
+                ephemeral_token,
+                model,
+            } = &command.command
+            {
+                let Some(transcription) = &self.transcription else {
+                    error(
+                        Some(request_id),
+                        "live_voice_unavailable",
+                        "live voice runtime is unavailable",
+                        false,
+                    );
+                    continue;
+                };
+                let start = crate::transcription::StartLiveVoice {
+                    request_id,
+                    live_stream_id: live_stream_id.clone(),
+                    ephemeral_token: ephemeral_token.clone(),
+                    model: model.clone(),
+                };
+                if transcription
+                    .send(TranscriptionControl::StartLive(start))
+                    .await
+                    .is_err()
+                {
+                    error(
+                        None,
+                        "live_voice_unavailable",
+                        "live voice runtime stopped",
+                        false,
+                    );
+                }
+                continue;
+            }
+            if let Command::StopLiveVoice { live_stream_id } = &command.command {
+                let Some(transcription) = &self.transcription else {
+                    error(
+                        Some(request_id),
+                        "live_voice_unavailable",
+                        "live voice runtime is unavailable",
+                        false,
+                    );
+                    continue;
+                };
+                if transcription
+                    .send(TranscriptionControl::StopLive {
+                        request_id,
+                        stream_id: live_stream_id.clone(),
+                    })
+                    .await
+                    .is_err()
+                {
+                    error(
+                        None,
+                        "live_voice_unavailable",
+                        "live voice runtime stopped",
+                        false,
+                    );
+                }
+                continue;
+            }
             if let Command::ConfigureTrustedAssistant {
                 managed_worker_origin,
             } = &command.command
@@ -1652,7 +1714,9 @@ async fn execute(
         | Command::ConfigureTrustedAssistant { .. }
         | Command::ClearAssistant
         | Command::StartTranscription { .. }
-        | Command::StopTranscription { .. } => false,
+        | Command::StopTranscription { .. }
+        | Command::StartLiveVoice { .. }
+        | Command::StopLiveVoice { .. } => false,
         Command::DeviceState { .. } => {
             progress(
                 &request_id,

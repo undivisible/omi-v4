@@ -263,6 +263,77 @@ final class WorkerOAuthClient {
   }
 }
 
+final class GeminiLiveToken {
+  const GeminiLiveToken({
+    required this.token,
+    required this.model,
+    required this.expireTime,
+    required this.newSessionExpireTime,
+  });
+
+  final String token;
+  final String model;
+  final DateTime expireTime;
+  final DateTime newSessionExpireTime;
+}
+
+abstract interface class LiveVoiceTokenClient {
+  Future<GeminiLiveToken> createGeminiToken();
+}
+
+final class WorkerVoiceClient implements LiveVoiceTokenClient {
+  const WorkerVoiceClient(this._client);
+
+  final WorkerHttpClient _client;
+
+  @override
+  Future<GeminiLiveToken> createGeminiToken() async {
+    final response = await _client.send(
+      method: 'POST',
+      path: '/v1/voice/gemini/token',
+    );
+    if (response.statusCode != 200) {
+      final body = response.body;
+      throw WorkerResponseException(
+        body is Map<String, Object?> && body['error'] is String
+            ? body['error']! as String
+            : 'Live voice is unavailable (${response.statusCode})',
+      );
+    }
+    final body = response.body;
+    const fields = {'token', 'model', 'expireTime', 'newSessionExpireTime'};
+    if (body is! Map<String, Object?> ||
+        body.length != fields.length ||
+        fields.any((key) => body[key] is! String)) {
+      throw const WorkerResponseException(
+        'Worker returned an invalid live voice token',
+      );
+    }
+    final token = body['token']! as String;
+    final model = body['model']! as String;
+    final expireTime = DateTime.tryParse(body['expireTime']! as String);
+    final newSessionExpireTime = DateTime.tryParse(
+      body['newSessionExpireTime']! as String,
+    );
+    if (token.isEmpty ||
+        token.length > 16384 ||
+        token.codeUnits.any((unit) => unit <= 0x20 || unit >= 0x7f) ||
+        model.isEmpty ||
+        expireTime == null ||
+        newSessionExpireTime == null) {
+      throw const WorkerResponseException(
+        'Worker returned an invalid live voice token',
+      );
+    }
+    return GeminiLiveToken(
+      token: token,
+      model: model,
+      expireTime: expireTime,
+      newSessionExpireTime: newSessionExpireTime,
+    );
+  }
+}
+
 abstract interface class ManagedSttClient {
   Uri get trustedWorkerOrigin;
 

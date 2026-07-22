@@ -1,16 +1,23 @@
+use crate::live_voice::{
+    GeminiLiveProvider, RealtimeVoiceEvent, RealtimeVoiceHandle, RealtimeVoiceProvider,
+    RealtimeVoiceSession, validate_session,
+};
 use crate::signals::{
-    AudioChunk, AudioEncoding, NativeError, NativeEvent, ToolProgress, ToolStatus, TranscriptDelta,
-    TranscriptGap, TranscriptionAuth, TranscriptionRoute, TranscriptionState, TranscriptionStatus,
+    AudioChunk, AudioEncoding, LiveVoiceAudio, LiveVoicePhase, LiveVoiceState, LiveVoiceTranscript,
+    NativeError, NativeEvent, ToolProgress, ToolStatus, TranscriptDelta, TranscriptGap,
+    TranscriptionAuth, TranscriptionRoute, TranscriptionState, TranscriptionStatus,
     TranscriptionStopAcknowledgement,
 };
 use crate::stt::{self, SttConfig, SttHandle};
 use std::collections::{HashMap, VecDeque};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 
 const COMMAND_QUEUE_CAPACITY: usize = 32;
 const AUDIO_QUEUE_CAPACITY: usize = 32;
 const MAX_ACTIVE_AUDIO_SESSIONS: usize = 8;
+const MAX_ACTIVE_LIVE_SESSIONS: usize = 2;
 const AUDIO_SESSION_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_RECONNECT_BUFFER_BYTES: usize = 64 * 1024;
 
@@ -68,9 +75,21 @@ pub(crate) struct ProviderTranscript {
     pub(crate) final_segment: bool,
 }
 
+pub(crate) struct StartLiveVoice {
+    pub(crate) request_id: String,
+    pub(crate) live_stream_id: String,
+    pub(crate) ephemeral_token: String,
+    pub(crate) model: String,
+}
+
 pub(crate) enum TranscriptionControl {
     Start(StartTranscription),
     Stop {
+        request_id: String,
+        stream_id: String,
+    },
+    StartLive(StartLiveVoice),
+    StopLive {
         request_id: String,
         stream_id: String,
     },
@@ -92,10 +111,221 @@ pub(crate) struct AudioAcceptError {
     pub(crate) message: String,
 }
 
+struct LiveSession {
+    handle: RealtimeVoiceHandle,
+    next_sequence: u64,
+}
+
+#[derive(Default)]
+pub(crate) struct LiveSessions(HashMap<String, LiveSession>);
+
+impl LiveSessions {
+    pub(crate) fn start(
+        &mut self,
+        provider: &dyn RealtimeVoiceProvider,
+        start: StartLiveVoice,
+    ) -> Result<(), AudioAcceptError> {
+        let session = RealtimeVoiceSession {
+            live_stream_id: start.live_stream_id.clone(),
+            ephemeral_token: start.ephemeral_token,
+            model: start.model,
+        };
+        if let Err(message) = validate_session(&session) {
+            return Err(AudioAcceptError {
+                request_id: start.request_id,
+                code: "live_voice_start_invalid",
+                message,
+            });
+        }
+        if self.0.contains_key(&start.live_stream_id) {
+            return Err(AudioAcceptError {
+                request_id: start.request_id,
+                code: "live_voice_start_conflict",
+                message: "live voice stream was already started".to_owned(),
+            });
+        }
+        if self.0.len() >= MAX_ACTIVE_LIVE_SESSIONS {
+            return Err(AudioAcceptError {
+                request_id: start.request_id,
+                code: "live_voice_capacity_exceeded",
+                message: "too many active live voice sessions".to_owned(),
+            });
+        }
+        let mut handle = provider.open(session).map_err(|message| AudioAcceptError {
+            request_id: start.request_id.clone(),
+            code: "live_voice_provider_invalid",
+            message,
+        })?;
+        if let Some(events) = handle.take_events() {
+            tokio::spawn(forward_live_events(start.live_stream_id.clone(), events));
+        }
+        self.0.insert(
+            start.live_stream_id,
+            LiveSession {
+                handle,
+                next_sequence: 0,
+            },
+        );
+        Ok(())
+    }
+
+    pub(crate) fn stop(&mut self, stream_id: &str) -> bool {
+        match self.0.remove(stream_id) {
+            Some(session) => {
+                session.handle.cancel();
+                true
+            }
+            None => false,
+        }
+    }
+
+    pub(crate) fn cancel_all(&mut self) {
+        for (stream_id, session) in self.0.drain() {
+            session.handle.cancel();
+            NativeEvent::LiveVoiceState(LiveVoiceState {
+                live_stream_id: stream_id,
+                state: LiveVoicePhase::Ended,
+                detail: Some("live voice session was fenced".to_owned()),
+            })
+            .send();
+        }
+    }
+
+    pub(crate) fn contains(&self, stream_id: &str) -> bool {
+        self.0.contains_key(stream_id)
+    }
+
+    pub(crate) fn accept(&mut self, chunk: AudioChunk) -> Result<(), AudioAcceptError> {
+        let session = self
+            .0
+            .get_mut(&chunk.request_id)
+            .ok_or_else(|| AudioAcceptError {
+                request_id: chunk.request_id.clone(),
+                code: "live_voice_not_started",
+                message: "live voice stream must be started before sending audio".to_owned(),
+            })?;
+        if chunk.sequence != session.next_sequence {
+            return Err(AudioAcceptError {
+                request_id: chunk.request_id,
+                code: "invalid_audio_sequence",
+                message: format!(
+                    "expected audio sequence {}, received {}",
+                    session.next_sequence, chunk.sequence
+                ),
+            });
+        }
+        if chunk.sample_rate_hz != 16_000
+            || chunk.channels != 1
+            || chunk.encoding != AudioEncoding::PcmS16Le
+        {
+            return Err(AudioAcceptError {
+                request_id: chunk.request_id,
+                code: "live_voice_unsupported_audio",
+                message: "live voice requires 16 kHz mono PCM16 audio".to_owned(),
+            });
+        }
+        session.next_sequence =
+            session
+                .next_sequence
+                .checked_add(1)
+                .ok_or_else(|| AudioAcceptError {
+                    request_id: chunk.request_id.clone(),
+                    code: "audio_counter_overflow",
+                    message: "audio sequence overflowed".to_owned(),
+                })?;
+        if chunk.end_of_stream {
+            let stream_id = chunk.request_id;
+            if let Some(session) = self.0.remove(&stream_id) {
+                session.handle.finish();
+            }
+            return Ok(());
+        }
+        session
+            .handle
+            .send_audio(&chunk.bytes)
+            .map_err(|message| AudioAcceptError {
+                request_id: chunk.request_id,
+                code: "live_voice_provider_unavailable",
+                message,
+            })
+    }
+}
+
+async fn forward_live_events(
+    live_stream_id: String,
+    mut events: mpsc::Receiver<RealtimeVoiceEvent>,
+) {
+    NativeEvent::LiveVoiceState(LiveVoiceState {
+        live_stream_id: live_stream_id.clone(),
+        state: LiveVoicePhase::Started,
+        detail: None,
+    })
+    .send();
+    let mut sequence = 0_u64;
+    while let Some(event) = events.recv().await {
+        match event {
+            RealtimeVoiceEvent::TranscriptDelta {
+                text,
+                final_segment,
+            } => NativeEvent::LiveVoiceTranscript(LiveVoiceTranscript {
+                live_stream_id: live_stream_id.clone(),
+                text,
+                final_segment,
+            })
+            .send(),
+            RealtimeVoiceEvent::AudioChunk {
+                sample_rate_hz,
+                bytes,
+            } => {
+                NativeEvent::LiveVoiceAudio(LiveVoiceAudio {
+                    live_stream_id: live_stream_id.clone(),
+                    sequence,
+                    sample_rate_hz,
+                    bytes,
+                })
+                .send();
+                sequence = sequence.saturating_add(1);
+            }
+            RealtimeVoiceEvent::Interrupted => NativeEvent::LiveVoiceState(LiveVoiceState {
+                live_stream_id: live_stream_id.clone(),
+                state: LiveVoicePhase::Interrupted,
+                detail: None,
+            })
+            .send(),
+            RealtimeVoiceEvent::SessionEnded => {
+                NativeEvent::LiveVoiceState(LiveVoiceState {
+                    live_stream_id,
+                    state: LiveVoicePhase::Ended,
+                    detail: None,
+                })
+                .send();
+                return;
+            }
+            RealtimeVoiceEvent::Error(message) => {
+                NativeEvent::LiveVoiceState(LiveVoiceState {
+                    live_stream_id,
+                    state: LiveVoicePhase::Failed,
+                    detail: Some(message),
+                })
+                .send();
+                return;
+            }
+        }
+    }
+    NativeEvent::LiveVoiceState(LiveVoiceState {
+        live_stream_id,
+        state: LiveVoicePhase::Ended,
+        detail: None,
+    })
+    .send();
+}
+
 pub struct AudioDispatcher {
     receiver: mpsc::Receiver<AudioChunk>,
     controls: mpsc::Receiver<TranscriptionControl>,
     sessions: AudioSessions,
+    live: LiveSessions,
+    live_provider: Arc<dyn RealtimeVoiceProvider>,
 }
 
 impl AudioDispatcher {
@@ -113,6 +343,8 @@ impl AudioDispatcher {
                 receiver,
                 controls,
                 sessions: AudioSessions::default(),
+                live: LiveSessions::default(),
+                live_provider: Arc::new(GeminiLiveProvider),
             },
         )
     }
@@ -140,11 +372,47 @@ impl AudioDispatcher {
                             NativeEvent::TranscriptionStatus(status).send();
                         }
                     }
-                    Some(TranscriptionControl::Fence) => self.sessions.cancel_all(),
+                    Some(TranscriptionControl::StartLive(start)) => {
+                        if let Err(failure) = self.live.start(self.live_provider.as_ref(), start) {
+                            NativeEvent::Error(NativeError {
+                                request_id: Some(failure.request_id),
+                                code: failure.code.to_owned(),
+                                message: failure.message,
+                                retryable: false,
+                            })
+                            .send();
+                        }
+                    }
+                    Some(TranscriptionControl::StopLive { request_id, stream_id }) => {
+                        if !self.live.stop(&stream_id) {
+                            NativeEvent::Error(NativeError {
+                                request_id: Some(request_id),
+                                code: "live_voice_not_started".to_owned(),
+                                message: "live voice stream is not active".to_owned(),
+                                retryable: false,
+                            })
+                            .send();
+                        }
+                    }
+                    Some(TranscriptionControl::Fence) => {
+                        self.sessions.cancel_all();
+                        self.live.cancel_all();
+                    }
                     None if self.receiver.is_closed() => break,
                     None => {}
                 },
                 chunk = self.receiver.recv() => match chunk {
+                    Some(chunk) if self.live.contains(&chunk.request_id) => {
+                        if let Err(failure) = self.live.accept(chunk) {
+                            NativeEvent::Error(NativeError {
+                                request_id: Some(failure.request_id),
+                                code: failure.code.to_owned(),
+                                message: failure.message,
+                                retryable: false,
+                            })
+                            .send();
+                        }
+                    }
                     Some(chunk) => match self.sessions.accept(chunk) {
                         Ok(Some(next)) => {
                             NativeEvent::ToolProgress(ToolProgress {

@@ -24,24 +24,28 @@ abstract class Command {
       case 6:
         return CommandStopTranscription.load(deserializer);
       case 7:
-        return CommandCaptureEvent.load(deserializer);
+        return CommandStartLiveVoice.load(deserializer);
       case 8:
-        return CommandSearchMemory.load(deserializer);
+        return CommandStopLiveVoice.load(deserializer);
       case 9:
-        return CommandExportMemory.load(deserializer);
+        return CommandCaptureEvent.load(deserializer);
       case 10:
-        return CommandListMemoryItems.load(deserializer);
+        return CommandSearchMemory.load(deserializer);
       case 11:
-        return CommandCorrectMemory.load(deserializer);
+        return CommandExportMemory.load(deserializer);
       case 12:
-        return CommandDeleteMemorySource.load(deserializer);
+        return CommandListMemoryItems.load(deserializer);
       case 13:
-        return CommandScanOnboarding.load(deserializer);
+        return CommandCorrectMemory.load(deserializer);
       case 14:
-        return CommandApprovalDecision.load(deserializer);
+        return CommandDeleteMemorySource.load(deserializer);
       case 15:
-        return CommandDeviceState.load(deserializer);
+        return CommandScanOnboarding.load(deserializer);
       case 16:
+        return CommandApprovalDecision.load(deserializer);
+      case 17:
+        return CommandDeviceState.load(deserializer);
+      case 18:
         return CommandCancel.load(deserializer);
       default:
         throw Exception(
@@ -568,6 +572,137 @@ class CommandStopTranscription extends Command {
 }
 
 @immutable
+class CommandStartLiveVoice extends Command {
+  const CommandStartLiveVoice({
+    required this.liveStreamId,
+    required this.ephemeralToken,
+    required this.model,
+  }) : super();
+
+  static CommandStartLiveVoice load(BinaryDeserializer deserializer) {
+    deserializer.increaseContainerDepth();
+    final instance = CommandStartLiveVoice(
+      liveStreamId: deserializer.deserializeString(),
+      ephemeralToken: deserializer.deserializeString(),
+      model: deserializer.deserializeString(),
+    );
+    deserializer.decreaseContainerDepth();
+    return instance;
+  }
+
+  final String liveStreamId;
+  final String ephemeralToken;
+  final String model;
+
+  CommandStartLiveVoice copyWith({
+    String? liveStreamId,
+    String? ephemeralToken,
+    String? model,
+  }) {
+    return CommandStartLiveVoice(
+      liveStreamId: liveStreamId ?? this.liveStreamId,
+      ephemeralToken: ephemeralToken ?? this.ephemeralToken,
+      model: model ?? this.model,
+    );
+  }
+
+  void serialize(BinarySerializer serializer) {
+    serializer.increaseContainerDepth();
+    serializer.serializeVariantIndex(7);
+    serializer.serializeString(liveStreamId);
+    serializer.serializeString(ephemeralToken);
+    serializer.serializeString(model);
+    serializer.decreaseContainerDepth();
+  }
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    if (other.runtimeType != runtimeType) return false;
+
+    return other is CommandStartLiveVoice &&
+        liveStreamId == other.liveStreamId &&
+        ephemeralToken == other.ephemeralToken &&
+        model == other.model;
+  }
+
+  @override
+  int get hashCode => Object.hash(liveStreamId, ephemeralToken, model);
+
+  @override
+  String toString() {
+    String? fullString;
+
+    assert(() {
+      fullString =
+          '$runtimeType('
+          'liveStreamId: $liveStreamId, '
+          'ephemeralToken: [REDACTED], '
+          'model: $model'
+          ')';
+      return true;
+    }());
+
+    return fullString ?? 'CommandStartLiveVoice';
+  }
+}
+
+@immutable
+class CommandStopLiveVoice extends Command {
+  const CommandStopLiveVoice({required this.liveStreamId}) : super();
+
+  static CommandStopLiveVoice load(BinaryDeserializer deserializer) {
+    deserializer.increaseContainerDepth();
+    final instance = CommandStopLiveVoice(
+      liveStreamId: deserializer.deserializeString(),
+    );
+    deserializer.decreaseContainerDepth();
+    return instance;
+  }
+
+  final String liveStreamId;
+
+  CommandStopLiveVoice copyWith({String? liveStreamId}) {
+    return CommandStopLiveVoice(
+      liveStreamId: liveStreamId ?? this.liveStreamId,
+    );
+  }
+
+  void serialize(BinarySerializer serializer) {
+    serializer.increaseContainerDepth();
+    serializer.serializeVariantIndex(8);
+    serializer.serializeString(liveStreamId);
+    serializer.decreaseContainerDepth();
+  }
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    if (other.runtimeType != runtimeType) return false;
+
+    return other is CommandStopLiveVoice && liveStreamId == other.liveStreamId;
+  }
+
+  @override
+  int get hashCode => liveStreamId.hashCode;
+
+  @override
+  String toString() {
+    String? fullString;
+
+    assert(() {
+      fullString =
+          '$runtimeType('
+          'liveStreamId: $liveStreamId'
+          ')';
+      return true;
+    }());
+
+    return fullString ?? 'CommandStopLiveVoice';
+  }
+}
+
+@immutable
 class CommandCaptureEvent extends Command {
   const CommandCaptureEvent({
     required this.ingestionKey,
@@ -633,7 +768,7 @@ class CommandCaptureEvent extends Command {
 
   void serialize(BinarySerializer serializer) {
     serializer.increaseContainerDepth();
-    serializer.serializeVariantIndex(7);
+    serializer.serializeVariantIndex(9);
     serializer.serializeString(ingestionKey);
     source.serialize(serializer);
     serializer.serializeInt64(occurredAtMs);
@@ -745,7 +880,7 @@ class CommandSearchMemory extends Command {
 
   void serialize(BinarySerializer serializer) {
     serializer.increaseContainerDepth();
-    serializer.serializeVariantIndex(8);
+    serializer.serializeVariantIndex(10);
     serializer.serializeString(query);
     serializer.serializeUint32(limit);
     TraitHelpers.serializeOptionI64(asOfValidAtMs, serializer);
@@ -832,7 +967,7 @@ class CommandExportMemory extends Command {
 
   void serialize(BinarySerializer serializer) {
     serializer.increaseContainerDepth();
-    serializer.serializeVariantIndex(9);
+    serializer.serializeVariantIndex(11);
     serializer.serializeInt64(afterCommit);
     serializer.serializeInt64(afterEventIndex);
     TraitHelpers.serializeOptionI64(highWaterMark, serializer);
@@ -896,7 +1031,7 @@ class CommandListMemoryItems extends Command {
 
   void serialize(BinarySerializer serializer) {
     serializer.increaseContainerDepth();
-    serializer.serializeVariantIndex(10);
+    serializer.serializeVariantIndex(12);
     serializer.serializeUint32(limit);
     serializer.decreaseContainerDepth();
   }
@@ -975,7 +1110,7 @@ class CommandCorrectMemory extends Command {
 
   void serialize(BinarySerializer serializer) {
     serializer.increaseContainerDepth();
-    serializer.serializeVariantIndex(11);
+    serializer.serializeVariantIndex(13);
     serializer.serializeString(claimId);
     serializer.serializeString(text);
     serializer.serializeString(value);
@@ -1050,7 +1185,7 @@ class CommandDeleteMemorySource extends Command {
 
   void serialize(BinarySerializer serializer) {
     serializer.increaseContainerDepth();
-    serializer.serializeVariantIndex(12);
+    serializer.serializeVariantIndex(14);
     serializer.serializeString(sourceId);
     serializer.serializeInt64(deletedAtMs);
     serializer.decreaseContainerDepth();
@@ -1128,7 +1263,7 @@ class CommandScanOnboarding extends Command {
 
   void serialize(BinarySerializer serializer) {
     serializer.increaseContainerDepth();
-    serializer.serializeVariantIndex(13);
+    serializer.serializeVariantIndex(15);
     TraitHelpers.serializeVectorStr(roots, serializer);
     serializer.serializeBool(includeAppleNotes);
     serializer.serializeBool(includeAppleMail);
@@ -1213,7 +1348,7 @@ class CommandApprovalDecision extends Command {
 
   void serialize(BinarySerializer serializer) {
     serializer.increaseContainerDepth();
-    serializer.serializeVariantIndex(14);
+    serializer.serializeVariantIndex(16);
     serializer.serializeString(proposalId);
     decision.serialize(serializer);
     TraitHelpers.serializeOptionComputerUseAuthorityReceipt(
@@ -1301,7 +1436,7 @@ class CommandDeviceState extends Command {
 
   void serialize(BinarySerializer serializer) {
     serializer.increaseContainerDepth();
-    serializer.serializeVariantIndex(15);
+    serializer.serializeVariantIndex(17);
     serializer.serializeString(deviceId);
     serializer.serializeBool(connected);
     TraitHelpers.serializeOptionU8(batteryPercent, serializer);
@@ -1357,7 +1492,7 @@ class CommandCancel extends Command {
 
   void serialize(BinarySerializer serializer) {
     serializer.increaseContainerDepth();
-    serializer.serializeVariantIndex(16);
+    serializer.serializeVariantIndex(18);
     serializer.decreaseContainerDepth();
   }
 

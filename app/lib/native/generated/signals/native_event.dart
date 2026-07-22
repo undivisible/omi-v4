@@ -57,6 +57,12 @@ abstract class NativeEvent {
         return NativeEventMemoryItems.load(deserializer);
       case 17:
         return NativeEventOnboardingScanCompleted.load(deserializer);
+      case 18:
+        return NativeEventLiveVoiceState.load(deserializer);
+      case 19:
+        return NativeEventLiveVoiceTranscript.load(deserializer);
+      case 20:
+        return NativeEventLiveVoiceAudio.load(deserializer);
       default:
         throw Exception(
           'Unknown variant index for NativeEvent: ' + index.toString(),
@@ -1047,6 +1053,165 @@ class NativeEventOnboardingScanCompleted extends NativeEvent {
     }());
 
     return fullString ?? 'NativeEventOnboardingScanCompleted';
+  }
+}
+
+@immutable
+class NativeEventLiveVoiceState extends NativeEvent {
+  const NativeEventLiveVoiceState({required this.value}) : super();
+
+  static NativeEventLiveVoiceState load(BinaryDeserializer deserializer) {
+    deserializer.increaseContainerDepth();
+    final instance = NativeEventLiveVoiceState(
+      value: LiveVoiceState.deserialize(deserializer),
+    );
+    deserializer.decreaseContainerDepth();
+    return instance;
+  }
+
+  final LiveVoiceState value;
+
+  NativeEventLiveVoiceState copyWith({LiveVoiceState? value}) {
+    return NativeEventLiveVoiceState(value: value ?? this.value);
+  }
+
+  void serialize(BinarySerializer serializer) {
+    serializer.increaseContainerDepth();
+    serializer.serializeVariantIndex(18);
+    value.serialize(serializer);
+    serializer.decreaseContainerDepth();
+  }
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    if (other.runtimeType != runtimeType) return false;
+
+    return other is NativeEventLiveVoiceState && value == other.value;
+  }
+
+  @override
+  int get hashCode => value.hashCode;
+
+  @override
+  String toString() {
+    String? fullString;
+
+    assert(() {
+      fullString =
+          '$runtimeType('
+          'value: $value'
+          ')';
+      return true;
+    }());
+
+    return fullString ?? 'NativeEventLiveVoiceState';
+  }
+}
+
+@immutable
+class NativeEventLiveVoiceTranscript extends NativeEvent {
+  const NativeEventLiveVoiceTranscript({required this.value}) : super();
+
+  static NativeEventLiveVoiceTranscript load(BinaryDeserializer deserializer) {
+    deserializer.increaseContainerDepth();
+    final instance = NativeEventLiveVoiceTranscript(
+      value: LiveVoiceTranscript.deserialize(deserializer),
+    );
+    deserializer.decreaseContainerDepth();
+    return instance;
+  }
+
+  final LiveVoiceTranscript value;
+
+  NativeEventLiveVoiceTranscript copyWith({LiveVoiceTranscript? value}) {
+    return NativeEventLiveVoiceTranscript(value: value ?? this.value);
+  }
+
+  void serialize(BinarySerializer serializer) {
+    serializer.increaseContainerDepth();
+    serializer.serializeVariantIndex(19);
+    value.serialize(serializer);
+    serializer.decreaseContainerDepth();
+  }
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    if (other.runtimeType != runtimeType) return false;
+
+    return other is NativeEventLiveVoiceTranscript && value == other.value;
+  }
+
+  @override
+  int get hashCode => value.hashCode;
+
+  @override
+  String toString() {
+    String? fullString;
+
+    assert(() {
+      fullString =
+          '$runtimeType('
+          'value: $value'
+          ')';
+      return true;
+    }());
+
+    return fullString ?? 'NativeEventLiveVoiceTranscript';
+  }
+}
+
+@immutable
+class NativeEventLiveVoiceAudio extends NativeEvent {
+  const NativeEventLiveVoiceAudio({required this.value}) : super();
+
+  static NativeEventLiveVoiceAudio load(BinaryDeserializer deserializer) {
+    deserializer.increaseContainerDepth();
+    final instance = NativeEventLiveVoiceAudio(
+      value: LiveVoiceAudio.deserialize(deserializer),
+    );
+    deserializer.decreaseContainerDepth();
+    return instance;
+  }
+
+  final LiveVoiceAudio value;
+
+  NativeEventLiveVoiceAudio copyWith({LiveVoiceAudio? value}) {
+    return NativeEventLiveVoiceAudio(value: value ?? this.value);
+  }
+
+  void serialize(BinarySerializer serializer) {
+    serializer.increaseContainerDepth();
+    serializer.serializeVariantIndex(20);
+    value.serialize(serializer);
+    serializer.decreaseContainerDepth();
+  }
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    if (other.runtimeType != runtimeType) return false;
+
+    return other is NativeEventLiveVoiceAudio && value == other.value;
+  }
+
+  @override
+  int get hashCode => value.hashCode;
+
+  @override
+  String toString() {
+    String? fullString;
+
+    assert(() {
+      fullString =
+          '$runtimeType('
+          'value: $value'
+          ')';
+      return true;
+    }());
+
+    return fullString ?? 'NativeEventLiveVoiceAudio';
   }
 }
 

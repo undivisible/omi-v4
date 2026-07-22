@@ -28,6 +28,13 @@ export 'generated/signals/signals.dart'
         OnboardingScanCompleted,
         OnboardingScanSource,
         OnboardingScanState,
+        LiveVoiceAudio,
+        LiveVoicePhase,
+        LiveVoiceState,
+        LiveVoiceTranscript,
+        NativeEventLiveVoiceAudio,
+        NativeEventLiveVoiceState,
+        NativeEventLiveVoiceTranscript,
         NativeEventTranscriptGap,
         NativeEventToolProgress,
         NativeEventTranscriptDelta,
@@ -148,6 +155,16 @@ abstract interface class NativeHub {
   void dispose();
 }
 
+abstract interface class LiveVoiceHub {
+  void startLiveVoice({
+    required String requestId,
+    required String liveStreamId,
+    required String ephemeralToken,
+    required String model,
+  });
+  void stopLiveVoice({required String requestId, required String liveStreamId});
+}
+
 abstract interface class OnboardingScanHub {
   void scanOnboarding({
     required String requestId,
@@ -171,7 +188,8 @@ final class NativeHubUnavailable implements Exception {
   String toString() => 'NativeHubUnavailable: $message';
 }
 
-final class UnavailableNativeHub implements NativeHub, OnboardingScanHub {
+final class UnavailableNativeHub
+    implements NativeHub, OnboardingScanHub, LiveVoiceHub {
   const UnavailableNativeHub(this.reason);
 
   final String reason;
@@ -257,6 +275,20 @@ final class UnavailableNativeHub implements NativeHub, OnboardingScanHub {
   }) => _unavailable();
 
   @override
+  void startLiveVoice({
+    required String requestId,
+    required String liveStreamId,
+    required String ephemeralToken,
+    required String model,
+  }) => _unavailable();
+
+  @override
+  void stopLiveVoice({
+    required String requestId,
+    required String liveStreamId,
+  }) => _unavailable();
+
+  @override
   void sendMessage({
     required String requestId,
     required String text,
@@ -325,7 +357,8 @@ final class UnavailableNativeHub implements NativeHub, OnboardingScanHub {
   void dispose() {}
 }
 
-final class RinfNativeHub implements NativeHub, OnboardingScanHub {
+final class RinfNativeHub
+    implements NativeHub, OnboardingScanHub, LiveVoiceHub {
   bool _initialized = false;
 
   @override
@@ -557,6 +590,27 @@ final class RinfNativeHub implements NativeHub, OnboardingScanHub {
     required String audioStreamId,
   }) =>
       _send(requestId, CommandStopTranscription(audioStreamId: audioStreamId));
+
+  @override
+  void startLiveVoice({
+    required String requestId,
+    required String liveStreamId,
+    required String ephemeralToken,
+    required String model,
+  }) => _send(
+    requestId,
+    CommandStartLiveVoice(
+      liveStreamId: liveStreamId,
+      ephemeralToken: ephemeralToken,
+      model: model,
+    ),
+  );
+
+  @override
+  void stopLiveVoice({
+    required String requestId,
+    required String liveStreamId,
+  }) => _send(requestId, CommandStopLiveVoice(liveStreamId: liveStreamId));
 
   @override
   void cancel(String requestId) => _send(requestId, const CommandCancel());

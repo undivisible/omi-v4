@@ -210,6 +210,52 @@ void main(List<String> arguments) {
     ),
   );
 
+  final commandLiveVoiceSource = file.readAsStringSync();
+  const liveVoiceStartMarker = 'class CommandStartLiveVoice extends Command {';
+  final liveVoiceStart = commandLiveVoiceSource.indexOf(liveVoiceStartMarker);
+  final liveVoiceEnd = commandLiveVoiceSource.indexOf(
+    '\n@immutable',
+    liveVoiceStart,
+  );
+  if (liveVoiceStart < 0 || liveVoiceEnd < 0) {
+    stderr.writeln('expected exactly one generated live-voice start class');
+    exitCode = 1;
+    return;
+  }
+  final liveVoiceSource = commandLiveVoiceSource.substring(
+    liveVoiceStart,
+    liveVoiceEnd,
+  );
+  const exposedLiveToken = "'ephemeralToken: \$ephemeralToken, '";
+  const redactedLiveToken = "'ephemeralToken: [REDACTED], '";
+  if (exposedLiveToken.allMatches(liveVoiceSource).length != 1 ||
+      redactedLiveToken.allMatches(liveVoiceSource).isNotEmpty) {
+    stderr.writeln('expected exactly one generated live-voice token field');
+    exitCode = 1;
+    return;
+  }
+  file.writeAsStringSync(
+    commandLiveVoiceSource.replaceRange(
+      liveVoiceStart,
+      liveVoiceEnd,
+      liveVoiceSource.replaceFirst(exposedLiveToken, redactedLiveToken),
+    ),
+  );
+
+  final liveTranscriptFile = File(
+    '${arguments.single}/signals/live_voice_transcript.dart',
+  );
+  final liveTranscriptSource = liveTranscriptFile.readAsStringSync();
+  if (exposedText.allMatches(liveTranscriptSource).length != 1 ||
+      redactedText.allMatches(liveTranscriptSource).isNotEmpty) {
+    stderr.writeln('expected exactly one generated live transcript text field');
+    exitCode = 1;
+    return;
+  }
+  liveTranscriptFile.writeAsStringSync(
+    liveTranscriptSource.replaceFirst(exposedText, redactedText),
+  );
+
   final transcriptFile = File(
     '${arguments.single}/signals/transcript_delta.dart',
   );

@@ -1960,6 +1960,171 @@ void main() {
     services.dispose();
     await hub.close();
   });
+
+  test(
+    'live voice start-stop drives the hub and discards output audio',
+    () async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+      addTearDown(() => debugDefaultTargetPlatformOverride = null);
+      final auth = AuthController(
+        _FakeAuthGateway(_session('user-a')),
+        consentStore: VolatileConsentStore()..receipt = _receipt('user-a'),
+      );
+      await auth.restoreSession();
+      final hub = _FakeHub();
+      final tokens = _FakeLiveVoiceTokens();
+      var permission = false;
+      final audio = StreamController<Uint8List>();
+      final voice = LiveVoiceCapture(
+        hub: hub,
+        permissionCheck: () async => permission,
+        startAudio: () async => audio.stream,
+        stopAudio: audio.close,
+      );
+      final services = AppServices.forTesting(
+        auth: auth,
+        nativeHub: hub,
+        deviceRelay: DeviceRelayService(
+          role: DeviceRelayRole.desktopObserver,
+          adapter: const UnavailableDeviceRelayAdapter(),
+        ),
+        memoryDatabasePath: (uid) => '/tmp/$uid.sqlite3',
+        liveVoice: voice,
+        liveVoiceTokens: tokens,
+      );
+      await services.initialize();
+
+      await expectLater(services.startLiveVoice(), throwsStateError);
+      expect(tokens.calls, 0);
+
+      permission = true;
+      await services.startLiveVoice();
+      expect(voice.active, isTrue);
+      expect(tokens.calls, 1);
+      expect(hub.liveVoiceModels.single, 'gemini-live-test-model');
+      expect(hub.liveVoiceTokens.single, 'auth_tokens/fake-live-token');
+      final streamId = hub.liveVoiceStartRequests.keys.single;
+
+      audio.add(Uint8List.fromList([1, 2, 3, 4]));
+      await Future<void>.delayed(Duration.zero);
+      expect(hub.audio.where((chunk) => chunk.requestId == streamId).length, 1);
+
+      hub.eventsController.add(
+        NativeEventLiveVoiceAudio(
+          value: LiveVoiceAudio(
+            liveStreamId: streamId,
+            sequence: Uint64.fromBigInt(BigInt.zero),
+            sampleRateHz: 24000,
+            bytes: [9, 9, 9],
+          ),
+        ),
+      );
+      await _waitFor(() => voice.discardedOutputBytes == 3);
+
+      await services.stopLiveVoice();
+      expect(voice.active, isFalse);
+      expect(
+        hub.audio
+            .where((chunk) => chunk.requestId == streamId && chunk.endOfStream)
+            .length,
+        1,
+      );
+
+      services.dispose();
+      await hub.close();
+    },
+  );
+
+  test('live voice fails closed without a worker token client', () async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    final auth = AuthController(
+      _FakeAuthGateway(_session('user-a')),
+      consentStore: VolatileConsentStore()..receipt = _receipt('user-a'),
+    );
+    await auth.restoreSession();
+    final hub = _FakeHub();
+    final voice = LiveVoiceCapture(hub: hub, permissionCheck: () async => true);
+    final services = AppServices.forTesting(
+      auth: auth,
+      nativeHub: hub,
+      deviceRelay: DeviceRelayService(
+        role: DeviceRelayRole.desktopObserver,
+        adapter: const UnavailableDeviceRelayAdapter(),
+      ),
+      memoryDatabasePath: (uid) => '/tmp/$uid.sqlite3',
+      liveVoice: voice,
+    );
+    await services.initialize();
+
+    await expectLater(services.startLiveVoice(), throwsStateError);
+    expect(hub.liveVoiceStartRequests, isEmpty);
+    expect(voice.active, isFalse);
+
+    services.dispose();
+    await hub.close();
+  });
+
+  test(
+    'live voice start races with authority changes and session end',
+    () async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+      addTearDown(() => debugDefaultTargetPlatformOverride = null);
+      final auth = AuthController(
+        _FakeAuthGateway(_session('user-a')),
+        consentStore: VolatileConsentStore()..receipt = _receipt('user-a'),
+      );
+      await auth.restoreSession();
+      final hub = _FakeHub();
+      final tokens = _FakeLiveVoiceTokens();
+      final audio = StreamController<Uint8List>();
+      final voice = LiveVoiceCapture(
+        hub: hub,
+        permissionCheck: () async => true,
+        startAudio: () async => audio.stream,
+        stopAudio: audio.close,
+      );
+      final services = AppServices.forTesting(
+        auth: auth,
+        nativeHub: hub,
+        deviceRelay: DeviceRelayService(
+          role: DeviceRelayRole.desktopObserver,
+          adapter: const UnavailableDeviceRelayAdapter(),
+        ),
+        memoryDatabasePath: (uid) => '/tmp/$uid.sqlite3',
+        liveVoice: voice,
+        liveVoiceTokens: tokens,
+      );
+      await services.initialize();
+
+      tokens.barrier = Completer<void>();
+      final starting = services.startLiveVoice();
+      await _waitFor(() => tokens.calls == 1);
+      await services.cancelLiveVoice();
+      tokens.barrier!.complete();
+      await expectLater(starting, throwsStateError);
+      expect(voice.active, isFalse);
+      expect(hub.liveVoiceStartRequests, isEmpty);
+
+      tokens.barrier = null;
+      await services.startLiveVoice();
+      final streamId = hub.liveVoiceStartRequests.keys.single;
+      hub.eventsController.add(
+        NativeEventLiveVoiceState(
+          value: LiveVoiceState(
+            liveStreamId: streamId,
+            state: LiveVoicePhase.failed,
+            detail: 'provider closed',
+          ),
+        ),
+      );
+      await _waitFor(() => !voice.active);
+      expect(hub.stoppedLiveStreams, 1);
+
+      services.dispose();
+      await hub.close();
+    },
+  );
 }
 
 final class _FakeConversationTransport implements ConversationTransport {
@@ -2041,6 +2206,23 @@ final class _FakeConversationInboxTransport
       responseText: responseText,
       error: error,
     ));
+  }
+}
+
+final class _FakeLiveVoiceTokens implements LiveVoiceTokenClient {
+  int calls = 0;
+  Completer<void>? barrier;
+
+  @override
+  Future<GeminiLiveToken> createGeminiToken() async {
+    calls += 1;
+    if (barrier != null) await barrier!.future;
+    return GeminiLiveToken(
+      token: 'auth_tokens/fake-live-token',
+      model: 'gemini-live-test-model',
+      expireTime: DateTime.utc(2030),
+      newSessionExpireTime: DateTime.utc(2030),
+    );
   }
 }
 
@@ -2133,7 +2315,7 @@ final class _FakeAuthGateway implements AuthGateway {
   }) async => _session!;
 }
 
-final class _FakeHub implements NativeHub, OnboardingScanHub {
+final class _FakeHub implements NativeHub, OnboardingScanHub, LiveVoiceHub {
   final eventsController = StreamController<NativeEvent>.broadcast();
   int initializeCalls = 0;
   int disposeCalls = 0;
@@ -2165,6 +2347,10 @@ final class _FakeHub implements NativeHub, OnboardingScanHub {
         })
       >[];
   int stoppedAudioStreams = 0;
+  int stoppedLiveStreams = 0;
+  final liveVoiceStartRequests = <String, String>{};
+  final liveVoiceModels = <String>[];
+  final liveVoiceTokens = <String>[];
   String? terminalTranscript;
   final audio =
       <
@@ -2411,6 +2597,18 @@ final class _FakeHub implements NativeHub, OnboardingScanHub {
       encoding: encoding,
       endOfStream: endOfStream,
     ));
+    if (endOfStream && liveVoiceStartRequests.containsKey(requestId)) {
+      liveVoiceStartRequests.remove(requestId);
+      eventsController.add(
+        NativeEventLiveVoiceState(
+          value: LiveVoiceState(
+            liveStreamId: requestId,
+            state: LiveVoicePhase.ended,
+          ),
+        ),
+      );
+      return;
+    }
     final text = terminalTranscript;
     if (!endOfStream || text == null) return;
     final startRequestId = transcriptionStartRequests.remove(requestId)!;
@@ -2469,6 +2667,44 @@ final class _FakeHub implements NativeHub, OnboardingScanHub {
         ),
       ),
     );
+  }
+
+  @override
+  void startLiveVoice({
+    required String requestId,
+    required String liveStreamId,
+    required String ephemeralToken,
+    required String model,
+  }) {
+    liveVoiceStartRequests[liveStreamId] = requestId;
+    liveVoiceModels.add(model);
+    liveVoiceTokens.add(ephemeralToken);
+    eventsController.add(
+      NativeEventLiveVoiceState(
+        value: LiveVoiceState(
+          liveStreamId: liveStreamId,
+          state: LiveVoicePhase.started,
+        ),
+      ),
+    );
+  }
+
+  @override
+  void stopLiveVoice({
+    required String requestId,
+    required String liveStreamId,
+  }) {
+    stoppedLiveStreams += 1;
+    if (liveVoiceStartRequests.remove(liveStreamId) != null) {
+      eventsController.add(
+        NativeEventLiveVoiceState(
+          value: LiveVoiceState(
+            liveStreamId: liveStreamId,
+            state: LiveVoicePhase.ended,
+          ),
+        ),
+      );
+    }
   }
 
   @override

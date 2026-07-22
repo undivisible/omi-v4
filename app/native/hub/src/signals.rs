@@ -43,6 +43,14 @@ pub enum Command {
     StopTranscription {
         audio_stream_id: String,
     },
+    StartLiveVoice {
+        live_stream_id: String,
+        ephemeral_token: String,
+        model: String,
+    },
+    StopLiveVoice {
+        live_stream_id: String,
+    },
     CaptureEvent {
         ingestion_key: String,
         source: CaptureSource,
@@ -271,6 +279,62 @@ pub enum NativeEvent {
     MemoryExported(MemoryExported),
     MemoryItems(MemoryItems),
     OnboardingScanCompleted(OnboardingScanCompleted),
+    LiveVoiceState(LiveVoiceState),
+    LiveVoiceTranscript(LiveVoiceTranscript),
+    LiveVoiceAudio(LiveVoiceAudio),
+}
+
+#[derive(Debug, Serialize, SignalPiece)]
+pub struct LiveVoiceState {
+    pub live_stream_id: String,
+    pub state: LiveVoicePhase,
+    pub detail: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, SignalPiece)]
+pub enum LiveVoicePhase {
+    Started,
+    Interrupted,
+    Ended,
+    Failed,
+}
+
+#[derive(Serialize, SignalPiece)]
+pub struct LiveVoiceTranscript {
+    pub live_stream_id: String,
+    pub text: String,
+    pub final_segment: bool,
+}
+
+impl std::fmt::Debug for LiveVoiceTranscript {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("LiveVoiceTranscript")
+            .field("live_stream_id", &self.live_stream_id)
+            .field("text", &"[redacted]")
+            .field("final_segment", &self.final_segment)
+            .finish()
+    }
+}
+
+#[derive(Serialize, SignalPiece)]
+pub struct LiveVoiceAudio {
+    pub live_stream_id: String,
+    pub sequence: u64,
+    pub sample_rate_hz: u32,
+    pub bytes: Vec<u8>,
+}
+
+impl std::fmt::Debug for LiveVoiceAudio {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("LiveVoiceAudio")
+            .field("live_stream_id", &self.live_stream_id)
+            .field("sequence", &self.sequence)
+            .field("sample_rate_hz", &self.sample_rate_hz)
+            .field("bytes", &self.bytes.len())
+            .finish()
+    }
 }
 
 #[derive(Debug, Serialize, SignalPiece)]

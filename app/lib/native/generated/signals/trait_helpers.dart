@@ -305,4 +305,16 @@ class TraitHelpers {
     final length = deserializer.deserializeLength();
     return List.generate(length, (_) => deserializer.deserializeString());
   }
+
+  static void serializeVectorU8(List<int> value, BinarySerializer serializer) {
+    serializer.serializeLength(value.length);
+    for (final item in value) {
+      serializer.serializeUint8(item);
+    }
+  }
+
+  static List<int> deserializeVectorU8(BinaryDeserializer deserializer) {
+    final length = deserializer.deserializeLength();
+    return List.generate(length, (_) => deserializer.deserializeUint8());
+  }
 }
