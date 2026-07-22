@@ -176,9 +176,11 @@ pub async fn run_meeting_poll() {
         let active = gate.apply(detected.is_some(), elapsed);
         if gate.has_observed_state() && active != last_active {
             last_active = active;
+            let suggested_title = detected.map(|app| app.name);
+            crate::meeting::observe_gate(active, suggested_title.clone());
             NativeEvent::MeetingStateChanged(MeetingStateChanged {
                 active,
-                suggested_title: detected.map(|app| app.name),
+                suggested_title,
             })
             .send();
         }

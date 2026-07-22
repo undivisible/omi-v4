@@ -5,6 +5,7 @@ mod daily_review;
 mod extraction;
 mod live_voice;
 mod local_ai;
+pub mod meeting;
 pub mod meeting_detector;
 mod runtime;
 mod scan;
@@ -27,6 +28,9 @@ async fn main() {
     let (audio_sender, transcription_sender, audio_dispatcher) = AudioDispatcher::channel();
     let (command_sender, dispatcher) =
         CommandDispatcher::channel_with_transcription(transcription_sender);
+    let (meeting_sender, meeting_runtime) = meeting::channel(command_sender.clone());
+    meeting::install(meeting_sender);
+    let meeting_runtime = spawn(meeting_runtime.run());
     let dispatcher = spawn(dispatcher.run());
     let audio_dispatcher = spawn(audio_dispatcher.run());
     let command_listener = spawn(ClientCommand::listen(command_sender));
@@ -36,6 +40,7 @@ async fn main() {
     dart_shutdown().await;
     command_listener.abort();
     audio_listener.abort();
+    meeting_runtime.abort();
     #[cfg(target_os = "macos")]
     meeting_poll.abort();
     let _ = command_listener.await;

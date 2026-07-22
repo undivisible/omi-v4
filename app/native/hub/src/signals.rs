@@ -105,6 +105,10 @@ pub enum Command {
         firmware_version: Option<String>,
     },
     Cancel,
+    StartMeeting {
+        title: Option<String>,
+    },
+    StopMeeting,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, SignalPiece)]
@@ -283,12 +287,50 @@ pub enum NativeEvent {
     LiveVoiceTranscript(LiveVoiceTranscript),
     LiveVoiceAudio(LiveVoiceAudio),
     MeetingStateChanged(MeetingStateChanged),
+    MeetingInsight(MeetingInsight),
+    MeetingCompleted(MeetingCompleted),
 }
 
 #[derive(Debug, Serialize, SignalPiece)]
 pub struct MeetingStateChanged {
     pub active: bool,
     pub suggested_title: Option<String>,
+}
+
+#[derive(Serialize, SignalPiece)]
+pub struct MeetingInsight {
+    pub kind: String,
+    pub text: String,
+    pub source_text: String,
+}
+
+impl std::fmt::Debug for MeetingInsight {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("MeetingInsight")
+            .field("kind", &self.kind)
+            .field("text", &self.text)
+            .field("source_text", &"[redacted]")
+            .finish()
+    }
+}
+
+#[derive(Serialize, SignalPiece)]
+pub struct MeetingCompleted {
+    pub title: String,
+    pub summary: String,
+    pub actions: Vec<String>,
+}
+
+impl std::fmt::Debug for MeetingCompleted {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("MeetingCompleted")
+            .field("title", &self.title)
+            .field("summary", &"[redacted]")
+            .field("actions", &self.actions.len())
+            .finish()
+    }
 }
 
 #[derive(Debug, Serialize, SignalPiece)]
