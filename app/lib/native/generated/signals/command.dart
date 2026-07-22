@@ -47,6 +47,10 @@ abstract class Command {
         return CommandDeviceState.load(deserializer);
       case 18:
         return CommandCancel.load(deserializer);
+      case 19:
+        return CommandStartMeeting.load(deserializer);
+      case 20:
+        return CommandStopMeeting.load(deserializer);
       default:
         throw Exception(
           'Unknown variant index for Command: ' + index.toString(),
@@ -1519,5 +1523,101 @@ class CommandCancel extends Command {
     }());
 
     return fullString ?? 'CommandCancel';
+  }
+}
+
+@immutable
+class CommandStartMeeting extends Command {
+  const CommandStartMeeting({this.title}) : super();
+
+  static CommandStartMeeting load(BinaryDeserializer deserializer) {
+    deserializer.increaseContainerDepth();
+    final instance = CommandStartMeeting(
+      title: TraitHelpers.deserializeOptionStr(deserializer),
+    );
+    deserializer.decreaseContainerDepth();
+    return instance;
+  }
+
+  final String? title;
+
+  CommandStartMeeting copyWith({String? Function()? title}) {
+    return CommandStartMeeting(title: title == null ? this.title : title());
+  }
+
+  void serialize(BinarySerializer serializer) {
+    serializer.increaseContainerDepth();
+    serializer.serializeVariantIndex(19);
+    TraitHelpers.serializeOptionStr(title, serializer);
+    serializer.decreaseContainerDepth();
+  }
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    if (other.runtimeType != runtimeType) return false;
+
+    return other is CommandStartMeeting && title == other.title;
+  }
+
+  @override
+  int get hashCode => title.hashCode;
+
+  @override
+  String toString() {
+    String? fullString;
+
+    assert(() {
+      fullString =
+          '$runtimeType('
+          'title: $title'
+          ')';
+      return true;
+    }());
+
+    return fullString ?? 'CommandStartMeeting';
+  }
+}
+
+@immutable
+class CommandStopMeeting extends Command {
+  const CommandStopMeeting() : super();
+
+  static CommandStopMeeting load(BinaryDeserializer deserializer) {
+    deserializer.increaseContainerDepth();
+    final instance = CommandStopMeeting();
+    deserializer.decreaseContainerDepth();
+    return instance;
+  }
+
+  void serialize(BinarySerializer serializer) {
+    serializer.increaseContainerDepth();
+    serializer.serializeVariantIndex(20);
+    serializer.decreaseContainerDepth();
+  }
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    if (other.runtimeType != runtimeType) return false;
+
+    return other is CommandStopMeeting;
+  }
+
+  @override
+  int get hashCode => runtimeType.hashCode;
+
+  @override
+  String toString() {
+    String? fullString;
+
+    assert(() {
+      fullString =
+          '$runtimeType('
+          ')';
+      return true;
+    }());
+
+    return fullString ?? 'CommandStopMeeting';
   }
 }

@@ -1727,6 +1727,26 @@ async fn execute(
             false
         }
         Command::Cancel => false,
+        Command::StartMeeting { title } => {
+            crate::meeting::request_start(title);
+            progress(
+                &request_id,
+                "meeting",
+                ToolStatus::Complete,
+                Some("meeting start requested"),
+            );
+            false
+        }
+        Command::StopMeeting => {
+            crate::meeting::request_stop();
+            progress(
+                &request_id,
+                "meeting",
+                ToolStatus::Complete,
+                Some("meeting stop requested"),
+            );
+            false
+        }
     }
 }
 

@@ -405,6 +405,9 @@ async fn run(
             message = socket.next() => match message {
                 Some(Ok(Message::Text(text))) => {
                     if let Some(delta) = state.parse(text.as_ref(), unix_time_ms()) {
+                        if delta.final_segment {
+                            crate::meeting::observe_final_segment(&delta.text);
+                        }
                         NativeEvent::TranscriptDelta(delta).send();
                     }
                 }
@@ -446,6 +449,9 @@ async fn drain_final_results(
             match message {
                 Ok(Message::Text(text)) => {
                     if let Some(delta) = state.parse(text.as_ref(), unix_time_ms()) {
+                        if delta.final_segment {
+                            crate::meeting::observe_final_segment(&delta.text);
+                        }
                         NativeEvent::TranscriptDelta(delta).send();
                     }
                 }
