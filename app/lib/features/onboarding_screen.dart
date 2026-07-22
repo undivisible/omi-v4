@@ -649,8 +649,8 @@ class _ProductionGateState extends State<ProductionGate>
     with WidgetsBindingObserver {
   static const permissionCapabilities = [
     CoreCapability.microphone,
-    CoreCapability.screenCapture,
     CoreCapability.accessibility,
+    CoreCapability.screenCapture,
     CoreCapability.appData,
   ];
   Map<CoreCapability, CapabilityStatus> statuses = {

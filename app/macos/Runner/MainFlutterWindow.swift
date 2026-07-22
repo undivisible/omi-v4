@@ -360,6 +360,8 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
         switch capability {
         case "accessibility":
           permissionOverlay.show(for: capability)
+          let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true]
+          AXIsProcessTrustedWithOptions(options as CFDictionary)
           self.openPrivacyPane("Privacy_Accessibility")
           result(nil)
         case "microphone":
