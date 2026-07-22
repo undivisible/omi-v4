@@ -46,7 +46,7 @@ const request = (
       },
       MIMO_API_KEY: "managed-secret",
       MIMO_CHAT_COMPLETIONS_URL:
-        "https://api.xiaomimimo.com/v1/chat/completions",
+        "https://token-plan-sgp.xiaomimimo.com/v1/chat/completions",
       MIMO_MODEL: "mimo-v2.5-pro",
       MIMO_INPUT_MICROUSD_PER_MILLION_TOKENS: "1000000",
       MIMO_OUTPUT_MICROUSD_PER_MILLION_TOKENS: "1000000",
@@ -281,10 +281,10 @@ describe("managed assistant", () => {
 
   test("rejects non-canonical Xiaomi endpoints before contacting upstream", async () => {
     for (const endpoint of [
-      "https://api.xiaomimimo.com/v1/chat/completions?debug=1",
-      "https://user@api.xiaomimimo.com/v1/chat/completions",
+      "https://token-plan-sgp.xiaomimimo.com/v1/chat/completions?debug=1",
+      "https://user@token-plan-sgp.xiaomimimo.com/v1/chat/completions",
       "https://127.0.0.1/v1/chat/completions",
-      "https://api.xiaomimimo.com.evil.test/v1/chat/completions",
+      "https://token-plan-sgp.xiaomimimo.com.evil.test/v1/chat/completions",
     ]) {
       expect(
         (

@@ -17,7 +17,7 @@ const messageFramingTokenReserve = 16;
 const upstreamTimeoutMs = 45_000;
 const staleRequestMs = 120_000;
 const xiaomiCompletionEndpoint =
-  "https://api.xiaomimimo.com/v1/chat/completions";
+  "https://token-plan-sgp.xiaomimimo.com/v1/chat/completions";
 const allowedKeys = new Set([
   "messages",
   "model",
@@ -426,7 +426,7 @@ assistant.post("/chat/completions", async (context) => {
       endpointUrl.password !== "" ||
       endpointUrl.search !== "" ||
       endpointUrl.hash !== "" ||
-      endpointUrl.hostname !== "api.xiaomimimo.com"
+      endpointUrl.hostname !== "token-plan-sgp.xiaomimimo.com"
     )
       throw new Error();
   } catch {
