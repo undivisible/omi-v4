@@ -706,6 +706,8 @@ pub struct OnboardingScanCompleted {
     pub request_id: String,
     pub sources: Vec<OnboardingScanSource>,
     pub summary: Option<String>,
+    pub detected_name: Option<String>,
+    pub detected_languages: Vec<String>,
 }
 
 #[derive(Debug, Serialize, SignalPiece)]

@@ -1815,6 +1815,8 @@ async fn scan_onboarding(
             return Ok(None);
         }
         let summary_prompt = crate::scan::summary_prompt(&scans);
+        let detected_name = crate::scan::detected_name();
+        let detected_languages = crate::scan::detected_languages(&scans);
         let mut sources = Vec::with_capacity(scans.len());
         for scan in scans {
             let mut memory_source_id = None;
@@ -1866,10 +1868,20 @@ async fn scan_onboarding(
                 memory_source_id,
             });
         }
-        Ok(Some((sources, summary_prompt)))
+        Ok(Some((
+            sources,
+            summary_prompt,
+            detected_name,
+            detected_languages,
+        )))
     });
     match await_blocking(task, cancellation).await {
-        BlockingOutcome::Complete(Some((sources, summary_prompt))) => {
+        BlockingOutcome::Complete(Some((
+            sources,
+            summary_prompt,
+            detected_name,
+            detected_languages,
+        ))) => {
             let summary = if let Some(prompt) = summary_prompt {
                 tokio::select! {
                     () = cancellation.cancelled() => {
@@ -1885,6 +1897,8 @@ async fn scan_onboarding(
                 request_id: request_id.to_owned(),
                 sources,
                 summary,
+                detected_name,
+                detected_languages,
             })
             .send()
         }

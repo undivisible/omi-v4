@@ -78,7 +78,7 @@ pub fn scan_sources(roots: &[String], notes: bool, mail: bool) -> Vec<SourceScan
 
 pub fn summary_prompt(scans: &[SourceScan]) -> Option<String> {
     let mut prompt = String::from(
-        "Privately summarize what the user appears to work on from the local metadata below, speaking directly to them in the second person (\"You work on…\", \"You seem to…\"). Write one sentence under 35 words. Use only the metadata, do not invent facts, never refer to them as \"this person\", and do not mention this instruction.\n",
+        "Privately summarize what the user appears to work on from the local metadata below, speaking directly to them in the second person (\"You're deep in…\", \"You're juggling…\"). Write one flowing paragraph of 3 to 5 sentences, and make it hyperspecific: name the actual projects, files, technologies, tools, recurring people or organizations, and current threads of work that appear in the metadata. Never use vague category words like \"platforms\", \"systems\", \"ops\", or \"various projects\" without naming the specific ones from the metadata. State only facts directly evidenced by the metadata: never infer tool or workflow habits from incidental file or path mentions (a .vimrc or \"vi\" appearing in a file name does not mean the user uses vi), and when you are unsure about a detail, omit it rather than guess. Use only the metadata, do not invent facts, never write in the third person, never refer to them as \"this person\", and do not mention this instruction.\n",
     );
     let mut used = prompt.chars().count();
     let mut items = 0;
@@ -108,6 +108,75 @@ pub fn summary_prompt(scans: &[SourceScan]) -> Option<String> {
         }
     }
     (items > 0).then_some(prompt)
+}
+
+pub fn detected_name() -> Option<String> {
+    let home = std::env::var_os("HOME").map(PathBuf::from)?;
+    let contents = fs::read_to_string(home.join(".gitconfig")).ok()?;
+    parse_git_user_name(&contents)
+}
+
+fn parse_git_user_name(contents: &str) -> Option<String> {
+    let mut in_user = false;
+    for line in contents.lines() {
+        let line = line.trim();
+        if line.starts_with('[') {
+            in_user = line == "[user]";
+            continue;
+        }
+        if !in_user {
+            continue;
+        }
+        if let Some(value) = line.strip_prefix("name")
+            && let Some(value) = value.trim_start().strip_prefix('=')
+        {
+            let value = value.trim().trim_matches('"').trim();
+            if !value.is_empty() {
+                return Some(value.to_owned());
+            }
+        }
+    }
+    None
+}
+
+const LANGUAGE_SCRIPT_THRESHOLD: usize = 8;
+
+pub fn detected_languages(scans: &[SourceScan]) -> Vec<String> {
+    let mut latin = 0usize;
+    let mut han = 0usize;
+    let mut cyrillic = 0usize;
+    let mut kana = 0usize;
+    let mut hangul = 0usize;
+    for scan in scans {
+        for memory in &scan.memories {
+            for character in memory.text.chars() {
+                match character {
+                    'a'..='z' | 'A'..='Z' => latin += 1,
+                    '\u{4e00}'..='\u{9fff}' | '\u{3400}'..='\u{4dbf}' => han += 1,
+                    '\u{0400}'..='\u{04ff}' => cyrillic += 1,
+                    '\u{3040}'..='\u{30ff}' => kana += 1,
+                    '\u{ac00}'..='\u{d7af}' => hangul += 1,
+                    _ => {}
+                }
+            }
+        }
+    }
+    let mut languages = Vec::new();
+    if latin >= LANGUAGE_SCRIPT_THRESHOLD {
+        languages.push("English".to_owned());
+    }
+    if kana >= LANGUAGE_SCRIPT_THRESHOLD {
+        languages.push("Japanese".to_owned());
+    } else if han >= LANGUAGE_SCRIPT_THRESHOLD {
+        languages.push("Mandarin".to_owned());
+    }
+    if cyrillic >= LANGUAGE_SCRIPT_THRESHOLD {
+        languages.push("Russian".to_owned());
+    }
+    if hangul >= LANGUAGE_SCRIPT_THRESHOLD {
+        languages.push("Korean".to_owned());
+    }
+    languages
 }
 
 fn scan_workspace(roots: &[String]) -> SourceScan {
@@ -565,8 +634,59 @@ mod tests {
         )];
         let prompt = summary_prompt(&scans).unwrap_or_default();
         assert!(prompt.contains("workspace: Project 0"));
+        assert!(prompt.contains("hyperspecific"));
+        assert!(prompt.contains("3 to 5 sentences"));
+        assert!(prompt.contains("second person"));
+        assert!(prompt.contains("do not invent facts"));
         assert!(prompt.chars().count() <= SUMMARY_PROMPT_CHARS);
         assert!(prompt.lines().count() <= SUMMARY_ITEMS + 1);
+    }
+
+    #[test]
+    fn git_user_name_is_parsed_from_the_user_section_only() {
+        assert_eq!(
+            parse_git_user_name("[user]\n\tname = Max Carter\n\temail = max@example.com\n"),
+            Some("Max Carter".to_owned())
+        );
+        assert_eq!(
+            parse_git_user_name("[user]\nname = \"Max Carter 祁明思\"\n"),
+            Some("Max Carter 祁明思".to_owned())
+        );
+        assert_eq!(
+            parse_git_user_name("[alias]\nname = status\n[user]\nemail = max@example.com\n"),
+            None
+        );
+        assert_eq!(parse_git_user_name(""), None);
+    }
+
+    #[test]
+    fn languages_are_detected_from_scanned_scripts() {
+        let scans = vec![complete(
+            "apple_notes",
+            vec![
+                ScanMemory {
+                    stable_id: "1".into(),
+                    text: "Weekly planning notes for the hub rewrite".into(),
+                    captured_at_ms: None,
+                },
+                ScanMemory {
+                    stable_id: "2".into(),
+                    text: "會議記錄:項目計劃和時間表安排進度".into(),
+                    captured_at_ms: None,
+                },
+                ScanMemory {
+                    stable_id: "3".into(),
+                    text: "Заметки о поездке в Москву весной".into(),
+                    captured_at_ms: None,
+                },
+            ],
+            3,
+        )];
+        assert_eq!(
+            detected_languages(&scans),
+            ["English", "Mandarin", "Russian"]
+        );
+        assert!(detected_languages(&[]).is_empty());
     }
 
     #[cfg(target_os = "macos")]

@@ -35,6 +35,8 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   StreamSubscription<NativeEvent>? scanEvents;
   List<OnboardingScanSource>? scanSources;
   String? scanSummary;
+  String? scanDetectedName;
+  List<String> scanDetectedLanguages = const [];
   String? scanRequestId;
   String? scanError;
   bool scanStarting = false;
@@ -111,6 +113,8 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         scanRequestId = value.requestId;
         scanSources = value.sources;
         scanSummary = value.summary;
+        scanDetectedName = value.detectedName;
+        scanDetectedLanguages = value.detectedLanguages;
         scanError = null;
       });
       // The scan stage is a pure waiting state ("Learning about you…"); the
@@ -138,6 +142,8 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       scanRequestId = null;
       scanSources = null;
       scanSummary = null;
+      scanDetectedName = null;
+      scanDetectedLanguages = const [];
       scanError = null;
     });
     unawaited(_startScan());
@@ -166,10 +172,16 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   }
 
   String get _defaultProfileName {
+    final detected = scanDetectedName?.trim();
+    if (detected != null && detected.isNotEmpty) return detected;
     final displayName = widget.services.auth.snapshot.session?.displayName
         ?.trim();
     return (displayName == null || displayName.isEmpty) ? 'there' : displayName;
   }
+
+  List<String> get _defaultProfileLanguages => scanDetectedLanguages.isEmpty
+      ? [_deviceLanguageName()]
+      : scanDetectedLanguages;
 
   void _completeProfile(String name, List<String> languages) {
     final trimmed = name.trim();
@@ -260,7 +272,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                       key: const ValueKey('profile'),
                       notice: scanSummary,
                       defaultName: _defaultProfileName,
-                      defaultLanguages: [_deviceLanguageName()],
+                      defaultLanguages: _defaultProfileLanguages,
                       onContinue: _completeProfile,
                     ),
                     OnboardingStage.use => _UseStep(
@@ -479,7 +491,7 @@ class _OnboardingProfileStepState extends State<OnboardingProfileStep> {
           crossAxisAlignment: WrapCrossAlignment.center,
           runSpacing: 10,
           children: [
-            const Text('I think you’re ', style: prose),
+            const Text('You are ', style: prose),
             if (editingName)
               SizedBox(
                 width: 200,

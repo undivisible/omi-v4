@@ -68,6 +68,7 @@ void main() {
               ),
             ],
             summary: 'stale summary',
+            detectedLanguages: const [],
           ),
         ),
       );
@@ -100,6 +101,7 @@ void main() {
               ),
             ],
             summary: 'still stale',
+            detectedLanguages: const [],
           ),
         ),
       );
@@ -120,6 +122,8 @@ void main() {
               ),
             ],
             summary: 'genuine summary',
+            detectedName: 'Max',
+            detectedLanguages: const ['English', 'Mandarin', 'Russian'],
           ),
         ),
       );
@@ -127,6 +131,8 @@ void main() {
 
       expect(find.textContaining('genuine summary'), findsOneWidget);
       expect(find.text('Continue'), findsOneWidget);
+      expect(find.text('Max'), findsOneWidget);
+      expect(find.text('English, Mandarin, Russian'), findsOneWidget);
     },
   );
 

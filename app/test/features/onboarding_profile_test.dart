@@ -25,6 +25,9 @@ void main() {
 
     expect(find.byKey(const Key('profile_name_chip')), findsOneWidget);
     expect(find.byKey(const Key('profile_languages_chip')), findsOneWidget);
+    expect(find.text('You are '), findsOneWidget);
+    expect(find.text('. You speak '), findsOneWidget);
+    expect(find.textContaining('I think'), findsNothing);
     expect(find.text('Ada'), findsOneWidget);
     expect(find.text('English'), findsOneWidget);
     expect(find.textContaining('You keep meticulous notes'), findsOneWidget);

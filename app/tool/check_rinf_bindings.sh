@@ -140,14 +140,16 @@ if grep -Fq "'text: \$text, '" "$assistant_file"; then
 fi
 
 scan_file="$generated_dir/signals/onboarding_scan_completed.dart"
-if grep -Fq "'summary: \$summary'" "$scan_file"; then
-  echo "generated onboarding summary output is not redacted" >&2
-  exit 1
-fi
-if [[ "$(grep -Fc "'summary: [REDACTED]'" "$scan_file")" -ne 1 ]]; then
-  echo "generated onboarding summary redaction is missing or ambiguous" >&2
-  exit 1
-fi
+for field in summary detectedName; do
+  if grep -Fq "'$field: \$$field" "$scan_file"; then
+    echo "generated onboarding $field output is not redacted" >&2
+    exit 1
+  fi
+  if [[ "$(grep -Fc "'$field: [REDACTED]" "$scan_file")" -ne 1 ]]; then
+    echo "generated onboarding $field redaction is missing or ambiguous" >&2
+    exit 1
+  fi
+done
 if [[ "$(grep -Fc "'text: [REDACTED], '" "$assistant_file")" -ne 1 ]]; then
   echo "generated assistant text redaction is missing or ambiguous" >&2
   exit 1
