@@ -14,7 +14,7 @@ Omi v4 is an ultrasimple thinking partner and second brain that works across eve
 | Application | Flutter for iOS, Android, macOS, Windows, and web; no desktop WebView |
 | Rust bridge | Rinf typed asynchronous signals; binary signals for bounded audio frames |
 | Live STT | Rust owns bounded transcription sessions; Deepgram is the managed/BYOK live route, local STT fails closed until a real provider exists, and MiMo remains batch-only |
-| Rust runtime | One `hub` crate using `rx4`, `rotary`, `rs_ai`, and platform-gated `praefectus` |
+| Rust runtime | One `hub` crate using `rx4` ("rotary"), `rs_ai`, and platform-gated `praefectus` |
 | Device ownership | Mobile owns BLE, background hardware relay, firmware, pairing, and device management; desktop owns primary assistant interaction and computer use |
 | Cloud | Bun/TypeScript Hono Worker, D1, R2, Queues, Workflows, Durable Objects where state coordination requires them |
 | Identity | Firebase Auth remains; phone OTP is primary, Google/Apple OAuth optional, Firebase UID is the initial canonical user ID |
@@ -61,7 +61,7 @@ The reusable memory engine lives in the public [`tschk/zkr`](https://github.com/
 - [ ] Prove Telegram and Blooio round trips with real credentials and a continuously connected desktop client.
 - [ ] Finish desktop both-Shift voice capture; the global gesture, microphone/STT path, and failure-safe teardown exist, but physical Windows proof does not.
 - [ ] Add the desktop menu-bar companion: show the single most important current task first, with capture and listening state/actions directly beneath it; keep it a compact portal into the same desktop agent session rather than a separate assistant.
-- [ ] Wire `rotary` into the hub and move `rx4` usage beyond version-reporting into real extraction/ranking calls; both are core to the assistant/extraction/ranking architecture, but integration is in progress.
+- [ ] Move `rx4` ("rotary") usage beyond version-reporting into real extraction/ranking calls; it is core to the assistant/extraction/ranking architecture, but integration is in progress.
 - [x] Complete the audited live-STT slice between bounded Omi BLE/Rinf audio and idempotent final-transcript `zkr` capture, including managed/BYOK provider routing, reconnect gaps, final drain, cancellation, and typed stop acknowledgements.
 - [ ] Re-prove Android, iOS without signing, macOS, Windows, and web release builds on the exact release head after this integration lands.
 - [ ] Wire Firebase Auth, real channel delivery, physical Omi hardware, desktop permissions/computer use, and model routes against real credentials and devices.
@@ -73,7 +73,7 @@ The reusable memory engine lives in the public [`tschk/zkr`](https://github.com/
 | `app/lib/memory/` and `app/lib/features/memory_screen.dart` | Personal Memory state and screens | upstream Omi domain language and source evidence |
 | `app/lib/currents/` and `app/lib/features/currents_screen.dart` | Recommendation state, ranking display, feedback | `omi-v3/app/src/lib/home-cards.ts` behavior |
 | `app/lib/device/` and `app/lib/features/device_screen.dart` | Omi pairing, BLE/audio status, phone capture | upstream Flutter device and capture services |
-| `app/native/hub/src/lib.rs` | Rinf signals, `rx4`, `rotary`, `rs_ai`, computer-use orchestration | `praefectus` crate; no fork |
+| `app/native/hub/src/lib.rs` | Rinf signals, `rx4`, `rs_ai`, computer-use orchestration | `praefectus` crate; no fork |
 | `worker/src/index.ts` | Authenticated API, D1 memory, channels, plans, managed inference | `omi-v3/desktop/cloud-api` |
 
 ## Rinf boundary
@@ -161,7 +161,7 @@ The nightly cycle creates one editable, idempotent Daily Review per Person, loca
 - A Current includes evidence, reason, timing, confidence, and one proposed next step.
 - Feedback changes future ranking without rewriting Personal Memory.
 - Accepted actions create an execution record and require approval at the action boundary.
-- `rx4` and `rotary` are core, paired extraction/ranking engines for the assistant/recommendation stack before adding another recommendation engine; `rx4` usage today is version-reporting only (`rx4::VERSION`), and wiring `rotary` plus moving `rx4` into real extraction/ranking calls is near-term work (see Active build checklist).
+- `rx4` (also called "rotary") is the core extraction/ranking engine for the assistant/recommendation stack, reused before adding another recommendation engine; usage today is version-reporting only (`rx4::VERSION`), and moving it into real extraction/ranking calls is near-term work (see Active build checklist).
 - Hermes-style background review proposes skills and preference updates; the user can inspect or disable them.
 
 ## Hardware and capture
@@ -314,7 +314,7 @@ When a paid plan is reintroduced, offer a subscription tier (e.g. riding an xAI 
 | Slice | Implemented | Proof still required |
 | --- | --- | --- |
 | Product shell | Gradient Flutter onboarding plus a single continuous-chat desktop hub with Currents surfaced as task rows and Settings consolidated into the app menu; Devices is mobile-only, Memory is web-portal-only | Rendered accessibility/responsive audit on every target |
-| Native hub | Generated Rinf signals, UID-scoped production Dart configuration/event consumption, bounded/reaped command registry, ordered configuration, nonblocking/idempotent `zkr` 0.3.0 capture, cited retrieval, correction, and deletion with transcript locators, managed/BYOK live STT, source gaps, final drain, typed stop acknowledgements, atomic computer-use approval/execution, cancellation, `rx4`, `rotary`, and `praefectus` | Credentialed live-provider proof, physical-device lifecycle stress, local STT only after a real provider exists, and wiring `rotary` plus real `rx4` extraction/ranking calls beyond version-reporting |
+| Native hub | Generated Rinf signals, UID-scoped production Dart configuration/event consumption, bounded/reaped command registry, ordered configuration, nonblocking/idempotent `zkr` 0.3.0 capture, cited retrieval, correction, and deletion with transcript locators, managed/BYOK live STT, source gaps, final drain, typed stop acknowledgements, atomic computer-use approval/execution, cancellation, `rx4`, and `praefectus` | Credentialed live-provider proof, physical-device lifecycle stress, local STT only after a real provider exists, and real `rx4` extraction/ranking calls beyond version-reporting |
 | Mobile relay | Omi-filtered BLE discovery, connect/discover, battery/codec reads, bounded sequenced PCM8/PCM16/Opus reassembly, native PCM8-to-linear16 conversion, disconnect/EOS, restart handling, and completed-transcript capture into evidenced `zkr` memory | Credentialed live Deepgram, physical iOS/Android sessions, and background recovery |
 | SaaS backend | Firebase-token boundary, D1 memory/settings, Stripe entitlements, Telegram, Blooio, cited retrieval, durable channel-to-desktop leases, and serialized outbound delivery | Real Firebase/Stripe/channel credentials and preview deployment |
 | Shared conversation | UID-scoped persistence, ordered replay, desktop channel dispatch, offline retry, and atomic outbound replies | Live app/web refresh and credentialed Telegram/Blooio proof |
@@ -359,7 +359,7 @@ Do not count a compiled adapter as a deployed integration. Credentialed provider
 
 - Firebase phone authentication on macOS and Windows uses the implemented browser handoff with a short-lived PKCE verifier, explicit matching confirmation code, atomic attempt lockout, and single-use custom-token exchange; deployment still requires real Firebase and Worker configuration.
 - Omi hardware capture is mobile-owned in v0 because upstream has no macOS/Windows BLE bridge and browsers cannot provide equivalent background BLE.
-- `rx4`, `rotary`, and `praefectus` need feature-gated audits for mobile and wasm linking.
+- `rx4` and `praefectus` need feature-gated audits for mobile and wasm linking.
 - `omi-v3` implements MiMo ASR/translation but not managed MiMo Pro chat, Telegram, Grok voice, or a complete Recommendation Memory lifecycle.
 - Cloudflare bindings and secrets in the reference backend are placeholders; deployment proof starts only after real preview resources exist.
 - Rinf 8.10's bundled Cargokit uses an API removed by Gradle 9; Android stays on the latest Flutter-supported Gradle 8 line until Rinf publishes a compatible release.
@@ -391,4 +391,4 @@ Prove managed/BYOK Deepgram with real credentials and a physical Omi on iOS and 
 - 2026-07-21: Upgraded the Rinf hub to `zkr` 0.2.0 after its isolation, bitemporal, embedding-lifecycle, deletion, plugin, migration, release, and security audits passed.
 - 2026-07-21: Rendered the authenticated, credential-redacted Worker setup-health contract in Flutter Setup so missing Firebase, channels, billing, model routes, and desktop authentication are visible without exposing secrets.
 - 2026-07-21: Replaced the Flutter plan placeholder with strict entitlement loading and external Stripe Checkout or billing-portal handoff for the two-plan SaaS model.
-- 2026-07-22: Redesigned the desktop hub as a single continuous-chat surface with Currents rendered as "What matters next" task rows, moved to a normal titled window with native traffic-light controls (onboarding stays borderless), consolidated Setup/Account into one Settings surface reached via the macOS app menu, and corrected PLAN.md's crate references (`praefectus` replacing `rs_peekaboo`, `rx4`/`rotary` as paired core engines, `zkr` 0.3.0).
+- 2026-07-22: Redesigned the desktop hub as a single continuous-chat surface with Currents rendered as "What matters next" task rows, moved to a normal titled window with native traffic-light controls (onboarding stays borderless), consolidated Setup/Account into one Settings surface reached via the macOS app menu, and corrected PLAN.md's crate references (`praefectus` replacing `rs_peekaboo`, `rx4` ("rotary") as one crate, not two, `zkr` 0.3.0).
