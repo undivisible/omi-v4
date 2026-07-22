@@ -499,8 +499,8 @@ class MobilePendantPageState extends State<MobilePendantPage> {
       builder: (context, constraints) {
         final pendantWidth = math.min(constraints.maxWidth * .82, 420.0);
         final heroHeight = math.min(
-          constraints.maxHeight * .46,
-          pendantWidth * .78 + 190,
+          constraints.maxHeight * .5,
+          pendantWidth * .78 + 222,
         );
         return Column(
           key: const Key('companion_pendant_column'),
