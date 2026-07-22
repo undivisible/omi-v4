@@ -1,17 +1,17 @@
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 use std::time::Duration;
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 const SUMMARY_TIMEOUT: Duration = Duration::from_secs(12);
-#[cfg(any(target_os = "macos", test))]
+#[cfg(any(all(target_os = "macos", target_arch = "aarch64"), test))]
 const SUMMARY_CHARS: usize = 280;
 
 pub fn is_available() -> bool {
-    #[cfg(target_os = "macos")]
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     {
         rs_ai_local::foundationmodels::is_available()
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
     {
         false
     }
@@ -21,7 +21,7 @@ pub async fn summarize(prompt: &str) -> Option<String> {
     if !is_available() {
         return None;
     }
-    #[cfg(target_os = "macos")]
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     {
         let options = rs_ai_local::foundationmodels::GenerationOptions {
             temperature: Some(0.2),
@@ -36,14 +36,14 @@ pub async fn summarize(prompt: &str) -> Option<String> {
         .ok()
         .and_then(|value| clean_summary(&value))
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
     {
         let _ = prompt;
         None
     }
 }
 
-#[cfg(any(target_os = "macos", test))]
+#[cfg(any(all(target_os = "macos", target_arch = "aarch64"), test))]
 fn clean_summary(value: &str) -> Option<String> {
     let value = value.split_whitespace().collect::<Vec<_>>().join(" ");
     let value = value.chars().take(SUMMARY_CHARS).collect::<String>();
