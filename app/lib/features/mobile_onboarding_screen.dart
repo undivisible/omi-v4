@@ -12,6 +12,16 @@ import 'onboarding/randomized_text.dart';
 
 enum MobileOnboardingStage { account, pair, teach, finish }
 
+const _headingStyle = TextStyle(
+  color: Color(0xfffffcec),
+  fontFamily: 'Avenir Next',
+  fontSize: 30,
+  fontWeight: FontWeight.w500,
+  height: 1.2,
+  letterSpacing: -1,
+);
+const _headingZoneHeight = 72.0;
+
 class MobileOnboardingScreen extends StatefulWidget {
   const MobileOnboardingScreen({
     required this.services,
@@ -128,14 +138,25 @@ class _MobileOnboardingScreenState extends State<MobileOnboardingScreen> {
     ),
   );
 
+  double get _stageProgress => switch (stage) {
+    MobileOnboardingStage.account => 0,
+    MobileOnboardingStage.pair => .35,
+    MobileOnboardingStage.teach =>
+      .6 + .1 * (teachPage / (_TeachStage.pages.length - 1)),
+    MobileOnboardingStage.finish => 1,
+  };
+
   @override
   Widget build(BuildContext context) {
     if (transitionMode case final mode?) {
+      final darkHome =
+          MediaQuery.platformBrightnessOf(context) == Brightness.dark;
       return Scaffold(
         backgroundColor: const Color(0xff171716),
         body: LightspeedTransition(
           key: const Key('mobile_onboarding_transition'),
           mode: mode,
+          endColor: darkHome ? _ink : const Color(0xfff7f6f1),
           onCompleted: () => unawaited(_completeFinish()),
           child: mode == LightspeedMode.lightspeed
               ? const PendantVisual(size: 132)
@@ -152,14 +173,15 @@ class _MobileOnboardingScreenState extends State<MobileOnboardingScreen> {
             stage == MobileOnboardingStage.pair &&
             relaySnapshot?.phase == DeviceConnectionPhase.scanning,
         settled: stage.index >= MobileOnboardingStage.teach.index,
+        progress: _stageProgress,
         child: SafeArea(
           child: Center(
             child: ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 620),
-              child: SingleChildScrollView(
+              child: Padding(
                 padding: const EdgeInsets.symmetric(
                   horizontal: 28,
-                  vertical: 44,
+                  vertical: 24,
                 ),
                 child: AnimatedSwitcher(
                   duration: const Duration(milliseconds: 240),
@@ -225,6 +247,47 @@ class _MobileOnboardingScreenState extends State<MobileOnboardingScreen> {
       ),
     );
   }
+}
+
+class _StageLayout extends StatelessWidget {
+  const _StageLayout({
+    required this.heading,
+    required this.primary,
+    this.body,
+    this.secondary,
+  });
+
+  final Widget heading;
+  final Widget? body;
+  final Widget primary;
+  final Widget? secondary;
+
+  @override
+  Widget build(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
+      SizedBox(
+        height: _headingZoneHeight,
+        child: ClipRect(
+          child: Align(alignment: Alignment.bottomLeft, child: heading),
+        ),
+      ),
+      const SizedBox(height: 20),
+      Expanded(
+        child: SingleChildScrollView(child: body ?? const SizedBox.shrink()),
+      ),
+      const SizedBox(height: 18),
+      SizedBox(
+        key: const Key('mobile_onboarding_primary_slot'),
+        height: 56,
+        child: Center(child: primary),
+      ),
+      SizedBox(
+        height: 52,
+        child: Center(child: secondary ?? const SizedBox.shrink()),
+      ),
+    ],
+  );
 }
 
 class PendantVisual extends StatelessWidget {
@@ -305,63 +368,52 @@ class _AccountStage extends StatelessWidget {
   final VoidCallback onAlreadyHaveAccount;
 
   @override
-  Widget build(BuildContext context) => Column(
-    crossAxisAlignment: CrossAxisAlignment.stretch,
-    children: [
-      const RandomizedText(
-        segments: [
-          ('Hi, I’m Omi. Let’s set up your ', null),
-          ('pendant.', TextStyle(fontWeight: FontWeight.w700)),
-        ],
-        style: TextStyle(
-          color: Color(0xfffffcec),
-          fontFamily: 'Avenir Next',
-          fontSize: 34,
-          fontWeight: FontWeight.w500,
-          height: 1.12,
-          letterSpacing: -1.4,
-        ),
-      ),
-      const SizedBox(height: 26),
-      AuthenticationGate(
-        auth: auth,
-        configurationMessage: configurationMessage,
-      ),
-      if (auth.snapshot.phase == AuthPhase.signedIn &&
-          !auth.snapshot.hasProcessingAuthority) ...[
-        const SizedBox(height: 8),
-        FilledButton(
-          key: const Key('mobile_grant_processing_consent'),
-          onPressed: () => unawaited(auth.grantProcessingConsent()),
-          child: const Text('Allow Omi to process my data'),
-        ),
+  Widget build(BuildContext context) => _StageLayout(
+    heading: const RandomizedText(
+      segments: [
+        ('Hi, I’m Omi. Let’s set up your ', null),
+        ('pendant.', TextStyle(fontWeight: FontWeight.w700)),
       ],
-      const SizedBox(height: 24),
-      Center(
-        child: FilledButton(
-          key: const Key('mobile_onboarding_account_continue'),
-          onPressed: satisfied ? onContinue : null,
-          style: buttonStyle,
-          child: const Text('Continue'),
+      maxLines: 2,
+      style: _headingStyle,
+    ),
+    body: Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        AuthenticationGate(
+          auth: auth,
+          configurationMessage: configurationMessage,
         ),
-      ),
-      const SizedBox(height: 10),
-      Center(
-        child: TextButton(
-          key: const Key('mobile_already_have_account'),
-          style: TextButton.styleFrom(
-            foregroundColor: const Color(0xb3fffcec),
-            textStyle: const TextStyle(
-              fontFamily: 'Avenir Next',
-              fontSize: 14,
-              fontWeight: FontWeight.w500,
-            ),
+        if (auth.snapshot.phase == AuthPhase.signedIn &&
+            !auth.snapshot.hasProcessingAuthority) ...[
+          const SizedBox(height: 8),
+          FilledButton(
+            key: const Key('mobile_grant_processing_consent'),
+            onPressed: () => unawaited(auth.grantProcessingConsent()),
+            child: const Text('Allow Omi to process my data'),
           ),
-          onPressed: onAlreadyHaveAccount,
-          child: const Text('Already have an account?'),
+        ],
+      ],
+    ),
+    primary: FilledButton(
+      key: const Key('mobile_onboarding_account_continue'),
+      onPressed: satisfied ? onContinue : null,
+      style: buttonStyle,
+      child: const Text('Continue'),
+    ),
+    secondary: TextButton(
+      key: const Key('mobile_already_have_account'),
+      style: TextButton.styleFrom(
+        foregroundColor: const Color(0xb3fffcec),
+        textStyle: const TextStyle(
+          fontFamily: 'Avenir Next',
+          fontSize: 14,
+          fontWeight: FontWeight.w500,
         ),
       ),
-    ],
+      onPressed: onAlreadyHaveAccount,
+      child: const Text('Already have an account?'),
+    ),
   );
 }
 
@@ -424,6 +476,7 @@ class _PairStageState extends State<_PairStage> {
     try {
       await widget.services.connectDevice(device.id);
       await widget.pairedDevices.save(device.id);
+      unawaited(relay.sendHaptic(2));
       if (mounted) setState(() {});
     } catch (next) {
       if (mounted) setState(() => error = next);
@@ -441,82 +494,86 @@ class _PairStageState extends State<_PairStage> {
   };
 
   @override
-  Widget build(BuildContext context) => Column(
-    crossAxisAlignment: CrossAxisAlignment.stretch,
-    children: [
-      const Center(child: PendantVisual(size: 120)),
-      const SizedBox(height: 8),
-      const RandomizedText(
-        segments: [('Pair your pendant.', null)],
-        textAlign: TextAlign.center,
-        style: TextStyle(
-          color: Color(0xfffffcec),
-          fontFamily: 'Avenir Next',
-          fontSize: 34,
-          fontWeight: FontWeight.w500,
-          height: 1.12,
-          letterSpacing: -1.4,
-        ),
-      ),
-      const SizedBox(height: 12),
-      Text(
-        [_phaseLabel(_phase), ?snapshot?.message].join(' · '),
-        key: const Key('mobile_pair_status'),
-        textAlign: TextAlign.center,
-        style: const TextStyle(color: Color(0xffd0cec6), height: 1.4),
-      ),
-      const SizedBox(height: 18),
-      if (!_connected) ...[
-        OutlinedButton.icon(
-          key: const Key('mobile_pair_scan'),
-          onPressed: _phase == DeviceConnectionPhase.scanning ? null : _scan,
-          icon: const Icon(Icons.bluetooth_searching_rounded),
-          label: const Text('Scan for my Omi'),
-        ),
+  Widget build(BuildContext context) => _StageLayout(
+    heading: const RandomizedText(
+      segments: [('Pair your pendant.', null)],
+      maxLines: 2,
+      style: _headingStyle,
+    ),
+    body: Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const Center(child: PendantVisual(size: 110)),
         const SizedBox(height: 8),
-        for (final found in devices)
-          ListTile(
-            key: Key('mobile_pair_connect_${found.id}'),
-            leading: const Icon(Icons.watch_outlined, color: Color(0xfffffcec)),
-            title: Text(
-              found.name,
-              style: const TextStyle(color: Color(0xfffffcec)),
-            ),
-            subtitle: Text(
-              [
-                if (found.signalStrength case final signal?) '$signal dBm',
-                if (found.batteryLevel case final battery?) '$battery% battery',
-              ].join(' · '),
-              style: const TextStyle(color: Color(0xffd0cec6)),
-            ),
-            trailing: const Icon(
-              Icons.add_circle_outline_rounded,
-              color: Color(0xfffffcec),
-            ),
-            onTap: _phase == DeviceConnectionPhase.connecting
-                ? null
-                : () => unawaited(_connect(found)),
+        Text(
+          [_phaseLabel(_phase), ?snapshot?.message].join(' · '),
+          key: const Key('mobile_pair_status'),
+          textAlign: TextAlign.center,
+          style: const TextStyle(color: Color(0xffd0cec6), height: 1.4),
+        ),
+        const SizedBox(height: 18),
+        if (!_connected) ...[
+          OutlinedButton.icon(
+            key: const Key('mobile_pair_scan'),
+            onPressed: _phase == DeviceConnectionPhase.scanning ? null : _scan,
+            icon: const Icon(Icons.bluetooth_searching_rounded),
+            label: const Text('Scan for my Omi'),
           ),
+          const SizedBox(height: 8),
+          for (final found in devices)
+            ListTile(
+              key: Key('mobile_pair_connect_${found.id}'),
+              leading: const Icon(
+                Icons.watch_outlined,
+                color: Color(0xfffffcec),
+              ),
+              title: Text(
+                found.name,
+                style: const TextStyle(color: Color(0xfffffcec)),
+              ),
+              subtitle: Text(
+                [
+                  if (found.signalStrength case final signal?) '$signal dBm',
+                  if (found.batteryLevel case final battery?)
+                    '$battery% battery',
+                ].join(' · '),
+                style: const TextStyle(color: Color(0xffd0cec6)),
+              ),
+              trailing: const Icon(
+                Icons.add_circle_outline_rounded,
+                color: Color(0xfffffcec),
+              ),
+              onTap: _phase == DeviceConnectionPhase.connecting
+                  ? null
+                  : () => unawaited(_connect(found)),
+            ),
+        ],
+        if (error case final message?) ...[
+          const SizedBox(height: 8),
+          Text('$message', style: const TextStyle(color: Color(0xffffb4ab))),
+        ],
       ],
-      if (error case final message?) ...[
-        const SizedBox(height: 8),
-        Text('$message', style: const TextStyle(color: Color(0xffffb4ab))),
-      ],
-      const SizedBox(height: 24),
-      if (_connected)
-        FilledButton(
-          key: const Key('mobile_pair_continue'),
-          onPressed: widget.onContinue,
-          style: widget.buttonStyle,
-          child: const Text('Continue'),
-        )
-      else
-        TextButton(
-          key: const Key('mobile_pair_skip'),
-          onPressed: widget.onContinue,
-          child: const Text('Pair later'),
-        ),
-    ],
+    ),
+    primary: _connected
+        ? FilledButton(
+            key: const Key('mobile_pair_continue'),
+            onPressed: widget.onContinue,
+            style: widget.buttonStyle,
+            child: const Text('Continue'),
+          )
+        : FilledButton(
+            key: const Key('mobile_pair_continue_disabled'),
+            onPressed: null,
+            style: widget.buttonStyle,
+            child: const Text('Continue'),
+          ),
+    secondary: _connected
+        ? null
+        : TextButton(
+            key: const Key('mobile_pair_skip'),
+            onPressed: widget.onContinue,
+            child: const Text('Pair later'),
+          ),
   );
 }
 
@@ -539,30 +596,19 @@ class _TeachStage extends StatelessWidget {
   final VoidCallback onContinue;
 
   @override
-  Widget build(BuildContext context) => Column(
-    mainAxisSize: MainAxisSize.min,
-    children: [
-      RandomizedText(
-        key: ValueKey(pages[page]),
-        segments: [(pages[page], null)],
-        textAlign: TextAlign.center,
-        style: const TextStyle(
-          color: Color(0xfffffcec),
-          fontFamily: 'Avenir Next',
-          fontSize: 30,
-          fontWeight: FontWeight.w500,
-          height: 1.25,
-          letterSpacing: -1,
-        ),
-      ),
-      const SizedBox(height: 36),
-      FilledButton(
-        key: Key('mobile_teach_continue_$page'),
-        onPressed: onContinue,
-        style: buttonStyle,
-        child: Text(page < pages.length - 1 ? 'Next' : 'Got it'),
-      ),
-    ],
+  Widget build(BuildContext context) => _StageLayout(
+    heading: RandomizedText(
+      key: ValueKey(pages[page]),
+      segments: [(pages[page], null)],
+      maxLines: 2,
+      style: _headingStyle.copyWith(fontSize: 24, letterSpacing: -.5),
+    ),
+    primary: FilledButton(
+      key: Key('mobile_teach_continue_$page'),
+      onPressed: onContinue,
+      style: buttonStyle,
+      child: Text(page < pages.length - 1 ? 'Next' : 'Got it'),
+    ),
   );
 }
 
@@ -581,40 +627,27 @@ class _FinishStage extends StatelessWidget {
   final FutureOr<void> Function() onFinish;
 
   @override
-  Widget build(BuildContext context) => Column(
-    mainAxisSize: MainAxisSize.min,
-    children: [
-      const PendantVisual(size: 120),
-      const SizedBox(height: 12),
-      const RandomizedText(
-        segments: [('You’re all set.', null)],
-        textAlign: TextAlign.center,
-        style: TextStyle(
-          color: Color(0xfffffcec),
-          fontFamily: 'Avenir Next',
-          fontSize: 34,
-          fontWeight: FontWeight.w500,
-          height: 1.12,
-          letterSpacing: -1.4,
-        ),
-      ),
-      const SizedBox(height: 36),
-      FilledButton(
-        key: const Key('mobile_onboarding_finish'),
-        onPressed: finishing ? null : () async => onFinish(),
-        style: buttonStyle,
-        child: const Text('Take me to Omi'),
-      ),
-      if (error case final message?) ...[
-        const SizedBox(height: 12),
-        Semantics(
-          liveRegion: true,
-          child: Text(
-            message,
-            style: const TextStyle(color: Color(0xffffb4ab)),
+  Widget build(BuildContext context) => _StageLayout(
+    heading: const RandomizedText(
+      segments: [('You’re all set.', null)],
+      maxLines: 2,
+      style: _headingStyle,
+    ),
+    body: const Center(child: PendantVisual(size: 120)),
+    primary: FilledButton(
+      key: const Key('mobile_onboarding_finish'),
+      onPressed: finishing ? null : () async => onFinish(),
+      style: buttonStyle,
+      child: const Text('Take me to Omi'),
+    ),
+    secondary: error == null
+        ? null
+        : Semantics(
+            liveRegion: true,
+            child: Text(
+              error!,
+              style: const TextStyle(color: Color(0xffffb4ab)),
+            ),
           ),
-        ),
-      ],
-    ],
   );
 }

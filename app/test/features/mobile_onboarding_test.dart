@@ -228,6 +228,81 @@ void main() {
     );
   });
 
+  testWidgets('primary button keeps a fixed position across stages', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(800, 1600));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final services = _unavailableAuthServices();
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MobileOnboardingScreen(
+          services: services,
+          pairedDevices: VolatilePairedDeviceStore(),
+          onFinish: () {},
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    Rect slot() =>
+        tester.getRect(find.byKey(const Key('mobile_onboarding_primary_slot')));
+    final accountSlot = slot();
+
+    await tester.tap(
+      find.byKey(const Key('mobile_onboarding_account_continue')),
+    );
+    await tester.pumpAndSettle();
+    expect(slot(), accountSlot);
+
+    await tester.tap(find.byKey(const Key('mobile_pair_skip')));
+    await tester.pumpAndSettle();
+    expect(slot(), accountSlot);
+
+    for (var page = 0; page < 3; page += 1) {
+      await tester.tap(find.byKey(Key('mobile_teach_continue_$page')));
+      await tester.pumpAndSettle();
+      expect(slot(), accountSlot);
+    }
+    services.dispose();
+  });
+
+  testWidgets('successful pairing sends a haptic to the pendant', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(800, 1600));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final adapter = _Adapter();
+    final services = await _authorizedMobileServices('user-a', adapter);
+    await services.initialize();
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MobileOnboardingScreen(
+          services: services,
+          pairedDevices: VolatilePairedDeviceStore(),
+          onFinish: () {},
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(const Key('mobile_onboarding_account_continue')),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('mobile_pair_scan')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('mobile_pair_connect_omi-1')));
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 50)),
+    );
+    await tester.pumpAndSettle();
+
+    expect(adapter.haptics, [2]);
+    services.dispose();
+  });
+
   testWidgets('desktop install notice shows, dismisses, and stays dismissed', (
     tester,
   ) async {
@@ -314,22 +389,24 @@ Future<AppServices> _authorizedServices(String uid) async =>
       memoryDatabasePath: (uid) => '/tmp/$uid.sqlite3',
     );
 
-Future<AppServices> _authorizedMobileServices(String uid) async =>
-    AppServices.forTesting(
-      nativeHub: _Hub(),
-      deviceRelay: DeviceRelayService(
-        role: DeviceRelayRole.mobileOwner,
-        adapter: _Adapter(),
-      ),
-      auth: await _authorizedAuth(uid),
-      memoryDatabasePath: (uid) => '/tmp/$uid.sqlite3',
-      managedStt: _ManagedStt(
-        ManagedSttSession(
-          websocketUrl: 'wss://api.example.test/v1/stt/sessions/s/stream',
-          session: _session(uid),
-        ),
-      ),
-    );
+Future<AppServices> _authorizedMobileServices(
+  String uid, [
+  _Adapter? adapter,
+]) async => AppServices.forTesting(
+  nativeHub: _Hub(),
+  deviceRelay: DeviceRelayService(
+    role: DeviceRelayRole.mobileOwner,
+    adapter: adapter ?? _Adapter(),
+  ),
+  auth: await _authorizedAuth(uid),
+  memoryDatabasePath: (uid) => '/tmp/$uid.sqlite3',
+  managedStt: _ManagedStt(
+    ManagedSttSession(
+      websocketUrl: 'wss://api.example.test/v1/stt/sessions/s/stream',
+      session: _session(uid),
+    ),
+  ),
+);
 
 final class _ManagedStt implements ManagedSttClient {
   _ManagedStt(this.result);
@@ -399,10 +476,17 @@ final class _Gateway implements AuthGateway {
   Future<void> signOut() async => currentSession = null;
 }
 
-final class _Adapter implements DeviceRelayAdapter {
+final class _Adapter implements DeviceRelayAdapter, DeviceRelayHaptics {
+  final haptics = <int>[];
   final _snapshots = StreamController<DeviceRelaySnapshot>.broadcast();
   final _audio = StreamController<List<int>>.broadcast();
   final _connections = StreamController<bool>.broadcast();
+
+  @override
+  Future<bool> sendHaptic(int level) async {
+    haptics.add(level);
+    return true;
+  }
 
   static const _device = RelayDevice(
     id: 'omi-1',

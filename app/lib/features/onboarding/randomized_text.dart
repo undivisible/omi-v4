@@ -7,12 +7,14 @@ class RandomizedText extends StatefulWidget {
     required this.segments,
     required this.style,
     this.textAlign = TextAlign.start,
+    this.maxLines,
     super.key,
   });
 
   final List<(String, TextStyle?)> segments;
   final TextStyle style;
   final TextAlign textAlign;
+  final int? maxLines;
 
   @override
   State<RandomizedText> createState() => _RandomizedTextState();
@@ -75,6 +77,10 @@ class _RandomizedTextState extends State<RandomizedText>
           ),
           style: widget.style,
           textAlign: widget.textAlign,
+          maxLines: widget.maxLines,
+          overflow: widget.maxLines == null
+              ? TextOverflow.clip
+              : TextOverflow.ellipsis,
         ),
       ),
     ),

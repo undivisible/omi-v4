@@ -11,6 +11,7 @@ class OnboardingBackdrop extends StatefulWidget {
     required this.searching,
     required this.settled,
     this.baseColor,
+    this.progress,
     super.key,
   });
 
@@ -19,6 +20,7 @@ class OnboardingBackdrop extends StatefulWidget {
   final bool searching;
   final bool settled;
   final Color? baseColor;
+  final double? progress;
 
   @override
   State<OnboardingBackdrop> createState() => _OnboardingBackdropState();
@@ -38,6 +40,13 @@ class _OnboardingBackdropState extends State<OnboardingBackdrop> {
   @override
   Widget build(BuildContext context) {
     final reduceMotion = MediaQuery.disableAnimationsOf(context);
+    final progress = widget.progress;
+    final opacity = progress == null
+        ? (widget.bright ? .74 : .16)
+        : .16 + .64 * progress.clamp(0.0, 1.0);
+    final riseEnd = progress == null
+        ? (widget.bright ? 1.0 : 0.0)
+        : (progress * 1.6).clamp(0.0, 1.0);
     return Stack(
       fit: StackFit.expand,
       children: [
@@ -48,15 +57,15 @@ class _OnboardingBackdropState extends State<OnboardingBackdrop> {
         AnimatedOpacity(
           duration: reduceMotion
               ? Duration.zero
-              : const Duration(milliseconds: 900),
+              : Duration(milliseconds: progress == null ? 900 : 600),
           curve: Curves.easeOutCubic,
-          opacity: entered ? (widget.bright ? .74 : .16) : 0,
+          opacity: entered ? opacity : 0,
           child: TweenAnimationBuilder<double>(
             duration: reduceMotion
                 ? Duration.zero
-                : const Duration(milliseconds: 1800),
+                : Duration(milliseconds: progress == null ? 1800 : 600),
             curve: Curves.easeOutCubic,
-            tween: Tween(end: widget.bright ? 1 : 0),
+            tween: Tween(end: riseEnd),
             builder: (context, rise, child) => _OnboardingEdgeGradient(
               rise: rise,
               active: widget.searching,
