@@ -10,6 +10,8 @@ export 'generated/signals/signals.dart'
     show
         AudioEncoding,
         CaptureSource,
+        ComputerUseAuthorityReceipt,
+        ActionRisk,
         ActionProposal,
         ApprovalDecision,
         ApprovalDecisionAcknowledgement,
@@ -22,6 +24,7 @@ export 'generated/signals/signals.dart'
         NativeEventError,
         NativeEventMemoryCaptured,
         NativeEventOnboardingScanCompleted,
+        NativeEventRuntimeStatus,
         OnboardingScanCompleted,
         OnboardingScanSource,
         OnboardingScanState,
@@ -43,6 +46,7 @@ export 'generated/signals/signals.dart'
         ToolProgress,
         ToolStatus,
         TranscriptDelta;
+export 'generated/signals/signals.dart' show Uint64;
 
 abstract interface class NativeHub {
   bool get available;
@@ -115,6 +119,7 @@ abstract interface class NativeHub {
     required String requestId,
     required String proposalId,
     required ApprovalDecision decision,
+    ComputerUseAuthorityReceipt? authorityReceipt,
   });
   void startTranscription({
     required String requestId,
@@ -281,6 +286,7 @@ final class UnavailableNativeHub implements NativeHub, OnboardingScanHub {
     required String requestId,
     required String proposalId,
     required ApprovalDecision decision,
+    ComputerUseAuthorityReceipt? authorityReceipt,
   }) => _unavailable();
 
   @override
@@ -512,9 +518,14 @@ final class RinfNativeHub implements NativeHub, OnboardingScanHub {
     required String requestId,
     required String proposalId,
     required ApprovalDecision decision,
+    ComputerUseAuthorityReceipt? authorityReceipt,
   }) => _send(
     requestId,
-    CommandApprovalDecision(proposalId: proposalId, decision: decision),
+    CommandApprovalDecision(
+      proposalId: proposalId,
+      decision: decision,
+      authorityReceipt: authorityReceipt,
+    ),
   );
 
   @override

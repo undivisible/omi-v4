@@ -94,6 +94,7 @@ final class AppServices {
       isReady: () => chatReady,
       isDisposed: () => _disposed,
       currentUid: () => auth.snapshot.session?.uid,
+      currentIdToken: () async => (await auth.validSession())?.idToken,
       canPollInbox:
           conversationInbox != null &&
           !kIsWeb &&
@@ -559,7 +560,7 @@ final class AppServices {
           _ => 'app',
         };
 
-  String decideChatApproval({
+  Future<String> decideChatApproval({
     required String proposalId,
     required ApprovalDecision decision,
   }) => _conversationController.decide(

@@ -7,6 +7,7 @@ class RuntimeStatus {
     required this.phase,
     this.detail,
     required this.computerUseAvailable,
+    this.computerUseCapabilities,
     required this.localAiAvailable,
     required this.memoryAvailable,
     required this.agentHarnessAvailable,
@@ -18,6 +19,8 @@ class RuntimeStatus {
       phase: RuntimePhaseExtension.deserialize(deserializer),
       detail: TraitHelpers.deserializeOptionStr(deserializer),
       computerUseAvailable: deserializer.deserializeBool(),
+      computerUseCapabilities:
+          TraitHelpers.deserializeOptionComputerUseCapabilities(deserializer),
       localAiAvailable: deserializer.deserializeBool(),
       memoryAvailable: deserializer.deserializeBool(),
       agentHarnessAvailable: deserializer.deserializeBool(),
@@ -38,6 +41,7 @@ class RuntimeStatus {
   final RuntimePhase phase;
   final String? detail;
   final bool computerUseAvailable;
+  final ComputerUseCapabilities? computerUseCapabilities;
   final bool localAiAvailable;
   final bool memoryAvailable;
   final bool agentHarnessAvailable;
@@ -46,6 +50,7 @@ class RuntimeStatus {
     RuntimePhase? phase,
     String? Function()? detail,
     bool? computerUseAvailable,
+    ComputerUseCapabilities? Function()? computerUseCapabilities,
     bool? localAiAvailable,
     bool? memoryAvailable,
     bool? agentHarnessAvailable,
@@ -54,6 +59,9 @@ class RuntimeStatus {
       phase: phase ?? this.phase,
       detail: detail == null ? this.detail : detail(),
       computerUseAvailable: computerUseAvailable ?? this.computerUseAvailable,
+      computerUseCapabilities: computerUseCapabilities == null
+          ? this.computerUseCapabilities
+          : computerUseCapabilities(),
       localAiAvailable: localAiAvailable ?? this.localAiAvailable,
       memoryAvailable: memoryAvailable ?? this.memoryAvailable,
       agentHarnessAvailable:
@@ -66,6 +74,10 @@ class RuntimeStatus {
     phase.serialize(serializer);
     TraitHelpers.serializeOptionStr(detail, serializer);
     serializer.serializeBool(computerUseAvailable);
+    TraitHelpers.serializeOptionComputerUseCapabilities(
+      computerUseCapabilities,
+      serializer,
+    );
     serializer.serializeBool(localAiAvailable);
     serializer.serializeBool(memoryAvailable);
     serializer.serializeBool(agentHarnessAvailable);
@@ -87,6 +99,7 @@ class RuntimeStatus {
         phase == other.phase &&
         detail == other.detail &&
         computerUseAvailable == other.computerUseAvailable &&
+        computerUseCapabilities == other.computerUseCapabilities &&
         localAiAvailable == other.localAiAvailable &&
         memoryAvailable == other.memoryAvailable &&
         agentHarnessAvailable == other.agentHarnessAvailable;
@@ -97,6 +110,7 @@ class RuntimeStatus {
     phase,
     detail,
     computerUseAvailable,
+    computerUseCapabilities,
     localAiAvailable,
     memoryAvailable,
     agentHarnessAvailable,
@@ -112,6 +126,7 @@ class RuntimeStatus {
           'phase: $phase, '
           'detail: $detail, '
           'computerUseAvailable: $computerUseAvailable, '
+          'computerUseCapabilities: $computerUseCapabilities, '
           'localAiAvailable: $localAiAvailable, '
           'memoryAvailable: $memoryAvailable, '
           'agentHarnessAvailable: $agentHarnessAvailable'

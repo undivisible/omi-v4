@@ -8,6 +8,7 @@ import 'package:omi/api/worker_http.dart';
 import 'package:omi/auth/auth.dart';
 import 'package:omi/device/device.dart';
 import 'package:omi/conversations/conversations.dart';
+import 'package:omi/currents/currents.dart';
 import 'package:omi/features/chat_screen.dart';
 import 'package:omi/keyboard/keyboard.dart';
 import 'package:omi/native/generated/signals/signals.dart';
@@ -250,6 +251,8 @@ void main() {
   testWidgets('chat sends, streams progress, cancels, and approves proposals', (
     tester,
   ) async {
+    await tester.binding.setSurfaceSize(const Size(1000, 1600));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
     final auth = AuthController(
       _FakeAuthGateway(_session('user-a')),
       consentStore: VolatileConsentStore()..receipt = _receipt('user-a'),
@@ -348,6 +351,39 @@ void main() {
     expect(find.text('planner · running · Reading tasks'), findsOneWidget);
 
     hub.eventsController.add(
+      const NativeEventRuntimeStatus(
+        value: RuntimeStatus(
+          phase: RuntimePhase.ready,
+          computerUseAvailable: true,
+          computerUseCapabilities: ComputerUseCapabilities(
+            platform: 'macos',
+            backend: 'praefectus-accessibility',
+            sessionIsolation: ComputerUseSessionIsolation.sharedDesktop,
+            permissions: [
+              ComputerUsePermission(name: 'accessibility', granted: true),
+            ],
+            actions: [
+              ComputerUseActionCapability(
+                name: 'invoke',
+                available: true,
+                deliveryRoute: ComputerUseDeliveryRoute.targetAddressed,
+                backgroundSupport: ComputerUseBackgroundSupport.guarded,
+              ),
+              ComputerUseActionCapability(
+                name: 'set_value',
+                available: true,
+                deliveryRoute: ComputerUseDeliveryRoute.targetAddressed,
+                backgroundSupport: ComputerUseBackgroundSupport.guarded,
+              ),
+            ],
+          ),
+          localAiAvailable: false,
+          memoryAvailable: true,
+          agentHarnessAvailable: true,
+        ),
+      ),
+    );
+    hub.eventsController.add(
       NativeEventActionProposal(
         value: ActionProposal(
           proposalId: 'proposal-1',
@@ -358,6 +394,15 @@ void main() {
           computerAction: const ComputerUseActionInvoke(
             targetName: 'Save',
             backgroundOnly: false,
+          ),
+          operationId: 'operation-1',
+          actionHash: List.filled(64, 'a').join(),
+          targetProvenance: ComputerUseTargetProvenance(
+            processId: 42,
+            processGeneration: 'process-generation-1',
+            windowId: 'window-1',
+            role: 'button',
+            observationGeneration: Uint64.fromBigInt(BigInt.from(9)),
           ),
         ),
       ),
@@ -375,13 +420,31 @@ void main() {
             value: 'send the exact response',
             backgroundOnly: true,
           ),
+          operationId: 'operation-2',
+          actionHash: List.filled(64, 'b').join(),
+          targetProvenance: ComputerUseTargetProvenance(
+            processId: 42,
+            processGeneration: 'process-generation-1',
+            windowId: 'window-1',
+            role: 'text_field',
+            observationGeneration: Uint64.fromBigInt(BigInt.from(9)),
+          ),
         ),
       ),
     );
     await tester.pump();
+    expect(find.text('Invoke “Save” · Interactive'), findsOneWidget);
     expect(find.text('send the exact response'), findsOneWidget);
     expect(find.text('Background only'), findsOneWidget);
-    expect(find.text('Invoke “Save” · Interactive'), findsOneWidget);
+    expect(
+      find.textContaining('Conservative risk: external side effect'),
+      findsOneWidget,
+    );
+    expect(find.textContaining('process 42'), findsNWidgets(2));
+    expect(
+      find.textContaining('guarded shared-desktop background'),
+      findsNWidgets(2),
+    );
     hub.executableProposals.add('proposal-1');
     final approve = find.byKey(const ValueKey('approve_proposal-1'));
     await tester.ensureVisible(approve);
@@ -644,8 +707,8 @@ void main() {
     );
     await Future<void>.delayed(Duration.zero);
 
-    expect(
-      () => services.decideChatApproval(
+    await expectLater(
+      services.decideChatApproval(
         proposalId: 'atomic-retry',
         decision: ApprovalDecision.approveOnce,
       ),
@@ -653,31 +716,23 @@ void main() {
     );
     hub.failAtomicApproval = false;
     hub.rejectAtomicApproval = true;
-    services.decideChatApproval(
+    await services.decideChatApproval(
       proposalId: 'atomic-retry',
       decision: ApprovalDecision.approveOnce,
     );
     await Future<void>.delayed(Duration.zero);
 
     hub.rejectAtomicApproval = false;
-    hub.rejectAtomicApprovalWithoutFollowup = true;
-    services.decideChatApproval(
-      proposalId: 'atomic-retry',
-      decision: ApprovalDecision.approveOnce,
-    );
-    await Future<void>.delayed(Duration.zero);
-
-    hub.rejectAtomicApprovalWithoutFollowup = false;
     hub.dropAtomicApproval = true;
-    final ambiguousRequestId = services.decideChatApproval(
+    final ambiguousRequestId = await services.decideChatApproval(
       proposalId: 'atomic-retry',
       decision: ApprovalDecision.approveOnce,
     );
     await Future<void>.delayed(Duration.zero);
 
     hub.dropAtomicApproval = false;
-    expect(
-      () => services.decideChatApproval(
+    await expectLater(
+      services.decideChatApproval(
         proposalId: 'atomic-retry',
         decision: ApprovalDecision.approveOnce,
       ),
@@ -695,8 +750,8 @@ void main() {
       ),
     );
     await Future<void>.delayed(Duration.zero);
-    expect(
-      () => services.decideChatApproval(
+    await expectLater(
+      services.decideChatApproval(
         proposalId: 'atomic-retry',
         decision: ApprovalDecision.approveOnce,
       ),
@@ -706,6 +761,152 @@ void main() {
     services.dispose();
     await hub.close();
   });
+
+  for (final outcomeCase
+      in <
+        ({
+          String name,
+          NativeEvent Function(String requestId) terminal,
+          String state,
+          String detail,
+        })
+      >[
+        (
+          name: 'unknown',
+          terminal: (requestId) => NativeEventError(
+            value: NativeError(
+              requestId: requestId,
+              code: 'computer_use_outcome_unknown',
+              message: 'Outcome unknown.',
+              retryable: false,
+            ),
+          ),
+          state: 'outcome_unknown',
+          detail:
+              'Approved computer action outcome is unknown; automatic retry is prohibited.',
+        ),
+        (
+          name: 'failed before effect',
+          terminal: (requestId) => NativeEventError(
+            value: NativeError(
+              requestId: requestId,
+              code: 'computer_use_unavailable',
+              message: 'Computer use unavailable.',
+              retryable: false,
+            ),
+          ),
+          state: 'failed',
+          detail: 'Native execution failed.',
+        ),
+        (
+          name: 'cancelled before effect',
+          terminal: (requestId) => NativeEventToolProgress(
+            value: ToolProgress(
+              requestId: requestId,
+              tool: 'request',
+              status: ToolStatus.cancelled,
+              detail: 'request cancelled',
+            ),
+          ),
+          state: 'cancelled_before_effect',
+          detail: 'Approved computer action was cancelled before any effect.',
+        ),
+        (
+          name: 'expired before effect',
+          terminal: (requestId) => NativeEventError(
+            value: NativeError(
+              requestId: requestId,
+              code: 'proposal_expired',
+              message: 'Expired before effect.',
+              retryable: false,
+            ),
+          ),
+          state: 'expired_before_effect',
+          detail: 'Approved computer action expired before any effect.',
+        ),
+      ]) {
+    test(
+      'Current approval is consumed before native dispatch and records ${outcomeCase.name}',
+      () async {
+        final auth = AuthController(
+          _FakeAuthGateway(_session('user-a')),
+          consentStore: VolatileConsentStore()..receipt = _receipt('user-a'),
+        );
+        await auth.restoreSession();
+        final hub = _FakeHub()
+          ..executableProposals.add('current-proposal')
+          ..rejectAtomicApprovalWithoutFollowup =
+              outcomeCase.state != 'outcome_unknown';
+        final currentsTransport = _CurrentApprovalTransport(hub);
+        final services = AppServices.forTesting(
+          auth: auth,
+          nativeHub: hub,
+          deviceRelay: DeviceRelayService(
+            role: DeviceRelayRole.desktopObserver,
+            adapter: const UnavailableDeviceRelayAdapter(),
+          ),
+          memoryDatabasePath: (uid) => '/tmp/$uid.sqlite3',
+          currentsClient: CurrentsClient(currentsTransport),
+        );
+        await services.initialize();
+        final parentRequestId = await services.handoffCurrentAction(
+          const CurrentActionHandoff(
+            executionId: 'execution-1',
+            approvalNonce: 'nonce-1',
+            instruction: 'Invoke Save',
+            policyGeneration: 3,
+          ),
+        );
+        hub.eventsController.add(
+          NativeEventActionProposal(
+            value: ActionProposal(
+              proposalId: 'current-proposal',
+              requestId: parentRequestId,
+              title: 'Invoke Save',
+              summary: 'Invoke the exact accessible target.',
+              risk: ActionRisk.external,
+              computerAction: const ComputerUseActionInvoke(
+                targetName: 'Save',
+                backgroundOnly: false,
+              ),
+              operationId: 'operation-1',
+              actionHash: List.filled(64, 'a').join(),
+              targetProvenance: ComputerUseTargetProvenance(
+                processId: 42,
+                processGeneration: 'process-generation-1',
+                windowId: 'window-1',
+                role: 'button',
+                observationGeneration: Uint64.fromBigInt(BigInt.from(9)),
+              ),
+            ),
+          ),
+        );
+        await Future<void>.delayed(Duration.zero);
+
+        final approvalRequestId = await services.decideChatApproval(
+          proposalId: 'current-proposal',
+          decision: ApprovalDecision.approveOnce,
+        );
+
+        expect(currentsTransport.approvalObservedBeforeNative, isTrue);
+        expect(hub.approvalReceipts.single?.executionId, 'execution-1');
+        expect(hub.approvalReceipts.single?.firebaseToken, isNotEmpty);
+        expect(
+          hub.approvalReceipts.single?.receiptToken,
+          '0123456789012345678901234567890123456789012',
+        );
+        hub.eventsController.add(outcomeCase.terminal(approvalRequestId));
+        await _waitFor(() => currentsTransport.outcomes.isNotEmpty);
+        expect(currentsTransport.outcomes.single, {
+          'state': outcomeCase.state,
+          'detail': outcomeCase.detail,
+        });
+
+        services.dispose();
+        await hub.close();
+      },
+    );
+  }
 
   test('authority fences chat and tombstones late terminal events', () async {
     final gateway = _FakeAuthGateway(_session('user-a'));
@@ -1940,6 +2141,7 @@ final class _FakeHub implements NativeHub, OnboardingScanHub {
   final cancelled = <String>[];
   final messages = <(String, String)>[];
   final approvals = <(String, ApprovalDecision)>[];
+  final approvalReceipts = <ComputerUseAuthorityReceipt?>[];
   final approvalRequests = <(String, String)>[];
   final executableProposals = <String>{};
   final executedProposals = <String>[];
@@ -2103,9 +2305,11 @@ final class _FakeHub implements NativeHub, OnboardingScanHub {
     required String requestId,
     required String proposalId,
     required ApprovalDecision decision,
+    ComputerUseAuthorityReceipt? authorityReceipt,
   }) {
     if (failAtomicApproval) throw StateError('command queue unavailable');
     approvals.add((proposalId, decision));
+    approvalReceipts.add(authorityReceipt);
     if (dropAtomicApproval) return;
     if (rejectAtomicApprovalWithoutFollowup) {
       eventsController.add(
@@ -2314,6 +2518,52 @@ final class _Capture {
   final int recordedAtMs;
   final String? text;
   final TranscriptLocator? transcriptLocator;
+}
+
+final class _CurrentApprovalTransport implements CurrentsTransport {
+  _CurrentApprovalTransport(this.hub);
+
+  final _FakeHub hub;
+  final outcomes = <Map<String, Object?>>[];
+  bool approvalObservedBeforeNative = false;
+
+  @override
+  Future<CurrentsResponse> send(CurrentsRequest request) async {
+    if (request.path.endsWith('/approve')) {
+      approvalObservedBeforeNative = hub.approvals.isEmpty;
+      final body = request.body!;
+      final issuedAtMs = DateTime.now().millisecondsSinceEpoch;
+      return CurrentsResponse(
+        statusCode: 200,
+        body: {
+          'receipt': {
+            'version': 'omi-current-authority-v1',
+            'receiptId': 'receipt-1',
+            'receiptToken': '0123456789012345678901234567890123456789012',
+            'subject': 'user-a',
+            'policyGeneration': body['generation'],
+            'operationId': body['operationId'],
+            'proposalId': body['proposalId'],
+            'actionHash': body['actionHash'],
+            'risk': body['risk'],
+            'issuedAtMs': issuedAtMs,
+            'expiresAtMs': issuedAtMs + 60000,
+          },
+        },
+      );
+    }
+    if (request.path.endsWith('/outcome')) {
+      outcomes.add(request.body!);
+      return const CurrentsResponse(statusCode: 200, body: {'ok': true});
+    }
+    if (request.path.endsWith('/reject')) {
+      return const CurrentsResponse(statusCode: 200, body: {'ok': true});
+    }
+    return const CurrentsResponse(
+      statusCode: 200,
+      body: {'currents': <Object?>[]},
+    );
+  }
 }
 
 final class _DeviceAdapter implements DeviceRelayAdapter {

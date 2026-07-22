@@ -3,6 +3,10 @@ import 'dart:async';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:omi/currents/currents.dart';
 
+const _actionHash =
+    'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+const _receiptToken = '0123456789012345678901234567890123456789012';
+
 void main() {
   test(
     'decodes cited Currents and sends feedback and action handoff requests',
@@ -22,8 +26,24 @@ void main() {
       final handoff = await client.accept('current-1');
       expect(handoff.executionId, 'execution-1');
       expect(handoff.instruction, 'Review release checklist');
-      await client.approve(handoff);
+      final receipt = await client.approve(
+        handoff,
+        subject: 'user-1',
+        proposalId: 'proposal-1',
+        operationId: 'operation-1',
+        actionHash: _actionHash,
+        risk: 'external',
+      );
       expect(transport.requests.last.path, endsWith('/approve'));
+      expect(transport.requests.last.body, {
+        'approvalNonce': 'nonce-1',
+        'proposalId': 'proposal-1',
+        'operationId': 'operation-1',
+        'actionHash': _actionHash,
+        'risk': 'external',
+        'generation': 7,
+      });
+      expect(receipt.receiptId, 'receipt-1');
       await client.recordOutcome(
         handoff,
         CurrentExecutionOutcome.succeeded,
@@ -68,11 +88,69 @@ void main() {
       hasLength(1),
     );
   });
+
+  test('rejects a mismatched approval receipt', () async {
+    final transport = _Transport()..receiptSubject = 'other-user';
+    final client = CurrentsClient(transport);
+    final handoff = await client.accept('current-1');
+
+    await expectLater(
+      client.approve(
+        handoff,
+        subject: 'user-1',
+        proposalId: 'proposal-1',
+        operationId: 'operation-1',
+        actionHash: _actionHash,
+        risk: 'external',
+      ),
+      throwsA(isA<CurrentsClientException>()),
+    );
+  });
+
+  test(
+    'serializes exact terminal outcome replays without effect retry',
+    () async {
+      final transport = _Transport();
+      final client = CurrentsClient(transport);
+      const handoff = CurrentActionHandoff(
+        executionId: 'execution-1',
+        approvalNonce: 'nonce-1',
+        instruction: 'Invoke Save',
+        policyGeneration: 7,
+      );
+      for (final outcomeCase in <(CurrentExecutionOutcome, String)>[
+        (
+          CurrentExecutionOutcome.cancelledBeforeEffect,
+          'cancelled_before_effect',
+        ),
+        (CurrentExecutionOutcome.expiredBeforeEffect, 'expired_before_effect'),
+        (CurrentExecutionOutcome.outcomeUnknown, 'outcome_unknown'),
+      ]) {
+        final first = client.recordOutcome(handoff, outcomeCase.$1, 'Terminal');
+        await first;
+        final second = client.recordOutcome(
+          handoff,
+          outcomeCase.$1,
+          'Terminal',
+        );
+        await second;
+        expect(transport.requests[transport.requests.length - 2].body, {
+          'state': outcomeCase.$2,
+          'detail': 'Terminal',
+        });
+        expect(
+          transport.requests.last.body,
+          transport.requests[transport.requests.length - 2].body,
+        );
+      }
+    },
+  );
 }
 
 final class _Transport implements CurrentsTransport {
   final requests = <CurrentsRequest>[];
   Completer<void>? pauseGenerate;
+  String receiptSubject = 'user-1';
 
   @override
   Future<CurrentsResponse> send(CurrentsRequest request) async {
@@ -82,11 +160,12 @@ final class _Transport implements CurrentsTransport {
       return const CurrentsResponse(statusCode: 200, body: {'current': null});
     }
     if (request.path.endsWith('/accept')) {
-      return const CurrentsResponse(
+      return CurrentsResponse(
         statusCode: 201,
         body: {
           'executionId': 'execution-1',
           'approvalNonce': 'nonce-1',
+          'policyGeneration': 7,
           'action': {
             'kind': 'review',
             'instruction': 'Review release checklist',
@@ -103,9 +182,30 @@ final class _Transport implements CurrentsTransport {
         },
       );
     }
-    if (request.path.endsWith('/approve') ||
-        request.path.endsWith('/outcome') ||
-        request.path.endsWith('/reject')) {
+    if (request.path.endsWith('/approve')) {
+      return CurrentsResponse(
+        statusCode: 200,
+        body: {
+          'receipt': {
+            'version': 'omi-current-authority-v1',
+            'receiptId': 'receipt-1',
+            'receiptToken': _receiptToken,
+            'subject': receiptSubject,
+            'proposalId': 'proposal-1',
+            'operationId': 'operation-1',
+            'actionHash': _actionHash,
+            'policyGeneration': 7,
+            'risk': 'external',
+            'issuedAtMs': 4102444700000,
+            'expiresAtMs': 4102444800000,
+          },
+        },
+      );
+    }
+    if (request.path.endsWith('/reject')) {
+      return const CurrentsResponse(statusCode: 200, body: {'ok': true});
+    }
+    if (request.path.endsWith('/outcome')) {
       return const CurrentsResponse(statusCode: 200, body: {'ok': true});
     }
     return CurrentsResponse(

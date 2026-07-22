@@ -935,6 +935,7 @@ final class _RecordingHub implements NativeHub {
     required String requestId,
     required String proposalId,
     required ApprovalDecision decision,
+    ComputerUseAuthorityReceipt? authorityReceipt,
   }) {}
 
   @override

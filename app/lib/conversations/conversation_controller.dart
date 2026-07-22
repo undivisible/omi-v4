@@ -8,7 +8,14 @@ import 'conversations.dart';
 enum _ChatRequestKind { message, approval }
 
 typedef _ChatRequest = ({int generation, _ChatRequestKind kind});
-typedef _ChatProposal = ({int generation, String parentRequestId});
+typedef _ChatProposal = ({
+  int generation,
+  String parentRequestId,
+  String? operationId,
+  String? actionHash,
+  ActionRisk risk,
+  bool executable,
+});
 typedef _PendingApproval = ({
   String proposalId,
   ApprovalDecision decision,
@@ -32,6 +39,12 @@ String _boundedText(String value, int maxLength) {
   if (last >= 0xd800 && last <= 0xdbff) end -= 1;
   return value.substring(0, end);
 }
+
+String _riskName(ActionRisk risk) => switch (risk) {
+  ActionRisk.reversible => 'reversible',
+  ActionRisk.external => 'external',
+  ActionRisk.destructive => 'destructive',
+};
 
 final class _ActiveInboxItem {
   _ActiveInboxItem({
@@ -59,6 +72,7 @@ final class ConversationController {
     required bool Function() isReady,
     required bool Function() isDisposed,
     required String? Function() currentUid,
+    required Future<String?> Function() currentIdToken,
     required bool canPollInbox,
     required void Function(Object error, StackTrace stackTrace) addError,
     required Duration inboxPollInterval,
@@ -72,6 +86,7 @@ final class ConversationController {
     isReady,
     isDisposed,
     currentUid,
+    currentIdToken,
     canPollInbox,
     addError,
     inboxPollInterval,
@@ -87,6 +102,7 @@ final class ConversationController {
     this._isReady,
     this._isDisposed,
     this._currentUid,
+    this._currentIdToken,
     this._canPollInbox,
     this._addError,
     this._inboxPollInterval,
@@ -101,6 +117,7 @@ final class ConversationController {
   final bool Function() _isReady;
   final bool Function() _isDisposed;
   final String? Function() _currentUid;
+  final Future<String?> Function() _currentIdToken;
   final bool _canPollInbox;
   final void Function(Object error, StackTrace stackTrace) _addError;
   final Duration _inboxPollInterval;
@@ -114,7 +131,6 @@ final class ConversationController {
   final _approvalRequestByProposal = <String, String>{};
   final _handoffsByChatRequest = <String, CurrentActionHandoff>{};
   final _handoffsByProposal = <String, CurrentActionHandoff>{};
-  final _approvalSyncByRequest = <String, Future<void>>{};
   final _terminalRequests = <String>{};
   Timer? _inboxPollTimer;
   _ActiveInboxItem? _activeInboxItem;
@@ -178,10 +194,10 @@ final class ConversationController {
     return send(text: handoff.instruction, currentHandoff: handoff);
   }
 
-  String decide({
+  Future<String> decide({
     required String proposalId,
     required ApprovalDecision decision,
-  }) {
+  }) async {
     if (!_isReady()) {
       throw StateError('Native services are not connected.');
     }
@@ -200,16 +216,96 @@ final class ConversationController {
     _pendingApprovals[requestId] = (
       proposalId: proposalId,
       decision: decision,
-      handoff: _handoffsByProposal[proposalId],
+      handoff: null,
     );
     _approvalRequestByProposal[proposalId] = requestId;
+    final handoff = _handoffsByProposal[proposalId];
+    CurrentApprovalReceipt? receipt;
     try {
+      if (handoff != null && _currents != null) {
+        if (decision == ApprovalDecision.approveOnce && proposal.executable) {
+          final uid = _currentUid();
+          var token = await _currentIdToken();
+          if (uid == null || token == null || token.isEmpty) {
+            throw StateError('Current approval authority is unavailable.');
+          }
+          receipt = await _currents.approve(
+            handoff,
+            subject: uid,
+            proposalId: proposalId,
+            operationId: proposal.operationId!,
+            actionHash: proposal.actionHash!,
+            risk: _riskName(proposal.risk),
+          );
+          token = await _currentIdToken();
+          final pending = _pendingApprovals[requestId];
+          if (pending == null ||
+              proposal.generation != _generation ||
+              _currentUid() != uid ||
+              token == null ||
+              token.isEmpty ||
+              receipt.expiresAtMs <= _now().millisecondsSinceEpoch) {
+            await _currents.recordOutcome(
+              handoff,
+              CurrentExecutionOutcome.failed,
+              'Local authority changed before native dispatch.',
+            );
+            receipt = null;
+            throw StateError('Current approval authority changed.');
+          }
+          _pendingApprovals[requestId] = (
+            proposalId: proposalId,
+            decision: decision,
+            handoff: handoff,
+          );
+          _nativeHub.decideApproval(
+            requestId: requestId,
+            proposalId: proposalId,
+            decision: decision,
+            authorityReceipt: ComputerUseAuthorityReceipt(
+              version: receipt.version,
+              executionId: handoff.executionId,
+              receiptId: receipt.receiptId,
+              receiptToken: receipt.receiptToken,
+              firebaseToken: token,
+              subject: receipt.subject,
+              policyGeneration: Uint64.fromBigInt(
+                BigInt.from(receipt.policyGeneration),
+              ),
+              operationId: receipt.operationId,
+              proposalId: receipt.proposalId,
+              actionHash: receipt.actionHash,
+              risk: proposal.risk,
+              issuedAtMs: receipt.issuedAtMs,
+              expiresAtMs: receipt.expiresAtMs,
+            ),
+          );
+          return requestId;
+        }
+        await _currents.reject(handoff);
+      }
       _nativeHub.decideApproval(
         requestId: requestId,
         proposalId: proposalId,
         decision: decision,
       );
     } catch (_) {
+      if (receipt != null && handoff != null && _currents != null) {
+        unawaited(
+          _currents
+              .recordOutcome(
+                handoff,
+                CurrentExecutionOutcome.outcomeUnknown,
+                'Native dispatch outcome is unknown; automatic retry is prohibited.',
+              )
+              .onError((error, stack) {
+                _addError(
+                  error ?? StateError('Currents outcome failed.'),
+                  stack,
+                );
+              }),
+        );
+      }
       _requests.remove(requestId);
       _pendingApprovals.remove(requestId);
       _approvalRequestByProposal.remove(proposalId);
@@ -432,37 +528,18 @@ final class ConversationController {
         return false;
       }
       if (!value.accepted) {
-        _finishApprovalCorrelation(value.requestId, pending.proposalId);
         return true;
       }
       _proposals.remove(pending.proposalId);
       _handoffsByProposal.remove(pending.proposalId);
-      final handoff = pending.handoff;
-      if (handoff != null && _currents != null) {
-        if (pending.decision == ApprovalDecision.approveOnce &&
-            value.executionPending) {
-          final sync = _currents.approve(handoff);
-          _approvalSyncByRequest[value.requestId] = sync;
-          unawaited(
-            sync.onError((error, stack) {
-              _addError(
-                error ?? StateError('Currents approval failed.'),
-                stack,
-              );
-            }),
-          );
-        } else {
-          unawaited(
-            _currents.reject(handoff).onError((error, stack) {
-              _addError(
-                error ?? StateError('Currents rejection failed.'),
-                stack,
-              );
-            }),
+      if (!value.executionPending) {
+        if (pending.handoff case final handoff?) {
+          _recordCurrentOutcome(
+            handoff,
+            CurrentExecutionOutcome.failed,
+            'Native execution did not start.',
           );
         }
-      }
-      if (!value.executionPending) {
         _finishApprovalCorrelation(value.requestId, pending.proposalId);
       }
       return true;
@@ -481,6 +558,13 @@ final class ConversationController {
       _proposals[value.proposalId] = (
         generation: _generation,
         parentRequestId: value.requestId,
+        operationId: value.operationId,
+        actionHash: value.actionHash,
+        risk: value.risk,
+        executable:
+            value.computerAction != null &&
+            value.operationId != null &&
+            value.actionHash != null,
       );
       final handoff = _handoffsByChatRequest[value.requestId];
       if (handoff != null) _handoffsByProposal[value.proposalId] = handoff;
@@ -522,34 +606,35 @@ final class ConversationController {
     if (terminal) {
       final pendingApproval = _pendingApprovals[requestId];
       final currentHandoff = pendingApproval?.handoff;
-      final currentApproval = _approvalSyncByRequest.remove(requestId);
-      if (currentHandoff != null &&
-          currentApproval != null &&
-          _currents != null) {
-        final outcome =
-            event is NativeEventToolProgress &&
-                event.value.status == ToolStatus.complete
-            ? CurrentExecutionOutcome.succeeded
-            : CurrentExecutionOutcome.failed;
-        final detail = event is NativeEventToolProgress
-            ? [
-                event.value.tool,
-                event.value.status.name,
-                if (event.value.detail != null) event.value.detail!,
-              ].join(' · ')
-            : 'Native execution failed.';
-        unawaited(
-          currentApproval
-              .then(
-                (_) => _currents.recordOutcome(currentHandoff, outcome, detail),
-              )
-              .onError((error, stack) {
-                _addError(
-                  error ?? StateError('Currents outcome failed.'),
-                  stack,
-                );
-              }),
-        );
+      if (currentHandoff != null && _currents != null) {
+        final outcome = switch (event) {
+          NativeEventToolProgress(:final value)
+              when value.status == ToolStatus.complete =>
+            CurrentExecutionOutcome.succeeded,
+          NativeEventError(:final value)
+              when value.code == 'computer_use_outcome_unknown' =>
+            CurrentExecutionOutcome.outcomeUnknown,
+          NativeEventError(:final value)
+              when value.code == 'computer_use_expired' ||
+                  value.code == 'proposal_expired' =>
+            CurrentExecutionOutcome.expiredBeforeEffect,
+          NativeEventToolProgress(:final value)
+              when value.status == ToolStatus.cancelled =>
+            CurrentExecutionOutcome.cancelledBeforeEffect,
+          _ => CurrentExecutionOutcome.failed,
+        };
+        final detail = switch (outcome) {
+          CurrentExecutionOutcome.succeeded =>
+            'Approved computer action completed.',
+          CurrentExecutionOutcome.outcomeUnknown =>
+            'Approved computer action outcome is unknown; automatic retry is prohibited.',
+          CurrentExecutionOutcome.cancelledBeforeEffect =>
+            'Approved computer action was cancelled before any effect.',
+          CurrentExecutionOutcome.expiredBeforeEffect =>
+            'Approved computer action expired before any effect.',
+          CurrentExecutionOutcome.failed => 'Native execution failed.',
+        };
+        _recordCurrentOutcome(currentHandoff, outcome, detail);
       }
       if (pendingApproval != null) {
         _finishApprovalCorrelation(requestId, pendingApproval.proposalId);
@@ -610,6 +695,20 @@ final class ConversationController {
     _tombstone(requestId);
   }
 
+  void _recordCurrentOutcome(
+    CurrentActionHandoff handoff,
+    CurrentExecutionOutcome outcome,
+    String detail,
+  ) {
+    final currents = _currents;
+    if (currents == null) return;
+    unawaited(
+      currents.recordOutcome(handoff, outcome, detail).onError((error, stack) {
+        _addError(error ?? StateError('Currents outcome failed.'), stack);
+      }),
+    );
+  }
+
   int fence({required bool cancelPending}) {
     _generation += 1;
     _inboxPollTimer?.cancel();
@@ -631,7 +730,6 @@ final class ConversationController {
     _approvalRequestByProposal.clear();
     _handoffsByChatRequest.clear();
     _handoffsByProposal.clear();
-    _approvalSyncByRequest.clear();
     _authorityChanges.add(_generation);
     return _generation;
   }

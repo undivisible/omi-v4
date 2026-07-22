@@ -1176,6 +1176,7 @@ class CommandApprovalDecision extends Command {
   const CommandApprovalDecision({
     required this.proposalId,
     required this.decision,
+    this.authorityReceipt,
   }) : super();
 
   static CommandApprovalDecision load(BinaryDeserializer deserializer) {
@@ -1183,6 +1184,10 @@ class CommandApprovalDecision extends Command {
     final instance = CommandApprovalDecision(
       proposalId: deserializer.deserializeString(),
       decision: ApprovalDecisionExtension.deserialize(deserializer),
+      authorityReceipt:
+          TraitHelpers.deserializeOptionComputerUseAuthorityReceipt(
+            deserializer,
+          ),
     );
     deserializer.decreaseContainerDepth();
     return instance;
@@ -1190,14 +1195,19 @@ class CommandApprovalDecision extends Command {
 
   final String proposalId;
   final ApprovalDecision decision;
+  final ComputerUseAuthorityReceipt? authorityReceipt;
 
   CommandApprovalDecision copyWith({
     String? proposalId,
     ApprovalDecision? decision,
+    ComputerUseAuthorityReceipt? Function()? authorityReceipt,
   }) {
     return CommandApprovalDecision(
       proposalId: proposalId ?? this.proposalId,
       decision: decision ?? this.decision,
+      authorityReceipt: authorityReceipt == null
+          ? this.authorityReceipt
+          : authorityReceipt(),
     );
   }
 
@@ -1206,6 +1216,10 @@ class CommandApprovalDecision extends Command {
     serializer.serializeVariantIndex(14);
     serializer.serializeString(proposalId);
     decision.serialize(serializer);
+    TraitHelpers.serializeOptionComputerUseAuthorityReceipt(
+      authorityReceipt,
+      serializer,
+    );
     serializer.decreaseContainerDepth();
   }
 
@@ -1216,11 +1230,12 @@ class CommandApprovalDecision extends Command {
 
     return other is CommandApprovalDecision &&
         proposalId == other.proposalId &&
-        decision == other.decision;
+        decision == other.decision &&
+        authorityReceipt == other.authorityReceipt;
   }
 
   @override
-  int get hashCode => Object.hash(proposalId, decision);
+  int get hashCode => Object.hash(proposalId, decision, authorityReceipt);
 
   @override
   String toString() {
@@ -1230,7 +1245,8 @@ class CommandApprovalDecision extends Command {
       fullString =
           '$runtimeType('
           'proposalId: $proposalId, '
-          'decision: $decision'
+          'decision: $decision, '
+          'authorityReceipt: $authorityReceipt'
           ')';
       return true;
     }());

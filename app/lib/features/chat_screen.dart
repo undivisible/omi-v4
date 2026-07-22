@@ -6,7 +6,17 @@ import '../app_services.dart';
 import '../currents/currents.dart';
 import '../keyboard/keyboard.dart';
 import '../native/generated/signals/signals.dart'
-    show ComputerUseAction, ComputerUseActionInvoke, ComputerUseActionSetValue;
+    show
+        ActionRisk,
+        ComputerUseAction,
+        ComputerUseActionCapability,
+        ComputerUseActionInvoke,
+        ComputerUseActionSetValue,
+        ComputerUseBackgroundSupport,
+        ComputerUseCapabilities,
+        ComputerUseDeliveryRoute,
+        ComputerUseSessionIsolation,
+        ComputerUseTargetProvenance;
 import '../native/native_hub.dart';
 import '../ui/omi_ui.dart';
 
@@ -42,6 +52,7 @@ class ChatScreenState extends State<ChatScreen> {
   String? _activeRequestId;
   String? _progress;
   String? _error;
+  ComputerUseCapabilities? _computerUseCapabilities;
   bool _sending = false;
   int _conversationLoadGeneration = 0;
   int _conversationCursor = 0;
@@ -69,6 +80,7 @@ class ChatScreenState extends State<ChatScreen> {
           }
           _proposalExpiryTimers.clear();
           _progress = null;
+          _computerUseCapabilities = null;
           _error = 'Chat authority changed. Reconnect before continuing.';
         });
         if (widget.services.auth.snapshot.hasProcessingAuthority) {
@@ -300,6 +312,8 @@ class ChatScreenState extends State<ChatScreen> {
               _removeProposalsForParent(value.requestId!);
             }
           }
+        case NativeEventRuntimeStatus(:final value):
+          _computerUseCapabilities = value.computerUseCapabilities;
         default:
           break;
       }
@@ -312,6 +326,7 @@ class ChatScreenState extends State<ChatScreen> {
     _sending = true;
     try {
       final requestId = await widget.services.sendChatMessage(text: text);
+      if (!mounted) return;
       setState(() {
         _messages.add(
           _ChatMessage(requestId: requestId, text: text, fromUser: true),
@@ -322,6 +337,7 @@ class ChatScreenState extends State<ChatScreen> {
         _input.clear();
       });
     } catch (failure) {
+      if (!mounted) return;
       setState(() {
         _activeRequestId = null;
         _progress = null;
@@ -362,9 +378,12 @@ class ChatScreenState extends State<ChatScreen> {
     }
   }
 
-  void _decide(ActionProposal proposal, ApprovalDecision decision) {
+  Future<void> _decide(
+    ActionProposal proposal,
+    ApprovalDecision decision,
+  ) async {
     try {
-      widget.services.decideChatApproval(
+      await widget.services.decideChatApproval(
         proposalId: proposal.proposalId,
         decision: decision,
       );
@@ -403,6 +422,104 @@ class ChatScreenState extends State<ChatScreen> {
       key: Key('computer_action_details'),
     ),
   };
+
+  String _riskDetail(ActionRisk risk) => switch (risk) {
+    ActionRisk.reversible =>
+      'Conservative risk: reversible, but the target and resulting state still require verification.',
+    ActionRisk.external =>
+      'Conservative risk: external side effect that may affect another person or system.',
+    ActionRisk.destructive =>
+      'Conservative risk: destructive or difficult to reverse.',
+  };
+
+  String _targetDetail(ComputerUseTargetProvenance provenance) =>
+      'Fenced target: ${provenance.role} · process ${provenance.processId} '
+      '(${provenance.processGeneration}) · window ${provenance.windowId} · '
+      'observation ${provenance.observationGeneration}';
+
+  ComputerUseActionCapability? _actionCapability(ComputerUseAction action) {
+    final name = switch (action) {
+      ComputerUseActionInvoke() => 'invoke',
+      ComputerUseActionSetValue() => 'set_value',
+      _ => null,
+    };
+    if (name == null) return null;
+    final capabilities = _computerUseCapabilities;
+    if (capabilities == null) return null;
+    for (final capability in capabilities.actions) {
+      if (capability.name == name) return capability;
+    }
+    return null;
+  }
+
+  String _capabilityDetail(ComputerUseAction action) {
+    final capabilities = _computerUseCapabilities;
+    final capability = _actionCapability(action);
+    if (capabilities == null || capability == null || !capability.available) {
+      return 'Native host did not report this action as available.';
+    }
+    final isolation = switch (capabilities.sessionIsolation) {
+      ComputerUseSessionIsolation.sharedDesktop =>
+        'shared desktop; not session-isolated',
+      ComputerUseSessionIsolation.hostIsolated => 'host-isolated session',
+      ComputerUseSessionIsolation.unknown => 'session isolation unknown',
+    };
+    final delivery = switch (capability.deliveryRoute) {
+      ComputerUseDeliveryRoute.targetAddressed => 'target-addressed delivery',
+      ComputerUseDeliveryRoute.pointer => 'pointer delivery',
+      ComputerUseDeliveryRoute.unknown => 'delivery route unknown',
+    };
+    final background = switch (capability.backgroundSupport) {
+      ComputerUseBackgroundSupport.guarded =>
+        capabilities.sessionIsolation ==
+                ComputerUseSessionIsolation.sharedDesktop
+            ? 'guarded shared-desktop background'
+            : 'guarded background',
+      ComputerUseBackgroundSupport.hostIsolatedOnly =>
+        'background requires host isolation',
+      ComputerUseBackgroundSupport.unavailable => 'background unavailable',
+      ComputerUseBackgroundSupport.unknown => 'background support unknown',
+    };
+    final permissions = capabilities.permissions
+        .map(
+          (permission) =>
+              '${permission.name} ${permission.granted ? 'granted' : 'denied'}',
+        )
+        .join(', ');
+    return '${capabilities.platform} · ${capabilities.backend} · $isolation · '
+        '$delivery · $background · Permissions: '
+        '${permissions.isEmpty ? 'none reported' : permissions}';
+  }
+
+  bool _canApprove(ActionProposal proposal) {
+    final action = proposal.computerAction;
+    if (action == null) return true;
+    final capability = _actionCapability(action);
+    if (proposal.operationId == null ||
+        proposal.actionHash == null ||
+        proposal.targetProvenance == null ||
+        capability == null ||
+        !capability.available ||
+        capability.deliveryRoute != ComputerUseDeliveryRoute.targetAddressed) {
+      return false;
+    }
+    final backgroundOnly = switch (action) {
+      ComputerUseActionInvoke(:final backgroundOnly) => backgroundOnly,
+      ComputerUseActionSetValue(:final backgroundOnly) => backgroundOnly,
+      _ => true,
+    };
+    if (!backgroundOnly) return true;
+    final isolation = _computerUseCapabilities!.sessionIsolation;
+    return switch (isolation) {
+      ComputerUseSessionIsolation.sharedDesktop =>
+        capability.backgroundSupport == ComputerUseBackgroundSupport.guarded,
+      ComputerUseSessionIsolation.hostIsolated =>
+        capability.backgroundSupport == ComputerUseBackgroundSupport.guarded ||
+            capability.backgroundSupport ==
+                ComputerUseBackgroundSupport.hostIsolatedOnly,
+      ComputerUseSessionIsolation.unknown => false,
+    };
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -503,19 +620,47 @@ class ChatScreenState extends State<ChatScreen> {
                         ),
                         const SizedBox(height: 6),
                         Text(proposal.summary),
+                        const SizedBox(height: 8),
+                        Text(
+                          _riskDetail(proposal.risk),
+                          key: ValueKey('risk_${proposal.proposalId}'),
+                        ),
+                        if (proposal.targetProvenance
+                            case final provenance?) ...[
+                          const SizedBox(height: 6),
+                          Text(
+                            _targetDetail(provenance),
+                            key: ValueKey('target_${proposal.proposalId}'),
+                          ),
+                        ] else if (proposal.computerAction != null) ...[
+                          const SizedBox(height: 6),
+                          Text(
+                            'Fenced target provenance unavailable.',
+                            key: ValueKey('target_${proposal.proposalId}'),
+                          ),
+                        ],
                         if (proposal.computerAction case final action?) ...[
                           const SizedBox(height: 10),
                           _computerActionDetails(action),
+                          const SizedBox(height: 6),
+                          Text(
+                            _capabilityDetail(action),
+                            key: ValueKey(
+                              'capabilities_${proposal.proposalId}',
+                            ),
+                          ),
                         ],
                         const SizedBox(height: 12),
                         Row(
                           children: [
                             FilledButton(
                               key: ValueKey('approve_${proposal.proposalId}'),
-                              onPressed: () => _decide(
-                                proposal,
-                                ApprovalDecision.approveOnce,
-                              ),
+                              onPressed: _canApprove(proposal)
+                                  ? () => _decide(
+                                      proposal,
+                                      ApprovalDecision.approveOnce,
+                                    )
+                                  : null,
                               child: const Text('Approve once'),
                             ),
                             const SizedBox(width: 8),

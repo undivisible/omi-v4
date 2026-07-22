@@ -25,6 +25,77 @@ class TraitHelpers {
     }
   }
 
+  static void serializeOptionComputerUseAuthorityReceipt(
+    ComputerUseAuthorityReceipt? value,
+    BinarySerializer serializer,
+  ) {
+    if (value == null) {
+      serializer.serializeOptionTag(false);
+    } else {
+      serializer.serializeOptionTag(true);
+      value.serialize(serializer);
+    }
+  }
+
+  static ComputerUseAuthorityReceipt?
+  deserializeOptionComputerUseAuthorityReceipt(
+    BinaryDeserializer deserializer,
+  ) {
+    final tag = deserializer.deserializeOptionTag();
+    if (tag) {
+      return ComputerUseAuthorityReceipt.deserialize(deserializer);
+    } else {
+      return null;
+    }
+  }
+
+  static void serializeOptionComputerUseCapabilities(
+    ComputerUseCapabilities? value,
+    BinarySerializer serializer,
+  ) {
+    if (value == null) {
+      serializer.serializeOptionTag(false);
+    } else {
+      serializer.serializeOptionTag(true);
+      value.serialize(serializer);
+    }
+  }
+
+  static ComputerUseCapabilities? deserializeOptionComputerUseCapabilities(
+    BinaryDeserializer deserializer,
+  ) {
+    final tag = deserializer.deserializeOptionTag();
+    if (tag) {
+      return ComputerUseCapabilities.deserialize(deserializer);
+    } else {
+      return null;
+    }
+  }
+
+  static void serializeOptionComputerUseTargetProvenance(
+    ComputerUseTargetProvenance? value,
+    BinarySerializer serializer,
+  ) {
+    if (value == null) {
+      serializer.serializeOptionTag(false);
+    } else {
+      serializer.serializeOptionTag(true);
+      value.serialize(serializer);
+    }
+  }
+
+  static ComputerUseTargetProvenance?
+  deserializeOptionComputerUseTargetProvenance(
+    BinaryDeserializer deserializer,
+  ) {
+    final tag = deserializer.deserializeOptionTag();
+    if (tag) {
+      return ComputerUseTargetProvenance.deserialize(deserializer);
+    } else {
+      return null;
+    }
+  }
+
   static void serializeOptionTranscriptLocator(
     TranscriptLocator? value,
     BinarySerializer serializer,
@@ -100,6 +171,47 @@ class TraitHelpers {
     } else {
       return null;
     }
+  }
+
+  static void serializeVectorComputerUseActionCapability(
+    List<ComputerUseActionCapability> value,
+    BinarySerializer serializer,
+  ) {
+    serializer.serializeLength(value.length);
+    for (final item in value) {
+      item.serialize(serializer);
+    }
+  }
+
+  static List<ComputerUseActionCapability>
+  deserializeVectorComputerUseActionCapability(
+    BinaryDeserializer deserializer,
+  ) {
+    final length = deserializer.deserializeLength();
+    return List.generate(
+      length,
+      (_) => ComputerUseActionCapability.deserialize(deserializer),
+    );
+  }
+
+  static void serializeVectorComputerUsePermission(
+    List<ComputerUsePermission> value,
+    BinarySerializer serializer,
+  ) {
+    serializer.serializeLength(value.length);
+    for (final item in value) {
+      item.serialize(serializer);
+    }
+  }
+
+  static List<ComputerUsePermission> deserializeVectorComputerUsePermission(
+    BinaryDeserializer deserializer,
+  ) {
+    final length = deserializer.deserializeLength();
+    return List.generate(
+      length,
+      (_) => ComputerUsePermission.deserialize(deserializer),
+    );
   }
 
   static void serializeVectorMemoryExportCommit(

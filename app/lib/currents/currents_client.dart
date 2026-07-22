@@ -1,5 +1,9 @@
 import 'currents.dart';
 
+const _currentAuthorityReceiptVersion = 'omi-current-authority-v1';
+final _actionHashPattern = RegExp(r'^[0-9a-f]{64}$');
+final _receiptTokenPattern = RegExp(r'^[A-Za-z0-9_-]{43}$');
+
 enum CurrentsHttpMethod { get, post }
 
 final class CurrentsRequest {
@@ -44,14 +48,50 @@ final class CurrentActionHandoff {
     required this.executionId,
     required this.approvalNonce,
     required this.instruction,
+    required this.policyGeneration,
   });
 
   final String executionId;
   final String approvalNonce;
   final String instruction;
+  final int policyGeneration;
 }
 
-enum CurrentExecutionOutcome { succeeded, failed, outcomeUnknown }
+final class CurrentApprovalReceipt {
+  const CurrentApprovalReceipt({
+    required this.version,
+    required this.receiptId,
+    required this.receiptToken,
+    required this.subject,
+    required this.proposalId,
+    required this.operationId,
+    required this.actionHash,
+    required this.policyGeneration,
+    required this.risk,
+    required this.issuedAtMs,
+    required this.expiresAtMs,
+  });
+
+  final String version;
+  final String receiptId;
+  final String receiptToken;
+  final String subject;
+  final String proposalId;
+  final String operationId;
+  final String actionHash;
+  final int policyGeneration;
+  final String risk;
+  final int issuedAtMs;
+  final int expiresAtMs;
+}
+
+enum CurrentExecutionOutcome {
+  succeeded,
+  failed,
+  cancelledBeforeEffect,
+  expiredBeforeEffect,
+  outcomeUnknown,
+}
 
 final class CurrentsClientException implements Exception {
   const CurrentsClientException(this.message);
@@ -134,17 +174,60 @@ final class CurrentsClient {
       executionId: _text(body, 'executionId'),
       approvalNonce: _text(body, 'approvalNonce'),
       instruction: _text(action, 'instruction'),
+      policyGeneration: _integer(body, 'policyGeneration'),
     );
   }
 
-  Future<void> approve(CurrentActionHandoff handoff) async {
-    await _send(
+  Future<CurrentApprovalReceipt> approve(
+    CurrentActionHandoff handoff, {
+    required String subject,
+    required String proposalId,
+    required String operationId,
+    required String actionHash,
+    required String risk,
+  }) async {
+    final body = await _send(
       CurrentsRequest(
         method: CurrentsHttpMethod.post,
         path: '/v1/currents/executions/${handoff.executionId}/approve',
-        body: {'approvalNonce': handoff.approvalNonce},
+        body: {
+          'approvalNonce': handoff.approvalNonce,
+          'proposalId': proposalId,
+          'operationId': operationId,
+          'actionHash': actionHash,
+          'risk': risk,
+          'generation': handoff.policyGeneration,
+        },
       ),
     );
+    final value = _map(body, 'receipt');
+    final receipt = CurrentApprovalReceipt(
+      version: _text(value, 'version'),
+      receiptId: _text(value, 'receiptId'),
+      receiptToken: _text(value, 'receiptToken'),
+      subject: _text(value, 'subject'),
+      proposalId: _text(value, 'proposalId'),
+      operationId: _text(value, 'operationId'),
+      actionHash: _text(value, 'actionHash'),
+      policyGeneration: _integer(value, 'policyGeneration'),
+      risk: _text(value, 'risk'),
+      issuedAtMs: _integer(value, 'issuedAtMs'),
+      expiresAtMs: _integer(value, 'expiresAtMs'),
+    );
+    if (receipt.version != _currentAuthorityReceiptVersion ||
+        !_receiptTokenPattern.hasMatch(receipt.receiptToken) ||
+        receipt.subject != subject ||
+        receipt.proposalId != proposalId ||
+        receipt.operationId != operationId ||
+        receipt.actionHash != actionHash ||
+        !_actionHashPattern.hasMatch(receipt.actionHash) ||
+        receipt.policyGeneration != handoff.policyGeneration ||
+        receipt.risk != risk ||
+        receipt.expiresAtMs <= receipt.issuedAtMs ||
+        receipt.expiresAtMs <= DateTime.now().millisecondsSinceEpoch) {
+      throw const CurrentsClientException('approval receipt is invalid');
+    }
+    return receipt;
   }
 
   Future<void> reject(CurrentActionHandoff handoff) async {
@@ -173,6 +256,10 @@ final class CurrentsClient {
           'state': switch (outcome) {
             CurrentExecutionOutcome.succeeded => 'succeeded',
             CurrentExecutionOutcome.failed => 'failed',
+            CurrentExecutionOutcome.cancelledBeforeEffect =>
+              'cancelled_before_effect',
+            CurrentExecutionOutcome.expiredBeforeEffect =>
+              'expired_before_effect',
             CurrentExecutionOutcome.outcomeUnknown => 'outcome_unknown',
           },
           'detail': detail,
@@ -215,6 +302,14 @@ String _text(Map<String, Object?> json, String key) {
   final value = json[key];
   if (value is! String || value.trim().isEmpty) {
     throw CurrentsClientException('$key must be a non-empty string');
+  }
+  return value;
+}
+
+int _integer(Map<String, Object?> json, String key) {
+  final value = json[key];
+  if (value is! int || value < 0) {
+    throw CurrentsClientException('$key must be a non-negative integer');
   }
   return value;
 }

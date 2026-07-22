@@ -10,6 +10,9 @@ class ActionProposal {
     required this.summary,
     required this.risk,
     this.computerAction,
+    this.operationId,
+    this.actionHash,
+    this.targetProvenance,
     this.expiresAtMs,
   });
 
@@ -24,6 +27,12 @@ class ActionProposal {
       computerAction: TraitHelpers.deserializeOptionComputerUseAction(
         deserializer,
       ),
+      operationId: TraitHelpers.deserializeOptionStr(deserializer),
+      actionHash: TraitHelpers.deserializeOptionStr(deserializer),
+      targetProvenance:
+          TraitHelpers.deserializeOptionComputerUseTargetProvenance(
+            deserializer,
+          ),
       expiresAtMs: TraitHelpers.deserializeOptionI64(deserializer),
     );
     deserializer.decreaseContainerDepth();
@@ -45,6 +54,9 @@ class ActionProposal {
   final String summary;
   final ActionRisk risk;
   final ComputerUseAction? computerAction;
+  final String? operationId;
+  final String? actionHash;
+  final ComputerUseTargetProvenance? targetProvenance;
   final int? expiresAtMs;
 
   ActionProposal copyWith({
@@ -54,6 +66,9 @@ class ActionProposal {
     String? summary,
     ActionRisk? risk,
     ComputerUseAction? Function()? computerAction,
+    String? Function()? operationId,
+    String? Function()? actionHash,
+    ComputerUseTargetProvenance? Function()? targetProvenance,
     int? Function()? expiresAtMs,
   }) {
     return ActionProposal(
@@ -65,6 +80,11 @@ class ActionProposal {
       computerAction: computerAction == null
           ? this.computerAction
           : computerAction(),
+      operationId: operationId == null ? this.operationId : operationId(),
+      actionHash: actionHash == null ? this.actionHash : actionHash(),
+      targetProvenance: targetProvenance == null
+          ? this.targetProvenance
+          : targetProvenance(),
       expiresAtMs: expiresAtMs == null ? this.expiresAtMs : expiresAtMs(),
     );
   }
@@ -77,6 +97,12 @@ class ActionProposal {
     serializer.serializeString(summary);
     risk.serialize(serializer);
     TraitHelpers.serializeOptionComputerUseAction(computerAction, serializer);
+    TraitHelpers.serializeOptionStr(operationId, serializer);
+    TraitHelpers.serializeOptionStr(actionHash, serializer);
+    TraitHelpers.serializeOptionComputerUseTargetProvenance(
+      targetProvenance,
+      serializer,
+    );
     TraitHelpers.serializeOptionI64(expiresAtMs, serializer);
     serializer.decreaseContainerDepth();
   }
@@ -99,6 +125,9 @@ class ActionProposal {
         summary == other.summary &&
         risk == other.risk &&
         computerAction == other.computerAction &&
+        operationId == other.operationId &&
+        actionHash == other.actionHash &&
+        targetProvenance == other.targetProvenance &&
         expiresAtMs == other.expiresAtMs;
   }
 
@@ -110,6 +139,9 @@ class ActionProposal {
     summary,
     risk,
     computerAction,
+    operationId,
+    actionHash,
+    targetProvenance,
     expiresAtMs,
   );
 
@@ -123,9 +155,12 @@ class ActionProposal {
           'proposalId: $proposalId, '
           'requestId: $requestId, '
           'title: $title, '
-          'summary: $summary, '
+          'summary: [REDACTED], '
           'risk: $risk, '
           'computerAction: $computerAction, '
+          'operationId: $operationId, '
+          'actionHash: $actionHash, '
+          'targetProvenance: $targetProvenance, '
           'expiresAtMs: $expiresAtMs'
           ')';
       return true;

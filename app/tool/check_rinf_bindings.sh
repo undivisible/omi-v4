@@ -77,6 +77,40 @@ if [[ "$(grep -Fc "'targetName: [REDACTED], '" "$action_file")" -ne 2 ]] ||
   exit 1
 fi
 
+receipt_file="$generated_dir/signals/computer_use_authority_receipt.dart"
+for field in receiptToken firebaseToken subject; do
+  if grep -Fq "'$field: \$$field, '" "$receipt_file"; then
+    echo "generated computer-use receipt $field output is not redacted" >&2
+    exit 1
+  fi
+  if [[ "$(grep -Fc "'$field: [REDACTED], '" "$receipt_file")" -ne 1 ]]; then
+    echo "generated computer-use receipt $field redaction is missing or ambiguous" >&2
+    exit 1
+  fi
+done
+
+provenance_file="$generated_dir/signals/computer_use_target_provenance.dart"
+for field in processId processGeneration windowId; do
+  if grep -Fq "'$field: \$$field, '" "$provenance_file"; then
+    echo "generated computer-use provenance $field output is not redacted" >&2
+    exit 1
+  fi
+  if [[ "$(grep -Fc "'$field: [REDACTED], '" "$provenance_file")" -ne 1 ]]; then
+    echo "generated computer-use provenance $field redaction is missing or ambiguous" >&2
+    exit 1
+  fi
+done
+
+proposal_file="$generated_dir/signals/action_proposal.dart"
+if grep -Fq "'summary: \$summary, '" "$proposal_file"; then
+  echo "generated action proposal summary output is not redacted" >&2
+  exit 1
+fi
+if [[ "$(grep -Fc "'summary: [REDACTED], '" "$proposal_file")" -ne 1 ]]; then
+  echo "generated action proposal summary redaction is missing or ambiguous" >&2
+  exit 1
+fi
+
 capture_block="$(sed -n '/^class CommandCaptureEvent /,/^@immutable$/p' "$command_file")"
 for field in text application windowTitle; do
   if grep -Fq "'$field: \$$field, '" <<<"$capture_block"; then

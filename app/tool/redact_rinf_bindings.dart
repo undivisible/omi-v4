@@ -64,6 +64,60 @@ void main(List<String> arguments) {
   }
   actionFile.writeAsStringSync(actionSource);
 
+  final receiptFile = File(
+    '${arguments.single}/signals/computer_use_authority_receipt.dart',
+  );
+  var receiptSource = receiptFile.readAsStringSync();
+  for (final field in ['receiptToken', 'firebaseToken', 'subject']) {
+    final exposedReceipt = "'$field: \$$field, '";
+    final redactedReceipt = "'$field: [REDACTED], '";
+    if (exposedReceipt.allMatches(receiptSource).length != 1 ||
+        redactedReceipt.allMatches(receiptSource).isNotEmpty) {
+      stderr.writeln('expected exactly one generated receipt $field field');
+      exitCode = 1;
+      return;
+    }
+    receiptSource = receiptSource.replaceFirst(exposedReceipt, redactedReceipt);
+  }
+  receiptFile.writeAsStringSync(receiptSource);
+
+  final provenanceFile = File(
+    '${arguments.single}/signals/computer_use_target_provenance.dart',
+  );
+  var provenanceSource = provenanceFile.readAsStringSync();
+  for (final field in ['processId', 'processGeneration', 'windowId']) {
+    final exposedProvenance = "'$field: \$$field, '";
+    final redactedProvenance = "'$field: [REDACTED], '";
+    if (exposedProvenance.allMatches(provenanceSource).length != 1 ||
+        redactedProvenance.allMatches(provenanceSource).isNotEmpty) {
+      stderr.writeln('expected exactly one generated provenance $field field');
+      exitCode = 1;
+      return;
+    }
+    provenanceSource = provenanceSource.replaceFirst(
+      exposedProvenance,
+      redactedProvenance,
+    );
+  }
+  provenanceFile.writeAsStringSync(provenanceSource);
+
+  final proposalFile = File('${arguments.single}/signals/action_proposal.dart');
+  final proposalSource = proposalFile.readAsStringSync();
+  const exposedProposalSummary = "'summary: \$summary, '";
+  const redactedProposalSummary = "'summary: [REDACTED], '";
+  if (exposedProposalSummary.allMatches(proposalSource).length != 1 ||
+      redactedProposalSummary.allMatches(proposalSource).isNotEmpty) {
+    stderr.writeln('expected exactly one generated proposal summary field');
+    exitCode = 1;
+    return;
+  }
+  proposalFile.writeAsStringSync(
+    proposalSource.replaceFirst(
+      exposedProposalSummary,
+      redactedProposalSummary,
+    ),
+  );
+
   final commandCaptureSource = file.readAsStringSync();
   const captureStartMarker = 'class CommandCaptureEvent extends Command {';
   final captureStart = commandCaptureSource.indexOf(captureStartMarker);
