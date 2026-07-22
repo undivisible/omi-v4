@@ -1,4 +1,5 @@
 import { Hono, type Context } from "hono";
+import { hasActivePro } from "./entitlement";
 import asr from "./asr";
 import assistant from "./assistant";
 import billing from "./billing";
@@ -666,18 +667,8 @@ routes.put("/settings", async (context) => {
 });
 
 routes.get("/entitlement", async (context) => {
-  const row = await context.env.DB.prepare(
-    "SELECT plan, status, valid_until FROM entitlements WHERE uid = ?1",
-  )
-    .bind(context.get("auth").uid)
-    .first();
-  const active =
-    row?.status === "active" &&
-    (row.valid_until === null || Number(row.valid_until) > Date.now());
-  return context.json({
-    plan: active && row?.plan === "pro" ? "pro" : "byok",
-    active,
-  });
+  const pro = await hasActivePro(context.env, context.get("auth").uid);
+  return context.json({ plan: pro ? "pro" : "byok", active: pro });
 });
 
 routes.post("/channels/:channel/link", async (context) => {

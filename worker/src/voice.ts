@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { hasActivePro } from "./entitlement";
 import type { AppEnv } from "./types";
 
 // Live voice runs over Gemini's Live API. The Worker mints single-use
@@ -15,18 +16,9 @@ voice.post("/gemini/token", async (context) => {
   if (!key || !model)
     return context.json({ error: "Live voice unavailable" }, 503);
   const auth = context.get("auth");
-  const entitlement = await context.env.DB.prepare(
-    "SELECT plan, status, valid_until FROM entitlements WHERE uid = ?1",
-  )
-    .bind(auth.uid)
-    .first();
-  const now = Date.now();
-  if (
-    entitlement?.plan !== "pro" ||
-    entitlement.status !== "active" ||
-    (entitlement.valid_until !== null && Number(entitlement.valid_until) <= now)
-  )
+  if (!(await hasActivePro(context.env, auth.uid)))
     return context.json({ error: "Managed Pro required" }, 403);
+  const now = Date.now();
   const requestId = crypto.randomUUID();
   try {
     await context.env.DB.prepare(

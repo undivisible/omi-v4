@@ -82,6 +82,22 @@ describe("gemini live tokens", () => {
     expect(response.status).toBe(503);
   });
 
+  test("DEV_FAKE_PRO stubs the entitlement gate for local testing", async () => {
+    globalThis.fetch = (async () =>
+      Response.json({ name: "auth_tokens/ephemeral-stub" })) as typeof fetch;
+    const response = await request(
+      "no-entitlement-row",
+      "/voice/gemini/token",
+      { method: "POST" },
+      {
+        GEMINI_API_KEY: "gemini-secret",
+        GEMINI_LIVE_MODEL: "gemini-3.1-flash-live-preview",
+        DEV_FAKE_PRO: "true",
+      },
+    );
+    expect(response.status).toBe(200);
+  });
+
   test("mints a model-locked ephemeral token without leaking the key", async () => {
     let upstreamBody: Record<string, unknown> | undefined;
     globalThis.fetch = (async (

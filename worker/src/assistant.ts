@@ -1,4 +1,5 @@
 import { Hono, type Context } from "hono";
+import { hasActivePro } from "./entitlement";
 import {
   admitAssistantRequest,
   releaseAssistantRequest,
@@ -451,18 +452,9 @@ assistant.post("/chat/completions", async (context) => {
   const parsed = body ? parseRequest(body, model) : null;
   if (!parsed) return context.json({ error: "Invalid request" }, 400);
   const auth = context.get("auth");
-  const entitlement = await context.env.DB.prepare(
-    "SELECT plan, status, valid_until FROM entitlements WHERE uid = ?1",
-  )
-    .bind(auth.uid)
-    .first();
-  const now = Date.now();
-  if (
-    entitlement?.plan !== "pro" ||
-    entitlement.status !== "active" ||
-    (entitlement.valid_until !== null && Number(entitlement.valid_until) <= now)
-  )
+  if (!(await hasActivePro(context.env, auth.uid)))
     return context.json({ error: "Managed Pro required" }, 403);
+  const now = Date.now();
   const requestId = crypto.randomUUID();
   const inputCharacters = parsed.messages.reduce(
     (total, message) => total + message.content.length,

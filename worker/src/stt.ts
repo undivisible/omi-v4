@@ -1,4 +1,5 @@
 import { Hono, type Context } from "hono";
+import { hasActivePro } from "./entitlement";
 import {
   admitSttSession,
   claimSttSession,
@@ -101,19 +102,8 @@ const parseRequest = (body: Record<string, unknown>) => {
   };
 };
 
-const activePro = async (context: Context<AppEnv>): Promise<boolean> => {
-  const entitlement = await context.env.DB.prepare(
-    "SELECT plan, status, valid_until FROM entitlements WHERE uid = ?1",
-  )
-    .bind(context.get("auth").uid)
-    .first();
-  return (
-    entitlement?.plan === "pro" &&
-    entitlement.status === "active" &&
-    (entitlement.valid_until === null ||
-      Number(entitlement.valid_until) > Date.now())
-  );
-};
+const activePro = (context: Context<AppEnv>): Promise<boolean> =>
+  hasActivePro(context.env, context.get("auth").uid);
 
 const sessionIdFor = async (uid: string, idempotencyKey: string) => {
   const digest = await crypto.subtle.digest(
