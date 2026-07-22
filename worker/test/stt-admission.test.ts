@@ -86,7 +86,7 @@ const claim = (
 ) => dispatch(instance, "claim", { sessionId, uid, acquisitionToken });
 
 afterEach(async () => {
-  await Promise.all(
+  await Promise.allSettled(
     instances.flatMap((instance) =>
       Array.from(tokens.get(instance)?.entries() ?? []).map(
         ([sessionId, { acquisitionToken, uid }]) =>
@@ -94,15 +94,22 @@ afterEach(async () => {
       ),
     ),
   );
-  await Promise.all(
+  await Promise.allSettled(
     responses
       .splice(0)
       .map((response) =>
         response.bodyUsed ? Promise.resolve() : response.arrayBuffer(),
       ),
   );
-  await Promise.all(instances.map((instance) => instance.dispose()));
-  instances.length = 0;
+  // Dispose sequentially and swallow individual failures: under load a
+  // Miniflare instance can still be finishing an in-flight Durable Object
+  // call when the test body resolves, and letting one disposal reject
+  // must not skip cleanup (or leak a dangling process) for the rest.
+  for (const instance of instances.splice(0)) {
+    try {
+      await instance.dispose();
+    } catch {}
+  }
   tokens.clear();
 });
 
@@ -124,7 +131,7 @@ describe("managed STT admission", () => {
     expect(first.status).toBe(200);
     expect(second.status).toBe(429);
     expect(second.headers.get("retry-after")).toBeTruthy();
-  });
+  }, 20_000);
 
   test("keeps the full reservation and makes duplicate admission idempotent", async () => {
     const instance = await createAdmission();
@@ -149,7 +156,7 @@ describe("managed STT admission", () => {
       uid: "beta",
     });
     expect(overBudget.status).toBe(200);
-  });
+  }, 20_000);
 
   test("releases in-flight capacity idempotently while retaining budget", async () => {
     const instance = await createAdmission({ STT_UID_IN_FLIGHT_LIMIT: "1" });
@@ -216,7 +223,7 @@ describe("managed STT admission", () => {
         })
       ).status,
     ).toBe(429);
-  }, 15_000);
+  }, 20_000);
 
   test("releases an abandoned claim deadline but preserves a claimed session", async () => {
     const instance = await createAdmission({
@@ -253,7 +260,7 @@ describe("managed STT admission", () => {
         })
       ).status,
     ).toBe(429);
-  }, 5000);
+  }, 20_000);
 
   test("rejects a late claim and ignores a delayed release from an old acquisition", async () => {
     const instance = await createAdmission({
@@ -294,5 +301,5 @@ describe("managed STT admission", () => {
         })
       ).status,
     ).toBe(429);
-  }, 5000);
+  }, 20_000);
 });

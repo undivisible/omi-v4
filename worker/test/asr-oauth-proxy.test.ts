@@ -27,6 +27,25 @@ const miniflare = new Miniflare({
 let database: D1Database;
 const originalFetch = globalThis.fetch;
 
+// Minimal in-memory stand-in for the RATE_LIMITER durable object namespace:
+// always admits, since these tests exercise the routes' own behavior, not
+// the rate limiter.
+const fakeRateLimiter = () =>
+  ({
+    getByName: () => ({
+      fetch: async (url: string | URL) => {
+        const pathname = new URL(String(url)).pathname;
+        if (pathname === "/consume")
+          return Response.json({ allowed: true, retryAfter: 0 });
+        if (pathname === "/acquire-lock")
+          return Response.json({ acquired: true });
+        if (pathname === "/release-lock")
+          return Response.json({ released: true });
+        return new Response(null, { status: 404 });
+      },
+    }),
+  }) as unknown as DurableObjectNamespace;
+
 const request = (
   uid: string,
   path: string,
@@ -42,6 +61,8 @@ const request = (
   return app.request(path, init, {
     DB: database,
     FIREBASE_PROJECT_ID: "test",
+    RATE_LIMITER: fakeRateLimiter(),
+    ENABLE_DEV_OAUTH_BROKER: "true",
     ...environment,
   } as Bindings);
 };

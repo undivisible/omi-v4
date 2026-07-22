@@ -6,6 +6,7 @@ import { deliverDueChannelMessages } from "./delivery";
 export { AssistantAdmission } from "./assistant-admission";
 export { SttAdmission } from "./stt-admission";
 export { DeliveryCoordinator } from "./delivery";
+export { RateLimiter } from "./rate-limit";
 import routes from "./routes";
 import type { AppEnv } from "./types";
 import webhooks from "./webhooks";

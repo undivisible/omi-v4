@@ -5,6 +5,7 @@ import {
   validatePinnedEndpoint,
   xiaomiCompletionEndpoint,
 } from "./assistant";
+import { consumeRateLimit } from "./rate-limit";
 import type { AppEnv } from "./types";
 
 const asr = new Hono<AppEnv>();
@@ -54,6 +55,16 @@ asr.post("/transcribe", async (context) => {
       (typeof language !== "string" || !languages.has(language)))
   )
     return context.json({ error: "Invalid request" }, 400);
+  const rateLimit = await consumeRateLimit(
+    context.env,
+    `asr:${auth.uid}`,
+    10,
+    60_000,
+  );
+  if (!rateLimit.allowed)
+    return context.json({ error: "Too many requests" }, 429, {
+      "retry-after": String(rateLimit.retryAfter),
+    });
   const now = Date.now();
   const requestId = crypto.randomUUID();
   try {

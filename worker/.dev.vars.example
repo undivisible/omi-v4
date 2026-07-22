@@ -6,3 +6,8 @@ XAI_OAUTH_CLIENT_ID=your-xai-oauth-client-id-here
 OAUTH_TOKEN_KEY=base64-encoded-32-byte-key-here
 DEV_FAKE_PRO=true
 TELEGRAM_WEBHOOK_SECRET=your-webhook-secret-here
+# Dev/testing only: enables the ChatGPT/xAI OAuth broker + proxy routes,
+# which relay subscription-auth sign-in and traffic for personal interactive
+# use. Leave unset (or "false") everywhere except local dev/testing --
+# these routes are not meant to run in production.
+ENABLE_DEV_OAUTH_BROKER=true

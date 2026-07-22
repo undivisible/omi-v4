@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { consumeRateLimit } from "./rate-limit";
 import type { AppEnv } from "./types";
 
 // Device-code OAuth broker for subscription sign-in (xAI Grok, OpenAI
@@ -162,6 +163,16 @@ export const providerConfig = async (
 };
 
 broker.post("/:provider/device/start", async (context) => {
+  const rateLimit = await consumeRateLimit(
+    context.env,
+    `oauth-device-start:${context.get("auth").uid}`,
+    5,
+    60_000,
+  );
+  if (!rateLimit.allowed)
+    return context.json({ error: "Too many requests" }, 429, {
+      "retry-after": String(rateLimit.retryAfter),
+    });
   const config = await providerConfig(
     context.req.param("provider"),
     context.env,
@@ -202,6 +213,16 @@ const pollErrorAllowlist = new Set([
 const accountIdPattern = /^[A-Za-z0-9_-]{1,128}$/;
 
 broker.post("/:provider/device/poll", async (context) => {
+  const rateLimit = await consumeRateLimit(
+    context.env,
+    `oauth-device-poll:${context.get("auth").uid}`,
+    30,
+    60_000,
+  );
+  if (!rateLimit.allowed)
+    return context.json({ error: "Too many requests" }, 429, {
+      "retry-after": String(rateLimit.retryAfter),
+    });
   const provider = context.req.param("provider");
   const config = await providerConfig(provider, context.env);
   if (!config) return context.json({ error: "Provider unavailable" }, 503);

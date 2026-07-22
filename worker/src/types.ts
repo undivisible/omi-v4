@@ -3,7 +3,9 @@ export type Bindings = {
   DELIVERY_COORDINATOR: DurableObjectNamespace;
   ASSISTANT_ADMISSION: DurableObjectNamespace;
   STT_ADMISSION: DurableObjectNamespace;
+  RATE_LIMITER: DurableObjectNamespace;
   FIREBASE_PROJECT_ID: string;
+  ENVIRONMENT?: string;
   TELEGRAM_WEBHOOK_SECRET?: string;
   TELEGRAM_BOT_TOKEN?: string;
   BLOOIO_WEBHOOK_SIGNING_SECRET?: string;
@@ -44,6 +46,7 @@ export type Bindings = {
   STT_GLOBAL_SECONDS_BUDGET?: string;
   STT_UID_COST_BUDGET_MICROUSD?: string;
   STT_GLOBAL_COST_BUDGET_MICROUSD?: string;
+  ENABLE_DEV_OAUTH_BROKER?: string;
 };
 
 export type Auth = { uid: string; email: string | null };
