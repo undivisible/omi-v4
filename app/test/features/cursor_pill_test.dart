@@ -263,7 +263,13 @@ void main() {
       messageFor(VoiceStartFailure.microphonePermission),
       contains('System Settings'),
     );
-    expect(messageFor(VoiceStartFailure.signedOut), contains('sign in'));
+    expect(messageFor(VoiceStartFailure.signedOut), 'internal detail');
+    expect(
+      CursorPillController.voiceStartErrorMessage(
+        VoiceStartException(VoiceStartFailure.signedOut, ''),
+      ),
+      contains('sign in'),
+    );
     expect(
       messageFor(VoiceStartFailure.backendNotConfigured),
       contains('No voice service is set up'),
