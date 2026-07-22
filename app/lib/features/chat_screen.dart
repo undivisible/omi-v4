@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../api/worker_http.dart' show WorkerAuthenticationException;
 import '../app_services.dart';
 import '../currents/currents.dart';
 import '../keyboard/keyboard.dart';
@@ -213,6 +214,17 @@ class ChatScreenState extends State<ChatScreen> {
     );
   }
 
+  String _describeError(Object? failure) {
+    debugPrint('chat_screen error: $failure');
+    return switch (failure) {
+      WorkerAuthenticationException() =>
+        'Sign in to sync with your account, or keep chatting locally.',
+      CurrentsClientException(:final message) => message,
+      StateError(:final message) => message,
+      _ => 'Something went wrong. Please try again.',
+    };
+  }
+
   Future<void> _refreshCurrents() async {
     final currents = widget.services.currents;
     if (currents == null || !widget.services.chatReady) return;
@@ -252,7 +264,7 @@ class ChatScreenState extends State<ChatScreen> {
           setState(() => _progress = 'Listening');
         } catch (failure) {
           widget.onDesktopGestureReset?.call();
-          if (mounted) setState(() => _error = failure.toString());
+          if (mounted) setState(() => _error = _describeError(failure));
         }
       case ShiftGestureAction.continueVoice:
         try {
@@ -260,7 +272,7 @@ class ChatScreenState extends State<ChatScreen> {
           if (mounted) setState(() => _progress = 'Listening');
         } catch (failure) {
           widget.onDesktopGestureReset?.call();
-          if (mounted) setState(() => _error = failure.toString());
+          if (mounted) setState(() => _error = _describeError(failure));
         }
       case ShiftGestureAction.stopVoice:
         try {
@@ -280,12 +292,13 @@ class ChatScreenState extends State<ChatScreen> {
             }
           });
         } catch (failure) {
-          if (mounted) setState(() => _error = failure.toString());
+          if (mounted) setState(() => _error = _describeError(failure));
         }
     }
   }
 
   Future<void> _loadConversation() async {
+    if (widget.services.localMode && !widget.services.chatReady) return;
     final generation = _conversationLoadGeneration;
     if (!_conversationLoads.add(generation)) return;
     try {
@@ -319,7 +332,7 @@ class ChatScreenState extends State<ChatScreen> {
       });
     } catch (failure) {
       if (mounted && generation == _conversationLoadGeneration) {
-        setState(() => _error = failure.toString());
+        setState(() => _error = _describeError(failure));
       }
     } finally {
       _conversationLoads.remove(generation);
@@ -415,7 +428,9 @@ class ChatScreenState extends State<ChatScreen> {
                     text: message.text,
                   )
                   .onError((failure, _) {
-                    if (mounted) setState(() => _error = failure.toString());
+                    if (mounted) {
+                      setState(() => _error = _describeError(failure));
+                    }
                   }),
             );
             _activeRequestId = null;
@@ -514,7 +529,7 @@ class ChatScreenState extends State<ChatScreen> {
       setState(() {
         _activeRequestId = null;
         _progress = null;
-        _error = failure.toString();
+        _error = _describeError(failure);
       });
     } finally {
       _sending = false;
@@ -563,7 +578,7 @@ class ChatScreenState extends State<ChatScreen> {
       _proposalExpiryTimers.remove(proposal.proposalId)?.cancel();
       setState(() => _proposals.remove(proposal.proposalId));
     } catch (failure) {
-      setState(() => _error = failure.toString());
+      setState(() => _error = _describeError(failure));
     }
   }
 
@@ -696,7 +711,9 @@ class ChatScreenState extends State<ChatScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final ready = !widget.previewMode && widget.services.chatReady;
+    final ready =
+        !widget.previewMode &&
+        (widget.services.chatReady || widget.services.localMode);
     final voiceActive = widget.services.desktopVoice.active;
     if (voiceActive) return _buildListening(context);
 

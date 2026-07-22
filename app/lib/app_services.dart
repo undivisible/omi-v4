@@ -118,6 +118,7 @@ final class AppServices {
       source: _conversationSource,
       now: _now,
       isReady: () => chatReady || localMode,
+      isLocalOnly: () => localMode && !chatReady,
       isDisposed: () => _disposed,
       currentUid: () => auth.snapshot.session?.uid,
       currentIdToken: () async => (await auth.validSession())?.idToken,

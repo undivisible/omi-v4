@@ -70,6 +70,7 @@ final class ConversationController {
     required String source,
     required DateTime Function() now,
     required bool Function() isReady,
+    bool Function()? isLocalOnly,
     required bool Function() isDisposed,
     required String? Function() currentUid,
     required Future<String?> Function() currentIdToken,
@@ -84,6 +85,7 @@ final class ConversationController {
     source,
     now,
     isReady,
+    isLocalOnly ?? (() => false),
     isDisposed,
     currentUid,
     currentIdToken,
@@ -100,6 +102,7 @@ final class ConversationController {
     this._source,
     this._now,
     this._isReady,
+    this._isLocalOnly,
     this._isDisposed,
     this._currentUid,
     this._currentIdToken,
@@ -115,6 +118,7 @@ final class ConversationController {
   final String _source;
   final DateTime Function() _now;
   final bool Function() _isReady;
+  final bool Function() _isLocalOnly;
   final bool Function() _isDisposed;
   final String? Function() _currentUid;
   final Future<String?> Function() _currentIdToken;
@@ -157,12 +161,14 @@ final class ConversationController {
       _handoffsByChatRequest[requestId] = currentHandoff;
     }
     try {
-      await _transport?.append(
-        clientMessageId: requestId,
-        role: 'user',
-        source: _source,
-        text: text,
-      );
+      if (!_isLocalOnly()) {
+        await _transport?.append(
+          clientMessageId: requestId,
+          role: 'user',
+          source: _source,
+          text: text,
+        );
+      }
       _nativeHub.sendMessage(requestId: requestId, text: text);
       return requestId;
     } catch (_) {
@@ -176,6 +182,7 @@ final class ConversationController {
     required String requestId,
     required String text,
   }) async {
+    if (_isLocalOnly()) return;
     await _transport?.append(
       clientMessageId: 'assistant:$requestId',
       role: 'assistant',
@@ -185,7 +192,9 @@ final class ConversationController {
   }
 
   Future<List<ConversationMessage>> replay({int after = 0}) =>
-      _transport?.replay(after: after) ?? Future.value(const []);
+      _isLocalOnly() || _transport == null
+      ? Future.value(const [])
+      : _transport.replay(after: after);
 
   Future<String> handoff(CurrentActionHandoff handoff) async {
     if (_currents == null) {
