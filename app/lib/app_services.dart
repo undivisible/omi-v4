@@ -266,6 +266,9 @@ final class AppServices {
   final ConversationTransport? conversations;
   final CurrentsController? currents;
   final WorkerHttpClient? _worker;
+
+  WorkerOAuthClient? get oauthConnections =>
+      _worker == null ? null : WorkerOAuthClient(_worker);
   final MemorySyncPump? memorySyncPump;
   final ManagedSttClient? _managedStt;
   final Uri? _workerOrigin;

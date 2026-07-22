@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -58,6 +60,18 @@ class SettingsScreen extends StatelessWidget {
           detail:
               'Managed Omi AI runs about \$35/mo of usage. A personal API key '
               'runs the same usage for about \$5/mo — configure it above.',
+        ),
+      ],
+      if (!previewMode && services.oauthConnections != null) ...[
+        _SubscriptionSignInTile(
+          client: services.oauthConnections!,
+          provider: 'openai',
+          title: 'Sign in with ChatGPT',
+        ),
+        _SubscriptionSignInTile(
+          client: services.oauthConnections!,
+          provider: 'xai',
+          title: 'Sign in with xAI',
         ),
       ],
       if (previewMode || !services.canUseApi)
@@ -561,6 +575,124 @@ class _ProviderTileState extends State<_ProviderTile> {
             ),
           ],
         ],
+      );
+    },
+  );
+}
+
+class _SubscriptionSignInTile extends StatefulWidget {
+  const _SubscriptionSignInTile({
+    required this.client,
+    required this.provider,
+    required this.title,
+  });
+
+  final WorkerOAuthClient client;
+  final String provider;
+  final String title;
+
+  @override
+  State<_SubscriptionSignInTile> createState() =>
+      _SubscriptionSignInTileState();
+}
+
+class _SubscriptionSignInTileState extends State<_SubscriptionSignInTile> {
+  late Future<List<String>> connected = widget.client.connectedProviders();
+  Timer? poll;
+  String? userCode;
+  String? error;
+
+  @override
+  void dispose() {
+    poll?.cancel();
+    super.dispose();
+  }
+
+  Future<void> connect() async {
+    setState(() {
+      error = null;
+      userCode = null;
+    });
+    final OAuthDeviceStart start;
+    try {
+      start = await widget.client.startDevice(widget.provider);
+    } catch (failure) {
+      if (mounted) setState(() => error = '$failure');
+      return;
+    }
+    if (!mounted) return;
+    setState(() => userCode = start.userCode);
+    if (start.verificationUri.isNotEmpty) {
+      final uri = Uri.tryParse(start.verificationUri);
+      if (uri != null && uri.scheme == 'https') {
+        await launchUrl(uri, mode: LaunchMode.externalApplication);
+      }
+    }
+    poll?.cancel();
+    poll = Timer.periodic(Duration(seconds: start.interval), (timer) async {
+      final bool done;
+      try {
+        done = await widget.client.pollDevice(
+          widget.provider,
+          start.deviceCode,
+        );
+      } catch (failure) {
+        timer.cancel();
+        if (mounted) {
+          setState(() {
+            error = '$failure';
+            userCode = null;
+          });
+        }
+        return;
+      }
+      if (!done || !mounted) return;
+      timer.cancel();
+      setState(() {
+        userCode = null;
+        connected = widget.client.connectedProviders();
+      });
+    });
+  }
+
+  Future<void> disconnect() async {
+    await widget.client.disconnect(widget.provider);
+    if (mounted) {
+      setState(() => connected = widget.client.connectedProviders());
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => FutureBuilder<List<String>>(
+    future: connected,
+    builder: (context, snapshot) {
+      final isConnected = snapshot.data?.contains(widget.provider) ?? false;
+      return BaseTile(
+        icon: Icons.link_rounded,
+        title: widget.title,
+        detail: error != null
+            ? error!
+            : userCode != null
+            ? 'Enter code $userCode in the browser window, then wait here.'
+            : isConnected
+            ? 'Connected — your subscription covers chat usage.'
+            : 'Use your existing subscription instead of paying for '
+                  'managed usage.',
+        trailing: TextButton(
+          key: Key('oauth_${widget.provider}'),
+          onPressed: userCode != null
+              ? null
+              : isConnected
+              ? disconnect
+              : connect,
+          child: Text(
+            userCode != null
+                ? 'Waiting…'
+                : isConnected
+                ? 'Disconnect'
+                : 'Connect',
+          ),
+        ),
       );
     },
   );

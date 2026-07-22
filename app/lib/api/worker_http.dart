@@ -175,6 +175,94 @@ final class WorkerBillingClient {
   }
 }
 
+final class OAuthDeviceStart {
+  const OAuthDeviceStart({
+    required this.deviceCode,
+    required this.userCode,
+    required this.verificationUri,
+    required this.interval,
+  });
+
+  final String deviceCode;
+  final String userCode;
+  final String verificationUri;
+  final int interval;
+}
+
+final class WorkerOAuthClient {
+  const WorkerOAuthClient(this._client);
+
+  final WorkerHttpClient _client;
+
+  Future<OAuthDeviceStart> startDevice(String provider) async {
+    final response = await _client.send(
+      method: 'POST',
+      path: '/v1/oauth/$provider/device/start',
+    );
+    final body = response.body;
+    if (response.statusCode != 200 ||
+        body is! Map<String, Object?> ||
+        body['deviceCode'] is! String ||
+        body['userCode'] is! String) {
+      throw WorkerResponseException(
+        body is Map<String, Object?> && body['error'] is String
+            ? body['error']! as String
+            : 'Sign-in is unavailable',
+      );
+    }
+    return OAuthDeviceStart(
+      deviceCode: body['deviceCode']! as String,
+      userCode: body['userCode']! as String,
+      verificationUri: body['verificationUri'] is String
+          ? body['verificationUri']! as String
+          : '',
+      interval: body['interval'] is int ? body['interval']! as int : 5,
+    );
+  }
+
+  /// Returns true when connected, false while authorization is pending.
+  Future<bool> pollDevice(String provider, String deviceCode) async {
+    final response = await _client.send(
+      method: 'POST',
+      path: '/v1/oauth/$provider/device/poll',
+      body: {'deviceCode': deviceCode},
+    );
+    if (response.statusCode == 202) return false;
+    final body = response.body;
+    if (response.statusCode != 200 ||
+        body is! Map<String, Object?> ||
+        body['connected'] != true) {
+      throw WorkerResponseException(
+        body is Map<String, Object?> && body['error'] is String
+            ? body['error']! as String
+            : 'Sign-in failed',
+      );
+    }
+    return true;
+  }
+
+  Future<List<String>> connectedProviders() async {
+    final response = await _client.send(
+      method: 'GET',
+      path: '/v1/oauth/status',
+    );
+    final body = response.body;
+    if (response.statusCode != 200 ||
+        body is! Map<String, Object?> ||
+        body['connections'] is! List) {
+      throw const WorkerResponseException('Could not load connections');
+    }
+    return [
+      for (final row in body['connections']! as List)
+        if (row is Map && row['provider'] is String) row['provider'] as String,
+    ];
+  }
+
+  Future<void> disconnect(String provider) async {
+    await _client.send(method: 'DELETE', path: '/v1/oauth/$provider');
+  }
+}
+
 abstract interface class ManagedSttClient {
   Uri get trustedWorkerOrigin;
 
