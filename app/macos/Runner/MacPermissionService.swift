@@ -49,6 +49,23 @@ enum AccessibilityPermissionPolicy {
   }
 }
 
+enum MicrophonePermissionAction: Equatable {
+  case request
+  case openSettings
+  case complete
+}
+
+enum MicrophonePermissionPolicy {
+  static func action(for status: AVAuthorizationStatus) -> MicrophonePermissionAction {
+    switch status {
+    case .notDetermined: .request
+    case .denied, .restricted: .openSettings
+    case .authorized: .complete
+    @unknown default: .openSettings
+    }
+  }
+}
+
 enum FullDiskAccessProbePolicy {
   static func files(in library: URL) -> [URL] {
     let notes = library.appendingPathComponent("Group Containers/group.com.apple.notes")
@@ -95,7 +112,17 @@ final class MacPermissionService {
       openPrivacyPane("Privacy_Accessibility")
       completion()
     case .microphone:
-      AVCaptureDevice.requestAccess(for: .audio) { _ in completion() }
+      switch MicrophonePermissionPolicy.action(
+        for: AVCaptureDevice.authorizationStatus(for: .audio))
+      {
+      case .request:
+        AVCaptureDevice.requestAccess(for: .audio) { _ in completion() }
+      case .openSettings:
+        openPrivacyPane("Privacy_Microphone")
+        completion()
+      case .complete:
+        completion()
+      }
     case .screenCapture:
       CGRequestScreenCaptureAccess()
       openPrivacyPane("Privacy_ScreenCapture")

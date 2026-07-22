@@ -236,6 +236,53 @@ void main() {
     expect(find.text('Continue'), findsNothing);
   });
 
+  testWidgets('microphone permission row requests microphone access', (
+    tester,
+  ) async {
+    final gateway = _Gateway(session, currentSession: session);
+    final auth = AuthController(
+      gateway,
+      consentStore: VolatileConsentStore()..receipt = _receipt('firebase-uid'),
+    );
+    await auth.restoreSession();
+    final capabilities = _Capabilities({
+      for (final capability in CoreCapability.values)
+        capability: const CapabilityStatus(
+          state: CapabilityState.granted,
+          detail: 'Verified',
+        ),
+      CoreCapability.microphone: const CapabilityStatus(
+        state: CapabilityState.actionRequired,
+        detail: 'Microphone access is not granted.',
+      ),
+    });
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SingleChildScrollView(
+            child: ProductionGate(
+              configurationMessage: 'configured',
+              auth: auth,
+              capabilities: capabilities,
+              onOpenPreview: () {},
+              onFinish: () {},
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final permission = find.bySemanticsLabel(
+      'I would like to use your microphone so we can talk.',
+    );
+    await tester.ensureVisible(permission);
+    await tester.tap(permission);
+    await tester.pumpAndSettle();
+
+    expect(capabilities.requested, [CoreCapability.microphone]);
+  });
+
   testWidgets('permissions are rechecked automatically', (tester) async {
     final gateway = _Gateway(session, currentSession: session);
     final auth = AuthController(

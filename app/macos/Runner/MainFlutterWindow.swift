@@ -192,7 +192,7 @@ private final class PermissionDragOverlay: NSView {
     restartTimer = nil
     NSAnimationContext.runAnimationGroup { context in
       context.duration = 0.2
-      context.timingFunction = CAMediaTimingFunction(name: .easeIn)
+      context.timingFunction = CAMediaTimingFunction(name: .easeOut)
       animator().alphaValue = 0
     } completionHandler: { [weak self] in
       self?.isHidden = true

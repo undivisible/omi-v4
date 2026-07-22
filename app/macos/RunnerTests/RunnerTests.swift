@@ -35,6 +35,13 @@ class RunnerTests: XCTestCase {
     XCTAssertNil(AccessibilityPermissionPolicy.isFunctional(.cannotComplete))
   }
 
+  func testMicrophonePolicyUsesTheSystemPromptOnlyWhenAvailable() {
+    XCTAssertEqual(MicrophonePermissionPolicy.action(for: .notDetermined), .request)
+    XCTAssertEqual(MicrophonePermissionPolicy.action(for: .denied), .openSettings)
+    XCTAssertEqual(MicrophonePermissionPolicy.action(for: .restricted), .openSettings)
+    XCTAssertEqual(MicrophonePermissionPolicy.action(for: .authorized), .complete)
+  }
+
   func testFullDiskPolicyUsesOnlyScannedOmiSources() {
     let library = URL(fileURLWithPath: "/Users/example/Library", isDirectory: true)
     XCTAssertEqual(

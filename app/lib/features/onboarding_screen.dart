@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
@@ -31,6 +32,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   final onboarding = OnboardingController();
   StreamSubscription<NativeEvent>? scanEvents;
   List<OnboardingScanSource>? scanSources;
+  String? scanSummary;
   String? scanRequestId;
   String? scanError;
   bool scanStarting = false;
@@ -88,11 +90,11 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         scanRequestId = requestId;
         scanStarting = false;
       });
-    } catch (error) {
+    } catch (_) {
       if (!mounted) return;
       setState(() {
         scanStarting = false;
-        scanError = error.toString();
+        scanError = 'I couldn’t start the private scan. Try again.';
       });
     }
   }
@@ -107,6 +109,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       setState(() {
         scanRequestId = value.requestId;
         scanSources = value.sources;
+        scanSummary = value.summary;
         scanError = null;
       });
     }
@@ -116,6 +119,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     setState(() {
       scanRequestId = null;
       scanSources = null;
+      scanSummary = null;
       scanError = null;
     });
     unawaited(_startScan());
@@ -157,6 +161,12 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       backgroundColor: Colors.transparent,
       body: OnboardingBackdrop(
         bright: onboarding.stage.index >= OnboardingStage.scan.index,
+        searching:
+            onboarding.stage == OnboardingStage.scan &&
+            scanSources == null &&
+            scanError == null,
+        settled:
+            onboarding.stage == OnboardingStage.scan && scanSources != null,
         child: SafeArea(
           child: Center(
             child: ConstrainedBox(
@@ -171,17 +181,23 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                   vertical: 58,
                 ),
                 child: AnimatedSwitcher(
-                  duration: const Duration(milliseconds: 350),
-                  transitionBuilder: (child, animation) => FadeTransition(
-                    opacity: animation,
-                    child: SlideTransition(
-                      position: Tween(
-                        begin: const Offset(0, .025),
-                        end: Offset.zero,
-                      ).animate(animation),
-                      child: child,
-                    ),
-                  ),
+                  duration: const Duration(milliseconds: 240),
+                  transitionBuilder: (child, animation) {
+                    final eased = CurvedAnimation(
+                      parent: animation,
+                      curve: Curves.easeOutCubic,
+                    );
+                    return FadeTransition(
+                      opacity: eased,
+                      child: SlideTransition(
+                        position: Tween(
+                          begin: const Offset(0, .015),
+                          end: Offset.zero,
+                        ).animate(eased),
+                        child: child,
+                      ),
+                    );
+                  },
                   child: switch (onboarding.stage) {
                     OnboardingStage.introduction => _Introduction(
                       key: const ValueKey('introduction'),
@@ -200,6 +216,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                     OnboardingStage.scan => _ScanStep(
                       key: ValueKey('scan'),
                       sources: scanSources,
+                      summary: scanSummary,
                       error: scanError,
                       onRetry: _retryScan,
                       onContinue: onboarding.completeScan,
@@ -237,33 +254,19 @@ class _Introduction extends StatelessWidget {
   Widget build(BuildContext context) => Column(
     mainAxisSize: MainAxisSize.min,
     children: [
-      Text.rich(
-        TextSpan(
-          children: [
-            const TextSpan(text: 'Hi, I’m Omi. I’m a '),
-            const TextSpan(
-              text: 'second brain',
-              style: TextStyle(fontWeight: FontWeight.w700),
-            ),
-            const TextSpan(text: ' you can '),
-            const TextSpan(
-              text: 'actually trust',
-              style: TextStyle(fontStyle: FontStyle.italic),
-            ),
-            const TextSpan(text: '—built to '),
-            const TextSpan(
-              text: 'surface what’s important',
-              style: TextStyle(fontWeight: FontWeight.w700),
-            ),
-            const TextSpan(text: ' in your life and help you '),
-            const TextSpan(
-              text: 'get things done.',
-              style: TextStyle(fontWeight: FontWeight.w700),
-            ),
-          ],
-        ),
+      const _RandomizedText(
+        segments: [
+          ('Hi, I’m Omi. I’m a ', null),
+          ('second brain', TextStyle(fontWeight: FontWeight.w700)),
+          (' you can ', null),
+          ('actually trust', TextStyle(fontStyle: FontStyle.italic)),
+          ('—built to ', null),
+          ('surface what’s important', TextStyle(fontWeight: FontWeight.w700)),
+          (' in your life and help you ', null),
+          ('get things done.', TextStyle(fontWeight: FontWeight.w700)),
+        ],
         textAlign: TextAlign.center,
-        style: const TextStyle(
+        style: TextStyle(
           color: Color(0xfffffcec),
           fontFamily: 'Avenir Next',
           fontSize: 46,
@@ -366,6 +369,7 @@ class _ProfileQuestion extends StatelessWidget {
 class _ScanStep extends StatelessWidget {
   const _ScanStep({
     required this.sources,
+    required this.summary,
     required this.error,
     required this.onRetry,
     required this.onContinue,
@@ -373,6 +377,7 @@ class _ScanStep extends StatelessWidget {
   });
 
   final List<OnboardingScanSource>? sources;
+  final String? summary;
   final String? error;
   final VoidCallback onRetry;
   final VoidCallback onContinue;
@@ -383,18 +388,42 @@ class _ScanStep extends StatelessWidget {
     children: [
       Semantics(
         liveRegion: true,
-        child: Text(
-          sources == null && error == null
-              ? 'Give me a second…'
-              : 'Here’s what I could read.',
-          style: Theme.of(context).textTheme.displaySmall?.copyWith(
-            color: const Color(0xfffffcec),
-            fontSize: 44,
-            letterSpacing: -1.6,
+        child: _RandomizedText(
+          key: ValueKey(
+            sources == null && error == null
+                ? 'Give me a second…'
+                : 'Here’s what I could read.',
           ),
+          segments: [
+            (
+              sources == null && error == null
+                  ? 'Give me a second…'
+                  : 'Here’s what I could read.',
+              null,
+            ),
+          ],
+          style:
+              Theme.of(context).textTheme.displaySmall?.copyWith(
+                color: const Color(0xfffffcec),
+                fontSize: 44,
+                letterSpacing: -1.6,
+              ) ??
+              const TextStyle(color: Color(0xfffffcec), fontSize: 44),
         ),
       ),
       const SizedBox(height: 24),
+      if (summary case final value?) ...[
+        _RandomizedText(
+          key: ValueKey(value),
+          segments: [(value, null)],
+          style: const TextStyle(
+            color: Color(0xfffffcec),
+            fontSize: 20,
+            height: 1.45,
+          ),
+        ),
+        const SizedBox(height: 18),
+      ],
       if (sources case final results?)
         for (final source in results)
           Padding(
@@ -481,4 +510,91 @@ class _UseStep extends StatelessWidget {
       ),
     ],
   );
+}
+
+class _RandomizedText extends StatefulWidget {
+  const _RandomizedText({
+    required this.segments,
+    required this.style,
+    this.textAlign = TextAlign.start,
+    super.key,
+  });
+
+  final List<(String, TextStyle?)> segments;
+  final TextStyle style;
+  final TextAlign textAlign;
+
+  @override
+  State<_RandomizedText> createState() => _RandomizedTextState();
+}
+
+class _RandomizedTextState extends State<_RandomizedText>
+    with SingleTickerProviderStateMixin {
+  late final animation = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 1200),
+  );
+  late final tokens = _tokens();
+
+  List<({String text, TextStyle? style, double delay})> _tokens() {
+    final random = math.Random();
+    return [
+      for (final segment in widget.segments)
+        for (final match in RegExp(r'\s+|\S+').allMatches(segment.$1))
+          (
+            text: match.group(0)!,
+            style: segment.$2,
+            delay: match.group(0)!.trim().isEmpty
+                ? 0
+                : .05 + random.nextDouble() * .18,
+          ),
+    ];
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (MediaQuery.disableAnimationsOf(context)) {
+      animation.value = 1;
+    } else if (!animation.isAnimating && animation.value == 0) {
+      animation.forward();
+    }
+  }
+
+  @override
+  void dispose() {
+    animation.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+    label: widget.segments.map((segment) => segment.$1).join(),
+    child: ExcludeSemantics(
+      child: AnimatedBuilder(
+        animation: animation,
+        builder: (context, child) => Text.rich(
+          TextSpan(
+            children: [
+              for (final token in tokens)
+                TextSpan(
+                  text: token.text,
+                  style: _style(token.style, token.delay),
+                ),
+            ],
+          ),
+          style: widget.style,
+          textAlign: widget.textAlign,
+        ),
+      ),
+    ),
+  );
+
+  TextStyle _style(TextStyle? tokenStyle, double delay) {
+    final progress = ((animation.value - delay) / .62).clamp(0.0, 1.0);
+    final opacity = Curves.easeOutExpo.transform(progress);
+    final style = widget.style.merge(tokenStyle);
+    final color = style.color ?? const Color(0xffffffff);
+    return style.copyWith(color: color.withValues(alpha: color.a * opacity));
+  }
 }
