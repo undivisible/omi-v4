@@ -191,40 +191,6 @@ class OmiLabel extends StatelessWidget {
   }
 }
 
-class StatRow extends StatelessWidget {
-  const StatRow({required this.values, super.key});
-
-  final List<(String, String)> values;
-
-  @override
-  Widget build(BuildContext context) {
-    return GlassCard(
-      child: Padding(
-        padding: const EdgeInsets.all(20),
-        child: Row(
-          children: [
-            for (final value in values)
-              Expanded(
-                child: Column(
-                  children: [
-                    Text(
-                      value.$1,
-                      style: Theme.of(context).textTheme.headlineMedium,
-                    ),
-                    Text(
-                      value.$2,
-                      style: const TextStyle(color: Colors.white54),
-                    ),
-                  ],
-                ),
-              ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
 class BaseTile extends StatelessWidget {
   const BaseTile({
     required this.icon,
