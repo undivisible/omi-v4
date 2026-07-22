@@ -3,6 +3,7 @@ import { requireAuth } from "./auth";
 import desktopAuth from "./desktop-auth";
 import { reconcileManagedAssistantRequests } from "./assistant";
 import { deliverDueChannelMessages } from "./delivery";
+import { respondToStaleInboxItems } from "./inbox-fallback";
 import { backfillClaimVectors, drainPendingEmbeddings } from "./memory-vectors";
 export { AssistantAdmission } from "./assistant-admission";
 export { SttAdmission } from "./stt-admission";
@@ -33,6 +34,7 @@ export default {
     context.waitUntil(
       Promise.all([
         deliverDueChannelMessages(env),
+        respondToStaleInboxItems(env).catch(() => undefined),
         reconcileManagedAssistantRequests(env),
         backfillClaimVectors(env)
           .then(() => drainPendingEmbeddings(env))
