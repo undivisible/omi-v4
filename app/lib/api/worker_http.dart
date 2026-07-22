@@ -458,12 +458,18 @@ final class WorkerAuthenticationException implements Exception {
   const WorkerAuthenticationException(this.message);
 
   final String message;
+
+  @override
+  String toString() => message;
 }
 
 final class WorkerResponseException implements Exception {
   const WorkerResponseException(this.message);
 
   final String message;
+
+  @override
+  String toString() => message;
 }
 
 final class WorkerMemoryTransport implements MemoryTransport {
