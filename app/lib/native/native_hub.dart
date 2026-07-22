@@ -116,6 +116,7 @@ abstract interface class NativeHub {
     required String requestId,
     required String text,
     String? conversationId,
+    String? memoryContext,
   });
   void configureAssistant({
     required String requestId,
@@ -322,6 +323,7 @@ final class UnavailableNativeHub
     required String requestId,
     required String text,
     String? conversationId,
+    String? memoryContext,
   }) => _unavailable();
 
   @override
@@ -565,9 +567,14 @@ final class RinfNativeHub
     required String requestId,
     required String text,
     String? conversationId,
+    String? memoryContext,
   }) => _send(
     requestId,
-    CommandSendMessage(text: text, conversationId: conversationId),
+    CommandSendMessage(
+      text: text,
+      conversationId: conversationId,
+      memoryContext: memoryContext,
+    ),
   );
 
   @override

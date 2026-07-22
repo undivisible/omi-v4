@@ -202,6 +202,7 @@ void main() {
             attempt: 2,
             leaseToken: 'lease-token-1',
             leaseUntil: 4102444800000,
+            memoryContext: 'Relevant synced memory:\n- Sam prefers espresso',
           ),
         )
         ..items.add(
@@ -234,6 +235,10 @@ void main() {
         'chat-channel:inbox-message-1:2',
         'What should I focus on?',
       ));
+      expect(
+        hub.memoryContexts.single,
+        'Relevant synced memory:\n- Sam prefers espresso',
+      );
       await Future<void>.delayed(const Duration(milliseconds: 5));
       expect(inbox.claims, 1);
 
@@ -2856,6 +2861,7 @@ final class _FakeHub
   final captures = <_Capture>[];
   final cancelled = <String>[];
   final messages = <(String, String)>[];
+  final memoryContexts = <String?>[];
   final approvals = <(String, ApprovalDecision)>[];
   final approvalReceipts = <ComputerUseAuthorityReceipt?>[];
   final approvalRequests = <(String, String)>[];
@@ -3034,8 +3040,10 @@ final class _FakeHub
     required String requestId,
     required String text,
     String? conversationId,
+    String? memoryContext,
   }) {
     messages.add((requestId, text));
+    memoryContexts.add(memoryContext);
   }
 
   @override

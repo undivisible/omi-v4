@@ -156,13 +156,18 @@ class CommandConfigureMemory extends Command {
 
 @immutable
 class CommandSendMessage extends Command {
-  const CommandSendMessage({required this.text, this.conversationId}) : super();
+  const CommandSendMessage({
+    required this.text,
+    this.conversationId,
+    this.memoryContext,
+  }) : super();
 
   static CommandSendMessage load(BinaryDeserializer deserializer) {
     deserializer.increaseContainerDepth();
     final instance = CommandSendMessage(
       text: deserializer.deserializeString(),
       conversationId: TraitHelpers.deserializeOptionStr(deserializer),
+      memoryContext: TraitHelpers.deserializeOptionStr(deserializer),
     );
     deserializer.decreaseContainerDepth();
     return instance;
@@ -170,16 +175,21 @@ class CommandSendMessage extends Command {
 
   final String text;
   final String? conversationId;
+  final String? memoryContext;
 
   CommandSendMessage copyWith({
     String? text,
     String? Function()? conversationId,
+    String? Function()? memoryContext,
   }) {
     return CommandSendMessage(
       text: text ?? this.text,
       conversationId: conversationId == null
           ? this.conversationId
           : conversationId(),
+      memoryContext: memoryContext == null
+          ? this.memoryContext
+          : memoryContext(),
     );
   }
 
@@ -188,6 +198,7 @@ class CommandSendMessage extends Command {
     serializer.serializeVariantIndex(1);
     serializer.serializeString(text);
     TraitHelpers.serializeOptionStr(conversationId, serializer);
+    TraitHelpers.serializeOptionStr(memoryContext, serializer);
     serializer.decreaseContainerDepth();
   }
 
@@ -198,11 +209,12 @@ class CommandSendMessage extends Command {
 
     return other is CommandSendMessage &&
         text == other.text &&
-        conversationId == other.conversationId;
+        conversationId == other.conversationId &&
+        memoryContext == other.memoryContext;
   }
 
   @override
-  int get hashCode => Object.hash(text, conversationId);
+  int get hashCode => Object.hash(text, conversationId, memoryContext);
 
   @override
   String toString() {
@@ -212,7 +224,8 @@ class CommandSendMessage extends Command {
       fullString =
           '$runtimeType('
           'text: [REDACTED], '
-          'conversationId: $conversationId'
+          'conversationId: $conversationId, '
+          'memoryContext: [REDACTED]'
           ')';
       return true;
     }());

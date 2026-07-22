@@ -156,9 +156,15 @@ void main(List<String> arguments) {
     messageStart,
     messageEnd,
   );
+  const exposedMemoryContext = "'memoryContext: \$memoryContext'";
+  const redactedMemoryContext = "'memoryContext: [REDACTED]'";
   if (exposedText.allMatches(messageSource).length != 1 ||
-      redactedText.allMatches(messageSource).isNotEmpty) {
-    stderr.writeln('expected exactly one generated send-message text field');
+      redactedText.allMatches(messageSource).isNotEmpty ||
+      exposedMemoryContext.allMatches(messageSource).length != 1 ||
+      redactedMemoryContext.allMatches(messageSource).isNotEmpty) {
+    stderr.writeln(
+      'expected exactly one generated send-message text and memoryContext field',
+    );
     exitCode = 1;
     return;
   }
@@ -166,7 +172,9 @@ void main(List<String> arguments) {
     commandMessageSource.replaceRange(
       messageStart,
       messageEnd,
-      messageSource.replaceFirst(exposedText, redactedText),
+      messageSource
+          .replaceFirst(exposedText, redactedText)
+          .replaceFirst(exposedMemoryContext, redactedMemoryContext),
     ),
   );
 

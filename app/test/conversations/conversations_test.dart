@@ -31,6 +31,7 @@ void main() {
                 'attempt': 1,
                 'leaseToken': 'lease-token-1',
                 'leaseUntil': 300001,
+                'memoryContext': 'Relevant synced memory:\n- likes espresso',
               },
             }),
             200,
@@ -42,8 +43,9 @@ void main() {
     final transport = WorkerConversationTransport(client);
 
     final item = await transport.claim();
+    expect(item!.memoryContext, 'Relevant synced memory:\n- likes espresso');
     await transport.complete(
-      item!,
+      item,
       outcome: ConversationInboxOutcome.done,
       responseText: 'Hi back',
     );
