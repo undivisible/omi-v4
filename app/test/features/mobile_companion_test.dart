@@ -85,8 +85,8 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    await tester.ensureVisible(find.byKey(const Key('companion_scan')));
-    await tester.tap(find.byKey(const Key('companion_scan')));
+    expect(find.byKey(const Key('companion_reconnect')), findsOneWidget);
+    await tester.tap(find.byKey(const Key('companion_reconnect')));
     await tester.pumpAndSettle();
     expect(find.text('Omi Pendant'), findsOneWidget);
 
@@ -118,8 +118,18 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(fixture.services.deviceAudio.active, isFalse);
-    expect(find.byKey(const Key('companion_scan_tile')), findsOneWidget);
-    expect(find.byKey(const Key('companion_remembered_tile')), findsOneWidget);
+    expect(find.byKey(const Key('companion_reconnect')), findsOneWidget);
+    expect(
+      find.byKey(const Key('companion_disconnected_label')),
+      findsOneWidget,
+    );
+
+    await tester.tap(find.byKey(const Key('companion_reconnect')));
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 50)),
+    );
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('companion_battery_tile')), findsOneWidget);
     fixture.services.dispose();
   });
 
@@ -165,9 +175,37 @@ void main() {
     fixture.services.dispose();
   });
 
-  testWidgets('settings section shows account, consent, route, and version', (
+  testWidgets('disconnected state collapses to one block with reconnect', (
     tester,
   ) async {
+    await tester.binding.setSurfaceSize(const Size(800, 1600));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final fixture = await _mobileFixture('user-a');
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MobileCompanionShell(
+          services: fixture.services,
+          pairedDevices: VolatilePairedDeviceStore(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('companion_pendant_faded')), findsOneWidget);
+    expect(
+      find.byKey(const Key('companion_disconnected_label')),
+      findsOneWidget,
+    );
+    expect(find.text('Omi disconnected'), findsOneWidget);
+    expect(find.byKey(const Key('companion_reconnect')), findsOneWidget);
+    expect(find.byKey(const Key('companion_scan_tile')), findsNothing);
+    expect(find.byKey(const Key('companion_remembered_tile')), findsNothing);
+    expect(find.byKey(const Key('companion_connection_tile')), findsNothing);
+    fixture.services.dispose();
+  });
+
+  testWidgets('settings sheet opens from the top-right button', (tester) async {
     await tester.binding.setSurfaceSize(const Size(800, 2400));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final fixture = await _mobileFixture('user-a');
@@ -182,6 +220,12 @@ void main() {
     );
     await tester.pumpAndSettle();
 
+    expect(find.byKey(const Key('companion_account_tile')), findsNothing);
+    expect(find.byKey(const Key('companion_settings_button')), findsOneWidget);
+    await tester.tap(find.byKey(const Key('companion_settings_button')));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('companion_settings_sheet')), findsOneWidget);
     expect(find.byKey(const Key('companion_account_tile')), findsOneWidget);
     expect(find.byKey(const Key('companion_consent_tile')), findsOneWidget);
     expect(find.byKey(const Key('companion_route_tile')), findsOneWidget);

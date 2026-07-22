@@ -263,6 +263,20 @@ class MobilePendantPageState extends State<MobilePendantPage> {
     }
   }
 
+  Future<void> reconnect() async {
+    final remembered = rememberedDeviceId;
+    if (remembered == null) {
+      await scan();
+      return;
+    }
+    setState(() => error = null);
+    try {
+      await widget.services.connectDevice(remembered);
+    } catch (next) {
+      if (mounted) setState(() => error = next);
+    }
+  }
+
   Future<void> connect(RelayDevice device) async {
     setState(() => error = null);
     try {
@@ -349,23 +363,20 @@ class MobilePendantPageState extends State<MobilePendantPage> {
         detail: 'Device pairing is intentionally unavailable on this client.',
       )
     else ...[
-      _PaperTile(
-        key: const Key('companion_connection_tile'),
-        icon: connected
-            ? Icons.bluetooth_connected_rounded
-            : Icons.bluetooth_rounded,
-        iconColor: connected ? _teal : null,
-        title: device?.name ?? 'No device connected',
-        detail: [_phaseLabel(phase), ?snapshot?.message].join(' · '),
-        trailing: connected
-            ? IconButton(
-                key: const Key('companion_disconnect'),
-                tooltip: 'Disconnect',
-                onPressed: disconnect,
-                icon: const Icon(Icons.link_off_rounded),
-              )
-            : null,
-      ),
+      if (connected)
+        _PaperTile(
+          key: const Key('companion_connection_tile'),
+          icon: Icons.bluetooth_connected_rounded,
+          iconColor: _teal,
+          title: device?.name ?? 'No device connected',
+          detail: [_phaseLabel(phase), ?snapshot?.message].join(' · '),
+          trailing: IconButton(
+            key: const Key('companion_disconnect'),
+            tooltip: 'Disconnect',
+            onPressed: disconnect,
+            icon: const Icon(Icons.link_off_rounded),
+          ),
+        ),
       if (connected && device != null) ...[
         _PaperTile(
           key: const Key('companion_codec_tile'),
@@ -402,33 +413,6 @@ class MobilePendantPageState extends State<MobilePendantPage> {
           ),
         ),
       ] else ...[
-        _PaperTile(
-          key: const Key('companion_scan_tile'),
-          icon: Icons.bluetooth_searching_rounded,
-          title: phase == DeviceConnectionPhase.scanning
-              ? 'Scanning nearby…'
-              : 'Find an Omi device',
-          detail: 'Bluetooth permission is requested when you scan.',
-          trailing: IconButton(
-            key: const Key('companion_scan'),
-            tooltip: 'Scan',
-            onPressed: phase == DeviceConnectionPhase.scanning ? null : scan,
-            icon: const Icon(Icons.refresh_rounded),
-          ),
-        ),
-        if (rememberedDeviceId case final remembered?)
-          _PaperTile(
-            key: const Key('companion_remembered_tile'),
-            icon: Icons.history_rounded,
-            title: 'Remembered device',
-            detail: remembered,
-            trailing: IconButton(
-              key: const Key('companion_forget'),
-              tooltip: 'Forget',
-              onPressed: forget,
-              icon: const Icon(Icons.delete_outline_rounded),
-            ),
-          ),
         for (final found in devices)
           _PaperTile(
             icon: Icons.watch_outlined,
@@ -494,7 +478,11 @@ class MobilePendantPageState extends State<MobilePendantPage> {
       0,
       (sum, delta) => sum + math.max(0, delta.endMs - delta.startMs),
     );
-    return ListView(
+    final busy =
+        phase == DeviceConnectionPhase.scanning ||
+        phase == DeviceConnectionPhase.connecting ||
+        phase == DeviceConnectionPhase.disconnecting;
+    final list = ListView(
       padding: EdgeInsets.zero,
       children: [
         _PendantHero(
@@ -502,6 +490,8 @@ class MobilePendantPageState extends State<MobilePendantPage> {
           phaseLabel: _phaseLabel(phase),
           connected: connected,
           batteryLevel: connected ? device?.batteryLevel : null,
+          busy: busy,
+          onReconnect: () => unawaited(reconnect()),
         ),
         Padding(
           padding: const EdgeInsets.fromLTRB(18, 8, 18, 24),
@@ -525,15 +515,6 @@ class MobilePendantPageState extends State<MobilePendantPage> {
                 ),
               ],
               const SizedBox(height: 22),
-              const _SectionLabel('SETTINGS'),
-              ..._withGaps(
-                _MobileSettingsSection.tiles(
-                  context,
-                  services: widget.services,
-                  previewMode: widget.previewMode,
-                ),
-              ),
-              const SizedBox(height: 22),
               const _SectionLabel('THIS SESSION'),
               ..._withGaps(_transcriptTiles()),
               const SizedBox(height: 8),
@@ -541,6 +522,53 @@ class MobilePendantPageState extends State<MobilePendantPage> {
           ),
         ),
       ],
+    );
+    return Stack(
+      children: [
+        list,
+        Positioned(
+          top: 0,
+          right: 0,
+          child: SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.only(top: 8, right: 14),
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  color: _surface,
+                  border: Border.all(color: _hairline),
+                  shape: BoxShape.circle,
+                ),
+                child: IconButton(
+                  key: const Key('companion_settings_button'),
+                  tooltip: 'Settings',
+                  onPressed: _openSettings,
+                  icon: const Icon(Icons.settings_outlined, size: 20),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  void _openSettings() {
+    unawaited(
+      showModalBottomSheet<void>(
+        context: context,
+        backgroundColor: _paper,
+        isScrollControlled: true,
+        useSafeArea: true,
+        shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+        ),
+        builder: (sheetContext) => _SettingsSheet(
+          services: widget.services,
+          previewMode: widget.previewMode,
+          rememberedDeviceId: () => rememberedDeviceId,
+          onForget: forget,
+        ),
+      ),
     );
   }
 }
@@ -555,12 +583,16 @@ class _PendantHero extends StatefulWidget {
     required this.phaseLabel,
     required this.connected,
     required this.batteryLevel,
+    required this.busy,
+    required this.onReconnect,
   });
 
   final String? deviceName;
   final String phaseLabel;
   final bool connected;
   final int? batteryLevel;
+  final bool busy;
+  final VoidCallback onReconnect;
 
   @override
   State<_PendantHero> createState() => _PendantHeroState();
@@ -596,13 +628,29 @@ class _PendantHeroState extends State<_PendantHero>
     final animationsDisabled = _animationsDisabled;
     final width = MediaQuery.sizeOf(context).width;
     final pendantWidth = math.min(width * .82, 420.0);
-    final pendant = Image.asset(
+    final connected = widget.connected;
+    Widget pendant = Image.asset(
       'assets/images/omi_pendant.png',
       key: const Key('companion_pendant_image'),
       width: pendantWidth,
       fit: BoxFit.fitWidth,
       excludeFromSemantics: true,
     );
+    if (!connected) {
+      pendant = Opacity(
+        key: const Key('companion_pendant_faded'),
+        opacity: .35,
+        child: ColorFiltered(
+          colorFilter: const ColorFilter.matrix([
+            .2126, .7152, .0722, 0, 0, //
+            .2126, .7152, .0722, 0, 0, //
+            .2126, .7152, .0722, 0, 0, //
+            0, 0, 0, 1, 0,
+          ]),
+          child: pendant,
+        ),
+      );
+    }
     return Column(
       children: [
         Align(
@@ -637,18 +685,51 @@ class _PendantHeroState extends State<_PendantHero>
                 ),
               ),
               const SizedBox(height: 6),
-              Semantics(
-                label: widget.deviceName == null
-                    ? 'Device status: ${widget.phaseLabel}'
-                    : '${widget.deviceName}: ${widget.phaseLabel}',
-                excludeSemantics: true,
-                child: Text(
-                  widget.deviceName == null
-                      ? widget.phaseLabel
-                      : '${widget.deviceName} · ${widget.phaseLabel}',
-                  style: const TextStyle(fontSize: 15, color: _inkSoft),
+              if (!connected) ...[
+                Semantics(
+                  label: 'Device status: ${widget.phaseLabel}',
+                  excludeSemantics: true,
+                  child: Text(
+                    widget.busy ? widget.phaseLabel : 'Omi disconnected',
+                    key: const Key('companion_disconnected_label'),
+                    style: const TextStyle(fontSize: 15, color: _inkSoft),
+                  ),
                 ),
-              ),
+                const SizedBox(height: 14),
+                OutlinedButton(
+                  key: const Key('companion_reconnect'),
+                  onPressed: widget.busy ? null : widget.onReconnect,
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: _ink,
+                    side: const BorderSide(color: _hairline),
+                    backgroundColor: _surface,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 26,
+                      vertical: 12,
+                    ),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                    textStyle: const TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  child: const Text('Reconnect'),
+                ),
+              ] else
+                Semantics(
+                  label: widget.deviceName == null
+                      ? 'Device status: ${widget.phaseLabel}'
+                      : '${widget.deviceName}: ${widget.phaseLabel}',
+                  excludeSemantics: true,
+                  child: Text(
+                    widget.deviceName == null
+                        ? widget.phaseLabel
+                        : '${widget.deviceName} · ${widget.phaseLabel}',
+                    style: const TextStyle(fontSize: 15, color: _inkSoft),
+                  ),
+                ),
               if (widget.batteryLevel case final battery?) ...[
                 const SizedBox(height: 10),
                 Semantics(
@@ -807,8 +888,8 @@ class _SectionLabel extends StatelessWidget {
       text,
       style: const TextStyle(
         fontSize: 11,
-        fontWeight: FontWeight.w700,
-        letterSpacing: 1.4,
+        fontWeight: FontWeight.w600,
+        letterSpacing: 1.43,
         color: _inkSoft,
       ),
     ),
@@ -915,6 +996,70 @@ class _DesktopCta extends StatelessWidget {
       ),
     ),
   );
+}
+
+class _SettingsSheet extends StatefulWidget {
+  const _SettingsSheet({
+    required this.services,
+    required this.previewMode,
+    required this.rememberedDeviceId,
+    required this.onForget,
+  });
+
+  final AppServices services;
+  final bool previewMode;
+  final String? Function() rememberedDeviceId;
+  final Future<void> Function() onForget;
+
+  @override
+  State<_SettingsSheet> createState() => _SettingsSheetState();
+}
+
+class _SettingsSheetState extends State<_SettingsSheet> {
+  @override
+  Widget build(BuildContext context) {
+    final remembered = widget.rememberedDeviceId();
+    return SafeArea(
+      top: false,
+      child: ListView(
+        key: const Key('companion_settings_sheet'),
+        shrinkWrap: true,
+        padding: const EdgeInsets.fromLTRB(18, 20, 18, 24),
+        children: [
+          const _SectionLabel('SETTINGS'),
+          ..._withGaps(
+            _MobileSettingsSection.tiles(
+              context,
+              services: widget.services,
+              previewMode: widget.previewMode,
+            ),
+          ),
+          if (remembered != null) ...[
+            const SizedBox(height: 22),
+            const _SectionLabel('DEVICE'),
+            ..._withGaps([
+              _PaperTile(
+                key: const Key('companion_remembered_tile'),
+                icon: Icons.history_rounded,
+                title: 'Remembered device',
+                detail: remembered,
+                trailing: IconButton(
+                  key: const Key('companion_forget'),
+                  tooltip: 'Forget',
+                  onPressed: () => unawaited(
+                    widget.onForget().then((_) {
+                      if (mounted) setState(() {});
+                    }),
+                  ),
+                  icon: const Icon(Icons.delete_outline_rounded),
+                ),
+              ),
+            ]),
+          ],
+        ],
+      ),
+    );
+  }
 }
 
 class _MobileSettingsSection {
