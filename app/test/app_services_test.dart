@@ -4,18 +4,21 @@ import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:omi/app_services.dart';
+import 'package:omi/api/dev_gemini.dart';
 import 'package:omi/api/worker_http.dart';
 import 'package:omi/auth/auth.dart';
 import 'package:omi/device/device.dart';
 import 'package:omi/conversations/conversations.dart';
 import 'package:omi/currents/currents.dart';
 import 'package:omi/features/chat_screen.dart';
+import 'package:omi/features/cursor_pill_controller.dart';
 import 'package:omi/keyboard/keyboard.dart';
 import 'package:omi/native/generated/signals/signals.dart';
 import 'package:omi/native/native_hub.dart';
 import 'package:omi/providers/providers.dart';
 import 'package:omi/settings/system_audio_capture_mode_store.dart'
     show VolatileSystemAudioCaptureModeStore;
+import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
   test('onboarding profile capture sends a chat memory event', () async {
@@ -2535,6 +2538,114 @@ void main() {
       await hub.close();
     },
   );
+
+  test('desktop voice signed out with a dev Gemini key routes through the '
+      'direct live path instead of throwing signedOut', () async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    SharedPreferences.setMockInitialValues({});
+    DevGemini.debugOverride = 'AIzaTestDevKey';
+    addTearDown(() => DevGemini.debugOverride = null);
+    final auth = AuthController(
+      _FakeAuthGateway(null),
+      consentStore: VolatileConsentStore(),
+    );
+    await auth.restoreSession();
+    expect(auth.snapshot.phase, AuthPhase.signedOut);
+    final hub = _FakeHub();
+    final audio = StreamController<Uint8List>();
+    final liveVoice = LiveVoiceCapture(
+      hub: hub,
+      startAudio: () async => audio.stream,
+      stopAudio: audio.close,
+    );
+    final desktopVoice = DesktopVoiceCapture(
+      hub: hub,
+      permissionCheck: () async => true,
+    );
+    final services = AppServices.forTesting(
+      auth: auth,
+      nativeHub: hub,
+      deviceRelay: DeviceRelayService(
+        role: DeviceRelayRole.desktopObserver,
+        adapter: const UnavailableDeviceRelayAdapter(),
+      ),
+      memoryDatabasePath: (uid) => '/tmp/$uid.sqlite3',
+      desktopVoice: desktopVoice,
+      liveVoice: liveVoice,
+    );
+    await services.initialize();
+    expect(services.localMode, isTrue);
+
+    await services.startDesktopVoice();
+    expect(liveVoice.active, isTrue);
+    expect(desktopVoice.active, isFalse);
+    expect(hub.liveVoiceStartRequests, isNotEmpty);
+
+    final requestId = await services.sendChatMessage(text: 'hello');
+    expect(requestId, isNotEmpty);
+
+    await services.captureOnboardingProfile(name: 'Ada', languages: const []);
+    expect(hub.captures, isNotEmpty);
+
+    await expectLater(
+      services.connectDevice('device-1'),
+      throwsA(
+        isA<StateError>().having(
+          (error) => error.message,
+          'message',
+          contains('connected account'),
+        ),
+      ),
+    );
+
+    await services.cancelDesktopVoice();
+    services.dispose();
+    await hub.close();
+  });
+
+  test('desktop voice signed out without a dev Gemini key fails with an '
+      'actionable message naming the key locations', () async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    DevGemini.debugOverride = null;
+    addTearDown(() => DevGemini.debugOverride = null);
+    final auth = AuthController(
+      _FakeAuthGateway(null),
+      consentStore: VolatileConsentStore(),
+    );
+    await auth.restoreSession();
+    final hub = _FakeHub();
+    final services = AppServices.forTesting(
+      auth: auth,
+      nativeHub: hub,
+      deviceRelay: DeviceRelayService(
+        role: DeviceRelayRole.desktopObserver,
+        adapter: const UnavailableDeviceRelayAdapter(),
+      ),
+      memoryDatabasePath: (uid) => '/tmp/$uid.sqlite3',
+    );
+    await services.initialize();
+
+    Object? failure;
+    try {
+      await services.startDesktopVoice();
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure, isA<VoiceStartException>());
+    final exception = failure as VoiceStartException;
+    expect(exception.failure, VoiceStartFailure.signedOut);
+    expect(exception.message, contains('GEMINI_API_KEY'));
+    expect(exception.message, contains('dev.env'));
+    expect(
+      CursorPillController.voiceStartErrorMessage(exception),
+      contains('GEMINI_API_KEY'),
+    );
+
+    services.dispose();
+    await hub.close();
+  });
 }
 
 final class _FakeConversationTransport implements ConversationTransport {

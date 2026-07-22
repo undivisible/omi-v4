@@ -325,7 +325,9 @@ final class CursorPillController extends ChangeNotifier {
           'Microphone access is off for Omi. Enable it in System Settings → '
               'Privacy & Security → Microphone, then try again.',
         VoiceStartFailure.signedOut =>
-          'Voice needs a signed-in session. Open Omi and sign in first.',
+          error is VoiceStartException && error.message.isNotEmpty
+              ? error.message
+              : 'Voice needs a signed-in session. Open Omi and sign in first.',
         VoiceStartFailure.backendNotConfigured =>
           'No voice service is set up yet. Add a transcription provider in '
               'Settings to use voice.',

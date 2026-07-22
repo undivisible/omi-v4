@@ -406,8 +406,7 @@ final class AppServices {
     required List<String> languages,
   }) async {
     final snapshot = auth.snapshot;
-    if (snapshot.phase != AuthPhase.unavailable &&
-        !snapshot.hasProcessingAuthority) {
+    if (!_localFallbackEligible && !snapshot.hasProcessingAuthority) {
       return;
     }
     if (name == null && languages.isEmpty) return;
@@ -483,6 +482,13 @@ final class AppServices {
       _nativeInitialized &&
       _configuredPersonId == _localOfflinePersonId &&
       DevGemini.apiKey != null;
+
+  /// Whether the local/offline memory store should back the app instead of a
+  /// production session: auth is entirely unconfigured, or the user is signed
+  /// out but a developer Gemini key is available for direct local use.
+  bool get _localFallbackEligible =>
+      auth.snapshot.phase == AuthPhase.unavailable ||
+      (auth.snapshot.phase == AuthPhase.signedOut && DevGemini.apiKey != null);
 
   Future<ProviderCredential?> get providerCredential async {
     final uid = auth.snapshot.session?.uid;
@@ -707,7 +713,9 @@ final class AppServices {
       }
       throw VoiceStartException(
         VoiceStartFailure.signedOut,
-        'Sign in and connect native services first.',
+        DevGemini.apiKey == null
+            ? 'Voice needs a signed-in session. ${DevGemini.missingKeyHint}'
+            : 'Sign in and connect native services first.',
       );
     }
     if (!await desktopVoice.hasPermission()) {
@@ -818,7 +826,7 @@ final class AppServices {
     if (key == null) {
       throw VoiceStartException(
         VoiceStartFailure.signedOut,
-        'Sign in and connect native services first.',
+        'Voice needs a signed-in session. ${DevGemini.missingKeyHint}',
       );
     }
     if (!await desktopVoice.hasPermission()) {
@@ -1020,7 +1028,7 @@ final class AppServices {
     // that case, but onboarding capture still needs somewhere to land, so
     // configure a local/offline memory store keyed by a stable local id
     // instead of skipping memory configuration outright.
-    if (auth.snapshot.phase == AuthPhase.unavailable) {
+    if (_localFallbackEligible) {
       memorySyncPump?.stop();
       if (_configuredPersonId == _localOfflinePersonId && _nativeInitialized) {
         _conversationController.scheduleInboxPoll();
@@ -1028,9 +1036,9 @@ final class AppServices {
       }
       await _stopCapture();
       if (!await _ensureNativeInitialized()) return;
-      if (_disposed || auth.snapshot.phase != AuthPhase.unavailable) return;
+      if (_disposed || !_localFallbackEligible) return;
       final databasePath = await memoryDatabasePath(_localOfflinePersonId);
-      if (_disposed || auth.snapshot.phase != AuthPhase.unavailable) return;
+      if (_disposed || !_localFallbackEligible) return;
       _configuredPersonId = _localOfflinePersonId;
       nativeHub.configureMemory(
         requestId: 'configure-memory-$_localOfflinePersonId',
@@ -1242,7 +1250,13 @@ final class AppServices {
       }
       final uid = auth.snapshot.session?.uid;
       if (!productionReady || !_nativeInitialized || uid == null) {
-        throw StateError('Sign in and grant current data consent first.');
+        throw StateError(
+          _localFallbackEligible
+              ? 'Device audio streaming needs a connected account. Local '
+                    'mode covers chat and voice; sign in to stream from a '
+                    'device.'
+              : 'Sign in and grant current data consent first.',
+        );
       }
       final device = await deviceRelay.connect(deviceId);
       try {
