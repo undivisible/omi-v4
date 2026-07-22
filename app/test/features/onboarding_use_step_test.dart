@@ -52,10 +52,7 @@ void main() {
       expect(controller.state, CursorPillState.listening);
       expect(harness.voiceStarts, 1);
       expect(find.textContaining('Show me my currents'), findsOneWidget);
-      expect(
-        find.textContaining('or Esc — to stop'),
-        findsOneWidget,
-      );
+      expect(find.textContaining('or Esc — to stop'), findsOneWidget);
 
       transcripts.add('show me my currents');
       await tester.pump();
@@ -154,9 +151,7 @@ void main() {
     },
   );
 
-  testWidgets('a silent stop still completes the lesson', (
-    tester,
-  ) async {
+  testWidgets('a silent stop still completes the lesson', (tester) async {
     final harness = _Harness();
     final controller = harness.controller();
     final transcripts = StreamController<String>.broadcast(sync: true);

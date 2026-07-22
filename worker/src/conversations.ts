@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { dispatchChannelMessage } from "./delivery";
 import { memoryContextFor } from "./memory-vectors";
-import type { AppEnv, Channel } from "./types";
+import type { AppEnv, Bindings, Channel } from "./types";
 
 const conversations = new Hono<AppEnv>();
 const encoder = new TextEncoder();
@@ -157,6 +157,138 @@ conversations.post("/conversations/default/inbox/claim", async (context) => {
   });
 });
 
+export type InboxDoneResult =
+  | { ok: true; delivery: unknown }
+  | { ok: false; error: string };
+
+export const completeInboxItemDone = async (
+  env: Bindings,
+  uid: string,
+  id: string,
+  leaseToken: string,
+  reply: string,
+  now = Date.now(),
+): Promise<InboxDoneResult> => {
+  const inbox = await env.DB.prepare(
+    `SELECT i.channel, i.attempts, i.status, d.id AS delivery_id,
+            d.state AS delivery_state, d.attempts AS delivery_attempts,
+            d.provider_message_id, d.last_error, d.text AS delivery_text
+     FROM channel_inbox i
+     LEFT JOIN channel_deliveries d
+       ON d.uid = i.uid AND d.channel = i.channel
+      AND d.idempotency_key = 'inbox:' || i.id || ':attempt:' || i.attempts
+     WHERE i.id = ?1 AND i.uid = ?2 AND i.lease_token = ?3
+       AND (i.status = 'done' OR (
+         i.status = 'processing' AND i.lease_until > ?4
+       ))`,
+  )
+    .bind(id, uid, leaseToken, now)
+    .first<{
+      channel: Channel;
+      attempts: number;
+      status: string;
+      delivery_id: string | null;
+      delivery_state: string | null;
+      delivery_attempts: number | null;
+      provider_message_id: string | null;
+      last_error: string | null;
+      delivery_text: string | null;
+    }>();
+  if (!inbox) return { ok: false, error: "Inbox lease conflict" };
+  if (inbox.status === "done") {
+    if (!inbox.delivery_id || inbox.delivery_text !== reply)
+      return { ok: false, error: "Inbox completion conflict" };
+    return {
+      ok: true,
+      delivery: {
+        id: inbox.delivery_id,
+        state: inbox.delivery_state,
+        attempts: inbox.delivery_attempts,
+        provider_message_id: inbox.provider_message_id,
+        last_error: inbox.last_error,
+      },
+    };
+  }
+  const clientMessageId = `inbox-reply:${id}:${inbox.attempts}`;
+  const idempotencyKey = `inbox:${id}:attempt:${inbox.attempts}`;
+  const deliveryId = `inbox-delivery:${id}:${inbox.attempts}`;
+  const conversationMessageId = clientMessageId;
+  const payloadHash = await digest(
+    JSON.stringify(["assistant", inbox.channel, reply, null, deliveryId]),
+  );
+  const results = await env.DB.batch([
+    env.DB.prepare(
+      "INSERT OR IGNORE INTO conversations (id, uid, created_at, updated_at) VALUES (?1, ?1, ?2, ?2)",
+    ).bind(uid, now),
+    env.DB.prepare(
+      `INSERT OR IGNORE INTO channel_deliveries
+           (id, uid, channel, idempotency_key, channel_chat_id, text, next_attempt_at, created_at, updated_at)
+         SELECT ?1, i.uid, i.channel, ?2, i.channel_chat_id, ?3, ?4, ?4, ?4
+         FROM channel_inbox i
+         WHERE i.id = ?5 AND i.uid = ?6 AND i.status = 'processing'
+           AND i.lease_token = ?7 AND i.lease_until > ?4
+           AND EXISTS (
+             SELECT 1 FROM channel_bindings b
+             WHERE b.uid = i.uid AND b.channel = i.channel
+               AND b.revoked_at IS NULL
+               AND COALESCE(b.channel_chat_id, b.channel_user_id) = i.channel_chat_id
+           )`,
+    ).bind(deliveryId, idempotencyKey, reply, now, id, uid, leaseToken),
+    env.DB.prepare(
+      `INSERT OR IGNORE INTO conversation_messages
+           (id, conversation_id, uid, client_message_id, role, source, text, payload_hash, channel_message_id, delivery_id, created_at)
+         SELECT ?1, i.uid, i.uid, ?2, 'assistant', i.channel, ?3, ?4, NULL, ?5, ?6
+         FROM channel_inbox i
+         JOIN channel_deliveries d ON d.id = ?5 AND d.uid = i.uid
+         WHERE i.id = ?7 AND i.uid = ?8 AND i.status = 'processing'
+           AND i.lease_token = ?9 AND i.lease_until > ?6`,
+    ).bind(
+      conversationMessageId,
+      clientMessageId,
+      reply,
+      payloadHash,
+      deliveryId,
+      now,
+      id,
+      uid,
+      leaseToken,
+    ),
+    env.DB.prepare(
+      `UPDATE channel_inbox
+         SET status = 'done', lease_until = NULL,
+             last_error = NULL, completed_at = ?1
+         WHERE id = ?2 AND uid = ?3 AND status = 'processing'
+           AND lease_token = ?4 AND lease_until > ?1
+           AND EXISTS (SELECT 1 FROM channel_deliveries WHERE id = ?5 AND uid = ?3)`,
+    ).bind(now, id, uid, leaseToken, deliveryId),
+  ]);
+  if (
+    results[1].meta.changes !== 1 ||
+    results[2].meta.changes !== 1 ||
+    results[3].meta.changes !== 1
+  ) {
+    const persisted = await env.DB.prepare(
+      `SELECT i.status, d.text
+       FROM channel_inbox i
+       JOIN channel_deliveries d ON d.id = ?1 AND d.uid = i.uid
+       WHERE i.id = ?2 AND i.uid = ?3 AND i.lease_token = ?4`,
+    )
+      .bind(deliveryId, id, uid, leaseToken)
+      .first<{ status: string; text: string }>();
+    if (persisted?.status !== "done" || persisted.text !== reply)
+      return { ok: false, error: "Channel is not linked" };
+  }
+  try {
+    await dispatchChannelMessage(env, deliveryId, uid, inbox.channel);
+  } catch {}
+  const delivery = await env.DB.prepare(
+    "SELECT id, state, attempts, provider_message_id, last_error FROM channel_deliveries WHERE id = ?1 AND uid = ?2",
+  )
+    .bind(deliveryId, uid)
+    .first();
+  return { ok: true, delivery };
+};
+
 conversations.post(
   "/conversations/default/inbox/:id/complete",
   async (context) => {
@@ -181,130 +313,17 @@ conversations.post(
     const id = context.req.param("id");
     const uid = context.get("auth").uid;
     if (outcome === "done") {
-      const inbox = await context.env.DB.prepare(
-        `SELECT i.channel, i.attempts, i.status, d.id AS delivery_id,
-                d.state AS delivery_state, d.attempts AS delivery_attempts,
-                d.provider_message_id, d.last_error, d.text AS delivery_text
-         FROM channel_inbox i
-         LEFT JOIN channel_deliveries d
-           ON d.uid = i.uid AND d.channel = i.channel
-          AND d.idempotency_key = 'inbox:' || i.id || ':attempt:' || i.attempts
-         WHERE i.id = ?1 AND i.uid = ?2 AND i.lease_token = ?3
-           AND (i.status = 'done' OR (
-             i.status = 'processing' AND i.lease_until > ?4
-           ))`,
-      )
-        .bind(id, uid, leaseToken, now)
-        .first<{
-          channel: Channel;
-          attempts: number;
-          status: string;
-          delivery_id: string | null;
-          delivery_state: string | null;
-          delivery_attempts: number | null;
-          provider_message_id: string | null;
-          last_error: string | null;
-          delivery_text: string | null;
-        }>();
-      if (!inbox) return context.json({ error: "Inbox lease conflict" }, 409);
       const reply = (responseText as string).trim();
-      if (inbox.status === "done") {
-        if (!inbox.delivery_id || inbox.delivery_text !== reply)
-          return context.json({ error: "Inbox completion conflict" }, 409);
-        return context.json({
-          status: "done",
-          delivery: {
-            id: inbox.delivery_id,
-            state: inbox.delivery_state,
-            attempts: inbox.delivery_attempts,
-            provider_message_id: inbox.provider_message_id,
-            last_error: inbox.last_error,
-          },
-        });
-      }
-      const clientMessageId = `inbox-reply:${id}:${inbox.attempts}`;
-      const idempotencyKey = `inbox:${id}:attempt:${inbox.attempts}`;
-      const deliveryId = `inbox-delivery:${id}:${inbox.attempts}`;
-      const conversationMessageId = clientMessageId;
-      const payloadHash = await digest(
-        JSON.stringify(["assistant", inbox.channel, reply, null, deliveryId]),
+      const result = await completeInboxItemDone(
+        context.env,
+        uid,
+        id,
+        leaseToken,
+        reply,
+        now,
       );
-      const results = await context.env.DB.batch([
-        context.env.DB.prepare(
-          "INSERT OR IGNORE INTO conversations (id, uid, created_at, updated_at) VALUES (?1, ?1, ?2, ?2)",
-        ).bind(uid, now),
-        context.env.DB.prepare(
-          `INSERT OR IGNORE INTO channel_deliveries
-               (id, uid, channel, idempotency_key, channel_chat_id, text, next_attempt_at, created_at, updated_at)
-             SELECT ?1, i.uid, i.channel, ?2, i.channel_chat_id, ?3, ?4, ?4, ?4
-             FROM channel_inbox i
-             WHERE i.id = ?5 AND i.uid = ?6 AND i.status = 'processing'
-               AND i.lease_token = ?7 AND i.lease_until > ?4
-               AND EXISTS (
-                 SELECT 1 FROM channel_bindings b
-                 WHERE b.uid = i.uid AND b.channel = i.channel
-                   AND b.revoked_at IS NULL
-                   AND COALESCE(b.channel_chat_id, b.channel_user_id) = i.channel_chat_id
-               )`,
-        ).bind(deliveryId, idempotencyKey, reply, now, id, uid, leaseToken),
-        context.env.DB.prepare(
-          `INSERT OR IGNORE INTO conversation_messages
-               (id, conversation_id, uid, client_message_id, role, source, text, payload_hash, channel_message_id, delivery_id, created_at)
-             SELECT ?1, i.uid, i.uid, ?2, 'assistant', i.channel, ?3, ?4, NULL, ?5, ?6
-             FROM channel_inbox i
-             JOIN channel_deliveries d ON d.id = ?5 AND d.uid = i.uid
-             WHERE i.id = ?7 AND i.uid = ?8 AND i.status = 'processing'
-               AND i.lease_token = ?9 AND i.lease_until > ?6`,
-        ).bind(
-          conversationMessageId,
-          clientMessageId,
-          reply,
-          payloadHash,
-          deliveryId,
-          now,
-          id,
-          uid,
-          leaseToken,
-        ),
-        context.env.DB.prepare(
-          `UPDATE channel_inbox
-             SET status = 'done', lease_until = NULL,
-                 last_error = NULL, completed_at = ?1
-             WHERE id = ?2 AND uid = ?3 AND status = 'processing'
-               AND lease_token = ?4 AND lease_until > ?1
-               AND EXISTS (SELECT 1 FROM channel_deliveries WHERE id = ?5 AND uid = ?3)`,
-        ).bind(now, id, uid, leaseToken, deliveryId),
-      ]);
-      if (
-        results[1].meta.changes !== 1 ||
-        results[2].meta.changes !== 1 ||
-        results[3].meta.changes !== 1
-      ) {
-        const persisted = await context.env.DB.prepare(
-          `SELECT i.status, d.text
-           FROM channel_inbox i
-           JOIN channel_deliveries d ON d.id = ?1 AND d.uid = i.uid
-           WHERE i.id = ?2 AND i.uid = ?3 AND i.lease_token = ?4`,
-        )
-          .bind(deliveryId, id, uid, leaseToken)
-          .first<{ status: string; text: string }>();
-        if (persisted?.status !== "done" || persisted.text !== reply)
-          return context.json({ error: "Channel is not linked" }, 409);
-      }
-      try {
-        await dispatchChannelMessage(
-          context.env,
-          deliveryId,
-          uid,
-          inbox.channel,
-        );
-      } catch {}
-      const delivery = await context.env.DB.prepare(
-        "SELECT id, state, attempts, provider_message_id, last_error FROM channel_deliveries WHERE id = ?1 AND uid = ?2",
-      )
-        .bind(deliveryId, uid)
-        .first();
-      return context.json({ status: "done", delivery });
+      if (!result.ok) return context.json({ error: result.error }, 409);
+      return context.json({ status: "done", delivery: result.delivery });
     }
     await context.env.DB.batch([
       context.env.DB.prepare(

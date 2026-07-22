@@ -435,6 +435,189 @@ export const reconcileManagedAssistantRequests = async (
   );
 };
 
+const workerCompletionMaxOutputTokens = 1024;
+const workerCompletionTimeoutMs = 30_000;
+
+export type ManagedMessage = Message;
+
+export const runManagedInboxCompletion = async (
+  env: AppEnv["Bindings"],
+  uid: string,
+  messages: ManagedMessage[],
+  fetcher: typeof fetch = fetch,
+): Promise<string | null> => {
+  const endpoint = env.MIMO_CHAT_COMPLETIONS_URL;
+  const secret = env.MIMO_API_KEY;
+  const model = env.MIMO_MODEL;
+  if (!endpoint || !secret || !model || messages.length === 0) return null;
+  const endpointUrl = validatePinnedEndpoint(
+    endpoint,
+    xiaomiCompletionEndpoint,
+    "token-plan-sgp.xiaomimimo.com",
+  );
+  if (!endpointUrl) return null;
+  const inputPrice = price(env.MIMO_INPUT_MICROUSD_PER_MILLION_TOKENS);
+  const outputPrice = price(env.MIMO_OUTPUT_MICROUSD_PER_MILLION_TOKENS);
+  if (inputPrice === null || outputPrice === null) return null;
+  const estimatedInputTokens = inputTokenReservation(messages);
+  const estimatedCost = costFor(
+    estimatedInputTokens,
+    workerCompletionMaxOutputTokens,
+    inputPrice,
+    outputPrice,
+  );
+  const requestId = crypto.randomUUID();
+  let admission: Response;
+  try {
+    admission = await admitAssistantRequest(
+      env,
+      requestId,
+      uid,
+      estimatedInputTokens + workerCompletionMaxOutputTokens,
+      estimatedCost,
+    );
+  } catch {
+    return null;
+  }
+  if (!admission.ok) return null;
+  const now = Date.now();
+  const settle = async (
+    status: FinalStatus,
+    inputTokens: number | null,
+    outputTokens: number | null,
+    upstreamStatus: number | null,
+  ): Promise<void> => {
+    const actualCost =
+      inputTokens !== null && outputTokens !== null
+        ? costFor(inputTokens, outputTokens, inputPrice, outputPrice)
+        : null;
+    try {
+      await retry(() =>
+        env.DB.prepare(
+          `UPDATE managed_ai_requests
+           SET status = ?1, input_tokens = COALESCE(?2, input_tokens),
+               output_tokens = COALESCE(?3, output_tokens),
+               actual_cost_microusd = COALESCE(?4, actual_cost_microusd),
+               upstream_status = COALESCE(?5, upstream_status),
+               finalization_attempts = finalization_attempts + 1,
+               finalized_at = COALESCE(finalized_at, ?6), updated_at = ?6
+           WHERE id = ?7 AND finalized_at IS NULL`,
+        )
+          .bind(
+            status,
+            inputTokens,
+            outputTokens,
+            actualCost,
+            upstreamStatus,
+            Date.now(),
+            requestId,
+          )
+          .run()
+          .then(() => undefined),
+      );
+    } catch {}
+    try {
+      await retry(() =>
+        inputTokens !== null && outputTokens !== null && actualCost !== null
+          ? settleAssistantRequest(
+              env,
+              requestId,
+              inputTokens + outputTokens,
+              actualCost,
+            )
+          : releaseAssistantRequest(env, requestId),
+      );
+      await retry(() =>
+        env.DB.prepare(
+          "UPDATE managed_ai_requests SET admission_settled_at = COALESCE(admission_settled_at, ?1), updated_at = ?1 WHERE id = ?2",
+        )
+          .bind(Date.now(), requestId)
+          .run()
+          .then(() => undefined),
+      );
+    } catch {}
+  };
+  try {
+    await env.DB.prepare(
+      `INSERT INTO managed_ai_requests
+       (id, uid, provider, model, status, input_characters, requested_max_output_tokens,
+        estimated_cost_microusd, created_at, updated_at)
+     VALUES (?1, ?2, 'mimo', ?3, 'started', ?4, ?5, ?6, ?7, ?7)`,
+    )
+      .bind(
+        requestId,
+        uid,
+        model,
+        messages.reduce((total, message) => total + message.content.length, 0),
+        workerCompletionMaxOutputTokens,
+        estimatedCost,
+        now,
+      )
+      .run();
+  } catch {
+    try {
+      await retry(() => releaseAssistantRequest(env, requestId));
+    } catch {}
+    return null;
+  }
+  let upstream: Response;
+  try {
+    upstream = await fetcher(endpointUrl, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${secret}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        model,
+        messages,
+        stream: false,
+        max_tokens: workerCompletionMaxOutputTokens,
+      }),
+      signal: AbortSignal.timeout(workerCompletionTimeoutMs),
+    });
+  } catch {
+    await settle("failed", null, null, null);
+    return null;
+  }
+  if (!upstream.ok) {
+    await cancelBody(upstream.body);
+    await settle("failed", null, null, upstream.status);
+    return null;
+  }
+  let content: string | null = null;
+  let inputTokens: number | null = null;
+  let outputTokens: number | null = null;
+  try {
+    const value = (await upstream.json()) as {
+      choices?: Array<{ message?: { content?: unknown } }>;
+      usage?: { prompt_tokens?: unknown; completion_tokens?: unknown };
+    };
+    const candidate = value.choices?.[0]?.message?.content;
+    if (typeof candidate === "string" && candidate.trim().length > 0)
+      content = candidate.trim();
+    if (
+      typeof value.usage?.prompt_tokens === "number" &&
+      Number.isSafeInteger(value.usage.prompt_tokens) &&
+      value.usage.prompt_tokens >= 0
+    )
+      inputTokens = value.usage.prompt_tokens;
+    if (
+      typeof value.usage?.completion_tokens === "number" &&
+      Number.isSafeInteger(value.usage.completion_tokens) &&
+      value.usage.completion_tokens >= 0
+    )
+      outputTokens = value.usage.completion_tokens;
+  } catch {}
+  await settle(
+    content === null ? "failed" : "complete",
+    inputTokens,
+    outputTokens,
+    upstream.status,
+  );
+  return content;
+};
+
 assistant.post("/chat/completions", async (context) => {
   const endpoint = context.env.MIMO_CHAT_COMPLETIONS_URL;
   const secret = context.env.MIMO_API_KEY;

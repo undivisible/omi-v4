@@ -385,7 +385,11 @@ final class ConversationController {
         kind: _ChatRequestKind.message,
       );
       try {
-        _nativeHub.sendMessage(requestId: requestId, text: item.text);
+        _nativeHub.sendMessage(
+          requestId: requestId,
+          text: item.text,
+          memoryContext: item.memoryContext,
+        );
       } catch (error) {
         _requests.remove(requestId);
         _tombstone(requestId);

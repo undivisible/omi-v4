@@ -1427,15 +1427,81 @@ pub fn runtime_status(memory_available: bool) -> RuntimeStatus {
     }
 }
 
+const MEMORY_CONTEXT_CHARACTER_LIMIT: usize = 2_000;
+const LOCAL_MEMORY_CONTEXT_ITEMS: u32 = 6;
+
+fn assistant_prompt(memory_context: Option<&str>, text: &str) -> String {
+    match memory_context
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        Some(context) => {
+            let bounded: String = context
+                .chars()
+                .take(MEMORY_CONTEXT_CHARACTER_LIMIT)
+                .collect();
+            format!("Relevant things you know about the user:\n{bounded}\n\n{text}")
+        }
+        None => text.to_owned(),
+    }
+}
+
+async fn local_memory_context(
+    state: &Mutex<RuntimeState>,
+    text: &str,
+    cancellation: &CancellationToken,
+) -> Option<String> {
+    let memory = state.lock().await.memory.clone()?;
+    let query = text.to_owned();
+    let task = spawn_blocking(move || {
+        let memory = memory
+            .lock()
+            .map_err(|_| "memory database lock was poisoned".to_owned())?;
+        memory
+            .database
+            .search(SearchInput {
+                tenant_id: memory.tenant_id.clone(),
+                person_id: memory.person_id.clone(),
+                query,
+                limit: LOCAL_MEMORY_CONTEXT_ITEMS,
+                query_embedding: None,
+                as_of: None,
+            })
+            .map_err(|error_value| error_value.to_string())
+    });
+    match await_blocking(task, cancellation).await {
+        BlockingOutcome::Complete(pack) => {
+            let lines: Vec<String> = pack
+                .items
+                .into_iter()
+                .filter(|item| matches!(item.memory, MemoryRef::Claim(_)))
+                .map(|item| format!("- {}", item.excerpt))
+                .collect();
+            if lines.is_empty() {
+                None
+            } else {
+                Some(lines.join("\n"))
+            }
+        }
+        BlockingOutcome::Failed(_) | BlockingOutcome::Cancelled => None,
+    }
+}
+
 async fn dispatch_assistant(
     request_id: &str,
     state: &Mutex<RuntimeState>,
     provider: Arc<dyn AssistantProvider>,
     text: String,
+    memory_context: Option<String>,
     cancellation: &CancellationToken,
 ) {
     let generation = state.lock().await.configuration_generation;
-    let mut events = provider.dispatch(request_id.to_owned(), text, cancellation.clone());
+    let memory_context = match memory_context {
+        Some(context) => Some(context),
+        None => local_memory_context(state, &text, cancellation).await,
+    };
+    let prompt = assistant_prompt(memory_context.as_deref(), &text);
+    let mut events = provider.dispatch(request_id.to_owned(), prompt, cancellation.clone());
     loop {
         let next =
             match receive_provider_event(&mut events, cancellation, PROVIDER_EVENT_TIMEOUT).await {
@@ -1700,8 +1766,20 @@ async fn execute(
             .await;
             false
         }
-        Command::SendMessage { text, .. } => {
-            dispatch_assistant(&request_id, &state, assistant_provider, text, &cancellation).await;
+        Command::SendMessage {
+            text,
+            memory_context,
+            ..
+        } => {
+            dispatch_assistant(
+                &request_id,
+                &state,
+                assistant_provider,
+                text,
+                memory_context,
+                &cancellation,
+            )
+            .await;
             false
         }
         Command::ApprovalDecision {
@@ -3863,6 +3941,34 @@ mod tests {
         }
     }
 
+    struct CapturingAssistantProvider {
+        prompt: Arc<StdMutex<Option<String>>>,
+    }
+
+    impl AssistantProvider for CapturingAssistantProvider {
+        fn dispatch(
+            &self,
+            _request_id: String,
+            text: String,
+            _cancellation: CancellationToken,
+        ) -> mpsc::Receiver<Result<AssistantProviderEvent, String>> {
+            *self
+                .prompt
+                .lock()
+                .unwrap_or_else(|failure| failure.into_inner()) = Some(text);
+            let (sender, receiver) = mpsc::channel(1);
+            tokio::spawn(async move {
+                let _ = sender
+                    .send(Ok(AssistantProviderEvent::Delta {
+                        text: "ok".to_owned(),
+                        final_segment: true,
+                    }))
+                    .await;
+            });
+            receiver
+        }
+    }
+
     struct ReconfiguringAssistantProvider {
         state: Arc<Mutex<RuntimeState>>,
         proposal: StdMutex<Option<ActionProposal>>,
@@ -5540,6 +5646,58 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn assistant_dispatch_prepends_supplied_memory_context() {
+        let state = Arc::new(Mutex::new(RuntimeState {
+            configuration_generation: 3,
+            authority_uid: Some("user-a".to_owned()),
+            ..RuntimeState::default()
+        }));
+        let prompt = Arc::new(StdMutex::new(None));
+        let provider: Arc<dyn AssistantProvider> = Arc::new(CapturingAssistantProvider {
+            prompt: Arc::clone(&prompt),
+        });
+        dispatch_assistant(
+            "chat-ctx-1",
+            state.as_ref(),
+            Arc::clone(&provider),
+            "what coffee do I like?".to_owned(),
+            Some("Relevant synced memory:\n- Sam prefers espresso".to_owned()),
+            &CancellationToken::new(),
+        )
+        .await;
+        let captured = prompt
+            .lock()
+            .unwrap_or_else(|failure| failure.into_inner())
+            .clone()
+            .unwrap_or_else(|| panic!("provider receives a prompt"));
+        assert!(captured.starts_with("Relevant things you know about the user:\n"));
+        assert!(captured.contains("Sam prefers espresso"));
+        assert!(captured.ends_with("\n\nwhat coffee do I like?"));
+
+        dispatch_assistant(
+            "chat-ctx-2",
+            state.as_ref(),
+            provider,
+            "plain message".to_owned(),
+            None,
+            &CancellationToken::new(),
+        )
+        .await;
+        let plain = prompt
+            .lock()
+            .unwrap_or_else(|failure| failure.into_inner())
+            .clone()
+            .unwrap_or_else(|| panic!("provider receives a prompt"));
+        assert_eq!(plain, "plain message");
+
+        let oversized = "x".repeat(3 * MEMORY_CONTEXT_CHARACTER_LIMIT);
+        let bounded = assistant_prompt(Some(&oversized), "tail");
+        assert!(bounded.len() < 2 * MEMORY_CONTEXT_CHARACTER_LIMIT);
+        assert!(bounded.ends_with("\n\ntail"));
+        assert_eq!(assistant_prompt(Some("   "), "tail"), "tail");
+    }
+
+    #[tokio::test]
     async fn assistant_dispatch_registers_proposals_and_suppresses_cancelled_output() {
         let state = Arc::new(Mutex::new(RuntimeState {
             configuration_generation: 7,
@@ -5568,6 +5726,7 @@ mod tests {
             state.as_ref(),
             provider,
             "plan".to_owned(),
+            None,
             &CancellationToken::new(),
         )
         .await;
@@ -5595,6 +5754,7 @@ mod tests {
             state.as_ref(),
             cancelled_provider,
             "cancel".to_owned(),
+            None,
             &cancellation,
         )
         .await;
@@ -5621,6 +5781,7 @@ mod tests {
             state.as_ref(),
             reconfiguring_provider,
             "reconfigure".to_owned(),
+            None,
             &CancellationToken::new(),
         )
         .await;

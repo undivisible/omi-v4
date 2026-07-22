@@ -66,6 +66,7 @@ final class ConversationInboxItem {
     required this.attempt,
     required this.leaseToken,
     required this.leaseUntil,
+    this.memoryContext,
   });
 
   factory ConversationInboxItem.fromJson(Map<String, Object?> json) {
@@ -77,6 +78,7 @@ final class ConversationInboxItem {
     final attempt = json['attempt'];
     final leaseToken = json['leaseToken'];
     final leaseUntil = json['leaseUntil'];
+    final memoryContext = json['memoryContext'];
     if (id is! String ||
         !RegExp(r'^[A-Za-z0-9._:-]{8,128}$').hasMatch(id) ||
         (channel != 'telegram' && channel != 'blooio') ||
@@ -103,6 +105,12 @@ final class ConversationInboxItem {
       attempt: attempt,
       leaseToken: leaseToken,
       leaseUntil: leaseUntil,
+      memoryContext:
+          memoryContext is String &&
+              memoryContext.trim().isNotEmpty &&
+              memoryContext.length <= 4096
+          ? memoryContext
+          : null,
     );
   }
 
@@ -114,6 +122,7 @@ final class ConversationInboxItem {
   final int attempt;
   final String leaseToken;
   final int leaseUntil;
+  final String? memoryContext;
 }
 
 enum ConversationInboxOutcome { done, retry }
