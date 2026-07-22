@@ -129,10 +129,11 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   }
 
   void _submitAnswer() {
-    if (onboarding.submitAnswer(
-      answerController.text,
-      questionCount: prompts.length,
-    )) {
+    final fallback = onboarding.questionIndex == 0 ? scanSummary : null;
+    final text = answerController.text.trim().isEmpty
+        ? (fallback ?? '')
+        : answerController.text;
+    if (onboarding.submitAnswer(text, questionCount: prompts.length)) {
       answerController.clear();
     }
   }
@@ -237,6 +238,9 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                       prompt: prompts[onboarding.questionIndex],
                       index: onboarding.questionIndex,
                       count: prompts.length,
+                      aiNotice: onboarding.questionIndex == 0
+                          ? scanSummary
+                          : null,
                       controller: answerController,
                       validationMessage: onboarding.validationMessage,
                       onContinue: _submitAnswer,
@@ -317,7 +321,7 @@ class _Introduction extends StatelessWidget {
   );
 }
 
-class _ProfileQuestion extends StatelessWidget {
+class _ProfileQuestion extends StatefulWidget {
   const _ProfileQuestion({
     required this.prompt,
     required this.index,
@@ -325,58 +329,94 @@ class _ProfileQuestion extends StatelessWidget {
     required this.controller,
     required this.validationMessage,
     required this.onContinue,
+    this.aiNotice,
     super.key,
   });
 
   final (String, String, String) prompt;
   final int index;
   final int count;
+  final String? aiNotice;
   final TextEditingController controller;
   final String? validationMessage;
   final VoidCallback onContinue;
 
   @override
-  Widget build(BuildContext context) => Column(
-    crossAxisAlignment: CrossAxisAlignment.start,
-    children: [
-      Text(
-        'PROFILE ${index + 1} OF $count',
-        style: const TextStyle(
-          color: Color(0xffd0cec6),
-          fontSize: 11,
-          letterSpacing: 1.2,
-        ),
-      ),
-      const SizedBox(height: 12),
-      Text(prompt.$1, style: Theme.of(context).textTheme.displaySmall),
-      const SizedBox(height: 12),
-      Text(
-        prompt.$2,
-        style: Theme.of(
-          context,
-        ).textTheme.bodyLarge?.copyWith(color: Colors.white70),
-      ),
-      const SizedBox(height: 28),
-      TextField(
-        key: const Key('onboarding_input'),
-        controller: controller,
-        minLines: 2,
-        maxLines: 4,
-        autofocus: true,
-        decoration: InputDecoration(
-          hintText: prompt.$3,
-          errorText: validationMessage,
-          suffixIcon: IconButton(
-            key: const Key('continue_onboarding'),
-            tooltip: 'Continue',
-            onPressed: onContinue,
-            icon: const Icon(Icons.arrow_upward_rounded),
+  State<_ProfileQuestion> createState() => _ProfileQuestionState();
+}
+
+class _ProfileQuestionState extends State<_ProfileQuestion> {
+  bool editing = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final notice = widget.aiNotice;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'PROFILE ${widget.index + 1} OF ${widget.count}',
+          style: const TextStyle(
+            color: Color(0xffd0cec6),
+            fontSize: 11,
+            letterSpacing: 1.2,
           ),
         ),
-        onSubmitted: (_) => onContinue(),
-      ),
-    ],
-  );
+        const SizedBox(height: 12),
+        Text(widget.prompt.$1, style: Theme.of(context).textTheme.displaySmall),
+        const SizedBox(height: 12),
+        if (notice != null && !editing) ...[
+          _RandomizedText(
+            key: ValueKey(notice),
+            segments: [(notice, null)],
+            style: const TextStyle(
+              color: Color(0xffd0cec6),
+              fontSize: 18,
+              height: 1.5,
+            ),
+          ),
+          const SizedBox(height: 28),
+          FilledButton(
+            key: const Key('keep_profile'),
+            onPressed: widget.onContinue,
+            child: const Text('Keep this profile'),
+          ),
+          const SizedBox(height: 12),
+          TextButton(
+            key: const Key('edit_profile'),
+            onPressed: () => setState(() => editing = true),
+            child: const Text('Let’s edit this a little more'),
+          ),
+        ] else ...[
+          Text(
+            widget.prompt.$2,
+            style: Theme.of(
+              context,
+            ).textTheme.bodyLarge?.copyWith(color: Colors.white70),
+          ),
+          const SizedBox(height: 28),
+          TextField(
+            key: const Key('onboarding_input'),
+            controller: widget.controller,
+            minLines: 2,
+            maxLines: 4,
+            autofocus: true,
+            decoration: InputDecoration(
+              hintText: widget.prompt.$3,
+              errorText: widget.validationMessage,
+              suffixIcon: IconButton(
+                key: const Key('continue_onboarding'),
+                tooltip: 'Continue',
+                onPressed: widget.onContinue,
+                icon: const Icon(Icons.arrow_upward_rounded),
+              ),
+            ),
+            onSubmitted: (_) => widget.onContinue(),
+          ),
+        ],
+      ],
+    );
+  }
 }
 
 class _ScanStep extends StatelessWidget {
