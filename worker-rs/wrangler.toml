@@ -1,0 +1,33 @@
+# Rust parity port of the omi-v4 API worker. Kept entirely separate from
+# worker/wrangler.jsonc so the TypeScript worker stays deployable until cutover.
+# Binds the SAME D1 database — the TS worker's migrations remain the schema of
+# record; this worker does NOT own migrations.
+name = "omi-v4-api-rs"
+main = "build/worker/shim.mjs"
+compatibility_date = "2026-07-21"
+
+[build]
+command = "worker-build --release"
+
+[vars]
+ENVIRONMENT = "production"
+FIREBASE_PROJECT_ID = "based-hardware"
+
+# Same physical D1 database as worker/wrangler.jsonc (database_id matches).
+[[d1_databases]]
+binding = "DB"
+database_name = "omi-v4"
+database_id = "74aab5eb-a81d-4494-9283-d48052b8a068"
+# Intentionally NO migrations_dir: the TS worker owns migrations.
+
+# Secrets (set via `wrangler secret put`), NOT committed:
+#   FIREBASE_PROJECT_ID is a var above; the following are secrets in the TS
+#   worker and should be provisioned identically before cutover:
+#   TELEGRAM_WEBHOOK_SECRET, TELEGRAM_BOT_TOKEN, BLOOIO_WEBHOOK_SIGNING_SECRET,
+#   BLOOIO_API_KEY, STRIPE_SECRET_KEY, STRIPE_PRO_PRICE_ID, STRIPE_WEBHOOK_SECRET,
+#   APP_URL, MIMO_API_KEY, DEEPGRAM_API_KEY, GEMINI_API_KEY,
+#   FIREBASE_SERVICE_ACCOUNT_EMAIL, FIREBASE_SERVICE_ACCOUNT_PRIVATE_KEY, etc.
+#
+# Durable Objects, Vectorize, and the AI binding are NOT declared yet — the
+# Phase-1 routes do not use them. See PORT_STATUS.md for the plan and the
+# workers-rs binding-support notes.
