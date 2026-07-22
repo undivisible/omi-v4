@@ -6,18 +6,28 @@ import 'auth_gateway.dart';
 import 'auth_models.dart';
 import 'consent_store.dart';
 
+// Groundwork for granting processing consent automatically at sign-in.
+// Intentionally false for now; intended to default on later so signing in
+// immediately records consent and connects to the backend with the uid.
+const bool autoGrantProcessingConsent = false;
+
 final class AuthController extends ChangeNotifier {
-  AuthController(this._gateway, {ConsentStore? consentStore})
-    : _consentStore = consentStore ?? VolatileConsentStore(),
-      _snapshot = _gateway.isConfigured
-          ? const AuthSnapshot.initial()
-          : AuthSnapshot(
-              phase: AuthPhase.unavailable,
-              consentGranted: false,
-              failure: _gateway.configurationFailure,
-            );
+  AuthController(
+    this._gateway, {
+    ConsentStore? consentStore,
+    bool? autoGrantConsent,
+  }) : _autoGrantConsent = autoGrantConsent ?? autoGrantProcessingConsent,
+       _consentStore = consentStore ?? VolatileConsentStore(),
+       _snapshot = _gateway.isConfigured
+           ? const AuthSnapshot.initial()
+           : AuthSnapshot(
+               phase: AuthPhase.unavailable,
+               consentGranted: false,
+               failure: _gateway.configurationFailure,
+             );
 
   final AuthGateway _gateway;
+  final bool _autoGrantConsent;
   final ConsentStore _consentStore;
   AuthSnapshot _snapshot;
   StreamSubscription<AuthSession?>? _sessionSubscription;
@@ -422,6 +432,9 @@ final class AuthController extends ChangeNotifier {
             : null,
       ),
     );
+    if (_autoGrantConsent && _snapshot.processingConsent == null) {
+      unawaited(grantProcessingConsent());
+    }
   }
 
   void _fail(
