@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../app_services.dart';
 import '../device/device.dart';
@@ -124,12 +125,15 @@ class MobileDeviceHome extends StatefulWidget {
 }
 
 class MobileDeviceHomeState extends State<MobileDeviceHome> {
+  static const desktopNoticeKey = 'desktop_install_notice_dismissed_v1';
+
   late final DeviceRelayService relay = widget.services.deviceRelay;
   List<RelayDevice> devices = const [];
   DeviceRelaySnapshot? snapshot;
   Object? error;
   String? rememberedDeviceId;
   bool _reconnectAttempted = false;
+  bool? _desktopNoticeDismissed;
   StreamSubscription<DeviceRelaySnapshot>? _snapshotSubscription;
 
   bool get _mobile => relay.role == DeviceRelayRole.mobileOwner;
@@ -147,6 +151,29 @@ class MobileDeviceHomeState extends State<MobileDeviceHome> {
       if (mounted) setState(() => snapshot = next);
     });
     if (!widget.previewMode && _mobile) unawaited(_restorePairing());
+    unawaited(_loadDesktopNotice());
+  }
+
+  Future<void> _loadDesktopNotice() async {
+    bool dismissed;
+    try {
+      dismissed =
+          (await SharedPreferences.getInstance()).getBool(desktopNoticeKey) ??
+          false;
+    } catch (_) {
+      dismissed = false;
+    }
+    if (mounted) setState(() => _desktopNoticeDismissed = dismissed);
+  }
+
+  Future<void> _dismissDesktopNotice() async {
+    setState(() => _desktopNoticeDismissed = true);
+    try {
+      await (await SharedPreferences.getInstance()).setBool(
+        desktopNoticeKey,
+        true,
+      );
+    } catch (_) {}
   }
 
   Future<void> _restorePairing() async {
@@ -296,6 +323,19 @@ class MobileDeviceHomeState extends State<MobileDeviceHome> {
                   )
                 : const SizedBox.shrink(),
           ),
+          if (_desktopNoticeDismissed == false)
+            BaseTile(
+              key: const Key('companion_desktop_notice_tile'),
+              icon: Icons.desktop_mac_outlined,
+              title: 'Install the Omi desktop app',
+              detail: 'Omi learns more about you from your Mac or Windows PC.',
+              trailing: IconButton(
+                key: const Key('companion_desktop_notice_dismiss'),
+                tooltip: 'Dismiss',
+                onPressed: () => unawaited(_dismissDesktopNotice()),
+                icon: const Icon(Icons.close_rounded),
+              ),
+            ),
           if (connected && device != null) ...[
             BaseTile(
               key: const Key('companion_battery_tile'),
