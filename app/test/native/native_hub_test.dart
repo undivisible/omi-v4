@@ -49,7 +49,10 @@ void main() {
         recordedAtMs: 46,
       ),
       const CommandDeleteMemorySource(sourceId: 'source-1', deletedAtMs: 44),
-      const CommandApproveAndExecuteComputerUse(proposalId: 'proposal-1'),
+      const CommandApprovalDecision(
+        proposalId: 'proposal-1',
+        decision: ApprovalDecision.approveOnce,
+      ),
       const CommandCancel(),
     ];
 
@@ -82,12 +85,14 @@ void main() {
     expect(Uint8List.fromList([1, 2]), hasLength(2));
   });
 
-  test('approval execution acknowledgement round trips', () {
-    const event = NativeEventApprovalExecutionAcknowledged(
-      value: ApprovalExecutionAcknowledgement(
+  test('approval decision acknowledgement round trips', () {
+    const event = NativeEventApprovalDecisionAcknowledged(
+      value: ApprovalDecisionAcknowledgement(
         requestId: 'approval-1',
         proposalId: 'proposal-1',
+        decision: ApprovalDecision.approveOnce,
         accepted: true,
+        executionPending: true,
       ),
     );
 

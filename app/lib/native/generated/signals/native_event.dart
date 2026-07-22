@@ -36,7 +36,7 @@ abstract class NativeEvent {
       case 6:
         return NativeEventActionProposal.load(deserializer);
       case 7:
-        return NativeEventApprovalExecutionAcknowledged.load(deserializer);
+        return NativeEventApprovalDecisionAcknowledged.load(deserializer);
       case 8:
         return NativeEventToolProgress.load(deserializer);
       case 9:
@@ -458,27 +458,27 @@ class NativeEventActionProposal extends NativeEvent {
 }
 
 @immutable
-class NativeEventApprovalExecutionAcknowledged extends NativeEvent {
-  const NativeEventApprovalExecutionAcknowledged({required this.value})
+class NativeEventApprovalDecisionAcknowledged extends NativeEvent {
+  const NativeEventApprovalDecisionAcknowledged({required this.value})
     : super();
 
-  static NativeEventApprovalExecutionAcknowledged load(
+  static NativeEventApprovalDecisionAcknowledged load(
     BinaryDeserializer deserializer,
   ) {
     deserializer.increaseContainerDepth();
-    final instance = NativeEventApprovalExecutionAcknowledged(
-      value: ApprovalExecutionAcknowledgement.deserialize(deserializer),
+    final instance = NativeEventApprovalDecisionAcknowledged(
+      value: ApprovalDecisionAcknowledgement.deserialize(deserializer),
     );
     deserializer.decreaseContainerDepth();
     return instance;
   }
 
-  final ApprovalExecutionAcknowledgement value;
+  final ApprovalDecisionAcknowledgement value;
 
-  NativeEventApprovalExecutionAcknowledged copyWith({
-    ApprovalExecutionAcknowledgement? value,
+  NativeEventApprovalDecisionAcknowledged copyWith({
+    ApprovalDecisionAcknowledgement? value,
   }) {
-    return NativeEventApprovalExecutionAcknowledged(value: value ?? this.value);
+    return NativeEventApprovalDecisionAcknowledged(value: value ?? this.value);
   }
 
   void serialize(BinarySerializer serializer) {
@@ -493,7 +493,7 @@ class NativeEventApprovalExecutionAcknowledged extends NativeEvent {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is NativeEventApprovalExecutionAcknowledged &&
+    return other is NativeEventApprovalDecisionAcknowledged &&
         value == other.value;
   }
 
@@ -512,7 +512,7 @@ class NativeEventApprovalExecutionAcknowledged extends NativeEvent {
       return true;
     }());
 
-    return fullString ?? 'NativeEventApprovalExecutionAcknowledged';
+    return fullString ?? 'NativeEventApprovalDecisionAcknowledged';
   }
 }
 

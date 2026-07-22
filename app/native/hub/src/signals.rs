@@ -43,9 +43,6 @@ pub enum Command {
     StopTranscription {
         audio_stream_id: String,
     },
-    ApproveAndExecuteComputerUse {
-        proposal_id: String,
-    },
     CaptureEvent {
         ingestion_key: String,
         source: CaptureSource,
@@ -125,7 +122,7 @@ pub enum CaptureSource {
     AppleReminders,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, SignalPiece)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, SignalPiece)]
 pub enum ApprovalDecision {
     ApproveOnce,
     Reject,
@@ -212,7 +209,7 @@ pub enum NativeEvent {
     AssistantDelta(AssistantDelta),
     CurrentUpdate(CurrentUpdate),
     ActionProposal(ActionProposal),
-    ApprovalExecutionAcknowledged(ApprovalExecutionAcknowledgement),
+    ApprovalDecisionAcknowledged(ApprovalDecisionAcknowledgement),
     ToolProgress(ToolProgress),
     Error(NativeError),
     RuntimeStatus(RuntimeStatus),
@@ -233,10 +230,12 @@ pub struct TranscriptionStopAcknowledgement {
 }
 
 #[derive(Debug, Serialize, SignalPiece)]
-pub struct ApprovalExecutionAcknowledgement {
+pub struct ApprovalDecisionAcknowledgement {
     pub request_id: String,
     pub proposal_id: String,
+    pub decision: ApprovalDecision,
     pub accepted: bool,
+    pub execution_pending: bool,
 }
 
 #[derive(Debug, Serialize, SignalPiece)]

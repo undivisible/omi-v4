@@ -17,7 +17,7 @@ part 'trait_helpers.dart';
 part 'action_proposal.dart';
 part 'action_risk.dart';
 part 'approval_decision.dart';
-part 'approval_execution_acknowledgement.dart';
+part 'approval_decision_acknowledgement.dart';
 part 'assistant_delta.dart';
 part 'assistant_provider.dart';
 part 'audio_chunk.dart';

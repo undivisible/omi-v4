@@ -389,12 +389,13 @@ void main() {
     );
     expect(find.textContaining('Presses Return after typing'), findsOneWidget);
     expect(find.text('Click left at (10, 20) once'), findsOneWidget);
+    hub.executableProposals.add('proposal-1');
     final approve = find.byKey(const ValueKey('approve_proposal-1'));
     await tester.ensureVisible(approve);
     await tester.tap(approve);
-    expect(hub.approvals, isEmpty);
+    expect(hub.approvals.map((approval) => approval.$1), ['proposal-1']);
     expect(hub.executedProposals, ['proposal-1']);
-    final approvalRequestId = hub.atomicApprovals.single.$1;
+    final approvalRequestId = hub.approvalRequests.single.$1;
     services.cancelChatRequest(approvalRequestId);
     expect(hub.cancelled, contains(approvalRequestId));
     hub.eventsController.add(
@@ -415,6 +416,7 @@ void main() {
     await tester.ensureVisible(approveNonExecutable);
     await tester.tap(approveNonExecutable);
     expect(hub.approvals.map((approval) => approval.$1), [
+      'proposal-1',
       'proposal-non-executable',
     ]);
     expect(hub.executedProposals, ['proposal-1']);
@@ -612,13 +614,15 @@ void main() {
     await hub.close();
   });
 
-  test('atomic approval restores proposal after enqueue failure', () async {
+  test('native approval authority blocks replay until acknowledged', () async {
     final auth = AuthController(
       _FakeAuthGateway(_session('user-a')),
       consentStore: VolatileConsentStore()..receipt = _receipt('user-a'),
     );
     await auth.restoreSession();
-    final hub = _FakeHub()..failAtomicApproval = true;
+    final hub = _FakeHub()
+      ..failAtomicApproval = true
+      ..executableProposals.add('atomic-retry');
     final services = AppServices.forTesting(
       auth: auth,
       nativeHub: hub,
@@ -627,7 +631,6 @@ void main() {
         adapter: const UnavailableDeviceRelayAdapter(),
       ),
       memoryDatabasePath: (uid) => '/tmp/$uid.sqlite3',
-      approvalAcknowledgementTimeout: const Duration(milliseconds: 5),
     );
     await services.initialize();
     final parentRequestId = await services.sendChatMessage(text: 'Click it');
@@ -679,7 +682,7 @@ void main() {
       proposalId: 'atomic-retry',
       decision: ApprovalDecision.approveOnce,
     );
-    await Future<void>.delayed(const Duration(milliseconds: 10));
+    await Future<void>.delayed(Duration.zero);
 
     hub.dropAtomicApproval = false;
     expect(
@@ -690,11 +693,13 @@ void main() {
       throwsStateError,
     );
     hub.eventsController.add(
-      NativeEventApprovalExecutionAcknowledged(
-        value: ApprovalExecutionAcknowledgement(
+      NativeEventApprovalDecisionAcknowledged(
+        value: ApprovalDecisionAcknowledgement(
           requestId: ambiguousRequestId,
           proposalId: 'atomic-retry',
+          decision: ApprovalDecision.approveOnce,
           accepted: true,
+          executionPending: true,
         ),
       ),
     );
@@ -1918,7 +1923,8 @@ final class _FakeHub implements NativeHub {
   final cancelled = <String>[];
   final messages = <(String, String)>[];
   final approvals = <(String, ApprovalDecision)>[];
-  final atomicApprovals = <(String, String)>[];
+  final approvalRequests = <(String, String)>[];
+  final executableProposals = <String>{};
   final executedProposals = <String>[];
   final assistantConfigurations =
       <(AssistantProvider, String, String?, String)>[];
@@ -2054,7 +2060,64 @@ final class _FakeHub implements NativeHub {
     required String proposalId,
     required ApprovalDecision decision,
   }) {
+    if (failAtomicApproval) throw StateError('command queue unavailable');
     approvals.add((proposalId, decision));
+    if (dropAtomicApproval) return;
+    if (rejectAtomicApprovalWithoutFollowup) {
+      eventsController.add(
+        NativeEventApprovalDecisionAcknowledged(
+          value: ApprovalDecisionAcknowledgement(
+            requestId: requestId,
+            proposalId: proposalId,
+            decision: decision,
+            accepted: false,
+            executionPending: false,
+          ),
+        ),
+      );
+      return;
+    }
+    if (rejectAtomicApproval) {
+      eventsController
+        ..add(
+          NativeEventApprovalDecisionAcknowledged(
+            value: ApprovalDecisionAcknowledgement(
+              requestId: requestId,
+              proposalId: proposalId,
+              decision: decision,
+              accepted: false,
+              executionPending: false,
+            ),
+          ),
+        )
+        ..add(
+          NativeEventError(
+            value: NativeError(
+              requestId: requestId,
+              code: 'computer_use_unavailable',
+              message: 'permissions unavailable',
+              retryable: true,
+            ),
+          ),
+        );
+      return;
+    }
+    final executionPending =
+        decision == ApprovalDecision.approveOnce &&
+        executableProposals.contains(proposalId);
+    approvalRequests.add((requestId, proposalId));
+    if (executionPending) executedProposals.add(proposalId);
+    eventsController.add(
+      NativeEventApprovalDecisionAcknowledged(
+        value: ApprovalDecisionAcknowledgement(
+          requestId: requestId,
+          proposalId: proposalId,
+          decision: decision,
+          accepted: true,
+          executionPending: executionPending,
+        ),
+      ),
+    );
   }
 
   @override
@@ -2186,61 +2249,6 @@ final class _FakeHub implements NativeHub {
         ),
       );
     }
-  }
-
-  @override
-  void approveAndExecuteComputerUse({
-    required String requestId,
-    required String proposalId,
-  }) {
-    if (failAtomicApproval) throw StateError('command queue unavailable');
-    if (dropAtomicApproval) return;
-    if (rejectAtomicApprovalWithoutFollowup) {
-      eventsController.add(
-        NativeEventApprovalExecutionAcknowledged(
-          value: ApprovalExecutionAcknowledgement(
-            requestId: requestId,
-            proposalId: proposalId,
-            accepted: false,
-          ),
-        ),
-      );
-      return;
-    }
-    if (rejectAtomicApproval) {
-      eventsController
-        ..add(
-          NativeEventApprovalExecutionAcknowledged(
-            value: ApprovalExecutionAcknowledgement(
-              requestId: requestId,
-              proposalId: proposalId,
-              accepted: false,
-            ),
-          ),
-        )
-        ..add(
-          NativeEventError(
-            value: NativeError(
-              requestId: requestId,
-              code: 'computer_use_unavailable',
-              message: 'permissions unavailable',
-              retryable: true,
-            ),
-          ),
-        );
-      return;
-    }
-    atomicApprovals.add((requestId, proposalId));
-    executedProposals.add(proposalId);
-    eventsController.add(
-      NativeEventApprovalExecutionAcknowledged(
-        value: ApprovalExecutionAcknowledgement(
-          requestId: requestId,
-          proposalId: proposalId,
-          accepted: true,
-        ),
-      ),
-    );
   }
 }
 

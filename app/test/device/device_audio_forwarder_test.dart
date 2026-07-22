@@ -857,12 +857,6 @@ final class _RecordingHub implements NativeHub {
   }
 
   @override
-  void approveAndExecuteComputerUse({
-    required String requestId,
-    required String proposalId,
-  }) {}
-
-  @override
   void sendAudio({
     required String requestId,
     required int sequence,

@@ -1,5 +1,5 @@
 use crate::signals::{
-    ActionProposal, ActionRisk, ApprovalDecision, ApprovalExecutionAcknowledgement, AssistantDelta,
+    ActionProposal, ActionRisk, ApprovalDecision, ApprovalDecisionAcknowledgement, AssistantDelta,
     AssistantProvider as ProviderKind, AudioChunk, AudioEncoding, CaptureSource, ClientCommand,
     Command, ComputerUseAction, MemoryCaptured, MemoryCorrected, MemoryExportCommit,
     MemoryExported, MemoryItem, MemoryItems, MemorySearchItem, MemorySearchResults,
@@ -841,7 +841,7 @@ enum ProposalDecisionError {
     AlreadyDecided,
     Capacity,
     Conflict,
-    NoAction,
+    ExecutionUnavailable,
 }
 
 impl ProposalRegistry {
@@ -902,7 +902,8 @@ impl ProposalRegistry {
         authority_generation: u64,
         decision: ApprovalDecision,
         now_ms: i64,
-    ) -> Result<ProposalRecord, ProposalDecisionError> {
+        computer_use_available: bool,
+    ) -> Result<(ProposalRecord, Option<ComputerUseAction>), ProposalDecisionError> {
         self.purge_expired(now_ms);
         if let Some(record) = self.terminal.get(proposal_id) {
             return if record.fingerprint.uid != uid
@@ -932,11 +933,20 @@ impl ProposalRegistry {
             self.finish(proposal_id, ProposalStatus::Expired);
             return Err(ProposalDecisionError::Expired);
         }
-        let status = match decision {
-            ApprovalDecision::ApproveOnce => ProposalStatus::Approved,
-            ApprovalDecision::Reject => ProposalStatus::Rejected,
+        let action = match decision {
+            ApprovalDecision::ApproveOnce => record.fingerprint.computer_action.clone(),
+            ApprovalDecision::Reject => None,
+        };
+        if action.is_some() && !computer_use_available {
+            return Err(ProposalDecisionError::ExecutionUnavailable);
+        }
+        let status = match (decision, action.is_some()) {
+            (ApprovalDecision::ApproveOnce, true) => ProposalStatus::Executed,
+            (ApprovalDecision::ApproveOnce, false) => ProposalStatus::Approved,
+            (ApprovalDecision::Reject, _) => ProposalStatus::Rejected,
         };
         self.finish(proposal_id, status)
+            .map(|record| (record, action))
             .ok_or(ProposalDecisionError::NotFound)
     }
 
@@ -955,52 +965,6 @@ impl ProposalRegistry {
         for id in ids {
             self.finish(&id, ProposalStatus::Invalidated);
         }
-    }
-
-    fn approve_and_take_action(
-        &mut self,
-        proposal_id: &str,
-        uid: &str,
-        authority_generation: u64,
-        now_ms: i64,
-    ) -> Result<ComputerUseAction, ProposalDecisionError> {
-        self.purge_expired(now_ms);
-        if let Some(record) = self.terminal.get(proposal_id) {
-            return if record.fingerprint.uid != uid
-                || record.fingerprint.authority_generation != authority_generation
-            {
-                Err(ProposalDecisionError::WrongAuthority)
-            } else if record.status == ProposalStatus::Expired {
-                Err(ProposalDecisionError::Expired)
-            } else {
-                Err(ProposalDecisionError::AlreadyDecided)
-            };
-        }
-        let record = self
-            .pending
-            .get(proposal_id)
-            .ok_or(ProposalDecisionError::NotFound)?;
-        if record.fingerprint.uid != uid
-            || record.fingerprint.authority_generation != authority_generation
-        {
-            return Err(ProposalDecisionError::WrongAuthority);
-        }
-        if record
-            .fingerprint
-            .expires_at_ms
-            .is_some_and(|expires| expires <= now_ms)
-        {
-            self.finish(proposal_id, ProposalStatus::Expired);
-            return Err(ProposalDecisionError::Expired);
-        }
-        let action = record
-            .fingerprint
-            .computer_action
-            .clone()
-            .ok_or(ProposalDecisionError::NoAction)?;
-        self.finish(proposal_id, ProposalStatus::Executed)
-            .ok_or(ProposalDecisionError::NotFound)?;
-        Ok(action)
     }
 
     fn invalidate_generation(&mut self, uid: &str, authority_generation: u64) {
@@ -1812,77 +1776,6 @@ impl CommandDispatcher {
                 completed.clear();
                 cancel_all(&self.active).await;
             }
-            if let Command::ApprovalDecision {
-                proposal_id,
-                decision,
-            } = &command.command
-            {
-                let mut state = self.state.lock().await;
-                let Some(uid) = state.authority_uid.clone() else {
-                    error(
-                        Some(request_id),
-                        "proposal_not_found",
-                        "no action proposal authority is configured",
-                        false,
-                    );
-                    continue;
-                };
-                let generation = state.configuration_generation;
-                match state.proposals.decide(
-                    proposal_id,
-                    &uid,
-                    generation,
-                    *decision,
-                    unix_time_ms(),
-                ) {
-                    Ok(record) => {
-                        let detail = format!(
-                            "{} {:?} proposal for {}",
-                            if record.status == ProposalStatus::Approved {
-                                "approved"
-                            } else {
-                                "rejected"
-                            },
-                            record.fingerprint.risk,
-                            record.fingerprint.parent_request_id
-                        );
-                        progress(&request_id, "approval", ToolStatus::Complete, Some(&detail));
-                    }
-                    Err(failure) => {
-                        let (code, message) = match failure {
-                            ProposalDecisionError::NotFound => (
-                                "proposal_not_found",
-                                "no matching action proposal is active",
-                            ),
-                            ProposalDecisionError::WrongAuthority => (
-                                "proposal_authority_changed",
-                                "the proposal belongs to a different authority",
-                            ),
-                            ProposalDecisionError::Expired => {
-                                ("proposal_expired", "the action proposal has expired")
-                            }
-                            ProposalDecisionError::AlreadyDecided => (
-                                "proposal_already_decided",
-                                "the action proposal was already decided",
-                            ),
-                            ProposalDecisionError::Capacity => (
-                                "proposal_capacity_exceeded",
-                                "too many action proposals are pending",
-                            ),
-                            ProposalDecisionError::Conflict => (
-                                "proposal_id_conflict",
-                                "proposal_id was reused with a different payload",
-                            ),
-                            ProposalDecisionError::NoAction => (
-                                "proposal_action_missing",
-                                "the proposal has no executable computer action",
-                            ),
-                        };
-                        error(Some(request_id), code, message, false);
-                    }
-                }
-                continue;
-            }
             let cancellation = CancellationToken::new();
             let capture = capture_fingerprint(&command.command);
             if let Some(fingerprint) = &capture {
@@ -1912,7 +1805,7 @@ impl CommandDispatcher {
                     Ok(true) => {}
                     Ok(false) => continue,
                     Err(ActivationError::Capacity) => {
-                        acknowledge_approval_execution_rejection(&command.command, &request_id);
+                        acknowledge_approval_rejection(&command.command, &request_id);
                         error(
                             Some(request_id),
                             "command_capacity_exceeded",
@@ -1922,7 +1815,7 @@ impl CommandDispatcher {
                         continue;
                     }
                     Err(ActivationError::Duplicate) => {
-                        acknowledge_approval_execution_rejection(&command.command, &request_id);
+                        acknowledge_approval_rejection(&command.command, &request_id);
                         error(
                             Some(request_id),
                             "duplicate_request",
@@ -1932,7 +1825,7 @@ impl CommandDispatcher {
                         continue;
                     }
                     Err(ActivationError::Conflict) => {
-                        acknowledge_approval_execution_rejection(&command.command, &request_id);
+                        acknowledge_approval_rejection(&command.command, &request_id);
                         error(
                             Some(request_id),
                             "idempotency_conflict",
@@ -2190,10 +2083,6 @@ async fn dispatch_assistant(
                             "proposal_id_conflict",
                             "proposal_id was reused with a different payload",
                         ),
-                        ProposalDecisionError::NoAction => (
-                            "proposal_action_missing",
-                            "the proposal has no executable computer action",
-                        ),
                         _ => (
                             "proposal_registration_failed",
                             "action proposal could not be registered",
@@ -2353,11 +2242,15 @@ async fn execute(
             dispatch_assistant(&request_id, &state, assistant_provider, text, &cancellation).await;
             false
         }
-        Command::ApproveAndExecuteComputerUse { proposal_id } => {
-            approve_and_execute_computer_use(
+        Command::ApprovalDecision {
+            proposal_id,
+            decision,
+        } => {
+            decide_approval(
                 &request_id,
                 &state,
                 &proposal_id,
+                decision,
                 execution_generation,
                 &cancellation,
             )
@@ -2369,15 +2262,6 @@ async fn execute(
         | Command::ClearAssistant
         | Command::StartTranscription { .. }
         | Command::StopTranscription { .. } => false,
-        Command::ApprovalDecision { .. } => {
-            error(
-                Some(request_id),
-                "proposal_not_found",
-                "no matching action proposal is active",
-                false,
-            );
-            false
-        }
         Command::DeviceState { .. } => {
             progress(
                 &request_id,
@@ -3292,42 +3176,34 @@ fn error(request_id: Option<String>, code: &str, message: &str, retryable: bool)
     .send();
 }
 
-async fn approve_and_execute_computer_use(
+async fn decide_approval(
     request_id: &str,
     state: &Mutex<RuntimeState>,
     proposal_id: &str,
+    decision: ApprovalDecision,
     generation: u64,
     cancellation: &CancellationToken,
 ) {
     if cancellation.is_cancelled() {
-        approval_execution_acknowledgement(request_id, proposal_id, false);
+        approval_decision_acknowledgement(request_id, proposal_id, decision, false, false);
         cancelled(request_id);
         return;
     }
-    if !computer_use_available() {
-        approval_execution_acknowledgement(request_id, proposal_id, false);
-        error(
-            Some(request_id.to_owned()),
-            "computer_use_unavailable",
-            "computer use permissions or platform support are unavailable",
-            true,
-        );
-        return;
-    }
-    let action = {
+    let computer_use_is_available = computer_use_available();
+    let result = {
         let mut state = state.lock().await;
         if cancellation.is_cancelled() {
-            approval_execution_acknowledgement(request_id, proposal_id, false);
+            approval_decision_acknowledgement(request_id, proposal_id, decision, false, false);
             cancelled(request_id);
             return;
         }
         if state.configuration_generation != generation {
-            approval_execution_acknowledgement(request_id, proposal_id, false);
+            approval_decision_acknowledgement(request_id, proposal_id, decision, false, false);
             cancelled(request_id);
             return;
         }
         let Some(uid) = state.authority_uid.clone() else {
-            approval_execution_acknowledgement(request_id, proposal_id, false);
+            approval_decision_acknowledgement(request_id, proposal_id, decision, false, false);
             error(
                 Some(request_id.to_owned()),
                 "proposal_not_found",
@@ -3338,7 +3214,14 @@ async fn approve_and_execute_computer_use(
         };
         state
             .proposals
-            .approve_and_take_action(proposal_id, &uid, generation, unix_time_ms())
+            .decide(
+                proposal_id,
+                &uid,
+                generation,
+                decision,
+                unix_time_ms(),
+                computer_use_is_available,
+            )
             .map_err(|failure| match failure {
                 ProposalDecisionError::NotFound => (
                     "proposal_not_found",
@@ -3348,30 +3231,49 @@ async fn approve_and_execute_computer_use(
                     "proposal_authority_changed",
                     "the proposal belongs to a different authority",
                 ),
-                ProposalDecisionError::NoAction => (
-                    "proposal_action_missing",
-                    "the proposal has no executable computer action",
-                ),
                 ProposalDecisionError::Expired => {
                     ("proposal_expired", "the action proposal has expired")
                 }
+                ProposalDecisionError::ExecutionUnavailable => (
+                    "computer_use_unavailable",
+                    "computer use permissions or platform support are unavailable",
+                ),
                 ProposalDecisionError::AlreadyDecided
                 | ProposalDecisionError::Capacity
                 | ProposalDecisionError::Conflict => (
                     "proposal_not_approved",
-                    "the computer action is not approved for execution",
+                    "the action proposal cannot be decided",
                 ),
             })
     };
-    let action = match action {
-        Ok(action) => action,
+    let (record, action) = match result {
+        Ok(result) => result,
         Err((code, message)) => {
-            approval_execution_acknowledgement(request_id, proposal_id, false);
-            error(Some(request_id.to_owned()), code, message, false);
+            approval_decision_acknowledgement(request_id, proposal_id, decision, false, false);
+            error(
+                Some(request_id.to_owned()),
+                code,
+                message,
+                code == "computer_use_unavailable",
+            );
             return;
         }
     };
-    approval_execution_acknowledgement(request_id, proposal_id, true);
+    approval_decision_acknowledgement(request_id, proposal_id, decision, true, action.is_some());
+    let Some(action) = action else {
+        let detail = format!(
+            "{} {:?} proposal for {}",
+            if record.status == ProposalStatus::Approved {
+                "approved"
+            } else {
+                "rejected"
+            },
+            record.fingerprint.risk,
+            record.fingerprint.parent_request_id
+        );
+        progress(request_id, "approval", ToolStatus::Complete, Some(&detail));
+        return;
+    };
     if cancellation.is_cancelled() {
         cancelled(request_id);
         return;
@@ -3405,18 +3307,30 @@ async fn approve_and_execute_computer_use(
     }
 }
 
-fn approval_execution_acknowledgement(request_id: &str, proposal_id: &str, accepted: bool) {
-    NativeEvent::ApprovalExecutionAcknowledged(ApprovalExecutionAcknowledgement {
+fn approval_decision_acknowledgement(
+    request_id: &str,
+    proposal_id: &str,
+    decision: ApprovalDecision,
+    accepted: bool,
+    execution_pending: bool,
+) {
+    NativeEvent::ApprovalDecisionAcknowledged(ApprovalDecisionAcknowledgement {
         request_id: request_id.to_owned(),
         proposal_id: proposal_id.to_owned(),
+        decision,
         accepted,
+        execution_pending,
     })
     .send();
 }
 
-fn acknowledge_approval_execution_rejection(command: &Command, request_id: &str) {
-    if let Command::ApproveAndExecuteComputerUse { proposal_id } = command {
-        approval_execution_acknowledgement(request_id, proposal_id, false);
+fn acknowledge_approval_rejection(command: &Command, request_id: &str) {
+    if let Command::ApprovalDecision {
+        proposal_id,
+        decision,
+    } = command
+    {
+        approval_decision_acknowledgement(request_id, proposal_id, *decision, false, false);
     }
 }
 
@@ -5251,6 +5165,7 @@ mod tests {
                 4,
                 ApprovalDecision::ApproveOnce,
                 100,
+                true,
             ),
             Err(ProposalDecisionError::WrongAuthority)
         );
@@ -5261,8 +5176,11 @@ mod tests {
                 4,
                 ApprovalDecision::ApproveOnce,
                 100,
+                true,
             )
             .unwrap_or_else(|failure| panic!("proposal is approved: {failure:?}"));
+        let (decided, action) = decided;
+        assert_eq!(action, None);
         assert_eq!(decided.status, ProposalStatus::Approved);
         assert_eq!(decided.fingerprint.parent_request_id, "chat-g4-1");
         assert_eq!(decided.fingerprint.risk, ActionRisk::External);
@@ -5281,7 +5199,14 @@ mod tests {
             Err(ProposalDecisionError::Conflict)
         );
         assert_eq!(
-            registry.decide("proposal-1", "user-a", 4, ApprovalDecision::Reject, 100,),
+            registry.decide(
+                "proposal-1",
+                "user-a",
+                4,
+                ApprovalDecision::Reject,
+                100,
+                true,
+            ),
             Err(ProposalDecisionError::AlreadyDecided)
         );
 
@@ -5307,6 +5232,7 @@ mod tests {
                 4,
                 ApprovalDecision::ApproveOnce,
                 i64::MAX,
+                true,
             ),
             Err(ProposalDecisionError::Expired)
         );
@@ -5344,11 +5270,37 @@ mod tests {
             )
             .unwrap_or_else(|failure| panic!("proposal registers: {failure:?}"));
         assert_eq!(
-            registry.approve_and_take_action("computer-1", "user-a", 7, 100),
-            Ok(action)
+            registry.decide(
+                "computer-1",
+                "user-a",
+                7,
+                ApprovalDecision::ApproveOnce,
+                100,
+                false,
+            ),
+            Err(ProposalDecisionError::ExecutionUnavailable)
+        );
+        assert!(registry.pending.contains_key("computer-1"));
+        assert_eq!(
+            registry.decide(
+                "computer-1",
+                "user-a",
+                7,
+                ApprovalDecision::ApproveOnce,
+                100,
+                true,
+            ),
+            Ok((registry.terminal["computer-1"].clone(), Some(action)))
         );
         assert_eq!(
-            registry.approve_and_take_action("computer-1", "user-a", 7, 100),
+            registry.decide(
+                "computer-1",
+                "user-a",
+                7,
+                ApprovalDecision::ApproveOnce,
+                100,
+                true,
+            ),
             Err(ProposalDecisionError::AlreadyDecided)
         );
         assert_eq!(
@@ -5371,10 +5323,19 @@ mod tests {
             )
             .unwrap_or_else(|failure| panic!("proposal registers: {failure:?}"));
         assert_eq!(
-            registry.approve_and_take_action("non-computer", "user-a", 7, 100),
-            Err(ProposalDecisionError::NoAction)
+            registry
+                .decide(
+                    "non-computer",
+                    "user-a",
+                    7,
+                    ApprovalDecision::ApproveOnce,
+                    100,
+                    true,
+                )
+                .map(|(record, action)| (record.status, action)),
+            Ok((ProposalStatus::Approved, None))
         );
-        assert!(registry.pending.contains_key("non-computer"));
+        assert!(!registry.pending.contains_key("non-computer"));
     }
 
     #[tokio::test]
@@ -5410,10 +5371,11 @@ mod tests {
         let cancellation = CancellationToken::new();
         cancellation.cancel();
 
-        approve_and_execute_computer_use(
+        decide_approval(
             "approval-1",
             &state,
             "cancel-before-accept",
+            ApprovalDecision::ApproveOnce,
             3,
             &cancellation,
         )
@@ -5462,6 +5424,7 @@ mod tests {
                     1,
                     ApprovalDecision::Reject,
                     0,
+                    true,
                 )
                 .unwrap_or_else(|failure| panic!("pending proposal rejects: {failure:?}"));
         }
@@ -5471,7 +5434,7 @@ mod tests {
                 .register("user-a", 1, action_proposal(&id, "chat-2", i64::MAX))
                 .unwrap_or_else(|failure| panic!("terminal proposal registers: {failure:?}"));
             registry
-                .decide(&id, "user-a", 1, ApprovalDecision::Reject, 0)
+                .decide(&id, "user-a", 1, ApprovalDecision::Reject, 0, true)
                 .unwrap_or_else(|failure| panic!("terminal proposal rejects: {failure:?}"));
         }
         assert_eq!(registry.terminal.len(), TERMINAL_PROPOSAL_CAPACITY);

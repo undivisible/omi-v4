@@ -16,7 +16,6 @@ import 'currents/currents.dart';
 import 'device/device.dart';
 import 'keyboard/keyboard.dart';
 import 'memory/memory.dart';
-import 'native/generated/signals/signals.dart' show NativeError;
 import 'native/native_hub.dart';
 import 'providers/providers.dart';
 import 'settings/settings.dart';
@@ -42,18 +41,17 @@ typedef _PendingTranscriptCapture = ({
 enum _ChatRequestKind { message, approval }
 
 typedef _ChatRequest = ({int generation, _ChatRequestKind kind});
-typedef _ChatProposal = ({
-  int generation,
-  String parentRequestId,
-  int? expiresAtMs,
-  bool executable,
+typedef _ChatProposal = ({int generation, String parentRequestId});
+typedef _PendingApproval = ({
+  String proposalId,
+  ApprovalDecision decision,
+  CurrentActionHandoff? handoff,
 });
 
 const _completedTranscriptCapacity = 256;
 const _managedAssistantModel = 'mimo-v2.5-pro';
 const _defaultAssistantRefreshLead = Duration(minutes: 5);
 const _defaultAssistantMinimumRefreshDelay = Duration(seconds: 30);
-const _defaultApprovalAcknowledgementTimeout = Duration(seconds: 5);
 const _defaultInboxPollInterval = Duration(seconds: 2);
 
 String _randomId() {
@@ -119,8 +117,6 @@ final class AppServices {
     DateTime Function()? now,
     this._assistantRefreshLead = _defaultAssistantRefreshLead,
     this._assistantMinimumRefreshDelay = _defaultAssistantMinimumRefreshDelay,
-    this._approvalAcknowledgementTimeout =
-        _defaultApprovalAcknowledgementTimeout,
     this._inboxPollInterval = _defaultInboxPollInterval,
     DesktopVoiceCapture? desktopVoice,
   }) : currents = currentsClient == null
@@ -252,8 +248,6 @@ final class AppServices {
     Duration assistantRefreshLead = _defaultAssistantRefreshLead,
     Duration assistantMinimumRefreshDelay =
         _defaultAssistantMinimumRefreshDelay,
-    Duration approvalAcknowledgementTimeout =
-        _defaultApprovalAcknowledgementTimeout,
     Duration inboxPollInterval = _defaultInboxPollInterval,
     DesktopVoiceCapture? desktopVoice,
     MemorySyncPump? memorySync,
@@ -276,7 +270,6 @@ final class AppServices {
     now: now,
     assistantRefreshLead: assistantRefreshLead,
     assistantMinimumRefreshDelay: assistantMinimumRefreshDelay,
-    approvalAcknowledgementTimeout: approvalAcknowledgementTimeout,
     inboxPollInterval: inboxPollInterval,
     desktopVoice: desktopVoice,
     memorySyncPump: memorySync,
@@ -306,7 +299,6 @@ final class AppServices {
   final DateTime Function() _now;
   final Duration _assistantRefreshLead;
   final Duration _assistantMinimumRefreshDelay;
-  final Duration _approvalAcknowledgementTimeout;
   final Duration _inboxPollInterval;
   final Future<String> Function(String uid) memoryDatabasePath;
   final _nativeEvents = StreamController<NativeEvent>.broadcast();
@@ -323,13 +315,10 @@ final class AppServices {
   int _chatTransportSequence = 0;
   final _chatRequests = <String, _ChatRequest>{};
   final _chatProposals = <String, _ChatProposal>{};
-  final _atomicApprovalProposalByRequest = <String, String>{};
-  final _atomicApprovalRequestByProposal = <String, String>{};
-  final _atomicApprovalAcknowledgementTimers = <String, Timer>{};
-  final _ambiguousAtomicApprovalProposalByRequest = <String, String>{};
+  final _pendingApprovals = <String, _PendingApproval>{};
+  final _approvalRequestByProposal = <String, String>{};
   final _currentHandoffsByChatRequest = <String, CurrentActionHandoff>{};
   final _currentHandoffsByProposal = <String, CurrentActionHandoff>{};
-  final _currentHandoffsByApprovalRequest = <String, CurrentActionHandoff>{};
   final _currentApprovalSyncByRequest = <String, Future<void>>{};
   final _terminalChatRequests = <String>{};
   bool _nativeInitialized = false;
@@ -658,21 +647,11 @@ final class AppServices {
       throw StateError('Native services are not connected.');
     }
     final proposal = _chatProposals[proposalId];
-    final now = DateTime.now().millisecondsSinceEpoch;
-    if (proposal == null ||
-        proposal.generation != _authorityGeneration ||
-        (proposal.expiresAtMs != null && proposal.expiresAtMs! <= now)) {
-      _chatProposals.remove(proposalId);
-      throw StateError('This action proposal is unavailable or expired.');
+    if (proposal == null || proposal.generation != _authorityGeneration) {
+      throw StateError('This action proposal is unavailable.');
     }
-    if (_atomicApprovalRequestByProposal.containsKey(proposalId)) {
-      throw StateError('This action proposal is already being approved.');
-    }
-    if (_atomicApprovalRequestByProposal.length >=
-        _completedTranscriptCapacity) {
-      throw StateError(
-        'Too many action approvals are awaiting reconciliation.',
-      );
+    if (_approvalRequestByProposal.containsKey(proposalId)) {
+      throw StateError('This action proposal is already being decided.');
     }
     final requestId =
         'approval-g$_authorityGeneration-${_chatTransportSequence++}';
@@ -680,65 +659,38 @@ final class AppServices {
       generation: _authorityGeneration,
       kind: _ChatRequestKind.approval,
     );
-    final currentHandoff = _currentHandoffsByProposal[proposalId];
-    if (decision == ApprovalDecision.approveOnce && proposal.executable) {
-      _atomicApprovalProposalByRequest[requestId] = proposalId;
-      _atomicApprovalRequestByProposal[proposalId] = requestId;
-      _atomicApprovalAcknowledgementTimers[requestId] = Timer(
-        _approvalAcknowledgementTimeout,
-        () => _approvalAcknowledgementTimedOut(requestId, proposalId),
+    _pendingApprovals[requestId] = (
+      proposalId: proposalId,
+      decision: decision,
+      handoff: _currentHandoffsByProposal[proposalId],
+    );
+    _approvalRequestByProposal[proposalId] = requestId;
+    try {
+      nativeHub.decideApproval(
+        requestId: requestId,
+        proposalId: proposalId,
+        decision: decision,
       );
-      if (currentHandoff != null) {
-        _currentHandoffsByApprovalRequest[requestId] = currentHandoff;
-      }
-      try {
-        nativeHub.approveAndExecuteComputerUse(
-          requestId: requestId,
-          proposalId: proposalId,
-        );
-      } catch (_) {
-        _chatRequests.remove(requestId);
-        _atomicApprovalProposalByRequest.remove(requestId);
-        _atomicApprovalRequestByProposal.remove(proposalId);
-        _currentHandoffsByApprovalRequest.remove(requestId);
-        _atomicApprovalAcknowledgementTimers.remove(requestId)?.cancel();
-        rethrow;
-      }
-    } else {
-      _chatProposals.remove(proposalId);
-      try {
-        nativeHub.decideApproval(
-          requestId: requestId,
-          proposalId: proposalId,
-          decision: decision,
-        );
-        if (currentHandoff != null &&
-            (decision == ApprovalDecision.reject || !proposal.executable) &&
-            _currentsClient != null) {
-          _currentHandoffsByProposal.remove(proposalId);
-          unawaited(
-            _currentsClient.reject(currentHandoff).onError((error, stack) {
-              _nativeEvents.addError(
-                error ?? StateError('Currents rejection failed.'),
-                stack,
-              );
-            }),
-          );
-        }
-      } catch (_) {
-        _chatRequests.remove(requestId);
-        _chatProposals[proposalId] = proposal;
-        rethrow;
-      }
+    } catch (_) {
+      _chatRequests.remove(requestId);
+      _pendingApprovals.remove(requestId);
+      _approvalRequestByProposal.remove(proposalId);
+      rethrow;
     }
     return requestId;
   }
 
   void cancelChatRequest(String requestId) {
-    final request = _chatRequests.remove(requestId);
+    final request = _chatRequests[requestId];
     if (request == null || request.generation != _authorityGeneration) return;
-    _tombstoneChatRequest(requestId);
-    _invalidateChatProposals(requestId);
+    final pendingApproval = _pendingApprovals[requestId];
+    if (pendingApproval != null) {
+      _finishApprovalCorrelation(requestId, pendingApproval.proposalId);
+    } else {
+      _chatRequests.remove(requestId);
+      _tombstoneChatRequest(requestId);
+      _invalidateChatProposals(requestId);
+    }
     if (chatReady) nativeHub.cancel(requestId);
   }
 
@@ -1101,20 +1053,23 @@ final class AppServices {
   }
 
   bool _acceptChatEvent(NativeEvent event) {
-    final now = DateTime.now().millisecondsSinceEpoch;
-    if (event case NativeEventApprovalExecutionAcknowledged(:final value)) {
-      final proposalId =
-          _atomicApprovalProposalByRequest[value.requestId] ??
-          _ambiguousAtomicApprovalProposalByRequest[value.requestId];
-      if (proposalId == null || proposalId != value.proposalId) return false;
-      _atomicApprovalProposalByRequest.remove(value.requestId);
-      _ambiguousAtomicApprovalProposalByRequest.remove(value.requestId);
-      _atomicApprovalRequestByProposal.remove(proposalId);
-      _atomicApprovalAcknowledgementTimers.remove(value.requestId)?.cancel();
-      if (value.accepted) {
-        _chatProposals.remove(proposalId);
-        final handoff = _currentHandoffsByApprovalRequest[value.requestId];
-        if (handoff != null && _currentsClient != null) {
+    if (event case NativeEventApprovalDecisionAcknowledged(:final value)) {
+      final pending = _pendingApprovals[value.requestId];
+      if (pending == null ||
+          pending.proposalId != value.proposalId ||
+          pending.decision != value.decision) {
+        return false;
+      }
+      if (!value.accepted) {
+        _finishApprovalCorrelation(value.requestId, pending.proposalId);
+        return true;
+      }
+      _chatProposals.remove(pending.proposalId);
+      _currentHandoffsByProposal.remove(pending.proposalId);
+      final handoff = pending.handoff;
+      if (handoff != null && _currentsClient != null) {
+        if (pending.decision == ApprovalDecision.approveOnce &&
+            value.executionPending) {
           final sync = _currentsClient.approve(handoff);
           _currentApprovalSyncByRequest[value.requestId] = sync;
           unawaited(
@@ -1125,11 +1080,19 @@ final class AppServices {
               );
             }),
           );
+        } else {
+          unawaited(
+            _currentsClient.reject(handoff).onError((error, stack) {
+              _nativeEvents.addError(
+                error ?? StateError('Currents rejection failed.'),
+                stack,
+              );
+            }),
+          );
         }
-      } else {
-        _currentHandoffsByApprovalRequest.remove(value.requestId);
-        _chatRequests.remove(value.requestId);
-        _tombstoneChatRequest(value.requestId);
+      }
+      if (!value.executionPending) {
+        _finishApprovalCorrelation(value.requestId, pending.proposalId);
       }
       return true;
     }
@@ -1140,14 +1103,13 @@ final class AppServices {
           parent.generation != _authorityGeneration ||
           _chatProposals.containsKey(value.proposalId) ||
           _terminalChatRequests.contains(value.requestId) ||
-          (value.expiresAtMs != null && value.expiresAtMs! <= now)) {
+          (value.expiresAtMs != null &&
+              value.expiresAtMs! <= DateTime.now().millisecondsSinceEpoch)) {
         return false;
       }
       _chatProposals[value.proposalId] = (
         generation: _authorityGeneration,
         parentRequestId: value.requestId,
-        expiresAtMs: value.expiresAtMs,
-        executable: value.computerAction != null,
       );
       final handoff = _currentHandoffsByChatRequest[value.requestId];
       if (handoff != null) {
@@ -1189,9 +1151,8 @@ final class AppServices {
       return false;
     }
     if (terminal) {
-      final currentHandoff = _currentHandoffsByApprovalRequest.remove(
-        requestId,
-      );
+      final pendingApproval = _pendingApprovals[requestId];
+      final currentHandoff = pendingApproval?.handoff;
       final currentApproval = _currentApprovalSyncByRequest.remove(requestId);
       if (currentHandoff != null &&
           currentApproval != null &&
@@ -1225,13 +1186,12 @@ final class AppServices {
               }),
         );
       }
-      final proposalId = _atomicApprovalProposalByRequest.remove(requestId);
-      if (proposalId != null) {
-        _atomicApprovalRequestByProposal.remove(proposalId);
+      if (pendingApproval != null) {
+        _finishApprovalCorrelation(requestId, pendingApproval.proposalId);
+      } else {
+        _chatRequests.remove(requestId);
+        _tombstoneChatRequest(requestId);
       }
-      _atomicApprovalAcknowledgementTimers.remove(requestId)?.cancel();
-      _chatRequests.remove(requestId);
-      _tombstoneChatRequest(requestId);
       final failedParent =
           event is NativeEventError ||
           (event is NativeEventToolProgress &&
@@ -1276,6 +1236,15 @@ final class AppServices {
     }
   }
 
+  void _finishApprovalCorrelation(String requestId, String proposalId) {
+    _pendingApprovals.remove(requestId);
+    if (_approvalRequestByProposal[proposalId] == requestId) {
+      _approvalRequestByProposal.remove(proposalId);
+    }
+    _chatRequests.remove(requestId);
+    _tombstoneChatRequest(requestId);
+  }
+
   void _fenceTranscriptCaptures() {
     _authorityGeneration += 1;
     unawaited(cancelDesktopVoice());
@@ -1305,54 +1274,12 @@ final class AppServices {
     }
     _chatRequests.clear();
     _chatProposals.clear();
-    _atomicApprovalProposalByRequest.clear();
-    _atomicApprovalRequestByProposal.clear();
-    _ambiguousAtomicApprovalProposalByRequest.clear();
+    _pendingApprovals.clear();
+    _approvalRequestByProposal.clear();
     _currentHandoffsByChatRequest.clear();
     _currentHandoffsByProposal.clear();
-    _currentHandoffsByApprovalRequest.clear();
     _currentApprovalSyncByRequest.clear();
-    for (final timer in _atomicApprovalAcknowledgementTimers.values) {
-      timer.cancel();
-    }
-    _atomicApprovalAcknowledgementTimers.clear();
     _chatAuthorityChanges.add(_authorityGeneration);
-  }
-
-  void _approvalAcknowledgementTimedOut(String requestId, String proposalId) {
-    if (_atomicApprovalProposalByRequest[requestId] != proposalId ||
-        _atomicApprovalRequestByProposal[proposalId] != requestId) {
-      return;
-    }
-    _atomicApprovalProposalByRequest.remove(requestId);
-    _atomicApprovalAcknowledgementTimers.remove(requestId)?.cancel();
-    _ambiguousAtomicApprovalProposalByRequest[requestId] = proposalId;
-    if (_ambiguousAtomicApprovalProposalByRequest.length >
-        _completedTranscriptCapacity) {
-      final expiredRequestId =
-          _ambiguousAtomicApprovalProposalByRequest.keys.first;
-      final expiredProposalId = _ambiguousAtomicApprovalProposalByRequest
-          .remove(expiredRequestId);
-      if (expiredProposalId != null &&
-          _atomicApprovalRequestByProposal[expiredProposalId] ==
-              expiredRequestId) {
-        _atomicApprovalRequestByProposal.remove(expiredProposalId);
-        _chatProposals.remove(expiredProposalId);
-      }
-    }
-    _chatRequests.remove(requestId);
-    _tombstoneChatRequest(requestId);
-    _nativeEvents.add(
-      NativeEventError(
-        value: NativeError(
-          requestId: requestId,
-          code: 'approval_acknowledgement_timeout',
-          message:
-              'Native approval state is unknown; retry is blocked until reconciled.',
-          retryable: false,
-        ),
-      ),
-    );
   }
 
   Future<void> _stopCapture() async {

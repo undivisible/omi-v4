@@ -12,12 +12,12 @@ export 'generated/signals/signals.dart'
         CaptureSource,
         ActionProposal,
         ApprovalDecision,
-        ApprovalExecutionAcknowledgement,
+        ApprovalDecisionAcknowledgement,
         AssistantDelta,
         AssistantProvider,
         NativeEvent,
         NativeEventActionProposal,
-        NativeEventApprovalExecutionAcknowledged,
+        NativeEventApprovalDecisionAcknowledged,
         NativeEventAssistantDelta,
         NativeEventError,
         NativeEventMemoryCaptured,
@@ -115,10 +115,6 @@ abstract interface class NativeHub {
     required String requestId,
     required String proposalId,
     required ApprovalDecision decision,
-  });
-  void approveAndExecuteComputerUse({
-    required String requestId,
-    required String proposalId,
   });
   void startTranscription({
     required String requestId,
@@ -285,12 +281,6 @@ final class UnavailableNativeHub implements NativeHub, OnboardingScanHub {
     required String requestId,
     required String proposalId,
     required ApprovalDecision decision,
-  }) => _unavailable();
-
-  @override
-  void approveAndExecuteComputerUse({
-    required String requestId,
-    required String proposalId,
   }) => _unavailable();
 
   @override
@@ -525,15 +515,6 @@ final class RinfNativeHub implements NativeHub, OnboardingScanHub {
   }) => _send(
     requestId,
     CommandApprovalDecision(proposalId: proposalId, decision: decision),
-  );
-
-  @override
-  void approveAndExecuteComputerUse({
-    required String requestId,
-    required String proposalId,
-  }) => _send(
-    requestId,
-    CommandApproveAndExecuteComputerUse(proposalId: proposalId),
   );
 
   @override
