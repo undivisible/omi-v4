@@ -11,6 +11,7 @@ final class DesktopMenuBarController {
     required this.isListening,
     required this.onCapture,
     required this.onToggleListening,
+    required this.onOpenSettings,
     MethodChannel? channel,
   }) : _channel = channel ?? const MethodChannel('omi/menu_bar');
 
@@ -18,6 +19,7 @@ final class DesktopMenuBarController {
   final bool Function() isListening;
   final Future<void> Function() onCapture;
   final Future<void> Function() onToggleListening;
+  final VoidCallback onOpenSettings;
   final MethodChannel _channel;
   bool _started = false;
 
@@ -45,6 +47,9 @@ final class DesktopMenuBarController {
         await onCapture();
       case 'toggleListening':
         await onToggleListening();
+      case 'openSettings':
+        onOpenSettings();
+        return;
       default:
         throw MissingPluginException('Unknown menu-bar action ${call.method}');
     }

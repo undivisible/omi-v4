@@ -1,15 +1,13 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../app_services.dart';
 import '../keyboard/keyboard.dart';
 import '../menu_bar/desktop_menu_bar.dart';
-import '../ui/omi_ui.dart';
 import 'chat_screen.dart';
-import 'currents_screen.dart';
-import 'device_screen.dart';
-import 'memory_screen.dart';
 import 'setup_account_screens.dart';
 
 class OmiShell extends StatefulWidget {
@@ -33,7 +31,6 @@ class OmiShell extends StatefulWidget {
 }
 
 class _OmiShellState extends State<OmiShell> {
-  var selected = 0;
   var _showOpeningGradient = true;
   final _chatKey = GlobalKey<ChatScreenState>();
   late final _desktopKeyboard = widget.desktopKeyboard ?? DesktopKeyboard();
@@ -42,14 +39,11 @@ class _OmiShellState extends State<OmiShell> {
   DesktopMenuBarController? _menuBar;
   Timer? _openingGradientTimer;
 
-  static const destinations = [
-    (Icons.chat_bubble_outline_rounded, 'Chat'),
-    (Icons.auto_stories_outlined, 'Memory'),
-    (Icons.waves_rounded, 'Currents'),
-    (Icons.devices_other_rounded, 'Devices'),
-    (Icons.checklist_rounded, 'Setup'),
-    (Icons.person_outline_rounded, 'Account'),
-  ];
+  static const _windowChromeChannel = MethodChannel('omi/window_chrome');
+  bool _windowChromeHandlerSet = false;
+
+  bool get _isMacDesktop =>
+      !kIsWeb && defaultTargetPlatform == TargetPlatform.macOS;
 
   @override
   void initState() {
@@ -58,6 +52,11 @@ class _OmiShellState extends State<OmiShell> {
       if (mounted) setState(() => _showOpeningGradient = false);
     });
     if (widget.previewMode) return;
+    if (_isMacDesktop) {
+      unawaited(_enterHubChrome());
+      _windowChromeChannel.setMethodCallHandler(_handleWindowChromeCall);
+      _windowChromeHandlerSet = true;
+    }
     _menuBar = DesktopMenuBarController(
       currents: widget.services.currents,
       isListening: () => widget.services.desktopVoice.active,
@@ -67,6 +66,7 @@ class _OmiShellState extends State<OmiShell> {
             ? ShiftGestureAction.stopVoice
             : ShiftGestureAction.startVoice,
       ),
+      onOpenSettings: _openSettings,
     );
     unawaited(_menuBar!.start());
     final gesture =
@@ -79,18 +79,47 @@ class _OmiShellState extends State<OmiShell> {
     _desktopGestureActions = gesture.actions.listen(_handleDesktopGesture);
   }
 
+  Future<void> _enterHubChrome() async {
+    try {
+      await _windowChromeChannel.invokeMethod('enterHub');
+    } on MissingPluginException {
+      return;
+    } on PlatformException {
+      return;
+    }
+  }
+
+  Future<dynamic> _handleWindowChromeCall(MethodCall call) async {
+    if (call.method == 'openSettings') {
+      _openSettings();
+    }
+    return null;
+  }
+
+  void _openSettings() {
+    if (!mounted) return;
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (context) => SettingsScreen(
+          services: widget.services,
+          previewMode: widget.previewMode,
+        ),
+        fullscreenDialog: true,
+      ),
+    );
+  }
+
   Future<void> _handleDesktopGesture(ShiftGestureAction action) async {
     if (!mounted) return;
-    if (selected != 0) {
-      setState(() => selected = 0);
-      await WidgetsBinding.instance.endOfFrame;
-    }
     await _chatKey.currentState?.handleDesktopGesture(action);
   }
 
   @override
   void dispose() {
     _openingGradientTimer?.cancel();
+    if (_windowChromeHandlerSet) {
+      _windowChromeChannel.setMethodCallHandler(null);
+    }
     unawaited(_menuBar?.dispose());
     unawaited(_disposeDesktopGesture());
     super.dispose();
@@ -114,184 +143,29 @@ class _OmiShellState extends State<OmiShell> {
         onDesktopGestureReset: _desktopGesture?.reset,
       ),
     );
-    final body = Stack(
-      fit: StackFit.expand,
-      children: [
-        Offstage(
-          offstage: selected != 0,
-          child: TickerMode(enabled: selected == 0, child: chat),
-        ),
-        if (selected != 0)
-          GradientBackground(
-            child: _Screen(
-              index: selected,
-              services: widget.services,
-              previewMode: widget.previewMode,
-              chatKey: _chatKey,
-              desktopKeyboard: _desktopKeyboard,
-              onDesktopGestureReset: _desktopGesture?.reset,
-              onOpenChat: () => setState(() => selected = 0),
-            ),
-          ),
-      ],
-    );
+    final topPadding = widget.previewMode ? 20.0 : 48.0;
     final paddedBody = SafeArea(
       left: !wide,
       child: Padding(
-        padding: EdgeInsets.fromLTRB(wide ? 32 : 18, 20, wide ? 32 : 18, 12),
+        padding: EdgeInsets.fromLTRB(
+          wide ? 32 : 18,
+          topPadding,
+          wide ? 32 : 18,
+          12,
+        ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             if (widget.previewMode)
               _PreviewNotice(onExit: widget.onExitPreview),
             if (widget.previewMode) const SizedBox(height: 12),
-            Expanded(child: body),
+            Expanded(child: chat),
           ],
         ),
       ),
     );
-    return Scaffold(
-      backgroundColor: selected == 0
-          ? const Color(0xfff7f6f1)
-          : const Color(0xff0b1013),
-      body: wide
-          ? Row(
-              children: [
-                NavigationRail(
-                  backgroundColor: selected == 0
-                      ? const Color(0xffefeee9)
-                      : const Color(0xff0b1013),
-                  selectedIndex: selected,
-                  onDestinationSelected: (value) =>
-                      setState(() => selected = value),
-                  extended: MediaQuery.sizeOf(context).width >= 1050,
-                  selectedIconTheme: IconThemeData(
-                    color: selected == 0
-                        ? const Color(0xff171716)
-                        : const Color(0xff73d5c4),
-                  ),
-                  unselectedIconTheme: IconThemeData(
-                    color: selected == 0
-                        ? const Color(0xff8d8980)
-                        : Colors.white54,
-                  ),
-                  selectedLabelTextStyle: TextStyle(
-                    color: selected == 0
-                        ? const Color(0xff171716)
-                        : Colors.white,
-                    fontWeight: FontWeight.w600,
-                  ),
-                  unselectedLabelTextStyle: TextStyle(
-                    color: selected == 0
-                        ? const Color(0xff706e68)
-                        : Colors.white60,
-                  ),
-                  leading: Padding(
-                    padding: EdgeInsets.symmetric(vertical: 20),
-                    child: selected == 0
-                        ? const _WarmOmiMark()
-                        : const OmiMark(),
-                  ),
-                  destinations: [
-                    for (final destination in destinations)
-                      NavigationRailDestination(
-                        icon: Icon(destination.$1),
-                        label: Text(destination.$2),
-                      ),
-                  ],
-                ),
-                VerticalDivider(
-                  width: 1,
-                  color: selected == 0
-                      ? const Color(0x14000000)
-                      : const Color(0x22ffffff),
-                ),
-                Expanded(child: paddedBody),
-              ],
-            )
-          : paddedBody,
-      bottomNavigationBar: wide
-          ? null
-          : NavigationBar(
-              backgroundColor: selected == 0 ? const Color(0xfff7f6f1) : null,
-              indicatorColor: selected == 0 ? const Color(0x14171716) : null,
-              selectedIndex: selected < 3 ? selected : 3,
-              onDestinationSelected: (value) {
-                if (value < 3) {
-                  setState(() => selected = value);
-                } else {
-                  _showMore();
-                }
-              },
-              destinations: const [
-                NavigationDestination(
-                  key: ValueKey('narrow_destination_0'),
-                  icon: Icon(Icons.chat_bubble_outline_rounded),
-                  label: 'Chat',
-                ),
-                NavigationDestination(
-                  key: ValueKey('narrow_destination_1'),
-                  icon: Icon(Icons.auto_stories_outlined),
-                  label: 'Memory',
-                ),
-                NavigationDestination(
-                  key: ValueKey('narrow_destination_2'),
-                  icon: Icon(Icons.waves_rounded),
-                  label: 'Currents',
-                ),
-                NavigationDestination(
-                  key: ValueKey('narrow_more'),
-                  icon: Icon(Icons.more_horiz_rounded),
-                  label: 'More',
-                ),
-              ],
-            ),
-    );
+    return Scaffold(backgroundColor: const Color(0xfff7f6f1), body: paddedBody);
   }
-
-  Future<void> _showMore() async {
-    final next = await showModalBottomSheet<int>(
-      context: context,
-      showDragHandle: true,
-      builder: (context) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            for (final index in const [3, 4, 5])
-              ListTile(
-                key: ValueKey('narrow_destination_$index'),
-                leading: Icon(destinations[index].$1),
-                title: Text(destinations[index].$2),
-                selected: selected == index,
-                onTap: () => Navigator.pop(context, index),
-              ),
-          ],
-        ),
-      ),
-    );
-    if (next != null && mounted) setState(() => selected = next);
-  }
-}
-
-class _WarmOmiMark extends StatelessWidget {
-  const _WarmOmiMark();
-
-  @override
-  Widget build(BuildContext context) => const Row(
-    mainAxisSize: MainAxisSize.min,
-    children: [
-      Icon(Icons.blur_on_rounded, color: Color(0xff171716), size: 28),
-      SizedBox(width: 10),
-      Text(
-        'omi',
-        style: TextStyle(
-          color: Color(0xff171716),
-          fontSize: 20,
-          fontWeight: FontWeight.w700,
-        ),
-      ),
-    ],
-  );
 }
 
 class _WarmPaperHub extends StatelessWidget {
@@ -445,50 +319,4 @@ class _PreviewNotice extends StatelessWidget {
       ),
     ),
   );
-}
-
-class _Screen extends StatelessWidget {
-  const _Screen({
-    required this.index,
-    required this.services,
-    required this.previewMode,
-    required this.chatKey,
-    required this.desktopKeyboard,
-    required this.onDesktopGestureReset,
-    required this.onOpenChat,
-  });
-
-  final int index;
-  final AppServices services;
-  final bool previewMode;
-  final GlobalKey<ChatScreenState> chatKey;
-  final DesktopKeyboard desktopKeyboard;
-  final VoidCallback? onDesktopGestureReset;
-  final VoidCallback onOpenChat;
-
-  @override
-  Widget build(BuildContext context) {
-    return switch (index) {
-      0 => ChatScreen(
-        key: chatKey,
-        services: services,
-        previewMode: previewMode,
-        desktopKeyboard: desktopKeyboard,
-        onDesktopGestureReset: onDesktopGestureReset,
-      ),
-      1 => MemoryScreen(services: services, previewMode: previewMode),
-      2 => CurrentsScreen(
-        controller: previewMode ? null : services.currents,
-        onActionHandoff: services.currents == null
-            ? null
-            : (handoff) async {
-                await services.handoffCurrentAction(handoff);
-                onOpenChat();
-              },
-      ),
-      3 => DevicesScreen(services: services, previewMode: previewMode),
-      4 => SetupScreen(services: services, previewMode: previewMode),
-      _ => AccountScreen(services: services, previewMode: previewMode),
-    };
-  }
 }

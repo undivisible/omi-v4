@@ -38,9 +38,17 @@ class ChatScreen extends StatefulWidget {
   State<ChatScreen> createState() => ChatScreenState();
 }
 
+const _kPlaceholderPrompts = [
+  'What deserves my attention?',
+  'What did I leave unfinished?',
+  'Help me plan today',
+];
+
 class ChatScreenState extends State<ChatScreen> {
   final _input = TextEditingController();
   final _inputFocus = FocusNode();
+  Timer? _placeholderTimer;
+  int _placeholderIndex = 0;
   late final _desktopKeyboard = widget.desktopKeyboard ?? DesktopKeyboard();
   final _messages = <_ChatMessage>[];
   final _proposals = <String, ActionProposal>{};
@@ -60,6 +68,13 @@ class ChatScreenState extends State<ChatScreen> {
   @override
   void initState() {
     super.initState();
+    _placeholderTimer = Timer.periodic(const Duration(milliseconds: 3200), (_) {
+      if (!mounted || MediaQuery.disableAnimationsOf(context)) return;
+      setState(
+        () => _placeholderIndex =
+            (_placeholderIndex + 1) % _kPlaceholderPrompts.length,
+      );
+    });
     if (!widget.previewMode) {
       widget.services.currents?.addListener(_currentsChanged);
       unawaited(_refreshCurrents());
@@ -226,6 +241,7 @@ class ChatScreenState extends State<ChatScreen> {
     for (final timer in _proposalExpiryTimers.values) {
       timer.cancel();
     }
+    _placeholderTimer?.cancel();
     _input.dispose();
     _inputFocus.dispose();
     super.dispose();
@@ -530,14 +546,12 @@ class ChatScreenState extends State<ChatScreen> {
         ? OmiOrbState.thinking
         : OmiOrbState.idle;
     final currents = widget.services.currents;
-    final current =
-        currents != null &&
-            !currents.loading &&
-            currents.error == null &&
-            currents.items.isNotEmpty
-        ? currents.items.first
-        : null;
+    final tasks =
+        currents != null && !currents.loading && currents.error == null
+        ? currents.items.take(4).toList()
+        : const <CurrentCard>[];
     final colors = Theme.of(context).colorScheme;
+    const backgroundColor = Color(0xfff7f6f1);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -589,101 +603,40 @@ class ChatScreenState extends State<ChatScreen> {
           ),
         const SizedBox(height: 20),
         Expanded(
-          child: ListView(
-            key: const Key('chat_messages'),
+          child: Stack(
             children: [
-              if (_messages.isEmpty && _proposals.isEmpty)
-                _ChatHome(ready: ready, current: current, onPrompt: _usePrompt),
-              for (final message in _messages)
-                Align(
-                  alignment: message.fromUser
-                      ? Alignment.centerRight
-                      : Alignment.centerLeft,
-                  child: Card(
-                    child: Padding(
-                      padding: const EdgeInsets.all(12),
-                      child: Text(message.text),
+              ListView(
+                key: const Key('chat_messages'),
+                reverse: true,
+                children: [
+                  _ChatHome(
+                    ready: ready,
+                    tasks: tasks,
+                    onComplete: currents == null
+                        ? null
+                        : (id) => unawaited(currents.dismiss(id)),
+                    onPrompt: _usePrompt,
+                  ),
+                  ..._historyNewestFirst(),
+                ],
+              ),
+              Positioned(
+                top: 0,
+                left: 0,
+                right: 0,
+                child: IgnorePointer(
+                  child: Container(
+                    height: 64,
+                    decoration: const BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                        colors: [backgroundColor, Color(0x00f7f6f1)],
+                      ),
                     ),
                   ),
                 ),
-              for (final proposal in _proposals.values)
-                Card(
-                  key: ValueKey('proposal_${proposal.proposalId}'),
-                  child: Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          proposal.title,
-                          style: const TextStyle(fontWeight: FontWeight.w600),
-                        ),
-                        const SizedBox(height: 6),
-                        Text(proposal.summary),
-                        const SizedBox(height: 8),
-                        Text(
-                          _riskDetail(proposal.risk),
-                          key: ValueKey('risk_${proposal.proposalId}'),
-                        ),
-                        if (proposal.targetProvenance
-                            case final provenance?) ...[
-                          const SizedBox(height: 6),
-                          Text(
-                            _targetDetail(provenance),
-                            key: ValueKey('target_${proposal.proposalId}'),
-                          ),
-                        ] else if (proposal.computerAction != null) ...[
-                          const SizedBox(height: 6),
-                          Text(
-                            'Fenced target provenance unavailable.',
-                            key: ValueKey('target_${proposal.proposalId}'),
-                          ),
-                        ],
-                        if (proposal.computerAction case final action?) ...[
-                          const SizedBox(height: 10),
-                          _computerActionDetails(action),
-                          const SizedBox(height: 6),
-                          Text(
-                            _capabilityDetail(action),
-                            key: ValueKey(
-                              'capabilities_${proposal.proposalId}',
-                            ),
-                          ),
-                        ],
-                        const SizedBox(height: 12),
-                        Row(
-                          children: [
-                            FilledButton(
-                              key: ValueKey('approve_${proposal.proposalId}'),
-                              onPressed: _canApprove(proposal)
-                                  ? () => _decide(
-                                      proposal,
-                                      ApprovalDecision.approveOnce,
-                                    )
-                                  : null,
-                              child: const Text('Approve once'),
-                            ),
-                            const SizedBox(width: 8),
-                            TextButton(
-                              key: ValueKey('reject_${proposal.proposalId}'),
-                              onPressed: () =>
-                                  _decide(proposal, ApprovalDecision.reject),
-                              child: const Text('Reject'),
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              if (_progress != null)
-                Text(_progress!, key: const Key('chat_progress')),
-              if (_error != null)
-                Text(
-                  _error!,
-                  key: const Key('chat_error'),
-                  style: const TextStyle(color: Colors.redAccent),
-                ),
+              ),
             ],
           ),
         ),
@@ -697,7 +650,7 @@ class ChatScreenState extends State<ChatScreen> {
           onSubmitted: (_) => _send(),
           decoration: InputDecoration(
             hintText: ready
-                ? 'Message Omi'
+                ? _kPlaceholderPrompts[_placeholderIndex]
                 : 'Connect an account and model to start chatting',
             prefixIcon: const Icon(Icons.add_circle_outline_rounded),
             suffixIcon: _activeRequestId == null
@@ -717,6 +670,96 @@ class ChatScreenState extends State<ChatScreen> {
     );
   }
 
+  List<Widget> _historyNewestFirst() {
+    final history = <Widget>[
+      for (final message in _messages)
+        Align(
+          alignment: message.fromUser
+              ? Alignment.centerRight
+              : Alignment.centerLeft,
+          child: Card(
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Text(message.text),
+            ),
+          ),
+        ),
+      for (final proposal in _proposals.values)
+        Card(
+          key: ValueKey('proposal_${proposal.proposalId}'),
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  proposal.title,
+                  style: const TextStyle(fontWeight: FontWeight.w600),
+                ),
+                const SizedBox(height: 6),
+                Text(proposal.summary),
+                const SizedBox(height: 8),
+                Text(
+                  _riskDetail(proposal.risk),
+                  key: ValueKey('risk_${proposal.proposalId}'),
+                ),
+                if (proposal.targetProvenance case final provenance?) ...[
+                  const SizedBox(height: 6),
+                  Text(
+                    _targetDetail(provenance),
+                    key: ValueKey('target_${proposal.proposalId}'),
+                  ),
+                ] else if (proposal.computerAction != null) ...[
+                  const SizedBox(height: 6),
+                  Text(
+                    'Fenced target provenance unavailable.',
+                    key: ValueKey('target_${proposal.proposalId}'),
+                  ),
+                ],
+                if (proposal.computerAction case final action?) ...[
+                  const SizedBox(height: 10),
+                  _computerActionDetails(action),
+                  const SizedBox(height: 6),
+                  Text(
+                    _capabilityDetail(action),
+                    key: ValueKey('capabilities_${proposal.proposalId}'),
+                  ),
+                ],
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    FilledButton(
+                      key: ValueKey('approve_${proposal.proposalId}'),
+                      onPressed: _canApprove(proposal)
+                          ? () =>
+                                _decide(proposal, ApprovalDecision.approveOnce)
+                          : null,
+                      child: const Text('Approve once'),
+                    ),
+                    const SizedBox(width: 8),
+                    TextButton(
+                      key: ValueKey('reject_${proposal.proposalId}'),
+                      onPressed: () =>
+                          _decide(proposal, ApprovalDecision.reject),
+                      child: const Text('Reject'),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      if (_progress != null) Text(_progress!, key: const Key('chat_progress')),
+      if (_error != null)
+        Text(
+          _error!,
+          key: const Key('chat_error'),
+          style: const TextStyle(color: Colors.redAccent),
+        ),
+    ];
+    return history.reversed.toList(growable: false);
+  }
+
   String _greeting() {
     final hour = DateTime.now().hour;
     if (hour < 5 || hour >= 22) return 'Late night';
@@ -729,12 +772,14 @@ class ChatScreenState extends State<ChatScreen> {
 class _ChatHome extends StatelessWidget {
   const _ChatHome({
     required this.ready,
-    required this.current,
+    required this.tasks,
+    required this.onComplete,
     required this.onPrompt,
   });
 
   final bool ready;
-  final CurrentCard? current;
+  final List<CurrentCard> tasks;
+  final ValueChanged<String>? onComplete;
   final ValueChanged<String> onPrompt;
 
   @override
@@ -761,80 +806,78 @@ class _ChatHome extends StatelessWidget {
                 textAlign: TextAlign.center,
                 style: TextStyle(color: colors.onSurfaceVariant, height: 1.45),
               ),
-              if (current case final value?) ...[
+              if (tasks.isNotEmpty) ...[
                 const SizedBox(height: 24),
-                Container(
-                  decoration: BoxDecoration(
-                    color: colors.surface.withValues(alpha: .82),
-                    border: Border.all(color: const Color(0x1a000000)),
-                    borderRadius: BorderRadius.circular(18),
-                  ),
-                  child: Padding(
-                    padding: const EdgeInsets.fromLTRB(20, 18, 12, 14),
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Padding(
-                          padding: EdgeInsets.only(top: 2),
-                          child: Icon(
-                            Icons.waves_rounded,
-                            color: Color(0xff3139fb),
-                          ),
-                        ),
-                        const SizedBox(width: 14),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              const OmiLabel('WORTH YOUR ATTENTION'),
-                              const SizedBox(height: 7),
-                              Text(
-                                value.title,
-                                style: Theme.of(context).textTheme.titleMedium,
-                              ),
-                              const SizedBox(height: 4),
-                              Text(
-                                value.summary,
-                                style: TextStyle(
-                                  color: colors.onSurfaceVariant,
-                                  height: 1.4,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        IconButton(
-                          key: const Key('discuss_current'),
-                          tooltip: 'Talk this through with Omi',
-                          onPressed: () =>
-                              onPrompt(value.item.proposedNextStep),
-                          icon: const Icon(Icons.arrow_forward_rounded),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ],
-              if (ready) ...[
-                const SizedBox(height: 20),
-                Wrap(
-                  alignment: WrapAlignment.center,
-                  spacing: 8,
-                  runSpacing: 8,
+                Column(
                   children: [
-                    for (final prompt in const [
-                      'What deserves my attention?',
-                      'What did I leave unfinished?',
-                      'Help me plan today',
-                    ])
-                      ActionChip(
-                        key: ValueKey('chat_prompt_$prompt'),
-                        label: Text(prompt),
-                        onPressed: () => onPrompt(prompt),
+                    for (final task in tasks)
+                      _TaskRow(
+                        key: ValueKey('task_${task.item.id}'),
+                        task: task,
+                        onComplete: onComplete == null
+                            ? null
+                            : () => onComplete!(task.item.id),
+                        onDiscuss: () => onPrompt(task.item.proposedNextStep),
                       ),
                   ],
                 ),
               ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _TaskRow extends StatelessWidget {
+  const _TaskRow({
+    required this.task,
+    required this.onComplete,
+    required this.onDiscuss,
+    super.key,
+  });
+
+  final CurrentCard task;
+  final VoidCallback? onComplete;
+  final VoidCallback onDiscuss;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    return DecoratedBox(
+      decoration: const BoxDecoration(
+        border: Border(top: BorderSide(color: Color(0x1a000000))),
+      ),
+      child: InkWell(
+        onTap: onDiscuss,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 14),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              IconButton(
+                key: ValueKey('complete_${task.item.id}'),
+                tooltip: 'Mark done',
+                onPressed: onComplete,
+                icon: Container(
+                  width: 16,
+                  height: 16,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    border: Border.all(color: colors.onSurfaceVariant),
+                  ),
+                ),
+              ),
+              Expanded(
+                child: Padding(
+                  padding: const EdgeInsets.only(top: 12),
+                  child: Text(
+                    task.title,
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                ),
+              ),
             ],
           ),
         ),
