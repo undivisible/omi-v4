@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -7,7 +8,15 @@ import '../app_services.dart';
 import '../device/device.dart';
 import '../native/native_hub.dart';
 import '../providers/providers.dart';
-import '../ui/omi_ui.dart';
+
+const _paper = Color(0xfff7f6f1);
+const _surface = Color(0xfffffefa);
+const _cream = Color(0xfffffcec);
+const _ink = Color(0xff171716);
+const _inkSoft = Color(0xff706e68);
+const _hairline = Color(0x14171716);
+const _teal = Color(0xff2f9d8a);
+const _coral = Color(0xffd97757);
 
 class MobileCompanionShell extends StatefulWidget {
   const MobileCompanionShell({
@@ -32,7 +41,6 @@ class _MobileCompanionShellState extends State<MobileCompanionShell> {
       widget.pairedDevices ?? PreferencesPairedDeviceStore();
   final List<TranscriptDelta> _transcripts = [];
   StreamSubscription<NativeEvent>? _nativeEventSubscription;
-  int _tab = 0;
 
   @override
   void initState() {
@@ -59,73 +67,113 @@ class _MobileCompanionShellState extends State<MobileCompanionShell> {
   }
 
   @override
-  Widget build(BuildContext context) {
-    final body = switch (_tab) {
-      0 => MobileDeviceHome(
-        services: widget.services,
-        pairedDevices: _pairedDevices,
-        previewMode: widget.previewMode,
+  Widget build(BuildContext context) => Theme(
+    data: Theme.of(context).copyWith(
+      brightness: Brightness.light,
+      colorScheme: const ColorScheme.light(
+        primary: _ink,
+        surface: _surface,
+        onSurface: _ink,
+        onSurfaceVariant: _inkSoft,
+        secondary: _teal,
       ),
-      1 => MobileCaptureScreen(
-        services: widget.services,
-        transcripts: _transcripts,
-      ),
-      _ => MobileSettingsScreen(
-        services: widget.services,
-        previewMode: widget.previewMode,
-      ),
-    };
-    return Scaffold(
-      body: GradientBackground(
-        child: SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(18, 24, 18, 8),
-            child: body,
-          ),
+      textTheme: Theme.of(
+        context,
+      ).textTheme.apply(bodyColor: _ink, displayColor: _ink),
+      iconTheme: const IconThemeData(color: _inkSoft),
+      switchTheme: SwitchThemeData(
+        thumbColor: WidgetStateProperty.resolveWith(
+          (states) => states.contains(WidgetState.selected) ? _cream : _surface,
+        ),
+        trackColor: WidgetStateProperty.resolveWith(
+          (states) => states.contains(WidgetState.selected)
+              ? _teal
+              : const Color(0x22171716),
         ),
       ),
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: _tab,
-        onDestinationSelected: (index) => setState(() => _tab = index),
-        destinations: const [
-          NavigationDestination(
-            key: Key('companion_tab_device'),
-            icon: Icon(Icons.watch_outlined),
-            label: 'Device',
-          ),
-          NavigationDestination(
-            key: Key('companion_tab_capture'),
-            icon: Icon(Icons.graphic_eq_rounded),
-            label: 'Capture',
-          ),
-          NavigationDestination(
-            key: Key('companion_tab_settings'),
-            icon: Icon(Icons.settings_outlined),
-            label: 'Settings',
+      dividerColor: _hairline,
+    ),
+    child: Scaffold(
+      key: const Key('companion_home'),
+      backgroundColor: _paper,
+      body: Stack(
+        fit: StackFit.expand,
+        children: [
+          const _WarmGlows(),
+          MobilePendantPage(
+            services: widget.services,
+            pairedDevices: _pairedDevices,
+            transcripts: _transcripts,
+            previewMode: widget.previewMode,
           ),
         ],
       ),
-    );
-  }
+    ),
+  );
 }
 
-class MobileDeviceHome extends StatefulWidget {
-  const MobileDeviceHome({
+class _WarmGlows extends StatelessWidget {
+  const _WarmGlows();
+
+  @override
+  Widget build(BuildContext context) => const IgnorePointer(
+    child: Stack(
+      fit: StackFit.expand,
+      children: [
+        DecoratedBox(
+          decoration: BoxDecoration(
+            gradient: RadialGradient(
+              center: Alignment(-1.1, -.9),
+              radius: 1.1,
+              colors: [Color(0x2e73d5c4), Color(0x00f7f6f1)],
+              stops: [0, .72],
+            ),
+          ),
+        ),
+        DecoratedBox(
+          decoration: BoxDecoration(
+            gradient: RadialGradient(
+              center: Alignment(1.2, -.6),
+              radius: 1.05,
+              colors: [Color(0x2496c4ff), Color(0x00f7f6f1)],
+              stops: [0, .7],
+            ),
+          ),
+        ),
+        DecoratedBox(
+          decoration: BoxDecoration(
+            gradient: RadialGradient(
+              center: Alignment(.7, 1.25),
+              radius: 1.15,
+              colors: [Color(0x26f2a78f), Color(0x00f7f6f1)],
+              stops: [0, .74],
+            ),
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
+class MobilePendantPage extends StatefulWidget {
+  const MobilePendantPage({
     required this.services,
     required this.pairedDevices,
+    required this.transcripts,
     this.previewMode = false,
     super.key,
   });
 
   final AppServices services;
   final PairedDeviceStore pairedDevices;
+  final List<TranscriptDelta> transcripts;
   final bool previewMode;
 
   @override
-  State<MobileDeviceHome> createState() => MobileDeviceHomeState();
+  State<MobilePendantPage> createState() => MobilePendantPageState();
 }
 
-class MobileDeviceHomeState extends State<MobileDeviceHome> {
+class MobilePendantPageState extends State<MobilePendantPage> {
   static const desktopNoticeKey = 'desktop_install_notice_dismissed_v1';
 
   late final DeviceRelayService relay = widget.services.deviceRelay;
@@ -281,223 +329,151 @@ class MobileDeviceHomeState extends State<MobileDeviceHome> {
     DeviceAudioCodec.unknown => 'Unknown',
   };
 
-  @override
-  Widget build(BuildContext context) {
-    final phase = _phase;
-    final device = snapshot?.device;
-    final connected = _connectedDevice != null;
-    final capturing = widget.services.deviceAudio.active;
-    final lastError = error ?? widget.services.deviceAudio.lastError;
-    return PageList(
-      title: 'Omi',
-      subtitle: 'Your pendant, paired to this phone.',
-      children: [
-        if (widget.previewMode)
-          const BaseTile(
-            icon: Icons.visibility_outlined,
-            title: 'Device controls unavailable in preview',
-            detail: 'Bluetooth scanning and connection are disabled.',
-            trailing: Icon(Icons.block_rounded),
-          )
-        else if (!_mobile)
-          const BaseTile(
-            icon: Icons.phone_iphone_rounded,
-            title: 'Mobile relay required',
-            detail:
-                'Device pairing is intentionally unavailable on this client.',
-            trailing: Icon(Icons.info_outline_rounded),
-          )
-        else ...[
-          BaseTile(
-            key: const Key('companion_connection_tile'),
-            icon: connected
-                ? Icons.bluetooth_connected_rounded
-                : Icons.bluetooth_rounded,
-            title: device?.name ?? 'No device connected',
-            detail: [_phaseLabel(phase), ?snapshot?.message].join(' · '),
-            trailing: connected
-                ? IconButton(
-                    key: const Key('companion_disconnect'),
-                    tooltip: 'Disconnect',
-                    onPressed: disconnect,
-                    icon: const Icon(Icons.link_off_rounded),
-                  )
-                : const SizedBox.shrink(),
+  List<Widget> _deviceTiles(
+    DeviceConnectionPhase phase,
+    RelayDevice? device,
+    bool connected,
+    bool capturing,
+    Object? lastError,
+  ) => [
+    if (widget.previewMode)
+      const _PaperTile(
+        icon: Icons.visibility_outlined,
+        title: 'Device controls unavailable in preview',
+        detail: 'Bluetooth scanning and connection are disabled.',
+      )
+    else if (!_mobile)
+      const _PaperTile(
+        icon: Icons.phone_iphone_rounded,
+        title: 'Mobile relay required',
+        detail: 'Device pairing is intentionally unavailable on this client.',
+      )
+    else ...[
+      _PaperTile(
+        key: const Key('companion_connection_tile'),
+        icon: connected
+            ? Icons.bluetooth_connected_rounded
+            : Icons.bluetooth_rounded,
+        iconColor: connected ? _teal : null,
+        title: device?.name ?? 'No device connected',
+        detail: [_phaseLabel(phase), ?snapshot?.message].join(' · '),
+        trailing: connected
+            ? IconButton(
+                key: const Key('companion_disconnect'),
+                tooltip: 'Disconnect',
+                onPressed: disconnect,
+                icon: const Icon(Icons.link_off_rounded),
+              )
+            : null,
+      ),
+      if (connected && device != null) ...[
+        _PaperTile(
+          key: const Key('companion_codec_tile'),
+          icon: Icons.graphic_eq_rounded,
+          title: 'Audio codec',
+          detail: _codecLabel(device.audioCodec),
+        ),
+        _PaperTile(
+          key: const Key('companion_firmware_tile'),
+          icon: Icons.memory_rounded,
+          title: 'Firmware',
+          detail: device.firmwareRevision ?? 'Not reported',
+        ),
+        if (device.signalStrength case final signal?)
+          _PaperTile(
+            icon: Icons.network_check_rounded,
+            title: 'Signal',
+            detail: '$signal dBm',
           ),
-          if (_desktopNoticeDismissed == false)
-            BaseTile(
-              key: const Key('companion_desktop_notice_tile'),
-              icon: Icons.desktop_mac_outlined,
-              title: 'Install the Omi desktop app',
-              detail: 'Omi learns more about you from your Mac or Windows PC.',
-              trailing: IconButton(
-                key: const Key('companion_desktop_notice_dismiss'),
-                tooltip: 'Dismiss',
-                onPressed: () => unawaited(_dismissDesktopNotice()),
-                icon: const Icon(Icons.close_rounded),
-              ),
-            ),
-          if (connected && device != null) ...[
-            BaseTile(
-              key: const Key('companion_battery_tile'),
-              icon: Icons.battery_std_rounded,
-              title: 'Battery',
-              detail: device.batteryLevel == null
-                  ? 'Unknown'
-                  : '${device.batteryLevel}%',
-              trailing: const SizedBox.shrink(),
-            ),
-            BaseTile(
-              key: const Key('companion_codec_tile'),
-              icon: Icons.graphic_eq_rounded,
-              title: 'Audio codec',
-              detail: _codecLabel(device.audioCodec),
-              trailing: const SizedBox.shrink(),
-            ),
-            BaseTile(
-              key: const Key('companion_firmware_tile'),
-              icon: Icons.memory_rounded,
-              title: 'Firmware',
-              detail: device.firmwareRevision ?? 'Not reported',
-              trailing: const SizedBox.shrink(),
-            ),
-            if (device.signalStrength case final signal?)
-              BaseTile(
-                icon: Icons.network_check_rounded,
-                title: 'Signal',
-                detail: '$signal dBm',
-                trailing: const SizedBox.shrink(),
-              ),
-            BaseTile(
-              key: const Key('companion_capture_tile'),
-              icon: capturing
-                  ? Icons.fiber_manual_record_rounded
-                  : Icons.pause_circle_outline_rounded,
-              iconColor: capturing ? const Color(0xfff2a78f) : null,
-              title: 'Capture',
-              detail: capturing
-                  ? 'Streaming audio to transcription.'
-                  : 'Capture is off.',
-              trailing: Switch(
-                key: const Key('companion_capture_switch'),
-                value: capturing,
-                onChanged: (value) => unawaited(_setCapture(value)),
-              ),
-            ),
-          ] else ...[
-            BaseTile(
-              key: const Key('companion_scan_tile'),
-              icon: Icons.bluetooth_searching_rounded,
-              title: phase == DeviceConnectionPhase.scanning
-                  ? 'Scanning nearby…'
-                  : 'Find an Omi device',
-              detail: 'Bluetooth permission is requested when you scan.',
-              trailing: IconButton(
-                key: const Key('companion_scan'),
-                tooltip: 'Scan',
-                onPressed: phase == DeviceConnectionPhase.scanning
-                    ? null
-                    : scan,
-                icon: const Icon(Icons.refresh_rounded),
-              ),
-            ),
-            if (rememberedDeviceId case final remembered?)
-              BaseTile(
-                key: const Key('companion_remembered_tile'),
-                icon: Icons.history_rounded,
-                title: 'Remembered device',
-                detail: remembered,
-                trailing: IconButton(
-                  key: const Key('companion_forget'),
-                  tooltip: 'Forget',
-                  onPressed: forget,
-                  icon: const Icon(Icons.delete_outline_rounded),
-                ),
-              ),
-            for (final found in devices)
-              BaseTile(
-                icon: Icons.watch_outlined,
-                title: found.name,
-                detail: [
-                  if (found.signalStrength case final signal?) '$signal dBm',
-                  if (found.batteryLevel case final battery?)
-                    '$battery% battery',
-                ].join(' · '),
-                trailing: IconButton(
-                  key: Key('companion_connect_${found.id}'),
-                  tooltip: 'Connect',
-                  onPressed: phase == DeviceConnectionPhase.connecting
-                      ? null
-                      : () => connect(found),
-                  icon: const Icon(Icons.add_circle_outline_rounded),
-                ),
-              ),
-          ],
-          if (lastError != null)
-            BaseTile(
-              key: const Key('companion_error_tile'),
-              icon: Icons.error_outline_rounded,
-              iconColor: const Color(0xfff2a78f),
-              title: 'Last error',
-              detail: '$lastError',
-              trailing: const SizedBox.shrink(),
-            ),
-        ],
-      ],
-    );
-  }
-}
-
-class MobileCaptureScreen extends StatelessWidget {
-  const MobileCaptureScreen({
-    required this.services,
-    required this.transcripts,
-    super.key,
-  });
-
-  final AppServices services;
-  final List<TranscriptDelta> transcripts;
-
-  @override
-  Widget build(BuildContext context) {
-    final capturing = services.deviceAudio.active;
-    return PageList(
-      title: 'Capture',
-      subtitle: capturing
-          ? 'Live transcription is running.'
-          : 'Connect your Omi to start capturing.',
-      children: [
-        BaseTile(
-          key: const Key('companion_capture_state_tile'),
+        _PaperTile(
+          key: const Key('companion_capture_tile'),
           icon: capturing
               ? Icons.fiber_manual_record_rounded
               : Icons.pause_circle_outline_rounded,
-          iconColor: capturing ? const Color(0xfff2a78f) : null,
-          title: capturing ? 'Capturing' : 'Idle',
+          iconColor: capturing ? _coral : null,
+          title: 'Capture',
           detail: capturing
-              ? 'Final segments appear below as they arrive.'
-              : 'Recent segments from this session stay listed here.',
-          trailing: const SizedBox.shrink(),
+              ? 'Streaming audio to transcription.'
+              : 'Capture is off.',
+          trailing: Switch(
+            key: const Key('companion_capture_switch'),
+            value: capturing,
+            onChanged: (value) => unawaited(_setCapture(value)),
+          ),
         ),
-        if (transcripts.isEmpty)
-          const BaseTile(
-            key: Key('companion_transcripts_empty'),
-            icon: Icons.notes_rounded,
-            title: 'No transcripts yet',
-            detail: 'Captured speech from this session will appear here.',
-            trailing: SizedBox.shrink(),
-          )
-        else
-          for (final delta in transcripts)
-            BaseTile(
-              icon: Icons.notes_rounded,
-              title: delta.text,
-              detail: _timestamp(delta.occurredAtMs),
-              trailing: const SizedBox.shrink(),
+      ] else ...[
+        _PaperTile(
+          key: const Key('companion_scan_tile'),
+          icon: Icons.bluetooth_searching_rounded,
+          title: phase == DeviceConnectionPhase.scanning
+              ? 'Scanning nearby…'
+              : 'Find an Omi device',
+          detail: 'Bluetooth permission is requested when you scan.',
+          trailing: IconButton(
+            key: const Key('companion_scan'),
+            tooltip: 'Scan',
+            onPressed: phase == DeviceConnectionPhase.scanning ? null : scan,
+            icon: const Icon(Icons.refresh_rounded),
+          ),
+        ),
+        if (rememberedDeviceId case final remembered?)
+          _PaperTile(
+            key: const Key('companion_remembered_tile'),
+            icon: Icons.history_rounded,
+            title: 'Remembered device',
+            detail: remembered,
+            trailing: IconButton(
+              key: const Key('companion_forget'),
+              tooltip: 'Forget',
+              onPressed: forget,
+              icon: const Icon(Icons.delete_outline_rounded),
             ),
+          ),
+        for (final found in devices)
+          _PaperTile(
+            icon: Icons.watch_outlined,
+            title: found.name,
+            detail: [
+              if (found.signalStrength case final signal?) '$signal dBm',
+              if (found.batteryLevel case final battery?) '$battery% battery',
+            ].join(' · '),
+            trailing: IconButton(
+              key: Key('companion_connect_${found.id}'),
+              tooltip: 'Connect',
+              onPressed: phase == DeviceConnectionPhase.connecting
+                  ? null
+                  : () => connect(found),
+              icon: const Icon(Icons.add_circle_outline_rounded),
+            ),
+          ),
       ],
-    );
-  }
+      if (lastError != null)
+        _PaperTile(
+          key: const Key('companion_error_tile'),
+          icon: Icons.error_outline_rounded,
+          iconColor: _coral,
+          title: 'Last error',
+          detail: '$lastError',
+        ),
+    ],
+  ];
+
+  List<Widget> _transcriptTiles() => [
+    if (widget.transcripts.isEmpty)
+      const _PaperTile(
+        key: Key('companion_transcripts_empty'),
+        icon: Icons.notes_rounded,
+        title: 'No transcripts yet',
+        detail: 'Captured speech from this session will appear here.',
+      )
+    else
+      for (final delta in widget.transcripts)
+        _PaperTile(
+          icon: Icons.notes_rounded,
+          title: delta.text,
+          detail: _timestamp(delta.occurredAtMs),
+        ),
+  ];
 
   String _timestamp(int occurredAtMs) {
     final time = DateTime.fromMillisecondsSinceEpoch(occurredAtMs).toLocal();
@@ -505,22 +481,469 @@ class MobileCaptureScreen extends StatelessWidget {
     final minutes = time.minute.toString().padLeft(2, '0');
     return '$hours:$minutes';
   }
+
+  @override
+  Widget build(BuildContext context) {
+    final phase = _phase;
+    final device = snapshot?.device;
+    final connected = _connectedDevice != null;
+    final capturing = widget.services.deviceAudio.active;
+    final lastError = error ?? widget.services.deviceAudio.lastError;
+    final capturedSegments = widget.transcripts.length;
+    final capturedMs = widget.transcripts.fold<int>(
+      0,
+      (sum, delta) => sum + math.max(0, delta.endMs - delta.startMs),
+    );
+    return ListView(
+      padding: EdgeInsets.zero,
+      children: [
+        _PendantHero(
+          deviceName: device?.name,
+          phaseLabel: _phaseLabel(phase),
+          connected: connected,
+          batteryLevel: connected ? device?.batteryLevel : null,
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(18, 8, 18, 24),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              _StatsRow(
+                capturedSegments: capturedSegments,
+                capturedMinutes: (capturedMs / 60000).ceil(),
+                capturing: capturing,
+              ),
+              const SizedBox(height: 22),
+              const _SectionLabel('DEVICE'),
+              ..._withGaps(
+                _deviceTiles(phase, device, connected, capturing, lastError),
+              ),
+              if (_desktopNoticeDismissed == false) ...[
+                const SizedBox(height: 22),
+                _DesktopCta(
+                  onDismiss: () => unawaited(_dismissDesktopNotice()),
+                ),
+              ],
+              const SizedBox(height: 22),
+              const _SectionLabel('SETTINGS'),
+              ..._withGaps(
+                _MobileSettingsSection.tiles(
+                  context,
+                  services: widget.services,
+                  previewMode: widget.previewMode,
+                ),
+              ),
+              const SizedBox(height: 22),
+              const _SectionLabel('THIS SESSION'),
+              ..._withGaps(_transcriptTiles()),
+              const SizedBox(height: 8),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
 }
 
-class MobileSettingsScreen extends StatelessWidget {
-  const MobileSettingsScreen({
-    required this.services,
-    this.previewMode = false,
+List<Widget> _withGaps(List<Widget> tiles) => [
+  for (final tile in tiles) ...[const SizedBox(height: 10), tile],
+];
+
+class _PendantHero extends StatefulWidget {
+  const _PendantHero({
+    required this.deviceName,
+    required this.phaseLabel,
+    required this.connected,
+    required this.batteryLevel,
+  });
+
+  final String? deviceName;
+  final String phaseLabel;
+  final bool connected;
+  final int? batteryLevel;
+
+  @override
+  State<_PendantHero> createState() => _PendantHeroState();
+}
+
+class _PendantHeroState extends State<_PendantHero>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _sway = AnimationController(
+    vsync: this,
+    duration: const Duration(seconds: 6),
+  );
+  bool _animationsDisabled = false;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _animationsDisabled = MediaQuery.disableAnimationsOf(context);
+    if (_animationsDisabled) {
+      _sway.stop();
+    } else if (!_sway.isAnimating) {
+      _sway.repeat();
+    }
+  }
+
+  @override
+  void dispose() {
+    _sway.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final animationsDisabled = _animationsDisabled;
+    final width = MediaQuery.sizeOf(context).width;
+    final pendantWidth = math.min(width * .82, 420.0);
+    final pendant = Image.asset(
+      'assets/images/omi_pendant.png',
+      key: const Key('companion_pendant_image'),
+      width: pendantWidth,
+      fit: BoxFit.fitWidth,
+      excludeFromSemantics: true,
+    );
+    return Column(
+      children: [
+        Align(
+          child: AnimatedBuilder(
+            animation: _sway,
+            child: pendant,
+            builder: (context, child) {
+              final t = _sway.value * 2 * math.pi;
+              final angle = animationsDisabled ? 0.0 : math.sin(t) * .012;
+              return Transform.rotate(
+                angle: angle,
+                alignment: Alignment.topCenter,
+                child: child,
+              );
+            },
+          ),
+        ),
+        Transform.translate(
+          offset: Offset(0, -pendantWidth * .22),
+          child: Column(
+            children: [
+              Semantics(
+                header: true,
+                child: const Text(
+                  'Omi',
+                  style: TextStyle(
+                    fontSize: 46,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: -1,
+                    color: _ink,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 6),
+              Semantics(
+                label: widget.deviceName == null
+                    ? 'Device status: ${widget.phaseLabel}'
+                    : '${widget.deviceName}: ${widget.phaseLabel}',
+                excludeSemantics: true,
+                child: Text(
+                  widget.deviceName == null
+                      ? widget.phaseLabel
+                      : '${widget.deviceName} · ${widget.phaseLabel}',
+                  style: const TextStyle(fontSize: 15, color: _inkSoft),
+                ),
+              ),
+              if (widget.batteryLevel case final battery?) ...[
+                const SizedBox(height: 10),
+                Semantics(
+                  label: 'Battery $battery percent',
+                  excludeSemantics: true,
+                  child: DecoratedBox(
+                    key: const Key('companion_battery_tile'),
+                    decoration: BoxDecoration(
+                      color: _surface,
+                      border: Border.all(color: _hairline),
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 6,
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            battery > 20
+                                ? Icons.battery_std_rounded
+                                : Icons.battery_alert_rounded,
+                            size: 18,
+                            color: battery > 20 ? _teal : _coral,
+                          ),
+                          const SizedBox(width: 6),
+                          Text(
+                            '$battery%',
+                            style: const TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w600,
+                              color: _ink,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _StatsRow extends StatelessWidget {
+  const _StatsRow({
+    required this.capturedSegments,
+    required this.capturedMinutes,
+    required this.capturing,
+  });
+
+  final int capturedSegments;
+  final int capturedMinutes;
+  final bool capturing;
+
+  @override
+  Widget build(BuildContext context) => Row(
+    children: [
+      Expanded(
+        child: _StatCard(
+          key: const Key('companion_stat_segments'),
+          value: '$capturedSegments',
+          label: 'segments captured',
+        ),
+      ),
+      const SizedBox(width: 10),
+      Expanded(
+        child: _StatCard(
+          key: const Key('companion_stat_minutes'),
+          value: '$capturedMinutes',
+          label: 'minutes transcribed',
+        ),
+      ),
+      const SizedBox(width: 10),
+      Expanded(
+        child: _StatCard(
+          key: const Key('companion_stat_capture'),
+          value: capturing ? 'Live' : 'Idle',
+          label: 'capture state',
+          accent: capturing ? _coral : null,
+        ),
+      ),
+    ],
+  );
+}
+
+class _StatCard extends StatelessWidget {
+  const _StatCard({
+    required this.value,
+    required this.label,
+    this.accent,
     super.key,
   });
 
-  final AppServices services;
-  final bool previewMode;
+  final String value;
+  final String label;
+  final Color? accent;
 
+  @override
+  Widget build(BuildContext context) => Semantics(
+    label: '$value $label',
+    excludeSemantics: true,
+    child: DecoratedBox(
+      decoration: BoxDecoration(
+        color: _surface,
+        border: Border.all(color: _hairline),
+        borderRadius: BorderRadius.circular(18),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x0d171716),
+            blurRadius: 14,
+            offset: Offset(0, 6),
+          ),
+        ],
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+        child: Column(
+          children: [
+            Text(
+              value,
+              style: TextStyle(
+                fontSize: 22,
+                fontWeight: FontWeight.w700,
+                color: accent ?? _ink,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              label,
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 11, color: _inkSoft),
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
+}
+
+class _SectionLabel extends StatelessWidget {
+  const _SectionLabel(this.text);
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.only(left: 4),
+    child: Text(
+      text,
+      style: const TextStyle(
+        fontSize: 11,
+        fontWeight: FontWeight.w700,
+        letterSpacing: 1.4,
+        color: _inkSoft,
+      ),
+    ),
+  );
+}
+
+class _PaperTile extends StatelessWidget {
+  const _PaperTile({
+    required this.icon,
+    required this.title,
+    required this.detail,
+    this.trailing,
+    this.iconColor,
+    super.key,
+  });
+
+  final IconData icon;
+  final Color? iconColor;
+  final String title;
+  final String detail;
+  final Widget? trailing;
+
+  @override
+  Widget build(BuildContext context) => DecoratedBox(
+    decoration: BoxDecoration(
+      color: _surface,
+      border: Border.all(color: _hairline),
+      borderRadius: BorderRadius.circular(18),
+    ),
+    child: ListTile(
+      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+      leading: Icon(icon, color: iconColor ?? _inkSoft),
+      title: Text(
+        title,
+        style: const TextStyle(
+          color: _ink,
+          fontSize: 15,
+          fontWeight: FontWeight.w600,
+        ),
+      ),
+      subtitle: Padding(
+        padding: const EdgeInsets.only(top: 3),
+        child: Text(
+          detail,
+          style: const TextStyle(color: _inkSoft, fontSize: 13, height: 1.4),
+        ),
+      ),
+      trailing: trailing,
+    ),
+  );
+}
+
+class _DesktopCta extends StatelessWidget {
+  const _DesktopCta({required this.onDismiss});
+
+  final VoidCallback onDismiss;
+
+  @override
+  Widget build(BuildContext context) => DecoratedBox(
+    key: const Key('companion_desktop_notice_tile'),
+    decoration: BoxDecoration(
+      gradient: const LinearGradient(
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+        colors: [Color(0xffeef7f0), Color(0xfffdf3ea)],
+      ),
+      border: Border.all(color: _hairline),
+      borderRadius: BorderRadius.circular(18),
+    ),
+    child: Padding(
+      padding: const EdgeInsets.fromLTRB(16, 14, 8, 14),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(Icons.desktop_mac_outlined, color: _teal),
+          const SizedBox(width: 12),
+          const Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Install the Omi desktop app',
+                  style: TextStyle(
+                    color: _ink,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                SizedBox(height: 3),
+                Text(
+                  'Omi learns more about you from your Mac or Windows PC.',
+                  style: TextStyle(color: _inkSoft, fontSize: 13, height: 1.4),
+                ),
+              ],
+            ),
+          ),
+          IconButton(
+            key: const Key('companion_desktop_notice_dismiss'),
+            tooltip: 'Dismiss',
+            onPressed: onDismiss,
+            icon: const Icon(Icons.close_rounded, size: 20),
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
+class _MobileSettingsSection {
   static const _appVersion = String.fromEnvironment(
     'OMI_APP_VERSION',
     defaultValue: 'dev',
   );
+
+  static List<Widget> tiles(
+    BuildContext context, {
+    required AppServices services,
+    required bool previewMode,
+  }) => [
+    _AccountTiles(services: services, previewMode: previewMode),
+    _RouteTile(services: services),
+    const _PaperTile(
+      key: Key('companion_version_tile'),
+      icon: Icons.info_outline_rounded,
+      title: 'App version',
+      detail: _appVersion,
+    ),
+  ];
+}
+
+class _AccountTiles extends StatelessWidget {
+  const _AccountTiles({required this.services, required this.previewMode});
+
+  final AppServices services;
+  final bool previewMode;
 
   @override
   Widget build(BuildContext context) {
@@ -531,11 +954,10 @@ class MobileSettingsScreen extends StatelessWidget {
         final snapshot = auth.snapshot;
         final session = snapshot.session;
         final consent = snapshot.processingConsent;
-        return PageList(
-          title: 'Settings',
-          subtitle: 'Account, consent, and transcription route.',
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            BaseTile(
+            _PaperTile(
               key: const Key('companion_account_tile'),
               icon: Icons.person_outline_rounded,
               title: session == null
@@ -550,7 +972,7 @@ class MobileSettingsScreen extends StatelessWidget {
                   ? services.configurationMessage
                   : 'Signed in.',
               trailing: session == null || previewMode
-                  ? const SizedBox.shrink()
+                  ? null
                   : IconButton(
                       key: const Key('companion_sign_out'),
                       tooltip: 'Sign out',
@@ -558,7 +980,8 @@ class MobileSettingsScreen extends StatelessWidget {
                       icon: const Icon(Icons.logout_rounded),
                     ),
             ),
-            BaseTile(
+            const SizedBox(height: 10),
+            _PaperTile(
               key: const Key('companion_consent_tile'),
               icon: Icons.privacy_tip_outlined,
               title: 'Processing consent',
@@ -567,7 +990,7 @@ class MobileSettingsScreen extends StatelessWidget {
                   : 'Granted ${consent.acceptedAt.toLocal().toIso8601String().split('T').first} '
                         '(policy v${consent.policyVersion}).',
               trailing: consent == null || previewMode
-                  ? const SizedBox.shrink()
+                  ? null
                   : IconButton(
                       key: const Key('companion_revoke_consent'),
                       tooltip: 'Revoke',
@@ -575,14 +998,6 @@ class MobileSettingsScreen extends StatelessWidget {
                           unawaited(auth.revokeProcessingConsent()),
                       icon: const Icon(Icons.block_rounded),
                     ),
-            ),
-            _RouteTile(services: services),
-            const BaseTile(
-              key: Key('companion_version_tile'),
-              icon: Icons.info_outline_rounded,
-              title: 'App version',
-              detail: _appVersion,
-              trailing: SizedBox.shrink(),
             ),
           ],
         );
@@ -616,14 +1031,13 @@ class _RouteTileState extends State<_RouteTile> {
     future: credential,
     builder: (context, snapshot) {
       final byok = snapshot.data;
-      return BaseTile(
+      return _PaperTile(
         key: const Key('companion_route_tile'),
         icon: Icons.route_rounded,
         title: 'Transcription route',
         detail: byok == null
             ? 'Managed Omi transcription.'
             : 'Bring your own key · ${byok.model}',
-        trailing: const SizedBox.shrink(),
       );
     },
   );
