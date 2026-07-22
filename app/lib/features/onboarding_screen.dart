@@ -816,45 +816,49 @@ class _OnboardingUseStepState extends State<OnboardingUseStep> {
     required Key key,
     required bool pressed,
     required bool listening,
-  }) => AnimatedContainer(
-    key: key,
-    duration: const Duration(milliseconds: 120),
-    curve: Curves.easeOut,
-    width: 132,
-    height: 64,
-    alignment: Alignment.center,
-    decoration: BoxDecoration(
-      color: listening
-          ? const Color(0xff2e8b57)
-          : pressed
-          ? const Color(0xfffffcec)
-          : const Color(0x14fffcec),
-      borderRadius: BorderRadius.circular(14),
-      border: Border.all(
+    required bool shimmer,
+  }) => KeycapShimmer(
+    enabled: shimmer,
+    child: AnimatedContainer(
+      key: key,
+      duration: const Duration(milliseconds: 120),
+      curve: Curves.easeOut,
+      width: 132,
+      height: 64,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
         color: listening
             ? const Color(0xff2e8b57)
             : pressed
             ? const Color(0xfffffcec)
-            : const Color(0x59fffcec),
-        width: 1.5,
-      ),
-      boxShadow: listening
-          ? const [BoxShadow(color: Color(0x662e8b57), blurRadius: 28)]
-          : pressed
-          ? const [BoxShadow(color: Color(0x66fffcec), blurRadius: 28)]
-          : const [],
-    ),
-    child: Text(
-      '⇧ shift',
-      style: TextStyle(
-        color: listening
-            ? const Color(0xfffffcec)
+            : const Color(0x14fffcec),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: listening
+              ? const Color(0xff2e8b57)
+              : pressed
+              ? const Color(0xfffffcec)
+              : const Color(0x59fffcec),
+          width: 1.5,
+        ),
+        boxShadow: listening
+            ? const [BoxShadow(color: Color(0x662e8b57), blurRadius: 28)]
             : pressed
-            ? const Color(0xff171716)
-            : const Color(0xb3fffcec),
-        fontFamily: 'Avenir Next',
-        fontSize: 19,
-        fontWeight: FontWeight.w600,
+            ? const [BoxShadow(color: Color(0x66fffcec), blurRadius: 28)]
+            : const [],
+      ),
+      child: Text(
+        '⇧ shift',
+        style: TextStyle(
+          color: listening
+              ? const Color(0xfffffcec)
+              : pressed
+              ? const Color(0xff171716)
+              : const Color(0xb3fffcec),
+          fontFamily: 'Avenir Next',
+          fontSize: 19,
+          fontWeight: FontWeight.w600,
+        ),
       ),
     ),
   );
@@ -870,6 +874,7 @@ class _OnboardingUseStepState extends State<OnboardingUseStep> {
   @override
   Widget build(BuildContext context) {
     final listening = widget.pill.state == CursorPillState.listening;
+    final expectingDoubleShift = !listening;
     return MouseRegion(
       onHover: _trackPointer,
       child: Column(
@@ -883,12 +888,30 @@ class _OnboardingUseStepState extends State<OnboardingUseStep> {
                 key: const Key('shift_left'),
                 pressed: leftShiftDown,
                 listening: listening,
+                shimmer: expectingDoubleShift,
               ),
-              const SizedBox(width: 22),
+              if (expectingDoubleShift)
+                const SizedBox(
+                  width: 52,
+                  child: Text(
+                    '×2',
+                    key: Key('shift_times_two'),
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      color: Color(0xb3fffcec),
+                      fontFamily: 'Avenir Next',
+                      fontSize: 21,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                )
+              else
+                const SizedBox(width: 22),
               _shiftKey(
                 key: const Key('shift_right'),
                 pressed: rightShiftDown,
                 listening: listening,
+                shimmer: expectingDoubleShift,
               ),
             ],
           ),
@@ -931,6 +954,81 @@ class _OnboardingUseStepState extends State<OnboardingUseStep> {
           ],
         ],
       ),
+    );
+  }
+}
+
+class KeycapShimmer extends StatefulWidget {
+  const KeycapShimmer({required this.enabled, required this.child, super.key});
+
+  static const period = Duration(milliseconds: 1800);
+
+  final bool enabled;
+  final Widget child;
+
+  @override
+  State<KeycapShimmer> createState() => _KeycapShimmerState();
+}
+
+class _KeycapShimmerState extends State<KeycapShimmer>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _sweep = AnimationController(
+    vsync: this,
+    duration: KeycapShimmer.period,
+  );
+
+  bool get _active =>
+      widget.enabled && !MediaQuery.disableAnimationsOf(context);
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _sync();
+  }
+
+  @override
+  void didUpdateWidget(covariant KeycapShimmer old) {
+    super.didUpdateWidget(old);
+    _sync();
+  }
+
+  void _sync() {
+    if (_active) {
+      if (!_sweep.isAnimating) _sweep.repeat();
+    } else {
+      _sweep.stop();
+      _sweep.value = 0;
+    }
+  }
+
+  @override
+  void dispose() {
+    _sweep.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!_active) return widget.child;
+    return AnimatedBuilder(
+      animation: _sweep,
+      child: widget.child,
+      builder: (context, child) {
+        final travel = -1.6 + 3.2 * _sweep.value;
+        return ShaderMask(
+          blendMode: BlendMode.srcATop,
+          shaderCallback: (bounds) => LinearGradient(
+            begin: Alignment(travel - 0.7, travel - 0.7),
+            end: Alignment(travel + 0.7, travel + 0.7),
+            colors: const [
+              Color(0x00ffffff),
+              Color(0x4dfffcec),
+              Color(0x00ffffff),
+            ],
+          ).createShader(bounds),
+          child: child,
+        );
+      },
     );
   }
 }

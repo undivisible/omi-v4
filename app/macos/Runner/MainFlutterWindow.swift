@@ -216,6 +216,8 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
   private var pillPreviousFrame: NSRect?
   private var pillPreviousLevel: NSWindow.Level = .normal
   private var pillPreviousCollectionBehavior: NSWindow.CollectionBehavior = []
+  private var pillLocalMouseMonitor: Any?
+  private var pillGlobalMouseMonitor: Any?
 
   func requestSettings() {
     NSApp.activate(ignoringOtherApps: true)
@@ -416,6 +418,7 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
   deinit {
     if let localKeyboardMonitor { NSEvent.removeMonitor(localKeyboardMonitor) }
     if let globalKeyboardMonitor { NSEvent.removeMonitor(globalKeyboardMonitor) }
+    stopFollowingCursor()
   }
 
   private func enterHubChrome() {
@@ -438,16 +441,10 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
     collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
   }
 
-  private func summonPill(width: Double, height: Double) {
-    if pillPreviousFrame == nil {
-      pillPreviousFrame = frame
-      pillPreviousLevel = level
-      pillPreviousCollectionBehavior = collectionBehavior
-    }
-    let cursor = NSEvent.mouseLocation
+  private func pillFrame(cursor: NSPoint, width: Double, height: Double) -> NSRect {
     var target = NSRect(
-      x: cursor.x + 12,
-      y: cursor.y - height + 24,
+      x: cursor.x + 18,
+      y: cursor.y - height - 18,
       width: width,
       height: height)
     let screen =
@@ -457,14 +454,50 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
       target.origin.x = min(max(target.origin.x, visible.minX), visible.maxX - width)
       target.origin.y = min(max(target.origin.y, visible.minY), visible.maxY - height)
     }
+    return target
+  }
+
+  private func followCursor(width: Double, height: Double) {
+    let reposition: (NSPoint) -> Void = { [weak self] cursor in
+      guard let self else { return }
+      self.setFrameOrigin(self.pillFrame(cursor: cursor, width: width, height: height).origin)
+    }
+    pillLocalMouseMonitor = NSEvent.addLocalMonitorForEvents(
+      matching: [.mouseMoved]
+    ) { event in
+      reposition(NSEvent.mouseLocation)
+      return event
+    }
+    pillGlobalMouseMonitor = NSEvent.addGlobalMonitorForEvents(
+      matching: [.mouseMoved]
+    ) { _ in reposition(NSEvent.mouseLocation) }
+  }
+
+  private func stopFollowingCursor() {
+    if let pillLocalMouseMonitor { NSEvent.removeMonitor(pillLocalMouseMonitor) }
+    if let pillGlobalMouseMonitor { NSEvent.removeMonitor(pillGlobalMouseMonitor) }
+    pillLocalMouseMonitor = nil
+    pillGlobalMouseMonitor = nil
+  }
+
+  private func summonPill(width: Double, height: Double) {
+    if pillPreviousFrame == nil {
+      pillPreviousFrame = frame
+      pillPreviousLevel = level
+      pillPreviousCollectionBehavior = collectionBehavior
+    }
+    let target = pillFrame(cursor: NSEvent.mouseLocation, width: width, height: height)
     level = .floating
     collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
     setFrame(target, display: true)
     NSApp.activate(ignoringOtherApps: true)
     makeKeyAndOrderFront(nil)
+    stopFollowingCursor()
+    followCursor(width: width, height: height)
   }
 
   private func restoreFromPill() {
+    stopFollowingCursor()
     guard let previousFrame = pillPreviousFrame else { return }
     pillPreviousFrame = nil
     level = pillPreviousLevel

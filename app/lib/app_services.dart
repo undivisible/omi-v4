@@ -45,6 +45,20 @@ final class LocalTranscriptionUnavailable implements Exception {
       'LocalTranscriptionUnavailable: Local transcription is not available yet.';
 }
 
+enum VoiceStartFailure {
+  unsupportedPlatform,
+  signedOut,
+  microphonePermission,
+  backendNotConfigured,
+  network,
+}
+
+final class VoiceStartException extends StateError {
+  VoiceStartException(this.failure, String message) : super(message);
+
+  final VoiceStartFailure failure;
+}
+
 final class AppServices {
   static const localTranscriptionAvailable = false;
   AppServices._({
@@ -579,15 +593,24 @@ final class AppServices {
     if (kIsWeb ||
         (defaultTargetPlatform != TargetPlatform.macOS &&
             defaultTargetPlatform != TargetPlatform.windows)) {
-      throw StateError('Desktop voice is available on macOS and Windows only.');
+      throw VoiceStartException(
+        VoiceStartFailure.unsupportedPlatform,
+        'Desktop voice is available on macOS and Windows only.',
+      );
     }
     final session = auth.snapshot.session;
     final generation = _authorityGeneration;
     if (!chatReady || session == null) {
-      throw StateError('Sign in and connect native services first.');
+      throw VoiceStartException(
+        VoiceStartFailure.signedOut,
+        'Sign in and connect native services first.',
+      );
     }
     if (!await desktopVoice.hasPermission()) {
-      throw StateError('Microphone permission is required for desktop voice.');
+      throw VoiceStartException(
+        VoiceStartFailure.microphonePermission,
+        'Microphone permission is required for desktop voice.',
+      );
     }
     if (voiceGeneration != _desktopVoiceGeneration) return;
     _desktopVoiceRouteIsLive = false;
@@ -638,12 +661,29 @@ final class AppServices {
         }
       }
     }
-    final transcriptionAuth = await _managedTranscriptionAuthFor(
-      uid: session.uid,
-      deviceId: 'desktop-microphone',
-      encoding: ManagedSttEncoding.linear16,
-      sampleRate: DesktopVoiceCapture.sampleRateHz,
-    );
+    if (_managedStt == null) {
+      throw VoiceStartException(
+        VoiceStartFailure.backendNotConfigured,
+        'No voice backend is configured: live voice is unavailable and '
+        'managed transcription is not set up.',
+      );
+    }
+    final TranscriptionAuthManaged transcriptionAuth;
+    try {
+      transcriptionAuth = await _managedTranscriptionAuthFor(
+        uid: session.uid,
+        deviceId: 'desktop-microphone',
+        encoding: ManagedSttEncoding.linear16,
+        sampleRate: DesktopVoiceCapture.sampleRateHz,
+      );
+    } on StateError {
+      rethrow;
+    } catch (error) {
+      throw VoiceStartException(
+        VoiceStartFailure.network,
+        'Could not reach the managed transcription service: $error',
+      );
+    }
     if (_voiceAuthorityChanged(
       generation: generation,
       voiceGeneration: voiceGeneration,
