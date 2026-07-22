@@ -282,6 +282,13 @@ pub enum NativeEvent {
     LiveVoiceState(LiveVoiceState),
     LiveVoiceTranscript(LiveVoiceTranscript),
     LiveVoiceAudio(LiveVoiceAudio),
+    MeetingStateChanged(MeetingStateChanged),
+}
+
+#[derive(Debug, Serialize, SignalPiece)]
+pub struct MeetingStateChanged {
+    pub active: bool,
+    pub suggested_title: Option<String>,
 }
 
 #[derive(Debug, Serialize, SignalPiece)]

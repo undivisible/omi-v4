@@ -39,6 +39,7 @@ part 'live_voice_audio.dart';
 part 'live_voice_phase.dart';
 part 'live_voice_state.dart';
 part 'live_voice_transcript.dart';
+part 'meeting_state_changed.dart';
 part 'memory_captured.dart';
 part 'memory_corrected.dart';
 part 'memory_export_commit.dart';

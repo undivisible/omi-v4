@@ -63,6 +63,8 @@ abstract class NativeEvent {
         return NativeEventLiveVoiceTranscript.load(deserializer);
       case 20:
         return NativeEventLiveVoiceAudio.load(deserializer);
+      case 21:
+        return NativeEventMeetingStateChanged.load(deserializer);
       default:
         throw Exception(
           'Unknown variant index for NativeEvent: ' + index.toString(),
@@ -1212,6 +1214,59 @@ class NativeEventLiveVoiceAudio extends NativeEvent {
     }());
 
     return fullString ?? 'NativeEventLiveVoiceAudio';
+  }
+}
+
+@immutable
+class NativeEventMeetingStateChanged extends NativeEvent {
+  const NativeEventMeetingStateChanged({required this.value}) : super();
+
+  static NativeEventMeetingStateChanged load(BinaryDeserializer deserializer) {
+    deserializer.increaseContainerDepth();
+    final instance = NativeEventMeetingStateChanged(
+      value: MeetingStateChanged.deserialize(deserializer),
+    );
+    deserializer.decreaseContainerDepth();
+    return instance;
+  }
+
+  final MeetingStateChanged value;
+
+  NativeEventMeetingStateChanged copyWith({MeetingStateChanged? value}) {
+    return NativeEventMeetingStateChanged(value: value ?? this.value);
+  }
+
+  void serialize(BinarySerializer serializer) {
+    serializer.increaseContainerDepth();
+    serializer.serializeVariantIndex(21);
+    value.serialize(serializer);
+    serializer.decreaseContainerDepth();
+  }
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    if (other.runtimeType != runtimeType) return false;
+
+    return other is NativeEventMeetingStateChanged && value == other.value;
+  }
+
+  @override
+  int get hashCode => value.hashCode;
+
+  @override
+  String toString() {
+    String? fullString;
+
+    assert(() {
+      fullString =
+          '$runtimeType('
+          'value: $value'
+          ')';
+      return true;
+    }());
+
+    return fullString ?? 'NativeEventMeetingStateChanged';
   }
 }
 

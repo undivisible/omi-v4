@@ -1,9 +1,11 @@
 mod approval;
+pub mod capture_policy;
 mod computer_use;
 mod daily_review;
 mod extraction;
 mod live_voice;
 mod local_ai;
+pub mod meeting_detector;
 mod runtime;
 mod scan;
 pub mod signals;
@@ -29,9 +31,13 @@ async fn main() {
     let audio_dispatcher = spawn(audio_dispatcher.run());
     let command_listener = spawn(ClientCommand::listen(command_sender));
     let audio_listener = spawn(AudioChunk::listen(audio_sender));
+    #[cfg(target_os = "macos")]
+    let meeting_poll = spawn(meeting_detector::run_meeting_poll());
     dart_shutdown().await;
     command_listener.abort();
     audio_listener.abort();
+    #[cfg(target_os = "macos")]
+    meeting_poll.abort();
     let _ = command_listener.await;
     let _ = audio_listener.await;
     let _ = dispatcher.await;
