@@ -140,6 +140,7 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
           CGRequestScreenCaptureAccess()
           result(nil)
         case "appData":
+          self.revealFullDiskAccessDragTarget()
           if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles") {
             NSWorkspace.shared.open(url)
           }
@@ -198,5 +199,22 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
     } catch {
       return false
     }
+  }
+
+  private func revealFullDiskAccessDragTarget() {
+    let app = Bundle.main.bundleURL
+    var target = app
+    if let desktop = FileManager.default.urls(for: .desktopDirectory, in: .userDomainMask).first {
+      let name = app.deletingPathExtension().lastPathComponent
+      let shortcut = desktop.appendingPathComponent("\(name) — drag into Settings.app")
+      if (try? FileManager.default.destinationOfSymbolicLink(atPath: shortcut.path)) != nil {
+        try? FileManager.default.removeItem(at: shortcut)
+      }
+      if !FileManager.default.fileExists(atPath: shortcut.path),
+         (try? FileManager.default.createSymbolicLink(at: shortcut, withDestinationURL: app)) != nil {
+        target = shortcut
+      }
+    }
+    NSWorkspace.shared.activateFileViewerSelecting([target])
   }
 }
