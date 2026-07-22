@@ -3,6 +3,15 @@ import { ensureZkrMemoryProjected } from "./memory-projection";
 import type { AppEnv } from "./types";
 
 const currents = new Hono<AppEnv>();
+const encoder = new TextEncoder();
+const approvalLifetimeMs = 5 * 60 * 1000;
+const receiptLifetimeMs = 60 * 1000;
+const receiptVersion = "omi-current-authority-v1";
+const actionHashPattern = /^[0-9a-f]{64}$/;
+const receiptTokenPattern = /^[A-Za-z0-9_-]{43}$/;
+const unreportedOutcome = JSON.stringify({
+  detail: "Execution authority was claimed, but no outcome was reported",
+});
 
 currents.use("*", async (context, next) => {
   await ensureZkrMemoryProjected(context.env.DB, context.get("auth").uid);
@@ -27,6 +36,40 @@ const text = (value: unknown, limit = 500) =>
 
 const bounded = (value: string, limit: number) =>
   Array.from(value).slice(0, limit).join("");
+
+const exactText = (value: unknown, limit: number) =>
+  typeof value === "string" &&
+  value.length > 0 &&
+  value.length <= limit &&
+  value.trim() === value
+    ? value
+    : null;
+
+const onlyKeys = (body: Record<string, unknown>, keys: string[]) =>
+  Object.keys(body).every((key) => keys.includes(key));
+
+const sha256 = async (value: string) =>
+  Array.from(
+    new Uint8Array(
+      await crypto.subtle.digest("SHA-256", encoder.encode(value)),
+    ),
+    (byte) => byte.toString(16).padStart(2, "0"),
+  ).join("");
+
+const receiptToken = () => {
+  const bytes = crypto.getRandomValues(new Uint8Array(32));
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary)
+    .replaceAll("+", "-")
+    .replaceAll("/", "_")
+    .replace(/=+$/, "");
+};
+
+const risk = (value: unknown) =>
+  value === "reversible" || value === "external" || value === "destructive"
+    ? value
+    : null;
 
 const rowToCurrent = (row: Record<string, unknown>) => ({
   id: String(row.id),
@@ -334,21 +377,14 @@ currents.post("/:id/accept", async (context) => {
     return context.json({ error: "Current cannot be accepted" }, 409);
   const executionId = crypto.randomUUID();
   const approvalNonce = crypto.randomUUID();
-  const hash = Array.from(
-    new Uint8Array(
-      await crypto.subtle.digest(
-        "SHA-256",
-        new TextEncoder().encode(approvalNonce),
-      ),
-    ),
-    (byte) => byte.toString(16).padStart(2, "0"),
-  ).join("");
+  const hash = await sha256(approvalNonce);
   const now = Date.now();
   const [execution] = await context.env.DB.batch([
     context.env.DB.prepare(
       `INSERT OR IGNORE INTO current_executions
-       (id, uid, current_id, state, action, approval_nonce_hash, created_at, updated_at)
-       SELECT ?1, ?2, ?3, 'awaiting_approval', ?4, ?5, ?6, ?6 FROM currents
+       (id, uid, current_id, state, action, approval_nonce_hash, policy_generation, created_at, updated_at)
+       SELECT ?1, ?2, ?3, 'awaiting_approval', ?4, ?5,
+              COALESCE((SELECT revision FROM user_settings WHERE uid = ?2), 0), ?6, ?6 FROM currents
        WHERE id = ?3 AND uid = ?2 AND status = 'surfaced'
          AND (expires_at IS NULL OR expires_at > ?6)`,
     ).bind(executionId, uid, id, current.proposed_action, hash, now),
@@ -360,10 +396,18 @@ currents.post("/:id/accept", async (context) => {
   ]);
   if (execution.meta.changes !== 1)
     return context.json({ error: "Current cannot be accepted" }, 409);
+  const stored = await context.env.DB.prepare(
+    "SELECT policy_generation FROM current_executions WHERE id = ?1 AND uid = ?2",
+  )
+    .bind(executionId, uid)
+    .first<{ policy_generation: number }>();
+  if (!stored)
+    return context.json({ error: "Current cannot be accepted" }, 409);
   return context.json(
     {
       executionId,
       approvalNonce,
+      policyGeneration: Number(stored.policy_generation),
       action: JSON.parse(String(current.proposed_action)),
       state: "awaiting_approval",
     },
@@ -374,28 +418,205 @@ currents.post("/:id/accept", async (context) => {
 currents.post("/executions/:id/approve", async (context) => {
   const uid = context.get("auth").uid;
   const body = await object(context.req.raw);
-  const nonce = text(body?.approvalNonce, 200);
-  if (!nonce) return context.json({ error: "Invalid approval" }, 400);
-  const hash = Array.from(
-    new Uint8Array(
-      await crypto.subtle.digest("SHA-256", new TextEncoder().encode(nonce)),
-    ),
-    (byte) => byte.toString(16).padStart(2, "0"),
-  ).join("");
-  const now = Date.now();
-  const result = await context.env.DB.prepare(
-    "UPDATE current_executions SET state = 'approved', approved_at = ?1, updated_at = ?1 WHERE id = ?2 AND uid = ?3 AND state = 'awaiting_approval' AND approval_nonce_hash = ?4",
+  if (
+    !body ||
+    !onlyKeys(body, [
+      "approvalNonce",
+      "operationId",
+      "proposalId",
+      "actionHash",
+      "risk",
+      "generation",
+    ])
   )
-    .bind(now, context.req.param("id"), uid, hash)
-    .run();
-  if (result.meta.changes !== 1)
+    return context.json({ error: "Invalid approval" }, 400);
+  const nonce = exactText(body.approvalNonce, 200);
+  const operationId = exactText(body.operationId, 200);
+  const proposalId = exactText(body.proposalId, 200);
+  const actionHash = exactText(body.actionHash, 64);
+  const actionRisk = risk(body.risk);
+  const generation = body.generation;
+  if (
+    !nonce ||
+    !operationId ||
+    !proposalId ||
+    !actionHash ||
+    !actionHashPattern.test(actionHash) ||
+    !actionRisk ||
+    typeof generation !== "number" ||
+    !Number.isSafeInteger(generation) ||
+    generation < 0
+  )
+    return context.json({ error: "Invalid approval" }, 400);
+  const nonceHash = await sha256(nonce);
+  const token = receiptToken();
+  const tokenHash = await sha256(token);
+  const id = context.req.param("id");
+  const receiptId = crypto.randomUUID();
+  const now = Date.now();
+  const expiresAt = now + receiptLifetimeMs;
+  let approved: { policy_generation: number } | null;
+  try {
+    approved = await context.env.DB.prepare(
+      `UPDATE current_executions
+       SET state = 'approved', approved_at = ?1, updated_at = ?1,
+           operation_id = ?5, proposal_id = ?6, action_hash = ?7, risk = ?8,
+           receipt_id = ?9, receipt_token_hash = ?10, receipt_issued_at = ?1,
+           receipt_expires_at = ?11
+       WHERE id = ?2 AND uid = ?3 AND state = 'awaiting_approval'
+         AND approval_nonce_hash = ?4 AND created_at > ?12
+         AND policy_generation = ?13
+         AND policy_generation = COALESCE((SELECT revision FROM user_settings WHERE uid = ?3), 0)
+         AND NOT EXISTS (
+           SELECT 1 FROM current_executions existing
+           WHERE existing.uid = ?3 AND (existing.operation_id = ?5 OR existing.proposal_id = ?6)
+         )
+       RETURNING policy_generation`,
+    )
+      .bind(
+        now,
+        id,
+        uid,
+        nonceHash,
+        operationId,
+        proposalId,
+        actionHash,
+        actionRisk,
+        receiptId,
+        tokenHash,
+        expiresAt,
+        now - approvalLifetimeMs,
+        generation,
+      )
+      .first<{ policy_generation: number }>();
+  } catch {
+    approved = null;
+  }
+  if (!approved)
     return context.json(
       { error: "Approval is invalid or already consumed" },
       409,
     );
   return context.json({
-    executionId: context.req.param("id"),
+    executionId: id,
     state: "approved",
+    receipt: {
+      version: receiptVersion,
+      receiptId,
+      receiptToken: token,
+      subject: uid,
+      policyGeneration: Number(approved.policy_generation),
+      operationId,
+      proposalId,
+      actionHash,
+      risk: actionRisk,
+      issuedAtMs: now,
+      expiresAtMs: expiresAt,
+    },
+  });
+});
+
+currents.post("/executions/:id/receipts/:receiptId/claim", async (context) => {
+  const uid = context.get("auth").uid;
+  const body = await object(context.req.raw);
+  if (
+    !body ||
+    !onlyKeys(body, [
+      "receiptToken",
+      "subject",
+      "policyGeneration",
+      "operationId",
+      "proposalId",
+      "actionHash",
+      "risk",
+    ])
+  )
+    return context.json({ error: "Invalid receipt claim" }, 400);
+  const token = exactText(body.receiptToken, 43);
+  const subject = exactText(body.subject, 200);
+  const operationId = exactText(body.operationId, 200);
+  const proposalId = exactText(body.proposalId, 200);
+  const actionHash = exactText(body.actionHash, 64);
+  const actionRisk = risk(body.risk);
+  const policyGeneration = body.policyGeneration;
+  if (
+    !token ||
+    !receiptTokenPattern.test(token) ||
+    subject !== uid ||
+    !operationId ||
+    !proposalId ||
+    !actionHash ||
+    !actionHashPattern.test(actionHash) ||
+    !actionRisk ||
+    typeof policyGeneration !== "number" ||
+    !Number.isSafeInteger(policyGeneration) ||
+    policyGeneration < 0
+  )
+    return context.json({ error: "Invalid receipt claim" }, 400);
+  const tokenHash = await sha256(token);
+  const id = context.req.param("id");
+  const receiptId = context.req.param("receiptId");
+  const now = Date.now();
+  const [claimed] = await context.env.DB.batch([
+    context.env.DB.prepare(
+      `UPDATE current_executions
+       SET receipt_claimed_at = ?1, state = 'outcome_unknown', outcome = ?11, updated_at = ?1
+       WHERE id = ?2 AND uid = ?3 AND state = 'approved'
+         AND receipt_id = ?4 AND receipt_token_hash = ?5
+         AND operation_id = ?6 AND proposal_id = ?7 AND action_hash = ?8 AND risk = ?9
+         AND policy_generation = ?10
+         AND policy_generation = COALESCE((SELECT revision FROM user_settings WHERE uid = ?3), 0)
+         AND receipt_claimed_at IS NULL AND receipt_expires_at > ?1`,
+    ).bind(
+      now,
+      id,
+      uid,
+      receiptId,
+      tokenHash,
+      operationId,
+      proposalId,
+      actionHash,
+      actionRisk,
+      policyGeneration,
+      unreportedOutcome,
+    ),
+    context.env.DB.prepare(
+      `UPDATE currents SET status = 'expired', updated_at = ?1
+       WHERE uid = ?2 AND status = 'accepted' AND id = (
+         SELECT current_id FROM current_executions
+         WHERE id = ?3 AND uid = ?2 AND state = 'outcome_unknown'
+           AND outcome = ?4 AND receipt_claimed_at = ?1
+       )`,
+    ).bind(now, uid, id, unreportedOutcome),
+  ]);
+  if (claimed.meta.changes !== 1)
+    return context.json(
+      { error: "Receipt is invalid, expired, or already claimed" },
+      409,
+    );
+  const stored = await context.env.DB.prepare(
+    "SELECT receipt_issued_at, receipt_expires_at FROM current_executions WHERE id = ?1 AND uid = ?2 AND receipt_claimed_at = ?3",
+  )
+    .bind(id, uid, now)
+    .first<{ receipt_issued_at: number; receipt_expires_at: number }>();
+  if (!stored)
+    return context.json({ error: "Claimed receipt could not be loaded" }, 500);
+  return context.json({
+    executionId: id,
+    state: "claimed",
+    receipt: {
+      version: receiptVersion,
+      receiptId,
+      subject: uid,
+      policyGeneration,
+      operationId,
+      proposalId,
+      actionHash,
+      risk: actionRisk,
+      issuedAtMs: Number(stored.receipt_issued_at),
+      expiresAtMs: Number(stored.receipt_expires_at),
+      claimedAtMs: now,
+    },
   });
 });
 
@@ -437,10 +658,16 @@ currents.post("/executions/:id/outcome", async (context) => {
   const uid = context.get("auth").uid;
   const body = await object(context.req.raw);
   const state = body?.state;
-  const detail = text(body?.detail, 1000);
+  const detail = body ? exactText(body.detail, 1000) : null;
   if (
+    !body ||
+    !onlyKeys(body, ["state", "detail"]) ||
     !detail ||
-    (state !== "succeeded" && state !== "failed" && state !== "outcome_unknown")
+    (state !== "succeeded" &&
+      state !== "failed" &&
+      state !== "outcome_unknown" &&
+      state !== "cancelled_before_effect" &&
+      state !== "expired_before_effect")
   )
     return context.json({ error: "Invalid outcome" }, 400);
   const id = context.req.param("id");
@@ -448,13 +675,19 @@ currents.post("/executions/:id/outcome", async (context) => {
   const serializedOutcome = JSON.stringify({ detail });
   const [execution] = await context.env.DB.batch([
     context.env.DB.prepare(
-      "UPDATE current_executions SET state = ?1, outcome = ?2, updated_at = ?3 WHERE id = ?4 AND uid = ?5 AND state = 'approved'",
+      `UPDATE current_executions
+       SET state = ?1, outcome = ?2, outcome_reported_at = ?3, updated_at = ?3
+       WHERE id = ?4 AND uid = ?5 AND outcome_reported_at IS NULL
+         AND ((state = 'approved' AND receipt_claimed_at IS NULL
+               AND ?1 IN ('failed', 'outcome_unknown', 'cancelled_before_effect', 'expired_before_effect'))
+              OR (state = 'outcome_unknown' AND receipt_claimed_at IS NOT NULL))`,
     ).bind(state, serializedOutcome, now, id, uid),
     context.env.DB.prepare(
       `UPDATE currents SET status = ?1, updated_at = ?2
-       WHERE uid = ?3 AND status = 'accepted' AND id = (
+       WHERE uid = ?3 AND status IN ('accepted', 'expired') AND id = (
          SELECT current_id FROM current_executions
-         WHERE id = ?4 AND uid = ?3 AND state = ?5 AND outcome = ?6 AND updated_at = ?2
+         WHERE id = ?4 AND uid = ?3 AND state = ?5 AND outcome = ?6
+           AND outcome_reported_at = ?2 AND updated_at = ?2
        )`,
     ).bind(
       state === "succeeded" ? "completed" : "expired",
@@ -465,8 +698,26 @@ currents.post("/executions/:id/outcome", async (context) => {
       serializedOutcome,
     ),
   ]);
-  if (execution.meta.changes !== 1)
-    return context.json({ error: "Execution is not awaiting an outcome" }, 409);
+  if (execution.meta.changes !== 1) {
+    const stored = await context.env.DB.prepare(
+      "SELECT state, outcome, outcome_reported_at FROM current_executions WHERE id = ?1 AND uid = ?2",
+    )
+      .bind(id, uid)
+      .first<{
+        state: string;
+        outcome: string | null;
+        outcome_reported_at: number | null;
+      }>();
+    if (
+      stored?.outcome_reported_at == null ||
+      stored.state !== state ||
+      stored.outcome !== serializedOutcome
+    )
+      return context.json(
+        { error: "Execution is not awaiting this outcome" },
+        409,
+      );
+  }
   return context.json({ executionId: id, state });
 });
 
