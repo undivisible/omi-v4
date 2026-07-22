@@ -5,6 +5,7 @@ import 'dart:math';
 import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'api/worker_http.dart';
 import 'auth/auth.dart';
@@ -18,6 +19,7 @@ import 'keyboard/keyboard.dart';
 import 'memory/memory.dart';
 import 'memory/transcript_memory_ingestor.dart';
 import 'native/native_hub.dart';
+import 'onboarding/onboarding_completion.dart';
 import 'providers/providers.dart';
 import 'settings/settings.dart';
 
@@ -303,6 +305,38 @@ final class AppServices {
 
   WorkerOAuthClient? get oauthConnections =>
       _worker == null ? null : WorkerOAuthClient(_worker);
+
+  late final OnboardingCompletionStore onboardingCompletion = _worker == null
+      ? PreferencesOnboardingCompletionStore()
+      : LayeredOnboardingCompletionStore(
+          local: PreferencesOnboardingCompletionStore(),
+          remote: WorkerOnboardingCompletionStore(_worker),
+        );
+
+  Future<void> deleteAccount() async {
+    final worker = _worker;
+    final uid = auth.snapshot.session?.uid;
+    if (worker == null || uid == null) {
+      throw StateError('Sign in before deleting your account.');
+    }
+    final response = await worker.send(method: 'DELETE', path: '/v1/account');
+    if (response.statusCode != 204 && response.statusCode != 200) {
+      final body = response.body;
+      throw WorkerResponseException(
+        body is Map<String, Object?> && body['error'] is String
+            ? body['error']! as String
+            : 'Account deletion failed (${response.statusCode})',
+      );
+    }
+    try {
+      await providerCredentials.delete(uid);
+    } catch (_) {}
+    try {
+      await (await SharedPreferences.getInstance()).clear();
+    } catch (_) {}
+    await auth.signOut();
+  }
+
   final MemorySyncPump? memorySyncPump;
   final ManagedSttClient? _managedStt;
   final Uri? _workerOrigin;
