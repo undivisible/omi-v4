@@ -1,10 +1,12 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import 'app_services.dart';
 import 'auth/auth.dart';
 import 'features/desktop_auth_screen.dart';
+import 'features/mobile_companion_shell.dart';
 import 'features/omi_shell.dart';
 import 'features/onboarding_screen.dart';
 import 'onboarding/onboarding_completion.dart';
@@ -17,10 +19,16 @@ Future<void> main() async {
 }
 
 class OmiApp extends StatefulWidget {
-  const OmiApp({super.key, this.services, this.onboardingCompletionStore});
+  const OmiApp({
+    super.key,
+    this.services,
+    this.onboardingCompletionStore,
+    this.platformOverride,
+  });
 
   final AppServices? services;
   final OnboardingCompletionStore? onboardingCompletionStore;
+  final TargetPlatform? platformOverride;
 
   @override
   State<OmiApp> createState() => _OmiAppState();
@@ -48,6 +56,13 @@ class _OmiAppState extends State<OmiApp> {
   }
 
   void _authChanged() => _refreshCompletion(notify: true);
+
+  bool get _mobileCompanion {
+    if (kIsWeb) return false;
+    final platform = widget.platformOverride ?? defaultTargetPlatform;
+    return platform == TargetPlatform.android ||
+        platform == TargetPlatform.iOS;
+  }
 
   bool get _authUnavailable =>
       services.auth.snapshot.phase == AuthPhase.unavailable;
@@ -170,7 +185,9 @@ class _OmiAppState extends State<OmiApp> {
           : _checkingCompletion
           ? const Scaffold(body: Center(child: CircularProgressIndicator()))
           : _onboardingComplete
-          ? OmiShell(services: services)
+          ? _mobileCompanion
+                ? MobileCompanionShell(services: services)
+                : OmiShell(services: services)
           : OnboardingScreen(services: services, onFinish: _completeOnboarding),
     );
   }
