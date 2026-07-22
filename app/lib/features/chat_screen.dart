@@ -18,7 +18,6 @@ import '../native/generated/signals/signals.dart'
         ComputerUseSessionIsolation,
         ComputerUseTargetProvenance;
 import '../native/native_hub.dart';
-import '../ui/omi_ui.dart';
 
 class ChatScreen extends StatefulWidget {
   const ChatScreen({
@@ -540,104 +539,42 @@ class ChatScreenState extends State<ChatScreen> {
   @override
   Widget build(BuildContext context) {
     final ready = !widget.previewMode && widget.services.chatReady;
-    final orbState = widget.services.desktopVoice.active
-        ? OmiOrbState.listening
-        : _activeRequestId != null
-        ? OmiOrbState.thinking
-        : OmiOrbState.idle;
+    final voiceActive = widget.services.desktopVoice.active;
+    if (voiceActive) return _buildListening(context);
+
     final currents = widget.services.currents;
     final tasks =
         currents != null && !currents.loading && currents.error == null
         ? currents.items.take(4).toList()
         : const <CurrentCard>[];
-    final colors = Theme.of(context).colorScheme;
-    const backgroundColor = Color(0xfff7f6f1);
+    final history = _historyBuildersNewestFirst();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        if (MediaQuery.sizeOf(context).width >= 500)
-          Center(
-            child: Column(
-              children: [
-                OmiActivityOrb(state: orbState),
-                const SizedBox(height: 12),
-                Text(
-                  _greeting(),
-                  key: const Key('hub_greeting'),
-                  textAlign: TextAlign.center,
-                  style: Theme.of(context).textTheme.displaySmall,
-                ),
-                const SizedBox(height: 5),
-                Text(
-                  'Quietly keeping track, so you can stay in the moment.',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(color: colors.onSurfaceVariant),
-                ),
-              ],
-            ),
-          )
-        else
-          Row(
-            children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      _greeting(),
-                      key: const Key('hub_greeting'),
-                      style: Theme.of(context).textTheme.headlineMedium,
-                    ),
-                    Text(
-                      'Quietly keeping track, so you can stay in the moment.',
-                      style: TextStyle(
-                        color: colors.onSurfaceVariant,
-                        fontSize: 12,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              OmiActivityOrb(state: orbState),
-            ],
-          ),
+        Text(
+          _greeting(),
+          key: const Key('hub_greeting'),
+          style: Theme.of(context).textTheme.headlineMedium,
+        ),
         const SizedBox(height: 20),
         Expanded(
-          child: Stack(
-            children: [
-              ListView(
-                key: const Key('chat_messages'),
-                reverse: true,
-                children: [
-                  _ChatHome(
-                    ready: ready,
-                    tasks: tasks,
-                    onComplete: currents == null
-                        ? null
-                        : (id) => unawaited(currents.dismiss(id)),
-                    onPrompt: _usePrompt,
-                  ),
-                  ..._historyNewestFirst(),
-                ],
-              ),
-              Positioned(
-                top: 0,
-                left: 0,
-                right: 0,
-                child: IgnorePointer(
-                  child: Container(
-                    height: 64,
-                    decoration: const BoxDecoration(
-                      gradient: LinearGradient(
-                        begin: Alignment.topCenter,
-                        end: Alignment.bottomCenter,
-                        colors: [backgroundColor, Color(0x00f7f6f1)],
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ],
+          child: ListView.builder(
+            key: const Key('chat_messages'),
+            reverse: true,
+            itemCount: history.length + 1,
+            itemBuilder: (context, index) {
+              if (index == 0) {
+                return _ChatHome(
+                  ready: ready,
+                  tasks: tasks,
+                  onComplete: currents == null
+                      ? null
+                      : (id) => unawaited(currents.dismiss(id)),
+                  onPrompt: _usePrompt,
+                );
+              }
+              return history[index - 1]();
+            },
           ),
         ),
         const SizedBox(height: 12),
@@ -670,10 +607,39 @@ class ChatScreenState extends State<ChatScreen> {
     );
   }
 
-  List<Widget> _historyNewestFirst() {
-    final history = <Widget>[
+  Widget _buildListening(BuildContext context) {
+    return Stack(
+      key: const Key('chat_listening'),
+      fit: StackFit.expand,
+      children: [
+        const IgnorePointer(child: _VoiceEdgeGradient()),
+        Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                'Listening',
+                style: Theme.of(context).textTheme.headlineMedium,
+              ),
+              const SizedBox(height: 16),
+              TextButton(
+                key: const Key('stop_listening'),
+                onPressed: () => unawaited(
+                  handleDesktopGesture(ShiftGestureAction.stopVoice),
+                ),
+                child: const Text('Done'),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  List<Widget Function()> _historyBuildersNewestFirst() {
+    final history = <Widget Function()>[
       for (final message in _messages)
-        Align(
+        () => Align(
           alignment: message.fromUser
               ? Alignment.centerRight
               : Alignment.centerLeft,
@@ -685,7 +651,7 @@ class ChatScreenState extends State<ChatScreen> {
           ),
         ),
       for (final proposal in _proposals.values)
-        Card(
+        () => Card(
           key: ValueKey('proposal_${proposal.proposalId}'),
           child: Padding(
             padding: const EdgeInsets.all(16),
@@ -749,9 +715,10 @@ class ChatScreenState extends State<ChatScreen> {
             ),
           ),
         ),
-      if (_progress != null) Text(_progress!, key: const Key('chat_progress')),
+      if (_progress != null)
+        () => Text(_progress!, key: const Key('chat_progress')),
       if (_error != null)
-        Text(
+        () => Text(
           _error!,
           key: const Key('chat_error'),
           style: const TextStyle(color: Colors.redAccent),
@@ -767,6 +734,53 @@ class ChatScreenState extends State<ChatScreen> {
     if (hour < 17) return 'Good afternoon';
     return 'Good evening';
   }
+}
+
+class _VoiceEdgeGradient extends StatelessWidget {
+  const _VoiceEdgeGradient();
+
+  @override
+  Widget build(BuildContext context) => Stack(
+    fit: StackFit.expand,
+    children: const [
+      DecoratedBox(
+        decoration: BoxDecoration(
+          gradient: RadialGradient(
+            center: Alignment(-1.15, -1.1),
+            radius: .9,
+            colors: [Color(0x55f25e6b), Color(0x00f25e6b)],
+          ),
+        ),
+      ),
+      DecoratedBox(
+        decoration: BoxDecoration(
+          gradient: RadialGradient(
+            center: Alignment(1.15, -.9),
+            radius: .9,
+            colors: [Color(0x5596c4ff), Color(0x0096c4ff)],
+          ),
+        ),
+      ),
+      DecoratedBox(
+        decoration: BoxDecoration(
+          gradient: RadialGradient(
+            center: Alignment(.9, 1.15),
+            radius: .9,
+            colors: [Color(0x55d3e081), Color(0x00d3e081)],
+          ),
+        ),
+      ),
+      DecoratedBox(
+        decoration: BoxDecoration(
+          gradient: RadialGradient(
+            center: Alignment(-1.1, 1.05),
+            radius: .9,
+            colors: [Color(0x55f2c2ac), Color(0x00f2c2ac)],
+          ),
+        ),
+      ),
+    ],
+  );
 }
 
 class _ChatHome extends StatelessWidget {

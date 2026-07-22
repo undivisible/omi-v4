@@ -31,13 +31,11 @@ class OmiShell extends StatefulWidget {
 }
 
 class _OmiShellState extends State<OmiShell> {
-  var _showOpeningGradient = true;
   final _chatKey = GlobalKey<ChatScreenState>();
   late final _desktopKeyboard = widget.desktopKeyboard ?? DesktopKeyboard();
   DesktopGestureController? _desktopGesture;
   StreamSubscription<ShiftGestureAction>? _desktopGestureActions;
   DesktopMenuBarController? _menuBar;
-  Timer? _openingGradientTimer;
 
   static const _windowChromeChannel = MethodChannel('omi/window_chrome');
   bool _windowChromeHandlerSet = false;
@@ -48,9 +46,6 @@ class _OmiShellState extends State<OmiShell> {
   @override
   void initState() {
     super.initState();
-    _openingGradientTimer = Timer(const Duration(milliseconds: 1800), () {
-      if (mounted) setState(() => _showOpeningGradient = false);
-    });
     if (widget.previewMode) return;
     if (_isMacDesktop) {
       unawaited(_enterHubChrome());
@@ -116,7 +111,6 @@ class _OmiShellState extends State<OmiShell> {
 
   @override
   void dispose() {
-    _openingGradientTimer?.cancel();
     if (_windowChromeHandlerSet) {
       _windowChromeChannel.setMethodCallHandler(null);
     }
@@ -134,7 +128,6 @@ class _OmiShellState extends State<OmiShell> {
   Widget build(BuildContext context) {
     final wide = MediaQuery.sizeOf(context).width >= 760;
     final chat = _WarmPaperHub(
-      showOpeningGradient: _showOpeningGradient,
       child: ChatScreen(
         key: _chatKey,
         services: widget.services,
@@ -169,9 +162,8 @@ class _OmiShellState extends State<OmiShell> {
 }
 
 class _WarmPaperHub extends StatelessWidget {
-  const _WarmPaperHub({required this.showOpeningGradient, required this.child});
+  const _WarmPaperHub({required this.child});
 
-  final bool showOpeningGradient;
   final Widget child;
 
   @override
@@ -199,82 +191,15 @@ class _WarmPaperHub extends StatelessWidget {
     ),
     child: ClipRRect(
       borderRadius: BorderRadius.circular(28),
-      child: Stack(
+      child: ColoredBox(
         key: const Key('warm_paper_hub'),
-        fit: StackFit.expand,
-        children: [
-          const ColoredBox(color: Color(0xfff7f6f1)),
-          const IgnorePointer(child: _EdgeGradient()),
-          AnimatedOpacity(
-            key: const Key('hub_opening_gradient'),
-            opacity: showOpeningGradient ? 1 : 0,
-            duration: const Duration(milliseconds: 700),
-            child: const IgnorePointer(
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  gradient: RadialGradient(
-                    radius: 1.05,
-                    colors: [Color(0xfffffcec), Color(0x00fffcec)],
-                    stops: [0, 1],
-                  ),
-                ),
-              ),
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-            child: child,
-          ),
-        ],
+        color: const Color(0xfff7f6f1),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          child: child,
+        ),
       ),
     ),
-  );
-}
-
-class _EdgeGradient extends StatelessWidget {
-  const _EdgeGradient();
-
-  @override
-  Widget build(BuildContext context) => Stack(
-    fit: StackFit.expand,
-    children: const [
-      DecoratedBox(
-        decoration: BoxDecoration(
-          gradient: RadialGradient(
-            center: Alignment(-1.15, -1.1),
-            radius: .9,
-            colors: [Color(0x55f25e6b), Color(0x00f25e6b)],
-          ),
-        ),
-      ),
-      DecoratedBox(
-        decoration: BoxDecoration(
-          gradient: RadialGradient(
-            center: Alignment(1.15, -.9),
-            radius: .9,
-            colors: [Color(0x5596c4ff), Color(0x0096c4ff)],
-          ),
-        ),
-      ),
-      DecoratedBox(
-        decoration: BoxDecoration(
-          gradient: RadialGradient(
-            center: Alignment(.9, 1.15),
-            radius: .9,
-            colors: [Color(0x55d3e081), Color(0x00d3e081)],
-          ),
-        ),
-      ),
-      DecoratedBox(
-        decoration: BoxDecoration(
-          gradient: RadialGradient(
-            center: Alignment(-1.1, 1.05),
-            radius: .9,
-            colors: [Color(0x55f2c2ac), Color(0x00f2c2ac)],
-          ),
-        ),
-      ),
-    ],
   );
 }
 
