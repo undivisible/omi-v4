@@ -76,11 +76,72 @@ pub(crate) fn pcm_bytes(samples: &[i16]) -> Vec<u8> {
     bytes
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct WavHeader {
+    pub(crate) sample_rate: u32,
+    /// Byte offset of the first sample in the `data` chunk, from the start
+    /// of the file.
+    pub(crate) data_offset: u64,
+}
+
+fn skip_bytes(reader: &mut impl std::io::Read, mut count: u64) -> std::io::Result<()> {
+    let mut buffer = [0u8; 4096];
+    while count > 0 {
+        let take = count.min(buffer.len() as u64) as usize;
+        reader.read_exact(&mut buffer[..take])?;
+        count -= take as u64;
+    }
+    Ok(())
+}
+
+/// Walks the RIFF chunk structure of a WAV stream to find the `fmt ` chunk's
+/// sample rate and the byte offset where the `data` chunk's samples begin.
+///
+/// This does not assume a canonical 16-byte `fmt ` chunk immediately followed
+/// by `data`: it tolerates a `WAVE_FORMAT_EXTENSIBLE` `fmt ` chunk (bigger
+/// than 16 bytes) and any number of other chunks (e.g. `LIST`, `fact`)
+/// appearing before `data`.
+pub(crate) fn parse_wav_header(reader: &mut impl std::io::Read) -> Option<WavHeader> {
+    let mut riff = [0u8; 12];
+    reader.read_exact(&mut riff).ok()?;
+    if &riff[0..4] != b"RIFF" || &riff[8..12] != b"WAVE" {
+        return None;
+    }
+    let mut pos: u64 = 12;
+    let mut sample_rate: Option<u32> = None;
+    loop {
+        let mut chunk_header = [0u8; 8];
+        reader.read_exact(&mut chunk_header).ok()?;
+        let id = &chunk_header[0..4];
+        let size = u32::from_le_bytes(chunk_header[4..8].try_into().ok()?);
+        pos += 8;
+        let padded_size = u64::from(size) + (size % 2 != 0) as u64;
+        if id == b"fmt " {
+            let read_len = (size as usize).min(16);
+            let mut fmt = vec![0u8; read_len];
+            reader.read_exact(&mut fmt).ok()?;
+            if read_len >= 8 {
+                sample_rate = fmt[4..8].try_into().ok().map(u32::from_le_bytes);
+            }
+            skip_bytes(reader, padded_size - read_len as u64).ok()?;
+            pos += padded_size;
+        } else if id == b"data" {
+            return sample_rate.map(|sample_rate| WavHeader {
+                sample_rate,
+                data_offset: pos,
+            });
+        } else {
+            skip_bytes(reader, padded_size).ok()?;
+            pos += padded_size;
+        }
+    }
+}
+
 #[cfg(target_os = "macos")]
 mod platform {
     use super::{
-        CAPTURE_SAMPLE_RATE_HZ, CAPTURE_STREAM_ID, LinearResampler, mix_two_track_to_mono,
-        pcm_bytes,
+        CAPTURE_SAMPLE_RATE_HZ, CAPTURE_STREAM_ID, LinearResampler, WavHeader,
+        mix_two_track_to_mono, parse_wav_header, pcm_bytes,
     };
     use crate::capture_policy::CapturePlan;
     use crate::signals::{AudioEncoding, NativeError, NativeEvent, TranscriptionAuth};
@@ -114,34 +175,73 @@ mod platform {
         }
     }
 
+    /// Generates a per-run random value without pulling in a `rand`-style
+    /// dependency: `RandomState`'s keys are seeded from OS randomness, so
+    /// hashing a fixed input with a fresh `RandomState` yields an
+    /// effectively random, unpredictable output.
+    fn random_component() -> u64 {
+        use std::collections::hash_map::RandomState;
+        use std::hash::{BuildHasher, Hasher};
+        RandomState::new().build_hasher().finish()
+    }
+
+    /// Creates a private, per-run subdirectory under the system temp
+    /// directory (restricted to the owner on Unix) to hold the meeting
+    /// capture WAV file, and returns the path to that file within it.
+    ///
+    /// The directory name mixes the pid, a timestamp, and a random
+    /// component so it cannot be predicted or pre-created by another
+    /// process, and the 0700 permissions on the directory (plus a
+    /// best-effort 0600 on the file itself once it exists) keep the audio
+    /// unreadable to other local users even though the underlying capture
+    /// library creates the file with default permissions.
     fn capture_path() -> PathBuf {
         let stamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
-        std::env::temp_dir().join(format!(
-            "omi-meeting-capture-{}-{stamp}.wav",
+        let random = random_component();
+        let dir = std::env::temp_dir().join(format!(
+            "omi-meeting-capture-{}-{stamp}-{random:016x}",
             std::process::id()
-        ))
-    }
-
-    fn wav_sample_rate(path: &PathBuf) -> Option<u32> {
-        let mut header = [0u8; 28];
-        let mut file = File::open(path).ok()?;
-        file.read_exact(&mut header).ok()?;
-        if &header[0..4] != b"RIFF" || &header[8..12] != b"WAVE" {
-            return None;
+        ));
+        if std::fs::create_dir(&dir).is_ok() {
+            restrict_permissions(&dir);
         }
-        header[24..28].try_into().map(u32::from_le_bytes).ok()
+        dir.join("capture.wav")
     }
 
-    fn wait_for_wav_sample_rate(path: &PathBuf) -> Option<u32> {
+    #[cfg(unix)]
+    fn restrict_permissions(path: &std::path::Path) {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+    }
+
+    #[cfg(not(unix))]
+    fn restrict_permissions(_path: &std::path::Path) {}
+
+    fn cleanup_capture(path: &PathBuf) {
+        let _ = std::fs::remove_file(path);
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::remove_dir(dir);
+        }
+    }
+
+    fn wav_header(path: &PathBuf) -> Option<WavHeader> {
+        let mut file = File::open(path).ok()?;
+        parse_wav_header(&mut file)
+    }
+
+    fn wait_for_wav_header(path: &PathBuf) -> Option<WavHeader> {
         let deadline = Instant::now() + TAP_READY_TIMEOUT;
         loop {
-            if let Some(sample_rate) = wav_sample_rate(path)
-                && sample_rate > 0
+            if let Some(header) = wav_header(path)
+                && header.sample_rate > 0
             {
-                return Some(sample_rate);
+                // The capture library creates the file with default
+                // permissions; tighten them now that it exists.
+                restrict_permissions(path);
+                return Some(header);
             }
             if Instant::now() >= deadline {
                 return None;
@@ -168,17 +268,17 @@ mod platform {
 
     fn stream_capture(
         path: &PathBuf,
-        sample_rate: u32,
+        header: WavHeader,
         stt: &SttHandle,
         control: &mpsc::Receiver<()>,
     ) -> bool {
         let Ok(mut file) = File::open(path) else {
             return true;
         };
-        if file.seek(SeekFrom::Start(44)).is_err() {
+        if file.seek(SeekFrom::Start(header.data_offset)).is_err() {
             return true;
         }
-        let mut resampler = LinearResampler::new(sample_rate, CAPTURE_SAMPLE_RATE_HZ);
+        let mut resampler = LinearResampler::new(header.sample_rate, CAPTURE_SAMPLE_RATE_HZ);
         let mut bytes = [0u8; 16_384];
         let mut remainder = Vec::new();
         let mut failing_since: Option<Instant> = None;
@@ -245,23 +345,23 @@ mod platform {
                     }
                     return;
                 };
-                let Some(sample_rate) = wait_for_wav_sample_rate(&path) else {
+                let Some(header) = wait_for_wav_header(&path) else {
                     let _ = session.stop();
-                    let _ = std::fs::remove_file(&path);
+                    cleanup_capture(&path);
                     stt.cancel();
                     if report_unavailable {
                         emit_error("meeting_system_audio_unavailable");
                     }
                     return;
                 };
-                let finished = stream_capture(&path, sample_rate, &stt, &control_rx);
+                let finished = stream_capture(&path, header, &stt, &control_rx);
                 if finished {
                     stt.finish();
                 } else {
                     stt.cancel();
                 }
                 let _ = session.stop();
-                let _ = std::fs::remove_file(&path);
+                cleanup_capture(&path);
             })
             .map_err(|error| error.to_string())?;
         Ok(MeetingCaptureHandle {
@@ -298,7 +398,80 @@ pub(crate) fn start(
 
 #[cfg(test)]
 mod tests {
-    use super::{LinearResampler, mix_two_track_to_mono, pcm_bytes};
+    use super::{LinearResampler, WavHeader, mix_two_track_to_mono, parse_wav_header, pcm_bytes};
+
+    fn le32(value: u32) -> [u8; 4] {
+        value.to_le_bytes()
+    }
+
+    fn le16(value: u16) -> [u8; 2] {
+        value.to_le_bytes()
+    }
+
+    /// Builds a synthetic WAV with a `LIST` chunk (and an odd-sized `fmt `
+    /// payload padded to an even boundary) inserted between `fmt ` and
+    /// `data`, to prove the parser walks chunks instead of assuming a fixed
+    /// 44-byte header.
+    fn synthetic_wav_with_extra_chunk(sample_rate: u32, samples: &[i16]) -> Vec<u8> {
+        let mut fmt_chunk = Vec::new();
+        fmt_chunk.extend_from_slice(&le16(1)); // PCM
+        fmt_chunk.extend_from_slice(&le16(1)); // mono
+        fmt_chunk.extend_from_slice(&le32(sample_rate));
+        fmt_chunk.extend_from_slice(&le32(sample_rate * 2)); // byte rate
+        fmt_chunk.extend_from_slice(&le16(2)); // block align
+        fmt_chunk.extend_from_slice(&le16(16)); // bits per sample
+
+        let list_payload = b"INFOIART\x05\x00\x00\x00abcd\x00".to_vec();
+
+        let data_payload: Vec<u8> = samples.iter().flat_map(|s| s.to_le_bytes()).collect();
+
+        let mut body = Vec::new();
+        body.extend_from_slice(b"WAVE");
+        body.extend_from_slice(b"fmt ");
+        body.extend_from_slice(&le32(fmt_chunk.len() as u32));
+        body.extend_from_slice(&fmt_chunk);
+        body.extend_from_slice(b"LIST");
+        body.extend_from_slice(&le32(list_payload.len() as u32));
+        body.extend_from_slice(&list_payload);
+        if list_payload.len() % 2 == 1 {
+            body.push(0);
+        }
+        body.extend_from_slice(b"data");
+        body.extend_from_slice(&le32(data_payload.len() as u32));
+        body.extend_from_slice(&data_payload);
+
+        let mut wav = Vec::new();
+        wav.extend_from_slice(b"RIFF");
+        wav.extend_from_slice(&le32(body.len() as u32));
+        wav.extend_from_slice(&body);
+        wav
+    }
+
+    #[test]
+    fn parses_wav_with_an_extra_chunk_before_data() {
+        let samples: Vec<i16> = vec![1, -2, 3, -4];
+        let wav = synthetic_wav_with_extra_chunk(48_000, &samples);
+        let mut reader = std::io::Cursor::new(wav.clone());
+        let header = parse_wav_header(&mut reader).unwrap_or_else(|| panic!("header parses"));
+        assert_eq!(
+            header,
+            WavHeader {
+                sample_rate: 48_000,
+                data_offset: (wav.len() - samples.len() * 2) as u64,
+            }
+        );
+        let recovered: Vec<i16> = wav[header.data_offset as usize..]
+            .chunks_exact(2)
+            .map(|chunk| i16::from_le_bytes([chunk[0], chunk[1]]))
+            .collect();
+        assert_eq!(recovered, samples);
+    }
+
+    #[test]
+    fn rejects_a_non_wav_header() {
+        let mut reader = std::io::Cursor::new(b"not-a-wav-file-at-all".to_vec());
+        assert!(parse_wav_header(&mut reader).is_none());
+    }
 
     #[test]
     fn two_track_mix_averages_and_keeps_partial_frames() {
