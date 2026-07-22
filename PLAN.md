@@ -1,6 +1,6 @@
 # Omi v4 living plan
 
-Updated: 2026-07-21
+Updated: 2026-07-22
 Status: architecture locked; v0 implementation and platform validation in progress
 
 ## Product
@@ -14,7 +14,7 @@ Omi v4 is an ultrasimple thinking partner and second brain that works across eve
 | Application | Flutter for iOS, Android, macOS, Windows, and web; no desktop WebView |
 | Rust bridge | Rinf typed asynchronous signals; binary signals for bounded audio frames |
 | Live STT | Rust owns bounded transcription sessions; Deepgram is the managed/BYOK live route, local STT fails closed until a real provider exists, and MiMo remains batch-only |
-| Rust runtime | One `hub` crate using `rx4`, `rs_ai`, and platform-gated `rs_peekaboo` |
+| Rust runtime | One `hub` crate using `rx4`, `rotary`, `rs_ai`, and platform-gated `praefectus` |
 | Device ownership | Mobile owns BLE, background hardware relay, firmware, pairing, and device management; desktop owns primary assistant interaction and computer use |
 | Cloud | Bun/TypeScript Hono Worker, D1, R2, Queues, Workflows, Durable Objects where state coordination requires them |
 | Identity | Firebase Auth remains; phone OTP is primary, Google/Apple OAuth optional, Firebase UID is the initial canonical user ID |
@@ -27,11 +27,11 @@ Omi v4 is an ultrasimple thinking partner and second brain that works across eve
 
 | Surface | First release responsibility |
 | --- | --- |
-| Mobile | Omi hardware relay, pairing, firmware, connection health, capture status, and device management |
-| Desktop | Primary assistant, memory/Currents, chat, screen context, local computer use, both-Shift voice/input gesture |
+| Mobile | Omi hardware relay, pairing, firmware, connection health, capture status, and device management (the only Devices surface; desktop has none) |
+| Desktop | A single continuous-chat home surface: no multi-destination navigation. Currents surfaces directly in chat home as "What matters next" task rows; screen context, local computer use, and the both-Shift voice/input gesture remain desktop-owned; Settings (reached via the macOS app menu, ⌘,, or the menu-bar item, not a nav destination) consolidates account/setup content |
 | Web | Signed portal for memory, Currents, account, connections, and billing |
 | Public site | Product explanation, pricing, download/sign-in; initially a public route in the Flutter web build |
-| Channels | Telegram and Blooio/iMessage are primary conversational portals into the same desktop chat and agent session |
+| Channels | Telegram and Blooio/iMessage are primary conversational portals into the same desktop chat and agent session; linking is server-side only for this pass (see Channels and identity) |
 
 ## Minimal repository
 
@@ -50,7 +50,7 @@ The reusable memory engine lives in the public [`tschk/zkr`](https://github.com/
 ## Active build checklist
 
 - [x] Verify the `zkr` evidence, temporal-claim, profile, review, and retrieval core.
-- [ ] Verify the Flutter gradient shell and every onboarding, navigation, and product surface on target platforms.
+- [ ] Verify the Flutter gradient shell and every onboarding, single-chat-surface, and product surface on target platforms.
 - [x] Verify the Bun/Hono Worker contracts, D1 schema, auth boundary, and channel webhook boundaries.
 - [x] Provision the production Worker and D1, apply all migrations, and verify the live fail-closed edge boundary.
 - [x] Complete production Dart consumption of generated Rinf signals and published `zkr` memory storage/search.
@@ -61,6 +61,7 @@ The reusable memory engine lives in the public [`tschk/zkr`](https://github.com/
 - [ ] Prove Telegram and Blooio round trips with real credentials and a continuously connected desktop client.
 - [ ] Finish desktop both-Shift voice capture; the global gesture, microphone/STT path, and failure-safe teardown exist, but physical Windows proof does not.
 - [ ] Add the desktop menu-bar companion: show the single most important current task first, with capture and listening state/actions directly beneath it; keep it a compact portal into the same desktop agent session rather than a separate assistant.
+- [ ] Wire `rotary` into the hub and move `rx4` usage beyond version-reporting into real extraction/ranking calls; both are core to the assistant/extraction/ranking architecture, but integration is in progress.
 - [x] Complete the audited live-STT slice between bounded Omi BLE/Rinf audio and idempotent final-transcript `zkr` capture, including managed/BYOK provider routing, reconnect gaps, final drain, cancellation, and typed stop acknowledgements.
 - [ ] Re-prove Android, iOS without signing, macOS, Windows, and web release builds on the exact release head after this integration lands.
 - [ ] Wire Firebase Auth, real channel delivery, physical Omi hardware, desktop permissions/computer use, and model routes against real credentials and devices.
@@ -72,7 +73,7 @@ The reusable memory engine lives in the public [`tschk/zkr`](https://github.com/
 | `app/lib/memory/` and `app/lib/features/memory_screen.dart` | Personal Memory state and screens | upstream Omi domain language and source evidence |
 | `app/lib/currents/` and `app/lib/features/currents_screen.dart` | Recommendation state, ranking display, feedback | `omi-v3/app/src/lib/home-cards.ts` behavior |
 | `app/lib/device/` and `app/lib/features/device_screen.dart` | Omi pairing, BLE/audio status, phone capture | upstream Flutter device and capture services |
-| `app/native/hub/src/lib.rs` | Rinf signals, `rx4`, `rs_ai`, computer-use orchestration | `rotary` and `rs_peekaboo` crates; no fork |
+| `app/native/hub/src/lib.rs` | Rinf signals, `rx4`, `rotary`, `rs_ai`, computer-use orchestration | `praefectus` crate; no fork |
 | `worker/src/index.ts` | Authenticated API, D1 memory, channels, plans, managed inference | `omi-v3/desktop/cloud-api` |
 
 ## Rinf boundary
@@ -86,7 +87,7 @@ Rust owns assistant sessions, provider routing, memory extraction contracts, pro
 | Dart to Rust | send message, capture event, start transcription metadata/config, bounded audio chunk, approval decision, device state, stop/cancel |
 | Rust to Dart | sourced transcript delta, assistant delta, Current update, action proposal, tool progress, error, runtime status |
 
-Native builds link the full hub. Web builds use the same signal schema but compile a wasm-safe hub subset and route inference, memory, and actions to the Worker. `rs_peekaboo` compiles only for macOS, Windows, and Linux desktop targets; iOS, Android, and web never link or initialize it.
+Native builds link the full hub. Web builds use the same signal schema but compile a wasm-safe hub subset and route inference, memory, and actions to the Worker. `praefectus` compiles only for macOS, Windows, and Linux desktop targets; iOS, Android, and web never link or initialize it.
 
 ## Onboarding
 
@@ -94,7 +95,9 @@ Native builds link the full hub. Web builds use the same signal schema but compi
 2. Ask three conversational questions: identity, current priorities, and what the user wants Omi to notice or help with.
 3. Require each platform's applicable core desktop capabilities, then run bounded native scans of approved workspace roots and available Apple Notes/Mail stores with explicit per-source results before showing editable “what I understand about you” evidence.
 4. Teach voice by asking the user to say “What are my tasks?” and render the real tasks returned by the assistant.
-5. Continue into the main screen with setup tasks for Calendar, Reminders, Contacts, Location, Telegram, Blooio, Notion, providers, and Omi hardware.
+5. Continue into the single continuous-chat hub with setup tasks for Calendar, Reminders, Contacts, Location, Telegram, Blooio, Notion, providers, and Omi hardware, consolidated into the Settings surface (app menu ⌘, or menu-bar item) rather than separate Setup/Account screens.
+
+Onboarding keeps its borderless, always-on-top presentation; the hub itself is a normal titled macOS window with native traffic-light window controls, not a borderless always-on-top panel.
 
 Use upstream Flutter's mature consent, name, language, permission, knowledge-graph, and device flows. Use `omi-v3`'s borderless gradient sequence and warm-paper hub as the presentation and interaction reference while retaining v4's real service boundaries.
 
@@ -113,7 +116,7 @@ Model native access as typed states: `unsupported`, `notApplicable`, `unknown`, 
 
 The macOS v0 is notarized direct distribution without App Sandbox because broad workspace discovery conflicts with sandbox scope. Windows remains `asInvoker`; do not request elevation or `uiAccess` merely to satisfy onboarding.
 
-Windows computer use is a first-class `rs_peekaboo` path: it must inspect UI Automation targets and execute policy-approved pointer clicks and keyboard text entry. Process-integrity boundaries may prevent control of elevated applications, but Windows itself is not a read-only or unsupported target.
+Windows computer use is a first-class `praefectus` path: it must inspect UI Automation targets and execute policy-approved pointer clicks and keyboard text entry. Process-integrity boundaries may prevent control of elevated applications, but Windows itself is not a read-only or unsupported target.
 
 Calendar and Reminders use the native EventKit bridge and are actionable post-onboarding setup tasks that import bounded evidence into `zkr`. Contacts and Location remain later setup tasks. Camera and Photos are omitted until a concrete feature needs them.
 
@@ -158,7 +161,7 @@ The nightly cycle creates one editable, idempotent Daily Review per Person, loca
 - A Current includes evidence, reason, timing, confidence, and one proposed next step.
 - Feedback changes future ranking without rewriting Personal Memory.
 - Accepted actions create an execution record and require approval at the action boundary.
-- `rx4` extraction/ranking is reused before adding another recommendation engine.
+- `rx4` and `rotary` are core, paired extraction/ranking engines for the assistant/recommendation stack before adding another recommendation engine; `rx4` usage today is version-reporting only (`rx4::VERSION`), and wiring `rotary` plus moving `rx4` into real extraction/ranking calls is near-term work (see Active build checklist).
 - Hermes-style background review proposes skills and preference updates; the user can inspect or disable them.
 
 ## Hardware and capture
@@ -205,6 +208,8 @@ Flutter owns the shared state machine. Small native keyboard adapters report phy
 | Application | Firebase UID from phone OTP, Google, or Apple |
 | Telegram | Bot sends a short-lived link code; Worker binds Telegram user/chat IDs to Firebase UID |
 | Blooio | E.164 number and Blooio chat identity bind to Firebase UID after an authenticated link flow |
+
+This pass runs Telegram and Blooio as server-side-only SaaS channels: bot/channel credentials are Worker environment variables (`TELEGRAM_BOT_TOKEN`, `BLOOIO_API_KEY`, already implemented), and there is no per-user in-app linking UI surfaced in desktop Settings for now. The linking widget and its tests (`ChannelConnectionTile`) remain in the codebase; they are simply not shown in the current Settings surface.
 
 Both adapters normalize inbound messages into the same desktop conversation and agent session. A user can ask from iMessage or Telegram for a computer-use action; the desktop agent plans and executes it under the remote-action approval policy. Webhooks verify provider authenticity, deduplicate event IDs, reject unlinked senders, and store delivery state. Blooio initially uses its unified HTTP API for iMessage/SMS/RCS/WhatsApp; advanced number management is not required for v0.
 
@@ -270,6 +275,7 @@ Use a same-model subagent only when the task needs independent deep reasoning or
 - Managed `mimo-v2.5-pro` planning uses Xiaomi's official overseas pay-as-you-go price published at https://platform.xiaomimimo.com/docs/en-US/price/pay-as-you-go and verified 2026-07-21: USD $0.435 per million uncached input tokens and $0.87 per million output tokens. Worker micro-USD price variables remain configurable and fail closed when missing, non-integral, or non-positive.
 - Managed Deepgram Nova-3 reservations use a conservative USD $0.01 per minute ceiling. [Deepgram's official pricing](https://deepgram.com/pricing) was verified 2026-07-21 at $0.0077 per minute for monolingual and $0.0092 per minute for multilingual pay-as-you-go transcription; the Worker rounds above both rates and fails closed on an invalid price.
 - Admission estimates use cache-miss input pricing, the requested output ceiling, UTF-8 content and role bytes, plus fixed per-request and per-message framing reserves. Actual provider usage atomically settles the rolling reservation, including overruns; missing usage retains the conservative reserve and stale requests are reconciled after crashes.
+- The hub surfaces an upgrade/BYOK prompt in `app/lib/features/setup_account_screens.dart`'s `SettingsScreen` contrasting managed Omi AI cost (~$35/mo equivalent usage) against bringing a personal xAI/Grok key (~$5/mo equivalent) to reduce cost; it deep-links into the Settings plan tile and is a real UI addition, not aspirational.
 
 ### Routing
 
@@ -295,8 +301,8 @@ Keep `grok-composer-2.5-fast` only when the authenticated xAI catalog returns it
 
 | Slice | Implemented | Proof still required |
 | --- | --- | --- |
-| Product shell | Gradient Flutter navigation, onboarding, chat, Memory, Currents, Devices, Setup, and Account | Rendered accessibility/responsive audit on every target |
-| Native hub | Generated Rinf signals, UID-scoped production Dart configuration/event consumption, bounded/reaped command registry, ordered configuration, nonblocking/idempotent `zkr` 0.2.0 capture, cited retrieval, correction, and deletion with transcript locators, managed/BYOK live STT, source gaps, final drain, typed stop acknowledgements, atomic computer-use approval/execution, cancellation, `rx4`, and `rs_peekaboo` | Credentialed live-provider proof, physical-device lifecycle stress, and local STT only after a real provider exists |
+| Product shell | Gradient Flutter onboarding plus a single continuous-chat desktop hub with Currents surfaced as task rows and Settings consolidated into the app menu; Devices is mobile-only, Memory is web-portal-only | Rendered accessibility/responsive audit on every target |
+| Native hub | Generated Rinf signals, UID-scoped production Dart configuration/event consumption, bounded/reaped command registry, ordered configuration, nonblocking/idempotent `zkr` 0.3.0 capture, cited retrieval, correction, and deletion with transcript locators, managed/BYOK live STT, source gaps, final drain, typed stop acknowledgements, atomic computer-use approval/execution, cancellation, `rx4`, `rotary`, and `praefectus` | Credentialed live-provider proof, physical-device lifecycle stress, local STT only after a real provider exists, and wiring `rotary` plus real `rx4` extraction/ranking calls beyond version-reporting |
 | Mobile relay | Omi-filtered BLE discovery, connect/discover, battery/codec reads, bounded sequenced PCM8/PCM16/Opus reassembly, native PCM8-to-linear16 conversion, disconnect/EOS, restart handling, and completed-transcript capture into evidenced `zkr` memory | Credentialed live Deepgram, physical iOS/Android sessions, and background recovery |
 | SaaS backend | Firebase-token boundary, D1 memory/settings, Stripe entitlements, Telegram, Blooio, cited retrieval, durable channel-to-desktop leases, and serialized outbound delivery | Real Firebase/Stripe/channel credentials and preview deployment |
 | Shared conversation | UID-scoped persistence, ordered replay, desktop channel dispatch, offline retry, and atomic outbound replies | Live app/web refresh and credentialed Telegram/Blooio proof |
@@ -341,7 +347,7 @@ Do not count a compiled adapter as a deployed integration. Credentialed provider
 
 - Firebase phone authentication on macOS and Windows uses the implemented browser handoff with a short-lived PKCE verifier, explicit matching confirmation code, atomic attempt lockout, and single-use custom-token exchange; deployment still requires real Firebase and Worker configuration.
 - Omi hardware capture is mobile-owned in v0 because upstream has no macOS/Windows BLE bridge and browsers cannot provide equivalent background BLE.
-- `rx4` and `rs_peekaboo` need feature-gated audits for mobile and wasm linking.
+- `rx4`, `rotary`, and `praefectus` need feature-gated audits for mobile and wasm linking.
 - `omi-v3` implements MiMo ASR/translation but not managed MiMo Pro chat, Telegram, Grok voice, or a complete Recommendation Memory lifecycle.
 - Cloudflare bindings and secrets in the reference backend are placeholders; deployment proof starts only after real preview resources exist.
 - Rinf 8.10's bundled Cargokit uses an API removed by Gradle 9; Android stays on the latest Flutter-supported Gradle 8 line until Rinf publishes a compatible release.
@@ -373,3 +379,4 @@ Prove managed/BYOK Deepgram with real credentials and a physical Omi on iOS and 
 - 2026-07-21: Upgraded the Rinf hub to `zkr` 0.2.0 after its isolation, bitemporal, embedding-lifecycle, deletion, plugin, migration, release, and security audits passed.
 - 2026-07-21: Rendered the authenticated, credential-redacted Worker setup-health contract in Flutter Setup so missing Firebase, channels, billing, model routes, and desktop authentication are visible without exposing secrets.
 - 2026-07-21: Replaced the Flutter plan placeholder with strict entitlement loading and external Stripe Checkout or billing-portal handoff for the two-plan SaaS model.
+- 2026-07-22: Redesigned the desktop hub as a single continuous-chat surface with Currents rendered as "What matters next" task rows, moved to a normal titled window with native traffic-light controls (onboarding stays borderless), consolidated Setup/Account into one Settings surface reached via the macOS app menu, and corrected PLAN.md's crate references (`praefectus` replacing `rs_peekaboo`, `rx4`/`rotary` as paired core engines, `zkr` 0.3.0).
