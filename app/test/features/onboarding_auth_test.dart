@@ -247,6 +247,50 @@ void main() {
     expect(find.text('Continue'), findsNothing);
   });
 
+  testWidgets('permissions are rechecked automatically', (tester) async {
+    final gateway = _Gateway(session, currentSession: session);
+    final auth = AuthController(
+      gateway,
+      consentStore: VolatileConsentStore()..receipt = _receipt('firebase-uid'),
+    );
+    await auth.restoreSession();
+    var finished = false;
+    final capabilities = _Capabilities({
+      for (final capability in CoreCapability.values)
+        capability: const CapabilityStatus(
+          state: CapabilityState.granted,
+          detail: 'Verified',
+        ),
+      CoreCapability.screenCapture: const CapabilityStatus(
+        state: CapabilityState.actionRequired,
+        detail: 'Grant screen recording',
+      ),
+    });
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ProductionGate(
+          configurationMessage: 'configured',
+          auth: auth,
+          capabilities: capabilities,
+          onOpenPreview: () {},
+          onFinish: () => finished = true,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    capabilities.statuses[CoreCapability.screenCapture] =
+        const CapabilityStatus(
+          state: CapabilityState.granted,
+          detail: 'Verified',
+        );
+
+    await tester.pump(const Duration(seconds: 2));
+    await tester.pumpAndSettle();
+
+    expect(capabilities.checkCalls, greaterThanOrEqualTo(2));
+    expect(finished, isTrue);
+  });
+
   testWidgets('duplicate capability requests are ignored while in flight', (
     tester,
   ) async {

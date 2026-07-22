@@ -109,14 +109,19 @@ private final class ShortcutDragView: NSImageView, NSDraggingSource {
 private final class PermissionDragOverlay: NSView {
   private var capability: String?
   private var permissionTimer: Timer?
+  private var restartTimer: Timer?
   private let permissionCheck: (String) -> Bool
+  private let restart: () -> Void
+  private let restartButton = NSButton(title: "Restart Omi", target: nil, action: nil)
 
   init(
     frame frameRect: NSRect,
     shortcutURL: URL,
-    permissionCheck: @escaping (String) -> Bool
+    permissionCheck: @escaping (String) -> Bool,
+    restart: @escaping () -> Void
   ) {
     self.permissionCheck = permissionCheck
+    self.restart = restart
     super.init(frame: frameRect)
     autoresizingMask = [.width, .height]
 
@@ -135,7 +140,15 @@ private final class PermissionDragOverlay: NSView {
       icon.heightAnchor.constraint(equalToConstant: 112),
     ])
 
-    let stack = NSStackView(views: [title, icon])
+    restartButton.target = self
+    restartButton.action = #selector(restartPressed)
+    restartButton.isBordered = false
+    restartButton.font = .systemFont(ofSize: 14, weight: .medium)
+    restartButton.contentTintColor = .white
+    restartButton.alphaValue = 0
+    restartButton.isHidden = true
+
+    let stack = NSStackView(views: [title, icon, restartButton])
     stack.orientation = .vertical
     stack.alignment = .centerX
     stack.spacing = 22
@@ -150,6 +163,10 @@ private final class PermissionDragOverlay: NSView {
 
   required init?(coder: NSCoder) { nil }
 
+  @objc private func restartPressed() {
+    restart()
+  }
+
   func show(for capability: String) {
     self.capability = capability
     alphaValue = 0
@@ -160,10 +177,28 @@ private final class PermissionDragOverlay: NSView {
       animator().alphaValue = 1
     }
     permissionTimer?.invalidate()
-    let timer = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in
+    restartTimer?.invalidate()
+    restartButton.alphaValue = 0
+    restartButton.isHidden = true
+    let restartTimer = Timer(timeInterval: 30, repeats: false) { [weak self] _ in
+      guard let self else { return }
+      restartButton.isHidden = false
+      NSAnimationContext.runAnimationGroup { context in
+        context.duration = 0.35
+        context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        self.restartButton.animator().alphaValue = 1
+      }
+    }
+    self.restartTimer = restartTimer
+    RunLoop.main.add(restartTimer, forMode: .common)
+    let timer = Timer(timeInterval: 2, repeats: true) { [weak self] _ in
       guard let self, let capability = self.capability,
             self.permissionCheck(capability) else { return }
-      self.hide()
+      if capability == "screenCapture" || capability == "appData" {
+        self.restart()
+      } else {
+        self.hide()
+      }
     }
     permissionTimer = timer
     RunLoop.main.add(timer, forMode: .common)
@@ -173,6 +208,8 @@ private final class PermissionDragOverlay: NSView {
     capability = nil
     permissionTimer?.invalidate()
     permissionTimer = nil
+    restartTimer?.invalidate()
+    restartTimer = nil
     NSAnimationContext.runAnimationGroup { context in
       context.duration = 0.2
       context.timingFunction = CAMediaTimingFunction(name: .easeIn)
@@ -240,6 +277,7 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
   override func awakeFromNib() {
     let flutterViewController = FlutterViewController()
     let windowFrame = self.frame
+    self.alphaValue = 0
     self.styleMask = [.borderless, .resizable, .miniaturizable]
     self.isOpaque = false
     self.backgroundColor = .clear
@@ -278,6 +316,8 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
       case "appData": self?.hasFullDiskAccess() == true
       default: false
       }
+    } restart: { [weak self] in
+      self?.restart()
     }
     rootView.addSubview(permissionOverlay)
 
@@ -367,6 +407,11 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
     ) { [weak self] event in self?.keyboardEvent(event) }
 
     super.awakeFromNib()
+    NSAnimationContext.runAnimationGroup { context in
+      context.duration = 0.45
+      context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+      self.animator().alphaValue = 1
+    }
   }
 
   deinit {
@@ -400,6 +445,21 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
   private func openPrivacyPane(_ pane: String) {
     if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(pane)") {
       NSWorkspace.shared.open(url)
+    }
+  }
+
+  private func restart() {
+    let configuration = NSWorkspace.OpenConfiguration()
+    configuration.activates = true
+    configuration.addsToRecentItems = false
+    configuration.createsNewApplicationInstance = true
+    NSWorkspace.shared.openApplication(
+      at: Bundle.main.bundleURL,
+      configuration: configuration
+    ) { application, _ in
+      if application != nil {
+        DispatchQueue.main.async { NSApp.terminate(nil) }
+      }
     }
   }
 

@@ -673,6 +673,7 @@ class _ProductionGateState extends State<ProductionGate>
     WidgetsBinding.instance.addObserver(this);
     widget.auth.addListener(_refreshView);
     unawaited(_check());
+    _startPermissionPoll();
   }
 
   @override
@@ -748,7 +749,7 @@ class _ProductionGateState extends State<ProductionGate>
   }
 
   void _startPermissionPoll() {
-    permissionPoll ??= Timer.periodic(const Duration(milliseconds: 500), (_) {
+    permissionPoll ??= Timer.periodic(const Duration(seconds: 2), (_) {
       if (mounted && !refreshing && !finishing) unawaited(_check());
     });
   }
