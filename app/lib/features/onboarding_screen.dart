@@ -5,14 +5,18 @@ import 'package:flutter/services.dart';
 
 import '../app_services.dart';
 import '../keyboard/shake_gesture.dart';
+import '../keyboard/voice_transcripts.dart';
 import '../capabilities/desktop_capabilities.dart';
 import '../native/native_hub.dart';
 import '../onboarding/onboarding_controller.dart';
 import '../ui/omi_ui.dart';
+import 'cursor_pill.dart';
+import 'cursor_pill_controller.dart';
 import 'onboarding/backdrop.dart';
 import 'onboarding/permission_gate.dart';
 import 'onboarding/randomized_text.dart';
 import 'omi_shell.dart';
+import 'voice_intents.dart';
 
 class OnboardingScreen extends StatefulWidget {
   const OnboardingScreen({
@@ -46,6 +50,28 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   bool previewing = false;
   bool finishing = false;
   String? finishError;
+  CursorPillController? _pillController;
+
+  CursorPillController get _usePillController {
+    final existing = _pillController;
+    if (existing != null) return existing;
+    widget.services.desktopVoiceIntentInterceptor = (_) => true;
+    final controller = CursorPillController(
+      hub: widget.services.nativeHub,
+      events: widget.services.nativeEvents,
+      startVoice: widget.services.startDesktopVoice,
+      stopVoice: () async =>
+          (await widget.services.stopDesktopVoice())?.text ?? '',
+      cancelVoice: widget.services.cancelDesktopVoice,
+      sendPrompt: (_) async {},
+      level: CombinedVoiceLevel([
+        widget.services.desktopVoice.level,
+        widget.services.liveVoice.level,
+      ]),
+    );
+    _pillController = controller;
+    return controller;
+  }
 
   @override
   void initState() {
@@ -60,6 +86,8 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     unawaited(scanEvents?.cancel());
     onboarding.removeListener(_refresh);
     widget.services.auth.removeListener(_refresh);
+    widget.services.desktopVoiceIntentInterceptor = null;
+    _pillController?.dispose();
     onboarding.dispose();
     super.dispose();
   }
@@ -263,8 +291,12 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                       defaultLanguages: [_deviceLanguageName()],
                       onContinue: _completeProfile,
                     ),
-                    OnboardingStage.use => _UseStep(
+                    OnboardingStage.use => OnboardingUseStep(
                       key: const ValueKey('use'),
+                      pill: _usePillController,
+                      transcripts: finalVoiceTranscripts(
+                        widget.services.nativeEvents,
+                      ),
                       finishing: finishing,
                       error: finishError,
                       onFinish: _finish,
@@ -619,25 +651,30 @@ class _ScanStep extends StatelessWidget {
   );
 }
 
-class _UseStep extends StatefulWidget {
-  const _UseStep({
+class OnboardingUseStep extends StatefulWidget {
+  const OnboardingUseStep({
+    required this.pill,
+    required this.transcripts,
     required this.finishing,
     required this.error,
     required this.onFinish,
     super.key,
   });
 
+  final CursorPillController pill;
+  final Stream<String> transcripts;
   final bool finishing;
   final String? error;
   final FutureOr<void> Function() onFinish;
 
   @override
-  State<_UseStep> createState() => _UseStepState();
+  State<OnboardingUseStep> createState() => _OnboardingUseStepState();
 }
 
-class _UseStepState extends State<_UseStep> {
+class _OnboardingUseStepState extends State<OnboardingUseStep> {
   bool leftShiftDown = false;
   bool rightShiftDown = false;
+  bool chordDown = false;
   bool completed = false;
   double shakeProgress = 0;
   double? lastPointerX;
@@ -645,11 +682,14 @@ class _UseStepState extends State<_UseStep> {
   int lastReversalAtMs = 0;
   final shakeClock = Stopwatch()..start();
   Timer? shakeDecay;
+  StreamSubscription<String>? transcriptEvents;
 
   @override
   void initState() {
     super.initState();
     HardwareKeyboard.instance.addHandler(_handleKey);
+    widget.pill.addListener(_refresh);
+    transcriptEvents = widget.transcripts.listen(_handleTranscript);
     shakeDecay = Timer.periodic(const Duration(milliseconds: 120), (_) {
       if (shakeProgress > 0 && !completed) {
         setState(() => shakeProgress = (shakeProgress - 8).clamp(0, 100));
@@ -658,7 +698,7 @@ class _UseStepState extends State<_UseStep> {
   }
 
   @override
-  void didUpdateWidget(covariant _UseStep old) {
+  void didUpdateWidget(covariant OnboardingUseStep old) {
     super.didUpdateWidget(old);
     // A failed finish surfaces an error and stops finishing; re-arm the
     // gesture so the user can trigger it again.
@@ -668,12 +708,22 @@ class _UseStepState extends State<_UseStep> {
   @override
   void dispose() {
     HardwareKeyboard.instance.removeHandler(_handleKey);
+    widget.pill.removeListener(_refresh);
+    unawaited(transcriptEvents?.cancel());
     shakeDecay?.cancel();
     super.dispose();
   }
 
+  void _refresh() {
+    if (mounted) setState(() {});
+  }
+
   bool _handleKey(KeyEvent event) {
     final physical = event.physicalKey;
+    if (physical == PhysicalKeyboardKey.escape && event is KeyDownEvent) {
+      unawaited(widget.pill.dismiss());
+      return false;
+    }
     final isLeft = physical == PhysicalKeyboardKey.shiftLeft;
     final isRight = physical == PhysicalKeyboardKey.shiftRight;
     if (!isLeft && !isRight) return false;
@@ -683,8 +733,20 @@ class _UseStepState extends State<_UseStep> {
       if (isLeft) leftShiftDown = down;
       if (isRight) rightShiftDown = down;
     });
-    if (leftShiftDown && rightShiftDown) _complete();
+    final bothDown = leftShiftDown && rightShiftDown;
+    if (bothDown && !chordDown) {
+      chordDown = true;
+      unawaited(widget.pill.doubleShift());
+    } else if (!leftShiftDown && !rightShiftDown) {
+      chordDown = false;
+    }
     return false;
+  }
+
+  void _handleTranscript(String text) {
+    if (completed || !matchesShowHubIntent(text)) return;
+    unawaited(widget.pill.dismiss());
+    _complete();
   }
 
   void _trackPointer(PointerHoverEvent event) {
@@ -707,7 +769,10 @@ class _UseStepState extends State<_UseStep> {
         shakeProgress = advanceShakeProgress(shakeProgress, movement);
       });
       lastReversalAtMs = now;
-      if (shakeProgress >= 100) _complete();
+      if (shakeProgress >= 100) {
+        unawaited(widget.pill.dismiss());
+        _complete();
+      }
     } else if (direction != lastPointerDirection) {
       lastReversalAtMs = now;
     }
@@ -720,80 +785,125 @@ class _UseStepState extends State<_UseStep> {
     unawaited(Future<void>.value(widget.onFinish()));
   }
 
-  Widget _shiftKey({required Key key, required bool pressed}) =>
-      AnimatedContainer(
-        key: key,
-        duration: const Duration(milliseconds: 120),
-        curve: Curves.easeOut,
-        width: 132,
-        height: 64,
-        alignment: Alignment.center,
-        decoration: BoxDecoration(
-          color: pressed ? const Color(0xfffffcec) : const Color(0x14fffcec),
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(
-            color: pressed ? const Color(0xfffffcec) : const Color(0x59fffcec),
-            width: 1.5,
-          ),
-          boxShadow: pressed
-              ? const [BoxShadow(color: Color(0x66fffcec), blurRadius: 28)]
-              : const [],
-        ),
-        child: Text(
-          '⇧ shift',
-          style: TextStyle(
-            color: pressed ? const Color(0xff171716) : const Color(0xb3fffcec),
-            fontFamily: 'Avenir Next',
-            fontSize: 19,
-            fontWeight: FontWeight.w600,
-          ),
-        ),
-      );
-
-  @override
-  Widget build(BuildContext context) => MouseRegion(
-    onHover: _trackPointer,
-    child: Column(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.center,
-      children: [
-        Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            _shiftKey(key: const Key('shift_left'), pressed: leftShiftDown),
-            const SizedBox(width: 22),
-            _shiftKey(key: const Key('shift_right'), pressed: rightShiftDown),
-          ],
-        ),
-        const SizedBox(height: 26),
-        AnimatedOpacity(
-          duration: const Duration(milliseconds: 200),
-          opacity: shakeProgress > 0 ? 1 : .55,
-          child: Text(
-            shakeProgress > 0
-                ? '${shakeProgress.round()}%'
-                : 'Press both Shift keys — or shake your cursor.',
-            textAlign: TextAlign.center,
-            style: const TextStyle(
-              color: Color(0xb3fffcec),
-              fontFamily: 'Avenir Next',
-              fontSize: 15,
-              fontWeight: FontWeight.w500,
-            ),
-          ),
-        ),
-        if (widget.error case final message?) ...[
-          const SizedBox(height: 12),
-          Semantics(
-            liveRegion: true,
-            child: Text(
-              message,
-              textAlign: TextAlign.center,
-              style: const TextStyle(color: Color(0xffffb4ab)),
-            ),
-          ),
-        ],
-      ],
+  Widget _shiftKey({
+    required Key key,
+    required bool pressed,
+    required bool listening,
+  }) => AnimatedContainer(
+    key: key,
+    duration: const Duration(milliseconds: 120),
+    curve: Curves.easeOut,
+    width: 132,
+    height: 64,
+    alignment: Alignment.center,
+    decoration: BoxDecoration(
+      color: listening
+          ? const Color(0xff2e8b57)
+          : pressed
+          ? const Color(0xfffffcec)
+          : const Color(0x14fffcec),
+      borderRadius: BorderRadius.circular(14),
+      border: Border.all(
+        color: listening
+            ? const Color(0xff2e8b57)
+            : pressed
+            ? const Color(0xfffffcec)
+            : const Color(0x59fffcec),
+        width: 1.5,
+      ),
+      boxShadow: listening
+          ? const [BoxShadow(color: Color(0x662e8b57), blurRadius: 28)]
+          : pressed
+          ? const [BoxShadow(color: Color(0x66fffcec), blurRadius: 28)]
+          : const [],
+    ),
+    child: Text(
+      '⇧ shift',
+      style: TextStyle(
+        color: listening
+            ? const Color(0xfffffcec)
+            : pressed
+            ? const Color(0xff171716)
+            : const Color(0xb3fffcec),
+        fontFamily: 'Avenir Next',
+        fontSize: 19,
+        fontWeight: FontWeight.w600,
+      ),
     ),
   );
+
+  String get _prompt => switch (widget.pill.state) {
+    CursorPillState.hidden =>
+      'Press both Shift keys at the same time — or shake your cursor.',
+    CursorPillState.input => 'Don’t type — press both Shift keys again.',
+    CursorPillState.listening =>
+      'Say “Show me my currents.” Press both Shift keys again to stop.',
+  };
+
+  @override
+  Widget build(BuildContext context) {
+    final listening = widget.pill.state == CursorPillState.listening;
+    return MouseRegion(
+      onHover: _trackPointer,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              _shiftKey(
+                key: const Key('shift_left'),
+                pressed: leftShiftDown,
+                listening: listening,
+              ),
+              const SizedBox(width: 22),
+              _shiftKey(
+                key: const Key('shift_right'),
+                pressed: rightShiftDown,
+                listening: listening,
+              ),
+            ],
+          ),
+          if (widget.pill.state != CursorPillState.hidden) ...[
+            const SizedBox(height: 26),
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 420),
+              child: CursorPill(controller: widget.pill, autofocus: false),
+            ),
+          ],
+          const SizedBox(height: 26),
+          AnimatedOpacity(
+            duration: const Duration(milliseconds: 200),
+            opacity: shakeProgress > 0 ? 1 : .55,
+            child: Semantics(
+              liveRegion: true,
+              child: Text(
+                shakeProgress > 0 ? '${shakeProgress.round()}%' : _prompt,
+                key: const Key('use_step_prompt'),
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  color: Color(0xb3fffcec),
+                  fontFamily: 'Avenir Next',
+                  fontSize: 15,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ),
+          ),
+          if (widget.error case final message?) ...[
+            const SizedBox(height: 12),
+            Semantics(
+              liveRegion: true,
+              child: Text(
+                message,
+                textAlign: TextAlign.center,
+                style: const TextStyle(color: Color(0xffffb4ab)),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
 }
