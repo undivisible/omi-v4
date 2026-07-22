@@ -1,10 +1,12 @@
 import { Hono, type Context } from "hono";
+import asr from "./asr";
 import assistant from "./assistant";
 import billing from "./billing";
 import currents from "./currents";
 import memorySync from "./memory-sync";
 import { ensureZkrMemoryProjected } from "./memory-projection";
 import oauthBroker from "./oauth-broker";
+import oauthProxy from "./oauth-proxy";
 import stt from "./stt";
 import voice from "./voice";
 import conversations, { appendConversationMessage } from "./conversations";
@@ -30,6 +32,8 @@ routes.use("/memories", async (context, next) => {
 });
 
 routes.route("/", assistant);
+routes.route("/asr", asr);
+routes.route("/oauth", oauthProxy);
 routes.route("/payments/stripe", billing);
 routes.route("/stt", stt);
 routes.route("/voice", voice);

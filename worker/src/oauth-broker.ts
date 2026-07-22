@@ -7,14 +7,14 @@ import type { AppEnv } from "./types";
 // a loopback, so the broker uses the device-code grant exclusively.
 const broker = new Hono<AppEnv>();
 
-type ProviderConfig = {
+export type ProviderConfig = {
   clientId: string;
   deviceEndpoint: string;
   tokenEndpoint: string;
   scope: string;
 };
 
-const providerConfig = async (
+export const providerConfig = async (
   provider: string,
   env: AppEnv["Bindings"],
 ): Promise<ProviderConfig | null> => {

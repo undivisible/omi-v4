@@ -9,7 +9,7 @@
     "dev": "WRANGLER_SEND_METRICS=false wrangler dev",
     "format": "biome format --write .",
     "lint": "biome lint .",
-    "test": "bun test test/app.test.ts && bun test test/routes.test.ts && bun test test/memory-sync.test.ts && bun test test/currents.test.ts && bun test test/assistant.test.ts && bun test test/assistant-admission.test.ts && bun test test/stt.test.ts && bun test test/stt-admission.test.ts && bun test test/webhooks.test.ts && bun test test/desktop-auth.test.ts && bun test test/voice-oauth.test.ts",
+    "test": "bun test test/app.test.ts && bun test test/routes.test.ts && bun test test/memory-sync.test.ts && bun test test/currents.test.ts && bun test test/assistant.test.ts && bun test test/assistant-admission.test.ts && bun test test/stt.test.ts && bun test test/stt-admission.test.ts && bun test test/webhooks.test.ts && bun test test/desktop-auth.test.ts && bun test test/voice-oauth.test.ts && bun test test/asr-oauth-proxy.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

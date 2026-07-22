@@ -16,7 +16,7 @@ const requestFramingTokenReserve = 64;
 const messageFramingTokenReserve = 16;
 const upstreamTimeoutMs = 45_000;
 const staleRequestMs = 120_000;
-const xiaomiCompletionEndpoint =
+export const xiaomiCompletionEndpoint =
   "https://token-plan-sgp.xiaomimimo.com/v1/chat/completions";
 const allowedKeys = new Set([
   "messages",
@@ -38,11 +38,36 @@ type CompletionRequest = {
   top_p?: number;
 };
 
-const boundedJson = async (
+export const validatePinnedEndpoint = (
+  endpoint: string,
+  pinned: string,
+  hostname: string,
+): URL | null => {
+  try {
+    const endpointUrl = new URL(endpoint);
+    if (
+      endpoint !== pinned ||
+      endpointUrl.href !== pinned ||
+      endpointUrl.protocol !== "https:" ||
+      endpointUrl.username !== "" ||
+      endpointUrl.password !== "" ||
+      endpointUrl.search !== "" ||
+      endpointUrl.hash !== "" ||
+      endpointUrl.hostname !== hostname
+    )
+      return null;
+    return endpointUrl;
+  } catch {
+    return null;
+  }
+};
+
+export const boundedJson = async (
   request: Request,
+  limit = maximumBodyBytes,
 ): Promise<Record<string, unknown> | null> => {
   const declared = Number(request.headers.get("content-length"));
-  if (Number.isFinite(declared) && declared > maximumBodyBytes) return null;
+  if (Number.isFinite(declared) && declared > limit) return null;
   if (!request.body) return null;
   const reader = request.body.getReader();
   const chunks: Uint8Array[] = [];
@@ -52,7 +77,7 @@ const boundedJson = async (
       const { done, value } = await reader.read();
       if (done) break;
       size += value.byteLength;
-      if (size > maximumBodyBytes) {
+      if (size > limit) {
         await reader.cancel();
         return null;
       }
@@ -415,23 +440,13 @@ assistant.post("/chat/completions", async (context) => {
   const model = context.env.MIMO_MODEL;
   if (!endpoint || !secret || !model)
     return context.json({ error: "Managed AI unavailable" }, 503);
-  let endpointUrl: URL;
-  try {
-    endpointUrl = new URL(endpoint);
-    if (
-      endpoint !== xiaomiCompletionEndpoint ||
-      endpointUrl.href !== xiaomiCompletionEndpoint ||
-      endpointUrl.protocol !== "https:" ||
-      endpointUrl.username !== "" ||
-      endpointUrl.password !== "" ||
-      endpointUrl.search !== "" ||
-      endpointUrl.hash !== "" ||
-      endpointUrl.hostname !== "token-plan-sgp.xiaomimimo.com"
-    )
-      throw new Error();
-  } catch {
+  const endpointUrl = validatePinnedEndpoint(
+    endpoint,
+    xiaomiCompletionEndpoint,
+    "token-plan-sgp.xiaomimimo.com",
+  );
+  if (!endpointUrl)
     return context.json({ error: "Managed AI unavailable" }, 503);
-  }
   const body = await boundedJson(context.req.raw);
   const parsed = body ? parseRequest(body, model) : null;
   if (!parsed) return context.json({ error: "Invalid request" }, 400);
