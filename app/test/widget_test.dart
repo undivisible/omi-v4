@@ -129,7 +129,7 @@ void main() {
       find.textContaining('INTERFACE PREVIEW · Account, memory, AI'),
       findsOneWidget,
     );
-    expect(find.text('Chat is not connected yet'), findsOneWidget);
+    expect(find.text('Set up Omi.'), findsOneWidget);
     expect(find.byKey(const Key('chat_input')), findsOneWidget);
   });
 
@@ -205,7 +205,7 @@ void main() {
     await tester.pumpWidget(const OmiApp());
     await openInterfacePreview(tester);
 
-    expect(find.text('Chat is not connected yet'), findsOneWidget);
+    expect(find.text('Set up Omi.'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 }

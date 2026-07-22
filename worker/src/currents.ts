@@ -77,6 +77,7 @@ const rowToCurrent = (row: Record<string, unknown>) => ({
   title: String(row.title),
   summary: String(row.summary),
   evidence: [{ sourceId: String(row.source_id), reason: String(row.reason) }],
+  sourceKind: row.source_kind == null ? null : String(row.source_kind),
   reason: String(row.reason),
   confidence: Number(row.confidence_basis_points) / 10_000,
   proposedNextStep: String(row.instruction),
@@ -106,7 +107,7 @@ const selectCurrent = async (
   id: string,
 ) =>
   env.DB.prepare(
-    `SELECT c.*, s.id AS source_id, json_extract(c.proposed_action, '$.instruction') AS instruction
+    `SELECT c.*, s.id AS source_id, s.kind AS source_kind, json_extract(c.proposed_action, '$.instruction') AS instruction
      FROM currents c
      JOIN memory_evidence e ON e.id = c.evidence_id AND e.uid = c.uid
      JOIN memory_source_revisions r ON r.id = e.source_revision_id AND r.uid = e.uid
@@ -298,7 +299,7 @@ currents.get("/", async (context) => {
     .bind(now, uid)
     .run();
   const rows = await context.env.DB.prepare(
-    `SELECT c.*, s.id AS source_id, json_extract(c.proposed_action, '$.instruction') AS instruction,
+    `SELECT c.*, s.id AS source_id, s.kind AS source_kind, json_extract(c.proposed_action, '$.instruction') AS instruction,
        COALESCE((SELECT SUM(CASE f.kind WHEN 'dismissed' THEN -1000 ELSE -250 END)
                  FROM current_feedback f
                  JOIN currents prior ON prior.id = f.current_id AND prior.uid = f.uid

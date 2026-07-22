@@ -8,8 +8,110 @@ import 'package:omi/currents/currents.dart';
 import 'package:omi/device/device.dart';
 import 'package:omi/features/chat_screen.dart';
 import 'package:omi/native/native_hub.dart';
+import 'package:omi/onboarding/hub_checklist.dart';
 
 void main() {
+  testWidgets('Set up Omi. renders as a crossed-out completed first row', (
+    tester,
+  ) async {
+    final services = AppServices.forTesting(
+      nativeHub: const UnavailableNativeHub('test'),
+      deviceRelay: DeviceRelayService(
+        role: DeviceRelayRole.desktopObserver,
+        adapter: const UnavailableDeviceRelayAdapter(),
+      ),
+      auth: AuthController(const UnconfiguredAuthGateway()),
+      memoryDatabasePath: (uid) => '/tmp/$uid.sqlite3',
+    );
+    addTearDown(services.dispose);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: ChatScreen(
+            services: services,
+            previewMode: true,
+            checklistStore: VolatileHubChecklistStore(),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.byKey(const Key('task_setup_omi')), findsOneWidget);
+    final title = tester.widget<Text>(find.text('Set up Omi.'));
+    expect(title.style?.decoration, TextDecoration.lineThrough);
+    final opacity = tester.widget<Opacity>(
+      find
+          .ancestor(
+            of: find.text('Set up Omi.'),
+            matching: find.byType(Opacity),
+          )
+          .first,
+    );
+    expect(opacity.opacity, closeTo(.45, .001));
+
+    await tester.tap(find.byKey(const Key('complete_setup_omi')));
+    await tester.pump();
+    expect(
+      tester.widget<Text>(find.text('Set up Omi.')).style?.decoration,
+      TextDecoration.none,
+    );
+  });
+
+  testWidgets('currents rows show a source tag for conversation evidence', (
+    tester,
+  ) async {
+    final createdAt = DateTime.utc(2026, 7, 21, 12);
+    final services = AppServices.forTesting(
+      nativeHub: const UnavailableNativeHub('test'),
+      deviceRelay: DeviceRelayService(
+        role: DeviceRelayRole.desktopObserver,
+        adapter: const UnavailableDeviceRelayAdapter(),
+      ),
+      auth: AuthController(const UnconfiguredAuthGateway()),
+      memoryDatabasePath: (uid) => '/tmp/$uid.sqlite3',
+      currentsClient: CurrentsClient(_Transport()),
+    );
+    addTearDown(services.dispose);
+    final seeded = <CurrentCard>[
+      CurrentCard(
+        item: CurrentItem.candidate(
+          id: 'meeting-follow-up',
+          evidence: [
+            CurrentEvidence(sourceId: 'zkr:meeting', reason: 'Commitment'),
+          ],
+          reason: 'Commitment',
+          timing: CurrentTiming(surfaceAt: createdAt),
+          confidence: .9,
+          proposedNextStep: 'Send the notes',
+          createdAt: createdAt,
+        ).transitionTo(CurrentStatus.surfaced, at: createdAt),
+        title: 'Send the notes',
+        summary: 'Send the notes',
+        sourceKind: 'conversation',
+      ),
+    ];
+    services.currents!.items = seeded;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: ChatScreen(
+            services: services,
+            checklistStore: VolatileHubChecklistStore(),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    services.currents!.items = seeded;
+    await tester.pump();
+
+    expect(find.byKey(const Key('task_meeting-follow-up')), findsOneWidget);
+    expect(find.text('CONVERSATION'), findsOneWidget);
+  });
+
   testWidgets('task rows render from currents and dismiss on complete tap', (
     tester,
   ) async {

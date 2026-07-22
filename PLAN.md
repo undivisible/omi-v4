@@ -293,6 +293,10 @@ Keep `grok-composer-2.5-fast` only when the authenticated xAI catalog returns it
 
 Stripe is intentionally unconfigured (`STRIPE_SECRET_KEY`/`STRIPE_PRO_PRICE_ID` unset) so `_PlanTile`'s checkout/portal actions fail closed with no live charge path; `AppServices.canUseApi` (`app/lib/app_services.dart:321`) gates chat/API access on auth and processing consent only, never on plan or entitlement, so the app stays fully usable for free during this testing phase. Do not wire real Stripe credentials until the provider-choice model below is designed and approved.
 
+### Future: native computer connection
+
+A later version adds a native computer connection: deep OS-level control beyond the current praefectus computer-use path, so Omi can operate the machine directly rather than only through the fenced accessibility-action pipeline.
+
 ### Future: provider choice under a SuperGrok/subscription plan (not yet designed)
 
 When a paid plan is reintroduced, offer a subscription tier (e.g. riding an xAI SuperGrok-style subscription) with a visible "or use your own API keys" fallback next to it, plus explicit provider choice rather than one fixed managed stack:

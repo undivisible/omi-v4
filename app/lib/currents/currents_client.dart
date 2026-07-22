@@ -30,17 +30,20 @@ final class CurrentCard {
     required this.item,
     required this.title,
     required this.summary,
+    this.sourceKind,
   });
 
   factory CurrentCard.fromJson(Map<String, Object?> json) => CurrentCard(
     item: CurrentItem.fromJson(json),
     title: _text(json, 'title'),
     summary: _text(json, 'summary'),
+    sourceKind: _optionalText(json, 'sourceKind'),
   );
 
   final CurrentItem item;
   final String title;
   final String summary;
+  final String? sourceKind;
 }
 
 final class CurrentActionHandoff {
@@ -294,6 +297,15 @@ Map<String, Object?> _map(Map<String, Object?> json, String key) {
   final value = json[key];
   if (value is! Map<String, Object?>) {
     throw CurrentsClientException('$key must be an object');
+  }
+  return value;
+}
+
+String? _optionalText(Map<String, Object?> json, String key) {
+  final value = json[key];
+  if (value == null) return null;
+  if (value is! String || value.trim().isEmpty) {
+    throw CurrentsClientException('$key must be a non-empty string or null');
   }
   return value;
 }
