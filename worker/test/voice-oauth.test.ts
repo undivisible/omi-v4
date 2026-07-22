@@ -86,7 +86,7 @@ describe("gemini live tokens", () => {
     globalThis.fetch = (async () =>
       Response.json({ name: "auth_tokens/ephemeral-stub" })) as typeof fetch;
     const response = await request(
-      "no-entitlement-row",
+      "beta",
       "/voice/gemini/token",
       { method: "POST" },
       {
