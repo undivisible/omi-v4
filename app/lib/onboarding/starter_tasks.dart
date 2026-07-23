@@ -15,7 +15,9 @@ List<String> deriveStarterTasks({
     for (final span in spans) {
       final subject = span.group(1)!.replaceAll(RegExp(r'\s+'), ' ').trim();
       if (subject.length < 3 || subject.length > 60) continue;
-      if (subjects.any((existing) => existing.toLowerCase() == subject.toLowerCase())) {
+      if (subjects.any(
+        (existing) => existing.toLowerCase() == subject.toLowerCase(),
+      )) {
         continue;
       }
       subjects.add(subject);

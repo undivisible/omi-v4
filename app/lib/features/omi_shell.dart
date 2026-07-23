@@ -42,7 +42,6 @@ class _OmiShellState extends State<OmiShell> {
   CursorPillController? _cursorPill;
 
   static const _windowChromeChannel = MethodChannel('omi/window_chrome');
-  bool _windowChromeHandlerSet = false;
 
   bool get _isMacDesktop =>
       !kIsWeb && defaultTargetPlatform == TargetPlatform.macOS;
@@ -53,8 +52,6 @@ class _OmiShellState extends State<OmiShell> {
     if (widget.previewMode) return;
     if (_isMacDesktop) {
       unawaited(_enterHubChrome());
-      _windowChromeChannel.setMethodCallHandler(_handleWindowChromeCall);
-      _windowChromeHandlerSet = true;
     }
     _cursorPill = CursorPillController.forServices(
       widget.services,
@@ -92,14 +89,31 @@ class _OmiShellState extends State<OmiShell> {
     }
   }
 
-  Future<dynamic> _handleWindowChromeCall(MethodCall call) async {
-    if (call.method == 'openSettings') {
-      _openSettings();
+  @visibleForTesting
+  void debugOpenSettingsForTest() => _openSettings();
+
+  /// On macOS settings live in their own native window (a second Flutter
+  /// engine hosted by SettingsWindowController); the channel call asks the
+  /// Runner to open or front it. Elsewhere — and in tests or previews where
+  /// the native side is absent — fall back to the in-window route.
+  void _openSettings() {
+    if (!mounted) return;
+    if (_isMacDesktop && !widget.previewMode) {
+      unawaited(() async {
+        try {
+          await _windowChromeChannel.invokeMethod<void>('openSettings');
+        } on MissingPluginException {
+          _openSettingsRoute();
+        } on PlatformException {
+          _openSettingsRoute();
+        }
+      }());
+      return;
     }
-    return null;
+    _openSettingsRoute();
   }
 
-  void _openSettings() {
+  void _openSettingsRoute() {
     if (!mounted) return;
     Navigator.of(context).push(
       MaterialPageRoute<void>(
@@ -124,9 +138,6 @@ class _OmiShellState extends State<OmiShell> {
 
   @override
   void dispose() {
-    if (_windowChromeHandlerSet) {
-      _windowChromeChannel.setMethodCallHandler(null);
-    }
     unawaited(_menuBar?.dispose());
     unawaited(_disposeDesktopGesture());
     _cursorPill?.dispose();
