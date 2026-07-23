@@ -221,6 +221,7 @@ impl FarEndWatch {
     }
 }
 
+#[cfg(any(target_os = "macos", test))]
 #[derive(Debug)]
 pub(crate) struct LinearResampler {
     step: f64,
@@ -228,6 +229,7 @@ pub(crate) struct LinearResampler {
     previous: Option<i16>,
 }
 
+#[cfg(any(target_os = "macos", test))]
 impl LinearResampler {
     pub(crate) fn new(input_hz: u32, output_hz: u32) -> Self {
         Self {
@@ -278,6 +280,23 @@ pub(crate) fn pcm_bytes(samples: &[i16]) -> Vec<u8> {
     bytes
 }
 
+/// Interleaves the microphone as `ch0` and the system tap as `ch1`, exactly the
+/// two-track byte layout the macOS tap writes, so the rest of the pipeline
+/// (mixing, per-track energy, speaker attribution) is shared across platforms.
+/// A short far-end track is padded with silence, which is also the signal a
+/// one-sided call is detected from.
+#[cfg(any(target_os = "windows", test))]
+pub(crate) fn interleave_two_track(microphone: &[i16], system: &[i16]) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(microphone.len() * 4);
+    for (index, sample) in microphone.iter().enumerate() {
+        bytes.extend_from_slice(&sample.to_le_bytes());
+        let far = system.get(index).copied().unwrap_or(0);
+        bytes.extend_from_slice(&far.to_le_bytes());
+    }
+    bytes
+}
+
+#[cfg(any(target_os = "macos", test))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct WavHeader {
     pub(crate) sample_rate: u32,
@@ -286,6 +305,7 @@ pub(crate) struct WavHeader {
     pub(crate) data_offset: u64,
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn skip_bytes(reader: &mut impl std::io::Read, mut count: u64) -> std::io::Result<()> {
     let mut buffer = [0u8; 4096];
     while count > 0 {
@@ -303,6 +323,7 @@ fn skip_bytes(reader: &mut impl std::io::Read, mut count: u64) -> std::io::Resul
 /// by `data`: it tolerates a `WAVE_FORMAT_EXTENSIBLE` `fmt ` chunk (bigger
 /// than 16 bytes) and any number of other chunks (e.g. `LIST`, `fact`)
 /// appearing before `data`.
+#[cfg(any(target_os = "macos", test))]
 pub(crate) fn parse_wav_header(reader: &mut impl std::io::Read) -> Option<WavHeader> {
     let mut riff = [0u8; 12];
     reader.read_exact(&mut riff).ok()?;
@@ -586,7 +607,276 @@ mod platform {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "windows")]
+mod platform {
+    use super::{
+        CAPTURE_SAMPLE_RATE_HZ, CAPTURE_STREAM_ID, FarEndWatch, interleave_two_track,
+        mix_two_track_to_mono_measured, observe_track_energy, pcm_bytes, reset_speaker_tracker,
+    };
+    use crate::capture_policy::CapturePlan;
+    use crate::signals::{AudioEncoding, NativeError, NativeEvent, TranscriptionAuth};
+    use crate::stt::{SttConfig, SttHandle};
+    use std::collections::VecDeque;
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
+    use wasapi::{DeviceEnumerator, Direction, SampleType, StreamMode, WaveFormat, initialize_mta};
+
+    const READ_POLL: Duration = Duration::from_millis(20);
+    const SESSION_LOST_AFTER: Duration = Duration::from_secs(5);
+    /// The far end runs behind the microphone by at most this much before its
+    /// backlog is dropped. The two endpoints run off independent device clocks,
+    /// so without a cap a faster system-audio clock would accumulate unbounded
+    /// latency against the microphone that drives the mixed timeline.
+    const MAX_SYSTEM_BACKLOG_SAMPLES: usize = CAPTURE_SAMPLE_RATE_HZ as usize;
+
+    pub struct MeetingCaptureHandle {
+        control: Option<mpsc::Sender<()>>,
+    }
+
+    impl MeetingCaptureHandle {
+        fn signal(&mut self) {
+            if let Some(control) = self.control.take() {
+                let _ = control.send(());
+            }
+        }
+    }
+
+    impl Drop for MeetingCaptureHandle {
+        fn drop(&mut self) {
+            self.signal();
+        }
+    }
+
+    fn emit_error(code: &str) {
+        let message = match code {
+            "meeting_system_audio_unavailable" => {
+                "system audio capture is unavailable; fall back to microphone capture"
+            }
+            _ => "meeting capture transcription session was lost",
+        };
+        NativeEvent::Error(NativeError {
+            request_id: Some(CAPTURE_STREAM_ID.to_owned()),
+            code: code.to_owned(),
+            message: message.to_owned(),
+            retryable: true,
+        })
+        .send();
+    }
+
+    /// A shared-mode WASAPI capture stream delivering 16 kHz mono signed 16-bit
+    /// PCM, whichever native format the endpoint runs at.
+    ///
+    /// The two endpoints this module opens — the render device in loopback mode
+    /// for system audio and the default capture device for the microphone — are
+    /// requested in the exact frame format the transcription pipeline consumes,
+    /// letting the audio engine's own resampler (`AUTOCONVERTPCM`) do the format
+    /// conversion instead of hand-rolling one per endpoint.
+    struct CaptureStream {
+        client: wasapi::AudioClient,
+        capture: wasapi::AudioCaptureClient,
+        bytes: VecDeque<u8>,
+    }
+
+    impl CaptureStream {
+        /// Opens the default endpoint for `endpoint` and, when
+        /// `loopback` is set, captures what that render endpoint is playing.
+        ///
+        /// WASAPI expresses render-endpoint loopback as a *capture* stream on
+        /// the *render* device: the `wasapi` crate turns the `Render` device
+        /// plus a `Capture` direction into the `AUDCLNT_STREAMFLAGS_LOOPBACK`
+        /// flag, so passing the render device here is what taps the far end of
+        /// the call.
+        fn open(endpoint: Direction) -> Result<Self, String> {
+            let enumerator = DeviceEnumerator::new().map_err(|error| error.to_string())?;
+            let device = enumerator
+                .get_default_device(&endpoint)
+                .map_err(|error| error.to_string())?;
+            let mut client = device
+                .get_iaudioclient()
+                .map_err(|error| error.to_string())?;
+            let format = WaveFormat::new(
+                16,
+                16,
+                &SampleType::Int,
+                CAPTURE_SAMPLE_RATE_HZ as usize,
+                1,
+                None,
+            );
+            let (default_period, _min_period) = client
+                .get_device_period()
+                .map_err(|error| error.to_string())?;
+            let mode = StreamMode::PollingShared {
+                autoconvert: true,
+                buffer_duration_hns: default_period,
+            };
+            client
+                .initialize_client(&format, &Direction::Capture, &mode)
+                .map_err(|error| error.to_string())?;
+            let capture = client
+                .get_audiocaptureclient()
+                .map_err(|error| error.to_string())?;
+            client.start_stream().map_err(|error| error.to_string())?;
+            Ok(Self {
+                client,
+                capture,
+                bytes: VecDeque::new(),
+            })
+        }
+
+        fn drain_into_buffer(&mut self) -> Result<(), String> {
+            self.capture
+                .read_from_device_to_deque(&mut self.bytes)
+                .map(|_info| ())
+                .map_err(|error| error.to_string())
+        }
+
+        /// Removes and returns the next `count` little-endian samples, padding
+        /// with silence when the stream has not produced that many yet.
+        fn take_samples(&mut self, count: usize) -> Vec<i16> {
+            let mut samples = Vec::with_capacity(count);
+            for _ in 0..count {
+                let low = self.bytes.pop_front();
+                let high = self.bytes.pop_front();
+                match (low, high) {
+                    (Some(low), Some(high)) => samples.push(i16::from_le_bytes([low, high])),
+                    _ => samples.push(0),
+                }
+            }
+            samples
+        }
+
+        fn buffered_samples(&self) -> usize {
+            self.bytes.len() / 2
+        }
+
+        fn cap_backlog(&mut self, max_samples: usize) {
+            while self.bytes.len() > max_samples * 2 {
+                self.bytes.pop_front();
+            }
+        }
+
+        fn stop(&self) {
+            let _ = self.client.stop_stream();
+        }
+    }
+
+    fn stream_capture(
+        microphone: &mut CaptureStream,
+        system: &mut CaptureStream,
+        stt: &SttHandle,
+        control: &mpsc::Receiver<()>,
+    ) -> bool {
+        let mut remainder = Vec::new();
+        let mut failing_since: Option<Instant> = None;
+        let mut far_end = FarEndWatch::default();
+        reset_speaker_tracker();
+        loop {
+            match control.recv_timeout(READ_POLL) {
+                Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => return true,
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+            }
+            if microphone.drain_into_buffer().is_err() || system.drain_into_buffer().is_err() {
+                return true;
+            }
+            // The microphone drives the shared timeline; the far end is aligned
+            // to it and padded with silence whenever it runs short, which is
+            // also the signal a one-sided call is detected from.
+            let frames = microphone.buffered_samples();
+            if frames == 0 {
+                system.cap_backlog(MAX_SYSTEM_BACKLOG_SAMPLES);
+                continue;
+            }
+            let mic_samples = microphone.take_samples(frames);
+            let system_samples = system.take_samples(frames.min(system.buffered_samples()));
+            system.cap_backlog(MAX_SYSTEM_BACKLOG_SAMPLES);
+            let interleaved = interleave_two_track(&mic_samples, &system_samples);
+            let (mono, energy) = mix_two_track_to_mono_measured(&interleaved, &mut remainder);
+            observe_track_energy(energy);
+            if far_end.observe(energy, CAPTURE_SAMPLE_RATE_HZ) {
+                emit_error("meeting_far_end_silent");
+            }
+            if mono.is_empty() {
+                continue;
+            }
+            match stt.send_audio(&pcm_bytes(&mono)) {
+                Ok(()) => failing_since = None,
+                Err(_) => {
+                    let since = *failing_since.get_or_insert_with(Instant::now);
+                    if since.elapsed() >= SESSION_LOST_AFTER {
+                        emit_error("meeting_capture_session_lost");
+                        return false;
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn start(
+        plan: CapturePlan,
+        auth: TranscriptionAuth,
+        trusted_worker_origin: Option<String>,
+    ) -> Result<MeetingCaptureHandle, String> {
+        if !plan.system_audio {
+            return Err("system audio capture is disallowed by the current mode".to_owned());
+        }
+        let config = SttConfig {
+            request_id: CAPTURE_STREAM_ID.to_owned(),
+            audio_stream_id: CAPTURE_STREAM_ID.to_owned(),
+            device_id: CAPTURE_STREAM_ID.to_owned(),
+            language: "multi".to_owned(),
+            sample_rate_hz: CAPTURE_SAMPLE_RATE_HZ,
+            channels: 1,
+            encoding: AudioEncoding::PcmS16Le,
+        };
+        let stt = crate::stt::spawn(config, &auth, trusted_worker_origin.as_deref())
+            .map_err(|error| error.to_string())?;
+        let report_unavailable = plan.microphone;
+        let (control_tx, control_rx) = mpsc::channel();
+        std::thread::Builder::new()
+            .name("omi-meeting-capture".into())
+            .spawn(move || {
+                // COM must be initialized on the thread that owns the WASAPI
+                // clients; a freshly spawned thread has no apartment yet.
+                let _ = initialize_mta();
+                let mut system = match CaptureStream::open(Direction::Render) {
+                    Ok(stream) => stream,
+                    Err(_) => {
+                        stt.cancel();
+                        if report_unavailable {
+                            emit_error("meeting_system_audio_unavailable");
+                        }
+                        return;
+                    }
+                };
+                let mut microphone = match CaptureStream::open(Direction::Capture) {
+                    Ok(stream) => stream,
+                    Err(_) => {
+                        system.stop();
+                        stt.cancel();
+                        if report_unavailable {
+                            emit_error("meeting_system_audio_unavailable");
+                        }
+                        return;
+                    }
+                };
+                let finished = stream_capture(&mut microphone, &mut system, &stt, &control_rx);
+                reset_speaker_tracker();
+                if finished {
+                    stt.finish();
+                } else {
+                    stt.cancel();
+                }
+                microphone.stop();
+                system.stop();
+            })
+            .map_err(|error| error.to_string())?;
+        Ok(MeetingCaptureHandle {
+            control: Some(control_tx),
+        })
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 mod platform {
     use crate::capture_policy::CapturePlan;
     use crate::signals::TranscriptionAuth;
@@ -598,9 +888,18 @@ mod platform {
         _auth: TranscriptionAuth,
         _trusted_worker_origin: Option<String>,
     ) -> Result<MeetingCaptureHandle, String> {
-        Err("meeting system audio capture is unavailable on this platform".to_owned())
+        Err(super::UNSUPPORTED_PLATFORM_REASON.to_owned())
     }
 }
+
+/// Shown to the user on desktop platforms that omi cannot yet capture a call
+/// on. It names the missing capability instead of failing quietly: it reaches
+/// the meeting panel as the `meeting_system_audio_unavailable` message whenever
+/// a meeting is started by hand here.
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+pub(crate) const UNSUPPORTED_PLATFORM_REASON: &str = "meeting capture isn't available on this platform yet — recording the other side of a call \
+     needs a PipeWire or PulseAudio monitor source that omi doesn't ship here. You can still start \
+     a meeting by hand to record your microphone.";
 
 pub(crate) use platform::MeetingCaptureHandle;
 
@@ -616,7 +915,7 @@ pub(crate) fn start(
 mod tests {
     use super::{
         FarEndWatch, LinearResampler, MeetingSpeaker, SpeakerTracker, TrackEnergy, WavHeader,
-        mix_two_track_to_mono_measured, parse_wav_header, pcm_bytes,
+        interleave_two_track, mix_two_track_to_mono_measured, parse_wav_header, pcm_bytes,
     };
     use std::time::{Duration, Instant};
 
@@ -753,6 +1052,20 @@ mod tests {
     #[test]
     fn pcm_bytes_are_little_endian() {
         assert_eq!(pcm_bytes(&[1, -2]), vec![1, 0, 254, 255]);
+    }
+
+    #[test]
+    fn interleave_pads_a_short_far_end_with_silence_and_mixes_back_cleanly() {
+        // Two microphone frames but only one far-end sample: the missing far
+        // end reads as silence, so the mix halves each microphone sample and
+        // the second frame keeps the microphone alone.
+        let bytes = interleave_two_track(&[1_000, 2_000], &[400]);
+        assert_eq!(bytes, vec![0xE8, 0x03, 0x90, 0x01, 0xD0, 0x07, 0x00, 0x00]);
+        let mut remainder = Vec::new();
+        let (mono, energy) = mix_two_track_to_mono_measured(&bytes, &mut remainder);
+        assert_eq!(mono, vec![700, 1_000]);
+        assert_eq!(energy.frames, 2);
+        assert!(remainder.is_empty());
     }
 
     fn two_track_frames(microphone: i16, system: i16, frames: usize) -> Vec<u8> {
@@ -901,9 +1214,9 @@ mod tests {
         }
     }
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     #[test]
-    fn non_macos_capture_is_unavailable() {
+    fn unsupported_platform_capture_is_unavailable() {
         use crate::capture_policy::{SystemAudioCaptureMode, capture_plan};
         use crate::signals::TranscriptionAuth;
         assert!(

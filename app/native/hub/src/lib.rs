@@ -39,13 +39,13 @@ async fn main() {
     let audio_dispatcher = spawn(audio_dispatcher.run());
     let command_listener = spawn(ClientCommand::listen(command_sender));
     let audio_listener = spawn(AudioChunk::listen(audio_sender));
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     let meeting_poll = spawn(meeting_detector::run_meeting_poll());
     dart_shutdown().await;
     command_listener.abort();
     audio_listener.abort();
     meeting_runtime.abort();
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     meeting_poll.abort();
     let _ = command_listener.await;
     let _ = audio_listener.await;
