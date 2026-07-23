@@ -1,6 +1,12 @@
 # Omi v4 Architecture
 
-*Generated from a read-only pass over the repository on 2026-07-22. Every claim below is grounded in code under `app/`, `worker/`, and `PLAN.md`; file paths are cited inline so each statement is checkable against the source. This describes what exists in the repository right now, not the eventual product vision.*
+*Generated from a read-only pass over the repository on 2026-07-22 and revised 2026-07-23. Every claim below is grounded in code under `app/`, `worker/`, `worker-rs/`, and `PLAN.md`; file paths are cited inline so each statement is checkable against the source. This describes what exists in the repository right now, not the eventual product vision.*
+
+This document covers the system as a whole and compares it to the upstream Omi project (§5). Three companion documents go deeper on each surface:
+
+- [`app/ARCHITECTURE-mobile.md`](app/ARCHITECTURE-mobile.md) — the iOS/Android companion and the BLE pendant relay.
+- [`app/ARCHITECTURE-desktop.md`](app/ARCHITECTURE-desktop.md) — the Flutter desktop UI, the Rust hub, and the macOS Runner.
+- [`firmware/ARCHITECTURE.md`](firmware/ARCHITECTURE.md) — the vendored nRF5340 pendant firmware.
 
 ## 1. Product summary
 
@@ -366,15 +372,55 @@ flowchart TD
 
 The Firebase UID is the sole tenant key on both sides of the system. On the Worker/D1 side, every table that stores user data is scoped by `uid` (`users`, `entitlements`, conversations, `channel_bindings`, `currents`/`current_executions`, memory projection tables) and nearly every query in `worker/src/*.ts` includes an explicit `uid = ?` predicate. On the Rust hub side, `zkr`'s `TenantId` and `PersonId` are both required to equal the same Firebase UID (`firebase_memory_scope` in `runtime.rs`) — there is intentionally no separate tenant/person split in v0. Channel identity (Telegram user/chat id, Blooio E.164/chat id) is mapped to a UID only through a consumed, hashed, single-use link token (`channel_link_tokens` → `channel_bindings`), never by trusting a channel-supplied identity claim directly. This is also how "same account links mobile, desktop, web, Telegram, and Blooio to one Firebase UID and assistant session" (`PLAN.md` v0 acceptance §1) is enforced structurally rather than just by convention.
 
-## 5. Known gaps / proof still required
+## 5. Comparison with upstream Omi
+
+Upstream here means the BasedHardware/omi monorepo (read for this section at `~/projects/omi`). The relationship is not a fork: this repository shares the pendant hardware and the product concept, but the app and backend are independently implemented. The one directly inherited component is the pendant firmware, which is vendored from upstream into `firmware/` (see [`firmware/ARCHITECTURE.md`](firmware/ARCHITECTURE.md)).
+
+### 5.1 Shape of the two codebases
+
+| Area | Upstream | Omi v4 (this repo) |
+| --- | --- | --- |
+| Client apps | Flutter app (~593 Dart files under `app/lib`) plus a separate native desktop product (`desktop/macos`: a Swift package, a `Backend-Rust` component, `agent/`, `agent-cloud/`, `acp-bridge/`; `desktop/windows`: Node) | One Flutter codebase (~160 Dart files under `app/lib`) serving iOS, Android, macOS, Windows, and web, plus an embedded Rust hub (`app/native/hub/src`) and a macOS Runner (`app/macos/Runner`) |
+| Backend | Python/FastAPI on GCP — Firestore, Cloud Storage, Cloud Tasks, Redis, Pinecone *and* Qdrant for vectors, Typesense for search, SQLAlchemy, Modal jobs; provisioned with OpenTofu (`backend/`, `infrastructure/`) | Cloudflare Workers — `worker/` (TypeScript/Hono) with `worker-rs/` (a Rust/workers-rs parity port); D1 for relational data, Durable Objects for coordination, Vectorize for embeddings, Workers AI |
+| Auth | Firebase Auth | Firebase Auth, verified at the edge (`worker/src/auth.ts`) |
+| Memory | Vector stores (Pinecone/Qdrant) behind backend services | `zkr` evidence-backed temporal memory in-process on the client, projected to D1/Vectorize for cloud recall |
+| Firmware | `omi/firmware` — production `omi/` plus legacy `devkit/` and `test/` variants | `firmware/` — the production tree vendored; `devkit/` and `test/` deliberately excluded |
+| Also in tree | `omiGlass`, a plugins/apps ecosystem, MCP servers, SDKs, contract tests | none of these |
+
+### 5.2 What we deliberately skip
+
+Upstream is a mature, shipped product with substantially more surface area. The following are real upstream capabilities this repository does not attempt: the plugins/apps ecosystem, `omiGlass`, the published MCP servers and SDKs, the dedicated diarizer and NLLB translation services, and the multi-datastore search/vector tier (Pinecone, Qdrant, Typesense, Redis). Upstream's `backend/database` also carries feature modules with no counterpart here. The mobile and desktop documents enumerate the per-surface omissions in detail.
+
+### 5.3 What we do differently
+
+- **One backend platform instead of several.** All persistence, coordination, and vector search run on Cloudflare primitives rather than a fleet of managed GCP services.
+- **The assistant runtime is embedded in the client**, not a separate agent process: `app/native/hub` is linked into the app over Rinf, so chat, voice, scan, memory, and computer-use share one process and one memory authority.
+- **Local-first inference with cloud escalation.** `app/native/hub/src/chat_router.rs` routes ordinary turns to on-device Apple Foundation Models and escalates heavier turns to a hosted model.
+- **One Flutter codebase for mobile and desktop**, where upstream maintains a separate native desktop product.
+- **A Rust parity port of the backend** (`worker-rs/`) so the hub and the edge can share a language.
+
+### 5.4 What we believe is better here
+
+These are defensible from the code, but they are architectural bets, not measured wins — no cost, latency, or reliability benchmark against upstream has been run.
+
+- Markedly fewer moving parts in the backend: one platform and one relational store plus Durable Objects and Vectorize, versus five-plus managed services.
+- Memory is evidence-backed and citable by construction rather than similarity-only retrieval (§3.2).
+- Computer-use is gated behind an explicit, auditable approval ledger (§3.5).
+- Keeping ordinary chat turns on-device reduces both cost and data egress.
+
+### 5.5 Where upstream is ahead
+
+Feature breadth across the mobile app, the plugin/app ecosystem and its marketplace, translation and diarization, additional hardware (`omiGlass`), published SDKs and MCP integrations, and a production deployment operating at real scale. Nothing in this repository has been proven against live provider credentials or physical hardware at that scale (§6).
+
+## 6. Known gaps / proof still required
 
 Directly from `PLAN.md`'s "Active build checklist," "Current release train," and "Known constraints," corroborated by the code read in this pass:
 
 - **No credentialed live-provider proof yet.** Gemini Live, MiMo (chat and ASR), Deepgram (legacy), Firebase, Stripe, Telegram, Blooio, and the model routes are all implemented against real protocols but have not been exercised against live provider credentials in this repository state.
 - **No physical-device proof.** Omi BLE hardware capture, iOS/Android transcription lifecycle, and macOS/Windows both-Shift gesture timing are implemented but only unit/logic-tested, not run against real hardware or OS input.
-- **`rx4` and `rotary` are not yet real extraction/ranking engines** in the hub — `rx4` usage is currently limited to version reporting; `rotary` integration has not started.
+- **`rotary` is still unintegrated.** `rx4` is now genuinely load-bearing — `extraction.rs` calls `rx4::extract_proactive_loose`, `rx4::extract_knowledge_loose`, and `rx4::top_n` to derive claims from model output — but `rotary` has no usage anywhere in `app/native/hub/src`.
 - **Local STT does not exist.** `TranscriptionAuth::Local` and `SttError::Unavailable` are deliberate fail-closed stand-ins until a real local STT provider (`rs_ai_local` or similar) is integrated; MiMo remains batch-only ASR.
 - **Nightly Daily Review orchestration is unwired.** Currents currently only supports a single idempotent cited recommendation generated on demand when the surface loads — no scheduled nightly reflection cycle exists yet.
-- **Windows computer-use (`rs_peekaboo`/UI Automation) and cross-platform release-build proof are outstanding**, per `PLAN.md`'s test-day checklist; this review did not inspect any Windows-specific native code.
+- **Windows computer-use and cross-platform release-build proof are outstanding**, per `PLAN.md`'s test-day checklist; this review did not inspect any Windows-specific native code. Desktop computer-use is provided by the `praefectus` crate (`app/native/hub/src/computer_use.rs`, behind the `computer-use` feature), which supersedes the `rs_peekaboo` naming used in older planning documents.
 - **Cloudflare bindings/secrets are still placeholders** in the reference backend; deployment proof (real D1/Stripe/Telegram/Blooio credentials in a live preview environment) has not happened.
 - **Some source files referenced in the task (`chat_screen.dart`, `omi_shell.dart`, `setup_account_screens.dart`, `onboarding_screen.dart`) were noted as possibly mid-edit by concurrent sessions** and were not deep-read for this document; their described behavior above is inferred from `AppServices` and `PLAN.md` rather than from reading those UI files directly.
