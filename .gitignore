@@ -13,3 +13,5 @@ target/
 *.pyc
 .env*
 !.env.example
+firmware/omi/prj.conf
+firmware/v2.9.0/

@@ -2,7 +2,11 @@ name: CI
 
 on:
   push:
+    paths-ignore:
+      - 'firmware/**'
   pull_request:
+    paths-ignore:
+      - 'firmware/**'
 
 permissions:
   contents: read
