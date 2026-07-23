@@ -94,6 +94,54 @@ void main() {
     expect(state.canRetry, isTrue);
     expect(state.error, 'Link expired');
   });
+
+  test('redeems a typed code and returns the bound channel', () async {
+    final transport = _Transport(
+      const ChannelResponse(
+        statusCode: 201,
+        body: {'channel': 'telegram', 'linked': true},
+      ),
+    );
+
+    final channel = await ChannelClient(transport).redeemCode('K7QP2RM');
+
+    expect(transport.lastRequest?.method, ChannelHttpMethod.post);
+    expect(transport.lastRequest?.path, '/v1/channels/link');
+    expect(transport.lastRequest?.body, {'code': 'K7QP2RM'});
+    expect(channel, ChannelProvider.telegram);
+  });
+
+  test('a redemption error surfaces its status for the caller', () async {
+    final client = ChannelClient(
+      _Transport(
+        const ChannelResponse(
+          statusCode: 404,
+          body: {'error': 'Unknown or expired code'},
+        ),
+      ),
+    );
+
+    await expectLater(
+      client.redeemCode('K7QP2RM'),
+      throwsA(
+        isA<ChannelApiException>().having((e) => e.statusCode, 'status', 404),
+      ),
+    );
+  });
+
+  group('ChannelLinkCode.tryParse', () {
+    test('accepts the code case-insensitively with separators', () {
+      expect(ChannelLinkCode.tryParse('k7qp2rm'), 'K7QP2RM');
+      expect(ChannelLinkCode.tryParse('K7Q-P2RM'), 'K7QP2RM');
+      expect(ChannelLinkCode.tryParse(' K7QP2RM '), 'K7QP2RM');
+    });
+
+    test('rejects the ambiguous alphabet and wrong lengths', () {
+      expect(ChannelLinkCode.tryParse('O0I1LAB'), isNull);
+      expect(ChannelLinkCode.tryParse('K7QP2R'), isNull);
+      expect(ChannelLinkCode.tryParse('hello there'), isNull);
+    });
+  });
 }
 
 final class _Transport implements AuthenticatedChannelTransport {

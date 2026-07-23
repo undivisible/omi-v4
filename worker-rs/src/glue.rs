@@ -11,6 +11,8 @@ use worker::{
 };
 
 use crate::auth::{self, Auth, FirebaseJwks};
+use crate::channel_commands as cmd;
+use crate::delivery::Channel;
 use crate::entitlement::{self, DevFakePro, EntitlementRow};
 use crate::setup_health::{setup_health_body, SetupHealthInputs};
 use crate::worker_util::now_ms_f64 as now_ms;
@@ -58,6 +60,10 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         .get_async("/v1/me", handle_me)
         .get_async("/v1/setup-health", handle_setup_health)
         .get_async("/v1/entitlement", handle_entitlement)
+        // Phase 2: channel linking (authenticated).
+        .post_async("/v1/channels/link", handle_channel_link_redeem)
+        .post_async("/v1/channels/:channel/link", handle_channel_link_token)
+        .delete_async("/v1/channels/:channel/link", handle_channel_unlink)
         .get_async("/v1/profile/onboarding", handle_onboarding_get)
         .put_async("/v1/profile/onboarding", handle_onboarding_put)
         .delete_async("/v1/account", handle_account_delete)
@@ -237,6 +243,158 @@ async fn handle_me(req: Request, ctx: RouteContext<()>) -> Result<Response> {
         "email": auth.email,
         "channels": channels,
     }))
+}
+
+// POST /v1/channels/link — redeem a texted link code. Parity with the TS
+// `/channels/link` route: the chat identity comes from the stored code row,
+// never from the request body.
+async fn handle_channel_link_redeem(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let auth = match authenticate(&req, &ctx).await {
+        AuthOutcome::Ok(auth) => auth,
+        AuthOutcome::Reject(response) => return Ok(response),
+    };
+    let body: Value = req.json().await.unwrap_or(Value::Null);
+    let Some(code) = body
+        .get("code")
+        .and_then(Value::as_str)
+        .and_then(crate::channel_link::normalize_link_code)
+    else {
+        return error_json("Invalid code", 400);
+    };
+    let (allowed, retry_after) = crate::rate_limit_lock::consume_rate_limit(
+        &ctx.env,
+        &format!("channel-link-redeem:{}", auth.uid),
+        10,
+        10 * 60_000,
+    )
+    .await?;
+    if !allowed {
+        let headers = worker::Headers::new();
+        headers.set("retry-after", &retry_after.to_string())?;
+        let response = Response::from_json(&json!({ "error": "Too many attempts" }))?
+            .with_status(429)
+            .with_headers(headers);
+        return Ok(response);
+    }
+    let now = Date::now().as_millis() as i64;
+    let Some(pending) = crate::routes_channels::resolve_link_code(&ctx.env, &code, now).await?
+    else {
+        return error_json("Unknown or expired code", 404);
+    };
+    let db = ctx.env.d1("DB")?;
+    let existing = db
+        .prepare(
+            "SELECT uid FROM channel_bindings WHERE channel = ?1 AND channel_user_id = ?2 AND revoked_at IS NULL",
+        )
+        .bind(&[
+            pending.channel.as_str().into(),
+            pending.channel_user_id.clone().into(),
+        ])?
+        .first::<Value>(None)
+        .await?;
+    if let Some(existing) = existing.as_ref() {
+        if row_str(existing, "uid").as_deref() != Some(auth.uid.as_str()) {
+            return error_json("Chat is linked to another account", 409);
+        }
+    }
+    let details = json!({
+        "channelUserId": pending.channel_user_id,
+        "channelChatId": pending.channel_chat_id,
+    })
+    .to_string();
+    let results = db
+        .batch(vec![
+            db.prepare(
+                "INSERT INTO channel_bindings (channel, channel_user_id, uid, verified_at, revoked_at, channel_chat_id)\n                 VALUES (?1, ?2, ?3, ?4, NULL, ?5)\n                 ON CONFLICT(channel, channel_user_id) DO UPDATE SET\n                   uid = excluded.uid, verified_at = excluded.verified_at,\n                   revoked_at = NULL, channel_chat_id = excluded.channel_chat_id",
+            )
+            .bind(&[
+                pending.channel.as_str().into(),
+                pending.channel_user_id.clone().into(),
+                auth.uid.clone().into(),
+                (now as f64).into(),
+                pending.channel_chat_id.clone().into(),
+            ])?,
+            db.prepare(
+                "INSERT INTO audit_events\n                   (id, uid, actor_type, action, target_type, target_id, details, created_at)\n                 VALUES (?1, ?2, 'channel', 'channel.linked', 'channel', ?3, ?4, ?5)",
+            )
+            .bind(&[
+                uuid_v4().into(),
+                auth.uid.clone().into(),
+                pending.channel.as_str().into(),
+                details.into(),
+                (now as f64).into(),
+            ])?,
+            db.prepare(
+                "UPDATE channel_link_codes SET consumed_at = ?1 WHERE code_hash = ?2 AND consumed_at IS NULL AND expires_at > ?1",
+            )
+            .bind(&[(now as f64).into(), pending.code_hash.clone().into()])?,
+        ])
+        .await?;
+    if changes(&results[2]) != 1 {
+        return error_json("Unknown or expired code", 404);
+    }
+    let _ = crate::routes_channels::send_channel_text(
+        &ctx.env,
+        pending.channel,
+        &pending.channel_chat_id,
+        &cmd::link_confirmation_text(auth.email.as_deref()),
+    )
+    .await;
+    Ok(
+        Response::from_json(&json!({ "channel": pending.channel.as_str(), "linked": true }))?
+            .with_status(201),
+    )
+}
+
+// POST /v1/channels/:channel/link — legacy authenticated token generation.
+async fn handle_channel_link_token(req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let auth = match authenticate(&req, &ctx).await {
+        AuthOutcome::Ok(auth) => auth,
+        AuthOutcome::Reject(response) => return Ok(response),
+    };
+    let Some(channel) = ctx.param("channel").and_then(|c| Channel::parse(c)) else {
+        return error_json("Unknown channel", 404);
+    };
+    let mut bytes = [0u8; 24];
+    getrandom::getrandom(&mut bytes).expect("getrandom");
+    let token = crypto_util::to_hex_lower(&bytes);
+    let token_hash = crypto_util::sha256_hex(&token);
+    let now = Date::now().as_millis() as i64;
+    let expires_at = now + 10 * 60_000;
+    let db = ctx.env.d1("DB")?;
+    db.prepare(
+        "INSERT INTO channel_link_tokens (token_hash, uid, channel, expires_at, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+    )
+    .bind(&[
+        token_hash.into(),
+        auth.uid.into(),
+        channel.as_str().into(),
+        (expires_at as f64).into(),
+        (now as f64).into(),
+    ])?
+    .run()
+    .await?;
+    Ok(Response::from_json(&json!({
+        "channel": channel.as_str(),
+        "token": token,
+        "expiresAt": expires_at,
+    }))?
+    .with_status(201))
+}
+
+// DELETE /v1/channels/:channel/link — revoke the binding for the current uid.
+async fn handle_channel_unlink(req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let auth = match authenticate(&req, &ctx).await {
+        AuthOutcome::Ok(auth) => auth,
+        AuthOutcome::Reject(response) => return Ok(response),
+    };
+    let Some(channel) = ctx.param("channel").and_then(|c| Channel::parse(c)) else {
+        return error_json("Unknown channel", 404);
+    };
+    match crate::routes_channels::dispatch_channel_unlink(&ctx.env, &auth.uid, channel).await {
+        Ok(()) => Ok(Response::empty()?.with_status(204)),
+        Err(_) => error_json("Delivery coordination unavailable", 503),
+    }
 }
 
 async fn handle_setup_health(req: Request, ctx: RouteContext<()>) -> Result<Response> {
@@ -779,9 +937,10 @@ async fn handle_webhook_telegram(mut req: Request, ctx: RouteContext<()>) -> Res
             == LinkOutcome::Linked;
         return Response::from_json(&json!({ "accepted": true, "linked": linked }));
     }
-    let queued = enqueue_channel_message(
-        &db,
-        "telegram",
+    let processed = process_channel_message(
+        &ctx.env,
+        Channel::Telegram,
+        fresh,
         &event_id,
         &message.message_id,
         &message.user_id,
@@ -793,7 +952,69 @@ async fn handle_webhook_telegram(mut req: Request, ctx: RouteContext<()>) -> Res
     if !fresh {
         return Response::from_json(&json!({ "accepted": true, "duplicate": true }));
     }
-    Response::from_json(&json!({ "accepted": queued, "queued": queued }))
+    Response::from_json(&json!({
+        "accepted": true,
+        "queued": processed.queued,
+        "replied": processed.replied,
+    }))
+}
+
+struct ProcessedMessage {
+    queued: bool,
+    replied: bool,
+}
+
+// Both webhooks are thin transports over the one shared command dispatcher —
+// parity with `processChannelMessage` in `worker/src/webhooks.ts`.
+#[allow(clippy::too_many_arguments)]
+async fn process_channel_message(
+    env: &Env,
+    channel: Channel,
+    fresh: bool,
+    event_id: &str,
+    message_id: &str,
+    channel_user_id: &str,
+    channel_chat_id: &str,
+    text: &str,
+    payload: &Value,
+) -> Result<ProcessedMessage> {
+    let outcome = crate::routes_channels::handle_channel_message(
+        env,
+        channel,
+        channel_user_id,
+        channel_chat_id,
+        text,
+        Date::now().as_millis() as i64,
+    )
+    .await?;
+    if fresh {
+        if let Some(reply) = outcome.reply.as_deref() {
+            let _ = crate::routes_channels::send_channel_text(env, channel, channel_chat_id, reply)
+                .await;
+        }
+    }
+    if !outcome.enqueue {
+        return Ok(ProcessedMessage {
+            queued: false,
+            replied: outcome.reply.is_some(),
+        });
+    }
+    let db = env.d1("DB")?;
+    let queued = enqueue_channel_message(
+        &db,
+        channel.as_str(),
+        event_id,
+        message_id,
+        channel_user_id,
+        channel_chat_id,
+        text,
+        payload,
+    )
+    .await?;
+    Ok(ProcessedMessage {
+        queued,
+        replied: false,
+    })
 }
 
 async fn handle_webhook_blooio(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
@@ -821,9 +1042,10 @@ async fn handle_webhook_blooio(mut req: Request, ctx: RouteContext<()>) -> Resul
             == LinkOutcome::Linked;
         return Response::from_json(&json!({ "accepted": true, "linked": linked }));
     }
-    let queued = enqueue_channel_message(
-        &db,
-        "blooio",
+    let processed = process_channel_message(
+        &ctx.env,
+        Channel::Blooio,
+        fresh,
         &message.event_id,
         &message.message_id,
         &message.sender,
@@ -835,7 +1057,11 @@ async fn handle_webhook_blooio(mut req: Request, ctx: RouteContext<()>) -> Resul
     if !fresh {
         return Response::from_json(&json!({ "accepted": true, "duplicate": true }));
     }
-    Response::from_json(&json!({ "accepted": queued, "queued": queued }))
+    Response::from_json(&json!({
+        "accepted": true,
+        "queued": processed.queued,
+        "replied": processed.replied,
+    }))
 }
 
 async fn handle_webhook_stripe(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {

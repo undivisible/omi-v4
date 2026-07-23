@@ -23,8 +23,18 @@ pub const MAX_REPLY_CHARACTERS: usize = 4_096;
 /// `offlineAcknowledgement`.
 pub const OFFLINE_ACKNOWLEDGEMENT: &str = "Got it — I'll answer when your desktop is back online.";
 
-/// `systemPrompt`.
-pub const SYSTEM_PROMPT: &str = "You are Omi, the user's personal assistant, replying over a messaging channel while their desktop is offline. Answer the user's latest message directly and concisely in plain text.";
+/// `systemPrompt` base. The channel command list is appended at build time
+/// (see [`system_prompt`]) so the model can point at a real command instead of
+/// inventing one — parity with `worker/src/inbox-fallback.ts`.
+pub const SYSTEM_PROMPT_BASE: &str = "You are Omi, the user's personal assistant, replying over a messaging channel while their desktop is offline. Answer the user's latest message directly and concisely in plain text.";
+
+/// `systemPrompt` — base plus the channel command injection.
+pub fn system_prompt() -> String {
+    format!(
+        "{SYSTEM_PROMPT_BASE}\n\n{}",
+        crate::channel_commands::channel_command_prompt()
+    )
+}
 
 /// A chat message (`ManagedMessage`): role + content.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -54,9 +64,10 @@ pub fn build_messages(
     history: &[Message],
     inbound: &str,
 ) -> Vec<Message> {
+    let base = system_prompt();
     let system_content = match memory_context {
-        None => SYSTEM_PROMPT.to_string(),
-        Some(context) => format!("{SYSTEM_PROMPT}\n\n{context}"),
+        None => base,
+        Some(context) => format!("{base}\n\n{context}"),
     };
     let mut messages = Vec::with_capacity(history.len() + 2);
     messages.push(Message::new("system", system_content));
@@ -115,14 +126,15 @@ mod tests {
         let out = build_messages(None, &history, "latest");
         assert_eq!(out.len(), 4);
         assert_eq!(out[0].role, "system");
-        assert_eq!(out[0].content, SYSTEM_PROMPT);
+        assert_eq!(out[0].content, system_prompt());
+        assert!(out[0].content.contains("/logout"));
         assert_eq!(out[3], Message::new("user", "latest"));
     }
 
     #[test]
     fn build_messages_with_memory_context() {
         let out = build_messages(Some("MEMORY"), &[], "q");
-        assert_eq!(out[0].content, format!("{SYSTEM_PROMPT}\n\nMEMORY"));
+        assert_eq!(out[0].content, format!("{}\n\nMEMORY", system_prompt()));
         assert_eq!(out.len(), 2);
     }
 
