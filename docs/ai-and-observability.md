@@ -33,26 +33,44 @@ Balanced also falls back to the legacy `MIMO_MODEL` when unset.
 
 ## 2. Speech-to-text (transcription)
 
-**Off Deepgram, onto OpenRouter/Gemini audio models.**
+**Off Deepgram, onto `x-ai/grok-stt-1.0` via OpenRouter.**
 
-- **Grok is not an option** — xAI models on OpenRouter are text/image only, no
-  audio input. (Checked the live model list.)
-- **No dedicated `transcription`-output models** on OpenRouter; STT is done by
-  audio-input multimodal models (`audio → text`).
-- **Cheapest audio→text:** `google/gemini-2.5-flash-lite` / `gemini-3.5-flash-lite`
-  at ~$0.30/M audio tokens, then `google/gemini-3.1-flash-lite` (~$0.50),
-  `openai/gpt-audio-mini` (~$0.60). (Mistral `voxtral` is ~$100/M — avoid.
-  The `inception/mercury-2` speed model has no audio input — it is not an
-  STT option.)
+- **Primary: `x-ai/grok-stt-1.0`** — xAI's dedicated STT model, released
+  2026-07 on OpenRouter, cheap. A purpose-built transcription model beats
+  bending a chat model into STT.
+- **Fallback / batch: `google/gemini-2.5-flash-lite`** (audio→text, ~$0.30/M
+  audio) — unifies on Gemini and covers the case where grok-stt is
+  unavailable. `openai/gpt-audio-mini` is the next option. (`inception/mercury-2`
+  and `xiaomi/mimo-v2.5*` are not audio models.)
 
-**Decision:**
-- **Batch / file transcription →** `google/gemini-2.5-flash-lite` — cheapest,
-  and it unifies on Gemini (already used by two tiers).
-- **Realtime / live (meetings, voice) →** Gemini Live's **built-in streaming
-  transcription**. This is the important tradeoff: Deepgram was a streaming
-  WebSocket; OpenRouter audio models are request/response (you'd chunk audio at
-  ~2–5s and eat the latency). Gemini Live transcribes the stream natively, so
-  for the realtime path use Gemini Live, not chunked OpenRouter.
+**Verify before shipping:** whether `grok-stt-1.0` supports *streaming*
+transcription or only batch. Deepgram was a streaming WebSocket; if grok-stt is
+request/response we chunk audio at ~2–5s (added latency). For the truly
+realtime path, Gemini Live's **built-in streaming transcription** remains the
+lowest-latency option and needs no separate STT call.
+
+## 2a. Embeddings
+
+**Keep them on Cloudflare Workers AI; reach for a multimodal model only for
+non-text.**
+
+- **Today:** `@cf/baai/bge-base-en-v1.5` (768-dim) via Workers AI
+  (`worker/src/embeddings.ts`), wired to Vectorize. It runs on our own
+  infrastructure (not a third party, not per-token-billed like OpenRouter),
+  and the free tier is generous — effectively the "local" option for the
+  cloud memory index.
+- **Recommendation:** keep Workers AI as the **primary text embedder**. It is
+  cheapest and already integrated; switching the primary to a paid API means
+  re-indexing the whole Vectorize store (dimension change) plus per-call cost
+  on a high-volume path.
+- **Multimodal:** when we index images/screenshots, add a multimodal embedder
+  for *that content only* — either a Cloudflare Workers AI multimodal model
+  (stays on-infra) or `gemini-embedding-2` (multimodal, high quality, but data
+  leaves and it costs per call). Prefer the on-infra option unless
+  gemini-embedding-2's quality is measurably needed.
+- **Net:** hybrid — Workers AI for text (the 95% path), a multimodal model for
+  images. Going all-in on `gemini-embedding-2` is only worth it if multimodal
+  quality is the priority and the re-index + cost are acceptable.
 
 ## 3. Gemini Live
 
@@ -99,7 +117,7 @@ constraint was lifted.
 |-------|------|--------------|--------|
 | Workers logs/metrics | **Workers Observability** (native) | Logpush → Better Stack/Datadog | ✅ enabled both workers |
 | LLM gateway | **Cloudflare AI Gateway** | Portkey, Kong AI Gateway | wiring in §4 |
-| LLM tracing | **Langfuse** (self-host, `rs_ai` native) | **foglamp.dev** (hosted, purpose-built for agents), Helicone, LangSmith | to wire |
+| LLM tracing | **foglamp.dev** (hosted, purpose-built for agents) | Langfuse (`rs_ai` native, self-host), Helicone, LangSmith | to wire |
 | Errors / APM | **Sentry** (worker **and** Flutter client) | Bugsnag, Rollbar, Highlight, GlitchTip (self-host) | to wire |
 | Uptime + status + on-call | **Better Stack** (uptime + logs + incidents in one) | **Hyperping** (uptime/status/on-call focus), Pingdom, Checkly, UptimeRobot | to wire |
 
@@ -117,9 +135,10 @@ constraint was lifted.
   standard for application errors on both the worker and the Flutter app.
 
 ### Recommended shape
-- **LLM:** Cloudflare AI Gateway (caching/cost/retries) **+** Langfuse
-  (per-request traces with cost attribution by tier/model). foglamp is the
-  drop-in if we skip self-hosting.
+- **LLM:** Cloudflare AI Gateway (caching/cost/retries) **+** foglamp.dev for
+  per-request traces with cost attribution by tier/model. foglamp is hosted, so
+  no self-host ops — chosen over Langfuse for that reason (Langfuse remains the
+  self-host option, with native `rs_ai` support, if we ever want to own it).
 - **Errors:** Sentry on the worker and the Flutter client.
 - **Uptime/incidents:** Better Stack (one tool for uptime + status page +
   on-call + log sink), Hyperping if we want status-page-first.
