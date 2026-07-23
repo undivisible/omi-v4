@@ -244,3 +244,10 @@ clang-format -i firmware/omi/src/**/*.c firmware/omi/src/**/*.h
   `zephyr.uf2` and `zephyr.hex` for the DevKit targets.
 - The signing key `bootloader/mcuboot/root-rsa-2048.pem` is in-tree and must be
   used as-is for the nRF5340 targets.
+- `.github/workflows/release-firmware.yml` builds its matrix by parsing the
+  `west build` commands above with `.github/scripts/discover_firmware_targets.py`,
+  including the `cp … prj.conf` line that precedes them. `$FW` is resolved to
+  `firmware/` in the checkout. Keep each target's command a single fenced block
+  under its own heading, and re-run
+  `python3 .github/scripts/discover_firmware_targets.py --print-only` after
+  editing this file — it fails if any path it derives is missing from the tree.
