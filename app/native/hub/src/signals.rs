@@ -479,6 +479,12 @@ pub struct TranscriptDelta {
     pub occurred_at_ms: i64,
     pub text: String,
     pub final_segment: bool,
+    /// The provider's diarization index for this segment, when the provider
+    /// was asked for diarization and returned one.
+    pub speaker: Option<u32>,
+    /// The provider channel the segment came from, when the provider reports
+    /// one. Always `0` on the mono streams the hub sends today.
+    pub channel_index: Option<u32>,
     pub language: Option<String>,
 }
 

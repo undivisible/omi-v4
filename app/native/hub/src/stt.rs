@@ -406,7 +406,7 @@ async fn run(
                 Some(Ok(Message::Text(text))) => {
                     if let Some(delta) = state.parse(text.as_ref(), unix_time_ms()) {
                         if delta.final_segment {
-                            crate::meeting::observe_final_segment(&delta.text).await;
+                            crate::meeting::observe_final_segment(&delta.text, diarization_key(&delta)).await;
                         }
                         NativeEvent::TranscriptDelta(delta).send();
                     }
@@ -450,7 +450,11 @@ async fn drain_final_results(
                 Ok(Message::Text(text)) => {
                     if let Some(delta) = state.parse(text.as_ref(), unix_time_ms()) {
                         if delta.final_segment {
-                            crate::meeting::observe_final_segment(&delta.text).await;
+                            crate::meeting::observe_final_segment(
+                                &delta.text,
+                                diarization_key(&delta),
+                            )
+                            .await;
                         }
                         NativeEvent::TranscriptDelta(delta).send();
                     }
@@ -639,6 +643,10 @@ struct DeepgramResponse {
     #[serde(default)]
     speech_final: bool,
     channel: Option<DeepgramChannel>,
+    /// `[channel, channel_count]` on a streaming result. Only the first entry
+    /// identifies the channel these words came from.
+    #[serde(default)]
+    channel_index: Vec<u32>,
 }
 
 #[derive(Deserialize)]
@@ -661,6 +669,43 @@ struct DeepgramAlternative {
 struct DeepgramWord {
     start: f64,
     end: f64,
+    /// The diarization index Deepgram assigns when `diarize=true` was
+    /// requested. Absent on every response from a session that did not ask
+    /// for diarization.
+    #[serde(default)]
+    speaker: Option<u32>,
+}
+
+/// The diarization index that spoke most of the words in a result.
+///
+/// Deepgram labels each word individually, so a segment that straddles a
+/// speaker change carries two indices; the majority one describes the segment
+/// as a whole, and ties keep the earliest speaker so the label stays stable
+/// as an interim result grows.
+fn dominant_speaker(words: &[DeepgramWord]) -> Option<u32> {
+    let mut tally: Vec<(u32, usize)> = Vec::new();
+    for speaker in words.iter().filter_map(|word| word.speaker) {
+        match tally.iter_mut().find(|(value, _)| *value == speaker) {
+            Some((_, count)) => *count += 1,
+            None => tally.push((speaker, 1)),
+        }
+    }
+    tally
+        .into_iter()
+        .rev()
+        .max_by_key(|(_, count)| *count)
+        .map(|(speaker, _)| speaker)
+}
+
+/// The identity of the voice behind a segment, as the provider reports it.
+///
+/// Diarization indices are only unique within a channel, so the channel is
+/// folded into the key. Everything the hub sends today is mono, which makes
+/// the channel `0` and the key the bare speaker index.
+pub(crate) fn diarization_key(delta: &TranscriptDelta) -> Option<u64> {
+    let speaker = delta.speaker?;
+    let channel = delta.channel_index.unwrap_or(0);
+    Some(u64::from(channel) << 32 | u64::from(speaker))
 }
 
 #[derive(Debug)]
@@ -683,6 +728,7 @@ impl TranscriptState {
 
     pub(crate) fn parse(&mut self, json: &str, occurred_at_ms: i64) -> Option<TranscriptDelta> {
         let response: DeepgramResponse = serde_json::from_str(json).ok()?;
+        let channel_index = response.channel_index.first().copied();
         let alternative = response.channel?.alternatives.into_iter().next()?;
         let text = alternative.transcript.trim();
         if text.is_empty() {
@@ -696,6 +742,7 @@ impl TranscriptState {
             .words
             .last()
             .map_or(occurred_at_ms, |word| seconds_to_millis(word.end));
+        let speaker = dominant_speaker(&alternative.words);
         let final_segment = response.is_final || response.speech_final;
         let sequence = self.sequence;
         if final_segment {
@@ -717,6 +764,8 @@ impl TranscriptState {
             occurred_at_ms,
             text: text.to_owned(),
             final_segment,
+            speaker,
+            channel_index,
             language: alternative.languages.into_iter().next().or_else(|| {
                 (self.config.language != "multi").then(|| self.config.language.clone())
             }),
@@ -791,8 +840,16 @@ mod tests {
         };
         let plan = ConnectionPlan::from_auth(&auth, &config(), None);
         assert_eq!(
-            plan.map(|value| (value.provider, value.reconnectable)),
+            plan.as_ref()
+                .map(|value| (value.provider, value.reconnectable)),
             Ok(("deepgram-byok", true))
+        );
+        assert_eq!(
+            plan.map(|value| value
+                .endpoint
+                .query_pairs()
+                .any(|(key, value)| key == "diarize" && value == "true")),
+            Ok(true)
         );
         let injected = TranscriptionAuth::Byok {
             endpoint: "wss://api.deepgram.com/v1/listen".to_owned(),
@@ -847,6 +904,53 @@ mod tests {
         assert!(next.is_ok());
         let next = next.unwrap_or_else(|_| unreachable!());
         assert_eq!(next.segment_id, "stream-1:epoch:1:segment:1");
+    }
+
+    #[test]
+    fn diarization_speaker_and_channel_survive_the_parser() {
+        let mut state = TranscriptState::new(config(), "deepgram-byok");
+        let delta = state
+            .parse(
+                r#"{"is_final":true,"channel_index":[0,1],"channel":{"alternatives":[{"transcript":"we ship on friday","confidence":0.98,"words":[{"word":"we","start":1.0,"end":1.2,"confidence":0.99,"speaker":0,"speaker_confidence":0.71,"punctuated_word":"We"},{"word":"ship","start":1.2,"end":1.5,"confidence":0.98,"speaker":1,"speaker_confidence":0.68,"punctuated_word":"ship"},{"word":"on","start":1.5,"end":1.6,"confidence":0.97,"speaker":1,"speaker_confidence":0.68,"punctuated_word":"on"},{"word":"friday","start":1.6,"end":2.0,"confidence":0.96,"speaker":1,"speaker_confidence":0.68,"punctuated_word":"Friday."}],"languages":["en"]}]}}"#,
+                2_000,
+            )
+            .ok_or("missing diarized delta");
+        assert!(delta.is_ok());
+        let delta = delta.unwrap_or_else(|_| unreachable!());
+        assert_eq!(delta.speaker, Some(1));
+        assert_eq!(delta.channel_index, Some(0));
+        assert_eq!(diarization_key(&delta), Some(1));
+    }
+
+    #[test]
+    fn undiarized_words_leave_the_segment_unattributed() {
+        let mut state = TranscriptState::new(config(), "deepgram-managed");
+        let delta = state
+            .parse(
+                r#"{"is_final":true,"channel":{"alternatives":[{"transcript":"hello","words":[{"start":1.0,"end":1.2}]}]}}"#,
+                2_000,
+            )
+            .ok_or("missing delta");
+        assert!(delta.is_ok());
+        let delta = delta.unwrap_or_else(|_| unreachable!());
+        assert_eq!(delta.speaker, None);
+        assert_eq!(delta.channel_index, None);
+        assert_eq!(diarization_key(&delta), None);
+    }
+
+    #[test]
+    fn a_second_channel_never_collides_with_the_first_channels_speakers() {
+        let mut state = TranscriptState::new(config(), "deepgram-byok");
+        let delta = state
+            .parse(
+                r#"{"is_final":true,"channel_index":[1,2],"channel":{"alternatives":[{"transcript":"over here","words":[{"start":1.0,"end":1.2,"speaker":0}]}]}}"#,
+                2_000,
+            )
+            .ok_or("missing delta");
+        assert!(delta.is_ok());
+        let delta = delta.unwrap_or_else(|_| unreachable!());
+        assert_eq!((delta.speaker, delta.channel_index), (Some(0), Some(1)));
+        assert_eq!(diarization_key(&delta), Some(1 << 32));
     }
 
     #[test]

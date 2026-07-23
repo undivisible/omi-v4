@@ -65,6 +65,8 @@ final class PreferencesTranscriptLogStore implements TranscriptLogStore {
     'occurredAtMs': delta.occurredAtMs,
     'text': delta.text,
     'finalSegment': delta.finalSegment,
+    'speaker': delta.speaker,
+    'channelIndex': delta.channelIndex,
     'language': delta.language,
   };
 
@@ -81,6 +83,8 @@ final class PreferencesTranscriptLogStore implements TranscriptLogStore {
     final occurredAtMs = json['occurredAtMs'];
     final text = json['text'];
     final finalSegment = json['finalSegment'];
+    final speaker = json['speaker'];
+    final channelIndex = json['channelIndex'];
     final language = json['language'];
     if (requestId is! String ||
         audioStreamId is! String ||
@@ -94,6 +98,8 @@ final class PreferencesTranscriptLogStore implements TranscriptLogStore {
         occurredAtMs is! int ||
         text is! String ||
         finalSegment is! bool ||
+        speaker is! int? ||
+        channelIndex is! int? ||
         language is! String?) {
       throw const FormatException('Invalid transcript segment');
     }
@@ -110,6 +116,8 @@ final class PreferencesTranscriptLogStore implements TranscriptLogStore {
       occurredAtMs: occurredAtMs,
       text: text,
       finalSegment: finalSegment,
+      speaker: speaker,
+      channelIndex: channelIndex,
       language: language,
     );
   }

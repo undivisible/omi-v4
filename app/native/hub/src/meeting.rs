@@ -190,7 +190,31 @@ impl MeetingNote {
 }
 
 pub fn note_prompt(transcript: &str, jots: &[String], title: &str) -> String {
-    let bounded: String = transcript.chars().take(SUMMARY_TRANSCRIPT_CHARS).collect();
+    build_note_prompt("transcript", "Transcript", transcript, jots, title)
+}
+
+/// The reduce half of the map-reduce summary: the same note prompt, told that
+/// its source is the ordered condensed notes of a transcript too long to send
+/// in one request rather than the transcript itself.
+pub fn digest_note_prompt(digest: &str, jots: &[String], title: &str) -> String {
+    build_note_prompt(
+        "condensed transcript notes",
+        "Condensed notes covering the whole meeting in order, one part per section of the \
+         transcript",
+        digest,
+        jots,
+        title,
+    )
+}
+
+fn build_note_prompt(
+    source_noun: &str,
+    source_label: &str,
+    source: &str,
+    jots: &[String],
+    title: &str,
+) -> String {
+    let bounded: String = source.chars().take(SUMMARY_TRANSCRIPT_CHARS).collect();
     let jot_block = if jots.is_empty() {
         String::new()
     } else {
@@ -208,8 +232,8 @@ pub fn note_prompt(transcript: &str, jots: &[String], title: &str) -> String {
         block
     };
     format!(
-        "You are a meeting note taker. Working title: {title}. From the transcript below, write \
-         a polished structured meeting note. Return ONLY valid JSON in this exact format: \
+        "You are a meeting note taker. Working title: {title}. From the {source_noun} below, \
+         write a polished structured meeting note. Return ONLY valid JSON in this exact format: \
          {{\"title\":\"short descriptive title\",\"summary\":\"2-3 sentence executive summary\",\
          \"participants\":[\"names actually mentioned, or empty\"],\
          \"sections\":[{{\"heading\":\"topic\",\"points\":[\"key point\"]}}],\
@@ -222,17 +246,140 @@ pub fn note_prompt(transcript: &str, jots: &[String], title: &str) -> String {
          - The transcript is speech-to-text and the jotted notes are typed in a hurry, so both \
          contain errors. Read through them for the intended meaning.\n\
          - Transcript lines prefixed \"You:\" are the attendee running this app; lines prefixed \
-         \"Them:\" are the other side of the call. Unprefixed lines could be either. Use those \
-         prefixes to attribute decisions and to fill in action owners, and set an owner only \
-         when the transcript makes it clear.\n\
+         \"Them:\" or \"Speaker 1:\", \"Speaker 2:\" and so on are other people on the call, one \
+         number per voice. Unprefixed lines could be anyone. Use those prefixes to attribute \
+         decisions and to fill in action owners, and set an owner only when the transcript makes \
+         it clear. A \"Speaker N\" label is not a name, so never present it as one.\n\
          - Give every section a concrete topic heading and at least two specific points. Do not \
          create generic \"Overview\", \"Introduction\", \"Summary\", or \"Participants\" \
          sections; the summary and participants have their own fields.\n\
          - Keep points specific and concrete. Prefer the actual numbers, names, and commitments \
          over abstractions.\n\
          - Leave any array empty rather than padding it.\
-         {jot_block}\n\nTranscript:\n{bounded}"
+         {jot_block}\n\n{source_label}:\n{bounded}"
     )
+}
+
+/// How much of the end of a chunk is repeated at the start of the next one, so
+/// an exchange split across a boundary is still summarized in context.
+const CHUNK_OVERLAP_CHARS: usize = 600;
+/// The shortest a part of the combined digest may be, whatever the part count.
+const MIN_DIGEST_PART_CHARS: usize = 400;
+
+/// Splits a transcript into overlapping chunks that each fit one summarization
+/// request.
+///
+/// A transcript within the budget comes back as a single chunk, which is the
+/// path every ordinary meeting takes. Longer ones are cut at the last line,
+/// sentence, or word boundary in the final quarter of each window, so a chunk
+/// never starts mid-utterance, and every chunk after the first repeats the tail
+/// of its predecessor.
+pub fn transcript_chunks(transcript: &str) -> Vec<String> {
+    let chars: Vec<char> = transcript.trim().chars().collect();
+    if chars.is_empty() {
+        return Vec::new();
+    }
+    if chars.len() <= SUMMARY_TRANSCRIPT_CHARS {
+        return vec![chars.into_iter().collect()];
+    }
+    let mut chunks = Vec::new();
+    let mut start = 0;
+    while start < chars.len() {
+        let limit = start
+            .saturating_add(SUMMARY_TRANSCRIPT_CHARS)
+            .min(chars.len());
+        let end = if limit == chars.len() {
+            limit
+        } else {
+            split_point(&chars, start, limit)
+        };
+        let chunk: String = chars[start..end].iter().collect();
+        let chunk = chunk.trim();
+        if !chunk.is_empty() {
+            chunks.push(chunk.to_owned());
+        }
+        if end >= chars.len() {
+            break;
+        }
+        start = overlap_start(&chars, start, end);
+    }
+    chunks
+}
+
+/// The end of a chunk: the latest line break, sentence end, or word break in
+/// the last quarter of the window, and the hard limit when the window holds
+/// none of them.
+fn split_point(chars: &[char], start: usize, limit: usize) -> usize {
+    let earliest = start + (limit - start) * 3 / 4;
+    let mut sentence = None;
+    let mut word = None;
+    for index in (earliest..limit).rev() {
+        match chars[index] {
+            '\n' => return index + 1,
+            '.' | '!' | '?' => sentence = sentence.or(Some(index + 1)),
+            character if character.is_whitespace() => word = word.or(Some(index + 1)),
+            _ => {}
+        }
+    }
+    sentence.or(word).unwrap_or(limit)
+}
+
+/// Where the next chunk begins: one overlap back from the end of this one,
+/// advanced to the next line or sentence so the repeated text starts cleanly.
+fn overlap_start(chars: &[char], start: usize, end: usize) -> usize {
+    let raw = end.saturating_sub(CHUNK_OVERLAP_CHARS).max(start + 1);
+    chars[raw..end]
+        .iter()
+        .position(|character| matches!(character, '\n' | '.' | '!' | '?'))
+        .map_or(raw, |offset| raw + offset + 1)
+}
+
+/// The map half of the map-reduce summary: condense one chunk into plain text
+/// that the reduce step can read, under the same grounding rules as the note
+/// itself.
+pub fn chunk_summary_prompt(chunk: &str, part: usize, total: usize, title: &str) -> String {
+    format!(
+        "You are condensing part {part} of {total} of a long meeting transcript. Working title: \
+         {title}. Write plain text notes covering everything this part contains: what was \
+         discussed, every decision, every commitment and who made it, every question left open, \
+         and the numbers, names, and dates that were said.\n\n\
+         Rules:\n\
+         - Use only what this part of the transcript actually says. Never infer, never invent a \
+         name, a date, or a number. If you are unsure about something, leave it out.\n\
+         - The transcript is speech-to-text, so it contains errors. Read through them for the \
+         intended meaning.\n\
+         - Keep the speaker prefixes (\"You:\", \"Them:\", \"Speaker 1:\") when you attribute \
+         something, so the final note can tell who said it.\n\
+         - This is one part of a longer meeting. Do not write an overall conclusion, an \
+         introduction, or a summary of the meeting as a whole, and do not guess at what the other \
+         parts contain.\n\
+         - Write short lines, one point each. No JSON, no headings, no preamble.\n\n\
+         Transcript part {part} of {total}:\n{chunk}"
+    )
+}
+
+/// Joins the per-chunk digests into the single body the reduce step reads.
+///
+/// Every part gets the same share of the budget, so the end of a long meeting
+/// reaches the final note instead of being cut off by whatever came before it.
+pub fn combine_chunk_digests(digests: &[String]) -> String {
+    let total = digests.len().max(1);
+    let budget = (SUMMARY_TRANSCRIPT_CHARS / total)
+        .saturating_sub(48)
+        .max(MIN_DIGEST_PART_CHARS);
+    let mut combined = String::new();
+    for (index, digest) in digests.iter().enumerate() {
+        let bounded: String = digest.trim().chars().take(budget).collect();
+        if bounded.is_empty() {
+            continue;
+        }
+        if !combined.is_empty() {
+            combined.push_str("\n\n");
+        }
+        combined.push_str(&format!("Part {} of {total}:\n", index + 1));
+        combined.push_str(&bounded);
+    }
+    combined
 }
 
 #[derive(serde::Deserialize)]
@@ -461,12 +608,86 @@ pub fn clean_answer(output: &str) -> Option<String> {
     (!answer.is_empty()).then_some(answer)
 }
 
+/// How many diarized voices one meeting keeps numbers for. Beyond this the
+/// roster stops growing and the segment falls back to the energy heuristic,
+/// which is the behaviour a provider that never diarizes already gets.
+const MAX_DIARIZED_SPEAKERS: usize = 16;
+
+#[derive(Debug)]
+struct RosterEntry {
+    key: u64,
+    local: u32,
+    remote: u32,
+    number: Option<u32>,
+}
+
+/// Resolves the transcription provider's diarization indices into the speaker
+/// labels the transcript uses.
+///
+/// The provider numbers voices arbitrarily and has no idea which of them is
+/// the person running the app; the two capture tracks do. So each diarized
+/// index accumulates which side of the call the energy heuristic saw while it
+/// was speaking, and the index that keeps coming back on the microphone track
+/// is reported as `You`. Every other diarized voice gets a stable number, so
+/// three people on the far end stop collapsing into one "Them".
+#[derive(Debug, Default)]
+pub struct SpeakerRoster {
+    entries: Vec<RosterEntry>,
+    assigned: u32,
+}
+
+impl SpeakerRoster {
+    /// Real diarization takes precedence over the energy heuristic whenever
+    /// the provider supplied an index; without one the heuristic's answer is
+    /// passed through untouched.
+    pub fn resolve(&mut self, diarized: Option<u64>, tracked: MeetingSpeaker) -> MeetingSpeaker {
+        let Some(key) = diarized else {
+            return tracked;
+        };
+        let position = match self.entries.iter().position(|entry| entry.key == key) {
+            Some(position) => position,
+            None if self.entries.len() < MAX_DIARIZED_SPEAKERS => {
+                self.entries.push(RosterEntry {
+                    key,
+                    local: 0,
+                    remote: 0,
+                    number: None,
+                });
+                self.entries.len() - 1
+            }
+            None => return tracked,
+        };
+        let local = {
+            let entry = &mut self.entries[position];
+            match tracked {
+                MeetingSpeaker::You => entry.local = entry.local.saturating_add(1),
+                MeetingSpeaker::Them => entry.remote = entry.remote.saturating_add(1),
+                MeetingSpeaker::Unknown | MeetingSpeaker::Diarized(_) => {}
+            }
+            entry.local > entry.remote
+        };
+        if local {
+            return MeetingSpeaker::You;
+        }
+        let number = match self.entries[position].number {
+            Some(number) => number,
+            None => {
+                self.assigned = self.assigned.saturating_add(1);
+                self.entries[position].number = Some(self.assigned);
+                self.assigned
+            }
+        };
+        MeetingSpeaker::Diarized(number)
+    }
+}
+
 #[derive(Debug)]
 pub struct MeetingSession {
     title: Option<String>,
     manual: bool,
     transcript: String,
     last_speaker: Option<MeetingSpeaker>,
+    roster: SpeakerRoster,
     limiter: InsightLimiter,
     started_at_ms: i64,
     jots: Vec<String>,
@@ -483,6 +704,7 @@ impl MeetingSession {
             manual,
             transcript: String::new(),
             last_speaker: None,
+            roster: SpeakerRoster::default(),
             limiter: InsightLimiter::default(),
             started_at_ms,
             jots: Vec::new(),
@@ -517,9 +739,9 @@ impl MeetingSession {
         if text.is_empty() || accumulated >= RAW_TRANSCRIPT_CHARS {
             return;
         }
-        let continues = speaker.label().is_some()
-            && self.last_speaker == Some(speaker)
-            && !self.transcript.is_empty();
+        let label = speaker.label();
+        let continues =
+            label.is_some() && self.last_speaker == Some(speaker) && !self.transcript.is_empty();
         let mut prefix = String::new();
         if continues {
             prefix.push(' ');
@@ -527,8 +749,8 @@ impl MeetingSession {
             if !self.transcript.is_empty() {
                 prefix.push('\n');
             }
-            if let Some(label) = speaker.label() {
-                prefix.push_str(label);
+            if let Some(label) = label {
+                prefix.push_str(&label);
                 prefix.push_str(": ");
             }
         }
@@ -540,6 +762,16 @@ impl MeetingSession {
         self.transcript
             .extend(text.chars().take(remaining - prefix.chars().count()));
         self.last_speaker = Some(speaker);
+    }
+
+    /// Combines the provider's diarization index, when there is one, with the
+    /// side of the call the capture tracks heard.
+    pub fn resolve_speaker(
+        &mut self,
+        diarized: Option<u64>,
+        tracked: MeetingSpeaker,
+    ) -> MeetingSpeaker {
+        self.roster.resolve(diarized, tracked)
     }
 
     pub fn transcript(&self) -> &str {
@@ -627,6 +859,7 @@ pub enum MeetingControl {
     },
     FinalSegment {
         speaker: MeetingSpeaker,
+        diarized: Option<u64>,
         text: String,
     },
     Jot {
@@ -764,7 +997,11 @@ pub fn set_mode(mode: SystemAudioCaptureMode) {
 ///
 /// The speaker is sampled here rather than inside the runtime because the two
 /// capture tracks only describe the moment the segment was spoken.
-pub async fn observe_final_segment(text: &str) {
+///
+/// `diarized` is the transcription provider's own speaker index for the
+/// segment, when the provider returned one; it takes precedence over the
+/// capture-track heuristic inside the session's roster.
+pub async fn observe_final_segment(text: &str, diarized: Option<u64>) {
     if text.trim().is_empty() {
         return;
     }
@@ -773,6 +1010,7 @@ pub async fn observe_final_segment(text: &str) {
     };
     let control = MeetingControl::FinalSegment {
         speaker: crate::meeting_capture::dominant_speaker(),
+        diarized,
         text: text.to_owned(),
     };
     match sender.try_send(control) {
@@ -859,11 +1097,16 @@ impl MeetingRuntime {
                         self.finish(finished);
                     }
                 }
-                MeetingControl::FinalSegment { speaker, text } => {
+                MeetingControl::FinalSegment {
+                    speaker,
+                    diarized,
+                    text,
+                } => {
                     if let Some(current) = &mut session {
+                        let speaker = current.resolve_speaker(diarized, speaker);
                         current.push_final(speaker, &text);
                         NativeEvent::MeetingTranscriptTurn(MeetingTranscriptTurn {
-                            speaker: speaker.name().to_owned(),
+                            speaker: speaker.name(),
                             text: text.trim().to_owned(),
                             occurred_at_ms: chrono::Utc::now().timestamp_millis(),
                         })
@@ -950,7 +1193,7 @@ impl MeetingRuntime {
                     kind: kind.name().to_owned(),
                     text,
                     source_text: source,
-                    speaker: speaker.name().to_owned(),
+                    speaker: speaker.name(),
                 })
                 .send();
             }
@@ -965,7 +1208,28 @@ impl MeetingRuntime {
                 return;
             }
             let now_ms = chrono::Utc::now().timestamp_millis();
-            let prompt = note_prompt(session.transcript(), session.jots(), session.title());
+            let chunks = transcript_chunks(session.transcript());
+            let prompt = match chunks.as_slice() {
+                [] => return,
+                [single] => note_prompt(single, session.jots(), session.title()),
+                chunks => {
+                    let mut digests = Vec::with_capacity(chunks.len());
+                    for (index, chunk) in chunks.iter().enumerate() {
+                        let prompt =
+                            chunk_summary_prompt(chunk, index + 1, chunks.len(), session.title());
+                        let digest = tokio::select! {
+                            () = cancellation.cancelled() => return,
+                            output = generate_note_output(&prompt) => output,
+                        };
+                        digests.push(digest.unwrap_or_else(|| chunk.clone()));
+                    }
+                    digest_note_prompt(
+                        &combine_chunk_digests(&digests),
+                        session.jots(),
+                        session.title(),
+                    )
+                }
+            };
             let output = tokio::select! {
                 () = cancellation.cancelled() => return,
                 output = generate_note_output(&prompt) => output,
@@ -1300,6 +1564,147 @@ mod tests {
         session.push_final(MeetingSpeaker::Them, "dropped entirely");
         assert!(session.transcript().chars().count() <= RAW_TRANSCRIPT_CHARS);
         assert!(!session.transcript().contains("Them"));
+    }
+
+    #[test]
+    fn provider_diarization_outranks_the_energy_heuristic_and_numbers_the_far_end() {
+        let mut session = MeetingSession::new_at(None, true, 0);
+        // The heuristic hears the far end; diarization separates two voices in it.
+        let first = session.resolve_speaker(Some(1), MeetingSpeaker::Them);
+        let second = session.resolve_speaker(Some(2), MeetingSpeaker::Them);
+        assert_eq!(first, MeetingSpeaker::Diarized(1));
+        assert_eq!(second, MeetingSpeaker::Diarized(2));
+        assert_eq!(
+            session.resolve_speaker(Some(1), MeetingSpeaker::Unknown),
+            MeetingSpeaker::Diarized(1)
+        );
+        // The voice the microphone track keeps carrying is the attendee.
+        assert_eq!(
+            session.resolve_speaker(Some(0), MeetingSpeaker::You),
+            MeetingSpeaker::You
+        );
+        assert_eq!(
+            session.resolve_speaker(Some(0), MeetingSpeaker::Unknown),
+            MeetingSpeaker::You
+        );
+        session.push_final(first, "QA finishes Thursday.");
+        session.push_final(second, "Pricing is unresolved.");
+        session.push_final(MeetingSpeaker::You, "Then we ship Friday.");
+        assert_eq!(
+            session.transcript(),
+            "Speaker 1: QA finishes Thursday.\nSpeaker 2: Pricing is unresolved.\nYou: Then we \
+             ship Friday."
+        );
+    }
+
+    #[test]
+    fn without_provider_diarization_the_energy_heuristic_still_decides() {
+        let mut session = MeetingSession::new_at(None, true, 0);
+        assert_eq!(
+            session.resolve_speaker(None, MeetingSpeaker::You),
+            MeetingSpeaker::You
+        );
+        assert_eq!(
+            session.resolve_speaker(None, MeetingSpeaker::Them),
+            MeetingSpeaker::Them
+        );
+        assert_eq!(
+            session.resolve_speaker(None, MeetingSpeaker::Unknown),
+            MeetingSpeaker::Unknown
+        );
+    }
+
+    #[test]
+    fn the_roster_stops_growing_and_falls_back_once_it_is_full() {
+        let mut roster = SpeakerRoster::default();
+        for index in 0..MAX_DIARIZED_SPEAKERS as u64 {
+            assert!(matches!(
+                roster.resolve(Some(index), MeetingSpeaker::Them),
+                MeetingSpeaker::Diarized(_)
+            ));
+        }
+        assert_eq!(
+            roster.resolve(Some(999), MeetingSpeaker::Them),
+            MeetingSpeaker::Them
+        );
+    }
+
+    #[test]
+    fn a_transcript_within_the_budget_is_summarized_in_one_request() {
+        assert!(transcript_chunks("   ").is_empty());
+        assert_eq!(
+            transcript_chunks("  You: hello team  "),
+            vec!["You: hello team".to_owned()]
+        );
+        let exact = "x".repeat(SUMMARY_TRANSCRIPT_CHARS);
+        assert_eq!(transcript_chunks(&exact).len(), 1);
+    }
+
+    #[test]
+    fn long_transcripts_split_on_line_boundaries_with_overlap_and_lose_nothing() {
+        let mut transcript = String::new();
+        let mut line = 0;
+        while transcript.chars().count() < SUMMARY_TRANSCRIPT_CHARS * 3 {
+            line += 1;
+            transcript.push_str(&format!("Them: line {line} of the meeting goes here.\n"));
+        }
+        let chunks = transcript_chunks(&transcript);
+        assert!(chunks.len() >= 3);
+        for chunk in &chunks {
+            assert!(chunk.chars().count() <= SUMMARY_TRANSCRIPT_CHARS);
+            assert!(chunk.starts_with("Them: line "));
+            assert!(chunk.ends_with('.'));
+        }
+        // Every line of the transcript survives in some chunk, and consecutive
+        // chunks overlap rather than butting up against each other.
+        for number in 1..=line {
+            let needle = format!("line {number} of the meeting");
+            assert!(
+                chunks.iter().any(|chunk| chunk.contains(&needle)),
+                "line {number} is missing from every chunk"
+            );
+        }
+        for pair in chunks.windows(2) {
+            let tail: String = pair[0].chars().rev().take(80).collect();
+            let tail: String = tail.chars().rev().collect();
+            assert!(pair[1].contains(&tail), "chunks do not overlap");
+        }
+    }
+
+    #[test]
+    fn the_tail_of_a_long_meeting_reaches_the_final_summary_prompt() {
+        let mut transcript = String::new();
+        while transcript.chars().count() < SUMMARY_TRANSCRIPT_CHARS * 2 {
+            transcript.push_str("Them: routine status chatter that fills the meeting.\n");
+        }
+        transcript.push_str("You: the very last decision is to ship on the ninth.\n");
+        let chunks = transcript_chunks(&transcript);
+        assert!(chunks.len() > 1);
+        assert!(
+            chunks
+                .last()
+                .is_some_and(|chunk| chunk.contains("ship on the ninth"))
+        );
+        // With no model available every chunk digest falls back to the chunk
+        // itself, and the tail still has to survive the reduce step.
+        let digest = combine_chunk_digests(&chunks);
+        assert!(digest.contains("ship on the ninth"));
+        assert!(digest.contains(&format!("Part {} of {}", chunks.len(), chunks.len())));
+        let prompt = digest_note_prompt(&digest, &[], "Meeting");
+        assert!(prompt.contains("ship on the ninth"));
+        assert!(prompt.contains("\"openQuestions\":"));
+        assert!(prompt.contains("Never infer, never invent a name, a date, or a number."));
+        assert!(prompt.chars().count() <= SUMMARY_TRANSCRIPT_CHARS * 2);
+    }
+
+    #[test]
+    fn chunk_prompts_state_their_place_and_keep_the_grounding_rules() {
+        let prompt = chunk_summary_prompt("Them: hello.", 2, 3, "Launch Sync");
+        assert!(prompt.contains("part 2 of 3"));
+        assert!(prompt.contains("Launch Sync"));
+        assert!(prompt.contains("Never infer, never invent a name, a date, or a number."));
+        assert!(prompt.contains("Do not write an overall conclusion"));
+        assert!(prompt.ends_with("Them: hello."));
     }
 
     #[test]

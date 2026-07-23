@@ -23,21 +23,27 @@ pub enum MeetingSpeaker {
     You,
     /// The far end of the call, captured from system audio, dominated.
     Them,
+    /// A distinct voice the transcription provider's own diarization
+    /// separated out, numbered in the order it was first heard. Only the far
+    /// end is numbered: a diarized voice that the microphone track shows to
+    /// be the local one is reported as `You` instead.
+    Diarized(u32),
 }
 
 impl MeetingSpeaker {
     /// The transcript prefix for this speaker, or `None` when the side is
     /// unknown and the line should read exactly as it did before speaker
     /// attribution existed.
-    pub fn label(self) -> Option<&'static str> {
+    pub fn label(self) -> Option<String> {
         match self {
             Self::Unknown => None,
-            Self::You => Some("You"),
-            Self::Them => Some("Them"),
+            Self::You => Some("You".to_owned()),
+            Self::Them => Some("Them".to_owned()),
+            Self::Diarized(number) => Some(format!("Speaker {number}")),
         }
     }
 
-    pub fn name(self) -> &'static str {
+    pub fn name(self) -> String {
         self.label().unwrap_or_default()
     }
 }
@@ -846,8 +852,12 @@ mod tests {
 
     #[test]
     fn speaker_labels_leave_unknown_lines_unprefixed() {
-        assert_eq!(MeetingSpeaker::You.label(), Some("You"));
-        assert_eq!(MeetingSpeaker::Them.label(), Some("Them"));
+        assert_eq!(MeetingSpeaker::You.label().as_deref(), Some("You"));
+        assert_eq!(MeetingSpeaker::Them.label().as_deref(), Some("Them"));
+        assert_eq!(
+            MeetingSpeaker::Diarized(2).label().as_deref(),
+            Some("Speaker 2")
+        );
         assert_eq!(MeetingSpeaker::Unknown.label(), None);
         assert_eq!(MeetingSpeaker::Unknown.name(), "");
         assert_eq!(MeetingSpeaker::default(), MeetingSpeaker::Unknown);

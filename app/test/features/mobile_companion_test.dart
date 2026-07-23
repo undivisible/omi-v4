@@ -263,7 +263,14 @@ void main() {
     () async {
       SharedPreferences.setMockInitialValues({});
       final store = PreferencesTranscriptLogStore();
-      await store.save([_delta('from the pendant', finalSegment: true)]);
+      await store.save([
+        _delta(
+          'from the pendant',
+          finalSegment: true,
+          speaker: 2,
+          channelIndex: 0,
+        ),
+      ]);
 
       final restored = await PreferencesTranscriptLogStore().read();
 
@@ -271,6 +278,8 @@ void main() {
       expect(restored.single.text, 'from the pendant');
       expect(restored.single.finalSegment, isTrue);
       expect(restored.single.deviceId, 'omi-1');
+      expect(restored.single.speaker, 2);
+      expect(restored.single.channelIndex, 0);
     },
   );
 
@@ -1331,21 +1340,27 @@ final class _CurrentsTransport implements CurrentsTransport {
   };
 }
 
-TranscriptDelta _delta(String text, {required bool finalSegment}) =>
-    TranscriptDelta(
-      requestId: 'start-req',
-      audioStreamId: 'stream-1',
-      segmentId: 'segment-$text',
-      segmentSequence: Uint64.fromBigInt(BigInt.zero),
-      sttEpoch: 0,
-      deviceId: 'omi-1',
-      provider: 'managed',
-      startMs: 0,
-      endMs: 1,
-      occurredAtMs: DateTime.utc(2026, 7, 22).millisecondsSinceEpoch,
-      text: text,
-      finalSegment: finalSegment,
-    );
+TranscriptDelta _delta(
+  String text, {
+  required bool finalSegment,
+  int? speaker,
+  int? channelIndex,
+}) => TranscriptDelta(
+  requestId: 'start-req',
+  audioStreamId: 'stream-1',
+  segmentId: 'segment-$text',
+  segmentSequence: Uint64.fromBigInt(BigInt.zero),
+  sttEpoch: 0,
+  deviceId: 'omi-1',
+  provider: 'managed',
+  startMs: 0,
+  endMs: 1,
+  occurredAtMs: DateTime.utc(2026, 7, 22).millisecondsSinceEpoch,
+  text: text,
+  finalSegment: finalSegment,
+  speaker: speaker,
+  channelIndex: channelIndex,
+);
 
 AuthSession _session(String uid) =>
     AuthSession(uid: uid, idToken: 'token-$uid', expiresAt: DateTime.utc(2030));
