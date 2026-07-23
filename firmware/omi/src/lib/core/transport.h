@@ -68,4 +68,15 @@ void transport_bulk_tx_release(void);
  */
 void transport_notify_charging_changed(void);
 
+/**
+ * @brief Re-evaluate the preferred connection parameters.
+ *
+ * With CONFIG_OMI_ENABLE_ADAPTIVE_CONN_PARAMS the link runs at the fast
+ * interval while audio is subscribed or an offline sync is in flight, and at
+ * the idle interval (with peripheral latency) otherwise. Without it this is a
+ * no-op and the link stays at the fast interval for the whole connection.
+ * Call whenever audio subscription or transfer state changes.
+ */
+void transport_conn_params_reevaluate(void);
+
 #endif // TRANSPORT_H

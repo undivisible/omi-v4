@@ -379,6 +379,7 @@ static void reset_transfer_state(void)
     atomic_set(&sync_confirmed_bytes, 0);
     sync_checkpoint_seq = 0;
     sync_checkpoint_deadline_ms = 0;
+    transport_conn_params_reevaluate();
 }
 
 /* Ring seq the phone has confirmed receiving (whole packets only). */
@@ -485,6 +486,7 @@ static int start_pending_read(struct bt_conn *conn)
     sync_checkpoint_seq = pending_start_seq;
     sync_checkpoint_deadline_ms = k_uptime_get() + STORAGE_ADVANCE_CHECKPOINT_MS;
     sync_speed_reset(SYNC_SPEED_MODE_NONE);
+    transport_conn_params_reevaluate();
 
     return 0;
 }
@@ -704,9 +706,22 @@ static void storage_write(void)
                 info_requested = 0;
                 info_deadline = 0;
             } else if (sd_is_ready()) {
-                (void) send_ring_info_response(conn);
-                info_requested = 0;
-                info_deadline = 0;
+                int ret = send_ring_info_response(conn);
+                if (ret == -ENOMEM) {
+                    /* No TX buffer right now. Keep the request pending and retry
+                     * until the same deadline the SD-ready wait uses, instead of
+                     * dropping it: the app only asks once per sync. */
+                    if (info_deadline == 0) {
+                        info_deadline = k_uptime_get() + STORAGE_SD_READY_TIMEOUT_MS;
+                    } else if (k_uptime_get() >= info_deadline) {
+                        info_requested = 0;
+                        info_deadline = 0;
+                    }
+                    k_yield();
+                } else {
+                    info_requested = 0;
+                    info_deadline = 0;
+                }
             } else {
                 /* SD still remounting after connect: wait for it, up to timeout. */
                 if (info_deadline == 0) {

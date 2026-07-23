@@ -56,6 +56,80 @@ config OMI_ENABLE_RFSW_CTRL
         "Enable RFSwitch Control support."
     default y
 
+config OMI_CONN_INTERVAL_FAST_MIN
+    int "Preferred connection interval, minimum (1.25 ms units)"
+    range 6 3200
+    default 6
+    help
+        "Lower bound of the connection interval requested while audio is
+         streaming or an offline sync is running. 6 units = 7.5 ms, the BLE
+         minimum, which maximises connection events per second and therefore
+         throughput."
+
+config OMI_CONN_INTERVAL_FAST_MAX
+    int "Preferred connection interval, maximum (1.25 ms units)"
+    range 6 3200
+    default 12
+    help
+        "Upper bound of the fast connection interval. 12 units = 15 ms."
+
+config OMI_CONN_SUPERVISION_TIMEOUT
+    int "Connection supervision timeout (10 ms units)"
+    range 10 3200
+    default 400
+    help
+        "Link supervision timeout requested for the connection. 400 units =
+         4 seconds. Must satisfy timeout > (1 + latency) * interval_max * 2."
+
+config OMI_ENABLE_ADAPTIVE_CONN_PARAMS
+    bool "Relax connection parameters when the link is idle"
+    default n
+    help
+        "Request a slower connection interval with peripheral latency whenever
+         no central is subscribed to the audio stream and no offline sync is
+         running, and switch back to the fast interval as soon as either
+         starts. Saves radio time on a link that is up but carrying nothing.
+
+         Off by default: an earlier attempt to force a slow interval plus
+         latency from the AAD sleep path caused dropped BLE connections on some
+         phones (see the comment in src/mic.c enter_hw_aad). Enable only after
+         validating against the phones you ship to."
+
+config OMI_CONN_INTERVAL_IDLE_MIN
+    int "Idle connection interval, minimum (1.25 ms units)"
+    range 6 3200
+    default 24
+    depends on OMI_ENABLE_ADAPTIVE_CONN_PARAMS
+    help
+        "24 units = 30 ms."
+
+config OMI_CONN_INTERVAL_IDLE_MAX
+    int "Idle connection interval, maximum (1.25 ms units)"
+    range 6 3200
+    default 40
+    depends on OMI_ENABLE_ADAPTIVE_CONN_PARAMS
+    help
+        "40 units = 50 ms."
+
+config OMI_CONN_IDLE_LATENCY
+    int "Idle peripheral latency (connection events)"
+    range 0 499
+    default 4
+    depends on OMI_ENABLE_ADAPTIVE_CONN_PARAMS
+    help
+        "Connection events the pendant may skip while idle. Keep
+         (1 + latency) * interval_max * 2 well under
+         OMI_CONN_SUPERVISION_TIMEOUT."
+
+config OMI_CONN_PARAM_SETTLE_MS
+    int "Delay before applying a connection parameter change (ms)"
+    range 0 10000
+    default 1000
+    depends on OMI_ENABLE_ADAPTIVE_CONN_PARAMS
+    help
+        "Debounce, so a burst of subscribe/unsubscribe or start/stop-sync
+         transitions results in one parameter update rather than several."
+
 config OMI_ENABLE_USER_EVENTS
     bool "User/system event notify characteristic"
     default n
@@ -98,16 +172,6 @@ config OMI_VAD_ABS_THRESHOLD
     help
         "Voice is considered active when average absolute amplitude of one
          microphone frame is greater than or equal to this threshold."
-
-config OMI_VAD_DEBOUNCE_FRAMES
-    int "VAD debounce frames to start recording"
-    range 1 50
-    default 3
-    depends on OMI_ENABLE_VAD_GATE
-    help
-        "Number of consecutive frames above threshold required before
-         transitioning from SLEEP to RECORDING. Each frame is ~100ms.
-         Default 3 = 300ms debounce to filter noise spikes."
 
 config OMI_VAD_HOLD_MS
     int "VAD hold time after last voice (ms)"

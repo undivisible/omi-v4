@@ -2,8 +2,9 @@
 
 #include <errno.h>
 #include <hal/nrf_power.h>
-#include <math.h> // For float conversion in logs
+#if defined(CONFIG_SHELL_BT_NUS)
 #include <shell/shell_bt_nus.h>
+#endif
 #include <stdint.h>
 #include <zephyr/bluetooth/bluetooth.h>
 #include <zephyr/bluetooth/gatt.h>
@@ -53,6 +54,14 @@ extern bool is_charging;
 extern bool is_capturing;
 #endif
 static atomic_t pusher_stop_flag;
+
+#ifdef CONFIG_OMI_ENABLE_ADAPTIVE_CONN_PARAMS
+static bool conn_params_fast = true;
+static struct k_work_delayable conn_params_apply_work;
+static void conn_params_apply_work_handler(struct k_work *work);
+#else
+#define conn_params_fast true
+#endif
 
 struct bt_conn *current_connection = NULL;
 uint16_t current_mtu = 0;
@@ -589,11 +598,13 @@ static void audio_ccc_config_changed_handler(const struct bt_gatt_attr *attr, ui
 #ifdef CONFIG_OMI_ENABLE_CAPTURE_LED
         is_capturing = true;
 #endif
+        transport_conn_params_reevaluate();
     } else if (value == 0) {
         LOG_INF("Client unsubscribed from notifications");
 #ifdef CONFIG_OMI_ENABLE_CAPTURE_LED
         is_capturing = false;
 #endif
+        transport_conn_params_reevaluate();
     } else {
         LOG_INF("Invalid CCC value: %u", value);
     }
@@ -932,14 +943,18 @@ static void _transport_connected(struct bt_conn *conn, uint8_t err)
     LOG_INF("Transport connected");
 
     // Log initial connection parameters
-    double connection_interval = info.le.interval * 1.25; // in ms
-    uint16_t supervision_timeout = info.le.timeout * 10;  // in ms
-    LOG_INF("Initial conn params: interval %.2f ms, latency %d intervals, timeout %d ms",
-            connection_interval,
+    uint32_t connection_interval_us = (uint32_t) info.le.interval * 1250U;
+    uint16_t supervision_timeout = info.le.timeout * 10; // in ms
+    LOG_INF("Initial conn params: interval %u.%03u ms, latency %d intervals, timeout %d ms",
+            connection_interval_us / 1000U,
+            connection_interval_us % 1000U,
             info.le.latency,
             supervision_timeout);
     LOG_INF("Initial MTU: %u", mtu);
     mtu_recheck_attempts = 0;
+#ifdef CONFIG_OMI_ENABLE_ADAPTIVE_CONN_PARAMS
+    conn_params_fast = true;
+#endif
 
     // Request aggressive connection params for higher BLE sync throughput.
     update_conn_params(current_connection);
@@ -958,9 +973,9 @@ static void _transport_connected(struct bt_conn *conn, uint8_t err)
 
     is_connected = true;
 
-    if (IS_ENABLED(CONFIG_SHELL_BT_NUS)) {
-        shell_bt_nus_enable(conn);
-    }
+#if defined(CONFIG_SHELL_BT_NUS)
+    shell_bt_nus_enable(conn);
+#endif
 
     // Notify SD module about BLE connection (flush current file)
 #ifdef CONFIG_OMI_ENABLE_OFFLINE_STORAGE
@@ -984,12 +999,16 @@ static void _transport_disconnected(struct bt_conn *conn, uint8_t err)
 {
     k_work_cancel_delayable(&mtu_recheck_work);
     mtu_recheck_attempts = 0;
+#ifdef CONFIG_OMI_ENABLE_ADAPTIVE_CONN_PARAMS
+    k_work_cancel_delayable(&conn_params_apply_work);
+    conn_params_fast = true;
+#endif
 
     is_connected = false;
 
-    if (IS_ENABLED(CONFIG_SHELL_BT_NUS)) {
-        shell_bt_nus_disable();
-    }
+#if defined(CONFIG_SHELL_BT_NUS)
+    shell_bt_nus_disable();
+#endif
 
     // Stop auto-sync and save current sync offset
 #ifdef CONFIG_OMI_ENABLE_OFFLINE_STORAGE
@@ -1029,14 +1048,15 @@ static bool _le_param_req(struct bt_conn *conn, struct bt_le_conn_param *param)
 
 static void _le_param_updated(struct bt_conn *conn, uint16_t interval, uint16_t latency, uint16_t timeout)
 {
-    double connection_interval = interval * 1.25; // in ms
-    uint16_t supervision_timeout = timeout * 10;  // in ms
-    LOG_INF("Connection parameters updated: interval %.2f ms, latency %d intervals, timeout %d ms",
-            connection_interval,
+    uint32_t connection_interval_us = (uint32_t) interval * 1250U;
+    uint16_t supervision_timeout = timeout * 10; // in ms
+    LOG_INF("Connection parameters updated: interval %u.%03u ms, latency %d intervals, timeout %d ms",
+            connection_interval_us / 1000U,
+            connection_interval_us % 1000U,
             latency,
             supervision_timeout);
 
-    if (interval > 24) {
+    if (conn_params_fast && interval > CONFIG_OMI_CONN_INTERVAL_FAST_MAX) {
         LOG_WRN("Connection interval still high (%u units). Re-requesting preferred params.", interval);
         update_conn_params(conn);
     }
@@ -1091,17 +1111,21 @@ static struct bt_conn_cb _callback_references = {
 #define CONN_PARAM_RETRY_COUNT 3
 #define CONN_PARAM_RETRY_DELAY_MS 300
 
-static void update_conn_params(struct bt_conn *conn)
+static void update_conn_params_mode(struct bt_conn *conn, bool fast)
 {
     int err = 0;
     const struct bt_le_conn_param preferred_param = {
-        .interval_min = 6,
-        .interval_max = 12,
-        .latency = 0,
-        .timeout = 400,
+        .interval_min = fast ? CONFIG_OMI_CONN_INTERVAL_FAST_MIN : CONFIG_OMI_CONN_INTERVAL_IDLE_MIN,
+        .interval_max = fast ? CONFIG_OMI_CONN_INTERVAL_FAST_MAX : CONFIG_OMI_CONN_INTERVAL_IDLE_MAX,
+        .latency = fast ? 0 : CONFIG_OMI_CONN_IDLE_LATENCY,
+        .timeout = CONFIG_OMI_CONN_SUPERVISION_TIMEOUT,
     };
 
-    LOG_INF("Requesting conn params update (7.5-15ms, latency 0)...");
+    LOG_INF("Requesting conn params update (%s: %u-%u units, latency %u)...",
+            fast ? "fast" : "idle",
+            preferred_param.interval_min,
+            preferred_param.interval_max,
+            preferred_param.latency);
     for (int attempt = 1; attempt <= CONN_PARAM_RETRY_COUNT; attempt++) {
         err = bt_conn_le_param_update(conn, &preferred_param);
         if (!err) {
@@ -1116,6 +1140,44 @@ static void update_conn_params(struct bt_conn *conn)
 
     LOG_WRN("bt_conn_le_param_update() still failed after retries (last err %d)", err);
 }
+
+static void update_conn_params(struct bt_conn *conn)
+{
+    update_conn_params_mode(conn, true);
+}
+
+#ifdef CONFIG_OMI_ENABLE_ADAPTIVE_CONN_PARAMS
+static void conn_params_apply_work_handler(struct k_work *work)
+{
+    ARG_UNUSED(work);
+
+    struct bt_conn *conn = current_connection;
+    if (conn == NULL) {
+        return;
+    }
+
+    bool want_fast = transport_is_audio_subscribed();
+#ifdef CONFIG_OMI_ENABLE_OFFLINE_STORAGE
+    want_fast = want_fast || storage_transfer_active();
+#endif
+
+    if (want_fast == conn_params_fast) {
+        return;
+    }
+
+    conn_params_fast = want_fast;
+    update_conn_params_mode(conn, want_fast);
+}
+
+void transport_conn_params_reevaluate(void)
+{
+    k_work_reschedule(&conn_params_apply_work, K_MSEC(CONFIG_OMI_CONN_PARAM_SETTLE_MS));
+}
+#else
+void transport_conn_params_reevaluate(void)
+{
+}
+#endif
 
 static void update_phy(struct bt_conn *conn)
 {
@@ -1636,6 +1698,10 @@ int transport_start()
     }
 #endif
 
+#ifdef CONFIG_OMI_ENABLE_ADAPTIVE_CONN_PARAMS
+    k_work_init_delayable(&conn_params_apply_work, conn_params_apply_work_handler);
+#endif
+
     // Configure callbacks
     bt_conn_cb_register(&_callback_references);
 
@@ -1670,14 +1736,14 @@ int transport_start()
     // Production-line helper: emit local BLE addresses on UART for fixture parsing.
     log_local_ble_addresses();
 
-    if (IS_ENABLED(CONFIG_SHELL_BT_NUS)) {
-        err = shell_bt_nus_init();
-        if (err) {
-            LOG_ERR("BT NUS shell init failed (err %d)", err);
-            return err;
-        }
-        LOG_INF("BT NUS shell initialized");
+#if defined(CONFIG_SHELL_BT_NUS)
+    err = shell_bt_nus_init();
+    if (err) {
+        LOG_ERR("BT NUS shell init failed (err %d)", err);
+        return err;
     }
+    LOG_INF("BT NUS shell initialized");
+#endif
 
     //  Enable accelerometer
 #ifdef CONFIG_OMI_ENABLE_ACCELEROMETER
