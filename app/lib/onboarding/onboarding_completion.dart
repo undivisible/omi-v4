@@ -2,6 +2,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../api/worker_http.dart';
 
+const localOnboardingUid = 'local';
+
 abstract interface class OnboardingCompletionStore {
   Future<bool> isComplete(String uid);
 
@@ -90,6 +92,7 @@ final class LayeredOnboardingCompletionStore
     try {
       if (await local.isComplete(uid)) return true;
     } catch (_) {}
+    if (uid == localOnboardingUid) return false;
     final bool remoteComplete;
     try {
       remoteComplete = await remote.isComplete(uid);
@@ -107,6 +110,7 @@ final class LayeredOnboardingCompletionStore
   @override
   Future<void> complete(String uid) async {
     await local.complete(uid);
+    if (uid == localOnboardingUid) return;
     try {
       await remote.complete(uid);
     } catch (_) {
