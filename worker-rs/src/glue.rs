@@ -14,6 +14,7 @@ use crate::auth::{self, Auth, FirebaseJwks};
 use crate::channel_commands as cmd;
 use crate::delivery::Channel;
 use crate::entitlement::{self, DevFakePro, EntitlementRow};
+use crate::settings;
 use crate::setup_health::{setup_health_body, SetupHealthInputs};
 use crate::worker_util::now_ms_f64 as now_ms;
 use crate::worker_util::{changes, secret_or_var, uuid_v4};
@@ -60,10 +61,19 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         .get_async("/v1/me", handle_me)
         .get_async("/v1/setup-health", handle_setup_health)
         .get_async("/v1/entitlement", handle_entitlement)
+        // Settings (authenticated). PUT owns `user_settings.revision` — the
+        // `policy_generation` the currents approval gate reads.
+        .get_async("/v1/settings", handle_settings_get)
+        .put_async("/v1/settings", handle_settings_put)
         // Phase 2: channel linking (authenticated).
         .post_async("/v1/channels/link", handle_channel_link_redeem)
         .post_async("/v1/channels/:channel/link", handle_channel_link_token)
         .delete_async("/v1/channels/:channel/link", handle_channel_unlink)
+        // App-initiated outbound channel send (authenticated).
+        .post_async(
+            "/v1/channels/:channel/messages",
+            handle_channel_message_post,
+        )
         .get_async("/v1/profile/onboarding", handle_onboarding_get)
         .put_async("/v1/profile/onboarding", handle_onboarding_put)
         .delete_async("/v1/account", handle_account_delete)
@@ -395,6 +405,326 @@ async fn handle_channel_unlink(req: Request, ctx: RouteContext<()>) -> Result<Re
         Ok(()) => Ok(Response::empty()?.with_status(204)),
         Err(_) => error_json("Delivery coordination unavailable", 503),
     }
+}
+
+// ===========================================================================
+// Settings — GET/PUT /v1/settings (port of routes.ts :573 / :590).
+// ===========================================================================
+
+// GET /v1/settings — the current settings and revision.
+async fn handle_settings_get(req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let auth = match authenticate(&req, &ctx).await {
+        AuthOutcome::Ok(auth) => auth,
+        AuthOutcome::Reject(response) => return Ok(response),
+    };
+    let db = ctx.env.d1("DB")?;
+    let row = db
+        .prepare("SELECT value, revision FROM user_settings WHERE uid = ?1")
+        .bind(&[js_str(&auth.uid)])?
+        .first::<Value>(None)
+        .await?;
+    let settings = settings::parse_settings(
+        row.as_ref()
+            .and_then(|r| r.get("value"))
+            .and_then(Value::as_str),
+    );
+    let revision = row
+        .as_ref()
+        .and_then(|r| r.get("revision"))
+        .and_then(json_to_i64)
+        .unwrap_or(0);
+    Response::from_json(&json!({
+        "settings": settings.to_value(),
+        "revision": revision,
+        "effectivePolicy": settings.to_value(),
+    }))
+}
+
+// PUT /v1/settings — apply a scoped or persistent settings change. A persistent
+// change bumps `user_settings.revision`, which the currents approval gate reads
+// as `policy_generation` — the mechanism a user uses to revoke standing
+// current-approvals.
+async fn handle_settings_put(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let auth = match authenticate(&req, &ctx).await {
+        AuthOutcome::Ok(auth) => auth,
+        AuthOutcome::Reject(response) => return Ok(response),
+    };
+    let body: Value = req.json().await.unwrap_or(Value::Null);
+    let Some(validated) = settings::validate_patch(&body) else {
+        return error_json("Invalid settings change", 400);
+    };
+    let db = ctx.env.d1("DB")?;
+    let row = db
+        .prepare("SELECT value, revision FROM user_settings WHERE uid = ?1")
+        .bind(&[js_str(&auth.uid)])?
+        .first::<Value>(None)
+        .await?;
+    let revision = row
+        .as_ref()
+        .and_then(|r| r.get("revision"))
+        .and_then(json_to_i64)
+        .unwrap_or(0);
+    if revision != validated.expected_revision {
+        return Ok(Response::from_json(
+            &json!({ "error": "Settings revision conflict", "revision": revision }),
+        )?
+        .with_status(409));
+    }
+    let previous = settings::parse_settings(
+        row.as_ref()
+            .and_then(|r| r.get("value"))
+            .and_then(Value::as_str),
+    );
+    let merged = settings::merge(
+        &previous,
+        validated.approval_mode.as_deref(),
+        validated.proactive_recommendations,
+    );
+    let diff = settings::settings_diff(&previous, &merged);
+    let expands = settings::expands_authority(&previous, validated.approval_mode.as_deref());
+    let now = Date::now().as_millis() as i64;
+    let duration = validated.duration;
+
+    let scope_id = if duration == settings::Duration::Persistent {
+        None
+    } else {
+        let key = if duration == settings::Duration::Task {
+            "taskId"
+        } else {
+            "sessionId"
+        };
+        settings::text(body.get(key), 200)
+    };
+    let expires_at = match body.get("expiresAt") {
+        None | Some(Value::Null) => None,
+        Some(value) => Some(crate::jsnum::number_from_value(value)),
+    };
+    if duration != settings::Duration::Persistent && scope_id.is_none() {
+        return error_json(&format!("Missing {} id", duration.as_str()), 400);
+    }
+    if let Some(expires) = expires_at {
+        if !crate::jsnum::is_safe_integer(expires) || expires <= now as f64 {
+            return error_json("Invalid settings expiry", 400);
+        }
+    }
+    if expands {
+        let Some(receipt_id) = settings::text(body.get("confirmationReceiptId"), 100) else {
+            return error_json("Owner confirmation required", 403);
+        };
+        // `expands` implies a patched approvalMode, so this is always present.
+        let approval = validated.approval_mode.as_deref().unwrap_or_default();
+        let result = db
+            .prepare(
+                "UPDATE owner_confirmation_receipts SET consumed_at = ?1\n             WHERE id = ?2 AND uid = ?3 AND purpose = 'settings.approvalMode' AND value = ?4\n               AND created_at < ?1 AND expires_at > ?1 AND consumed_at IS NULL",
+            )
+            .bind(&[
+                (now as f64).into(),
+                js_str(&receipt_id),
+                js_str(&auth.uid),
+                js_str(approval),
+            ])?
+            .run()
+            .await?;
+        if changes(&result) != 1 {
+            return error_json("Owner confirmation invalid", 403);
+        }
+    }
+
+    if duration != settings::Duration::Persistent {
+        let id = uuid_v4();
+        let patch_json = body
+            .get("patch")
+            .cloned()
+            .unwrap_or(Value::Null)
+            .to_string();
+        // scope_id is Some here (verified above).
+        let scope = scope_id.clone().unwrap_or_default();
+        db.prepare(
+            "INSERT INTO setting_scopes (id, uid, duration, scope_id, base_revision, patch, created_at, expires_at)\n             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)\n             ON CONFLICT(uid, duration, scope_id) DO UPDATE SET\n               base_revision = excluded.base_revision, patch = excluded.patch,\n               created_at = excluded.created_at, expires_at = excluded.expires_at",
+        )
+        .bind(&[
+            js_str(&id),
+            js_str(&auth.uid),
+            js_str(duration.as_str()),
+            js_str(&scope),
+            (revision as f64).into(),
+            js_str(&patch_json),
+            (now as f64).into(),
+            match expires_at {
+                Some(v) => v.into(),
+                None => JsValue::NULL,
+            },
+        ])?
+        .run()
+        .await?;
+        return Response::from_json(&json!({
+            "settings": merged.to_value(),
+            "revision": revision,
+            "duration": duration.as_str(),
+            "scopeId": scope_id,
+            "diff": diff,
+            "effectivePolicy": merged.to_value(),
+            "restartRequired": false,
+        }));
+    }
+
+    let stored = merged.to_value().to_string();
+    let result = if row.is_some() {
+        db.prepare(
+            "UPDATE user_settings SET value = ?1, revision = revision + 1, updated_at = ?2 WHERE uid = ?3 AND revision = ?4",
+        )
+        .bind(&[
+            js_str(&stored),
+            (now as f64).into(),
+            js_str(&auth.uid),
+            (validated.expected_revision as f64).into(),
+        ])?
+        .run()
+        .await?
+    } else {
+        db.prepare(
+            "INSERT OR IGNORE INTO user_settings (uid, value, revision, updated_at) VALUES (?1, ?2, 1, ?3)",
+        )
+        .bind(&[js_str(&auth.uid), js_str(&stored), (now as f64).into()])?
+        .run()
+        .await?
+    };
+    if changes(&result) != 1 {
+        return Ok(
+            Response::from_json(&json!({ "error": "Settings revision conflict" }))?
+                .with_status(409),
+        );
+    }
+    Response::from_json(&json!({
+        "settings": merged.to_value(),
+        "revision": revision + 1,
+        "duration": duration.as_str(),
+        "diff": diff,
+        "effectivePolicy": merged.to_value(),
+        "restartRequired": false,
+    }))
+}
+
+// ===========================================================================
+// Channels — POST /v1/channels/:channel/messages (port of routes.ts :923).
+// ===========================================================================
+
+// App-initiated outbound channel send: idempotency-keyed `channel_deliveries`
+// insert → conversation append → DeliveryCoordinator dispatch → status machine.
+async fn handle_channel_message_post(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let auth = match authenticate(&req, &ctx).await {
+        AuthOutcome::Ok(auth) => auth,
+        AuthOutcome::Reject(response) => return Ok(response),
+    };
+    let Some(channel) = ctx.param("channel").and_then(|c| Channel::parse(c)) else {
+        return error_json("Unknown channel", 404);
+    };
+    let body: Value = req.json().await.unwrap_or(Value::Null);
+    let message = settings::text(body.get("text"), 4096);
+    let idempotency_key = settings::text(body.get("idempotencyKey"), 128);
+    let (Some(message), Some(idempotency_key)) = (message, idempotency_key) else {
+        return error_json("Invalid delivery", 400);
+    };
+    if !crate::delivery::valid_idempotency_key(&idempotency_key) {
+        return error_json("Invalid delivery", 400);
+    }
+    let db = ctx.env.d1("DB")?;
+    let binding = db
+        .prepare(
+            "SELECT COALESCE(channel_chat_id, channel_user_id) AS channel_chat_id\n             FROM channel_bindings\n             WHERE uid = ?1 AND channel = ?2 AND revoked_at IS NULL\n             ORDER BY verified_at DESC LIMIT 1",
+        )
+        .bind(&[js_str(&auth.uid), js_str(channel.as_str())])?
+        .first::<Value>(None)
+        .await?;
+    let Some(chat_id) = binding
+        .as_ref()
+        .and_then(|b| b.get("channel_chat_id"))
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .map(String::from)
+    else {
+        return Ok(
+            Response::from_json(&json!({ "error": "Channel is not linked" }))?.with_status(409),
+        );
+    };
+    let id = uuid_v4();
+    let now = now_ms();
+    db.prepare(
+        "INSERT OR IGNORE INTO channel_deliveries\n               (id, uid, channel, idempotency_key, channel_chat_id, text, next_attempt_at, created_at, updated_at)\n             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7, ?7)",
+    )
+    .bind(&[
+        js_str(&id),
+        js_str(&auth.uid),
+        js_str(channel.as_str()),
+        js_str(&idempotency_key),
+        js_str(&chat_id),
+        js_str(&message),
+        now.into(),
+    ])?
+    .run()
+    .await?;
+    let delivery = db
+        .prepare(
+            "SELECT id, channel_chat_id, text, state, attempts, provider_message_id, last_error\n             FROM channel_deliveries WHERE uid = ?1 AND channel = ?2 AND idempotency_key = ?3",
+        )
+        .bind(&[
+            js_str(&auth.uid),
+            js_str(channel.as_str()),
+            js_str(&idempotency_key),
+        ])?
+        .first::<Value>(None)
+        .await?
+        .unwrap_or(Value::Null);
+    let Some(delivery_id) = row_str(&delivery, "id") else {
+        return Ok(
+            Response::from_json(&json!({ "error": "Idempotency key conflict" }))?.with_status(409),
+        );
+    };
+    if row_str(&delivery, "channel_chat_id").as_deref() != Some(chat_id.as_str())
+        || row_str(&delivery, "text").as_deref() != Some(message.as_str())
+    {
+        return Ok(
+            Response::from_json(&json!({ "error": "Idempotency key conflict" }))?.with_status(409),
+        );
+    }
+    let conv_message = ConvMessage {
+        uid: auth.uid.clone(),
+        client_message_id: format!("delivery:{}:{}", channel.as_str(), idempotency_key),
+        role: "assistant".to_string(),
+        source: channel.as_str().to_string(),
+        text: message.clone(),
+        channel_message_id: None,
+        delivery_id: Some(delivery_id.clone()),
+        created_at: now,
+    };
+    if append_conversation_message(&db, &conv_message, Vec::new())
+        .await?
+        .is_none()
+    {
+        return Ok(
+            Response::from_json(&json!({ "error": "Conversation message conflict" }))?
+                .with_status(409),
+        );
+    }
+    if crate::routes_channels::dispatch_channel_message(&ctx.env, &delivery_id, &auth.uid, channel)
+        .await
+        .is_err()
+    {
+        return error_json("Delivery coordination unavailable", 503);
+    }
+    let current = db
+        .prepare(
+            "SELECT id, state, attempts, provider_message_id, last_error FROM channel_deliveries WHERE id = ?1 AND uid = ?2",
+        )
+        .bind(&[js_str(&delivery_id), js_str(&auth.uid)])?
+        .first::<Value>(None)
+        .await?
+        .unwrap_or(Value::Null);
+    let status = crate::delivery::delivery_status(
+        row_str(&current, "state").as_deref(),
+        row_str(&current, "last_error").as_deref(),
+    );
+    Ok(Response::from_json(&json!({ "delivery": current }))?.with_status(status))
 }
 
 async fn handle_setup_health(req: Request, ctx: RouteContext<()>) -> Result<Response> {

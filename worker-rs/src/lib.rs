@@ -19,6 +19,7 @@ pub mod desktop_auth;
 pub mod entitlement;
 pub mod inbox_fallback;
 pub mod routes_memory;
+pub mod settings;
 pub mod setup_health;
 pub mod webhooks;
 

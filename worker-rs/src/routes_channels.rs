@@ -748,6 +748,26 @@ impl DeliveryCoordinator {
     }
 }
 
+/// `dispatchChannelMessage` — route a due delivery through the per-uid/channel
+/// DeliveryCoordinator's `/deliver` endpoint (best-effort; the caller maps a
+/// failure to a 503, and the scheduled drain retries regardless).
+pub async fn dispatch_channel_message(
+    env: &Env,
+    id: &str,
+    uid: &str,
+    channel: Channel,
+) -> Result<()> {
+    let now = now_ms();
+    dispatch_to_coordinator(
+        env,
+        uid,
+        channel,
+        "/deliver",
+        &json!({ "id": id, "uid": uid, "channel": channel.as_str(), "now": now }),
+    )
+    .await
+}
+
 /// `dispatchChannelUnlink` — route an unlink through the per-uid/channel
 /// DeliveryCoordinator so it serializes with in-flight deliveries.
 pub async fn dispatch_channel_unlink(env: &Env, uid: &str, channel: Channel) -> Result<()> {
