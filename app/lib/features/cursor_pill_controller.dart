@@ -211,6 +211,8 @@ final class CursorPillController extends ChangeNotifier {
     this._presentWindow,
     this._dismissWindow,
     this._voiceLevelSink,
+    this._submitRelay,
+    this._chooseRelay,
     String Function()? requestId,
     DateTime Function()? now,
     this.doubleShiftDebounce = const Duration(milliseconds: 500),
@@ -288,6 +290,14 @@ final class CursorPillController extends ChangeNotifier {
   final Future<void> Function(bool centered)? _presentWindow;
   final Future<void> Function()? _dismissWindow;
   final Future<void> Function(double level)? _voiceLevelSink;
+
+  /// Set only inside the pill panel's own Flutter engine, which renders the
+  /// overlay but owns none of the services behind it: [submit] and [choose]
+  /// hand the raw text (or the suggestion's index) to the primary engine
+  /// instead of acting locally, so the launcher, browser, memory, and agent
+  /// plumbing all stay in one place.
+  final Future<void> Function(String text)? _submitRelay;
+  final Future<void> Function(int index)? _chooseRelay;
   final String Function() _requestId;
   final DateTime Function() _now;
   final Duration doubleShiftDebounce;
@@ -638,6 +648,11 @@ final class CursorPillController extends ChangeNotifier {
   Future<void> submit(String text) async {
     final normalized = text.trim();
     if (normalized.isEmpty || _state != CursorPillState.input) return;
+    if (_submitRelay case final relay?) {
+      _clearPrediction();
+      await relay(normalized);
+      return;
+    }
     switch (parseLauncherIntent(normalized)) {
       case OpenUrlIntent(:final url, :final display):
         _showWorking('Opening $display…');
@@ -745,6 +760,11 @@ final class CursorPillController extends ChangeNotifier {
 
   Future<void> choose(PillSuggestion suggestion) async {
     if (_state != CursorPillState.input) return;
+    if (_chooseRelay case final relay?) {
+      final index = _suggestions.indexOf(suggestion);
+      if (index >= 0) await relay(index);
+      return;
+    }
     switch (suggestion.kind) {
       case PillSuggestionKind.link:
         await _hide();
@@ -959,6 +979,25 @@ final class CursorPillController extends ChangeNotifier {
       _mergeSuggestions();
       _notify();
     }
+  }
+
+  /// Adopts the surface state pushed by the primary engine. Only the pill
+  /// panel's engine calls this: it renders what the live controller holds
+  /// without running the state machine that produced it.
+  void applyHostState({
+    required CursorPillState state,
+    List<PillSuggestion> suggestions = const [],
+    String? status,
+    String? error,
+  }) {
+    if (state == CursorPillState.hidden) _clearPrediction();
+    _state = state;
+    _suggestions = List.unmodifiable(
+      state == CursorPillState.input ? suggestions : const <PillSuggestion>[],
+    );
+    _status = status;
+    _error = error;
+    _notify();
   }
 
   void _notify() {

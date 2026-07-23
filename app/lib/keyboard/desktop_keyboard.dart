@@ -54,6 +54,32 @@ final class DesktopGlobalHotkeyUnavailableEvent extends DesktopKeyboardEvent {
   const DesktopGlobalHotkeyUnavailableEvent();
 }
 
+/// Whether omi itself is the frontmost application. The chord means two
+/// different things either side of this line: in-app it focuses the hub's
+/// own input, in the background it summons the floating pill panel.
+final class DesktopAppActivationEvent extends DesktopKeyboardEvent {
+  const DesktopAppActivationEvent(this.active);
+
+  final bool active;
+}
+
+/// The live state of global input capture: whether the process is
+/// Accessibility-trusted, and whether the session event tap that watches the
+/// chord and the pointer shake is actually installed. Surfaced in-app so a
+/// missing grant or a dead tap is visible instead of silent.
+final class DesktopInputDiagnosticsEvent extends DesktopKeyboardEvent {
+  const DesktopInputDiagnosticsEvent({
+    required this.trusted,
+    required this.tapInstalled,
+  });
+
+  final bool trusted;
+  final bool tapInstalled;
+
+  /// True when global shortcuts really are being watched right now.
+  bool get globalCaptureLive => trusted && tapInstalled;
+}
+
 final class DesktopKeyboard {
   DesktopKeyboard({EventChannel? channel, MethodChannel? control})
     : _channel = channel ?? const EventChannel('omi/desktop_keyboard'),
@@ -61,15 +87,23 @@ final class DesktopKeyboard {
 
   final EventChannel _channel;
   final MethodChannel _control;
+  Stream<DesktopKeyboardEvent>? _events;
 
   bool get supported =>
       !kIsWeb &&
       (defaultTargetPlatform == TargetPlatform.macOS ||
           defaultTargetPlatform == TargetPlatform.windows);
 
+  /// One shared stream per instance. Every `receiveBroadcastStream()` call
+  /// installs its own handler for the channel name, and the newest one
+  /// replaces the last — so subscribing twice (gestures and the in-app
+  /// notices) would silently starve the first subscriber of every event.
   Stream<DesktopKeyboardEvent> get events {
     if (!supported) return const Stream.empty();
-    return _channel.receiveBroadcastStream().map(_decode);
+    return _events ??= _channel
+        .receiveBroadcastStream()
+        .map(_decode)
+        .asBroadcastStream();
   }
 
   Future<void> focusApplication() async {
@@ -94,6 +128,11 @@ final class DesktopKeyboard {
       'summonOverlay' => const DesktopSummonOverlayEvent(),
       'shake' => const DesktopShakeEvent(),
       'globalHotkeyUnavailable' => const DesktopGlobalHotkeyUnavailableEvent(),
+      'appActivation' => DesktopAppActivationEvent(raw['active'] == true),
+      'diagnostics' => DesktopInputDiagnosticsEvent(
+        trusted: raw['trusted'] == true,
+        tapInstalled: raw['tapInstalled'] == true,
+      ),
       _ => throw const FormatException('unknown keyboard event'),
     };
   }

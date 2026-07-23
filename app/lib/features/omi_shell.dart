@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../app_services.dart';
+import '../capabilities/desktop_capabilities.dart';
 import '../keyboard/keyboard.dart';
 import '../menu_bar/desktop_menu_bar.dart';
 import 'chat_screen.dart';
@@ -12,6 +13,7 @@ import 'cursor_pill.dart';
 import 'cursor_pill_controller.dart';
 import 'hub_opener.dart';
 import 'meeting_assist_panel.dart';
+import 'pill_panel.dart';
 import 'setup_account_screens.dart';
 
 class OmiShell extends StatefulWidget {
@@ -43,6 +45,9 @@ class _OmiShellState extends State<OmiShell> {
   bool _globalHotkeyNoticeShown = false;
   DesktopMenuBarController? _menuBar;
   CursorPillController? _cursorPill;
+  PillPanelHost? _pillPanelHost;
+  bool _appActive = false;
+  DesktopInputDiagnosticsEvent? _inputDiagnostics;
 
   static const _windowChromeChannel = MethodChannel('omi/window_chrome');
 
@@ -63,6 +68,15 @@ class _OmiShellState extends State<OmiShell> {
         _chatKey.currentState?.showAllTasks();
       },
     );
+    if (_isMacDesktop) {
+      // The pill lives in its own panel window backed by a second engine;
+      // this half of the bridge keeps that engine in sync and executes what
+      // it relays back.
+      _pillPanelHost = PillPanelHost(
+        controller: _cursorPill!,
+        draft: widget.services.generateDraft,
+      )..start();
+    }
     _menuBar = DesktopMenuBarController(
       currents: widget.services.currents,
       isListening: () => widget.services.desktopVoice.active,
@@ -90,6 +104,20 @@ class _OmiShellState extends State<OmiShell> {
   /// while another app is frontmost, so the chord and Option+Space silently
   /// stop working system-wide. Surface that once, with the fix.
   void _handleKeyboardNotice(DesktopKeyboardEvent event) {
+    if (event is DesktopAppActivationEvent) {
+      _appActive = event.active;
+      return;
+    }
+    if (event is DesktopInputDiagnosticsEvent) {
+      if (!mounted) return;
+      final previous = _inputDiagnostics;
+      if (previous?.trusted == event.trusted &&
+          previous?.tapInstalled == event.tapInstalled) {
+        return;
+      }
+      setState(() => _inputDiagnostics = event);
+      return;
+    }
     if (event is! DesktopGlobalHotkeyUnavailableEvent) return;
     if (_globalHotkeyNoticeShown || !mounted) return;
     _globalHotkeyNoticeShown = true;
@@ -155,6 +183,16 @@ class _OmiShellState extends State<OmiShell> {
   Future<void> _handleDesktopGesture(ShiftGestureAction action) async {
     if (!mounted) return;
     final pill = _cursorPill;
+    // With the hub already frontmost the chord means "let me type here": the
+    // floating panel would only cover the window it was summoned from, so the
+    // caret goes to the hub's own composer instead. Any surface already up
+    // keeps its own toggle semantics.
+    if (action == ShiftGestureAction.openOverlay &&
+        _appActive &&
+        (pill == null || pill.state == CursorPillState.hidden)) {
+      _chatKey.currentState?.focusInput();
+      return;
+    }
     if (pill != null) {
       await pill.handleGesture(action);
       return;
@@ -166,6 +204,7 @@ class _OmiShellState extends State<OmiShell> {
   void dispose() {
     unawaited(_menuBar?.dispose());
     unawaited(_disposeDesktopGesture());
+    _pillPanelHost?.dispose();
     _cursorPill?.dispose();
     super.dispose();
   }
@@ -207,12 +246,26 @@ class _OmiShellState extends State<OmiShell> {
             if (widget.previewMode)
               _PreviewNotice(onExit: widget.onExitPreview),
             if (widget.previewMode) const SizedBox(height: 12),
+            if (_inputDiagnostics case final diagnostics?
+                when !diagnostics.globalCaptureLive) ...[
+              _GlobalInputNotice(
+                diagnostics: diagnostics,
+                onGrant: () => unawaited(
+                  widget.services.capabilities.request(
+                    CoreCapability.accessibility,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+            ],
             Expanded(child: chat),
           ],
         ),
       ),
     );
-    final pill = _cursorPill;
+    // On macOS the pill renders inside its own panel window (a second Flutter
+    // engine); drawing it in the hub too would show it twice.
+    final pill = _isMacDesktop && !widget.previewMode ? null : _cursorPill;
     final hubBackground = Theme.of(context).brightness == Brightness.dark
         ? const Color(0xff1c1c1a)
         : const Color(0xfff7f6f1);
@@ -305,6 +358,54 @@ class _WarmPaperHub extends StatelessWidget {
       ),
     );
   }
+}
+
+/// The visible truth about global input capture. Without it the chord, the
+/// overlay keybind, and the pointer shake only work while omi is frontmost,
+/// which otherwise looks like the feature is simply broken.
+class _GlobalInputNotice extends StatelessWidget {
+  const _GlobalInputNotice({required this.diagnostics, required this.onGrant});
+
+  final DesktopInputDiagnosticsEvent diagnostics;
+  final VoidCallback onGrant;
+
+  @override
+  Widget build(BuildContext context) => DecoratedBox(
+    key: const Key('global_input_notice'),
+    decoration: BoxDecoration(
+      color: const Color(0x22ffc66d),
+      border: Border.all(color: const Color(0x66ffc66d)),
+      borderRadius: BorderRadius.circular(14),
+    ),
+    child: Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      child: Row(
+        children: [
+          const Icon(
+            Icons.keyboard_alt_outlined,
+            size: 18,
+            color: Color(0xffffc66d),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              'Global shortcuts are off — double-Shift, '
+              '$summonOverlayKeybindLabel, and the cursor shake only work '
+              'inside Omi. Accessibility: '
+              '${diagnostics.trusted ? "granted" : "not granted"} · '
+              'input tap: ${diagnostics.tapInstalled ? "live" : "not running"}.',
+              style: const TextStyle(fontSize: 12, color: Color(0xffffd99a)),
+            ),
+          ),
+          TextButton(
+            key: const Key('global_input_notice_grant'),
+            onPressed: onGrant,
+            child: const Text('Open Accessibility'),
+          ),
+        ],
+      ),
+    ),
+  );
 }
 
 class _PreviewNotice extends StatelessWidget {
