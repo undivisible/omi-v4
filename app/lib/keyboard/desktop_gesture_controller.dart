@@ -35,7 +35,9 @@ final class DesktopGestureController {
         enabled,
       ),
       DesktopEscapeEvent() => _machine.escape(),
-      DesktopGlobalHotkeyUnavailableEvent() => const <ShiftGestureAction>[],
+      DesktopGlobalHotkeyUnavailableEvent() ||
+      DesktopAppActivationEvent() ||
+      DesktopInputDiagnosticsEvent() => const <ShiftGestureAction>[],
     };
     _emit(actions);
     _armChordTimer();

@@ -505,6 +505,14 @@ class ChatScreenState extends State<ChatScreen> {
     }
   }
 
+  /// Puts the caret in the hub's own composer. The chord means "start
+  /// typing", so while omi is already frontmost it lands here instead of
+  /// summoning the floating pill panel over the window.
+  void focusInput() {
+    if (!mounted) return;
+    _inputFocus.requestFocus();
+  }
+
   /// Brings the hub to the tasks view — the voice "show me my tasks" intent
   /// lands here.
   void showAllTasks() {
