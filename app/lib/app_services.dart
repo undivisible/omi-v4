@@ -372,6 +372,11 @@ final class AppServices {
   /// Non-fatal device-audio status (e.g. paired while signed out, so audio
   /// streaming is deferred until an account grants processing authority).
   final deviceAudioNotice = ValueNotifier<String?>(null);
+
+  /// Which model handled the most recent chat turn, as reported by the hub's
+  /// chat router ("local:apple-foundation-models" or
+  /// "online:configured-provider"). Null until a routed turn completes.
+  final chatModelNotice = ValueNotifier<String?>(null);
   Future<void> _liveVoiceLifecycle = Future.value();
   int _liveVoiceGeneration = 0;
   final SystemAudioCaptureModeStore _captureModeStore;
@@ -1222,6 +1227,11 @@ final class AppServices {
   }
 
   void _handleNativeEvent(NativeEvent event) {
+    if (event case NativeEventToolProgress(
+      :final value,
+    ) when value.tool == 'chat_model') {
+      chatModelNotice.value = value.detail;
+    }
     if (!_conversationController.handleNativeEvent(event)) return;
     _handleMeetingEvent(event);
     _nativeEvents.add(event);
