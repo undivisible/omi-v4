@@ -91,13 +91,6 @@ void main() {
 
     expect(find.byKey(const Key('companion_reconnect')), findsOneWidget);
     await tester.tap(find.byKey(const Key('companion_reconnect')));
-    await tester.pumpAndSettle();
-    expect(find.text('Omi Pendant'), findsOneWidget);
-
-    await tester.ensureVisible(
-      find.byKey(const Key('companion_connect_omi-1')),
-    );
-    await tester.tap(find.byKey(const Key('companion_connect_omi-1')));
     await tester.runAsync(
       () => Future<void>.delayed(const Duration(milliseconds: 50)),
     );
@@ -373,11 +366,6 @@ void main() {
     );
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('companion_reconnect')));
-    await tester.pumpAndSettle();
-    await tester.ensureVisible(
-      find.byKey(const Key('companion_connect_omi-1')),
-    );
-    await tester.tap(find.byKey(const Key('companion_connect_omi-1')));
     await tester.runAsync(
       () => Future<void>.delayed(const Duration(milliseconds: 50)),
     );

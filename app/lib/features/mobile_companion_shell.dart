@@ -220,6 +220,7 @@ class MobilePendantPageState extends State<MobilePendantPage> {
   @override
   void initState() {
     super.initState();
+    snapshot = relay.lastSnapshot;
     _snapshotSubscription = relay.snapshots.listen((next) {
       if (mounted) setState(() => snapshot = next);
       unawaited(
@@ -269,14 +270,13 @@ class MobilePendantPageState extends State<MobilePendantPage> {
     }
     if (!mounted || remembered == null) return;
     setState(() => rememberedDeviceId = remembered);
-    if (_reconnectAttempted ||
-        _phase != DeviceConnectionPhase.disconnected ||
-        !widget.services.productionReady) {
+    if (_reconnectAttempted || _phase != DeviceConnectionPhase.disconnected) {
       return;
     }
     _reconnectAttempted = true;
     try {
       await widget.services.connectDevice(remembered);
+      unawaited(relay.sendHaptic(2));
     } catch (next) {
       if (mounted) setState(() => error = next);
     }
@@ -300,14 +300,20 @@ class MobilePendantPageState extends State<MobilePendantPage> {
   }
 
   Future<void> reconnect() async {
-    final remembered = rememberedDeviceId;
-    if (remembered == null) {
-      await scan();
-      return;
-    }
     setState(() => error = null);
     try {
+      var remembered = rememberedDeviceId;
+      if (remembered == null) {
+        final found = await relay.scan();
+        if (!mounted) return;
+        setState(() => devices = found);
+        if (found.isEmpty) return;
+        remembered = found.first.id;
+      }
       await widget.services.connectDevice(remembered);
+      await widget.pairedDevices.save(remembered);
+      if (mounted) setState(() => rememberedDeviceId = remembered);
+      unawaited(relay.sendHaptic(2));
     } catch (next) {
       if (mounted) setState(() => error = next);
     }
@@ -319,6 +325,7 @@ class MobilePendantPageState extends State<MobilePendantPage> {
       await widget.services.connectDevice(device.id);
       await widget.pairedDevices.save(device.id);
       if (mounted) setState(() => rememberedDeviceId = device.id);
+      unawaited(relay.sendHaptic(2));
     } catch (next) {
       if (mounted) setState(() => error = next);
     }
@@ -523,7 +530,7 @@ class MobilePendantPageState extends State<MobilePendantPage> {
         final pendantWidth = math.min(constraints.maxWidth * .82, 420.0);
         final heroHeight = math.min(
           constraints.maxHeight * .5,
-          pendantWidth * .78 + 222,
+          pendantWidth * .78 + 196,
         );
         // Push the hero (pendant image, title, status, battery) down from
         // the very top edge: respect the safe-area inset and add extra
@@ -532,7 +539,7 @@ class MobilePendantPageState extends State<MobilePendantPage> {
         return Column(
           key: const Key('companion_pendant_column'),
           children: [
-            SizedBox(height: topInset + 52),
+            SizedBox(height: topInset + 28),
             SizedBox(
               height: heroHeight,
               child: OverflowBox(
@@ -552,7 +559,7 @@ class MobilePendantPageState extends State<MobilePendantPage> {
               child: ListView(
                 key: const Key('companion_page_sections'),
                 physics: const ClampingScrollPhysics(),
-                padding: const EdgeInsets.fromLTRB(18, 8, 18, 24),
+                padding: const EdgeInsets.fromLTRB(18, 0, 18, 24),
                 children: [
                   _StatsRow(
                     capturedSegments: capturedSegments,
@@ -1117,7 +1124,7 @@ class _DesktopCta extends StatelessWidget {
       gradient: const LinearGradient(
         begin: Alignment.topLeft,
         end: Alignment.bottomRight,
-        colors: [Color(0xffeef7f0), Color(0xfffdf3ea)],
+        colors: [Color(0xffddf2e8), Color(0xffffe9d8)],
       ),
       border: Border.all(color: _hairline),
       borderRadius: BorderRadius.circular(18),

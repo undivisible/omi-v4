@@ -116,13 +116,31 @@ final class UniversalBleDeviceRelayAdapter
   @override
   Future<RelayDevice> connect(String deviceId) async {
     if (_connectedId == deviceId && _connectedDevice != null && _connected) {
+      // Re-emit so a UI that missed the original connect snapshot (or whose
+      // reconnect button was pressed while already connected) refreshes.
+      _snapshots.add(
+        DeviceRelaySnapshot(
+          phase: DeviceConnectionPhase.connected,
+          capabilities: capabilities,
+          device: _connectedDevice,
+        ),
+      );
       return _connectedDevice!;
     }
     if (_connectedId != null) await disconnect();
     _restoreAttempts = 0;
-    final device = _devices[deviceId];
+    var device = _devices[deviceId];
     if (device == null) {
-      throw ArgumentError.value(deviceId, 'deviceId', 'Scan before connecting');
+      // Reconnecting a remembered device after an app restart: the scan
+      // cache is empty, so scan on demand instead of failing.
+      await scan();
+      device = _devices[deviceId];
+    }
+    if (device == null) {
+      throw StateError(
+        'Your Omi was not found nearby. Make sure it is charged and close '
+        'by, then try again.',
+      );
     }
 
     Object? lastError;
@@ -267,16 +285,30 @@ final class UniversalBleDeviceRelayAdapter
   Future<bool> sendHaptic(int level) async {
     final deviceId = _connectedId;
     if (deviceId == null || !_connected) return false;
+    final payload = Uint8List.fromList([level & 0xff]);
     try {
       await UniversalBle.write(
         deviceId,
         _speakerService,
         _speakerHaptic,
-        Uint8List.fromList([level & 0xff]),
+        payload,
       );
       return true;
     } catch (_) {
-      return false;
+      // Some firmware revisions expose the haptic characteristic as
+      // write-without-response only; retry in that mode before giving up.
+      try {
+        await UniversalBle.write(
+          deviceId,
+          _speakerService,
+          _speakerHaptic,
+          payload,
+          withoutResponse: true,
+        );
+        return true;
+      } catch (_) {
+        return false;
+      }
     }
   }
 

@@ -18,10 +18,24 @@ abstract interface class DeviceRelayAdapter {
 }
 
 class DeviceRelayService {
-  DeviceRelayService({required this.role, required this.adapter});
+  DeviceRelayService({required this.role, required this.adapter}) {
+    // Snapshots are broadcast with no replay: a screen that mounts after the
+    // connect (onboarding pairs, then the home screen appears) would other-
+    // wise render "Disconnected" until the next state change. Cache the last
+    // snapshot so late listeners can seed their initial state.
+    if (role == DeviceRelayRole.mobileOwner) {
+      adapter.snapshots.listen(
+        (snapshot) => _lastSnapshot = snapshot,
+        onError: (Object _) {},
+      );
+    }
+  }
 
   final DeviceRelayRole role;
   final DeviceRelayAdapter adapter;
+  DeviceRelaySnapshot? _lastSnapshot;
+
+  DeviceRelaySnapshot? get lastSnapshot => _lastSnapshot;
 
   DeviceRelayCapabilities get capabilities =>
       role == DeviceRelayRole.mobileOwner
