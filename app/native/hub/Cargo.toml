@@ -16,7 +16,7 @@ futures = "0.3"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 rs_ai = "0.2.22"
 rs_ai_core = "0.2.21"
-rx4 = { version = "0.3.23", default-features = false }
+rx4 = { version = "0.3.25", default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 miniz_oxide = "0.8"
@@ -25,7 +25,7 @@ tokio = { version = "1", features = ["io-util", "macros", "net", "rt", "sync", "
 tokio-util = { version = "0.7", features = ["rt"] }
 tokio-tungstenite = { version = "0.28", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
 url = "2"
-zkr = "0.3.0"
+zkr = "0.3.1"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt", "test-util", "time"] }
@@ -33,7 +33,7 @@ tokio = { version = "1", features = ["macros", "rt", "test-util", "time"] }
 [target.'cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))'.dependencies]
 ed25519-dalek = "2"
 getrandom = "0.3"
-praefectus = "=0.3.0"
+praefectus = "=0.4.0"
 sha2 = "0.10"
 
 [target.'cfg(target_os = "macos")'.dependencies]
