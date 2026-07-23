@@ -37,8 +37,10 @@ impl Limits {
                 .unwrap_or(100_000),
             global_tokens: positive_integer_str(get("MIMO_GLOBAL_TOKEN_BUDGET").as_deref())
                 .unwrap_or(2_000_000),
-            uid_cost_microusd: positive_integer_str(get("MIMO_UID_COST_BUDGET_MICROUSD").as_deref())
-                .unwrap_or(1_000_000),
+            uid_cost_microusd: positive_integer_str(
+                get("MIMO_UID_COST_BUDGET_MICROUSD").as_deref(),
+            )
+            .unwrap_or(1_000_000),
             global_cost_microusd: positive_integer_str(
                 get("MIMO_GLOBAL_COST_BUDGET_MICROUSD").as_deref(),
             )
@@ -99,7 +101,11 @@ impl AssistantAdmission {
         self.reservations
             .retain(|r| r.created_at > now - limits.window_ms);
 
-        if let Some(existing) = self.reservations.iter().find(|r| r.request_id == request_id) {
+        if let Some(existing) = self
+            .reservations
+            .iter()
+            .find(|r| r.request_id == request_id)
+        {
             let admitted = existing.in_flight == 1;
             return Outcome::json(
                 if admitted { 200 } else { 429 },
@@ -133,9 +139,9 @@ impl AssistantAdmission {
             || global_cost + cost_budget_microusd > limits.global_cost_microusd
             || uid_cost + cost_budget_microusd > limits.uid_cost_microusd;
 
-        let retry_after = (((oldest.unwrap_or(now) + limits.window_ms - now) as f64 / 1000.0).ceil()
-            as i64)
-            .max(1);
+        let retry_after =
+            (((oldest.unwrap_or(now) + limits.window_ms - now) as f64 / 1000.0).ceil() as i64)
+                .max(1);
 
         if exceeds {
             return Outcome {
@@ -226,9 +232,7 @@ impl AssistantAdmission {
                     .get("costBudgetMicrousd")
                     .and_then(positive_integer_value);
                 match (uid, token_budget, cost) {
-                    (Some(uid), Some(t), Some(c)) => {
-                        self.admit(limits, now, request_id, uid, t, c)
-                    }
+                    (Some(uid), Some(t), Some(c)) => self.admit(limits, now, request_id, uid, t, c),
                     _ => Outcome::json(400, serde_json::json!({ "error": "Invalid request" })),
                 }
             }
@@ -285,7 +289,10 @@ mod tests {
 
     #[test]
     fn enforces_per_uid_and_global_in_flight_limits() {
-        let l = Limits { uid_in_flight: 2, ..limits() };
+        let l = Limits {
+            uid_in_flight: 2,
+            ..limits()
+        };
         let mut a = AssistantAdmission::new();
         let mut ok = 0;
         let mut refused = 0;
@@ -299,12 +306,22 @@ mod tests {
         assert_eq!(ok, 2);
         assert_eq!(refused, 22);
 
-        let l = Limits { uid_in_flight: 10, global_in_flight: 3, ..limits() };
+        let l = Limits {
+            uid_in_flight: 10,
+            global_in_flight: 3,
+            ..limits()
+        };
         let mut a = AssistantAdmission::new();
         let mut ok = 0;
         let mut refused = 0;
         for i in 0..24 {
-            match admit(&mut a, l, 1000, &format!("global-{i}"), &format!("user-{i}")) {
+            match admit(
+                &mut a,
+                l,
+                1000,
+                &format!("global-{i}"),
+                &format!("user-{i}"),
+            ) {
                 200 => ok += 1,
                 429 => refused += 1,
                 other => panic!("unexpected {other}"),
@@ -327,13 +344,25 @@ mod tests {
         assert_eq!(a.dispatch(l, t0, "POST", "/admit", &body).status, 200);
         assert_eq!(a.dispatch(l, t0, "POST", "/admit", &body).status, 200);
         assert_eq!(
-            a.dispatch(l, t0, "POST", "/release", &json!({ "requestId": "duplicate" }))
-                .status,
+            a.dispatch(
+                l,
+                t0,
+                "POST",
+                "/release",
+                &json!({ "requestId": "duplicate" })
+            )
+            .status,
             200
         );
         assert_eq!(
-            a.dispatch(l, t0, "POST", "/release", &json!({ "requestId": "duplicate" }))
-                .status,
+            a.dispatch(
+                l,
+                t0,
+                "POST",
+                "/release",
+                &json!({ "requestId": "duplicate" })
+            )
+            .status,
             200
         );
         assert_eq!(a.dispatch(l, t0, "POST", "/admit", &body).status, 429);
@@ -386,20 +415,26 @@ mod tests {
     fn invalid_bodies_yield_400_and_wrong_method_405() {
         let mut a = AssistantAdmission::new();
         let l = limits();
+        assert_eq!(a.dispatch(l, 1, "GET", "/admit", &json!({})).status, 405);
         assert_eq!(
-            a.dispatch(l, 1, "GET", "/admit", &json!({})).status,
-            405
-        );
-        assert_eq!(
-            a.dispatch(l, 1, "POST", "/admit", &json!({ "uid": "u" })).status,
+            a.dispatch(l, 1, "POST", "/admit", &json!({ "uid": "u" }))
+                .status,
             400
         );
         assert_eq!(
-            a.dispatch(l, 1, "POST", "/admit", &json!({ "requestId": "x", "uid": "u", "tokenBudget": 0, "costBudgetMicrousd": 1 })).status,
+            a.dispatch(
+                l,
+                1,
+                "POST",
+                "/admit",
+                &json!({ "requestId": "x", "uid": "u", "tokenBudget": 0, "costBudgetMicrousd": 1 })
+            )
+            .status,
             400
         );
         assert_eq!(
-            a.dispatch(l, 1, "POST", "/unknown", &json!({ "requestId": "x" })).status,
+            a.dispatch(l, 1, "POST", "/unknown", &json!({ "requestId": "x" }))
+                .status,
             404
         );
     }

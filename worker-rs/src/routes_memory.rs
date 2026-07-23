@@ -306,10 +306,10 @@ pub fn parse_commit(value: &Value, uid: &str) -> Option<SyncCommit> {
     let recorded_at = safe_int(commit.and_then(|c| c.get("recorded_at")), 0)?;
     let event_count = safe_int(commit.and_then(|c| c.get("event_count")), 1)?;
     let first_event_index = safe_int(commit.and_then(|c| c.get("first_event_index")), 0)?;
-    let records_value = commit.and_then(|c| c.get("records")).and_then(Value::as_array)?;
-    if records_value.is_empty()
-        || first_event_index + records_value.len() as i64 > event_count
-    {
+    let records_value = commit
+        .and_then(|c| c.get("records"))
+        .and_then(Value::as_array)?;
+    if records_value.is_empty() || first_event_index + records_value.len() as i64 > event_count {
         return None;
     }
     let mut records = Vec::with_capacity(records_value.len());
@@ -505,7 +505,10 @@ const RECEIPT_TOKEN_LEN: usize = 43;
 
 /// `/^[0-9a-f]{64}$/`.
 pub fn is_action_hash(value: &str) -> bool {
-    value.len() == ACTION_HASH_LEN && value.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+    value.len() == ACTION_HASH_LEN
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
 }
 
 /// `/^[A-Za-z0-9_-]{43}$/`.
@@ -560,9 +563,7 @@ pub fn iso_from_ms(ms: i64) -> String {
     let minute = (millis_of_day / 60_000) % 60;
     let second = (millis_of_day / 1000) % 60;
     let milli = millis_of_day % 1000;
-    format!(
-        "{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{milli:03}Z"
-    )
+    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{milli:03}Z")
 }
 
 /// Howard Hinnant's `civil_from_days` (days since 1970-01-01 → y/m/d).
@@ -613,8 +614,7 @@ fn field_opt_str(row: &Value, key: &str) -> Option<String> {
 /// `rowToCurrent(row)` — DB row → API Current shape.
 pub fn row_to_current(row: &Value) -> Value {
     let proposed_action_raw = field_str(row, "proposed_action");
-    let proposed_action: Value =
-        serde_json::from_str(&proposed_action_raw).unwrap_or(Value::Null);
+    let proposed_action: Value = serde_json::from_str(&proposed_action_raw).unwrap_or(Value::Null);
     let confidence = field_i64(row, "confidence_basis_points") as f64 / 10_000.0;
     json!({
         "id": field_str(row, "id"),
@@ -848,7 +848,11 @@ pub fn validate_outcome(body: Option<&Value>) -> Result<(String, String), &'stat
     let state = object.get("state").and_then(Value::as_str).ok_or(err)?;
     if !matches!(
         state,
-        "succeeded" | "failed" | "outcome_unknown" | "cancelled_before_effect" | "expired_before_effect"
+        "succeeded"
+            | "failed"
+            | "outcome_unknown"
+            | "cancelled_before_effect"
+            | "expired_before_effect"
     ) {
         return Err(err);
     }
@@ -961,7 +965,11 @@ mod tests {
         };
         assert_eq!(
             record_identity(&claim).unwrap(),
-            RecordIdentity { kind: "claim".into(), id: "old-claim".into(), deleted_at: None }
+            RecordIdentity {
+                kind: "claim".into(),
+                id: "old-claim".into(),
+                deleted_at: None
+            }
         );
 
         let link = SyncRecord {
@@ -1007,7 +1015,10 @@ mod tests {
     #[test]
     fn touched_claim_ids_projects_and_dedupes() {
         let records = vec![
-            SyncRecord { kind: "claim".into(), record: json!({ "id": "old-claim" }) },
+            SyncRecord {
+                kind: "claim".into(),
+                record: json!({ "id": "old-claim" }),
+            },
             SyncRecord {
                 kind: "correction".into(),
                 record: json!({ "superseded_claim_id": "old-claim", "claim_id": "new-claim" }),
@@ -1026,10 +1037,7 @@ mod tests {
     #[test]
     fn projected_claim_id_matches_uppercase_hex() {
         // "a" = 0x61.
-        assert_eq!(
-            projected_claim_id("a", "b", "c"),
-            "zkr:61:62:claim:63"
-        );
+        assert_eq!(projected_claim_id("a", "b", "c"), "zkr:61:62:claim:63");
     }
 
     #[test]
@@ -1056,18 +1064,37 @@ mod tests {
     #[test]
     fn partition_drain_splits_eligible_and_missing() {
         let rows = vec![
-            PendingRow { uid: "a".into(), claim_id: "c1".into() },
-            PendingRow { uid: "a".into(), claim_id: "c2".into() },
-            PendingRow { uid: "a".into(), claim_id: "c3".into() },
+            PendingRow {
+                uid: "a".into(),
+                claim_id: "c1".into(),
+            },
+            PendingRow {
+                uid: "a".into(),
+                claim_id: "c2".into(),
+            },
+            PendingRow {
+                uid: "a".into(),
+                claim_id: "c3".into(),
+            },
         ];
         let lookups = vec![
             Some(ClaimRow {
-                id: "c1".into(), uid: "a".into(), content: "x".into(),
-                subject: None, predicate: None, recorded_at: 1, eligible: 1,
+                id: "c1".into(),
+                uid: "a".into(),
+                content: "x".into(),
+                subject: None,
+                predicate: None,
+                recorded_at: 1,
+                eligible: 1,
             }),
             Some(ClaimRow {
-                id: "c2".into(), uid: "a".into(), content: "y".into(),
-                subject: None, predicate: None, recorded_at: 1, eligible: 0,
+                id: "c2".into(),
+                uid: "a".into(),
+                content: "y".into(),
+                subject: None,
+                predicate: None,
+                recorded_at: 1,
+                eligible: 0,
             }),
             None,
         ];
@@ -1102,7 +1129,10 @@ mod tests {
         assert_eq!(current["confidence"], json!(0.9));
         assert_eq!(current["sourceKind"], json!("conversation"));
         assert_eq!(current["proposedAction"]["kind"], json!("review"));
-        assert_eq!(current["timing"]["surfaceAt"], json!("1970-01-01T00:00:00.000Z"));
+        assert_eq!(
+            current["timing"]["surfaceAt"],
+            json!("1970-01-01T00:00:00.000Z")
+        );
         assert_eq!(current["timing"]["expiresAt"], Value::Null);
         assert_eq!(current["updatedAt"], json!("1970-01-01T00:00:01.000Z"));
     }
@@ -1137,7 +1167,10 @@ mod tests {
         ];
         items.sort_by(|x, y| x.0.cmp(&y.0));
         // 9000 beats 8000; between equal scores updated_at desc then id asc.
-        assert_eq!(items.iter().map(|(_, id)| *id).collect::<Vec<_>>(), ["a", "c", "b"]);
+        assert_eq!(
+            items.iter().map(|(_, id)| *id).collect::<Vec<_>>(),
+            ["a", "c", "b"]
+        );
     }
 
     #[test]
@@ -1154,7 +1187,10 @@ mod tests {
             "evidenceId": "e", "title": "t", "summary": "s", "reason": "r",
             "proposedNextStep": "step", "confidence": 1.5, "surfaceAt": 100,
         });
-        assert_eq!(validate_candidate(Some(&bad_confidence)), Err("Invalid Current candidate"));
+        assert_eq!(
+            validate_candidate(Some(&bad_confidence)),
+            Err("Invalid Current candidate")
+        );
 
         let bad_expiry = json!({
             "evidenceId": "e", "title": "t", "summary": "s", "reason": "r",
@@ -1166,8 +1202,15 @@ mod tests {
     #[test]
     fn validate_feedback_checks_snooze_future() {
         assert!(validate_feedback(Some(&json!({ "kind": "dismissed" })), 100).is_ok());
-        assert!(validate_feedback(Some(&json!({ "kind": "snoozed", "snoozedUntil": 200 })), 100).is_ok());
-        assert!(validate_feedback(Some(&json!({ "kind": "snoozed", "snoozedUntil": 50 })), 100).is_err());
+        assert!(validate_feedback(
+            Some(&json!({ "kind": "snoozed", "snoozedUntil": 200 })),
+            100
+        )
+        .is_ok());
+        assert!(
+            validate_feedback(Some(&json!({ "kind": "snoozed", "snoozedUntil": 50 })), 100)
+                .is_err()
+        );
         assert!(validate_feedback(Some(&json!({ "kind": "other" })), 100).is_err());
     }
 
@@ -1211,7 +1254,10 @@ mod tests {
     #[test]
     fn validate_outcome_accepts_known_states() {
         let good = json!({ "state": "succeeded", "detail": "done" });
-        assert_eq!(validate_outcome(Some(&good)).unwrap(), ("succeeded".into(), "done".into()));
+        assert_eq!(
+            validate_outcome(Some(&good)).unwrap(),
+            ("succeeded".into(), "done".into())
+        );
         let bad_state = json!({ "state": "weird", "detail": "d" });
         assert!(validate_outcome(Some(&bad_state)).is_err());
         let extra = json!({ "state": "failed", "detail": "d", "x": 1 });
@@ -1220,7 +1266,10 @@ mod tests {
 
     #[test]
     fn retrieve_match_quotes_and_limits_terms() {
-        assert_eq!(retrieve_match("concise release"), "\"concise\" AND \"release\"");
+        assert_eq!(
+            retrieve_match("concise release"),
+            "\"concise\" AND \"release\""
+        );
         assert_eq!(retrieve_match("say \"hi\""), "\"say\" AND \"\"\"hi\"\"\"");
         assert_eq!(relevance_basis_points(0), 10_000);
         assert_eq!(relevance_basis_points(1), 9_500);
@@ -1241,7 +1290,9 @@ mod tests {
         assert!(is_action_hash(&"a".repeat(64)));
         assert!(!is_action_hash(&"A".repeat(64))); // uppercase rejected
         assert!(!is_action_hash(&"a".repeat(63)));
-        assert!(is_receipt_token(&"Aa0_-".repeat(9).chars().take(43).collect::<String>()));
+        assert!(is_receipt_token(
+            &"Aa0_-".repeat(9).chars().take(43).collect::<String>()
+        ));
         assert!(!is_receipt_token(&"A".repeat(42)));
     }
 }

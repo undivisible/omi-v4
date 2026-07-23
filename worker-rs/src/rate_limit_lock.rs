@@ -37,7 +37,10 @@ pub async fn consume_rate_limit(
     let req = Request::new_with_init("https://rate-limit.internal/consume", &init)?;
     let mut response = stub_for(env, key)?.fetch_with_request(req).await?;
     let body: serde_json::Value = response.json().await.unwrap_or(serde_json::Value::Null);
-    let allowed = body.get("allowed").and_then(serde_json::Value::as_bool).unwrap_or(false);
+    let allowed = body
+        .get("allowed")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
     let retry_after = body
         .get("retryAfter")
         .and_then(serde_json::Value::as_i64)

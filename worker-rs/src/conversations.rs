@@ -43,7 +43,9 @@ pub fn valid_cursor_client_id(value: &str) -> bool {
 pub fn valid_lease_token(value: &str) -> bool {
     let len = value.len();
     (8..=128).contains(&len)
-        && value.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-')
 }
 
 fn is_id_byte(b: u8) -> bool {
@@ -61,7 +63,9 @@ pub fn validate_append(
     if !valid_client_message_id(client_message_id) {
         return None;
     }
-    let role = role.as_str().filter(|r| *r == "user" || *r == "assistant")?;
+    let role = role
+        .as_str()
+        .filter(|r| *r == "user" || *r == "assistant")?;
     let source = source
         .as_str()
         .filter(|s| matches!(*s, "app" | "web" | "desktop"))?;
@@ -89,8 +93,14 @@ pub struct AppendInput {
 /// Outcome of validating a POST /inbox/:id/complete body.
 #[derive(Debug, PartialEq, Eq)]
 pub enum InboxOutcome {
-    Done { lease_token: String, reply: String },
-    Retry { lease_token: String, error: Option<String> },
+    Done {
+        lease_token: String,
+        reply: String,
+    },
+    Retry {
+        lease_token: String,
+        error: Option<String>,
+    },
 }
 
 /// Validate the inbox-complete body. `None` → 400 "Invalid inbox outcome".
@@ -177,7 +187,12 @@ mod tests {
     fn append_validation() {
         use serde_json::json;
         assert_eq!(
-            validate_append(&json!("client-1x"), &json!("user"), &json!("app"), &json!("  hi ")),
+            validate_append(
+                &json!("client-1x"),
+                &json!("user"),
+                &json!("app"),
+                &json!("  hi ")
+            ),
             Some(AppendInput {
                 client_message_id: "client-1x".into(),
                 role: "user".into(),
@@ -186,25 +201,47 @@ mod tests {
             })
         );
         // Bad role.
-        assert!(validate_append(&json!("client-1x"), &json!("bot"), &json!("app"), &json!("hi")).is_none());
+        assert!(validate_append(
+            &json!("client-1x"),
+            &json!("bot"),
+            &json!("app"),
+            &json!("hi")
+        )
+        .is_none());
         // Bad source.
-        assert!(validate_append(&json!("client-1x"), &json!("user"), &json!("telegram"), &json!("hi")).is_none());
+        assert!(validate_append(
+            &json!("client-1x"),
+            &json!("user"),
+            &json!("telegram"),
+            &json!("hi")
+        )
+        .is_none());
         // Blank text.
-        assert!(validate_append(&json!("client-1x"), &json!("user"), &json!("app"), &json!("   ")).is_none());
+        assert!(validate_append(
+            &json!("client-1x"),
+            &json!("user"),
+            &json!("app"),
+            &json!("   ")
+        )
+        .is_none());
     }
 
     #[test]
     fn inbox_done_and_retry() {
         use serde_json::json;
         assert_eq!(
-            validate_inbox_complete(&json!({"leaseToken": "abc-1234", "outcome": "done", "responseText": " hi "})),
+            validate_inbox_complete(
+                &json!({"leaseToken": "abc-1234", "outcome": "done", "responseText": " hi "})
+            ),
             Some(InboxOutcome::Done {
                 lease_token: "abc-1234".into(),
                 reply: "hi".into(),
             })
         );
         assert_eq!(
-            validate_inbox_complete(&json!({"leaseToken": "abc-1234", "outcome": "retry", "error": "boom"})),
+            validate_inbox_complete(
+                &json!({"leaseToken": "abc-1234", "outcome": "retry", "error": "boom"})
+            ),
             Some(InboxOutcome::Retry {
                 lease_token: "abc-1234".into(),
                 error: Some("boom".into()),
@@ -216,18 +253,38 @@ mod tests {
     fn inbox_complete_rejections() {
         use serde_json::json;
         // retry must not carry responseText.
-        assert!(validate_inbox_complete(&json!({"leaseToken": "abc-1234", "outcome": "retry", "responseText": "x"})).is_none());
+        assert!(validate_inbox_complete(
+            &json!({"leaseToken": "abc-1234", "outcome": "retry", "responseText": "x"})
+        )
+        .is_none());
         // done must carry non-blank responseText.
-        assert!(validate_inbox_complete(&json!({"leaseToken": "abc-1234", "outcome": "done"})).is_none());
-        assert!(validate_inbox_complete(&json!({"leaseToken": "abc-1234", "outcome": "done", "responseText": "   "})).is_none());
+        assert!(
+            validate_inbox_complete(&json!({"leaseToken": "abc-1234", "outcome": "done"}))
+                .is_none()
+        );
+        assert!(validate_inbox_complete(
+            &json!({"leaseToken": "abc-1234", "outcome": "done", "responseText": "   "})
+        )
+        .is_none());
         // bad lease token.
-        assert!(validate_inbox_complete(&json!({"leaseToken": "short", "outcome": "retry"})).is_none());
+        assert!(
+            validate_inbox_complete(&json!({"leaseToken": "short", "outcome": "retry"})).is_none()
+        );
         // bad outcome.
-        assert!(validate_inbox_complete(&json!({"leaseToken": "abc-1234", "outcome": "skip"})).is_none());
+        assert!(
+            validate_inbox_complete(&json!({"leaseToken": "abc-1234", "outcome": "skip"}))
+                .is_none()
+        );
         // oversized error.
-        assert!(validate_inbox_complete(&json!({"leaseToken": "abc-1234", "outcome": "retry", "error": "x".repeat(1001)})).is_none());
+        assert!(validate_inbox_complete(
+            &json!({"leaseToken": "abc-1234", "outcome": "retry", "error": "x".repeat(1001)})
+        )
+        .is_none());
         // oversized reply.
-        assert!(validate_inbox_complete(&json!({"leaseToken": "abc-1234", "outcome": "done", "responseText": "x".repeat(4097)})).is_none());
+        assert!(validate_inbox_complete(
+            &json!({"leaseToken": "abc-1234", "outcome": "done", "responseText": "x".repeat(4097)})
+        )
+        .is_none());
     }
 
     #[test]

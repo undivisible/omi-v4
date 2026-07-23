@@ -11,8 +11,8 @@ pub mod auth;
 pub mod billing;
 pub mod conversations;
 pub mod crypto_util;
-pub mod desktop_auth;
 pub mod delivery;
+pub mod desktop_auth;
 pub mod entitlement;
 pub mod inbox_fallback;
 pub mod oauth;
@@ -41,6 +41,6 @@ pub(crate) mod glue;
 #[cfg(target_arch = "wasm32")]
 mod rate_limit_lock;
 #[cfg(target_arch = "wasm32")]
-mod routes_channels;
-#[cfg(target_arch = "wasm32")]
 mod routes_ai;
+#[cfg(target_arch = "wasm32")]
+mod routes_channels;

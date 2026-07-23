@@ -90,9 +90,7 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
     let router = crate::routes_ai::register(router);
     let router = crate::routes_memory::register(router);
     router
-        .or_else_any_method("/*catchall", |_req, _ctx| {
-            error_json("Not found", 404)
-        })
+        .or_else_any_method("/*catchall", |_req, _ctx| error_json("Not found", 404))
         .run(req, env)
         .await
 }
@@ -151,7 +149,11 @@ pub(crate) async fn authenticate(req: &Request, ctx: &RouteContext<()>) -> AuthO
         .flatten()
         .unwrap_or_default();
     let token = auth::bearer_token(&authorization);
-    let project_id = ctx.env.var("FIREBASE_PROJECT_ID").ok().map(|v| v.to_string());
+    let project_id = ctx
+        .env
+        .var("FIREBASE_PROJECT_ID")
+        .ok()
+        .map(|v| v.to_string());
 
     let (Some(token), Some(project_id)) = (token, project_id) else {
         return reject("Authentication required", 401);
@@ -203,7 +205,11 @@ fn reject(message: &str, status: u16) -> AuthOutcome {
     // panic-free.
     let response = error_json(message, status)
         .or_else(|_| Response::error(message.to_string(), status))
-        .unwrap_or_else(|_| Response::empty().map(|r| r.with_status(status)).unwrap_or_else(|_| Response::error("error", status).expect("error response")));
+        .unwrap_or_else(|_| {
+            Response::empty()
+                .map(|r| r.with_status(status))
+                .unwrap_or_else(|_| Response::error("error", status).expect("error response"))
+        });
     AuthOutcome::Reject(response)
 }
 
@@ -625,11 +631,7 @@ async fn append_conversation_message(
 // ===========================================================================
 
 /// Insert into webhook_events; returns true when this event is fresh (changes==1).
-async fn record_webhook(
-    db: &worker::D1Database,
-    channel: &str,
-    event_id: &str,
-) -> Result<bool> {
+async fn record_webhook(db: &worker::D1Database, channel: &str, event_id: &str) -> Result<bool> {
     let result = db
         .prepare(
             "INSERT OR IGNORE INTO webhook_events (channel, event_id, received_at) VALUES (?1, ?2, ?3)",
@@ -680,8 +682,8 @@ async fn bind_channel(
             return Ok(LinkOutcome::Conflict);
         }
     }
-    let details = json!({ "channelUserId": channel_user_id, "channelChatId": channel_chat_id })
-        .to_string();
+    let details =
+        json!({ "channelUserId": channel_user_id, "channelChatId": channel_chat_id }).to_string();
     let results = db
         .batch(vec![
             db.prepare(
@@ -712,13 +714,11 @@ async fn bind_channel(
             .bind(&[now.into(), js_str(&token_hash), js_str(&uid), js_str(channel)])?,
         ])
         .await?;
-    Ok(
-        if changes(&results[0]) == 1 && changes(&results[2]) == 1 {
-            LinkOutcome::Linked
-        } else {
-            LinkOutcome::Invalid
-        },
-    )
+    Ok(if changes(&results[0]) == 1 && changes(&results[2]) == 1 {
+        LinkOutcome::Linked
+    } else {
+        LinkOutcome::Invalid
+    })
 }
 
 /// Port of `enqueue`: look up the binding, then append the inbound message with
@@ -786,7 +786,9 @@ async fn enqueue_channel_message(
         delivery_id: None,
         created_at: now,
     };
-    Ok(append_conversation_message(db, &message, extra).await?.is_some())
+    Ok(append_conversation_message(db, &message, extra)
+        .await?
+        .is_some())
 }
 
 async fn handle_webhook_telegram(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
@@ -855,8 +857,7 @@ async fn handle_webhook_blooio(mut req: Request, ctx: RouteContext<()>) -> Resul
         if !fresh {
             return Response::from_json(&json!({ "accepted": true, "duplicate": true }));
         }
-        let linked = bind_channel(&db, "blooio", &message.sender, &message.chat_id, &token)
-            .await?
+        let linked = bind_channel(&db, "blooio", &message.sender, &message.chat_id, &token).await?
             == LinkOutcome::Linked;
         return Response::from_json(&json!({ "accepted": true, "linked": linked }));
     }
@@ -1054,7 +1055,8 @@ async fn handle_desktop_start(mut req: Request, ctx: RouteContext<()>) -> Result
         return error_json("Handoff already exists", 409);
     }
     // Build browserUrl: <appOrigin>/?desktop_auth=<sessionId>
-    let mut browser = Url::parse(&app_origin).map_err(|e| worker::Error::RustError(e.to_string()))?;
+    let mut browser =
+        Url::parse(&app_origin).map_err(|e| worker::Error::RustError(e.to_string()))?;
     browser.set_path("/");
     browser
         .query_pairs_mut()
@@ -1362,8 +1364,9 @@ async fn handle_inbox_complete(mut req: Request, ctx: RouteContext<()>) -> Resul
                 Ok(delivery) => {
                     Response::from_json(&json!({ "status": "done", "delivery": delivery }))
                 }
-                Err(message) => Ok(Response::from_json(&json!({ "error": message }))?
-                    .with_status(409)),
+                Err(message) => {
+                    Ok(Response::from_json(&json!({ "error": message }))?.with_status(409))
+                }
             }
         }
         conv::InboxOutcome::Retry { lease_token, error } => {
@@ -1393,8 +1396,10 @@ async fn handle_inbox_complete(mut req: Request, ctx: RouteContext<()>) -> Resul
                 .await?;
             match replay.and_then(|r| row_str(&r, "result_status")) {
                 Some(status) => Response::from_json(&json!({ "status": status })),
-                None => Ok(Response::from_json(&json!({ "error": "Inbox lease conflict" }))?
-                    .with_status(409)),
+                None => Ok(
+                    Response::from_json(&json!({ "error": "Inbox lease conflict" }))?
+                        .with_status(409),
+                ),
             }
         }
     }
@@ -1587,8 +1592,12 @@ async fn handle_messages_post(mut req: Request, ctx: RouteContext<()>) -> Result
     };
     let body: Value = req.json().await.unwrap_or(Value::Null);
     let get = |key: &str| body.get(key).cloned().unwrap_or(Value::Null);
-    let Some(input) = conv::validate_append(&get("clientMessageId"), &get("role"), &get("source"), &get("text"))
-    else {
+    let Some(input) = conv::validate_append(
+        &get("clientMessageId"),
+        &get("role"),
+        &get("source"),
+        &get("text"),
+    ) else {
         return error_json("Invalid conversation message", 400);
     };
     let db = ctx.env.d1("DB")?;
@@ -1611,8 +1620,10 @@ async fn handle_messages_post(mut req: Request, ctx: RouteContext<()>) -> Result
             }))?
             .with_status(status))
         }
-        None => Ok(Response::from_json(&json!({ "error": "Client message ID conflict" }))?
-            .with_status(409)),
+        None => Ok(
+            Response::from_json(&json!({ "error": "Client message ID conflict" }))?
+                .with_status(409),
+        ),
     }
 }
 
@@ -1671,8 +1682,9 @@ async fn handle_cursor_put(mut req: Request, ctx: RouteContext<()>) -> Result<Re
         .await?
     };
     if changes(&result) != 1 {
-        return Ok(Response::from_json(&json!({ "error": "Replay cursor conflict" }))?
-            .with_status(409));
+        return Ok(
+            Response::from_json(&json!({ "error": "Replay cursor conflict" }))?.with_status(409),
+        );
     }
     let stored = db
         .prepare(

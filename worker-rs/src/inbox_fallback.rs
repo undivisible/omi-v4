@@ -21,8 +21,7 @@ pub const HISTORY_LIMIT: u32 = 12;
 pub const MAX_REPLY_CHARACTERS: usize = 4_096;
 
 /// `offlineAcknowledgement`.
-pub const OFFLINE_ACKNOWLEDGEMENT: &str =
-    "Got it — I'll answer when your desktop is back online.";
+pub const OFFLINE_ACKNOWLEDGEMENT: &str = "Got it — I'll answer when your desktop is back online.";
 
 /// `systemPrompt`.
 pub const SYSTEM_PROMPT: &str = "You are Omi, the user's personal assistant, replying over a messaging channel while their desktop is offline. Answer the user's latest message directly and concisely in plain text.";
@@ -135,7 +134,10 @@ mod tests {
             ("assistant".to_string(), "b".to_string()),
         ];
         let shaped = shape_history(&rows);
-        assert_eq!(shaped, vec![Message::new("user", "a"), Message::new("assistant", "b")]);
+        assert_eq!(
+            shaped,
+            vec![Message::new("user", "a"), Message::new("assistant", "b")]
+        );
     }
 
     #[test]

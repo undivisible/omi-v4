@@ -13,9 +13,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use worker::wasm_bindgen::{JsCast, JsValue};
 use worker::wasm_bindgen_futures::JsFuture;
-use worker::{
-    js_sys, Date, Env, Request, Response, Result, RouteContext, Router,
-};
+use worker::{js_sys, Date, Env, Request, Response, Result, RouteContext, Router};
 use worker::{D1Database, D1PreparedStatement, D1Result};
 
 use crate::auth::Auth;
@@ -52,19 +50,31 @@ pub fn register(router: Router<'_, ()>) -> Router<'_, ()> {
         .get_async("/v1/currents", handle_currents_list)
         .post_async("/v1/currents/:id/feedback", handle_current_feedback)
         .post_async("/v1/currents/:id/accept", handle_current_accept)
-        .post_async("/v1/currents/executions/:id/approve", handle_execution_approve)
+        .post_async(
+            "/v1/currents/executions/:id/approve",
+            handle_execution_approve,
+        )
         .post_async(
             "/v1/currents/executions/:id/receipts/:receiptId/claim",
             handle_receipt_claim,
         )
-        .post_async("/v1/currents/executions/:id/reject", handle_execution_reject)
-        .post_async("/v1/currents/executions/:id/outcome", handle_execution_outcome)
+        .post_async(
+            "/v1/currents/executions/:id/reject",
+            handle_execution_reject,
+        )
+        .post_async(
+            "/v1/currents/executions/:id/outcome",
+            handle_execution_outcome,
+        )
 }
 
 /// Scheduled cron slice: backfill claims missing vectors, then drain. Combine
 /// this into the merged `#[event(scheduled)]` handler additively.
 pub async fn cron_slice(env: &Env) {
-    if backfill_claim_vectors(env, BACKFILL_BATCH_SIZE).await.is_ok() {
+    if backfill_claim_vectors(env, BACKFILL_BATCH_SIZE)
+        .await
+        .is_ok()
+    {
         let _ = drain_pending_embeddings(env, DRAIN_BATCH_SIZE).await;
     }
 }
@@ -90,7 +100,9 @@ fn nullable_s(value: Option<&str>) -> JsValue {
 }
 
 fn nullable_n(value: Option<i64>) -> JsValue {
-    value.map(|v| JsValue::from_f64(v as f64)).unwrap_or(JsValue::NULL)
+    value
+        .map(|v| JsValue::from_f64(v as f64))
+        .unwrap_or(JsValue::NULL)
 }
 
 fn changes(result: &D1Result) -> usize {
@@ -223,7 +235,11 @@ fn vectorize(env: &Env) -> Option<Vectorize> {
 }
 
 impl Vectorize {
-    async fn call(&self, method: &str, args: &js_sys::Array) -> std::result::Result<JsValue, JsValue> {
+    async fn call(
+        &self,
+        method: &str,
+        args: &js_sys::Array,
+    ) -> std::result::Result<JsValue, JsValue> {
         let func = js_sys::Reflect::get(&self.0, &s(method))?.dyn_into::<js_sys::Function>()?;
         let promise = func.apply(&self.0, args)?.dyn_into::<js_sys::Promise>()?;
         JsFuture::from(promise).await
@@ -258,7 +274,10 @@ impl Vectorize {
             matches
                 .iter()
                 .filter_map(|m| {
-                    let id = m.get("id").and_then(Value::as_str).filter(|s| !s.is_empty())?;
+                    let id = m
+                        .get("id")
+                        .and_then(Value::as_str)
+                        .filter(|s| !s.is_empty())?;
                     let score = m.get("score").and_then(Value::as_f64).unwrap_or(0.0);
                     Some((id.to_string(), score))
                 })
@@ -453,12 +472,7 @@ async fn backfill_claim_vectors(env: &Env, limit: i64) -> Result<i64> {
 }
 
 /// Direct vector search + D1 re-check (`searchMemoryClaims`).
-async fn search_memory_claims(
-    env: &Env,
-    uid: &str,
-    query: &str,
-    top_k: i64,
-) -> Result<Vec<Value>> {
+async fn search_memory_claims(env: &Env, uid: &str, query: &str, top_k: i64) -> Result<Vec<Value>> {
     let Some(index) = vectorize(env) else {
         return Ok(Vec::new());
     };
@@ -598,9 +612,10 @@ async fn apply_commit(
     )
     .await?;
     if event_rows.len() as i64 != commit.event_count
-        || event_rows.iter().enumerate().any(|(index, row)| {
-            row.get("event_index").and_then(json_to_i64) != Some(index as i64)
-        })
+        || event_rows
+            .iter()
+            .enumerate()
+            .any(|(index, row)| row.get("event_index").and_then(json_to_i64) != Some(index as i64))
     {
         return Ok(("replayed".to_string(), Vec::new()));
     }
@@ -842,7 +857,11 @@ async fn handle_retrieve(mut req: Request, ctx: RouteContext<()>) -> Result<Resp
     ensure_projected(&db, &auth.uid).await?;
 
     let is_post = req.method() == worker::Method::Post;
-    let body = if is_post { json_object(&mut req).await } else { None };
+    let body = if is_post {
+        json_object(&mut req).await
+    } else {
+        None
+    };
     let url = req.url()?;
     let query_param = |key: &str| {
         url.query_pairs()
@@ -1053,7 +1072,8 @@ async fn handle_memories_post(mut req: Request, ctx: RouteContext<()>) -> Result
     let claim_id = uuid_v4();
     let now = now_ms();
     let content_hash = sha256_hex(&content);
-    let evidence_json = serde_json::to_string(evidence_val.unwrap_or(&json!([]))).unwrap_or("[]".into());
+    let evidence_json =
+        serde_json::to_string(evidence_val.unwrap_or(&json!([]))).unwrap_or("[]".into());
     let payload_json = json!({ "content": content }).to_string();
 
     let mut statements = vec![
@@ -1093,10 +1113,18 @@ async fn handle_memories_post(mut req: Request, ctx: RouteContext<()>) -> Result
             &[s(&id), s(&auth.uid), s(&claim_id), s(&profile_kind), s(&profile_key), s(&content), n(now)],
         )?,
     ];
-    statements.extend(enqueue_statements(&db, &auth.uid, std::slice::from_ref(&claim_id), now)?);
+    statements.extend(enqueue_statements(
+        &db,
+        &auth.uid,
+        std::slice::from_ref(&claim_id),
+        now,
+    )?);
     db.batch(statements).await?;
     drain_pending_embeddings(&ctx.env, DRAIN_BATCH_SIZE).await?;
-    Ok(Response::from_json(&json!({ "id": id, "sourceId": source_id, "claimId": claim_id }))?.with_status(201))
+    Ok(
+        Response::from_json(&json!({ "id": id, "sourceId": source_id, "claimId": claim_id }))?
+            .with_status(201),
+    )
 }
 
 async fn handle_source_revision(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
@@ -1241,12 +1269,11 @@ async fn handle_daily_reviews_post(mut req: Request, ctx: RouteContext<()>) -> R
     let local_date = trimmed(body_ref.and_then(|b| b.get("localDate")), 10);
     let input_revision = trimmed(body_ref.and_then(|b| b.get("inputRevision")), 200);
     let review_body = trimmed(body_ref.and_then(|b| b.get("body")), 50_000);
-    let citation_ids = body_ref.and_then(|b| b.get("citationIds")).and_then(Value::as_array);
+    let citation_ids = body_ref
+        .and_then(|b| b.get("citationIds"))
+        .and_then(Value::as_array);
 
-    let date_ok = local_date
-        .as_deref()
-        .map(is_iso_date)
-        .unwrap_or(false);
+    let date_ok = local_date.as_deref().map(is_iso_date).unwrap_or(false);
     let citations_ok = citation_ids
         .map(|arr| !arr.is_empty() && arr.iter().all(|v| trimmed(Some(v), 100).is_some()))
         .unwrap_or(false);
@@ -1301,10 +1328,13 @@ fn is_iso_date(value: &str) -> bool {
     bytes.len() == 10
         && bytes[4] == b'-'
         && bytes[7] == b'-'
-        && bytes
-            .iter()
-            .enumerate()
-            .all(|(i, b)| if i == 4 || i == 7 { *b == b'-' } else { b.is_ascii_digit() })
+        && bytes.iter().enumerate().all(|(i, b)| {
+            if i == 4 || i == 7 {
+                *b == b'-'
+            } else {
+                b.is_ascii_digit()
+            }
+        })
 }
 
 // ---------------------------------------------------------------------------
@@ -1395,7 +1425,9 @@ async fn handle_current_generate(req: Request, ctx: RouteContext<()>) -> Result<
     .await?;
     if changes(&inserted) == 1 {
         let current = select_current(&db, &uid, &id).await?.unwrap_or(Value::Null);
-        return Ok(Response::from_json(&json!({ "current": row_to_current(&current) }))?.with_status(201));
+        return Ok(
+            Response::from_json(&json!({ "current": row_to_current(&current) }))?.with_status(201),
+        );
     }
     let existing = d1_first(
         &db,
@@ -1455,7 +1487,9 @@ async fn handle_current_candidates(mut req: Request, ctx: RouteContext<()>) -> R
         ],
     )
     .await?;
-    let current = select_current(&db, &auth.uid, &id).await?.unwrap_or(Value::Null);
+    let current = select_current(&db, &auth.uid, &id)
+        .await?
+        .unwrap_or(Value::Null);
     Ok(Response::from_json(&json!({ "current": row_to_current(&current) }))?.with_status(201))
 }
 
@@ -1528,7 +1562,9 @@ async fn handle_current_feedback(mut req: Request, ctx: RouteContext<()>) -> Res
     if changes(&results[0]) != 1 {
         return error_json("Current cannot receive feedback", 409);
     }
-    let updated = select_current(&db, &auth.uid, &id).await?.unwrap_or(Value::Null);
+    let updated = select_current(&db, &auth.uid, &id)
+        .await?
+        .unwrap_or(Value::Null);
     Response::from_json(&json!({ "current": row_to_current(&updated) }))
 }
 
@@ -1575,7 +1611,10 @@ async fn handle_current_accept(req: Request, ctx: RouteContext<()>) -> Result<Re
     let Some(stored) = stored else {
         return error_json("Current cannot be accepted", 409);
     };
-    let policy_generation = stored.get("policy_generation").and_then(json_to_i64).unwrap_or(0);
+    let policy_generation = stored
+        .get("policy_generation")
+        .and_then(json_to_i64)
+        .unwrap_or(0);
     let action: Value = serde_json::from_str(&proposed_action).unwrap_or(Value::Null);
     Ok(Response::from_json(&json!({
         "executionId": execution_id,
@@ -1627,7 +1666,10 @@ async fn handle_execution_approve(mut req: Request, ctx: RouteContext<()>) -> Re
     let Some(approved) = approved else {
         return error_json("Approval is invalid or already consumed", 409);
     };
-    let policy_generation = approved.get("policy_generation").and_then(json_to_i64).unwrap_or(0);
+    let policy_generation = approved
+        .get("policy_generation")
+        .and_then(json_to_i64)
+        .unwrap_or(0);
     Response::from_json(&json!({
         "executionId": id,
         "state": "approved",
@@ -1764,7 +1806,11 @@ async fn handle_execution_outcome(mut req: Request, ctx: RouteContext<()>) -> Re
     let id = ctx.param("id").cloned().unwrap_or_default();
     let now = now_ms();
     let serialized_outcome = json!({ "detail": detail }).to_string();
-    let current_status = if state == "succeeded" { "completed" } else { "expired" };
+    let current_status = if state == "succeeded" {
+        "completed"
+    } else {
+        "expired"
+    };
     let results = db
         .batch(vec![
             stmt(

@@ -10,12 +10,12 @@
 
 use futures_util::StreamExt;
 use serde_json::{json, Value};
+use worker::wasm_bindgen;
+use worker::wasm_bindgen::JsValue;
 use worker::{
     durable_object, Date, Env, Headers, Method, Request, RequestInit, Response, Result,
     RouteContext, Router, State, Stub, WebSocketPair,
 };
-use worker::wasm_bindgen;
-use worker::wasm_bindgen::JsValue;
 
 use crate::assistant_admission::{AssistantAdmission, Limits as AssistantLimits, Outcome};
 use crate::glue::{authenticate, error_json, has_active_pro, AuthOutcome};
@@ -116,7 +116,10 @@ async fn consume_rate_limit(env: &Env, key: &str, limit: i64, window_ms: i64) ->
     match do_post(&stub, "https://rate-limit.internal/consume", &payload).await {
         Ok(mut response) => match response.json::<Value>().await {
             Ok(value) => (
-                value.get("allowed").and_then(Value::as_bool).unwrap_or(false),
+                value
+                    .get("allowed")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
                 value.get("retryAfter").and_then(Value::as_i64).unwrap_or(1),
             ),
             Err(_) => (false, 1),
@@ -217,8 +220,10 @@ pub async fn run_managed_inbox_completion(
         managed_ai::XIAOMI_COMPLETION_ENDPOINT,
         managed_ai::XIAOMI_HOSTNAME,
     )?;
-    let input_price = managed_ai::price(env_get(env, "MIMO_INPUT_MICROUSD_PER_MILLION_TOKENS").as_deref())?;
-    let output_price = managed_ai::price(env_get(env, "MIMO_OUTPUT_MICROUSD_PER_MILLION_TOKENS").as_deref())?;
+    let input_price =
+        managed_ai::price(env_get(env, "MIMO_INPUT_MICROUSD_PER_MILLION_TOKENS").as_deref())?;
+    let output_price =
+        managed_ai::price(env_get(env, "MIMO_OUTPUT_MICROUSD_PER_MILLION_TOKENS").as_deref())?;
 
     let estimated_input_tokens = managed_ai::input_token_reservation(messages);
     let estimated_cost = managed_ai::cost_for(
@@ -288,19 +293,52 @@ pub async fn run_managed_inbox_completion(
     init.with_headers(headers);
     init.with_body(Some(JsValue::from_str(&body.to_string())));
     let Ok(upstream_request) = Request::new_with_init(endpoint_url.as_str(), &init) else {
-        settle_managed_inbox(env, &stub, &request_id, "failed", None, None, None, input_price, output_price).await;
+        settle_managed_inbox(
+            env,
+            &stub,
+            &request_id,
+            "failed",
+            None,
+            None,
+            None,
+            input_price,
+            output_price,
+        )
+        .await;
         return None;
     };
     let mut upstream = match worker::Fetch::Request(upstream_request).send().await {
         Ok(response) => response,
         Err(_) => {
-            settle_managed_inbox(env, &stub, &request_id, "failed", None, None, None, input_price, output_price).await;
+            settle_managed_inbox(
+                env,
+                &stub,
+                &request_id,
+                "failed",
+                None,
+                None,
+                None,
+                input_price,
+                output_price,
+            )
+            .await;
             return None;
         }
     };
     let upstream_status = upstream.status_code() as i64;
     if upstream_status >= 300 {
-        settle_managed_inbox(env, &stub, &request_id, "failed", None, None, Some(upstream_status), input_price, output_price).await;
+        settle_managed_inbox(
+            env,
+            &stub,
+            &request_id,
+            "failed",
+            None,
+            None,
+            Some(upstream_status),
+            input_price,
+            output_price,
+        )
+        .await;
         return None;
     }
 
@@ -309,7 +347,11 @@ pub async fn run_managed_inbox_completion(
         Some(v) => managed_ai::parse_completion(v),
         None => (None, None, None),
     };
-    let status = if content.is_none() { "failed" } else { "complete" };
+    let status = if content.is_none() {
+        "failed"
+    } else {
+        "complete"
+    };
     settle_managed_inbox(
         env,
         &stub,
@@ -463,7 +505,10 @@ async fn handle_chat_completions(mut req: Request, ctx: RouteContext<()>) -> Res
         bytes.as_deref(),
         managed_ai::MAXIMUM_BODY_BYTES,
     );
-    let Some(parsed) = body.as_ref().and_then(|b| managed_ai::parse_request(b, &model)) else {
+    let Some(parsed) = body
+        .as_ref()
+        .and_then(|b| managed_ai::parse_request(b, &model))
+    else {
         return error_json("Invalid request", 400);
     };
 
@@ -475,8 +520,10 @@ async fn handle_chat_completions(mut req: Request, ctx: RouteContext<()>) -> Res
         return error_json("Managed Pro required", 403);
     }
 
-    let input_price = managed_ai::price(env_get(&ctx.env, "MIMO_INPUT_MICROUSD_PER_MILLION_TOKENS").as_deref());
-    let output_price = managed_ai::price(env_get(&ctx.env, "MIMO_OUTPUT_MICROUSD_PER_MILLION_TOKENS").as_deref());
+    let input_price =
+        managed_ai::price(env_get(&ctx.env, "MIMO_INPUT_MICROUSD_PER_MILLION_TOKENS").as_deref());
+    let output_price =
+        managed_ai::price(env_get(&ctx.env, "MIMO_OUTPUT_MICROUSD_PER_MILLION_TOKENS").as_deref());
     let (Some(input_price), Some(output_price)) = (input_price, output_price) else {
         return error_json("Managed AI unavailable", 503);
     };
@@ -506,14 +553,21 @@ async fn handle_chat_completions(mut req: Request, ctx: RouteContext<()>) -> Res
         "tokenBudget": estimated_input_tokens + parsed.max_tokens,
         "costBudgetMicrousd": estimated_cost,
     });
-    let admission = match do_post(&stub, "https://assistant-admission.internal/admit", &admission_payload).await {
+    let admission = match do_post(
+        &stub,
+        "https://assistant-admission.internal/admit",
+        &admission_payload,
+    )
+    .await
+    {
         Ok(response) => response,
         Err(_) => return error_json("Managed AI unavailable", 503),
     };
     if admission.status_code() >= 300 {
         let retry_after = admission.headers().get("retry-after").ok().flatten();
-        let mut response = Response::from_json(&json!({ "error": "Managed AI capacity exceeded" }))?
-            .with_status(429);
+        let mut response =
+            Response::from_json(&json!({ "error": "Managed AI capacity exceeded" }))?
+                .with_status(429);
         if let Some(retry_after) = retry_after {
             response.headers_mut().set("retry-after", &retry_after)?;
         }
@@ -534,7 +588,12 @@ async fn handle_chat_completions(mut req: Request, ctx: RouteContext<()>) -> Res
     .await
     .is_err()
     {
-        let _ = do_post(&stub, "https://assistant-admission.internal/release", &json!({ "requestId": request_id })).await;
+        let _ = do_post(
+            &stub,
+            "https://assistant-admission.internal/release",
+            &json!({ "requestId": request_id }),
+        )
+        .await;
         return error_json("Managed AI unavailable", 503);
     }
 
@@ -547,7 +606,9 @@ async fn handle_chat_completions(mut req: Request, ctx: RouteContext<()>) -> Res
     headers.set("authorization", &format!("Bearer {secret}"))?;
     headers.set("content-type", "application/json")?;
     init.with_headers(headers);
-    init.with_body(Some(JsValue::from_str(&managed_ai::upstream_body(&parsed).to_string())));
+    init.with_body(Some(JsValue::from_str(
+        &managed_ai::upstream_body(&parsed).to_string(),
+    )));
     let upstream_request = Request::new_with_init(endpoint_url.as_str(), &init)?;
     let mut upstream = match worker::Fetch::Request(upstream_request).send().await {
         Ok(response) => response,
@@ -644,8 +705,11 @@ async fn handle_asr(mut req: Request, ctx: RouteContext<()>) -> Result<Response>
     let (allowed, retry_after) =
         consume_rate_limit(&ctx.env, &format!("asr:{}", auth.uid), 10, 60_000).await;
     if !allowed {
-        let mut response = Response::from_json(&json!({ "error": "Too many requests" }))?.with_status(429);
-        response.headers_mut().set("retry-after", &retry_after.to_string())?;
+        let mut response =
+            Response::from_json(&json!({ "error": "Too many requests" }))?.with_status(429);
+        response
+            .headers_mut()
+            .set("retry-after", &retry_after.to_string())?;
         return Ok(response);
     }
 
@@ -674,7 +738,9 @@ async fn handle_asr(mut req: Request, ctx: RouteContext<()>) -> Result<Response>
     headers.set("authorization", &format!("Bearer {secret}"))?;
     headers.set("content-type", "application/json")?;
     init.with_headers(headers);
-    init.with_body(Some(JsValue::from_str(&asr_logic::upstream_body(&request).to_string())));
+    init.with_body(Some(JsValue::from_str(
+        &asr_logic::upstream_body(&request).to_string(),
+    )));
     let upstream_request = Request::new_with_init(endpoint_url.as_str(), &init)?;
     let mut upstream = match worker::Fetch::Request(upstream_request).send().await {
         Ok(response) => response,
@@ -720,16 +786,29 @@ async fn handle_voice_token(req: Request, ctx: RouteContext<()>) -> Result<Respo
     let (allowed, retry_after) =
         consume_rate_limit(&ctx.env, &format!("voice-token:{}", auth.uid), 10, 60_000).await;
     if !allowed {
-        let mut response = Response::from_json(&json!({ "error": "Too many requests" }))?.with_status(429);
-        response.headers_mut().set("retry-after", &retry_after.to_string())?;
+        let mut response =
+            Response::from_json(&json!({ "error": "Too many requests" }))?.with_status(429);
+        response
+            .headers_mut()
+            .set("retry-after", &retry_after.to_string())?;
         return Ok(response);
     }
 
     let now = now_ms();
     let request_id = uuid_v4();
-    if insert_managed_request(&ctx, &request_id, &auth.uid, "gemini-live", &model, 0, 0, None, now)
-        .await
-        .is_err()
+    if insert_managed_request(
+        &ctx,
+        &request_id,
+        &auth.uid,
+        "gemini-live",
+        &model,
+        0,
+        0,
+        None,
+        now,
+    )
+    .await
+    .is_err()
     {
         return error_json("Live voice unavailable", 503);
     }
@@ -740,7 +819,9 @@ async fn handle_voice_token(req: Request, ctx: RouteContext<()>) -> Result<Respo
     headers.set("content-type", "application/json")?;
     headers.set("x-goog-api-key", &key)?;
     init.with_headers(headers);
-    init.with_body(Some(JsValue::from_str(&voice_logic::token_request_body(now, &model).to_string())));
+    init.with_body(Some(JsValue::from_str(
+        &voice_logic::token_request_body(now, &model).to_string(),
+    )));
     let upstream_request = Request::new_with_init(voice_logic::TOKEN_ENDPOINT, &init)?;
     let mut upstream = match worker::Fetch::Request(upstream_request).send().await {
         Ok(response) => response,
@@ -777,11 +858,9 @@ async fn handle_stt_create(mut req: Request, ctx: RouteContext<()>) -> Result<Re
         env_get(&ctx.env, "STT_COST_MICROUSD_PER_MINUTE").as_deref(),
     );
     let deepgram = env_get(&ctx.env, "DEEPGRAM_API_KEY");
-    let (Some(max_session_seconds), Some(cost_per_minute), true) = (
-        max_session_seconds,
-        cost_per_minute,
-        deepgram.is_some(),
-    ) else {
+    let (Some(max_session_seconds), Some(cost_per_minute), true) =
+        (max_session_seconds, cost_per_minute, deepgram.is_some())
+    else {
         return error_json("Managed STT unavailable", 503);
     };
     if max_session_seconds > 3600 {
@@ -820,14 +899,21 @@ async fn handle_stt_create(mut req: Request, ctx: RouteContext<()>) -> Result<Re
         "reservedSeconds": max_session_seconds,
         "costBudgetMicrousd": estimated_cost,
     });
-    let mut admission = match do_post(&stub, "https://stt-admission.internal/admit", &admission_payload).await {
+    let mut admission = match do_post(
+        &stub,
+        "https://stt-admission.internal/admit",
+        &admission_payload,
+    )
+    .await
+    {
         Ok(response) => response,
         Err(_) => return error_json("Managed STT unavailable", 503),
     };
     if admission.status_code() >= 300 {
         let retry_after = admission.headers().get("retry-after").ok().flatten();
-        let mut response = Response::from_json(&json!({ "error": "Managed STT capacity exceeded" }))?
-            .with_status(429);
+        let mut response =
+            Response::from_json(&json!({ "error": "Managed STT capacity exceeded" }))?
+                .with_status(429);
         if let Some(retry_after) = retry_after {
             response.headers_mut().set("retry-after", &retry_after)?;
         }
@@ -844,7 +930,8 @@ async fn handle_stt_create(mut req: Request, ctx: RouteContext<()>) -> Result<Re
         return error_json("Managed STT unavailable", 503);
     }
     let duplicate = result.get("duplicate").and_then(Value::as_bool) == Some(true);
-    let owns_admission = !duplicate || result.get("reacquired").and_then(Value::as_bool) == Some(true);
+    let owns_admission =
+        !duplicate || result.get("reacquired").and_then(Value::as_bool) == Some(true);
 
     let now = now_ms();
     let db = match ctx.env.d1("DB") {
@@ -900,7 +987,10 @@ async fn handle_stt_create(mut req: Request, ctx: RouteContext<()>) -> Result<Re
         return error_json("Managed STT unavailable", 503);
     };
 
-    let status = row.get("status").and_then(Value::as_str).unwrap_or_default();
+    let status = row
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
     let request_url = req.url()?;
     let websocket_url =
         stt_logic::websocket_url(request_url.as_str(), &session_id).unwrap_or_default();
@@ -956,7 +1046,11 @@ async fn handle_stt_stream(req: Request, ctx: RouteContext<()>) -> Result<Respon
             .await
             .ok()
             .flatten()
-            .and_then(|row| row.get("admission_token").and_then(Value::as_str).map(str::to_string)),
+            .and_then(|row| {
+                row.get("admission_token")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            }),
         Err(_) => return error_json("Managed STT unavailable", 503),
     };
     let Some(acquisition_token) = acquisition_token else {
@@ -997,7 +1091,11 @@ async fn handle_stt_stream(req: Request, ctx: RouteContext<()>) -> Result<Respon
         )
         .bind(&[(now as f64).into(), session_id.clone().into(), auth.uid.clone().into(), acquisition_token.clone().into()]);
     let claimed = match claim {
-        Ok(statement) => statement.run().await.ok().map(|r| r.meta().ok().flatten().and_then(|m| m.changes).unwrap_or(0)),
+        Ok(statement) => statement
+            .run()
+            .await
+            .ok()
+            .map(|r| r.meta().ok().flatten().and_then(|m| m.changes).unwrap_or(0)),
         Err(_) => None,
     };
     match claimed {
@@ -1016,12 +1114,14 @@ async fn handle_stt_stream(req: Request, ctx: RouteContext<()>) -> Result<Respon
     )
     .await;
     let claimed_ok = match claim_ack {
-        Ok(mut response) => response
-            .json::<Value>()
-            .await
-            .ok()
-            .and_then(|v| v.get("claimed").and_then(Value::as_bool))
-            == Some(true),
+        Ok(mut response) => {
+            response
+                .json::<Value>()
+                .await
+                .ok()
+                .and_then(|v| v.get("claimed").and_then(Value::as_bool))
+                == Some(true)
+        }
         Err(_) => false,
     };
     if !claimed_ok {
@@ -1054,12 +1154,26 @@ async fn handle_stt_stream(req: Request, ctx: RouteContext<()>) -> Result<Respon
     // Connect to Deepgram, upgrading to a WebSocket.
     let query = stt_logic::deepgram_query(
         row.get("model").and_then(Value::as_str).unwrap_or_default(),
-        row.get("language").and_then(Value::as_str).unwrap_or_default(),
-        row.get("encoding").and_then(Value::as_str).unwrap_or_default(),
-        row.get("sample_rate").and_then(Value::as_i64).unwrap_or_default(),
-        row.get("channels").and_then(Value::as_i64).unwrap_or_default(),
-        row.get("diarize").and_then(Value::as_i64).unwrap_or_default() == 1,
-        row.get("interim_results").and_then(Value::as_i64).unwrap_or_default() == 1,
+        row.get("language")
+            .and_then(Value::as_str)
+            .unwrap_or_default(),
+        row.get("encoding")
+            .and_then(Value::as_str)
+            .unwrap_or_default(),
+        row.get("sample_rate")
+            .and_then(Value::as_i64)
+            .unwrap_or_default(),
+        row.get("channels")
+            .and_then(Value::as_i64)
+            .unwrap_or_default(),
+        row.get("diarize")
+            .and_then(Value::as_i64)
+            .unwrap_or_default()
+            == 1,
+        row.get("interim_results")
+            .and_then(Value::as_i64)
+            .unwrap_or_default()
+            == 1,
     );
     let mut upstream_url = url::Url::parse("https://api.deepgram.com/v1/listen")
         .map_err(|e| worker::Error::RustError(e.to_string()))?;
@@ -1101,7 +1215,15 @@ async fn handle_stt_stream(req: Request, ctx: RouteContext<()>) -> Result<Respon
     let relay_uid = auth.uid.clone();
     let relay_token = acquisition_token.clone();
     wasm_bindgen_futures::spawn_local(async move {
-        bridge_sockets(env, server, upstream_socket, relay_session, relay_uid, relay_token).await;
+        bridge_sockets(
+            env,
+            server,
+            upstream_socket,
+            relay_session,
+            relay_uid,
+            relay_token,
+        )
+        .await;
     });
 
     Response::from_websocket(client)
@@ -1239,7 +1361,11 @@ pub async fn reconcile_managed_assistant_requests(env: &Env) -> Result<()> {
     let rows = statement.all().await?.results::<Value>()?;
     let stub = assistant_admission_stub(env)?;
     for row in rows {
-        let id = row.get("id").and_then(Value::as_str).unwrap_or_default().to_string();
+        let id = row
+            .get("id")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
         if id.is_empty() {
             continue;
         }

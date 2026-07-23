@@ -122,12 +122,17 @@ mod tests {
 
     #[test]
     fn base64_cap_matches_ts() {
-        assert_eq!(maximum_audio_base64_chars(), (10 * 1024 * 1024 * 4usize).div_ceil(3));
+        assert_eq!(
+            maximum_audio_base64_chars(),
+            (10 * 1024 * 1024 * 4usize).div_ceil(3)
+        );
     }
 
     #[test]
     fn rejects_oversized_declared_length() {
-        assert!(declared_length_exceeds(Some(&(maximum_body_bytes() + 1).to_string())));
+        assert!(declared_length_exceeds(Some(
+            &(maximum_body_bytes() + 1).to_string()
+        )));
         assert!(!declared_length_exceeds(Some("100")));
         assert!(!declared_length_exceeds(None));
     }
@@ -135,17 +140,26 @@ mod tests {
     #[test]
     fn classifies_size_before_shape() {
         let big = "A".repeat(maximum_audio_base64_chars() + 1);
-        assert_eq!(classify(&json!({ "audio": big, "format": "wav" })), AsrOutcome::TooLarge);
+        assert_eq!(
+            classify(&json!({ "audio": big, "format": "wav" })),
+            AsrOutcome::TooLarge
+        );
     }
 
     #[test]
     fn rejects_disallowed_format_and_language() {
-        assert_eq!(classify(&json!({ "audio": "QUJD", "format": "flac" })), AsrOutcome::Invalid);
+        assert_eq!(
+            classify(&json!({ "audio": "QUJD", "format": "flac" })),
+            AsrOutcome::Invalid
+        );
         assert_eq!(
             classify(&json!({ "audio": "QUJD", "format": "wav", "language": "de" })),
             AsrOutcome::Invalid
         );
-        assert_eq!(classify(&json!({ "audio": "", "format": "wav" })), AsrOutcome::Invalid);
+        assert_eq!(
+            classify(&json!({ "audio": "", "format": "wav" })),
+            AsrOutcome::Invalid
+        );
     }
 
     #[test]

@@ -162,15 +162,14 @@ mod tests {
     #[test]
     fn custom_token_round_trips_and_verifies() {
         let key = test_key();
-        let pem = key.to_pkcs8_pem(rsa::pkcs8::LineEnding::LF).unwrap().to_string();
+        let pem = key
+            .to_pkcs8_pem(rsa::pkcs8::LineEnding::LF)
+            .unwrap()
+            .to_string();
         let now = 1_700_000_000i64;
-        let token = create_firebase_custom_token(
-            "user-1",
-            "firebase-adminsdk@example.test",
-            &pem,
-            now,
-        )
-        .expect("token");
+        let token =
+            create_firebase_custom_token("user-1", "firebase-adminsdk@example.test", &pem, now)
+                .expect("token");
         let parts: Vec<&str> = token.split('.').collect();
         assert_eq!(parts.len(), 3);
 
@@ -193,7 +192,10 @@ mod tests {
     #[test]
     fn pem_with_escaped_newlines_decodes() {
         let key = test_key();
-        let pem = key.to_pkcs8_pem(rsa::pkcs8::LineEnding::LF).unwrap().to_string();
+        let pem = key
+            .to_pkcs8_pem(rsa::pkcs8::LineEnding::LF)
+            .unwrap()
+            .to_string();
         let escaped = pem.replace('\n', "\\n");
         assert!(create_firebase_custom_token("u", "e", &escaped, 0).is_some());
     }

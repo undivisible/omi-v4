@@ -25,9 +25,7 @@ pub fn verify_timestamped_signature(
     now_seconds: i64,
 ) -> bool {
     let parts: Vec<&str> = header.split(',').map(str::trim).collect();
-    let timestamp = parts
-        .iter()
-        .find_map(|part| part.strip_prefix("t="));
+    let timestamp = parts.iter().find_map(|part| part.strip_prefix("t="));
     let signatures: Vec<String> = parts
         .iter()
         .filter_map(|part| part.strip_prefix("v1="))
@@ -61,11 +59,17 @@ pub fn verify_timestamped_signature(
 }
 
 fn is_hex64_lower(value: &str) -> bool {
-    value.len() == 64 && value.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
 fn is_hex48_lower(value: &str) -> bool {
-    value.len() == 48 && value.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    value.len() == 48
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
 /// Extract a 48-hex link token. For Telegram, matches
@@ -118,7 +122,9 @@ pub fn parse_telegram(body: &Value) -> Result<(String, Option<TelegramMessage>),
     let update_id = safe_integer(body.get("update_id")).ok_or(())?;
     let event_id = update_id.to_string();
     let message = body.get("message");
-    let message_id = message.and_then(|m| m.get("message_id")).and_then(safe_integer_ref);
+    let message_id = message
+        .and_then(|m| m.get("message_id"))
+        .and_then(safe_integer_ref);
     let from_id = message
         .and_then(|m| m.get("from"))
         .and_then(|f| f.get("id"))
@@ -346,7 +352,12 @@ mod tests {
         let now = 1_700_000_000i64;
         let body = "{\"event\":\"message.received\"}";
         let header = sign("whsec_test", now, body);
-        assert!(verify_timestamped_signature(body, &header, "whsec_test", now));
+        assert!(verify_timestamped_signature(
+            body,
+            &header,
+            "whsec_test",
+            now
+        ));
     }
 
     #[test]
@@ -354,9 +365,19 @@ mod tests {
         let now = 1_700_000_000i64;
         let body = "{}";
         let header = sign("whsec_test", now - 301, body);
-        assert!(!verify_timestamped_signature(body, &header, "whsec_test", now));
+        assert!(!verify_timestamped_signature(
+            body,
+            &header,
+            "whsec_test",
+            now
+        ));
         let future = sign("whsec_test", now + 301, body);
-        assert!(!verify_timestamped_signature(body, &future, "whsec_test", now));
+        assert!(!verify_timestamped_signature(
+            body,
+            &future,
+            "whsec_test",
+            now
+        ));
     }
 
     #[test]
@@ -364,17 +385,37 @@ mod tests {
         let now = 1_700_000_000i64;
         let header = sign("whsec_test", now, "{}");
         assert!(!verify_timestamped_signature("{}", &header, "other", now));
-        assert!(!verify_timestamped_signature("{\"x\":1}", &header, "whsec_test", now));
+        assert!(!verify_timestamped_signature(
+            "{\"x\":1}",
+            &header,
+            "whsec_test",
+            now
+        ));
     }
 
     #[test]
     fn rejects_malformed_headers() {
         let now = 1_700_000_000i64;
         assert!(!verify_timestamped_signature("{}", "", "s", now));
-        assert!(!verify_timestamped_signature("{}", "t=abc,v1=deadbeef", "s", now));
-        assert!(!verify_timestamped_signature("{}", &format!("t={now}"), "s", now));
+        assert!(!verify_timestamped_signature(
+            "{}",
+            "t=abc,v1=deadbeef",
+            "s",
+            now
+        ));
+        assert!(!verify_timestamped_signature(
+            "{}",
+            &format!("t={now}"),
+            "s",
+            now
+        ));
         // v1 present but not 64-hex.
-        assert!(!verify_timestamped_signature("{}", &format!("t={now},v1=zz"), "s", now));
+        assert!(!verify_timestamped_signature(
+            "{}",
+            &format!("t={now},v1=zz"),
+            "s",
+            now
+        ));
     }
 
     #[test]
@@ -382,20 +423,34 @@ mod tests {
         let now = 1_700_000_000i64;
         let good = hmac_sha256_hex("whsec_test", &format!("{now}.{{}}"));
         let header = format!("t={now},v1={},v1={good}", "0".repeat(64));
-        assert!(verify_timestamped_signature("{}", &header, "whsec_test", now));
+        assert!(verify_timestamped_signature(
+            "{}",
+            &header,
+            "whsec_test",
+            now
+        ));
     }
 
     #[test]
     fn telegram_link_token_patterns() {
         let tok = "a".repeat(48);
-        assert_eq!(link_token(&format!("/start {tok}"), true), Some(tok.clone()));
-        assert_eq!(link_token(&format!("/start@my_bot {tok}"), true), Some(tok.clone()));
+        assert_eq!(
+            link_token(&format!("/start {tok}"), true),
+            Some(tok.clone())
+        );
+        assert_eq!(
+            link_token(&format!("/start@my_bot {tok}"), true),
+            Some(tok.clone())
+        );
         assert_eq!(link_token(&format!("/start@ {tok}"), true), None);
         assert_eq!(link_token(&format!("/start  {tok}"), true), None);
         assert_eq!(link_token(&tok, true), None);
         assert_eq!(link_token("/start deadbeef", true), None);
         // Uppercase hex is rejected (regex is lowercase-only).
-        assert_eq!(link_token(&format!("/start {}", "A".repeat(48)), true), None);
+        assert_eq!(
+            link_token(&format!("/start {}", "A".repeat(48)), true),
+            None
+        );
     }
 
     #[test]

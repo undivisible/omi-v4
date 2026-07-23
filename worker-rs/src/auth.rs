@@ -154,7 +154,9 @@ pub fn verify_firebase_token(
         return None;
     }
     let kid = parsed.header.kid.as_deref()?;
-    let jwk = jwks.iter().find(|candidate| candidate.kid.as_deref() == Some(kid))?;
+    let jwk = jwks
+        .iter()
+        .find(|candidate| candidate.kid.as_deref() == Some(kid))?;
     if !verify_rs256(jwk, &parsed.signed, &parsed.signature) {
         return None;
     }
@@ -377,7 +379,10 @@ mod tests {
 
     #[test]
     fn cache_max_age_parsing() {
-        assert_eq!(cache_max_age("public, max-age=19008, must-revalidate"), 19008);
+        assert_eq!(
+            cache_max_age("public, max-age=19008, must-revalidate"),
+            19008
+        );
         assert_eq!(cache_max_age("no-cache"), 300);
         assert_eq!(cache_max_age(""), 300);
     }

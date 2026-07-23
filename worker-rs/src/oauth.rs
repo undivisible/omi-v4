@@ -205,7 +205,10 @@ mod tests {
     fn aes_gcm_round_trip() {
         let iv = [7u8; 12];
         let stored = encrypt_oauth_token(&key(), &iv, "secret-token").unwrap();
-        assert_eq!(decrypt_oauth_token(&key(), &stored).as_deref(), Some("secret-token"));
+        assert_eq!(
+            decrypt_oauth_token(&key(), &stored).as_deref(),
+            Some("secret-token")
+        );
     }
 
     #[test]
@@ -220,7 +223,10 @@ mod tests {
         stored = STANDARD.encode(tampered);
         assert_eq!(decrypt_oauth_token(&key(), &stored), None);
         // Too-short payload.
-        assert_eq!(decrypt_oauth_token(&key(), &STANDARD.encode([0u8; 8])), None);
+        assert_eq!(
+            decrypt_oauth_token(&key(), &STANDARD.encode([0u8; 8])),
+            None
+        );
         // Wrong key fails.
         let iv2 = [2u8; 12];
         let ok = encrypt_oauth_token(&key(), &iv2, "hi").unwrap();
@@ -239,7 +245,12 @@ mod tests {
     #[test]
     fn xai_config_uses_discovered_endpoints() {
         assert!(xai_config(None, "a", "b").is_none());
-        let cfg = xai_config(Some("cid"), "https://auth.x.ai/device", "https://auth.x.ai/token").unwrap();
+        let cfg = xai_config(
+            Some("cid"),
+            "https://auth.x.ai/device",
+            "https://auth.x.ai/token",
+        )
+        .unwrap();
         assert_eq!(cfg.device_endpoint, "https://auth.x.ai/device");
         assert_eq!(cfg.scope, "openid profile offline_access");
     }
@@ -267,13 +278,31 @@ mod tests {
 
     #[test]
     fn poll_error_classification() {
-        assert_eq!(classify_poll_error(Some("authorization_pending")), PollOutcome::Pending("authorization_pending"));
-        assert_eq!(classify_poll_error(Some("slow_down")), PollOutcome::Pending("slow_down"));
-        assert_eq!(classify_poll_error(Some("expired_token")), PollOutcome::Failed("expired_token".into()));
-        assert_eq!(classify_poll_error(Some("access_denied")), PollOutcome::Failed("access_denied".into()));
+        assert_eq!(
+            classify_poll_error(Some("authorization_pending")),
+            PollOutcome::Pending("authorization_pending")
+        );
+        assert_eq!(
+            classify_poll_error(Some("slow_down")),
+            PollOutcome::Pending("slow_down")
+        );
+        assert_eq!(
+            classify_poll_error(Some("expired_token")),
+            PollOutcome::Failed("expired_token".into())
+        );
+        assert_eq!(
+            classify_poll_error(Some("access_denied")),
+            PollOutcome::Failed("access_denied".into())
+        );
         // Not on the allowlist collapses to "failed".
-        assert_eq!(classify_poll_error(Some("invalid_grant")), PollOutcome::Failed("failed".into()));
-        assert_eq!(classify_poll_error(None), PollOutcome::Failed("failed".into()));
+        assert_eq!(
+            classify_poll_error(Some("invalid_grant")),
+            PollOutcome::Failed("failed".into())
+        );
+        assert_eq!(
+            classify_poll_error(None),
+            PollOutcome::Failed("failed".into())
+        );
     }
 
     #[test]
@@ -284,7 +313,10 @@ mod tests {
         assert!(!needs_refresh(Some(1_001 + REFRESH_LEEWAY_MS), 1_000));
 
         assert_eq!(refreshed_expires_at(1_000, Some(60.0)), 61_000);
-        assert_eq!(refreshed_expires_at(1_000, None), 1_000 + DEFAULT_REFRESH_TTL_MS);
+        assert_eq!(
+            refreshed_expires_at(1_000, None),
+            1_000 + DEFAULT_REFRESH_TTL_MS
+        );
         assert_eq!(connection_expires_at(1_000, Some(30.0)), Some(31_000));
         assert_eq!(connection_expires_at(1_000, None), None);
     }

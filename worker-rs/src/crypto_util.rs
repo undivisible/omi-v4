@@ -28,8 +28,8 @@ pub fn to_hex_lower(bytes: &[u8]) -> String {
 /// HMAC-SHA256 of `payload` under `secret`, lowercase hex. Mirrors the TS
 /// `hmac` helper (raw key import + SHA-256 + hex).
 pub fn hmac_sha256_hex(secret: &str, payload: &str) -> String {
-    let mut mac = HmacSha256::new_from_slice(secret.as_bytes())
-        .expect("HMAC accepts keys of any length");
+    let mut mac =
+        HmacSha256::new_from_slice(secret.as_bytes()).expect("HMAC accepts keys of any length");
     mac.update(payload.as_bytes());
     to_hex_lower(&mac.finalize().into_bytes())
 }
@@ -83,7 +83,9 @@ mod tests {
         // t.body form used by Stripe/Blooio timestamped signatures.
         let sig = hmac_sha256_hex("whsec_test", "1700000000.{}");
         assert_eq!(sig.len(), 64);
-        assert!(sig.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
+        assert!(sig
+            .chars()
+            .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
     }
 
     #[test]

@@ -90,9 +90,11 @@ pub fn cost_for(input_tokens: i64, output_tokens: i64, input_price: i64, output_
 
 /// Port of `inputTokenReservation`: framing overhead plus UTF-8 byte lengths.
 pub fn input_token_reservation(messages: &[Message]) -> i64 {
-    messages.iter().fold(REQUEST_FRAMING_TOKEN_RESERVE, |total, m| {
-        total + MESSAGE_FRAMING_TOKEN_RESERVE + m.role.len() as i64 + m.content.len() as i64
-    })
+    messages
+        .iter()
+        .fold(REQUEST_FRAMING_TOKEN_RESERVE, |total, m| {
+            total + MESSAGE_FRAMING_TOKEN_RESERVE + m.role.len() as i64 + m.content.len() as i64
+        })
 }
 
 fn object_keys_all_allowed(obj: &Map<String, Value>, allowed: &[&str]) -> bool {
@@ -120,10 +122,7 @@ pub fn parse_request(body: &Value, model: &str) -> Option<CompletionRequest> {
     let mut input_characters = 0usize;
     for candidate in messages_val {
         let value = candidate.as_object()?;
-        if value
-            .keys()
-            .any(|k| k != "role" && k != "content")
-        {
+        if value.keys().any(|k| k != "role" && k != "content") {
             return None;
         }
         let role = value.get("role").and_then(Value::as_str)?;
@@ -147,8 +146,7 @@ pub fn parse_request(body: &Value, model: &str) -> Option<CompletionRequest> {
         return None;
     }
     let stream_options = obj.get("stream_options")?.as_object()?;
-    if stream_options.len() != 1
-        || stream_options.get("include_usage") != Some(&Value::Bool(true))
+    if stream_options.len() != 1 || stream_options.get("include_usage") != Some(&Value::Bool(true))
     {
         return None;
     }
@@ -323,7 +321,14 @@ mod tests {
     #[test]
     fn price_matches_js() {
         assert_eq!(price(Some("435000")), Some(435000));
-        for invalid in [None, Some(""), Some("0"), Some("-1"), Some("1.5"), Some("NaN")] {
+        for invalid in [
+            None,
+            Some(""),
+            Some("0"),
+            Some("-1"),
+            Some("1.5"),
+            Some("NaN"),
+        ] {
             assert_eq!(price(invalid), None);
         }
     }
@@ -413,7 +418,10 @@ mod tests {
         assert!(parse_request(&Value::Object(extra_opt), "mimo-v2.5-pro").is_none());
 
         let mut tool_role = base.as_object().unwrap().clone();
-        tool_role.insert("messages".into(), json!([{ "role": "tool", "content": "unsafe" }]));
+        tool_role.insert(
+            "messages".into(),
+            json!([{ "role": "tool", "content": "unsafe" }]),
+        );
         assert!(parse_request(&Value::Object(tool_role), "mimo-v2.5-pro").is_none());
     }
 
@@ -446,7 +454,10 @@ mod tests {
         );
         assert_eq!(bounded_json(Some("999999999"), Some(b"{}"), 4), None);
         assert_eq!(bounded_json(None, Some(b"[1,2]"), MAXIMUM_BODY_BYTES), None);
-        assert_eq!(bounded_json(None, Some(b"not json"), MAXIMUM_BODY_BYTES), None);
+        assert_eq!(
+            bounded_json(None, Some(b"not json"), MAXIMUM_BODY_BYTES),
+            None
+        );
         assert_eq!(bounded_json(None, None, MAXIMUM_BODY_BYTES), None);
     }
 }

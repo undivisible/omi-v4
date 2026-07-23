@@ -100,7 +100,14 @@ mod tests {
     #[test]
     fn positive_integer_str_matches_js() {
         assert_eq!(positive_integer_str(Some("435000")), Some(435000));
-        for invalid in [None, Some(""), Some("0"), Some("-1"), Some("1.5"), Some("NaN")] {
+        for invalid in [
+            None,
+            Some(""),
+            Some("0"),
+            Some("-1"),
+            Some("1.5"),
+            Some("NaN"),
+        ] {
             assert_eq!(positive_integer_str(invalid), None);
         }
     }

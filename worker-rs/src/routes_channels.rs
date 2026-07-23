@@ -46,10 +46,22 @@ fn random_uuid() -> String {
     let h = |b: u8| format!("{b:02x}");
     format!(
         "{}{}{}{}-{}{}-{}{}-{}{}-{}{}{}{}{}{}",
-        h(bytes[0]), h(bytes[1]), h(bytes[2]), h(bytes[3]),
-        h(bytes[4]), h(bytes[5]), h(bytes[6]), h(bytes[7]),
-        h(bytes[8]), h(bytes[9]), h(bytes[10]), h(bytes[11]),
-        h(bytes[12]), h(bytes[13]), h(bytes[14]), h(bytes[15]),
+        h(bytes[0]),
+        h(bytes[1]),
+        h(bytes[2]),
+        h(bytes[3]),
+        h(bytes[4]),
+        h(bytes[5]),
+        h(bytes[6]),
+        h(bytes[7]),
+        h(bytes[8]),
+        h(bytes[9]),
+        h(bytes[10]),
+        h(bytes[11]),
+        h(bytes[12]),
+        h(bytes[13]),
+        h(bytes[14]),
+        h(bytes[15]),
     )
 }
 
@@ -209,7 +221,9 @@ fn request_for(delivery: &DeliveryRow, env: &Env) -> Result<Option<Request>> {
                 &stable_idempotency_key(&delivery.uid, delivery.channel, &delivery.idempotency_key),
             )?;
             init.with_headers(headers);
-            init.with_body(Some(JsValue::from_str(&json!({ "text": delivery.text }).to_string())));
+            init.with_body(Some(JsValue::from_str(
+                &json!({ "text": delivery.text }).to_string(),
+            )));
             Ok(Some(Request::new_with_init(&url, &init)?))
         }
     }
@@ -415,9 +429,7 @@ impl DurableObject for DeliveryCoordinator {
     async fn fetch(&self, mut req: Request) -> Result<Response> {
         match self.dispatch(&mut req).await {
             Ok(()) => Ok(Response::empty()?.with_status(204)),
-            Err(_) => {
-                error_json("Delivery coordination failed", 500)
-            }
+            Err(_) => error_json("Delivery coordination failed", 500),
         }
     }
 }
@@ -425,7 +437,10 @@ impl DurableObject for DeliveryCoordinator {
 impl DeliveryCoordinator {
     async fn dispatch(&self, req: &mut Request) -> Result<()> {
         let path = req.path();
-        let body: Value = req.json().await.map_err(|_| worker::Error::RustError("bad body".into()))?;
+        let body: Value = req
+            .json()
+            .await
+            .map_err(|_| worker::Error::RustError("bad body".into()))?;
         let uid = body.get("uid").and_then(Value::as_str);
         let channel = body
             .get("channel")
@@ -481,7 +496,9 @@ async fn dispatch_to_coordinator(
     let req = Request::new_with_init(&format!("https://delivery.internal{path}"), &init)?;
     let response = stub.fetch_with_request(req).await?;
     if response.status_code() >= 300 {
-        return Err(worker::Error::RustError("Delivery coordinator unavailable".into()));
+        return Err(worker::Error::RustError(
+            "Delivery coordinator unavailable".into(),
+        ));
     }
     Ok(())
 }
@@ -504,7 +521,9 @@ pub async fn deliver_due_channel_messages(env: &Env) -> Result<()> {
     for row in orphans.results::<Value>()? {
         if let (Some(uid), Some(channel)) = (
             json_str(&row, "uid"),
-            json_str(&row, "channel").as_deref().and_then(Channel::parse),
+            json_str(&row, "channel")
+                .as_deref()
+                .and_then(Channel::parse),
         ) {
             let _ = dispatch_to_coordinator(
                 env,
@@ -527,7 +546,9 @@ pub async fn deliver_due_channel_messages(env: &Env) -> Result<()> {
         if let (Some(id), Some(uid), Some(channel)) = (
             json_str(&row, "id"),
             json_str(&row, "uid"),
-            json_str(&row, "channel").as_deref().and_then(Channel::parse),
+            json_str(&row, "channel")
+                .as_deref()
+                .and_then(Channel::parse),
         ) {
             let _ = dispatch_to_coordinator(
                 env,
@@ -595,7 +616,8 @@ async fn complete_inbox_item_done(
             }
         }
     };
-    match crate::glue::complete_inbox_done(env, &db, uid, id, lease_token, reply, now as f64).await {
+    match crate::glue::complete_inbox_done(env, &db, uid, id, lease_token, reply, now as f64).await
+    {
         Ok(Ok(_)) => InboxDoneResult {
             ok: true,
             error: String::new(),
@@ -627,7 +649,13 @@ async fn recent_history(env: &Env, uid: &str) -> Result<Vec<fallback::Message>> 
     Ok(fallback::shape_history(&chronological))
 }
 
-async fn release_for_retry(env: &Env, id: &str, uid: &str, lease_token: &str, error: &str) -> Result<()> {
+async fn release_for_retry(
+    env: &Env,
+    id: &str,
+    uid: &str,
+    lease_token: &str,
+    error: &str,
+) -> Result<()> {
     let db = env.d1("DB")?;
     db.prepare(
         "UPDATE channel_inbox\n     SET status = CASE WHEN attempts < ?1 THEN 'pending' ELSE 'failed' END,\n         lease_until = NULL, lease_token = NULL, last_error = ?2,\n         completed_at = CASE WHEN attempts >= ?1 THEN ?3 ELSE NULL END\n     WHERE id = ?4 AND uid = ?5 AND status = 'processing' AND lease_token = ?6",
@@ -676,7 +704,14 @@ async fn respond_to_item(env: &Env, id: &str, uid: &str, now: i64) -> Result<()>
             Some(completion) => completion,
             None => {
                 if attempts < fallback::MAX_ATTEMPTS {
-                    release_for_retry(env, id, uid, &lease_token, "Fallback completion unavailable").await?;
+                    release_for_retry(
+                        env,
+                        id,
+                        uid,
+                        &lease_token,
+                        "Fallback completion unavailable",
+                    )
+                    .await?;
                     return Ok(());
                 }
                 fallback::OFFLINE_ACKNOWLEDGEMENT.to_string()
@@ -698,7 +733,12 @@ async fn respond_to_item(env: &Env, id: &str, uid: &str, now: i64) -> Result<()>
 /// MERGE NOTE: additive cron piece — call from the unified scheduled handler.
 #[allow(dead_code)]
 pub async fn respond_to_stale_inbox_items(env: &Env) -> Result<()> {
-    if fallback::responder_disabled(env.var("CHANNEL_FALLBACK_RESPONDER").ok().map(|v| v.to_string()).as_deref()) {
+    if fallback::responder_disabled(
+        env.var("CHANNEL_FALLBACK_RESPONDER")
+            .ok()
+            .map(|v| v.to_string())
+            .as_deref(),
+    ) {
         return Ok(());
     }
     let now = now_ms();
@@ -728,7 +768,8 @@ async fn env_has_active_pro(env: &Env, uid: &str) -> bool {
     let environment = env.var("ENVIRONMENT").ok().map(|v| v.to_string());
     match crate::entitlement::dev_fake_pro(dev.as_deref(), environment.as_deref()) {
         crate::entitlement::DevFakePro::ForcePro => return true,
-        crate::entitlement::DevFakePro::IgnoredInProduction | crate::entitlement::DevFakePro::NotSet => {}
+        crate::entitlement::DevFakePro::IgnoredInProduction
+        | crate::entitlement::DevFakePro::NotSet => {}
     }
     let Ok(db) = env.d1("DB") else {
         return false;
@@ -768,7 +809,9 @@ async fn discover_xai_endpoints() -> Option<(String, String)> {
         return None;
     }
     let body: Value = response.json().await.ok()?;
-    let device = body.get("device_authorization_endpoint").and_then(Value::as_str)?;
+    let device = body
+        .get("device_authorization_endpoint")
+        .and_then(Value::as_str)?;
     let token = body.get("token_endpoint").and_then(Value::as_str)?;
     if !valid_xai_endpoint(device) || !valid_xai_endpoint(token) {
         return None;
@@ -780,7 +823,12 @@ async fn discover_xai_endpoints() -> Option<(String, String)> {
 
 async fn provider_config(env: &Env, provider: &str) -> Option<ProviderConfig> {
     match provider {
-        "openai" => openai_config(env.var("OPENAI_OAUTH_CLIENT_ID").ok().map(|v| v.to_string()).as_deref()),
+        "openai" => openai_config(
+            env.var("OPENAI_OAUTH_CLIENT_ID")
+                .ok()
+                .map(|v| v.to_string())
+                .as_deref(),
+        ),
         "xai" => {
             let client_id = env.var("XAI_OAUTH_CLIENT_ID").ok().map(|v| v.to_string());
             let (device, token) = discover_xai_endpoints().await?;
@@ -812,7 +860,11 @@ fn json_response(value: Value, status: u16) -> Result<Response> {
 
 /// The `ENABLE_DEV_OAUTH_BROKER` gate (parity with the `/oauth/*` middleware).
 fn oauth_gate(ctx: &RouteContext<()>) -> Option<Response> {
-    let enabled = ctx.env.var("ENABLE_DEV_OAUTH_BROKER").ok().map(|v| v.to_string());
+    let enabled = ctx
+        .env
+        .var("ENABLE_DEV_OAUTH_BROKER")
+        .ok()
+        .map(|v| v.to_string());
     if enabled.as_deref() != Some("true") {
         return json_response(
             json!({ "error": "Disabled: dev/testing only OAuth broker is not enabled" }),
@@ -835,7 +887,9 @@ async fn oauth_device_start(req: Request, ctx: RouteContext<()>) -> Result<Respo
         consume_rate_limit(&ctx.env, &format!("oauth-device-start:{uid}"), 5, 60_000).await?;
     if !allowed {
         let mut response = json_response(json!({ "error": "Too many requests" }), 429)?;
-        response.headers_mut().set("retry-after", &retry_after.to_string())?;
+        response
+            .headers_mut()
+            .set("retry-after", &retry_after.to_string())?;
         return Ok(response);
     }
     let provider = ctx.param("provider").cloned().unwrap_or_default();
@@ -863,7 +917,10 @@ async fn oauth_device_start(req: Request, ctx: RouteContext<()>) -> Result<Respo
         .or_else(|| body.get("verification_uri").and_then(Value::as_str))
         .unwrap_or("");
     let interval = body.get("interval").and_then(Value::as_i64).unwrap_or(5);
-    let expires_in = body.get("expires_in").and_then(Value::as_i64).unwrap_or(900);
+    let expires_in = body
+        .get("expires_in")
+        .and_then(Value::as_i64)
+        .unwrap_or(900);
     json_response(
         json!({
             "deviceCode": device_code,
@@ -888,7 +945,9 @@ async fn oauth_device_poll(mut req: Request, ctx: RouteContext<()>) -> Result<Re
         consume_rate_limit(&ctx.env, &format!("oauth-device-poll:{uid}"), 30, 60_000).await?;
     if !allowed {
         let mut response = json_response(json!({ "error": "Too many requests" }), 429)?;
-        response.headers_mut().set("retry-after", &retry_after.to_string())?;
+        response
+            .headers_mut()
+            .set("retry-after", &retry_after.to_string())?;
         return Ok(response);
     }
     let provider = ctx.param("provider").cloned().unwrap_or_default();
@@ -1077,7 +1136,11 @@ async fn oauth_proxy_chat(mut req: Request, ctx: RouteContext<()>) -> Result<Res
     init.with_method(Method::Post);
     init.with_headers(headers);
     init.with_body(Some(JsValue::from_str(&body.to_string())));
-    let upstream_url = if provider == "openai" { OPENAI_UPSTREAM } else { XAI_UPSTREAM };
+    let upstream_url = if provider == "openai" {
+        OPENAI_UPSTREAM
+    } else {
+        XAI_UPSTREAM
+    };
     let request = Request::new_with_init(upstream_url, &init)?;
     let mut upstream = match Fetch::Request(request).send().await {
         Ok(response) => response,
@@ -1133,7 +1196,17 @@ async fn refresh_access_token(
     if !acquired {
         return reject(json!({ "error": "Refresh in progress, retry" }), 409);
     }
-    let outcome = refresh_with_lock(db, key, uid, provider, connection, &config, &refresh_token, now).await;
+    let outcome = refresh_with_lock(
+        db,
+        key,
+        uid,
+        provider,
+        connection,
+        &config,
+        &refresh_token,
+        now,
+    )
+    .await;
     let _ = release_refresh_lock(env, &lock_key).await;
     outcome
 }
@@ -1177,7 +1250,9 @@ async fn refresh_with_lock(
     };
     let stored_refresh = connection.refresh_token.clone().unwrap_or_default();
     let rotated_refresh = match json_str(&refreshed, "refresh_token") {
-        Some(refresh) => encrypt_oauth_token(key, &random_iv(), &refresh).unwrap_or(stored_refresh.clone()),
+        Some(refresh) => {
+            encrypt_oauth_token(key, &random_iv(), &refresh).unwrap_or(stored_refresh.clone())
+        }
         None => stored_refresh.clone(),
     };
     let expires_at = refreshed_expires_at(now, refreshed.get("expires_in").and_then(Value::as_f64));
@@ -1198,7 +1273,12 @@ async fn refresh_with_lock(
         ]);
     let changes = match rotation {
         Ok(stmt) => match stmt.run().await {
-            Ok(result) => result.meta().ok().flatten().and_then(|m| m.changes).unwrap_or(0),
+            Ok(result) => result
+                .meta()
+                .ok()
+                .flatten()
+                .and_then(|m| m.changes)
+                .unwrap_or(0),
             Err(_) => return reject(json!({ "error": "Reconnect required" }), 401),
         },
         Err(_) => return reject(json!({ "error": "Reconnect required" }), 401),
@@ -1211,7 +1291,9 @@ async fn refresh_with_lock(
             .ok();
         let winner_token = match winner {
             Some(stmt) => match stmt.first::<Value>(None).await {
-                Ok(Some(row)) => json_str(&row, "access_token").and_then(|t| decrypt_oauth_token(key, &t)),
+                Ok(Some(row)) => {
+                    json_str(&row, "access_token").and_then(|t| decrypt_oauth_token(key, &t))
+                }
                 _ => None,
             },
             None => None,

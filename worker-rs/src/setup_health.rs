@@ -107,18 +107,33 @@ mod tests {
     fn telegram_needs_both_secret_and_token() {
         let mut input = empty();
         input.telegram_webhook_secret = Some("s");
-        assert_eq!(setup_health_body(&input)["channels"]["telegram"], json!(false));
+        assert_eq!(
+            setup_health_body(&input)["channels"]["telegram"],
+            json!(false)
+        );
         input.telegram_bot_token = Some("t");
-        assert_eq!(setup_health_body(&input)["channels"]["telegram"], json!(true));
+        assert_eq!(
+            setup_health_body(&input)["channels"]["telegram"],
+            json!(true)
+        );
     }
 
     #[test]
     fn managed_asr_needs_key_and_url() {
         let mut input = empty();
         input.mimo_api_key = Some("k");
-        assert_eq!(setup_health_body(&input)["models"]["managedChat"], json!(true));
-        assert_eq!(setup_health_body(&input)["models"]["managedAsr"], json!(false));
+        assert_eq!(
+            setup_health_body(&input)["models"]["managedChat"],
+            json!(true)
+        );
+        assert_eq!(
+            setup_health_body(&input)["models"]["managedAsr"],
+            json!(false)
+        );
         input.mimo_chat_completions_url = Some("https://x");
-        assert_eq!(setup_health_body(&input)["models"]["managedAsr"], json!(true));
+        assert_eq!(
+            setup_health_body(&input)["models"]["managedAsr"],
+            json!(true)
+        );
     }
 }

@@ -20,7 +20,10 @@ pub fn checkout_params(
         ("line_items[0][quantity]".into(), "1".into()),
         ("client_reference_id".into(), uid.into()),
         ("metadata[firebase_uid]".into(), uid.into()),
-        ("subscription_data[metadata][firebase_uid]".into(), uid.into()),
+        (
+            "subscription_data[metadata][firebase_uid]".into(),
+            uid.into(),
+        ),
         (
             "success_url".into(),
             format!("{app_url}/billing/success?session_id={{CHECKOUT_SESSION_ID}}"),
@@ -111,7 +114,9 @@ mod tests {
     #[test]
     fn checkout_params_no_customer_no_email() {
         let params = checkout_params("uid-1", "price", "https://app.test", None, None);
-        assert!(!params.iter().any(|(k, _)| k == "customer" || k == "customer_email"));
+        assert!(!params
+            .iter()
+            .any(|(k, _)| k == "customer" || k == "customer_email"));
     }
 
     #[test]

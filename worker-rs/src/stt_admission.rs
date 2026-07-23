@@ -197,9 +197,9 @@ impl SttAdmission {
             || global_cost + cost_budget_microusd > limits.global_cost_microusd
             || uid_cost + cost_budget_microusd > limits.uid_cost_microusd;
 
-        let retry_after = (((oldest.unwrap_or(now) + limits.window_ms - now) as f64 / 1000.0).ceil()
-            as i64)
-            .max(1);
+        let retry_after =
+            (((oldest.unwrap_or(now) + limits.window_ms - now) as f64 / 1000.0).ceil() as i64)
+                .max(1);
 
         if let Some(dup) = duplicate {
             if dup.in_flight == 1 {
@@ -312,8 +312,9 @@ impl SttAdmission {
             }
             "/admit" => {
                 let uid = body.get("uid").and_then(Value::as_str);
-                let reserved =
-                    body.get("reservedSeconds").and_then(crate::jsnum::positive_integer_value);
+                let reserved = body
+                    .get("reservedSeconds")
+                    .and_then(crate::jsnum::positive_integer_value);
                 let cost = body
                     .get("costBudgetMicrousd")
                     .and_then(crate::jsnum::positive_integer_value);
@@ -378,7 +379,10 @@ mod tests {
 
     #[test]
     fn enforces_per_user_reservations() {
-        let l = Limits { uid_in_flight: 1, ..limits() };
+        let l = Limits {
+            uid_in_flight: 1,
+            ..limits()
+        };
         let mut a = SttAdmission::new();
         let first = admit(&mut a, l, 1000, "one", "alpha", 900, 75000, "t1");
         let second = admit(&mut a, l, 1000, "two", "alpha", 900, 75000, "t2");
@@ -391,35 +395,67 @@ mod tests {
     fn duplicate_admission_is_idempotent() {
         let l = limits();
         let mut a = SttAdmission::new();
-        assert_eq!(admit(&mut a, l, 1000, "same", "alpha", 900, 75000, "t1").status, 200);
+        assert_eq!(
+            admit(&mut a, l, 1000, "same", "alpha", 900, 75000, "t1").status,
+            200
+        );
         let dup = admit(&mut a, l, 1000, "same", "alpha", 900, 75000, "t2");
         assert_eq!(dup.status, 200);
         assert_eq!(dup.body["admitted"], json!(true));
         assert_eq!(dup.body["duplicate"], json!(true));
         // The duplicate returns the ORIGINAL token, not the freshly-minted one.
         assert_eq!(dup.body["acquisitionToken"], json!("t1"));
-        assert_eq!(admit(&mut a, l, 1000, "next", "alpha", 900, 75000, "t3").status, 200);
-        assert_eq!(admit(&mut a, l, 1000, "over", "beta", 900, 75000, "t4").status, 200);
+        assert_eq!(
+            admit(&mut a, l, 1000, "next", "alpha", 900, 75000, "t3").status,
+            200
+        );
+        assert_eq!(
+            admit(&mut a, l, 1000, "over", "beta", 900, 75000, "t4").status,
+            200
+        );
     }
 
     #[test]
     fn release_is_idempotent_and_retains_budget_then_reacquires() {
-        let l = Limits { uid_in_flight: 1, ..limits() };
+        let l = Limits {
+            uid_in_flight: 1,
+            ..limits()
+        };
         let mut a = SttAdmission::new();
-        assert_eq!(admit(&mut a, l, 1000, "released", "alpha", 900, 75000, "t1").status, 200);
+        assert_eq!(
+            admit(&mut a, l, 1000, "released", "alpha", 900, 75000, "t1").status,
+            200
+        );
         // Release with the wrong uid is a no-op but still 200.
         assert_eq!(
-            a.dispatch(l, 1000, "POST", "/release", &json!({ "sessionId": "released", "uid": "beta", "acquisitionToken": "t1" }), "")
-                .status,
+            a.dispatch(
+                l,
+                1000,
+                "POST",
+                "/release",
+                &json!({ "sessionId": "released", "uid": "beta", "acquisitionToken": "t1" }),
+                ""
+            )
+            .status,
             200
         );
         // Budget still reserved -> a new tiny session is blocked (uid in-flight 1).
-        assert_eq!(admit(&mut a, l, 1000, "still-blocked", "alpha", 1, 1, "t2").status, 429);
+        assert_eq!(
+            admit(&mut a, l, 1000, "still-blocked", "alpha", 1, 1, "t2").status,
+            429
+        );
         // Duplicate releases: both 200.
         for _ in 0..2 {
             assert_eq!(
-                a.dispatch(l, 1000, "POST", "/release", &json!({ "sessionId": "released", "uid": "alpha", "acquisitionToken": "t1" }), "")
-                    .status,
+                a.dispatch(
+                    l,
+                    1000,
+                    "POST",
+                    "/release",
+                    &json!({ "sessionId": "released", "uid": "alpha", "acquisitionToken": "t1" }),
+                    ""
+                )
+                .status,
                 200
             );
         }
@@ -429,16 +465,42 @@ mod tests {
         assert_eq!(reacq.body["duplicate"], json!(true));
         assert_eq!(reacq.body["reacquired"], json!(true));
         assert_eq!(reacq.body["acquisitionToken"], json!("t5"));
-        assert_eq!(admit(&mut a, l, 1000, "blocked-by-reacquired", "alpha", 1, 1, "t6").status, 429);
+        assert_eq!(
+            admit(
+                &mut a,
+                l,
+                1000,
+                "blocked-by-reacquired",
+                "alpha",
+                1,
+                1,
+                "t6"
+            )
+            .status,
+            429
+        );
         // Release the reacquired one (with its new token) then admit again.
         assert_eq!(
-            a.dispatch(l, 1000, "POST", "/release", &json!({ "sessionId": "released", "uid": "alpha", "acquisitionToken": "t5" }), "")
-                .status,
+            a.dispatch(
+                l,
+                1000,
+                "POST",
+                "/release",
+                &json!({ "sessionId": "released", "uid": "alpha", "acquisitionToken": "t5" }),
+                ""
+            )
+            .status,
             200
         );
-        assert_eq!(admit(&mut a, l, 1000, "next", "alpha", 1, 1, "t7").status, 200);
+        assert_eq!(
+            admit(&mut a, l, 1000, "next", "alpha", 1, 1, "t7").status,
+            200
+        );
         // Over the seconds budget now (900 reserved + 900 > 1800).
-        assert_eq!(admit(&mut a, l, 1000, "over-budget", "alpha", 900, 75000, "t8").status, 429);
+        assert_eq!(
+            admit(&mut a, l, 1000, "over-budget", "alpha", 900, 75000, "t8").status,
+            429
+        );
     }
 
     #[test]
@@ -449,10 +511,16 @@ mod tests {
             ..limits()
         };
         let mut a = SttAdmission::new();
-        assert_eq!(admit(&mut a, l, 1000, "abandoned", "alpha", 900, 75000, "t1").status, 200);
+        assert_eq!(
+            admit(&mut a, l, 1000, "abandoned", "alpha", 900, 75000, "t1").status,
+            200
+        );
         // Deadline lapses -> alarm expires the in-flight reservation.
         a.alarm(2200);
-        assert_eq!(admit(&mut a, l, 2200, "after-alarm", "alpha", 1, 1, "t2").status, 200);
+        assert_eq!(
+            admit(&mut a, l, 2200, "after-alarm", "alpha", 1, 1, "t2").status,
+            200
+        );
         // Claim within the new deadline.
         let claimed = a.dispatch(
             l,
@@ -466,7 +534,10 @@ mod tests {
         assert_eq!(claimed.body["claimed"], json!(true));
         // A later alarm must NOT expire the claimed session (claim_by cleared).
         a.alarm(3400);
-        assert_eq!(admit(&mut a, l, 3400, "still-blocked", "alpha", 1, 1, "t3").status, 429);
+        assert_eq!(
+            admit(&mut a, l, 3400, "still-blocked", "alpha", 1, 1, "t3").status,
+            429
+        );
     }
 
     #[test]
@@ -496,12 +567,29 @@ mod tests {
         assert_eq!(second.body["acquisitionToken"], json!("gen2"));
         // A delayed release from the OLD token must not free the new generation.
         assert_eq!(
-            a.dispatch(l, 2200, "POST", "/release", &json!({ "sessionId": "generation", "uid": "alpha", "acquisitionToken": "gen1" }), "")
-                .status,
+            a.dispatch(
+                l,
+                2200,
+                "POST",
+                "/release",
+                &json!({ "sessionId": "generation", "uid": "alpha", "acquisitionToken": "gen1" }),
+                ""
+            )
+            .status,
             200
         );
         assert_eq!(
-            admit(&mut a, l, 2200, "still-blocked-by-new-generation", "alpha", 1, 1, "t9").status,
+            admit(
+                &mut a,
+                l,
+                2200,
+                "still-blocked-by-new-generation",
+                "alpha",
+                1,
+                1,
+                "t9"
+            )
+            .status,
             429
         );
     }
