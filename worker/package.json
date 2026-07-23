@@ -13,7 +13,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "hono": "^4.12.31"
+    "hono": "^4.12.31",
+    "toucan-js": "^4.1.1"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.4",

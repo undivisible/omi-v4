@@ -316,25 +316,26 @@ void main() {
     expect(pendingRow, findsNothing);
   });
 
-  testWidgets('back button returns to the greeter and keeps history', (
+  testWidgets('scrolling past the newest message returns to the greeter', (
     tester,
   ) async {
     final store = VolatileHubChecklistStore();
     await pumpLocalHub(tester, store);
-    expect(find.byKey(const Key('chat_back')), findsNothing);
 
     await tester.enterText(find.byKey(const Key('chat_input')), 'hello');
     await tester.tap(find.byKey(const Key('send_chat')));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 600));
     expect(find.byKey(const Key('hub_greeter')), findsNothing);
-    expect(find.byKey(const Key('chat_back')), findsOneWidget);
+    expect(find.byKey(const Key('chat_scroll_home_hint')), findsOneWidget);
 
-    await tester.tap(find.byKey(const Key('chat_back')));
+    await tester.drag(
+      find.byKey(const Key('chat_messages')),
+      const Offset(0, -200),
+    );
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 600));
     expect(find.byKey(const Key('hub_greeter')), findsOneWidget);
-    expect(find.byKey(const Key('chat_back')), findsNothing);
     // The greeter fills the viewport with the newest turn (a thinking
     // skeleton, since the dev key never answers) peeking; scroll history up
     // to confirm "hello" is still there.
@@ -456,7 +457,10 @@ void main() {
     await tester.tap(find.byKey(const Key('send_chat')));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 700));
-    await tester.tap(find.byKey(const Key('chat_back')));
+    await tester.drag(
+      find.byKey(const Key('chat_messages')),
+      const Offset(0, -200),
+    );
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 700));
     expect(find.byKey(const Key('hub_greeter')), findsOneWidget);
@@ -485,9 +489,7 @@ void main() {
       find.byKey(const Key('chat_messages')),
       Offset(0, -(position.pixels - 30)),
     );
-    for (var i = 0; i < 40; i++) {
-      await tester.pump(const Duration(milliseconds: 50));
-    }
+    await tester.pumpAndSettle();
     expect(position.pixels, 0);
   });
 

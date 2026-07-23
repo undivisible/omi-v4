@@ -376,7 +376,7 @@ void main() {
         find.byKey(const Key('chat_messages')),
         const Offset(0, 600),
       );
-      await tester.pump();
+      await tester.pumpAndSettle();
       expect(find.textContaining('Instance of'), findsNothing);
       expect(
         find.text(
@@ -433,7 +433,7 @@ void main() {
       find.byKey(const Key('chat_messages')),
       const Offset(0, 600),
     );
-    await tester.pump();
+    await tester.pumpAndSettle();
     expect(find.text('Meeting detected: Standup'), findsOneWidget);
 
     hub.eventsController.add(

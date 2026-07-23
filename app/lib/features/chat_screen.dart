@@ -31,6 +31,7 @@ import '../onboarding/hub_checklist.dart';
 import '../ui/markdown_text.dart';
 import '../ui/omi_ui.dart';
 import 'cursor_pill_controller.dart' show CombinedVoiceLevel;
+import 'cursor_pill_window.dart' show VoiceOverlayWindow;
 import 'hub_task_meta.dart';
 import 'in_app_voice_view.dart';
 import 'meeting_notes.dart';
@@ -40,6 +41,10 @@ import 'tasks_screen.dart';
 /// Height of the sliver of conversation left visible above the home view, so
 /// the newest message peeks in and scrolling up is discoverable.
 const double _historyPeekExtent = 44;
+
+/// How far past the newest message you have to keep pulling before the chat
+/// hands you back to the home view.
+const double _homeOverscroll = -64;
 
 /// Reads the plan this account is on. Null means there is nothing to ask —
 /// no billing backend — which is itself a free setup.
@@ -173,7 +178,6 @@ class ChatScreenState extends State<ChatScreen> {
   int _conversationCursor = 0;
   Timer? _shakeDecayTimer;
   double? _lastShakeX;
-  Offset _lastShakePosition = Offset.zero;
   int _lastShakeDirection = 0;
   DateTime _lastShakeReversalAt = DateTime.fromMillisecondsSinceEpoch(0);
   double _shakeProgress = 0;
@@ -225,7 +229,8 @@ class ChatScreenState extends State<ChatScreen> {
     });
     _shakeDecayTimer = Timer.periodic(const Duration(milliseconds: 120), (_) {
       if (!mounted || _shakeProgress <= 0) return;
-      setState(() => _shakeProgress = (_shakeProgress - 8).clamp(0, 100));
+      _shakeProgress = (_shakeProgress - 8).clamp(0, 100);
+      if (_shakeProgress <= 0) unawaited(VoiceOverlayWindow.stop());
     });
     if (!widget.previewMode) {
       widget.services.currents?.addListener(_currentsChanged);
@@ -540,9 +545,20 @@ class ChatScreenState extends State<ChatScreen> {
     _greeterDismissed = true;
   }
 
-  bool _handleScrollEnd(ScrollEndNotification notification) {
-    if (_snapping || _greeterDismissed || _messages.isEmpty) return false;
+  bool _handleScroll(ScrollNotification notification) {
+    if (_snapping || _messages.isEmpty) return false;
     final metrics = notification.metrics;
+    // Past the newest message (the list is reversed, so that is the bottom)
+    // there is nothing left to read: keep pulling and you land back home. The
+    // check runs on every update because bouncing physics springs the
+    // overscroll back before the gesture ends.
+    if (_greeterDismissed) {
+      if (metrics.pixels < _homeOverscroll) {
+        setState(() => _greeterDismissed = false);
+      }
+      return false;
+    }
+    if (notification is! ScrollEndNotification) return false;
     final render = _greeterKey.currentContext?.findRenderObject();
     if (render is! RenderBox || !render.hasSize) return false;
     final boundary = (render.size.height - metrics.viewportDimension * .35)
@@ -579,7 +595,6 @@ class ChatScreenState extends State<ChatScreen> {
   }
 
   void _trackShake(Offset position) {
-    _lastShakePosition = position;
     final now = DateTime.now();
     final lastX = _lastShakeX;
     _lastShakeX = position.dx;
@@ -590,7 +605,13 @@ class ChatScreenState extends State<ChatScreen> {
     final elapsedMs = now.difference(_lastShakeReversalAt).inMilliseconds;
     if (isShakeReversal(_lastShakeDirection, direction, elapsedMs, movement)) {
       final progress = advanceShakeProgress(_shakeProgress, movement);
-      setState(() => _shakeProgress = progress);
+      // The glow lives in the detached screen-wide overlay window, never in
+      // this one: painted in-window it washes the hub out and stops at the
+      // window's edges.
+      if (_shakeProgress <= 0 && progress > 0) {
+        unawaited(VoiceOverlayWindow.startGlow());
+      }
+      _shakeProgress = progress;
       if (progress >= 100) unawaited(_activateShakeVoice());
       _lastShakeReversalAt = now;
     } else if (direction != _lastShakeDirection) {
@@ -602,7 +623,8 @@ class ChatScreenState extends State<ChatScreen> {
   Future<void> _activateShakeVoice() async {
     if (_activatingShakeVoice) return;
     _activatingShakeVoice = true;
-    setState(() => _shakeProgress = 0);
+    _shakeProgress = 0;
+    await VoiceOverlayWindow.burst();
     try {
       if (widget.onShakeSummon case final summon?) {
         await summon();
@@ -1054,8 +1076,8 @@ class ChatScreenState extends State<ChatScreen> {
                                 );
                           return Stack(
                             children: [
-                              NotificationListener<ScrollEndNotification>(
-                                onNotification: _handleScrollEnd,
+                              NotificationListener<ScrollNotification>(
+                                onNotification: _handleScroll,
                                 child: ScrollConfiguration(
                                   behavior: ScrollConfiguration.of(
                                     context,
@@ -1063,8 +1085,14 @@ class ChatScreenState extends State<ChatScreen> {
                                   child: ListView.builder(
                                     key: const Key('chat_messages'),
                                     controller: _scroll,
+                                    // Bouncing, not clamping: the pull past
+                                    // the newest message is the go-home
+                                    // gesture, so it has to be possible to
+                                    // overscroll there.
                                     physics:
-                                        const AlwaysScrollableScrollPhysics(),
+                                        const AlwaysScrollableScrollPhysics(
+                                          parent: BouncingScrollPhysics(),
+                                        ),
                                     reverse: true,
                                     // The message directly above the home view is
                                     // the peek, so it has to be built even when the
@@ -1153,28 +1181,12 @@ class ChatScreenState extends State<ChatScreen> {
                         onCancel: _cancel,
                       ),
                     ),
+                    _ScrollHomeHint(visible: _greeterDismissed),
                   ],
                 ),
               ),
             ),
           ),
-          if (_greeterDismissed)
-            Positioned(
-              top: 0,
-              left: 0,
-              child: _BackToHomeButton(
-                key: const Key('chat_back'),
-                onPressed: () => setState(() => _greeterDismissed = false),
-              ),
-            ),
-          if (_shakeProgress > 0)
-            IgnorePointer(
-              child: _ShakeGlow(
-                key: const Key('shake_glow'),
-                position: _lastShakePosition,
-                progress: _shakeProgress / 100,
-              ),
-            ),
         ],
       ),
     );
@@ -1206,13 +1218,17 @@ class ChatScreenState extends State<ChatScreen> {
             'msg_fade_${message.requestId}_${message.fromUser ? 'user' : 'assistant'}',
           ),
           delayMs: _pendingChatReveal ? 220 : 0,
+          // The user's own words are bare: the card belongs to the assistant,
+          // so the absence of one is what tells the two sides apart.
           child: message.fromUser
               ? Align(
                   alignment: Alignment.centerRight,
-                  child: Card(
-                    child: Padding(
-                      padding: const EdgeInsets.all(12),
-                      child: Text(message.text),
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(48, 12, 12, 12),
+                    child: Text(
+                      message.text,
+                      textAlign: TextAlign.right,
+                      style: TextStyle(color: _HubColors.of(context).muted),
                     ),
                   ),
                 )
@@ -1503,30 +1519,34 @@ class _CompletionFadeState extends State<_CompletionFade>
   );
 }
 
-class _BackToHomeButton extends StatelessWidget {
-  const _BackToHomeButton({required this.onPressed, super.key});
+class _ScrollHomeHint extends StatelessWidget {
+  const _ScrollHomeHint({required this.visible});
 
-  final VoidCallback onPressed;
+  final bool visible;
 
   @override
   Widget build(BuildContext context) {
     final colors = _HubColors.of(context);
-    return Tooltip(
-      message: 'Back to home',
-      child: Material(
-        color: colors.cardBg,
-        shape: CircleBorder(side: BorderSide(color: colors.hairline)),
-        child: InkWell(
-          onTap: onPressed,
-          customBorder: const CircleBorder(),
-          hoverColor: colors.rowHover,
-          splashColor: Colors.transparent,
-          highlightColor: Colors.transparent,
-          child: SizedBox(
-            width: 34,
-            height: 34,
-            child: Icon(Icons.arrow_back_rounded, size: 18, color: colors.ink),
-          ),
+    return AnimatedOpacity(
+      opacity: visible ? 1 : 0,
+      duration: const Duration(milliseconds: 240),
+      child: Padding(
+        padding: const EdgeInsets.only(top: 8),
+        child: Row(
+          key: const Key('chat_scroll_home_hint'),
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              Icons.keyboard_arrow_down_rounded,
+              size: 15,
+              color: colors.muted,
+            ),
+            const SizedBox(width: 4),
+            Text(
+              'Scroll down to go home',
+              style: TextStyle(fontSize: 11.5, color: colors.muted),
+            ),
+          ],
         ),
       ),
     );
@@ -1598,35 +1618,6 @@ class _VoiceEdgeGradient extends StatelessWidget {
       ),
     ],
   );
-}
-
-class _ShakeGlow extends StatelessWidget {
-  const _ShakeGlow({required this.position, required this.progress, super.key});
-
-  final Offset position;
-  final double progress;
-
-  @override
-  Widget build(BuildContext context) {
-    final size = 120 + progress * 360;
-    return Positioned(
-      left: position.dx - size / 2,
-      top: position.dy - size / 2,
-      width: size,
-      height: size,
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          gradient: RadialGradient(
-            colors: [
-              const Color(0xff96c4ff).withValues(alpha: progress * .55),
-              const Color(0x0096c4ff),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
 }
 
 class _ChatHome extends StatelessWidget {

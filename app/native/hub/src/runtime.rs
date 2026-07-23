@@ -1476,7 +1476,6 @@ const MEMORY_CONTEXT_CHARACTER_LIMIT: usize = 2_000;
 const LOCAL_MEMORY_CONTEXT_ITEMS: u32 = 6;
 const PROFILE_CONTEXT_ITEMS: u32 = 12;
 const CHAT_MODEL_TOOL: &str = "chat_model";
-const LOCAL_CHAT_MODEL_DETAIL: &str = "local:apple-foundation-models";
 const ONLINE_CHAT_MODEL_DETAIL: &str = "online:configured-provider";
 
 const OVERLAY_AGENT_FRAMING: &str = "You are the user's desktop agent, summoned from the quick \
@@ -1650,39 +1649,11 @@ async fn dispatch_assistant(
         profile.as_ref().map(|value| value.lines.as_str()),
         memory_context.as_deref(),
     );
-    // Overlay-initiated turns are agent instructions: they must reach the
-    // configured provider (which carries the action/tool pipeline), never the
-    // local chat-only model.
-    let overlay = origin == Some(MessageOrigin::Overlay);
-    if !overlay && crate::chat_router::should_route_local(local_ai_available, &text) {
-        let prompt = assistant_prompt(context.as_deref(), &text);
-        let reply = tokio::select! {
-            _ = cancellation.cancelled() => {
-                cancelled(request_id);
-                return;
-            }
-            value = crate::local_ai::respond(&prompt) => value,
-        };
-        if state.lock().await.configuration_generation != generation {
-            cancelled(request_id);
-            return;
-        }
-        if let Some(reply) = reply {
-            progress(
-                request_id,
-                CHAT_MODEL_TOOL,
-                ToolStatus::Complete,
-                Some(LOCAL_CHAT_MODEL_DETAIL),
-            );
-            NativeEvent::AssistantDelta(AssistantDelta {
-                request_id: request_id.to_owned(),
-                text: reply,
-                final_segment: true,
-            })
-            .send();
-            return;
-        }
-    }
+    // Chat always goes to the configured cloud provider. Apple Foundation
+    // Models refuses too much ("Unable to work with that request.") and has no
+    // tool/memory access, so it is kept for small local jobs only —
+    // summarization, onboarding, meeting extraction, model selection.
+    let _ = (local_ai_available, origin);
     // Online context is intentionally NOT de-identified: the cloud side has
     // to recognize the user across iMessage/Telegram channels, so identity
     // must survive the hop.

@@ -117,7 +117,7 @@ constraint was lifted.
 |-------|------|--------------|--------|
 | Workers logs/metrics | **Workers Observability** (native) | Logpush → Better Stack/Datadog | ✅ enabled both workers |
 | LLM gateway | **Cloudflare AI Gateway** | Portkey, Kong AI Gateway | wiring in §4 |
-| LLM tracing | **foglamp.dev** (hosted, purpose-built for agents) | Langfuse (`rs_ai` native, self-host), Helicone, LangSmith | to wire |
+| LLM tracing/eval | **Hold** — covered for now by AI Gateway + Better Stack logs | foglamp.dev (hosted, add for eval), Langfuse (self-host — impractical on Cloudflare, see below) | deferred |
 | Errors / APM | **Sentry** (worker **and** Flutter client) | Bugsnag, Rollbar, Highlight, GlitchTip (self-host) | to wire |
 | Uptime + status + on-call | **Better Stack** (uptime + logs + incidents in one) | **Hyperping** (uptime/status/on-call focus), Pingdom, Checkly, UptimeRobot | to wire |
 
@@ -135,10 +135,14 @@ constraint was lifted.
   standard for application errors on both the worker and the Flutter app.
 
 ### Recommended shape
-- **LLM:** Cloudflare AI Gateway (caching/cost/retries) **+** foglamp.dev for
-  per-request traces with cost attribution by tier/model. foglamp is hosted, so
-  no self-host ops — chosen over Langfuse for that reason (Langfuse remains the
-  self-host option, with native `rs_ai` support, if we ever want to own it).
+- **LLM:** Cloudflare AI Gateway (caching/cost/retries) **+** log prompt/
+  completion events into Better Stack Logs. That covers cost, latency, and
+  request inspection without another vendor.
+  - **LLM tracing/eval is deferred.** Langfuse self-hosting is impractical on
+    Cloudflare (its Postgres + ClickHouse + Redis + S3 stack has no managed
+    Cloudflare equivalent — you'd run external DBs, defeating the point). If we
+    later want prompt-level eval/quality scoring (the one thing AI Gateway +
+    Better Stack don't give), add hosted **foglamp.dev** then.
 - **Errors:** Sentry on the worker and the Flutter client.
 - **Uptime/incidents:** Better Stack (one tool for uptime + status page +
   on-call + log sink), Hyperping if we want status-page-first.
