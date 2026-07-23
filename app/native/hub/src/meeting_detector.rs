@@ -122,7 +122,7 @@ const BROWSER_APP_NAMES: &[&str] = &[
 /// These stay narrow on purpose: a tab merely *about* a meeting product must
 /// not arm capture, so each keyword is either a join URL shape or the title a
 /// platform only uses once you are in the call.
-#[cfg(any(target_os = "macos", test))]
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 const BROWSER_CALL_KEYWORDS: &[&str] = &[
     "google meet",
     "meet.google.com",
@@ -239,7 +239,124 @@ pub fn detect() -> Option<MeetingApp> {
     detect_mic_owner().or_else(detect_call_window)
 }
 
-#[cfg(not(target_os = "macos"))]
+/// Browser process names, as `Get-Process` reports them (no `.exe`), whose
+/// window a call keyword can appear in.
+#[cfg(any(target_os = "windows", test))]
+const WINDOWS_BROWSER_PROCESS_NAMES: &[&str] = &[
+    "chrome", "msedge", "firefox", "brave", "opera", "vivaldi", "arc", "chromium", "browser",
+];
+
+/// Native call-app process names, matched as substrings of the running process
+/// name so version suffixes (`ms-teams`, `WebexHost`) still count.
+#[cfg(any(target_os = "windows", test))]
+const WINDOWS_CALL_PROCESS_NAMES: &[&str] = &[
+    "zoom",
+    "teams",
+    "webex",
+    "gotomeeting",
+    "g2mcomm",
+    "slack",
+    "discord",
+];
+
+/// Window-title fragments a native call app only shows once a call is live.
+///
+/// Native apps keep a single window whose title stays generic outside a call,
+/// so a call keyword in the title is what separates an in-progress meeting from
+/// an idle app sitting in the tray.
+#[cfg(any(target_os = "windows", test))]
+const WINDOWS_CALL_TITLE_MARKERS: &[&str] = &[
+    "zoom meeting",
+    "zoom share",
+    "meeting compact",
+    "webex meeting",
+    "huddle",
+    "in a call",
+    "on a call",
+];
+
+/// Decides whether one running process and its main-window title describe a
+/// live call, reusing the platform-independent call keywords.
+#[cfg(any(target_os = "windows", test))]
+fn windows_meeting_candidate(process: &str, title: &str) -> Option<MeetingApp> {
+    let process_lower = process.to_ascii_lowercase();
+    let title_lower = title.to_ascii_lowercase();
+    let title_is_call = BROWSER_CALL_KEYWORDS
+        .iter()
+        .any(|keyword| title_lower.contains(keyword));
+    let is_browser = WINDOWS_BROWSER_PROCESS_NAMES
+        .iter()
+        .any(|name| process_lower == *name);
+    if is_browser && title_is_call {
+        return Some(MeetingApp {
+            name: title.to_owned(),
+            bundle_id: process.to_owned(),
+        });
+    }
+    let is_native_call_app = WINDOWS_CALL_PROCESS_NAMES
+        .iter()
+        .any(|name| process_lower.contains(name));
+    let native_in_call = title_is_call
+        || WINDOWS_CALL_TITLE_MARKERS
+            .iter()
+            .any(|marker| title_lower.contains(marker));
+    if is_native_call_app && native_in_call {
+        return Some(MeetingApp {
+            name: title.to_owned(),
+            bundle_id: process.to_owned(),
+        });
+    }
+    None
+}
+
+/// Lists every process that owns a main window as `name`\t`title` pairs.
+///
+/// This mirrors the macOS System Events scan without a native dependency: a
+/// short PowerShell one-liner enumerates the visible windows, keeping the
+/// detector free of the `unsafe` a direct Win32 window walk would need.
+#[cfg(target_os = "windows")]
+fn windows_window_titles() -> Vec<(String, String)> {
+    let script = "Get-Process | Where-Object { $_.MainWindowTitle } | ForEach-Object { \
+                  \"$($_.ProcessName)`t$($_.MainWindowTitle)\" }";
+    let Ok(output) = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", script])
+        .stderr(std::process::Stdio::null())
+        .output()
+    else {
+        return Vec::new();
+    };
+    if !output.status.success() {
+        return Vec::new();
+    }
+    let Ok(text) = String::from_utf8(output.stdout) else {
+        return Vec::new();
+    };
+    text.lines()
+        .filter_map(|line| {
+            let (name, title) = line.split_once('\t')?;
+            let title = title.trim_end_matches('\r');
+            (!name.is_empty() && !title.is_empty()).then(|| (name.to_owned(), title.to_owned()))
+        })
+        .collect()
+}
+
+#[cfg(target_os = "windows")]
+fn browser_process_running() -> bool {
+    windows_window_titles().iter().any(|(name, _)| {
+        WINDOWS_BROWSER_PROCESS_NAMES
+            .iter()
+            .any(|browser| name.eq_ignore_ascii_case(browser))
+    })
+}
+
+#[cfg(target_os = "windows")]
+pub fn detect() -> Option<MeetingApp> {
+    windows_window_titles()
+        .into_iter()
+        .find_map(|(name, title)| windows_meeting_candidate(&name, &title))
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 pub fn detect() -> Option<MeetingApp> {
     None
 }
@@ -248,7 +365,7 @@ pub fn suggested_title() -> Option<String> {
     detect().map(|app| app.name)
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 pub async fn run_meeting_poll() {
     let mut gate = MeetingGate::default();
     let mut browser_gate = BrowserGate::default();
@@ -403,6 +520,25 @@ mod tests {
             },
             "Google Meet",
         ));
+    }
+
+    #[test]
+    fn windows_detects_browser_calls_and_native_meetings_only_when_live() {
+        use super::windows_meeting_candidate;
+        // A browser tab in a call is detected off the same keyword list macOS
+        // uses; an ordinary tab in the same browser is not.
+        assert_eq!(
+            windows_meeting_candidate("chrome", "Standup - Google Meet - Google Chrome")
+                .map(|app| app.bundle_id),
+            Some("chrome".to_owned()),
+        );
+        assert!(windows_meeting_candidate("chrome", "Inbox (12) - Gmail").is_none());
+        // A native call app is armed only once its window shows a live call.
+        assert!(windows_meeting_candidate("Zoom", "Zoom Meeting").is_some());
+        assert!(windows_meeting_candidate("Zoom", "Zoom Workplace").is_none());
+        assert!(windows_meeting_candidate("ms-teams", "Meeting compact view").is_some());
+        // A non-call app whose title merely mentions a meeting is left alone.
+        assert!(windows_meeting_candidate("OUTLOOK", "Standup - Meeting").is_none());
     }
 
     #[test]
