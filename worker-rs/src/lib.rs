@@ -13,6 +13,7 @@ pub mod channel_commands;
 pub mod channel_link;
 pub mod conversations;
 pub mod crypto_util;
+pub mod currents;
 pub mod delivery;
 pub mod desktop_auth;
 pub mod entitlement;

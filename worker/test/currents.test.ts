@@ -42,6 +42,7 @@ beforeAll(async () => {
     "0016_zkr_sync.sql",
     "0017_zkr_read_projection.sql",
     "0018_praefectus_approval_receipts.sql",
+    "0023_currents_crepus.sql",
   ]) {
     const sql = (await Bun.file(`migrations/${name}`).text()).replace(
       "PRAGMA foreign_keys = ON;",
@@ -54,11 +55,11 @@ beforeAll(async () => {
   const now = Date.now();
   await database
     .prepare(
-      "INSERT INTO users (uid, created_at, updated_at) VALUES ('alpha', ?1, ?1), ('beta', ?1, ?1), ('gamma', ?1, ?1)",
+      "INSERT INTO users (uid, created_at, updated_at) VALUES ('alpha', ?1, ?1), ('beta', ?1, ?1), ('gamma', ?1, ?1), ('delta', ?1, ?1)",
     )
     .bind(now)
     .run();
-  for (const uid of ["alpha", "beta", "gamma"]) {
+  for (const uid of ["alpha", "beta", "gamma", "delta"]) {
     await database.batch([
       database
         .prepare(
@@ -641,5 +642,50 @@ describe("Currents", () => {
         )
       ).status,
     ).toBe(409);
+  });
+
+  test("attaches a .crepus widget description and length-caps it", async () => {
+    const now = Date.now();
+    const crepus =
+      'stack col\n  text "Pay the invoice"\n  button "Done" onclick=complete';
+    expect(
+      (
+        await post("delta", "/candidates", {
+          evidenceId: "delta-evidence",
+          title: "Invoice",
+          summary: "Invoice summary",
+          reason: "Cited conversation",
+          confidence: 0.8,
+          proposedNextStep: "Pay it",
+          surfaceAt: now,
+          crepus,
+        })
+      ).status,
+    ).toBe(201);
+    // An oversized blob is dropped (pass-through rejection), not stored.
+    expect(
+      (
+        await post("delta", "/candidates", {
+          evidenceId: "delta-evidence",
+          title: "Oversized",
+          summary: "Oversized summary",
+          reason: "Cited conversation",
+          confidence: 0.7,
+          proposedNextStep: "Ignore",
+          surfaceAt: now,
+          crepus: "x".repeat(9000),
+        })
+      ).status,
+    ).toBe(201);
+    const body = (await (await request("delta", "/")).json()) as {
+      currents: Array<{
+        title: string;
+        metadata?: { crepus?: string };
+      }>;
+    };
+    const withWidget = body.currents.find((item) => item.title === "Invoice");
+    const oversized = body.currents.find((item) => item.title === "Oversized");
+    expect(withWidget?.metadata?.crepus).toBe(crepus);
+    expect(oversized?.metadata).toBeUndefined();
   });
 });
