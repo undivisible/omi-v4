@@ -52,6 +52,20 @@ dependencies:
   package_info_plus: ^10.2.1
   mcumgr_flutter: ^0.4.2
   archive: ^4.0.7
+  # Crepuscularity Flutter renderer for AI-authored currents (see
+  # lib/currents/crepus_current.dart). PINNED GIT dependency, not a path
+  # dependency, so CI resolves it without a sibling checkout.
+  #
+  # PRERELEASE: the package is not yet on pub.dev. CI pins it through the crepus
+  # tooling — `crepus flutter dep` emits exactly this block (see the note in
+  # .github/workflows/ci.yml). Once published this becomes a pub.dev version.
+  # For LOCAL development against an unpushed ref, `pubspec_overrides.yaml`
+  # (git-ignored) points the same package at your local crepuscularity checkout.
+  crepuscularity_flutter:
+    git:
+      url: https://github.com/tschk/crepuscularity
+      ref: 7aca833ea6c2117db1b0322f805a290b013fee71
+      path: plugins/crepuscularity-flutter
 
 dev_dependencies:
   flutter_test:
