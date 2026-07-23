@@ -95,7 +95,16 @@ limiting** — server-side, no client involvement.
 
 **Setup**
 1. Cloudflare dashboard → AI Gateway → create a gateway (note the *account id*
-   and *gateway id*).
+   and *gateway id*). A gateway named `default` is also auto-created on the
+   first request that carries a `cf-aig-authorization` header — but that needs
+   a **scoped API token**, not the OAuth token `wrangler auth token` prints.
+   Create one at dash → API Tokens → Custom Token with `AI Gateway - Read`,
+   `AI Gateway - Edit`, `Workers AI - Read`. Without it every call returns
+   `AiGatewayError 2009 Unauthorized` (and the management API returns
+   `10000 Authentication error`) — which is exactly where the wiring stands
+   today. `wrangler` has no `ai-gateway` command, so there is no CLI path.
+   Once the gateway exists and is left unauthenticated, normal traffic needs
+   no Cloudflare token at all: the OpenRouter key alone is enough.
 2. Set the worker `vars` (non-secret): `CF_AI_GATEWAY_ACCOUNT_ID` and
    `CF_AI_GATEWAY_ID`.
 3. With both set, the OpenRouter base is rewritten to
@@ -106,6 +115,26 @@ limiting** — server-side, no client involvement.
 
 Wired in `worker/src/assistant.ts` (see `aiGatewayBase`). Mirror in
 `worker-rs` and the hub for full parity.
+
+## 4a. Cloudflare AI Search
+
+**Not for us, at least not yet.** AI Search (the product formerly called
+AutoRAG) is a managed RAG pipeline: point it at R2, a website, or uploaded
+files and it handles chunking, embeddings, Vectorize indexing, continuous
+sync, hybrid (semantic + keyword) retrieval, reranking, and optionally the
+generated answer — plus a built-in MCP endpoint per instance.
+
+It is built *on* Vectorize, and we already run the layer underneath it:
+Workers AI `bge-base` embeddings into our own Vectorize index, with our own
+chunking and our own evidence/claim model on top. Handing that to AI Search
+would mean re-indexing and giving up control of the retrieval pipeline for
+convenience we do not need — Cloudflare's own guidance is Vectorize when you
+want to own retrieval, AI Search when you want it managed.
+
+Where it *would* earn its place: indexing a corpus we do not own the
+ingestion for — user-uploaded documents, or a per-tenant file store — since
+it does continuous sync and per-tenant isolation for free. Worth revisiting
+when we ship document upload.
 
 ## 5. Observability stack
 
