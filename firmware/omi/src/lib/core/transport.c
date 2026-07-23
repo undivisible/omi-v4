@@ -1174,9 +1174,7 @@ void transport_conn_params_reevaluate(void)
     k_work_reschedule(&conn_params_apply_work, K_MSEC(CONFIG_OMI_CONN_PARAM_SETTLE_MS));
 }
 #else
-void transport_conn_params_reevaluate(void)
-{
-}
+void transport_conn_params_reevaluate(void) {}
 #endif
 
 static void update_phy(struct bt_conn *conn)

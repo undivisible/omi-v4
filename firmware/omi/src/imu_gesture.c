@@ -151,9 +151,8 @@ static int imu_program_registers(void)
         return err;
     }
     wake_up_dur &= (uint8_t) ~LSM6DS_WAKE_UP_DUR_WAKE_DUR_MASK;
-    wake_up_dur |=
-        (uint8_t) ((CONFIG_OMI_IMU_WAKE_DURATION << LSM6DS_WAKE_UP_DUR_WAKE_DUR_SHIFT) &
-                   LSM6DS_WAKE_UP_DUR_WAKE_DUR_MASK);
+    wake_up_dur |= (uint8_t) ((CONFIG_OMI_IMU_WAKE_DURATION << LSM6DS_WAKE_UP_DUR_WAKE_DUR_SHIFT) &
+                              LSM6DS_WAKE_UP_DUR_WAKE_DUR_MASK);
     err = i2c_reg_write_byte_dt(&imu_i2c, LSM6DS_REG_WAKE_UP_DUR, wake_up_dur);
     if (err) {
         LOG_ERR("Failed to write WAKE_UP_DUR (err %d)", err);

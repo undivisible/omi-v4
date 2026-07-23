@@ -219,9 +219,7 @@ static void update_idle_sleep(void)
     }
 }
 #else
-void omi_note_user_activity(void)
-{
-}
+void omi_note_user_activity(void) {}
 #endif
 
 static int suspend_unused_modules(void)
