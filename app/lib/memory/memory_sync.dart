@@ -7,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../api/worker_http.dart';
 import '../native/generated/signals/signals.dart';
 import '../native/native_hub.dart';
+import '../random_id.dart';
 
 typedef MemorySyncCursor = ({
   int requestCommit,
@@ -73,11 +74,7 @@ final class PreferencesMemorySyncCursorStore implements MemorySyncCursorStore {
     final preferences = await SharedPreferences.getInstance();
     final existing = preferences.getString(_replicaKey);
     if (existing != null && existing.isNotEmpty) return existing;
-    final random = Random.secure();
-    final created = List.generate(
-      16,
-      (_) => random.nextInt(256).toRadixString(16).padLeft(2, '0'),
-    ).join();
+    final created = randomId();
     if (!await preferences.setString(_replicaKey, created)) {
       throw StateError('Could not persist memory replica identity');
     }

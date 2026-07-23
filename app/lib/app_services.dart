@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:math';
 
 import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
@@ -20,6 +19,7 @@ import 'features/meeting_notes.dart';
 import 'integrations/eventkit_task_sync.dart';
 import 'keyboard/keyboard.dart';
 import 'memory/memory.dart';
+import 'random_id.dart';
 import 'memory/transcript_memory_ingestor.dart';
 import 'native/native_hub.dart';
 import 'onboarding/onboarding_completion.dart';
@@ -34,14 +34,6 @@ const _localProfileNameKey = 'omi_local_profile_name';
 const _defaultAssistantRefreshLead = Duration(minutes: 5);
 const _defaultAssistantMinimumRefreshDelay = Duration(seconds: 30);
 const _defaultInboxPollInterval = Duration(seconds: 2);
-
-String _randomId() {
-  final random = Random.secure();
-  return List.generate(
-    16,
-    (_) => random.nextInt(256).toRadixString(16).padLeft(2, '0'),
-  ).join();
-}
 
 final class LocalTranscriptionUnavailable implements Exception {
   const LocalTranscriptionUnavailable();
@@ -426,7 +418,7 @@ final class AppServices {
       );
     }
     final root = await selectedWorkspaceRoot;
-    final requestId = 'onboarding-scan-${_randomId()}';
+    final requestId = 'onboarding-scan-${randomId()}';
     (nativeHub as OnboardingScanHub).scanOnboarding(
       requestId: requestId,
       roots: [?root],
@@ -482,7 +474,7 @@ final class AppServices {
     final occurredAtMs = _now().millisecondsSinceEpoch;
     try {
       nativeHub.capture(
-        requestId: 'onboarding-profile-${_randomId()}',
+        requestId: 'onboarding-profile-${randomId()}',
         ingestionKey: 'onboarding-profile-$occurredAtMs',
         source: CaptureSource.chat,
         occurredAtMs: occurredAtMs,
@@ -669,7 +661,7 @@ final class AppServices {
       throw StateError('Native services are not connected.');
     }
     (nativeHub as MeetingHub).startMeeting(
-      requestId: 'meeting-start-${_randomId()}',
+      requestId: 'meeting-start-${randomId()}',
       title: title,
     );
   }
@@ -678,7 +670,7 @@ final class AppServices {
     if (!chatReady || nativeHub is! MeetingHub) {
       throw StateError('Native services are not connected.');
     }
-    (nativeHub as MeetingHub).stopMeeting('meeting-stop-${_randomId()}');
+    (nativeHub as MeetingHub).stopMeeting('meeting-stop-${randomId()}');
   }
 
   void jotMeetingNote(String text) {
@@ -687,7 +679,7 @@ final class AppServices {
       throw StateError('Native services are not connected.');
     }
     (nativeHub as MeetingHub).jotMeetingNote(
-      requestId: 'meeting-jot-${_randomId()}',
+      requestId: 'meeting-jot-${randomId()}',
       text: text,
     );
   }
@@ -697,7 +689,7 @@ final class AppServices {
   /// Returns null on timeout or failure — callers must degrade gracefully.
   Future<String?> generateDraft(String prompt, Duration timeout) async {
     if (!_nativeInitialized) return null;
-    final requestId = 'draft-${_randomId()}';
+    final requestId = 'draft-${randomId()}';
     final buffer = StringBuffer();
     final completer = Completer<String?>();
     final subscription = nativeEvents.listen((event) {
