@@ -31,6 +31,19 @@ app.route("/api/v1", publicApi);
 app.route("/mcp", mcp);
 app.notFound((context) => context.json({ error: "Not found" }, 404));
 
+// Better Stack heartbeat. Unset in development, so the ping simply does not
+// happen rather than failing.
+const pingHeartbeat = async (env: AppEnv["Bindings"]): Promise<void> => {
+  const url = env.HEARTBEAT_URL?.trim();
+  if (!url || !url.startsWith("https://")) return;
+  try {
+    await fetch(url, {
+      method: "POST",
+      signal: AbortSignal.timeout(5_000),
+    });
+  } catch {}
+};
+
 export default {
   fetch: app.fetch,
   scheduled(
@@ -46,6 +59,10 @@ export default {
         backfillClaimVectors(env)
           .then(() => drainPendingEmbeddings(env))
           .catch(() => undefined),
+        // The heartbeat is what turns Better Stack's monitoring from "the API
+        // answers" into "the cron is still running". It is fire-and-forget:
+        // a monitoring outage must never fail the scheduled work it watches.
+        pingHeartbeat(env),
       ]).then(() => undefined),
     );
   },
