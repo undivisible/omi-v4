@@ -15,7 +15,9 @@ import '../device/device.dart';
 import '../features/setup_account_screens.dart' show EventKitProactiveSyncTile;
 import '../native/live_activity_bridge.dart';
 import '../native/native_hub.dart';
+import '../ui/burst_glow.dart';
 import 'capture_notifier.dart';
+import 'firmware_update_check.dart';
 import 'mobile_update_check.dart';
 import 'transcript_log_store.dart';
 
@@ -77,6 +79,8 @@ class MobileCompanionShell extends StatefulWidget {
     this.captureNotifier,
     this.captureEnabledStore,
     this.updateChecker,
+    this.firmwareChecker,
+    this.firmwareDownloader,
     this.openLink,
     this.previewMode = false,
     super.key,
@@ -88,6 +92,8 @@ class MobileCompanionShell extends StatefulWidget {
   final CaptureNotifier? captureNotifier;
   final CaptureEnabledStore? captureEnabledStore;
   final MobileUpdateChecker? updateChecker;
+  final FirmwareUpdateChecker? firmwareChecker;
+  final FirmwareDownloader? firmwareDownloader;
   final LinkOpener? openLink;
   final bool previewMode;
 
@@ -208,6 +214,8 @@ class _MobileCompanionShellState extends State<MobileCompanionShell> {
               captureNotifier: _captureNotifier,
               captureEnabledStore: widget.captureEnabledStore,
               updateChecker: widget.updateChecker,
+              firmwareChecker: widget.firmwareChecker,
+              firmwareDownloader: widget.firmwareDownloader,
               openLink: widget.openLink,
               previewMode: widget.previewMode,
             ),
@@ -269,6 +277,8 @@ class MobilePendantPage extends StatefulWidget {
     required this.captureNotifier,
     this.captureEnabledStore,
     this.updateChecker,
+    this.firmwareChecker,
+    this.firmwareDownloader,
     this.openLink,
     this.interimText = '',
     this.previewMode = false,
@@ -281,6 +291,8 @@ class MobilePendantPage extends StatefulWidget {
   final CaptureNotifier captureNotifier;
   final CaptureEnabledStore? captureEnabledStore;
   final MobileUpdateChecker? updateChecker;
+  final FirmwareUpdateChecker? firmwareChecker;
+  final FirmwareDownloader? firmwareDownloader;
   final LinkOpener? openLink;
   final String interimText;
   final bool previewMode;
@@ -305,6 +317,10 @@ class MobilePendantPageState extends State<MobilePendantPage> {
   // and only this switch (rendered under the minutes chip) turns it off.
   bool _captureEnabled = true;
   bool _syncingCapture = false;
+  // Turns false once a capture-LED write has been refused, which is what old
+  // firmware without 19b10015 does. The switch keeps working — only the claim
+  // that the pendant light follows it is withdrawn.
+  bool _captureLedSupported = true;
   // A connect this page started already brings capture up on its own, so the
   // snapshot that lands mid-connect must not race it with a second attempt.
   bool _connectInFlight = false;
@@ -345,6 +361,12 @@ class MobilePendantPageState extends State<MobilePendantPage> {
       );
       _syncCaptureWithConnection();
     });
+    // Capture starts and stops without anyone touching the switch — it comes up
+    // with the connection and ends when the link drops — and `active` is a
+    // plain getter the hero can only sample while it happens to be rebuilding.
+    // Without this listener the auto-connect path renders capture as off for
+    // the whole session and never writes the pendant LED.
+    widget.services.deviceAudio.activeListenable.addListener(_captureChanged);
     unawaited(_restoreCaptureEnabled());
     if (!widget.previewMode) unawaited(_ensureProcessingConsent());
     if (!widget.previewMode && _mobile) unawaited(_restorePairing());
@@ -398,11 +420,34 @@ class MobilePendantPageState extends State<MobilePendantPage> {
     if (_syncingCapture || _connectInFlight || widget.previewMode) return;
     if (_connectedDevice == null) return;
     final active = widget.services.deviceAudio.active;
-    if (active == _captureEnabled) return;
+    if (active == _captureEnabled) {
+      // Already matched, but a reconnect resets the pendant's own LED state, so
+      // re-assert it instead of leaving the light stale.
+      unawaited(_reflectCaptureOnPendant(active));
+      return;
+    }
     _syncingCapture = true;
     unawaited(
       _setCapture(_captureEnabled).whenComplete(() => _syncingCapture = false),
     );
+  }
+
+  void _captureChanged() {
+    if (!mounted) return;
+    setState(() {});
+    unawaited(_reflectCaptureOnPendant(widget.services.deviceAudio.active));
+  }
+
+  // Mirrors the app's capture state onto the pendant LED (19b10015). Every
+  // capture transition runs through here, so the light follows a stream that
+  // started on its own just as well as one the switch started.
+  Future<void> _reflectCaptureOnPendant(bool capturing) async {
+    if (widget.previewMode || _connectedDevice == null) return;
+    final written = await relay.writeCaptureLed(capturing);
+    if (!mounted) return;
+    final supported = written && relay.captureLedSupported;
+    if (supported == _captureLedSupported) return;
+    setState(() => _captureLedSupported = supported);
   }
 
   Future<void> _loadDesktopNotice() async {
@@ -462,6 +507,9 @@ class MobilePendantPageState extends State<MobilePendantPage> {
   @override
   void dispose() {
     unawaited(_snapshotSubscription?.cancel());
+    widget.services.deviceAudio.activeListenable.removeListener(
+      _captureChanged,
+    );
     unawaited(_liveActivity.end());
     _scrollController.dispose();
     _scrollOffset.dispose();
@@ -547,12 +595,12 @@ class MobilePendantPageState extends State<MobilePendantPage> {
       if (!enabled) {
         await widget.services.deviceAudio.stop();
         // Reflect the idle state on the pendant LED (red) via the firmware
-        // capture-state characteristic; a no-op on firmware without it.
-        unawaited(relay.writeCaptureLed(false));
+        // capture-state characteristic; a no-op on firmware without it. The
+        // write itself is driven by the capture-state listener, so that the
+        // light follows every transition and not only this one.
         unawaited(widget.captureNotifier.captureStopped());
       } else if (device != null) {
         await widget.services.connectDevice(device.id);
-        unawaited(relay.writeCaptureLed(true));
         // Post an ambient local notification and surface the segment in the
         // conversations list (wired via the transcript log) when a capture
         // starts.
@@ -752,6 +800,7 @@ class MobilePendantPageState extends State<MobilePendantPage> {
               hint: _captureHint(connected, capturing),
               busy: busy,
               captureEnabled: _captureEnabled,
+              ledSupported: _captureLedSupported,
               onCaptureChanged: widget.previewMode ? null : _setCaptureEnabled,
               onReconnect: () => unawaited(reconnect()),
               onHoldPendant: connected
@@ -814,6 +863,9 @@ class MobilePendantPageState extends State<MobilePendantPage> {
         builder: (sheetContext) => _SettingsSheet(
           services: widget.services,
           previewMode: widget.previewMode,
+          firmwareChecker: widget.firmwareChecker,
+          firmwareDownloader: widget.firmwareDownloader,
+          openLink: widget.openLink ?? _openExternalLink,
           rememberedDeviceId: () => rememberedDeviceId,
           connectedDevice: () => _connectedDevice,
           capturing: () => widget.services.deviceAudio.active,
@@ -973,6 +1025,238 @@ class _DeveloperOptionsPage extends StatelessWidget {
   }
 }
 
+// The pendant firmware update. Detection, gating and the download land here;
+// the flash itself does not. MCUboot on the nRF5340 is configured
+// overwrite-only with downgrade prevention, so a half-written image has nothing
+// to fall back to — the install control stays deliberately out of reach until
+// the mcumgr transport is wired and exercised on hardware. See
+// `docs/mobile-firmware-dfu.md` for what is left.
+class _FirmwareUpdatePage extends StatefulWidget {
+  const _FirmwareUpdatePage({
+    required this.device,
+    required this.capturing,
+    required this.dfuSupported,
+    required this.checker,
+    required this.downloader,
+    required this.openLink,
+  });
+
+  final RelayDevice? device;
+  final bool capturing;
+  final bool dfuSupported;
+  final FirmwareUpdateChecker checker;
+  final FirmwareDownloader downloader;
+  final LinkOpener openLink;
+
+  @override
+  State<_FirmwareUpdatePage> createState() => _FirmwareUpdatePageState();
+}
+
+class _FirmwareUpdatePageState extends State<_FirmwareUpdatePage> {
+  bool _checking = true;
+  FirmwareRelease? _release;
+  Object? _error;
+  double? _downloadProgress;
+  String? _downloadedPath;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_check());
+  }
+
+  Future<void> _check() async {
+    FirmwareRelease? release;
+    Object? failure;
+    try {
+      release = await widget.checker.check(
+        installedRevision: widget.device?.firmwareRevision,
+        target: widget.device?.modelNumber,
+      );
+    } catch (error) {
+      failure = error;
+    }
+    if (!mounted) return;
+    setState(() {
+      _checking = false;
+      _release = release;
+      _error = failure;
+    });
+  }
+
+  FirmwareUpdateBlock get _block => firmwareUpdateBlock(
+    connected: widget.device != null,
+    dfuSupported: widget.dfuSupported,
+    capturing: widget.capturing,
+    batteryLevel: widget.device?.batteryLevel,
+  );
+
+  Future<void> _download(FirmwareRelease release) async {
+    setState(() {
+      _downloadProgress = 0;
+      _error = null;
+    });
+    try {
+      final file = await widget.downloader.download(
+        release,
+        onProgress: (progress) {
+          if (mounted) setState(() => _downloadProgress = progress);
+        },
+      );
+      if (!mounted) return;
+      setState(() => _downloadedPath = file.path);
+    } catch (error) {
+      // A failed or interrupted download leaves the pendant untouched, so the
+      // only thing to undo is the progress bar.
+      if (!mounted) return;
+      setState(() {
+        _downloadProgress = null;
+        _error = error;
+      });
+    }
+  }
+
+  String _blockMessage(FirmwareUpdateBlock block, FirmwareRelease release) =>
+      switch (block) {
+        FirmwareUpdateBlock.none =>
+          'Downloaded. Installing from the app is not enabled yet — open the '
+              'release and flash ${release.assetName} with nRF Connect for '
+              'Mobile.',
+        FirmwareUpdateBlock.disconnected =>
+          'Connect your pendant before updating it.',
+        FirmwareUpdateBlock.unsupported =>
+          'This pendant cannot take an update over Bluetooth.',
+        FirmwareUpdateBlock.lowBattery =>
+          'Charge your pendant to at least $firmwareUpdateMinimumBattery% '
+              'first: an update that runs out of power mid-write cannot be '
+              'undone.',
+        FirmwareUpdateBlock.capturing =>
+          'Turn capture off first — updating interrupts the audio stream.',
+      };
+
+  @override
+  Widget build(BuildContext context) {
+    final dark = _darkMode(context);
+    final device = widget.device;
+    final release = _release;
+    final block = _block;
+    final progress = _downloadProgress;
+    return Scaffold(
+      key: const Key('companion_firmware_page'),
+      backgroundColor: dark ? _inkSheet : _paper,
+      appBar: AppBar(
+        backgroundColor: dark ? _inkSheet : _paper,
+        foregroundColor: _pageInk(context),
+        elevation: 0,
+        title: const Text('Firmware update'),
+      ),
+      body: SafeArea(
+        top: false,
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(18, 12, 18, 24),
+          children: [
+            const _SectionLabel('PENDANT'),
+            ..._withGaps([
+              _PaperTile(
+                key: const Key('companion_firmware_installed'),
+                icon: Icons.memory_rounded,
+                title: 'Installed',
+                detail: device?.firmwareRevision ?? 'Not reported',
+              ),
+              if (_checking)
+                const _PaperTile(
+                  key: Key('companion_firmware_checking'),
+                  icon: Icons.sync_rounded,
+                  title: 'Checking for updates…',
+                  detail: 'Reading the published firmware releases.',
+                )
+              else if (release == null)
+                _PaperTile(
+                  key: const Key('companion_firmware_up_to_date'),
+                  icon: Icons.check_circle_outline_rounded,
+                  title: _error == null
+                      ? 'Up to date'
+                      : 'Could not check for updates',
+                  detail: _error == null
+                      ? 'No newer firmware has been published.'
+                      : '$_error',
+                )
+              else ...[
+                _PaperTile(
+                  key: const Key('companion_firmware_available'),
+                  icon: Icons.system_update_alt_rounded,
+                  title: 'Firmware ${release.version} available',
+                  detail: release.assetName,
+                  trailing: const _RowChevron(),
+                  onTap: () =>
+                      unawaited(widget.openLink(Uri.parse(release.url))),
+                ),
+                if (block != FirmwareUpdateBlock.none ||
+                    _downloadedPath != null)
+                  _PaperTile(
+                    key: const Key('companion_firmware_block'),
+                    icon: block == FirmwareUpdateBlock.none
+                        ? Icons.info_outline_rounded
+                        : Icons.warning_amber_rounded,
+                    iconColor: block == FirmwareUpdateBlock.none
+                        ? null
+                        : _coral,
+                    title: block == FirmwareUpdateBlock.none
+                        ? 'Ready to flash'
+                        : 'Not ready to update',
+                    detail: _blockMessage(block, release),
+                  ),
+                if (progress != null)
+                  _PaperCard(
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Text(
+                            _downloadedPath == null
+                                ? 'Downloading ${(progress * 100).round()}%'
+                                : 'Downloaded',
+                            key: const Key('companion_firmware_progress_label'),
+                            style: const TextStyle(
+                              fontSize: 13,
+                              color: _inkSoft,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          LinearProgressIndicator(
+                            key: const Key('companion_firmware_progress'),
+                            value: progress,
+                            backgroundColor: _hairline,
+                            color: _teal,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                _PaperTile(
+                  key: const Key('companion_firmware_download'),
+                  icon: Icons.download_rounded,
+                  title: _downloadedPath == null
+                      ? 'Download update'
+                      : 'Download again',
+                  detail: release.sizeBytes == null
+                      ? 'Fetch the update package to this phone.'
+                      : '${(release.sizeBytes! / 1024).round()} KB',
+                  trailing: const _RowChevron(),
+                  onTap: progress != null && _downloadedPath == null
+                      ? null
+                      : () => unawaited(_download(release)),
+                ),
+              ],
+            ]),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 // Blurs and fades the hero as the page scrolls: only this widget reacts to the
 // scroll offset, so the rest of the page scrolls without fading. Increasing
 // blur (ImageFiltered) pairs with decreasing opacity tied to scroll position.
@@ -1017,6 +1301,7 @@ class _PendantHero extends StatefulWidget {
     required this.hint,
     required this.busy,
     required this.captureEnabled,
+    required this.ledSupported,
     required this.onCaptureChanged,
     required this.onReconnect,
     required this.onHoldPendant,
@@ -1031,6 +1316,7 @@ class _PendantHero extends StatefulWidget {
   final String hint;
   final bool busy;
   final bool captureEnabled;
+  final bool ledSupported;
   final ValueChanged<bool>? onCaptureChanged;
   final VoidCallback onReconnect;
   final VoidCallback? onHoldPendant;
@@ -1046,6 +1332,15 @@ class _PendantHeroState extends State<_PendantHero>
     duration: const Duration(seconds: 6),
   );
   bool _animationsDisabled = false;
+  // Bumped on every disconnected → connected edge so the burst glow is a new
+  // widget each time; it fires exactly once per instance by design.
+  int _connectEpoch = 0;
+
+  @override
+  void didUpdateWidget(covariant _PendantHero old) {
+    super.didUpdateWidget(old);
+    if (widget.connected && !old.connected) _connectEpoch += 1;
+  }
 
   @override
   void didChangeDependencies() {
@@ -1071,28 +1366,27 @@ class _PendantHeroState extends State<_PendantHero>
     final pendantWidth = math.min(width * .82, 420.0);
     final connected = widget.connected;
     final capturing = widget.capturing;
-    Widget pendant = Image.asset(
+    final image = Image.asset(
       'assets/images/omi_pendant.png',
       key: const Key('companion_pendant_image'),
       width: pendantWidth,
       fit: BoxFit.fitWidth,
       excludeFromSemantics: true,
     );
-    if (!connected) {
-      pendant = Opacity(
-        key: const Key('companion_pendant_faded'),
-        opacity: .35,
-        child: ColorFiltered(
-          colorFilter: const ColorFilter.matrix([
-            .2126, .7152, .0722, 0, 0, //
-            .2126, .7152, .0722, 0, 0, //
-            .2126, .7152, .0722, 0, 0, //
-            0, 0, 0, 1, 0,
-          ]),
-          child: pendant,
-        ),
-      );
-    }
+    // The pendant warms up rather than snapping: colour and opacity are two
+    // continuous ramps over the same 0…1, so connecting fades and saturates the
+    // image in and disconnecting runs the identical curve backwards. Fully
+    // warm is the untouched asset, so the filter drops out entirely there.
+    Widget pendantFor(double warmth) => warmth >= 1
+        ? image
+        : Opacity(
+            key: const Key('companion_pendant_faded'),
+            opacity: .35 + warmth * .65,
+            child: ColorFiltered(
+              colorFilter: ColorFilter.matrix(_saturationMatrix(warmth)),
+              child: image,
+            ),
+          );
     final glowSize = pendantWidth * 1.3;
     final stateColor = connected
         ? _stateBlue
@@ -1103,6 +1397,21 @@ class _PendantHeroState extends State<_PendantHero>
       alignment: Alignment.center,
       clipBehavior: Clip.none,
       children: [
+        // The connect finale: the warm glow bursts outward once, keyed on the
+        // connection so a later reconnect fires a fresh one. Skipped under
+        // reduced motion, where a burst that cannot animate would only leave a
+        // static blob behind the pendant.
+        if (connected && !animationsDisabled)
+          Positioned(
+            top: pendantWidth * .55 - glowSize / 2,
+            child: OmiBurstGlow(
+              key: ValueKey('companion_connect_burst_$_connectEpoch'),
+              progress: .72,
+              complete: true,
+              baseDiameter: glowSize * .58,
+              growth: 0,
+            ),
+          ),
         Positioned(
           top: pendantWidth * .55 - glowSize / 2,
           child: IgnorePointer(
@@ -1156,18 +1465,32 @@ class _PendantHeroState extends State<_PendantHero>
               ),
             ),
           ),
-        AnimatedBuilder(
-          animation: _sway,
-          child: pendant,
-          builder: (context, child) {
-            final t = _sway.value * 2 * math.pi;
-            final angle = animationsDisabled ? 0.0 : math.sin(t) * .012;
-            return Transform.rotate(
-              angle: angle,
+        TweenAnimationBuilder<double>(
+          tween: Tween<double>(end: connected ? 1 : 0),
+          duration: animationsDisabled
+              ? Duration.zero
+              : const Duration(milliseconds: 520),
+          curve: Curves.easeOutCubic,
+          builder: (context, warmth, _) => AnimatedBuilder(
+            animation: _sway,
+            // Anchored to the top edge, which the layout above pins to the very
+            // top of the screen: scaling about the centre would walk the
+            // pendant down the page as it warms up.
+            child: Transform.scale(
+              scale: .965 + warmth * .035,
               alignment: Alignment.topCenter,
-              child: child,
-            );
-          },
+              child: pendantFor(warmth),
+            ),
+            builder: (context, child) {
+              final t = _sway.value * 2 * math.pi;
+              final angle = animationsDisabled ? 0.0 : math.sin(t) * .012;
+              return Transform.rotate(
+                angle: angle,
+                alignment: Alignment.topCenter,
+                child: child,
+              );
+            },
+          ),
         ),
       ],
     );
@@ -1324,6 +1647,7 @@ class _PendantHeroState extends State<_PendantHero>
                 enabled: widget.captureEnabled,
                 capturing: capturing,
                 connected: connected,
+                ledSupported: widget.ledSupported,
                 onChanged: widget.onCaptureChanged,
               ),
             ],
@@ -1334,23 +1658,41 @@ class _PendantHeroState extends State<_PendantHero>
   }
 }
 
+// Rec. 709 luminance weights, the same ones the fully desaturated pendant used
+// before it learned to fade: [saturation] 0 is grey, 1 is the original colour.
+List<double> _saturationMatrix(double saturation) {
+  const r = .2126, g = .7152, b = .0722;
+  final rest = 1 - saturation;
+  return [
+    r + saturation * (1 - r), g * rest, b * rest, 0, 0, //
+    r * rest, g + saturation * (1 - g), b * rest, 0, 0, //
+    r * rest, g * rest, b + saturation * (1 - b), 0, 0, //
+    0, 0, 0, 1, 0,
+  ];
+}
+
 class _CaptureToggle extends StatelessWidget {
   const _CaptureToggle({
     required this.enabled,
     required this.capturing,
     required this.connected,
+    required this.ledSupported,
     required this.onChanged,
   });
 
   final bool enabled;
   final bool capturing;
   final bool connected;
+  final bool ledSupported;
   final ValueChanged<bool>? onChanged;
 
   @override
   Widget build(BuildContext context) {
-    final active = capturing || (enabled && connected);
-    return Semantics(
+    // The switch reports what the app is doing, which is the part that is
+    // always true. Whether the pendant light agrees depends on the firmware,
+    // so say so rather than implying the light followed.
+    final active = capturing && connected;
+    final toggle = Semantics(
       container: true,
       label: 'Capture',
       child: Builder(
@@ -1397,6 +1739,23 @@ class _CaptureToggle extends StatelessWidget {
           ),
         ),
       ),
+    );
+    if (!connected || ledSupported) return toggle;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        toggle,
+        const Padding(
+          padding: EdgeInsets.only(top: 4),
+          child: Text(
+            'Your pendant light stays as it is: this firmware cannot be told '
+            'about capture.',
+            key: Key('companion_capture_led_unsupported'),
+            textAlign: TextAlign.center,
+            style: TextStyle(fontSize: 11.5, color: _inkSoft, height: 1.3),
+          ),
+        ),
+      ],
     );
   }
 }
@@ -1787,6 +2146,9 @@ class _SettingsSheet extends StatefulWidget {
   const _SettingsSheet({
     required this.services,
     required this.previewMode,
+    required this.firmwareChecker,
+    required this.firmwareDownloader,
+    required this.openLink,
     required this.rememberedDeviceId,
     required this.connectedDevice,
     required this.capturing,
@@ -1797,6 +2159,9 @@ class _SettingsSheet extends StatefulWidget {
 
   final AppServices services;
   final bool previewMode;
+  final FirmwareUpdateChecker? firmwareChecker;
+  final FirmwareDownloader? firmwareDownloader;
+  final LinkOpener openLink;
   final String? Function() rememberedDeviceId;
   final RelayDevice? Function() connectedDevice;
   final bool Function() capturing;
@@ -1919,6 +2284,23 @@ class _SettingsSheetState extends State<_SettingsSheet> {
     }
   }
 
+  void _openFirmwareUpdate() {
+    unawaited(
+      Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (routeContext) => _FirmwareUpdatePage(
+            device: widget.connectedDevice(),
+            capturing: widget.capturing(),
+            dfuSupported: widget.services.deviceRelay.dfuSupported,
+            checker: widget.firmwareChecker ?? FirmwareUpdateChecker(),
+            downloader: widget.firmwareDownloader ?? HttpFirmwareDownloader(),
+            openLink: widget.openLink,
+          ),
+        ),
+      ),
+    );
+  }
+
   void _openDeveloperOptions() {
     unawaited(
       Navigator.of(context).push(
@@ -2029,6 +2411,19 @@ class _SettingsSheetState extends State<_SettingsSheet> {
                         if (mounted) setState(() {});
                       }),
                     ),
+                  ),
+                // Only pendants whose firmware carries the SMP service can be
+                // updated over BLE. Everything else — DevKit builds, and any
+                // image built without MCUboot OTA — never sees the row, rather
+                // than being walked to the end of a flow that cannot finish.
+                if (connected && widget.services.deviceRelay.dfuSupported)
+                  _PaperTile(
+                    key: const Key('companion_firmware_update'),
+                    icon: Icons.memory_rounded,
+                    title: 'Firmware update',
+                    detail: 'Check for a newer pendant firmware.',
+                    trailing: const _RowChevron(),
+                    onTap: _openFirmwareUpdate,
                   ),
                 _PaperTile(
                   key: const Key('companion_developer_options'),

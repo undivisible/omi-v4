@@ -13,6 +13,11 @@ abstract interface class DeviceRelayHaptics {
 /// semantics without failing.
 abstract interface class DeviceRelayLed {
   Future<bool> writeCaptureLed(bool capturing);
+
+  /// False once the adapter knows the connected firmware has no capture-LED
+  /// characteristic. Adapters start optimistic and learn from the first write,
+  /// so this only turns false when the pendant genuinely cannot be driven.
+  bool get captureLedSupported;
 }
 
 /// Commands the pendant to sleep/power off (settings characteristic 19b10014).
@@ -26,6 +31,15 @@ abstract interface class DeviceRelaySleep {
 /// field can hide or disable itself gracefully.
 abstract interface class DeviceRelayRename {
   Future<bool> renameDevice(String name);
+}
+
+/// Reports whether the connected pendant exposes the SMP (mcumgr) service that
+/// MCUboot OTA runs over. Firmware built without
+/// `CONFIG_NCS_SAMPLE_MCUMGR_BT_OTA_DFU` — and every DevKit target, which uses
+/// the Adafruit UF2 bootloader instead — has no such service, and the update
+/// affordance must stay hidden rather than fail at the end of a flow.
+abstract interface class DeviceRelayDfu {
+  bool get dfuSupported;
 }
 
 abstract interface class DeviceRelayAdapter {
@@ -147,6 +161,22 @@ class DeviceRelayService {
 
   bool get supportsRename =>
       role == DeviceRelayRole.mobileOwner && adapter is DeviceRelayRename;
+
+  /// Whether the connected pendant can take a firmware update over BLE.
+  bool get dfuSupported {
+    if (role != DeviceRelayRole.mobileOwner) return false;
+    final Object dfu = adapter;
+    return dfu is DeviceRelayDfu && dfu.dfuSupported;
+  }
+
+  /// Whether the pendant LED can be driven from the app at all. Old firmware
+  /// predates the capture-state characteristic, and a relay that cannot write
+  /// it must not let the UI claim the light follows the switch.
+  bool get captureLedSupported {
+    if (role != DeviceRelayRole.mobileOwner) return false;
+    final Object led = adapter;
+    return led is DeviceRelayLed && led.captureLedSupported;
+  }
 
   Stream<DeviceAudioFrame> audioFrames(String deviceId) {
     _require(

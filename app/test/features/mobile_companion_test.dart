@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
@@ -11,11 +13,13 @@ import 'package:omi/auth/auth.dart';
 import 'package:omi/currents/currents.dart';
 import 'package:omi/device/device.dart';
 import 'package:omi/features/capture_notifier.dart';
+import 'package:omi/features/firmware_update_check.dart';
 import 'package:omi/features/mobile_companion_shell.dart';
 import 'package:omi/features/transcript_log_store.dart';
 import 'package:omi/main.dart';
 import 'package:omi/native/native_hub.dart';
 import 'package:omi/onboarding/onboarding_completion.dart';
+import 'package:omi/ui/burst_glow.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
@@ -535,6 +539,179 @@ void main() {
     fixture.services.dispose();
   });
 
+  // The regression the pendant surfaced as "capture always says off": the
+  // remembered-device reconnect starts capture without anything calling
+  // setState afterwards, so a hero that samples `deviceAudio.active` only while
+  // it happens to rebuild renders the whole session as idle.
+  testWidgets('capture reads as on after the remembered pendant reconnects on '
+      'its own', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(800, 1600));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final fixture = await _mobileFixture('user-a');
+    final paired = VolatilePairedDeviceStore();
+    await paired.save('omi-1');
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MobileCompanionShell(
+          services: fixture.services,
+          pairedDevices: paired,
+        ),
+      ),
+    );
+    await _settle(tester);
+
+    expect(fixture.services.deviceAudio.active, isTrue);
+    expect(find.byKey(const Key('companion_capture_ring')), findsOneWidget);
+    expect(
+      tester.widget<Text>(find.byKey(const Key('companion_pendant_hint'))).data,
+      'Capturing · Hold the pendant to disconnect',
+    );
+    fixture.services.dispose();
+  });
+
+  testWidgets('the pendant LED is driven for a capture nobody switched on', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(800, 1600));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final led = _LedAdapter();
+    final fixture = await _mobileFixture('user-a', adapter: led);
+    final paired = VolatilePairedDeviceStore();
+    await paired.save('omi-1');
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MobileCompanionShell(
+          services: fixture.services,
+          pairedDevices: paired,
+          captureEnabledStore: VolatileCaptureEnabledStore(),
+        ),
+      ),
+    );
+    await _settle(tester);
+
+    expect(led.ledWrites, contains(true));
+    expect(
+      find.byKey(const Key('companion_capture_led_unsupported')),
+      findsNothing,
+    );
+
+    await tester.tap(find.byKey(const Key('companion_capture_switch')));
+    await _settle(tester);
+
+    expect(led.ledWrites.last, isFalse);
+    fixture.services.dispose();
+  });
+
+  testWidgets('firmware without the capture-LED characteristic stops claiming '
+      'the pendant light follows the switch', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(800, 1600));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final led = _LedAdapter(ledSupported: false);
+    final fixture = await _mobileFixture('user-a', adapter: led);
+    final paired = VolatilePairedDeviceStore();
+    await paired.save('omi-1');
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MobileCompanionShell(
+          services: fixture.services,
+          pairedDevices: paired,
+        ),
+      ),
+    );
+    await _settle(tester);
+
+    // The LED cannot be driven, but the app-side capture state is still right.
+    expect(led.ledWrites, isEmpty);
+    expect(fixture.services.deviceAudio.active, isTrue);
+    expect(find.byKey(const Key('companion_capture_ring')), findsOneWidget);
+    expect(
+      find.byKey(const Key('companion_capture_led_unsupported')),
+      findsOneWidget,
+    );
+    fixture.services.dispose();
+  });
+
+  testWidgets('connecting warms the pendant image and bursts the glow', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(800, 1600));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    binding.platformDispatcher.clearAccessibilityFeaturesTestValue();
+    final fixture = await _mobileFixture('user-a');
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MobileCompanionShell(
+          services: fixture.services,
+          pairedDevices: VolatilePairedDeviceStore(),
+          captureEnabledStore: VolatileCaptureEnabledStore(),
+        ),
+      ),
+    );
+    // The pendant sways forever with motion on, so nothing here can settle.
+    await _pumpFrames(tester);
+
+    // Disconnected: grey, dimmed, and no burst.
+    expect(find.byKey(const Key('companion_pendant_faded')), findsOneWidget);
+    expect(find.byType(OmiBurstGlow), findsNothing);
+
+    await tester.tap(find.byKey(const Key('companion_reconnect')));
+    await _pumpFrames(tester);
+
+    expect(find.byType(OmiBurstGlow), findsOneWidget);
+
+    // Partway through the warm-up the image is neither ghost nor asset.
+    final midway = tester.widget<Opacity>(
+      find.byKey(const Key('companion_pendant_faded')),
+    );
+    expect(midway.opacity, greaterThan(.35));
+    expect(midway.opacity, lessThan(1));
+
+    await tester.pump(const Duration(milliseconds: 700));
+    expect(find.byKey(const Key('companion_pendant_faded')), findsNothing);
+
+    // Disconnecting runs the same ramp backwards and retires the burst.
+    await tester.longPress(find.byKey(const Key('companion_pendant_tap')));
+    await _pumpFrames(tester);
+
+    expect(find.byType(OmiBurstGlow), findsNothing);
+    final cooling = tester.widget<Opacity>(
+      find.byKey(const Key('companion_pendant_faded')),
+    );
+    expect(cooling.opacity, lessThan(1));
+    fixture.services.dispose();
+  });
+
+  testWidgets('the connect burst is inert under reduced motion', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(800, 1600));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final fixture = await _mobileFixture('user-a');
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MobileCompanionShell(
+          services: fixture.services,
+          pairedDevices: VolatilePairedDeviceStore(),
+          captureEnabledStore: VolatileCaptureEnabledStore(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('companion_reconnect')));
+    await _settle(tester);
+
+    // disableAnimations is on for the whole suite: the pendant lands warm in
+    // one frame and nothing bursts.
+    expect(find.byType(OmiBurstGlow), findsNothing);
+    expect(find.byKey(const Key('companion_pendant_faded')), findsNothing);
+    fixture.services.dispose();
+  });
+
   testWidgets('the capture switch posts a local notification when it '
       'restarts capture', (tester) async {
     await tester.binding.setSurfaceSize(const Size(800, 1600));
@@ -961,6 +1138,118 @@ void main() {
     fixture.services.dispose();
   });
 
+  testWidgets('a pendant that cannot take an OTA never sees the firmware '
+      'row', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(800, 2400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final fixture = await _mobileFixture('user-a');
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MobileCompanionShell(
+          services: fixture.services,
+          pairedDevices: VolatilePairedDeviceStore(),
+          captureEnabledStore: VolatileCaptureEnabledStore(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('companion_reconnect')));
+    await _settle(tester);
+    await tester.tap(find.byKey(const Key('companion_settings_button')));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('companion_firmware_update')), findsNothing);
+    fixture.services.dispose();
+  });
+
+  testWidgets('the firmware screen offers the update, refuses to flash while '
+      'capture streams, and downloads', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(800, 2400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final fixture = await _mobileFixture('user-a', adapter: _DfuAdapter());
+    final downloader = _FakeDownloader();
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MobileCompanionShell(
+          services: fixture.services,
+          pairedDevices: VolatilePairedDeviceStore(),
+          captureEnabledStore: VolatileCaptureEnabledStore(),
+          firmwareChecker: FirmwareUpdateChecker(
+            endpoint: 'https://example.test/releases',
+            client: MockClient(
+              (request) async => http.Response(
+                jsonEncode([
+                  {
+                    'tag_name': 'firmware-v9.9.9',
+                    'html_url': 'https://example.test/firmware-v9.9.9',
+                    'assets': [
+                      {
+                        'name': 'dfu_application.zip',
+                        'browser_download_url':
+                            'https://example.test/dfu_application.zip',
+                        'size': 440320,
+                      },
+                    ],
+                  },
+                ]),
+                200,
+              ),
+            ),
+          ),
+          firmwareDownloader: downloader,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('companion_reconnect')));
+    await _settle(tester);
+    await tester.tap(find.byKey(const Key('companion_settings_button')));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(
+      find.byKey(const Key('companion_firmware_update')),
+    );
+    await tester.tap(find.byKey(const Key('companion_firmware_update')));
+    await _settle(tester);
+
+    expect(find.byKey(const Key('companion_firmware_page')), findsOneWidget);
+    expect(
+      find.byKey(const Key('companion_firmware_available')),
+      findsOneWidget,
+    );
+    // Capture is streaming, so the screen says so instead of offering a flash.
+    expect(
+      tester
+          .widget<ListTile>(
+            find.descendant(
+              of: find.byKey(const Key('companion_firmware_block')),
+              matching: find.byType(ListTile),
+            ),
+          )
+          .title,
+      isA<Text>().having((text) => text.data, 'title', 'Not ready to update'),
+    );
+
+    await tester.tap(find.byKey(const Key('companion_firmware_download')));
+    await _settle(tester);
+
+    expect(
+      find.byKey(const Key('companion_firmware_progress')),
+      findsOneWidget,
+    );
+    expect(
+      tester
+          .widget<Text>(
+            find.byKey(const Key('companion_firmware_progress_label')),
+          )
+          .data,
+      'Downloaded',
+    );
+    expect(downloader.requested, ['dfu_application.zip']);
+    fixture.services.dispose();
+  });
+
   testWidgets('the settings disconnect action stops capture', (tester) async {
     await tester.binding.setSurfaceSize(const Size(800, 2400));
     addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -1284,6 +1573,17 @@ void main() {
 // Device work hops between the fake test clock and real async (stream
 // cancellation, the native hub's acknowledgement round-trips), so give it a
 // few real turns and pump between each one before asserting.
+// The motion-enabled sibling of [_settle]: with animations on the pendant sway
+// never ends, so advance a fixed number of frames instead of settling.
+Future<void> _pumpFrames(WidgetTester tester) async {
+  for (var round = 0; round < 3; round += 1) {
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 20)),
+    );
+    await tester.pump(const Duration(milliseconds: 60));
+  }
+}
+
 Future<void> _settle(WidgetTester tester) async {
   for (var round = 0; round < 3; round += 1) {
     await tester.runAsync(
@@ -1552,6 +1852,49 @@ final class _RenamingAdapter extends _Adapter implements DeviceRelayRename {
   Future<bool> renameDevice(String name) async {
     if (!accepts) return false;
     renames.add(name);
+    return true;
+  }
+}
+
+// The download is exercised for real in firmware_update_check_test; here it
+// only has to move the screen forward.
+final class _FakeDownloader implements FirmwareDownloader {
+  final requested = <String>[];
+
+  @override
+  Future<File> download(
+    FirmwareRelease release, {
+    void Function(double progress)? onProgress,
+  }) async {
+    requested.add(release.assetName);
+    onProgress?.call(.5);
+    onProgress?.call(1);
+    return File('/tmp/${release.assetName}');
+  }
+}
+
+// A pendant whose firmware carries the SMP service, so it can take an update
+// over BLE.
+final class _DfuAdapter extends _Adapter implements DeviceRelayDfu {
+  @override
+  bool get dfuSupported => true;
+}
+
+// A pendant whose firmware may or may not carry 19b10015. With [ledSupported]
+// false it refuses every write, exactly as a pre-capture-LED build does.
+final class _LedAdapter extends _Adapter implements DeviceRelayLed {
+  _LedAdapter({this.ledSupported = true});
+
+  final bool ledSupported;
+  final ledWrites = <bool>[];
+
+  @override
+  bool get captureLedSupported => ledSupported;
+
+  @override
+  Future<bool> writeCaptureLed(bool capturing) async {
+    if (!ledSupported) return false;
+    ledWrites.add(capturing);
     return true;
   }
 }
