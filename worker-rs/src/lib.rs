@@ -8,8 +8,19 @@
 //! crate.
 
 pub mod auth;
+pub mod billing;
+pub mod conversations;
+pub mod crypto_util;
+pub mod desktop_auth;
 pub mod entitlement;
 pub mod setup_health;
+pub mod webhooks;
 
 #[cfg(target_arch = "wasm32")]
 mod glue;
+
+// Hand-written Vectorize JS FFI. Compiled only when the `vectorize` feature is
+// enabled AND targeting wasm (it binds the JS `VectorizeIndex` object). Off by
+// default — see PORT_STATUS.md for the interop outcome.
+#[cfg(all(target_arch = "wasm32", feature = "vectorize"))]
+mod vectorize_ffi;
