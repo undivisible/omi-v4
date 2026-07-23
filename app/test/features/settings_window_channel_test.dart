@@ -7,6 +7,7 @@ import 'package:omi/auth/auth.dart';
 import 'package:omi/device/device.dart';
 import 'package:omi/features/omi_shell.dart';
 import 'package:omi/features/setup_account_screens.dart';
+import 'package:omi/main.dart';
 import 'package:omi/native/native_hub.dart';
 
 void main() {
@@ -84,6 +85,47 @@ void main() {
       await tester.pump(const Duration(milliseconds: 500));
 
       expect(find.byType(SettingsScreen), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'the settings window opens on the section the Runner was asked for, and '
+    'moves when a later request arrives',
+    (tester) async {
+      final messenger = tester.binding.defaultBinaryMessenger;
+      final asked = <String>[];
+      messenger.setMockMethodCallHandler(settingsRouteChannel, (call) async {
+        asked.add(call.method);
+        return call.method == 'pendingSection'
+            ? SettingsSection.providers.name
+            : null;
+      });
+      addTearDown(
+        () => messenger.setMockMethodCallHandler(settingsRouteChannel, null),
+      );
+
+      final services = AppServices.fromEnvironment();
+      addTearDown(services.dispose);
+      await tester.pumpWidget(SettingsWindowApp(services: services));
+      await tester.pumpAndSettle();
+
+      expect(asked, contains('pendingSection'));
+      final screen = tester.widget<SettingsScreen>(find.byType(SettingsScreen));
+      expect(screen.initialSection, SettingsSection.providers);
+      expect(find.text('AI Providers'), findsWidgets);
+
+      // The window is already up: the Runner pushes the next anchor at it.
+      await messenger.handlePlatformMessage(
+        'omi/settings_route',
+        const StandardMethodCodec().encodeMethodCall(
+          MethodCall('showSection', SettingsSection.advanced.name),
+        ),
+        (_) {},
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('Advanced'), findsWidgets);
+      expect(tester.takeException(), isNull);
     },
   );
 }

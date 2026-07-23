@@ -7,6 +7,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../api/worker_http.dart';
 import '../app_services.dart';
 import '../capabilities/desktop_capabilities.dart';
+import '../conversations/conversations.dart';
 import '../integrations/apple_eventkit.dart';
 import '../integrations/apple_eventkit_import.dart';
 import '../integrations/eventkit_task_sync.dart';
@@ -14,6 +15,8 @@ import '../native/generated/signals/signals.dart'
     show AssistantProvider, SystemAudioCaptureMode;
 import '../providers/providers.dart';
 import '../settings/settings.dart';
+import '../ui/burst_glow.dart';
+import 'meeting_notes.dart';
 
 enum SettingsSection {
   account('Account', Icons.person_outline_rounded),
@@ -27,6 +30,17 @@ enum SettingsSection {
 
   final String label;
   final IconData icon;
+
+  /// Resolves the wire name a deep link carries (the native settings window
+  /// is a separate engine, so the requested anchor crosses a method channel
+  /// as a plain string). Unknown names land on the default section.
+  static SettingsSection? tryParse(String? name) {
+    if (name == null) return null;
+    for (final section in values) {
+      if (section.name == name) return section;
+    }
+    return null;
+  }
 }
 
 bool get _isWindowsStyle =>
@@ -35,22 +49,83 @@ bool get _isWindowsStyle =>
 bool get _isMacDesktop =>
     !kIsWeb && defaultTargetPlatform == TargetPlatform.macOS;
 
+/// The warm-paper palette, pinned rather than read from the ambient theme so
+/// settings looks identical in its own native window and in the in-window
+/// route fallback. Values are the hub's — nothing new is introduced here.
+class _SettingsColors {
+  const _SettingsColors._({
+    required this.page,
+    required this.panel,
+    required this.hairline,
+    required this.ink,
+    required this.muted,
+  });
+
+  const _SettingsColors.light()
+    : this._(
+        page: const Color(0xfff7f6f1),
+        panel: const Color(0xfffffefa),
+        hairline: const Color(0x1a000000),
+        ink: const Color(0xff171716),
+        muted: const Color(0xff706e68),
+      );
+
+  const _SettingsColors.dark()
+    : this._(
+        page: const Color(0xff1c1c1a),
+        panel: const Color(0xff232321),
+        hairline: const Color(0x1affffff),
+        ink: const Color(0xfff4f2ea),
+        muted: const Color(0xffa6a49c),
+      );
+
+  final Color page;
+  final Color panel;
+  final Color hairline;
+  final Color ink;
+  final Color muted;
+
+  static _SettingsColors of(BuildContext context) =>
+      Theme.of(context).brightness == Brightness.dark
+      ? const _SettingsColors.dark()
+      : const _SettingsColors.light();
+}
+
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({
     required this.services,
     this.previewMode = false,
+    this.initialSection,
+    this.numbersLoader,
     super.key,
   });
 
   final AppServices services;
   final bool previewMode;
 
+  /// Where a deep link asked settings to land. Null opens the first section.
+  final SettingsSection? initialSection;
+
+  /// Override for the hidden "Omi in numbers" figures, so tests can supply
+  /// known stores instead of the ambient ones.
+  final OmiNumbersLoader? numbersLoader;
+
   @override
   State<SettingsScreen> createState() => _SettingsScreenState();
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
-  SettingsSection selected = SettingsSection.account;
+  late SettingsSection selected =
+      widget.initialSection ?? SettingsSection.account;
+
+  @override
+  void didUpdateWidget(SettingsScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final requested = widget.initialSection;
+    if (requested != null && requested != oldWidget.initialSection) {
+      selected = requested;
+    }
+  }
 
   List<SettingsSection> get sections => [
     SettingsSection.account,
@@ -165,115 +240,245 @@ class _SettingsScreenState extends State<SettingsScreen> {
     };
   }
 
+  /// The orb click streak that reveals "Omi in numbers". Clicks have to land
+  /// within [_orbStreakWindow] of each other, so ordinary single clicks on
+  /// the mark never accumulate into it.
+  static const orbStreakTarget = 5;
+  static const _orbStreakWindow = Duration(milliseconds: 700);
+
+  final _orbKey = GlobalKey();
+  int _orbStreak = 0;
+  DateTime? _lastOrbClick;
+  Offset? _burstAt;
+  bool _numbersRevealed = false;
+
+  void _orbClicked() {
+    final now = DateTime.now();
+    final last = _lastOrbClick;
+    _lastOrbClick = now;
+    final streak = last != null && now.difference(last) <= _orbStreakWindow
+        ? _orbStreak + 1
+        : 1;
+    if (streak < orbStreakTarget) {
+      setState(() => _orbStreak = streak);
+      return;
+    }
+    setState(() {
+      _orbStreak = 0;
+      _lastOrbClick = null;
+      _numbersRevealed = true;
+      // Reduced motion gets the reward without the fireworks.
+      _burstAt = MediaQuery.disableAnimationsOf(context) ? null : _orbCentre();
+    });
+  }
+
+  Offset? _orbCentre() {
+    final box = _orbKey.currentContext?.findRenderObject();
+    if (box is! RenderBox || !box.hasSize) return null;
+    final overlay = context.findRenderObject();
+    if (overlay is! RenderBox || !overlay.hasSize) return null;
+    return box.localToGlobal(box.size.center(Offset.zero), ancestor: overlay);
+  }
+
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
+    final colors = _SettingsColors.of(context);
     final windows = _isWindowsStyle;
-    final hairline = scheme.onSurface.withValues(alpha: .12);
+    final radius = BorderRadius.circular(windows ? 8 : 12);
     final available = sections;
     final active = available.contains(selected) ? selected : available.first;
-    return Scaffold(
-      body: SafeArea(
-        child: Center(
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 760, maxHeight: 560),
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  color: scheme.surface,
-                  borderRadius: BorderRadius.circular(windows ? 8 : 12),
-                  border: Border.all(color: hairline),
+    final sidebar = DecoratedBox(
+      key: const Key('settings_sidebar'),
+      decoration: BoxDecoration(
+        color: colors.panel,
+        borderRadius: radius,
+        border: Border.all(color: colors.hairline),
+      ),
+      child: ClipRRect(
+        borderRadius: radius,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(14, 14, 14, 10),
+              child: Row(
+                children: [
+                  _SettingsOrb(
+                    key: _orbKey,
+                    streak: _orbStreak,
+                    onPressed: _orbClicked,
+                  ),
+                  const SizedBox(width: 9),
+                  Expanded(
+                    child: Semantics(
+                      header: true,
+                      child: Text(
+                        'Settings',
+                        style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w700,
+                          color: colors.ink,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            for (final section in available)
+              _SidebarItem(
+                section: section,
+                selected: section == active,
+                windows: windows,
+                onTap: () => setState(() => selected = section),
+              ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+    final content = Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(4, 12, 0, 12),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  active.label,
+                  style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w600,
+                    color: colors.ink,
+                  ),
                 ),
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(windows ? 8 : 12),
+              ),
+              if (Navigator.of(context).canPop())
+                IconButton(
+                  key: const Key('settings_close'),
+                  tooltip: 'Close settings',
+                  iconSize: 18,
+                  onPressed: () => Navigator.of(context).maybePop(),
+                  icon: const Icon(Icons.close_rounded),
+                ),
+            ],
+          ),
+        ),
+        Divider(height: 1, color: colors.hairline),
+        Expanded(
+          child: ListView(
+            padding: const EdgeInsets.symmetric(vertical: 16),
+            children: [
+              if (_numbersRevealed) ...[
+                OmiNumbersCard(
+                  loader: widget.numbersLoader ?? _defaultNumbersLoader,
+                  onDismiss: () => setState(() => _numbersRevealed = false),
+                ),
+                const SizedBox(height: 12),
+              ],
+              _SettingsGroup(children: _tiles(active)),
+            ],
+          ),
+        ),
+      ],
+    );
+    return Scaffold(
+      backgroundColor: colors.page,
+      body: SafeArea(
+        child: Stack(
+          children: [
+            Center(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(
+                    maxWidth: 760,
+                    maxHeight: 560,
+                  ),
                   child: Row(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      SizedBox(
-                        width: 192,
-                        child: ColoredBox(
-                          color: scheme.onSurface.withValues(alpha: .03),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
-                            children: [
-                              Padding(
-                                padding: const EdgeInsets.fromLTRB(
-                                  16,
-                                  16,
-                                  16,
-                                  10,
-                                ),
-                                child: Semantics(
-                                  header: true,
-                                  child: Text(
-                                    'Settings',
-                                    style: TextStyle(
-                                      fontSize: 15,
-                                      fontWeight: FontWeight.w700,
-                                      color: scheme.onSurface,
-                                    ),
-                                  ),
-                                ),
-                              ),
-                              for (final section in available)
-                                _SidebarItem(
-                                  section: section,
-                                  selected: section == active,
-                                  windows: windows,
-                                  onTap: () =>
-                                      setState(() => selected = section),
-                                ),
-                            ],
-                          ),
-                        ),
-                      ),
-                      VerticalDivider(width: 1, color: hairline),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            Padding(
-                              padding: const EdgeInsets.fromLTRB(20, 12, 8, 12),
-                              child: Row(
-                                children: [
-                                  Expanded(
-                                    child: Text(
-                                      active.label,
-                                      style: TextStyle(
-                                        fontSize: 15,
-                                        fontWeight: FontWeight.w600,
-                                        color: scheme.onSurface,
-                                      ),
-                                    ),
-                                  ),
-                                  if (Navigator.of(context).canPop())
-                                    IconButton(
-                                      key: const Key('settings_close'),
-                                      tooltip: 'Close settings',
-                                      iconSize: 18,
-                                      onPressed: () =>
-                                          Navigator.of(context).maybePop(),
-                                      icon: const Icon(Icons.close_rounded),
-                                    ),
-                                ],
-                              ),
-                            ),
-                            Divider(height: 1, color: hairline),
-                            Expanded(
-                              child: ListView(
-                                padding: const EdgeInsets.all(16),
-                                children: [
-                                  _SettingsGroup(children: _tiles(active)),
-                                ],
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
+                      SizedBox(width: 192, child: sidebar),
+                      const SizedBox(width: 16),
+                      Expanded(child: content),
                     ],
                   ),
                 ),
+              ),
+            ),
+            if (_burstAt case final centre?)
+              Positioned(
+                left: centre.dx,
+                top: centre.dy,
+                child: FractionalTranslation(
+                  translation: const Offset(-.5, -.5),
+                  child: OmiBurstGlow(
+                    key: const Key('settings_orb_burst'),
+                    progress: 1,
+                    complete: true,
+                    baseDiameter: 40,
+                    growth: 120,
+                    onBurstDone: () {
+                      if (mounted) setState(() => _burstAt = null);
+                    },
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<List<OmiNumber>> _defaultNumbersLoader() =>
+      loadOmiNumbers(widget.services);
+}
+
+/// The Omi mark in the settings header. Every click springs it a little
+/// further, which is the only hint that clicking it repeatedly does anything.
+class _SettingsOrb extends StatelessWidget {
+  const _SettingsOrb({
+    required this.streak,
+    required this.onPressed,
+    super.key,
+  });
+
+  final int streak;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final reducedMotion = MediaQuery.disableAnimationsOf(context);
+    return Semantics(
+      button: true,
+      label: 'Omi',
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        child: GestureDetector(
+          key: const Key('settings_orb'),
+          onTap: onPressed,
+          child: TweenAnimationBuilder<double>(
+            tween: Tween(end: 1 + streak * .05),
+            duration: reducedMotion
+                ? Duration.zero
+                : const Duration(milliseconds: 420),
+            curve: Curves.elasticOut,
+            builder: (context, scale, child) =>
+                Transform.scale(scale: reducedMotion ? 1 : scale, child: child),
+            child: Container(
+              width: 22,
+              height: 22,
+              decoration: const BoxDecoration(
+                shape: BoxShape.circle,
+                gradient: LinearGradient(
+                  colors: [Color(0xfffffcec), Color(0xffe9e4cf)],
+                ),
+              ),
+              child: const Icon(
+                Icons.blur_on_rounded,
+                color: Color(0xff171716),
+                size: 14,
               ),
             ),
           ),
@@ -298,10 +503,8 @@ class _SidebarItem extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final foreground = selected
-        ? scheme.onSurface
-        : scheme.onSurface.withValues(alpha: .72);
+    final colors = _SettingsColors.of(context);
+    final foreground = selected ? colors.ink : colors.muted;
     final label = Row(
       children: [
         if (windows)
@@ -310,7 +513,7 @@ class _SidebarItem extends StatelessWidget {
             height: 16,
             margin: const EdgeInsets.only(right: 9),
             decoration: BoxDecoration(
-              color: selected ? scheme.primary : Colors.transparent,
+              color: selected ? colors.ink : Colors.transparent,
               borderRadius: BorderRadius.circular(2),
             ),
           ),
@@ -332,10 +535,8 @@ class _SidebarItem extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 1),
       child: Material(
-        color: selected && !windows
-            ? scheme.primary.withValues(alpha: .14)
-            : selected
-            ? scheme.onSurface.withValues(alpha: .06)
+        color: selected
+            ? colors.ink.withValues(alpha: windows ? .06 : .08)
             : Colors.transparent,
         borderRadius: BorderRadius.circular(windows ? 4 : 6),
         child: InkWell(
@@ -359,8 +560,8 @@ class _SettingsGroup extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final hairline = scheme.onSurface.withValues(alpha: .1);
+    final colors = _SettingsColors.of(context);
+    final hairline = colors.hairline;
     if (_isWindowsStyle) {
       return Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -369,7 +570,7 @@ class _SettingsGroup extends StatelessWidget {
             Container(
               margin: const EdgeInsets.only(bottom: 6),
               decoration: BoxDecoration(
-                color: scheme.onSurface.withValues(alpha: .03),
+                color: colors.panel,
                 borderRadius: BorderRadius.circular(8),
                 border: Border.all(color: hairline),
               ),
@@ -380,7 +581,7 @@ class _SettingsGroup extends StatelessWidget {
     }
     return DecoratedBox(
       decoration: BoxDecoration(
-        color: scheme.onSurface.withValues(alpha: .03),
+        color: colors.panel,
         borderRadius: BorderRadius.circular(10),
         border: Border.all(color: hairline),
       ),
@@ -413,14 +614,14 @@ class _Tile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
+    final colors = _SettingsColors.of(context);
     return Material(
       type: MaterialType.transparency,
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
         child: Row(
           children: [
-            Icon(icon, size: 18, color: scheme.onSurface),
+            Icon(icon, size: 18, color: colors.ink),
             const SizedBox(width: 12),
             Expanded(
               child: Column(
@@ -431,7 +632,7 @@ class _Tile extends StatelessWidget {
                     style: TextStyle(
                       fontSize: 13,
                       fontWeight: FontWeight.w600,
-                      color: scheme.onSurface,
+                      color: colors.ink,
                     ),
                   ),
                   const SizedBox(height: 2),
@@ -440,7 +641,7 @@ class _Tile extends StatelessWidget {
                     style: TextStyle(
                       fontSize: 12,
                       height: 1.35,
-                      color: scheme.onSurfaceVariant,
+                      color: colors.muted,
                     ),
                   ),
                 ],
@@ -502,7 +703,7 @@ class _StateTile extends StatelessWidget {
             state,
             style: TextStyle(
               fontSize: 12,
-              color: Theme.of(context).colorScheme.onSurfaceVariant,
+              color: _SettingsColors.of(context).muted,
             ),
           )
         : IconButton(
@@ -1533,4 +1734,189 @@ class _PlanTileState extends State<_PlanTile> {
       );
     },
   );
+}
+
+/// One line of the hidden "Omi in numbers" card.
+final class OmiNumber {
+  const OmiNumber(this.label, this.value);
+
+  final String label;
+  final String value;
+}
+
+typedef OmiNumbersLoader = Future<List<OmiNumber>> Function();
+
+/// Counts what this device already stores. Every line is a real figure read
+/// back out of an existing store; anything that cannot be counted from what
+/// is already on disk is left out rather than estimated, so an empty list
+/// here means there is genuinely nothing to show yet.
+Future<List<OmiNumber>> loadOmiNumbers(AppServices services) async {
+  DateTime? earliest;
+  void observe(DateTime moment) {
+    if (moment.millisecondsSinceEpoch <= 0) return;
+    final known = earliest;
+    if (known == null || moment.isBefore(known)) earliest = moment;
+  }
+
+  var meetings = const <MeetingNote>[];
+  try {
+    meetings = await services.meetingNotes.list();
+  } catch (_) {}
+  var transcribedMinutes = 0;
+  for (final note in meetings) {
+    final span = note.endedAt.difference(note.startedAt);
+    if (span > Duration.zero) transcribedMinutes += span.inMinutes;
+    observe(note.startedAt.toUtc());
+  }
+
+  var messages = const <ConversationMessage>[];
+  try {
+    messages = await services.replayConversation();
+  } catch (_) {}
+  for (final message in messages) {
+    observe(
+      DateTime.fromMillisecondsSinceEpoch(message.createdAt, isUtc: true),
+    );
+  }
+
+  final numbers = <OmiNumber>[
+    if (messages.isNotEmpty)
+      OmiNumber('Messages exchanged', '${messages.length}'),
+    if (meetings.isNotEmpty)
+      OmiNumber('Meetings recorded', '${meetings.length}'),
+    if (transcribedMinutes > 0)
+      OmiNumber('Minutes transcribed', '$transcribedMinutes'),
+  ];
+  if (earliest case final first?) {
+    final days = DateTime.now().toUtc().difference(first).inDays;
+    if (days > 0) numbers.add(OmiNumber('Days with Omi', '$days'));
+  }
+  return numbers;
+}
+
+/// The reward behind the settings orb. It is a card in the normal scroll, not
+/// a modal: it never blocks anything, and its own control puts it away.
+class OmiNumbersCard extends StatefulWidget {
+  const OmiNumbersCard({
+    required this.loader,
+    required this.onDismiss,
+    super.key,
+  });
+
+  final OmiNumbersLoader loader;
+  final VoidCallback onDismiss;
+
+  @override
+  State<OmiNumbersCard> createState() => _OmiNumbersCardState();
+}
+
+class _OmiNumbersCardState extends State<OmiNumbersCard> {
+  late final Future<List<OmiNumber>> numbers = widget.loader();
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = _SettingsColors.of(context);
+    return DecoratedBox(
+      key: const Key('omi_numbers_card'),
+      decoration: BoxDecoration(
+        color: colors.panel,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: colors.hairline),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(14, 12, 8, 14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.auto_awesome_outlined, size: 16, color: colors.ink),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Your Omi in numbers',
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: colors.ink,
+                    ),
+                  ),
+                ),
+                IconButton(
+                  key: const Key('omi_numbers_dismiss'),
+                  tooltip: 'Hide',
+                  iconSize: 16,
+                  onPressed: widget.onDismiss,
+                  icon: const Icon(Icons.close_rounded),
+                ),
+              ],
+            ),
+            FutureBuilder<List<OmiNumber>>(
+              future: numbers,
+              builder: (context, snapshot) {
+                if (snapshot.connectionState != ConnectionState.done) {
+                  return Padding(
+                    padding: const EdgeInsets.only(left: 24, right: 12),
+                    child: Text(
+                      'Counting…',
+                      style: TextStyle(fontSize: 12, color: colors.muted),
+                    ),
+                  );
+                }
+                final values = snapshot.data ?? const <OmiNumber>[];
+                if (values.isEmpty) {
+                  return Padding(
+                    padding: const EdgeInsets.only(left: 24, right: 12),
+                    child: Text(
+                      'Nothing to count yet — come back after a few '
+                      'conversations.',
+                      style: TextStyle(
+                        fontSize: 12,
+                        height: 1.35,
+                        color: colors.muted,
+                      ),
+                    ),
+                  );
+                }
+                return Padding(
+                  padding: const EdgeInsets.only(left: 24, right: 12, top: 2),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      for (final number in values)
+                        Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 3),
+                          child: Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  number.label,
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: colors.muted,
+                                  ),
+                                ),
+                              ),
+                              Text(
+                                number.value,
+                                key: Key('omi_number_${number.label}'),
+                                style: TextStyle(
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.w700,
+                                  color: colors.ink,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                    ],
+                  ),
+                );
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }

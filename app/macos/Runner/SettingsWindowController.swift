@@ -11,6 +11,12 @@ final class SettingsWindowController: NSWindowController {
   static var shared: SettingsWindowController?
 
   private var engine: FlutterEngine?
+  private var routeChannel: FlutterMethodChannel?
+
+  /// The section a deep link asked for, held until the settings engine is up
+  /// far enough to ask for it. Cleared once handed over so a later plain
+  /// open lands wherever the window already was.
+  private static var pendingSection: String?
 
   static let defaultContentSize = NSSize(width: 760, height: 560)
   static let windowTitle = "Omi Settings"
@@ -32,8 +38,15 @@ final class SettingsWindowController: NSWindowController {
     return window
   }
 
-  static func show() {
+  static func show(section: String? = nil) {
+    pendingSection = section
     if let existing = shared {
+      // The window is already up, so its engine will never re-read the
+      // pending section on its own; push the request at it instead.
+      if let section {
+        pendingSection = nil
+        existing.routeChannel?.invokeMethod("showSection", arguments: section)
+      }
       existing.front()
       return
     }
@@ -44,6 +57,19 @@ final class SettingsWindowController: NSWindowController {
     let controller = SettingsWindowController(
       window: makeWindow(contentViewController: viewController))
     controller.engine = engine
+    let route = FlutterMethodChannel(
+      name: "omi/settings_route",
+      binaryMessenger: engine.binaryMessenger)
+    route.setMethodCallHandler { call, result in
+      guard call.method == "pendingSection" else {
+        result(FlutterMethodNotImplemented)
+        return
+      }
+      let requested = pendingSection
+      pendingSection = nil
+      result(requested)
+    }
+    controller.routeChannel = route
     shared = controller
     controller.front()
   }
