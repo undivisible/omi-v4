@@ -18,7 +18,7 @@ vectorize = []
 [dependencies]
 base64 = "0.22"
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde_json = { version = "1", features = ["preserve_order"] }
 rsa = { version = "0.9", default-features = false, features = ["sha2", "pem"] }
 sha2 = { version = "0.10", default-features = false }
 hmac = { version = "0.12", default-features = false }
@@ -36,6 +36,7 @@ console_error_panic_hook = "0.1"
 getrandom = { version = "0.2", features = ["js"] }
 futures-util = { version = "0.3", default-features = false }
 wasm-bindgen-futures = "0.4"
+serde-wasm-bindgen = "0.6"
 
 [profile.release]
 opt-level = "s"

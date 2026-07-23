@@ -16,6 +16,7 @@ pub mod delivery;
 pub mod entitlement;
 pub mod inbox_fallback;
 pub mod oauth;
+pub mod routes_memory;
 pub mod setup_health;
 pub mod webhooks;
 
@@ -31,7 +32,7 @@ pub mod stt_logic;
 pub mod voice_logic;
 
 #[cfg(target_arch = "wasm32")]
-mod glue;
+pub(crate) mod glue;
 
 // Hand-written Vectorize JS FFI. Compiled only when the `vectorize` feature is
 // enabled AND targeting wasm (it binds the JS `VectorizeIndex` object). Off by

@@ -29,6 +29,15 @@ fn start() {
     console_error_panic_hook::set_once();
 }
 
+// Scheduled cron handler. Each module group contributes one additively-combined
+// hook here; the merge concatenates the awaited slices. Currently: the Memory
+// group's backfill+drain slice.
+#[event(scheduled)]
+async fn scheduled(_event: worker::ScheduledEvent, env: Env, _ctx: worker::ScheduleContext) {
+    // --- Memory & Currents group cron slice ---
+    crate::routes_memory::cron_slice(&env).await;
+}
+
 #[event(fetch)]
 async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
     let router = Router::new()
@@ -70,6 +79,7 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
     // `register` hook.
     let router = crate::routes_channels::register(router);
     let router = crate::routes_ai::register(router);
+    let router = crate::routes_memory::register(router);
     router
         .or_else_any_method("/*catchall", |_req, _ctx| {
             error_json("Not found", 404)
@@ -303,7 +313,7 @@ pub(crate) async fn has_active_pro(ctx: &RouteContext<()>, uid: &str) -> Result<
 
 /// D1 returns numbers as JSON numbers, but large integers may arrive as
 /// strings; accept either.
-fn json_to_i64(value: &Value) -> Option<i64> {
+pub(crate) fn json_to_i64(value: &Value) -> Option<i64> {
     if value.is_null() {
         return None;
     }
