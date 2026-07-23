@@ -296,6 +296,13 @@ int main(void)
 
     (void) lsm6dsl_time_boot_adjust_rtc();
 
+#ifdef CONFIG_OMI_ENABLE_IMU_GESTURES
+    ret = imu_gesture_init();
+    if (ret) {
+        LOG_WRN("IMU gesture init failed (err %d); button wake only", ret);
+    }
+#endif
+
 #ifdef CONFIG_OMI_ENABLE_MONITOR
     // Initialize monitoring system
     LOG_INF("Initializing monitoring system...\n");

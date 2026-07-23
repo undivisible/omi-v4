@@ -435,6 +435,9 @@ void turnoff_all()
     
     /* Persist an IMU timestamp base so we can estimate time across system_off. */
     lsm6dsl_time_prepare_for_system_off();
+#ifdef CONFIG_OMI_ENABLE_IMU_GESTURES
+    imu_gesture_arm_system_off();
+#endif
     k_msleep(1000);
     LOG_INF("Entering system off; press usr_btn to restart");
 

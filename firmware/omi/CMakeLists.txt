@@ -48,6 +48,10 @@ file(GLOB app_sources
     src/imu.c
 )
 
+if(CONFIG_OMI_ENABLE_IMU_GESTURES)
+    list(APPEND app_sources src/imu_gesture.c)
+endif()
+
 if(CONFIG_OMI_ENABLE_T5838_AAD)
     # Hardware AAD is integrated into mic.c; t5838_aad.c is the low-level driver.
     list(APPEND app_sources src/t5838_aad.c)

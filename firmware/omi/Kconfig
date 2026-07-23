@@ -173,6 +173,84 @@ config OMI_WATCHDOG_TIMEOUT_MS
          operations can run longer (e.g. SD/LFS pre-warm) to avoid false
          watchdog resets."
 
+config OMI_ENABLE_IMU_GESTURES
+    bool "IMU wake-on-motion and tap gestures"
+    depends on OMI_ENABLE_USER_EVENTS
+    default n
+    help
+        "Use the LSM6DS3TR-C embedded activity detector on INT1 (P1.13,
+         irq-gpios on the lsm6dsl alias) to emit user events on motion and to
+         wake the SoC out of system off without a button press. Requires the
+         Zephyr LSM6DSL trigger support to stay disabled
+         (LSM6DSL_TRIGGER_NONE, the default) because this code owns INT1
+         directly."
+
+config OMI_IMU_WAKE_THRESHOLD
+    int "IMU wake-up threshold (WAKE_UP_THS, 0-63)"
+    range 1 63
+    default 32
+    depends on OMI_ENABLE_IMU_GESTURES
+    help
+        "Acceleration above which motion counts as activity, in units of
+         full-scale/64. At the +/-2 g full scale this driver programs, 32 is
+         about 1 g of extra acceleration: a deliberate lift or shake rather
+         than a table vibration. Lower it to make the pendant easier to wake,
+         raise it if it wakes in a bag or pocket."
+
+config OMI_IMU_WAKE_DURATION
+    int "IMU wake-up duration (WAKE_UP_DUR, 0-3)"
+    range 0 3
+    default 0
+    depends on OMI_ENABLE_IMU_GESTURES
+    help
+        "Number of consecutive over-threshold samples required before the
+         wake-up event fires, in ODR periods. 0 reacts on the first sample."
+
+config OMI_ENABLE_IMU_DOUBLE_TAP
+    bool "IMU double-tap gesture (tap the pendant body)"
+    depends on OMI_ENABLE_IMU_GESTURES
+    default n
+    help
+        "Alternative trigger for the assistant: double-tap the pendant instead
+         of the button. Reliable tap detection needs the accelerometer at
+         416 Hz instead of the 26 Hz used for wake-on-motion, which costs
+         noticeably more idle current, and the gesture can misfire when the
+         pendant knocks against clothing. Off by default; enable only after
+         validating the thresholds on real hardware."
+
+config OMI_IMU_TAP_THRESHOLD
+    int "IMU tap threshold (TAP_THS_6D, 0-31)"
+    range 0 31
+    default 12
+    depends on OMI_ENABLE_IMU_GESTURES
+    help
+        "Tap detection threshold in units of full-scale/32."
+
+config OMI_IMU_TAP_SHOCK
+    int "IMU tap shock window (INT_DUR2 SHOCK, 0-3)"
+    range 0 3
+    default 3
+    depends on OMI_ENABLE_IMU_GESTURES
+    help
+        "Maximum duration of the over-threshold event, in ODR periods * 8."
+
+config OMI_IMU_TAP_QUIET
+    int "IMU tap quiet window (INT_DUR2 QUIET, 0-3)"
+    range 0 3
+    default 3
+    depends on OMI_ENABLE_IMU_GESTURES
+    help
+        "Settling time after a tap before the next one is evaluated, in ODR
+         periods * 4."
+
+config OMI_IMU_TAP_DURATION
+    int "IMU double-tap window (INT_DUR2 DUR, 0-15)"
+    range 0 15
+    default 7
+    depends on OMI_ENABLE_IMU_GESTURES
+    help
+        "Maximum gap between the two taps of a double tap, in ODR periods * 32."
+
 config OMI_ENABLE_IDLE_SLEEP
     bool "Idle auto-sleep (system off)"
     depends on OMI_ENABLE_BUTTON
