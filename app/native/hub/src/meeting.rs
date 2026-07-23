@@ -1,8 +1,8 @@
 use crate::capture_policy::{CapturePlan, SystemAudioCaptureMode, capture_plan};
 use crate::meeting_capture::MeetingSpeaker;
 use crate::signals::{
-    CaptureSource, ClientCommand, Command, MeetingCompleted, MeetingInsight, MeetingTranscriptTurn,
-    NativeError, NativeEvent, TranscriptionAuth,
+    CaptureSource, ClientCommand, Command, MeetingCompleted, MeetingInsight, MeetingStateChanged,
+    MeetingTranscriptTurn, NativeError, NativeEvent, TranscriptionAuth,
 };
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
@@ -20,6 +20,18 @@ pub const MAX_JOTS: usize = 200;
 const JOT_CHARS: usize = 500;
 const CONTROL_QUEUE_CAPACITY: usize = 64;
 const DEFAULT_TITLE: &str = "Meeting";
+
+/// How long the detector gate must stay off before a manual session ends by
+/// itself.
+///
+/// A manual session outlives the gate on purpose — the user asked for it, so a
+/// momentary detection blind spot must not cut the recording. It must not
+/// outlive the *call*, though, or a session started by hand records until the
+/// app quits. The detector already debounces eight seconds of absence before
+/// it reports the gate off, so this grace only has to cover the longer blind
+/// spots (a browser tab renamed mid-call, a screen share taking over the
+/// window title) rather than a flap.
+pub const MANUAL_GATE_OFF_GRACE: Duration = Duration::from_secs(180);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum InsightKind {
@@ -1055,12 +1067,48 @@ pub fn channel(
     )
 }
 
+/// Publishes the session's existence whenever it changes, so the runtime — not
+/// the platform detector — is the single source of truth for whether a meeting
+/// is under way.
+fn announce(session: Option<&MeetingSession>, announced: &mut bool) {
+    let active = session.is_some();
+    if active == *announced {
+        return;
+    }
+    *announced = active;
+    NativeEvent::MeetingStateChanged(MeetingStateChanged {
+        active,
+        suggested_title: session.map(|current| current.title().to_owned()),
+    })
+    .send();
+}
+
+async fn reached(deadline: Option<tokio::time::Instant>) {
+    match deadline {
+        Some(at) => tokio::time::sleep_until(at).await,
+        None => std::future::pending().await,
+    }
+}
+
 impl MeetingRuntime {
     pub async fn run(mut self) {
         let mut session: Option<MeetingSession> = None;
+        let mut announced = false;
+        let mut gate_active = false;
+        let mut auto_start_suppressed = false;
+        let mut manual_end: Option<tokio::time::Instant> = None;
         loop {
             let control = tokio::select! {
                 () = self.cancellation.cancelled() => break,
+                () = reached(manual_end) => {
+                    manual_end = None;
+                    if let Some(finished) = session.take() {
+                        self.capture.stop();
+                        self.finish(finished);
+                    }
+                    announce(session.as_ref(), &mut announced);
+                    continue;
+                }
                 control = self.receiver.recv() => match control {
                     Some(control) => control,
                     None => break,
@@ -1068,6 +1116,8 @@ impl MeetingRuntime {
             };
             match control {
                 MeetingControl::Start { title } => {
+                    auto_start_suppressed = false;
+                    manual_end = None;
                     match &mut session {
                         Some(current) => current.upgrade_to_manual(title),
                         None => session = Some(MeetingSession::new(title, true)),
@@ -1076,6 +1126,13 @@ impl MeetingRuntime {
                 }
                 MeetingControl::Stop => {
                     self.capture.stop();
+                    manual_end = None;
+                    // Stopping by hand mid-call must not be undone a poll later
+                    // by a detector that is still holding the gate open, so
+                    // auto-start stays suppressed until the call itself ends.
+                    // Starting again remains available throughout, because a
+                    // manual Start ignores the gate entirely.
+                    auto_start_suppressed = gate_active;
                     if let Some(finished) = session.take() {
                         self.finish(finished);
                     }
@@ -1084,17 +1141,30 @@ impl MeetingRuntime {
                     active: true,
                     suggested_title,
                 } => {
-                    if session.is_none() && should_auto_start(self.mode, true) {
+                    gate_active = true;
+                    manual_end = None;
+                    if session.is_none()
+                        && !auto_start_suppressed
+                        && should_auto_start(self.mode, true)
+                    {
                         session = Some(MeetingSession::new(suggested_title, false));
                     }
                     self.sync_capture(session.is_some());
                 }
                 MeetingControl::Gate { active: false, .. } => {
-                    if session.as_ref().is_some_and(|current| !current.is_manual())
-                        && let Some(finished) = session.take()
-                    {
-                        self.capture.stop();
-                        self.finish(finished);
+                    gate_active = false;
+                    auto_start_suppressed = false;
+                    match session.as_ref().map(MeetingSession::is_manual) {
+                        Some(false) => {
+                            if let Some(finished) = session.take() {
+                                self.capture.stop();
+                                self.finish(finished);
+                            }
+                        }
+                        Some(true) => {
+                            manual_end = Some(tokio::time::Instant::now() + MANUAL_GATE_OFF_GRACE);
+                        }
+                        None => {}
                     }
                 }
                 MeetingControl::FinalSegment {
@@ -1131,6 +1201,7 @@ impl MeetingRuntime {
                     self.sync_capture(session.is_some());
                 }
             }
+            announce(session.as_ref(), &mut announced);
         }
         self.capture.stop();
         self.cancellation.cancel();
@@ -1875,5 +1946,176 @@ mod tests {
         assert!(!remembered.source_id.0.is_empty());
         drop(database);
         let _ = std::fs::remove_file(path);
+    }
+
+    fn meeting_states() -> Vec<(bool, Option<String>)> {
+        crate::signals::test_events::take()
+            .into_iter()
+            .filter_map(|event| match event {
+                NativeEvent::MeetingStateChanged(state) => {
+                    Some((state.active, state.suggested_title))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn runtime() -> (
+        mpsc::Sender<MeetingControl>,
+        MeetingRuntime,
+        mpsc::Receiver<ClientCommand>,
+    ) {
+        let (captures, capture_receiver) = mpsc::channel(8);
+        let (controls, runtime) = channel(captures);
+        (controls, runtime, capture_receiver)
+    }
+
+    async fn send(controls: &mpsc::Sender<MeetingControl>, control: MeetingControl) {
+        assert!(controls.send(control).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn a_manual_start_and_stop_each_announce_the_meeting_state() {
+        let (controls, runtime, _captures) = runtime();
+        let driven = tokio::spawn(runtime.run());
+        send(
+            &controls,
+            MeetingControl::Start {
+                title: Some("Quarterly Review".to_owned()),
+            },
+        )
+        .await;
+        send(&controls, MeetingControl::Stop).await;
+        drop(controls);
+        let _ = driven.await;
+        assert_eq!(
+            meeting_states(),
+            vec![(true, Some("Quarterly Review".to_owned())), (false, None)]
+        );
+    }
+
+    #[tokio::test]
+    async fn the_detector_gate_announces_through_the_runtime_exactly_once_per_change() {
+        let (controls, runtime, _captures) = runtime();
+        let driven = tokio::spawn(runtime.run());
+        send(
+            &controls,
+            MeetingControl::Gate {
+                active: true,
+                suggested_title: Some("zoom.us".to_owned()),
+            },
+        )
+        .await;
+        send(
+            &controls,
+            MeetingControl::Gate {
+                active: true,
+                suggested_title: Some("zoom.us".to_owned()),
+            },
+        )
+        .await;
+        send(
+            &controls,
+            MeetingControl::Gate {
+                active: false,
+                suggested_title: None,
+            },
+        )
+        .await;
+        drop(controls);
+        let _ = driven.await;
+        assert_eq!(
+            meeting_states(),
+            vec![(true, Some("zoom.us".to_owned())), (false, None)]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_manual_stop_survives_the_still_open_gate_and_still_allows_a_restart() {
+        let (controls, runtime, _captures) = runtime();
+        let driven = tokio::spawn(runtime.run());
+        send(
+            &controls,
+            MeetingControl::Gate {
+                active: true,
+                suggested_title: Some("zoom.us".to_owned()),
+            },
+        )
+        .await;
+        send(&controls, MeetingControl::Stop).await;
+        send(
+            &controls,
+            MeetingControl::Gate {
+                active: true,
+                suggested_title: Some("zoom.us".to_owned()),
+            },
+        )
+        .await;
+        send(&controls, MeetingControl::Start { title: None }).await;
+        drop(controls);
+        let _ = driven.await;
+        assert_eq!(
+            meeting_states(),
+            vec![
+                (true, Some("zoom.us".to_owned())),
+                (false, None),
+                (true, Some(DEFAULT_TITLE.to_owned())),
+            ]
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_manual_session_ends_once_the_gate_has_stayed_off_through_the_grace() {
+        let (controls, runtime, _captures) = runtime();
+        let driven = tokio::spawn(runtime.run());
+        send(&controls, MeetingControl::Start { title: None }).await;
+        send(
+            &controls,
+            MeetingControl::Gate {
+                active: false,
+                suggested_title: None,
+            },
+        )
+        .await;
+        tokio::time::sleep(MANUAL_GATE_OFF_GRACE - Duration::from_secs(1)).await;
+        assert_eq!(
+            meeting_states(),
+            vec![(true, Some(DEFAULT_TITLE.to_owned()))]
+        );
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        assert_eq!(meeting_states(), vec![(false, None)]);
+        drop(controls);
+        let _ = driven.await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_detector_flap_does_not_end_a_manual_session() {
+        let (controls, runtime, _captures) = runtime();
+        let driven = tokio::spawn(runtime.run());
+        send(&controls, MeetingControl::Start { title: None }).await;
+        send(
+            &controls,
+            MeetingControl::Gate {
+                active: false,
+                suggested_title: None,
+            },
+        )
+        .await;
+        tokio::time::sleep(Duration::from_secs(10)).await;
+        send(
+            &controls,
+            MeetingControl::Gate {
+                active: true,
+                suggested_title: Some("zoom.us".to_owned()),
+            },
+        )
+        .await;
+        tokio::time::sleep(MANUAL_GATE_OFF_GRACE * 2).await;
+        assert_eq!(
+            meeting_states(),
+            vec![(true, Some(DEFAULT_TITLE.to_owned()))]
+        );
+        drop(controls);
+        let _ = driven.await;
     }
 }
