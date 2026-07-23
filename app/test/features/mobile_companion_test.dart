@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:archive/archive.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -1055,6 +1056,20 @@ void main() {
       findsOneWidget,
     );
     expect(find.byKey(const Key('companion_dev_capture_tile')), findsOneWidget);
+    // The update row is hidden for this pendant (no SMP service), so developer
+    // options is where that stops being a silent absence.
+    expect(
+      tester
+          .widget<ListTile>(
+            find.descendant(
+              of: find.byKey(const Key('companion_dev_dfu_tile')),
+              matching: find.byType(ListTile),
+            ),
+          )
+          .subtitle,
+      isA<Padding>(),
+    );
+    expect(find.textContaining('Unavailable: this firmware'), findsOneWidget);
     fixture.services.dispose();
   });
 
@@ -1163,12 +1178,11 @@ void main() {
     fixture.services.dispose();
   });
 
-  testWidgets('the firmware screen offers the update, refuses to flash while '
-      'capture streams, and downloads', (tester) async {
+  testWidgets('the firmware screen offers the update and refuses to flash '
+      'while capture streams', (tester) async {
     await tester.binding.setSurfaceSize(const Size(800, 2400));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final fixture = await _mobileFixture('user-a', adapter: _DfuAdapter());
-    final downloader = _FakeDownloader();
 
     await tester.pumpWidget(
       MaterialApp(
@@ -1176,29 +1190,9 @@ void main() {
           services: fixture.services,
           pairedDevices: VolatilePairedDeviceStore(),
           captureEnabledStore: VolatileCaptureEnabledStore(),
-          firmwareChecker: FirmwareUpdateChecker(
-            endpoint: 'https://example.test/releases',
-            client: MockClient(
-              (request) async => http.Response(
-                jsonEncode([
-                  {
-                    'tag_name': 'firmware-v9.9.9',
-                    'html_url': 'https://example.test/firmware-v9.9.9',
-                    'assets': [
-                      {
-                        'name': 'dfu_application.zip',
-                        'browser_download_url':
-                            'https://example.test/dfu_application.zip',
-                        'size': 440320,
-                      },
-                    ],
-                  },
-                ]),
-                200,
-              ),
-            ),
-          ),
-          firmwareDownloader: downloader,
+          firmwareChecker: _firmwareChecker(),
+          firmwareDownloader: _ZipDownloader(),
+          firmwareFlasher: _FakeFlasher(),
         ),
       ),
     );
@@ -1230,23 +1224,98 @@ void main() {
           .title,
       isA<Text>().having((text) => text.data, 'title', 'Not ready to update'),
     );
+    expect(find.byKey(const Key('companion_firmware_install')), findsNothing);
+    fixture.services.dispose();
+  });
 
-    await tester.tap(find.byKey(const Key('companion_firmware_download')));
+  testWidgets('a waiting firmware update rides the same banner card as the '
+      'desktop invitation, and dismisses', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(800, 2400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    SharedPreferences.setMockInitialValues({});
+    final fixture = await _mobileFixture('user-a', adapter: _DfuAdapter());
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MobileCompanionShell(
+          services: fixture.services,
+          pairedDevices: VolatilePairedDeviceStore(),
+          captureEnabledStore: VolatileCaptureEnabledStore(),
+          firmwareChecker: _firmwareChecker(),
+          firmwareDownloader: _ZipDownloader(),
+          firmwareFlasher: _FakeFlasher(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('companion_reconnect')));
     await _settle(tester);
 
+    final banner = find.byKey(const Key('companion_firmware_notice_tile'));
+    expect(banner, findsOneWidget);
+    // Same component, same slot: the pendant notice sits directly above the
+    // desktop one rather than on a screen of its own.
     expect(
-      find.byKey(const Key('companion_firmware_progress')),
-      findsOneWidget,
+      tester.getTopLeft(banner).dy,
+      lessThan(
+        tester
+            .getTopLeft(find.byKey(const Key('companion_desktop_notice_tile')))
+            .dy,
+      ),
     );
+
+    await tester.tap(
+      find.byKey(const Key('companion_firmware_notice_dismiss')),
+    );
+    await _settle(tester);
+
+    expect(banner, findsNothing);
+    fixture.services.dispose();
+  });
+
+  testWidgets('the banner opens the flow, which writes the package and '
+      'confirms the version that comes back', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(800, 2400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    SharedPreferences.setMockInitialValues({});
+    final adapter = _DfuAdapter();
+    final flasher = _FakeFlasher(onDone: () => adapter.revision = '9.9.9');
+    final fixture = await _mobileFixture('user-a', adapter: adapter);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MobileCompanionShell(
+          services: fixture.services,
+          pairedDevices: VolatilePairedDeviceStore(),
+          // Capture off, so the pre-flight gate lets the install through.
+          captureEnabledStore: VolatileCaptureEnabledStore(enabled: false),
+          firmwareChecker: _firmwareChecker(),
+          firmwareDownloader: _ZipDownloader(),
+          firmwareFlasher: flasher,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('companion_reconnect')));
+    await _settle(tester);
+    await tester.tap(find.byKey(const Key('companion_firmware_notice_tile')));
+    await _settle(tester);
+
+    expect(find.byKey(const Key('companion_firmware_page')), findsOneWidget);
+    await tester.tap(find.byKey(const Key('companion_firmware_install')));
+    // The install does real file I/O and waits for the BLE stack to release
+    // the peripheral, so it needs several real-time windows rather than one.
+    await _settleSlow(tester);
+
+    expect(flasher.flashed.single.single.image, 0);
     expect(
       tester
           .widget<Text>(
             find.byKey(const Key('companion_firmware_progress_label')),
           )
           .data,
-      'Downloaded',
+      'Installed',
     );
-    expect(downloader.requested, ['dfu_application.zip']);
     fixture.services.dispose();
   });
 
@@ -1584,6 +1653,21 @@ Future<void> _pumpFrames(WidgetTester tester) async {
   }
 }
 
+// For flows that step through real file I/O and a real delay: each round gives
+// the event loop a window, and pumps whatever came back out of it.
+Future<void> _settleSlow(WidgetTester tester) async {
+  for (var round = 0; round < 30; round += 1) {
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 60)),
+    );
+    // Plain pumps, not pumpAndSettle: an indeterminate progress bar never
+    // settles, and one is on screen for most of this flow. The step also has
+    // to move the fake clock past the installer's own settle delay.
+    await tester.pump(const Duration(milliseconds: 400));
+    await tester.pump(const Duration(milliseconds: 16));
+  }
+}
+
 Future<void> _settle(WidgetTester tester) async {
   for (var round = 0; round < 3; round += 1) {
     await tester.runAsync(
@@ -1856,9 +1940,31 @@ final class _RenamingAdapter extends _Adapter implements DeviceRelayRename {
   }
 }
 
+FirmwareUpdateChecker _firmwareChecker() => FirmwareUpdateChecker(
+  endpoint: 'https://example.test/releases',
+  client: MockClient(
+    (request) async => http.Response(
+      jsonEncode([
+        {
+          'tag_name': 'firmware-v9.9.9',
+          'html_url': 'https://example.test/firmware-v9.9.9',
+          'assets': [
+            {
+              'name': 'dfu_application.zip',
+              'browser_download_url':
+                  'https://example.test/dfu_application.zip',
+            },
+          ],
+        },
+      ]),
+      200,
+    ),
+  ),
+);
+
 // The download is exercised for real in firmware_update_check_test; here it
-// only has to move the screen forward.
-final class _FakeDownloader implements FirmwareDownloader {
+// only has to put a package on disk that the install flow can unpack.
+final class _ZipDownloader implements FirmwareDownloader {
   final requested = <String>[];
 
   @override
@@ -1869,15 +1975,78 @@ final class _FakeDownloader implements FirmwareDownloader {
     requested.add(release.assetName);
     onProgress?.call(.5);
     onProgress?.call(1);
-    return File('/tmp/${release.assetName}');
+    final archive = Archive();
+    final manifest = utf8.encode(
+      jsonEncode({
+        'format-version': 0,
+        'time': 1,
+        'files': [
+          {'file': 'app_update.bin', 'image_index': '0'},
+        ],
+      }),
+    );
+    archive.add(ArchiveFile('manifest.json', manifest.length, manifest));
+    archive.add(ArchiveFile('app_update.bin', 4, const [1, 2, 3, 4]));
+    final directory = await Directory.systemTemp.createTemp('omi-widget-dfu');
+    final file = File('${directory.path}/${release.assetName}');
+    await file.writeAsBytes(ZipEncoder().encode(archive));
+    return file;
+  }
+}
+
+// Stands in for mcumgr: reports progress, then reports success without
+// touching a radio.
+final class _FakeFlasher implements FirmwareFlasher {
+  _FakeFlasher({this.onDone});
+
+  final void Function()? onDone;
+  final flashed = <List<FirmwareImage>>[];
+
+  @override
+  Stream<FirmwareFlashProgress> flash({
+    required String deviceId,
+    required List<FirmwareImage> images,
+  }) async* {
+    flashed.add(images);
+    yield const FirmwareFlashProgress(FirmwareFlashStage.uploading, .5);
+    yield const FirmwareFlashProgress(FirmwareFlashStage.uploading, 1);
+    onDone?.call();
   }
 }
 
 // A pendant whose firmware carries the SMP service, so it can take an update
-// over BLE.
+// over BLE. Its reported revision moves when the fake flash lands, which is
+// what the post-flash confirmation reads.
 final class _DfuAdapter extends _Adapter implements DeviceRelayDfu {
+  String revision = '1.0.3';
+
+  RelayDevice get _dfuDevice => const RelayDevice(
+    id: 'omi-1',
+    name: 'Omi Pendant',
+    signalStrength: -52,
+    batteryLevel: 87,
+    audioCodec: DeviceAudioCodec.opus,
+  ).copyWith(firmwareRevision: revision);
+
   @override
   bool get dfuSupported => true;
+
+  @override
+  Future<List<RelayDevice>> scan() async => [_dfuDevice];
+
+  @override
+  Future<RelayDevice> connect(String deviceId) async {
+    connectCalls += 1;
+    final device = _dfuDevice;
+    _snapshots.add(
+      DeviceRelaySnapshot(
+        phase: DeviceConnectionPhase.connected,
+        capabilities: capabilities,
+        device: device,
+      ),
+    );
+    return device;
+  }
 }
 
 // A pendant whose firmware may or may not carry 19b10015. With [ledSupported]

@@ -38,6 +38,7 @@ final class FirmwareRelease {
     required this.assetName,
     required this.assetUrl,
     this.sizeBytes,
+    this.digest,
   });
 
   final String version;
@@ -48,6 +49,11 @@ final class FirmwareRelease {
   final String assetName;
   final String assetUrl;
   final int? sizeBytes;
+
+  /// The asset digest GitHub publishes alongside the size, in its
+  /// `<algorithm>:<hex>` form (`sha256:…`). Null on a release old enough — or a
+  /// mirror plain enough — not to carry one; the size check still applies.
+  final String? digest;
 
   @override
   String toString() => 'FirmwareRelease($version, $assetName)';
@@ -79,6 +85,22 @@ FirmwareUpdateBlock firmwareUpdateBlock({
 }) {
   if (!connected) return FirmwareUpdateBlock.disconnected;
   if (!dfuSupported) return FirmwareUpdateBlock.unsupported;
+  if (batteryLevel != null && batteryLevel < firmwareUpdateMinimumBattery) {
+    return FirmwareUpdateBlock.lowBattery;
+  }
+  if (capturing) return FirmwareUpdateBlock.capturing;
+  return FirmwareUpdateBlock.none;
+}
+
+/// The subset of [firmwareUpdateBlock] that still applies once an install is
+/// under way. The link is deliberately handed to the DFU transport partway
+/// through, so "disconnected" stops meaning anything — but a capture the user
+/// restarted, or a battery that fell below the floor, are still reasons to stop
+/// before the upload completes and MCUboot swaps.
+FirmwareUpdateBlock firmwareUpdateAbort({
+  required bool capturing,
+  required int? batteryLevel,
+}) {
   if (batteryLevel != null && batteryLevel < firmwareUpdateMinimumBattery) {
     return FirmwareUpdateBlock.lowBattery;
   }
@@ -192,6 +214,7 @@ final class FirmwareUpdateChecker {
         assetName: asset.name,
         assetUrl: asset.url,
         sizeBytes: asset.size,
+        digest: asset.digest,
       );
       if (best == null || compareVersions(release.version, best.version) > 0) {
         best = release;
@@ -200,12 +223,13 @@ final class FirmwareUpdateChecker {
     return best;
   }
 
-  ({String name, String url, int? size})? _artifact(
+  ({String name, String url, int? size, String? digest})? _artifact(
     Object? assets,
     String? target,
   ) {
     if (assets is! List<Object?>) return null;
-    final candidates = <({String name, String url, int? size})>[];
+    final candidates =
+        <({String name, String url, int? size, String? digest})>[];
     for (final asset in assets) {
       if (asset is! Map<String, Object?>) continue;
       final name = asset['name'];
@@ -213,7 +237,13 @@ final class FirmwareUpdateChecker {
       if (name is! String || url is! String) continue;
       if (!name.toLowerCase().contains(firmwareArtifactMarker)) continue;
       final size = asset['size'];
-      candidates.add((name: name, url: url, size: size is int ? size : null));
+      final digest = asset['digest'];
+      candidates.add((
+        name: name,
+        url: url,
+        size: size is int ? size : null,
+        digest: digest is String && digest.isNotEmpty ? digest : null,
+      ));
     }
     if (target != null) {
       final hint = target.toLowerCase();

@@ -1,7 +1,6 @@
 # Pendant firmware update from the mobile app
 
-What ships today, and exactly what is left before the app may write an image to
-a pendant.
+What ships today, and what still has to be proved on a physical pendant.
 
 ## Shipped
 
@@ -10,58 +9,64 @@ a pendant.
 | DFU capability probe (SMP service `8D53DC1D-1DB7-4CD3-868B-8A527460AA84`) | `app/lib/device/universal_ble_device_relay.dart`, `DeviceRelayDfu` in `app/lib/device/device_relay.dart` |
 | Release lookup on the `firmware-v*` tag stream, artifact selection, version compare, dismissal | `app/lib/features/firmware_update_check.dart` |
 | Pre-flight gate (disconnected / unsupported / low battery / capturing) | `firmwareUpdateBlock` in the same file |
+| Mid-flow abort rule (battery, capture) | `firmwareUpdateAbort` in the same file |
 | Streaming download with progress into the temporary directory | `FirmwareDownloader` |
-| Settings entry point and the update screen | `app/lib/features/mobile_companion_shell.dart` (`companion_firmware_update`, `_FirmwareUpdatePage`) |
+| `manifest.json` parsing and `dfu_application.zip` unpacking (pure Dart, `archive`) | `app/lib/device/firmware_dfu.dart` |
+| The flash itself over SMP/mcumgr | `McuMgrFirmwareFlasher` in the same file |
+| Size + SHA-256 verification, downgrade refusal, link handover, reconnect, post-flash version confirmation | `app/lib/features/firmware_install.dart` |
+| Home banner (same `_BannerCta` component as the desktop install notice), settings entry point, update screen with real progress | `app/lib/features/mobile_companion_shell.dart` |
 
-The row only appears when the connected pendant advertises the SMP service, so
-a DevKit build (Adafruit UF2 bootloader, no MCUboot OTA) never sees it.
+The banner and the settings row only appear when the connected pendant
+advertises the SMP service, so a DevKit build (Adafruit UF2 bootloader, no
+MCUboot OTA) never sees them. Developer options states why, rather than leaving
+the absence unexplained.
 
-## Deliberately not shipped: the flash
+## Safety rules the code enforces
 
-The install control is absent, not disabled-with-a-spinner. `omi-cv1` runs
-MCUboot **overwrite-only with downgrade prevention**
-(`firmware/bootloader/mcuboot/mcuboot.conf`), so a partially written image has
-no slot to roll back to: an aborted or mis-selected write is a brick, not a
-retry. Nothing in this repository can exercise that path — there is no pendant
-in CI and the firmware tree is not even compile-verified — so the screen ends at
-"downloaded, flash it with nRF Connect for Mobile" and links to the release.
+`omi-cv1` runs MCUboot **overwrite-only with downgrade prevention**
+(`firmware/bootloader/mcuboot/mcuboot.conf`): there is no rollback slot.
 
-## Remaining wiring
+1. `eraseAppSettings` is **false**. True would erase the NVS partition that
+   holds the persisted device name (`19B10016`) and the mic gain.
+   `FirmwareUpgradeMode.confirmOnly` matches a bootloader with no revert slot.
+2. An image whose version is not strictly newer than the DIS revision
+   (`0x2A26`) is refused before anything is downloaded.
+3. A package whose byte count does not match the release's `size`, or whose
+   SHA-256 does not match the release's `digest`, is never unpacked.
+4. The gate is evaluated when the button is pressed **and** again immediately
+   before the BLE link is released. Battery and capture are re-read on every
+   flash progress event; a capture started mid-upload aborts. Battery mid-flash
+   is the last value read before the handover — the app has no link to re-read
+   it over.
+5. Aborting during the upload is safe and offered: MCUboot swaps only after a
+   whole image has landed in the secondary slot.
+6. Success is only claimed after reconnecting and re-reading `0x2A26`.
+7. Every failure carries a recovery line (nRF Connect for Desktop Programmer or
+   a J-Link with the release's `merged.hex`), never a silent dead end.
 
-1. **Add the transport.** `mcumgr_flutter` (Nordic, Apache-2.0, no telemetry) is
-   the match for MCUboot/SMP on nRF5340 and nRF52840. `nordic_dfu` implements
-   the *legacy* Nordic Secure DFU protocol and does **not** apply here — upstream
-   Omi carries both only because its older DevKit images use the legacy path.
-   Adding it pulls in `iOSMcuManagerLibrary` (CocoaPods) and the Android
-   `mcumgr-android` library; neither has a macOS implementation, so confirm
-   `flutter build macos --debug` still links before going further.
-2. **Unpack the artifact.** `dfu_application.zip` contains `manifest.json` plus
-   one signed `.bin` per image (app core, and on the nRF5340 the network core).
-   Parse the manifest and build `mcumgr.Image(image: <slot>, data: <bytes>)` per
-   entry. Prefer the pure-Dart `archive` package over `flutter_archive` so the
-   unpack stays testable off-device.
-3. **Free the link first.** Stop `DeviceAudioForwarder`, unsubscribe the audio
-   characteristic and let the connection idle before handing the device id to
-   `FirmwareUpdateManagerFactory().getUpdateManager(deviceId)`; mcumgr opens its
-   own GATT connection and will fight the relay's.
-4. **Drive the upload.** `updateManager.setup()` for the state stream,
-   `progressStream` for bytes, then `update(images, configuration:
-   FirmwareUpgradeConfiguration(estimatedSwapTime: …, eraseAppSettings: false,
-   pipelineDepth: 1))`. `eraseAppSettings: true` would wipe the NVS that holds
-   the device name (`19B10016`) and mic gain — keep it false.
-5. **Re-check the gate per chunk, not once.** Battery and capture state can
-   change mid-upload; re-read `19B10013`/battery and abort cleanly on a drop
-   below `firmwareUpdateMinimumBattery`.
-6. **Handle the reboot.** The pendant disconnects when MCUboot swaps. Expect the
-   link to drop, reconnect on the same BLE address, and confirm success by
-   re-reading DIS `0x2A26` and comparing to the version that was installed —
-   the only honest "it worked".
-7. **Failure paths to cover before enabling the control:** upload interrupted by
-   distance, phone backgrounded mid-upload, wrong image for the target, image
-   version not greater than installed (downgrade prevention rejects it), and a
-   pendant that reboots into the old image.
-8. **Tests to add with it:** manifest parsing from a fixture zip, the abort path
-   leaving no partial state in the app, and the post-flash version confirmation.
+## Not implemented: legacy Nordic Secure DFU
+
+Upstream Omi carries `nordic_dfu` alongside `mcumgr_flutter` because its older
+DevKit images use the legacy Secure DFU protocol. Our shipping device is
+nRF5340/MCUboot, so only the mcumgr path is implemented. Devices on the legacy
+path have no SMP service, so the affordance stays hidden for them — the same
+graceful path as any pre-OTA firmware.
+
+## Not verified
+
+- No `firmware-v*` release has been published yet, so the real download has
+  never run end to end. Everything is covered against fakes and a fixture zip
+  built in-test (`app/test/features/firmware_install_test.dart`).
+- **The flash has never run against hardware.** `McuMgrFirmwareFlasher` is the
+  one piece with no test coverage beyond compiling: it is a thin adapter over
+  `mcumgr_flutter`'s method channel.
+- First real-device run should watch: that the `manifest.json` in our
+  `dfu_application.zip` really carries `image_index` for both cores; that the
+  peripheral is genuinely free after `disconnectDevice()` plus the two-second
+  settle (raise the settle if mcumgr reports a connect failure); that the
+  pendant re-advertises after the swap so `connectDevice` finds it again; and
+  that the DIS revision string equals the release version exactly, since the
+  confirmation compares them.
 
 ## Release-side prerequisite
 
