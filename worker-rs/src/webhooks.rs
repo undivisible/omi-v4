@@ -191,8 +191,10 @@ pub fn parse_blooio(body: &Value) -> Option<BlooioMessage> {
 #[derive(Debug, PartialEq)]
 pub enum StripePlan {
     /// No `data.object`, or missing uid/customer, or a non-subscription/
-    /// non-checkout event: only the receipt row is written.
-    ReceiptOnly,
+    /// non-checkout event: only the receipt row is written. `has_object`
+    /// distinguishes the no-object branch (TS omits `updated`) from the
+    /// object-present-but-unactionable branch (TS includes `updated: false`).
+    ReceiptOnly { has_object: bool },
     /// `checkout.session.completed` with uid+customer: seed byok/inactive row.
     Checkout { uid: String, customer: String },
     /// A `customer.subscription.*` event with uid+customer.
@@ -231,7 +233,7 @@ pub fn parse_stripe(event: &Value) -> Result<StripeEnvelope, ()> {
             id: id.to_string(),
             event_type: event_type.to_string(),
             created,
-            plan: StripePlan::ReceiptOnly,
+            plan: StripePlan::ReceiptOnly { has_object: false },
         });
     };
 
@@ -263,7 +265,7 @@ pub fn parse_stripe(event: &Value) -> Result<StripeEnvelope, ()> {
             id: id.to_string(),
             event_type: event_type.to_string(),
             created,
-            plan: StripePlan::ReceiptOnly,
+            plan: StripePlan::ReceiptOnly { has_object: true },
         });
     };
 
@@ -283,7 +285,7 @@ pub fn parse_stripe(event: &Value) -> Result<StripeEnvelope, ()> {
             id: id.to_string(),
             event_type: event_type.to_string(),
             created,
-            plan: StripePlan::ReceiptOnly,
+            plan: StripePlan::ReceiptOnly { has_object: true },
         });
     }
 
@@ -513,21 +515,30 @@ mod tests {
 
     #[test]
     fn stripe_receipt_only_paths() {
-        // No data.object.
+        // No data.object → TS omits `updated`.
         let no_object = json!({"id": "e", "type": "invoice.paid", "created": 1});
-        assert_eq!(parse_stripe(&no_object).unwrap().plan, StripePlan::ReceiptOnly);
-        // Missing customer.
+        assert_eq!(
+            parse_stripe(&no_object).unwrap().plan,
+            StripePlan::ReceiptOnly { has_object: false }
+        );
+        // Missing customer → object present, TS includes `updated: false`.
         let no_customer = json!({
             "id": "e", "type": "checkout.session.completed", "created": 1,
             "data": {"object": {"client_reference_id": "u"}}
         });
-        assert_eq!(parse_stripe(&no_customer).unwrap().plan, StripePlan::ReceiptOnly);
+        assert_eq!(
+            parse_stripe(&no_customer).unwrap().plan,
+            StripePlan::ReceiptOnly { has_object: true }
+        );
         // Non-subscription, non-checkout with uid+customer.
         let other = json!({
             "id": "e", "type": "invoice.paid", "created": 1,
             "data": {"object": {"client_reference_id": "u", "customer": "c"}}
         });
-        assert_eq!(parse_stripe(&other).unwrap().plan, StripePlan::ReceiptOnly);
+        assert_eq!(
+            parse_stripe(&other).unwrap().plan,
+            StripePlan::ReceiptOnly { has_object: true }
+        );
     }
 
     #[test]

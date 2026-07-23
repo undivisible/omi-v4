@@ -880,17 +880,18 @@ async fn handle_webhook_stripe(mut req: Request, ctx: RouteContext<()>) -> Resul
         ])
     };
     match &envelope.plan {
-        wh::StripePlan::ReceiptOnly => {
+        wh::StripePlan::ReceiptOnly { has_object } => {
             let inserted = receipt()?.run().await?;
-            Response::from_json(&json!({
-                "received": true,
-                "duplicate": changes(&inserted) == 0,
-                // The TS handler omits `updated` only for the no-object branch;
-                // when an object exists but uid/customer is missing it includes
-                // `updated: false`. Both are ReceiptOnly here — mirror the more
-                // common (object-present) shape which also includes updated.
-                "updated": false,
-            }))
+            let duplicate = changes(&inserted) == 0;
+            // Parity: the no-object branch returns just {received, duplicate};
+            // an object present but not actionable adds `updated: false`.
+            if *has_object {
+                Response::from_json(
+                    &json!({ "received": true, "duplicate": duplicate, "updated": false }),
+                )
+            } else {
+                Response::from_json(&json!({ "received": true, "duplicate": duplicate }))
+            }
         }
         wh::StripePlan::Checkout { uid, customer } => {
             let results = db
