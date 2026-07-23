@@ -7,6 +7,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../api/worker_http.dart';
 import '../app_services.dart';
 import '../capabilities/desktop_capabilities.dart';
+import '../channels/channels.dart';
 import '../conversations/conversations.dart';
 import '../integrations/apple_eventkit.dart';
 import '../integrations/apple_eventkit_import.dart';
@@ -161,6 +162,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
           ),
           DeleteAccountTile(services: services),
+          if (services.channels != null)
+            _ChannelLinkTile(client: services.channels!),
         ] else if (!previewMode)
           DeleteLocalDataTile(services: services),
       ],
@@ -604,6 +607,7 @@ class _Tile extends StatelessWidget {
     required this.title,
     required this.detail,
     required this.trailing,
+    this.onTap,
     super.key,
   });
 
@@ -611,47 +615,51 @@ class _Tile extends StatelessWidget {
   final String title;
   final String detail;
   final Widget trailing;
+  // When set, the whole row is the button — never a button on the right of a
+  // row.
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
     final colors = _SettingsColors.of(context);
+    final row = Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      child: Row(
+        children: [
+          Icon(icon, size: 18, color: colors.ink),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: colors.ink,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  detail,
+                  style: TextStyle(
+                    fontSize: 12,
+                    height: 1.35,
+                    color: colors.muted,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 12),
+          trailing,
+        ],
+      ),
+    );
     return Material(
       type: MaterialType.transparency,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-        child: Row(
-          children: [
-            Icon(icon, size: 18, color: colors.ink),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    title,
-                    style: TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                      color: colors.ink,
-                    ),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    detail,
-                    style: TextStyle(
-                      fontSize: 12,
-                      height: 1.35,
-                      color: colors.muted,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(width: 12),
-            trailing,
-          ],
-        ),
-      ),
+      child: onTap == null ? row : InkWell(onTap: onTap, child: row),
     );
   }
 }
@@ -784,6 +792,252 @@ class _DeleteAccountTileState extends State<DeleteAccountTile> {
       child: const Text('Delete'),
     ),
   );
+}
+
+// Links a Telegram or iMessage chat: the user texts the bot, gets a short
+// code, and types it here. The whole row is the button, matching the account
+// tiles around it.
+class _ChannelLinkTile extends StatefulWidget {
+  const _ChannelLinkTile({required this.client});
+
+  final ChannelClient client;
+
+  @override
+  State<_ChannelLinkTile> createState() => _ChannelLinkTileState();
+}
+
+class _ChannelLinkTileState extends State<_ChannelLinkTile> {
+  late Future<Set<ChannelProvider>> _linked = _load();
+
+  Future<Set<ChannelProvider>> _load() async {
+    final linked = <ChannelProvider>{};
+    for (final channel in ChannelProvider.values) {
+      try {
+        if (await widget.client.isLinked(channel)) linked.add(channel);
+      } on ChannelClientException {
+        // A single channel's status failing must not blank the row.
+      }
+    }
+    return linked;
+  }
+
+  void _reload() {
+    setState(() => _linked = _load());
+  }
+
+  String _label(ChannelProvider channel) => switch (channel) {
+    ChannelProvider.telegram => 'Telegram',
+    ChannelProvider.blooio => 'iMessage',
+  };
+
+  Future<void> _openSheet(Set<ChannelProvider> linked) async {
+    final changed = await showDialog<bool>(
+      context: context,
+      builder: (context) => _ChannelLinkDialog(
+        client: widget.client,
+        linked: linked,
+        label: _label,
+      ),
+    );
+    if (changed == true && mounted) _reload();
+  }
+
+  @override
+  Widget build(BuildContext context) => FutureBuilder<Set<ChannelProvider>>(
+    future: _linked,
+    builder: (context, snapshot) {
+      final linked = snapshot.data ?? const <ChannelProvider>{};
+      final detail = switch (snapshot.connectionState) {
+        ConnectionState.done when snapshot.hasError =>
+          'Could not check linked chats. Tap to try again.',
+        ConnectionState.done when linked.isEmpty =>
+          'Text the Omi bot on Telegram or iMessage, then enter the code it '
+              'sends back.',
+        ConnectionState.done =>
+          'Linked: ${linked.map(_label).join(', ')}. Tap to link another or '
+              'unlink.',
+        _ => 'Checking your linked chats…',
+      };
+      return _Tile(
+        key: const Key('channel_link_tile'),
+        icon: Icons.chat_bubble_outline_rounded,
+        title: 'Link a chat',
+        detail: detail,
+        trailing: Icon(
+          Icons.arrow_forward_rounded,
+          size: 18,
+          color: _SettingsColors.of(context).muted,
+        ),
+        onTap: snapshot.connectionState == ConnectionState.done
+            ? () => _openSheet(linked)
+            : null,
+      );
+    },
+  );
+}
+
+class _ChannelLinkDialog extends StatefulWidget {
+  const _ChannelLinkDialog({
+    required this.client,
+    required this.linked,
+    required this.label,
+  });
+
+  final ChannelClient client;
+  final Set<ChannelProvider> linked;
+  final String Function(ChannelProvider) label;
+
+  @override
+  State<_ChannelLinkDialog> createState() => _ChannelLinkDialogState();
+}
+
+class _ChannelLinkDialogState extends State<_ChannelLinkDialog> {
+  final _controller = TextEditingController();
+  bool _busy = false;
+  String? _error;
+  String? _success;
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  Future<void> _redeem() async {
+    final code = _controller.text.trim();
+    if (code.isEmpty) return;
+    setState(() {
+      _busy = true;
+      _error = null;
+      _success = null;
+    });
+    try {
+      final channel = await widget.client.redeemCode(code);
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _success = '${widget.label(channel)} is now linked.';
+        _controller.clear();
+      });
+    } on ChannelApiException catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _error = error.statusCode == 404
+            ? 'That code is unknown or has expired. Text the bot again for a '
+                  'fresh one.'
+            : error.message;
+      });
+    } on ChannelClientException catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _error = error.message;
+      });
+    }
+  }
+
+  Future<void> _unlink(ChannelProvider channel) async {
+    setState(() {
+      _busy = true;
+      _error = null;
+      _success = null;
+    });
+    try {
+      await widget.client.unlink(channel);
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _success = '${widget.label(channel)} is unlinked.';
+        widget.linked.remove(channel);
+      });
+    } on ChannelClientException catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _error = error.message;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = _SettingsColors.of(context);
+    return AlertDialog(
+      backgroundColor: colors.panel,
+      title: const Text('Link a chat'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Message the Omi bot on Telegram or iMessage and it will reply '
+            'with a short code. Enter it below.',
+            style: TextStyle(fontSize: 12, height: 1.35, color: colors.muted),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            key: const Key('channel_link_code_field'),
+            controller: _controller,
+            enabled: !_busy,
+            autocorrect: false,
+            textCapitalization: TextCapitalization.characters,
+            decoration: const InputDecoration(
+              labelText: 'Link code',
+              hintText: 'e.g. K7QP2RM',
+            ),
+            onSubmitted: (_) => _redeem(),
+          ),
+          if (_error != null) ...[
+            const SizedBox(height: 10),
+            Text(
+              _error!,
+              style: const TextStyle(fontSize: 12, color: Colors.redAccent),
+            ),
+          ],
+          if (_success != null) ...[
+            const SizedBox(height: 10),
+            Text(_success!, style: TextStyle(fontSize: 12, color: colors.ink)),
+          ],
+          if (widget.linked.isNotEmpty) ...[
+            const SizedBox(height: 16),
+            Text(
+              'Linked chats',
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: colors.ink,
+              ),
+            ),
+            for (final channel in widget.linked)
+              Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Row(
+                  children: [
+                    Expanded(child: Text(widget.label(channel))),
+                    TextButton(
+                      onPressed: _busy ? null : () => _unlink(channel),
+                      child: const Text('Unlink'),
+                    ),
+                  ],
+                ),
+              ),
+          ],
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: _busy ? null : () => Navigator.of(context).pop(true),
+          child: const Text('Done'),
+        ),
+        FilledButton(
+          key: const Key('channel_link_submit'),
+          onPressed: _busy ? null : _redeem,
+          child: const Text('Link'),
+        ),
+      ],
+    );
+  }
 }
 
 class DeleteLocalDataTile extends StatefulWidget {

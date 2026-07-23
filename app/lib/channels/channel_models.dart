@@ -11,6 +11,25 @@ enum ChannelProvider {
   };
 }
 
+// The link-code format, mirrored from the worker (`channel-link.ts`): a fixed
+// length over an unambiguous alphabet (no O/0/I/l/1), case-insensitive with
+// tolerated separators. Kept here so both the settings dialog and the desktop
+// chat recogniser agree on what counts as a code.
+abstract final class ChannelLinkCode {
+  static const alphabet = '23456789ABCDEFGHJKMNPQRSTUVWXYZ';
+  static const length = 7;
+
+  /// Returns the canonical code when [value] is one, otherwise null.
+  static String? tryParse(String value) {
+    final normalized = value.toUpperCase().replaceAll(RegExp(r'[\s._-]'), '');
+    if (normalized.length != length) return null;
+    for (final unit in normalized.codeUnits) {
+      if (!alphabet.contains(String.fromCharCode(unit))) return null;
+    }
+    return normalized;
+  }
+}
+
 enum ChannelLinkPhase {
   unlinked,
   requesting,

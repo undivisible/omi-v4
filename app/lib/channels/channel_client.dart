@@ -3,10 +3,11 @@ import 'channel_models.dart';
 enum ChannelHttpMethod { get, post, delete }
 
 final class ChannelRequest {
-  const ChannelRequest({required this.method, required this.path});
+  const ChannelRequest({required this.method, required this.path, this.body});
 
   final ChannelHttpMethod method;
   final String path;
+  final ChannelJson? body;
 }
 
 final class ChannelResponse {
@@ -62,6 +63,18 @@ final class ChannelClient {
       );
     }
     return token;
+  }
+
+  Future<ChannelProvider> redeemCode(String code) async {
+    final response = await _send(
+      ChannelRequest(
+        method: ChannelHttpMethod.post,
+        path: '/v1/channels/link',
+        body: {'code': code},
+      ),
+    );
+    final body = _object(response.body);
+    return ChannelProvider.fromJson(body['channel']);
   }
 
   Future<bool> isLinked(ChannelProvider channel) async {

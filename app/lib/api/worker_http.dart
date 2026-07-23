@@ -522,6 +522,7 @@ final class WorkerChannelTransport implements AuthenticatedChannelTransport {
     final response = await _client.send(
       method: request.method.name.toUpperCase(),
       path: request.path,
+      body: request.body,
     );
     return ChannelResponse(
       statusCode: response.statusCode,

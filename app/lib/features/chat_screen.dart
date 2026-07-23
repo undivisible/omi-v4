@@ -9,6 +9,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../api/worker_http.dart'
     show BillingEntitlement, OmiPlan, WorkerAuthenticationException;
 import '../app_services.dart';
+import '../channels/channels.dart';
 import '../currents/currents.dart';
 import '../keyboard/keyboard.dart';
 import '../keyboard/shake_gesture.dart';
@@ -713,6 +714,14 @@ class ChatScreenState extends State<ChatScreen> {
   Future<void> _send() async {
     final text = _input.text.trim();
     if (text.isEmpty || _activeRequestId != null || _sending) return;
+    // A bare channel link code typed into the chat box is a link action, not a
+    // message for the assistant — redeem it here and confirm inline.
+    final code = ChannelLinkCode.tryParse(text);
+    final channels = widget.services.channels;
+    if (code != null && channels != null) {
+      await _redeemLinkCode(channels, code);
+      return;
+    }
     _sending = true;
     try {
       final requestId = await widget.services.sendChatMessage(text: text);
@@ -733,6 +742,51 @@ class ChatScreenState extends State<ChatScreen> {
         _activeRequestId = null;
         _progress = null;
         _error = _describeError(failure);
+      });
+    } finally {
+      _sending = false;
+    }
+  }
+
+  Future<void> _redeemLinkCode(ChannelClient channels, String code) async {
+    _sending = true;
+    setState(() {
+      _messages.add(
+        _ChatMessage(
+          requestId: 'channel-link:$code',
+          text: code,
+          fromUser: true,
+        ),
+      );
+      _dismissGreeter();
+      _progress = 'Linking chat';
+      _error = null;
+      _input.clear();
+    });
+    try {
+      final channel = await channels.redeemCode(code);
+      if (!mounted) return;
+      final name = channel == ChannelProvider.telegram
+          ? 'Telegram'
+          : 'iMessage';
+      setState(() {
+        _messages.add(
+          _ChatMessage(
+            requestId: 'channel-link-result:$code',
+            text: 'Linked your $name chat to this account.',
+            fromUser: false,
+          ),
+        );
+        _progress = null;
+      });
+    } catch (failure) {
+      if (!mounted) return;
+      setState(() {
+        _progress = null;
+        _error = failure is ChannelApiException && failure.statusCode == 404
+            ? 'That link code is unknown or has expired. Text the bot again '
+                  'for a fresh one.'
+            : _describeError(failure);
       });
     } finally {
       _sending = false;
