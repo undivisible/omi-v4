@@ -292,6 +292,12 @@ final class AppServices {
   final DeviceAudioForwarder deviceAudio;
   late final DesktopVoiceCapture desktopVoice;
   late final LiveVoiceCapture liveVoice;
+
+  /// Whether a desktop voice turn is running on either route. The live route
+  /// leaves [desktopVoice] idle, so anything that keys off voice being active
+  /// — the in-window listening view, escape-to-cancel — has to ask both or it
+  /// silently ignores every live turn.
+  bool get desktopVoiceActive => desktopVoice.active || liveVoice.active;
   final WorkspaceRootStore workspaceRoots;
   final ProviderCredentialStore providerCredentials;
   final PlatformDesktopCapabilityGateway capabilities;

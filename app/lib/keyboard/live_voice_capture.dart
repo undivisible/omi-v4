@@ -16,13 +16,34 @@ final class LiveVoiceCapture {
     this.permissionCheck,
     this.startTimeout = const Duration(seconds: 12),
     this.stopTimeout = const Duration(seconds: 5),
-  });
+    this.playbackHangover = const Duration(milliseconds: 320),
+    this.echoCancelledSource,
+    DateTime Function()? clock,
+  }) : _now = clock ?? DateTime.now;
 
   static const sampleRateHz = 16000;
 
   final NativeHub hub;
   final Duration startTimeout;
   final Duration stopTimeout;
+
+  /// How long after the assistant's playback drains the microphone stays
+  /// muted, covering the utterance tail and room reverb the mic would
+  /// otherwise re-capture. Only used on the half-duplex fallback, when the
+  /// capture device could not be put into acoustic-echo-cancelling mode.
+  final Duration playbackHangover;
+
+  /// Whether an injected audio source already cancels the assistant's
+  /// playback out of the microphone signal. Only consulted when [_startAudio]
+  /// supplies the stream; the built-in recorder answers this from the device
+  /// itself. Defaults to assuming it does not, so the half-duplex guard
+  /// covers sources of unknown provenance.
+  final bool? echoCancelledSource;
+
+  /// Injectable wall clock so the half-duplex gate can be tested
+  /// deterministically.
+  final DateTime Function() _now;
+
   final Future<bool> Function()? permissionCheck;
   AudioRecorder? _recorder;
   final DesktopAudioStart? _startAudio;
@@ -32,6 +53,7 @@ final class LiveVoiceCapture {
   _LiveVoiceSession? _endedSession;
   int _generation = 0;
   int _discardedOutputBytes = 0;
+  bool _echoCancelled = false;
   String? _ephemeralToken;
   String? _model;
   final level = ValueNotifier<double>(0);
@@ -39,6 +61,17 @@ final class LiveVoiceCapture {
   /// Running transcript of what the assistant said aloud, surfaced so the
   /// UI/chat can show the reply text alongside the audio.
   final assistantTranscript = ValueNotifier<String>('');
+
+  /// Running transcript of what the user said, as the provider finalizes each
+  /// segment, so the listening view can show speech landing live.
+  final userTranscript = ValueNotifier<String>('');
+
+  /// Whether the capture device is running through the platform's
+  /// acoustic-echo-cancelling path. When it is, the assistant's own playback
+  /// is subtracted from the microphone signal in hardware and the mic can
+  /// stay open through playback, which is what makes barge-in work. When it
+  /// is not, [playbackHangover] half-duplex gating stands in for it.
+  bool get echoCancelled => _echoCancelled;
 
   bool get active => _session != null;
 
@@ -67,6 +100,7 @@ final class LiveVoiceCapture {
     _ephemeralToken = ephemeralToken;
     _model = model;
     assistantTranscript.value = '';
+    userTranscript.value = '';
     final streamId =
         'live-voice-$authorityId-${DateTime.now().microsecondsSinceEpoch}';
     final session = _LiveVoiceSession(streamId);
@@ -86,15 +120,7 @@ final class LiveVoiceCapture {
         ),
       ]).timeout(startTimeout);
       if (_session != session || generation != _generation) return;
-      final audio =
-          await (_startAudio?.call() ??
-              (_recorder ??= AudioRecorder()).startStream(
-                const RecordConfig(
-                  encoder: AudioEncoder.pcm16bits,
-                  sampleRate: sampleRateHz,
-                  numChannels: 1,
-                ),
-              ));
+      final audio = await _startMicrophone();
       if (_session != session || generation != _generation) {
         await (_stopAudio?.call() ?? _recorder!.stop().then((_) {}));
         return;
@@ -110,6 +136,46 @@ final class LiveVoiceCapture {
     } catch (_) {
       await _abort(session);
       rethrow;
+    }
+  }
+
+  static RecordConfig _recordConfig({required bool echoCancel}) => RecordConfig(
+    encoder: AudioEncoder.pcm16bits,
+    sampleRate: sampleRateHz,
+    numChannels: 1,
+    echoCancel: echoCancel,
+  );
+
+  /// Opens the microphone through the platform's voice-processing path.
+  ///
+  /// A Live API turn is full duplex: the assistant's reply plays out of the
+  /// speakers while the microphone keeps streaming. Captured plain, the mic
+  /// picks that playback back up, the server's voice activity detector hears
+  /// the model talking over itself, barges in on its own turn and answers
+  /// again — the "cuts out, then repeats" loop. macOS routes this request
+  /// through the voice-processing IO unit, which subtracts the speaker
+  /// signal; Google's own Live API samples capture the same way. A device
+  /// that refuses voice processing falls back to plain capture, and the
+  /// half-duplex guard in [_sendAudio] stands in for it.
+  Future<Stream<Uint8List>> _startMicrophone() async {
+    final start = _startAudio;
+    if (start != null) {
+      _echoCancelled = echoCancelledSource ?? false;
+      return start();
+    }
+    final recorder = _recorder ??= AudioRecorder();
+    try {
+      final stream = await recorder.startStream(
+        _recordConfig(echoCancel: true),
+      );
+      _echoCancelled = true;
+      return stream;
+    } catch (_) {
+      final stream = await recorder.startStream(
+        _recordConfig(echoCancel: false),
+      );
+      _echoCancelled = false;
+      return stream;
     }
   }
 
@@ -165,6 +231,16 @@ final class LiveVoiceCapture {
     final session = _session;
     if (session == null || session.stopping || bytes.isEmpty) return;
     level.value = pcm16Rms(bytes);
+    // Half-duplex echo guard, used only when the capture device could not be
+    // put into echo-cancelling mode. The raw input node hears the assistant's
+    // own playback, and forwarding that lets the model hear itself and
+    // re-respond — the audible "cuts out, then repeats" loop. Drop outbound
+    // mic frames until playback has drained; the level still moves so the
+    // waveform stays alive. It costs barge-in, which is why cancelling the
+    // echo properly is preferred whenever the device allows it.
+    if (!_echoCancelled && _now().isBefore(session.suppressOutboundUntil)) {
+      return;
+    }
     hub.sendAudio(
       requestId: session.streamId,
       sequence: session.sequence++,
@@ -185,6 +261,11 @@ final class LiveVoiceCapture {
         case LiveVoicePhase.started:
           if (!session.started.isCompleted) session.started.complete();
         case LiveVoicePhase.interrupted:
+          // The turn was cut: its queued audio is dropped, so the echo guard
+          // must release at once or the mic would stay muted with nothing
+          // playing.
+          session.playbackEndsAt = _epoch;
+          session.suppressOutboundUntil = _epoch;
           session.playoutOps = session.playoutOps.then(
             (_) => session.playout.flush(),
           );
@@ -219,6 +300,7 @@ final class LiveVoiceCapture {
         assistantTranscript.value = session.assistantTranscript.toString();
       } else if (value.finalSegment) {
         session.transcript.write(value.text);
+        userTranscript.value = session.transcript.toString();
       }
     } else if (event case NativeEventLiveVoiceAudio(
       :final value,
@@ -284,6 +366,10 @@ final class LiveVoiceCapture {
 
   void _playOutput(_LiveVoiceSession session, LiveVoiceAudio chunk) {
     final bytes = Uint8List.fromList(chunk.bytes);
+    // PCM16 mono: two bytes per frame, frames / rate seconds of playback.
+    final chunkMs = chunk.sampleRateHz > 0
+        ? (bytes.length ~/ 2) * 1000 ~/ chunk.sampleRateHz
+        : 0;
     session.playoutOps = session.playoutOps.then((_) async {
       final played =
           _session == session &&
@@ -291,7 +377,22 @@ final class LiveVoiceCapture {
             sampleRateHz: chunk.sampleRateHz,
             bytes: bytes,
           );
-      if (!played) _discardedOutputBytes += bytes.length;
+      if (played) {
+        // Only audio that actually reaches the speakers can echo back into
+        // the mic, so only real playback arms the half-duplex guard. Chunks
+        // queue faster than realtime; track a running playback-end time so
+        // the mute window spans the whole queued backlog, not just one chunk.
+        final now = _now();
+        final base = session.playbackEndsAt.isAfter(now)
+            ? session.playbackEndsAt
+            : now;
+        session.playbackEndsAt = base.add(Duration(milliseconds: chunkMs));
+        session.suppressOutboundUntil = session.playbackEndsAt.add(
+          playbackHangover,
+        );
+      } else {
+        _discardedOutputBytes += bytes.length;
+      }
     });
   }
 
@@ -334,10 +435,17 @@ final class LiveVoiceCapture {
   }
 }
 
+final _epoch = DateTime.fromMillisecondsSinceEpoch(0);
+
 final class _LiveVoiceSession {
   _LiveVoiceSession(this.streamId);
 
   final String streamId;
+  // Half-duplex echo guard state. [playbackEndsAt] is the running wall-clock
+  // time the queued assistant audio finishes; [suppressOutboundUntil] adds the
+  // hangover and is what gates the microphone.
+  DateTime playbackEndsAt = _epoch;
+  DateTime suppressOutboundUntil = _epoch;
   String get startRequestId => 'start-$streamId';
   String get stopRequestId => 'stop-$streamId';
   final started = Completer<void>();

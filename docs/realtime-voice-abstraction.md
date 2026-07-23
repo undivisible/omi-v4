@@ -14,6 +14,53 @@ The design in section 2 proposed a provider-agnostic `voice.rs` with a `VoiceSes
 
 Per `ARCHITECTURE.md` (section on live voice) and `PLAN.md`: the hub-side implementation and its unit tests are complete, but there is no credentialed live-provider proof yet — Gemini Live has not been exercised against real provider credentials in this repository state. The multi-provider abstraction proposed in section 2 (OpenAI Realtime GA/GPT-Live-1, NVIDIA Nemotron/PersonaPlex) remains unimplemented design work; if a second provider is added, expect the trait to grow back toward the richer shape in section 2 rather than the narrower one that shipped for a single provider.
 
+### 0.1 Full duplex means the microphone hears the model
+
+A Live API turn plays the model's audio out of the speakers while the
+microphone keeps streaming. Captured plainly, the microphone re-records that
+playback and sends it back up the socket; the server's voice activity detector
+reads it as the user speaking, interrupts the model mid-reply (`serverContent.interrupted`)
+and answers again. What the user hears is the assistant cutting out and then
+repeating itself — a feedback loop, not a networking fault.
+
+The mitigation lives on the client, in `app/lib/keyboard/live_voice_capture.dart`:
+
+- **Acoustic echo cancellation, preferred.** The recorder is started with
+  `RecordConfig(echoCancel: true)`, which `record_macos` turns into
+  `AVAudioEngine.inputNode.setVoiceProcessingEnabled(true)` — the voice-processing
+  IO unit, which subtracts the output signal from the microphone. Barge-in keeps
+  working because the microphone stays open through playback. Google's own Live
+  API sample clients capture the same way.
+- **Half-duplex gating, fallback.** If a device refuses voice processing the
+  recorder is retried without it and `LiveVoiceCapture` mutes outbound frames
+  until the queued playback has drained plus `playbackHangover`. This costs
+  barge-in, which is why it is a fallback and not the default. A barge-in
+  interrupt releases the gate immediately, since the interrupted turn's queued
+  audio is dropped rather than played.
+
+Rates are asymmetric and must stay that way: 16 kHz PCM16 mono up
+(`INPUT_SAMPLE_RATE_HZ`), whatever rate the `audio/pcm;rate=` mime says down
+(24 kHz by default). `_VoicePlayout` reconfigures the player node when the
+output rate changes mid-session rather than feeding one rate into a node
+opened at another.
+
+**Manual verification** (needs real credentials, so it is not covered by the
+test suite):
+
+1. Start a live voice turn on a Mac with **built-in speakers at normal volume**
+   and no headphones — the loop only reproduces when the microphone can hear
+   the speakers.
+2. Ask something with a long answer ("explain how a transformer works") and let
+   the model talk for 20+ seconds without speaking. The reply must run to
+   completion: no mid-sentence cut, no restart of an earlier sentence.
+3. While the model is still speaking, interrupt it out loud. It must stop
+   promptly (barge-in), and the following reply must answer the interruption
+   rather than repeating the previous one. If it never stops, echo cancellation
+   did not engage; if it stops but the reply is unrelated, the fallback gate is
+   swallowing the interruption.
+4. Repeat with headphones. Behaviour should be identical — this isolates
+   echo-path regressions from provider-side ones.
+
 ## 1. Provider landscape
 
 ### 1.1 What each provider actually is
