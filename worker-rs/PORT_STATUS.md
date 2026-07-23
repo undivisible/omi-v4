@@ -30,6 +30,8 @@ resolved — noted inline).
 | `routes.ts` → `GET /setup-health` | `src/setup_health.rs` + `glue.rs::handle_setup_health` | **ported** | Identical boolean shape. 4 tests. |
 | `routes.ts` → `GET /entitlement` | `glue.rs::handle_entitlement` | **ported** | |
 | `routes.ts` → `GET|PUT /profile/onboarding` | `glue.rs::handle_onboarding_*` | **ported** | Same INSERT…ON CONFLICT + 400 on `complete!=true`. |
+| `routes.ts` → `GET|PUT /settings` | `src/settings.rs` + `glue.rs::handle_settings_*` | **ported** | Security-relevant: `PUT` owns `user_settings.revision` (= `policy_generation`), the mechanism a user uses to revoke standing current-approvals — the approval gate in `routes_memory/wasm_glue.rs` reads `policy_generation = COALESCE((SELECT revision FROM user_settings…), 0)`, so without this route the revision could never bump and revocation was inoperative. Parity: same up-front validation (patch keys, `Number(expectedRevision)` safe-int ≥0 with `undefined`→NaN reject, duration allow-list, approval/proactive value checks), 409 revision conflict, `expandsAuthority` owner-confirmation-receipt consume (403 shapes), scoped `setting_scopes` upsert (`ON CONFLICT(uid,duration,scope_id)`) vs persistent `revision+1` UPDATE / `revision=1` INSERT-OR-IGNORE, `settingsDiff`, and the scopeId/expiresAt guards. Pure logic + 8 host tests in `settings.rs`. |
+| `routes.ts` → `POST /channels/:channel/messages` | `glue.rs::handle_channel_message_post` + `routes_channels::dispatch_channel_message` | **ported** | App-initiated outbound send: `text`/idempotency-key validation (len≥8 + `^[A-Za-z0-9._:-]+$`), `channel_bindings` lookup (409 not-linked), idempotent `INSERT OR IGNORE INTO channel_deliveries` + re-read conflict (409), `appendConversationMessage` (409 on conflict), DeliveryCoordinator `/deliver` dispatch (503 on failure), and the 200/503/502/202 status machine from the re-read state. `dispatch_channel_message` added to `routes_channels.rs` (uses the existing `dispatch_to_coordinator`). Pure `valid_idempotency_key` + `delivery_status` with 2 host tests in `delivery.rs`. |
 | `routes.ts` → `DELETE /account` | `glue.rs::handle_account_delete` | **partial** | D1 batch delete across all uid-scoped tables at parity. Vectorize claim-vector cleanup deferred — **blocked** on Vectorize binding (see below). |
 
 ## Phase 2 (this task — landed)
@@ -67,8 +69,8 @@ build is honest with or without the index provisioned. The scheduled
 | TS module | Status | Notes |
 |---|---|---|
 | `assistant.ts`, `assistant-admission.ts` (DO) | pending | DO native; large logic surface. |
-| `conversations.ts` | pending | D1 only. |
-| `currents.ts` | pending | D1 only. |
+| `conversations.ts` | **ported** | See the Delivery / AI / Memory sections below; D1 replay + inbox landed. |
+| `currents.ts` | **ported** | See "Memory & currents" below (`routes_memory.rs` + `wasm_glue.rs`). This row previously (and wrongly) read `pending`. |
 | `delivery.ts` (DeliveryCoordinator DO) | pending | DO native. |
 | `stt.ts`, `stt-admission.ts` (DO), `asr.ts`, `voice.ts` | pending | WebSocket upgrade + upstream fetch; workers-rs supports `WebSocketPair`. |
 | `memory-projection.ts`, `memory-sync.ts` | pending | D1 + zkr (see wasm note). |
