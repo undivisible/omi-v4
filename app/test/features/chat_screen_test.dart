@@ -10,10 +10,63 @@ import 'package:omi/conversations/conversations.dart';
 import 'package:omi/currents/currents.dart';
 import 'package:omi/device/device.dart';
 import 'package:omi/features/chat_screen.dart';
+import 'package:omi/features/meeting_notes.dart';
 import 'package:omi/native/native_hub.dart';
 import 'package:omi/onboarding/hub_checklist.dart';
 
 void main() {
+  testWidgets('a saved meeting surfaces as a current and opens the notes', (
+    tester,
+  ) async {
+    final services = AppServices.forTesting(
+      nativeHub: const UnavailableNativeHub('test'),
+      deviceRelay: DeviceRelayService(
+        role: DeviceRelayRole.desktopObserver,
+        adapter: const UnavailableDeviceRelayAdapter(),
+      ),
+      auth: AuthController(const UnconfiguredAuthGateway()),
+      memoryDatabasePath: (uid) => '/tmp/$uid.sqlite3',
+    );
+    services.meetingNotes = VolatileMeetingNotesStore()
+      ..notes.add(
+        MeetingNote(
+          id: 'meeting-1',
+          title: 'Design sync',
+          summary: 'Agreed the launch date',
+          startedAt: DateTime.utc(2026, 7, 21, 12),
+          endedAt: DateTime.utc(2026, 7, 21, 12, 25),
+          participants: const [],
+          keyPoints: const ['Ship on the 30th'],
+          decisions: const [],
+          actions: const [],
+          markdown: '# Design sync',
+          metadataJson: '',
+        ),
+      );
+    addTearDown(services.dispose);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: ChatScreen(
+            services: services,
+            previewMode: true,
+            checklistStore: VolatileHubChecklistStore(),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('meeting_note_meeting-1')), findsOneWidget);
+    expect(find.text('Design sync'), findsOneWidget);
+    expect(find.text('Ship on the 30th'), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('meeting_note_meeting-1')));
+    await tester.pumpAndSettle();
+    expect(find.widgetWithText(AppBar, 'Meeting notes'), findsOneWidget);
+  });
+
   testWidgets('Set up Omi. renders as a crossed-out completed first row', (
     tester,
   ) async {

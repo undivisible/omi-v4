@@ -31,6 +31,8 @@ import '../ui/omi_ui.dart';
 import 'cursor_pill_controller.dart' show CombinedVoiceLevel;
 import 'hub_task_meta.dart';
 import 'in_app_voice_view.dart';
+import 'meeting_notes.dart';
+import 'meeting_notes_screen.dart';
 import 'tasks_screen.dart';
 
 /// Height of the sliver of conversation left visible above the home view, so
@@ -193,6 +195,7 @@ class ChatScreenState extends State<ChatScreen> {
   Timer? _chatRevealTimer;
   List<String> _starterTasks = const [];
   final _doneStarterTasks = <String>{};
+  List<MeetingNote> _meetingNotes = const [];
   late final _voiceLevel = CombinedVoiceLevel([
     widget.services.desktopVoice.level,
     widget.services.liveVoice.level,
@@ -202,6 +205,7 @@ class ChatScreenState extends State<ChatScreen> {
   void initState() {
     super.initState();
     unawaited(_loadChecklist());
+    unawaited(_loadMeetingNotes());
     unawaited(_loadByokHint());
     if (!widget.previewMode) {
       unawaited(
@@ -287,6 +291,30 @@ class ChatScreenState extends State<ChatScreen> {
           ..addAll(doneStarters);
       });
     }
+  }
+
+  /// Meetings surface as currents, not as a buried settings row: the notes Omi
+  /// wrote belong next to "what matters next", where the user is already
+  /// looking. Reloaded whenever a meeting completes.
+  Future<void> _loadMeetingNotes() async {
+    List<MeetingNote> notes;
+    try {
+      notes = await widget.services.meetingNotes.list();
+    } catch (_) {
+      notes = const [];
+    }
+    if (!mounted) return;
+    setState(() => _meetingNotes = notes);
+  }
+
+  void _openMeetingNotes() {
+    if (!mounted) return;
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (context) => MeetingNotesScreen(services: widget.services),
+        fullscreenDialog: true,
+      ),
+    );
   }
 
   /// The BYOK hint is only true for accounts that are not already paying for
@@ -704,6 +732,7 @@ class ChatScreenState extends State<ChatScreen> {
               fromUser: false,
             ),
           );
+          unawaited(_loadMeetingNotes());
         default:
           break;
       }
@@ -1010,6 +1039,9 @@ class ChatScreenState extends State<ChatScreen> {
                                                   onToggleStarterTask:
                                                       _toggleStarterTask,
                                                   tasks: tasks,
+                                                  meetingNotes: _meetingNotes,
+                                                  onOpenMeetingNotes:
+                                                      _openMeetingNotes,
                                                   onComplete: currents == null
                                                       ? null
                                                       : (id) => unawaited(
@@ -1543,6 +1575,8 @@ class _ChatHome extends StatelessWidget {
     required this.doneStarterTasks,
     required this.onToggleStarterTask,
     required this.tasks,
+    required this.meetingNotes,
+    required this.onOpenMeetingNotes,
     required this.onComplete,
     required this.onPrompt,
     this.onAllTasks,
@@ -1558,6 +1592,8 @@ class _ChatHome extends StatelessWidget {
   final Set<String> doneStarterTasks;
   final ValueChanged<String> onToggleStarterTask;
   final List<CurrentCard> tasks;
+  final List<MeetingNote> meetingNotes;
+  final VoidCallback onOpenMeetingNotes;
   final ValueChanged<String>? onComplete;
   final ValueChanged<String> onPrompt;
   final VoidCallback? onAllTasks;
@@ -1664,6 +1700,36 @@ class _ChatHome extends StatelessWidget {
                           : () => onComplete!(task.item.id),
                       onTap: () => onPrompt(task.item.proposedNextStep),
                     ),
+                for (final note in meetingNotes.take(3))
+                  _MeetingNoteRow(
+                    key: ValueKey('meeting_note_${note.id}'),
+                    note: note,
+                    onTap: onOpenMeetingNotes,
+                  ),
+                if (meetingNotes.length > 3)
+                  DecoratedBox(
+                    decoration: BoxDecoration(
+                      border: Border(top: BorderSide(color: colors.hairline)),
+                    ),
+                    child: InkWell(
+                      key: const Key('hub_all_meeting_notes'),
+                      onTap: onOpenMeetingNotes,
+                      hoverColor: colors.rowHover,
+                      splashColor: Colors.transparent,
+                      highlightColor: Colors.transparent,
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 10),
+                        child: Text(
+                          'All meeting notes →',
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: colors.muted,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
                 if (onAllTasks != null)
                   DecoratedBox(
                     decoration: BoxDecoration(
@@ -1979,6 +2045,139 @@ class _RichTaskRow extends StatelessWidget {
                 ],
               ),
             ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// A completed meeting, rendered as a current so the notes Omi wrote sit
+/// alongside "what matters next" instead of behind a settings screen. The
+/// whole row opens the notes; there is no completion circle — a meeting that
+/// happened is not a task to tick off.
+class _MeetingNoteRow extends StatelessWidget {
+  const _MeetingNoteRow({required this.note, required this.onTap, super.key});
+
+  final MeetingNote note;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = _HubColors.of(context);
+    final points = note.keyPoints;
+    final preview = points.isNotEmpty ? points.first : note.summary;
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        border: Border(top: BorderSide(color: colors.hairline)),
+      ),
+      child: InkWell(
+        onTap: onTap,
+        hoverColor: colors.rowHover,
+        splashColor: Colors.transparent,
+        highlightColor: Colors.transparent,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 12),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.only(top: 2),
+                child: Icon(
+                  Icons.sticky_note_2_outlined,
+                  size: 16,
+                  color: colors.muted,
+                ),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: DecoratedBox(
+                  key: ValueKey('meeting_note_card_${note.id}'),
+                  decoration: BoxDecoration(
+                    color: colors.cardBg,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: colors.hairline),
+                    boxShadow: [
+                      BoxShadow(
+                        color: colors.cardShadow,
+                        offset: const Offset(0, 4),
+                        blurRadius: 16,
+                      ),
+                    ],
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Container(
+                          width: 3,
+                          height: 34,
+                          margin: const EdgeInsets.only(right: 10, top: 2),
+                          decoration: BoxDecoration(
+                            color: colors.hintBlue,
+                            borderRadius: BorderRadius.circular(2),
+                          ),
+                        ),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                note.title,
+                                style: TextStyle(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w600,
+                                  color: colors.ink,
+                                ),
+                              ),
+                              if (preview.isNotEmpty)
+                                Padding(
+                                  padding: const EdgeInsets.only(top: 2),
+                                  child: Text(
+                                    preview,
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      height: 18 / 12,
+                                      color: colors.muted,
+                                    ),
+                                  ),
+                                ),
+                            ],
+                          ),
+                        ),
+                        Padding(
+                          padding: const EdgeInsets.only(left: 10),
+                          child: DecoratedBox(
+                            decoration: BoxDecoration(
+                              border: Border.all(color: colors.hairline),
+                              borderRadius: BorderRadius.circular(999),
+                            ),
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                                vertical: 2,
+                              ),
+                              child: Text(
+                                'MEETING',
+                                style: TextStyle(
+                                  fontSize: 9,
+                                  fontWeight: FontWeight.w600,
+                                  letterSpacing: 1.17,
+                                  color: colors.muted,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ],
           ),
         ),
       ),
