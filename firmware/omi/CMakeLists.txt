@@ -1,4 +1,33 @@
 cmake_minimum_required(VERSION 3.20.0)
+
+set(OMI_VERSION_MAJOR 0)
+set(OMI_VERSION_MINOR 0)
+set(OMI_VERSION_PATCHLEVEL 0)
+set(OMI_VERSION_EXTRA "")
+
+file(STRINGS ${CMAKE_CURRENT_SOURCE_DIR}/VERSION omi_version_lines)
+foreach(omi_version_line ${omi_version_lines})
+    if(omi_version_line MATCHES "^[ \t]*VERSION_MAJOR[ \t]*=[ \t]*([0-9]+)")
+        set(OMI_VERSION_MAJOR ${CMAKE_MATCH_1})
+    elseif(omi_version_line MATCHES "^[ \t]*VERSION_MINOR[ \t]*=[ \t]*([0-9]+)")
+        set(OMI_VERSION_MINOR ${CMAKE_MATCH_1})
+    elseif(omi_version_line MATCHES "^[ \t]*PATCHLEVEL[ \t]*=[ \t]*([0-9]+)")
+        set(OMI_VERSION_PATCHLEVEL ${CMAKE_MATCH_1})
+    elseif(omi_version_line MATCHES "^[ \t]*EXTRAVERSION[ \t]*=[ \t]*([A-Za-z0-9_.-]+)")
+        set(OMI_VERSION_EXTRA ${CMAKE_MATCH_1})
+    endif()
+endforeach()
+
+set(OMI_FW_REV_STR "${OMI_VERSION_MAJOR}.${OMI_VERSION_MINOR}.${OMI_VERSION_PATCHLEVEL}")
+if(NOT OMI_VERSION_EXTRA STREQUAL "")
+    string(APPEND OMI_FW_REV_STR "-${OMI_VERSION_EXTRA}")
+endif()
+
+set(OMI_GENERATED_VERSION_CONF ${CMAKE_CURRENT_BINARY_DIR}/omi_fw_rev.conf)
+file(WRITE ${OMI_GENERATED_VERSION_CONF} "CONFIG_BT_DIS_FW_REV_STR=\"${OMI_FW_REV_STR}\"\n")
+list(APPEND EXTRA_CONF_FILE ${OMI_GENERATED_VERSION_CONF})
+message(STATUS "Omi firmware revision (DIS 0x2A26): ${OMI_FW_REV_STR}")
+
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 enable_language(C ASM) # OPUS
 

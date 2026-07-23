@@ -1,7 +1,7 @@
+#include <app_version.h>
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/pm/device_runtime.h>
-#include <zephyr/shell/shell.h>
 
 #include "lib/core/button.h"
 #include "lib/core/codec.h"
@@ -227,7 +227,7 @@ static int suspend_unused_modules(void)
 int main(void)
 {
     int ret;
-    printk("Starting omi ...\n");
+    printk("Starting omi %s ...\n", APP_VERSION_STRING);
 
     // print reset reason at startup
     print_reset_reason();
