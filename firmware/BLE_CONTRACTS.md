@@ -5,7 +5,28 @@ from the firmware sources in this directory; file and function citations are
 inline so each claim is checkable. Reflects `firmware/omi/VERSION` 3.1.0 on top
 of upstream `BasedHardware/omi` `ed4e513e` (see `PROVENANCE.md`).*
 
-## 0. Conventions
+## 0. Which device am I talking to?
+
+Two different Zephyr firmwares implement (parts of) this interface:
+
+| Device | Firmware | Advertised name | DIS model `0x2A24` |
+| --- | --- | --- | --- |
+| **CV1 pendant** (production, nRF5340) | `firmware/omi/` | `Omi` | `Omi CV 1` |
+| **DevKit v1** (XIAO nRF52840 Sense) | `firmware/devkit/`, `prj_xiao_ble_sense_devkitv1.conf` | `Friend` | `Friend DevKit 1` |
+| **DevKit v1-spisd** | same app, `…devkitv1-spisd.conf` | `Friend` | `Friend DevKit 1 SPI SD` |
+| **DevKit v2-adafruit** | same app, `…devkitv2-adafruit.conf` | `Friend` | see that config file |
+
+**Everything in this document is the CV1 contract.** The DevKit implements a
+subset, listed in §12. Read the features bitmap (§4) and fall back to GATT
+discovery rather than assuming a characteristic exists.
+
+**Other Omi hardware does not implement this profile at all.** The glasses
+firmware (`omiGlass` upstream, and the sibling `OpenGlass` repository) is a
+Seeed XIAO ESP32-S3 Sense Arduino application, and `Whomane` is a Raspberry Pi
+Python wearable. Neither runs Zephyr and neither shares any UUID below. Do not
+route them through the same client code.
+
+## 0.1 Conventions
 
 - **Base UUID**: most custom services use `xxxxxxxx-E8F2-537E-4F6C-D104768A1214`.
   The button, accelerometer, haptic and storage services predate that and use
@@ -592,7 +613,58 @@ The peripheral re-requests the fast interval if the central settles above
 relaxes the link to 30–50 ms with latency 4 whenever audio is unsubscribed and
 no sync is running.
 
-## 11. Verification status
+## 11. Per-device support matrix
+
+`—` means the characteristic is not registered on that target at all; a read or
+write will fail with "attribute not found". "needs button" means the code is
+present but `CONFIG_OMI_ENABLE_BUTTON` is off in that configuration, because the
+DevKit button is an external switch the user wires between D4 and D5
+(`firmware/devkit/src/button.c`) and a floating pin would produce spurious taps.
+
+| UUID | What | CV1 | DevKit v1 | v1-spisd | v2-adafruit |
+| --- | --- | --- | --- | --- | --- |
+| `19B10001` | Audio data | yes | yes | yes | yes |
+| `19B10002` | Codec id | yes | yes | yes | yes |
+| `19B10003` | Speaker | — | — | — | yes |
+| `19B10011` | LED dim ratio | yes | — | — | — |
+| `19B10012` | Mic gain | yes | — | — | — |
+| `19B10013` | Charging state | yes | — | — | yes |
+| `19B10014` | Sleep command | yes | needs button | needs button | yes |
+| `19B10015` | Capture state | yes | yes | yes | yes |
+| `19B10016` | Device name | yes | — | — | — |
+| `19B10017` | User events | yes | yes | yes | yes |
+| `19B10021` | Features bitmap | yes | yes | yes | yes |
+| `19B10031`/`32` | Time sync | yes, NVS-backed | yes, RAM only | yes, RAM only | yes, RAM only |
+| `30295781`/`82` | Offline storage | yes, raw ring | — | yes, **FATFS, different protocol** | yes, **FATFS, different protocol** |
+| `23BA7925` | Legacy button | yes | needs button | needs button | yes |
+| `CAB1AB96` | Haptic | yes | — | — | yes |
+| `32403791` | Accelerometer stream | — | — | — | yes |
+| `0x2A19` | Battery level (BAS) | yes | yes | yes | yes |
+| `0x2A26` | Firmware revision (DIS) | yes | yes | yes | yes |
+| `00001531` | Nordic legacy DFU | — | yes | yes | yes |
+| SMP `8D53DC1D…` | MCUmgr OTA | yes | — | — | — |
+
+Per-device notes the app must handle:
+
+- **User events on the DevKit** use the identical 8-byte layout and the identical
+  codes (`firmware/devkit/src/omi_ext.h`), but only `0x01` bookmark, `0x02`
+  assistant and `0x03` power-off are ever emitted. There is no `0x10`/`0x11`
+  microphone sleep pair (no hardware AAD) and no `0x20`/`0x21` IMU pair.
+- **DevKit timestamps are volatile.** The DevKit has no RTC peripheral and no
+  NVS in these builds, so `19B10032` returns base-epoch + uptime and resets to 0
+  on every reboot. Write `19B10031` on every connect and do not trust a DevKit
+  timestamp across a reconnect that followed a reboot.
+- **DevKit offline storage is a different protocol.** The `-spisd` and
+  `v2-adafruit` builds use `firmware/devkit/src/storage.c` over FATFS, which
+  predates the CV1 ring protocol in §7 and does not share its opcodes. Section 7
+  applies to the CV1 only. Gate on the DIS model string, not just on the
+  presence of the `30295780` service.
+- **OTA differs.** CV1 is MCUboot + SMP over BLE; the DevKits use the Adafruit
+  UF2 bootloader with the Nordic legacy DFU service `00001530`/`00001531`.
+- **The DevKit has no LED dim ratio or mic gain**, so any settings UI must be
+  driven from the features bitmap rather than assumed.
+
+## 12. Verification status
 
 This branch has **not** been compiled or run on hardware. No Zephyr / nRF
 Connect SDK toolchain is installed on the machine where these changes were made.
