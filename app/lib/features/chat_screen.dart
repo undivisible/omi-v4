@@ -7,6 +7,7 @@ import '../app_services.dart';
 import '../currents/currents.dart';
 import '../keyboard/keyboard.dart';
 import '../keyboard/shake_gesture.dart';
+import 'cursor_pill.dart' show TypingShimmer;
 import '../native/generated/signals/signals.dart'
     show
         ActionRisk,
@@ -217,6 +218,7 @@ class ChatScreenState extends State<ChatScreen> {
   Future<void> _loadChecklist() async {
     bool done;
     List<String> starters;
+    List<String> doneStarters;
     try {
       done = await _checklist.isSetupComplete();
     } catch (_) {
@@ -227,10 +229,21 @@ class ChatScreenState extends State<ChatScreen> {
     } catch (_) {
       starters = const [];
     }
-    if (mounted && (done != _setupTaskDone || starters.isNotEmpty)) {
+    try {
+      doneStarters = await _checklist.doneStarterTasks();
+    } catch (_) {
+      doneStarters = const [];
+    }
+    if (mounted &&
+        (done != _setupTaskDone ||
+            starters.isNotEmpty ||
+            doneStarters.isNotEmpty)) {
       setState(() {
         _setupTaskDone = done;
         _starterTasks = starters;
+        _doneStarterTasks
+          ..clear()
+          ..addAll(doneStarters);
       });
     }
   }
@@ -239,10 +252,11 @@ class ChatScreenState extends State<ChatScreen> {
     setState(() {
       if (!_doneStarterTasks.remove(title)) _doneStarterTasks.add(title);
     });
-    final pending = _starterTasks
-        .where((task) => !_doneStarterTasks.contains(task))
-        .toList();
-    unawaited(_checklist.setStarterTasks(pending).catchError((Object _) {}));
+    unawaited(
+      _checklist
+          .setDoneStarterTasks(_doneStarterTasks.toList())
+          .catchError((Object _) {}),
+    );
   }
 
   void _toggleSetupTask() {
@@ -601,6 +615,14 @@ class ChatScreenState extends State<ChatScreen> {
     _inputFocus.requestFocus();
   }
 
+  void _sendPrompt(String prompt) {
+    _input.value = TextEditingValue(
+      text: prompt,
+      selection: TextSelection.collapsed(offset: prompt.length),
+    );
+    unawaited(_send());
+  }
+
   void _removeProposalsForParent(String requestId) {
     final removed = _proposals.values
         .where((proposal) => proposal.requestId == requestId)
@@ -777,16 +799,14 @@ class ChatScreenState extends State<ChatScreen> {
             child: ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 680),
               child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Flexible(
+                  Expanded(
                     child: Stack(
                       children: [
                         ListView.builder(
                           key: const Key('chat_messages'),
                           reverse: true,
-                          shrinkWrap: true,
                           itemCount: history.length + 1,
                           itemBuilder: (context, index) {
                             if (index == 0) {
@@ -803,7 +823,7 @@ class ChatScreenState extends State<ChatScreen> {
                                   onComplete: currents == null
                                       ? null
                                       : (id) => unawaited(currents.dismiss(id)),
-                                  onPrompt: _usePrompt,
+                                  onPrompt: _sendPrompt,
                                   onAllTasks: currents == null
                                       ? null
                                       : () => _openAllTasks(currents),
@@ -843,6 +863,15 @@ class ChatScreenState extends State<ChatScreen> {
               ),
             ),
           ),
+          if (_greeterDismissed)
+            Positioned(
+              top: 0,
+              left: 0,
+              child: _BackToHomeButton(
+                key: const Key('chat_back'),
+                onPressed: () => setState(() => _greeterDismissed = false),
+              ),
+            ),
           if (_shakeProgress > 0)
             IgnorePointer(
               child: _ShakeGlow(
@@ -1044,7 +1073,173 @@ class _GreeterSwitcher extends StatelessWidget {
       ),
       child: dismissed
           ? const SizedBox.shrink(key: Key('hub_greeter_hidden'))
-          : KeyedSubtree(key: const Key('hub_greeter'), child: child),
+          : KeyedSubtree(
+              key: const Key('hub_greeter'),
+              child: disableAnimations
+                  ? child
+                  : Stack(
+                      children: [
+                        child,
+                        const Positioned.fill(
+                          child: IgnorePointer(
+                            child: _GlowSweep(key: Key('hub_greeter_glow')),
+                          ),
+                        ),
+                      ],
+                    ),
+            ),
+    );
+  }
+}
+
+class _GlowSweep extends StatefulWidget {
+  const _GlowSweep({super.key});
+
+  @override
+  State<_GlowSweep> createState() => _GlowSweepState();
+}
+
+class _GlowSweepState extends State<_GlowSweep>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _sweep = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 1100),
+  )..forward();
+
+  @override
+  void dispose() {
+    _sweep.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => AnimatedBuilder(
+    animation: _sweep,
+    builder: (context, child) {
+      final value = _sweep.value;
+      if (value <= 0 || value >= 1) return const SizedBox.shrink();
+      final travel = -0.4 + 1.8 * value;
+      final fade = value < .5 ? value * 2 : (1 - value) * 2;
+      return DecoratedBox(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [
+              const Color(0x00fffcec),
+              const Color(0xfffffcec).withValues(alpha: .14 * fade),
+              const Color(0x00fffcec),
+            ],
+            stops: [
+              (travel - 0.25).clamp(0.0, 1.0),
+              travel.clamp(0.0, 1.0),
+              (travel + 0.25).clamp(0.0, 1.0),
+            ],
+          ),
+        ),
+      );
+    },
+  );
+}
+
+class _CompletionShimmer extends StatefulWidget {
+  const _CompletionShimmer({required this.done, required this.child});
+
+  final bool done;
+  final Widget child;
+
+  @override
+  State<_CompletionShimmer> createState() => _CompletionShimmerState();
+}
+
+class _CompletionShimmerState extends State<_CompletionShimmer>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _sweep = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 700),
+  );
+
+  @override
+  void didUpdateWidget(covariant _CompletionShimmer old) {
+    super.didUpdateWidget(old);
+    if (!old.done && widget.done && !MediaQuery.disableAnimationsOf(context)) {
+      _sweep.forward(from: 0);
+    }
+  }
+
+  @override
+  void dispose() {
+    _sweep.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => Stack(
+    children: [
+      widget.child,
+      Positioned.fill(
+        child: IgnorePointer(
+          child: AnimatedBuilder(
+            animation: _sweep,
+            builder: (context, child) {
+              final value = _sweep.value;
+              if (!_sweep.isAnimating || value <= 0 || value >= 1) {
+                return const SizedBox.shrink();
+              }
+              final travel = -0.3 + 1.6 * value;
+              return DecoratedBox(
+                key: const Key('task_complete_shimmer'),
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.centerLeft,
+                    end: Alignment.centerRight,
+                    colors: const [
+                      Color(0x00fffcec),
+                      Color(0x2efffcec),
+                      Color(0x00fffcec),
+                    ],
+                    stops: [
+                      (travel - 0.2).clamp(0.0, 1.0),
+                      travel.clamp(0.0, 1.0),
+                      (travel + 0.2).clamp(0.0, 1.0),
+                    ],
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+      ),
+    ],
+  );
+}
+
+class _BackToHomeButton extends StatelessWidget {
+  const _BackToHomeButton({required this.onPressed, super.key});
+
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = _HubColors.of(context);
+    return Tooltip(
+      message: 'Back to home',
+      child: Material(
+        color: colors.cardBg,
+        shape: CircleBorder(side: BorderSide(color: colors.hairline)),
+        child: InkWell(
+          onTap: onPressed,
+          customBorder: const CircleBorder(),
+          hoverColor: colors.rowHover,
+          splashColor: Colors.transparent,
+          highlightColor: Colors.transparent,
+          child: SizedBox(
+            width: 34,
+            height: 34,
+            child: Icon(Icons.arrow_back_rounded, size: 18, color: colors.ink),
+          ),
+        ),
+      ),
     );
   }
 }
@@ -1333,71 +1528,74 @@ class _TaskRow extends StatelessWidget {
         hoverColor: colors.rowHover,
         splashColor: Colors.transparent,
         highlightColor: Colors.transparent,
-        child: Opacity(
-          opacity: done ? .45 : 1,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(vertical: 16),
-            child: Row(
-              children: [
-                InkWell(
-                  key: completeKey,
-                  onTap: onComplete,
-                  customBorder: const CircleBorder(),
-                  child: Container(
-                    width: 16,
-                    height: 16,
-                    alignment: Alignment.center,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      border: Border.all(color: colors.muted),
-                    ),
-                    child: done
-                        ? Text(
-                            '✓',
-                            style: TextStyle(fontSize: 10, color: colors.ink),
-                          )
-                        : null,
-                  ),
-                ),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: Text(
-                    title,
-                    style: TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w600,
-                      color: colors.ink,
-                      decoration: done
-                          ? TextDecoration.lineThrough
-                          : TextDecoration.none,
-                    ),
-                  ),
-                ),
-                if (sourceTag case final tag?) ...[
-                  const SizedBox(width: 16),
-                  DecoratedBox(
-                    decoration: BoxDecoration(
-                      border: Border.all(color: colors.hairline),
-                      borderRadius: BorderRadius.circular(999),
-                    ),
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 8,
-                        vertical: 2,
+        child: _CompletionShimmer(
+          done: done,
+          child: Opacity(
+            opacity: done ? .45 : 1,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 16),
+              child: Row(
+                children: [
+                  InkWell(
+                    key: completeKey,
+                    onTap: onComplete,
+                    customBorder: const CircleBorder(),
+                    child: Container(
+                      width: 16,
+                      height: 16,
+                      alignment: Alignment.center,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        border: Border.all(color: colors.muted),
                       ),
-                      child: Text(
-                        tag.toUpperCase(),
-                        style: TextStyle(
-                          fontSize: 9,
-                          fontWeight: FontWeight.w600,
-                          letterSpacing: 1.17,
-                          color: colors.muted,
+                      child: done
+                          ? Text(
+                              '✓',
+                              style: TextStyle(fontSize: 10, color: colors.ink),
+                            )
+                          : null,
+                    ),
+                  ),
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: Text(
+                      title,
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                        color: colors.ink,
+                        decoration: done
+                            ? TextDecoration.lineThrough
+                            : TextDecoration.none,
+                      ),
+                    ),
+                  ),
+                  if (sourceTag case final tag?) ...[
+                    const SizedBox(width: 16),
+                    DecoratedBox(
+                      decoration: BoxDecoration(
+                        border: Border.all(color: colors.hairline),
+                        borderRadius: BorderRadius.circular(999),
+                      ),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 2,
+                        ),
+                        child: Text(
+                          tag.toUpperCase(),
+                          style: TextStyle(
+                            fontSize: 9,
+                            fontWeight: FontWeight.w600,
+                            letterSpacing: 1.17,
+                            color: colors.muted,
+                          ),
                         ),
                       ),
                     ),
-                  ),
+                  ],
                 ],
-              ],
+              ),
             ),
           ),
         ),
@@ -1437,142 +1635,148 @@ class _RichTaskRow extends StatelessWidget {
         hoverColor: colors.rowHover,
         splashColor: Colors.transparent,
         highlightColor: Colors.transparent,
-        child: Opacity(
-          opacity: done ? .45 : 1,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(vertical: 12),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Padding(
-                  padding: const EdgeInsets.only(top: 4),
-                  child: InkWell(
-                    key: completeKey,
-                    onTap: onComplete,
-                    customBorder: const CircleBorder(),
-                    child: Container(
-                      width: 16,
-                      height: 16,
-                      alignment: Alignment.center,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        border: Border.all(color: colors.muted),
+        child: _CompletionShimmer(
+          done: done,
+          child: Opacity(
+            opacity: done ? .45 : 1,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 12),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: InkWell(
+                      key: completeKey,
+                      onTap: onComplete,
+                      customBorder: const CircleBorder(),
+                      child: Container(
+                        width: 16,
+                        height: 16,
+                        alignment: Alignment.center,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          border: Border.all(color: colors.muted),
+                        ),
+                        child: done
+                            ? Text(
+                                '✓',
+                                style: TextStyle(
+                                  fontSize: 10,
+                                  color: colors.ink,
+                                ),
+                              )
+                            : null,
                       ),
-                      child: done
-                          ? Text(
-                              '✓',
-                              style: TextStyle(fontSize: 10, color: colors.ink),
-                            )
-                          : null,
                     ),
                   ),
-                ),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: DecoratedBox(
-                    key: ValueKey('rich_task_card_${meta.title}'),
-                    decoration: BoxDecoration(
-                      color: colors.cardBg,
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: colors.hairline),
-                      boxShadow: [
-                        BoxShadow(
-                          color: colors.cardShadow,
-                          offset: const Offset(0, 4),
-                          blurRadius: 16,
-                        ),
-                      ],
-                    ),
-                    child: Padding(
-                      padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Container(
-                            width: 3,
-                            height: 34,
-                            margin: const EdgeInsets.only(right: 10, top: 2),
-                            decoration: BoxDecoration(
-                              color: colors.hintBlue,
-                              borderRadius: BorderRadius.circular(2),
-                            ),
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: DecoratedBox(
+                      key: ValueKey('rich_task_card_${meta.title}'),
+                      decoration: BoxDecoration(
+                        color: colors.cardBg,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: colors.hairline),
+                        boxShadow: [
+                          BoxShadow(
+                            color: colors.cardShadow,
+                            offset: const Offset(0, 4),
+                            blurRadius: 16,
                           ),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  meta.title,
-                                  style: TextStyle(
-                                    fontSize: 14,
-                                    fontWeight: FontWeight.w600,
-                                    color: colors.ink,
-                                    decoration: done
-                                        ? TextDecoration.lineThrough
-                                        : TextDecoration.none,
-                                  ),
-                                ),
-                                if (time != null)
-                                  Padding(
-                                    padding: const EdgeInsets.only(top: 2),
-                                    child: Text(
-                                      time,
-                                      key: ValueKey(
-                                        'rich_task_time_${meta.title}',
-                                      ),
-                                      style: TextStyle(
-                                        fontSize: 12,
-                                        fontWeight: FontWeight.w500,
-                                        color: colors.muted,
-                                      ),
-                                    ),
-                                  ),
-                                if (meta.detail case final detail?)
-                                  Padding(
-                                    padding: const EdgeInsets.only(top: 2),
-                                    child: Text(
-                                      detail,
-                                      style: TextStyle(
-                                        fontSize: 12,
-                                        height: 18 / 12,
-                                        color: colors.muted,
-                                      ),
-                                    ),
-                                  ),
-                              ],
+                        ],
+                      ),
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Container(
+                              width: 3,
+                              height: 34,
+                              margin: const EdgeInsets.only(right: 10, top: 2),
+                              decoration: BoxDecoration(
+                                color: colors.hintBlue,
+                                borderRadius: BorderRadius.circular(2),
+                              ),
                             ),
-                          ),
-                          if (sourceTag case final tag?)
-                            Padding(
-                              padding: const EdgeInsets.only(left: 10),
-                              child: DecoratedBox(
-                                decoration: BoxDecoration(
-                                  border: Border.all(color: colors.hairline),
-                                  borderRadius: BorderRadius.circular(999),
-                                ),
-                                child: Padding(
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 8,
-                                    vertical: 2,
-                                  ),
-                                  child: Text(
-                                    tag.toUpperCase(),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    meta.title,
                                     style: TextStyle(
-                                      fontSize: 9,
+                                      fontSize: 14,
                                       fontWeight: FontWeight.w600,
-                                      letterSpacing: 1.17,
-                                      color: colors.muted,
+                                      color: colors.ink,
+                                      decoration: done
+                                          ? TextDecoration.lineThrough
+                                          : TextDecoration.none,
+                                    ),
+                                  ),
+                                  if (time != null)
+                                    Padding(
+                                      padding: const EdgeInsets.only(top: 2),
+                                      child: Text(
+                                        time,
+                                        key: ValueKey(
+                                          'rich_task_time_${meta.title}',
+                                        ),
+                                        style: TextStyle(
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.w500,
+                                          color: colors.muted,
+                                        ),
+                                      ),
+                                    ),
+                                  if (meta.detail case final detail?)
+                                    Padding(
+                                      padding: const EdgeInsets.only(top: 2),
+                                      child: Text(
+                                        detail,
+                                        style: TextStyle(
+                                          fontSize: 12,
+                                          height: 18 / 12,
+                                          color: colors.muted,
+                                        ),
+                                      ),
+                                    ),
+                                ],
+                              ),
+                            ),
+                            if (sourceTag case final tag?)
+                              Padding(
+                                padding: const EdgeInsets.only(left: 10),
+                                child: DecoratedBox(
+                                  decoration: BoxDecoration(
+                                    border: Border.all(color: colors.hairline),
+                                    borderRadius: BorderRadius.circular(999),
+                                  ),
+                                  child: Padding(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 8,
+                                      vertical: 2,
+                                    ),
+                                    child: Text(
+                                      tag.toUpperCase(),
+                                      style: TextStyle(
+                                        fontSize: 9,
+                                        fontWeight: FontWeight.w600,
+                                        letterSpacing: 1.17,
+                                        color: colors.muted,
+                                      ),
                                     ),
                                   ),
                                 ),
                               ),
-                            ),
-                        ],
+                          ],
+                        ),
                       ),
                     ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
         ),
@@ -1683,8 +1887,9 @@ class _ChatInputCardState extends State<_ChatInputCard> {
   Widget build(BuildContext context) {
     final colors = _HubColors.of(context);
     final focused = widget.focusNode.hasFocus;
+    final disableAnimations = MediaQuery.disableAnimationsOf(context);
     return AnimatedContainer(
-      duration: MediaQuery.disableAnimationsOf(context)
+      duration: disableAnimations
           ? Duration.zero
           : const Duration(milliseconds: 160),
       curve: Curves.easeOut,
@@ -1700,80 +1905,100 @@ class _ChatInputCardState extends State<_ChatInputCard> {
           ),
         ],
       ),
-      padding: const EdgeInsets.fromLTRB(20, 13, 13, 13),
-      child: Row(
-        children: [
-          Expanded(
-            child: Stack(
-              alignment: Alignment.centerLeft,
-              children: [
-                if (widget.controller.text.isEmpty)
-                  IgnorePointer(
-                    child: _AnimatedPlaceholder(
-                      text: widget.hintText,
-                      style: TextStyle(fontSize: 15, color: colors.muted),
-                    ),
-                  ),
-                TextField(
-                  key: const Key('chat_input'),
-                  controller: widget.controller,
-                  focusNode: widget.focusNode,
-                  enabled: widget.enabled,
-                  readOnly: widget.busy,
-                  onSubmitted: (_) => widget.onSend(),
-                  style: TextStyle(fontSize: 15, color: colors.ink),
-                  decoration: InputDecoration(
-                    isDense: true,
-                    filled: false,
-                    border: InputBorder.none,
-                    enabledBorder: InputBorder.none,
-                    focusedBorder: InputBorder.none,
-                    disabledBorder: InputBorder.none,
-                    contentPadding: EdgeInsets.zero,
-                    hintText: widget.hintText,
-                    hintStyle: const TextStyle(
-                      fontSize: 15,
-                      color: Colors.transparent,
-                    ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(20),
+        child: Stack(
+          children: [
+            if (widget.busy && !disableAnimations)
+              const Positioned.fill(
+                child: IgnorePointer(
+                  child: TypingShimmer(
+                    key: Key('input_thinking_shimmer'),
+                    enabled: true,
                   ),
                 ),
-              ],
+              ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 13, 13, 13),
+              child: _buildRow(colors),
             ),
-          ),
-          const SizedBox(width: 12),
-          SizedBox(
-            width: 38,
-            height: 38,
-            child: widget.busy
-                ? IconButton(
-                    key: const Key('cancel_chat'),
-                    onPressed: widget.onCancel,
-                    padding: EdgeInsets.zero,
-                    style: IconButton.styleFrom(
-                      backgroundColor: colors.sendBg,
-                      foregroundColor: colors.sendFg,
-                      shape: const CircleBorder(),
-                    ),
-                    icon: const Icon(Icons.stop_rounded, size: 18),
-                  )
-                : IconButton(
-                    key: const Key('send_chat'),
-                    onPressed: widget.enabled ? widget.onSend : null,
-                    padding: EdgeInsets.zero,
-                    style: IconButton.styleFrom(
-                      backgroundColor: colors.sendBg,
-                      foregroundColor: colors.sendFg,
-                      disabledBackgroundColor: colors.sendDisabledBg,
-                      disabledForegroundColor: colors.sendFg,
-                      shape: const CircleBorder(),
-                    ),
-                    icon: const Icon(Icons.arrow_upward_rounded, size: 18),
-                  ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
+
+  Widget _buildRow(_HubColors colors) => Row(
+    children: [
+      Expanded(
+        child: Stack(
+          alignment: Alignment.centerLeft,
+          children: [
+            if (widget.controller.text.isEmpty)
+              IgnorePointer(
+                child: _AnimatedPlaceholder(
+                  text: widget.hintText,
+                  style: TextStyle(fontSize: 15, color: colors.muted),
+                ),
+              ),
+            TextField(
+              key: const Key('chat_input'),
+              controller: widget.controller,
+              focusNode: widget.focusNode,
+              enabled: widget.enabled,
+              readOnly: widget.busy,
+              onSubmitted: (_) => widget.onSend(),
+              style: TextStyle(fontSize: 15, color: colors.ink),
+              decoration: InputDecoration(
+                isDense: true,
+                filled: false,
+                border: InputBorder.none,
+                enabledBorder: InputBorder.none,
+                focusedBorder: InputBorder.none,
+                disabledBorder: InputBorder.none,
+                contentPadding: EdgeInsets.zero,
+                hintText: widget.hintText,
+                hintStyle: const TextStyle(
+                  fontSize: 15,
+                  color: Colors.transparent,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+      const SizedBox(width: 12),
+      SizedBox(
+        width: 38,
+        height: 38,
+        child: widget.busy
+            ? IconButton(
+                key: const Key('cancel_chat'),
+                onPressed: widget.onCancel,
+                padding: EdgeInsets.zero,
+                style: IconButton.styleFrom(
+                  backgroundColor: colors.sendBg,
+                  foregroundColor: colors.sendFg,
+                  shape: const CircleBorder(),
+                ),
+                icon: const Icon(Icons.stop_rounded, size: 18),
+              )
+            : IconButton(
+                key: const Key('send_chat'),
+                onPressed: widget.enabled ? widget.onSend : null,
+                padding: EdgeInsets.zero,
+                style: IconButton.styleFrom(
+                  backgroundColor: colors.sendBg,
+                  foregroundColor: colors.sendFg,
+                  disabledBackgroundColor: colors.sendDisabledBg,
+                  disabledForegroundColor: colors.sendFg,
+                  shape: const CircleBorder(),
+                ),
+                icon: const Icon(Icons.arrow_upward_rounded, size: 18),
+              ),
+      ),
+    ],
+  );
 }
 
 class _AnimatedPlaceholder extends StatelessWidget {
