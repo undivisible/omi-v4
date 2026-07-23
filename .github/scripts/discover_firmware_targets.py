@@ -9,42 +9,51 @@ import shlex
 import sys
 from pathlib import Path
 
+# Every path this script emits is repo-relative: `app_dir`, `conf`,
+# `conf_copy_from` and `conf_copy_to` are all resolved from the repository root,
+# never from `app_dir`. Path-valued CMake arguments carry the REPO_TOKEN prefix,
+# which the workflow replaces with $GITHUB_WORKSPACE, because west runs from the
+# NCS workspace rather than from the checkout.
+REPO_TOKEN = "%%REPO_ROOT%%"
+
 FALLBACK_TARGETS = [
     {
         "id": "omi-cv1",
         "device": "Omi CV1 pendant (nRF5340)",
         "board": "omi/nrf5340/cpuapp",
         "app_dir": "firmware/omi",
-        "conf": "omi.conf",
+        "conf": "firmware/omi/omi.conf",
         "sysbuild": "true",
-        "cmake_args": "-DCONF_FILE=omi.conf",
+        "cmake_args": "",
+        "conf_copy_from": "firmware/omi/omi.conf",
+        "conf_copy_to": "firmware/omi/prj.conf",
     },
     {
         "id": "omi-devkit-v1",
         "device": "Omi DevKit v1 (Seeed XIAO nRF52840 Sense)",
         "board": "xiao_ble/nrf52840/sense",
         "app_dir": "firmware/devkit",
-        "conf": "prj_xiao_ble_sense_devkitv1.conf",
+        "conf": "firmware/devkit/prj_xiao_ble_sense_devkitv1.conf",
         "sysbuild": "false",
-        "cmake_args": "-DCONF_FILE=prj_xiao_ble_sense_devkitv1.conf",
+        "cmake_args": f"-DCONF_FILE={REPO_TOKEN}/firmware/devkit/prj_xiao_ble_sense_devkitv1.conf",
     },
     {
         "id": "omi-devkit-v1-spisd",
         "device": "Omi DevKit v1 with SPI SD card (Seeed XIAO nRF52840 Sense)",
         "board": "xiao_ble/nrf52840/sense",
         "app_dir": "firmware/devkit",
-        "conf": "prj_xiao_ble_sense_devkitv1-spisd.conf",
+        "conf": "firmware/devkit/prj_xiao_ble_sense_devkitv1-spisd.conf",
         "sysbuild": "false",
-        "cmake_args": "-DCONF_FILE=prj_xiao_ble_sense_devkitv1-spisd.conf",
+        "cmake_args": f"-DCONF_FILE={REPO_TOKEN}/firmware/devkit/prj_xiao_ble_sense_devkitv1-spisd.conf",
     },
     {
         "id": "omi-devkit-v2-adafruit",
         "device": "Omi DevKit v2 Adafruit (Seeed XIAO nRF52840 Sense)",
         "board": "xiao_ble/nrf52840/sense",
         "app_dir": "firmware/devkit",
-        "conf": "prj_xiao_ble_sense_devkitv2-adafruit.conf",
+        "conf": "firmware/devkit/prj_xiao_ble_sense_devkitv2-adafruit.conf",
         "sysbuild": "false",
-        "cmake_args": "-DCONF_FILE=prj_xiao_ble_sense_devkitv2-adafruit.conf",
+        "cmake_args": f"-DCONF_FILE={REPO_TOKEN}/firmware/devkit/prj_xiao_ble_sense_devkitv2-adafruit.conf",
     },
 ]
 
@@ -85,6 +94,84 @@ CONF_CMAKE_KEYS = ("CONF_FILE", "EXTRA_CONF_FILE", "OVERLAY_CONFIG", "FILE_SUFFI
 def slug(text: str) -> str:
     out = re.sub(r"[^A-Za-z0-9]+", "-", text.strip().lower()).strip("-")
     return out or "target"
+
+
+def repo_relative_dir(root: Path, value: str) -> str:
+    parts = [p for p in value.split("/") if p and p != "."]
+    for index in range(len(parts)):
+        candidate = "/".join(parts[index:])
+        if candidate != "firmware" and not candidate.startswith("firmware/"):
+            continue
+        if (root / candidate).is_dir():
+            return candidate
+    return ""
+
+
+def readme_variables(root: Path, text: str) -> dict[str, str]:
+    variables: dict[str, str] = {}
+    pattern = re.compile(r"(?<![A-Za-z0-9_$])([A-Za-z_][A-Za-z0-9_]*)=([^\s`'\"]+)")
+    for raw in text.splitlines():
+        for match in pattern.finditer(raw):
+            name = match.group(1)
+            if name in variables:
+                continue
+            resolved = repo_relative_dir(root, match.group(2).rstrip("`.,;"))
+            if resolved:
+                variables[name] = resolved
+    return variables
+
+
+def expand_vars(text: str, variables: dict[str, str]) -> str:
+    if not variables:
+        return text
+
+    def replace(match: re.Match[str]) -> str:
+        name = match.group(1) or match.group(2)
+        return variables.get(name, match.group(0))
+
+    return re.sub(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)", replace, text)
+
+
+def repo_relative(root: Path, value: str) -> str:
+    if not value:
+        return ""
+    candidate = os.path.normpath(value.lstrip("/") if os.path.isabs(value) else value)
+    if candidate.startswith("..") or candidate == ".":
+        return ""
+    if (root / candidate).exists():
+        return candidate
+    return ""
+
+
+def resolve_conf(root: Path, app_dir: str, value: str) -> str:
+    if not value:
+        return ""
+    direct = repo_relative(root, value)
+    if direct:
+        return direct
+    joined = os.path.normpath(os.path.join(app_dir, value))
+    if (root / joined).is_file():
+        return joined
+    return value
+
+
+def rewrite_cmake_args(root: Path, args: list[str]) -> str:
+    rewritten: list[str] = []
+    for arg in args:
+        body = arg[2:]
+        if "=" not in body:
+            rewritten.append(arg)
+            continue
+        key, value = body.split("=", 1)
+        # The workflow derives BOARD_ROOT from the discovered board root and
+        # passes it itself; keeping the README's copy would pass it twice.
+        if key == "BOARD_ROOT" or key.endswith("_BOARD_ROOT"):
+            continue
+        relative = repo_relative(root, value)
+        if relative:
+            value = f"{REPO_TOKEN}/{relative}"
+        rewritten.append(f"-D{key}={value}")
+    return " ".join(rewritten)
 
 
 def read_text(path: Path) -> str:
@@ -198,6 +285,8 @@ def logical_commands(text: str):
             continue
         if not inside_fence and "west build" not in stripped:
             continue
+        if not stripped and not buffer:
+            continue
         if buffer:
             buffer = buffer + " " + stripped.rstrip("\\").strip()
         else:
@@ -214,8 +303,6 @@ def logical_commands(text: str):
             command = cd_match.group(2).strip()
             if not command:
                 continue
-        if "west build" not in command:
-            continue
         yield heading, workdir, command
 
 
@@ -275,6 +362,28 @@ def parse_west_build(command: str) -> dict | None:
     return None
 
 
+def parse_conf_copy(root: Path, command: str) -> tuple[str, str] | None:
+    if not command.startswith("cp "):
+        return None
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        return None
+    tokens = [t for t in tokens[1:] if not t.startswith("-")]
+    if len(tokens) != 2:
+        return None
+    source, destination = tokens
+    if Path(destination).name != "prj.conf":
+        return None
+    source_rel = repo_relative(root, source)
+    destination_rel = os.path.normpath(
+        destination.lstrip("/") if os.path.isabs(destination) else destination
+    )
+    if not source_rel or destination_rel.startswith(".."):
+        return None
+    return source_rel, destination_rel
+
+
 def conf_from_cmake_args(args: list[str]) -> str:
     for arg in args:
         body = arg[2:]
@@ -296,11 +405,10 @@ def resolve_app_dir(root: Path, workdir: str, source: str) -> str:
     elif workdir:
         candidates.append(Path(workdir))
     for candidate in candidates:
-        normalised = os.path.normpath(str(candidate))
-        if normalised.startswith(".."):
+        normalised = repo_relative(root, str(candidate))
+        if not normalised:
             continue
-        full = root / normalised
-        if (full / "CMakeLists.txt").is_file():
+        if (root / normalised / "CMakeLists.txt").is_file():
             return normalised
     for candidate in candidates:
         name = Path(os.path.normpath(str(candidate))).name
@@ -312,12 +420,12 @@ def resolve_app_dir(root: Path, workdir: str, source: str) -> str:
     return ""
 
 
-def is_sysbuild_conf(app_dir: Path, conf: str, declared: bool) -> bool:
+def is_sysbuild_conf(root: Path, app_dir: Path, conf: str, declared: bool) -> bool:
     if declared:
         return True
     if (app_dir / "sysbuild.conf").is_file() or (app_dir / "sysbuild").is_dir():
         return True
-    conf_path = app_dir / conf if conf else app_dir / "prj.conf"
+    conf_path = root / conf if conf else app_dir / "prj.conf"
     text = read_text(conf_path)
     return "CONFIG_BOOTLOADER_MCUBOOT=y" in text
 
@@ -326,27 +434,41 @@ def targets_from_readme(root: Path, boards: list[dict]) -> list[dict]:
     readme = root / "firmware" / "README.md"
     if not readme.is_file():
         return []
+    text = read_text(readme)
+    variables = readme_variables(root, text)
     seen: set[str] = set()
     targets: list[dict] = []
     entries = []
-    for heading, workdir, command in logical_commands(read_text(readme)):
+    pending_copy = ("", "")
+    for heading, workdir, command in logical_commands(text):
+        command = expand_vars(command, variables)
+        workdir = expand_vars(workdir, variables)
+        copy = parse_conf_copy(root, command)
+        if copy:
+            pending_copy = copy
+            continue
         parsed = parse_west_build(command)
         if not parsed:
             continue
         app_dir = resolve_app_dir(root, workdir, parsed["source"])
         if not app_dir:
+            pending_copy = ("", "")
             continue
-        entries.append((heading, parsed, app_dir))
+        copy_from, copy_to = pending_copy
+        if copy_to and os.path.dirname(copy_to) != app_dir:
+            copy_from, copy_to = "", ""
+        pending_copy = ("", "")
+        entries.append((heading, parsed, app_dir, copy_from, copy_to))
     # One README heading often documents several builds that differ only by
     # config (the DevKit variants). Numbering those would produce artifacts
     # nobody can map back to a board, so those targets are named after their
     # config instead.
     heading_counts: dict[str, int] = {}
-    for heading, _, _ in entries:
+    for heading, _, _, _, _ in entries:
         key = slug(heading) if heading else ""
         heading_counts[key] = heading_counts.get(key, 0) + 1
-    for heading, parsed, app_dir in entries:
-        conf = conf_from_cmake_args(parsed["cmake_args"])
+    for heading, parsed, app_dir, copy_from, copy_to in entries:
+        conf = resolve_conf(root, app_dir, conf_from_cmake_args(parsed["cmake_args"]))
         board = parsed["board"]
         if not board:
             board = board_for(f"{app_dir} {conf} {heading}", boards)
@@ -374,8 +496,10 @@ def targets_from_readme(root: Path, boards: list[dict]) -> list[dict]:
                 "board": board,
                 "app_dir": app_dir,
                 "conf": conf,
-                "sysbuild": "true" if is_sysbuild_conf(root / app_dir, conf, parsed["sysbuild"]) else "false",
-                "cmake_args": " ".join(parsed["cmake_args"]),
+                "sysbuild": "true" if is_sysbuild_conf(root, root / app_dir, conf, parsed["sysbuild"]) else "false",
+                "cmake_args": rewrite_cmake_args(root, parsed["cmake_args"]),
+                "conf_copy_from": copy_from,
+                "conf_copy_to": copy_to,
             }
         )
     return targets
@@ -420,19 +544,20 @@ def targets_from_tree(root: Path, boards: list[dict]) -> list[dict]:
                 suffix += 1
             seen.add(identifier)
             app_rel = str(app.relative_to(root))
+            conf_rel = str(conf.relative_to(root))
             board = board_for(f"{app_rel} {conf.name}", boards)
-            sysbuild = is_sysbuild_conf(app, conf.name, False)
+            sysbuild = is_sysbuild_conf(root, app, conf_rel, False)
             cmake_args = ""
             if conf.name != "prj.conf":
                 prefix = f"{app.name}_" if sysbuild else ""
-                cmake_args = f"-D{prefix}CONF_FILE={conf.name}"
+                cmake_args = f"-D{prefix}CONF_FILE={REPO_TOKEN}/{conf_rel}"
             targets.append(
                 {
                     "id": identifier,
                     "device": f"{app.name} ({conf.name})",
                     "board": board,
                     "app_dir": app_rel,
-                    "conf": conf.name,
+                    "conf": conf_rel,
                     "sysbuild": "true" if sysbuild else "false",
                     "cmake_args": cmake_args,
                 }
@@ -489,6 +614,8 @@ def main() -> int:
         target["board_root"] = board_root
         target.setdefault("cmake_args", "")
         target.setdefault("conf", "")
+        target.setdefault("conf_copy_from", "")
+        target.setdefault("conf_copy_to", "")
 
     print(f"Discovery source: {source}")
     print(f"Board root: {board_root or '(none)'}")
@@ -499,11 +626,29 @@ def main() -> int:
         print("  (none)")
     print("Targets:")
     for target in targets:
+        copy = ""
+        if target["conf_copy_from"]:
+            copy = f" conf_copy={target['conf_copy_from']} -> {target['conf_copy_to']}"
         print(
             f"  - {target['id']}: board={target['board'] or '(unresolved)'} "
             f"app_dir={target['app_dir']} conf={target['conf'] or '(default prj.conf)'} "
-            f"sysbuild={target['sysbuild']} cmake_args={target['cmake_args'] or '(none)'}"
+            f"sysbuild={target['sysbuild']} cmake_args={target['cmake_args'] or '(none)'}{copy}"
         )
+
+    missing = []
+    for target in targets:
+        for key in ("app_dir", "conf", "conf_copy_from"):
+            value = target[key]
+            if value and not (root / value).exists():
+                missing.append(f"{target['id']}: {key}={value}")
+    if missing:
+        print(
+            "::error::These discovered paths do not exist in the checkout: "
+            + "; ".join(missing)
+            + ". Fix the west build commands in firmware/README.md or "
+            ".github/scripts/discover_firmware_targets.py."
+        )
+        return 1
 
     unresolved = [t["id"] for t in targets if not t["board"]]
     if unresolved:
