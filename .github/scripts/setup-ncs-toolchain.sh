@@ -22,6 +22,54 @@ persist_env() {
   export "$1=$2"
 }
 
+prepend_path() {
+  case ":${PATH}:" in
+    *":$1:"*) return 0 ;;
+  esac
+  PATH="$1:${PATH}"
+  export PATH
+  persist_path_entry "$1"
+  note "added $1 to PATH"
+}
+
+toolchain_bundles() {
+  # nrfutil unpacks each toolchain into a hash-named directory. The image sets
+  # ZEPHYR_SDK_INSTALL_DIR=<bundle>/opt/zephyr-sdk, which names the bundle
+  # without having to guess the hash.
+  if [ -n "${ZEPHYR_SDK_INSTALL_DIR:-}" ]; then
+    case "${ZEPHYR_SDK_INSTALL_DIR}" in
+      */opt/zephyr-sdk) printf '%s\n' "${ZEPHYR_SDK_INSTALL_DIR%/opt/zephyr-sdk}" ;;
+    esac
+  fi
+  for root in /opt/ncs/toolchains /opt/nordic/ncs/toolchains "${HOME}/ncs/toolchains"; do
+    [ -d "${root}" ] || continue
+    for bundle in "${root}"/*; do
+      [ -d "${bundle}" ] || continue
+      printf '%s\n' "${bundle}"
+    done
+  done
+}
+
+export_toolchain_bundle() {
+  local found=1
+  while IFS= read -r bundle; do
+    [ -n "${bundle}" ] || continue
+    [ -d "${bundle}" ] || continue
+    note "inspecting toolchain bundle ${bundle}"
+    for suffix in bin usr/bin usr/local/bin opt/bin opt/zephyr-sdk/arm-zephyr-eabi/bin; do
+      [ -d "${bundle}/${suffix}" ] || continue
+      prepend_path "${bundle}/${suffix}"
+      found=0
+    done
+    if [ -d "${bundle}/opt/zephyr-sdk" ] && [ -z "${ZEPHYR_SDK_INSTALL_DIR:-}" ]; then
+      persist_env ZEPHYR_SDK_INSTALL_DIR "${bundle}/opt/zephyr-sdk"
+    fi
+  done <<EOF
+$(toolchain_bundles)
+EOF
+  return "${found}"
+}
+
 export_zephyr_sdk() {
   if [ -n "${ZEPHYR_SDK_INSTALL_DIR:-}" ] && [ -d "${ZEPHYR_SDK_INSTALL_DIR}" ]; then
     persist_env ZEPHYR_SDK_INSTALL_DIR "${ZEPHYR_SDK_INSTALL_DIR}"
@@ -53,14 +101,18 @@ report_success() {
   echo "ZEPHYR_TOOLCHAIN_VARIANT=${ZEPHYR_TOOLCHAIN_VARIANT:-unset}"
 }
 
-note "checking whether west is already on PATH (${PATH})"
-if command -v west >/dev/null 2>&1; then
+note "checking whether the build tools are already on PATH (${PATH})"
+if command -v west >/dev/null 2>&1 && command -v cmake >/dev/null 2>&1 \
+  && command -v ninja >/dev/null 2>&1; then
   export_zephyr_sdk || true
   report_success
   exit 0
 fi
 
-if command -v nrfutil >/dev/null 2>&1; then
+note "looking for an unpacked nRF Connect SDK toolchain bundle"
+export_toolchain_bundle || note "no toolchain bundle directory was found"
+
+if ! command -v west >/dev/null 2>&1 && command -v nrfutil >/dev/null 2>&1; then
   note "asking nrfutil toolchain-manager for the toolchain environment"
   before="$(mktemp)"
   after="$(mktemp)"
@@ -102,50 +154,68 @@ if command -v nrfutil >/dev/null 2>&1; then
 fi
 
 if ! command -v west >/dev/null 2>&1; then
-  for base in /opt/nordic /opt /usr/local "${HOME}/.local"; do
+  for base in /opt/ncs /opt/nordic /opt /usr/local "${HOME}/.local"; do
     [ -d "${base}" ] || continue
     note "searching for a west executable under ${base}"
     while IFS= read -r candidate; do
       [ -x "${candidate}" ] || continue
-      dir="$(dirname "${candidate}")"
-      PATH="${dir}:${PATH}"
-      export PATH
-      persist_path_entry "${dir}"
-      note "added ${dir} to PATH (contains ${candidate})"
+      prepend_path "$(dirname "${candidate}")"
       break
-    done < <(find "${base}" -maxdepth 6 -type f -name west 2>/dev/null | sort)
+    done < <(find "${base}" -maxdepth 9 -type f -name west 2>/dev/null | sort)
     command -v west >/dev/null 2>&1 && break
   done
 fi
 
-if ! command -v cmake >/dev/null 2>&1 || ! command -v ninja >/dev/null 2>&1; then
-  for tool in cmake ninja dtc; do
-    command -v "${tool}" >/dev/null 2>&1 && continue
-    note "searching for ${tool} under /opt/nordic and /opt"
-    found="$(find /opt/nordic /opt -maxdepth 6 -type f -name "${tool}" -perm -u+x 2>/dev/null | sort | head -n1 || true)"
-    if [ -n "${found}" ]; then
-      dir="$(dirname "${found}")"
-      PATH="${dir}:${PATH}"
-      export PATH
-      persist_path_entry "${dir}"
-      note "added ${dir} to PATH (contains ${tool})"
-    fi
-  done
-fi
+for tool in cmake ninja dtc python3; do
+  command -v "${tool}" >/dev/null 2>&1 && continue
+  note "searching for ${tool} under /opt/ncs, /opt/nordic and /opt"
+  found="$(find /opt/ncs /opt/nordic /opt -maxdepth 9 -type f -name "${tool}" -perm -u+x 2>/dev/null | sort | head -n1 || true)"
+  if [ -n "${found}" ]; then
+    prepend_path "$(dirname "${found}")"
+  fi
+done
 
 export_zephyr_sdk || true
 
-if ! command -v west >/dev/null 2>&1; then
-  echo "::error::No nRF Connect SDK toolchain could be located in this container. west was not found on PATH, nrfutil toolchain-manager did not provide one, and no west executable exists under /opt/nordic, /opt, /usr/local or ~/.local. The container image layout changed; update .github/scripts/setup-ncs-toolchain.sh."
+report_failure() {
+  echo "::error::$1 Update .github/scripts/setup-ncs-toolchain.sh."
   echo "--- what was searched ---"
   cat "${SEARCH_LOG}"
+  echo "--- toolchain bundles considered ---"
+  toolchain_bundles || true
   echo "--- /opt contents ---"
   ls -la /opt 2>/dev/null || echo "/opt does not exist"
-  echo "--- /opt/nordic contents ---"
-  find /opt/nordic -maxdepth 3 2>/dev/null | head -n 60 || echo "/opt/nordic does not exist"
+  echo "--- /opt/ncs contents ---"
+  ls -la /opt/ncs 2>/dev/null || echo "/opt/ncs does not exist"
+  echo "--- toolchain directory listings ---"
+  for root in /opt/ncs/toolchains /opt/nordic/ncs/toolchains; do
+    [ -d "${root}" ] || continue
+    ls -la "${root}" 2>/dev/null || true
+    for bundle in "${root}"/*; do
+      [ -d "${bundle}" ] || continue
+      echo "--- ${bundle} ---"
+      ls -la "${bundle}" 2>/dev/null || true
+      for suffix in bin usr/bin usr/local/bin opt/bin; do
+        [ -d "${bundle}/${suffix}" ] || continue
+        echo "--- ${bundle}/${suffix} ---"
+        ls -la "${bundle}/${suffix}" 2>/dev/null | head -n 40 || true
+      done
+    done
+  done
+  echo "--- any file named west anywhere under / (depth 9) ---"
+  find / -maxdepth 9 -name west -type f 2>/dev/null | head -n 20 || true
+  echo "--- ZEPHYR_SDK_INSTALL_DIR=${ZEPHYR_SDK_INSTALL_DIR:-unset} ---"
   echo "--- PATH ---"
   echo "${PATH}"
   exit 1
+}
+
+if ! command -v west >/dev/null 2>&1; then
+  report_failure "No nRF Connect SDK toolchain could be located in this container. west was not found on PATH, nrfutil toolchain-manager did not provide one, and no west executable exists under /opt/ncs, /opt/nordic, /opt, /usr/local or ~/.local."
+fi
+
+if ! west --version >/dev/null 2>&1; then
+  report_failure "west was found at $(command -v west) but is not runnable ($(west --version 2>&1 | head -n 3))."
 fi
 
 report_success
