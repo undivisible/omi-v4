@@ -3,8 +3,8 @@ import 'package:flutter/services.dart';
 
 abstract final class CursorPillWindow {
   static const _channel = MethodChannel('omi/window_chrome');
-  static const width = 420.0;
-  static const height = 230.0;
+  static const width = 460.0;
+  static const height = 320.0;
 
   static bool get _supported =>
       !kIsWeb && defaultTargetPlatform == TargetPlatform.macOS;
@@ -13,41 +13,16 @@ abstract final class CursorPillWindow {
   /// shown it stays put (static, interactive, key) — voice never goes through
   /// this window; its glow and waveform are native surfaces owned by
   /// [VoiceOverlayWindow].
+  ///
+  /// The window is a separate non-activating NSPanel with its own Flutter
+  /// engine (`pillMain`): the main app window never moves, resizes, or
+  /// changes level when the pill comes and goes.
   static Future<void> summon() async {
     if (!_supported) return;
     try {
       await _channel.invokeMethod('summonPill', {
         'width': width,
         'height': height,
-      });
-    } on MissingPluginException {
-      return;
-    } on PlatformException {
-      return;
-    }
-  }
-
-  /// Reports the pill's rounded-rect glass regions (logical points,
-  /// top-left origin) so the native Liquid Glass layer under the Flutter
-  /// view can mask itself to match.
-  static Future<void> updateGlass(
-    List<({double x, double y, double w, double h, double r})> regions, {
-    double radius = 18,
-  }) async {
-    if (!_supported) return;
-    try {
-      await _channel.invokeMethod('updatePillGlass', {
-        'regions': [
-          for (final region in regions)
-            {
-              'x': region.x,
-              'y': region.y,
-              'w': region.w,
-              'h': region.h,
-              'r': region.r,
-            },
-        ],
-        'radius': radius,
       });
     } on MissingPluginException {
       return;

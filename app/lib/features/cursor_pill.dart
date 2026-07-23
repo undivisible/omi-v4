@@ -8,7 +8,7 @@ import 'package:flutter/services.dart';
 
 import '../native/native_hub.dart' show ApprovalDecision;
 import 'cursor_pill_controller.dart';
-import 'cursor_pill_window.dart';
+import 'pill_panel.dart';
 
 const _pillInk = Color(0xfffffefa);
 const _pillMuted = Color(0xb3f4f2ec);
@@ -192,7 +192,7 @@ class _CursorPillState extends State<CursorPill> {
         .join(';');
     if (signature == _lastGlassSignature) return;
     _lastGlassSignature = signature;
-    unawaited(CursorPillWindow.updateGlass(regions));
+    unawaited(PillPanelGlass.update(regions));
   }
 
   @override
@@ -201,7 +201,7 @@ class _CursorPillState extends State<CursorPill> {
     if (controller.state == CursorPillState.hidden) {
       if (_lastGlassSignature.isNotEmpty) {
         _lastGlassSignature = '';
-        unawaited(CursorPillWindow.updateGlass(const []));
+        unawaited(PillPanelGlass.update(const []));
       }
       return const SizedBox.shrink();
     }

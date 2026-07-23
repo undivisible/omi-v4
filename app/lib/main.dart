@@ -9,6 +9,7 @@ import 'features/mobile_companion_shell.dart';
 import 'features/mobile_onboarding_screen.dart';
 import 'features/omi_shell.dart';
 import 'features/onboarding_screen.dart';
+import 'features/pill_panel.dart';
 import 'features/setup_account_screens.dart';
 import 'onboarding/hub_checklist.dart';
 import 'onboarding/onboarding_completion.dart';
@@ -30,6 +31,17 @@ Future<void> settingsMain() async {
   final services = await AppServices.initializeFromEnvironment();
   await services.initialize();
   runApp(SettingsWindowApp(services: services));
+}
+
+/// Entrypoint for the floating text-input overlay on macOS. A third
+/// FlutterEngine in the Runner (PillPanelController) runs this inside its own
+/// non-activating panel; it renders only the pill — input field, suggestions,
+/// and the inline completion ghost — and relays every action back to the
+/// primary engine, so summoning it never disturbs the hub window.
+@pragma('vm:entry-point')
+Future<void> pillMain() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  runApp(const PillPanelApp());
 }
 
 class SettingsWindowApp extends StatelessWidget {
