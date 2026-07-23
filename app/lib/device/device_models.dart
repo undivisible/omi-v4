@@ -63,6 +63,7 @@ class RelayDevice {
     this.serialNumber,
     this.batteryLevel,
     this.audioCodec = DeviceAudioCodec.unknown,
+    this.systemConnected = false,
   });
 
   final String id;
@@ -75,6 +76,7 @@ class RelayDevice {
   final String? serialNumber;
   final int? batteryLevel;
   final DeviceAudioCodec audioCodec;
+  final bool systemConnected;
 }
 
 class DeviceRelaySnapshot {

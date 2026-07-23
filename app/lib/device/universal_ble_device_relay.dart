@@ -8,6 +8,10 @@ import 'device_models.dart';
 
 final class UniversalBleDeviceRelayAdapter
     implements DeviceRelayAdapter, DeviceRelayHaptics {
+  UniversalBleDeviceRelayAdapter({
+    this.scanSettle = const Duration(seconds: 5),
+  });
+
   static const _omiService = '19b10000-e8f2-537e-4f6c-d104768a1214';
   static const _audioStream = '19b10001-e8f2-537e-4f6c-d104768a1214';
   static const _audioCodec = '19b10002-e8f2-537e-4f6c-d104768a1214';
@@ -16,9 +20,11 @@ final class UniversalBleDeviceRelayAdapter
   static const _speakerService = 'cab1ab95-2ea5-4f4d-bb56-874b72cfc984';
   static const _speakerHaptic = 'cab1ab96-2ea5-4f4d-bb56-874b72cfc984';
 
+  final Duration scanSettle;
   final _snapshots = StreamController<DeviceRelaySnapshot>.broadcast();
   final _connectionStates = StreamController<bool>.broadcast();
   final Map<String, BleDevice> _devices = {};
+  final Set<String> _systemDeviceIds = {};
   String? _connectedId;
   RelayDevice? _connectedDevice;
   StreamSubscription<bool>? _connectionSubscription;
@@ -63,6 +69,7 @@ final class UniversalBleDeviceRelayAdapter
         ? null
         : _devices[_connectedId];
     _devices.clear();
+    _systemDeviceIds.removeWhere((id) => id != _connectedId);
     if (connectedBleDevice != null) {
       _devices[connectedBleDevice.deviceId] = connectedBleDevice;
     }
@@ -72,6 +79,11 @@ final class UniversalBleDeviceRelayAdapter
         capabilities: capabilities,
       ),
     );
+    // A pendant that is already BLE-connected to the system (or to this app
+    // from a previous session) stops advertising, so a scan alone would never
+    // find it. Fold system-connected peripherals exposing the Omi service
+    // into the results before scanning for advertising ones.
+    _mergeSystemDevices(await _systemConnectedDevices());
     final subscription = UniversalBle.scanStream.listen((device) {
       if (device.services.any(
         (service) => service.toLowerCase() == _omiService,
@@ -83,7 +95,7 @@ final class UniversalBleDeviceRelayAdapter
       await UniversalBle.startScan(
         scanFilter: ScanFilter(withServices: const [_omiService]),
       );
-      await Future<void>.delayed(const Duration(seconds: 5));
+      await Future<void>.delayed(scanSettle);
     } finally {
       await UniversalBle.stopScan();
       await subscription.cancel();
@@ -130,6 +142,13 @@ final class UniversalBleDeviceRelayAdapter
     if (_connectedId != null) await disconnect();
     _restoreAttempts = 0;
     var device = _devices[deviceId];
+    if (device == null) {
+      // The remembered pendant may already be connected at the system level
+      // (it stops advertising in that state); attaching to a system-connected
+      // device is valid, so check there before falling back to a scan.
+      _mergeSystemDevices(await _systemConnectedDevices());
+      device = _devices[deviceId];
+    }
     if (device == null) {
       // Reconnecting a remembered device after an app restart: the scan
       // cache is empty, so scan on demand instead of failing.
@@ -396,6 +415,23 @@ final class UniversalBleDeviceRelayAdapter
     }
   }
 
+  Future<List<BleDevice>> _systemConnectedDevices() async {
+    try {
+      return await UniversalBle.getSystemDevices(
+        withServices: const [_omiService],
+      );
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  void _mergeSystemDevices(List<BleDevice> systemDevices) {
+    for (final device in systemDevices) {
+      _devices[device.deviceId] = device;
+      _systemDeviceIds.add(device.deviceId);
+    }
+  }
+
   RelayDevice _relayDevice(BleDevice device, {int? codec, int? battery}) =>
       RelayDevice(
         id: device.deviceId,
@@ -405,6 +441,9 @@ final class UniversalBleDeviceRelayAdapter
         audioCodec: codec == null
             ? DeviceAudioCodec.unknown
             : DeviceAudioCodec.fromFirmwareId(codec),
+        systemConnected:
+            device.isSystemDevice == true ||
+            _systemDeviceIds.contains(device.deviceId),
       );
 
   void _emitUnavailable(DeviceCapabilityState state) {
