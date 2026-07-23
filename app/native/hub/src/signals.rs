@@ -307,6 +307,7 @@ pub enum NativeEvent {
     LiveVoiceAudio(LiveVoiceAudio),
     MeetingStateChanged(MeetingStateChanged),
     MeetingInsight(MeetingInsight),
+    MeetingTranscriptTurn(MeetingTranscriptTurn),
     MeetingCompleted(MeetingCompleted),
 }
 
@@ -321,6 +322,9 @@ pub struct MeetingInsight {
     pub kind: String,
     pub text: String,
     pub source_text: String,
+    /// Which side of the call the utterance came from: `You`, `Them`, or empty
+    /// when the two capture tracks could not tell them apart.
+    pub speaker: String,
 }
 
 impl std::fmt::Debug for MeetingInsight {
@@ -330,6 +334,29 @@ impl std::fmt::Debug for MeetingInsight {
             .field("kind", &self.kind)
             .field("text", &self.text)
             .field("source_text", &"[redacted]")
+            .field("speaker", &self.speaker)
+            .finish()
+    }
+}
+
+/// A finalized transcript segment attributed to a side of the call.
+///
+/// The assist panel renders these instead of raw transcript deltas so the
+/// live rolling transcript shows who is speaking.
+#[derive(Serialize, SignalPiece)]
+pub struct MeetingTranscriptTurn {
+    pub speaker: String,
+    pub text: String,
+    pub occurred_at_ms: i64,
+}
+
+impl std::fmt::Debug for MeetingTranscriptTurn {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("MeetingTranscriptTurn")
+            .field("speaker", &self.speaker)
+            .field("text", &"[redacted]")
+            .field("occurred_at_ms", &self.occurred_at_ms)
             .finish()
     }
 }

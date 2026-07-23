@@ -1,7 +1,8 @@
 use crate::capture_policy::{CapturePlan, SystemAudioCaptureMode, capture_plan};
+use crate::meeting_capture::MeetingSpeaker;
 use crate::signals::{
-    CaptureSource, ClientCommand, Command, MeetingCompleted, MeetingInsight, NativeError,
-    NativeEvent, TranscriptionAuth,
+    CaptureSource, ClientCommand, Command, MeetingCompleted, MeetingInsight, MeetingTranscriptTurn,
+    NativeError, NativeEvent, TranscriptionAuth,
 };
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
@@ -140,6 +141,30 @@ pub struct NoteSection {
     pub points: Vec<String>,
 }
 
+/// An action item, with the owner the model could attribute it to.
+///
+/// Both reference assistants surface an owner next to every task — Meetily's
+/// bundled `standard_meeting.json` template even asks for an owner column —
+/// and an unowned action item is the single most common thing a reader has to
+/// go back to the transcript for.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ActionItem {
+    pub text: String,
+    pub owner: Option<String>,
+}
+
+impl ActionItem {
+    /// The one-line rendering used wherever an action is a plain string: the
+    /// exported markdown checklist, the completion signal, and the evidence
+    /// text the task extractor reads.
+    pub fn line(&self) -> String {
+        match self.owner.as_deref() {
+            Some(owner) => format!("{} — {owner}", self.text),
+            None => self.text.clone(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct MeetingNote {
     pub title: Option<String>,
@@ -147,7 +172,8 @@ pub struct MeetingNote {
     pub participants: Vec<String>,
     pub sections: Vec<NoteSection>,
     pub decisions: Vec<String>,
-    pub actions: Vec<String>,
+    pub actions: Vec<ActionItem>,
+    pub open_questions: Vec<String>,
 }
 
 impl MeetingNote {
@@ -157,6 +183,10 @@ impl MeetingNote {
             .flat_map(|section| section.points.iter().cloned())
             .collect()
     }
+
+    pub fn action_lines(&self) -> Vec<String> {
+        self.actions.iter().map(ActionItem::line).collect()
+    }
 }
 
 pub fn note_prompt(transcript: &str, jots: &[String], title: &str) -> String {
@@ -165,9 +195,10 @@ pub fn note_prompt(transcript: &str, jots: &[String], title: &str) -> String {
         String::new()
     } else {
         let mut block = String::from(
-            "\n\nThe attendee jotted these rough notes during the meeting. Expand \
-                          and polish them into the note, keeping their intent and ordering, and \
-                          fill in surrounding details from the transcript:\n",
+            "\n\nThe attendee jotted these rough notes during the meeting, in the order they \
+             typed them. Expand and polish them into the note, keeping their intent and \
+             ordering, and fill in surrounding details from the transcript. Weave each jot into \
+             whichever section it belongs to instead of turning it into its own heading.\n",
         );
         for jot in jots {
             block.push_str("- ");
@@ -182,9 +213,43 @@ pub fn note_prompt(transcript: &str, jots: &[String], title: &str) -> String {
          {{\"title\":\"short descriptive title\",\"summary\":\"2-3 sentence executive summary\",\
          \"participants\":[\"names actually mentioned, or empty\"],\
          \"sections\":[{{\"heading\":\"topic\",\"points\":[\"key point\"]}}],\
-         \"decisions\":[\"decisions made\"],\"actions\":[\"action items\"]}}\
+         \"decisions\":[\"decisions made\"],\
+         \"actions\":[{{\"text\":\"what will be done\",\"owner\":\"who owns it, or omit\"}}],\
+         \"openQuestions\":[\"questions raised but left unanswered\"]}}\n\n\
+         Rules:\n\
+         - Use only what the transcript and notes actually say. Never infer, never invent a \
+         name, a date, or a number. If you are unsure about something, leave it out.\n\
+         - The transcript is speech-to-text and the jotted notes are typed in a hurry, so both \
+         contain errors. Read through them for the intended meaning.\n\
+         - Transcript lines prefixed \"You:\" are the attendee running this app; lines prefixed \
+         \"Them:\" are the other side of the call. Unprefixed lines could be either. Use those \
+         prefixes to attribute decisions and to fill in action owners, and set an owner only \
+         when the transcript makes it clear.\n\
+         - Give every section a concrete topic heading and at least two specific points. Do not \
+         create generic \"Overview\", \"Introduction\", \"Summary\", or \"Participants\" \
+         sections; the summary and participants have their own fields.\n\
+         - Keep points specific and concrete. Prefer the actual numbers, names, and commitments \
+         over abstractions.\n\
+         - Leave any array empty rather than padding it.\
          {jot_block}\n\nTranscript:\n{bounded}"
     )
+}
+
+#[derive(serde::Deserialize)]
+struct ActionPayload {
+    #[serde(default)]
+    text: String,
+    #[serde(default)]
+    owner: String,
+}
+
+/// Accepts an action either as the structured object the prompt asks for or as
+/// a bare string, which smaller models still fall back to.
+#[derive(serde::Deserialize)]
+#[serde(untagged)]
+enum ActionEntry {
+    Structured(ActionPayload),
+    Line(String),
 }
 
 #[derive(serde::Deserialize)]
@@ -200,7 +265,9 @@ struct NotePayload {
     #[serde(default)]
     decisions: Vec<String>,
     #[serde(default)]
-    actions: Vec<String>,
+    actions: Vec<ActionEntry>,
+    #[serde(default, rename = "openQuestions")]
+    open_questions: Vec<String>,
 }
 
 fn clean_list(values: Vec<String>) -> Vec<String> {
@@ -208,6 +275,23 @@ fn clean_list(values: Vec<String>) -> Vec<String> {
         .into_iter()
         .map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty())
+        .collect()
+}
+
+fn clean_actions(values: Vec<ActionEntry>) -> Vec<ActionItem> {
+    values
+        .into_iter()
+        .map(|entry| match entry {
+            ActionEntry::Structured(payload) => ActionItem {
+                text: payload.text.trim().to_owned(),
+                owner: Some(payload.owner.trim().to_owned()).filter(|value| !value.is_empty()),
+            },
+            ActionEntry::Line(text) => ActionItem {
+                text: text.trim().to_owned(),
+                owner: None,
+            },
+        })
+        .filter(|action| !action.text.is_empty())
         .collect()
 }
 
@@ -230,7 +314,8 @@ pub fn parse_note(output: &str) -> Option<MeetingNote> {
             .filter(|section| !section.points.is_empty())
             .collect(),
         decisions: clean_list(payload.decisions),
-        actions: clean_list(payload.actions),
+        actions: clean_actions(payload.actions),
+        open_questions: clean_list(payload.open_questions),
     })
 }
 
@@ -257,6 +342,7 @@ pub fn fallback_note(transcript: &str, jots: &[String]) -> MeetingNote {
         sections: jot_section.into_iter().collect(),
         decisions: Vec::new(),
         actions: Vec::new(),
+        open_questions: Vec::new(),
     }
 }
 
@@ -314,7 +400,20 @@ pub fn note_markdown(
         markdown.push_str("\n## Action items\n\n");
         for action in &note.actions {
             markdown.push_str("- [ ] ");
-            markdown.push_str(action);
+            markdown.push_str(&action.text);
+            if let Some(owner) = &action.owner {
+                markdown.push_str(" — **");
+                markdown.push_str(owner);
+                markdown.push_str("**");
+            }
+            markdown.push('\n');
+        }
+    }
+    if !note.open_questions.is_empty() {
+        markdown.push_str("\n## Open questions\n\n");
+        for question in &note.open_questions {
+            markdown.push_str("- ");
+            markdown.push_str(question);
             markdown.push('\n');
         }
     }
@@ -335,7 +434,8 @@ pub fn metadata_json(
         "participants": note.participants,
         "keyPoints": note.key_points(),
         "decisions": note.decisions,
-        "actions": note.actions,
+        "actions": note.action_lines(),
+        "openQuestions": note.open_questions,
     })
     .to_string()
 }
@@ -366,6 +466,7 @@ pub struct MeetingSession {
     title: Option<String>,
     manual: bool,
     transcript: String,
+    last_speaker: Option<MeetingSpeaker>,
     limiter: InsightLimiter,
     started_at_ms: i64,
     jots: Vec<String>,
@@ -381,6 +482,7 @@ impl MeetingSession {
             title: title.filter(|value| !value.trim().is_empty()),
             manual,
             transcript: String::new(),
+            last_speaker: None,
             limiter: InsightLimiter::default(),
             started_at_ms,
             jots: Vec::new(),
@@ -403,17 +505,41 @@ impl MeetingSession {
         &self.jots
     }
 
-    pub fn push_final(&mut self, text: &str) {
+    /// Appends a finalized segment, opening a new speaker turn whenever the
+    /// side of the call changes and continuing the current turn otherwise.
+    ///
+    /// An unknown speaker never starts a labelled turn, so capture paths with
+    /// no far end (the microphone-only fallback) read exactly as they did
+    /// before speaker attribution existed.
+    pub fn push_final(&mut self, speaker: MeetingSpeaker, text: &str) {
         let text = text.trim();
         let accumulated = self.transcript.chars().count();
         if text.is_empty() || accumulated >= RAW_TRANSCRIPT_CHARS {
             return;
         }
-        if !self.transcript.is_empty() {
-            self.transcript.push('\n');
+        let continues = speaker.label().is_some()
+            && self.last_speaker == Some(speaker)
+            && !self.transcript.is_empty();
+        let mut prefix = String::new();
+        if continues {
+            prefix.push(' ');
+        } else {
+            if !self.transcript.is_empty() {
+                prefix.push('\n');
+            }
+            if let Some(label) = speaker.label() {
+                prefix.push_str(label);
+                prefix.push_str(": ");
+            }
         }
-        let remaining = RAW_TRANSCRIPT_CHARS.saturating_sub(accumulated + 1);
-        self.transcript.extend(text.chars().take(remaining));
+        let remaining = RAW_TRANSCRIPT_CHARS.saturating_sub(accumulated);
+        if prefix.chars().count() >= remaining {
+            return;
+        }
+        self.transcript.push_str(&prefix);
+        self.transcript
+            .extend(text.chars().take(remaining - prefix.chars().count()));
+        self.last_speaker = Some(speaker);
     }
 
     pub fn transcript(&self) -> &str {
@@ -473,18 +599,16 @@ pub fn compose_completion(
             transcript_locator: None,
         },
     };
+    let actions = note.action_lines();
+    let key_points = note.key_points();
     let completed = MeetingCompleted {
         title,
         summary: note.summary,
-        actions: note.actions,
+        actions,
         started_at_ms,
         ended_at_ms: now_ms,
         participants: note.participants,
-        key_points: note
-            .sections
-            .iter()
-            .flat_map(|section| section.points.iter().cloned())
-            .collect(),
+        key_points,
         decisions: note.decisions,
         note_markdown: markdown,
         metadata_json: metadata,
@@ -502,6 +626,7 @@ pub enum MeetingControl {
         suggested_title: Option<String>,
     },
     FinalSegment {
+        speaker: MeetingSpeaker,
         text: String,
     },
     Jot {
@@ -636,6 +761,9 @@ pub fn set_mode(mode: SystemAudioCaptureMode) {
 /// Unlike `notify`, this must not silently drop the segment when the control
 /// queue is momentarily full: losing final transcript text is worse than a
 /// bit of latency, so a full queue falls back to a blocking send.
+///
+/// The speaker is sampled here rather than inside the runtime because the two
+/// capture tracks only describe the moment the segment was spoken.
 pub async fn observe_final_segment(text: &str) {
     if text.trim().is_empty() {
         return;
@@ -644,6 +772,7 @@ pub async fn observe_final_segment(text: &str) {
         return;
     };
     let control = MeetingControl::FinalSegment {
+        speaker: crate::meeting_capture::dominant_speaker(),
         text: text.to_owned(),
     };
     match sender.try_send(control) {
@@ -730,10 +859,16 @@ impl MeetingRuntime {
                         self.finish(finished);
                     }
                 }
-                MeetingControl::FinalSegment { text } => {
+                MeetingControl::FinalSegment { speaker, text } => {
                     if let Some(current) = &mut session {
-                        current.push_final(&text);
-                        self.maybe_classify(current, &text);
+                        current.push_final(speaker, &text);
+                        NativeEvent::MeetingTranscriptTurn(MeetingTranscriptTurn {
+                            speaker: speaker.name().to_owned(),
+                            text: text.trim().to_owned(),
+                            occurred_at_ms: chrono::Utc::now().timestamp_millis(),
+                        })
+                        .send();
+                        self.maybe_classify(current, speaker, &text);
                     }
                 }
                 MeetingControl::Jot { text } => {
@@ -781,7 +916,7 @@ impl MeetingRuntime {
             });
     }
 
-    fn maybe_classify(&self, session: &mut MeetingSession, text: &str) {
+    fn maybe_classify(&self, session: &mut MeetingSession, speaker: MeetingSpeaker, text: &str) {
         let source: String = text.trim().chars().take(INSIGHT_SOURCE_CHARS).collect();
         if source.is_empty()
             || self.classifying.load(Ordering::Acquire)
@@ -815,6 +950,7 @@ impl MeetingRuntime {
                     kind: kind.name().to_owned(),
                     text,
                     source_text: source,
+                    speaker: speaker.name().to_owned(),
                 })
                 .send();
             }
@@ -943,7 +1079,8 @@ mod tests {
                       aligned on launch. Follow-ups were assigned.\",\"participants\":[\"Ana\",\" \
                       \"],\"sections\":[{\"heading\":\"Launch\",\"points\":[\"Beta ships \
                       Friday\",\"  \"]},{\"heading\":\"Empty\",\"points\":[]}],\"decisions\":\
-                      [\"Ship Friday\"],\"actions\":[\"Ship beta\",\"  \",\"Email QA\"]}\n```";
+                      [\"Ship Friday\"],\"actions\":[\"Ship beta\",\"  \",\"Email QA\"],\
+                      \"openQuestions\":[\"Who signs off pricing?\",\" \"]}\n```";
         let note = parse_note(output).unwrap_or_else(|| panic!("note parses"));
         assert_eq!(note.title.as_deref(), Some("Launch Sync"));
         assert_eq!(
@@ -955,7 +1092,37 @@ mod tests {
         assert_eq!(note.sections[0].points, vec!["Beta ships Friday"]);
         assert_eq!(note.key_points(), vec!["Beta ships Friday"]);
         assert_eq!(note.decisions, vec!["Ship Friday"]);
-        assert_eq!(note.actions, vec!["Ship beta", "Email QA"]);
+        assert_eq!(note.action_lines(), vec!["Ship beta", "Email QA"]);
+        assert_eq!(note.open_questions, vec!["Who signs off pricing?"]);
+    }
+
+    #[test]
+    fn actions_carry_owners_and_still_accept_bare_strings() {
+        let output = "{\"summary\":\"Aligned.\",\"actions\":[{\"text\":\" Email QA \",\
+                      \"owner\":\" Ana \"},{\"text\":\"Book the room\",\"owner\":\"  \"},\
+                      \"Draft the plan\",{\"text\":\"  \",\"owner\":\"Ben\"}]}";
+        let note = parse_note(output).unwrap_or_else(|| panic!("note parses"));
+        assert_eq!(
+            note.actions,
+            vec![
+                ActionItem {
+                    text: "Email QA".to_owned(),
+                    owner: Some("Ana".to_owned()),
+                },
+                ActionItem {
+                    text: "Book the room".to_owned(),
+                    owner: None,
+                },
+                ActionItem {
+                    text: "Draft the plan".to_owned(),
+                    owner: None,
+                },
+            ]
+        );
+        assert_eq!(
+            note.action_lines(),
+            vec!["Email QA — Ana", "Book the room", "Draft the plan"]
+        );
     }
 
     #[test]
@@ -987,7 +1154,17 @@ mod tests {
                 points: vec!["Beta ships Friday".to_owned()],
             }],
             decisions: vec!["Ship Friday".to_owned()],
-            actions: vec!["Email QA".to_owned()],
+            actions: vec![
+                ActionItem {
+                    text: "Email QA".to_owned(),
+                    owner: Some("Ana".to_owned()),
+                },
+                ActionItem {
+                    text: "Book the room".to_owned(),
+                    owner: None,
+                },
+            ],
+            open_questions: vec!["Who signs off pricing?".to_owned()],
         };
         let markdown = note_markdown(&note, "Meeting", 0, 60_000);
         assert!(markdown.starts_with("# Launch Sync\n"));
@@ -996,7 +1173,9 @@ mod tests {
         assert!(markdown.contains("## Summary\n\nWe aligned on launch."));
         assert!(markdown.contains("## Discussion\n\n- Beta ships Friday"));
         assert!(markdown.contains("## Decisions\n\n- Ship Friday"));
-        assert!(markdown.contains("## Action items\n\n- [ ] Email QA"));
+        assert!(markdown.contains("## Action items\n\n- [ ] Email QA — **Ana**"));
+        assert!(markdown.contains("- [ ] Book the room\n"));
+        assert!(markdown.contains("## Open questions\n\n- Who signs off pricing?"));
     }
 
     #[test]
@@ -1010,7 +1189,11 @@ mod tests {
                 points: vec!["A point".to_owned()],
             }],
             decisions: vec!["Decided".to_owned()],
-            actions: vec!["Do it".to_owned()],
+            actions: vec![ActionItem {
+                text: "Do it".to_owned(),
+                owner: Some("Ben".to_owned()),
+            }],
+            open_questions: vec!["Still open?".to_owned()],
         };
         let metadata: serde_json::Value =
             serde_json::from_str(&metadata_json(&note, "Standup", 5, 9))
@@ -1022,7 +1205,8 @@ mod tests {
         assert_eq!(metadata["participants"][0], "Ana");
         assert_eq!(metadata["keyPoints"][0], "A point");
         assert_eq!(metadata["decisions"][0], "Decided");
-        assert_eq!(metadata["actions"][0], "Do it");
+        assert_eq!(metadata["actions"][0], "Do it — Ben");
+        assert_eq!(metadata["openQuestions"][0], "Still open?");
     }
 
     #[test]
@@ -1049,6 +1233,19 @@ mod tests {
     }
 
     #[test]
+    fn note_prompt_states_the_grounding_speaker_and_structure_rules() {
+        let prompt = note_prompt("You: hello\nThem: hi", &[], "Sync");
+        assert!(prompt.contains("Never infer"));
+        assert!(prompt.contains("leave it out"));
+        assert!(prompt.contains("\"You:\""));
+        assert!(prompt.contains("\"Them:\""));
+        assert!(prompt.contains("at least two specific points"));
+        assert!(prompt.contains("\"Overview\""));
+        assert!(prompt.contains("openQuestions"));
+        assert!(prompt.contains("\"owner\""));
+    }
+
+    #[test]
     fn suggested_answers_are_flattened_and_bounded() {
         assert_eq!(
             clean_answer("  The beta\nships Friday.  "),
@@ -1064,19 +1261,51 @@ mod tests {
     fn sessions_accumulate_final_segments_within_the_raw_bound() {
         let mut session = MeetingSession::new(Some("  ".to_owned()), true);
         assert_eq!(session.title(), "Meeting");
-        session.push_final("  hello team  ");
-        session.push_final("");
-        session.push_final(&"x".repeat(RAW_TRANSCRIPT_CHARS));
-        session.push_final("overflow is dropped");
+        session.push_final(MeetingSpeaker::Unknown, "  hello team  ");
+        session.push_final(MeetingSpeaker::Unknown, "");
+        session.push_final(MeetingSpeaker::Unknown, &"x".repeat(RAW_TRANSCRIPT_CHARS));
+        session.push_final(MeetingSpeaker::Unknown, "overflow is dropped");
         assert!(session.transcript().starts_with("hello team\n"));
         assert!(session.transcript().chars().count() <= RAW_TRANSCRIPT_CHARS);
         assert!(!session.transcript().contains("overflow"));
     }
 
     #[test]
+    fn transcripts_label_speaker_turns_and_merge_consecutive_ones() {
+        let mut session = MeetingSession::new_at(None, true, 0);
+        session.push_final(MeetingSpeaker::You, "Where are we on the beta?");
+        session.push_final(MeetingSpeaker::Them, "QA finishes Thursday.");
+        session.push_final(MeetingSpeaker::Them, "We ship Friday.");
+        session.push_final(MeetingSpeaker::You, "Great.");
+        assert_eq!(
+            session.transcript(),
+            "You: Where are we on the beta?\nThem: QA finishes Thursday. We ship \
+             Friday.\nYou: Great."
+        );
+    }
+
+    #[test]
+    fn unattributed_segments_stay_unlabelled_so_mic_only_capture_reads_as_before() {
+        let mut session = MeetingSession::new_at(None, true, 0);
+        session.push_final(MeetingSpeaker::Unknown, "first line");
+        session.push_final(MeetingSpeaker::Unknown, "second line");
+        session.push_final(MeetingSpeaker::You, "mine");
+        assert_eq!(session.transcript(), "first line\nsecond line\nYou: mine");
+    }
+
+    #[test]
+    fn a_speaker_prefix_never_pushes_a_transcript_past_its_bound() {
+        let mut session = MeetingSession::new_at(None, true, 0);
+        session.push_final(MeetingSpeaker::You, &"x".repeat(RAW_TRANSCRIPT_CHARS - 10));
+        session.push_final(MeetingSpeaker::Them, "dropped entirely");
+        assert!(session.transcript().chars().count() <= RAW_TRANSCRIPT_CHARS);
+        assert!(!session.transcript().contains("Them"));
+    }
+
+    #[test]
     fn manual_start_upgrades_an_auto_session_and_adopts_the_title() {
         let mut session = MeetingSession::new(Some("Zoom".to_owned()), false);
-        session.push_final("early context");
+        session.push_final(MeetingSpeaker::Unknown, "early context");
         session.upgrade_to_manual(Some("Quarterly Review".to_owned()));
         assert!(session.is_manual());
         assert_eq!(session.title(), "Quarterly Review");
@@ -1162,8 +1391,8 @@ mod tests {
     #[test]
     fn completed_meetings_compose_a_capture_stored_as_a_conversation_source() {
         let mut session = MeetingSession::new_at(Some("Standup".to_owned()), false, 5);
-        session.push_final("We agreed to ship on Friday.");
-        session.push_final("I'll email the release notes.");
+        session.push_final(MeetingSpeaker::Them, "We agreed to ship on Friday.");
+        session.push_final(MeetingSpeaker::You, "I'll email the release notes.");
         let (completed, capture) = compose_completion(
             &session,
             MeetingNote {
@@ -1175,13 +1404,17 @@ mod tests {
                     points: vec!["Friday is the date".to_owned()],
                 }],
                 decisions: vec!["Ship Friday".to_owned()],
-                actions: vec!["Email release notes".to_owned()],
+                actions: vec![ActionItem {
+                    text: "Email release notes".to_owned(),
+                    owner: Some("Ana".to_owned()),
+                }],
+                open_questions: Vec::new(),
             },
             10,
         );
         assert_eq!(completed.title, "Standup");
         assert_eq!(completed.summary, "Team agreed to ship Friday.");
-        assert_eq!(completed.actions, vec!["Email release notes"]);
+        assert_eq!(completed.actions, vec!["Email release notes — Ana"]);
         assert_eq!(completed.started_at_ms, 5);
         assert_eq!(completed.ended_at_ms, 10);
         assert_eq!(completed.participants, vec!["Ana"]);
@@ -1191,7 +1424,7 @@ mod tests {
         assert!(
             completed
                 .note_markdown
-                .contains("- [ ] Email release notes")
+                .contains("- [ ] Email release notes — **Ana**")
         );
         assert!(completed.metadata_json.contains("\"kind\":\"meeting\""));
         let Command::CaptureEvent {
@@ -1210,7 +1443,8 @@ mod tests {
         assert!(evidence.contains("# Standup"));
         assert!(evidence.contains("- [ ] Email release notes"));
         assert!(evidence.contains("## Transcript"));
-        assert!(evidence.contains("We agreed to ship on Friday."));
+        assert!(evidence.contains("Them: We agreed to ship on Friday."));
+        assert!(evidence.contains("You: I'll email the release notes."));
 
         let path = std::env::temp_dir().join(format!(
             "omi-v4-meeting-{}-{}.sqlite3",

@@ -68,6 +68,8 @@ abstract class NativeEvent {
       case 22:
         return NativeEventMeetingInsight.load(deserializer);
       case 23:
+        return NativeEventMeetingTranscriptTurn.load(deserializer);
+      case 24:
         return NativeEventMeetingCompleted.load(deserializer);
       default:
         throw Exception(
@@ -1328,6 +1330,61 @@ class NativeEventMeetingInsight extends NativeEvent {
 }
 
 @immutable
+class NativeEventMeetingTranscriptTurn extends NativeEvent {
+  const NativeEventMeetingTranscriptTurn({required this.value}) : super();
+
+  static NativeEventMeetingTranscriptTurn load(
+    BinaryDeserializer deserializer,
+  ) {
+    deserializer.increaseContainerDepth();
+    final instance = NativeEventMeetingTranscriptTurn(
+      value: MeetingTranscriptTurn.deserialize(deserializer),
+    );
+    deserializer.decreaseContainerDepth();
+    return instance;
+  }
+
+  final MeetingTranscriptTurn value;
+
+  NativeEventMeetingTranscriptTurn copyWith({MeetingTranscriptTurn? value}) {
+    return NativeEventMeetingTranscriptTurn(value: value ?? this.value);
+  }
+
+  void serialize(BinarySerializer serializer) {
+    serializer.increaseContainerDepth();
+    serializer.serializeVariantIndex(23);
+    value.serialize(serializer);
+    serializer.decreaseContainerDepth();
+  }
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    if (other.runtimeType != runtimeType) return false;
+
+    return other is NativeEventMeetingTranscriptTurn && value == other.value;
+  }
+
+  @override
+  int get hashCode => value.hashCode;
+
+  @override
+  String toString() {
+    String? fullString;
+
+    assert(() {
+      fullString =
+          '$runtimeType('
+          'value: $value'
+          ')';
+      return true;
+    }());
+
+    return fullString ?? 'NativeEventMeetingTranscriptTurn';
+  }
+}
+
+@immutable
 class NativeEventMeetingCompleted extends NativeEvent {
   const NativeEventMeetingCompleted({required this.value}) : super();
 
@@ -1348,7 +1405,7 @@ class NativeEventMeetingCompleted extends NativeEvent {
 
   void serialize(BinarySerializer serializer) {
     serializer.increaseContainerDepth();
-    serializer.serializeVariantIndex(23);
+    serializer.serializeVariantIndex(24);
     value.serialize(serializer);
     serializer.decreaseContainerDepth();
   }

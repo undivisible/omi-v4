@@ -6,6 +6,7 @@ import 'package:omi/app_services.dart';
 import 'package:omi/auth/auth.dart';
 import 'package:omi/device/device.dart';
 import 'package:omi/features/meeting_assist_panel.dart';
+import 'package:omi/native/generated/signals/signals.dart' show NativeError;
 import 'package:omi/native/native_hub.dart';
 
 void main() {
@@ -57,21 +58,11 @@ void main() {
     expect(find.text('Standup'), findsOneWidget);
 
     hub.eventsController.add(
-      NativeEventTranscriptDelta(
-        value: TranscriptDelta(
-          requestId: 'r1',
-          audioStreamId: 'meeting-capture',
-          segmentId: 's1',
-          segmentSequence: Uint64.fromBigInt(BigInt.one),
-          sttEpoch: 1,
-          deviceId: 'meeting-capture',
-          provider: 'test',
-          startMs: 0,
-          endMs: 1000,
-          occurredAtMs: 0,
+      const NativeEventMeetingTranscriptTurn(
+        value: MeetingTranscriptTurn(
+          speaker: 'Them',
           text: 'When do we ship the beta?',
-          finalSegment: true,
-          language: null,
+          occurredAtMs: 1000,
         ),
       ),
     );
@@ -81,13 +72,18 @@ void main() {
           kind: 'response',
           text: 'The beta ships Friday after QA signs off.',
           sourceText: 'When do we ship the beta?',
+          speaker: 'Them',
         ),
       ),
     );
     await tester.pump();
     await tester.pump();
-    expect(find.text('When do we ship the beta?'), findsOneWidget);
-    expect(find.text('SUGGESTED ANSWER'), findsOneWidget);
+    expect(
+      find.textContaining('When do we ship the beta?', findRichText: true),
+      findsOneWidget,
+    );
+    expect(find.textContaining('Them', findRichText: true), findsWidgets);
+    expect(find.text('SUGGESTED ANSWER · Them'), findsOneWidget);
     expect(
       find.text('The beta ships Friday after QA signs off.'),
       findsOneWidget,
@@ -137,6 +133,97 @@ void main() {
     await tester.pump();
     await tester.pump();
     expect(find.byKey(const Key('meeting_assist_panel')), findsNothing);
+  });
+
+  testWidgets('an unattributed turn renders without a speaker prefix', (
+    tester,
+  ) async {
+    final (services, hub) = await servicesWithHub();
+    addTearDown(services.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(body: MeetingAssistPanel(services: services)),
+      ),
+    );
+    hub.eventsController.add(
+      const NativeEventMeetingStateChanged(
+        value: MeetingStateChanged(active: true, suggestedTitle: 'Sync'),
+      ),
+    );
+    hub.eventsController.add(
+      const NativeEventMeetingTranscriptTurn(
+        value: MeetingTranscriptTurn(
+          speaker: '',
+          text: 'Nobody knows who said this.',
+          occurredAtMs: 5,
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+    final turn = tester.widget<Text>(
+      find.ancestor(
+        of: find.textContaining(
+          'Nobody knows who said this.',
+          findRichText: true,
+        ),
+        matching: find.byType(Text),
+      ),
+    );
+    expect(turn.textSpan?.toPlainText(), 'Nobody knows who said this.');
+  });
+
+  testWidgets('a silent far end warns that only the microphone is recorded', (
+    tester,
+  ) async {
+    final (services, hub) = await servicesWithHub();
+    addTearDown(services.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(body: MeetingAssistPanel(services: services)),
+      ),
+    );
+    hub.eventsController.add(
+      const NativeEventMeetingStateChanged(
+        value: MeetingStateChanged(active: true, suggestedTitle: 'Sync'),
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+    expect(find.byKey(const Key('meeting_far_end_warning')), findsNothing);
+
+    hub.eventsController.add(
+      const NativeEventError(
+        value: NativeError(
+          requestId: 'meeting-capture',
+          code: 'meeting_far_end_silent',
+          message: 'only your microphone is being recorded',
+          retryable: false,
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+    expect(find.byKey(const Key('meeting_far_end_warning')), findsOneWidget);
+
+    hub.eventsController.add(
+      const NativeEventMeetingStateChanged(
+        value: MeetingStateChanged(active: true, suggestedTitle: 'Sync'),
+      ),
+    );
+    hub.eventsController.add(
+      const NativeEventMeetingStateChanged(
+        value: MeetingStateChanged(active: false, suggestedTitle: null),
+      ),
+    );
+    hub.eventsController.add(
+      const NativeEventMeetingStateChanged(
+        value: MeetingStateChanged(active: true, suggestedTitle: 'Sync'),
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+    expect(find.byKey(const Key('meeting_far_end_warning')), findsNothing);
   });
 }
 

@@ -22,10 +22,11 @@ class MeetingAssistPanel extends StatefulWidget {
 class MeetingAssistPanelState extends State<MeetingAssistPanel> {
   StreamSubscription<NativeEvent>? _events;
   final _jot = TextEditingController();
-  final List<String> _highlights = [];
+  final List<MeetingTranscriptTurn> _highlights = [];
   final List<MeetingInsight> _insights = [];
   final List<String> _memoryContext = [];
   bool _active = false;
+  bool _farEndSilent = false;
   String? _title;
   String? _lastContextRequestId;
   int _contextSequence = 0;
@@ -57,12 +58,13 @@ class MeetingAssistPanelState extends State<MeetingAssistPanel> {
             _highlights.clear();
             _insights.clear();
             _memoryContext.clear();
+            _farEndSilent = false;
           }
         });
-      case NativeEventTranscriptDelta(:final value)
-          when _active && value.finalSegment && value.text.trim().isNotEmpty:
+      case NativeEventMeetingTranscriptTurn(:final value)
+          when _active && value.text.trim().isNotEmpty:
         setState(() {
-          _highlights.add(value.text.trim());
+          _highlights.add(value);
           while (_highlights.length > MeetingAssistPanel.maxHighlights) {
             _highlights.removeAt(0);
           }
@@ -89,6 +91,9 @@ class MeetingAssistPanelState extends State<MeetingAssistPanel> {
                   .take(MeetingAssistPanel.maxContextItems),
             );
         });
+      case NativeEventError(:final value)
+          when _active && value.code == 'meeting_far_end_silent':
+        setState(() => _farEndSilent = true);
       default:
         break;
     }
@@ -201,20 +206,24 @@ class MeetingAssistPanelState extends State<MeetingAssistPanel> {
                     ),
                   ],
                 ),
+                if (_farEndSilent) ...[
+                  const SizedBox(height: 6),
+                  Text(
+                    key: const Key('meeting_far_end_warning'),
+                    'Only your microphone is being recorded — the call audio '
+                    'is not reaching system audio capture.',
+                    style: const TextStyle(
+                      fontSize: 11.5,
+                      color: Color(0xffe4614d),
+                    ),
+                  ),
+                ],
                 if (_highlights.isNotEmpty) ...[
                   const SizedBox(height: 6),
                   for (final highlight in _highlights)
                     Padding(
                       padding: const EdgeInsets.only(bottom: 4),
-                      child: Text(
-                        highlight,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: scheme.onSurfaceVariant,
-                        ),
-                      ),
+                      child: _TranscriptTurnRow(turn: highlight),
                     ),
                 ],
                 for (final insight in _insights) ...[
@@ -269,6 +278,38 @@ class MeetingAssistPanelState extends State<MeetingAssistPanel> {
   }
 }
 
+/// One finalized transcript turn, prefixed with the side of the call it came
+/// from when the two capture tracks could tell them apart.
+class _TranscriptTurnRow extends StatelessWidget {
+  const _TranscriptTurnRow({required this.turn});
+
+  final MeetingTranscriptTurn turn;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final speaker = turn.speaker.trim();
+    return Text.rich(
+      TextSpan(
+        children: [
+          if (speaker.isNotEmpty)
+            TextSpan(
+              text: '$speaker  ',
+              style: TextStyle(
+                fontWeight: FontWeight.w600,
+                color: scheme.onSurface,
+              ),
+            ),
+          TextSpan(text: turn.text.trim()),
+        ],
+      ),
+      maxLines: 2,
+      overflow: TextOverflow.ellipsis,
+      style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
+    );
+  }
+}
+
 class _InsightRow extends StatelessWidget {
   const _InsightRow({required this.insight});
 
@@ -277,6 +318,7 @@ class _InsightRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final speaker = insight.speaker.trim();
     final label = switch (insight.kind) {
       'decision' => 'DECISION',
       'action' => 'ACTION',
@@ -286,7 +328,7 @@ class _InsightRow extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
-          label,
+          speaker.isEmpty ? label : '$label · $speaker',
           style: TextStyle(
             fontSize: 10,
             letterSpacing: 1.1,
