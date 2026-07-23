@@ -328,6 +328,7 @@ def targets_from_readme(root: Path, boards: list[dict]) -> list[dict]:
         return []
     seen: set[str] = set()
     targets: list[dict] = []
+    entries = []
     for heading, workdir, command in logical_commands(read_text(readme)):
         parsed = parse_west_build(command)
         if not parsed:
@@ -335,12 +336,32 @@ def targets_from_readme(root: Path, boards: list[dict]) -> list[dict]:
         app_dir = resolve_app_dir(root, workdir, parsed["source"])
         if not app_dir:
             continue
+        entries.append((heading, parsed, app_dir))
+    # One README heading often documents several builds that differ only by
+    # config (the DevKit variants). Numbering those would produce artifacts
+    # nobody can map back to a board, so those targets are named after their
+    # config instead.
+    heading_counts: dict[str, int] = {}
+    for heading, _, _ in entries:
+        key = slug(heading) if heading else ""
+        heading_counts[key] = heading_counts.get(key, 0) + 1
+    for heading, parsed, app_dir in entries:
         conf = conf_from_cmake_args(parsed["cmake_args"])
         board = parsed["board"]
         if not board:
             board = board_for(f"{app_dir} {conf} {heading}", boards)
-        identifier = slug(heading) if heading else slug(f"{Path(app_dir).name}-{conf or board}")
-        base = identifier
+        heading_slug = slug(heading) if heading else ""
+        if heading_slug and heading_counts.get(heading_slug, 0) == 1:
+            identifier = heading_slug
+        elif conf:
+            stem = Path(conf).stem
+            if stem.startswith("prj_"):
+                stem = stem[4:]
+            identifier = slug(stem)
+        else:
+            identifier = heading_slug or slug(f"{Path(app_dir).name}-{board}")
+        base = identifier or slug(Path(app_dir).name)
+        identifier = base
         suffix = 2
         while identifier in seen:
             identifier = f"{base}-{suffix}"
