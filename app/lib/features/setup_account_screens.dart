@@ -77,16 +77,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
         if (!previewMode && services.auth.snapshot.session != null) ...[
           _Tile(
             icon: Icons.logout_rounded,
-            title: 'Sign out',
+            title: 'Log out',
             detail: 'Sign out of this device. Your account data stays intact.',
             trailing: TextButton(
               key: const Key('sign_out'),
               onPressed: () => unawaited(services.auth.signOut()),
-              child: const Text('Sign out'),
+              child: const Text('Log out'),
             ),
           ),
           DeleteAccountTile(services: services),
-        ],
+        ] else if (!previewMode)
+          DeleteLocalDataTile(services: services),
       ],
       SettingsSection.plan => [
         if (previewMode || services.billing == null)
@@ -577,6 +578,76 @@ class _DeleteAccountTileState extends State<DeleteAccountTile> {
                   'data.'),
     trailing: TextButton(
       key: const Key('delete_account'),
+      style: TextButton.styleFrom(foregroundColor: Colors.redAccent),
+      onPressed: deleting ? null : _confirmAndDelete,
+      child: const Text('Delete'),
+    ),
+  );
+}
+
+class DeleteLocalDataTile extends StatefulWidget {
+  const DeleteLocalDataTile({required this.services, super.key});
+
+  final AppServices services;
+
+  @override
+  State<DeleteLocalDataTile> createState() => _DeleteLocalDataTileState();
+}
+
+class _DeleteLocalDataTileState extends State<DeleteLocalDataTile> {
+  bool deleting = false;
+  String? error;
+
+  Future<void> _confirmAndDelete() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete data?'),
+        content: const Text(
+          'This erases everything Omi stores on this device — conversations, '
+          'transcripts, notes, tasks, and your onboarding profile — and '
+          'returns you to onboarding. This cannot be undone.',
+        ),
+        actions: [
+          TextButton(
+            key: const Key('delete_local_data_cancel'),
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            key: const Key('delete_local_data_confirm'),
+            style: FilledButton.styleFrom(backgroundColor: Colors.redAccent),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Delete forever'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    setState(() {
+      deleting = true;
+      error = null;
+    });
+    try {
+      await widget.services.deleteAccount();
+    } catch (failure) {
+      if (mounted) setState(() => error = '$failure');
+    } finally {
+      if (mounted) setState(() => deleting = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => _Tile(
+    icon: Icons.delete_forever_outlined,
+    title: 'Delete data',
+    detail:
+        error ??
+        (deleting
+            ? 'Deleting your local data…'
+            : 'Erase everything stored on this device and start over.'),
+    trailing: TextButton(
+      key: const Key('delete_local_data'),
       style: TextButton.styleFrom(foregroundColor: Colors.redAccent),
       onPressed: deleting ? null : _confirmAndDelete,
       child: const Text('Delete'),

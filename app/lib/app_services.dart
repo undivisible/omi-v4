@@ -340,7 +340,10 @@ final class AppServices {
       await (await SharedPreferences.getInstance()).clear();
     } catch (_) {}
     if (uid != null) await auth.signOut();
+    dataWipes.value += 1;
   }
+
+  final dataWipes = ValueNotifier<int>(0);
 
   final MemorySyncPump? memorySyncPump;
   final ManagedSttClient? _managedStt;

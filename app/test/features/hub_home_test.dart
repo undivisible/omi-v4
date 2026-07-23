@@ -193,6 +193,189 @@ void main() {
     expect(find.byKey(const Key('chat_placeholder')), findsNothing);
   });
 
+  AppServices makeLocalServices() {
+    final services = AppServices.forTesting(
+      nativeHub: _EventHub(),
+      deviceRelay: DeviceRelayService(
+        role: DeviceRelayRole.desktopObserver,
+        adapter: const UnavailableDeviceRelayAdapter(),
+      ),
+      auth: AuthController(const UnconfiguredAuthGateway()),
+      memoryDatabasePath: (uid) => '/tmp/$uid.sqlite3',
+    );
+    addTearDown(services.dispose);
+    return services;
+  }
+
+  Future<AppServices> pumpLocalHub(
+    WidgetTester tester,
+    VolatileHubChecklistStore store,
+  ) async {
+    DevGemini.debugOverride = 'AIzaTestDevKey';
+    addTearDown(() => DevGemini.debugOverride = null);
+    final services = makeLocalServices();
+    await services.initialize();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: ChatScreen(services: services, checklistStore: store),
+        ),
+      ),
+    );
+    await tester.pump();
+    return services;
+  }
+
+  testWidgets('starter task row tap sends the title as a chat message', (
+    tester,
+  ) async {
+    final store = VolatileHubChecklistStore()..tasks = ['Pick omi back up'];
+    await pumpLocalHub(tester, store);
+    expect(find.text('Pick omi back up'), findsOneWidget);
+
+    await tester.tap(
+      find.byKey(const ValueKey('starter_task_Pick omi back up')),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 600));
+
+    expect(find.byKey(const Key('hub_greeter')), findsNothing);
+    expect(find.text('Pick omi back up'), findsOneWidget);
+    expect(
+      tester
+          .widget<TextField>(find.byKey(const Key('chat_input')))
+          .controller!
+          .text,
+      isEmpty,
+    );
+    expect(store.doneTasks, isEmpty);
+  });
+
+  testWidgets('starter task checkbox completes without sending', (
+    tester,
+  ) async {
+    final store = VolatileHubChecklistStore()..tasks = ['Pick omi back up'];
+    await pumpLocalHub(tester, store);
+
+    await tester.tap(
+      find.byKey(const ValueKey('complete_starter_Pick omi back up')),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 800));
+
+    expect(find.byKey(const Key('hub_greeter')), findsOneWidget);
+    expect(store.doneTasks, ['Pick omi back up']);
+    expect(store.tasks, ['Pick omi back up']);
+  });
+
+  testWidgets('completed starter tasks are restored from the store', (
+    tester,
+  ) async {
+    final store = VolatileHubChecklistStore()
+      ..tasks = ['Pick omi back up', 'Decide next step for tsc.hk']
+      ..doneTasks = ['Pick omi back up'];
+    await pumpLocalHub(tester, store);
+
+    final doneRow = find.descendant(
+      of: find.byKey(const ValueKey('starter_task_Pick omi back up')),
+      matching: find.text('✓'),
+    );
+    expect(doneRow, findsOneWidget);
+    final pendingRow = find.descendant(
+      of: find.byKey(
+        const ValueKey('starter_task_Decide next step for tsc.hk'),
+      ),
+      matching: find.text('✓'),
+    );
+    expect(pendingRow, findsNothing);
+  });
+
+  testWidgets('back button returns to the greeter and keeps history', (
+    tester,
+  ) async {
+    final store = VolatileHubChecklistStore();
+    await pumpLocalHub(tester, store);
+    expect(find.byKey(const Key('chat_back')), findsNothing);
+
+    await tester.enterText(find.byKey(const Key('chat_input')), 'hello');
+    await tester.tap(find.byKey(const Key('send_chat')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 600));
+    expect(find.byKey(const Key('hub_greeter')), findsNothing);
+    expect(find.byKey(const Key('chat_back')), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('chat_back')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 600));
+    expect(find.byKey(const Key('hub_greeter')), findsOneWidget);
+    expect(find.byKey(const Key('chat_back')), findsNothing);
+    expect(find.text('hello'), findsOneWidget);
+  });
+
+  testWidgets('input card shimmers while the assistant is thinking', (
+    tester,
+  ) async {
+    final store = VolatileHubChecklistStore();
+    await pumpLocalHub(tester, store);
+    expect(find.byKey(const Key('input_thinking_shimmer')), findsNothing);
+
+    await tester.enterText(find.byKey(const Key('chat_input')), 'hello');
+    await tester.tap(find.byKey(const Key('send_chat')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 600));
+
+    expect(find.byKey(const Key('input_thinking_shimmer')), findsOneWidget);
+  });
+
+  testWidgets('hub shimmer and glow stay off under reduced motion', (
+    tester,
+  ) async {
+    DevGemini.debugOverride = 'AIzaTestDevKey';
+    addTearDown(() => DevGemini.debugOverride = null);
+    final services = makeLocalServices();
+    await services.initialize();
+    final store = VolatileHubChecklistStore()..tasks = ['Pick omi back up'];
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MediaQuery(
+          data: const MediaQueryData(disableAnimations: true),
+          child: Scaffold(
+            body: ChatScreen(services: services, checklistStore: store),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    expect(find.byKey(const Key('hub_greeter_glow')), findsNothing);
+
+    await tester.tap(
+      find.byKey(const ValueKey('complete_starter_Pick omi back up')),
+    );
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(find.byKey(const Key('task_complete_shimmer')), findsNothing);
+
+    await tester.enterText(find.byKey(const Key('chat_input')), 'hello');
+    await tester.tap(find.byKey(const Key('send_chat')));
+    await tester.pump();
+    expect(find.byKey(const Key('input_thinking_shimmer')), findsNothing);
+  });
+
+  testWidgets('greeter entrance carries a glow sweep and rows shimmer on '
+      'completion', (tester) async {
+    final store = VolatileHubChecklistStore()..tasks = ['Pick omi back up'];
+    await pumpLocalHub(tester, store);
+    expect(find.byKey(const Key('hub_greeter_glow')), findsOneWidget);
+
+    await tester.tap(
+      find.byKey(const ValueKey('complete_starter_Pick omi back up')),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 200));
+    expect(find.byKey(const Key('task_complete_shimmer')), findsOneWidget);
+    await tester.pump(const Duration(milliseconds: 900));
+    expect(find.byKey(const Key('task_complete_shimmer')), findsNothing);
+  });
+
   testWidgets('tasks with meeting metadata render as rich calendar rows', (
     tester,
   ) async {

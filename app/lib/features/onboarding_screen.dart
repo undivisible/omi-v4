@@ -382,6 +382,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     final store = widget.checklistStore ?? PreferencesHubChecklistStore();
     try {
       await store.setStarterTasks(derived);
+      await store.setDoneStarterTasks(const []);
     } catch (_) {}
   }
 

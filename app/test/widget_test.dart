@@ -7,6 +7,7 @@ import 'package:omi/features/omi_shell.dart';
 import 'package:omi/features/setup_account_screens.dart';
 import 'package:omi/main.dart';
 import 'package:omi/ui/omi_ui.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 Future<void> tapVisible(WidgetTester tester, Finder finder) async {
   await tester.ensureVisible(finder);
@@ -29,6 +30,8 @@ Future<void> openInterfacePreview(WidgetTester tester) async {
 }
 
 void main() {
+  setUp(() => SharedPreferences.setMockInitialValues({}));
+
   testWidgets('onboarding copy reveals while the oval mask stays fixed', (
     tester,
   ) async {
@@ -37,6 +40,7 @@ void main() {
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
     await tester.pumpWidget(const OmiApp());
+    await tester.pump();
 
     final intro = find.textContaining('Hi, I’m Omi.');
     final firstFrame = tester.widget<Text>(intro).textSpan! as TextSpan;
@@ -82,6 +86,7 @@ void main() {
     debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
     addTearDown(() => debugDefaultTargetPlatformOverride = null);
     await tester.pumpWidget(const OmiApp());
+    await tester.pump();
 
     expect(find.textContaining('Hi, I’m Omi.'), findsOneWidget);
     expect(
@@ -183,6 +188,7 @@ void main() {
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
     await tester.pumpWidget(const OmiApp());
+    await tester.pump();
 
     await reachPreviewGate(tester);
     expect(

@@ -102,9 +102,8 @@ void main() {
   });
 
   for (final size in const [Size(1400, 900), Size(900, 700)]) {
-    testWidgets('hub column is centered at ${size.width}x${size.height}', (
-      tester,
-    ) async {
+    testWidgets('hub column is centered with a bottom-anchored input at '
+        '${size.width}x${size.height}', (tester) async {
       final services = makeServices();
       addTearDown(services.dispose);
       await pumpShell(
@@ -141,8 +140,8 @@ void main() {
       final topGap = contentTop - hubRect.top;
       final bottomGap = hubRect.bottom - contentBottom;
       expect(topGap, greaterThan(0));
-      expect(bottomGap, greaterThan(0));
-      expect((topGap - bottomGap).abs(), lessThan(120));
+      expect(bottomGap, greaterThanOrEqualTo(0));
+      expect(bottomGap, lessThan(40));
     });
   }
 }

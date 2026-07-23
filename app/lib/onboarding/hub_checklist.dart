@@ -15,11 +15,16 @@ abstract interface class HubChecklistStore {
   Future<List<String>> starterTasks();
 
   Future<void> setStarterTasks(List<String> titles);
+
+  Future<List<String>> doneStarterTasks();
+
+  Future<void> setDoneStarterTasks(List<String> titles);
 }
 
 final class PreferencesHubChecklistStore implements HubChecklistStore {
   static const _key = 'hub_setup_omi_complete_v1';
   static const _starterKey = 'hub_starter_tasks_v1';
+  static const _doneStarterKey = 'hub_starter_tasks_done_v1';
 
   @override
   Future<bool> isSetupComplete() async =>
@@ -42,6 +47,19 @@ final class PreferencesHubChecklistStore implements HubChecklistStore {
       titles,
     );
   }
+
+  @override
+  Future<List<String>> doneStarterTasks() async =>
+      (await SharedPreferences.getInstance()).getStringList(_doneStarterKey) ??
+      const [];
+
+  @override
+  Future<void> setDoneStarterTasks(List<String> titles) async {
+    await (await SharedPreferences.getInstance()).setStringList(
+      _doneStarterKey,
+      titles,
+    );
+  }
 }
 
 final class VolatileHubChecklistStore implements HubChecklistStore {
@@ -49,6 +67,7 @@ final class VolatileHubChecklistStore implements HubChecklistStore {
 
   bool setupComplete;
   List<String> tasks = const [];
+  List<String> doneTasks = const [];
 
   @override
   Future<bool> isSetupComplete() async => setupComplete;
@@ -62,4 +81,11 @@ final class VolatileHubChecklistStore implements HubChecklistStore {
   @override
   Future<void> setStarterTasks(List<String> titles) async =>
       tasks = List.of(titles);
+
+  @override
+  Future<List<String>> doneStarterTasks() async => doneTasks;
+
+  @override
+  Future<void> setDoneStarterTasks(List<String> titles) async =>
+      doneTasks = List.of(titles);
 }

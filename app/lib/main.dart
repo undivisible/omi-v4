@@ -4,7 +4,6 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import 'app_services.dart';
-import 'auth/auth.dart';
 import 'features/desktop_auth_screen.dart';
 import 'features/mobile_companion_shell.dart';
 import 'features/mobile_onboarding_screen.dart';
@@ -93,19 +92,21 @@ class _OmiAppState extends State<OmiApp> {
   bool _checkingCompletion = false;
   bool _onboardingComplete = false;
   int _completionGeneration = 0;
-  // Firebase can be entirely unconfigured (no backend to authenticate
-  // against) for local/offline testing builds; completion in that case has
-  // no account to persist against, so it is tracked only for this run.
-  bool _localTestOnboardingComplete = false;
 
   @override
   void initState() {
     super.initState();
     services.auth.addListener(_authChanged);
+    services.dataWipes.addListener(_dataWiped);
     _refreshCompletion();
   }
 
   void _authChanged() => _refreshCompletion(notify: true);
+
+  void _dataWiped() {
+    _checkedUid = null;
+    _refreshCompletion(notify: true);
+  }
 
   bool get _mobileCompanion {
     if (kIsWeb) return false;
@@ -113,28 +114,15 @@ class _OmiAppState extends State<OmiApp> {
     return platform == TargetPlatform.android || platform == TargetPlatform.iOS;
   }
 
-  bool get _authUnavailable =>
-      services.auth.snapshot.phase == AuthPhase.unavailable;
+  String get _completionUid {
+    final snapshot = services.auth.snapshot;
+    return snapshot.hasProcessingAuthority
+        ? snapshot.session!.uid
+        : localOnboardingUid;
+  }
 
   void _refreshCompletion({bool notify = false}) {
-    final snapshot = services.auth.snapshot;
-    if (_authUnavailable) {
-      _completionGeneration += 1;
-      _checkedUid = null;
-      _checkingCompletion = false;
-      _onboardingComplete = _localTestOnboardingComplete;
-      if (notify && mounted) setState(() {});
-      return;
-    }
-    final uid = snapshot.hasProcessingAuthority ? snapshot.session!.uid : null;
-    if (uid == null) {
-      _completionGeneration += 1;
-      _checkedUid = null;
-      _checkingCompletion = false;
-      _onboardingComplete = false;
-      if (notify && mounted) setState(() {});
-      return;
-    }
+    final uid = _completionUid;
     if (_checkedUid == uid) return;
     final generation = ++_completionGeneration;
     _checkedUid = uid;
@@ -162,26 +150,9 @@ class _OmiAppState extends State<OmiApp> {
     try {
       await PreferencesHubChecklistStore().setSetupComplete(true);
     } catch (_) {}
-    if (_authUnavailable) {
-      if (mounted) {
-        setState(() {
-          _localTestOnboardingComplete = true;
-          _onboardingComplete = true;
-        });
-      }
-      return;
-    }
-    final snapshot = services.auth.snapshot;
-    if (!snapshot.hasProcessingAuthority) {
-      throw StateError('Processing authority is required');
-    }
-    final uid = snapshot.session!.uid;
+    final uid = _completionUid;
     await onboardingCompletionStore.complete(uid);
-    if (!mounted ||
-        !services.auth.snapshot.hasProcessingAuthority ||
-        services.auth.snapshot.session!.uid != uid) {
-      return;
-    }
+    if (!mounted || _completionUid != uid) return;
     setState(() {
       _checkedUid = uid;
       _checkingCompletion = false;
@@ -192,6 +163,7 @@ class _OmiAppState extends State<OmiApp> {
   @override
   void dispose() {
     services.auth.removeListener(_authChanged);
+    services.dataWipes.removeListener(_dataWiped);
     if (widget.services == null) services.dispose();
     super.dispose();
   }
