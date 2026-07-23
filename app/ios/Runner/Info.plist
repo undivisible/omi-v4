@@ -12,6 +12,16 @@
 	<string>Omi uses Bluetooth to connect to your wearable and relay its audio.</string>
 	<key>NSBluetoothPeripheralUsageDescription</key>
 	<string>Omi uses Bluetooth to communicate with your wearable.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Omi uses the microphone for voice requests and meeting transcription.</string>
+	<key>NSCalendarsUsageDescription</key>
+	<string>Omi reads your calendar to remember commitments and surface what matters next.</string>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>Omi reads your calendar to remember commitments and surface what matters next.</string>
+	<key>NSRemindersUsageDescription</key>
+	<string>Omi reads your reminders to understand and help with your tasks.</string>
+	<key>NSRemindersFullAccessUsageDescription</key>
+	<string>Omi reads your reminders to understand and help with your tasks.</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
