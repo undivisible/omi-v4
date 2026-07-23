@@ -118,23 +118,30 @@ Wired in `worker/src/assistant.ts` (see `aiGatewayBase`). Mirror in
 
 ## 4a. Cloudflare AI Search
 
-**Not for us, at least not yet.** AI Search (the product formerly called
-AutoRAG) is a managed RAG pipeline: point it at R2, a website, or uploaded
-files and it handles chunking, embeddings, Vectorize indexing, continuous
-sync, hybrid (semantic + keyword) retrieval, reranking, and optionally the
-generated answer — plus a built-in MCP endpoint per instance.
+**Use it for uploaded documents. Keep memory ours.** AI Search (the product
+formerly called AutoRAG) is a managed RAG pipeline: point it at R2, a website,
+or uploaded files and it handles chunking, embeddings, Vectorize indexing,
+continuous sync, hybrid (semantic + keyword) retrieval, reranking, and
+optionally the generated answer — plus a built-in MCP endpoint per instance.
 
-It is built *on* Vectorize, and we already run the layer underneath it:
-Workers AI `bge-base` embeddings into our own Vectorize index, with our own
-chunking and our own evidence/claim model on top. Handing that to AI Search
-would mean re-indexing and giving up control of the retrieval pipeline for
-convenience we do not need — Cloudflare's own guidance is Vectorize when you
-want to own retrieval, AI Search when you want it managed.
+The split is by *what is being indexed*, not by which product is better:
 
-Where it *would* earn its place: indexing a corpus we do not own the
-ingestion for — user-uploaded documents, or a per-tenant file store — since
-it does continuous sync and per-tenant isolation for free. Worth revisiting
-when we ship document upload.
+- **Documents the user uploads → AI Search.** We have no ingestion pipeline
+  for arbitrary files and no reason to build one: chunking heuristics per file
+  type, re-index on change, and per-tenant isolation are the whole product.
+  `omi-memory-claims` currently holds **0 vectors**, so there is nothing to
+  migrate and no sunk cost defending the hand-rolled path here.
+- **Memory / claims → stays on our own Vectorize index.** Not because our
+  retrieval is smarter, but because the unit is different: we index *claims*
+  carrying evidence locators back to a source revision, and rows are
+  invalidated when the source changes. AI Search returns document chunks; it
+  has nowhere to put an evidence locator, and losing that loses provenance.
+
+**On cost:** AI Search is not cheaper by itself — underneath it is the same
+Vectorize storage, the same Workers AI embedding calls, and now a reranking
+model too, so per-query cost goes slightly *up*. What it saves is the
+engineering and the ongoing maintenance of an ingestion pipeline, which is the
+larger bill. Do not adopt it expecting a smaller invoice.
 
 ## 5. Observability stack
 

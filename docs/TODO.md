@@ -16,8 +16,10 @@ your account/keys/hardware. See `docs/ai-and-observability.md` for the "why".
 - [ ] (you) Set the OpenRouter key + point the endpoint at OpenRouter (or the AI Gateway)
 
 ## Cloudflare AI Gateway
-- [~] Wire the gateway + OpenRouter endpoint + SSRF host-allowlist across worker/worker-rs/hub (agent in flight)
-- [ ] (you) Create the gateway; set `CF_AI_GATEWAY_ACCOUNT_ID` / `CF_AI_GATEWAY_ID`
+- [x] Wire the gateway into the TS worker (`aiGatewayRoute`), ids validated before they reach the URL path
+- [x] `default` gateway confirmed live and **authenticated**; `CF_AI_GATEWAY_TOKEN` set as a secret on both workers; vars set and deployed
+- [ ] Mirror the gateway route in `worker-rs` and the hub
+- [ ] Document upload → Cloudflare **AI Search** instance (memory/claims stay on our own Vectorize index)
 
 ## Observability / DevOps
 - [x] Native Workers Observability on both workers
