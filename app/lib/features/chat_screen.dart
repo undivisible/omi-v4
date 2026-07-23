@@ -164,6 +164,10 @@ class ChatScreenState extends State<ChatScreen> {
   Timer? _chatRevealTimer;
   List<String> _starterTasks = const [];
   final _doneStarterTasks = <String>{};
+  late final _voiceLevel = CombinedVoiceLevel([
+    widget.services.desktopVoice.level,
+    widget.services.liveVoice.level,
+  ]);
 
   @override
   void initState() {
@@ -295,7 +299,7 @@ class ChatScreenState extends State<ChatScreen> {
     switch (action) {
       case ShiftGestureAction.toggleVoice:
         await handleDesktopGesture(
-          widget.services.desktopVoice.active
+          widget.services.desktopVoiceActive
               ? ShiftGestureAction.stopVoice
               : ShiftGestureAction.startVoice,
         );
@@ -304,7 +308,7 @@ class ChatScreenState extends State<ChatScreen> {
         if (mounted) _inputFocus.requestFocus();
       case ShiftGestureAction.escape:
       case ShiftGestureAction.cancel:
-        if (widget.services.desktopVoice.active) {
+        if (widget.services.desktopVoiceActive) {
           await widget.services.cancelDesktopVoice();
           if (mounted) setState(() => _progress = 'Cancelled');
         } else if (_activeRequestId != null) {
@@ -417,6 +421,7 @@ class ChatScreenState extends State<ChatScreen> {
     _shakeDecayTimer?.cancel();
     _chatRevealTimer?.cancel();
     _scroll.dispose();
+    _voiceLevel.dispose();
     _input.dispose();
     _inputFocus.dispose();
     super.dispose();
@@ -840,7 +845,7 @@ class ChatScreenState extends State<ChatScreen> {
     final ready =
         !widget.previewMode &&
         (widget.services.chatReady || widget.services.localMode);
-    final voiceActive = widget.services.desktopVoice.active;
+    final voiceActive = widget.services.desktopVoiceActive;
     if (voiceActive) return _buildListening(context);
 
     final currents = widget.services.currents;
@@ -958,24 +963,13 @@ class ChatScreenState extends State<ChatScreen> {
       fit: StackFit.expand,
       children: [
         const IgnorePointer(child: _VoiceEdgeGradient()),
-        Center(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(
-                'Listening',
-                style: Theme.of(context).textTheme.headlineMedium,
-              ),
-              const SizedBox(height: 16),
-              TextButton(
-                key: const Key('stop_listening'),
-                onPressed: () => unawaited(
-                  handleDesktopGesture(ShiftGestureAction.stopVoice),
-                ),
-                child: const Text('Done'),
-              ),
-            ],
-          ),
+        InAppVoiceView(
+          level: _voiceLevel,
+          userTranscript: widget.services.liveVoice.userTranscript,
+          assistantTranscript: widget.services.liveVoice.assistantTranscript,
+          notice: widget.services.voiceNotice,
+          onDone: () =>
+              unawaited(handleDesktopGesture(ShiftGestureAction.stopVoice)),
         ),
       ],
     );
