@@ -20,8 +20,7 @@ use crate::signals::{
 use crate::signals::{AudioChunk, TranscriptionAuth, TranscriptionRoute};
 #[cfg(test)]
 use crate::transcription::{
-    AudioAcceptError, AudioProgress, AudioSession, AudioSessions, LiveSttProvider,
-    ProviderTranscript, TranscriptionPhase,
+    AudioAcceptError, AudioProgress, AudioSession, AudioSessions, TranscriptionPhase,
 };
 use crate::transcription::{StartTranscription, TranscriptionControl};
 use futures::StreamExt;
@@ -55,8 +54,6 @@ const MAX_APPROVAL_RESPONSE_BYTES: usize = 32 * 1024;
 const MAX_ACTIVE_AUDIO_SESSIONS: usize = 8;
 #[cfg(test)]
 const AUDIO_SESSION_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
-#[cfg(test)]
-const MAX_RECONNECT_BUFFER_BYTES: usize = 64 * 1024;
 
 pub(crate) struct MemoryContext {
     pub(crate) database: MemoryDb,
@@ -5363,10 +5360,7 @@ mod tests {
                 route: TranscriptionRoute::Byok,
                 language: "en".to_owned(),
                 epoch: 0,
-                logical_sequence: 0,
                 phase: TranscriptionPhase::Streaming,
-                reconnect_buffer: VecDeque::new(),
-                reconnect_buffer_bytes: 0,
                 provider: None,
             },
         )]));
@@ -5391,118 +5385,6 @@ mod tests {
         assert_eq!(session.next_sequence, u64::MAX);
         assert_eq!(session.accepted_bytes, 7);
         assert_eq!(session.last_seen, previous_seen);
-    }
-
-    #[test]
-    fn transcript_revisions_keep_identity_and_finals_advance_sequence() {
-        let mut sessions = AudioSessions::default();
-        start_audio(&mut sessions, "voice-1");
-        let interim = sessions
-            .transcript(
-                "voice-1",
-                "voice-1",
-                ProviderTranscript {
-                    provider: "fake".to_owned(),
-                    start_ms: 0,
-                    end_ms: 100,
-                    text: "hel".to_owned(),
-                    final_segment: false,
-                },
-            )
-            .unwrap_or_else(|failure| panic!("interim failed: {}", failure.message));
-        let revision = sessions
-            .transcript(
-                "voice-1",
-                "voice-1",
-                ProviderTranscript {
-                    provider: "fake".to_owned(),
-                    start_ms: 0,
-                    end_ms: 120,
-                    text: "hello".to_owned(),
-                    final_segment: true,
-                },
-            )
-            .unwrap_or_else(|failure| panic!("final failed: {}", failure.message));
-        let next = sessions
-            .transcript(
-                "voice-1",
-                "voice-1",
-                ProviderTranscript {
-                    provider: "fake".to_owned(),
-                    start_ms: 120,
-                    end_ms: 200,
-                    text: "next".to_owned(),
-                    final_segment: false,
-                },
-            )
-            .unwrap_or_else(|failure| panic!("next failed: {}", failure.message));
-        assert_eq!(interim.segment_id, revision.segment_id);
-        assert_eq!(interim.segment_sequence, revision.segment_sequence);
-        assert_ne!(revision.segment_id, next.segment_id);
-        assert_eq!(next.segment_sequence, 1);
-    }
-
-    #[test]
-    fn reconnect_never_replays_sent_audio_and_bounds_new_audio() {
-        let mut sessions = AudioSessions::default();
-        start_audio(&mut sessions, "voice-1");
-        assert!(
-            sessions
-                .accept(AudioChunk {
-                    request_id: "voice-1".to_owned(),
-                    sequence: 0,
-                    sample_rate_hz: 16_000,
-                    channels: 1,
-                    encoding: AudioEncoding::Opus,
-                    end_of_stream: false,
-                    bytes: vec![1, 2, 3],
-                })
-                .is_ok()
-        );
-        let gap = sessions
-            .provider_disconnected("reconnect-1", "voice-1", 0, 20)
-            .unwrap_or_else(|failure| panic!("disconnect failed: {}", failure.message));
-        assert_eq!(gap.stt_epoch, 0);
-        assert_eq!(sessions.0["voice-1"].epoch, 1);
-        assert!(
-            sessions
-                .accept(AudioChunk {
-                    request_id: "voice-1".to_owned(),
-                    sequence: 1,
-                    sample_rate_hz: 16_000,
-                    channels: 1,
-                    encoding: AudioEncoding::Opus,
-                    end_of_stream: false,
-                    bytes: vec![4, 5],
-                })
-                .is_ok()
-        );
-        let replay = sessions
-            .provider_reconnected("reconnect-1", "voice-1")
-            .unwrap_or_else(|failure| panic!("reconnect failed: {}", failure.message));
-        assert_eq!(replay, vec![vec![4, 5]]);
-        assert!(!replay.iter().any(|bytes| bytes == &[1, 2, 3]));
-
-        sessions
-            .provider_disconnected("reconnect-2", "voice-1", 20, 40)
-            .unwrap_or_else(|failure| panic!("disconnect failed: {}", failure.message));
-        let overflow = sessions.accept(AudioChunk {
-            request_id: "voice-1".to_owned(),
-            sequence: 2,
-            sample_rate_hz: 16_000,
-            channels: 1,
-            encoding: AudioEncoding::Opus,
-            end_of_stream: false,
-            bytes: vec![0; MAX_RECONNECT_BUFFER_BYTES + 1],
-        });
-        assert!(matches!(
-            overflow,
-            Err(AudioAcceptError {
-                code: "transcription_reconnect_buffer_full",
-                ..
-            })
-        ));
-        assert_eq!(sessions.0["voice-1"].next_sequence, 2);
     }
 
     #[test]
@@ -5599,40 +5481,6 @@ mod tests {
                     .iter()
                     .any(|action| action.available)),
         );
-    }
-
-    struct ScriptedProvider {
-        calls: Vec<&'static str>,
-    }
-
-    impl LiveSttProvider for ScriptedProvider {
-        fn start(&mut self, _stream_id: &str) -> Result<(), String> {
-            self.calls.push("start");
-            Ok(())
-        }
-
-        fn send_audio(&mut self, _bytes: &[u8]) -> Result<(), String> {
-            self.calls.push("audio");
-            Ok(())
-        }
-
-        fn finish(&mut self) -> Result<(), String> {
-            self.calls.push("finish");
-            Ok(())
-        }
-
-        fn cancel(&mut self) {
-            self.calls.push("cancel");
-        }
-    }
-
-    #[test]
-    fn scripted_provider_observes_start_audio_finish_order() {
-        let mut provider = ScriptedProvider { calls: Vec::new() };
-        assert!(provider.start("voice-1").is_ok());
-        assert!(provider.send_audio(&[1]).is_ok());
-        assert!(provider.finish().is_ok());
-        assert_eq!(provider.calls, ["start", "audio", "finish"]);
     }
 
     #[test]
