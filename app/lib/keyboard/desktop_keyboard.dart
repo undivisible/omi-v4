@@ -64,20 +64,23 @@ final class DesktopAppActivationEvent extends DesktopKeyboardEvent {
 }
 
 /// The live state of global input capture: whether the process is
-/// Accessibility-trusted, and whether the session event tap that watches the
-/// chord and the pointer shake is actually installed. Surfaced in-app so a
-/// missing grant or a dead tap is visible instead of silent.
+/// Accessibility-trusted, whether it holds Input Monitoring (the separate
+/// grant a keyboard event tap needs), and whether the session event tap that
+/// watches the chord and the pointer shake is actually installed. Surfaced
+/// in-app so a missing grant or a dead tap is visible instead of silent.
 final class DesktopInputDiagnosticsEvent extends DesktopKeyboardEvent {
   const DesktopInputDiagnosticsEvent({
     required this.trusted,
+    required this.inputMonitoring,
     required this.tapInstalled,
   });
 
   final bool trusted;
+  final bool inputMonitoring;
   final bool tapInstalled;
 
   /// True when global shortcuts really are being watched right now.
-  bool get globalCaptureLive => trusted && tapInstalled;
+  bool get globalCaptureLive => tapInstalled;
 }
 
 final class DesktopKeyboard {
@@ -131,6 +134,7 @@ final class DesktopKeyboard {
       'appActivation' => DesktopAppActivationEvent(raw['active'] == true),
       'diagnostics' => DesktopInputDiagnosticsEvent(
         trusted: raw['trusted'] == true,
+        inputMonitoring: raw['inputMonitoring'] == true,
         tapInstalled: raw['tapInstalled'] == true,
       ),
       _ => throw const FormatException('unknown keyboard event'),

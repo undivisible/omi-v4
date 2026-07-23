@@ -579,6 +579,7 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
     keyboardSink?([
       "type": "diagnostics",
       "trusted": AXIsProcessTrusted(),
+      "inputMonitoring": MacPermissionService.inputMonitoringGranted,
       "tapInstalled": globalInputTap.isInstalled,
     ])
   }
@@ -694,6 +695,9 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
         result(self.permissionService.rawSnapshot())
       case "promptAccessibility":
         self.permissionService.promptAccessibility()
+        result(nil)
+      case "promptInputMonitoring":
+        self.permissionService.promptInputMonitoring()
         result(nil)
       case "requestMicrophone":
         self.permissionService.requestMicrophone { result(nil) }

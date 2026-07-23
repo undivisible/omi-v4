@@ -1163,6 +1163,9 @@ final class _Capabilities implements DesktopCapabilityGateway {
   }
 
   @override
+  Future<void> requestInputMonitoring() async {}
+
+  @override
   Future<void> dismissOverlay() async {
     dismissCalls += 1;
   }

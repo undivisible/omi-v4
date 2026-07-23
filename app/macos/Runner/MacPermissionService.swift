@@ -1,15 +1,25 @@
 import ApplicationServices
 import AVFoundation
 import Cocoa
+import IOKit.hid
 import SQLite3
 
 final class MacPermissionService {
   static let privacyPanes: Set<String> = [
     "Privacy_Accessibility",
+    "Privacy_ListenEvent",
     "Privacy_Microphone",
     "Privacy_ScreenCapture",
     "Privacy_AllFiles",
   ]
+
+  /// A session-level CGEventTap that watches keyDown and flagsChanged needs
+  /// Input Monitoring, which is a separate grant from Accessibility. Without
+  /// it `CGEvent.tapCreate` returns nil and every global shortcut silently
+  /// does nothing, so the state has to be visible rather than inferred.
+  static var inputMonitoringGranted: Bool {
+    IOHIDCheckAccess(kIOHIDRequestTypeListenEvent) == kIOHIDAccessTypeGranted
+  }
 
   private static let fullDiskProbeMinInterval: TimeInterval = 3
 
@@ -34,6 +44,7 @@ final class MacPermissionService {
     let probes = fullDiskProbes()
     return [
       "accessibility": AXIsProcessTrusted() || tccAccessibilityAllowed(),
+      "inputMonitoring": Self.inputMonitoringGranted,
       "microphone": microphoneStatus(),
       "screenCapture": CGPreflightScreenCaptureAccess(),
       "screenCaptureAtLaunch": screenCaptureGrantedAtLaunch,
@@ -46,6 +57,10 @@ final class MacPermissionService {
   func promptAccessibility() {
     let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true]
     AXIsProcessTrustedWithOptions(options as CFDictionary)
+  }
+
+  func promptInputMonitoring() {
+    IOHIDRequestAccess(kIOHIDRequestTypeListenEvent)
   }
 
   func requestMicrophone(completion: @escaping () -> Void) {

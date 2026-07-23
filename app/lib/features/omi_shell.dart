@@ -112,6 +112,7 @@ class _OmiShellState extends State<OmiShell> {
       if (!mounted) return;
       final previous = _inputDiagnostics;
       if (previous?.trusted == event.trusted &&
+          previous?.inputMonitoring == event.inputMonitoring &&
           previous?.tapInstalled == event.tapInstalled) {
         return;
       }
@@ -286,9 +287,11 @@ class _OmiShellState extends State<OmiShell> {
               _GlobalInputNotice(
                 diagnostics: diagnostics,
                 onGrant: () => unawaited(
-                  widget.services.capabilities.request(
-                    CoreCapability.accessibility,
-                  ),
+                  diagnostics.trusted && !diagnostics.inputMonitoring
+                      ? widget.services.capabilities.requestInputMonitoring()
+                      : widget.services.capabilities.request(
+                          CoreCapability.accessibility,
+                        ),
                 ),
               ),
               const SizedBox(height: 12),
@@ -428,6 +431,8 @@ class _GlobalInputNotice extends StatelessWidget {
               '$summonOverlayKeybindLabel, and the cursor shake only work '
               'inside Omi. Accessibility: '
               '${diagnostics.trusted ? "granted" : "not granted"} · '
+              'input monitoring: '
+              '${diagnostics.inputMonitoring ? "granted" : "not granted"} · '
               'input tap: ${diagnostics.tapInstalled ? "live" : "not running"}.',
               style: const TextStyle(fontSize: 12, color: Color(0xffffd99a)),
             ),
@@ -435,7 +440,11 @@ class _GlobalInputNotice extends StatelessWidget {
           TextButton(
             key: const Key('global_input_notice_grant'),
             onPressed: onGrant,
-            child: const Text('Open Accessibility'),
+            child: Text(
+              diagnostics.trusted && !diagnostics.inputMonitoring
+                  ? 'Open Input Monitoring'
+                  : 'Open Accessibility',
+            ),
           ),
         ],
       ),

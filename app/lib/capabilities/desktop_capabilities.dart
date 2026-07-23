@@ -40,6 +40,12 @@ abstract interface class DesktopCapabilityGateway {
 
   Future<void> request(CoreCapability capability);
 
+  /// Input Monitoring is a separate macOS grant from Accessibility, and a
+  /// keyboard event tap needs it. It is not a [CoreCapability] because
+  /// nothing gates on it at startup — only the global-shortcut notice offers
+  /// it, once the diagnostics show that it is the missing piece.
+  Future<void> requestInputMonitoring();
+
   Future<void> dismissOverlay();
 }
 
@@ -127,6 +133,7 @@ final class PlatformDesktopCapabilityGateway
   final Future<String?> Function() _directoryPicker;
   Future<void>? _workspaceRequest;
   bool _accessibilityPrompted = false;
+  bool _inputMonitoringPrompted = false;
   bool _screenCapturePrompted = false;
   CoreCapability? _overlayShownFor;
 
@@ -359,6 +366,17 @@ final class PlatformDesktopCapabilityGateway
         }
       case CoreCapability.workspaceRoot:
         return;
+    }
+  }
+
+  @override
+  Future<void> requestInputMonitoring() async {
+    if (defaultTargetPlatform != TargetPlatform.macOS) return;
+    if (!_inputMonitoringPrompted) {
+      _inputMonitoringPrompted = true;
+      await _channel.invokeMethod<void>('promptInputMonitoring');
+    } else {
+      await _openSettingsPane('Privacy_ListenEvent', null);
     }
   }
 

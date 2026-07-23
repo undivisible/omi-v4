@@ -45,5 +45,8 @@ final class _Gateway implements DesktopCapabilityGateway {
   }
 
   @override
+  Future<void> requestInputMonitoring() async {}
+
+  @override
   Future<void> dismissOverlay() async {}
 }

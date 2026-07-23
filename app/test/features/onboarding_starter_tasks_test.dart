@@ -26,6 +26,9 @@ final class _AllGrantedCapabilities implements DesktopCapabilityGateway {
   Future<void> request(CoreCapability capability) async {}
 
   @override
+  Future<void> requestInputMonitoring() async {}
+
+  @override
   Future<void> dismissOverlay() async {}
 }
 
