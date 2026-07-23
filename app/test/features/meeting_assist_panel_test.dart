@@ -264,7 +264,7 @@ void main() {
   });
 }
 
-final class _RecordingMeetingHub implements NativeHub, MeetingHub {
+final class _RecordingMeetingHub implements NativeHub {
   final eventsController = StreamController<NativeEvent>.broadcast();
   final jots = <String>[];
   final searchQueries = <String>[];

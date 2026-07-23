@@ -1577,7 +1577,7 @@ class _ChatHome extends StatelessWidget {
             delayMs: 0,
             child: Column(
               children: [
-                const OmiActivityOrb(state: OmiOrbState.idle, size: 48),
+                const OmiActivityOrb(size: 48),
                 const SizedBox(height: 16),
                 Text(
                   greeting,

@@ -104,7 +104,7 @@ jobs:
         run: |
           set -euo pipefail
           if [ -z "${BOARD}" ]; then
-            echo "::error::No board could be resolved for ${TARGET_ID}. Document the exact west build command for this target in firmware/README.md, or add it to FALLBACK_TARGETS/BOARD_HINTS in .github/scripts/discover_firmware_targets.py."
+            echo "::error::No board could be resolved for ${TARGET_ID}. Document the exact west build command for this target in firmware/README.md, or add it to BOARD_HINTS in .github/scripts/discover_firmware_targets.py."
             echo "Boards present under firmware/boards:"
             find firmware/boards -maxdepth 4 \( -name board.yml -o -name '*_defconfig' \) 2>/dev/null | sort || echo "  (firmware/boards is absent)"
             exit 1

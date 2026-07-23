@@ -167,10 +167,6 @@ abstract interface class NativeHub {
     required bool endOfStream,
     required Uint8List bytes,
   });
-  void dispose();
-}
-
-abstract interface class LiveVoiceHub {
   void startLiveVoice({
     required String requestId,
     required String liveStreamId,
@@ -179,15 +175,9 @@ abstract interface class LiveVoiceHub {
     String? resumptionHandle,
   });
   void stopLiveVoice({required String requestId, required String liveStreamId});
-}
-
-abstract interface class MeetingHub {
   void startMeeting({required String requestId, String? title});
   void stopMeeting(String requestId);
   void jotMeetingNote({required String requestId, required String text});
-}
-
-abstract interface class MeetingCaptureHub {
   void provideMeetingAuth({
     required String requestId,
     required TranscriptionAuth auth,
@@ -197,9 +187,6 @@ abstract interface class MeetingCaptureHub {
     required String requestId,
     required SystemAudioCaptureMode mode,
   });
-}
-
-abstract interface class OnboardingScanHub {
   void scanOnboarding({
     required String requestId,
     required List<String> roots,
@@ -207,6 +194,7 @@ abstract interface class OnboardingScanHub {
     required bool includeAppleMail,
     required int recordedAtMs,
   });
+  void dispose();
 }
 
 NativeHub createNativeHub() => kIsWeb
@@ -222,13 +210,7 @@ final class NativeHubUnavailable implements Exception {
   String toString() => 'NativeHubUnavailable: $message';
 }
 
-final class UnavailableNativeHub
-    implements
-        NativeHub,
-        OnboardingScanHub,
-        LiveVoiceHub,
-        MeetingHub,
-        MeetingCaptureHub {
+final class UnavailableNativeHub implements NativeHub {
   const UnavailableNativeHub(this.reason);
 
   final String reason;
@@ -423,13 +405,7 @@ final class UnavailableNativeHub
   void dispose() {}
 }
 
-final class RinfNativeHub
-    implements
-        NativeHub,
-        OnboardingScanHub,
-        LiveVoiceHub,
-        MeetingHub,
-        MeetingCaptureHub {
+final class RinfNativeHub implements NativeHub {
   bool _initialized = false;
 
   @override

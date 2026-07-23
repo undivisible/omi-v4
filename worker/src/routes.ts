@@ -13,8 +13,6 @@ import {
   enqueueClaimEmbeddings,
   searchMemoryClaims,
 } from "./memory-vectors";
-import oauthBroker from "./oauth-broker";
-import oauthProxy from "./oauth-proxy";
 import stt from "./stt";
 import voice from "./voice";
 import conversations, { appendConversationMessage } from "./conversations";
@@ -41,19 +39,9 @@ routes.use("/memories", async (context, next) => {
 
 routes.route("/", assistant);
 routes.route("/asr", asr);
-routes.use("/oauth/*", async (context, next) => {
-  if (context.env.ENABLE_DEV_OAUTH_BROKER !== "true")
-    return context.json(
-      { error: "Disabled: dev/testing only OAuth broker is not enabled" },
-      404,
-    );
-  await next();
-});
-routes.route("/oauth", oauthProxy);
 routes.route("/payments/stripe", billing);
 routes.route("/stt", stt);
 routes.route("/voice", voice);
-routes.route("/oauth", oauthBroker);
 routes.route("/currents", currents);
 routes.route("/memory/zkr-sync", memorySync);
 routes.route("/", conversations);

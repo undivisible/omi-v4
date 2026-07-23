@@ -3,6 +3,7 @@ import 'dart:math';
 
 import '../currents/currents.dart';
 import '../native/native_hub.dart';
+import '../random_id.dart';
 import 'conversations.dart';
 
 enum _ChatRequestKind { message, approval }
@@ -23,14 +24,6 @@ typedef _PendingApproval = ({
 });
 
 const _completedRequestCapacity = 256;
-
-String _randomId() {
-  final random = Random.secure();
-  return List.generate(
-    16,
-    (_) => random.nextInt(256).toRadixString(16).padLeft(2, '0'),
-  ).join();
-}
 
 String _boundedText(String value, int maxLength) {
   if (value.length <= maxLength) return value;
@@ -130,7 +123,7 @@ final class ConversationController {
   final void Function(Object error, StackTrace stackTrace) _addError;
   final Duration _inboxPollInterval;
   final _authorityChanges = StreamController<int>.broadcast(sync: true);
-  final String _sessionId = _randomId();
+  final String _sessionId = randomId();
   int _generation = 0;
   int _transportSequence = 0;
   final _requests = <String, _ChatRequest>{};

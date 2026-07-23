@@ -2965,8 +2965,7 @@ final class _FakeAuthGateway implements AuthGateway {
   }) async => _session!;
 }
 
-final class _FakeHub
-    implements NativeHub, OnboardingScanHub, LiveVoiceHub, MeetingCaptureHub {
+final class _FakeHub implements NativeHub {
   final eventsController = StreamController<NativeEvent>.broadcast();
   final meetingAuth = <(TranscriptionAuth, String?)>[];
   final captureModes = <SystemAudioCaptureMode>[];
@@ -3427,6 +3426,15 @@ final class _FakeHub
       );
     }
   }
+
+  @override
+  void startMeeting({required String requestId, String? title}) {}
+
+  @override
+  void stopMeeting(String requestId) {}
+
+  @override
+  void jotMeetingNote({required String requestId, required String text}) {}
 }
 
 final class _Capture {

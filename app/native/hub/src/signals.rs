@@ -289,7 +289,6 @@ pub enum NativeEvent {
     TranscriptionStopAcknowledged(TranscriptionStopAcknowledgement),
     TranscriptGap(TranscriptGap),
     AssistantDelta(AssistantDelta),
-    CurrentUpdate(CurrentUpdate),
     ActionProposal(ActionProposal),
     ApprovalDecisionAcknowledged(ApprovalDecisionAcknowledgement),
     ToolProgress(ToolProgress),
@@ -531,14 +530,6 @@ pub struct AssistantDelta {
     pub request_id: String,
     pub text: String,
     pub final_segment: bool,
-}
-
-#[derive(Debug, Serialize, SignalPiece)]
-pub struct CurrentUpdate {
-    pub current_id: String,
-    pub title: String,
-    pub summary: String,
-    pub updated_at_ms: i64,
 }
 
 #[derive(Clone, Serialize, SignalPiece)]

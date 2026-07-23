@@ -104,8 +104,8 @@ binding = "AI"
 
 # Durable Objects. Binding names match the TS worker; class_name values are the
 # Rust `#[durable_object]` struct names (this worker owns its own DO namespace).
-# One canonical RATE_LIMITER binding (RateLimiterDo) is shared across the
-# delivery/OAuth and managed-AI route groups.
+# One canonical RATE_LIMITER binding (RateLimiterDo) serves the managed-AI
+# route group.
 [[durable_objects.bindings]]
 name = "DELIVERY_COORDINATOR"
 class_name = "DeliveryCoordinator"

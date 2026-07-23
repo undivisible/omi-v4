@@ -13,7 +13,6 @@ import '../auth/auth.dart';
 import '../currents/currents.dart';
 import '../device/device.dart';
 import '../features/setup_account_screens.dart' show EventKitProactiveSyncTile;
-import '../native/live_activity_bridge.dart';
 import '../native/native_hub.dart';
 import '../ui/burst_glow.dart';
 import 'capture_notifier.dart';
@@ -326,7 +325,6 @@ class MobilePendantPageState extends State<MobilePendantPage> {
   bool _connectInFlight = false;
   MobileRelease? _update;
   StreamSubscription<DeviceRelaySnapshot>? _snapshotSubscription;
-  final LiveActivityBridge _liveActivity = LiveActivityBridge();
   final ScrollController _scrollController = ScrollController();
   // Drives the hero blur/fade. Only the hero reads this; the rest of the page
   // scrolls normally, so the value lives outside setState to avoid rebuilding
@@ -352,13 +350,6 @@ class MobilePendantPageState extends State<MobilePendantPage> {
     snapshot = relay.lastSnapshot;
     _snapshotSubscription = relay.snapshots.listen((next) {
       if (mounted) setState(() => snapshot = next);
-      unawaited(
-        _liveActivity.update(
-          connected: next.phase == DeviceConnectionPhase.connected,
-          batteryLevel: next.device?.batteryLevel,
-          deviceName: next.device?.name,
-        ),
-      );
       _syncCaptureWithConnection();
     });
     // Capture starts and stops without anyone touching the switch — it comes up
@@ -510,7 +501,6 @@ class MobilePendantPageState extends State<MobilePendantPage> {
     widget.services.deviceAudio.activeListenable.removeListener(
       _captureChanged,
     );
-    unawaited(_liveActivity.end());
     _scrollController.dispose();
     _scrollOffset.dispose();
     super.dispose();

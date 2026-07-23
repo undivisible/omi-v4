@@ -206,7 +206,7 @@ final class _AllGrantedCapabilities implements DesktopCapabilityGateway {
   Future<void> dismissOverlay() async {}
 }
 
-final class _ScanHub implements NativeHub, OnboardingScanHub {
+final class _ScanHub implements NativeHub {
   final eventsController = StreamController<NativeEvent>.broadcast();
   final scanRequests = <({String requestId, List<String> roots})>[];
   @override
@@ -359,4 +359,41 @@ final class _ScanHub implements NativeHub, OnboardingScanHub {
 
   @override
   void dispose() {}
+
+  @override
+  void startLiveVoice({
+    required String requestId,
+    required String liveStreamId,
+    required String ephemeralToken,
+    required String model,
+    String? resumptionHandle,
+  }) {}
+
+  @override
+  void stopLiveVoice({
+    required String requestId,
+    required String liveStreamId,
+  }) {}
+
+  @override
+  void startMeeting({required String requestId, String? title}) {}
+
+  @override
+  void stopMeeting(String requestId) {}
+
+  @override
+  void jotMeetingNote({required String requestId, required String text}) {}
+
+  @override
+  void provideMeetingAuth({
+    required String requestId,
+    required TranscriptionAuth auth,
+    String? trustedWorkerOrigin,
+  }) {}
+
+  @override
+  void setSystemAudioCaptureMode({
+    required String requestId,
+    required SystemAudioCaptureMode mode,
+  }) {}
 }

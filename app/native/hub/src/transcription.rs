@@ -4,12 +4,11 @@ use crate::live_voice::{
 };
 use crate::signals::{
     AudioChunk, AudioEncoding, LiveVoiceAudio, LiveVoicePhase, LiveVoiceState, LiveVoiceTranscript,
-    NativeError, NativeEvent, ToolProgress, ToolStatus, TranscriptDelta, TranscriptGap,
-    TranscriptionAuth, TranscriptionRoute, TranscriptionState, TranscriptionStatus,
-    TranscriptionStopAcknowledgement,
+    NativeError, NativeEvent, ToolProgress, ToolStatus, TranscriptionAuth, TranscriptionRoute,
+    TranscriptionState, TranscriptionStatus, TranscriptionStopAcknowledgement,
 };
 use crate::stt::{self, SttConfig, SttHandle};
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
@@ -19,7 +18,6 @@ const AUDIO_QUEUE_CAPACITY: usize = 32;
 const MAX_ACTIVE_AUDIO_SESSIONS: usize = 8;
 const MAX_ACTIVE_LIVE_SESSIONS: usize = 2;
 const AUDIO_SESSION_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
-const MAX_RECONNECT_BUFFER_BYTES: usize = 64 * 1024;
 
 pub(crate) struct AudioSession {
     pub(crate) start_request_id: String,
@@ -33,26 +31,14 @@ pub(crate) struct AudioSession {
     pub(crate) route: TranscriptionRoute,
     pub(crate) language: String,
     pub(crate) epoch: u32,
-    pub(crate) logical_sequence: u64,
     pub(crate) phase: TranscriptionPhase,
-    pub(crate) reconnect_buffer: VecDeque<Vec<u8>>,
-    pub(crate) reconnect_buffer_bytes: usize,
     pub(crate) provider: Option<SttHandle>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum TranscriptionPhase {
     Streaming,
-    Reconnecting,
     Draining,
-}
-
-#[allow(dead_code)]
-pub(crate) trait LiveSttProvider: Send {
-    fn start(&mut self, stream_id: &str) -> Result<(), String>;
-    fn send_audio(&mut self, bytes: &[u8]) -> Result<(), String>;
-    fn finish(&mut self) -> Result<(), String>;
-    fn cancel(&mut self);
 }
 
 pub(crate) struct StartTranscription {
@@ -65,14 +51,6 @@ pub(crate) struct StartTranscription {
     pub(crate) sample_rate_hz: u32,
     pub(crate) channels: u8,
     pub(crate) encoding: AudioEncoding,
-}
-
-pub(crate) struct ProviderTranscript {
-    pub(crate) provider: String,
-    pub(crate) start_ms: i64,
-    pub(crate) end_ms: i64,
-    pub(crate) text: String,
-    pub(crate) final_segment: bool,
 }
 
 pub(crate) struct StartLiveVoice {
@@ -516,117 +494,6 @@ impl AudioDispatcher {
 }
 
 impl AudioSessions {
-    #[allow(dead_code)]
-    pub(crate) fn provider_disconnected(
-        &mut self,
-        request_id: &str,
-        stream_id: &str,
-        gap_start_ms: i64,
-        gap_end_ms: i64,
-    ) -> Result<TranscriptGap, AudioAcceptError> {
-        let session = self.0.get_mut(stream_id).ok_or_else(|| AudioAcceptError {
-            request_id: request_id.to_owned(),
-            code: "transcription_not_started",
-            message: "audio stream was not started".to_owned(),
-        })?;
-        let previous_epoch = session.epoch;
-        session.epoch = session
-            .epoch
-            .checked_add(1)
-            .ok_or_else(|| AudioAcceptError {
-                request_id: request_id.to_owned(),
-                code: "audio_counter_overflow",
-                message: "transcription epoch overflowed".to_owned(),
-            })?;
-        session.phase = TranscriptionPhase::Reconnecting;
-        session.reconnect_buffer.clear();
-        session.reconnect_buffer_bytes = 0;
-        let gap = TranscriptGap {
-            request_id: request_id.to_owned(),
-            audio_stream_id: stream_id.to_owned(),
-            stt_epoch: previous_epoch,
-            start_ms: gap_start_ms,
-            end_ms: gap_end_ms,
-            reason: "provider connection lost; sent audio was not replayed".to_owned(),
-        };
-        NativeEvent::TranscriptGap(TranscriptGap {
-            request_id: gap.request_id.clone(),
-            audio_stream_id: gap.audio_stream_id.clone(),
-            stt_epoch: gap.stt_epoch,
-            start_ms: gap.start_ms,
-            end_ms: gap.end_ms,
-            reason: gap.reason.clone(),
-        })
-        .send();
-        NativeEvent::TranscriptionStatus(TranscriptionStatus {
-            request_id: request_id.to_owned(),
-            audio_stream_id: stream_id.to_owned(),
-            state: TranscriptionState::Reconnecting,
-            stt_epoch: session.epoch,
-        })
-        .send();
-        Ok(gap)
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn provider_reconnected(
-        &mut self,
-        request_id: &str,
-        stream_id: &str,
-    ) -> Result<Vec<Vec<u8>>, AudioAcceptError> {
-        let session = self.0.get_mut(stream_id).ok_or_else(|| AudioAcceptError {
-            request_id: request_id.to_owned(),
-            code: "transcription_not_started",
-            message: "audio stream was not started".to_owned(),
-        })?;
-        if session.phase != TranscriptionPhase::Reconnecting {
-            return Err(AudioAcceptError {
-                request_id: request_id.to_owned(),
-                code: "transcription_not_reconnecting",
-                message: "audio stream is not reconnecting".to_owned(),
-            });
-        }
-        session.phase = TranscriptionPhase::Streaming;
-        session.reconnect_buffer_bytes = 0;
-        Ok(session.reconnect_buffer.drain(..).collect())
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn transcript(
-        &mut self,
-        request_id: &str,
-        stream_id: &str,
-        event: ProviderTranscript,
-    ) -> Result<TranscriptDelta, AudioAcceptError> {
-        let session = self.0.get_mut(stream_id).ok_or_else(|| AudioAcceptError {
-            request_id: request_id.to_owned(),
-            code: "transcription_not_started",
-            message: "audio stream was not started".to_owned(),
-        })?;
-        let sequence = session.logical_sequence;
-        let delta = TranscriptDelta {
-            request_id: request_id.to_owned(),
-            audio_stream_id: stream_id.to_owned(),
-            segment_id: format!("{stream_id}:segment:{sequence}"),
-            segment_sequence: sequence,
-            stt_epoch: session.epoch,
-            device_id: session.device_id.clone(),
-            provider: event.provider,
-            start_ms: event.start_ms,
-            end_ms: event.end_ms,
-            occurred_at_ms: event.end_ms,
-            text: event.text,
-            final_segment: event.final_segment,
-            speaker: None,
-            channel_index: None,
-            language: Some(session.language.clone()),
-        };
-        if event.final_segment {
-            session.logical_sequence = session.logical_sequence.saturating_add(1);
-        }
-        Ok(delta)
-    }
-
     pub(crate) fn start(&mut self, start: StartTranscription) -> Result<(), AudioAcceptError> {
         if matches!(&start.auth, TranscriptionAuth::Local) {
             return Err(AudioAcceptError {
@@ -695,10 +562,7 @@ impl AudioSessions {
                 route,
                 language: start.language,
                 epoch: 0,
-                logical_sequence: 0,
                 phase: TranscriptionPhase::Streaming,
-                reconnect_buffer: VecDeque::new(),
-                reconnect_buffer_bytes: 0,
                 provider,
             },
         );
@@ -840,34 +704,9 @@ impl AudioSessions {
                 code: "audio_counter_overflow",
                 message: "accepted audio byte count overflowed".to_owned(),
             })?;
-        let reconnect_buffer_bytes =
-            if session.phase == TranscriptionPhase::Reconnecting && !chunk.end_of_stream {
-                let buffered = session
-                    .reconnect_buffer_bytes
-                    .checked_add(chunk.bytes.len())
-                    .ok_or_else(|| AudioAcceptError {
-                        request_id: chunk.request_id.clone(),
-                        code: "audio_counter_overflow",
-                        message: "reconnect buffer size overflowed".to_owned(),
-                    })?;
-                if buffered > MAX_RECONNECT_BUFFER_BYTES {
-                    return Err(AudioAcceptError {
-                        request_id: chunk.request_id,
-                        code: "transcription_reconnect_buffer_full",
-                        message: "transcription reconnect buffer is full".to_owned(),
-                    });
-                }
-                Some(buffered)
-            } else {
-                None
-            };
         session.next_sequence = next_sequence;
         session.accepted_bytes = accepted_bytes;
         session.last_seen = now;
-        if let Some(buffered) = reconnect_buffer_bytes {
-            session.reconnect_buffer.push_back(chunk.bytes.clone());
-            session.reconnect_buffer_bytes = buffered;
-        }
         let progress = if chunk.end_of_stream {
             let stream_id = chunk.request_id.clone();
             let epoch = session.epoch;

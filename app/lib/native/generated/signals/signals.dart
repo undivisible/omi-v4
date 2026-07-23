@@ -34,7 +34,6 @@ part 'computer_use_delivery_route.dart';
 part 'computer_use_permission.dart';
 part 'computer_use_session_isolation.dart';
 part 'computer_use_target_provenance.dart';
-part 'current_update.dart';
 part 'live_voice_audio.dart';
 part 'live_voice_phase.dart';
 part 'live_voice_state.dart';

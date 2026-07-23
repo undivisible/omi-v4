@@ -32,44 +32,42 @@ abstract class NativeEvent {
       case 4:
         return NativeEventAssistantDelta.load(deserializer);
       case 5:
-        return NativeEventCurrentUpdate.load(deserializer);
-      case 6:
         return NativeEventActionProposal.load(deserializer);
-      case 7:
+      case 6:
         return NativeEventApprovalDecisionAcknowledged.load(deserializer);
-      case 8:
+      case 7:
         return NativeEventToolProgress.load(deserializer);
-      case 9:
+      case 8:
         return NativeEventError.load(deserializer);
-      case 10:
+      case 9:
         return NativeEventRuntimeStatus.load(deserializer);
-      case 11:
+      case 10:
         return NativeEventMemoryCaptured.load(deserializer);
-      case 12:
+      case 11:
         return NativeEventMemorySearchResults.load(deserializer);
-      case 13:
+      case 12:
         return NativeEventMemoryCorrected.load(deserializer);
-      case 14:
+      case 13:
         return NativeEventMemorySourceDeleted.load(deserializer);
-      case 15:
+      case 14:
         return NativeEventMemoryExported.load(deserializer);
-      case 16:
+      case 15:
         return NativeEventMemoryItems.load(deserializer);
-      case 17:
+      case 16:
         return NativeEventOnboardingScanCompleted.load(deserializer);
-      case 18:
+      case 17:
         return NativeEventLiveVoiceState.load(deserializer);
-      case 19:
+      case 18:
         return NativeEventLiveVoiceTranscript.load(deserializer);
-      case 20:
+      case 19:
         return NativeEventLiveVoiceAudio.load(deserializer);
-      case 21:
+      case 20:
         return NativeEventMeetingStateChanged.load(deserializer);
-      case 22:
+      case 21:
         return NativeEventMeetingInsight.load(deserializer);
-      case 23:
+      case 22:
         return NativeEventMeetingTranscriptTurn.load(deserializer);
-      case 24:
+      case 23:
         return NativeEventMeetingCompleted.load(deserializer);
       default:
         throw Exception(
@@ -366,59 +364,6 @@ class NativeEventAssistantDelta extends NativeEvent {
 }
 
 @immutable
-class NativeEventCurrentUpdate extends NativeEvent {
-  const NativeEventCurrentUpdate({required this.value}) : super();
-
-  static NativeEventCurrentUpdate load(BinaryDeserializer deserializer) {
-    deserializer.increaseContainerDepth();
-    final instance = NativeEventCurrentUpdate(
-      value: CurrentUpdate.deserialize(deserializer),
-    );
-    deserializer.decreaseContainerDepth();
-    return instance;
-  }
-
-  final CurrentUpdate value;
-
-  NativeEventCurrentUpdate copyWith({CurrentUpdate? value}) {
-    return NativeEventCurrentUpdate(value: value ?? this.value);
-  }
-
-  void serialize(BinarySerializer serializer) {
-    serializer.increaseContainerDepth();
-    serializer.serializeVariantIndex(5);
-    value.serialize(serializer);
-    serializer.decreaseContainerDepth();
-  }
-
-  @override
-  bool operator ==(Object other) {
-    if (identical(this, other)) return true;
-    if (other.runtimeType != runtimeType) return false;
-
-    return other is NativeEventCurrentUpdate && value == other.value;
-  }
-
-  @override
-  int get hashCode => value.hashCode;
-
-  @override
-  String toString() {
-    String? fullString;
-
-    assert(() {
-      fullString =
-          '$runtimeType('
-          'value: $value'
-          ')';
-      return true;
-    }());
-
-    return fullString ?? 'NativeEventCurrentUpdate';
-  }
-}
-
-@immutable
 class NativeEventActionProposal extends NativeEvent {
   const NativeEventActionProposal({required this.value}) : super();
 
@@ -439,7 +384,7 @@ class NativeEventActionProposal extends NativeEvent {
 
   void serialize(BinarySerializer serializer) {
     serializer.increaseContainerDepth();
-    serializer.serializeVariantIndex(6);
+    serializer.serializeVariantIndex(5);
     value.serialize(serializer);
     serializer.decreaseContainerDepth();
   }
@@ -497,7 +442,7 @@ class NativeEventApprovalDecisionAcknowledged extends NativeEvent {
 
   void serialize(BinarySerializer serializer) {
     serializer.increaseContainerDepth();
-    serializer.serializeVariantIndex(7);
+    serializer.serializeVariantIndex(6);
     value.serialize(serializer);
     serializer.decreaseContainerDepth();
   }
@@ -551,7 +496,7 @@ class NativeEventToolProgress extends NativeEvent {
 
   void serialize(BinarySerializer serializer) {
     serializer.increaseContainerDepth();
-    serializer.serializeVariantIndex(8);
+    serializer.serializeVariantIndex(7);
     value.serialize(serializer);
     serializer.decreaseContainerDepth();
   }
@@ -604,7 +549,7 @@ class NativeEventError extends NativeEvent {
 
   void serialize(BinarySerializer serializer) {
     serializer.increaseContainerDepth();
-    serializer.serializeVariantIndex(9);
+    serializer.serializeVariantIndex(8);
     value.serialize(serializer);
     serializer.decreaseContainerDepth();
   }
@@ -657,7 +602,7 @@ class NativeEventRuntimeStatus extends NativeEvent {
 
   void serialize(BinarySerializer serializer) {
     serializer.increaseContainerDepth();
-    serializer.serializeVariantIndex(10);
+    serializer.serializeVariantIndex(9);
     value.serialize(serializer);
     serializer.decreaseContainerDepth();
   }
@@ -710,7 +655,7 @@ class NativeEventMemoryCaptured extends NativeEvent {
 
   void serialize(BinarySerializer serializer) {
     serializer.increaseContainerDepth();
-    serializer.serializeVariantIndex(11);
+    serializer.serializeVariantIndex(10);
     value.serialize(serializer);
     serializer.decreaseContainerDepth();
   }
@@ -763,7 +708,7 @@ class NativeEventMemorySearchResults extends NativeEvent {
 
   void serialize(BinarySerializer serializer) {
     serializer.increaseContainerDepth();
-    serializer.serializeVariantIndex(12);
+    serializer.serializeVariantIndex(11);
     value.serialize(serializer);
     serializer.decreaseContainerDepth();
   }
@@ -816,7 +761,7 @@ class NativeEventMemoryCorrected extends NativeEvent {
 
   void serialize(BinarySerializer serializer) {
     serializer.increaseContainerDepth();
-    serializer.serializeVariantIndex(13);
+    serializer.serializeVariantIndex(12);
     value.serialize(serializer);
     serializer.decreaseContainerDepth();
   }
@@ -869,7 +814,7 @@ class NativeEventMemorySourceDeleted extends NativeEvent {
 
   void serialize(BinarySerializer serializer) {
     serializer.increaseContainerDepth();
-    serializer.serializeVariantIndex(14);
+    serializer.serializeVariantIndex(13);
     value.serialize(serializer);
     serializer.decreaseContainerDepth();
   }
@@ -922,7 +867,7 @@ class NativeEventMemoryExported extends NativeEvent {
 
   void serialize(BinarySerializer serializer) {
     serializer.increaseContainerDepth();
-    serializer.serializeVariantIndex(15);
+    serializer.serializeVariantIndex(14);
     value.serialize(serializer);
     serializer.decreaseContainerDepth();
   }
@@ -975,7 +920,7 @@ class NativeEventMemoryItems extends NativeEvent {
 
   void serialize(BinarySerializer serializer) {
     serializer.increaseContainerDepth();
-    serializer.serializeVariantIndex(16);
+    serializer.serializeVariantIndex(15);
     value.serialize(serializer);
     serializer.decreaseContainerDepth();
   }
@@ -1032,7 +977,7 @@ class NativeEventOnboardingScanCompleted extends NativeEvent {
 
   void serialize(BinarySerializer serializer) {
     serializer.increaseContainerDepth();
-    serializer.serializeVariantIndex(17);
+    serializer.serializeVariantIndex(16);
     value.serialize(serializer);
     serializer.decreaseContainerDepth();
   }
@@ -1085,7 +1030,7 @@ class NativeEventLiveVoiceState extends NativeEvent {
 
   void serialize(BinarySerializer serializer) {
     serializer.increaseContainerDepth();
-    serializer.serializeVariantIndex(18);
+    serializer.serializeVariantIndex(17);
     value.serialize(serializer);
     serializer.decreaseContainerDepth();
   }
@@ -1138,7 +1083,7 @@ class NativeEventLiveVoiceTranscript extends NativeEvent {
 
   void serialize(BinarySerializer serializer) {
     serializer.increaseContainerDepth();
-    serializer.serializeVariantIndex(19);
+    serializer.serializeVariantIndex(18);
     value.serialize(serializer);
     serializer.decreaseContainerDepth();
   }
@@ -1191,7 +1136,7 @@ class NativeEventLiveVoiceAudio extends NativeEvent {
 
   void serialize(BinarySerializer serializer) {
     serializer.increaseContainerDepth();
-    serializer.serializeVariantIndex(20);
+    serializer.serializeVariantIndex(19);
     value.serialize(serializer);
     serializer.decreaseContainerDepth();
   }
@@ -1244,7 +1189,7 @@ class NativeEventMeetingStateChanged extends NativeEvent {
 
   void serialize(BinarySerializer serializer) {
     serializer.increaseContainerDepth();
-    serializer.serializeVariantIndex(21);
+    serializer.serializeVariantIndex(20);
     value.serialize(serializer);
     serializer.decreaseContainerDepth();
   }
@@ -1297,7 +1242,7 @@ class NativeEventMeetingInsight extends NativeEvent {
 
   void serialize(BinarySerializer serializer) {
     serializer.increaseContainerDepth();
-    serializer.serializeVariantIndex(22);
+    serializer.serializeVariantIndex(21);
     value.serialize(serializer);
     serializer.decreaseContainerDepth();
   }
@@ -1352,7 +1297,7 @@ class NativeEventMeetingTranscriptTurn extends NativeEvent {
 
   void serialize(BinarySerializer serializer) {
     serializer.increaseContainerDepth();
-    serializer.serializeVariantIndex(23);
+    serializer.serializeVariantIndex(22);
     value.serialize(serializer);
     serializer.decreaseContainerDepth();
   }
@@ -1405,7 +1350,7 @@ class NativeEventMeetingCompleted extends NativeEvent {
 
   void serialize(BinarySerializer serializer) {
     serializer.increaseContainerDepth();
-    serializer.serializeVariantIndex(24);
+    serializer.serializeVariantIndex(23);
     value.serialize(serializer);
     serializer.decreaseContainerDepth();
   }
