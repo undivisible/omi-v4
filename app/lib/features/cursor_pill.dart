@@ -57,11 +57,17 @@ class CursorPill extends StatefulWidget {
   const CursorPill({
     required this.controller,
     this.autofocus = true,
+    this.hintText = 'Ask me anything…',
     super.key,
   });
 
   final CursorPillController controller;
   final bool autofocus;
+
+  /// The input placeholder. Subtly reflects the surface: the panel summoned
+  /// over another app can read what you are working on, so it invites exactly
+  /// that; the in-app pill keeps the generic prompt.
+  final String hintText;
 
   @override
   State<CursorPill> createState() => _CursorPillState();
@@ -249,6 +255,12 @@ class _CursorPillState extends State<CursorPill> {
             const SizedBox(height: 8),
           ],
           _pill(),
+          // The model's fuller answer sits in a bubble under the pill; the
+          // terse continuation lives inline as the ghost after the caret.
+          if (controller.answer case final answer?) ...[
+            const SizedBox(height: 8),
+            _AnswerBubble(text: answer),
+          ],
           if (controller.error case final message?) ...[
             const SizedBox(height: 6),
             Text(
@@ -493,14 +505,14 @@ class _CursorPillState extends State<CursorPill> {
               maxLines: 1,
               cursorColor: _pillInk,
               style: const TextStyle(color: _pillInk, fontSize: 14),
-              decoration: const InputDecoration(
+              decoration: InputDecoration(
                 isDense: true,
                 border: InputBorder.none,
                 enabledBorder: InputBorder.none,
                 focusedBorder: InputBorder.none,
                 filled: false,
-                hintText: 'Ask me anything…',
-                hintStyle: TextStyle(color: _pillMuted, fontSize: 14),
+                hintText: widget.hintText,
+                hintStyle: const TextStyle(color: _pillMuted, fontSize: 14),
               ),
               onSubmitted: (value) =>
                   unawaited(widget.controller.submit(value)),
@@ -657,6 +669,48 @@ class _SuggestionChip extends StatelessWidget {
       ),
     ),
   );
+}
+
+/// The bubble under the pill holding the model's fuller answer while typing.
+/// Fades in on first appearance and holds still as the answer refines; honors
+/// reduce-motion by skipping the fade.
+class _AnswerBubble extends StatelessWidget {
+  const _AnswerBubble({required this.text});
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    final reduceMotion = MediaQuery.disableAnimationsOf(context);
+    return TweenAnimationBuilder<double>(
+      tween: Tween<double>(begin: reduceMotion ? 1 : 0, end: 1),
+      duration: reduceMotion
+          ? Duration.zero
+          : const Duration(milliseconds: 200),
+      curve: Curves.easeOut,
+      builder: (context, t, child) => Opacity(opacity: t, child: child),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 360),
+        child: LiquidGlass(
+          radius: 14,
+          child: Padding(
+            key: const Key('cursor_pill_answer'),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+            child: Text(
+              text,
+              maxLines: 6,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                color: _pillInk,
+                fontSize: 13,
+                height: 1.35,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 /// Five slim, center-weighted bars next to the mic — the clicky look. The

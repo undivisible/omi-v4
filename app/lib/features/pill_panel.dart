@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../native/native_hub.dart';
+import 'ax_context.dart';
 import 'cursor_pill.dart';
 import 'cursor_pill_controller.dart';
 
@@ -84,6 +85,11 @@ final class PillPanelHost {
           arguments?['prompt'] as String? ?? '',
           Duration(milliseconds: arguments?['timeoutMs'] as int? ?? 1500),
         );
+      case 'axContext':
+        // The panel's engine cannot reach the omi/ax_context channel, which is
+        // registered only on the primary engine; relay the read-only snapshot
+        // it captured across so the panel's inline assist has on-screen context.
+        return (await AxContext.snapshot()).toMap();
       case 'sync':
         push();
         return null;
@@ -135,6 +141,7 @@ final class PillPanelClient {
       chooseRelay: (index) => _invoke('choose', index),
       dismissWindow: () => _invoke('dismiss'),
       draft: (prompt, timeout) => _completion(prompt, timeout),
+      fetchAxContext: _axContext,
       level: ValueNotifier<double>(0),
     );
   }
@@ -181,6 +188,21 @@ final class PillPanelClient {
       return null;
     } on PlatformException {
       return null;
+    }
+  }
+
+  Future<AxContextSnapshot> _axContext() async {
+    try {
+      final reply = await _channel.invokeMethod<Map<Object?, Object?>>(
+        'axContext',
+      );
+      return reply == null
+          ? AxContextSnapshot.empty
+          : AxContextSnapshot.fromMap(reply);
+    } on MissingPluginException {
+      return AxContextSnapshot.empty;
+    } on PlatformException {
+      return AxContextSnapshot.empty;
     }
   }
 
@@ -300,7 +322,12 @@ class _PillPanelAppState extends State<PillPanelApp> {
         alignment: Alignment.topLeft,
         child: Padding(
           padding: const EdgeInsets.all(10),
-          child: CursorPill(controller: _client.controller),
+          child: CursorPill(
+            controller: _client.controller,
+            // The panel is always summoned over another app, where the reader
+            // can see the thread and the draft in progress — invite that.
+            hintText: 'Ask about what you’re working on…',
+          ),
         ),
       ),
     ),

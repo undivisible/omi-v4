@@ -7,6 +7,7 @@ import '../app_services.dart';
 import '../currents/currents.dart';
 import '../keyboard/shift_gesture.dart';
 import '../native/native_hub.dart';
+import 'ax_context.dart';
 import 'cursor_pill_window.dart';
 import 'overlay_launcher.dart';
 import 'voice_intents.dart';
@@ -196,6 +197,138 @@ final class PillSuggestion {
   }
 }
 
+String _clampText(String text, int max) =>
+    text.length <= max ? text : '${text.substring(0, max).trimRight()}…';
+
+String _collapseLine(String text, int max) =>
+    _clampText(text.replaceAll(RegExp(r'\s+'), ' ').trim(), max);
+
+/// The labeled context sections shared by the submit prompt and the assist
+/// prompt: app, window, (optionally) what the user has already written, the
+/// current selection, the visible on-screen text, and the session's memory
+/// matches. Each is length-capped and omitted when empty.
+List<String> _contextSections(
+  AxContextSnapshot context,
+  List<PillSuggestion> memory, {
+  bool includeWritten = true,
+}) {
+  final sections = <String>[];
+  if (context.appName case final app? when app.isNotEmpty) {
+    final bundle = context.bundleId;
+    sections.add(
+      'App: $app${bundle != null && bundle.isNotEmpty ? ' ($bundle)' : ''}',
+    );
+  }
+  if (context.windowTitle case final title? when title.isNotEmpty) {
+    sections.add('Window: ${_collapseLine(title, 200)}');
+  }
+  if (includeWritten) {
+    if (context.focusedText case final written? when written.isNotEmpty) {
+      sections.add(
+        'What I have already written:\n"""\n${_clampText(written, 2000)}\n"""',
+      );
+    }
+  }
+  if (context.selectedText case final selected? when selected.isNotEmpty) {
+    sections.add(
+      'Currently selected:\n"""\n${_clampText(selected, 1000)}\n"""',
+    );
+  }
+  if (context.surrounding case final surrounding? when surrounding.isNotEmpty) {
+    final marker = context.truncated ? '\n… (truncated)' : '';
+    sections.add(
+      'On screen:\n"""\n${_clampText(surrounding, 4000)}$marker\n"""',
+    );
+  }
+  final memoryLines = <String>[
+    for (final item in memory.take(3))
+      if (sanitizeEvidenceText(item.prompt, maxLength: 280) case final line
+          when line.isNotEmpty)
+        '- $line',
+  ];
+  if (memoryLines.isNotEmpty) {
+    sections.add('From my memory:\n${memoryLines.join('\n')}');
+  }
+  return sections;
+}
+
+/// Assembles the outgoing agent prompt from the user's typed [question] plus
+/// the read-only on-screen [context] and the [memory] matches already surfaced
+/// this session — clearly labeled sections, the same shape as the email-draft
+/// assembly. Omitted when empty, so with nothing on hand the bare question is
+/// sent unchanged. A secure field contributes nothing:
+/// [AxContextSnapshot.focusedText] is already null there.
+String buildOverlayPrompt({
+  required String question,
+  AxContextSnapshot context = AxContextSnapshot.empty,
+  List<PillSuggestion> memory = const [],
+}) {
+  final sections = _contextSections(context, memory);
+  if (sections.isEmpty) return question;
+  return '$question\n\n'
+      '--- Context (a read-only snapshot of what I am looking at right now; '
+      'use it to answer, do not repeat it back verbatim) ---\n'
+      '${sections.join('\n\n')}';
+}
+
+/// Assembles the assist prompt for what the user has [typed] so far in the
+/// pill, plus the read-only on-screen [context] and [memory] matches. It asks
+/// the model for two outputs in one turn: a terse INLINE continuation (the
+/// ghost after the caret) and a fuller ANSWER (the bubble). The user's own
+/// written field is left out — [typed] is what they are drafting here.
+String buildAssistPrompt({
+  required String typed,
+  AxContextSnapshot context = AxContextSnapshot.empty,
+  List<PillSuggestion> memory = const [],
+}) {
+  final sections = _contextSections(context, memory, includeWritten: false);
+  final block = sections.isEmpty
+      ? ''
+      : '\n\nWhat I am looking at right now (read-only, do not repeat it back '
+            'verbatim):\n${sections.join('\n\n')}';
+  return 'I am typing in a quick assist box and paused after: "$typed".\n'
+      'Continue my text naturally and also give me a fuller answer, using '
+      'what is on my screen.$block\n\n'
+      'Reply in exactly this format, nothing else:\n'
+      'INLINE: <a short continuation to append right after what I typed — one '
+      'line, no quotes>\n'
+      'ANSWER: <a fuller answer or explanation, 1-3 sentences>';
+}
+
+/// Splits an assist reply into its inline continuation and fuller answer.
+/// Prefers the explicit `INLINE:` / `ANSWER:` markers the prompt asks for;
+/// when the model ignores them, the first line becomes the inline completion
+/// and the remainder the answer, so a plain continuation still works.
+({String? inline, String? answer}) splitAssistResponse(String raw) {
+  final text = raw.trim();
+  if (text.isEmpty) return (inline: null, answer: null);
+  final inlineMatch = RegExp(
+    r'INLINE\s*:\s*(.*?)(?:\n\s*ANSWER\s*:|$)',
+    dotAll: true,
+    caseSensitive: false,
+  ).firstMatch(text);
+  final answerMatch = RegExp(
+    r'ANSWER\s*:\s*(.*)$',
+    dotAll: true,
+    caseSensitive: false,
+  ).firstMatch(text);
+  if (inlineMatch != null || answerMatch != null) {
+    return (
+      inline: _nonEmpty(inlineMatch?.group(1)?.trim()),
+      answer: _nonEmpty(answerMatch?.group(1)?.trim()),
+    );
+  }
+  final newline = text.indexOf('\n');
+  if (newline < 0) return (inline: _nonEmpty(text), answer: null);
+  return (
+    inline: _nonEmpty(text.substring(0, newline).trim()),
+    answer: _nonEmpty(text.substring(newline + 1).trim()),
+  );
+}
+
+String? _nonEmpty(String? value) =>
+    value == null || value.isEmpty ? null : value;
+
 final class CursorPillController extends ChangeNotifier {
   CursorPillController({
     required this._hub,
@@ -221,9 +354,10 @@ final class CursorPillController extends ChangeNotifier {
     this._automate,
     this._openApp,
     this._decideProposal,
+    this._fetchAxContext,
     this.draftTimeout = const Duration(milliseconds: 2500),
     this.predictionDebounce = const Duration(milliseconds: 300),
-    this.predictionTimeout = const Duration(milliseconds: 1500),
+    this.predictionTimeout = const Duration(seconds: 4),
     this.emailLookupTimeout = const Duration(milliseconds: 800),
     this.openFlashDuration = const Duration(milliseconds: 900),
   }) : _launchLink = launchLink ?? launcher.launchUrl,
@@ -248,6 +382,11 @@ final class CursorPillController extends ChangeNotifier {
       // frames them so the model acts as the user's desktop agent.
       sendPrompt: (text) =>
           services.sendChatMessage(text: text, origin: MessageOrigin.overlay),
+      // The reader is a no-op off macOS and returns a reasoned empty snapshot
+      // when Accessibility is not trusted (the native check is silent — it
+      // never triggers the permission prompt), so it needs no separate grant
+      // gate here; it shares the Accessibility grant the global tap uses.
+      fetchAxContext: AxContext.snapshot,
       openApp: const OverlayAppLauncher().openApp,
       decideProposal: (proposalId, decision) => services.decideChatApproval(
         proposalId: proposalId,
@@ -309,11 +448,21 @@ final class CursorPillController extends ChangeNotifier {
   final Future<String?> Function(String query)? _openApp;
   final Future<void> Function(String proposalId, ApprovalDecision decision)?
   _decideProposal;
+
+  /// Fetches the read-only accessibility snapshot of what the user is looking
+  /// at, injected so the platform channel is never touched from the controller
+  /// and the assist/send path stays fakeable. Null off macOS and in tests that
+  /// don't exercise it, in which case the prompt carries no on-screen context.
+  final Future<AxContextSnapshot> Function()? _fetchAxContext;
   final Duration draftTimeout;
 
-  /// How long typing must pause before an inline AI completion is requested,
-  /// and how long that request may take before it is abandoned. The
-  /// completion renders as the dimmed ghost remainder after the caret.
+  /// How long typing must pause before the context-aware assist is requested,
+  /// and how long that request may take before it is abandoned. A pause during
+  /// a burst collapses to a single regeneration, so continued typing refines
+  /// rather than firing per keystroke. The assist yields two outputs: a terse
+  /// inline continuation (the dimmed ghost after the caret, accepted with Tab)
+  /// and a fuller answer (the bubble under the pill). The timeout is seconds-
+  /// scale because the on-device model produces both.
   final Duration predictionDebounce;
   final Duration predictionTimeout;
   static const predictionMinChars = 3;
@@ -325,8 +474,16 @@ final class CursorPillController extends ChangeNotifier {
   Completer<List<MemorySearchItem>>? _emailLookup;
   String? _emailLookupRequestId;
   String? _prediction;
+  String? _answer;
   Timer? _predictionTimer;
   int _predictionEpoch = 0;
+
+  /// The last read-only on-screen snapshot, captured once when the input
+  /// surface is summoned and refreshed cheaply in the background. The assist
+  /// reads it synchronously so a refinement never waits on the accessibility
+  /// channel while the user is mid-type.
+  AxContextSnapshot _axSnapshot = AxContextSnapshot.empty;
+  int _axEpoch = 0;
 
   DateTime? _lastTransitionAt;
   CursorPillState _state = CursorPillState.hidden;
@@ -359,6 +516,11 @@ final class CursorPillController extends ChangeNotifier {
   /// One-line status from the voice pipeline (e.g. a live-voice downgrade
   /// note), shown while listening.
   String? get notice => _voiceNotice?.value;
+
+  /// The model's fuller answer for the current input, shown in the bubble
+  /// under the pill while typing — the model talking. The terse inline
+  /// continuation is the ghost after the caret; this is its companion.
+  String? get answer => _answer;
 
   Future<void> handleGesture(ShiftGestureAction action) async {
     switch (action) {
@@ -471,6 +633,11 @@ final class CursorPillController extends ChangeNotifier {
     _suggestions = const [];
     _currentSuggestions = const [];
     _memorySuggestions = const [];
+    _prediction = null;
+    _answer = null;
+    // Grab the on-screen context once now, while the surface opens, so the
+    // inline assist and its bubble have it ready without a per-keystroke fetch.
+    _refreshAxContext();
     _notify();
     await _presentWindow?.call(true);
     _subscription ??= _events.listen(_handleEvent);
@@ -564,17 +731,22 @@ final class CursorPillController extends ChangeNotifier {
   }
 
   /// Called by the overlay on every edit of the in-progress input. Debounces
-  /// a short AI continuation request through the draft plumbing; the result
-  /// shows as the ghost remainder while the typed text stays a prefix of it.
-  /// Typing again cancels the in-flight request (its epoch goes stale), so a
-  /// late reply never flashes an outdated completion.
+  /// the context-aware assist request through the draft plumbing; its inline
+  /// half shows as the ghost remainder while the typed text stays a prefix of
+  /// it, and its fuller half fills the bubble under the pill. Typing again
+  /// cancels the in-flight request (its epoch goes stale), so a late reply
+  /// never flashes an outdated result, and continued typing refines rather
+  /// than piling up per-keystroke requests.
   void inputChanged(String text) {
     _predictionTimer?.cancel();
     _predictionTimer = null;
     _predictionEpoch += 1;
     if (_prediction case final prediction?
         when !_matchesPrediction(prediction, text)) {
+      // The inline suggestion no longer extends what is typed: drop it and the
+      // stale bubble with it, then let the debounced request regenerate both.
       _prediction = null;
+      _answer = null;
       _notify();
     }
     if (_draft == null || _state != CursorPillState.input) return;
@@ -608,11 +780,15 @@ final class CursorPillController extends ChangeNotifier {
     final epoch = _predictionEpoch;
     String? completion;
     try {
+      // Read the cached on-screen snapshot synchronously — it is refreshed in
+      // the background when the pill is summoned, so a refinement never waits
+      // on the accessibility channel mid-type.
       completion = await draft(
-        'Continue this partially typed instruction to a desktop assistant. '
-        'Reply with only the most likely short continuation of the text — '
-        'no quotes, no restating what was already typed, one line.\n'
-        'Typed so far: "$typed"',
+        buildAssistPrompt(
+          typed: typed,
+          context: _axSnapshot,
+          memory: _memorySuggestions,
+        ),
         predictionTimeout,
       );
     } catch (_) {
@@ -623,19 +799,46 @@ final class CursorPillController extends ChangeNotifier {
         _state != CursorPillState.input) {
       return;
     }
-    final cleaned = completion
+    final parts = splitAssistResponse(completion ?? '');
+    // The fuller answer fills the bubble; it needs no prefix relationship to
+    // the typed text.
+    if (parts.answer case final answer?) {
+      _answer = _clampText(answer.replaceAll(RegExp(r'\s+'), ' ').trim(), 400);
+    }
+    final cleaned = parts.inline
         ?.replaceAll(RegExp(r'\s+'), ' ')
         .replaceAll(RegExp(r'^["“”]+|["“”]+$'), '')
         .trimRight();
-    if (cleaned == null || cleaned.isEmpty) return;
-    // The model may either continue the text or restate it in full; fold
-    // both shapes into one full predicted string.
-    final full = cleaned.toLowerCase().startsWith(typed.toLowerCase())
-        ? cleaned
-        : '$typed$cleaned';
-    if (!_matchesPrediction(full, typed)) return;
-    _prediction = full;
+    if (cleaned != null && cleaned.isNotEmpty) {
+      // The model may either continue the text or restate it in full; fold
+      // both shapes into one full predicted string.
+      final full = cleaned.toLowerCase().startsWith(typed.toLowerCase())
+          ? cleaned
+          : '$typed$cleaned';
+      if (_matchesPrediction(full, typed)) _prediction = full;
+    }
     _notify();
+  }
+
+  /// Refreshes the cached on-screen snapshot in the background when the input
+  /// surface opens, so the assist has context ready without the fetch ever
+  /// gating a keystroke. Fire-and-forget: the native reader is self-bounded, so
+  /// a late or failed read simply leaves the previous snapshot in place, and a
+  /// stale epoch (surface reopened) discards a result that arrives too late.
+  void _refreshAxContext() {
+    final fetch = _fetchAxContext;
+    if (fetch == null) return;
+    final epoch = ++_axEpoch;
+    unawaited(() async {
+      AxContextSnapshot snapshot;
+      try {
+        snapshot = await fetch();
+      } catch (_) {
+        return;
+      }
+      if (_disposed || epoch != _axEpoch) return;
+      _axSnapshot = snapshot;
+    }());
   }
 
   void _clearPrediction() {
@@ -643,6 +846,7 @@ final class CursorPillController extends ChangeNotifier {
     _predictionTimer = null;
     _predictionEpoch += 1;
     _prediction = null;
+    _answer = null;
   }
 
   Future<void> submit(String text) async {
@@ -699,12 +903,21 @@ final class CursorPillController extends ChangeNotifier {
   /// it collapses when the reply starts streaming in chat (or when the turn
   /// completes silently), and holds open while a proposal awaits approval.
   Future<void> _sendToAgent(String text) async {
+    // Fold the user's question with the on-screen snapshot cached when the
+    // pill opened and the memory matches surfaced this session — the same
+    // snapshot the inline assist and bubble used, captured before _showWorking
+    // clears the suggestion state.
+    final prompt = buildOverlayPrompt(
+      question: text,
+      context: _axSnapshot,
+      memory: _memorySuggestions,
+    );
     _showWorking('Working on it…');
     _sawAgentReply = false;
     _proposal = null;
     String? requestId;
     try {
-      requestId = await _sendPrompt(text);
+      requestId = await _sendPrompt(prompt);
     } catch (_) {
       requestId = null;
     }
@@ -991,12 +1204,18 @@ final class CursorPillController extends ChangeNotifier {
     String? error,
   }) {
     if (state == CursorPillState.hidden) _clearPrediction();
+    // Entering the typing surface in the panel engine: refresh the on-screen
+    // snapshot so the inline assist and bubble have context, just as summon()
+    // does in the engine that owns the state machine.
+    final entering =
+        state == CursorPillState.input && _state != CursorPillState.input;
     _state = state;
     _suggestions = List.unmodifiable(
       state == CursorPillState.input ? suggestions : const <PillSuggestion>[],
     );
     _status = status;
     _error = error;
+    if (entering) _refreshAxContext();
     _notify();
   }
 

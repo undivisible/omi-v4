@@ -906,6 +906,21 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
       }
     }
 
+    // On-demand, read-only accessibility snapshot of what the user is looking
+    // at, so a typed pill prompt can be answered with the on-screen context.
+    // AXContextReader never throws and returns synchronously within its own
+    // bounded deadline, so the reply is immediate.
+    let axContext = FlutterMethodChannel(
+      name: "omi/ax_context",
+      binaryMessenger: flutterViewController.engine.binaryMessenger)
+    axContext.setMethodCallHandler { call, result in
+      guard call.method == "snapshot" else {
+        result(FlutterMethodNotImplemented)
+        return
+      }
+      result(AXContextReader.snapshot())
+    }
+
     let launcher = FlutterMethodChannel(
       name: "omi/launcher",
       binaryMessenger: flutterViewController.engine.binaryMessenger)
