@@ -1,10 +1,12 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+import 'storage/omi_directory.dart';
 
 import 'api/dev_gemini.dart';
 import 'api/worker_http.dart';
@@ -1487,5 +1489,6 @@ DeviceRelayService _createDeviceRelay() {
 
 Future<String> _defaultMemoryDatabasePath(String uid) async {
   final digest = sha256.convert(utf8.encode(uid));
-  return '${(await getApplicationSupportDirectory()).path}/omi-memory-$digest.sqlite3';
+  final root = await omiDataDirectory();
+  return '${root.path}${Platform.pathSeparator}omi-memory-$digest.sqlite3';
 }
