@@ -17,6 +17,7 @@ const GEMINI_LIVE_PATH: &str =
     "/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent";
 const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(8);
 const FINAL_DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+const GO_AWAY_DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 const MAX_TOKEN_BYTES: usize = 16 * 1024;
 const MAX_PENDING_AUDIO_BYTES: usize = 256 * 1024;
 const EVENT_QUEUE_CAPACITY: usize = 64;
@@ -213,6 +214,42 @@ pub(crate) fn audio_stream_end_message() -> &'static str {
     r#"{"realtimeInput":{"audioStreamEnd":true}}"#
 }
 
+/// Holds outbound microphone audio until the provider acknowledges setup.
+/// The Live API contract requires clients to wait for
+/// `BidiGenerateContentSetupComplete` before sending any additional messages;
+/// audio pushed earlier (a fresh connect, or a resume where the mic is
+/// already streaming) is buffered in order and flushed the moment setup
+/// completes, bounded so a stalled setup can never grow without limit.
+#[derive(Default)]
+pub(crate) struct OutboundAudioGate {
+    ready: bool,
+    buffered: std::collections::VecDeque<Vec<u8>>,
+    buffered_bytes: usize,
+}
+
+impl OutboundAudioGate {
+    pub(crate) fn push(&mut self, bytes: Vec<u8>) -> Vec<Vec<u8>> {
+        if self.ready {
+            return vec![bytes];
+        }
+        self.buffered_bytes = self.buffered_bytes.saturating_add(bytes.len());
+        self.buffered.push_back(bytes);
+        while self.buffered_bytes > MAX_PENDING_AUDIO_BYTES {
+            let Some(dropped) = self.buffered.pop_front() else {
+                break;
+            };
+            self.buffered_bytes = self.buffered_bytes.saturating_sub(dropped.len());
+        }
+        Vec::new()
+    }
+
+    pub(crate) fn open(&mut self) -> Vec<Vec<u8>> {
+        self.ready = true;
+        self.buffered_bytes = 0;
+        self.buffered.drain(..).collect()
+    }
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ServerFrame {
@@ -319,7 +356,7 @@ pub(crate) fn parse_server_message(payload: &[u8]) -> Result<ServerMessage, Stri
     let Some(content) = frame.server_content else {
         return Ok(ServerMessage::Unknown);
     };
-    let mut audio = Vec::new();
+    let mut audio: Vec<(u32, Vec<u8>)> = Vec::new();
     for part in content.model_turn.into_iter().flat_map(|turn| turn.parts) {
         let Some(inline) = part.inline_data else {
             continue;
@@ -330,9 +367,23 @@ pub(crate) fn parse_server_message(payload: &[u8]) -> Result<ServerMessage, Stri
         let bytes = BASE64
             .decode(inline.data.as_bytes())
             .map_err(|_| "live voice provider returned invalid audio".to_owned())?;
-        if !bytes.is_empty() {
-            audio.push((pcm_sample_rate(&inline.mime_type), bytes));
+        if bytes.is_empty() {
+            continue;
         }
+        let rate = pcm_sample_rate(&inline.mime_type);
+        // Consecutive parts at the same rate are coalesced into one chunk so
+        // the playout host is fed fewer, larger buffers and is less likely to
+        // underflow between tiny fragments.
+        match audio.last_mut() {
+            Some((last_rate, last_bytes)) if *last_rate == rate => last_bytes.extend(bytes),
+            _ => audio.push((rate, bytes)),
+        }
+    }
+    // An interrupted turn's audio was already discarded by the model; playing
+    // any of it after the barge-in is what makes the assistant audibly repeat
+    // itself, so it never leaves the parser.
+    if content.interrupted {
+        audio.clear();
     }
     let input_transcript = content
         .input_transcription
@@ -455,6 +506,8 @@ async fn run(
         return;
     }
     let mut draining = false;
+    let mut go_away = false;
+    let mut gate = OutboundAudioGate::default();
     loop {
         tokio::select! {
             biased;
@@ -462,6 +515,9 @@ async fn run(
                 Some(LiveControl::Finish) => {
                     while let Ok(bytes) = audio_receiver.try_recv() {
                         pending_audio_bytes.fetch_sub(bytes.len(), Ordering::AcqRel);
+                        gate.push(bytes);
+                    }
+                    for bytes in gate.open() {
                         if socket.send(Message::Text(realtime_input_message(&bytes).into())).await.is_err() {
                             let _ = events.send(RealtimeVoiceEvent::Error {
                                 message: "live voice provider connection was lost".to_owned(),
@@ -490,21 +546,38 @@ async fn run(
             },
             audio = audio_receiver.recv() => if let Some(bytes) = audio {
                 pending_audio_bytes.fetch_sub(bytes.len(), Ordering::AcqRel);
-                if !draining
-                    && socket.send(Message::Text(realtime_input_message(&bytes).into())).await.is_err()
-                {
-                    let _ = events.send(RealtimeVoiceEvent::Error {
-                        message: "live voice provider connection was lost".to_owned(),
-                        resumption_handle: resumption_handle.clone(),
-                    }).await;
-                    return;
+                if !draining {
+                    for bytes in gate.push(bytes) {
+                        if socket.send(Message::Text(realtime_input_message(&bytes).into())).await.is_err() {
+                            let _ = events.send(RealtimeVoiceEvent::Error {
+                                message: "live voice provider connection was lost".to_owned(),
+                                resumption_handle: resumption_handle.clone(),
+                            }).await;
+                            return;
+                        }
+                    }
                 }
             },
-            message = message_with_drain_timeout(&mut socket, draining) => match message {
+            message = message_with_drain_timeout(&mut socket, draining, go_away) => match message {
                 Some(Ok(payload)) => {
-                    if !dispatch_server_payload(&payload, &events, &mut resumption_handle).await {
+                    let outcome = dispatch_server_payload(&payload, &events, &mut resumption_handle).await;
+                    if !outcome.keep_running {
                         let _ = socket.close(None).await;
                         return;
+                    }
+                    if outcome.setup_complete {
+                        for bytes in gate.open() {
+                            if socket.send(Message::Text(realtime_input_message(&bytes).into())).await.is_err() {
+                                let _ = events.send(RealtimeVoiceEvent::Error {
+                                    message: "live voice provider connection was lost".to_owned(),
+                                    resumption_handle: resumption_handle.clone(),
+                                }).await;
+                                return;
+                            }
+                        }
+                    }
+                    if outcome.go_away {
+                        go_away = true;
                     }
                 }
                 Some(Err(transport_error)) => {
@@ -529,6 +602,7 @@ async fn run(
 async fn message_with_drain_timeout(
     socket: &mut (impl StreamExt<Item = Result<Message, tokio_tungstenite::tungstenite::Error>> + Unpin),
     draining: bool,
+    go_away: bool,
 ) -> Option<Result<Vec<u8>, String>> {
     let next = async {
         loop {
@@ -547,8 +621,37 @@ async fn message_with_drain_timeout(
         tokio::time::timeout(FINAL_DRAIN_TIMEOUT, next)
             .await
             .unwrap_or(None)
+    } else if go_away {
+        tokio::time::timeout(GO_AWAY_DRAIN_TIMEOUT, next)
+            .await
+            .unwrap_or(None)
     } else {
         next.await
+    }
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct DispatchOutcome {
+    keep_running: bool,
+    setup_complete: bool,
+    go_away: bool,
+}
+
+impl DispatchOutcome {
+    fn running() -> Self {
+        Self {
+            keep_running: true,
+            setup_complete: false,
+            go_away: false,
+        }
+    }
+
+    fn stopped() -> Self {
+        Self {
+            keep_running: false,
+            setup_complete: false,
+            go_away: false,
+        }
     }
 }
 
@@ -557,7 +660,7 @@ async fn dispatch_server_payload(
     payload: &[u8],
     events: &mpsc::Sender<RealtimeVoiceEvent>,
     resumption_handle: &mut Option<String>,
-) -> bool {
+) -> DispatchOutcome {
     let message = match parse_server_message(payload) {
         Ok(message) => message,
         Err(failure) => {
@@ -567,26 +670,38 @@ async fn dispatch_server_payload(
                     resumption_handle: resumption_handle.clone(),
                 })
                 .await;
-            return false;
+            return DispatchOutcome::stopped();
         }
     };
     match message {
-        ServerMessage::SetupComplete => events.send(RealtimeVoiceEvent::Started).await.is_ok(),
-        ServerMessage::Unknown => true,
+        ServerMessage::SetupComplete => {
+            if events.send(RealtimeVoiceEvent::Started).await.is_err() {
+                return DispatchOutcome::stopped();
+            }
+            DispatchOutcome {
+                keep_running: true,
+                setup_complete: true,
+                go_away: false,
+            }
+        }
+        ServerMessage::Unknown => DispatchOutcome::running(),
         ServerMessage::SessionResumptionUpdate { handle, resumable } => {
             if resumable {
                 *resumption_handle = Some(handle);
             }
-            true
+            DispatchOutcome::running()
         }
-        ServerMessage::GoAway => {
-            let _ = events
-                .send(RealtimeVoiceEvent::SessionEnded {
-                    resumption_handle: resumption_handle.clone(),
-                })
-                .await;
-            false
-        }
+        // goAway only announces that the server will close the connection
+        // soon. Tearing the session down here used to cut the in-flight reply
+        // mid-word and hand the resumption path a half-delivered turn to
+        // regenerate — the audible "cuts off, then repeats itself" failure.
+        // Keep draining until the server actually closes; the None arm then
+        // ends the session with the latest resumption handle.
+        ServerMessage::GoAway => DispatchOutcome {
+            keep_running: true,
+            setup_complete: false,
+            go_away: true,
+        },
         ServerMessage::Content {
             audio,
             input_transcript,
@@ -595,7 +710,7 @@ async fn dispatch_server_payload(
             turn_complete,
         } => {
             if interrupted && events.send(RealtimeVoiceEvent::Interrupted).await.is_err() {
-                return false;
+                return DispatchOutcome::stopped();
             }
             if let Some(text) = input_transcript
                 && events
@@ -607,7 +722,7 @@ async fn dispatch_server_payload(
                     .await
                     .is_err()
             {
-                return false;
+                return DispatchOutcome::stopped();
             }
             for (sample_rate_hz, bytes) in audio {
                 if events
@@ -618,7 +733,7 @@ async fn dispatch_server_payload(
                     .await
                     .is_err()
                 {
-                    return false;
+                    return DispatchOutcome::stopped();
                 }
             }
             if let Some(text) = transcript
@@ -631,9 +746,9 @@ async fn dispatch_server_payload(
                     .await
                     .is_err()
             {
-                return false;
+                return DispatchOutcome::stopped();
             }
-            true
+            DispatchOutcome::running()
         }
     }
 }
@@ -762,7 +877,6 @@ mod tests {
                         {"text": "ignored"},
                     ]
                 },
-                "interrupted": true,
                 "turnComplete": true,
                 "inputTranscription": {"text": "plan the launch"},
                 "outputTranscription": {"text": "hello"},
@@ -775,10 +889,85 @@ mod tests {
                 audio: vec![(24_000, vec![9, 8])],
                 input_transcript: Some("plan the launch".to_owned()),
                 transcript: Some("hello".to_owned()),
-                interrupted: true,
+                interrupted: false,
                 turn_complete: true,
             })
         );
+    }
+
+    #[test]
+    fn interrupted_frames_drop_stale_model_audio() {
+        let payload = serde_json::json!({
+            "serverContent": {
+                "modelTurn": {
+                    "parts": [
+                        {"inlineData": {"mimeType": "audio/pcm;rate=24000", "data": BASE64.encode([9, 8])}},
+                    ]
+                },
+                "interrupted": true,
+            }
+        })
+        .to_string();
+        assert_eq!(
+            parse_server_message(payload.as_bytes()),
+            Ok(ServerMessage::Content {
+                audio: Vec::new(),
+                input_transcript: None,
+                transcript: None,
+                interrupted: true,
+                turn_complete: false,
+            })
+        );
+    }
+
+    #[test]
+    fn consecutive_audio_parts_at_one_rate_are_coalesced() {
+        let payload = serde_json::json!({
+            "serverContent": {
+                "modelTurn": {
+                    "parts": [
+                        {"inlineData": {"mimeType": "audio/pcm;rate=24000", "data": BASE64.encode([1, 2])}},
+                        {"inlineData": {"mimeType": "audio/pcm;rate=24000", "data": BASE64.encode([3])}},
+                        {"inlineData": {"mimeType": "audio/pcm;rate=16000", "data": BASE64.encode([4])}},
+                        {"inlineData": {"mimeType": "audio/pcm;rate=24000", "data": BASE64.encode([5])}},
+                    ]
+                },
+            }
+        })
+        .to_string();
+        assert_eq!(
+            parse_server_message(payload.as_bytes()),
+            Ok(ServerMessage::Content {
+                audio: vec![
+                    (24_000, vec![1, 2, 3]),
+                    (16_000, vec![4]),
+                    (24_000, vec![5]),
+                ],
+                input_transcript: None,
+                transcript: None,
+                interrupted: false,
+                turn_complete: false,
+            })
+        );
+    }
+
+    #[test]
+    fn outbound_audio_is_gated_until_setup_completes_and_flushes_in_order() {
+        let mut gate = OutboundAudioGate::default();
+        assert_eq!(gate.push(vec![1]), Vec::<Vec<u8>>::new());
+        assert_eq!(gate.push(vec![2]), Vec::<Vec<u8>>::new());
+        assert_eq!(gate.open(), vec![vec![1], vec![2]]);
+        assert_eq!(gate.push(vec![3]), vec![vec![3]]);
+        assert_eq!(gate.open(), Vec::<Vec<u8>>::new());
+    }
+
+    #[test]
+    fn outbound_gate_is_bounded_and_drops_the_oldest_audio_first() {
+        let mut gate = OutboundAudioGate::default();
+        gate.push(vec![7; MAX_PENDING_AUDIO_BYTES]);
+        gate.push(vec![8; 2]);
+        let flushed = gate.open();
+        assert_eq!(flushed, vec![vec![8, 8]]);
     }
 
     #[test]
@@ -858,7 +1047,8 @@ mod tests {
                 }
             })
             .to_string();
-            assert!(dispatch_server_payload(content.as_bytes(), &sender, &mut handle).await);
+            let outcome = dispatch_server_payload(content.as_bytes(), &sender, &mut handle).await;
+            assert_eq!(outcome, DispatchOutcome::running());
             assert_eq!(
                 receiver.try_recv(),
                 Ok(RealtimeVoiceEvent::TranscriptDelta {
@@ -868,10 +1058,41 @@ mod tests {
                 })
             );
             assert!(receiver.try_recv().is_err());
-            assert!(
-                dispatch_server_payload(br#"{"setupComplete":{}}"#, &sender, &mut handle).await
+            let outcome =
+                dispatch_server_payload(br#"{"setupComplete":{}}"#, &sender, &mut handle).await;
+            assert_eq!(
+                outcome,
+                DispatchOutcome {
+                    keep_running: true,
+                    setup_complete: true,
+                    go_away: false,
+                }
             );
             assert_eq!(receiver.try_recv(), Ok(RealtimeVoiceEvent::Started));
+        });
+    }
+
+    #[test]
+    fn go_away_defers_session_end_until_the_server_closes() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap_or_else(|error| panic!("runtime builds: {error}"));
+        runtime.block_on(async {
+            let (sender, mut receiver) = mpsc::channel(EVENT_QUEUE_CAPACITY);
+            let mut handle = Some("handle-3".to_owned());
+            let outcome =
+                dispatch_server_payload(br#"{"goAway":{"timeLeft":"10s"}}"#, &sender, &mut handle)
+                    .await;
+            assert_eq!(
+                outcome,
+                DispatchOutcome {
+                    keep_running: true,
+                    setup_complete: false,
+                    go_away: true,
+                }
+            );
+            assert!(receiver.try_recv().is_err());
+            assert_eq!(handle.as_deref(), Some("handle-3"));
         });
     }
 
@@ -890,7 +1111,10 @@ mod tests {
                 }
             })
             .to_string();
-            assert!(dispatch_server_payload(content.as_bytes(), &sender, &mut handle).await);
+            assert_eq!(
+                dispatch_server_payload(content.as_bytes(), &sender, &mut handle).await,
+                DispatchOutcome::running()
+            );
             assert_eq!(
                 receiver.try_recv(),
                 Ok(RealtimeVoiceEvent::TranscriptDelta {
