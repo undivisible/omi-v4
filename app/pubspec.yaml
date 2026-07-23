@@ -64,7 +64,7 @@ dependencies:
   crepuscularity_flutter:
     git:
       url: https://github.com/tschk/crepuscularity
-      ref: 7aca833ea6c2117db1b0322f805a290b013fee71
+      ref: 41c3b2c1b775fccabf9bb397dfb011d1a45f94ca
       path: plugins/crepuscularity-flutter
 
 dev_dependencies:
