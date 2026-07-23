@@ -450,9 +450,8 @@ fn computer_use_tools() -> Vec<ToolDefinition> {
             description: "Propose invoking the unique accessible element with this exact name after user approval".to_owned(),
             parameters: serde_json::json!({
                 "type": "object",
-                "additionalProperties": false,
                 "properties": {
-                    "target_name": {"type": "string", "minLength": 1, "maxLength": 1024},
+                    "target_name": {"type": "string"},
                     "background_only": {"type": "boolean"}
                 },
                 "required": ["target_name", "background_only"]
@@ -464,10 +463,9 @@ fn computer_use_tools() -> Vec<ToolDefinition> {
             description: "Propose setting the value of the unique editable accessible element with this exact name after user approval".to_owned(),
             parameters: serde_json::json!({
                 "type": "object",
-                "additionalProperties": false,
                 "properties": {
-                    "target_name": {"type": "string", "minLength": 1, "maxLength": 1024},
-                    "value": {"type": "string", "maxLength": 16384},
+                    "target_name": {"type": "string"},
+                    "value": {"type": "string"},
                     "background_only": {"type": "boolean"}
                 },
                 "required": ["target_name", "value", "background_only"]
@@ -5409,6 +5407,45 @@ mod tests {
         let (duplicate, status) = sessions.stop("stop-2", "voice-1");
         assert!(!duplicate.accepted);
         assert!(status.is_none());
+    }
+
+    #[test]
+    fn computer_tool_schemas_stay_within_the_gemini_function_schema_subset() {
+        // Gemini's functionDeclarations.parameters accepts only the proto
+        // Schema subset; JSON Schema keywords like additionalProperties,
+        // minLength, or maxLength are rejected with a 400, which surfaced in
+        // local dev-Gemini mode as "assistant provider connection failed".
+        const ALLOWED_KEYS: &[&str] = &[
+            "type",
+            "format",
+            "description",
+            "nullable",
+            "enum",
+            "items",
+            "properties",
+            "required",
+        ];
+        fn assert_schema(value: &serde_json::Value) {
+            let Some(object) = value.as_object() else {
+                return;
+            };
+            for (key, nested) in object {
+                assert!(
+                    ALLOWED_KEYS.contains(&key.as_str()),
+                    "schema keyword {key} is not Gemini-compatible"
+                );
+                if key == "properties" {
+                    for property in nested.as_object().into_iter().flatten() {
+                        assert_schema(property.1);
+                    }
+                } else if key == "items" {
+                    assert_schema(nested);
+                }
+            }
+        }
+        for tool in computer_use_tools() {
+            assert_schema(&tool.parameters);
+        }
     }
 
     #[test]
