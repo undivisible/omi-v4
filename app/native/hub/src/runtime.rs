@@ -1495,7 +1495,6 @@ async fn local_memory_context(
 
 struct ProfileContext {
     lines: String,
-    names: Vec<String>,
 }
 
 async fn local_profile_context(
@@ -1518,22 +1517,15 @@ async fn local_profile_context(
     });
     match await_blocking(task, cancellation).await {
         BlockingOutcome::Complete(profiles) => {
-            let mut names = Vec::new();
             let lines: Vec<String> = profiles
                 .into_iter()
-                .map(|profile| {
-                    if profile.key.to_lowercase().contains("name") {
-                        names.push(profile.value.clone());
-                    }
-                    format!("- {}: {}", profile.key, profile.value)
-                })
+                .map(|profile| format!("- {}: {}", profile.key, profile.value))
                 .collect();
             if lines.is_empty() {
                 None
             } else {
                 Some(ProfileContext {
                     lines: lines.join("\n"),
-                    names,
                 })
             }
         }
@@ -1598,8 +1590,9 @@ async fn dispatch_assistant(
             return;
         }
     }
-    let names = profile.map(|value| value.names).unwrap_or_default();
-    let context = context.map(|value| crate::chat_router::deidentify(&value, &names));
+    // Online context is intentionally NOT de-identified: the cloud side has
+    // to recognize the user across iMessage/Telegram channels, so identity
+    // must survive the hop.
     progress(
         request_id,
         CHAT_MODEL_TOOL,
@@ -5842,7 +5835,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn assistant_dispatch_deidentifies_context_for_online_models() {
+    async fn assistant_dispatch_keeps_identity_in_context_for_online_models() {
         let state = Arc::new(Mutex::new(RuntimeState {
             configuration_generation: 3,
             authority_uid: Some("user-a".to_owned()),
@@ -5868,8 +5861,8 @@ mod tests {
             .clone()
             .unwrap_or_else(|| panic!("provider receives a prompt"));
         assert!(captured.starts_with("Relevant things you know about the user:\n"));
-        assert!(captured.contains("- Email is [email]"));
-        assert!(captured.contains("- Phone is [phone]"));
+        assert!(captured.contains("- Email is sam.jones@example.com"));
+        assert!(captured.contains("- Phone is +1 (555) 123-4567"));
         assert!(captured.ends_with("\n\nemail sam.jones@example.com about my plans"));
     }
 
