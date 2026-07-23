@@ -1,0 +1,330 @@
+name: Release Firmware
+
+on:
+  push:
+    tags:
+      - 'firmware-v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version label used for artifact names on manual runs
+        required: false
+        default: dev
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-firmware-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  NCS_VERSION: v2.9.0
+  NCS_WORKSPACE: /opt/ncs
+
+jobs:
+  version:
+    name: Resolve version
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+    steps:
+      - id: meta
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            version="${GITHUB_REF_NAME#firmware-v}"
+          else
+            version="${{ inputs.version || 'dev' }}"
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "Firmware release version: ${version}"
+
+  zephyr:
+    name: ${{ matrix.id }}
+    runs-on: ubuntu-24.04
+    needs: version
+    container:
+      image: ghcr.io/nrfconnect/sdk-nrf-toolchain:v2.9.0
+      options: --user root
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: omi-cv1
+            device: Omi CV1 pendant (nRF5340)
+            board: omi/nrf5340/cpuapp
+            app_hint: firmware/omi
+            conf: omi.conf
+            sysbuild: 'true'
+          - id: omi-devkit-v1
+            device: Omi DevKit v1 (Seeed XIAO nRF52840 Sense)
+            board: xiao_ble/nrf52840/sense
+            app_hint: firmware/devkit
+            conf: prj_xiao_ble_sense_devkitv1.conf
+            sysbuild: 'false'
+          - id: omi-devkit-v1-spisd
+            device: Omi DevKit v1 with SPI SD card (Seeed XIAO nRF52840 Sense)
+            board: xiao_ble/nrf52840/sense
+            app_hint: firmware/devkit
+            conf: prj_xiao_ble_sense_devkitv1-spisd.conf
+            sysbuild: 'false'
+          - id: omi-devkit-v2-adafruit
+            device: Omi DevKit v2 Adafruit (Seeed XIAO nRF52840 Sense)
+            board: xiao_ble/nrf52840/sense
+            app_hint: firmware/devkit
+            conf: prj_xiao_ble_sense_devkitv2-adafruit.conf
+            sysbuild: 'false'
+    steps:
+      - name: Trust the workspace inside the container
+        run: git config --global --add safe.directory '*'
+
+      - uses: actions/checkout@v4
+
+      - name: Resolve the NCS toolchain on PATH
+        run: |
+          set -euo pipefail
+          if command -v west >/dev/null 2>&1; then
+            echo "west: $(command -v west)"
+            exit 0
+          fi
+          root="$(find /opt/nordic/ncs/toolchains -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort | head -n1 || true)"
+          if [ -z "${root}" ]; then
+            echo "::error::No nRF Connect SDK toolchain found under /opt/nordic/ncs/toolchains in image ghcr.io/nrfconnect/sdk-nrf-toolchain:${NCS_VERSION}. The container image layout changed; update this workflow."
+            exit 1
+          fi
+          for d in "${root}/bin" "${root}/usr/bin" "${root}/usr/local/bin" "${root}/opt/bin" "${root}/opt/nanopb/generator-bin"; do
+            if [ -d "${d}" ]; then echo "${d}" >> "$GITHUB_PATH"; fi
+          done
+          echo "ZEPHYR_TOOLCHAIN_VARIANT=zephyr" >> "$GITHUB_ENV"
+          if [ -d "${root}/opt/zephyr-sdk" ]; then
+            echo "ZEPHYR_SDK_INSTALL_DIR=${root}/opt/zephyr-sdk" >> "$GITHUB_ENV"
+          fi
+
+      - name: Verify the vendored firmware layout
+        id: layout
+        run: |
+          set -euo pipefail
+          if [ ! -d firmware ]; then
+            echo "::error::firmware/ is not present in this repository. The pendant firmware has not been vendored yet, so ${{ matrix.id }} cannot be built. Vendor the nRF Connect SDK ${NCS_VERSION} firmware tree into firmware/ and re-run this workflow."
+            exit 1
+          fi
+          app_dir=""
+          if [ -f "${{ matrix.app_hint }}/${{ matrix.conf }}" ]; then
+            app_dir="${{ matrix.app_hint }}"
+          else
+            found="$(find firmware -maxdepth 4 -name '${{ matrix.conf }}' -type f | head -n1 || true)"
+            if [ -n "${found}" ]; then
+              app_dir="$(dirname "${found}")"
+              echo "::notice::${{ matrix.conf }} was not at ${{ matrix.app_hint }}; using ${app_dir} instead."
+            fi
+          fi
+          if [ -z "${app_dir}" ]; then
+            echo "::error::Could not find ${{ matrix.conf }} anywhere under firmware/ (expected ${{ matrix.app_hint }}/${{ matrix.conf }}). This target of the firmware matrix is not vendored, or firmware/README.md documents a different layout. Fix the matrix entry for ${{ matrix.id }}."
+            echo "Files present under firmware/:"
+            find firmware -maxdepth 3 -type f -name '*.conf' | sort
+            exit 1
+          fi
+          if [ ! -f "${app_dir}/CMakeLists.txt" ]; then
+            echo "::error::${app_dir} contains ${{ matrix.conf }} but no CMakeLists.txt, so it is not a Zephyr application directory."
+            exit 1
+          fi
+          echo "app_dir=${GITHUB_WORKSPACE}/${app_dir}" >> "$GITHUB_OUTPUT"
+          if [ -d firmware/boards ]; then
+            echo "board_root=${GITHUB_WORKSPACE}/firmware" >> "$GITHUB_OUTPUT"
+          else
+            echo "board_root=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Cache the nRF Connect SDK workspace
+        id: ncs-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.NCS_WORKSPACE }}
+          key: ncs-${{ env.NCS_VERSION }}-narrow-v1
+
+      - name: Fetch the nRF Connect SDK
+        if: steps.ncs-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p "${NCS_WORKSPACE}"
+          west init -m https://github.com/nrfconnect/sdk-nrf --mr "${NCS_VERSION}" "${NCS_WORKSPACE}"
+          cd "${NCS_WORKSPACE}"
+          west update --narrow -o=--depth=1
+          west zephyr-export
+
+      - name: Export the Zephyr CMake package
+        run: |
+          set -euo pipefail
+          cd "${NCS_WORKSPACE}"
+          west zephyr-export
+
+      - name: Build ${{ matrix.device }}
+        run: |
+          set -euo pipefail
+          app_dir="${{ steps.layout.outputs.app_dir }}"
+          if [ "${{ matrix.conf }}" != "prj.conf" ]; then
+            cp "${app_dir}/${{ matrix.conf }}" "${app_dir}/prj.conf"
+          fi
+          build_dir="${GITHUB_WORKSPACE}/build/${{ matrix.id }}"
+          extra=()
+          if [ -n "${{ steps.layout.outputs.board_root }}" ]; then
+            extra+=("-DBOARD_ROOT=${{ steps.layout.outputs.board_root }}")
+          fi
+          sysbuild=()
+          if [ "${{ matrix.sysbuild }}" = "true" ]; then
+            sysbuild+=("--sysbuild")
+          fi
+          cd "${NCS_WORKSPACE}"
+          west build -b "${{ matrix.board }}" "${app_dir}" \
+            --build-dir "${build_dir}" \
+            --pristine always \
+            "${sysbuild[@]}" \
+            -- "${extra[@]}"
+
+      - name: Collect flashable artifacts
+        run: |
+          set -euo pipefail
+          build_dir="${GITHUB_WORKSPACE}/build/${{ matrix.id }}"
+          out="${GITHUB_WORKSPACE}/artifacts"
+          mkdir -p "${out}"
+          prefix="${{ matrix.id }}-${{ needs.version.outputs.version }}"
+          copy_first() {
+            src="$(find "${build_dir}" -name "$1" -type f | sort | head -n1 || true)"
+            if [ -n "${src}" ]; then
+              cp "${src}" "${out}/${prefix}-$2"
+              echo "collected ${src} -> ${prefix}-$2"
+            fi
+          }
+          copy_first dfu_application.zip dfu_application.zip
+          copy_first merged.hex merged.hex
+          copy_first merged_domains.hex merged_domains.hex
+          copy_first app_update.bin app_update.bin
+          copy_first zephyr.hex zephyr.hex
+          copy_first zephyr.bin zephyr.bin
+          copy_first zephyr.uf2 zephyr.uf2
+          if [ -z "$(ls -A "${out}" 2>/dev/null)" ]; then
+            echo "::error::The build for ${{ matrix.id }} produced none of the expected artifacts (dfu_application.zip, merged.hex, zephyr.hex, zephyr.bin, zephyr.uf2) under ${build_dir}."
+            find "${build_dir}" -maxdepth 3 -type f | sort | head -n 100
+            exit 1
+          fi
+          ls -l "${out}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: firmware-${{ matrix.id }}
+          path: artifacts/*
+          if-no-files-found: error
+          retention-days: 14
+
+  omiglass:
+    name: omiGlass (ESP32, PlatformIO)
+    runs-on: ubuntu-24.04
+    needs: version
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Detect a PlatformIO target
+        id: detect
+        run: |
+          set -euo pipefail
+          if [ ! -d firmware ]; then
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::firmware/ is absent; skipping the optional omiGlass PlatformIO build."
+            exit 0
+          fi
+          ini="$(find firmware -maxdepth 3 -name platformio.ini -type f | head -n1 || true)"
+          if [ -z "${ini}" ]; then
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::No platformio.ini under firmware/; the omiGlass ESP32 target is not vendored. Skipping."
+            exit 0
+          fi
+          echo "present=true" >> "$GITHUB_OUTPUT"
+          echo "dir=$(dirname "${ini}")" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-python@v5
+        if: steps.detect.outputs.present == 'true'
+        with:
+          python-version: '3.12'
+
+      - name: Cache PlatformIO
+        if: steps.detect.outputs.present == 'true'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio
+            ~/.cache/pip
+          key: platformio-${{ runner.os }}-${{ hashFiles('firmware/**/platformio.ini') }}
+          restore-keys: |
+            platformio-${{ runner.os }}-
+
+      - name: Build with PlatformIO
+        if: steps.detect.outputs.present == 'true'
+        working-directory: ${{ steps.detect.outputs.dir }}
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade platformio
+          pio run
+
+      - name: Collect PlatformIO artifacts
+        if: steps.detect.outputs.present == 'true'
+        run: |
+          set -euo pipefail
+          out="${GITHUB_WORKSPACE}/artifacts"
+          mkdir -p "${out}"
+          prefix="omiglass-${{ needs.version.outputs.version }}"
+          found=0
+          while IFS= read -r f; do
+            cp "${f}" "${out}/${prefix}-$(basename "${f}")"
+            found=1
+          done < <(find "${{ steps.detect.outputs.dir }}/.pio/build" -maxdepth 2 -type f \( -name 'firmware.bin' -o -name 'firmware.elf' -o -name 'bootloader.bin' -o -name 'partitions.bin' \) 2>/dev/null || true)
+          if [ "${found}" -eq 0 ]; then
+            echo "::error::The PlatformIO build produced no firmware.bin under .pio/build."
+            exit 1
+          fi
+          ls -l "${out}"
+
+      - uses: actions/upload-artifact@v4
+        if: steps.detect.outputs.present == 'true'
+        with:
+          name: firmware-omiglass
+          path: artifacts/*
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: Publish firmware release
+    runs-on: ubuntu-24.04
+    needs: [version, zephyr, omiglass]
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: firmware-*
+          merge-multiple: true
+
+      - name: Checksum the artifacts
+        run: |
+          set -euo pipefail
+          cd dist
+          sha256sum -- * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: firmware-release-bundle
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Create the GitHub release
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Firmware ${{ needs.version.outputs.version }}
+          tag_name: ${{ github.ref_name }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: dist/*
