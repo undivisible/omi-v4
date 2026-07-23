@@ -436,6 +436,20 @@ void main() {
     expect(services.dataWipes.value, 1);
     expect(tester.takeException(), isNull);
   });
+  testWidgets('advanced settings open the saved meeting notes', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    final services = makeServices();
+    await tester.pumpWidget(host(services));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('settings_section_advanced')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('settings_meeting_notes')), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('settings_meeting_notes')));
+    await tester.pumpAndSettle();
+    expect(find.widgetWithText(AppBar, 'Meeting notes'), findsOneWidget);
+  });
 }
 
 final class _SignedInGateway implements AuthGateway {

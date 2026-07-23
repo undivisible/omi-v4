@@ -45,8 +45,10 @@ void main() {
     final menuBar = DesktopMenuBarController(
       currents: currents,
       isListening: () => true,
+      isMeetingActive: () => false,
       onCapture: () async {},
       onToggleListening: () async {},
+      onToggleMeeting: () async {},
       onOpenSettings: () {},
       channel: channel,
     );
@@ -57,6 +59,7 @@ void main() {
     expect(calls.single.arguments, {
       'task': 'Finish the release',
       'listening': true,
+      'meeting': false,
     });
     await menuBar.dispose();
   });
@@ -97,8 +100,10 @@ void main() {
     final menuBar = DesktopMenuBarController(
       currents: currents,
       isListening: () => false,
+      isMeetingActive: () => false,
       onCapture: () async {},
       onToggleListening: () async {},
+      onToggleMeeting: () async {},
       onOpenSettings: () {},
       channel: channel,
     );
@@ -108,6 +113,60 @@ void main() {
     expect(calls.single.arguments, {
       'task': 'Finish the release',
       'listening': false,
+      'meeting': false,
+    });
+    await menuBar.dispose();
+  });
+
+  test('publishes meeting state and relays the menu-bar toggle', () async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    const channel = MethodChannel('omi/menu_bar_meeting_test');
+    final calls = <MethodCall>[];
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+          calls.add(call);
+          return null;
+        });
+    addTearDown(
+      () => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, null),
+    );
+    var meeting = false;
+    var toggles = 0;
+    final menuBar = DesktopMenuBarController(
+      currents: null,
+      isListening: () => false,
+      isMeetingActive: () => meeting,
+      onCapture: () async {},
+      onToggleListening: () async {},
+      onToggleMeeting: () async {
+        toggles += 1;
+        meeting = !meeting;
+      },
+      onOpenSettings: () {},
+      channel: channel,
+    );
+
+    await menuBar.start();
+    expect(calls.single.arguments, {
+      'task': null,
+      'listening': false,
+      'meeting': false,
+    });
+
+    await TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .handlePlatformMessage(
+          channel.name,
+          channel.codec.encodeMethodCall(const MethodCall('toggleMeeting')),
+          (_) {},
+        );
+
+    expect(toggles, 1);
+    expect(calls.last.arguments, {
+      'task': null,
+      'listening': false,
+      'meeting': true,
     });
     await menuBar.dispose();
   });

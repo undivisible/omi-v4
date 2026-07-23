@@ -8,6 +8,7 @@ final class MenuBarBridge: NSObject {
   private var statusItem: NSStatusItem?
   private var task = "Omi"
   private var listening = false
+  private var meeting = false
 
   init(binaryMessenger: FlutterBinaryMessenger, window: NSWindow) {
     channel = FlutterMethodChannel(name: "omi/menu_bar", binaryMessenger: binaryMessenger)
@@ -20,6 +21,7 @@ final class MenuBarBridge: NSObject {
         let arguments = call.arguments as? [String: Any]
         self.task = Self.title(arguments?["task"] as? String)
         self.listening = arguments?["listening"] as? Bool ?? false
+        self.meeting = arguments?["meeting"] as? Bool ?? false
         self.render()
         result(nil)
       case "dispose":
@@ -57,6 +59,11 @@ final class MenuBarBridge: NSObject {
     listeningItem.target = self
     listeningItem.state = listening ? .on : .off
     menu.addItem(listeningItem)
+    let meetingItem = NSMenuItem(
+      title: meeting ? "End meeting" : "Start meeting", action: #selector(toggleMeeting),
+      keyEquivalent: "")
+    meetingItem.target = self
+    menu.addItem(meetingItem)
     menu.addItem(.separator())
     let settings = NSMenuItem(title: "Settings…", action: #selector(openSettings), keyEquivalent: ",")
     settings.target = self
@@ -81,6 +88,10 @@ final class MenuBarBridge: NSObject {
 
   @objc private func toggleListening() {
     channel.invokeMethod("toggleListening", arguments: nil)
+  }
+
+  @objc private func toggleMeeting() {
+    channel.invokeMethod("toggleMeeting", arguments: nil)
   }
 
   @objc private func openSettings() {

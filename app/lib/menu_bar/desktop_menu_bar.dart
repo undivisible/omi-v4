@@ -10,16 +10,20 @@ final class DesktopMenuBarController {
   DesktopMenuBarController({
     required this.currents,
     required this.isListening,
+    required this.isMeetingActive,
     required this.onCapture,
     required this.onToggleListening,
+    required this.onToggleMeeting,
     required this.onOpenSettings,
     MethodChannel? channel,
   }) : _channel = channel ?? const MethodChannel('omi/menu_bar');
 
   final CurrentsController? currents;
   final bool Function() isListening;
+  final bool Function() isMeetingActive;
   final Future<void> Function() onCapture;
   final Future<void> Function() onToggleListening;
+  final Future<void> Function() onToggleMeeting;
   final VoidCallback onOpenSettings;
   final MethodChannel _channel;
   bool _started = false;
@@ -42,12 +46,18 @@ final class DesktopMenuBarController {
 
   void _currentsChanged() => unawaited(_sync());
 
+  /// The meeting runtime flips its own state, so the menu title only tracks it
+  /// when whoever owns that signal asks for a redraw.
+  Future<void> refresh() => _sync();
+
   Future<void> _handleCall(MethodCall call) async {
     switch (call.method) {
       case 'capture':
         await onCapture();
       case 'toggleListening':
         await onToggleListening();
+      case 'toggleMeeting':
+        await onToggleMeeting();
       case 'openSettings':
         onOpenSettings();
         return;
@@ -63,6 +73,7 @@ final class DesktopMenuBarController {
     await _channel.invokeMethod<void>('update', {
       'task': items.isEmpty ? null : stripInlineMarkdown(items.first.title),
       'listening': isListening(),
+      'meeting': isMeetingActive(),
     });
   }
 

@@ -8,6 +8,7 @@ import '../app_services.dart';
 import '../capabilities/desktop_capabilities.dart';
 import '../keyboard/keyboard.dart';
 import '../menu_bar/desktop_menu_bar.dart';
+import '../native/native_hub.dart';
 import 'chat_screen.dart';
 import 'cursor_pill.dart';
 import 'cursor_pill_controller.dart';
@@ -44,6 +45,7 @@ class _OmiShellState extends State<OmiShell> {
   StreamSubscription<DesktopKeyboardEvent>? _keyboardNotices;
   bool _globalHotkeyNoticeShown = false;
   DesktopMenuBarController? _menuBar;
+  StreamSubscription<NativeEvent>? _meetingStateEvents;
   CursorPillController? _cursorPill;
   PillPanelHost? _pillPanelHost;
   bool _appActive = false;
@@ -80,15 +82,21 @@ class _OmiShellState extends State<OmiShell> {
     _menuBar = DesktopMenuBarController(
       currents: widget.services.currents,
       isListening: () => widget.services.desktopVoice.active,
+      isMeetingActive: () => widget.services.meetingActive,
       onCapture: () => _handleDesktopGesture(ShiftGestureAction.openOverlay),
       onToggleListening: () => _handleDesktopGesture(
         widget.services.desktopVoice.active
             ? ShiftGestureAction.stopVoice
             : ShiftGestureAction.startVoice,
       ),
+      onToggleMeeting: _toggleMeeting,
       onOpenSettings: _openSettings,
     );
     unawaited(_menuBar!.start());
+    _meetingStateEvents = widget.services.nativeEvents.listen((event) {
+      if (event is! NativeEventMeetingStateChanged) return;
+      unawaited(_menuBar?.refresh());
+    });
     final gesture =
         widget.desktopGesture ??
         (_desktopKeyboard.supported
@@ -214,6 +222,18 @@ class _OmiShellState extends State<OmiShell> {
     );
   }
 
+  Future<void> _toggleMeeting() async {
+    try {
+      if (widget.services.meetingActive) {
+        widget.services.stopMeeting();
+      } else {
+        widget.services.startMeeting();
+      }
+    } on StateError {
+      return;
+    }
+  }
+
   Future<void> _handleDesktopGesture(ShiftGestureAction action) async {
     if (!mounted) return;
     final pill = _cursorPill;
@@ -236,6 +256,7 @@ class _OmiShellState extends State<OmiShell> {
 
   @override
   void dispose() {
+    unawaited(_meetingStateEvents?.cancel());
     unawaited(_menuBar?.dispose());
     unawaited(_disposeDesktopGesture());
     _pillPanelHost?.dispose();

@@ -225,6 +225,43 @@ void main() {
     await tester.pump();
     expect(find.byKey(const Key('meeting_far_end_warning')), findsNothing);
   });
+
+  testWidgets('ending a meeting hides the panel and clears the active state', (
+    tester,
+  ) async {
+    final (services, hub) = await servicesWithHub();
+    addTearDown(services.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(body: MeetingAssistPanel(services: services)),
+      ),
+    );
+    hub.eventsController.add(
+      const NativeEventMeetingStateChanged(
+        value: MeetingStateChanged(active: true, suggestedTitle: 'Sync'),
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+    expect(find.byKey(const Key('meeting_assist_panel')), findsOneWidget);
+    expect(services.meetingActive, isTrue);
+
+    await tester.tap(find.byKey(const Key('meeting_stop')));
+    await tester.pump();
+    expect(hub.stops, 1);
+
+    // The runtime answers a stop with its own state change; without it the
+    // panel would keep rendering a session that no longer exists.
+    hub.eventsController.add(
+      const NativeEventMeetingStateChanged(
+        value: MeetingStateChanged(active: false, suggestedTitle: null),
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+    expect(find.byKey(const Key('meeting_assist_panel')), findsNothing);
+    expect(services.meetingActive, isFalse);
+  });
 }
 
 final class _RecordingMeetingHub implements NativeHub, MeetingHub {

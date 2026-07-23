@@ -17,6 +17,7 @@ import '../providers/providers.dart';
 import '../settings/settings.dart';
 import '../ui/burst_glow.dart';
 import 'meeting_notes.dart';
+import 'meeting_notes_screen.dart';
 
 enum SettingsSection {
   account('Account', Icons.person_outline_rounded),
@@ -226,6 +227,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
         EventKitProactiveSyncTile(previewMode: previewMode),
       ],
       SettingsSection.advanced => [
+        _ActionTile(
+          key: const Key('settings_meeting_notes'),
+          icon: Icons.sticky_note_2_outlined,
+          title: 'Meeting notes',
+          detail:
+              'Read, copy, or delete the notes Omi wrote after your meetings.',
+          onTap: _openMeetingNotes,
+        ),
         if (previewMode || !services.canUseApi)
           const _InfoTile(
             icon: Icons.shield_outlined,
@@ -238,6 +247,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
           _ProductionHealthTile(client: services.settings!),
       ],
     };
+  }
+
+  void _openMeetingNotes() {
+    if (!mounted) return;
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (context) => MeetingNotesScreen(services: widget.services),
+        fullscreenDialog: true,
+      ),
+    );
   }
 
   /// The orb click streak that reveals "Omi in numbers". Clicks have to land
@@ -674,6 +693,44 @@ class _InfoTile extends StatelessWidget {
     detail: detail,
     trailing: const SizedBox.shrink(),
   );
+}
+
+class _ActionTile extends StatelessWidget {
+  const _ActionTile({
+    required this.icon,
+    required this.title,
+    required this.detail,
+    required this.onTap,
+    super.key,
+  });
+
+  final IconData icon;
+  final String title;
+  final String detail;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = _SettingsColors.of(context);
+    return Material(
+      type: MaterialType.transparency,
+      child: InkWell(
+        // The entire row is the button; nothing on the right is separately
+        // tappable, so the target always spans the full row.
+        onTap: onTap,
+        child: _Tile(
+          icon: icon,
+          title: title,
+          detail: detail,
+          trailing: Icon(
+            Icons.chevron_right_rounded,
+            size: 18,
+            color: colors.muted,
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class _StateTile extends StatelessWidget {
