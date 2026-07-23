@@ -9,6 +9,7 @@
 
 pub mod auth;
 pub mod entitlement;
+pub mod routes_memory;
 pub mod setup_health;
 
 #[cfg(target_arch = "wasm32")]
