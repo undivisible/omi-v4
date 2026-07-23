@@ -24,7 +24,9 @@ import '../native/native_hub.dart';
 import '../onboarding/hub_checklist.dart';
 import '../ui/markdown_text.dart';
 import '../ui/omi_ui.dart';
+import 'cursor_pill_controller.dart' show CombinedVoiceLevel;
 import 'hub_task_meta.dart';
+import 'in_app_voice_view.dart';
 import 'tasks_screen.dart';
 
 class ChatScreen extends StatefulWidget {

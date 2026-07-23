@@ -281,6 +281,123 @@ void main() {
     await hub.close();
   });
 
+  test('mic frames are muted while the assistant is playing out and reopen '
+      'after the hangover', () async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(_playoutChannel, (call) async {
+          return call.method == 'feed' ? 0 : null;
+        });
+    var now = DateTime.fromMillisecondsSinceEpoch(1000000);
+    final hub = _LiveHub();
+    addTearDown(hub.close);
+    final mic = StreamController<Uint8List>();
+    addTearDown(mic.close);
+    final capture = LiveVoiceCapture(
+      hub: hub,
+      startAudio: () async => mic.stream,
+      stopAudio: () async {},
+      disposeAudio: () async {},
+      permissionCheck: () async => true,
+      playbackHangover: const Duration(milliseconds: 300),
+      clock: () => now,
+    );
+    final started = capture.start(
+      ephemeralToken: 'auth_tokens/fake',
+      model: 'gemini-live-test',
+      authorityId: 'g1',
+    );
+    await hub.startedStream();
+    hub.emitState(LiveVoicePhase.started);
+    await started;
+
+    final frame = Uint8List.fromList(
+      List.generate(320, (i) => i.isEven ? 0x00 : 0x40),
+    );
+
+    // Before any playback the mic streams normally.
+    mic.add(frame);
+    await pumpEventQueue();
+    expect(hub.sentAudio, hasLength(1));
+
+    // 1000 frames of 16kHz PCM16 = 100ms of playout; with the 300ms hangover
+    // the guard mutes the mic until 400ms from now.
+    hub.emitAudio(List<int>.filled(3200, 1), sampleRateHz: 16000);
+    await pumpEventQueue();
+    mic.add(frame);
+    await pumpEventQueue();
+    expect(hub.sentAudio, hasLength(1), reason: 'muted during playback');
+
+    // Still inside the hangover window.
+    now = now.add(const Duration(milliseconds: 350));
+    mic.add(frame);
+    await pumpEventQueue();
+    expect(hub.sentAudio, hasLength(1), reason: 'muted during hangover');
+
+    // Past the playback tail plus hangover: the mic reopens.
+    now = now.add(const Duration(milliseconds: 100));
+    mic.add(frame);
+    await pumpEventQueue();
+    expect(hub.sentAudio, hasLength(2), reason: 'reopened after hangover');
+
+    hub.emitState(LiveVoicePhase.ended);
+    await pumpEventQueue();
+    await capture.stop();
+    await capture.dispose();
+  });
+
+  test('a barge-in interrupt releases the mic guard immediately', () async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(_playoutChannel, (call) async {
+          return call.method == 'feed' ? 0 : null;
+        });
+    final now = DateTime.fromMillisecondsSinceEpoch(1000000);
+    final hub = _LiveHub();
+    addTearDown(hub.close);
+    final mic = StreamController<Uint8List>();
+    addTearDown(mic.close);
+    final capture = LiveVoiceCapture(
+      hub: hub,
+      startAudio: () async => mic.stream,
+      stopAudio: () async {},
+      disposeAudio: () async {},
+      permissionCheck: () async => true,
+      playbackHangover: const Duration(seconds: 5),
+      clock: () => now,
+    );
+    final started = capture.start(
+      ephemeralToken: 'auth_tokens/fake',
+      model: 'gemini-live-test',
+      authorityId: 'g1',
+    );
+    await hub.startedStream();
+    hub.emitState(LiveVoicePhase.started);
+    await started;
+
+    final frame = Uint8List.fromList(
+      List.generate(320, (i) => i.isEven ? 0x00 : 0x40),
+    );
+    hub.emitAudio(List<int>.filled(3200, 1), sampleRateHz: 16000);
+    await pumpEventQueue();
+    mic.add(frame);
+    await pumpEventQueue();
+    expect(hub.sentAudio, isEmpty, reason: 'muted while playing');
+
+    // An interrupt drops the queued audio, so the guard must lift at once even
+    // though the (long) hangover has not elapsed on the frozen clock.
+    hub.emitState(LiveVoicePhase.interrupted);
+    await pumpEventQueue();
+    mic.add(frame);
+    await pumpEventQueue();
+    expect(hub.sentAudio, hasLength(1), reason: 'reopened on interrupt');
+
+    hub.emitState(LiveVoicePhase.ended);
+    await pumpEventQueue();
+    await capture.stop();
+    await capture.dispose();
+  });
+
   test('non-macOS platforms never touch the playout channel', () async {
     debugDefaultTargetPlatformOverride = TargetPlatform.linux;
     final calls = <MethodCall>[];
@@ -354,6 +471,19 @@ final class _LiveHub implements NativeHub, LiveVoiceHub {
           text: text,
           finalSegment: finalSegment,
           assistant: assistant,
+        ),
+      ),
+    );
+  }
+
+  void emitAudio(List<int> bytes, {required int sampleRateHz}) {
+    _events.add(
+      NativeEventLiveVoiceAudio(
+        value: LiveVoiceAudio(
+          liveStreamId: streamId!,
+          sequence: Uint64.fromBigInt(BigInt.zero),
+          sampleRateHz: sampleRateHz,
+          bytes: bytes,
         ),
       ),
     );

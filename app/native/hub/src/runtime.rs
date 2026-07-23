@@ -1493,12 +1493,35 @@ async fn local_memory_context(
     });
     match await_blocking(task, cancellation).await {
         BlockingOutcome::Complete(pack) => {
-            let lines: Vec<String> = pack
-                .items
-                .into_iter()
-                .filter(|item| matches!(item.memory, MemoryRef::Claim(_)))
-                .map(|item| format!("- {}", item.excerpt))
-                .collect();
+            // Distilled claims are the better context, but on-device memory is
+            // mostly raw evidence: the onboarding scan and every capture store
+            // `claim: None`, and claim extraction only runs when a local model
+            // is available. Returning claims only therefore handed the model an
+            // empty context on a database full of the user's own material —
+            // the "I don't have access to personal data about you" reply. Fall
+            // back to the evidence the same ranked search already produced.
+            let mut distilled: Vec<String> = Vec::new();
+            let mut evidence: Vec<String> = Vec::new();
+            for item in pack.items {
+                let excerpt = item.excerpt.trim();
+                if excerpt.is_empty() {
+                    continue;
+                }
+                let line = format!("- {excerpt}");
+                match item.memory {
+                    MemoryRef::Claim(_) | MemoryRef::DailyReview(_) => distilled.push(line),
+                    MemoryRef::Evidence(_) | MemoryRef::Source(_) => evidence.push(line),
+                    // Profile entries already reach the prompt through
+                    // `local_profile_context`; repeating them only spends
+                    // context budget.
+                    MemoryRef::ProfileEntry(_) => {}
+                }
+            }
+            let lines = if distilled.is_empty() {
+                evidence
+            } else {
+                distilled
+            };
             if lines.is_empty() {
                 None
             } else {
@@ -2132,6 +2155,35 @@ async fn scan_onboarding(
             } else {
                 None
             };
+            // The scan stored raw evidence only; persist the derived identity as
+            // claims + profiles so the assistant actually knows the user.
+            let configured_memory = state.lock().await.memory.clone();
+            if let Some(memory) = configured_memory {
+                let name = detected_name.clone();
+                let languages = detected_languages.clone();
+                let summary = summary.clone();
+                let ingest = spawn_blocking(move || {
+                    let mut memory = memory
+                        .lock()
+                        .map_err(|_| "memory database lock was poisoned".to_owned())?;
+                    ingest_onboarding_profile(
+                        &mut memory,
+                        name.as_deref(),
+                        &languages,
+                        summary.as_deref(),
+                        recorded_at_ms,
+                    )
+                });
+                if let BlockingOutcome::Failed(message) = await_blocking(ingest, cancellation).await
+                {
+                    error(
+                        Some(request_id.to_owned()),
+                        "onboarding_profile_ingest_failed",
+                        &message,
+                        true,
+                    );
+                }
+            }
             NativeEvent::OnboardingScanCompleted(OnboardingScanCompleted {
                 request_id: request_id.to_owned(),
                 sources,
@@ -2492,6 +2544,97 @@ fn spawn_transcript_extraction(
         })
         .await;
     });
+}
+
+/// Persists the identity derived from the onboarding scan so the assistant can
+/// answer "what do you know about me". The scan itself stores raw evidence with
+/// `claim: None`, which neither `local_profile_context` (profiles) nor
+/// `local_memory_context` (claims) ever surfaces — leaving the memory database
+/// empty for retrieval and the model with nothing to say. The detected name and
+/// languages become profile facts; the AI summary is kept as a retrievable
+/// long-term claim. Stable ingestion keys make a re-scan update in place rather
+/// than duplicate.
+fn ingest_onboarding_profile(
+    memory: &mut MemoryContext,
+    detected_name: Option<&str>,
+    detected_languages: &[String],
+    summary: Option<&str>,
+    recorded_at_ms: i64,
+) -> Result<usize, String> {
+    let mut stored = 0;
+    let mut profile_facts: Vec<(&str, String)> = Vec::new();
+    if let Some(name) = detected_name
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        profile_facts.push(("name", name.to_owned()));
+    }
+    if !detected_languages.is_empty() {
+        profile_facts.push(("languages", detected_languages.join(", ")));
+    }
+    for (predicate, value) in profile_facts {
+        let remembered = memory
+            .database
+            .remember(RememberInput {
+                tenant_id: memory.tenant_id.clone(),
+                person_id: memory.person_id.clone(),
+                ingestion_key: Some(format!("onboarding-profile:{predicate}")),
+                kind: SourceKind::Integration,
+                text: format!("{predicate}: {value}"),
+                captured_at: recorded_at_ms,
+                recorded_at: recorded_at_ms,
+                claim: Some(zkr::ClaimInput {
+                    subject: "user".to_owned(),
+                    predicate: predicate.to_owned(),
+                    value,
+                    kind: zkr::ClaimKind::ProfileFact,
+                    valid_from: recorded_at_ms,
+                    tier: zkr::MemoryTier::LongTerm,
+                    processing_state: zkr::MemoryProcessingState::Processed,
+                }),
+            })
+            .map_err(|error_value| error_value.to_string())?;
+        if let Some(claim_id) = remembered.claim_id {
+            memory
+                .database
+                .store_profile(zkr::ProfileInput {
+                    tenant_id: memory.tenant_id.clone(),
+                    person_id: memory.person_id.clone(),
+                    stability: zkr::ProfileStability::Current,
+                    claim_id,
+                    recorded_at: recorded_at_ms,
+                })
+                .map_err(|error_value| error_value.to_string())?;
+            stored += 1;
+        }
+    }
+    if let Some(summary) = summary.map(str::trim).filter(|value| !value.is_empty()) {
+        let remembered = memory
+            .database
+            .remember(RememberInput {
+                tenant_id: memory.tenant_id.clone(),
+                person_id: memory.person_id.clone(),
+                ingestion_key: Some("onboarding-profile:summary".to_owned()),
+                kind: SourceKind::Integration,
+                text: summary.to_owned(),
+                captured_at: recorded_at_ms,
+                recorded_at: recorded_at_ms,
+                claim: Some(zkr::ClaimInput {
+                    subject: "user".to_owned(),
+                    predicate: "summary".to_owned(),
+                    value: summary.chars().take(280).collect(),
+                    kind: zkr::ClaimKind::Fact,
+                    valid_from: recorded_at_ms,
+                    tier: zkr::MemoryTier::LongTerm,
+                    processing_state: zkr::MemoryProcessingState::Processed,
+                }),
+            })
+            .map_err(|error_value| error_value.to_string())?;
+        if remembered.claim_id.is_some() {
+            stored += 1;
+        }
+    }
+    Ok(stored)
 }
 
 fn store_candidate_claims(
@@ -5971,6 +6114,176 @@ mod tests {
         assert!(captured.contains("Acme"));
         assert!(captured.ends_with("\n\nwhere do I work?"));
         state.lock().await.memory = None;
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn evidence_only_memory_still_reaches_every_assistant_route() {
+        // The state the user actually had: onboarding and every capture write
+        // evidence with `claim: None`, so the database holds their material
+        // but not a single claim. Retrieval used to discard all of it and the
+        // model answered that it knew nothing about them.
+        let path = std::env::temp_dir().join(format!(
+            "omi-v4-evidence-context-{}-{}.sqlite3",
+            std::process::id(),
+            unix_time_ms()
+        ));
+        let mut memory = MemoryContext {
+            database: MemoryDb::open(&path)
+                .unwrap_or_else(|error_value| panic!("memory opens: {error_value}")),
+            tenant_id: TenantId::new("user-a")
+                .unwrap_or_else(|error_value| panic!("valid tenant: {error_value}")),
+            person_id: PersonId::new("user-a")
+                .unwrap_or_else(|error_value| panic!("valid person: {error_value}")),
+        };
+        memory
+            .database
+            .remember(RememberInput {
+                tenant_id: memory.tenant_id.clone(),
+                person_id: memory.person_id.clone(),
+                ingestion_key: Some("onboarding-profile-1".to_owned()),
+                kind: SourceKind::Conversation,
+                text: "The user's name is Max. They speak English, Russian.".to_owned(),
+                captured_at: 10,
+                recorded_at: 10,
+                claim: None,
+            })
+            .unwrap_or_else(|error_value| panic!("evidence is seeded: {error_value}"));
+        let state = Arc::new(Mutex::new(RuntimeState {
+            memory: Some(Arc::new(StdMutex::new(memory))),
+            configuration_generation: 1,
+            authority_uid: Some("user-a".to_owned()),
+            ..RuntimeState::default()
+        }));
+        let cancellation = CancellationToken::new();
+        // Both live routes — the signed-in managed worker and the signed-out
+        // developer Gemini key — build their prompt here, so proving it once
+        // per provider proves it for both.
+        for (request_id, kind) in [
+            ("chat-worker-1", AssistantProviderKind::Worker),
+            ("chat-gemini-1", AssistantProviderKind::Gemini),
+        ] {
+            // Neither route asks the client for context: `memory_context` is
+            // `None` below exactly as `Command::SendMessage` delivers it, so
+            // whatever the prompt carries came from the hub's own assembly.
+            assert!(matches!(
+                kind,
+                AssistantProviderKind::Worker | AssistantProviderKind::Gemini
+            ));
+            let prompt = Arc::new(StdMutex::new(None));
+            let provider: Arc<dyn AssistantProvider> = Arc::new(CapturingAssistantProvider {
+                prompt: Arc::clone(&prompt),
+            });
+            dispatch_assistant(
+                request_id,
+                state.as_ref(),
+                provider,
+                "what is my name?".to_owned(),
+                None,
+                false,
+                &cancellation,
+                None,
+            )
+            .await;
+            let captured = prompt
+                .lock()
+                .unwrap_or_else(|failure| failure.into_inner())
+                .clone()
+                .unwrap_or_else(|| panic!("provider receives a prompt"));
+            assert!(captured.starts_with("Relevant things you know about the user:\n"));
+            assert!(captured.contains("Max"));
+            assert!(captured.contains("Russian"));
+            assert!(captured.ends_with("\n\nwhat is my name?"));
+        }
+        state.lock().await.memory = None;
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn onboarding_profile_ingestion_makes_the_assistant_know_the_user() {
+        let path = std::env::temp_dir().join(format!(
+            "omi-v4-onboarding-{}-{}.sqlite3",
+            std::process::id(),
+            unix_time_ms()
+        ));
+        let mut memory = MemoryContext {
+            database: MemoryDb::open(&path)
+                .unwrap_or_else(|error_value| panic!("memory opens: {error_value}")),
+            tenant_id: TenantId::new("user-a")
+                .unwrap_or_else(|error_value| panic!("valid tenant: {error_value}")),
+            person_id: PersonId::new("user-a")
+                .unwrap_or_else(|error_value| panic!("valid person: {error_value}")),
+        };
+        // A fresh database — exactly the state that produced "I don't have
+        // access to personal data about you" — surfaces no profile at all.
+        let cancellation = CancellationToken::new();
+        let empty_state = Arc::new(Mutex::new(RuntimeState {
+            memory: Some(Arc::new(StdMutex::new(MemoryContext {
+                database: MemoryDb::open(&path)
+                    .unwrap_or_else(|error_value| panic!("memory reopens: {error_value}")),
+                tenant_id: TenantId::new("user-a")
+                    .unwrap_or_else(|error_value| panic!("valid tenant: {error_value}")),
+                person_id: PersonId::new("user-a")
+                    .unwrap_or_else(|error_value| panic!("valid person: {error_value}")),
+            }))),
+            ..RuntimeState::default()
+        }));
+        assert!(
+            local_profile_context(empty_state.as_ref(), &cancellation)
+                .await
+                .is_none()
+        );
+
+        let stored = ingest_onboarding_profile(
+            &mut memory,
+            Some("Max"),
+            &["English".to_owned(), "Russian".to_owned()],
+            Some("Works on the hub rewrite and prefers concise answers."),
+            1_000,
+        )
+        .unwrap_or_else(|error_value| panic!("ingest: {error_value}"));
+        assert_eq!(stored, 3);
+
+        let state = Arc::new(Mutex::new(RuntimeState {
+            memory: Some(Arc::new(StdMutex::new(memory))),
+            configuration_generation: 1,
+            authority_uid: Some("user-a".to_owned()),
+            ..RuntimeState::default()
+        }));
+        let profile = local_profile_context(state.as_ref(), &cancellation)
+            .await
+            .unwrap_or_else(|| panic!("profile context is present after ingestion"));
+        assert!(profile.lines.contains("Max"));
+        assert!(profile.lines.contains("Russian"));
+
+        // End to end: the identity now reaches the model's prompt.
+        let prompt = Arc::new(StdMutex::new(None));
+        let provider: Arc<dyn AssistantProvider> = Arc::new(CapturingAssistantProvider {
+            prompt: Arc::clone(&prompt),
+        });
+        dispatch_assistant(
+            "chat-onboarding-1",
+            state.as_ref(),
+            provider,
+            "what do you know about me?".to_owned(),
+            None,
+            false,
+            &cancellation,
+            None,
+        )
+        .await;
+        let captured = prompt
+            .lock()
+            .unwrap_or_else(|failure| failure.into_inner())
+            .clone()
+            .unwrap_or_else(|| panic!("provider receives a prompt"));
+        assert!(captured.starts_with("Relevant things you know about the user:\n"));
+        assert!(captured.contains("Max"));
+        assert!(captured.contains("Russian"));
+        assert!(captured.ends_with("\n\nwhat do you know about me?"));
+
+        state.lock().await.memory = None;
+        empty_state.lock().await.memory = None;
         let _ = std::fs::remove_file(path);
     }
 

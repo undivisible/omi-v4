@@ -16,13 +16,25 @@ final class LiveVoiceCapture {
     this.permissionCheck,
     this.startTimeout = const Duration(seconds: 12),
     this.stopTimeout = const Duration(seconds: 5),
-  });
+    this.playbackHangover = const Duration(milliseconds: 320),
+    DateTime Function()? clock,
+  }) : _now = clock ?? DateTime.now;
 
   static const sampleRateHz = 16000;
 
   final NativeHub hub;
   final Duration startTimeout;
   final Duration stopTimeout;
+
+  /// How long after the assistant's playback drains the microphone stays
+  /// muted, covering the utterance tail and room reverb the mic would
+  /// otherwise re-capture.
+  final Duration playbackHangover;
+
+  /// Injectable wall clock so the half-duplex gate can be tested
+  /// deterministically.
+  final DateTime Function() _now;
+
   final Future<bool> Function()? permissionCheck;
   AudioRecorder? _recorder;
   final DesktopAudioStart? _startAudio;
@@ -165,6 +177,14 @@ final class LiveVoiceCapture {
     final session = _session;
     if (session == null || session.stopping || bytes.isEmpty) return;
     level.value = pcm16Rms(bytes);
+    // Half-duplex echo guard. The record plugin captures the raw input node
+    // with no acoustic echo cancellation, so while the assistant's own TTS is
+    // playing out the speakers (plus a short hangover) the microphone is also
+    // picking that playback up. Forwarding it lets the model hear itself and
+    // re-respond — the audible "cuts out, then repeats" loop. Drop outbound
+    // mic frames until playback has drained; the level still moves so the
+    // waveform stays alive.
+    if (_now().isBefore(session.suppressOutboundUntil)) return;
     hub.sendAudio(
       requestId: session.streamId,
       sequence: session.sequence++,
@@ -185,6 +205,11 @@ final class LiveVoiceCapture {
         case LiveVoicePhase.started:
           if (!session.started.isCompleted) session.started.complete();
         case LiveVoicePhase.interrupted:
+          // The turn was cut: its queued audio is dropped, so the echo guard
+          // must release at once or the mic would stay muted with nothing
+          // playing.
+          session.playbackEndsAt = _epoch;
+          session.suppressOutboundUntil = _epoch;
           session.playoutOps = session.playoutOps.then(
             (_) => session.playout.flush(),
           );
@@ -284,6 +309,10 @@ final class LiveVoiceCapture {
 
   void _playOutput(_LiveVoiceSession session, LiveVoiceAudio chunk) {
     final bytes = Uint8List.fromList(chunk.bytes);
+    // PCM16 mono: two bytes per frame, frames / rate seconds of playback.
+    final chunkMs = chunk.sampleRateHz > 0
+        ? (bytes.length ~/ 2) * 1000 ~/ chunk.sampleRateHz
+        : 0;
     session.playoutOps = session.playoutOps.then((_) async {
       final played =
           _session == session &&
@@ -291,7 +320,22 @@ final class LiveVoiceCapture {
             sampleRateHz: chunk.sampleRateHz,
             bytes: bytes,
           );
-      if (!played) _discardedOutputBytes += bytes.length;
+      if (played) {
+        // Only audio that actually reaches the speakers can echo back into
+        // the mic, so only real playback arms the half-duplex guard. Chunks
+        // queue faster than realtime; track a running playback-end time so
+        // the mute window spans the whole queued backlog, not just one chunk.
+        final now = _now();
+        final base = session.playbackEndsAt.isAfter(now)
+            ? session.playbackEndsAt
+            : now;
+        session.playbackEndsAt = base.add(Duration(milliseconds: chunkMs));
+        session.suppressOutboundUntil = session.playbackEndsAt.add(
+          playbackHangover,
+        );
+      } else {
+        _discardedOutputBytes += bytes.length;
+      }
     });
   }
 
@@ -334,10 +378,17 @@ final class LiveVoiceCapture {
   }
 }
 
+final _epoch = DateTime.fromMillisecondsSinceEpoch(0);
+
 final class _LiveVoiceSession {
   _LiveVoiceSession(this.streamId);
 
   final String streamId;
+  // Half-duplex echo guard state. [playbackEndsAt] is the running wall-clock
+  // time the queued assistant audio finishes; [suppressOutboundUntil] adds the
+  // hangover and is what gates the microphone.
+  DateTime playbackEndsAt = _epoch;
+  DateTime suppressOutboundUntil = _epoch;
   String get startRequestId => 'start-$streamId';
   String get stopRequestId => 'stop-$streamId';
   final started = Completer<void>();
