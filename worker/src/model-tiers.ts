@@ -5,10 +5,10 @@
 //
 // | Tier       | When                                                      | Default model         | Provider |
 // |------------|-----------------------------------------------------------|-----------------------|----------|
-// | speed      | latency-sensitive: live insights, classification, answers | gemini-3.1-flash-lite | Gemini   |
-// | balanced   | default (~80%): meeting notes, general chat               | mimo-v2.5-balanced    | MiMo     |
-// | smart      | hard reasoning                                            | mimo-v2.5-pro         | MiMo     |
-// | multimodal | vision / visual computer-use                              | gemini-3.6-flash      | Gemini   |
+// | speed      | latency-sensitive: live insights, classification, answers | google/google/gemini-3.1-flash-lite | Gemini   |
+// | balanced   | default (~80%): meeting notes, general chat               | xiaomi/mimo-v2.5          | MiMo     |
+// | smart      | hard reasoning                                            | xiaomi/xiaomi/mimo-v2.5-pro           | MiMo     |
+// | multimodal | vision / visual computer-use                              | google/google/gemini-3.6-flash         | Gemini   |
 //
 // The default ids are best-effort and may need correcting against the real
 // provider APIs; that is why they are env-overridable rather than hardcoded.
@@ -18,10 +18,10 @@ import type { Bindings } from "./types";
 export type ModelTier = "speed" | "balanced" | "smart" | "multimodal";
 
 export const defaultTierModels: Record<ModelTier, string> = {
-  speed: "gemini-3.1-flash-lite",
-  balanced: "mimo-v2.5-balanced",
-  smart: "mimo-v2.5-pro",
-  multimodal: "gemini-3.6-flash",
+  speed: "google/google/gemini-3.1-flash-lite",
+  balanced: "xiaomi/mimo-v2.5",
+  smart: "xiaomi/xiaomi/mimo-v2.5-pro",
+  multimodal: "google/google/gemini-3.6-flash",
 };
 
 const tierEnvVar: Record<ModelTier, keyof Bindings> = {

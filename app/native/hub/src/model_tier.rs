@@ -5,23 +5,23 @@
 //!
 //! | Tier         | When                                                      | Default model           | Provider |
 //! |--------------|-----------------------------------------------------------|-------------------------|----------|
-//! | `speed`      | latency-sensitive: live insights, classification, answers | `gemini-3.1-flash-lite` | Gemini   |
-//! | `balanced`   | default (~80%): meeting notes, general chat               | `mimo-v2.5-balanced`    | MiMo     |
-//! | `smart`      | hard reasoning                                            | `mimo-v2.5-pro`         | MiMo     |
-//! | `multimodal` | vision / visual computer-use                              | `gemini-3.6-flash`      | Gemini   |
+//! | `speed`      | latency-sensitive: live insights, classification, answers | google/gemini-3.1-flash-lite | Gemini   |
+//! | `balanced`   | default (~80%): meeting notes, general chat               | xiaomi/mimo-v2.5    | MiMo     |
+//! | `smart`      | hard reasoning                                            | xiaomi/mimo-v2.5-pro         | MiMo     |
+//! | `multimodal` | vision / visual computer-use                              | google/gemini-3.6-flash      | Gemini   |
 //!
 //! The default ids are best-effort and may need correcting against the real
 //! provider APIs; that is exactly why they are env-overridable rather than
 //! hardcoded at call sites.
 
 /// SPEED tier default: latency-sensitive live insights and answer suggestions.
-pub(crate) const DEFAULT_SPEED_MODEL: &str = "gemini-3.1-flash-lite";
+pub(crate) const DEFAULT_SPEED_MODEL: &str = "google/google/gemini-3.1-flash-lite";
 /// BALANCED tier default: the everyday model for meeting notes and chat.
-pub(crate) const DEFAULT_BALANCED_MODEL: &str = "mimo-v2.5-balanced";
+pub(crate) const DEFAULT_BALANCED_MODEL: &str = "xiaomi/mimo-v2.5";
 /// SMART tier default: reserved for hard reasoning.
-pub(crate) const DEFAULT_SMART_MODEL: &str = "mimo-v2.5-pro";
+pub(crate) const DEFAULT_SMART_MODEL: &str = "xiaomi/xiaomi/mimo-v2.5-pro";
 /// MULTIMODAL tier default: vision and visual computer-use.
-pub(crate) const DEFAULT_MULTIMODAL_MODEL: &str = "gemini-3.6-flash";
+pub(crate) const DEFAULT_MULTIMODAL_MODEL: &str = "google/google/gemini-3.6-flash";
 
 // The hub resolves the SPEED tier directly (its dev Gemini fallback); the
 // BALANCED model reaches meeting notes through the configured provider rather

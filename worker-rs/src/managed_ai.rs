@@ -28,22 +28,22 @@ pub const XIAOMI_HOSTNAME: &str = "token-plan-sgp.xiaomimimo.com";
 //
 // | Tier       | When                                                      | Default model         | Provider |
 // |------------|-----------------------------------------------------------|-----------------------|----------|
-// | speed      | latency-sensitive: live insights, classification, answers | gemini-3.1-flash-lite | Gemini   |
-// | balanced   | default (~80%): meeting notes, general chat               | mimo-v2.5-balanced    | MiMo     |
-// | smart      | hard reasoning                                            | mimo-v2.5-pro         | MiMo     |
-// | multimodal | vision / visual computer-use                              | gemini-3.6-flash      | Gemini   |
+// | speed      | latency-sensitive: live insights, classification, answers | google/google/gemini-3.1-flash-lite | Gemini   |
+// | balanced   | default (~80%): meeting notes, general chat               | xiaomi/mimo-v2.5          | MiMo     |
+// | smart      | hard reasoning                                            | xiaomi/xiaomi/mimo-v2.5-pro           | MiMo     |
+// | multimodal | vision / visual computer-use                              | google/google/gemini-3.6-flash         | Gemini   |
 //
 // The default ids are best-effort and may need correcting against the real
 // provider APIs; that is why they are env-overridable rather than hardcoded.
 
 /// SPEED tier default: latency-sensitive live insights and answer suggestions.
-pub const DEFAULT_SPEED_MODEL: &str = "gemini-3.1-flash-lite";
+pub const DEFAULT_SPEED_MODEL: &str = "google/google/gemini-3.1-flash-lite";
 /// BALANCED tier default: the everyday model for meeting notes and chat.
-pub const DEFAULT_BALANCED_MODEL: &str = "mimo-v2.5-balanced";
+pub const DEFAULT_BALANCED_MODEL: &str = "xiaomi/mimo-v2.5";
 /// SMART tier default: reserved for hard reasoning.
-pub const DEFAULT_SMART_MODEL: &str = "mimo-v2.5-pro";
+pub const DEFAULT_SMART_MODEL: &str = "xiaomi/xiaomi/mimo-v2.5-pro";
 /// MULTIMODAL tier default: vision and visual computer-use.
-pub const DEFAULT_MULTIMODAL_MODEL: &str = "gemini-3.6-flash";
+pub const DEFAULT_MULTIMODAL_MODEL: &str = "google/google/gemini-3.6-flash";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ModelTier {
@@ -376,7 +376,7 @@ mod tests {
 
     fn valid() -> Value {
         json!({
-            "model": "mimo-v2.5-pro",
+            "model": "xiaomi/mimo-v2.5-pro",
             "messages": [{ "role": "user", "content": "Remember this safely." }],
             "stream": true,
             "max_tokens": 256,
@@ -424,12 +424,12 @@ mod tests {
     #[test]
     fn parses_the_captured_streaming_shape_and_defaults_max_tokens() {
         let body = json!({
-            "model": "mimo-v2.5-pro",
+            "model": "xiaomi/mimo-v2.5-pro",
             "messages": [{ "role": "user", "content": "hello" }],
             "stream": true,
             "stream_options": { "include_usage": true }
         });
-        let parsed = parse_request(&body, "mimo-v2.5-pro").unwrap();
+        let parsed = parse_request(&body, "xiaomi/mimo-v2.5-pro").unwrap();
         assert_eq!(parsed.max_tokens, DEFAULT_OUTPUT_TOKENS);
         let upstream = upstream_body(&parsed);
         assert_eq!(upstream["max_tokens"], json!(1024));
@@ -454,41 +454,41 @@ mod tests {
         let base = valid();
         let mut with_api_key = base.as_object().unwrap().clone();
         with_api_key.insert("api_key".into(), json!("user-key"));
-        assert!(parse_request(&Value::Object(with_api_key), "mimo-v2.5-pro").is_none());
+        assert!(parse_request(&Value::Object(with_api_key), "xiaomi/mimo-v2.5-pro").is_none());
 
         let mut base_url = base.as_object().unwrap().clone();
         base_url.insert("base_url".into(), json!("https://user.example"));
-        assert!(parse_request(&Value::Object(base_url), "mimo-v2.5-pro").is_none());
+        assert!(parse_request(&Value::Object(base_url), "xiaomi/mimo-v2.5-pro").is_none());
 
         let mut other_model = base.as_object().unwrap().clone();
         other_model.insert("model".into(), json!("other"));
-        assert!(parse_request(&Value::Object(other_model), "mimo-v2.5-pro").is_none());
+        assert!(parse_request(&Value::Object(other_model), "xiaomi/mimo-v2.5-pro").is_none());
 
         let mut not_stream = base.as_object().unwrap().clone();
         not_stream.insert("stream".into(), json!(false));
-        assert!(parse_request(&Value::Object(not_stream), "mimo-v2.5-pro").is_none());
+        assert!(parse_request(&Value::Object(not_stream), "xiaomi/mimo-v2.5-pro").is_none());
 
         let mut too_many = base.as_object().unwrap().clone();
         too_many.insert("max_tokens".into(), json!(4097));
-        assert!(parse_request(&Value::Object(too_many), "mimo-v2.5-pro").is_none());
+        assert!(parse_request(&Value::Object(too_many), "xiaomi/mimo-v2.5-pro").is_none());
 
         let mut no_usage = base.as_object().unwrap().clone();
         no_usage.insert("stream_options".into(), json!({ "include_usage": false }));
-        assert!(parse_request(&Value::Object(no_usage), "mimo-v2.5-pro").is_none());
+        assert!(parse_request(&Value::Object(no_usage), "xiaomi/mimo-v2.5-pro").is_none());
 
         let mut extra_opt = base.as_object().unwrap().clone();
         extra_opt.insert(
             "stream_options".into(),
             json!({ "include_usage": true, "extra": true }),
         );
-        assert!(parse_request(&Value::Object(extra_opt), "mimo-v2.5-pro").is_none());
+        assert!(parse_request(&Value::Object(extra_opt), "xiaomi/mimo-v2.5-pro").is_none());
 
         let mut tool_role = base.as_object().unwrap().clone();
         tool_role.insert(
             "messages".into(),
             json!([{ "role": "tool", "content": "unsafe" }]),
         );
-        assert!(parse_request(&Value::Object(tool_role), "mimo-v2.5-pro").is_none());
+        assert!(parse_request(&Value::Object(tool_role), "xiaomi/mimo-v2.5-pro").is_none());
     }
 
     #[test]
