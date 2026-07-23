@@ -8,10 +8,10 @@ import '../currents/currents.dart';
 import '../keyboard/shift_gesture.dart';
 import '../native/native_hub.dart';
 import 'cursor_pill_window.dart';
-import 'overlay_commands.dart';
+import 'overlay_launcher.dart';
 import 'voice_intents.dart';
 
-enum CursorPillState { hidden, input, listening }
+enum CursorPillState { hidden, input, listening, working }
 
 final class CombinedVoiceLevel extends ChangeNotifier
     implements ValueListenable<double> {
@@ -216,8 +216,11 @@ final class CursorPillController extends ChangeNotifier {
     this._currents,
     this._draft,
     this._automate,
+    this._openApp,
+    this._decideProposal,
     this.draftTimeout = const Duration(milliseconds: 2500),
     this.emailLookupTimeout = const Duration(milliseconds: 800),
+    this.openFlashDuration = const Duration(milliseconds: 900),
   }) : _launchLink = launchLink ?? launcher.launchUrl,
        _requestId = requestId ?? _defaultRequestId,
        _now = now ?? DateTime.now {
@@ -235,7 +238,15 @@ final class CursorPillController extends ChangeNotifier {
       startVoice: services.startDesktopVoice,
       stopVoice: () async => (await services.stopDesktopVoice())?.text ?? '',
       cancelVoice: services.cancelDesktopVoice,
-      sendPrompt: (text) => services.sendChatMessage(text: text),
+      // Overlay submissions are agent instructions, not plain chat: the hub
+      // frames them so the model acts as the user's desktop agent.
+      sendPrompt: (text) =>
+          services.sendChatMessage(text: text, origin: MessageOrigin.overlay),
+      openApp: const OverlayAppLauncher().openApp,
+      decideProposal: (proposalId, decision) => services.decideChatApproval(
+        proposalId: proposalId,
+        decision: decision,
+      ),
       level: CombinedVoiceLevel([
         services.desktopVoice.level,
         services.liveVoice.level,
@@ -262,7 +273,7 @@ final class CursorPillController extends ChangeNotifier {
   final Future<void> Function() _startVoice;
   final Future<String> Function() _stopVoice;
   final Future<void> Function() _cancelVoice;
-  final Future<void> Function(String text) _sendPrompt;
+  final Future<String?> Function(String text) _sendPrompt;
   final VoidCallback? _openHub;
   final Future<bool> Function(Uri link) _launchLink;
   final Future<void> Function(bool centered)? _presentWindow;
@@ -275,8 +286,15 @@ final class CursorPillController extends ChangeNotifier {
   final CurrentsController? _currents;
   final Future<String?> Function(String prompt, Duration timeout)? _draft;
   final Future<void> Function(String currentId)? _automate;
+  final Future<String?> Function(String query)? _openApp;
+  final Future<void> Function(String proposalId, ApprovalDecision decision)?
+  _decideProposal;
   final Duration draftTimeout;
   final Duration emailLookupTimeout;
+
+  /// How long the "Opening …" confirmation lingers before the overlay
+  /// collapses after a deterministic launch.
+  final Duration openFlashDuration;
   Completer<List<MemorySearchItem>>? _emailLookup;
   String? _emailLookupRequestId;
 
@@ -289,10 +307,24 @@ final class CursorPillController extends ChangeNotifier {
   String? _searchRequestId;
   StreamSubscription<NativeEvent>? _subscription;
   bool _disposed = false;
+  String? _status;
+  String? _agentRequestId;
+  bool _sawAgentReply = false;
+  ActionProposal? _proposal;
+  int _workingEpoch = 0;
 
   CursorPillState get state => _state;
   List<PillSuggestion> get suggestions => _suggestions;
   String? get error => _error;
+
+  /// One-line live status while the overlay is working ("Opening Chrome…",
+  /// the current tool name/detail streamed by the hub).
+  String? get status => _status;
+
+  /// A pending action proposal from an overlay-initiated agent turn,
+  /// surfaced next to the overlay so approving is one click. The praefectus
+  /// approval flow stays authoritative: this only relays the decision.
+  ActionProposal? get proposal => _proposal;
 
   /// One-line status from the voice pipeline (e.g. a live-voice downgrade
   /// note), shown while listening.
@@ -300,6 +332,8 @@ final class CursorPillController extends ChangeNotifier {
 
   Future<void> handleGesture(ShiftGestureAction action) async {
     switch (action) {
+      case ShiftGestureAction.toggleVoice:
+        await doubleShift();
       case ShiftGestureAction.openOverlay:
         await toggleOverlay();
       case ShiftGestureAction.escape:
@@ -313,36 +347,54 @@ final class CursorPillController extends ChangeNotifier {
     }
   }
 
-  /// Both-Shift chord: the primary summon. From idle it opens the centered
-  /// text overlay; while any surface is up (overlay or voice) it dismisses,
-  /// exactly like Esc. The 500ms debounce guards against a bounced or
-  /// double-fired chord.
-  Future<void> doubleShift() => toggleOverlay();
-
-  /// Option+Space (or the menu-bar capture control): the secondary binding
-  /// for the same toggle as the double-shift chord — summon the centered
-  /// text overlay from idle, dismiss whatever surface is up otherwise.
-  Future<void> toggleOverlay() async {
-    final at = _now();
-    final last = _lastTransitionAt;
-    if (last != null && at.difference(last) < doubleShiftDebounce) return;
-    _lastTransitionAt = at;
+  /// Both-Shift chord: talk. From idle it starts listening immediately
+  /// (full-screen waveform); while any surface is up (voice or overlay) it
+  /// dismisses, exactly like Esc. The 500ms debounce guards against a
+  /// bounced or double-fired chord.
+  Future<void> doubleShift() async {
+    if (!_debounced()) return;
     switch (_state) {
       case CursorPillState.hidden:
-        await summon();
-      case CursorPillState.input || CursorPillState.listening:
+        await beginVoice();
+      case CursorPillState.input ||
+          CursorPillState.listening ||
+          CursorPillState.working:
         await dismissSurface();
     }
   }
 
-  /// The shared dismissal Esc and a second double-shift both perform: with
-  /// the overlay up it hides; while listening it stops voice and routes any
-  /// transcript (hub intent included); from idle it is a no-op.
+  /// Option+Space (or the menu-bar capture control): summon the centered
+  /// text overlay from idle, dismiss whatever surface is up otherwise.
+  Future<void> toggleOverlay() async {
+    if (!_debounced()) return;
+    switch (_state) {
+      case CursorPillState.hidden:
+        await summon();
+      case CursorPillState.input ||
+          CursorPillState.listening ||
+          CursorPillState.working:
+        await dismissSurface();
+    }
+  }
+
+  bool _debounced() {
+    final at = _now();
+    final last = _lastTransitionAt;
+    if (last != null && at.difference(last) < doubleShiftDebounce) {
+      return false;
+    }
+    _lastTransitionAt = at;
+    return true;
+  }
+
+  /// The shared dismissal Esc and a second chord both perform: with the
+  /// overlay up (typing or working) it hides; while listening it stops voice
+  /// and routes any transcript (hub intent included); from idle a no-op.
   Future<void> dismissSurface() async {
     switch (_state) {
       case CursorPillState.hidden:
         return;
-      case CursorPillState.input:
+      case CursorPillState.input || CursorPillState.working:
         await _hide();
       case CursorPillState.listening:
         await finishListening();
@@ -481,14 +533,108 @@ final class CursorPillController extends ChangeNotifier {
   Future<void> submit(String text) async {
     final normalized = text.trim();
     if (normalized.isEmpty || _state != CursorPillState.input) return;
-    await _hide();
-    if (matchOverlayCommand(normalized) == OverlayCommand.showTasks) {
-      _openHub?.call();
+    switch (parseLauncherIntent(normalized)) {
+      case OpenUrlIntent(:final url, :final display):
+        _showWorking('Opening $display…');
+        try {
+          await _launchLink(url);
+        } catch (_) {}
+        _flashThenHide();
+      case LaunchAppIntent(:final query):
+        if (await _launchApp(query)) return;
+        await _sendToAgent(normalized);
+      case null:
+        await _sendToAgent(normalized);
+    }
+  }
+
+  /// Resolves and opens an installed app by name via the native launcher.
+  /// True when the app launched (the overlay flashes "Opening …" and
+  /// collapses); false lets the caller fall through to the assistant.
+  Future<bool> _launchApp(String query) async {
+    final openApp = _openApp;
+    if (openApp == null) return false;
+    _showWorking('Opening $query…');
+    String? name;
+    try {
+      name = await openApp(query);
+    } catch (_) {
+      name = null;
+    }
+    if (_disposed || _state != CursorPillState.working) return true;
+    if (name == null) {
+      _state = CursorPillState.input;
+      _status = null;
+      _notify();
+      return false;
+    }
+    _status = 'Opening $name…';
+    _notify();
+    _flashThenHide();
+    return true;
+  }
+
+  /// Routes the typed instruction to the assistant as the user's desktop
+  /// agent. The overlay stays up in a working state streaming tool progress;
+  /// it collapses when the reply starts streaming in chat (or when the turn
+  /// completes silently), and holds open while a proposal awaits approval.
+  Future<void> _sendToAgent(String text) async {
+    _showWorking('Working on it…');
+    _sawAgentReply = false;
+    _proposal = null;
+    String? requestId;
+    try {
+      requestId = await _sendPrompt(text);
+    } catch (_) {
+      requestId = null;
+    }
+    if (_disposed || _state != CursorPillState.working) return;
+    if (requestId == null) {
+      await _hide();
       return;
     }
+    _agentRequestId = requestId;
+  }
+
+  void _showWorking(String status) {
+    _state = CursorPillState.working;
+    _status = status;
+    _error = null;
+    _agentRequestId = null;
+    _proposal = null;
+    _suggestions = const [];
+    _currentSuggestions = const [];
+    _memorySuggestions = const [];
+    _workingEpoch += 1;
+    _notify();
+  }
+
+  void _flashThenHide() {
+    final epoch = _workingEpoch;
+    unawaited(
+      Future<void>.delayed(openFlashDuration).then((_) {
+        if (_disposed ||
+            _state != CursorPillState.working ||
+            _workingEpoch != epoch) {
+          return;
+        }
+        unawaited(_hide());
+      }),
+    );
+  }
+
+  /// Relays the user's one-click decision on a surfaced proposal to the
+  /// existing approval pipeline, then collapses the overlay.
+  Future<void> decideProposal(ApprovalDecision decision) async {
+    final proposal = _proposal;
+    final decide = _decideProposal;
+    if (proposal == null || decide == null) return;
+    _proposal = null;
+    _notify();
     try {
-      await _sendPrompt(normalized);
+      await decide(proposal.proposalId, decision);
     } catch (_) {}
+    if (!_disposed && _state == CursorPillState.working) await _hide();
   }
 
   Future<void> choose(PillSuggestion suggestion) async {
@@ -621,6 +767,11 @@ final class CursorPillController extends ChangeNotifier {
   Future<void> _hide() async {
     _state = CursorPillState.hidden;
     _searchRequestId = null;
+    _status = null;
+    _agentRequestId = null;
+    _sawAgentReply = false;
+    _proposal = null;
+    _workingEpoch += 1;
     _suggestions = const [];
     _currentSuggestions = const [];
     _memorySuggestions = const [];
@@ -653,6 +804,40 @@ final class CursorPillController extends ChangeNotifier {
         lookup.complete(List.of(value.items));
       }
       return;
+    }
+    if (_state == CursorPillState.working && _agentRequestId != null) {
+      if (event case NativeEventToolProgress(
+        :final value,
+      ) when value.requestId == _agentRequestId) {
+        _status = value.detail ?? value.tool.replaceAll('_', ' ');
+        _notify();
+        return;
+      }
+      if (event case NativeEventActionProposal(
+        :final value,
+      ) when value.requestId == _agentRequestId) {
+        _proposal = value;
+        _notify();
+        return;
+      }
+      if (event case NativeEventAssistantDelta(
+        :final value,
+      ) when value.requestId == _agentRequestId) {
+        if (value.text.isNotEmpty) _sawAgentReply = true;
+        // A streaming text reply lives in chat, exactly as before; the
+        // overlay's job is done the moment text starts (or when the turn
+        // ends silently with nothing to approve).
+        if (_sawAgentReply || (value.finalSegment && _proposal == null)) {
+          unawaited(_hide());
+        }
+        return;
+      }
+      if (event case NativeEventError(
+        :final value,
+      ) when value.requestId == _agentRequestId) {
+        unawaited(_hide());
+        return;
+      }
     }
     if (event case NativeEventMemorySearchResults(
       :final value,
