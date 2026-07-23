@@ -138,3 +138,50 @@ Gates (rustup `stable`, wasm target): `cargo test --lib` 51 green · `cargo
 clippy --all-targets -D warnings` clean (host) · `cargo clippy --target
 wasm32-unknown-unknown -D warnings` clean · `cargo build --release --target
 wasm32-unknown-unknown` clean.
+## AI routes
+
+Managed-AI route group (`assistant.ts`, `assistant-admission.ts`,
+`stt.ts`, `stt-admission.ts`, `asr.ts`, `voice.ts`, `rate-limit.ts`) ported as
+host-testable pure logic plus a thin wasm glue layer. Route registration is a
+single hook: `glue.rs` calls `crate::routes_ai::register(router)` (one line);
+all route wiring and Durable Objects live in `src/routes_ai.rs`.
+
+| TS module | Rust (pure) | Status | Notes |
+|---|---|---|---|
+| `assistant.ts` request/pricing logic | `src/managed_ai.rs` | **ported** | `validatePinnedEndpoint`, `parseRequest`, `boundedJson`, `price`, `costFor`, `inputTokenReservation`, `usageFrom`, completion parse. 8 unit tests incl. the captured streaming shape, 64-tiny-message framing (=1409), endpoint pinning, cost accounting (est=361, actual=9). |
+| `assistant-admission.ts` (DO) | `src/assistant_admission.rs` | **ported** | In-memory reservation ledger with admit/release/settle. Ported DO races: simultaneous per-UID (2) + global (3) in-flight caps, idempotent duplicate release + window roll, settle-to-overrun blocks dense traffic, 400/404/405 shapes. |
+| `stt-admission.ts` (DO) | `src/stt_admission.rs` | **ported** | Acquisition-token claim/release protocol + deadline `alarm`. Ported races: per-user reservation cap, idempotent duplicate (returns original token), release+reacquire (new token), abandoned-claim alarm expiry vs. preserved claimed session, late-claim rejection + stale-release ignored. |
+| `stt.ts` session logic | `src/stt_logic.rs` | **ported** | `parseRequest`, `supportedAudio`, id/lang/session regexes, `sessionIdFor` (SHA-256), `websocketUrl`, Deepgram query, and `bridgeSttSockets` terminal-status as `bridge_outcome`. |
+| `asr.ts` | `src/asr_logic.rs` | **ported** | base64 cap (4/3 scaling), format/language allow-lists, 413-before-400 ordering, pinned upstream body, transcript parse. |
+| `voice.ts` | `src/voice_logic.rs` | **ported** | two-use model-locked token request, ISO expiry timestamps (`Date.toISOString` parity), response shaping, `name` parse. |
+| `rate-limit.ts` (DO) | `src/rate_limit.rs` | **ported** | fixed-window counter + refresh-lock mutex with the DO route defaults. Canonical for the crate; self-contained. |
+| `crypto`/number coercion | `src/jsnum.rs` | **ported** | `Number(...)` / `Number.isSafeInteger` / positive-integer guards shared by the above. |
+
+Glue (`src/routes_ai.rs`, wasm-only): the five routes
+(`POST /v1/chat/completions`, `POST /v1/asr/transcribe`,
+`POST /v1/voice/gemini/token`, `POST /v1/stt/sessions`,
+`GET /v1/stt/sessions/:id/stream`) plus the three Durable Objects
+(`AssistantAdmissionDo`, `SttAdmissionDo`, `RateLimiterDo`). The DOs are thin:
+they load the pure state machine from DO storage (JSON snapshot), `dispatch`,
+persist, and — for STT — schedule the deadline alarm from `next_alarm()`. The
+TS worker uses the SQLite storage API directly; the state-machine semantics are
+identical and are what the `cargo test` suites cover. Streaming uses
+`Response::from_stream` for true SSE passthrough; the WebSocket bridge relays
+via `WebSocket::events()`.
+
+DO bindings (`ASSISTANT_ADMISSION`, `STT_ADMISSION`, `RATE_LIMITER`) and the
+`v1` migration are declared in `wrangler.toml`.
+
+**Deferred glue (cutover):** (1) streaming *usage-tail* settlement — the chat
+route marks the ledger `streaming` and relies on
+`reconcile_managed_assistant_requests` (ported, wired via a one-line call in the
+`scheduled` event owned by glue) rather than parsing the SSE tail inline;
+(2) the `waitUntil`-based durable retry wrapper around finalize/release is
+best-effort here. Behaviour parity of the decision logic is proven by the host
+tests; these two items are runtime-fidelity refinements, not logic gaps.
+
+Gates: `cargo test` 65 green (host); `cargo clippy --all-targets -D warnings`
+clean (host); `cargo clippy --target wasm32-unknown-unknown -D warnings` clean;
+`cargo build --release --target wasm32-unknown-unknown` clean. (worker-build's
+wasm-bindgen post-processing carries the same pre-existing abort-handler flag
+issue documented in README — unchanged by this work.)

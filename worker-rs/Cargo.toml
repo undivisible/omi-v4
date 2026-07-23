@@ -34,6 +34,8 @@ worker = { version = "0.8", features = ["d1", "http"] }
 worker-macros = "0.8"
 console_error_panic_hook = "0.1"
 getrandom = { version = "0.2", features = ["js"] }
+futures-util = { version = "0.3", default-features = false }
+wasm-bindgen-futures = "0.4"
 
 [profile.release]
 opt-level = "s"

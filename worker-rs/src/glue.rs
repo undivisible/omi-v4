@@ -67,8 +67,9 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
             handle_cursor_put,
         );
     // MERGE SEAM: each module group extends the router through its own
-    // `register` hook. Delivery/OAuth group's routes are added here.
+    // `register` hook.
     let router = crate::routes_channels::register(router);
+    let router = crate::routes_ai::register(router);
     router
         .or_else_any_method("/*catchall", |_req, _ctx| {
             error_json("Not found", 404)
@@ -270,7 +271,7 @@ async fn handle_entitlement(req: Request, ctx: RouteContext<()>) -> Result<Respo
 }
 
 /// Port of entitlement.ts `hasActivePro`: DEV_FAKE_PRO guard then the DB read.
-async fn has_active_pro(ctx: &RouteContext<()>, uid: &str) -> Result<bool> {
+pub(crate) async fn has_active_pro(ctx: &RouteContext<()>, uid: &str) -> Result<bool> {
     let dev = ctx.env.var("DEV_FAKE_PRO").ok().map(|v| v.to_string());
     let environment = ctx.env.var("ENVIRONMENT").ok().map(|v| v.to_string());
     match entitlement::dev_fake_pro(dev.as_deref(), environment.as_deref()) {

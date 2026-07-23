@@ -19,6 +19,17 @@ pub mod oauth;
 pub mod setup_health;
 pub mod webhooks;
 
+// AI route group (managed assistant / STT / ASR / voice) pure logic. Host-
+// testable; the wasm glue in `routes_ai` binds these to the Worker runtime.
+pub mod asr_logic;
+pub mod assistant_admission;
+pub mod jsnum;
+pub mod managed_ai;
+pub mod rate_limit;
+pub mod stt_admission;
+pub mod stt_logic;
+pub mod voice_logic;
+
 #[cfg(target_arch = "wasm32")]
 mod glue;
 
@@ -31,3 +42,5 @@ mod vectorize_ffi;
 mod rate_limit_lock;
 #[cfg(target_arch = "wasm32")]
 mod routes_channels;
+#[cfg(target_arch = "wasm32")]
+mod routes_ai;
