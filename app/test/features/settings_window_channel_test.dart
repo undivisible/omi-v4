@@ -68,6 +68,52 @@ void main() {
   );
 
   testWidgets(
+    'a silent regression is impossible: on macOS the in-window fallback '
+    'reports the failed channel call instead of quietly opening a route',
+    (tester) async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+      final messenger = tester.binding.defaultBinaryMessenger;
+      const windowChrome = MethodChannel('omi/window_chrome');
+      const menuBar = MethodChannel('omi/menu_bar');
+      // A Runner that answers the channel but cannot open the window — the
+      // shape of every native settings regression.
+      messenger.setMockMethodCallHandler(windowChrome, (call) async {
+        if (call.method != 'openSettings') return null;
+        throw PlatformException(code: 'settings_window_unavailable');
+      });
+      messenger.setMockMethodCallHandler(menuBar, (call) async => null);
+      addTearDown(() {
+        messenger.setMockMethodCallHandler(windowChrome, null);
+        messenger.setMockMethodCallHandler(menuBar, null);
+      });
+
+      final services = makeServices();
+      addTearDown(services.dispose);
+      await tester.pumpWidget(MaterialApp(home: OmiShell(services: services)));
+      await tester.pump(const Duration(seconds: 2));
+
+      final reported = <FlutterErrorDetails>[];
+      final previous = FlutterError.onError;
+      FlutterError.onError = reported.add;
+      final state = tester.state(find.byType(OmiShell)) as dynamic;
+      // ignore: avoid_dynamic_calls
+      state.debugOpenSettingsForTest();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 500));
+      FlutterError.onError = previous;
+
+      expect(reported, isNotEmpty);
+      expect(reported.single.exception, isA<PlatformException>());
+      expect(reported.single.context.toString(), contains('omi/window_chrome'));
+      // Loud, but still not stranded: the route is the release behaviour.
+      expect(find.byType(SettingsScreen), findsOneWidget);
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      debugDefaultTargetPlatformOverride = null;
+    },
+  );
+
+  testWidgets(
     'without the native channel the settings fall back to the in-window '
     'route',
     (tester) async {

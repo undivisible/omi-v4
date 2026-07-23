@@ -164,15 +164,39 @@ class _OmiShellState extends State<OmiShell> {
             'openSettings',
             section?.name,
           );
-        } on MissingPluginException {
+        } on MissingPluginException catch (error, stack) {
+          _reportSettingsFallback(error, stack);
           _openSettingsRoute(section);
-        } on PlatformException {
+        } on PlatformException catch (error, stack) {
+          _reportSettingsFallback(error, stack);
           _openSettingsRoute(section);
         }
       }());
       return;
     }
     _openSettingsRoute(section);
+  }
+
+  /// On macOS the native settings window is the only correct surface, so
+  /// reaching the in-window route there means the Runner never answered —
+  /// a regression, not a fallback. Say so out loud in debug builds; release
+  /// still degrades to the route rather than showing nothing.
+  void _reportSettingsFallback(Object error, StackTrace stack) {
+    assert(() {
+      FlutterError.reportError(
+        FlutterErrorDetails(
+          exception: error,
+          stack: stack,
+          library: 'omi',
+          context: ErrorDescription(
+            'asking the Runner to open the native settings window over '
+            'omi/window_chrome. The in-window route is a fallback for '
+            'platforms without it and must never be reached on macOS.',
+          ),
+        ),
+      );
+      return true;
+    }());
   }
 
   void _openSettingsRoute([SettingsSection? section]) {

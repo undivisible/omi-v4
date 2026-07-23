@@ -82,6 +82,30 @@ void main() {
 
       expect(harness.controller.state, CursorPillState.hidden);
     });
+
+    testWidgets(
+      'the panel is summoned once and never re-presented while it is up',
+      (tester) async {
+        await harness.controller.summon();
+        expect(harness.presents, [true]);
+
+        // Everything that happens while the user types pushes state at the
+        // panel; none of it may ask the Runner to place the window again, or
+        // the overlay walks off after the cursor.
+        harness.controller.inputChanged('open sl');
+        await tester.pump(const Duration(milliseconds: 400));
+        harness.controller.applyHostState(
+          state: CursorPillState.input,
+          status: 'Thinking…',
+        );
+        await harness.controller.summon();
+        await harness.controller.toggleOverlay();
+        await tester.pump();
+
+        expect(harness.presents, [true]);
+        expect(harness.pushes.length, greaterThan(1));
+      },
+    );
   });
 
   group('panel engine client', () {
@@ -200,6 +224,11 @@ final class _HostHarness {
         return 'request-1';
       },
       level: ValueNotifier<double>(0),
+      presentWindow: (centered) async => presents.add(centered),
+      draft: (prompt, timeout) async {
+        draftPrompts.add(prompt);
+        return 'open slack';
+      },
     );
     host = PillPanelHost(
       controller: controller,
@@ -224,6 +253,7 @@ final class _HostHarness {
   late final PillPanelHost host;
   final prompts = <String>[];
   final draftPrompts = <String>[];
+  final presents = <bool>[];
   final pushes = <Map<String, Object?>>[];
 
   void close() {

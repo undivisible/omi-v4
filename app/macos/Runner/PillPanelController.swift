@@ -176,22 +176,33 @@ final class PillPanelController {
     }
   }
 
+  /// Where a summon puts the panel: anchored to the cursor the first time,
+  /// and exactly where it already is once it is up. The overlay is summoned
+  /// at the cursor and then static — it must never track the pointer, and a
+  /// repeat summon must not teleport it out from under the user's hands.
+  static func summonFrame(
+    current: NSRect, visible isVisible: Bool, cursor: NSPoint, size: NSSize,
+    screen: NSRect
+  ) -> NSRect {
+    guard !isVisible else { return current }
+    return MainFlutterWindow.cursorPillFrame(
+      cursor: cursor, width: size.width, height: size.height, visible: screen)
+  }
+
   /// Shows the panel next to the cursor, autofocused. Once up it is static:
   /// a repeat summon only re-keys it, so the surface never jumps around
   /// under the user's hands.
   func show(at cursor: NSPoint, size: NSSize) {
-    if !panel.isVisible {
-      let screen =
-        NSScreen.screens.first { NSMouseInRect(cursor, $0.frame, false) }
-        ?? NSScreen.main
-      panel.setFrame(
-        MainFlutterWindow.cursorPillFrame(
-          cursor: cursor,
-          width: size.width,
-          height: size.height,
-          visible: screen?.visibleFrame ?? NSRect(origin: cursor, size: size)),
-        display: true)
-    }
+    let screen =
+      NSScreen.screens.first { NSMouseInRect(cursor, $0.frame, false) }
+      ?? NSScreen.main
+    let frame = Self.summonFrame(
+      current: panel.frame,
+      visible: panel.isVisible,
+      cursor: cursor,
+      size: size,
+      screen: screen?.visibleFrame ?? NSRect(origin: cursor, size: size))
+    if frame != panel.frame { panel.setFrame(frame, display: true) }
     // A non-activating panel takes keyboard input without pulling the rest of
     // omi in front of whatever the user was working in — the hub stays exactly
     // where it was. Typing is non-negotiable though, so if the panel could not
