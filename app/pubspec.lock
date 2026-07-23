@@ -81,6 +81,15 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "1.19.1"
+  crepuscularity_flutter:
+    dependency: "direct main"
+    description:
+      path: "plugins/crepuscularity-flutter"
+      ref: "7aca833ea6c2117db1b0322f805a290b013fee71"
+      resolved-ref: "7aca833ea6c2117db1b0322f805a290b013fee71"
+      url: "https://github.com/tschk/crepuscularity"
+    source: git
+    version: "0.1.0"
   cross_file:
     dependency: transitive
     description:
