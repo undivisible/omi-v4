@@ -23,6 +23,9 @@ export 'generated/signals/signals.dart'
         NativeEventAssistantDelta,
         NativeEventError,
         NativeEventMemoryCaptured,
+        NativeEventMemorySearchResults,
+        MemorySearchResults,
+        MemorySearchItem,
         NativeEventOnboardingScanCompleted,
         NativeEventRuntimeStatus,
         OnboardingScanCompleted,
@@ -177,6 +180,7 @@ abstract interface class LiveVoiceHub {
 abstract interface class MeetingHub {
   void startMeeting({required String requestId, String? title});
   void stopMeeting(String requestId);
+  void jotMeetingNote({required String requestId, required String text});
 }
 
 abstract interface class MeetingCaptureHub {
@@ -378,6 +382,10 @@ final class UnavailableNativeHub
 
   @override
   void stopMeeting(String requestId) => _unavailable();
+
+  @override
+  void jotMeetingNote({required String requestId, required String text}) =>
+      _unavailable();
 
   @override
   void provideMeetingAuth({
@@ -684,6 +692,10 @@ final class RinfNativeHub
   @override
   void stopMeeting(String requestId) =>
       _send(requestId, const CommandStopMeeting());
+
+  @override
+  void jotMeetingNote({required String requestId, required String text}) =>
+      _send(requestId, CommandJotMeetingNote(text: text));
 
   @override
   void provideMeetingAuth({

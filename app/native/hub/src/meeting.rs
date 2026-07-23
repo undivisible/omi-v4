@@ -13,6 +13,10 @@ pub const INSIGHT_INTERVAL: Duration = Duration::from_secs(20);
 pub const SUMMARY_TRANSCRIPT_CHARS: usize = 12_000;
 pub const RAW_TRANSCRIPT_CHARS: usize = 48_000;
 const INSIGHT_SOURCE_CHARS: usize = 500;
+const ANSWER_CONTEXT_CHARS: usize = 1_200;
+const ANSWER_CHARS: usize = 360;
+pub const MAX_JOTS: usize = 200;
+const JOT_CHARS: usize = 500;
 const CONTROL_QUEUE_CAPACITY: usize = 64;
 const DEFAULT_TITLE: &str = "Meeting";
 
@@ -128,47 +132,109 @@ impl InsightLimiter {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct MeetingSummary {
+#[derive(Clone, Debug, Default, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct NoteSection {
+    #[serde(default)]
+    pub heading: String,
+    #[serde(default)]
+    pub points: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct MeetingNote {
+    pub title: Option<String>,
     pub summary: String,
+    pub participants: Vec<String>,
+    pub sections: Vec<NoteSection>,
+    pub decisions: Vec<String>,
     pub actions: Vec<String>,
 }
 
-pub fn summary_prompt(transcript: &str) -> String {
+impl MeetingNote {
+    pub fn key_points(&self) -> Vec<String> {
+        self.sections
+            .iter()
+            .flat_map(|section| section.points.iter().cloned())
+            .collect()
+    }
+}
+
+pub fn note_prompt(transcript: &str, jots: &[String], title: &str) -> String {
     let bounded: String = transcript.chars().take(SUMMARY_TRANSCRIPT_CHARS).collect();
+    let jot_block = if jots.is_empty() {
+        String::new()
+    } else {
+        let mut block = String::from(
+            "\n\nThe attendee jotted these rough notes during the meeting. Expand \
+                          and polish them into the note, keeping their intent and ordering, and \
+                          fill in surrounding details from the transcript:\n",
+        );
+        for jot in jots {
+            block.push_str("- ");
+            block.push_str(jot);
+            block.push('\n');
+        }
+        block
+    };
     format!(
-        "You are a meeting assistant. Given the transcript below, produce a concise summary and \
-         a list of action items. Return ONLY valid JSON in this exact format: \
-         {{\"summary\":\"2-3 sentence summary of the meeting\",\"actions\":[\"action item \
-         1\",\"action item 2\"]}}\n\n{bounded}"
+        "You are a meeting note taker. Working title: {title}. From the transcript below, write \
+         a polished structured meeting note. Return ONLY valid JSON in this exact format: \
+         {{\"title\":\"short descriptive title\",\"summary\":\"2-3 sentence executive summary\",\
+         \"participants\":[\"names actually mentioned, or empty\"],\
+         \"sections\":[{{\"heading\":\"topic\",\"points\":[\"key point\"]}}],\
+         \"decisions\":[\"decisions made\"],\"actions\":[\"action items\"]}}\
+         {jot_block}\n\nTranscript:\n{bounded}"
     )
 }
 
 #[derive(serde::Deserialize)]
-struct SummaryPayload {
+struct NotePayload {
+    #[serde(default)]
+    title: String,
     #[serde(default)]
     summary: String,
+    #[serde(default)]
+    participants: Vec<String>,
+    #[serde(default)]
+    sections: Vec<NoteSection>,
+    #[serde(default)]
+    decisions: Vec<String>,
     #[serde(default)]
     actions: Vec<String>,
 }
 
-pub fn parse_summary(output: &str) -> Option<MeetingSummary> {
+fn clean_list(values: Vec<String>) -> Vec<String> {
+    values
+        .into_iter()
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+        .collect()
+}
+
+pub fn parse_note(output: &str) -> Option<MeetingNote> {
     let start = output.find('{')?;
     let end = output.rfind('}')?;
-    let payload: SummaryPayload = serde_json::from_str(output.get(start..=end)?).ok()?;
+    let payload: NotePayload = serde_json::from_str(output.get(start..=end)?).ok()?;
     let summary = payload.summary.trim().to_owned();
-    (!summary.is_empty()).then(|| MeetingSummary {
+    (!summary.is_empty()).then(|| MeetingNote {
+        title: Some(payload.title.trim().to_owned()).filter(|value| !value.is_empty()),
         summary,
-        actions: payload
-            .actions
+        participants: clean_list(payload.participants),
+        sections: payload
+            .sections
             .into_iter()
-            .map(|action| action.trim().to_owned())
-            .filter(|action| !action.is_empty())
+            .map(|section| NoteSection {
+                heading: section.heading.trim().to_owned(),
+                points: clean_list(section.points),
+            })
+            .filter(|section| !section.points.is_empty())
             .collect(),
+        decisions: clean_list(payload.decisions),
+        actions: clean_list(payload.actions),
     })
 }
 
-pub fn fallback_summary(transcript: &str) -> MeetingSummary {
+pub fn fallback_note(transcript: &str, jots: &[String]) -> MeetingNote {
     let mut summary = String::new();
     let mut sentences = 0;
     for character in transcript.trim().chars().take(SUMMARY_TRANSCRIPT_CHARS) {
@@ -180,10 +246,119 @@ pub fn fallback_summary(transcript: &str) -> MeetingSummary {
             }
         }
     }
-    MeetingSummary {
+    let jot_section = (!jots.is_empty()).then(|| NoteSection {
+        heading: "Notes".to_owned(),
+        points: jots.to_vec(),
+    });
+    MeetingNote {
+        title: None,
         summary: summary.split_whitespace().collect::<Vec<_>>().join(" "),
+        participants: Vec::new(),
+        sections: jot_section.into_iter().collect(),
+        decisions: Vec::new(),
         actions: Vec::new(),
     }
+}
+
+fn format_stamp(unix_ms: i64) -> String {
+    chrono::DateTime::from_timestamp_millis(unix_ms)
+        .map(|stamp| stamp.format("%Y-%m-%d %H:%M UTC").to_string())
+        .unwrap_or_default()
+}
+
+pub fn note_markdown(
+    note: &MeetingNote,
+    title: &str,
+    started_at_ms: i64,
+    ended_at_ms: i64,
+) -> String {
+    let mut markdown = format!(
+        "# {}\n\n{} — {}\n",
+        note.title.as_deref().unwrap_or(title),
+        format_stamp(started_at_ms),
+        format_stamp(ended_at_ms),
+    );
+    if !note.participants.is_empty() {
+        markdown.push_str("\nAttendees: ");
+        markdown.push_str(&note.participants.join(", "));
+        markdown.push('\n');
+    }
+    if !note.summary.is_empty() {
+        markdown.push_str("\n## Summary\n\n");
+        markdown.push_str(&note.summary);
+        markdown.push('\n');
+    }
+    for section in &note.sections {
+        markdown.push_str("\n## ");
+        markdown.push_str(if section.heading.is_empty() {
+            "Discussion"
+        } else {
+            &section.heading
+        });
+        markdown.push_str("\n\n");
+        for point in &section.points {
+            markdown.push_str("- ");
+            markdown.push_str(point);
+            markdown.push('\n');
+        }
+    }
+    if !note.decisions.is_empty() {
+        markdown.push_str("\n## Decisions\n\n");
+        for decision in &note.decisions {
+            markdown.push_str("- ");
+            markdown.push_str(decision);
+            markdown.push('\n');
+        }
+    }
+    if !note.actions.is_empty() {
+        markdown.push_str("\n## Action items\n\n");
+        for action in &note.actions {
+            markdown.push_str("- [ ] ");
+            markdown.push_str(action);
+            markdown.push('\n');
+        }
+    }
+    markdown
+}
+
+pub fn metadata_json(
+    note: &MeetingNote,
+    title: &str,
+    started_at_ms: i64,
+    ended_at_ms: i64,
+) -> String {
+    serde_json::json!({
+        "kind": "meeting",
+        "title": note.title.as_deref().unwrap_or(title),
+        "startedAtMs": started_at_ms,
+        "endedAtMs": ended_at_ms,
+        "participants": note.participants,
+        "keyPoints": note.key_points(),
+        "decisions": note.decisions,
+        "actions": note.actions,
+    })
+    .to_string()
+}
+
+pub fn answer_prompt(question: &str, context: &str) -> String {
+    let bounded: String = context.chars().take(ANSWER_CONTEXT_CHARS).collect();
+    format!(
+        "You are quietly assisting someone in a live meeting. A question just came up. Using the \
+         recent transcript for context, suggest a concise, confident answer or talking point (1-2 \
+         sentences, plain text, no preamble). Recent transcript:\n{bounded}\n\nQuestion: \
+         {question}"
+    )
+}
+
+pub fn clean_answer(output: &str) -> Option<String> {
+    let answer: String = output
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(ANSWER_CHARS)
+        .collect();
+    (!answer.is_empty()).then_some(answer)
 }
 
 #[derive(Debug)]
@@ -192,16 +367,40 @@ pub struct MeetingSession {
     manual: bool,
     transcript: String,
     limiter: InsightLimiter,
+    started_at_ms: i64,
+    jots: Vec<String>,
 }
 
 impl MeetingSession {
     pub fn new(title: Option<String>, manual: bool) -> Self {
+        Self::new_at(title, manual, chrono::Utc::now().timestamp_millis())
+    }
+
+    pub fn new_at(title: Option<String>, manual: bool, started_at_ms: i64) -> Self {
         Self {
             title: title.filter(|value| !value.trim().is_empty()),
             manual,
             transcript: String::new(),
             limiter: InsightLimiter::default(),
+            started_at_ms,
+            jots: Vec::new(),
         }
+    }
+
+    pub fn started_at_ms(&self) -> i64 {
+        self.started_at_ms
+    }
+
+    pub fn push_jot(&mut self, text: &str) {
+        let text: String = text.trim().chars().take(JOT_CHARS).collect();
+        if text.is_empty() || self.jots.len() >= MAX_JOTS {
+            return;
+        }
+        self.jots.push(text);
+    }
+
+    pub fn jots(&self) -> &[String] {
+        &self.jots
     }
 
     pub fn push_final(&mut self, text: &str) {
@@ -243,21 +442,23 @@ pub fn should_auto_start(mode: SystemAudioCaptureMode, meeting_active: bool) -> 
 
 pub fn compose_completion(
     session: &MeetingSession,
-    summary: MeetingSummary,
+    note: MeetingNote,
     now_ms: i64,
 ) -> (MeetingCompleted, ClientCommand) {
-    let title = session.title().to_owned();
+    let title = note
+        .title
+        .clone()
+        .unwrap_or_else(|| session.title().to_owned());
+    let started_at_ms = session.started_at_ms();
+    let markdown = note_markdown(&note, session.title(), started_at_ms, now_ms);
+    let metadata = metadata_json(&note, session.title(), started_at_ms, now_ms);
     let transcript: String = session
         .transcript()
         .chars()
         .take(SUMMARY_TRANSCRIPT_CHARS)
         .collect();
-    let mut evidence = format!("Meeting: {title}\nSummary: {}", summary.summary);
-    for action in &summary.actions {
-        evidence.push_str("\nAction: ");
-        evidence.push_str(action);
-    }
-    evidence.push_str("\n\n");
+    let mut evidence = markdown.clone();
+    evidence.push_str("\n## Transcript\n\n");
     evidence.push_str(&transcript);
     let command = ClientCommand {
         request_id: format!("meeting-{now_ms}"),
@@ -274,8 +475,19 @@ pub fn compose_completion(
     };
     let completed = MeetingCompleted {
         title,
-        summary: summary.summary,
-        actions: summary.actions,
+        summary: note.summary,
+        actions: note.actions,
+        started_at_ms,
+        ended_at_ms: now_ms,
+        participants: note.participants,
+        key_points: note
+            .sections
+            .iter()
+            .flat_map(|section| section.points.iter().cloned())
+            .collect(),
+        decisions: note.decisions,
+        note_markdown: markdown,
+        metadata_json: metadata,
     };
     (completed, command)
 }
@@ -290,6 +502,9 @@ pub enum MeetingControl {
         suggested_title: Option<String>,
     },
     FinalSegment {
+        text: String,
+    },
+    Jot {
         text: String,
     },
     ProvideAuth {
@@ -392,6 +607,10 @@ pub fn request_start(title: Option<String>) -> bool {
 
 pub fn request_stop() -> bool {
     notify(MeetingControl::Stop)
+}
+
+pub fn request_jot(text: String) -> bool {
+    notify(MeetingControl::Jot { text })
 }
 
 pub fn observe_gate(active: bool, suggested_title: Option<String>) {
@@ -517,6 +736,11 @@ impl MeetingRuntime {
                         self.maybe_classify(current, &text);
                     }
                 }
+                MeetingControl::Jot { text } => {
+                    if let Some(current) = &mut session {
+                        current.push_jot(&text);
+                    }
+                }
                 MeetingControl::ProvideAuth {
                     auth,
                     trusted_worker_origin,
@@ -568,13 +792,28 @@ impl MeetingRuntime {
         self.classifying.store(true, Ordering::Release);
         let classifying = Arc::clone(&self.classifying);
         let cancellation = self.cancellation.clone();
+        let context: String = {
+            let transcript = session.transcript();
+            let skip = transcript
+                .chars()
+                .count()
+                .saturating_sub(ANSWER_CONTEXT_CHARS);
+            transcript.chars().skip(skip).collect()
+        };
         tokio::spawn(async move {
             let kind = classify(&source, &cancellation).await;
+            let text = match kind {
+                Some(InsightKind::Response) => suggest_answer(&source, &context, &cancellation)
+                    .await
+                    .unwrap_or_else(|| InsightKind::Response.text().to_owned()),
+                Some(kind) => kind.text().to_owned(),
+                None => String::new(),
+            };
             classifying.store(false, Ordering::Release);
             if let Some(kind) = kind {
                 NativeEvent::MeetingInsight(MeetingInsight {
                     kind: kind.name().to_owned(),
-                    text: kind.text().to_owned(),
+                    text,
                     source_text: source,
                 })
                 .send();
@@ -590,22 +829,41 @@ impl MeetingRuntime {
                 return;
             }
             let now_ms = chrono::Utc::now().timestamp_millis();
-            let (_, capture) =
-                compose_completion(&session, fallback_summary(session.transcript()), now_ms);
-            let _ = captures.send(capture).await;
-            let prompt = summary_prompt(session.transcript());
+            let prompt = note_prompt(session.transcript(), session.jots(), session.title());
             let output = tokio::select! {
                 () = cancellation.cancelled() => return,
-                output = crate::local_ai::respond(&prompt) => output,
+                output = generate_note_output(&prompt) => output,
             };
-            let summary = output
+            let note = output
                 .as_deref()
-                .and_then(parse_summary)
-                .unwrap_or_else(|| fallback_summary(session.transcript()));
-            let (completed, _) = compose_completion(&session, summary, now_ms);
+                .and_then(parse_note)
+                .unwrap_or_else(|| fallback_note(session.transcript(), session.jots()));
+            let (completed, capture) = compose_completion(&session, note, now_ms);
+            let _ = captures.send(capture).await;
             NativeEvent::MeetingCompleted(completed).send();
         });
     }
+}
+
+async fn generate_note_output(prompt: &str) -> Option<String> {
+    if let Some(output) = crate::local_ai::respond(prompt).await {
+        return Some(output);
+    }
+    let key = crate::dev_gemini::api_key()?;
+    crate::dev_gemini::generate(&key, prompt).await
+}
+
+async fn suggest_answer(
+    question: &str,
+    context: &str,
+    cancellation: &CancellationToken,
+) -> Option<String> {
+    let prompt = answer_prompt(question, context);
+    let output = tokio::select! {
+        () = cancellation.cancelled() => return None,
+        output = generate_note_output(&prompt) => output,
+    };
+    output.as_deref().and_then(clean_answer)
 }
 
 async fn classify(source: &str, cancellation: &CancellationToken) -> Option<InsightKind> {
@@ -680,26 +938,126 @@ mod tests {
     }
 
     #[test]
-    fn summary_json_is_parsed_from_fenced_output() {
-        let output = "Sure, here you go:\n```json\n{\"summary\":\"We aligned on launch. \
-                      Follow-ups were assigned.\",\"actions\":[\"Ship beta\",\"  \",\"Email QA\"]}\n```";
-        let summary = parse_summary(output).unwrap_or_else(|| panic!("summary parses"));
+    fn note_json_is_parsed_from_fenced_output() {
+        let output = "Sure, here you go:\n```json\n{\"title\":\" Launch Sync \",\"summary\":\"We \
+                      aligned on launch. Follow-ups were assigned.\",\"participants\":[\"Ana\",\" \
+                      \"],\"sections\":[{\"heading\":\"Launch\",\"points\":[\"Beta ships \
+                      Friday\",\"  \"]},{\"heading\":\"Empty\",\"points\":[]}],\"decisions\":\
+                      [\"Ship Friday\"],\"actions\":[\"Ship beta\",\"  \",\"Email QA\"]}\n```";
+        let note = parse_note(output).unwrap_or_else(|| panic!("note parses"));
+        assert_eq!(note.title.as_deref(), Some("Launch Sync"));
         assert_eq!(
-            summary.summary,
+            note.summary,
             "We aligned on launch. Follow-ups were assigned."
         );
-        assert_eq!(summary.actions, vec!["Ship beta", "Email QA"]);
+        assert_eq!(note.participants, vec!["Ana"]);
+        assert_eq!(note.sections.len(), 1);
+        assert_eq!(note.sections[0].points, vec!["Beta ships Friday"]);
+        assert_eq!(note.key_points(), vec!["Beta ships Friday"]);
+        assert_eq!(note.decisions, vec!["Ship Friday"]);
+        assert_eq!(note.actions, vec!["Ship beta", "Email QA"]);
     }
 
     #[test]
-    fn unusable_summary_output_falls_back_to_leading_sentences() {
-        assert!(parse_summary("no json here").is_none());
-        assert!(parse_summary("{\"actions\":[\"x\"]}").is_none());
-        assert!(parse_summary("{not valid}").is_none());
-        let fallback =
-            fallback_summary("First point. Second\npoint! Third point that must not appear.");
+    fn unusable_note_output_falls_back_to_leading_sentences_and_jots() {
+        assert!(parse_note("no json here").is_none());
+        assert!(parse_note("{\"actions\":[\"x\"]}").is_none());
+        assert!(parse_note("{not valid}").is_none());
+        let jots = vec!["pricing follow-up".to_owned()];
+        let fallback = fallback_note(
+            "First point. Second\npoint! Third point that must not appear.",
+            &jots,
+        );
         assert_eq!(fallback.summary, "First point. Second point!");
         assert!(fallback.actions.is_empty());
+        assert_eq!(fallback.sections.len(), 1);
+        assert_eq!(fallback.sections[0].heading, "Notes");
+        assert_eq!(fallback.sections[0].points, jots);
+        assert!(fallback_note("x.", &[]).sections.is_empty());
+    }
+
+    #[test]
+    fn note_markdown_renders_every_populated_section() {
+        let note = MeetingNote {
+            title: Some("Launch Sync".to_owned()),
+            summary: "We aligned on launch.".to_owned(),
+            participants: vec!["Ana".to_owned(), "Ben".to_owned()],
+            sections: vec![NoteSection {
+                heading: String::new(),
+                points: vec!["Beta ships Friday".to_owned()],
+            }],
+            decisions: vec!["Ship Friday".to_owned()],
+            actions: vec!["Email QA".to_owned()],
+        };
+        let markdown = note_markdown(&note, "Meeting", 0, 60_000);
+        assert!(markdown.starts_with("# Launch Sync\n"));
+        assert!(markdown.contains("1970-01-01 00:00 UTC — 1970-01-01 00:01 UTC"));
+        assert!(markdown.contains("Attendees: Ana, Ben"));
+        assert!(markdown.contains("## Summary\n\nWe aligned on launch."));
+        assert!(markdown.contains("## Discussion\n\n- Beta ships Friday"));
+        assert!(markdown.contains("## Decisions\n\n- Ship Friday"));
+        assert!(markdown.contains("## Action items\n\n- [ ] Email QA"));
+    }
+
+    #[test]
+    fn metadata_json_carries_structured_meeting_fields() {
+        let note = MeetingNote {
+            title: None,
+            summary: "Short.".to_owned(),
+            participants: vec!["Ana".to_owned()],
+            sections: vec![NoteSection {
+                heading: "Topic".to_owned(),
+                points: vec!["A point".to_owned()],
+            }],
+            decisions: vec!["Decided".to_owned()],
+            actions: vec!["Do it".to_owned()],
+        };
+        let metadata: serde_json::Value =
+            serde_json::from_str(&metadata_json(&note, "Standup", 5, 9))
+                .unwrap_or_else(|error_value| panic!("metadata parses: {error_value}"));
+        assert_eq!(metadata["kind"], "meeting");
+        assert_eq!(metadata["title"], "Standup");
+        assert_eq!(metadata["startedAtMs"], 5);
+        assert_eq!(metadata["endedAtMs"], 9);
+        assert_eq!(metadata["participants"][0], "Ana");
+        assert_eq!(metadata["keyPoints"][0], "A point");
+        assert_eq!(metadata["decisions"][0], "Decided");
+        assert_eq!(metadata["actions"][0], "Do it");
+    }
+
+    #[test]
+    fn jots_are_trimmed_bounded_and_capped() {
+        let mut session = MeetingSession::new_at(None, true, 0);
+        session.push_jot("  pricing follow-up  ");
+        session.push_jot("   ");
+        session.push_jot(&"y".repeat(2 * JOT_CHARS));
+        assert_eq!(session.jots()[0], "pricing follow-up");
+        assert_eq!(session.jots()[1].chars().count(), JOT_CHARS);
+        for index in 0..MAX_JOTS {
+            session.push_jot(&format!("jot {index}"));
+        }
+        assert_eq!(session.jots().len(), MAX_JOTS);
+    }
+
+    #[test]
+    fn note_prompt_embeds_jots_for_enhancement() {
+        let with_jots = note_prompt("hello", &["pricing".to_owned()], "Sync");
+        assert!(with_jots.contains("- pricing"));
+        assert!(with_jots.contains("rough notes"));
+        let without = note_prompt("hello", &[], "Sync");
+        assert!(!without.contains("rough notes"));
+    }
+
+    #[test]
+    fn suggested_answers_are_flattened_and_bounded() {
+        assert_eq!(
+            clean_answer("  The beta\nships Friday.  "),
+            Some("The beta ships Friday.".to_owned())
+        );
+        assert!(clean_answer("   ").is_none());
+        let long = clean_answer(&"word ".repeat(200)).unwrap_or_default();
+        assert!(long.chars().count() <= ANSWER_CHARS);
+        assert!(answer_prompt("When do we ship?", "context here").contains("When do we ship?"));
     }
 
     #[test]
@@ -803,13 +1161,20 @@ mod tests {
 
     #[test]
     fn completed_meetings_compose_a_capture_stored_as_a_conversation_source() {
-        let mut session = MeetingSession::new(Some("Standup".to_owned()), false);
+        let mut session = MeetingSession::new_at(Some("Standup".to_owned()), false, 5);
         session.push_final("We agreed to ship on Friday.");
         session.push_final("I'll email the release notes.");
         let (completed, capture) = compose_completion(
             &session,
-            MeetingSummary {
+            MeetingNote {
+                title: None,
                 summary: "Team agreed to ship Friday.".to_owned(),
+                participants: vec!["Ana".to_owned()],
+                sections: vec![NoteSection {
+                    heading: "Release".to_owned(),
+                    points: vec!["Friday is the date".to_owned()],
+                }],
+                decisions: vec!["Ship Friday".to_owned()],
                 actions: vec!["Email release notes".to_owned()],
             },
             10,
@@ -817,6 +1182,18 @@ mod tests {
         assert_eq!(completed.title, "Standup");
         assert_eq!(completed.summary, "Team agreed to ship Friday.");
         assert_eq!(completed.actions, vec!["Email release notes"]);
+        assert_eq!(completed.started_at_ms, 5);
+        assert_eq!(completed.ended_at_ms, 10);
+        assert_eq!(completed.participants, vec!["Ana"]);
+        assert_eq!(completed.key_points, vec!["Friday is the date"]);
+        assert_eq!(completed.decisions, vec!["Ship Friday"]);
+        assert!(completed.note_markdown.contains("# Standup"));
+        assert!(
+            completed
+                .note_markdown
+                .contains("- [ ] Email release notes")
+        );
+        assert!(completed.metadata_json.contains("\"kind\":\"meeting\""));
         let Command::CaptureEvent {
             ingestion_key,
             source,
@@ -830,8 +1207,9 @@ mod tests {
         };
         assert_eq!(source, CaptureSource::Chat);
         assert_eq!(ingestion_key, "meeting:10");
-        assert!(evidence.contains("Meeting: Standup"));
-        assert!(evidence.contains("Action: Email release notes"));
+        assert!(evidence.contains("# Standup"));
+        assert!(evidence.contains("- [ ] Email release notes"));
+        assert!(evidence.contains("## Transcript"));
         assert!(evidence.contains("We agreed to ship on Friday."));
 
         let path = std::env::temp_dir().join(format!(

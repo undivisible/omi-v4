@@ -16,6 +16,7 @@ import 'channels/channels.dart';
 import 'conversations/conversations.dart';
 import 'currents/currents.dart';
 import 'device/device.dart';
+import 'features/meeting_notes.dart';
 import 'integrations/eventkit_task_sync.dart';
 import 'keyboard/keyboard.dart';
 import 'memory/memory.dart';
@@ -383,6 +384,9 @@ final class AppServices {
   MeetingMicCapture? _meetingMic;
   bool _meetingActive = false;
   int _meetingAuthSequence = 0;
+  MeetingNotesStore meetingNotes = PreferencesMeetingNotesStore();
+
+  bool get meetingActive => _meetingActive;
 
   Stream<NativeEvent> get nativeEvents => _nativeEvents.stream;
   Stream<int> get chatAuthorityChanges =>
@@ -657,6 +661,17 @@ final class AppServices {
       throw StateError('Native services are not connected.');
     }
     (nativeHub as MeetingHub).stopMeeting('meeting-stop-${_randomId()}');
+  }
+
+  void jotMeetingNote(String text) {
+    if (text.trim().isEmpty) return;
+    if (!chatReady || nativeHub is! MeetingHub) {
+      throw StateError('Native services are not connected.');
+    }
+    (nativeHub as MeetingHub).jotMeetingNote(
+      requestId: 'meeting-jot-${_randomId()}',
+      text: text,
+    );
   }
 
   /// One-shot assistant completion outside the conversation flow, used for
@@ -1217,6 +1232,12 @@ final class AppServices {
         final mic = _meetingMic;
         if (mic != null) unawaited(mic.stop());
       }
+    } else if (event case NativeEventMeetingCompleted(:final value)) {
+      unawaited(
+        meetingNotes
+            .save(MeetingNote.fromCompleted(value))
+            .catchError((Object _) {}),
+      );
     } else if (event case NativeEventError(:final value) when _meetingActive) {
       if (value.code == 'meeting_capture_session_lost') {
         unawaited(_provideMeetingAuth().onError((_, _) {}));

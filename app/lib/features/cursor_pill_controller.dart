@@ -6,7 +6,6 @@ import 'package:url_launcher/url_launcher.dart' as launcher;
 import '../app_services.dart';
 import '../currents/currents.dart';
 import '../keyboard/shift_gesture.dart';
-import '../native/generated/signals/signals.dart';
 import '../native/native_hub.dart';
 import 'cursor_pill_window.dart';
 import 'overlay_commands.dart';

@@ -52,8 +52,10 @@ abstract class Command {
       case 20:
         return CommandStopMeeting.load(deserializer);
       case 21:
-        return CommandProvideMeetingAuth.load(deserializer);
+        return CommandJotMeetingNote.load(deserializer);
       case 22:
+        return CommandProvideMeetingAuth.load(deserializer);
+      case 23:
         return CommandSetSystemAudioCaptureMode.load(deserializer);
       default:
         throw Exception(
@@ -1651,6 +1653,59 @@ class CommandStopMeeting extends Command {
 }
 
 @immutable
+class CommandJotMeetingNote extends Command {
+  const CommandJotMeetingNote({required this.text}) : super();
+
+  static CommandJotMeetingNote load(BinaryDeserializer deserializer) {
+    deserializer.increaseContainerDepth();
+    final instance = CommandJotMeetingNote(
+      text: deserializer.deserializeString(),
+    );
+    deserializer.decreaseContainerDepth();
+    return instance;
+  }
+
+  final String text;
+
+  CommandJotMeetingNote copyWith({String? text}) {
+    return CommandJotMeetingNote(text: text ?? this.text);
+  }
+
+  void serialize(BinarySerializer serializer) {
+    serializer.increaseContainerDepth();
+    serializer.serializeVariantIndex(21);
+    serializer.serializeString(text);
+    serializer.decreaseContainerDepth();
+  }
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    if (other.runtimeType != runtimeType) return false;
+
+    return other is CommandJotMeetingNote && text == other.text;
+  }
+
+  @override
+  int get hashCode => text.hashCode;
+
+  @override
+  String toString() {
+    String? fullString;
+
+    assert(() {
+      fullString =
+          '$runtimeType('
+          'text: $text'
+          ')';
+      return true;
+    }());
+
+    return fullString ?? 'CommandJotMeetingNote';
+  }
+}
+
+@immutable
 class CommandProvideMeetingAuth extends Command {
   const CommandProvideMeetingAuth({
     required this.auth,
@@ -1684,7 +1739,7 @@ class CommandProvideMeetingAuth extends Command {
 
   void serialize(BinarySerializer serializer) {
     serializer.increaseContainerDepth();
-    serializer.serializeVariantIndex(21);
+    serializer.serializeVariantIndex(22);
     auth.serialize(serializer);
     TraitHelpers.serializeOptionStr(trustedWorkerOrigin, serializer);
     serializer.decreaseContainerDepth();
@@ -1743,7 +1798,7 @@ class CommandSetSystemAudioCaptureMode extends Command {
 
   void serialize(BinarySerializer serializer) {
     serializer.increaseContainerDepth();
-    serializer.serializeVariantIndex(22);
+    serializer.serializeVariantIndex(23);
     mode.serialize(serializer);
     serializer.decreaseContainerDepth();
   }

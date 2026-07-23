@@ -87,6 +87,7 @@ class CurrentItem {
     required this.updatedAt,
     this.feedbackReference,
     this.executionReference,
+    this.metadata,
   }) : evidence = List.unmodifiable(evidence) {
     _requireText(id, 'id');
     _requireText(reason, 'reason');
@@ -161,6 +162,10 @@ class CurrentItem {
       updatedAt: _dateTime(json, 'updatedAt'),
       feedbackReference: _optionalString(json, 'feedbackReference'),
       executionReference: _optionalString(json, 'executionReference'),
+      metadata: switch (json['metadata']) {
+        final Map<String, Object?> value => Map.unmodifiable(value),
+        _ => null,
+      },
     );
   }
 
@@ -175,6 +180,7 @@ class CurrentItem {
   final DateTime updatedAt;
   final String? feedbackReference;
   final String? executionReference;
+  final Map<String, Object?>? metadata;
 
   bool get isTerminal => {
     CurrentStatus.dismissed,
@@ -211,6 +217,7 @@ class CurrentItem {
       updatedAt: at,
       feedbackReference: feedbackReference ?? this.feedbackReference,
       executionReference: executionReference ?? this.executionReference,
+      metadata: metadata,
     );
   }
 
@@ -226,6 +233,7 @@ class CurrentItem {
     'updatedAt': updatedAt.toUtc().toIso8601String(),
     'feedbackReference': feedbackReference,
     'executionReference': executionReference,
+    if (metadata != null) 'metadata': metadata,
   };
 }
 
