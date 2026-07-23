@@ -92,7 +92,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       stopVoice: () async =>
           (await widget.services.stopDesktopVoice())?.text ?? '',
       cancelVoice: widget.services.cancelDesktopVoice,
-      sendPrompt: (_) async {},
+      sendPrompt: (_) async => null,
       level: CombinedVoiceLevel([
         widget.services.desktopVoice.level,
         widget.services.liveVoice.level,
@@ -942,7 +942,6 @@ class _OnboardingUseStepState extends State<OnboardingUseStep> {
   bool rightShiftDown = false;
   bool chordDown = false;
   bool _lessonSignalled = false;
-  bool _dismissLessonDone = false;
   CursorPillState lastPillState = CursorPillState.hidden;
   StreamSubscription<String>? transcriptEvents;
 
@@ -978,11 +977,7 @@ class _OnboardingUseStepState extends State<OnboardingUseStep> {
     if (!mounted) return;
     final state = widget.pill.state;
     final wasListening = lastPillState == CursorPillState.listening;
-    final wasInput = lastPillState == CursorPillState.input;
     lastPillState = state;
-    if (wasInput && state == CursorPillState.hidden) {
-      _dismissLessonDone = true;
-    }
     if (wasListening && state == CursorPillState.hidden && !widget.finale) {
       _signalVoiceLesson();
     }
@@ -1120,14 +1115,12 @@ class _OnboardingUseStepState extends State<OnboardingUseStep> {
   }
 
   String get _prompt => switch (widget.pill.state) {
-    CursorPillState.hidden when !_dismissLessonDone =>
-      'Double-tap both Shift keys to summon me.',
     CursorPillState.hidden =>
-      'Summon me again — double-tap both Shift keys — then tap the mic to talk.',
-    CursorPillState.input when !_dismissLessonDone =>
-      'This is where you type. Now press Esc — or double-shift again — to dismiss.',
+      'Double-tap both Shift keys to start talking to me. '
+          '($summonOverlayKeybindLabel summons the typing bar anywhere.)',
     CursorPillState.input =>
-      'Tap the mic to talk. ($summonOverlayKeybindLabel opens this anywhere.)',
+      'This is where you type. Press Esc — or double-shift — to dismiss.',
+    CursorPillState.working => 'Working on it…',
     CursorPillState.listening =>
       'Say something — then press Esc, or double-shift, to stop.',
   };

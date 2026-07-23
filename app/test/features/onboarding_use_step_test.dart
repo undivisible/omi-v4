@@ -40,7 +40,7 @@ void main() {
     ),
   );
 
-  testWidgets('the lesson walks summon, dismiss, then voice', (tester) async {
+  testWidgets('the lesson walks talk, then stop', (tester) async {
     final harness = _Harness();
     final controller = harness.controller();
     final transcripts = StreamController<String>.broadcast(sync: true);
@@ -56,33 +56,12 @@ void main() {
 
     expect(find.byKey(const Key('shift_left')), findsOneWidget);
     expect(
-      find.textContaining('Double-tap both Shift keys to summon'),
+      find.textContaining('Double-tap both Shift keys to start talking'),
       findsOneWidget,
     );
 
-    // Summon: the chord opens the centered input overlay, not voice.
+    // Talk: the chord starts listening directly — no mic tap in between.
     await chord(tester);
-    expect(controller.state, CursorPillState.input);
-    expect(harness.voiceStarts, 0);
-    expect(
-      find.textContaining('press Esc — or double-shift again — to dismiss'),
-      findsOneWidget,
-    );
-
-    // Dismiss: a second chord hides it and unlocks the voice beat.
-    harness.advance(const Duration(seconds: 1));
-    await chord(tester);
-    expect(controller.state, CursorPillState.hidden);
-    expect(lessonDone, 0);
-    expect(find.textContaining('then tap the mic to talk'), findsOneWidget);
-
-    // Re-summon, then the mic affordance starts listening.
-    harness.advance(const Duration(seconds: 1));
-    await chord(tester);
-    expect(controller.state, CursorPillState.input);
-    expect(find.textContaining('Tap the mic to talk'), findsOneWidget);
-    await controller.beginVoice();
-    await tester.pump();
     expect(controller.state, CursorPillState.listening);
     expect(harness.voiceStarts, 1);
     expect(
@@ -172,8 +151,8 @@ void main() {
     await chord(tester);
     await chord(tester);
     // The bounced second chord is swallowed by the 500ms debounce.
-    expect(controller.state, CursorPillState.input);
-    expect(harness.voiceStarts, 0);
+    expect(controller.state, CursorPillState.listening);
+    expect(harness.voiceStarts, 1);
 
     await tester.pumpWidget(const SizedBox());
     controller.dispose();
@@ -197,17 +176,9 @@ void main() {
       ),
     );
 
-    // Esc closes the summoned overlay.
+    // Esc stops listening, satisfying the voice lesson — identical to a
+    // second chord.
     await chord(tester);
-    expect(controller.state, CursorPillState.input);
-    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
-    await tester.pump();
-    expect(controller.state, CursorPillState.hidden);
-    expect(find.textContaining('then tap the mic to talk'), findsOneWidget);
-
-    // Esc also stops listening, satisfying the voice lesson.
-    await controller.beginVoice();
-    await tester.pump();
     expect(controller.state, CursorPillState.listening);
     await tester.sendKeyEvent(LogicalKeyboardKey.escape);
     await tester.pump();
@@ -296,7 +267,7 @@ final class _Harness {
     startVoice: () async => voiceStarts += 1,
     stopVoice: () async => '',
     cancelVoice: () async {},
-    sendPrompt: (_) async {},
+    sendPrompt: (_) async => null,
     level: level,
     now: () => now,
   );

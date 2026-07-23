@@ -29,6 +29,50 @@ class RunnerTests: XCTestCase {
     XCTAssertNotNil(snapshot["fullDiskGrantedOutOfProcess"] as? Bool)
   }
 
+  func testLauncherResolvesExactThenPrefixThenSubstring() {
+    let candidates = [
+      URL(fileURLWithPath: "/Applications/Safari Technology Preview.app"),
+      URL(fileURLWithPath: "/Applications/Safari.app"),
+      URL(fileURLWithPath: "/Applications/Google Chrome.app"),
+      URL(fileURLWithPath: "/System/Applications/Mail.app"),
+    ]
+    XCTAssertEqual(
+      MainFlutterWindow.resolveApplicationURL(query: "safari", candidates: candidates)?
+        .lastPathComponent,
+      "Safari.app")
+    XCTAssertEqual(
+      MainFlutterWindow.resolveApplicationURL(query: "chrome", candidates: candidates)?
+        .lastPathComponent,
+      "Google Chrome.app")
+    XCTAssertEqual(
+      MainFlutterWindow.resolveApplicationURL(query: "MAIL", candidates: candidates)?
+        .lastPathComponent,
+      "Mail.app")
+    XCTAssertNil(
+      MainFlutterWindow.resolveApplicationURL(query: "fizzbuzzer", candidates: candidates))
+    XCTAssertNil(MainFlutterWindow.resolveApplicationURL(query: "", candidates: candidates))
+  }
+
+  func testLauncherScansOnlyAppBundlesFromKnownRoots() {
+    let roots = MainFlutterWindow.launcherSearchRoots.map(\.path)
+    XCTAssertTrue(roots.contains("/Applications"))
+    XCTAssertTrue(roots.contains("/System/Applications"))
+    let applications = MainFlutterWindow.installedApplicationURLs()
+    XCTAssertTrue(applications.allSatisfy { $0.pathExtension == "app" })
+  }
+
+  func testCenteredPillWindowAcceptsMouseEventsAndVoiceOverlayDoesNot() {
+    // The centered text overlay must stay interactive (clickable input and
+    // suggestion chips); only the full-screen voice surface is click-through.
+    XCTAssertFalse(MainFlutterWindow.pillIgnoresMouseEvents(centered: true))
+    XCTAssertTrue(MainFlutterWindow.pillIgnoresMouseEvents(centered: false))
+    let visible = NSRect(x: 0, y: 0, width: 1440, height: 900)
+    let centered = MainFlutterWindow.centeredPillFrame(
+      width: 420, height: 230, visible: visible)
+    XCTAssertEqual(centered.midX, visible.midX, accuracy: 0.5)
+    XCTAssertLessThan(centered.maxY, visible.maxY)
+  }
+
   func testVoicePlayoutQueueTracksQueuedMilliseconds() {
     let queue = VoicePlayoutQueue(sampleRateHz: 24000)
     XCTAssertEqual(queue.queuedMs, 0)
