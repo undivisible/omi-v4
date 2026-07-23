@@ -1048,11 +1048,6 @@ class ChatScreenState extends State<ChatScreen> {
                                                           currents.dismiss(id),
                                                         ),
                                                   onPrompt: _sendPrompt,
-                                                  onAllTasks: currents == null
-                                                      ? null
-                                                      : () => _openAllTasks(
-                                                          currents,
-                                                        ),
                                                   showByokHint:
                                                       !_byokHintDismissed &&
                                                       _byokPlanFree,
@@ -1156,19 +1151,24 @@ class ChatScreenState extends State<ChatScreen> {
             'msg_fade_${message.requestId}_${message.fromUser ? 'user' : 'assistant'}',
           ),
           delayMs: _pendingChatReveal ? 220 : 0,
-          child: Align(
-            alignment: message.fromUser
-                ? Alignment.centerRight
-                : Alignment.centerLeft,
-            child: Card(
-              child: Padding(
-                padding: const EdgeInsets.all(12),
-                child: message.fromUser
-                    ? Text(message.text)
-                    : AssistantMarkdown(message.text),
-              ),
-            ),
-          ),
+          child: message.fromUser
+              ? Align(
+                  alignment: Alignment.centerRight,
+                  child: Card(
+                    child: Padding(
+                      padding: const EdgeInsets.all(12),
+                      child: Text(message.text),
+                    ),
+                  ),
+                )
+              : _AssistantRow(
+                  child: Card(
+                    child: Padding(
+                      padding: const EdgeInsets.all(12),
+                      child: AssistantMarkdown(message.text),
+                    ),
+                  ),
+                ),
         ),
       for (final proposal in _proposals.values)
         () => Card(
@@ -1235,7 +1235,15 @@ class ChatScreenState extends State<ChatScreen> {
             ),
           ),
         ),
-      if (_progress != null)
+      if (_activeRequestId != null)
+        () => _AssistantRow(
+          spinning: true,
+          child: _SkeletonBubble(
+            key: const Key('chat_skeleton'),
+            label: _progress,
+          ),
+        )
+      else if (_progress != null)
         () => Text(_progress!, key: const Key('chat_progress')),
       if (_error != null)
         () => Text(
@@ -1579,7 +1587,6 @@ class _ChatHome extends StatelessWidget {
     required this.onOpenMeetingNotes,
     required this.onComplete,
     required this.onPrompt,
-    this.onAllTasks,
     this.showByokHint = false,
     this.onOpenByok,
     this.onDismissByok,
@@ -1596,7 +1603,6 @@ class _ChatHome extends StatelessWidget {
   final VoidCallback onOpenMeetingNotes;
   final ValueChanged<String>? onComplete;
   final ValueChanged<String> onPrompt;
-  final VoidCallback? onAllTasks;
   final bool showByokHint;
   final VoidCallback? onOpenByok;
   final VoidCallback? onDismissByok;
@@ -1630,23 +1636,14 @@ class _ChatHome extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 36),
+          // No "what matters next" heading and no "all tasks" link: this
+          // section already IS what matters next, and anyone who wants the
+          // full list can just ask the agent for it.
           _Reveal(
             delayMs: 420,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 12),
-                  child: Text(
-                    'WHAT MATTERS NEXT',
-                    style: TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w600,
-                      letterSpacing: 1.43,
-                      color: colors.muted,
-                    ),
-                  ),
-                ),
                 _TaskRow(
                   key: const Key('task_setup_omi'),
                   title: 'Set up Omi.',
@@ -1721,30 +1718,6 @@ class _ChatHome extends StatelessWidget {
                         padding: const EdgeInsets.symmetric(vertical: 10),
                         child: Text(
                           'All meeting notes →',
-                          style: TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w600,
-                            color: colors.muted,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                if (onAllTasks != null)
-                  DecoratedBox(
-                    decoration: BoxDecoration(
-                      border: Border(top: BorderSide(color: colors.hairline)),
-                    ),
-                    child: InkWell(
-                      key: const Key('hub_all_tasks'),
-                      onTap: onAllTasks,
-                      hoverColor: colors.rowHover,
-                      splashColor: Colors.transparent,
-                      highlightColor: Colors.transparent,
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 10),
-                        child: Text(
-                          'All tasks →',
                           style: TextStyle(
                             fontSize: 12,
                             fontWeight: FontWeight.w600,
@@ -2050,6 +2023,131 @@ class _RichTaskRow extends StatelessWidget {
       ),
     );
   }
+}
+
+/// The assistant's turn: the omi mark as its profile picture, left of the
+/// bubble. [spinning] turns the mark fast to read as "thinking" while a reply
+/// is still coming.
+class _AssistantRow extends StatelessWidget {
+  const _AssistantRow({required this.child, this.spinning = false});
+
+  final Widget child;
+  final bool spinning;
+
+  @override
+  Widget build(BuildContext context) => Row(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Padding(
+        padding: const EdgeInsets.only(top: 4, right: 10),
+        child: spinning
+            ? const OmiActivityOrb.loading(size: 26)
+            : const OmiActivityOrb(size: 26),
+      ),
+      Flexible(child: child),
+    ],
+  );
+}
+
+/// The placeholder shown while the assistant's reply is still streaming in —
+/// shimmering lines instead of a spinner alone, so the wait reads as content
+/// arriving rather than a stall. [label] surfaces the live status if there is
+/// one ("Thinking", "Working on it…").
+class _SkeletonBubble extends StatefulWidget {
+  const _SkeletonBubble({this.label, super.key});
+
+  final String? label;
+
+  @override
+  State<_SkeletonBubble> createState() => _SkeletonBubbleState();
+}
+
+class _SkeletonBubbleState extends State<_SkeletonBubble>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _shimmer = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 1200),
+  );
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (debugOmiOrbStatic ||
+        (MediaQuery.maybeOf(context)?.disableAnimations ?? false)) {
+      _shimmer.stop();
+    } else if (!_shimmer.isAnimating) {
+      _shimmer.repeat();
+    }
+  }
+
+  @override
+  void dispose() {
+    _shimmer.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = _HubColors.of(context);
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            for (final width in const [220.0, 260.0, 160.0])
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: _SkeletonLine(
+                  width: width,
+                  shimmer: _shimmer,
+                  base: colors.hairline,
+                  highlight: colors.rowHover,
+                ),
+              ),
+            if (widget.label case final label?)
+              Text(label, style: TextStyle(fontSize: 12, color: colors.muted)),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _SkeletonLine extends StatelessWidget {
+  const _SkeletonLine({
+    required this.width,
+    required this.shimmer,
+    required this.base,
+    required this.highlight,
+  });
+
+  final double width;
+  final Animation<double> shimmer;
+  final Color base;
+  final Color highlight;
+
+  @override
+  Widget build(BuildContext context) => AnimatedBuilder(
+    animation: shimmer,
+    builder: (context, _) {
+      final t = shimmer.value;
+      return Container(
+        width: width,
+        height: 10,
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(5),
+          gradient: LinearGradient(
+            begin: Alignment(-1 - 2 * (1 - t), 0),
+            end: Alignment(1 - 2 * (1 - t), 0),
+            colors: [base, highlight, base],
+            stops: const [0.35, 0.5, 0.65],
+          ),
+        ),
+      );
+    },
+  );
 }
 
 /// A completed meeting, rendered as a current so the notes Omi wrote sit

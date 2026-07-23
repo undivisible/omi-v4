@@ -77,6 +77,8 @@ flutter:
 
   assets:
     - assets/images/omi_pendant.png
+    - assets/images/omi_logo.png
+    - assets/images/omi_wordmark.png
 
 rinf:
   gen_input_crates:

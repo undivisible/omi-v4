@@ -93,7 +93,6 @@ void main() {
 
     expect(find.byKey(const Key('warm_paper_hub')), findsOneWidget);
     expect(find.byKey(const Key('hub_greeting')), findsOneWidget);
-    expect(find.text('WHAT MATTERS NEXT'), findsOneWidget);
     expect(find.text('Set up Omi.'), findsOneWidget);
     expect(
       find.text('By the way, if you bring your own keys, Omi becomes free.'),

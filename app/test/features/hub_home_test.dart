@@ -335,6 +335,14 @@ void main() {
     await tester.pump(const Duration(milliseconds: 600));
     expect(find.byKey(const Key('hub_greeter')), findsOneWidget);
     expect(find.byKey(const Key('chat_back')), findsNothing);
+    // The greeter fills the viewport with the newest turn (a thinking
+    // skeleton, since the dev key never answers) peeking; scroll history up
+    // to confirm "hello" is still there.
+    await tester.drag(
+      find.byKey(const Key('chat_messages')),
+      const Offset(0, 400),
+    );
+    await tester.pump();
     expect(find.text('hello'), findsOneWidget);
   });
 
