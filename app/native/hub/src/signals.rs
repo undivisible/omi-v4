@@ -21,6 +21,7 @@ pub enum Command {
         text: String,
         conversation_id: Option<String>,
         memory_context: Option<String>,
+        origin: Option<MessageOrigin>,
     },
     ConfigureAssistant {
         provider: AssistantProvider,
@@ -121,6 +122,12 @@ pub enum Command {
     SetSystemAudioCaptureMode {
         mode: crate::capture_policy::SystemAudioCaptureMode,
     },
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, SignalPiece)]
+pub enum MessageOrigin {
+    Chat,
+    Overlay,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, SignalPiece)]

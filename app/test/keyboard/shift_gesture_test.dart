@@ -2,12 +2,12 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:omi/keyboard/keyboard.dart';
 
 void main() {
-  test('both Shift keys emit a single overlay toggle', () {
+  test('both Shift keys emit a single voice toggle', () {
     final gesture = ShiftGestureMachine();
 
     expect(gesture.shift(PhysicalShift.left, true), isEmpty);
     expect(gesture.shift(PhysicalShift.right, true), [
-      ShiftGestureAction.openOverlay,
+      ShiftGestureAction.toggleVoice,
     ]);
     // Holding the chord does not re-fire.
     expect(gesture.shift(PhysicalShift.left, true), isEmpty);
@@ -18,14 +18,14 @@ void main() {
 
     gesture.shift(PhysicalShift.left, true);
     expect(gesture.shift(PhysicalShift.right, true), [
-      ShiftGestureAction.openOverlay,
+      ShiftGestureAction.toggleVoice,
     ]);
     gesture.shift(PhysicalShift.left, false);
     gesture.shift(PhysicalShift.right, false);
 
     gesture.shift(PhysicalShift.left, true);
     expect(gesture.shift(PhysicalShift.right, true), [
-      ShiftGestureAction.openOverlay,
+      ShiftGestureAction.toggleVoice,
     ]);
   });
 
@@ -60,7 +60,7 @@ void main() {
     // press must not spuriously toggle.
     expect(gesture.shift(PhysicalShift.left, true), isEmpty);
     expect(gesture.shift(PhysicalShift.right, true), [
-      ShiftGestureAction.openOverlay,
+      ShiftGestureAction.toggleVoice,
     ]);
   });
 }

@@ -272,6 +272,12 @@ class ChatScreenState extends State<ChatScreen> {
   Future<void> handleDesktopGesture(ShiftGestureAction action) async {
     if (!mounted) return;
     switch (action) {
+      case ShiftGestureAction.toggleVoice:
+        await handleDesktopGesture(
+          widget.services.desktopVoice.active
+              ? ShiftGestureAction.stopVoice
+              : ShiftGestureAction.startVoice,
+        );
       case ShiftGestureAction.openOverlay:
         await _desktopKeyboard.focusApplication();
         if (mounted) _inputFocus.requestFocus();
@@ -429,8 +435,8 @@ class ChatScreenState extends State<ChatScreen> {
     }
   }
 
-  /// Brings the hub to the tasks view — the overlay's "show me your tasks"
-  /// command lands here.
+  /// Brings the hub to the tasks view — the voice "show me my tasks" intent
+  /// lands here.
   void showAllTasks() {
     if (!mounted) return;
     final currents = widget.services.currents;

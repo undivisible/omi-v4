@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 
+import '../native/native_hub.dart' show ApprovalDecision;
 import 'cursor_pill_controller.dart';
 import 'cursor_pill_window.dart';
 
@@ -197,7 +198,8 @@ class _CursorPillState extends State<CursorPill> {
       return const SizedBox.shrink();
     }
     final listening = controller.state == CursorPillState.listening;
-    final chipCount = listening ? 0 : controller.suggestions.length;
+    final working = controller.state == CursorPillState.working;
+    final chipCount = listening || working ? 0 : controller.suggestions.length;
     while (_chipKeys.length > chipCount) {
       _chipKeys.removeLast();
     }
@@ -206,6 +208,7 @@ class _CursorPillState extends State<CursorPill> {
     }
     WidgetsBinding.instance.addPostFrameCallback((_) => _reportGlassRegions());
     if (listening) return _voice();
+    if (working) return _working();
     return Focus(
       onKeyEvent: _handleKey,
       child: Column(
@@ -314,6 +317,113 @@ class _CursorPillState extends State<CursorPill> {
         ),
       ],
     ),
+  );
+
+  /// While the agent works (or a deterministic launch flashes), the pill
+  /// swaps its input for a live status line; a pending action proposal
+  /// renders above it with one-click approve/dismiss controls.
+  Widget _working() => Column(
+    key: const Key('cursor_pill'),
+    mainAxisSize: MainAxisSize.min,
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      if (widget.controller.proposal case final proposal?) ...[
+        LiquidGlass(
+          radius: 13,
+          child: Padding(
+            key: const Key('cursor_pill_proposal'),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  proposal.title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: _pillInk,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 360),
+                  child: Text(
+                    proposal.summary,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(color: _pillMuted, fontSize: 12),
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    TextButton(
+                      key: const Key('cursor_pill_approve'),
+                      onPressed: () => unawaited(
+                        widget.controller.decideProposal(
+                          ApprovalDecision.approveOnce,
+                        ),
+                      ),
+                      child: const Text(
+                        'Approve',
+                        style: TextStyle(color: _pillGreen, fontSize: 12),
+                      ),
+                    ),
+                    TextButton(
+                      key: const Key('cursor_pill_deny'),
+                      onPressed: () => unawaited(
+                        widget.controller.decideProposal(
+                          ApprovalDecision.reject,
+                        ),
+                      ),
+                      child: const Text(
+                        'Dismiss',
+                        style: TextStyle(color: _pillMuted, fontSize: 12),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 8),
+      ],
+      LiquidGlass(
+        key: _pillKey,
+        child: SizedBox(
+          height: pillHeight,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                SizedBox(
+                  width: 26,
+                  height: 20,
+                  child: PillWaveform(level: widget.controller.level),
+                ),
+                const SizedBox(width: 8),
+                ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 340),
+                  child: Text(
+                    widget.controller.status ?? 'Working on it…',
+                    key: const Key('cursor_pill_status'),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(color: _pillInk, fontSize: 14),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    ],
   );
 
   Widget _pill() => LiquidGlass(

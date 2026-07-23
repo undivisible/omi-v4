@@ -286,6 +286,13 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
   func onListen(withArguments arguments: Any?, eventSink events: @escaping FlutterEventSink) -> FlutterError? {
     keyboardSink = events
     emitSecureInput()
+    // Global NSEvent monitors only fire while another app is frontmost when
+    // the process holds the Accessibility grant; without it the double-shift
+    // chord and Option+Space work solely inside omi, so tell Dart to surface
+    // a clear notice.
+    if !AXIsProcessTrusted() {
+      events(["type": "globalHotkeyUnavailable"])
+    }
     return nil
   }
 
@@ -484,6 +491,39 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
       }
     }
 
+    let launcher = FlutterMethodChannel(
+      name: "omi/launcher",
+      binaryMessenger: flutterViewController.engine.binaryMessenger)
+    launcher.setMethodCallHandler { call, result in
+      guard call.method == "openApp" else {
+        result(FlutterMethodNotImplemented)
+        return
+      }
+      guard
+        let query = (call.arguments as? String)?
+          .trimmingCharacters(in: .whitespacesAndNewlines),
+        !query.isEmpty
+      else {
+        result(nil)
+        return
+      }
+      DispatchQueue.global(qos: .userInitiated).async {
+        guard
+          let url = Self.resolveApplicationURL(
+            query: query, candidates: Self.installedApplicationURLs())
+        else {
+          DispatchQueue.main.async { result(nil) }
+          return
+        }
+        let name = url.deletingPathExtension().lastPathComponent
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = true
+        NSWorkspace.shared.openApplication(at: url, configuration: configuration) { application, error in
+          DispatchQueue.main.async { result(error == nil ? name : nil) }
+        }
+      }
+    }
+
     super.awakeFromNib()
     NSAnimationContext.runAnimationGroup { context in
       context.duration = 0.45
@@ -537,8 +577,59 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
 
   /// The full-screen voice overlay covers the active screen edge to edge so
   /// the waveform and its glow can hug the screen borders.
+  /// Directories scanned for the overlay's deterministic "open <app>" fast
+  /// path. Shallow, launch-time cheap; NSWorkspace performs the real open.
+  static var launcherSearchRoots: [URL] {
+    [
+      URL(fileURLWithPath: "/Applications", isDirectory: true),
+      URL(fileURLWithPath: "/Applications/Utilities", isDirectory: true),
+      URL(fileURLWithPath: "/System/Applications", isDirectory: true),
+      URL(fileURLWithPath: "/System/Applications/Utilities", isDirectory: true),
+      URL(
+        fileURLWithPath: NSHomeDirectory() + "/Applications", isDirectory: true),
+    ]
+  }
+
+  static func installedApplicationURLs(roots: [URL] = launcherSearchRoots) -> [URL] {
+    var applications: [URL] = []
+    for root in roots {
+      guard
+        let entries = try? FileManager.default.contentsOfDirectory(
+          at: root, includingPropertiesForKeys: nil,
+          options: [.skipsHiddenFiles])
+      else { continue }
+      applications.append(
+        contentsOf: entries.filter { $0.pathExtension == "app" })
+    }
+    return applications
+  }
+
+  /// Deterministic name match for the overlay launcher: exact name first,
+  /// then prefix, then substring — all case-insensitive — so "chrome" finds
+  /// "Google Chrome" and "safari" never loses to "Safari Technology Preview".
+  static func resolveApplicationURL(query: String, candidates: [URL]) -> URL? {
+    let normalized = query.lowercased()
+    guard !normalized.isEmpty else { return nil }
+    var prefixMatch: URL?
+    var substringMatch: URL?
+    for url in candidates {
+      let name = url.deletingPathExtension().lastPathComponent.lowercased()
+      if name == normalized { return url }
+      if prefixMatch == nil, name.hasPrefix(normalized) { prefixMatch = url }
+      if substringMatch == nil, name.contains(normalized) { substringMatch = url }
+    }
+    return prefixMatch ?? substringMatch
+  }
+
   static func voiceOverlayFrame(for screen: NSScreen?) -> NSRect {
     screen?.frame ?? .zero
+  }
+
+  /// Only the full-screen voice/waveform surface is click-through; the
+  /// centered text overlay must accept mouse events so its input field and
+  /// suggestion chips stay clickable.
+  static func pillIgnoresMouseEvents(centered: Bool) -> Bool {
+    !centered
   }
 
   static func centeredPillFrame(
@@ -571,7 +662,7 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
     collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
     // Voice is click-through: the full-screen overlay must never swallow
     // clicks meant for whatever the user is working in beneath it.
-    ignoresMouseEvents = !centered
+    ignoresMouseEvents = Self.pillIgnoresMouseEvents(centered: centered)
     setFrame(target, display: true)
     attachPillGlass()
     NSApp.activate(ignoringOtherApps: true)

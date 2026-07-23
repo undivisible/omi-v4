@@ -51,6 +51,7 @@ part 'memory_items.dart';
 part 'memory_search_item.dart';
 part 'memory_search_results.dart';
 part 'memory_source_deleted.dart';
+part 'message_origin.dart';
 part 'native_error.dart';
 part 'native_event.dart';
 part 'onboarding_scan_completed.dart';

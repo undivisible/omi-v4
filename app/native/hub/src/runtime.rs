@@ -12,9 +12,9 @@ use crate::signals::{
     AssistantProvider as ProviderKind, CaptureSource, ClientCommand, Command, ComputerUseAction,
     ComputerUseAuthorityReceipt, MemoryCaptured, MemoryCorrected, MemoryExportCommit,
     MemoryExported, MemoryItem, MemoryItems, MemorySearchItem, MemorySearchResults,
-    MemorySourceDeleted, NativeError, NativeEvent, OnboardingScanCompleted, OnboardingScanSource,
-    OnboardingScanState, RuntimePhase, RuntimeStatus, ToolProgress, ToolStatus, TranscriptLocator,
-    TranscriptionStopAcknowledgement,
+    MemorySourceDeleted, MessageOrigin, NativeError, NativeEvent, OnboardingScanCompleted,
+    OnboardingScanSource, OnboardingScanState, RuntimePhase, RuntimeStatus, ToolProgress,
+    ToolStatus, TranscriptLocator, TranscriptionStopAcknowledgement,
 };
 #[cfg(test)]
 use crate::signals::{AudioChunk, TranscriptionAuth, TranscriptionRoute};
@@ -1436,6 +1436,24 @@ const CHAT_MODEL_TOOL: &str = "chat_model";
 const LOCAL_CHAT_MODEL_DETAIL: &str = "local:apple-foundation-models";
 const ONLINE_CHAT_MODEL_DETAIL: &str = "online:configured-provider";
 
+const OVERLAY_AGENT_FRAMING: &str = "You are the user's desktop agent, summoned from the quick \
+overlay on their Mac. Treat the message below as an instruction to act on this computer, not \
+casual chat: when a step can be carried out here, propose the concrete action or tool call for \
+the user's approval instead of only describing it. Keep any text reply short enough to read at \
+a glance.";
+
+fn framed_assistant_prompt(
+    origin: Option<MessageOrigin>,
+    memory_context: Option<&str>,
+    text: &str,
+) -> String {
+    let prompt = assistant_prompt(memory_context, text);
+    match origin {
+        Some(MessageOrigin::Overlay) => format!("{OVERLAY_AGENT_FRAMING}\n\n{prompt}"),
+        Some(MessageOrigin::Chat) | None => prompt,
+    }
+}
+
 fn assistant_prompt(memory_context: Option<&str>, text: &str) -> String {
     match memory_context
         .map(str::trim)
@@ -1542,6 +1560,10 @@ fn combined_context(profile: Option<&str>, memory: Option<&str>) -> Option<Strin
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the assistant turn carries independently sourced inputs; grouping them would only relabel the arity"
+)]
 async fn dispatch_assistant(
     request_id: &str,
     state: &Mutex<RuntimeState>,
@@ -1550,6 +1572,7 @@ async fn dispatch_assistant(
     memory_context: Option<String>,
     local_ai_available: bool,
     cancellation: &CancellationToken,
+    origin: Option<MessageOrigin>,
 ) {
     let generation = state.lock().await.configuration_generation;
     let profile = local_profile_context(state, cancellation).await;
@@ -1561,7 +1584,11 @@ async fn dispatch_assistant(
         profile.as_ref().map(|value| value.lines.as_str()),
         memory_context.as_deref(),
     );
-    if crate::chat_router::should_route_local(local_ai_available, &text) {
+    // Overlay-initiated turns are agent instructions: they must reach the
+    // configured provider (which carries the action/tool pipeline), never the
+    // local chat-only model.
+    let overlay = origin == Some(MessageOrigin::Overlay);
+    if !overlay && crate::chat_router::should_route_local(local_ai_available, &text) {
         let prompt = assistant_prompt(context.as_deref(), &text);
         let reply = tokio::select! {
             _ = cancellation.cancelled() => {
@@ -1599,7 +1626,7 @@ async fn dispatch_assistant(
         ToolStatus::Complete,
         Some(ONLINE_CHAT_MODEL_DETAIL),
     );
-    let prompt = assistant_prompt(context.as_deref(), &text);
+    let prompt = framed_assistant_prompt(origin, context.as_deref(), &text);
     let mut events = provider.dispatch(request_id.to_owned(), prompt, cancellation.clone());
     loop {
         let next =
@@ -1868,6 +1895,7 @@ async fn execute(
         Command::SendMessage {
             text,
             memory_context,
+            origin,
             ..
         } => {
             dispatch_assistant(
@@ -1878,6 +1906,7 @@ async fn execute(
                 memory_context,
                 crate::local_ai::is_available(),
                 &cancellation,
+                origin,
             )
             .await;
             false
@@ -5782,6 +5811,7 @@ mod tests {
             Some("Relevant synced memory:\n- Sam prefers espresso".to_owned()),
             false,
             &CancellationToken::new(),
+            None,
         )
         .await;
         let captured = prompt
@@ -5801,6 +5831,7 @@ mod tests {
             None,
             false,
             &CancellationToken::new(),
+            None,
         )
         .await;
         let plain = prompt
@@ -5815,6 +5846,59 @@ mod tests {
         assert!(bounded.len() < 2 * MEMORY_CONTEXT_CHARACTER_LIMIT);
         assert!(bounded.ends_with("\n\ntail"));
         assert_eq!(assistant_prompt(Some("   "), "tail"), "tail");
+    }
+
+    #[test]
+    fn overlay_origin_frames_the_prompt_as_a_desktop_agent_instruction() {
+        let framed = framed_assistant_prompt(
+            Some(MessageOrigin::Overlay),
+            Some("- Works at Acme"),
+            "open the quarterly report",
+        );
+        assert!(framed.starts_with(OVERLAY_AGENT_FRAMING));
+        assert!(framed.contains("Relevant things you know about the user:\n- Works at Acme"));
+        assert!(framed.ends_with("open the quarterly report"));
+
+        // Chat and unspecified origins keep the plain prompt.
+        assert_eq!(
+            framed_assistant_prompt(Some(MessageOrigin::Chat), None, "hello"),
+            "hello"
+        );
+        assert_eq!(framed_assistant_prompt(None, None, "hello"), "hello");
+        assert!(!framed_assistant_prompt(None, None, "hello").contains("desktop agent"),);
+    }
+
+    #[tokio::test]
+    async fn overlay_dispatch_reaches_the_provider_with_agent_framing() {
+        let state = Arc::new(Mutex::new(RuntimeState {
+            configuration_generation: 3,
+            authority_uid: Some("user-a".to_owned()),
+            ..RuntimeState::default()
+        }));
+        let prompt = Arc::new(StdMutex::new(None));
+        let provider: Arc<dyn AssistantProvider> = Arc::new(CapturingAssistantProvider {
+            prompt: Arc::clone(&prompt),
+        });
+        // local_ai_available=true would normally allow local routing; the
+        // overlay origin must bypass it so the tool pipeline stays in play.
+        dispatch_assistant(
+            "overlay-1",
+            state.as_ref(),
+            provider,
+            "open my latest draft".to_owned(),
+            None,
+            true,
+            &CancellationToken::new(),
+            Some(MessageOrigin::Overlay),
+        )
+        .await;
+        let captured = prompt
+            .lock()
+            .unwrap_or_else(|failure| failure.into_inner())
+            .clone()
+            .unwrap_or_else(|| panic!("provider receives the overlay prompt"));
+        assert!(captured.starts_with(OVERLAY_AGENT_FRAMING));
+        assert!(captured.ends_with("open my latest draft"));
     }
 
     #[tokio::test]
@@ -5838,6 +5922,7 @@ mod tests {
             None,
             false,
             &CancellationToken::new(),
+            None,
         )
         .await;
         let captured = prompt
@@ -5871,6 +5956,7 @@ mod tests {
             Some("- Email is sam.jones@example.com\n- Phone is +1 (555) 123-4567".to_owned()),
             false,
             &CancellationToken::new(),
+            None,
         )
         .await;
         let captured = prompt
@@ -5916,6 +6002,7 @@ mod tests {
             None,
             false,
             &CancellationToken::new(),
+            None,
         )
         .await;
         assert!(
@@ -5945,6 +6032,7 @@ mod tests {
             None,
             false,
             &cancellation,
+            None,
         )
         .await;
         assert!(
@@ -5973,6 +6061,7 @@ mod tests {
             None,
             false,
             &CancellationToken::new(),
+            None,
         )
         .await;
         assert!(

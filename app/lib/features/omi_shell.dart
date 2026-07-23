@@ -39,6 +39,8 @@ class _OmiShellState extends State<OmiShell> {
   late final _desktopKeyboard = widget.desktopKeyboard ?? DesktopKeyboard();
   DesktopGestureController? _desktopGesture;
   StreamSubscription<ShiftGestureAction>? _desktopGestureActions;
+  StreamSubscription<DesktopKeyboardEvent>? _keyboardNotices;
+  bool _globalHotkeyNoticeShown = false;
   DesktopMenuBarController? _menuBar;
   CursorPillController? _cursorPill;
 
@@ -81,6 +83,26 @@ class _OmiShellState extends State<OmiShell> {
     if (gesture == null) return;
     _desktopGesture = gesture..start();
     _desktopGestureActions = gesture.actions.listen(_handleDesktopGesture);
+    _keyboardNotices = _desktopKeyboard.events.listen(_handleKeyboardNotice);
+  }
+
+  /// Without the Accessibility grant the global keyboard monitor is blind
+  /// while another app is frontmost, so the chord and Option+Space silently
+  /// stop working system-wide. Surface that once, with the fix.
+  void _handleKeyboardNotice(DesktopKeyboardEvent event) {
+    if (event is! DesktopGlobalHotkeyUnavailableEvent) return;
+    if (_globalHotkeyNoticeShown || !mounted) return;
+    _globalHotkeyNoticeShown = true;
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+      const SnackBar(
+        content: Text(
+          'Global shortcuts (double-Shift, $summonOverlayKeybindLabel) only '
+          'work inside Omi until Accessibility access is granted in System '
+          'Settings → Privacy & Security → Accessibility.',
+        ),
+        duration: Duration(seconds: 8),
+      ),
+    );
   }
 
   Future<void> _enterHubChrome() async {
@@ -150,6 +172,7 @@ class _OmiShellState extends State<OmiShell> {
 
   Future<void> _disposeDesktopGesture() async {
     await _desktopGestureActions?.cancel();
+    await _keyboardNotices?.cancel();
     await _desktopGesture?.dispose();
   }
 

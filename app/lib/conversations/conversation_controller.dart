@@ -150,6 +150,7 @@ final class ConversationController {
   Future<String> send({
     required String text,
     CurrentActionHandoff? currentHandoff,
+    MessageOrigin origin = MessageOrigin.chat,
   }) async {
     if (!_isReady()) {
       throw StateError(
@@ -184,7 +185,7 @@ final class ConversationController {
           );
         } catch (_) {}
       }
-      _nativeHub.sendMessage(requestId: requestId, text: text);
+      _nativeHub.sendMessage(requestId: requestId, text: text, origin: origin);
       return requestId;
     } catch (_) {
       _requests.remove(requestId);

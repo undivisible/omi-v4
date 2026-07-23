@@ -17,6 +17,7 @@ export 'generated/signals/signals.dart'
         ApprovalDecisionAcknowledgement,
         AssistantDelta,
         AssistantProvider,
+        MessageOrigin,
         NativeEvent,
         NativeEventActionProposal,
         NativeEventApprovalDecisionAcknowledged,
@@ -120,6 +121,7 @@ abstract interface class NativeHub {
     required String text,
     String? conversationId,
     String? memoryContext,
+    MessageOrigin? origin,
   });
   void configureAssistant({
     required String requestId,
@@ -330,6 +332,7 @@ final class UnavailableNativeHub
     required String text,
     String? conversationId,
     String? memoryContext,
+    MessageOrigin? origin,
   }) => _unavailable();
 
   @override
@@ -578,12 +581,14 @@ final class RinfNativeHub
     required String text,
     String? conversationId,
     String? memoryContext,
+    MessageOrigin? origin,
   }) => _send(
     requestId,
     CommandSendMessage(
       text: text,
       conversationId: conversationId,
       memoryContext: memoryContext,
+      origin: origin,
     ),
   );
 

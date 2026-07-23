@@ -39,6 +39,14 @@ final class DesktopSummonOverlayEvent extends DesktopKeyboardEvent {
   const DesktopSummonOverlayEvent();
 }
 
+/// Emitted once at stream start when the process lacks the Accessibility
+/// grant, meaning the global keyboard monitor cannot see keystrokes while
+/// another app is frontmost — the chord and overlay keybind only work
+/// inside omi until the grant is made.
+final class DesktopGlobalHotkeyUnavailableEvent extends DesktopKeyboardEvent {
+  const DesktopGlobalHotkeyUnavailableEvent();
+}
+
 final class DesktopKeyboard {
   DesktopKeyboard({EventChannel? channel, MethodChannel? control})
     : _channel = channel ?? const EventChannel('omi/desktop_keyboard'),
@@ -77,6 +85,7 @@ final class DesktopKeyboard {
       'secureInput' => DesktopSecureInputEvent(raw['enabled'] == true),
       'escape' => const DesktopEscapeEvent(),
       'summonOverlay' => const DesktopSummonOverlayEvent(),
+      'globalHotkeyUnavailable' => const DesktopGlobalHotkeyUnavailableEvent(),
       _ => throw const FormatException('unknown keyboard event'),
     };
   }

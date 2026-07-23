@@ -51,11 +51,11 @@ if [[ "$(grep -Fc "'text: [REDACTED], '" <<<"$message_block")" -ne 1 ]]; then
   echo "generated send-message text redaction is missing or ambiguous" >&2
   exit 1
 fi
-if grep -Fq "'memoryContext: \$memoryContext'" <<<"$message_block"; then
+if grep -Fq "'memoryContext: \$memoryContext, '" <<<"$message_block"; then
   echo "generated send-message memoryContext debug output is not redacted" >&2
   exit 1
 fi
-if [[ "$(grep -Fc "'memoryContext: [REDACTED]'" <<<"$message_block")" -ne 1 ]]; then
+if [[ "$(grep -Fc "'memoryContext: [REDACTED], '" <<<"$message_block")" -ne 1 ]]; then
   echo "generated send-message memoryContext redaction is missing or ambiguous" >&2
   exit 1
 fi

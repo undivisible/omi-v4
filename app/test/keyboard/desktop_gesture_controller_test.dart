@@ -4,7 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:omi/keyboard/keyboard.dart';
 
 void main() {
-  test('both Shift keys produce an overlay toggle', () async {
+  test('both Shift keys produce a voice toggle', () async {
     final events = StreamController<DesktopKeyboardEvent>();
     final controller = DesktopGestureController(events: events.stream);
     final actions = <ShiftGestureAction>[];
@@ -17,7 +17,7 @@ void main() {
     );
     await Future<void>.delayed(Duration.zero);
 
-    expect(actions, [ShiftGestureAction.openOverlay]);
+    expect(actions, [ShiftGestureAction.toggleVoice]);
     await subscription.cancel();
     await controller.dispose();
     await events.close();

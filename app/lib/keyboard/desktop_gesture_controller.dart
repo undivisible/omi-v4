@@ -33,6 +33,7 @@ final class DesktopGestureController {
         enabled,
       ),
       DesktopEscapeEvent() => _machine.escape(),
+      DesktopGlobalHotkeyUnavailableEvent() => const <ShiftGestureAction>[],
     };
     _emit(actions);
   }

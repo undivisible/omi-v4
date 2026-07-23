@@ -11,19 +11,20 @@ import 'package:omi/keyboard/keyboard.dart';
 import 'package:omi/native/native_hub.dart';
 
 void main() {
-  test('double-shift summons the overlay and dismisses it again', () async {
+  test('double-shift starts voice directly and dismisses it again', () async {
     final harness = _Harness();
     final controller = harness.controller();
 
-    // idle → overlay: the chord is the primary summon.
+    // idle → listening: the chord goes straight to voice, no mic tap.
     await controller.doubleShift();
-    expect(controller.state, CursorPillState.input);
-    expect(harness.voiceStarts, 0);
+    expect(controller.state, CursorPillState.listening);
+    expect(harness.voiceStarts, 1);
 
-    // overlay → idle.
+    // listening → idle (stopped; the transcript still routes).
     harness.advance(const Duration(seconds: 1));
     await controller.doubleShift();
     expect(controller.state, CursorPillState.hidden);
+    expect(harness.voiceStops, 1);
 
     controller.dispose();
     await harness.close();
@@ -34,42 +35,49 @@ void main() {
     final controller = harness.controller();
     Future<void> settle() async => harness.advance(const Duration(seconds: 1));
 
-    // idle --double-shift--> overlay
+    // idle --double-shift--> voice, directly.
     await controller.doubleShift();
-    expect(controller.state, CursorPillState.input);
+    expect(controller.state, CursorPillState.listening);
+    expect(harness.voiceStarts, 1);
 
-    // overlay --Option+Space--> idle (secondary binding, same toggle)
+    // voice --Option+Space--> idle (dismisses whatever surface is up)
     await settle();
     await controller.toggleOverlay();
     expect(controller.state, CursorPillState.hidden);
+    expect(harness.voiceStops, 1);
 
-    // idle --Option+Space--> overlay
+    // idle --Option+Space--> overlay (the typing surface)
     await settle();
     await controller.toggleOverlay();
     expect(controller.state, CursorPillState.input);
+    expect(harness.voiceStarts, 1);
 
-    // overlay --Esc--> idle (identical to a second double-shift)
+    // overlay --Esc--> idle (identical to a second chord)
     await controller.dismissSurface();
     expect(controller.state, CursorPillState.hidden);
 
     // idle --Esc--> idle (no-op)
     await controller.dismissSurface();
     expect(controller.state, CursorPillState.hidden);
-    expect(harness.voiceStarts, 0);
 
-    // overlay --mic--> voice
+    // overlay --double-shift--> idle (the chord dismisses the overlay too)
+    await settle();
+    await controller.toggleOverlay();
+    expect(controller.state, CursorPillState.input);
     await settle();
     await controller.doubleShift();
-    expect(controller.state, CursorPillState.input);
-    await controller.beginVoice();
-    expect(controller.state, CursorPillState.listening);
+    expect(controller.state, CursorPillState.hidden);
     expect(harness.voiceStarts, 1);
 
     // voice --double-shift--> idle (stopped; the transcript still routes)
     await settle();
     await controller.doubleShift();
+    expect(controller.state, CursorPillState.listening);
+    expect(harness.voiceStarts, 2);
+    await settle();
+    await controller.doubleShift();
     expect(controller.state, CursorPillState.hidden);
-    expect(harness.voiceStops, 1);
+    expect(harness.voiceStops, 2);
 
     // voice --Esc--> idle behaves identically to the chord.
     await settle();
@@ -77,14 +85,14 @@ void main() {
     expect(controller.state, CursorPillState.listening);
     await controller.dismissSurface();
     expect(controller.state, CursorPillState.hidden);
-    expect(harness.voiceStops, 2);
+    expect(harness.voiceStops, 3);
 
     // menu-bar voice keeps working: start explicitly, stop explicitly.
     await controller.handleGesture(ShiftGestureAction.startVoice);
     expect(controller.state, CursorPillState.listening);
     await controller.handleGesture(ShiftGestureAction.stopVoice);
     expect(controller.state, CursorPillState.hidden);
-    expect(harness.voiceStops, 3);
+    expect(harness.voiceStops, 4);
 
     // secure-input cancel hard-cancels voice instead of routing it.
     await controller.handleGesture(ShiftGestureAction.startVoice);
@@ -102,11 +110,11 @@ void main() {
     final controller = harness.controller();
 
     await controller.doubleShift();
-    expect(controller.state, CursorPillState.input);
-    // A bounced chord inside 500ms must not immediately dismiss the overlay.
+    expect(controller.state, CursorPillState.listening);
+    // A bounced chord inside 500ms must not immediately stop listening.
     harness.advance(const Duration(milliseconds: 300));
     await controller.doubleShift();
-    expect(controller.state, CursorPillState.input);
+    expect(controller.state, CursorPillState.listening);
     // Past the debounce, the toggle dismisses it.
     harness.advance(const Duration(milliseconds: 600));
     await controller.doubleShift();
@@ -150,21 +158,200 @@ void main() {
     await harness.close();
   });
 
-  test('typed task commands open the hub instead of chatting', () async {
+  test('typed phrases route to the agent, not a canned command', () async {
     final harness = _Harness();
     final controller = harness.controller();
 
     await controller.summon();
     await controller.submit('show me your tasks');
-    expect(harness.hubOpens, 1);
-    expect(harness.prompts, isEmpty);
+    expect(harness.hubOpens, 0);
+    expect(harness.prompts, ['show me your tasks']);
+    expect(controller.state, CursorPillState.working);
+    await controller.dismiss();
 
     harness.advance(const Duration(seconds: 1));
     await controller.summon();
     await controller.submit('what should I do about my tasks today?');
-    expect(harness.hubOpens, 1);
-    expect(harness.prompts, ['what should I do about my tasks today?']);
+    expect(harness.prompts, [
+      'show me your tasks',
+      'what should I do about my tasks today?',
+    ]);
+    expect(controller.state, CursorPillState.working);
 
+    controller.dispose();
+    await harness.close();
+  });
+
+  test('a bare open-app phrase launches locally without the model', () async {
+    final harness = _Harness(installedApps: {'chrome': 'Google Chrome'});
+    final controller = harness.controller();
+
+    await controller.summon();
+    await controller.submit('open chrome');
+
+    expect(harness.openedApps, ['chrome']);
+    expect(harness.prompts, isEmpty);
+    // openFlashDuration is zero in the harness, so the flash collapses on
+    // the next microtask turn.
+    await pumpEventQueue();
+    expect(controller.state, CursorPillState.hidden);
+
+    controller.dispose();
+    await harness.close();
+  });
+
+  test('an unresolved app name falls through to the agent', () async {
+    final harness = _Harness();
+    final controller = harness.controller();
+
+    await controller.summon();
+    await controller.submit('launch fizzbuzzer');
+
+    expect(harness.openedApps, ['fizzbuzzer']);
+    expect(harness.prompts, ['launch fizzbuzzer']);
+    expect(controller.state, CursorPillState.working);
+
+    controller.dispose();
+    await harness.close();
+  });
+
+  test('a bare URL opens in the browser without the model', () async {
+    final harness = _Harness();
+    final controller = harness.controller();
+
+    await controller.summon();
+    await controller.submit('open github.com');
+
+    expect(harness.launchedLinks.single, Uri.parse('https://github.com'));
+    expect(harness.prompts, isEmpty);
+    expect(controller.status, 'Opening github.com…');
+    await pumpEventQueue();
+    expect(controller.state, CursorPillState.hidden);
+
+    controller.dispose();
+    await harness.close();
+  });
+
+  test('agent turns collapse the overlay on silent completion', () async {
+    final harness = _Harness();
+    final controller = harness.controller();
+
+    await controller.summon();
+    await controller.submit('tidy up my desktop');
+    expect(controller.state, CursorPillState.working);
+
+    harness.hub.add(
+      const NativeEventAssistantDelta(
+        value: AssistantDelta(requestId: 'req-1', text: '', finalSegment: true),
+      ),
+    );
+    await pumpEventQueue();
+    expect(controller.state, CursorPillState.hidden);
+
+    controller.dispose();
+    await harness.close();
+  });
+
+  test('agent text replies stream in chat and hide the overlay', () async {
+    final harness = _Harness();
+    final controller = harness.controller();
+
+    await controller.summon();
+    await controller.submit('summarize my day');
+    expect(controller.state, CursorPillState.working);
+
+    harness.hub.add(
+      const NativeEventAssistantDelta(
+        value: AssistantDelta(
+          requestId: 'req-1',
+          text: 'Here is your day: ',
+          finalSegment: false,
+        ),
+      ),
+    );
+    await pumpEventQueue();
+    expect(controller.state, CursorPillState.hidden);
+
+    controller.dispose();
+    await harness.close();
+  });
+
+  test('a proposal surfaces in the overlay and one click decides it', () async {
+    final harness = _Harness();
+    final controller = harness.controller();
+
+    await controller.summon();
+    await controller.submit('archive my downloads folder');
+    harness.hub.add(
+      const NativeEventActionProposal(
+        value: ActionProposal(
+          proposalId: 'proposal-1',
+          requestId: 'req-1',
+          title: 'Archive Downloads',
+          summary: 'Move ~/Downloads into a dated archive folder.',
+          risk: ActionRisk.external,
+        ),
+      ),
+    );
+    expect(controller.proposal?.proposalId, 'proposal-1');
+
+    // A final, text-free delta must NOT collapse while approval is pending.
+    harness.hub.add(
+      const NativeEventAssistantDelta(
+        value: AssistantDelta(requestId: 'req-1', text: '', finalSegment: true),
+      ),
+    );
+    expect(controller.state, CursorPillState.working);
+
+    await controller.decideProposal(ApprovalDecision.approveOnce);
+    expect(harness.decisions, [('proposal-1', ApprovalDecision.approveOnce)]);
+    expect(controller.state, CursorPillState.hidden);
+
+    controller.dispose();
+    await harness.close();
+  });
+
+  testWidgets('the working overlay renders live tool progress', (tester) async {
+    final harness = _Harness();
+    final controller = harness.controller();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(body: CursorPill(controller: controller)),
+      ),
+    );
+
+    await controller.summon();
+    await tester.pump();
+    await controller.submit('rename my screenshots');
+    await tester.pump();
+
+    expect(find.byKey(const Key('cursor_pill_status')), findsOneWidget);
+    expect(find.text('Working on it…'), findsOneWidget);
+    expect(find.byKey(const Key('cursor_pill_input')), findsNothing);
+
+    harness.hub.add(
+      const NativeEventToolProgress(
+        value: ToolProgress(
+          requestId: 'req-1',
+          tool: 'computer_use',
+          status: ToolStatus.running,
+          detail: 'Opening Finder',
+        ),
+      ),
+    );
+    await tester.pump();
+    expect(find.text('Opening Finder'), findsOneWidget);
+
+    harness.hub.add(
+      const NativeEventAssistantDelta(
+        value: AssistantDelta(requestId: 'req-1', text: '', finalSegment: true),
+      ),
+    );
+    await tester.pump();
+    expect(controller.state, CursorPillState.hidden);
+    expect(find.byKey(const Key('cursor_pill')), findsNothing);
+
+    await tester.pumpWidget(const SizedBox());
     controller.dispose();
     await harness.close();
   });
@@ -343,6 +530,18 @@ void main() {
     await tester.pump();
 
     expect(harness.prompts, ['Draft a summary of today']);
+    // The overlay stays up in a working state until the reply streams.
+    expect(controller.state, CursorPillState.working);
+    harness.hub.add(
+      const NativeEventAssistantDelta(
+        value: AssistantDelta(
+          requestId: 'req-1',
+          text: 'Here you go',
+          finalSegment: true,
+        ),
+      ),
+    );
+    await tester.pump();
     expect(controller.state, CursorPillState.hidden);
 
     await tester.pumpWidget(const SizedBox());
@@ -877,7 +1076,11 @@ final class _UnusedTransport implements CurrentsTransport {
 }
 
 final class _Harness {
-  _Harness({this.stopTranscript = '', this.startVoiceError});
+  _Harness({
+    this.stopTranscript = '',
+    this.startVoiceError,
+    this.installedApps = const {},
+  });
 
   final draftPrompts = <String>[];
 
@@ -885,6 +1088,11 @@ final class _Harness {
   final level = ValueNotifier<double>(0);
   final prompts = <String>[];
   final launchedLinks = <Uri>[];
+  final openedApps = <String>[];
+  final decisions = <(String, ApprovalDecision)>[];
+
+  /// Fake installed-app resolver: query (lowercased) → display name.
+  final Map<String, String> installedApps;
   final String stopTranscript;
   final Object? startVoiceError;
   int voiceStarts = 0;
@@ -917,7 +1125,18 @@ final class _Harness {
       return stopTranscript;
     },
     cancelVoice: () async => voiceCancels += 1,
-    sendPrompt: (text) async => prompts.add(text),
+    sendPrompt: (text) async {
+      prompts.add(text);
+      return 'req-${prompts.length}';
+    },
+    openApp: (query) async {
+      openedApps.add(query);
+      return installedApps[query.toLowerCase()];
+    },
+    decideProposal: (proposalId, decision) async {
+      decisions.add((proposalId, decision));
+    },
+    openFlashDuration: Duration.zero,
     level: level,
     openHub: () => hubOpens += 1,
     launchLink: (link) async {

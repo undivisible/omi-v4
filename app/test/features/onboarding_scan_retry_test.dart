@@ -293,6 +293,7 @@ final class _ScanHub implements NativeHub, OnboardingScanHub {
     required String text,
     String? conversationId,
     String? memoryContext,
+    MessageOrigin? origin,
   }) {}
 
   @override

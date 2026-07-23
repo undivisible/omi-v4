@@ -3157,6 +3157,7 @@ final class _FakeHub
     required String text,
     String? conversationId,
     String? memoryContext,
+    MessageOrigin? origin,
   }) {
     messages.add((requestId, text));
     memoryContexts.add(memoryContext);
