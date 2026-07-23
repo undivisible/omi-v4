@@ -221,6 +221,39 @@ class RunnerTests: XCTestCase {
   }
 
   @MainActor
+  func testThePillPanelIsPlacedOnceAndThenNeverFollowsTheCursor() {
+    let visible = NSRect(x: 0, y: 0, width: 1440, height: 900)
+    let size = PillPanelController.defaultSize
+    let firstCursor = NSPoint(x: 500, y: 600)
+    let placed = PillPanelController.summonFrame(
+      current: NSRect(origin: .zero, size: size),
+      visible: false, cursor: firstCursor, size: size, screen: visible)
+    XCTAssertEqual(
+      placed,
+      MainFlutterWindow.cursorPillFrame(
+        cursor: firstCursor, width: size.width, height: size.height,
+        visible: visible))
+
+    // The pointer moves across the screen and the panel is asked to show
+    // again: it stays exactly where the first summon put it.
+    for cursor in [
+      NSPoint(x: 40, y: 80), NSPoint(x: 900, y: 120), NSPoint(x: 1400, y: 870),
+    ] {
+      XCTAssertEqual(
+        PillPanelController.summonFrame(
+          current: placed, visible: true, cursor: cursor, size: size,
+          screen: visible),
+        placed)
+    }
+
+    // Dismissed and summoned afresh, it anchors to the cursor again.
+    let reSummoned = PillPanelController.summonFrame(
+      current: placed, visible: false, cursor: NSPoint(x: 200, y: 300),
+      size: size, screen: visible)
+    XCTAssertNotEqual(reSummoned, placed)
+  }
+
+  @MainActor
   func testSummoningTheTextPillNeverTouchesTheMainWindow() {
     let initialFrame = NSRect(x: 40, y: 40, width: 400, height: 300)
     let window = MainFlutterWindow(
