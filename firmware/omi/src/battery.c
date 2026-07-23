@@ -1,5 +1,7 @@
 #include "lib/core/lib/battery/battery.h"
 
+#include "lib/core/transport.h"
+
 #include <hal/nrf_saadc.h>
 #include <zephyr/device.h>
 #include <zephyr/devicetree.h>
@@ -134,6 +136,11 @@ static void battery_charging_callback(const struct device *dev, struct gpio_call
     int err = battery_charging_state_read();
     if (err) {
         LOG_ERR("Failed to read charging state (%d)", err);
+        return;
+    }
+
+    if (dev != NULL) {
+        transport_notify_charging_changed();
     }
 }
 

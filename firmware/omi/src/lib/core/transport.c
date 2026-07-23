@@ -48,9 +48,7 @@ static bool storage_full_warned = false;
 #endif
 
 extern bool is_connected;
-#ifdef CONFIG_OMI_ENABLE_BATTERY
 extern bool is_charging;
-#endif
 #ifdef CONFIG_OMI_ENABLE_CAPTURE_LED
 extern bool is_capturing;
 #endif
@@ -741,6 +739,47 @@ static ssize_t settings_charging_status_read_handler(struct bt_conn *conn,
     return bt_gatt_attr_read(conn, attr, buf, len, offset, &charging_status, sizeof(charging_status));
 }
 
+static int8_t charging_status_last_notified = -1;
+
+static int notify_charging_status(struct bt_conn *conn, bool force_notify)
+{
+    if (conn == NULL) {
+        return -ENOTCONN;
+    }
+
+    if (!bt_gatt_is_subscribed(conn, &settings_service.attrs[6], BT_GATT_CCC_NOTIFY)) {
+        return 0;
+    }
+
+    uint8_t charging_status = is_charging ? 1U : 0U;
+    if (!force_notify && charging_status_last_notified == (int8_t) charging_status) {
+        return 0;
+    }
+
+    int err = bt_gatt_notify(conn, &settings_service.attrs[6], &charging_status, sizeof(charging_status));
+    if (err) {
+        LOG_WRN("Charging status notify failed: %d", err);
+        return err;
+    }
+
+    charging_status_last_notified = (int8_t) charging_status;
+    LOG_INF("Charging status notified: %u", charging_status);
+    return 0;
+}
+
+static void charging_notify_work_handler(struct k_work *work)
+{
+    ARG_UNUSED(work);
+    (void) notify_charging_status(current_connection, false);
+}
+
+static K_WORK_DEFINE(charging_notify_work, charging_notify_work_handler);
+
+void transport_notify_charging_changed(void)
+{
+    k_work_submit(&charging_notify_work);
+}
+
 static ssize_t
 features_read_handler(struct bt_conn *conn, const struct bt_gatt_attr *attr, void *buf, uint16_t len, uint16_t offset)
 {
@@ -767,6 +806,26 @@ features_read_handler(struct bt_conn *conn, const struct bt_gatt_attr *attr, voi
 #ifdef CONFIG_OMI_ENABLE_OFFLINE_STORAGE
     features |= OMI_FEATURE_OFFLINE_STORAGE;
 #endif
+#ifdef CONFIG_OMI_ENABLE_USER_EVENTS
+    features |= OMI_FEATURE_USER_EVENTS;
+#endif
+#ifdef CONFIG_OMI_ENABLE_IMU_GESTURES
+    features |= OMI_FEATURE_IMU_GESTURES;
+#endif
+#ifdef CONFIG_OMI_ENABLE_T5838_AAD
+    features |= OMI_FEATURE_HW_VAD;
+#endif
+#ifdef CONFIG_OMI_ENABLE_BLE_SLEEP_CMD
+    features |= OMI_FEATURE_BLE_SLEEP_CMD;
+#endif
+#ifdef CONFIG_OMI_ENABLE_CAPTURE_LED
+    features |= OMI_FEATURE_CAPTURE_STATE;
+#endif
+#ifdef CONFIG_OMI_ENABLE_DEVICE_NAME_RW
+    features |= OMI_FEATURE_DEVICE_NAME_RW;
+#endif
+    // The charging-state characteristic is always present in the settings service.
+    features |= OMI_FEATURE_CHARGING_STATE;
     // LED dimming is always enabled now with PWM.
     features |= OMI_FEATURE_LED_DIMMING;
     // Mic gain control is always enabled.
@@ -798,34 +857,7 @@ static void exchange_func(struct bt_conn *conn, uint8_t att_err, struct bt_gatt_
 #define BATTERY_REFRESH_INTERVAL_DISCONNECTED 10000 // 10 seconds
 #define CONFIG_OMI_BATTERY_CRITICAL_MV 3500         // mV
 uint8_t battery_percentage = 0;
-static int8_t charging_status_last_notified = -1;
 void broadcast_battery_level(struct k_work *work_item);
-
-static int notify_charging_status(struct bt_conn *conn, bool force_notify)
-{
-    if (conn == NULL) {
-        return -ENOTCONN;
-    }
-
-    if (!bt_gatt_is_subscribed(conn, &settings_service.attrs[6], BT_GATT_CCC_NOTIFY)) {
-        return 0;
-    }
-
-    uint8_t charging_status = is_charging ? 1U : 0U;
-    if (!force_notify && charging_status_last_notified == (int8_t) charging_status) {
-        return 0;
-    }
-
-    int err = bt_gatt_notify(conn, &settings_service.attrs[6], &charging_status, sizeof(charging_status));
-    if (err) {
-        LOG_WRN("Charging status notify failed: %d", err);
-        return err;
-    }
-
-    charging_status_last_notified = (int8_t) charging_status;
-    LOG_INF("Charging status notified: %u", charging_status);
-    return 0;
-}
 
 K_WORK_DELAYABLE_DEFINE(battery_work, broadcast_battery_level);
 

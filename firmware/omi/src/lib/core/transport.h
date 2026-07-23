@@ -59,4 +59,13 @@ bool transport_is_audio_subscribed(void);
 int transport_bulk_tx_acquire(k_timeout_t timeout);
 void transport_bulk_tx_release(void);
 
+/**
+ * @brief Push a charging-state change to the subscribed central.
+ *
+ * Notifies characteristic 19B10013 (1 byte, 0 = not charging, 1 = charging)
+ * from the system workqueue, deduplicated against the last notified value.
+ * Safe to call from the charge-detect GPIO interrupt.
+ */
+void transport_notify_charging_changed(void);
+
 #endif // TRANSPORT_H
