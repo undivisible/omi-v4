@@ -9,6 +9,8 @@
 
 pub mod auth;
 pub mod billing;
+pub mod channel_commands;
+pub mod channel_link;
 pub mod conversations;
 pub mod crypto_util;
 pub mod delivery;
