@@ -41,23 +41,22 @@ export PATH="$HOME/.rustup/toolchains/stable-aarch64-apple-darwin/bin:$PATH"
 - Wasm lint:     `cargo clippy --target wasm32-unknown-unknown -- -D warnings`
 - Wasm build:    `cargo build --release --target wasm32-unknown-unknown` (ok)
 
-### worker-build note
+### worker-build note (RESOLVED)
 
-`worker-build --release` compiles the crate to wasm successfully, then fails in
-the `wasm-bindgen` post-processing step with:
+`worker-build --release` now produces a deployable bundle
+(`build/worker/shim.mjs` + `build/index_bg.wasm`) and
+`npx wrangler deploy --dry-run` succeeds.
 
-```
-externref table required for catch wrappers
-```
-
-because worker-build passes `--force-enable-abort-handler` and rustc 1.97 does
-not emit an externref table by default. Running `wasm-bindgen` on the produced
-`.wasm` **without** that flag succeeds and yields the deployable module, so this
-is a toolchain-version alignment issue (rustc / wasm-bindgen 0.2.126 /
-worker-build), not a defect in the port. `.cargo/config.toml` enables
-`+reference-types,+multivalue` for the wasm target as the standard mitigation;
-resolving the abort-handler flag fully is a cutover-time task (pin a
-rustc/wasm-bindgen combination known to emit the table).
+The former blocker — `wasm-bindgen` failing the forced
+`--force-enable-abort-handler` step with "externref table required for catch
+wrappers" — was caused by `[profile.release] strip = true` in `Cargo.toml`.
+Cargo's strip removed the wasm `target_features` custom section, so wasm-bindgen
+could not detect the `reference-types` feature that `.cargo/config.toml` enables
+(`+reference-types,+multivalue`) and therefore refused to emit the externref
+table. The `.cargo/config.toml` flags DO reach the build; they were just being
+stripped afterward. Fix: set `strip = false` (wasm-opt, run by worker-build,
+strips debug info for size regardless, so the final bundle is unaffected). See
+CUTOVER.md.
 
 ## Manual integration smoke (`npx wrangler dev`)
 

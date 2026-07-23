@@ -1,5 +1,16 @@
 # PORT_STATUS — TypeScript worker → Rust (workers-rs)
 
+> **CUTOVER-READY.** `worker-build --release` produces a deployable bundle and
+> `npx wrangler deploy --dry-run` succeeds. `wrangler dev` boots and
+> `GET /health` → 200, `GET /v1/me` (no auth) → 401, `GET /` serves the static
+> asset. All cross-group inbox-fallback placeholders are closed; Vectorize is a
+> single implementation compiled by DEFAULT with a graceful runtime fallback;
+> the scheduled handler runs every minutely-cron piece; `wrangler.toml` is at
+> full var/binding/assets parity with `worker/wrangler.jsonc` (custom domain
+> commented out). See CUTOVER.md for the runbook. Gates: 161 host tests green,
+> host + wasm clippy `-D warnings` clean. Remaining risks are listed at the
+> bottom.
+
 Tracks every module in `worker/src/*.ts` against its Rust port status.
 Source of truth for behaviour parity is the TS file; the Rust worker binds the
 same D1 database and does not own migrations.
@@ -14,7 +25,7 @@ resolved — noted inline).
 |---|---|---|---|
 | `auth.ts` | `src/auth.rs` + `glue.rs::authenticate`/`firebase_keys` | **ported** | RS256 via RustCrypto `rsa` (pure, no WebCrypto). JWKS fetch + per-isolate cache + Cache-Control max-age. Same 401/503 error shapes. 13 unit tests. |
 | `entitlement.ts` | `src/entitlement.rs` + `glue.rs::has_active_pro` | **ported** | `DEV_FAKE_PRO`/`ENVIRONMENT` guard + row matrix. 8 tests. |
-| `index.ts` (fetch router, `/health`) | `glue.rs::fetch` | **partial** | Router + `/health` + Phase-1 routes done. `scheduled` cron handler and DO exports pending (later phases). |
+| `index.ts` (fetch router, `/health`, `scheduled`) | `glue.rs::fetch` + `glue.rs::scheduled` | **ported** | Router + `/health` + all route groups registered. The single `#[event(scheduled)]` runs every minutely-cron piece in TS order: `deliverDueChannelMessages`, `respondToStaleInboxItems`, `reconcileManagedAssistantRequests`, then `backfillClaimVectors → drainPendingEmbeddings` (memory `cron_slice`). `[triggers] crons = ["* * * * *"]` declared in `wrangler.toml`. DO exports present. Divergence: workers-rs Router handlers get no execution `Context`, so the TS `waitUntil` slices are awaited inline (each error-isolated, matching the per-branch `.catch`). |
 | `routes.ts` → `GET /me` | `glue.rs::handle_me` | **ported** | Includes `channel_bindings` lookup. |
 | `routes.ts` → `GET /setup-health` | `src/setup_health.rs` + `glue.rs::handle_setup_health` | **ported** | Identical boolean shape. 4 tests. |
 | `routes.ts` → `GET /entitlement` | `glue.rs::handle_entitlement` | **ported** | |
@@ -32,25 +43,24 @@ host-testable modules (`cargo test`), thin wasm glue for D1/fetch/JS interop.
 | `billing.ts` | `src/billing.rs` + `glue.rs::handle_billing_*` | **ported** | Stripe checkout/portal via `fetch` (form-encoded, `stripe-version` pinned), metadata `firebase_uid` propagation, customer-id-over-email precedence, fail-closed 503 when unconfigured / 502 on provider failure / 404 no customer. 6 pure tests. |
 | `desktop-auth.ts` | `src/desktop_auth.rs` + `glue.rs::handle_desktop_*` | **ported** | 3-step handoff (start/complete/exchange): PKCE-style SHA-256 verifier challenge, single-use consumption (`consumed_at` change guard), 6-digit confirmation with atomic 5-attempt lockout (`bind_desktop_session`), per-IP 10/10min rate limit, public-origin validation, service-account RS256 custom-token signing (RustCrypto `rsa` PKCS#8). 8 pure tests incl. sign→verify round-trip and escaped-newline PEM. |
 | `conversations.ts` | `src/conversations.rs` + `glue.rs::handle_inbox_*`/`handle_messages_*`/`handle_cursor_put` | **ported** | Inbox claim/complete lease mechanics, atomic completion batch with the `Channel is not linked` re-read fallback, retry state machine + completion idempotency, replay messages/cursors with optimistic-revision conflict (409). Payload-hash idempotency shared with webhooks. 8 pure tests. `memoryContext` returns `null` unless the `vectorize` feature is on (see below) — parity-safe because TS also returns null when `MEMORY_VECTORS`/`AI` are unbound. `dispatchChannelMessage` (DeliveryCoordinator DO) is a best-effort call the TS wraps in try/catch-ignore; skipped here (DO is a later phase; the scheduled drain still delivers). |
-| `embeddings.ts` + `memory-vectors.ts` (search path) | `src/vectorize_ffi.rs` | **ported (feature-gated)** | Hand-written `wasm_bindgen`/`js_sys` FFI to the JS `VectorizeIndex` object: `query`/`upsert`/`deleteByIds` with metadata filters, plus `embed_texts` via the native `Ai` binding. JSON round-trip interop (`JSON.parse`/`stringify`) keeps it dependency-light. Wires `memory_context_for` into inbox claim. **OFF by default** behind `--features vectorize`; MEMORY_VECTORS/AI bindings must be declared in `wrangler.toml` before enabling. See "Vectorize FFI outcome" below. |
+| `embeddings.ts` + `memory-vectors.ts` (search path) | `routes_memory/wasm_glue.rs` | **ported (default)** | Single hand-written `js_sys` FFI to the JS `VectorizeIndex` object (`query`/`upsert`/`deleteByIds` with metadata filters) plus `embed_texts` via the native `Ai` binding, compiled by DEFAULT. `MEMORY_VECTORS`/`AI` declared in `wrangler.toml`; when unbound at runtime the FFI returns `None` and memory context is `null` (TS parity). The old feature-gated duplicate `src/vectorize_ffi.rs` and the `vectorize` cargo feature were REMOVED. See "Vectorize FFI outcome" below. |
 | `rate-limit.ts` (RateLimiter DO) | — | **pending** | Durable Objects natively supported in workers-rs via `#[durable_object]`; mechanical, deferred. |
 
-### Vectorize FFI outcome
+### Vectorize FFI outcome (unified, default-on)
 
-The known interop gap is **resolved**, not stubbed-silently. `vectorize_ffi.rs`
+There is now **one** Vectorize implementation: `routes_memory/wasm_glue.rs`. It
 binds the `VectorizeIndex` JS object by reading the `MEMORY_VECTORS` binding off
 the env with `js_sys::Reflect` and invoking `query`/`upsert`/`deleteByIds` as JS
-methods, marshalling arguments/results as JSON. Embeddings use the native
-`worker::Ai` binding (`env.ai("AI")`). It compiles and lints clean on
-`wasm32-unknown-unknown` under `--features vectorize` (clippy `-D warnings`) and
-builds in release. It is **gated OFF by default** so the shipped default build
-declares no Vectorize/AI bindings and the inbox `memoryContext` is honestly
-`null` (matching TS behaviour when those bindings are absent) — no silently
-broken vector code. Remaining before enabling in production: declare
-`[[vectorize]]` (`binding = "MEMORY_VECTORS"`) and the `[ai]` binding in
-`wrangler.toml`, and port the scheduled `drainPendingEmbeddings`/
-`backfillClaimVectors`/`deleteClaimVectors` drivers (the `upsert`/`delete_by_ids`
-FFI they need is already implemented) plus the `DELETE /account` vector cleanup.
+methods; embeddings use the native `worker::Ai` binding. It is compiled **by
+default** (the `vectorize` cargo feature and the duplicate `src/vectorize_ffi.rs`
+were deleted). `[[vectorize]]` (`binding = "MEMORY_VECTORS"`,
+`index_name = "omi-memory-claims"`) and `[ai]` (`binding = "AI"`) are declared
+in `wrangler.toml`. Runtime is fail-safe: when the bindings are absent the FFI
+returns `None` and memory context is `null`, matching TS behaviour — so the
+build is honest with or without the index provisioned. The scheduled
+`backfillClaimVectors`/`drainPendingEmbeddings` drivers run via `cron_slice`;
+`DELETE /account` vector cleanup remains the one deferred Vectorize consumer
+(documented in Phase 1).
 
 ## Later phases (larger surface / binding-dependent)
 
@@ -114,7 +124,7 @@ appended).
 | TS module | Rust | Status | Notes |
 |---|---|---|---|
 | `delivery.ts` | `src/delivery.rs` + `routes_channels.rs` | **ported** | `DeliveryCoordinator` DO (`#[durable_object]`, per-uid/channel identity fencing, `/deliver` `/unlink` `/cancel-orphans`), Telegram/Blooio provider sends, retry-after (header seconds + HTTP-date + JSON `retry_after`) with jittered exponential backoff, orphan cancellation, ambiguous-Telegram `unknown` outcome, stable idempotency-key digest. `deliverDueChannelMessages` cron piece ported as `deliver_due_channel_messages(env)` (additive; wire into the unified `#[event(scheduled)]` at merge). 15 pure unit tests. |
-| `inbox-fallback.ts` | `src/inbox_fallback.rs` + `routes_channels.rs` | **partial** | 2-min claim threshold, lease claim/fencing (`channel_inbox` UPDATE…RETURNING + `lease_token` guard), retry/failed release transitions, non-Pro static ack, final-attempt ack, `CHANNEL_FALLBACK_RESPONDER` flag, prompt assembly + reply trim/cap — all ported. Pro completion (`runManagedInboxCompletion`), `memoryContextFor`, and `completeInboxItemDone` are **cross-group placeholders** clearly marked in `routes_channels.rs` (MERGE PLACEHOLDERS block); until they land the claim is released for retry so nothing is dropped. 6 pure unit tests. |
+| `inbox-fallback.ts` | `src/inbox_fallback.rs` + `routes_channels.rs` | **ported** | 2-min claim threshold, lease claim/fencing (`channel_inbox` UPDATE…RETURNING + `lease_token` guard), retry/failed release transitions, non-Pro static ack, final-attempt ack, `CHANNEL_FALLBACK_RESPONDER` flag, prompt assembly + reply trim/cap. Cross-group calls now WIRED: `runManagedInboxCompletion` → `routes_ai::run_managed_inbox_completion` (admission DO admit/settle/release + `managed_ai_requests` ledger + non-streaming MIMO completion), `memoryContextFor` → `routes_memory::memory_context_for` (single Vectorize impl), `completeInboxItemDone` → `glue::complete_inbox_done` (delivery + conversation-message batch with the `Channel is not linked` re-read). 6 pure unit tests. |
 | `oauth-broker.ts` | `src/oauth.rs` + `routes_channels.rs` | **ported** | Device start/poll/status/delete, AES-GCM encrypt/decrypt at rest, pinned x.ai discovery with per-isolate cache + endpoint allowlist, poll error allowlist (202 pending vs 400), `account_id` pattern, `ENABLE_DEV_OAUTH_BROKER` gate, `oauth-device-start`/`oauth-device-poll` rate limits. 10 pure unit tests. |
 | `oauth-proxy.ts` | `src/oauth.rs` + `routes_channels.rs` | **ported** | Subscription chat proxy, `needs_refresh` leeway check, refresh with `expires_in` fallback TTL, compare-and-swap rotation keyed on the old refresh token + loser re-read, per-`(uid,provider)` refresh lock, streaming upstream passthrough with `no-store`/`nosniff` headers. |
 | `rate-limit.ts` | `src/rate_limit_lock.rs` | **ported (self-contained copy)** | `RateLimiter` DO (fixed-window counter + refresh mutex) + `consume_rate_limit`/`acquire_refresh_lock`/`release_refresh_lock`. Dedupe with the rate-limit group at merge (keep one DO + one binding). |
@@ -226,3 +236,40 @@ retrieve-match quoting, ISO formatting, receipt/hash patterns.
 **Gates:** `cargo test` 50 green · `cargo clippy --all-targets -D warnings`
 (host) clean · `cargo clippy --target wasm32 -D warnings` clean ·
 `cargo build --release --target wasm32-unknown-unknown` clean.
+
+## Cutover readiness — remaining risks (honest list)
+
+Everything the TS worker's routes/cron touch is ported and the deploy pipeline
+is green. Known residual risks, none blocking a cutover:
+
+- **DELETE /account Vectorize cleanup** still deferred: account deletion removes
+  all D1 rows but does not delete the user's claim vectors from the
+  `omi-memory-claims` index. Orphaned vectors are uid-filtered and never
+  surfaced to other users, but they are not purged. The `delete_by_ids` FFI
+  exists; wiring it into the delete path is the one open Vectorize consumer.
+- **Durable Object state does not migrate** at cutover. The Rust worker uses its
+  own DO namespace (`AssistantAdmissionDo`/`SttAdmissionDo`/`RateLimiterDo`/
+  `DeliveryCoordinator`). In-flight admission ledgers and rate-limit counters
+  reset; both are short-TTL/self-healing and reconverge within a cron cycle.
+- **Provider `fetch` timeouts**: workers-rs `RequestInit` has no `AbortSignal`
+  field, so the TS per-request `AbortSignal.timeout(...)` guards are dropped in
+  favour of the platform subrequest timeout (delivery, MIMO completion, OAuth).
+- **Streaming usage-tail settlement** for `/v1/chat/completions` is reconciled
+  by the minutely cron rather than parsed inline; budgets converge within one
+  cron cycle (TS-equivalent deferral).
+- **Local dev caveat**: Vectorize is "not supported" in `wrangler dev --local`
+  and AI "always remote"; semantic-search paths return null/empty locally. This
+  is a Miniflare limitation, not a port gap — both work against the deployed
+  worker (or `wrangler dev --remote`).
+- **Assets path** `../worker/public` is outside the project dir; wrangler 4.x
+  accepts it (verified). If a future wrangler rejects it, copy into
+  `worker-rs/public/` via a `[build]` step (documented in CUTOVER.md).
+
+## Build pipeline (RESOLVED)
+
+`worker-build --release` produces `build/worker/shim.mjs` + `build/index_bg.wasm`
+and `npx wrangler deploy --dry-run --outdir /tmp/wrs-dry` succeeds. The former
+"externref table required for catch wrappers" blocker was `[profile.release]
+strip = true` stripping the wasm `target_features` section that wasm-bindgen
+reads to detect `reference-types`; fixed by `strip = false` (wasm-opt still
+strips debug info for size). See README.md and CUTOVER.md.
