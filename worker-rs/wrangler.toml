@@ -5,6 +5,9 @@
 name = "omi-v4-api-rs"
 main = "build/worker/shim.mjs"
 compatibility_date = "2026-07-21"
+# Keeps the *.workers.dev URL live so the shadow deploy stays smoke-testable
+# after the custom domain is attached, and gives rollback a working target.
+workers_dev = true
 
 [build]
 command = "worker-build --release"

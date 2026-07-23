@@ -76,6 +76,11 @@ jobs:
     container:
       image: ghcr.io/nrfconnect/sdk-nrf-toolchain:v2.9.0
       options: --user root
+    # The image's /bin/sh is dash, which has no `set -o pipefail`; without this
+    # every step using bash syntax dies before it runs a single command.
+    defaults:
+      run:
+        shell: bash
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.discover.outputs.matrix) }}
