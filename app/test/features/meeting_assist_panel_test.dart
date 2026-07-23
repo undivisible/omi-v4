@@ -226,6 +226,61 @@ void main() {
     expect(find.byKey(const Key('meeting_far_end_warning')), findsNothing);
   });
 
+  testWidgets(
+    'unavailable system audio surfaces why only the mic is recorded',
+    (tester) async {
+      final (services, hub) = await servicesWithHub();
+      addTearDown(services.dispose);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(body: MeetingAssistPanel(services: services)),
+        ),
+      );
+      hub.eventsController.add(
+        const NativeEventMeetingStateChanged(
+          value: MeetingStateChanged(active: true, suggestedTitle: 'Sync'),
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+      expect(find.byKey(const Key('meeting_mic_only_notice')), findsNothing);
+
+      hub.eventsController.add(
+        const NativeEventError(
+          value: NativeError(
+            requestId: 'meeting-capture',
+            code: 'meeting_system_audio_unavailable',
+            message:
+                'system audio capture is unavailable; recording your '
+                'microphone only.',
+            retryable: true,
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+      expect(find.byKey(const Key('meeting_mic_only_notice')), findsOneWidget);
+      expect(
+        find.textContaining('recording your microphone only'),
+        findsOneWidget,
+      );
+
+      hub.eventsController.add(
+        const NativeEventMeetingStateChanged(
+          value: MeetingStateChanged(active: false, suggestedTitle: null),
+        ),
+      );
+      hub.eventsController.add(
+        const NativeEventMeetingStateChanged(
+          value: MeetingStateChanged(active: true, suggestedTitle: 'Sync'),
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+      expect(find.byKey(const Key('meeting_mic_only_notice')), findsNothing);
+    },
+  );
+
   testWidgets('ending a meeting hides the panel and clears the active state', (
     tester,
   ) async {

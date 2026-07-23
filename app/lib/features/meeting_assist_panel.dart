@@ -27,6 +27,7 @@ class MeetingAssistPanelState extends State<MeetingAssistPanel> {
   final List<String> _memoryContext = [];
   bool _active = false;
   bool _farEndSilent = false;
+  String? _micOnlyReason;
   String? _title;
   String? _lastContextRequestId;
   int _contextSequence = 0;
@@ -59,6 +60,7 @@ class MeetingAssistPanelState extends State<MeetingAssistPanel> {
             _insights.clear();
             _memoryContext.clear();
             _farEndSilent = false;
+            _micOnlyReason = null;
           }
         });
       case NativeEventMeetingTranscriptTurn(:final value)
@@ -94,6 +96,15 @@ class MeetingAssistPanelState extends State<MeetingAssistPanel> {
       case NativeEventError(:final value)
           when _active && value.code == 'meeting_far_end_silent':
         setState(() => _farEndSilent = true);
+      // System-audio capture could not open (no support on this platform, or a
+      // device error): the call falls back to microphone-only, so say why the
+      // other side of the call is missing instead of failing silently.
+      case NativeEventError(:final value)
+          when _active && value.code == 'meeting_system_audio_unavailable':
+        final reason = value.message.trim();
+        if (reason.isNotEmpty) {
+          setState(() => _micOnlyReason = reason);
+        }
       default:
         break;
     }
@@ -206,7 +217,17 @@ class MeetingAssistPanelState extends State<MeetingAssistPanel> {
                     ),
                   ],
                 ),
-                if (_farEndSilent) ...[
+                if (_micOnlyReason case final reason?) ...[
+                  const SizedBox(height: 6),
+                  Text(
+                    key: const Key('meeting_mic_only_notice'),
+                    reason,
+                    style: const TextStyle(
+                      fontSize: 11.5,
+                      color: Color(0xffe4614d),
+                    ),
+                  ),
+                ] else if (_farEndSilent) ...[
                   const SizedBox(height: 6),
                   Text(
                     key: const Key('meeting_far_end_warning'),
