@@ -16,6 +16,7 @@
 #endif
 #include "lib/core/settings.h"
 #include "lib/core/transport.h"
+#include "lib/core/user_event.h"
 #ifdef CONFIG_OMI_ENABLE_OFFLINE_STORAGE
 #include "lib/core/storage.h"
 #endif
@@ -171,7 +172,7 @@ void set_led_state()
     } else {
 #ifdef CONFIG_OMI_ENABLE_CAPTURE_LED
         // Blue while a central is actively capturing (audio subscribed), red otherwise
-        blue = is_connected && is_capturing;
+        blue = is_connected && is_capturing && !mic_in_aad_sleep();
         red = !blue;
 #else
         blue = is_connected;
@@ -196,6 +197,11 @@ void set_led_state()
 #define IDLE_SLEEP_TIMEOUT_SEC (CONFIG_OMI_IDLE_SLEEP_TIMEOUT_MIN * 60)
 static uint32_t idle_seconds = 0;
 
+void omi_note_user_activity(void)
+{
+    idle_seconds = 0;
+}
+
 static void update_idle_sleep(void)
 {
     // Streaming audio to a subscribed central, or charging, holds the device awake.
@@ -211,6 +217,10 @@ static void update_idle_sleep(void)
         LOG_INF("Idle for %u s; entering system off", idle_seconds);
         turnoff_all();
     }
+}
+#else
+void omi_note_user_activity(void)
+{
 }
 #endif
 

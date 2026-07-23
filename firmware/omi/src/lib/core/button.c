@@ -17,6 +17,7 @@
 #include "mic.h"
 #include "speaker.h"
 #include "transport.h"
+#include "user_event.h"
 #include "wdog_facade.h"
 
 #include "imu.h"
@@ -221,6 +222,10 @@ void check_button_level(struct k_work *work_item)
         btn_last_event = event;
 
         notify_tap();
+#ifdef CONFIG_OMI_ENABLE_USER_EVENTS
+        omi_note_user_activity();
+        omi_user_event_emit(OMI_USER_EVENT_BOOKMARK, OMI_USER_EVENT_SRC_BUTTON);
+#endif
     }
 
     // Double tap
@@ -228,6 +233,10 @@ void check_button_level(struct k_work *work_item)
         LOG_INF("double tap detected\n");
         btn_last_event = event;
         notify_double_tap();
+#ifdef CONFIG_OMI_ENABLE_USER_EVENTS
+        omi_note_user_activity();
+        omi_user_event_emit(OMI_USER_EVENT_ASSISTANT, OMI_USER_EVENT_SRC_BUTTON);
+#endif
     }
 
     // Long press, one time event
@@ -254,7 +263,6 @@ void check_button_level(struct k_work *work_item)
     }
 
     k_work_reschedule(&button_work, K_MSEC(BUTTON_CHECK_INTERVAL));
-    return 0;
 }
 
 static ssize_t button_data_read_characteristic(struct bt_conn *conn,
@@ -348,6 +356,10 @@ FSM_STATE_T get_current_button_state()
 void turnoff_all()
 {
     int rc;
+
+#ifdef CONFIG_OMI_ENABLE_USER_EVENTS
+    omi_user_event_emit(OMI_USER_EVENT_POWER_OFF, OMI_USER_EVENT_SRC_SYSTEM);
+#endif
 
     // Immediate feedback: LED off and haptic
     led_off();

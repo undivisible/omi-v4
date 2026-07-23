@@ -18,6 +18,7 @@
 #include <zephyr/logging/log.h>
 #include <zephyr/settings/settings.h>
 #include <zephyr/sys/atomic.h>
+#include <zephyr/sys/byteorder.h>
 #include <zephyr/sys/ring_buffer.h>
 
 #include "accel.h"
@@ -33,6 +34,7 @@
 #include "sd_card.h"
 #include "settings.h"
 #include "storage.h"
+#include "user_event.h"
 LOG_MODULE_REGISTER(transport, CONFIG_LOG_DEFAULT_LEVEL);
 
 #ifdef CONFIG_OMI_ENABLE_RFSW_CTRL
@@ -294,6 +296,126 @@ static ssize_t settings_device_name_read_handler(struct bt_conn *conn,
 }
 #endif
 
+#ifdef CONFIG_OMI_ENABLE_USER_EVENTS
+static struct bt_uuid_128 settings_user_event_characteristic_uuid =
+    BT_UUID_INIT_128(BT_UUID_128_ENCODE(0x19B10017, 0xE8F2, 0x537E, 0x4F6C, 0xD104768A1214));
+
+struct omi_user_event_record {
+    uint8_t code;
+    uint8_t source;
+    uint16_t seq;
+    uint32_t epoch_s;
+};
+
+static struct omi_user_event_record user_event_queue[CONFIG_OMI_USER_EVENT_QUEUE_LEN];
+static uint8_t user_event_head;
+static uint8_t user_event_count;
+static uint16_t user_event_next_seq;
+static uint8_t user_event_last[OMI_USER_EVENT_PAYLOAD_LEN];
+static K_MUTEX_DEFINE(user_event_lock);
+
+static void user_event_encode(const struct omi_user_event_record *rec, uint8_t *out)
+{
+    out[0] = rec->code;
+    out[1] = rec->source;
+    sys_put_le16(rec->seq, out + 2);
+    sys_put_le32(rec->epoch_s, out + 4);
+}
+
+static struct bt_gatt_attr *user_event_value_attr(void);
+
+static bool user_event_try_notify(const struct omi_user_event_record *rec)
+{
+    struct bt_conn *conn = current_connection;
+    struct bt_gatt_attr *attr = user_event_value_attr();
+
+    if (conn == NULL || attr == NULL) {
+        return false;
+    }
+    if (!bt_gatt_is_subscribed(conn, attr, BT_GATT_CCC_NOTIFY)) {
+        return false;
+    }
+
+    uint8_t payload[OMI_USER_EVENT_PAYLOAD_LEN];
+    user_event_encode(rec, payload);
+
+    int err = bt_gatt_notify(conn, attr, payload, sizeof(payload));
+    if (err) {
+        LOG_WRN("User event notify failed: %d", err);
+        return false;
+    }
+    return true;
+}
+
+static void user_event_queue_push(const struct omi_user_event_record *rec)
+{
+    if (user_event_count == CONFIG_OMI_USER_EVENT_QUEUE_LEN) {
+        user_event_head = (user_event_head + 1U) % CONFIG_OMI_USER_EVENT_QUEUE_LEN;
+        user_event_count--;
+    }
+
+    uint8_t tail = (user_event_head + user_event_count) % CONFIG_OMI_USER_EVENT_QUEUE_LEN;
+    user_event_queue[tail] = *rec;
+    user_event_count++;
+}
+
+void omi_user_event_emit(uint8_t code, uint8_t source)
+{
+    struct omi_user_event_record rec = {
+        .code = code,
+        .source = source,
+        .epoch_s = get_utc_time(),
+    };
+
+    k_mutex_lock(&user_event_lock, K_FOREVER);
+    rec.seq = user_event_next_seq++;
+    user_event_encode(&rec, user_event_last);
+
+    if (user_event_count > 0U || !user_event_try_notify(&rec)) {
+        user_event_queue_push(&rec);
+    }
+    k_mutex_unlock(&user_event_lock);
+
+    LOG_INF("User event 0x%02x from source 0x%02x (seq %u)", code, source, rec.seq);
+}
+
+void omi_user_event_flush(void)
+{
+    k_mutex_lock(&user_event_lock, K_FOREVER);
+    while (user_event_count > 0U) {
+        if (!user_event_try_notify(&user_event_queue[user_event_head])) {
+            break;
+        }
+        user_event_head = (user_event_head + 1U) % CONFIG_OMI_USER_EVENT_QUEUE_LEN;
+        user_event_count--;
+    }
+    k_mutex_unlock(&user_event_lock);
+}
+
+static void user_event_ccc_config_changed_handler(const struct bt_gatt_attr *attr, uint16_t value)
+{
+    ARG_UNUSED(attr);
+
+    if (value == BT_GATT_CCC_NOTIFY) {
+        LOG_INF("Client subscribed for user event notifications");
+        omi_user_event_flush();
+    } else if (value == 0) {
+        LOG_INF("Client unsubscribed from user event notifications");
+    } else {
+        LOG_INF("Invalid user event CCC value: %u", value);
+    }
+}
+
+static ssize_t settings_user_event_read_handler(struct bt_conn *conn,
+                                                const struct bt_gatt_attr *attr,
+                                                void *buf,
+                                                uint16_t len,
+                                                uint16_t offset)
+{
+    return bt_gatt_attr_read(conn, attr, buf, len, offset, user_event_last, sizeof(user_event_last));
+}
+#endif
+
 static struct bt_gatt_attr settings_service_attr[] = {
     BT_GATT_PRIMARY_SERVICE(&settings_service_uuid),
     BT_GATT_CHARACTERISTIC(&settings_dim_ratio_characteristic_uuid.uuid,
@@ -339,9 +461,25 @@ static struct bt_gatt_attr settings_service_attr[] = {
                            settings_device_name_write_handler,
                            NULL),
 #endif
+#ifdef CONFIG_OMI_ENABLE_USER_EVENTS
+    BT_GATT_CHARACTERISTIC(&settings_user_event_characteristic_uuid.uuid,
+                           BT_GATT_CHRC_READ | BT_GATT_CHRC_NOTIFY,
+                           BT_GATT_PERM_READ,
+                           settings_user_event_read_handler,
+                           NULL,
+                           NULL),
+    BT_GATT_CCC(user_event_ccc_config_changed_handler, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
+#endif
 };
 
 static struct bt_gatt_service settings_service = BT_GATT_SERVICE(settings_service_attr);
+
+#ifdef CONFIG_OMI_ENABLE_USER_EVENTS
+static struct bt_gatt_attr *user_event_value_attr(void)
+{
+    return &settings_service_attr[ARRAY_SIZE(settings_service_attr) - 2U];
+}
+#endif
 
 // --- Features Service ---
 static struct bt_uuid_128 features_service_uuid =

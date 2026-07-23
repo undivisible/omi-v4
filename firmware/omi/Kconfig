@@ -56,6 +56,26 @@ config OMI_ENABLE_RFSW_CTRL
         "Enable RFSwitch Control support."
     default y
 
+config OMI_ENABLE_USER_EVENTS
+    bool "User/system event notify characteristic"
+    default n
+    help
+        "Expose a read/notify characteristic (19B10017) in the settings service
+         carrying device-originated events with an RTC timestamp: single button
+         tap = bookmark ('mark this moment'), double tap = assistant trigger,
+         imminent power off, microphone AAD sleep/wake and IMU gestures.
+         See src/lib/core/user_event.h for the 8-byte payload layout."
+
+config OMI_USER_EVENT_QUEUE_LEN
+    int "User events buffered while no central is subscribed"
+    range 1 64
+    default 16
+    depends on OMI_ENABLE_USER_EVENTS
+    help
+        "Events emitted while disconnected (or before the app subscribes) are
+         held in this RAM ring and flushed on subscribe. The oldest event is
+         dropped on overflow. The queue does not survive reboot or system off."
+
 config OMI_ENABLE_MONITOR
     bool "Enable monitoring/metrics system"
     help

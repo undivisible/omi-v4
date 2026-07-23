@@ -23,6 +23,7 @@
 #include "storage.h"
 #include "t5838_aad.h"
 #include "transport.h"
+#include "user_event.h"
 #endif
 
 LOG_MODULE_REGISTER(mic, CONFIG_LOG_DEFAULT_LEVEL);
@@ -390,6 +391,9 @@ static void enter_hw_aad(void)
         k_sem_give(&aad_sem);
     }
     LOG_INF("AAD: hardware sleep (mic off)");
+#ifdef CONFIG_OMI_ENABLE_USER_EVENTS
+    omi_user_event_emit(OMI_USER_EVENT_MIC_SLEEP, OMI_USER_EVENT_SRC_MIC);
+#endif
 }
 
 /* Bring the mic back online (aad thread context). */
@@ -402,6 +406,9 @@ static void exit_hw_aad(void)
     sd_request_power(true);   /* power on + remount SD before audio starts flowing */
     mic_resume();             /* dmic START reclaims CLK via pinctrl */
     LOG_INF("AAD: WAKE -> mic resumed");
+#ifdef CONFIG_OMI_ENABLE_USER_EVENTS
+    omi_user_event_emit(OMI_USER_EVENT_MIC_WAKE, OMI_USER_EVENT_SRC_MIC);
+#endif
 }
 
 static void aad_thread_fn(void *p1, void *p2, void *p3)
