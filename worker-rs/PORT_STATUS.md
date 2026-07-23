@@ -21,14 +21,36 @@ resolved — noted inline).
 | `routes.ts` → `GET|PUT /profile/onboarding` | `glue.rs::handle_onboarding_*` | **ported** | Same INSERT…ON CONFLICT + 400 on `complete!=true`. |
 | `routes.ts` → `DELETE /account` | `glue.rs::handle_account_delete` | **partial** | D1 batch delete across all uid-scoped tables at parity. Vectorize claim-vector cleanup deferred — **blocked** on Vectorize binding (see below). |
 
-## Phase 2 (next)
+## Phase 2 (this task — landed)
 
-| TS module | Status | Notes |
-|---|---|---|
-| `billing.ts` | **pending** | Stripe checkout/portal via `fetch` — no binding needed; straightforward next. |
-| `webhooks.ts` | **pending** | Telegram/Blooio/Stripe inbound. Needs constant-time compares + HMAC/dedupe. Use RustCrypto (`hmac`, `sha2`, `subtle`) — all wasm-compatible. |
-| `desktop-auth.ts` | **pending** | Signs a Firebase custom token (service-account RS256 signing) — RustCrypto `rsa` PKCS#8 private key, wasm-OK. |
-| `rate-limit.ts` (RateLimiter DO) | **blocked-ish** | Durable Objects natively supported in workers-rs via `#[durable_object]`; port is mechanical but deferred. |
+Same pure-logic/glue split as Phase 1: pure decision/crypto logic in
+host-testable modules (`cargo test`), thin wasm glue for D1/fetch/JS interop.
+
+| TS module | Rust | Status | Notes |
+|---|---|---|---|
+| `webhooks.ts` | `src/webhooks.rs` + `src/crypto_util.rs` + `glue.rs::handle_webhook_*` | **ported** | Telegram (constant-time secret-header compare via `subtle`), Blooio + Stripe (timestamped HMAC-SHA256 ±300s, `hmac`/`sha2`), `webhook_events`/`stripe_events` dedupe, link-token binding with conflict detection (`bind_channel`), `channel_inbox` + conversation append idempotency (`enqueue_channel_message`/`append_conversation_message`), Stripe entitlement state machine incl. the `stripe_event_created` ordering guard. 24 pure tests (HMAC vectors, link-token regexes, Telegram/Blooio/Stripe extraction). |
+| `billing.ts` | `src/billing.rs` + `glue.rs::handle_billing_*` | **ported** | Stripe checkout/portal via `fetch` (form-encoded, `stripe-version` pinned), metadata `firebase_uid` propagation, customer-id-over-email precedence, fail-closed 503 when unconfigured / 502 on provider failure / 404 no customer. 6 pure tests. |
+| `desktop-auth.ts` | `src/desktop_auth.rs` + `glue.rs::handle_desktop_*` | **ported** | 3-step handoff (start/complete/exchange): PKCE-style SHA-256 verifier challenge, single-use consumption (`consumed_at` change guard), 6-digit confirmation with atomic 5-attempt lockout (`bind_desktop_session`), per-IP 10/10min rate limit, public-origin validation, service-account RS256 custom-token signing (RustCrypto `rsa` PKCS#8). 8 pure tests incl. sign→verify round-trip and escaped-newline PEM. |
+| `conversations.ts` | `src/conversations.rs` + `glue.rs::handle_inbox_*`/`handle_messages_*`/`handle_cursor_put` | **ported** | Inbox claim/complete lease mechanics, atomic completion batch with the `Channel is not linked` re-read fallback, retry state machine + completion idempotency, replay messages/cursors with optimistic-revision conflict (409). Payload-hash idempotency shared with webhooks. 8 pure tests. `memoryContext` returns `null` unless the `vectorize` feature is on (see below) — parity-safe because TS also returns null when `MEMORY_VECTORS`/`AI` are unbound. `dispatchChannelMessage` (DeliveryCoordinator DO) is a best-effort call the TS wraps in try/catch-ignore; skipped here (DO is a later phase; the scheduled drain still delivers). |
+| `embeddings.ts` + `memory-vectors.ts` (search path) | `src/vectorize_ffi.rs` | **ported (feature-gated)** | Hand-written `wasm_bindgen`/`js_sys` FFI to the JS `VectorizeIndex` object: `query`/`upsert`/`deleteByIds` with metadata filters, plus `embed_texts` via the native `Ai` binding. JSON round-trip interop (`JSON.parse`/`stringify`) keeps it dependency-light. Wires `memory_context_for` into inbox claim. **OFF by default** behind `--features vectorize`; MEMORY_VECTORS/AI bindings must be declared in `wrangler.toml` before enabling. See "Vectorize FFI outcome" below. |
+| `rate-limit.ts` (RateLimiter DO) | — | **pending** | Durable Objects natively supported in workers-rs via `#[durable_object]`; mechanical, deferred. |
+
+### Vectorize FFI outcome
+
+The known interop gap is **resolved**, not stubbed-silently. `vectorize_ffi.rs`
+binds the `VectorizeIndex` JS object by reading the `MEMORY_VECTORS` binding off
+the env with `js_sys::Reflect` and invoking `query`/`upsert`/`deleteByIds` as JS
+methods, marshalling arguments/results as JSON. Embeddings use the native
+`worker::Ai` binding (`env.ai("AI")`). It compiles and lints clean on
+`wasm32-unknown-unknown` under `--features vectorize` (clippy `-D warnings`) and
+builds in release. It is **gated OFF by default** so the shipped default build
+declares no Vectorize/AI bindings and the inbox `memoryContext` is honestly
+`null` (matching TS behaviour when those bindings are absent) — no silently
+broken vector code. Remaining before enabling in production: declare
+`[[vectorize]]` (`binding = "MEMORY_VECTORS"`) and the `[ai]` binding in
+`wrangler.toml`, and port the scheduled `drainPendingEmbeddings`/
+`backfillClaimVectors`/`deleteClaimVectors` drivers (the `upsert`/`delete_by_ids`
+FFI they need is already implemented) plus the `DELETE /account` vector cleanup.
 
 ## Later phases (larger surface / binding-dependent)
 
