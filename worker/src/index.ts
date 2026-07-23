@@ -10,6 +10,7 @@ import publicApi from "./public-api";
 export { AssistantAdmission } from "./assistant-admission";
 export { SttAdmission } from "./stt-admission";
 export { DeliveryCoordinator } from "./delivery";
+export { FaceTimeBridge } from "./facetime-bridge";
 export { RateLimiter } from "./rate-limit";
 import routes from "./routes";
 import { reconcileStripeSubscriptions } from "./stripe-sync";

@@ -451,7 +451,12 @@ monotonically increasing integer; page forward by passing the previous
 ```
 
 `role` is `user` or `assistant`. `source` is `app`, `web`, `desktop`,
-`telegram` or `blooio`. `nextCursor` equals `after` when no messages were
+`telegram` or `blooio`. `blooio` is the stored identifier for the **iMessage
+channel**; the provider behind it is now Sendblue. The identifier is
+deliberately unchanged — it appears in three D1 `CHECK` constraints and in
+`worker-rs`, and rewriting it would rebuild those tables and require both
+binaries to ship at once, for no functional gain. Existing bindings therefore
+keep working untouched. See §4.9.2. `nextCursor` equals `after` when no messages were
 returned, so polling is safe. `channelMessageId` and `deliveryId` are non-null
 only for messages that travelled over a linked chat channel.
 
@@ -571,15 +576,16 @@ first-party `/v1/chat/completions` route with a Firebase token.
 
 Scope: `facetime:write`.
 
-> **Status: not currently available.** Blooio's FaceTime endpoint is
-> implemented and wired up end to end, but the provider has it switched off
-> while they stabilise the call flow and answers `501`. This route therefore
-> returns `503` with `code: "facetime_unavailable"` for every call today. The
-> integration needs no change when the provider enables it.
+> **Status: live on accounts with a Sendblue FaceTime line.** The provider is
+> Sendblue (`POST https://api.sendblue.com/facetime/start-call`), which requires
+> a purchased FaceTime number. On an account without one the route keeps its
+> graceful state and returns `503` with `code: "facetime_unavailable"`.
 
-Place a FaceTime Audio call. On success the provider mints a shareable FaceTime
-link, rings the handle on the recipient's real device, and auto-admits the first
-person who joins via the link.
+Place a FaceTime Audio call. The provider rings the handle on the recipient's
+real device and returns Agora WebRTC credentials for the call's audio channel;
+Omi joins that channel server-side and bridges the audio to Gemini Live, so the
+recipient simply talks to Omi. There is no join link and no browser anywhere in
+the path — see §4.9.1.
 
 This is **side-effectful and not undoable**: it rings a real person's phone.
 Confirm the handle with the user before calling it.
@@ -595,8 +601,8 @@ Request:
 
 | Field | Type | Required | Notes |
 | --- | --- | --- | --- |
-| `handle` | string | yes | Who to call. Either an E.164 phone number — `+` then 7–15 digits, first digit non-zero — or an email address. Maximum 254 characters. Emails are lowercased; phone numbers are passed through verbatim. |
-| `idempotencyKey` | string | no | 8–120 characters matching `[A-Za-z0-9._:-]`. Forwarded to the provider (hashed with the uid) as `Idempotency-Key` so a retry does not place a second call. Defaults to a fresh UUID, which makes each call distinct. |
+| `handle` | string | yes | Who to call. Must be an E.164 phone number — `+` then 7–15 digits, first digit non-zero. An email address parses but is refused with `400` before anything is sent upstream: Sendblue dials numbers, not FaceTime email identities. |
+| `idempotencyKey` | string | no | 8–120 characters matching `[A-Za-z0-9._:-]`. Hashed with the uid to derive the session id, so a retry lands on the same admission reservation instead of placing a second call. Defaults to a fresh UUID, which makes each call distinct. |
 
 A handle that is neither an E.164 number nor a plausible email address is
 rejected locally with `400`; nothing is sent upstream.
@@ -607,10 +613,15 @@ rejected locally with `400`; nothing is sent upstream.
 {
   "call": {
     "handle": "+15551234567",
-    "link": "https://facetime.apple.com/join#v=1&p=..."
+    "sessionId": "9f8e7d6c5b4a32100123456789abcdef",
+    "link": "https://omi.tsc.hk/facetime/sessions/9f8e7d6c5b4a32100123456789abcdef"
   }
 }
 ```
+
+`link` is retained for compatibility with existing clients, which validate that
+it is an `https` URL. It now addresses the bridge session rather than an Apple
+join page; nothing joins the call by opening it.
 
 Errors:
 
@@ -621,7 +632,101 @@ Errors:
 | `403` | `{"error":"Missing scope","scope":"facetime:write"}` | Key lacks the scope. |
 | `429` | `{"error":"Too many requests"}` | Rate limit; see §2. |
 | `502` | `{"error":"FaceTime calling unavailable"}` | Provider error, timeout, or an unusable response body. Safe to retry with the same `idempotencyKey`. |
-| `503` | `{"error":"FaceTime calling is not yet available from Blooio","code":"facetime_unavailable"}` | The provider has FaceTime calling disabled (upstream `501`). **Do not retry** — this is a product state, not a transient fault. Distinguish it by `code`, not by the status. |
+| `429` | `{"error":"FaceTime capacity exceeded"}` | The realtime admission controller refused the session — the uid or the deployment is at its concurrent-session, seconds, or cost budget. `Retry-After` is set. |
+| `503` | `{"error":"FaceTime calling is not provisioned on this account","code":"facetime_unavailable"}` | No FaceTime line on the Sendblue account (upstream `402`/`403`/`404`/`501`), or no `GEMINI_API_KEY` for the bridge. **Do not retry** — this is a product state, not a transient fault. Distinguish it by `code`, not by the status. When the bridge key is missing the phone is never rung. |
+| `503` | `{"error":"FaceTime calling unavailable"}` | Credentials are unset or rejected (`SENDBLUE_*`, upstream `401`). |
+
+#### 4.9.1 How the audio is bridged
+
+`POST /facetime/start-call` returns `{appId, channelName, token, uid}` for an
+Agora channel rather than a link. Joining that channel needs Agora's native
+Server Gateway SDK (x86_64 Linux), which cannot run in the Workers runtime, so
+the bridge is a **Cloudflare Container** (`worker/container/facetime-bridge`)
+driven by the `FaceTimeBridge` Durable Object:
+
+1. `startFaceTimeSession` takes an admission reservation from `STT_ADMISSION`
+   (the same bounded seconds/cost controller the realtime STT path uses),
+   records the session in `managed_ai_requests`, then places the call.
+2. The Durable Object starts one container per call and passes the Agora
+   credentials, the Gemini key and the session deadline as process environment.
+   Nothing secret is baked into the image.
+3. The container joins the channel, streams caller audio to Gemini Live at
+   16 kHz mono, and pushes Gemini's 24 kHz audio back into the channel. Both
+   directions use bounded queues that drop the oldest frames under
+   backpressure, and every decoded chunk is size-capped.
+4. The reservation is released on **every** exit path: the container's
+   `monitor()` promise, an explicit stop, the Durable Object alarm, the
+   container's own deadline, and the admission controller's claim alarm.
+
+Audio only — no video track is published or subscribed.
+
+Required environment (secrets via `wrangler secret put`, never committed):
+
+| Variable | Purpose |
+| --- | --- |
+| `SENDBLUE_API_KEY_ID` / `SENDBLUE_API_KEY_SECRET` | Sendblue API credentials, sent as `sb-api-key-id` / `sb-api-secret-key`. |
+| `SENDBLUE_FACETIME_NUMBER` | The FaceTime-enabled Sendblue number to call from. |
+| `GEMINI_API_KEY` | Gemini Live. OpenRouter cannot carry realtime, so this is its own key. |
+| `GEMINI_LIVE_MODEL` | Live model id (var, already set). |
+| `FACETIME_MAX_SESSION_SECONDS` | Session cap, default 600, hard-capped at 3600. |
+| `FACETIME_COST_MICROUSD_PER_MINUTE` | Reservation cost estimate, default 30000. |
+| `FACETIME_SYSTEM_PROMPT` | Optional system instruction for the call. |
+| `AGORA_CLOUD_PROXY` | `tcp` (default) pins media to TLS 443 via Agora Cloud Proxy; `udp` or anything else uses direct mode. |
+
+#### 4.9.2 iMessage channel: Sendblue
+
+The iMessage/SMS/RCS channel moved from Blooio to Sendblue. Exactly one
+provider is live per deployment: `delivery.ts` uses Sendblue when the Sendblue
+variables are set, and falls back to Blooio otherwise. Telegram is untouched.
+
+**Outbound** — `POST https://api.sendblue.com/api/send-message` with
+`{number, from_number, content}` and the `sb-api-key-id` / `sb-api-secret-key`
+headers. Sendblue has **no idempotency key**, so the delivery queue's lease and
+status machinery is the only duplicate-send guard; do not retry outside it.
+
+**Inbound** — `POST /webhooks/sendblue/<SENDBLUE_WEBHOOK_PATH_TOKEN>`.
+
+> **Security caveat, stated plainly.** Sendblue does not sign webhook bodies.
+> It echoes the shared secret configured for the endpoint back in an
+> `sb-signing-secret` header. There is no HMAC, no timestamp, and therefore no
+> binding between the secret and the payload — anyone who observes that header
+> once can forge inbound messages until it is rotated. This is materially
+> weaker than the Blooio and Stripe paths, and cannot be fixed from our side.
+>
+> Compensating controls, all implemented in `worker/src/sendblue.ts`:
+>
+> 1. The header is compared in **constant time**, so it cannot be recovered by
+>    timing the endpoint.
+> 2. The route carries a **second high-entropy path segment**
+>    (`SENDBLUE_WEBHOOK_PATH_TOKEN`), also compared in constant time. Both the
+>    header and the path must leak together for a forgery to land.
+> 3. Replay is bounded by `webhook_events`, keyed on `message_handle`, so a
+>    captured request cannot be replayed into a second inbound message.
+> 4. Rotate the secret through Sendblue's webhooks API on any suspicion of
+>    exposure.
+
+The `receive` payload is mapped as: `from_number` → channel user id,
+`group_id` (when non-empty) → chat id so group threads stay one conversation,
+`content` → text, `media_url` → carried through for voice-note transcription.
+Outbound echoes (`is_outbound: true`) are dropped.
+
+Sendblue also exposes a `call_log` webhook carrying `disposition`
+(`connected` / `not_answered` / `voicemail`) and `transcript`. It fires only
+for outbound calls placed from the Sendblue **dashboard** — not for API-placed
+FaceTime calls — so it is not wired up.
+
+Environment:
+
+| Variable | Purpose |
+| --- | --- |
+| `SENDBLUE_NUMBER` | The line messages are sent from. |
+| `SENDBLUE_WEBHOOK_SIGNING_SECRET` | Value expected in `sb-signing-secret`. |
+| `SENDBLUE_WEBHOOK_PATH_TOKEN` | Secret path segment on the inbound route. |
+
+Migrating the channel also gains SMS and RCS fallback, group messaging,
+typing indicators, read receipts, expressive send styles and voice notes
+(`.caf` media renders as a voice memo). It loses Blooio's body-signed webhook
+and its idempotency key.
 
 ### 4.10 `POST /api/v1/speech/transcriptions`
 
@@ -634,9 +739,12 @@ write-ahead log of buffered audio after a dropout, and third-party
 integrations. The live capture path in the desktop and mobile apps does not use
 this route; it transcribes in the hub.
 
-The call runs as an OpenRouter chat completion against the `transcribe` model
-tier (`OMI_MODEL_TRANSCRIBE`, default `google/gemini-2.5-flash-lite`), through
-the Cloudflare AI Gateway when one is configured.
+The call runs as an OpenRouter chat completion against the first tier whose
+model declares audio input: balanced (`OMI_MODEL_BALANCED`, default
+`xiaomi/mimo-v2.5`), then transcribe (`OMI_MODEL_TRANSCRIBE`), then multimodal
+— through the Cloudflare AI Gateway when one is configured. When no configured
+model can accept audio the request is refused with `503` rather than sent to a
+text-only model.
 
 Request:
 
@@ -668,7 +776,7 @@ before it is buffered. Audio longer than `SPEECH_MAX_AUDIO_SECONDS` (default
 {
   "requestId": "sha256-of-uid-and-clientMessageId",
   "clientMessageId": "phone:wal:2026-07-23:0007",
-  "model": "google/gemini-2.5-flash-lite",
+  "model": "xiaomi/mimo-v2.5",
   "language": "en",
   "durationSeconds": 42,
   "text": "hello there second line",
@@ -928,14 +1036,14 @@ Requires an active Omi Pro subscription; without one the result is
 #### `start_facetime_call`
 
 ```
-handle          string   required, 3-254, E.164 phone or email address
+handle          string   required, 3-254, E.164 phone number
 idempotencyKey  string   optional, 8-120 chars of [A-Za-z0-9._:-]
 ```
 
-Side-effectful: it rings a real person's device. See §4.9 for the full
-semantics and for its current unavailability. The provider is switched off
-today, so this tool currently returns `isError: true` with
-`{"error":"FaceTime calling is not yet available from Blooio","code":"facetime_unavailable"}`.
+Side-effectful: it rings a real person's device, and Omi then joins the call's
+audio. See §4.9 for the full semantics. On an account with no FaceTime line the
+tool returns `isError: true` with
+`{"error":"FaceTime calling is not provisioned on this account","code":"facetime_unavailable"}`.
 
 #### `transcribe_audio`
 

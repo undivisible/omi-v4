@@ -167,6 +167,7 @@ beforeAll(async () => {
     "0016_zkr_sync.sql",
     "0017_zkr_read_projection.sql",
     "0021_memory_vectors.sql",
+    "0029_memory_authority_log.sql",
   ]) {
     const sql = (await Bun.file(`migrations/${name}`).text()).replace(
       "PRAGMA foreign_keys = ON;",
@@ -232,6 +233,25 @@ describe("zkr memory sync", () => {
       { record_kind: "claim", record_id: "old-claim" },
       { record_kind: "source", record_id: "source-1" },
     ]);
+    const log = await database
+      .prepare(
+        "SELECT sequence, origin_replica, record_kind, record_id FROM memory_log WHERE uid = 'alpha' ORDER BY sequence",
+      )
+      .all();
+    expect(log.results).toEqual([
+      {
+        sequence: 1,
+        origin_replica: "desktop",
+        record_kind: "source",
+        record_id: "source-1",
+      },
+      {
+        sequence: 2,
+        origin_replica: "desktop",
+        record_kind: "claim",
+        record_id: "old-claim",
+      },
+    ]);
   });
 
   test("acknowledges exact replay without duplicating authority", async () => {
@@ -252,6 +272,10 @@ describe("zkr memory sync", () => {
       )
       .first<{ count: number }>();
     expect(Number(count?.count)).toBe(2);
+    const log = await database
+      .prepare("SELECT COUNT(*) AS count FROM memory_log WHERE uid = 'alpha'")
+      .first<{ count: number }>();
+    expect(Number(log?.count)).toBe(2);
   });
 
   test("applies correction and deletion records in one completed commit", async () => {

@@ -7,7 +7,8 @@ import {
 } from "./conversations";
 import { createCurrent, listCurrents } from "./currents";
 import { hasActivePro } from "./entitlement";
-import { normalizeHandle, startFaceTimeCall } from "./facetime";
+import { normalizeHandle } from "./facetime";
+import { startFaceTimeSession } from "./facetime-session";
 import { ensureZkrMemoryProjected } from "./memory-projection";
 import {
   listDailyReviews,
@@ -318,6 +319,30 @@ export const askOmiOperation = async (
   };
 };
 
+// The idempotency key decides the session id, so a retry lands on the same
+// admission reservation instead of placing a second call.
+const faceTimeSessionId = async (
+  uid: string,
+  token: string,
+): Promise<string> => {
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(`${uid} facetime ${token}`),
+  );
+  return Array.from(new Uint8Array(digest).slice(0, 16), (byte) =>
+    byte.toString(16).padStart(2, "0"),
+  ).join("");
+};
+
+// The custom domain this Worker is deployed on, used when APP_URL is unset.
+const defaultAppUrl = "https://omi.tsc.hk";
+
+const faceTimeSessionLink = (env: Bindings, sessionId: string): string =>
+  new URL(
+    `/facetime/sessions/${sessionId}`,
+    env.APP_URL?.trim() || defaultAppUrl,
+  ).toString();
+
 export const startFaceTimeOperation = async (
   env: Bindings,
   uid: string,
@@ -335,18 +360,35 @@ export const startFaceTimeOperation = async (
   if (!handle || !token) return invalid("Invalid FaceTime handle");
   const limited = await gate(env, uid, "public-facetime", faceTimeLimit);
   if (limited) return limited;
-  const outcome = await startFaceTimeCall(env, uid, handle, token, fetcher);
+  const sessionId = await faceTimeSessionId(uid, token);
+  const outcome = await startFaceTimeSession(
+    env,
+    uid,
+    handle,
+    sessionId,
+    fetcher,
+  );
   switch (outcome.kind) {
     case "ok":
       return {
         status: 201,
-        body: { call: { handle: outcome.handle, link: outcome.link } },
+        body: {
+          call: {
+            handle: outcome.handle,
+            sessionId: outcome.sessionId,
+            // The provider no longer returns an Apple join link: the call's
+            // audio is joined server-side by the bridge. `link` is kept in
+            // the contract and points at this session so existing clients
+            // keep working.
+            link: faceTimeSessionLink(env, outcome.sessionId),
+          },
+        },
       };
     case "unavailable":
       return {
         status: 503,
         body: {
-          error: "FaceTime calling is not yet available from Blooio",
+          error: "FaceTime calling is not provisioned on this account",
           code: "facetime_unavailable",
         },
       };
@@ -354,6 +396,12 @@ export const startFaceTimeOperation = async (
       return { status: 503, body: { error: "FaceTime calling unavailable" } };
     case "rejected":
       return { status: 400, body: { error: "Handle rejected by provider" } };
+    case "capacity":
+      return {
+        status: 429,
+        body: { error: "FaceTime capacity exceeded" },
+        retryAfter: outcome.retryAfter,
+      };
     default:
       return { status: 502, body: { error: "FaceTime calling unavailable" } };
   }

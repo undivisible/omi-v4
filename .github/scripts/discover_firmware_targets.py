@@ -209,12 +209,30 @@ def code_lines(text: str):
         yield raw, fence is not None
 
 
+# A fenced block containing this marker is documentation, not a build target.
+# firmware/README.md uses it for the optional CONFIG_OMI_RUST=y variant of
+# omi-cv1, which is the same target with an extra CMake define and must not
+# appear in the matrix twice.
+IGNORE_MARKER = "discover-ignore"
+
+
 def logical_commands(text: str):
     heading = ""
     buffer = ""
     workdir = ""
+    was_inside_fence = False
+    ignore_block = False
     for raw, inside_fence in code_lines(text):
+        if inside_fence and not was_inside_fence:
+            ignore_block = False
+        was_inside_fence = inside_fence
         stripped = raw.strip()
+        if inside_fence and IGNORE_MARKER in stripped:
+            ignore_block = True
+            buffer = ""
+            continue
+        if ignore_block and inside_fence:
+            continue
         if not inside_fence and stripped.startswith("#"):
             heading = stripped.lstrip("#").strip()
             continue
@@ -365,6 +383,52 @@ def is_sysbuild_conf(root: Path, app_dir: Path, conf: str, declared: bool) -> bo
     return "CONFIG_BOOTLOADER_MCUBOOT=y" in text
 
 
+def _normalize_id(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", value.lower())
+
+
+def migration_status(text: str) -> list[tuple[str, bool, str]]:
+    """Parse the `## Migration status` table in firmware/README.md.
+
+    Returns (normalized target id, builds, note) for every row. A target whose
+    "v3.4.0 build" cell says anything containing "does not build" is known
+    broken and must not gate CI; everything else is required to compile.
+    """
+    rows: list[tuple[str, bool, str]] = []
+    in_section = False
+    for raw in text.splitlines():
+        line = raw.strip()
+        if line.startswith("#"):
+            in_section = line.lstrip("#").strip().lower().startswith("migration status")
+            continue
+        if not in_section or not line.startswith("|"):
+            continue
+        cells = [c.strip() for c in line.strip("|").split("|")]
+        if len(cells) < 2 or set(cells[0]) <= set("- :"):
+            continue
+        target = _normalize_id(cells[0].strip("`"))
+        if not target or target in ("target",):
+            continue
+        state = cells[1].strip("*").strip().lower()
+        note = cells[2] if len(cells) > 2 else ""
+        rows.append((target, "does not build" not in state, note))
+    return rows
+
+
+def annotate_build_state(text: str, targets: list[dict]) -> None:
+    rows = migration_status(text)
+    for target in targets:
+        normalized = _normalize_id(target["id"])
+        match = ""
+        builds = True
+        note = ""
+        for candidate, candidate_builds, candidate_note in rows:
+            if candidate in normalized and len(candidate) > len(match):
+                match, builds, note = candidate, candidate_builds, candidate_note
+        target["required"] = "true" if builds else "false"
+        target["status_note"] = note if not builds else ""
+
+
 def targets_from_readme(root: Path, boards: list[dict]) -> list[dict]:
     readme = root / "firmware" / "README.md"
     if not readme.is_file():
@@ -437,6 +501,7 @@ def targets_from_readme(root: Path, boards: list[dict]) -> list[dict]:
                 "conf_copy_to": copy_to,
             }
         )
+    annotate_build_state(text, targets)
     return targets
 
 
@@ -486,6 +551,8 @@ def main() -> int:
         target.setdefault("conf", "")
         target.setdefault("conf_copy_from", "")
         target.setdefault("conf_copy_to", "")
+        target.setdefault("required", "true")
+        target.setdefault("status_note", "")
 
     print(f"Discovery source: {source}")
     print(f"Board root: {board_root or '(none)'}")
@@ -502,7 +569,8 @@ def main() -> int:
         print(
             f"  - {target['id']}: board={target['board'] or '(unresolved)'} "
             f"app_dir={target['app_dir']} conf={target['conf'] or '(default prj.conf)'} "
-            f"sysbuild={target['sysbuild']} cmake_args={target['cmake_args'] or '(none)'}{copy}"
+            f"sysbuild={target['sysbuild']} required={target.get('required', 'true')} "
+            f"cmake_args={target['cmake_args'] or '(none)'}{copy}"
         )
 
     missing = []

@@ -20,6 +20,7 @@ import 'channels/channels.dart';
 import 'conversations/conversations.dart';
 import 'currents/currents.dart';
 import 'device/device.dart';
+import 'features/composer_dictation.dart';
 import 'features/meeting_notes.dart';
 import 'integrations/eventkit_task_sync.dart';
 import 'keyboard/keyboard.dart';
@@ -332,6 +333,22 @@ final class AppServices {
   final ConversationTransport? conversations;
   final CurrentsController? currents;
   final WorkerHttpClient? _worker;
+
+  /// Transcribes a short recording (composer dictation) through the Worker's
+  /// batch endpoint, which picks an audio-capable model by capability. Null
+  /// without a backend, which the composer shows as an explained state rather
+  /// than a microphone that does nothing.
+  VoiceNoteTranscriber? get voiceNoteTranscriber {
+    final worker = _worker;
+    if (worker == null) return null;
+    return workerVoiceNoteTranscriber(
+      ({
+        required String method,
+        required String path,
+        Map<String, Object?>? body,
+      }) => worker.send(method: method, path: path, body: body),
+    );
+  }
 
   late final OnboardingCompletionStore onboardingCompletion = _worker == null
       ? PreferencesOnboardingCompletionStore()

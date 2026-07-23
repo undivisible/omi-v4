@@ -6,8 +6,19 @@ import {
 } from "./channel-checkout";
 import { handleChannelMessage } from "./channel-commands";
 import { digest, hmacHex } from "./channel-link";
+import {
+  fetchTelegramVoice,
+  telegramVoiceOf,
+  transcribeChannelVoiceNote,
+  uidForChannelUser,
+} from "./channel-voice";
 import { appendConversationMessage } from "./conversations";
 import { sendChannelText } from "./delivery";
+import {
+  imessageChannel,
+  parseSendblueInbound,
+  verifySendblueWebhook,
+} from "./sendblue";
 import {
   applySubscriptionState,
   claimStripeCustomer,
@@ -240,6 +251,27 @@ const processChannelMessage = async (
   return { queued, replied: false };
 };
 
+// Said out loud rather than silently dropped: a voice note that cannot be
+// transcribed is a state the sender has to be told about, because nothing else
+// on the channel will ever answer it.
+const voiceUnavailableReply =
+  "I could not transcribe that voice message. Send it as text and I will pick it up.";
+
+// Downloads and transcribes a channel voice note, returning null when the
+// sender is unlinked, the download fails, or no configured model can take audio.
+const transcribedVoiceNote = async (
+  env: Bindings,
+  channel: Channel,
+  channelUserId: string,
+  voice: NonNullable<ReturnType<typeof telegramVoiceOf>>,
+): Promise<string | null> => {
+  const uid = await uidForChannelUser(env.DB, channel, channelUserId);
+  if (uid === null) return null;
+  const note = await fetchTelegramVoice(env, voice);
+  if (note === null) return null;
+  return transcribeChannelVoiceNote(env, uid, channel, note);
+};
+
 const linkToken = (text: string, telegram = false): string | null => {
   const value = telegram
     ? /^\/start(?:@[A-Za-z0-9_]+)? ([a-f0-9]{48})$/.exec(text)?.[1]
@@ -257,6 +289,7 @@ webhooks.post("/telegram", async (context) => {
     message?: {
       message_id?: unknown;
       text?: unknown;
+      voice?: unknown;
       from?: { id?: unknown };
       chat?: { id?: unknown };
     };
@@ -275,15 +308,37 @@ webhooks.post("/telegram", async (context) => {
     typeof fromId !== "number" ||
     !Number.isSafeInteger(fromId) ||
     typeof telegramChatId !== "number" ||
-    !Number.isSafeInteger(telegramChatId) ||
-    typeof message?.text !== "string" ||
-    message.text.trim().length === 0 ||
-    message.text.length > 20_000
+    !Number.isSafeInteger(telegramChatId)
   )
     return context.json({ accepted: true, queued: false });
   const userId = String(fromId);
   const chatId = String(telegramChatId);
-  const messageText = message.text.trim();
+  // A voice note carries no text, so it is transcribed into one before the
+  // ordinary text path picks it up. The sender has to be linked already: an
+  // unlinked voice note has no account to bill or to answer as.
+  const voice = telegramVoiceOf(message);
+  const spoken =
+    voice === null
+      ? null
+      : await transcribedVoiceNote(context.env, "telegram", userId, voice);
+  if (voice !== null && spoken === null) {
+    if (fresh)
+      await sendChannelText(
+        context.env,
+        "telegram",
+        chatId,
+        voiceUnavailableReply,
+      );
+    return context.json({ accepted: true, queued: false });
+  }
+  const text = spoken ?? message?.text;
+  if (
+    typeof text !== "string" ||
+    text.trim().length === 0 ||
+    text.length > 20_000
+  )
+    return context.json({ accepted: true, queued: false });
+  const messageText = text.trim();
   const token = linkToken(messageText, true);
   if (token) {
     if (!fresh) return context.json({ accepted: true, duplicate: true });
@@ -375,6 +430,55 @@ webhooks.post("/blooio", async (context) => {
     chatId,
     messageText,
     body,
+  );
+  if (!fresh) return context.json({ accepted: true, duplicate: true });
+  return context.json({ accepted: true, ...processed });
+});
+
+// Sendblue's inbound route. The secret path segment is the first of the two
+// gates described in `sendblue.ts`; configure the webhook URL in Sendblue as
+// `https://<host>/webhooks/sendblue/<SENDBLUE_WEBHOOK_PATH_TOKEN>`.
+webhooks.post("/sendblue/:token", async (context) => {
+  if (
+    !verifySendblueWebhook(
+      context.env,
+      context.req.param("token"),
+      context.req.header("sb-signing-secret"),
+    )
+  )
+    return context.json({ error: "Unauthorized" }, 401);
+  let body: unknown;
+  try {
+    body = await context.req.json();
+  } catch {
+    return context.json({ error: "Invalid body" }, 400);
+  }
+  const inbound = parseSendblueInbound(body);
+  if (!inbound) return context.json({ accepted: true, queued: false });
+  const eventId = `message.received:${inbound.messageHandle}`;
+  const fresh = await recordWebhook(context.env.DB, imessageChannel, eventId);
+  const token = linkToken(inbound.text);
+  if (token) {
+    if (!fresh) return context.json({ accepted: true, duplicate: true });
+    const linked = await bind(
+      context.env.DB,
+      imessageChannel,
+      inbound.sender,
+      inbound.chatId,
+      token,
+    );
+    return context.json({ accepted: true, linked: linked === "linked" });
+  }
+  const processed = await processChannelMessage(
+    context.env,
+    imessageChannel,
+    fresh,
+    eventId,
+    inbound.messageHandle,
+    inbound.sender,
+    inbound.chatId,
+    inbound.text,
+    body as Record<string, unknown>,
   );
   if (!fresh) return context.json({ accepted: true, duplicate: true });
   return context.json({ accepted: true, ...processed });

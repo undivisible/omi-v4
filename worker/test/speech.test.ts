@@ -195,7 +195,7 @@ describe("server-side transcription", () => {
     const headers = fetches[0].init.headers as Record<string, string>;
     expect(headers.authorization).toBe("Bearer openrouter-secret");
     expect(headers["cf-aig-authorization"]).toBe("Bearer gateway-token");
-    expect(bodyOf(fetches[0]).model).toBe("google/gemini-2.5-flash-lite");
+    expect(bodyOf(fetches[0]).model).toBe("xiaomi/mimo-v2.5");
     expect(calls.map((call) => call.path)).toEqual([
       "/admit",
       "/claim",
@@ -203,15 +203,52 @@ describe("server-side transcription", () => {
     ]);
   });
 
-  test("honours the transcribe model override", async () => {
+  test("honours an audio-capable model override", async () => {
     const { calls: fetches, fetcher } = recorder(() => transcriptReply());
     await transcribeAudioOperation(
-      environment({ OMI_MODEL_TRANSCRIBE: "x-ai/grok-stt-1.0" }),
+      environment({
+        OMI_MODEL_BALANCED: "x-ai/grok-stt-1.0",
+        OMI_MODEL_CAPABILITIES: JSON.stringify({
+          "x-ai/grok-stt-1.0": ["text", "audioIn"],
+        }),
+      }),
       "alpha",
       { audio: audio(), format: "mp3", clientMessageId: "wal:flush:0002" },
       fetcher,
     );
     expect(bodyOf(fetches[0]).model).toBe("x-ai/grok-stt-1.0");
+  });
+
+  test("skips a preferred tier whose override cannot take audio", async () => {
+    const { calls: fetches, fetcher } = recorder(() => transcriptReply());
+    await transcribeAudioOperation(
+      environment({
+        OMI_MODEL_BALANCED: "some/text-only-model",
+        OMI_MODEL_CAPABILITIES: JSON.stringify({
+          "some/text-only-model": ["text"],
+        }),
+      }),
+      "alpha",
+      { audio: audio(), format: "mp3", clientMessageId: "wal:flush:0003" },
+      fetcher,
+    );
+    expect(bodyOf(fetches[0]).model).toBe("google/gemini-3.5-flash-lite");
+  });
+
+  test("refuses to transcribe when no preferred tier declares audio input", async () => {
+    const { calls: fetches, fetcher } = recorder(() => transcriptReply());
+    const outcome = await transcribeAudioOperation(
+      environment({
+        OMI_MODEL_BALANCED: "some/text-only-model",
+        OMI_MODEL_TRANSCRIBE: "some/text-only-model",
+        OMI_MODEL_MULTIMODAL: "some/text-only-model",
+      }),
+      "alpha",
+      { audio: audio(), format: "mp3", clientMessageId: "wal:flush:0004" },
+      fetcher,
+    );
+    expect(outcome.status).toBe(503);
+    expect(fetches).toHaveLength(0);
   });
 
   test("replays a retried upload without transcribing or charging again", async () => {

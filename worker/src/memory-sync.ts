@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { appendMemoryLog, canonicalJson } from "./memory-log";
 import { projectZkrMemory } from "./memory-projection";
 import {
   deferVectorWork,
@@ -57,18 +58,6 @@ const integer = (value: unknown, minimum: number): number | null =>
   Number.isSafeInteger(value) && Number(value) >= minimum
     ? Number(value)
     : null;
-
-const canonicalJson = (value: unknown): string => {
-  if (Array.isArray(value))
-    return `[${value.map((item) => canonicalJson(item)).join(",")}]`;
-  const entry = object(value);
-  if (entry)
-    return `{${Object.keys(entry)
-      .sort()
-      .map((key) => `${JSON.stringify(key)}:${canonicalJson(entry[key])}`)
-      .join(",")}}`;
-  return JSON.stringify(value);
-};
 
 const scopedRecord = (value: unknown, uid: string): SyncRecord | null => {
   const envelope = object(value);
@@ -278,6 +267,20 @@ const applyCommit = async (
       );
   }
   await db.batch(statements);
+  // The log is appended before the projection is refreshed: the projection is
+  // derived, so it may never describe a record the authority has not accepted.
+  await appendMemoryLog(
+    db,
+    uid,
+    replicaId,
+    records.map((record, index) => ({
+      recordKind: identities[index]!.kind,
+      recordId: identities[index]!.id,
+      payload: record.record,
+      recordedAt: commit.recordedAt,
+    })),
+    now,
+  );
   await projectZkrMemory(db, uid, replicaId);
   await db
     .prepare(

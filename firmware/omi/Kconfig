@@ -383,4 +383,22 @@ config OMI_ENABLE_DEVICE_NAME_RW
          stored in NVS and re-applied via bt_set_name() on boot, so it
          survives reboot without enabling CONFIG_BT_SETTINGS."
 
+config OMI_RUST
+    bool "Build and link the Rust support library"
+    depends on RUST
+    default n
+    help
+        "Compile firmware/omi/rust (the omi-rust staticlib) with cargo and link
+         it into the application. Requires the out-of-tree zephyr-lang-rust
+         module in the west workspace (see firmware/README.md) and the
+         thumbv8m.main-none-eabi Rust target. Currently only carries the tx
+         ring-buffer and GATT packet header codecs plus a self-test."
+
+config OMI_RUST_CLIPPY
+    bool "Run cargo clippy on the Rust support library during the build"
+    depends on OMI_RUST
+    default y
+    help
+        "Fail the build on clippy warnings in firmware/omi/rust."
+
 endmenu

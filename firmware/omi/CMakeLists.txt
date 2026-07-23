@@ -74,6 +74,10 @@ target_include_directories(app PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/lib/core
 )
 
+if(CONFIG_OMI_RUST)
+    add_subdirectory(rust)
+endif()
+
 if(CONFIG_OMI_CODEC_OPUS)
     add_subdirectory(src/lib/core/lib/opus-1.2.1/)
     target_link_libraries(app PRIVATE opus_codec)

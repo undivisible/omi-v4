@@ -1,3 +1,4 @@
+import { sendblueRequest } from "./sendblue";
 import type { Bindings, Channel } from "./types";
 
 type Delivery = {
@@ -239,6 +240,11 @@ const providerRequest = (
       },
     };
   }
+  // The iMessage channel. Sendblue is the provider when it is configured;
+  // Blooio stays as the fallback until Sendblue is proven in production, and
+  // exactly one of them is ever live for a given deployment.
+  const sendblue = sendblueRequest(env, channelChatId, text);
+  if (sendblue) return sendblue;
   if (!env.BLOOIO_API_KEY) return null;
   return {
     url: `https://api.blooio.com/v2/api/chats/${encodeURIComponent(channelChatId)}/messages`,

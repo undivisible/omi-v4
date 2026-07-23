@@ -2,8 +2,9 @@
 
 The Omi device firmware in this directory is vendored from a separate upstream
 repository. It covers the nRF5340 CV1 pendant (`omi/`), the XIAO nRF52840 Sense
-DevKit (`devkit/`) and the CV1 bring-up harness (`test/`). It is **not** built by
-this repo's CI (it needs the Zephyr SDK / nRF Connect SDK toolchain).
+DevKit (`devkit/`) and the CV1 bring-up harness (`test/`). It is built by
+`.github/workflows/ci-firmware.yml`, which runs inside Nordic's prebuilt
+nRF Connect SDK v3.4.0 toolchain container.
 
 ## Upstream
 
@@ -138,6 +139,26 @@ v3.4.0; `devkit/src/mic.c` needs porting to the nrfx 3.x PDM API, and
 `devkit/src/{usb,button,transport,sdcard}.c` carry pre-existing compile errors.
 Until that is done, DevKit changes can still be taken from upstream almost
 verbatim.
+
+### Rust divergence: `omi/rust/` and `west-rust.yml` have no upstream counterpart
+
+Upstream is C only. This tree adds an **opt-in** Rust static library to the
+`omi-cv1` application. Nothing was migrated off C; the library carries the tx
+ring-buffer and GATT packet header codecs and a boot-time self-test, and exists
+to prove the toolchain path before `transport.c`'s tx logic moves over. See the
+README's *Rust in the firmware* section.
+
+| Path | Divergence |
+| --- | --- |
+| `omi/rust/` | **new**, no upstream counterpart. `omi-rust` staticlib: `framing.rs` (wire headers, host-tested), a `k_panic()` panic handler, and CMake that links it into the existing `app` target without zephyr-lang-rust's `rust_cargo_application()` (which would displace `omi/src/main.c`) |
+| `west-rust.yml` | **new**. West manifest fragment pinning `zephyrproject-rtos/zephyr-lang-rust` at `ab3e546232bfa2f4e16d6c5156b9d9500885b4e8`, imported on top of the NCS manifest. The module is in neither the NCS nor the upstream Zephyr manifest, and `CONFIG_RUST` in Zephyr 4.4.0 is a stub without it |
+| `omi/Kconfig` | added `OMI_RUST` (default `n`) and `OMI_RUST_CLIPPY` |
+| `omi/CMakeLists.txt` | `add_subdirectory(rust)` under `CONFIG_OMI_RUST` |
+| `omi/src/main.c` | calls `omi_rust_selftest()` under `#ifdef CONFIG_OMI_RUST` |
+
+All of it is inert when `CONFIG_OMI_RUST=n`, which is the default and what the
+release images build, so a re-sync can drop the whole thing without touching the
+shipping configuration. It is additive: no upstream C file changed behaviour.
 
 When re-syncing, expect step 3 of *How to re-sync with upstream* to produce a
 large diff on every file in the first table. Those hunks are deliberate; do not

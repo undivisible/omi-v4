@@ -6,9 +6,11 @@ and how to re-sync, [`ARCHITECTURE.md`](ARCHITECTURE.md) for how it is put
 together and how it differs from upstream, and
 [`BLE_CONTRACTS.md`](BLE_CONTRACTS.md) for the app-facing GATT interface.
 
-This tree is **excluded from the repository's CI** (`.github/workflows/ci.yml`
-has `paths-ignore: firmware/**`) because it needs the nRF Connect SDK toolchain,
-which no CI job installs.
+This tree is excluded from the *root* CI workflow (`.github/workflows/ci.yml`
+has `paths-ignore: firmware/**`); it is built by its own workflow,
+[`.github/workflows/ci-firmware.yml`](../.github/workflows/ci-firmware.yml),
+which runs inside Nordic's prebuilt NCS v3.4.0 toolchain container. See
+[Notes for CI](#notes-for-ci).
 
 > **Partially compile-verified.** `omi-cv1` and `evt-test` build clean under
 > nRF Connect SDK v3.4.0 (Zephyr 4.4.0). The three `devkit-*` targets do **not**
@@ -313,6 +315,104 @@ that string, the generated fragment was not applied.
 The same `VERSION` file feeds imgtool's image version on `omi-cv1`, which is
 what MCUboot's downgrade prevention compares.
 
+## Rust in the firmware
+
+`omi-cv1` can build and link a Rust static library. It is **opt-in**
+(`CONFIG_OMI_RUST=n` by default) and today carries only the tx ring-buffer and
+GATT packet header codecs in `omi/rust/`, plus a self-test `main()` calls at
+boot. Nothing has been migrated off C yet.
+
+### Why an out-of-tree module is needed
+
+`CONFIG_RUST` exists in Zephyr 4.4.0 only as a Kconfig stub: the build backing
+it lives in `zephyrproject-rtos/zephyr-lang-rust`, a standalone repository that
+is in neither the NCS nor the upstream Zephyr west manifest. Without that module
+in the workspace, `CONFIG_RUST=y` does nothing.
+
+[`west-rust.yml`](west-rust.yml) adds it to an existing workspace at the pinned
+revision, importing the NCS manifest unchanged so no other project moves:
+
+```sh
+cp "$FW/west-rust.yml" <workspace>/nrf/west-rust.yml
+cd <workspace>
+west config manifest.file west-rust.yml
+west update zephyr-lang-rust
+```
+
+Reverse it with `west config manifest.file west.yml`. CI does not mutate a
+workspace: `.github/workflows/ci-firmware.yml` clones the same pinned revision
+into `modules/lang/rust` directly, which is the same layout.
+
+### Building it
+
+The nRF5340 application core builds with `CONFIG_FP_HARDABI`, so the Rust target
+is **`thumbv8m.main-none-eabihf`**, not the `thumbv8m.main-none-eabi` a plain
+Cortex-M33 would use. The build tells you which one it wants if you get it
+wrong:
+
+```sh
+rustup target add thumbv8m.main-none-eabihf
+```
+
+Then, with the module in the workspace:
+
+```sh
+# discover-ignore: the same omi-cv1 target with Rust enabled, not a separate one
+cp "$FW/omi/omi.conf" "$FW/omi/prj.conf"
+
+west build -b omi/nrf5340/cpuapp "$FW/omi" \
+    --sysbuild \
+    --build-dir "$FW/omi/build" \
+    -- -DBOARD_ROOT="$FW" -DCONFIG_RUST=y -DCONFIG_OMI_RUST=y
+```
+
+Confirm the code actually reached the image rather than being garbage-collected:
+
+```sh
+arm-zephyr-eabi-nm "$FW/omi/build/omi/zephyr/zephyr.elf" | grep omi_rust_selftest
+```
+
+`omi/rust/CMakeLists.txt` deliberately does **not** call zephyr-lang-rust's
+`rust_cargo_application()`: that helper injects the module's own `main.c` and
+takes over `main()`, which would displace `omi/src/main.c`. It reuses the
+module's target mapping and cargo integration and links the staticlib into the
+existing `app` target instead.
+
+### Known blocker: the `zephyr` bindings crate
+
+`omi/rust/Cargo.toml` has **no dependency on the `zephyr` crate**, on purpose.
+With `CONFIG_FLASH=y` — which `omi-cv1` sets — that crate's generated
+`devicetree.rs` fails to compile for this board:
+
+```
+error[E0425]: cannot find function `get_instance_raw` in module `super::super::super`
+   --> .../build/zephyr-*/out/devicetree.rs
+    |    let device = super::super::super::get_instance_raw();
+```
+
+The generated `get_instance()` for a `fixed-partitions` child assumes the
+partition's grandparent is a flash device with bindings. On the nRF5340 the
+chain is `nordic_ram_flash_controller_0` → `flash_sim_0` → `partitions` →
+`partition_0`, and the grandparent is a `zephyr,sim-flash` node with no
+generated accessor. It is a codegen bug in the module, not in this tree, and it
+does not appear with `CONFIG_FLASH=n` (which is why the module's own
+`hello_world` sample builds for `omi/nrf5340/cpuapp`).
+
+Nothing in `omi/rust/` needs Zephyr bindings, so the crate builds against `core`
+with its own `#[panic_handler]` forwarding to Zephyr's `k_panic()`. Restoring
+the dependency is a one-line change to `Cargo.toml` once the codegen is fixed
+upstream — until then, do not add it, because it breaks `omi-cv1`.
+
+### Where this is going
+
+`omi/rust/src/framing.rs` is the seed for the tx path in
+`omi/src/lib/core/transport.c` — `write_to_tx_queue`, `read_from_tx_queue` and
+`push_to_gatt` are pure logic over a 2-byte little-endian ring-buffer length
+header and the 3-byte wire header (`id` little-endian `u16`, then `index`). The
+crate is host-testable (`cd omi/rust && cargo test`) precisely so it can later
+be shared with `app/native/hub` and stop the two ends of the wire format from
+drifting. That migration is **not** part of this change.
+
 ## Formatting
 
 `firmware/.clang-format` applies to the C sources in `omi/`, `devkit/` and
@@ -335,10 +435,26 @@ clang-format -i firmware/omi/src/**/*.c firmware/omi/src/**/*.h
   `zephyr.uf2` and `zephyr.hex` for the DevKit targets.
 - The signing key `bootloader/mcuboot/root-rsa-2048.pem` is in-tree and must be
   used as-is for the nRF5340 targets.
-- `.github/workflows/release-firmware.yml` builds its matrix by parsing the
-  `west build` commands above with `.github/scripts/discover_firmware_targets.py`,
-  including the `cp … prj.conf` line that precedes them. `$FW` is resolved to
-  `firmware/` in the checkout. Keep each target's command a single fenced block
-  under its own heading, and re-run
-  `python3 .github/scripts/discover_firmware_targets.py --print-only` after
-  editing this file — it fails if any path it derives is missing from the tree.
+- `.github/workflows/ci-firmware.yml` (per-push, path-filtered to `firmware/**`)
+  and `.github/workflows/release-firmware.yml` (per-tag) both build their matrix
+  by parsing the `west build` commands above with
+  `.github/scripts/discover_firmware_targets.py`, including the `cp … prj.conf`
+  line that precedes them. `$FW` is resolved to `firmware/` in the checkout.
+  Keep each target's command a single fenced block under its own heading, and
+  re-run `python3 .github/scripts/discover_firmware_targets.py --print-only`
+  after editing this file — it fails if any path it derives is missing from the
+  tree. A fenced block carrying the marker `discover-ignore` is skipped; that is
+  how the `CONFIG_OMI_RUST=y` variant of `omi-cv1` stays out of the matrix.
+- **The [Migration status](#migration-status) table is the CI gate.** The
+  discovery script reads it and emits `required=false` for any target whose
+  `v3.4.0 build` cell says *does not build*; both workflows mark those legs
+  `continue-on-error`. Editing that cell is all it takes to make a target
+  gating — there is no second list to update.
+- Neither workflow installs the toolchain by hand. Both run inside
+  `ghcr.io/nrfconnect/sdk-nrf-toolchain:v3.4.0`, which already carries the
+  Zephyr SDK, so the ~900 MB `nrfutil toolchain-manager` download and its ~3 GB
+  install never happen on a runner. What is expensive is `west update`
+  (~2.9 GB); `ci-firmware.yml` populates it in one `workspace` job, caches
+  `/opt/ncs` under a key derived from `NCS_VERSION` and the pinned
+  zephyr-lang-rust revision, and every build leg restores it with
+  `fail-on-cache-miss`. Bumping either version invalidates the cache.

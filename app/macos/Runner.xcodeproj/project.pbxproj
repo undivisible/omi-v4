@@ -35,6 +35,7 @@
 		A417E00B2F24000100A417E0 /* PillPanelController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A417E00A2F24000100A417E0 /* PillPanelController.swift */; };
 		A417E00D2F24000200A417E0 /* GlobalInputTap.swift in Sources */ = {isa = PBXBuildFile; fileRef = A417E00C2F24000200A417E0 /* GlobalInputTap.swift */; };
 		A417E0212F25000100A417E0 /* AXContextReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = A417E0202F25000100A417E0 /* AXContextReader.swift */; };
+		A417E0312F25000100A417E0 /* RewindCaptureBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = A417E0302F25000100A417E0 /* RewindCaptureBridge.swift */; };
 		58C680C7D5738E6F0DF14401 /* Pods_RunnerTests.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = CED00773D45318311563DA5B /* Pods_RunnerTests.framework */; };
 		7606AEDFFD18E7E56FE7E7A5 /* Pods_Runner.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 4B36B2D50732A414EC17F176 /* Pods_Runner.framework */; };
 		78A318202AECB46A00862997 /* FlutterGeneratedPluginSwiftPackage in Frameworks */ = {isa = PBXBuildFile; productRef = 78A3181F2AECB46A00862997 /* FlutterGeneratedPluginSwiftPackage */; };
@@ -92,6 +93,7 @@
 		A417E00A2F24000100A417E0 /* PillPanelController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PillPanelController.swift; sourceTree = "<group>"; };
 		A417E00C2F24000200A417E0 /* GlobalInputTap.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlobalInputTap.swift; sourceTree = "<group>"; };
 		A417E0202F25000100A417E0 /* AXContextReader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AXContextReader.swift; sourceTree = "<group>"; };
+		A417E0302F25000100A417E0 /* RewindCaptureBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RewindCaptureBridge.swift; sourceTree = "<group>"; };
 		33CEB47222A05771004F2AC0 /* Flutter-Debug.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = "Flutter-Debug.xcconfig"; sourceTree = "<group>"; };
 		33CEB47422A05771004F2AC0 /* Flutter-Release.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = "Flutter-Release.xcconfig"; sourceTree = "<group>"; };
 		33CEB47722A0578A004F2AC0 /* Flutter-Generated.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; name = "Flutter-Generated.xcconfig"; path = "ephemeral/Flutter-Generated.xcconfig"; sourceTree = "<group>"; };
@@ -205,6 +207,7 @@
 				A417E00A2F24000100A417E0 /* PillPanelController.swift */,
 				A417E00C2F24000200A417E0 /* GlobalInputTap.swift */,
 				A417E0202F25000100A417E0 /* AXContextReader.swift */,
+				A417E0302F25000100A417E0 /* RewindCaptureBridge.swift */,
 				33E51913231747F40026EE4D /* DebugProfile.entitlements */,
 				33E51914231749380026EE4D /* Release.entitlements */,
 				33CC11242044D66E0003C045 /* Resources */,
@@ -480,6 +483,7 @@
 				A417E00B2F24000100A417E0 /* PillPanelController.swift in Sources */,
 				A417E00D2F24000200A417E0 /* GlobalInputTap.swift in Sources */,
 				A417E0212F25000100A417E0 /* AXContextReader.swift in Sources */,
+				A417E0312F25000100A417E0 /* RewindCaptureBridge.swift in Sources */,
 				33CC10F12044A3C60003C045 /* AppDelegate.swift in Sources */,
 				335BBD1B22A9A15E00E9071D /* GeneratedPluginRegistrant.swift in Sources */,
 			);

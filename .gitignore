@@ -14,4 +14,6 @@ target/
 .env*
 !.env.example
 firmware/omi/prj.conf
+firmware/test/prj.conf
 firmware/v2.9.0/
+firmware/v3.4.0/

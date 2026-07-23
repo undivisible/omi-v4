@@ -1,4 +1,7 @@
-use crate::model_tier::{ModelTier, model_for_tier};
+use crate::model_tier::{
+    ASYNC_AUDIO_TIER_PREFERENCE, Capability, CapabilityMismatch, ModelTier, model_for_tier,
+    select_model_for,
+};
 use rx4::model_router::{ModelRouter, RouterConfig, TaskTier};
 
 // Search and multimodal are hub-level tiers with no rx4 `TaskTier`, so the
@@ -109,6 +112,30 @@ impl ChatRouter {
         model_for_tier(self.route_prompt(prompt), value)
     }
 
+    /// Selects a model for a request that carries more than text. The prompt
+    /// still decides what the request is worth paying for, but the attachment
+    /// decides what the model has to be able to read, and a configuration where
+    /// no preferred tier can read it is an error rather than a silent downgrade
+    /// to a model that would answer about audio it never received.
+    #[allow(dead_code)]
+    pub(crate) fn model_for_input(
+        &self,
+        prompt: &str,
+        required: &[Capability],
+        value: impl Fn(&str) -> Option<String> + Copy,
+    ) -> Result<String, CapabilityMismatch> {
+        // Audio in is the asynchronous voice-note case: cheapest capable tier
+        // first, which is the balanced model. Anything else keeps the prompt's
+        // own tier at the head of the preference list.
+        if required.contains(&Capability::AudioIn) {
+            return select_model_for(required, ASYNC_AUDIO_TIER_PREFERENCE, value)
+                .map(|(_, model)| model);
+        }
+        let routed = self.route_prompt(prompt);
+        let preference = [routed, ModelTier::Multimodal, ModelTier::Balanced];
+        select_model_for(required, &preference, value).map(|(_, model)| model)
+    }
+
     fn tier_model(&self, tier: TaskTier) -> &str {
         self.router
             .config()
@@ -161,6 +188,30 @@ mod tests {
         // The Lite tier is populated from the SPEED slug even though the online
         // prompt heuristics rarely reach it directly.
         assert_eq!(router.tier_model(TaskTier::Lite), DEFAULT_SPEED_MODEL);
+    }
+
+    #[test]
+    fn audio_input_routes_to_the_balanced_model_whatever_the_prompt_says() {
+        let router = default_router();
+        assert_eq!(
+            router.model_for_input("prove this theorem", &[Capability::AudioIn], |_| None),
+            Ok(DEFAULT_BALANCED_MODEL.to_owned())
+        );
+    }
+
+    #[test]
+    fn an_input_no_configured_model_can_read_is_refused() {
+        let router = default_router();
+        let text_only = |name: &str| match name {
+            "OMI_MODEL_MULTIMODAL" => Some(DEFAULT_SPEED_MODEL.to_owned()),
+            "OMI_MODEL_BALANCED" => Some(DEFAULT_SPEED_MODEL.to_owned()),
+            _ => None,
+        };
+        assert!(
+            router
+                .model_for_input("what is in this image?", &[Capability::ImageIn], text_only)
+                .is_err()
+        );
     }
 
     #[test]

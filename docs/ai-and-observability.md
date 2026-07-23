@@ -18,7 +18,7 @@ see §4).
 | smart | hard reasoning | `xiaomi/mimo-v2.5-pro` | `OMI_MODEL_SMART` |
 | multimodal | vision / visual computer-use | `google/gemini-3.6-flash` | `OMI_MODEL_MULTIMODAL` |
 | search | web-grounded answers (live search) | `perplexity/sonar` | `OMI_MODEL_SEARCH` |
-| transcribe | server-side speech-to-text for callers with no hub | `google/gemini-2.5-flash-lite` | `OMI_MODEL_TRANSCRIBE` |
+| transcribe | server-side speech-to-text for callers with no hub | `google/gemini-3.5-flash-lite` | `OMI_MODEL_TRANSCRIBE` |
 | speak | server-side text-to-speech | `openai/gpt-audio-mini` | `OMI_MODEL_SPEAK` |
 
 Balanced also falls back to the legacy `MIMO_MODEL` when unset.
@@ -33,6 +33,59 @@ Balanced also falls back to the legacy `MIMO_MODEL` when unset.
   is newer/less proven; A/B it against `google/gemini-3.5-flash` or
   `deepseek/deepseek-chat` on real transcripts before fully trusting it.
 
+### 1.1 Capabilities, and routing on them
+
+A tier says how much a workload is worth paying for. It never said what a model
+can *carry*, which is how audio once reached a text-only model and answered
+confidently about nothing. Each entry now also declares capabilities, and any
+call site with non-text input resolves through the capability check rather than
+through the tier slug alone.
+
+| Capability | Meaning |
+|------------|---------|
+| `text` | Text prompt in, text out. Every model. |
+| `audioIn` | Accepts audio as input (transcription). |
+| `audioOut` | Returns synthesized audio (speech). |
+| `imageIn` | Accepts images (vision, visual computer-use). |
+| `realtime` | Bidirectional live session. **Declared by nothing here** — see below. |
+
+| Model | text | audioIn | audioOut | imageIn | Prompt price |
+|-------|:----:|:-------:|:--------:|:-------:|--------------|
+| `xiaomi/mimo-v2.5` (balanced) | yes | **yes** | — | — | $0.14/M |
+| `xiaomi/mimo-v2.5-pro` (smart) | yes | — | — | — | — |
+| `inception/mercury-2` (speed) | yes | — | — | — | — |
+| `perplexity/sonar` (search) | yes | — | — | — | — |
+| `google/gemini-3.6-flash` (multimodal) | yes | yes | — | **yes** | $1.50/M audio |
+| `google/gemini-3.5-flash-lite` (transcribe) | yes | **yes** | — | — | $0.30/M audio |
+| `openai/gpt-audio-mini` (speak) | yes | — | **yes** | — | — |
+
+**The routing rule.** A request states the capabilities it needs and an ordered
+tier preference. The router walks the preference, resolves each tier through the
+usual env override, and returns the first model that declares every required
+capability. If none does, it **fails loudly** (`ModelCapabilityError` in the
+worker, `CapabilityMismatch` in the hub; the speech endpoints answer 503) rather
+than sending the input to a model that cannot read it.
+
+- **Asynchronous audio prefers balanced.** `asyncAudioTierPreference` is
+  `balanced -> transcribe -> multimodal`, so voice notes, WAL uploads and
+  channel voice messages go to `xiaomi/mimo-v2.5` at $0.14/M — half the
+  transcribe tier — and fall back only if an override leaves balanced
+  text-only. This is the A/B suggested in §2, made the default.
+- **Overrides are validated at the point of use, not at startup.** The table
+  stays env-overridable exactly as before, but an override naming a model this
+  table has not verified satisfies *nothing*: an unknown id is never assumed
+  audio-capable. A new model declares itself through `OMI_MODEL_CAPABILITIES` —
+  JSON (`{"vendor/model":["text","audioIn"]}`) in the worker, a
+  `vendor/model=text+audioIn,...` list in the hub. A malformed value declares
+  nothing, so a typo degrades to "unverified" and is refused, never accepted.
+- **`realtime` is intentionally unsatisfiable from this table.** OpenRouter is
+  request/response and cannot carry a live session, so a caller asking the tier
+  table for a realtime model is asking the wrong layer. Realtime goes to Gemini
+  Live (`worker/src/voice.ts` mints the ephemeral token,
+  `app/native/hub/src/live_voice.rs` holds the WebSocket, `GEMINI_LIVE_MODEL`
+  names the model). Confirmed 2026-07-23: no realtime path resolves a model
+  through the tier table.
+
 ## 2. Speech-to-text (transcription)
 
 **Off Deepgram, onto OpenRouter.** The model originally named here does not
@@ -42,7 +95,7 @@ instead.
 - **Was planned: `x-ai/grok-stt-1.0`** — xAI's dedicated STT model. A
   purpose-built transcription model would beat bending a chat model into STT,
   but it is not on OpenRouter (see below), so it is not what ships.
-- **Primary today: `google/gemini-2.5-flash-lite`** (audio→text, ~$0.30/M
+- **Primary today: `google/gemini-3.5-flash-lite`** (audio→text, ~$0.30/M
   audio) — the `transcribe` tier default. `openai/gpt-audio-mini` is the next
   option. (`inception/mercury-2` and `xiaomi/mimo-v2.5*` are not audio models.)
 
@@ -54,10 +107,26 @@ available are, cheapest first:
 
 | Model | Audio input | Note |
 |-------|-------------|------|
-| `google/gemini-2.5-flash-lite` | $0.30/M audio tokens | **Chosen default for the `transcribe` tier.** It is the fallback this document already named, it is the cheapest audio-capable model on the list, and it keeps the batch path on the same provider family as the multimodal tier. |
+| `google/gemini-3.5-flash-lite` | $0.30/M audio tokens | **Chosen default for the `transcribe` tier.** It is the fallback this document already named, it is the cheapest audio-capable model on the list, and it keeps the batch path on the same provider family as the multimodal tier. |
 | `google/gemini-3.1-flash-lite` | $0.50/M | Newer, ~1.7x the price; the upgrade path if 2.5-flash-lite's accuracy disappoints. |
 | `openai/gpt-audio-mini` | $0.60/M | Best if we want one model doing both directions; slightly dearer for input and it is the TTS choice already. |
 | `mistralai/voxtral-small-24b-2507` | $100/M | A dedicated audio model but priced far above the rest for this workload. |
+
+**Why not a model already in the tier table?** Two are audio-capable and were
+considered. `google/gemini-3.6-flash` is the multimodal tier and takes audio at
+$1.50/M — five times the price on what is a high-volume path, for a job that
+does not need frontier vision. More interestingly, **`xiaomi/mimo-v2.5` — the
+balanced tier — accepts audio input** and is the cheapest model on the list at
+$0.14/M prompt. It is worth A/B-ing against the transcribe default on real
+pendant audio: if its transcription quality holds up, the transcribe tier
+collapses into the balanced tier and the table gets shorter rather than longer.
+
+**As of the capability router (§1.1), that is now the default.** Asynchronous
+audio — channel voice notes on Telegram and iMessage, WAL flushes, composer
+dictation, API uploads — resolves to `xiaomi/mimo-v2.5` first, with the
+transcribe tier kept as the fallback. `OMI_MODEL_TRANSCRIBE` still decides that
+fallback, and setting `OMI_MODEL_BALANCED` to something text-only moves the
+audio path back to it automatically rather than breaking it.
 
 The tier is env-overridable, so the moment `x-ai/grok-stt-1.0` (or any better
 STT model) does appear on OpenRouter, setting `OMI_MODEL_TRANSCRIBE` switches
@@ -70,6 +139,57 @@ batch-only, for callers that have no hub — the FaceTime/Gemini Live bridge, a
 phone flushing a write-ahead log after a dropout, API/MCP consumers. For the
 truly realtime path, Gemini Live's **built-in streaming transcription** remains
 the lowest-latency option and needs no separate STT call.
+
+### 2.1 The FaceTime audio bridge
+
+FaceTime moved from Blooio to **Sendblue**. Blooio returned a
+`facetime.apple.com` join link, which forced a headless browser; a prior
+investigation established that this cannot work on Cloudflare Browser Run
+(WebRTC candidate pairs never succeed under symmetric NAT and per-flow anycast
+egress, `enumerateDevices()` is empty, and Chrome launch flags are not
+controllable). Sendblue's `POST /facetime/start-call` returns **Agora WebRTC
+credentials** instead, so there is no browser and no Apple web client at all.
+
+Agora's Web SDK is browser-only. Server participation goes through Agora's
+**Server Gateway SDK**, a native `x86_64-linux-gnu` shared object with Python,
+Go, Java and C++ wrappers (`agora-python-server-sdk`, MIT-licensed wrapper
+around Agora's proprietary binary, which the installer downloads at build
+time). Nothing about that can be loaded into an isolate, so the deployment
+target is decided by the SDK, not by preference.
+
+**Chosen deployment: a Cloudflare Container** (`worker/container/facetime-bridge`),
+one per call, driven by the `FaceTimeBridge` Durable Object. Containers run
+arbitrary `linux/amd64` images next to the Worker, which keeps the control
+plane, the admission controller and the D1 records in one place and gives
+per-call addressing and lifecycle hooks for free. The image is a plain
+Dockerfile with a single HTTP control port and no Cloudflare-specific code, so
+the same artefact runs on any VM if the media path ever needs a fixed egress
+IP.
+
+**The residual risk, stated honestly.** Agora's direct mode sends media over
+UDP to arbitrary ports. Cloudflare's egress is anycast and per-flow, which is
+the same property that killed the Browser Run approach; Cloudflare does not
+document container outbound UDP behaviour either way. The mitigation is Agora
+**Cloud Proxy in Force TCP mode** (`rtc.enable_proxy` plus
+`rtc.proxy_server:[13,"",0]`), which pins all media to TLS 443 and sidesteps
+the question entirely. Cloud Proxy must be enabled by Agora **on the App ID**,
+and the App ID here belongs to Sendblue — so Sendblue has to request it. Until
+they do, direct mode is what runs, and if it fails the fallback is to deploy
+the identical image on a small VM rather than to change any code.
+
+Cost and safety discipline matches the realtime STT path: the session takes a
+reservation from `STT_ADMISSION` (bounded concurrency, seconds and cost per uid
+and globally), is capped at `FACETIME_MAX_SESSION_SECONDS` (default 600, hard
+ceiling 3600), and is released on every exit path — container exit, explicit
+stop, Durable Object alarm, the container's own deadline, and the admission
+claim alarm. Audio queues in both directions are bounded and drop the oldest
+frames under backpressure; every decoded chunk is size-capped before it is
+allocated. Gemini Live needs its own `GEMINI_API_KEY`: OpenRouter cannot carry
+realtime.
+
+Sessions are recorded in `managed_ai_requests` with provider
+`facetime-gemini-live`, so they show up alongside every other managed AI call
+with no new table.
 
 ## 2a. Embeddings
 

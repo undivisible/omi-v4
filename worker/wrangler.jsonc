@@ -31,6 +31,9 @@
     "BYOK_NEGOTIATION_MAX_TURNS": "6",
     "BYOK_NEGOTIATION_COOLDOWN_HOURS": "720",
     "GEMINI_LIVE_MODEL": "gemini-3.1-flash-live-preview",
+    "FACETIME_MAX_SESSION_SECONDS": "600",
+    "FACETIME_COST_MICROUSD_PER_MINUTE": "30000",
+    "AGORA_CLOUD_PROXY": "tcp",
     "STT_MAX_SESSION_SECONDS": "900",
     "STT_COST_MICROUSD_PER_MINUTE": "10000",
     "STT_UPSTREAM_CONNECT_TIMEOUT_MS": "10000",
@@ -61,9 +64,25 @@
       {
         "name": "RATE_LIMITER",
         "class_name": "RateLimiter"
+      },
+      {
+        "name": "FACETIME_BRIDGE",
+        "class_name": "FaceTimeBridge"
       }
     ]
   },
+  // One container per FaceTime call. The image carries Agora's native Server
+  // Gateway SDK, which cannot run in the Workers runtime. `lite` is enough:
+  // the process moves 16 kHz mono PCM in both directions and does no codec
+  // work of its own.
+  "containers": [
+    {
+      "class_name": "FaceTimeBridge",
+      "image": "./container/facetime-bridge/Dockerfile",
+      "instance_type": "basic",
+      "max_instances": 10
+    }
+  ],
   "migrations": [
     {
       "tag": "v1",
@@ -80,6 +99,10 @@
     {
       "tag": "v4",
       "new_classes": ["RateLimiter"]
+    },
+    {
+      "tag": "v5",
+      "new_sqlite_classes": ["FaceTimeBridge"]
     }
   ],
   // Semantic memory search. One-time setup before deploy:

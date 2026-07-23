@@ -564,6 +564,7 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
   private var eventKitBridge: AppleEventKitBridge?
   private var menuBarBridge: MenuBarBridge?
   private var voicePlayoutBridge: VoicePlayoutBridge?
+  private var rewindCaptureBridge: RewindCaptureBridge?
   private var keyboardSink: FlutterEventSink?
   private var localKeyboardMonitor: Any?
   private var localShakeMonitor: Any?
@@ -712,6 +713,8 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
     eventKitBridge = AppleEventKitBridge(binaryMessenger: flutterViewController.engine.binaryMessenger)
     menuBarBridge = MenuBarBridge(binaryMessenger: flutterViewController.engine.binaryMessenger, window: self)
     voicePlayoutBridge = VoicePlayoutBridge(binaryMessenger: flutterViewController.engine.binaryMessenger)
+    rewindCaptureBridge = RewindCaptureBridge(
+      binaryMessenger: flutterViewController.engine.binaryMessenger)
 
     let capabilities = FlutterMethodChannel(
       name: "omi/core_capabilities",

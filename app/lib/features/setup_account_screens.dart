@@ -28,6 +28,7 @@ import '../settings/settings.dart';
 import '../ui/burst_glow.dart';
 import '../ui/scroll_edge_fade.dart';
 import 'meeting_notes.dart';
+import 'rewind/rewind_settings_tile.dart';
 
 enum SettingsSection {
   account('Account', Icons.person_outline_rounded),
@@ -37,6 +38,7 @@ enum SettingsSection {
   developer('API & MCP', Icons.terminal_rounded),
   calls('FaceTime', Icons.videocam_outlined),
   calendar('Calendar', Icons.calendar_today_outlined),
+  rewind('Rewind', Icons.history_toggle_off_rounded),
   advanced('Advanced', Icons.tune_rounded);
 
   const SettingsSection(this.label, this.icon);
@@ -148,6 +150,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     SettingsSection.calls,
     if (_isMacDesktop || _isWindowsStyle) SettingsSection.permissions,
     if (_isMacDesktop) SettingsSection.calendar,
+    if (_isMacDesktop) SettingsSection.rewind,
     SettingsSection.advanced,
   ];
 
@@ -254,6 +257,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
         EventKitProactiveSyncTile(previewMode: previewMode),
       ],
+      SettingsSection.rewind => [RewindSettingsTile(previewMode: previewMode)],
       SettingsSection.advanced => [
         if (previewMode || !services.canUseApi)
           const _InfoTile(

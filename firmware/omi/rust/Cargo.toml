@@ -1,0 +1,24 @@
+[package]
+name = "omi-rust"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+name = "omi_rust"
+crate-type = ["staticlib", "rlib"]
+path = "src/lib.rs"
+
+# No `zephyr = "0.1.0"` dependency yet, deliberately. See the "Rust in the
+# firmware" section of firmware/README.md: the zephyr crate's generated
+# devicetree module does not compile for omi/nrf5340/cpuapp when CONFIG_FLASH=y.
+# Nothing here needs Zephyr bindings, and staying off the crate keeps omi-cv1
+# buildable. Adding it back is a one-line change once that is fixed upstream.
+[dependencies]
+
+[profile.release]
+panic = "abort"
+opt-level = "s"
+
+[profile.dev]
+panic = "abort"

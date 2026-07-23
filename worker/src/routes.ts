@@ -7,6 +7,7 @@ import billing from "./billing";
 import byok from "./byok-negotiation";
 import currents from "./currents";
 import memorySync from "./memory-sync";
+import { readMemoryLog, recordMirrorCursor } from "./memory-log";
 import { ensureZkrMemoryProjected } from "./memory-projection";
 import {
   listDailyReviews,
@@ -126,6 +127,29 @@ const retrieveMemory = async (context: Context<AppEnv>) => {
 routes.get("/memory/retrieve", retrieveMemory);
 routes.post("/memory/retrieve", retrieveMemory);
 
+// The authoritative memory log, cursored. Any client can materialize a local
+// mirror from this without a Rust hub, which is what makes the web target
+// possible; `replica_id` is optional and only reports how far that replica's
+// mirror has caught up.
+routes.get("/memory/log", async (context) => {
+  const after = Number(context.req.query("after") ?? 0);
+  const limit = Number(context.req.query("limit") ?? 200);
+  const replicaId = text(context.req.query("replica_id"), 200);
+  if (
+    !Number.isSafeInteger(after) ||
+    after < 0 ||
+    !Number.isSafeInteger(limit) ||
+    limit < 1 ||
+    limit > 500
+  )
+    return context.json({ error: "Invalid memory log cursor" }, 400);
+  const uid = context.get("auth").uid;
+  const page = await readMemoryLog(context.env.DB, uid, after, limit);
+  if (replicaId)
+    await recordMirrorCursor(context.env.DB, uid, replicaId, after);
+  return context.json(page);
+});
+
 routes.get("/memory/semantic-search", async (context) => {
   const query = text(context.req.query("q"), 500);
   const limit = Number(context.req.query("limit") ?? 8);
@@ -160,9 +184,16 @@ routes.get("/setup-health", (context) => {
       telegram:
         configured(context.env.TELEGRAM_WEBHOOK_SECRET) &&
         configured(context.env.TELEGRAM_BOT_TOKEN),
+      // The iMessage channel, whichever provider is behind it. Sendblue wins
+      // when it is configured; Blooio is the retained fallback.
       blooio:
-        configured(context.env.BLOOIO_WEBHOOK_SIGNING_SECRET) &&
-        configured(context.env.BLOOIO_API_KEY),
+        (configured(context.env.SENDBLUE_API_KEY_ID) &&
+          configured(context.env.SENDBLUE_API_KEY_SECRET) &&
+          configured(context.env.SENDBLUE_NUMBER) &&
+          configured(context.env.SENDBLUE_WEBHOOK_SIGNING_SECRET) &&
+          configured(context.env.SENDBLUE_WEBHOOK_PATH_TOKEN)) ||
+        (configured(context.env.BLOOIO_WEBHOOK_SIGNING_SECRET) &&
+          configured(context.env.BLOOIO_API_KEY)),
     },
     billing:
       configured(context.env.STRIPE_SECRET_KEY) &&

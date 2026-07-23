@@ -1,0 +1,31 @@
+# Out-of-tree west manifest fragment that adds zephyr-lang-rust to an existing
+# nRF Connect SDK v3.4.0 workspace. zephyr-lang-rust is a standalone repository:
+# it is in neither the NCS nor the upstream Zephyr manifest, so CONFIG_RUST in
+# Zephyr 4.4.0 is a Kconfig stub with no build backing until this module is
+# present in the workspace.
+#
+# `self: import:` pulls in the manifest repository's own west.yml unchanged, so
+# every NCS project keeps the revision v3.4.0 pins it already had; this file
+# only adds one project on top.
+#
+#   cp <repo>/firmware/west-rust.yml <workspace>/nrf/west-rust.yml
+#   cd <workspace>
+#   west config manifest.file west-rust.yml
+#   west update zephyr-lang-rust
+#
+# Reversible per workspace: `west config manifest.file west.yml` drops it again.
+# CI does not use this file — it clones the same pinned revision directly and
+# passes -DEXTRA_ZEPHYR_MODULES, which needs no workspace mutation.
+manifest:
+  remotes:
+    - name: zephyrproject-rtos
+      url-base: https://github.com/zephyrproject-rtos
+
+  projects:
+    - name: zephyr-lang-rust
+      remote: zephyrproject-rtos
+      revision: ab3e546232bfa2f4e16d6c5156b9d9500885b4e8
+      path: modules/lang/rust
+
+  self:
+    import: west.yml

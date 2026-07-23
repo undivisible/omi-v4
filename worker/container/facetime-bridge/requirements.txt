@@ -1,0 +1,2 @@
+agora-python-server-sdk==2.4.9
+websockets==15.0.1

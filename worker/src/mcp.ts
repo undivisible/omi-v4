@@ -276,12 +276,12 @@ export const tools: ToolDefinition[] = [
     title: "Start a FaceTime call",
     description:
       "Place a real FaceTime Audio call. This rings the given handle on the " +
-      "person's actual device immediately and returns a shareable FaceTime " +
-      "link that auto-admits the first person to join. Side-effectful and not " +
+      "person's actual device immediately and Omi joins the call's audio " +
+      "server-side, so the person can just talk. Side-effectful and not " +
       "undoable — confirm the handle with the user before calling it. The " +
-      "handle must be an E.164 phone number (like +15551234567) or an email " +
-      "address. Note: the upstream provider currently has FaceTime calling " +
-      "switched off, so this usually returns a 'not yet available' error.",
+      "handle must be an E.164 phone number (like +15551234567); the " +
+      "provider dials numbers, not email addresses. Returns a 'not yet " +
+      "available' error on accounts with no FaceTime line provisioned.",
     scope: "facetime:write",
     inputSchema: object(
       {

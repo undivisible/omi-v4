@@ -14,6 +14,24 @@ export type Bindings = {
   TELEGRAM_BOT_TOKEN?: string;
   BLOOIO_WEBHOOK_SIGNING_SECRET?: string;
   BLOOIO_API_KEY?: string;
+  // Sendblue FaceTime. All three must be set for the feature to leave its
+  // graceful "not provisioned" state; the account also needs a purchased
+  // FaceTime line. Secrets come from `wrangler secret put`, never the repo.
+  SENDBLUE_API_KEY_ID?: string;
+  SENDBLUE_API_KEY_SECRET?: string;
+  SENDBLUE_FACETIME_NUMBER?: string;
+  // Sendblue iMessage/SMS/RCS. `SENDBLUE_NUMBER` is the line messages are
+  // sent from. The two webhook values are both required: Sendblue does not
+  // sign bodies, so the inbound route is gated on a secret path segment as
+  // well as the echoed secret header (see `sendblue.ts`).
+  SENDBLUE_NUMBER?: string;
+  SENDBLUE_WEBHOOK_SIGNING_SECRET?: string;
+  SENDBLUE_WEBHOOK_PATH_TOKEN?: string;
+  FACETIME_BRIDGE?: DurableObjectNamespace;
+  FACETIME_MAX_SESSION_SECONDS?: string;
+  FACETIME_COST_MICROUSD_PER_MINUTE?: string;
+  FACETIME_SYSTEM_PROMPT?: string;
+  AGORA_CLOUD_PROXY?: string;
   STRIPE_SECRET_KEY?: string;
   STRIPE_PRO_PRICE_ID?: string;
   STRIPE_WEBHOOK_SECRET?: string;
@@ -30,6 +48,7 @@ export type Bindings = {
   OMI_MODEL_SEARCH?: string;
   OMI_MODEL_TRANSCRIBE?: string;
   OMI_MODEL_SPEAK?: string;
+  OMI_MODEL_CAPABILITIES?: string;
   OPENROUTER_API_KEY?: string;
   OPENROUTER_CHAT_COMPLETIONS_URL?: string;
   SPEECH_MAX_AUDIO_SECONDS?: string;

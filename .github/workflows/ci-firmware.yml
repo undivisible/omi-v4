@@ -1,0 +1,372 @@
+name: CI (firmware)
+
+# The root CI workflow has `paths-ignore: firmware/**`, so until this workflow
+# existed nothing compiled the pendant firmware. That is how the tree reached a
+# state where transport.c called speak() with no declaration and
+# battery_charging_state_read() had no prototype: it had never been built.
+#
+# This workflow compiles every target that firmware/README.md's "Migration
+# status" table says builds. The three devkit-* targets are known broken (nrfx
+# 2.x -> 3.x PDM API break) and run with continue-on-error until that port
+# lands; the discovery script reads their state out of the same table, so the
+# gate follows the README rather than a second hand-maintained list.
+
+on:
+  push:
+    paths:
+      - 'firmware/**'
+      - '.github/workflows/ci-firmware.yml'
+      - '.github/scripts/discover_firmware_targets.py'
+      - '.github/scripts/setup-ncs-toolchain.sh'
+  pull_request:
+    paths:
+      - 'firmware/**'
+      - '.github/workflows/ci-firmware.yml'
+      - '.github/scripts/discover_firmware_targets.py'
+      - '.github/scripts/setup-ncs-toolchain.sh'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-firmware-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Must match firmware/README.md's Toolchain section and the revision pinned in
+  # firmware/west-rust.yml's sibling comment.
+  NCS_VERSION: v3.4.0
+  NCS_WORKSPACE: /opt/ncs
+  # zephyr-lang-rust is in neither the NCS nor the upstream Zephyr manifest, so
+  # it is fetched separately. Keep this in sync with firmware/west-rust.yml.
+  RUST_MODULE_REV: ab3e546232bfa2f4e16d6c5156b9d9500885b4e8
+  # firmware/omi builds with CONFIG_FP_HARDABI, so the app core maps to the
+  # hard-float triple, not the thumbv8m.main-none-eabi one the plain nRF5340
+  # docs mention.
+  RUST_TARGET: thumbv8m.main-none-eabihf
+
+jobs:
+  discover:
+    name: Discover firmware targets
+    runs-on: ubuntu-24.04
+    outputs:
+      matrix: ${{ steps.targets.outputs.matrix }}
+      count: ${{ steps.targets.outputs.count }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Same script the release workflow uses. It parses the west build commands
+      # out of firmware/README.md and fails if any path it derives is missing,
+      # so a README that drifts from the tree breaks CI here rather than at
+      # release time.
+      - name: Derive the build matrix from firmware/README.md
+        id: targets
+        run: python3 .github/scripts/discover_firmware_targets.py --repo-root .
+
+  # The NCS toolchain is a ~900 MB download and a ~3 GB install. It is not
+  # downloaded at all: the job runs inside Nordic's prebuilt toolchain container,
+  # which already carries the Zephyr SDK, and GitHub pulls that image. What IS
+  # expensive per run is `west update` (~2.9 GB of module clones), so this job
+  # populates it once and every build job restores it read-only. Without this,
+  # each of the six matrix legs would re-clone the whole SDK on every push.
+  workspace:
+    name: NCS west workspace
+    runs-on: ubuntu-24.04
+    container:
+      image: ghcr.io/nrfconnect/sdk-nrf-toolchain:v3.4.0
+      options: --user root
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Trust the workspace inside the container
+        run: git config --global --add safe.directory '*'
+
+      - uses: actions/checkout@v4
+
+      - name: Restore the west workspace
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.NCS_WORKSPACE }}
+          key: ncs-${{ env.NCS_VERSION }}-rust-${{ env.RUST_MODULE_REV }}-v1
+
+      - name: Resolve the NCS toolchain on PATH
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: bash .github/scripts/setup-ncs-toolchain.sh
+
+      - name: Fetch the nRF Connect SDK
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p "${NCS_WORKSPACE}"
+          if [ ! -d "${NCS_WORKSPACE}/.west" ]; then
+            west init -m https://github.com/nrfconnect/sdk-nrf --mr "${NCS_VERSION}" "${NCS_WORKSPACE}"
+          fi
+          cd "${NCS_WORKSPACE}"
+          west config manifest.group-filter -- -babblesim,-ci,-optional,-debug
+          west update --narrow -o=--depth=1
+          west zephyr-export
+          du -sh "${NCS_WORKSPACE}" || true
+
+      # Cloned into the cached workspace at the same path west-rust.yml uses, so
+      # a developer who follows the README's `west config manifest.file` route
+      # ends up with an identical layout. CI takes the clone route because it
+      # needs no workspace mutation and pins the same revision.
+      - name: Fetch zephyr-lang-rust
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          dest="${NCS_WORKSPACE}/modules/lang/rust"
+          if [ ! -d "${dest}/.git" ]; then
+            mkdir -p "$(dirname "${dest}")"
+            git clone https://github.com/zephyrproject-rtos/zephyr-lang-rust "${dest}"
+          fi
+          git -C "${dest}" fetch --depth 1 origin "${RUST_MODULE_REV}"
+          git -C "${dest}" checkout --detach "${RUST_MODULE_REV}"
+          git -C "${dest}" rev-parse HEAD
+
+  build:
+    name: ${{ matrix.id }}
+    runs-on: ubuntu-24.04
+    needs: [discover, workspace]
+    container:
+      image: ghcr.io/nrfconnect/sdk-nrf-toolchain:v3.4.0
+      options: --user root
+    # The image's /bin/sh is dash, which has no `set -o pipefail`.
+    defaults:
+      run:
+        shell: bash
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.discover.outputs.matrix) }}
+    # matrix.required is false only for targets firmware/README.md's Migration
+    # status table marks "does not build" — today the three devkit-* targets,
+    # which need an nrfx 2.x -> 3.x port. They still build here so the log shows
+    # how far they get, but they cannot fail the check.
+    continue-on-error: ${{ matrix.required != 'true' }}
+    steps:
+      - name: Trust the workspace inside the container
+        run: git config --global --add safe.directory '*'
+
+      - uses: actions/checkout@v4
+
+      - name: Announce known-broken targets
+        if: matrix.required != 'true'
+        env:
+          TARGET_ID: ${{ matrix.id }}
+          NOTE: ${{ matrix.status_note }}
+        run: |
+          echo "::warning::${TARGET_ID} is not a required check: firmware/README.md's Migration status table records it as not building under NCS ${NCS_VERSION} (${NOTE}). Remove the row's 'does not build' state once the nrfx 3.x port lands and this target becomes gating automatically."
+
+      - name: Restore the west workspace
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ env.NCS_WORKSPACE }}
+          key: ncs-${{ env.NCS_VERSION }}-rust-${{ env.RUST_MODULE_REV }}-v1
+          fail-on-cache-miss: true
+
+      - name: Resolve the NCS toolchain on PATH
+        run: bash .github/scripts/setup-ncs-toolchain.sh
+
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ccache
+          key: ccache-fw-${{ matrix.id }}-${{ github.sha }}
+          restore-keys: |
+            ccache-fw-${{ matrix.id }}-
+
+      - name: Confirm the discovered target exists on disk
+        id: layout
+        env:
+          TARGET_ID: ${{ matrix.id }}
+          APP_DIR: ${{ matrix.app_dir }}
+          CONF: ${{ matrix.conf }}
+          BOARD: ${{ matrix.board }}
+          BOARD_ROOT: ${{ matrix.board_root }}
+        run: |
+          set -euo pipefail
+          if [ -z "${BOARD}" ]; then
+            echo "::error::No board could be resolved for ${TARGET_ID}. Document the exact west build command in firmware/README.md, or add it to BOARD_HINTS in .github/scripts/discover_firmware_targets.py."
+            exit 1
+          fi
+          if [ ! -f "${APP_DIR}/CMakeLists.txt" ]; then
+            echo "::error::${APP_DIR} has no CMakeLists.txt, so ${TARGET_ID} is not a buildable Zephyr application."
+            exit 1
+          fi
+          if [ -n "${CONF}" ] && [ ! -f "${CONF}" ]; then
+            echo "::error::${CONF} does not exist, so ${TARGET_ID} cannot be configured."
+            exit 1
+          fi
+          echo "app_dir=${GITHUB_WORKSPACE}/${APP_DIR}" >> "$GITHUB_OUTPUT"
+          if [ -n "${BOARD_ROOT}" ] && [ -d "${BOARD_ROOT}/boards" ]; then
+            echo "board_root=${GITHUB_WORKSPACE}/${BOARD_ROOT}" >> "$GITHUB_OUTPUT"
+          else
+            echo "board_root=" >> "$GITHUB_OUTPUT"
+          fi
+
+      # prj.conf is generated from the target's real config and is gitignored,
+      # so the checkout does not carry it and Zephyr would configure an empty
+      # application. firmware/README.md documents the copy; this replays it.
+      - name: Generate the gitignored prj.conf
+        if: matrix.conf_copy_from != ''
+        env:
+          COPY_FROM: ${{ matrix.conf_copy_from }}
+          COPY_TO: ${{ matrix.conf_copy_to }}
+        run: |
+          set -euo pipefail
+          cp "${COPY_FROM}" "${COPY_TO}"
+          echo "copied ${COPY_FROM} -> ${COPY_TO}"
+
+      - name: Build ${{ matrix.device }}
+        env:
+          BOARD: ${{ matrix.board }}
+          SYSBUILD: ${{ matrix.sysbuild }}
+          CMAKE_ARGS: ${{ matrix.cmake_args }}
+          APP_DIR: ${{ steps.layout.outputs.app_dir }}
+          BOARD_ROOT: ${{ steps.layout.outputs.board_root }}
+          BUILD_DIR_NAME: ${{ matrix.id }}
+        run: |
+          set -euo pipefail
+          build_dir="${GITHUB_WORKSPACE}/build/${BUILD_DIR_NAME}"
+          extra=()
+          if [ -n "${BOARD_ROOT}" ]; then
+            extra+=("-DBOARD_ROOT=${BOARD_ROOT}")
+          fi
+          if [ -n "${CMAKE_ARGS}" ]; then
+            read -r -a parsed <<< "${CMAKE_ARGS}"
+            for arg in "${parsed[@]}"; do
+              extra+=("${arg//%%REPO_ROOT%%/${GITHUB_WORKSPACE}}")
+            done
+          fi
+          sysbuild=()
+          if [ "${SYSBUILD}" = "true" ]; then
+            sysbuild+=("--sysbuild")
+          fi
+          cd "${NCS_WORKSPACE}"
+          set -x
+          west build -b "${BOARD}" "${APP_DIR}" \
+            --build-dir "${build_dir}" \
+            --pristine always \
+            "${sysbuild[@]}" \
+            -- "${extra[@]}"
+
+      # Not a release; this exists so a failing image can be inspected and so a
+      # size regression is visible without re-running the build locally.
+      - name: Report image size
+        env:
+          BUILD_DIR_NAME: ${{ matrix.id }}
+        run: |
+          set -euo pipefail
+          build_dir="${GITHUB_WORKSPACE}/build/${BUILD_DIR_NAME}"
+          {
+            echo "### ${BUILD_DIR_NAME}"
+            echo
+            echo '```'
+            find "${build_dir}" -name 'zephyr.elf' -not -path '*/CMakeFiles/*' \
+              | sort | while IFS= read -r elf; do
+                  echo "${elf#"${build_dir}/"}"
+                  arm-zephyr-eabi-size "${elf}" 2>/dev/null || size "${elf}" 2>/dev/null || true
+                done
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # Rust is opt-in (CONFIG_OMI_RUST=n by default), so the matrix above builds
+  # omi-cv1 without it. This leg proves the out-of-tree zephyr-lang-rust module
+  # still compiles and links into the real signed image, and runs the framing
+  # crate's host tests — the crate is the seed for sharing the wire format with
+  # app/native/hub, so it has to stay host-testable.
+  rust:
+    name: omi-cv1 with CONFIG_OMI_RUST=y
+    runs-on: ubuntu-24.04
+    needs: workspace
+    container:
+      image: ghcr.io/nrfconnect/sdk-nrf-toolchain:v3.4.0
+      options: --user root
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Trust the workspace inside the container
+        run: git config --global --add safe.directory '*'
+
+      - uses: actions/checkout@v4
+
+      - name: Restore the west workspace
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ env.NCS_WORKSPACE }}
+          key: ncs-${{ env.NCS_VERSION }}-rust-${{ env.RUST_MODULE_REV }}-v1
+          fail-on-cache-miss: true
+
+      - name: Resolve the NCS toolchain on PATH
+        run: bash .github/scripts/setup-ncs-toolchain.sh
+
+      - name: Cache the Rust toolchain and cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.rustup/toolchains
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: rust-fw-${{ env.RUST_TARGET }}-${{ hashFiles('firmware/omi/rust/Cargo.toml') }}
+          restore-keys: |
+            rust-fw-${{ env.RUST_TARGET }}-
+
+      - name: Install Rust with the nRF5340 app-core target
+        run: |
+          set -euo pipefail
+          if ! command -v rustup >/dev/null 2>&1; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+              | sh -s -- -y --profile minimal --default-toolchain stable --component clippy
+          fi
+          . "${HOME}/.cargo/env"
+          rustup component add clippy
+          rustup target add "${RUST_TARGET}"
+          echo "${HOME}/.cargo/bin" >> "$GITHUB_PATH"
+          rustc --version
+          cargo --version
+
+      # Host tests first: they are seconds, they need no Zephyr, and they are
+      # what will keep the device and app/native/hub wire formats from drifting.
+      - name: Test the framing crate on the host
+        working-directory: firmware/omi/rust
+        run: |
+          set -euo pipefail
+          . "${HOME}/.cargo/env"
+          cargo test
+
+      - name: Build omi-cv1 with Rust linked in
+        run: |
+          set -euo pipefail
+          . "${HOME}/.cargo/env"
+          cp firmware/omi/omi.conf firmware/omi/prj.conf
+          cd "${NCS_WORKSPACE}"
+          set -x
+          west build -b omi/nrf5340/cpuapp "${GITHUB_WORKSPACE}/firmware/omi" \
+            --sysbuild \
+            --build-dir "${GITHUB_WORKSPACE}/build/omi-cv1-rust" \
+            --pristine always \
+            -- \
+            -DBOARD_ROOT="${GITHUB_WORKSPACE}/firmware" \
+            -DCONFIG_RUST=y \
+            -DCONFIG_OMI_RUST=y
+
+      # A Rust staticlib that compiles but gets dropped by --gc-sections would
+      # look like success. Assert the symbol is in the linked application.
+      - name: Assert the Rust code reached the image
+        run: |
+          set -euo pipefail
+          elf="${GITHUB_WORKSPACE}/build/omi-cv1-rust/omi/zephyr/zephyr.elf"
+          if [ ! -f "${elf}" ]; then
+            echo "::error::${elf} was not produced."
+            exit 1
+          fi
+          if ! arm-zephyr-eabi-nm "${elf}" | grep -q ' T omi_rust_selftest$'; then
+            echo "::error::omi_rust_selftest is not in the linked image, so the Rust staticlib did not actually make it in."
+            arm-zephyr-eabi-nm "${elf}" | grep -i rust || true
+            exit 1
+          fi
+          echo "omi_rust_selftest is linked into zephyr.elf"

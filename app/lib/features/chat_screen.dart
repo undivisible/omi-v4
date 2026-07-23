@@ -30,6 +30,7 @@ import '../native/native_hub.dart';
 import '../onboarding/hub_checklist.dart';
 import '../ui/markdown_text.dart';
 import '../ui/omi_ui.dart';
+import 'composer_dictation.dart';
 import 'cursor_pill_controller.dart' show CombinedVoiceLevel;
 import 'cursor_pill_window.dart' show VoiceOverlayWindow;
 import 'hub_task_meta.dart';
@@ -71,6 +72,7 @@ class ChatScreen extends StatefulWidget {
     this.checklistStore,
     this.onOpenProviderSettings,
     this.entitlementProbe,
+    this.dictation,
     super.key,
   });
 
@@ -91,6 +93,10 @@ class ChatScreen extends StatefulWidget {
 
   /// Override for the plan lookup that gates the BYOK hint.
   final EntitlementProbe? entitlementProbe;
+
+  /// Override for composer dictation, so a test can drive the microphone
+  /// without a real one.
+  final ComposerDictation? dictation;
 
   @override
   State<ChatScreen> createState() => ChatScreenState();
@@ -170,6 +176,15 @@ class ChatScreenState extends State<ChatScreen>
     with SingleTickerProviderStateMixin {
   final _input = TextEditingController();
   final _inputFocus = FocusNode();
+
+  /// Composer dictation. Absent without a backend to transcribe through, in
+  /// which case the microphone is simply not offered.
+  late final ComposerDictation? _dictation =
+      widget.dictation ??
+      switch (widget.services.voiceNoteTranscriber) {
+        final transcribe? => ComposerDictation(transcribe: transcribe),
+        null => null,
+      };
   Timer? _placeholderTimer;
   int _placeholderIndex = 0;
   String? _localName;
@@ -551,6 +566,8 @@ class ChatScreenState extends State<ChatScreen>
     for (final timer in _proposalExpiryTimers.values) {
       timer.cancel();
     }
+    // Only the one this screen made is this screen's to dispose.
+    if (widget.dictation == null) _dictation?.dispose();
     _placeholderTimer?.cancel();
     _shakeDecayTimer?.cancel();
     _chatRevealTimer?.cancel();
@@ -1271,6 +1288,7 @@ class ChatScreenState extends State<ChatScreen>
                             : 'Connect an account and model to start chatting',
                         onSend: _send,
                         onCancel: _cancel,
+                        dictation: _dictation,
                       ),
                     ),
                     _buildBottomHint(),
@@ -2652,6 +2670,7 @@ class _ChatInputCard extends StatefulWidget {
     required this.hintText,
     required this.onSend,
     required this.onCancel,
+    this.dictation,
   });
 
   final TextEditingController controller;
@@ -2661,6 +2680,10 @@ class _ChatInputCard extends StatefulWidget {
   final String hintText;
   final VoidCallback onSend;
   final VoidCallback onCancel;
+
+  /// Dictation for the composer. Null when nothing can transcribe, which the
+  /// microphone shows as an explained state rather than hiding itself.
+  final ComposerDictation? dictation;
 
   @override
   State<_ChatInputCard> createState() => _ChatInputCardState();
@@ -2672,6 +2695,7 @@ class _ChatInputCardState extends State<_ChatInputCard> {
     super.initState();
     widget.focusNode.addListener(_focusChanged);
     widget.controller.addListener(_focusChanged);
+    widget.dictation?.addListener(_focusChanged);
   }
 
   @override
@@ -2685,13 +2709,43 @@ class _ChatInputCardState extends State<_ChatInputCard> {
       old.controller.removeListener(_focusChanged);
       widget.controller.addListener(_focusChanged);
     }
+    if (old.dictation != widget.dictation) {
+      old.dictation?.removeListener(_focusChanged);
+      widget.dictation?.addListener(_focusChanged);
+    }
   }
 
   @override
   void dispose() {
     widget.focusNode.removeListener(_focusChanged);
     widget.controller.removeListener(_focusChanged);
+    widget.dictation?.removeListener(_focusChanged);
     super.dispose();
+  }
+
+  /// Records, then puts the transcript in the composer at the caret. The
+  /// message is never sent: dictation is a way of typing, not of submitting.
+  Future<void> _toggleDictation() async {
+    final dictation = widget.dictation;
+    if (dictation == null) return;
+    if (dictation.state == DictationState.recording) {
+      final text = await dictation.stop();
+      if (text == null || !mounted) return;
+      final controller = widget.controller;
+      final existing = controller.text;
+      final joined = existing.isEmpty ? text : '${existing.trimRight()} $text';
+      controller.value = TextEditingValue(
+        text: joined,
+        selection: TextSelection.collapsed(offset: joined.length),
+      );
+      widget.focusNode.requestFocus();
+      return;
+    }
+    if (dictation.state != DictationState.idle) {
+      dictation.acknowledge();
+      return;
+    }
+    await dictation.start();
   }
 
   void _focusChanged() {
@@ -2732,13 +2786,29 @@ class _ChatInputCardState extends State<_ChatInputCard> {
               ),
             Padding(
               padding: const EdgeInsets.fromLTRB(20, 13, 13, 13),
-              child: _buildRow(colors),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  _buildRow(colors),
+                  if (widget.dictation?.message != null)
+                    _buildDictationNotice(colors, widget.dictation!.message!),
+                ],
+              ),
             ),
           ],
         ),
       ),
     );
   }
+
+  /// A refused permission or an unavailable model is said out loud in the
+  /// composer, so the microphone is never a control that silently does nothing.
+  Widget _buildDictationNotice(_HubColors colors, String message) => Padding(
+    key: const Key('dictation_notice'),
+    padding: const EdgeInsets.only(left: 0, right: 7, top: 8),
+    child: Text(message, style: TextStyle(fontSize: 12, color: colors.muted)),
+  );
 
   Widget _buildRow(_HubColors colors) => Row(
     children: [
@@ -2779,6 +2849,15 @@ class _ChatInputCardState extends State<_ChatInputCard> {
           ],
         ),
       ),
+      if (widget.dictation != null) ...[
+        const SizedBox(width: 4),
+        _DictationButton(
+          dictation: widget.dictation!,
+          enabled: widget.enabled && !widget.busy,
+          onPressed: () => unawaited(_toggleDictation()),
+          colors: colors,
+        ),
+      ],
       const SizedBox(width: 12),
       SizedBox(
         width: 38,
@@ -2811,6 +2890,76 @@ class _ChatInputCardState extends State<_ChatInputCard> {
       ),
     ],
   );
+}
+
+/// The composer's microphone. Press to record, press again to stop, and the
+/// transcript lands in the field to be edited — it never sends.
+class _DictationButton extends StatelessWidget {
+  const _DictationButton({
+    required this.dictation,
+    required this.enabled,
+    required this.onPressed,
+    required this.colors,
+  });
+
+  final ComposerDictation dictation;
+  final bool enabled;
+  final VoidCallback onPressed;
+  final _HubColors colors;
+
+  @override
+  Widget build(BuildContext context) {
+    final state = dictation.state;
+    final recording = state == DictationState.recording;
+    final transcribing = state == DictationState.transcribing;
+    // The mark is the recording state: the same orb the rest of the app uses,
+    // swelling with the input level. It honours reduced motion itself.
+    if (recording || transcribing) {
+      return SizedBox(
+        width: 38,
+        height: 38,
+        child: IconButton(
+          key: const Key('stop_dictation'),
+          tooltip: recording ? 'Stop recording' : 'Transcribing',
+          onPressed: recording ? onPressed : null,
+          padding: EdgeInsets.zero,
+          icon: ValueListenableBuilder<double>(
+            valueListenable: dictation.level,
+            builder: (context, level, child) => OmiActivityOrb(
+              size: 22,
+              state: recording ? OmiOrbState.listening : OmiOrbState.thinking,
+              period: recording
+                  ? const Duration(seconds: 8)
+                  : const Duration(milliseconds: 1100),
+              amplitude: level,
+              color: colors.ink,
+            ),
+          ),
+        ),
+      );
+    }
+    final blocked =
+        state == DictationState.denied || state == DictationState.unavailable;
+    return SizedBox(
+      width: 38,
+      height: 38,
+      child: IconButton(
+        key: const Key('start_dictation'),
+        tooltip: blocked ? dictation.message : 'Dictate a message',
+        onPressed: enabled || blocked ? onPressed : null,
+        padding: EdgeInsets.zero,
+        style: IconButton.styleFrom(
+          foregroundColor: blocked ? colors.muted : colors.ink,
+          disabledForegroundColor: colors.muted,
+          shape: const CircleBorder(),
+        ),
+        icon: Icon(
+          blocked ? Icons.mic_off_rounded : Icons.mic_none_rounded,
+          size: 20,
+        ),
+      ),
+    );
+  }
 }
 
 class _ThinkingGlow extends StatefulWidget {
