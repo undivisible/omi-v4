@@ -15,6 +15,7 @@ final class DesktopGestureController {
   final ShiftGestureMachine _machine;
   final _actions = StreamController<ShiftGestureAction>.broadcast(sync: true);
   StreamSubscription<DesktopKeyboardEvent>? _subscription;
+  Timer? _chordTimer;
 
   Stream<ShiftGestureAction> get actions => _actions.stream;
 
@@ -29,6 +30,7 @@ final class DesktopGestureController {
         pressed,
       ),
       DesktopSummonOverlayEvent() => _machine.summonOverlay(),
+      DesktopShakeEvent() => _machine.mouseShake(),
       DesktopSecureInputEvent(:final enabled) => _machine.setSecureInput(
         enabled,
       ),
@@ -36,6 +38,20 @@ final class DesktopGestureController {
       DesktopGlobalHotkeyUnavailableEvent() => const <ShiftGestureAction>[],
     };
     _emit(actions);
+    _armChordTimer();
+  }
+
+  /// A first chord is held back for the double-chord window; when no second
+  /// chord upgrades it to voice, the timer resolves it as the single-chord
+  /// text-input intent.
+  void _armChordTimer() {
+    _chordTimer?.cancel();
+    _chordTimer = null;
+    if (!_machine.hasPendingChord) return;
+    _chordTimer = Timer(
+      _machine.doubleChordWindow,
+      () => _emit(_machine.chordTimeout()),
+    );
   }
 
   void _emit(List<ShiftGestureAction> actions) {
@@ -47,6 +63,7 @@ final class DesktopGestureController {
   void reset() => _machine.reset();
 
   Future<void> dispose() async {
+    _chordTimer?.cancel();
     await _subscription?.cancel();
     await _actions.close();
   }

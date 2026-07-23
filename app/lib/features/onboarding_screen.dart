@@ -940,10 +940,16 @@ class OnboardingUseStep extends StatefulWidget {
 class _OnboardingUseStepState extends State<OnboardingUseStep> {
   bool leftShiftDown = false;
   bool rightShiftDown = false;
-  bool chordDown = false;
   bool _lessonSignalled = false;
+  bool _typeLessonDone = false;
   CursorPillState lastPillState = CursorPillState.hidden;
   StreamSubscription<String>? transcriptEvents;
+
+  /// The same chord state machine the shell uses, so the lesson teaches the
+  /// real timing: one chord summons typing, two chords inside the window
+  /// start voice.
+  final _chords = ShiftGestureMachine();
+  Timer? _chordTimer;
 
   void _signalVoiceLesson() {
     if (_lessonSignalled) return;
@@ -962,6 +968,7 @@ class _OnboardingUseStepState extends State<OnboardingUseStep> {
 
   @override
   void dispose() {
+    _chordTimer?.cancel();
     HardwareKeyboard.instance.removeHandler(_handleKey);
     widget.pill.removeListener(_pillChanged);
     unawaited(transcriptEvents?.cancel());
@@ -972,16 +979,35 @@ class _OnboardingUseStepState extends State<OnboardingUseStep> {
   /// Performing that stop IS the voice lesson completing — the user talked
   /// and stopped — so hand off to the shake finale rather than finishing
   /// outright, even when speech recognition produced no transcript (the live
-  /// route can drain late or be unavailable in offline setups).
+  /// route can drain late or be unavailable in offline setups). Dismissing
+  /// the typing bar the same way completes the earlier type lesson.
   void _pillChanged() {
     if (!mounted) return;
     final state = widget.pill.state;
     final wasListening = lastPillState == CursorPillState.listening;
+    final wasTyping = lastPillState == CursorPillState.input;
     lastPillState = state;
+    if (wasTyping && state == CursorPillState.hidden) {
+      _typeLessonDone = true;
+    }
     if (wasListening && state == CursorPillState.hidden && !widget.finale) {
+      _typeLessonDone = true;
       _signalVoiceLesson();
     }
     setState(() {});
+  }
+
+  void _routeChordActions(List<ShiftGestureAction> actions) {
+    for (final action in actions) {
+      unawaited(widget.pill.handleGesture(action));
+    }
+    _chordTimer?.cancel();
+    _chordTimer = null;
+    if (!_chords.hasPendingChord) return;
+    _chordTimer = Timer(_chords.doubleChordWindow, () {
+      if (!mounted) return;
+      _routeChordActions(_chords.chordTimeout());
+    });
   }
 
   bool _handleKey(KeyEvent event) {
@@ -1000,13 +1026,9 @@ class _OnboardingUseStepState extends State<OnboardingUseStep> {
       if (isLeft) leftShiftDown = down;
       if (isRight) rightShiftDown = down;
     });
-    final bothDown = leftShiftDown && rightShiftDown;
-    if (bothDown && !chordDown) {
-      chordDown = true;
-      unawaited(widget.pill.doubleShift());
-    } else if (!leftShiftDown && !rightShiftDown) {
-      chordDown = false;
-    }
+    _routeChordActions(
+      _chords.shift(isLeft ? PhysicalShift.left : PhysicalShift.right, down),
+    );
     return false;
   }
 
@@ -1076,8 +1098,8 @@ class _OnboardingUseStepState extends State<OnboardingUseStep> {
     ),
   );
 
-  /// The keycaps start close together; once the pill is up and the user is
-  /// asked to press both Shift keys again, they slide apart while the ×2
+  /// The keycaps start close together; once the type lesson is done and the
+  /// user is asked to double-tap the chord, they slide apart while the ×2
   /// hint fades and scales in between them.
   Widget _timesTwoReveal({required bool shown}) {
     final duration = MediaQuery.disableAnimationsOf(context)
@@ -1115,14 +1137,15 @@ class _OnboardingUseStepState extends State<OnboardingUseStep> {
   }
 
   String get _prompt => switch (widget.pill.state) {
-    CursorPillState.hidden =>
-      'Double-tap both Shift keys to start talking to me. '
-          '($summonOverlayKeybindLabel summons the typing bar anywhere.)',
+    CursorPillState.hidden when !_typeLessonDone =>
+      'Press both Shift keys once to summon the typing bar. '
+          '($summonOverlayKeybindLabel works anywhere too.)',
+    CursorPillState.hidden => 'Now tap the chord twice to start talking to me.',
     CursorPillState.input =>
-      'This is where you type. Press Esc — or double-shift — to dismiss.',
+      'This is where you type. Press Esc — or the chord — to dismiss.',
     CursorPillState.working => 'Working on it…',
     CursorPillState.listening =>
-      'Say something — then press Esc, or double-shift, to stop.',
+      'Say something — then press Esc, or the chord, to stop.',
   };
 
   @override
@@ -1143,7 +1166,11 @@ class _OnboardingUseStepState extends State<OnboardingUseStep> {
               listening: listening,
               shimmer: expectingDoubleShift,
             ),
-            _timesTwoReveal(shown: widget.pill.state == CursorPillState.input),
+            _timesTwoReveal(
+              shown:
+                  _typeLessonDone &&
+                  widget.pill.state == CursorPillState.hidden,
+            ),
             _shiftKey(
               key: const Key('shift_right'),
               pressed: rightShiftDown,

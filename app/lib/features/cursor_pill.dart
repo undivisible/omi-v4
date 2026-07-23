@@ -78,7 +78,7 @@ class _CursorPillState extends State<CursorPill> {
   void initState() {
     super.initState();
     widget.controller.addListener(_changed);
-    _text.addListener(_changed);
+    _text.addListener(_textChanged);
     _focus.addListener(_focusChanged);
   }
 
@@ -94,6 +94,11 @@ class _CursorPillState extends State<CursorPill> {
     if (mounted) setState(() {});
   }
 
+  void _textChanged() {
+    widget.controller.inputChanged(_text.text);
+    _changed();
+  }
+
   void _focusChanged() {
     if (!mounted) return;
     // Rebuild so the typing shimmer starts/stops with focus.
@@ -104,6 +109,9 @@ class _CursorPillState extends State<CursorPill> {
     }
   }
 
+  /// The dimmed inline continuation after the caret: a static suggestion
+  /// whose label extends the typed text is the instant first tier; when none
+  /// matches, the debounced AI prediction from the controller fills in.
   String? get _ghostRemainder {
     final typed = _text.text;
     if (typed.isEmpty) return null;
@@ -113,7 +121,7 @@ class _CursorPillState extends State<CursorPill> {
         return suggestion.label.substring(typed.length);
       }
     }
-    return null;
+    return widget.controller.predictedRemainder(typed);
   }
 
   void _acceptGhost() {
