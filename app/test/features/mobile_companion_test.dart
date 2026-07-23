@@ -11,6 +11,7 @@ import 'package:omi/auth/auth.dart';
 import 'package:omi/currents/currents.dart';
 import 'package:omi/device/device.dart';
 import 'package:omi/features/mobile_companion_shell.dart';
+import 'package:omi/features/transcript_log_store.dart';
 import 'package:omi/main.dart';
 import 'package:omi/native/native_hub.dart';
 import 'package:omi/onboarding/onboarding_completion.dart';
@@ -171,6 +172,67 @@ void main() {
     expect(find.byKey(const Key('companion_stat_segments')), findsOneWidget);
     fixture.services.dispose();
   });
+
+  testWidgets('captured transcripts survive recreating the shell with the '
+      'same store', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(800, 2400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final fixture = await _mobileFixture('user-a');
+    final transcriptLog = VolatileTranscriptLogStore();
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MobileCompanionShell(
+          services: fixture.services,
+          pairedDevices: VolatilePairedDeviceStore(),
+          transcriptLog: transcriptLog,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    fixture.hub.events0.add(
+      NativeEventTranscriptDelta(
+        value: _delta('persisted segment', finalSegment: true),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('persisted segment'), findsOneWidget);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pumpAndSettle();
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MobileCompanionShell(
+          services: fixture.services,
+          pairedDevices: VolatilePairedDeviceStore(),
+          transcriptLog: transcriptLog,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('persisted segment'), findsOneWidget);
+    expect(find.byKey(const Key('companion_transcripts_empty')), findsNothing);
+    fixture.services.dispose();
+  });
+
+  test(
+    'transcript log store round-trips segments through preferences',
+    () async {
+      SharedPreferences.setMockInitialValues({});
+      final store = PreferencesTranscriptLogStore();
+      await store.save([_delta('from the pendant', finalSegment: true)]);
+
+      final restored = await PreferencesTranscriptLogStore().read();
+
+      expect(restored, hasLength(1));
+      expect(restored.single.text, 'from the pendant');
+      expect(restored.single.finalSegment, isTrue);
+      expect(restored.single.deviceId, 'omi-1');
+    },
+  );
 
   testWidgets('disconnected state collapses to one block with reconnect', (
     tester,

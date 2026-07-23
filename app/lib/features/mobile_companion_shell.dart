@@ -11,6 +11,7 @@ import '../features/setup_account_screens.dart' show EventKitProactiveSyncTile;
 import '../native/live_activity_bridge.dart';
 import '../native/native_hub.dart';
 import '../providers/providers.dart';
+import 'transcript_log_store.dart';
 
 const _paper = Color(0xfff7f6f1);
 const _surface = Color(0xfffffefa);
@@ -41,12 +42,14 @@ class MobileCompanionShell extends StatefulWidget {
   const MobileCompanionShell({
     required this.services,
     this.pairedDevices,
+    this.transcriptLog,
     this.previewMode = false,
     super.key,
   });
 
   final AppServices services;
   final PairedDeviceStore? pairedDevices;
+  final TranscriptLogStore? transcriptLog;
   final bool previewMode;
 
   @override
@@ -58,12 +61,15 @@ class _MobileCompanionShellState extends State<MobileCompanionShell> {
 
   late final PairedDeviceStore _pairedDevices =
       widget.pairedDevices ?? PreferencesPairedDeviceStore();
+  late final TranscriptLogStore _transcriptLog =
+      widget.transcriptLog ?? PreferencesTranscriptLogStore();
   final List<TranscriptDelta> _transcripts = [];
   StreamSubscription<NativeEvent>? _nativeEventSubscription;
 
   @override
   void initState() {
     super.initState();
+    unawaited(_restoreTranscripts());
     _nativeEventSubscription = widget.services.nativeEvents.listen((event) {
       if (event case NativeEventTranscriptDelta(
         :final value,
@@ -75,8 +81,30 @@ class _MobileCompanionShellState extends State<MobileCompanionShell> {
             _transcripts.removeRange(_maxTranscripts, _transcripts.length);
           }
         });
+        unawaited(
+          _transcriptLog.save(List.of(_transcripts)).catchError((Object _) {}),
+        );
       }
     }, onError: (Object error, StackTrace stackTrace) {});
+  }
+
+  Future<void> _restoreTranscripts() async {
+    List<TranscriptDelta> restored;
+    try {
+      restored = await _transcriptLog.read();
+    } catch (_) {
+      restored = const [];
+    }
+    if (!mounted || restored.isEmpty) return;
+    setState(() {
+      final known = _transcripts.map((delta) => delta.segmentId).toSet();
+      _transcripts.addAll(
+        restored.where((delta) => !known.contains(delta.segmentId)),
+      );
+      if (_transcripts.length > _maxTranscripts) {
+        _transcripts.removeRange(_maxTranscripts, _transcripts.length);
+      }
+    });
   }
 
   @override
@@ -461,6 +489,7 @@ class MobilePendantPageState extends State<MobilePendantPage> {
             icon: Icons.watch_outlined,
             title: found.name,
             detail: [
+              if (found.systemConnected) 'Already connected',
               if (found.signalStrength case final signal?) '$signal dBm',
               if (found.batteryLevel case final battery?) '$battery% battery',
             ].join(' · '),
