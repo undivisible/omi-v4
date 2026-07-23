@@ -28,6 +28,13 @@ LOG_MODULE_REGISTER(t5838, CONFIG_LOG_DEFAULT_LEVEL);
 #define T5838_AAD_A_LPF_2_0kHz 0x02
 #define T5838_AAD_A_THR_75dB 0x06
 
+#ifndef CONFIG_OMI_AAD_A_LPF
+#define CONFIG_OMI_AAD_A_LPF T5838_AAD_A_LPF_2_0kHz
+#endif
+#ifndef CONFIG_OMI_AAD_A_THRESHOLD
+#define CONFIG_OMI_AAD_A_THRESHOLD T5838_AAD_A_THR_75dB
+#endif
+
 /* ---- FAKE2C bit-bang protocol constants (from datasheet) ---- */
 #define FAKE2C_START_PILOT_CLKS 10
 #define FAKE2C_ZERO (1 * FAKE2C_START_PILOT_CLKS)
@@ -168,8 +175,8 @@ int t5838_aad_enter(void)
 
     /* Mode A: disable, set LPF + threshold, then select mode A. */
     reg_write(T5838_REG_AAD_MODE, T5838_AAD_SELECT_NONE);
-    reg_write(T5838_REG_AAD_A_LPF, T5838_AAD_A_LPF_2_0kHz);
-    reg_write(T5838_REG_AAD_A_THR, T5838_AAD_A_THR_75dB);
+    reg_write(T5838_REG_AAD_A_LPF, (uint8_t) CONFIG_OMI_AAD_A_LPF);
+    reg_write(T5838_REG_AAD_A_THR, (uint8_t) CONFIG_OMI_AAD_A_THRESHOLD);
     reg_write(T5838_REG_AAD_MODE, T5838_AAD_SELECT_A);
 
     /* Clock >2 ms so the mic latches config and enters AAD sleep. */
@@ -181,6 +188,8 @@ int t5838_aad_enter(void)
      * stays latched in AAD mode. */
     clk_set(1);
     gpio_pin_set_dt(&thsel, 1);
-    LOG_INF("t5838 AAD: entered sleep (mode A, 75dB, CLK/THSEL parked high)");
+    LOG_INF("t5838 AAD: entered sleep (mode A, lpf=0x%02x thr=0x%02x, CLK/THSEL parked high)",
+            (uint8_t) CONFIG_OMI_AAD_A_LPF,
+            (uint8_t) CONFIG_OMI_AAD_A_THRESHOLD);
     return 0;
 }

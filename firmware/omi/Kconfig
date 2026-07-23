@@ -141,6 +141,29 @@ config OMI_AAD_SETTLE_MS
          arming the WAKE interrupt. Lets the mic settle its noise floor and
          swallow the entry transient so it does not immediately false-wake."
 
+config OMI_AAD_A_LPF
+    int "T5838 AAD mode-A low-pass filter (register 0x35)"
+    range 0 3
+    default 2
+    depends on OMI_ENABLE_T5838_AAD
+    help
+        "Raw value written to the T5838 AAD_A_LPF register. Selects the
+         bandwidth the mic's hardware detector listens over. 2 (the default) is
+         the 2.0 kHz setting, which covers speech. Lower values narrow the band
+         (fewer false wakes from broadband noise); higher values widen it."
+
+config OMI_AAD_A_THRESHOLD
+    int "T5838 AAD mode-A acoustic threshold (register 0x36)"
+    range 0 15
+    default 6
+    depends on OMI_ENABLE_T5838_AAD
+    help
+        "Raw value written to the T5838 AAD_A_THR register. 0 is the most
+         sensitive setting (~60 dB SPL) and triggers on ambient room noise;
+         6 (the default) is ~75 dB, which wakes on nearby speech but ignores a
+         quiet room. Raise it if the pendant never sleeps, lower it if it misses
+         the start of conversations."
+
 config OMI_WATCHDOG_TIMEOUT_MS
     int "Watchdog timeout (ms)"
     range 5000 300000
