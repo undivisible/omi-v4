@@ -17,7 +17,6 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-pub(crate) const DEV_GEMINI_MODEL: &str = "gemini-3.1-flash-lite";
 const GENERATE_TIMEOUT: Duration = Duration::from_secs(20);
 
 #[derive(Clone, Eq, PartialEq)]
@@ -100,9 +99,9 @@ pub(crate) fn parse_env_value(contents: &str, name: &str) -> Option<String> {
 /// One-shot text generation against the Gemini `generateContent` REST API.
 /// Returns `None` on any failure; failures never include the key.
 pub(crate) async fn generate(key: &DevGeminiKey, prompt: &str) -> Option<String> {
-    let url = format!(
-        "https://generativelanguage.googleapis.com/v1beta/models/{DEV_GEMINI_MODEL}:generateContent"
-    );
+    let model = crate::model_tier::model_for_tier_env(crate::model_tier::ModelTier::Speed);
+    let url =
+        format!("https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent");
     let body = serde_json::json!({
         "contents": [{ "parts": [{ "text": prompt }] }],
         "generationConfig": { "temperature": 0.2, "maxOutputTokens": 512 },

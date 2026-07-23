@@ -772,7 +772,9 @@ fn production_assistant_provider() -> Arc<dyn AssistantProvider> {
             Some(key) => Arc::new(RsAiAssistantProvider {
                 config: AssistantProviderConfig {
                     kind: AssistantProviderKind::Gemini,
-                    model: crate::dev_gemini::DEV_GEMINI_MODEL.to_owned(),
+                    model: crate::model_tier::model_for_tier_env(
+                        crate::model_tier::ModelTier::Speed,
+                    ),
                     credential: key.0,
                     endpoint: None,
                 },
@@ -795,6 +797,59 @@ fn configured_assistant_provider(
             computer_use_enabled: computer_use_available(),
         }) as Arc<dyn AssistantProvider>
     }))
+}
+
+/// One-shot, non-streaming generation for callers that want a single block of
+/// text (meeting notes) rather than a live stream. Text deltas are collected
+/// until the provider ends the message; a tool-call proposal, an error, a
+/// timeout, or cancellation all yield `None` so the caller can fall back.
+async fn generate_once(
+    provider: &Arc<dyn AssistantProvider>,
+    prompt: &str,
+    cancellation: &CancellationToken,
+) -> Option<String> {
+    let request_id = format!("meeting-note-{}", unix_time_ms());
+    let mut events = provider.dispatch(request_id, prompt.to_owned(), cancellation.clone());
+    let mut text = String::new();
+    loop {
+        match receive_provider_event(&mut events, cancellation, PROVIDER_EVENT_TIMEOUT).await {
+            ProviderReceive::Event(Ok(AssistantProviderEvent::Delta {
+                text: delta,
+                final_segment,
+            })) => {
+                text.push_str(&delta);
+                if final_segment {
+                    break;
+                }
+            }
+            ProviderReceive::Event(Ok(AssistantProviderEvent::Proposal(_))) => return None,
+            ProviderReceive::Event(Err(_)) => return None,
+            ProviderReceive::Closed => break,
+            ProviderReceive::Cancelled | ProviderReceive::TimedOut => return None,
+        }
+    }
+    let trimmed = text.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_owned())
+}
+
+/// Wraps a provider as a meeting-note generator: the meeting runtime injects
+/// this so notes are produced by the configured (BALANCED-tier) provider
+/// without depending on the streaming provider types.
+fn note_generator(provider: Arc<dyn AssistantProvider>) -> crate::meeting::NoteGenerator {
+    Arc::new(move |prompt, cancellation| {
+        let provider = Arc::clone(&provider);
+        Box::pin(async move { generate_once(&provider, &prompt, &cancellation).await })
+    })
+}
+
+/// Pushes the current assistant provider to the meeting runtime so meeting-note
+/// generation uses the same provider as chat.
+fn publish_note_provider(provider: &Arc<StdMutex<Arc<dyn AssistantProvider>>>) {
+    let current = provider
+        .lock()
+        .unwrap_or_else(|failure| failure.into_inner())
+        .clone();
+    crate::meeting::configure_note_provider(note_generator(current));
 }
 
 #[derive(Default)]
@@ -882,6 +937,7 @@ impl CommandDispatcher {
         let mut tasks = JoinSet::new();
         let mut completed = CompletedCaptures::default();
         let mut authority_generation = 0_u64;
+        publish_note_provider(&self.assistant_provider);
         loop {
             reap_ready(
                 &mut tasks,
@@ -1115,6 +1171,7 @@ impl CommandDispatcher {
                                 config,
                                 computer_use_enabled: computer_use_available(),
                             });
+                        publish_note_provider(&self.assistant_provider);
                         progress(
                             &request_id,
                             "assistant_configuration",
@@ -1140,6 +1197,7 @@ impl CommandDispatcher {
                     Arc::new(UnavailableAssistantProvider {
                         reason: "no model provider is configured".to_owned(),
                     });
+                publish_note_provider(&self.assistant_provider);
                 progress(
                     &request_id,
                     "assistant_configuration",
