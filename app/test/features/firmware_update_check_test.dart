@@ -30,6 +30,7 @@ void main() {
       'https://example.test/firmware-v3.2.0/dfu_application.zip',
     );
     expect(release?.sizeBytes, 440320);
+    expect(release?.digest, 'sha256:$_digest');
   });
 
   test('stays quiet when the pendant is current or newer', () async {
@@ -211,6 +212,11 @@ void main() {
   });
 }
 
+// Stands in for the digest GitHub publishes per asset; the installer refuses
+// bytes that do not hash to it.
+const _digest =
+    '0000000000000000000000000000000000000000000000000000000000000001';
+
 FirmwareUpdateChecker _checker(List<Map<String, Object?>> feed) =>
     FirmwareUpdateChecker(
       endpoint: 'https://example.test/releases',
@@ -242,6 +248,7 @@ Map<String, Object?> _release(
         'name': asset,
         'browser_download_url': 'https://example.test/$tag/$asset',
         'size': 440320,
+        'digest': 'sha256:$_digest',
       },
   ],
 };
