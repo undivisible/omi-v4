@@ -389,6 +389,7 @@ void main() {
           kind: 'action',
           text: 'Capture this commitment',
           sourceText: 'I will send the notes',
+          speaker: 'You',
         ),
       ),
     );

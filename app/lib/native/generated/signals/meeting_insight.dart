@@ -7,6 +7,7 @@ class MeetingInsight {
     required this.kind,
     required this.text,
     required this.sourceText,
+    required this.speaker,
   });
 
   static MeetingInsight deserialize(BinaryDeserializer deserializer) {
@@ -15,6 +16,7 @@ class MeetingInsight {
       kind: deserializer.deserializeString(),
       text: deserializer.deserializeString(),
       sourceText: deserializer.deserializeString(),
+      speaker: deserializer.deserializeString(),
     );
     deserializer.decreaseContainerDepth();
     return instance;
@@ -32,12 +34,19 @@ class MeetingInsight {
   final String kind;
   final String text;
   final String sourceText;
+  final String speaker;
 
-  MeetingInsight copyWith({String? kind, String? text, String? sourceText}) {
+  MeetingInsight copyWith({
+    String? kind,
+    String? text,
+    String? sourceText,
+    String? speaker,
+  }) {
     return MeetingInsight(
       kind: kind ?? this.kind,
       text: text ?? this.text,
       sourceText: sourceText ?? this.sourceText,
+      speaker: speaker ?? this.speaker,
     );
   }
 
@@ -46,6 +55,7 @@ class MeetingInsight {
     serializer.serializeString(kind);
     serializer.serializeString(text);
     serializer.serializeString(sourceText);
+    serializer.serializeString(speaker);
     serializer.decreaseContainerDepth();
   }
 
@@ -63,11 +73,12 @@ class MeetingInsight {
     return other is MeetingInsight &&
         kind == other.kind &&
         text == other.text &&
-        sourceText == other.sourceText;
+        sourceText == other.sourceText &&
+        speaker == other.speaker;
   }
 
   @override
-  int get hashCode => Object.hash(kind, text, sourceText);
+  int get hashCode => Object.hash(kind, text, sourceText, speaker);
 
   @override
   String toString() {
@@ -78,7 +89,8 @@ class MeetingInsight {
           '$runtimeType('
           'kind: $kind, '
           'text: $text, '
-          'sourceText: $sourceText'
+          'sourceText: $sourceText, '
+          'speaker: $speaker'
           ')';
       return true;
     }());
