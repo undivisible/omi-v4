@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/material.dart';
 
@@ -7,7 +8,6 @@ import '../app_services.dart';
 import '../currents/currents.dart';
 import '../keyboard/keyboard.dart';
 import '../keyboard/shake_gesture.dart';
-import 'cursor_pill.dart' show TypingShimmer;
 import '../native/generated/signals/signals.dart'
     show
         ActionRisk,
@@ -155,6 +155,11 @@ class ChatScreenState extends State<ChatScreen> {
       widget.checklistStore ?? PreferencesHubChecklistStore();
   bool _setupTaskDone = true;
   bool _greeterDismissed = false;
+  final _scroll = ScrollController();
+  final _greeterKey = GlobalKey();
+  bool _snapping = false;
+  bool _pendingChatReveal = false;
+  Timer? _chatRevealTimer;
   List<String> _starterTasks = const [];
   final _doneStarterTasks = <String>{};
 
@@ -330,7 +335,7 @@ class ChatScreenState extends State<ChatScreen> {
           setState(() {
             _progress = submission == null ? null : 'Thinking';
             if (submission != null) {
-              _greeterDismissed = true;
+              _dismissGreeter();
               _messages.add(
                 _ChatMessage(
                   requestId: submission.requestId,
@@ -408,9 +413,60 @@ class ChatScreenState extends State<ChatScreen> {
     }
     _placeholderTimer?.cancel();
     _shakeDecayTimer?.cancel();
+    _chatRevealTimer?.cancel();
+    _scroll.dispose();
     _input.dispose();
     _inputFocus.dispose();
     super.dispose();
+  }
+
+  void _dismissGreeter() {
+    if (!_greeterDismissed) {
+      _pendingChatReveal = true;
+      _chatRevealTimer?.cancel();
+      _chatRevealTimer = Timer(const Duration(milliseconds: 450), () {
+        _pendingChatReveal = false;
+      });
+    }
+    _greeterDismissed = true;
+  }
+
+  bool _handleScrollEnd(ScrollEndNotification notification) {
+    if (_snapping || _greeterDismissed || _messages.isEmpty) return false;
+    final metrics = notification.metrics;
+    final render = _greeterKey.currentContext?.findRenderObject();
+    if (render is! RenderBox || !render.hasSize) return false;
+    final boundary = (render.size.height - metrics.viewportDimension * .35)
+        .clamp(0.0, metrics.maxScrollExtent);
+    if (boundary <= 0) return false;
+    final pixels = metrics.pixels;
+    if (pixels <= 1 || pixels >= boundary - 1) return false;
+    _snapTo(pixels > 48 ? boundary : 0.0);
+    return false;
+  }
+
+  void _snapTo(double target) {
+    _snapping = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_scroll.hasClients) {
+        _snapping = false;
+        return;
+      }
+      if (MediaQuery.disableAnimationsOf(context)) {
+        _scroll.jumpTo(target);
+        _snapping = false;
+        return;
+      }
+      unawaited(
+        _scroll
+            .animateTo(
+              target,
+              duration: const Duration(milliseconds: 280),
+              curve: Curves.easeOutCubic,
+            )
+            .whenComplete(() => _snapping = false),
+      );
+    });
   }
 
   void _trackShake(Offset position) {
@@ -579,7 +635,7 @@ class ChatScreenState extends State<ChatScreen> {
           _ChatMessage(requestId: requestId, text: text, fromUser: true),
         );
         _activeRequestId = requestId;
-        _greeterDismissed = true;
+        _dismissGreeter();
         _progress = 'Thinking';
         _error = null;
         _input.clear();
@@ -804,34 +860,43 @@ class ChatScreenState extends State<ChatScreen> {
                   Expanded(
                     child: Stack(
                       children: [
-                        ListView.builder(
-                          key: const Key('chat_messages'),
-                          reverse: true,
-                          itemCount: history.length + 1,
-                          itemBuilder: (context, index) {
-                            if (index == 0) {
-                              return _GreeterSwitcher(
-                                dismissed: _greeterDismissed,
-                                child: _ChatHome(
-                                  greeting: _greeting(),
-                                  setupTaskDone: _setupTaskDone,
-                                  onToggleSetupTask: _toggleSetupTask,
-                                  starterTasks: _starterTasks,
-                                  doneStarterTasks: _doneStarterTasks,
-                                  onToggleStarterTask: _toggleStarterTask,
-                                  tasks: tasks,
-                                  onComplete: currents == null
-                                      ? null
-                                      : (id) => unawaited(currents.dismiss(id)),
-                                  onPrompt: _sendPrompt,
-                                  onAllTasks: currents == null
-                                      ? null
-                                      : () => _openAllTasks(currents),
-                                ),
-                              );
-                            }
-                            return history[index - 1]();
-                          },
+                        NotificationListener<ScrollEndNotification>(
+                          onNotification: _handleScrollEnd,
+                          child: ListView.builder(
+                            key: const Key('chat_messages'),
+                            controller: _scroll,
+                            physics: const AlwaysScrollableScrollPhysics(),
+                            reverse: true,
+                            itemCount: history.length + 1,
+                            itemBuilder: (context, index) {
+                              if (index == 0) {
+                                return KeyedSubtree(
+                                  key: _greeterKey,
+                                  child: _GreeterSwitcher(
+                                    dismissed: _greeterDismissed,
+                                    child: _ChatHome(
+                                      greeting: _greeting(),
+                                      setupTaskDone: _setupTaskDone,
+                                      onToggleSetupTask: _toggleSetupTask,
+                                      starterTasks: _starterTasks,
+                                      doneStarterTasks: _doneStarterTasks,
+                                      onToggleStarterTask: _toggleStarterTask,
+                                      tasks: tasks,
+                                      onComplete: currents == null
+                                          ? null
+                                          : (id) =>
+                                                unawaited(currents.dismiss(id)),
+                                      onPrompt: _sendPrompt,
+                                      onAllTasks: currents == null
+                                          ? null
+                                          : () => _openAllTasks(currents),
+                                    ),
+                                  ),
+                                );
+                              }
+                              return history[index - 1]();
+                            },
+                          ),
                         ),
                         if (_messages.isNotEmpty)
                           const Positioned(
@@ -917,16 +982,22 @@ class ChatScreenState extends State<ChatScreen> {
   List<Widget Function()> _historyBuildersNewestFirst() {
     final history = <Widget Function()>[
       for (final message in _messages)
-        () => Align(
-          alignment: message.fromUser
-              ? Alignment.centerRight
-              : Alignment.centerLeft,
-          child: Card(
-            child: Padding(
-              padding: const EdgeInsets.all(12),
-              child: message.fromUser
-                  ? Text(message.text)
-                  : AssistantMarkdown(message.text),
+        () => _BlurFadeIn(
+          key: ValueKey(
+            'msg_fade_${message.requestId}_${message.fromUser ? 'user' : 'assistant'}',
+          ),
+          delayMs: _pendingChatReveal ? 220 : 0,
+          child: Align(
+            alignment: message.fromUser
+                ? Alignment.centerRight
+                : Alignment.centerLeft,
+            child: Card(
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: message.fromUser
+                    ? Text(message.text)
+                    : AssistantMarkdown(message.text),
+              ),
             ),
           ),
         ),
@@ -1059,6 +1130,9 @@ class _GreeterSwitcher extends StatelessWidget {
       duration: disableAnimations
           ? Duration.zero
           : const Duration(milliseconds: 420),
+      reverseDuration: disableAnimations
+          ? Duration.zero
+          : const Duration(milliseconds: 200),
       switchInCurve: Curves.easeOutCubic,
       switchOutCurve: Curves.easeInCubic,
       transitionBuilder: (child, animation) => FadeTransition(
@@ -1077,140 +1151,123 @@ class _GreeterSwitcher extends StatelessWidget {
               key: const Key('hub_greeter'),
               child: disableAnimations
                   ? child
-                  : Stack(
-                      children: [
-                        child,
-                        const Positioned.fill(
-                          child: IgnorePointer(
-                            child: _GlowSweep(key: Key('hub_greeter_glow')),
-                          ),
-                        ),
-                      ],
+                  : _BlurFadeIn(
+                      key: const Key('hub_greeter_blur_fade'),
+                      child: child,
                     ),
             ),
     );
   }
 }
 
-class _GlowSweep extends StatefulWidget {
-  const _GlowSweep({super.key});
+class _BlurFadeIn extends StatelessWidget {
+  const _BlurFadeIn({this.delayMs = 0, required this.child, super.key});
+
+  final int delayMs;
+  final Widget child;
 
   @override
-  State<_GlowSweep> createState() => _GlowSweepState();
-}
-
-class _GlowSweepState extends State<_GlowSweep>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _sweep = AnimationController(
-    vsync: this,
-    duration: const Duration(milliseconds: 1100),
-  )..forward();
-
-  @override
-  void dispose() {
-    _sweep.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) => AnimatedBuilder(
-    animation: _sweep,
-    builder: (context, child) {
-      final value = _sweep.value;
-      if (value <= 0 || value >= 1) return const SizedBox.shrink();
-      final travel = -0.4 + 1.8 * value;
-      final fade = value < .5 ? value * 2 : (1 - value) * 2;
-      return DecoratedBox(
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [
-              const Color(0x00fffcec),
-              const Color(0xfffffcec).withValues(alpha: .14 * fade),
-              const Color(0x00fffcec),
-            ],
-            stops: [
-              (travel - 0.25).clamp(0.0, 1.0),
-              travel.clamp(0.0, 1.0),
-              (travel + 0.25).clamp(0.0, 1.0),
-            ],
+  Widget build(BuildContext context) {
+    if (MediaQuery.disableAnimationsOf(context)) return child;
+    final total = delayMs + 420;
+    return TweenAnimationBuilder<double>(
+      tween: Tween(begin: 0, end: 1),
+      duration: Duration(milliseconds: total),
+      curve: Interval(delayMs / total, 1, curve: Curves.easeOutCubic),
+      builder: (context, value, child) {
+        if (value >= 1) return child!;
+        final sigma = 5 * (1 - value);
+        return Opacity(
+          opacity: value.clamp(0.0, 1.0),
+          child: ImageFiltered(
+            imageFilter: ImageFilter.blur(sigmaX: sigma, sigmaY: sigma),
+            child: Stack(
+              children: [
+                child!,
+                Positioned.fill(
+                  child: IgnorePointer(
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        color: const Color(
+                          0xfff2c2ac,
+                        ).withValues(alpha: .10 * (1 - value)),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
           ),
-        ),
-      );
-    },
-  );
+        );
+      },
+      child: child,
+    );
+  }
 }
 
-class _CompletionShimmer extends StatefulWidget {
-  const _CompletionShimmer({required this.done, required this.child});
+class _CompletionFade extends StatefulWidget {
+  const _CompletionFade({required this.done, required this.child});
 
   final bool done;
   final Widget child;
 
   @override
-  State<_CompletionShimmer> createState() => _CompletionShimmerState();
+  State<_CompletionFade> createState() => _CompletionFadeState();
 }
 
-class _CompletionShimmerState extends State<_CompletionShimmer>
+class _CompletionFadeState extends State<_CompletionFade>
     with SingleTickerProviderStateMixin {
-  late final AnimationController _sweep = AnimationController(
+  late final AnimationController _fade = AnimationController(
     vsync: this,
     duration: const Duration(milliseconds: 700),
   );
 
   @override
-  void didUpdateWidget(covariant _CompletionShimmer old) {
+  void didUpdateWidget(covariant _CompletionFade old) {
     super.didUpdateWidget(old);
     if (!old.done && widget.done && !MediaQuery.disableAnimationsOf(context)) {
-      _sweep.forward(from: 0);
+      _fade.forward(from: 0);
     }
   }
 
   @override
   void dispose() {
-    _sweep.dispose();
+    _fade.dispose();
     super.dispose();
   }
 
   @override
-  Widget build(BuildContext context) => Stack(
-    children: [
-      widget.child,
-      Positioned.fill(
-        child: IgnorePointer(
-          child: AnimatedBuilder(
-            animation: _sweep,
-            builder: (context, child) {
-              final value = _sweep.value;
-              if (!_sweep.isAnimating || value <= 0 || value >= 1) {
-                return const SizedBox.shrink();
-              }
-              final travel = -0.3 + 1.6 * value;
-              return DecoratedBox(
-                key: const Key('task_complete_shimmer'),
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.centerLeft,
-                    end: Alignment.centerRight,
-                    colors: const [
-                      Color(0x00fffcec),
-                      Color(0x2efffcec),
-                      Color(0x00fffcec),
-                    ],
-                    stops: [
-                      (travel - 0.2).clamp(0.0, 1.0),
-                      travel.clamp(0.0, 1.0),
-                      (travel + 0.2).clamp(0.0, 1.0),
-                    ],
-                  ),
-                ),
-              );
-            },
+  Widget build(BuildContext context) => AnimatedBuilder(
+    animation: _fade,
+    child: widget.child,
+    builder: (context, child) {
+      final value = _fade.value;
+      if (!_fade.isAnimating || value <= 0 || value >= 1) return child!;
+      final eased = Curves.easeOutCubic.transform(value);
+      final sigma = 2.5 * (1 - eased);
+      return Stack(
+        children: [
+          ImageFiltered(
+            imageFilter: ImageFilter.blur(sigmaX: sigma, sigmaY: sigma),
+            child: child,
           ),
-        ),
-      ),
-    ],
+          Positioned.fill(
+            child: IgnorePointer(
+              child: DecoratedBox(
+                key: const Key('task_complete_fade'),
+                decoration: BoxDecoration(
+                  color: const Color(
+                    0xfff2c2ac,
+                  ).withValues(alpha: .18 * (1 - eased)),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+              ),
+            ),
+          ),
+        ],
+      );
+    },
   );
 }
 
@@ -1528,7 +1585,7 @@ class _TaskRow extends StatelessWidget {
         hoverColor: colors.rowHover,
         splashColor: Colors.transparent,
         highlightColor: Colors.transparent,
-        child: _CompletionShimmer(
+        child: _CompletionFade(
           done: done,
           child: Opacity(
             opacity: done ? .45 : 1,
@@ -1635,7 +1692,7 @@ class _RichTaskRow extends StatelessWidget {
         hoverColor: colors.rowHover,
         splashColor: Colors.transparent,
         highlightColor: Colors.transparent,
-        child: _CompletionShimmer(
+        child: _CompletionFade(
           done: done,
           child: Opacity(
             opacity: done ? .45 : 1,
@@ -1912,10 +1969,7 @@ class _ChatInputCardState extends State<_ChatInputCard> {
             if (widget.busy && !disableAnimations)
               const Positioned.fill(
                 child: IgnorePointer(
-                  child: TypingShimmer(
-                    key: Key('input_thinking_shimmer'),
-                    enabled: true,
-                  ),
+                  child: _ThinkingGlow(key: Key('input_thinking_glow')),
                 ),
               ),
             Padding(
@@ -2001,42 +2055,126 @@ class _ChatInputCardState extends State<_ChatInputCard> {
   );
 }
 
-class _AnimatedPlaceholder extends StatelessWidget {
+class _ThinkingGlow extends StatefulWidget {
+  const _ThinkingGlow({super.key});
+
+  @override
+  State<_ThinkingGlow> createState() => _ThinkingGlowState();
+}
+
+class _ThinkingGlowState extends State<_ThinkingGlow>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _pulse = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 900),
+  )..repeat(reverse: true);
+
+  @override
+  void dispose() {
+    _pulse.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => AnimatedBuilder(
+    animation: _pulse,
+    builder: (context, child) {
+      final glow = Curves.easeInOut.transform(_pulse.value);
+      return DecoratedBox(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(
+            color: const Color(0xfff2c2ac).withValues(alpha: .16 + .24 * glow),
+            width: 1.5,
+          ),
+        ),
+      );
+    },
+  );
+}
+
+class _AnimatedPlaceholder extends StatefulWidget {
   const _AnimatedPlaceholder({required this.text, required this.style});
 
   final String text;
   final TextStyle style;
 
   @override
+  State<_AnimatedPlaceholder> createState() => _AnimatedPlaceholderState();
+}
+
+class _AnimatedPlaceholderState extends State<_AnimatedPlaceholder>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _swap = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 340),
+  )..addListener(_tick);
+  late String _shown = widget.text;
+
+  void _tick() {
+    if (!mounted) return;
+    setState(() {
+      if (_swap.value >= .5 && _shown != widget.text) _shown = widget.text;
+    });
+  }
+
+  @override
+  void didUpdateWidget(covariant _AnimatedPlaceholder old) {
+    super.didUpdateWidget(old);
+    if (widget.text == _shown) return;
+    if (MediaQuery.disableAnimationsOf(context)) {
+      _shown = widget.text;
+      return;
+    }
+    _swap.forward(from: 0);
+  }
+
+  @override
+  void dispose() {
+    _swap.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final disableAnimations = MediaQuery.disableAnimationsOf(context);
-    return AnimatedSwitcher(
+    double opacity = 1;
+    double dy = 0;
+    double sigma = 0;
+    Color? color = widget.style.color;
+    if (_swap.isAnimating) {
+      final value = _swap.value;
+      if (value < .5) {
+        final t = Curves.easeInCubic.transform(value * 2);
+        opacity = 1 - t;
+        dy = -4 * t;
+        sigma = 3 * t;
+      } else {
+        final t = Curves.easeOutCubic.transform((value - .5) * 2);
+        opacity = t;
+        dy = 5 * (1 - t);
+        sigma = 3 * (1 - t);
+        color = Color.lerp(const Color(0xffd99a72), color, t);
+      }
+    }
+    final text = Text(
+      _shown,
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+      style: widget.style.copyWith(color: color),
+    );
+    return KeyedSubtree(
       key: const Key('chat_placeholder'),
-      duration: disableAnimations
-          ? Duration.zero
-          : const Duration(milliseconds: 320),
-      switchInCurve: Curves.easeOutCubic,
-      switchOutCurve: Curves.easeInCubic,
-      layoutBuilder: (currentChild, previousChildren) => Stack(
-        alignment: Alignment.centerLeft,
-        children: [...previousChildren, ?currentChild],
-      ),
-      transitionBuilder: (child, animation) => FadeTransition(
-        opacity: animation,
-        child: SlideTransition(
-          position: Tween(
-            begin: const Offset(0, .55),
-            end: Offset.zero,
-          ).animate(animation),
-          child: child,
+      child: Transform.translate(
+        offset: Offset(0, dy),
+        child: Opacity(
+          opacity: opacity.clamp(0.0, 1.0),
+          child: sigma <= 0
+              ? text
+              : ImageFiltered(
+                  imageFilter: ImageFilter.blur(sigmaX: sigma, sigmaY: sigma),
+                  child: text,
+                ),
         ),
-      ),
-      child: Text(
-        text,
-        key: ValueKey(text),
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        style: style,
       ),
     );
   }

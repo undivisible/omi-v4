@@ -169,7 +169,6 @@ void main() {
 
     final switcherFinder = find.byKey(const Key('chat_placeholder'));
     expect(switcherFinder, findsOneWidget);
-    expect(tester.widget(switcherFinder), isA<AnimatedSwitcher>());
     expect(
       find.descendant(
         of: switcherFinder,
@@ -177,8 +176,17 @@ void main() {
       ),
       findsOneWidget,
     );
+    expect(
+      find.descendant(of: switcherFinder, matching: find.byType(Text)),
+      findsOneWidget,
+    );
 
     await tester.pump(const Duration(milliseconds: 3300));
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(
+      find.descendant(of: switcherFinder, matching: find.byType(Text)),
+      findsOneWidget,
+    );
     await tester.pump(const Duration(milliseconds: 400));
     expect(
       find.descendant(
@@ -186,6 +194,17 @@ void main() {
         matching: find.text('What should I do next?'),
       ),
       findsOneWidget,
+    );
+    expect(
+      find.descendant(of: switcherFinder, matching: find.byType(Text)),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: switcherFinder,
+        matching: find.text('Turn today’s notes into a plan'),
+      ),
+      findsNothing,
     );
 
     await tester.enterText(find.byKey(const Key('chat_input')), 'typing');
@@ -312,22 +331,22 @@ void main() {
     expect(find.text('hello'), findsOneWidget);
   });
 
-  testWidgets('input card shimmers while the assistant is thinking', (
+  testWidgets('input card glows while the assistant is thinking', (
     tester,
   ) async {
     final store = VolatileHubChecklistStore();
     await pumpLocalHub(tester, store);
-    expect(find.byKey(const Key('input_thinking_shimmer')), findsNothing);
+    expect(find.byKey(const Key('input_thinking_glow')), findsNothing);
 
     await tester.enterText(find.byKey(const Key('chat_input')), 'hello');
     await tester.tap(find.byKey(const Key('send_chat')));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 600));
 
-    expect(find.byKey(const Key('input_thinking_shimmer')), findsOneWidget);
+    expect(find.byKey(const Key('input_thinking_glow')), findsOneWidget);
   });
 
-  testWidgets('hub shimmer and glow stay off under reduced motion', (
+  testWidgets('hub blur fades and glow stay off under reduced motion', (
     tester,
   ) async {
     DevGemini.debugOverride = 'AIzaTestDevKey';
@@ -346,34 +365,115 @@ void main() {
       ),
     );
     await tester.pump();
-    expect(find.byKey(const Key('hub_greeter_glow')), findsNothing);
+    expect(find.byKey(const Key('hub_greeter_blur_fade')), findsNothing);
 
     await tester.tap(
       find.byKey(const ValueKey('complete_starter_Pick omi back up')),
     );
     await tester.pump(const Duration(milliseconds: 100));
-    expect(find.byKey(const Key('task_complete_shimmer')), findsNothing);
+    expect(find.byKey(const Key('task_complete_fade')), findsNothing);
 
     await tester.enterText(find.byKey(const Key('chat_input')), 'hello');
     await tester.tap(find.byKey(const Key('send_chat')));
     await tester.pump();
-    expect(find.byKey(const Key('input_thinking_shimmer')), findsNothing);
+    expect(find.byKey(const Key('input_thinking_glow')), findsNothing);
   });
 
-  testWidgets('greeter entrance carries a glow sweep and rows shimmer on '
-      'completion', (tester) async {
+  testWidgets('greeter entrance blur-fades in and rows fade on completion', (
+    tester,
+  ) async {
     final store = VolatileHubChecklistStore()..tasks = ['Pick omi back up'];
     await pumpLocalHub(tester, store);
-    expect(find.byKey(const Key('hub_greeter_glow')), findsOneWidget);
+    expect(find.byKey(const Key('hub_greeter_blur_fade')), findsOneWidget);
 
     await tester.tap(
       find.byKey(const ValueKey('complete_starter_Pick omi back up')),
     );
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 200));
-    expect(find.byKey(const Key('task_complete_shimmer')), findsOneWidget);
+    expect(find.byKey(const Key('task_complete_fade')), findsOneWidget);
     await tester.pump(const Duration(milliseconds: 900));
-    expect(find.byKey(const Key('task_complete_shimmer')), findsNothing);
+    expect(find.byKey(const Key('task_complete_fade')), findsNothing);
+  });
+
+  testWidgets('greeter fades out before the first message reaches full '
+      'opacity', (tester) async {
+    final store = VolatileHubChecklistStore();
+    await pumpLocalHub(tester, store);
+
+    await tester.enterText(find.byKey(const Key('chat_input')), 'hello');
+    await tester.tap(find.byKey(const Key('send_chat')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(find.byKey(const Key('hub_greeter')), findsOneWidget);
+    final messageFade = find.byWidgetPredicate(
+      (widget) =>
+          widget.runtimeType.toString() == '_BlurFadeIn' &&
+          widget.key.toString().contains('msg_fade_'),
+    );
+    expect(messageFade, findsOneWidget);
+    final opacity = tester.widget<Opacity>(
+      find.descendant(of: messageFade, matching: find.byType(Opacity)).first,
+    );
+    expect(opacity.opacity, lessThan(.05));
+
+    await tester.pump(const Duration(milliseconds: 700));
+    expect(find.byKey(const Key('hub_greeter')), findsNothing);
+    expect(find.text('hello'), findsOneWidget);
+  });
+
+  testWidgets('history is reachable from home and snaps to the latest '
+      'message', (tester) async {
+    tester.view.physicalSize = const Size(800, 500);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    final store = VolatileHubChecklistStore()
+      ..tasks = [
+        'Pick omi back up',
+        'Decide next step for tsc.hk',
+        'Review the desktop handoff',
+        'Plan the week',
+      ];
+    await pumpLocalHub(tester, store);
+
+    await tester.enterText(find.byKey(const Key('chat_input')), 'hello');
+    await tester.tap(find.byKey(const Key('send_chat')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 700));
+    await tester.tap(find.byKey(const Key('chat_back')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 700));
+    expect(find.byKey(const Key('hub_greeter')), findsOneWidget);
+
+    final scrollable = find.descendant(
+      of: find.byKey(const Key('chat_messages')),
+      matching: find.byType(Scrollable),
+    );
+    final position = tester.state<ScrollableState>(scrollable).position;
+    expect(position.maxScrollExtent, greaterThan(0));
+
+    await tester.fling(
+      find.byKey(const Key('chat_messages')),
+      const Offset(0, 120),
+      900,
+    );
+    for (var i = 0; i < 40; i++) {
+      await tester.pump(const Duration(milliseconds: 50));
+    }
+    expect(position.pixels, greaterThan(48));
+    final messageRect = tester.getRect(find.text('hello'));
+    expect(messageRect.top, greaterThanOrEqualTo(0));
+    expect(messageRect.bottom, lessThanOrEqualTo(500));
+
+    await tester.drag(
+      find.byKey(const Key('chat_messages')),
+      Offset(0, -(position.pixels - 30)),
+    );
+    for (var i = 0; i < 40; i++) {
+      await tester.pump(const Duration(milliseconds: 50));
+    }
+    expect(position.pixels, 0);
   });
 
   testWidgets('tasks with meeting metadata render as rich calendar rows', (
