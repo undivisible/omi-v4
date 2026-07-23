@@ -54,6 +54,38 @@ void main() {
     return scaffold.backgroundColor!;
   }
 
+  /// Boxes under the hub that fill themselves with one of the two page
+  /// shades. The Scaffold is the single page background, so any such box is a
+  /// second layer and the page reads as a panel inset in another panel.
+  Iterable<Widget> pageFills(WidgetTester tester) {
+    const pages = [Color(0xfff7f6f1), Color(0xff1c1c1a)];
+    return tester.allWidgets.where((widget) {
+      final color = switch (widget) {
+        ColoredBox(:final color) => color,
+        Container(color: final color) => color,
+        DecoratedBox(decoration: final BoxDecoration decoration) =>
+          decoration.color,
+        _ => null,
+      };
+      return color != null && pages.contains(color);
+    });
+  }
+
+  testWidgets('the hub paints exactly one page background', (tester) async {
+    for (final brightness in Brightness.values) {
+      final services = makeServices();
+      addTearDown(services.dispose);
+      await pumpShell(tester, services, brightness: brightness);
+
+      final page = brightness == Brightness.dark
+          ? const Color(0xff1c1c1a)
+          : const Color(0xfff7f6f1);
+      expect(find.byType(Scaffold), findsOneWidget, reason: '$brightness');
+      expect(hubBackground(tester), page, reason: '$brightness');
+      expect(pageFills(tester), isEmpty, reason: '$brightness');
+    }
+  });
+
   testWidgets('chat opens in the warm paper hub', (tester) async {
     final services = makeServices();
     addTearDown(services.dispose);
