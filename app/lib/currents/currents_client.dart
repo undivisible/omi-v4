@@ -31,6 +31,7 @@ final class CurrentCard {
     required this.title,
     required this.summary,
     this.sourceKind,
+    this.metadata,
   });
 
   factory CurrentCard.fromJson(Map<String, Object?> json) => CurrentCard(
@@ -38,12 +39,16 @@ final class CurrentCard {
     title: _text(json, 'title'),
     summary: _text(json, 'summary'),
     sourceKind: _optionalText(json, 'sourceKind'),
+    metadata: json['metadata'] is Map
+        ? (json['metadata'] as Map).cast<String, Object?>()
+        : null,
   );
 
   final CurrentItem item;
   final String title;
   final String summary;
   final String? sourceKind;
+  final Map<String, Object?>? metadata;
 }
 
 final class CurrentActionHandoff {
