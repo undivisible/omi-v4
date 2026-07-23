@@ -10,6 +10,7 @@
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/pm/device_runtime.h>
+#include <zephyr/sys/atomic.h>
 #include <zephyr/sys/poweroff.h>
 
 #include "haptic.h"
@@ -355,6 +356,12 @@ FSM_STATE_T get_current_button_state()
 void turnoff_all()
 {
     int rc;
+    static atomic_t turnoff_in_progress = ATOMIC_INIT(0);
+
+    if (!atomic_cas(&turnoff_in_progress, 0, 1)) {
+        LOG_WRN("turnoff_all() already in progress; ignoring re-entry");
+        return;
+    }
 
 #ifdef CONFIG_OMI_ENABLE_USER_EVENTS
     omi_user_event_emit(OMI_USER_EVENT_POWER_OFF, OMI_USER_EVENT_SRC_SYSTEM);
@@ -417,27 +424,24 @@ void turnoff_all()
     rc = gpio_pin_configure_dt(&usr_btn, GPIO_INPUT);
     if (rc < 0) {
         LOG_ERR("Could not configure usr_btn GPIO (%d)", rc);
-        return;
     }
 
     rc = gpio_pin_interrupt_configure_dt(&usr_btn, GPIO_INT_LEVEL_LOW);
     if (rc < 0) {
         LOG_ERR("Could not configure usr_btn GPIO interrupt (%d)", rc);
-        return;
     }
     rc = watchdog_deinit();
     if (rc < 0) {
         LOG_ERR("Failed to deinitialize watchdog (%d)", rc);
-        return;
     }
 
     /* Persist an IMU timestamp base so we can estimate time across system_off. */
     lsm6dsl_time_prepare_for_system_off();
+    k_msleep(1000);
+    LOG_INF("Entering system off; press usr_btn to restart");
 #ifdef CONFIG_OMI_ENABLE_IMU_GESTURES
     imu_gesture_arm_system_off();
 #endif
-    k_msleep(1000);
-    LOG_INF("Entering system off; press usr_btn to restart");
 
     // Power off the system using sys_poweroff
     sys_poweroff();

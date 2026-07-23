@@ -36,9 +36,10 @@ static int cmd_motor_off(const struct shell *shell, size_t argc, char **argv)
     return 0;
 }
 
-static void motor_init(void)
+static int motor_init(void)
 {
     k_work_init_delayable(&motor_off_work, motor_off_work_handler);
+    return 0;
 }
 
 SHELL_STATIC_SUBCMD_SET_CREATE(sub_motor_cmds,

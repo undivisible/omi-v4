@@ -214,6 +214,23 @@ class TraitHelpers {
     }
   }
 
+  static void serializeVectorBriefItem(
+    List<BriefItem> value,
+    BinarySerializer serializer,
+  ) {
+    serializer.serializeLength(value.length);
+    for (final item in value) {
+      item.serialize(serializer);
+    }
+  }
+
+  static List<BriefItem> deserializeVectorBriefItem(
+    BinaryDeserializer deserializer,
+  ) {
+    final length = deserializer.deserializeLength();
+    return List.generate(length, (_) => BriefItem.deserialize(deserializer));
+  }
+
   static void serializeVectorComputerUseActionCapability(
     List<ComputerUseActionCapability> value,
     BinarySerializer serializer,

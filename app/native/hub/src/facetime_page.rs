@@ -287,9 +287,15 @@ pub(crate) const BRIDGE_SCRIPT: &str = r#"
         const value = input[Math.floor(i * ratio)] || 0;
         pcm[i] = Math.max(-1, Math.min(1, value)) * 32767;
       }
-      if (state.inboundLength > MAX_QUEUED_INBOUND) { state.inbound.shift(); }
-      else { state.inboundLength += pcm.length * 2; }
       state.inbound.push(pcm);
+      state.inboundLength += pcm.length * 2;
+      // Evict oldest-first until the queue is back inside the cap, decrementing
+      // as we go: a counter that is only ever incremented freezes at the cap and
+      // then bounds nothing. One chunk always survives so a single oversized
+      // chunk cannot empty the queue.
+      while (state.inboundLength > MAX_QUEUED_INBOUND && state.inbound.length > 1) {
+        state.inboundLength -= state.inbound.shift().length * 2;
+      }
     };
     source.connect(listener);
     const sink = ac.createGain();
@@ -618,6 +624,14 @@ mod tests {
     fn the_bridge_script_is_idempotent_and_bounded() {
         assert!(BRIDGE_SCRIPT.contains("if (window.__omi) return;"));
         assert!(BRIDGE_SCRIPT.contains("MAX_QUEUED_INBOUND"));
+        // The inbound cap only bounds anything if eviction decrements the
+        // counter it is measured against. A `shift()` that leaves the counter
+        // alone freezes it at the cap and the queue stops being bounded by
+        // bytes at all, so the decrement is asserted here rather than trusted.
+        assert!(BRIDGE_SCRIPT.contains("state.inboundLength -= state.inbound.shift().length * 2;"));
+        assert!(BRIDGE_SCRIPT.contains(
+            "while (state.inboundLength > MAX_QUEUED_INBOUND && state.inbound.length > 1)"
+        ));
     }
 
     #[test]

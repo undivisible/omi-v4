@@ -122,6 +122,38 @@ pub enum Command {
     SetSystemAudioCaptureMode {
         mode: crate::capture_policy::SystemAudioCaptureMode,
     },
+    /// Compose the currents brief for the items the client just refreshed.
+    /// Answered by exactly one [`BriefComposed`], whose `crepus` is `None`
+    /// whenever the brief could not be composed — the client then keeps the
+    /// hand-built brief it already drew.
+    ComposeBrief {
+        now_local: String,
+        items: Vec<BriefItem>,
+    },
+    /// Join a call link with the headless-browser leg and bridge it to a
+    /// realtime voice session. `ephemeral_token` and `model` are the same
+    /// short-lived session credentials [`Command::StartLiveVoice`] carries:
+    /// the hub never mints them.
+    JoinCall {
+        link: String,
+        display_name: Option<String>,
+        video: bool,
+        ephemeral_token: String,
+        model: String,
+    },
+    /// Resolve the dev-only Gemini access the client falls back to when no
+    /// account is configured. Answered by exactly one [`DevAssistant`].
+    ResolveDevAssistant,
+}
+
+/// One current, flattened to the few facts the brief may state. Mirrors
+/// [`crate::brief::BriefItem`], which is the shape the prompt is built from.
+#[derive(Clone, Deserialize, SignalPiece)]
+pub struct BriefItem {
+    pub title: String,
+    pub when: String,
+    pub detail: String,
+    pub next_step: String,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, SignalPiece)]
@@ -308,6 +340,73 @@ pub enum NativeEvent {
     MeetingInsight(MeetingInsight),
     MeetingTranscriptTurn(MeetingTranscriptTurn),
     MeetingCompleted(MeetingCompleted),
+    BriefComposed(BriefComposed),
+    CallState(CallState),
+    DevAssistantResolved(DevAssistant),
+}
+
+/// The answer to a [`Command::ResolveDevAssistant`]. `credential` is the
+/// developer Gemini key when one was found — the client needs the value
+/// itself to open a Gemini Live session — and `None` otherwise, in which case
+/// `missing_key_hint` names every place a key may be put.
+#[derive(Serialize, SignalPiece)]
+pub struct DevAssistant {
+    pub request_id: String,
+    pub credential: Option<String>,
+    pub live_model: String,
+    pub missing_key_hint: String,
+}
+
+impl std::fmt::Debug for DevAssistant {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("DevAssistant")
+            .field("request_id", &self.request_id)
+            .field(
+                "credential",
+                &self.credential.as_ref().map(|_| "[redacted]"),
+            )
+            .field("live_model", &self.live_model)
+            .finish()
+    }
+}
+
+/// The answer to a [`Command::ComposeBrief`]. `crepus` carries a document the
+/// renderer has already been checked to accept, or `None` when nothing was
+/// composed — no generator, a model failure, a timeout, a cancellation, or a
+/// document the renderer would refuse. `None` is not an error and never
+/// raises one: the client's hand-built brief is the answer then.
+#[derive(Serialize, SignalPiece)]
+pub struct BriefComposed {
+    pub request_id: String,
+    pub crepus: Option<String>,
+}
+
+impl std::fmt::Debug for BriefComposed {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("BriefComposed")
+            .field("request_id", &self.request_id)
+            .field("crepus", &self.crepus.as_ref().map(|_| "[redacted]"))
+            .finish()
+    }
+}
+
+/// Where a [`Command::JoinCall`] has got to. Exactly one terminal phase
+/// (`Ended` or `Failed`) is sent per call.
+#[derive(Debug, Serialize, SignalPiece)]
+pub struct CallState {
+    pub request_id: String,
+    pub state: CallPhase,
+    pub detail: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, SignalPiece)]
+pub enum CallPhase {
+    Joining,
+    Joined,
+    Ended,
+    Failed,
 }
 
 #[derive(Debug, Serialize, SignalPiece)]

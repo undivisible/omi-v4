@@ -207,6 +207,8 @@ final class _AllGrantedCapabilities implements DesktopCapabilityGateway {
 }
 
 final class _ScanHub implements NativeHub {
+  @override
+  void resolveDevAssistant(String requestId) {}
   final eventsController = StreamController<NativeEvent>.broadcast();
   final scanRequests = <({String requestId, List<String> roots})>[];
   @override
@@ -389,6 +391,23 @@ final class _ScanHub implements NativeHub {
     required String requestId,
     required TranscriptionAuth auth,
     String? trustedWorkerOrigin,
+  }) {}
+
+  @override
+  void composeBrief({
+    required String requestId,
+    required String nowLocal,
+    required List<BriefItem> items,
+  }) {}
+
+  @override
+  void joinCall({
+    required String requestId,
+    required String link,
+    required String ephemeralToken,
+    required String model,
+    String? displayName,
+    bool video = true,
   }) {}
 
   @override

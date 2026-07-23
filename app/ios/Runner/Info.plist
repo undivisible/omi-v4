@@ -73,6 +73,17 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+	<!-- bluetooth-central is the whole of iOS background capture. It lets iOS
+	     wake the suspended app to deliver notifications from the already-
+	     connected pendant, which is enough to keep writing frames into the
+	     on-disk capture log. It does NOT keep the STT WebSocket alive, does NOT
+	     keep timers running, and does NOT relaunch the app after a force-quit
+	     or a jetsam kill — there is deliberately no CoreBluetooth state
+	     restoration identifier, because universal_ble does not implement the
+	     restoration delegate and declaring one would promise a relaunch the app
+	     cannot honour. `audio` is not declared: the phone microphone is not a
+	     capture source on mobile, and claiming the mode without using it is an
+	     App Review rejection. -->
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>bluetooth-central</string>

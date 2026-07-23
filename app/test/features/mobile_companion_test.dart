@@ -2173,6 +2173,8 @@ final class _RecordingCaptureNotifier implements CaptureNotifier {
 }
 
 final class _Hub implements NativeHub {
+  @override
+  void resolveDevAssistant(String requestId) {}
   final events0 = StreamController<NativeEvent>.broadcast();
 
   @override
@@ -2363,6 +2365,23 @@ final class _Hub implements NativeHub {
     required String requestId,
     required TranscriptionAuth auth,
     String? trustedWorkerOrigin,
+  }) {}
+
+  @override
+  void composeBrief({
+    required String requestId,
+    required String nowLocal,
+    required List<BriefItem> items,
+  }) {}
+
+  @override
+  void joinCall({
+    required String requestId,
+    required String link,
+    required String ephemeralToken,
+    required String model,
+    String? displayName,
+    bool video = true,
   }) {}
 
   @override

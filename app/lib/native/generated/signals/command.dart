@@ -57,6 +57,12 @@ abstract class Command {
         return CommandProvideMeetingAuth.load(deserializer);
       case 23:
         return CommandSetSystemAudioCaptureMode.load(deserializer);
+      case 24:
+        return CommandComposeBrief.load(deserializer);
+      case 25:
+        return CommandJoinCall.load(deserializer);
+      case 26:
+        return CommandResolveDevAssistant.load(deserializer);
       default:
         throw Exception(
           'Unknown variant index for Command: ' + index.toString(),
@@ -1835,5 +1841,204 @@ class CommandSetSystemAudioCaptureMode extends Command {
     }());
 
     return fullString ?? 'CommandSetSystemAudioCaptureMode';
+  }
+}
+
+@immutable
+class CommandComposeBrief extends Command {
+  const CommandComposeBrief({required this.nowLocal, required this.items})
+    : super();
+
+  static CommandComposeBrief load(BinaryDeserializer deserializer) {
+    deserializer.increaseContainerDepth();
+    final instance = CommandComposeBrief(
+      nowLocal: deserializer.deserializeString(),
+      items: TraitHelpers.deserializeVectorBriefItem(deserializer),
+    );
+    deserializer.decreaseContainerDepth();
+    return instance;
+  }
+
+  final String nowLocal;
+  final List<BriefItem> items;
+
+  CommandComposeBrief copyWith({String? nowLocal, List<BriefItem>? items}) {
+    return CommandComposeBrief(
+      nowLocal: nowLocal ?? this.nowLocal,
+      items: items ?? this.items,
+    );
+  }
+
+  void serialize(BinarySerializer serializer) {
+    serializer.increaseContainerDepth();
+    serializer.serializeVariantIndex(24);
+    serializer.serializeString(nowLocal);
+    TraitHelpers.serializeVectorBriefItem(items, serializer);
+    serializer.decreaseContainerDepth();
+  }
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    if (other.runtimeType != runtimeType) return false;
+
+    return other is CommandComposeBrief &&
+        nowLocal == other.nowLocal &&
+        listEquals(items, other.items);
+  }
+
+  @override
+  int get hashCode => Object.hash(nowLocal, items);
+
+  @override
+  String toString() {
+    String? fullString;
+
+    assert(() {
+      fullString =
+          '$runtimeType('
+          'nowLocal: $nowLocal, '
+          'items: $items'
+          ')';
+      return true;
+    }());
+
+    return fullString ?? 'CommandComposeBrief';
+  }
+}
+
+@immutable
+class CommandJoinCall extends Command {
+  const CommandJoinCall({
+    required this.link,
+    this.displayName,
+    required this.video,
+    required this.ephemeralToken,
+    required this.model,
+  }) : super();
+
+  static CommandJoinCall load(BinaryDeserializer deserializer) {
+    deserializer.increaseContainerDepth();
+    final instance = CommandJoinCall(
+      link: deserializer.deserializeString(),
+      displayName: TraitHelpers.deserializeOptionStr(deserializer),
+      video: deserializer.deserializeBool(),
+      ephemeralToken: deserializer.deserializeString(),
+      model: deserializer.deserializeString(),
+    );
+    deserializer.decreaseContainerDepth();
+    return instance;
+  }
+
+  final String link;
+  final String? displayName;
+  final bool video;
+  final String ephemeralToken;
+  final String model;
+
+  CommandJoinCall copyWith({
+    String? link,
+    String? Function()? displayName,
+    bool? video,
+    String? ephemeralToken,
+    String? model,
+  }) {
+    return CommandJoinCall(
+      link: link ?? this.link,
+      displayName: displayName == null ? this.displayName : displayName(),
+      video: video ?? this.video,
+      ephemeralToken: ephemeralToken ?? this.ephemeralToken,
+      model: model ?? this.model,
+    );
+  }
+
+  void serialize(BinarySerializer serializer) {
+    serializer.increaseContainerDepth();
+    serializer.serializeVariantIndex(25);
+    serializer.serializeString(link);
+    TraitHelpers.serializeOptionStr(displayName, serializer);
+    serializer.serializeBool(video);
+    serializer.serializeString(ephemeralToken);
+    serializer.serializeString(model);
+    serializer.decreaseContainerDepth();
+  }
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    if (other.runtimeType != runtimeType) return false;
+
+    return other is CommandJoinCall &&
+        link == other.link &&
+        displayName == other.displayName &&
+        video == other.video &&
+        ephemeralToken == other.ephemeralToken &&
+        model == other.model;
+  }
+
+  @override
+  int get hashCode =>
+      Object.hash(link, displayName, video, ephemeralToken, model);
+
+  @override
+  String toString() {
+    String? fullString;
+
+    assert(() {
+      fullString =
+          '$runtimeType('
+          'link: $link, '
+          'displayName: $displayName, '
+          'video: $video, '
+          'ephemeralToken: $ephemeralToken, '
+          'model: $model'
+          ')';
+      return true;
+    }());
+
+    return fullString ?? 'CommandJoinCall';
+  }
+}
+
+@immutable
+class CommandResolveDevAssistant extends Command {
+  const CommandResolveDevAssistant() : super();
+
+  static CommandResolveDevAssistant load(BinaryDeserializer deserializer) {
+    deserializer.increaseContainerDepth();
+    final instance = CommandResolveDevAssistant();
+    deserializer.decreaseContainerDepth();
+    return instance;
+  }
+
+  void serialize(BinarySerializer serializer) {
+    serializer.increaseContainerDepth();
+    serializer.serializeVariantIndex(26);
+    serializer.decreaseContainerDepth();
+  }
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    if (other.runtimeType != runtimeType) return false;
+
+    return other is CommandResolveDevAssistant;
+  }
+
+  @override
+  int get hashCode => runtimeType.hashCode;
+
+  @override
+  String toString() {
+    String? fullString;
+
+    assert(() {
+      fullString =
+          '$runtimeType('
+          ')';
+      return true;
+    }());
+
+    return fullString ?? 'CommandResolveDevAssistant';
   }
 }

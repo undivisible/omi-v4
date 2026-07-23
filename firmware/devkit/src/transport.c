@@ -806,7 +806,7 @@ int bt_off()
 int bt_on()
 {
     int err = bt_enable(NULL);
-    bt_le_adv_start(BT_LE_ADV_CONN, bt_ad, ARRAY_SIZE(bt_ad), bt_sd, ARRAY_SIZE(bt_sd));
+    bt_le_adv_start(BT_LE_ADV_CONN_FAST_2, bt_ad, ARRAY_SIZE(bt_ad), bt_sd, ARRAY_SIZE(bt_sd));
     bt_gatt_service_register(&storage_service);
     sd_on();
     mic_on();
@@ -845,7 +845,7 @@ int transport_start()
     bt_gatt_service_register(&audio_service);
     bt_gatt_service_register(&dfu_service);
     omi_ext_register();
-    err = bt_le_adv_start(BT_LE_ADV_CONN, bt_ad, ARRAY_SIZE(bt_ad), bt_sd, ARRAY_SIZE(bt_sd));
+    err = bt_le_adv_start(BT_LE_ADV_CONN_FAST_2, bt_ad, ARRAY_SIZE(bt_ad), bt_sd, ARRAY_SIZE(bt_sd));
     if (err) {
         LOG_ERR("Transport advertising failed to start (err %d)", err);
         return err;

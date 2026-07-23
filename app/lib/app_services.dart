@@ -8,8 +8,10 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'storage/omi_directory.dart';
 
-import 'api/dev_gemini.dart';
+import 'api/dev_assistant.dart';
+import 'api/api_keys_client.dart';
 import 'api/byok_client.dart';
+import 'api/facetime_client.dart';
 import 'api/worker_http.dart';
 import 'auth/auth.dart';
 import 'auth/firebase_bootstrap.dart';
@@ -75,6 +77,8 @@ final class AppServices {
     this.channels,
     this.billing,
     this.byok,
+    this.apiKeys,
+    this.facetime,
     this.conversations,
     ConversationInboxTransport? conversationInbox,
     LocalConversationStore? localConversations,
@@ -100,6 +104,8 @@ final class AppServices {
            : CurrentsController(
                currentsClient,
                onItemsRefreshed: currentsTaskSync?.apply,
+               hub: nativeHub,
+               now: now,
              ),
        deviceAudio = DeviceAudioForwarder(relay: deviceRelay, hub: nativeHub),
        capabilities = PlatformDesktopCapabilityGateway(
@@ -162,6 +168,8 @@ final class AppServices {
       channels: ChannelClient(WorkerChannelTransport(worker)),
       billing: WorkerBillingClient(worker),
       byok: WorkerByokClient(worker),
+      apiKeys: WorkerApiKeysClient(worker),
+      facetime: WorkerFaceTimeClient(worker),
       conversations: WorkerConversationTransport(worker),
       conversationInbox: WorkerConversationTransport(worker),
       localConversations: PreferencesLocalConversationStore(),
@@ -209,6 +217,8 @@ final class AppServices {
       channels: ChannelClient(WorkerChannelTransport(worker)),
       billing: WorkerBillingClient(worker),
       byok: WorkerByokClient(worker),
+      apiKeys: WorkerApiKeysClient(worker),
+      facetime: WorkerFaceTimeClient(worker),
       conversations: WorkerConversationTransport(worker),
       conversationInbox: WorkerConversationTransport(worker),
       localConversations: PreferencesLocalConversationStore(),
@@ -252,9 +262,13 @@ final class AppServices {
     SystemAudioCaptureModeStore? captureModeStore,
     MeetingMicCapture? meetingMic,
     WorkerHttpClient? worker,
+    ApiKeysClient? apiKeys,
+    FaceTimeClient? facetime,
   }) => AppServices._(
     auth: auth,
     worker: worker,
+    apiKeys: apiKeys,
+    facetime: facetime,
     nativeHub: nativeHub,
     deviceRelay: deviceRelay,
     memoryDatabasePath: (uid) async => memoryDatabasePath(uid),
@@ -308,6 +322,13 @@ final class AppServices {
   /// BYOK plan and price negotiation. The negotiated price lives on the
   /// worker; this client only reads and settles it.
   final WorkerByokClient? byok;
+
+  /// API key management. The three routes are Firebase-only by design: a key
+  /// cannot mint or revoke keys.
+  final ApiKeysClient? apiKeys;
+
+  /// Places FaceTime calls through the worker. Null without a backend.
+  final FaceTimeClient? facetime;
   final ConversationTransport? conversations;
   final CurrentsController? currents;
   final WorkerHttpClient? _worker;
@@ -374,6 +395,8 @@ final class AppServices {
   late final ConversationController _conversationController;
   int _assistantTransportSequence = 0;
   bool _nativeInitialized = false;
+  DevAssistantAccess _devAssistant = DevAssistantAccess.none;
+  bool _devAssistantResolved = false;
   bool _assistantConfigured = false;
   Timer? _assistantRefreshTimer;
   bool _disposed = false;
@@ -404,6 +427,10 @@ final class AppServices {
   MeetingNotesStore meetingNotes = PreferencesMeetingNotesStore();
 
   bool get meetingActive => _meetingActive;
+
+  /// The worker origin programmatic clients point at, for the API and MCP
+  /// instructions shown in settings.
+  Uri? get apiOriginUri => _workerOrigin;
 
   Stream<NativeEvent> get nativeEvents => _nativeEvents.stream;
   Stream<int> get chatAuthorityChanges =>
@@ -446,6 +473,7 @@ final class AppServices {
     String? name,
     required List<String> languages,
   }) async {
+    await _resolveDevAssistant();
     final snapshot = auth.snapshot;
     if (!_localFallbackEligible && !snapshot.hasProcessingAuthority) {
       return;
@@ -504,6 +532,10 @@ final class AppServices {
 
   Future<void> initialize() async {
     auth.addListener(_authChanged);
+    // Started here, never awaited on the connect path: opening the log and
+    // reading alert settings must not add latency between pairing a pendant
+    // and streaming from it.
+    unawaited(_ensureCapture());
     await capabilities.verifiedWorkspaceRoot();
     await _queueProductionSync();
   }
@@ -522,14 +554,15 @@ final class AppServices {
   bool get localMode =>
       _nativeInitialized &&
       _configuredPersonId == _localOfflinePersonId &&
-      DevGemini.apiKey != null;
+      _devAssistant.credential != null;
 
   /// Whether the local/offline memory store should back the app instead of a
   /// production session: auth is entirely unconfigured, or the user is signed
   /// out but a developer Gemini key is available for direct local use.
   bool get _localFallbackEligible =>
       auth.snapshot.phase == AuthPhase.unavailable ||
-      (auth.snapshot.phase == AuthPhase.signedOut && DevGemini.apiKey != null);
+      (auth.snapshot.phase == AuthPhase.signedOut &&
+          _devAssistant.credential != null);
 
   Future<ProviderCredential?> get providerCredential async {
     final uid = auth.snapshot.session?.uid;
@@ -767,8 +800,9 @@ final class AppServices {
       }
       throw VoiceStartException(
         VoiceStartFailure.signedOut,
-        DevGemini.apiKey == null
-            ? 'Voice needs a signed-in session. ${DevGemini.missingKeyHint}'
+        _devAssistant.credential == null
+            ? 'Voice needs a signed-in session. '
+                  '${_devAssistant.missingKeyHint}'
             : 'Sign in and connect native services first.',
       );
     }
@@ -883,11 +917,11 @@ final class AppServices {
   /// Dev/no-account live voice: connect straight to the Gemini Live API
   /// with the developer key instead of a Worker-minted ephemeral token.
   Future<void> _startDesktopVoiceLocal(int voiceGeneration) async {
-    final key = DevGemini.apiKey;
+    final key = _devAssistant.credential;
     if (key == null) {
       throw VoiceStartException(
         VoiceStartFailure.signedOut,
-        'Voice needs a signed-in session. ${DevGemini.missingKeyHint}',
+        'Voice needs a signed-in session. ${_devAssistant.missingKeyHint}',
       );
     }
     if (!await desktopVoice.hasPermission()) {
@@ -900,7 +934,7 @@ final class AppServices {
     _desktopVoiceRouteIsLive = false;
     await liveVoice.start(
       ephemeralToken: key,
-      model: DevGemini.liveModel,
+      model: _devAssistant.liveModel,
       authorityId: 'g$_authorityGeneration',
     );
     if (voiceGeneration != _desktopVoiceGeneration) {
@@ -1088,6 +1122,8 @@ final class AppServices {
 
   Future<void> _syncProductionState() async {
     if (_disposed) return;
+    await _resolveDevAssistant();
+    if (_disposed) return;
     // Auth can be entirely unconfigured (local/testing builds with no
     // backend). There is no production session to configure memory for in
     // that case, but onboarding capture still needs somewhere to land, so
@@ -1155,6 +1191,57 @@ final class AppServices {
     memorySyncPump?.start(session.uid);
     if (_workerOrigin != null) await _configureSelectedAssistant(session.uid);
     _conversationController.scheduleInboxPoll(Duration.zero);
+  }
+
+  /// Asks the hub once for the dev-only assistant credential. Only the
+  /// no-account paths can use it, so a signed-in start never pays for the
+  /// lookup, and a hub that is unavailable (web) resolves to no access.
+  Future<void> _resolveDevAssistant() async {
+    if (_devAssistantResolved || _disposed) return;
+    if (debugDevAssistantAccess case final override?) {
+      _devAssistant = override;
+      _devAssistantResolved = true;
+      return;
+    }
+    final phase = auth.snapshot.phase;
+    if (phase != AuthPhase.signedOut && phase != AuthPhase.unavailable) return;
+    if (!await _ensureNativeInitialized()) {
+      _devAssistantResolved = true;
+      return;
+    }
+    final requestId = 'resolve-dev-assistant-${randomId()}';
+    final completer = Completer<DevAssistantAccess>();
+    final subscription = nativeEvents.listen((event) {
+      if (event case NativeEventDevAssistantResolved(
+        :final value,
+      ) when value.requestId == requestId) {
+        if (!completer.isCompleted) {
+          completer.complete(
+            DevAssistantAccess(
+              credential: value.credential,
+              liveModel: value.liveModel,
+              missingKeyHint: value.missingKeyHint,
+            ),
+          );
+        }
+      } else if (event case NativeEventError(
+        :final value,
+      ) when value.requestId == requestId) {
+        if (!completer.isCompleted) completer.complete(DevAssistantAccess.none);
+      }
+    }, onError: (_, _) {});
+    try {
+      nativeHub.resolveDevAssistant(requestId);
+      _devAssistant = await completer.future.timeout(
+        const Duration(seconds: 5),
+        onTimeout: () => DevAssistantAccess.none,
+      );
+    } catch (_) {
+      _devAssistant = DevAssistantAccess.none;
+    } finally {
+      await subscription.cancel();
+    }
+    _devAssistantResolved = true;
   }
 
   Future<bool> _ensureNativeInitialized() async {
@@ -1287,7 +1374,45 @@ final class AppServices {
     );
   }
 
+  /// Durability, background execution and the two capture alerts. Created on
+  /// the first mobile connect, because everything it owns is only meaningful
+  /// once a pendant is streaming.
+  CaptureCoordinator? capture;
+  Future<CaptureCoordinator?>? _captureSetup;
+
+  Future<CaptureCoordinator?> _ensureCapture() {
+    if (deviceRelay.role != DeviceRelayRole.mobileOwner) {
+      return Future<CaptureCoordinator?>.value();
+    }
+    return _captureSetup ??=
+        CaptureCoordinator.create(
+          forwarder: deviceAudio,
+          transport: _worker == null
+              ? const UnavailableCaptureUploadTransport()
+              : WorkerCaptureUploadTransport(_worker),
+          onError: _reportCaptureError,
+        ).then((coordinator) {
+          if (_disposed) {
+            unawaited(coordinator.dispose());
+            return null;
+          }
+          coordinator.watch(deviceRelay);
+          capture = coordinator;
+          return coordinator;
+        });
+  }
+
+  /// Capture setup outlives a disposed service by a microtask or two, so the
+  /// event stream may already be closed by the time an error arrives.
+  void _reportCaptureError(Object error) {
+    if (_disposed || _nativeEvents.isClosed) return;
+    try {
+      _nativeEvents.addError(error);
+    } catch (_) {}
+  }
+
   Future<void> _stopCapture() async {
+    await capture?.captureStopped();
     await deviceAudio.stop();
     if (deviceRelay.role == DeviceRelayRole.mobileOwner) {
       try {
@@ -1345,7 +1470,9 @@ final class AppServices {
           throw StateError('Account authority changed while connecting.');
         }
         await deviceAudio.start(device, auth: selectedAuth);
+        unawaited(_ensureCapture().then((c) => c?.captureStarted(device)));
         if (!productionReady || auth.snapshot.session?.uid != uid) {
+          await capture?.captureStopped();
           await deviceAudio.stop();
           throw StateError('Account authority changed while connecting.');
         }
@@ -1424,6 +1551,7 @@ final class AppServices {
     final operation = _lifecycle.then<void>((_) {}, onError: (_, _) {}).then((
       _,
     ) async {
+      await capture?.captureStopped();
       await deviceAudio.stop();
       await deviceRelay.disconnect();
     });
@@ -1433,6 +1561,7 @@ final class AppServices {
 
   void dispose() {
     _disposed = true;
+    unawaited(capture?.dispose());
     memorySyncPump?.dispose();
     auth.removeListener(_authChanged);
     _clearAssistant();

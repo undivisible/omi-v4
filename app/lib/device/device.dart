@@ -1,4 +1,11 @@
+export 'background_capture.dart';
+export 'capture_coordinator.dart';
 export 'capture_enabled_store.dart';
+export 'capture_gap_log.dart';
+export 'capture_notifications.dart';
+export 'capture_upload.dart';
+export 'capture_wal.dart';
+export 'capture_wal_uploader.dart';
 export 'device_audio_frame.dart';
 export 'device_audio_forwarder.dart';
 export 'device_models.dart';

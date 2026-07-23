@@ -40,6 +40,8 @@ int battery_set_slow_charge(void);
  */
 int battery_charge_start(void);
 
+int battery_charging_state_read(void);
+
 /**
  * @brief Stop battery charging.
  *

@@ -100,9 +100,52 @@ on top. See `git log -- firmware/` for the exact set. The feature work covers:
 - a fix for an upstream typo that silently disabled offline storage in the
   DevKit SPI-SD configuration
 
+### SDK divergence: upstream is on v2.9.0, this tree is on v3.4.0
+
+**This is the largest and most consequential divergence, and it is one-way.**
+Upstream `BasedHardware/omi` builds against nRF Connect SDK v2.9.0 (Zephyr 3.7).
+This tree was migrated to nRF Connect SDK v3.4.0 (Zephyr 4.4.0). Every future
+upstream change to a file listed below must now be ported by hand rather than
+merged, because the same file has been edited here for the newer SDK.
+
+Files that diverge for SDK reasons only (not feature work):
+
+| Path | Divergence |
+| --- | --- |
+| `boards/omi/board.yml` | added `full_name`, now required by the board schema |
+| `boards/omi/omi_nrf5340_cpuapp.dts` | `<common/nordic/…>` include prefix dropped; `disk-name` on the `mmc` node; `nfct-pins-as-gpios` on `&uicr` |
+| `boards/omi/omi_nrf5340_cpunet.dts` | `<common/nordic/…>` include prefix dropped |
+| `boards/omi/omi_nrf5340_cpuapp_defconfig` | `CONFIG_NFCT_PINS_AS_GPIOS` removed (moved to devicetree) |
+| `boards/omi/omi_nrf5340_cpunet_defconfig` | `CONFIG_BT_CTLR=y` removed (no longer user-assignable) |
+| `boards/omi/Kconfig.defconfig` | `BT_CTLR` default block removed |
+| `boards/omi/pm_static.yml` | **renamed** to `pm_static_omi_nrf5340_cpuapp.yml` so it is no longer misapplied to the CPUNET domain |
+| `omi/sysbuild.conf`, `test/sysbuild.conf` | `SB_CONFIG_PARTITION_MANAGER=y` added; it no longer defaults on |
+| `omi/sysbuild/mcuboot.conf` | dead `CONFIG_NCS_SAMPLE_MCUMGR_BT_OTA_DFU` removed |
+| `omi/sysbuild/ipc_radio.conf` | dead `BT_PERIPHERAL_PREF_*` block removed |
+| `omi/omi.conf`, `test/omi.conf` | `CONFIG_NRFX_PDM0`, `CONFIG_I2S_NRFX`, `CONFIG_SDMMC_VOLUME_NAME` removed; `CONFIG_BT_BUF_EVT_RX_COUNT=12` added |
+| `omi/src/sd_card.c` | disk name read from devicetree instead of Kconfig |
+| `omi/src/lib/core/transport.c`, `devkit/src/transport.c`, `test/src/ble.c`, `test/src/ble_throughput_test.c` | `BT_LE_ADV_CONN` → `BT_LE_ADV_CONN_FAST_2` |
+
+Files that diverge because a **pre-existing defect** was fixed (the tree had
+never been compiled before this upgrade, so these were latent):
+`omi/src/lib/core/transport.c`, `omi/src/lib/core/lib/battery/battery.h`,
+`test/app.overlay`, `test/src/imu.c`, `test/src/mic.c`, `test/src/mic.h`,
+`test/src/main.c`, `test/src/motor.c`. See the README's *Migration status*
+section for the exact list.
+
+The three `devkit-*` targets are **not yet migrated** and do not build under
+v3.4.0; `devkit/src/mic.c` needs porting to the nrfx 3.x PDM API, and
+`devkit/src/{usb,button,transport,sdcard}.c` carry pre-existing compile errors.
+Until that is done, DevKit changes can still be taken from upstream almost
+verbatim.
+
+When re-syncing, expect step 3 of *How to re-sync with upstream* to produce a
+large diff on every file in the first table. Those hunks are deliberate; do not
+take the upstream side.
+
 See `ARCHITECTURE.md` for the full upstream comparison and the per-device
 support matrix, `BLE_CONTRACTS.md` for the resulting app-facing interface, and
-`README.md` for per-target build instructions.
+`README.md` for per-target build instructions and the SDK migration record.
 
 ## How to re-sync with upstream
 

@@ -22,27 +22,54 @@
 //! call, and the Gemini session it is bridged to was opened elsewhere with a
 //! token from the environment.
 
-#![allow(dead_code)]
-// The call path is complete and tested end to end inside the hub, but nothing
-// in this crate calls into it yet: the command that places a FaceTime call and
-// hands back a join link lives in the Worker and the Dart UI, both outside this
-// change's ownership. `facetime_bridge::live::join` and `call_bridge::run_call`
-// are the two entry points that surface needs.
-
-use crate::call_bridge::{CallMedia, CallTransport};
+use crate::call_bridge::{CallMedia, CallOutcome, CallTransport};
 use crate::facetime_page::{self, JoinFailure, JoinStep, PageStatus};
+use crate::live_voice::{
+    GeminiLiveProvider, RealtimeVoiceProvider, RealtimeVoiceSession, validate_session,
+};
+use crate::signals::{CallPhase, CallState, NativeEvent};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use serde_json::{Value, json};
 use std::time::Duration;
 use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 
+// Read only by the `live` module, which is the real browser driver and is
+// compiled out under `cfg(test)`; the test build swaps in a stub that refuses
+// to spawn one, so these are genuinely unread there and nowhere else.
+#[cfg_attr(test, allow(dead_code))]
 const CDP_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(15);
+#[cfg_attr(test, allow(dead_code))]
 const CDP_CALL_TIMEOUT: Duration = Duration::from_secs(20);
+#[cfg_attr(test, allow(dead_code))]
 const JOIN_POLL_INTERVAL: Duration = Duration::from_millis(500);
-/// Outbound media queued for the page. Video frames are droppable; audio is
-/// not, so the queue is sized for roughly a second of both.
+/// Outbound audio queued for the page, in chunks. Audio is not droppable, so a
+/// full queue is a page that has stopped draining, which ends the call.
+#[cfg_attr(test, allow(dead_code))]
 const OUTBOUND_QUEUE: usize = 64;
+/// Outbound video, queued separately and deliberately shallow.
+///
+/// Video and audio must never share a queue: they are written over one
+/// serialized DevTools connection, a 240x240 frame is two orders of magnitude
+/// larger than an audio chunk, and a full queue is fatal for audio but free for
+/// video. Sharing one would let the video track end the call. A stale frame is
+/// worth nothing, so two slots is all the buffering video gets.
+#[cfg_attr(test, allow(dead_code))]
+const FRAME_QUEUE: usize = 2;
+/// The largest captured-audio payload a drain may return, in decoded bytes.
+///
+/// `window.__omi` is an ordinary writable property, so page script can replace
+/// it after the bridge installs itself and answer a drain with whatever it
+/// likes. A legitimate drain is bounded by the page's own `MAX_QUEUED_INBOUND`
+/// (eight seconds at 16 kHz PCM16); this is that with room to spare, and
+/// anything past it is not the bridge answering.
+#[cfg_attr(test, allow(dead_code))]
+const MAX_CAPTURE_BYTES: usize = 384 * 1024;
+/// The ceiling on a single DevTools message, which is the first place an
+/// oversized answer can be refused — before it is ever a Rust `String`.
+#[cfg_attr(test, allow(dead_code))]
+const MAX_CDP_MESSAGE_BYTES: usize = 1024 * 1024;
 
 // ---------------------------------------------------------------------------
 // Chrome DevTools Protocol
@@ -144,12 +171,25 @@ pub(crate) fn decode_capture(encoded: &str) -> Result<Vec<u8>, JoinFailure> {
     if encoded.is_empty() {
         return Ok(Vec::new());
     }
+    // Refused on the encoded length, before any decode allocates: four base64
+    // characters carry three bytes, so this is the cap expressed in the units
+    // the answer actually arrived in.
+    if encoded.len() / 4 * 3 > MAX_CAPTURE_BYTES {
+        return Err(JoinFailure::PageChanged(
+            "captured audio was implausibly large".to_owned(),
+        ));
+    }
     let bytes = BASE64
         .decode(encoded.as_bytes())
         .map_err(|_| JoinFailure::PageChanged("captured audio was not base64".to_owned()))?;
     if bytes.len() % 2 != 0 {
         return Err(JoinFailure::PageChanged(
             "captured audio was not whole samples".to_owned(),
+        ));
+    }
+    if bytes.len() > MAX_CAPTURE_BYTES {
+        return Err(JoinFailure::PageChanged(
+            "captured audio was implausibly large".to_owned(),
         ));
     }
     Ok(bytes)
@@ -205,20 +245,40 @@ pub(crate) fn join_progress(step: JoinStep, status: &PageStatus) -> JoinProgress
 /// `deliver` is synchronous and the page is not, so media is queued here and
 /// written by the pump task that owns the DevTools connection. A closed queue
 /// means the browser is gone, which is the call ending.
+///
+/// Audio and video are queued **separately**. Audio is not droppable and a full
+/// audio queue ends the call; video is droppable and a full video queue costs a
+/// frame. One shared queue would make a slow video track — the far larger of
+/// the two payloads — able to fill the audio queue and hang up the call, so the
+/// two never share backpressure.
 pub(crate) struct FaceTimeTransport {
-    outbound: mpsc::Sender<CallMedia>,
+    audio: mpsc::Sender<CallMedia>,
+    frames: mpsc::Sender<CallMedia>,
     video: bool,
 }
 
 impl FaceTimeTransport {
-    pub(crate) fn new(outbound: mpsc::Sender<CallMedia>, video: bool) -> Self {
-        Self { outbound, video }
+    pub(crate) fn new(
+        audio: mpsc::Sender<CallMedia>,
+        frames: mpsc::Sender<CallMedia>,
+        video: bool,
+    ) -> Self {
+        Self {
+            audio,
+            frames,
+            video,
+        }
     }
 }
 
 impl CallTransport for FaceTimeTransport {
     fn deliver(&mut self, media: CallMedia) -> Result<(), String> {
-        match self.outbound.try_send(media) {
+        let queue = if matches!(media, CallMedia::Video(_)) {
+            &self.frames
+        } else {
+            &self.audio
+        };
+        match queue.try_send(media) {
             Ok(()) => Ok(()),
             Err(mpsc::error::TrySendError::Full(CallMedia::Video(_))) => Ok(()),
             Err(mpsc::error::TrySendError::Full(_)) => {
@@ -280,11 +340,11 @@ pub(crate) fn locate_browser() -> Result<std::path::PathBuf, JoinFailure> {
 #[cfg(not(test))]
 pub(crate) mod live {
     use super::{
-        BrowserProcess, CDP_CALL_TIMEOUT, CDP_DISCOVERY_TIMEOUT, CdpMessage, Duration,
+        BrowserProcess, CDP_CALL_TIMEOUT, CDP_DISCOVERY_TIMEOUT, CdpMessage, Duration, FRAME_QUEUE,
         FaceTimeTransport, JOIN_POLL_INTERVAL, JoinFailure, JoinProgress, JoinStep, JoinedCall,
-        OUTBOUND_QUEUE, PageStatus, Value, cdp_request, debugger_url, decode_capture,
-        deliver_script, evaluate_params, evaluate_string, evaluate_value, facetime_page,
-        join_progress, locate_browser, mpsc, parse_cdp_message,
+        MAX_CDP_MESSAGE_BYTES, OUTBOUND_QUEUE, PageStatus, Value, cdp_request, debugger_url,
+        decode_capture, deliver_script, evaluate_params, evaluate_string, evaluate_value,
+        facetime_page, join_progress, locate_browser, mpsc, parse_cdp_message,
     };
     use crate::call_bridge::CallMedia;
     use crate::facetime_page::{BRIDGE_SCRIPT, DRAIN_INTERVAL, JOIN_TIMEOUT};
@@ -427,10 +487,11 @@ pub(crate) mod live {
 
         let (caller_sender, caller_audio) = mpsc::channel(64);
         let (outbound, outbound_receiver) = mpsc::channel(OUTBOUND_QUEUE);
-        tokio::spawn(pump(cdp, caller_sender, outbound_receiver));
+        let (frames, frames_receiver) = mpsc::channel(FRAME_QUEUE);
+        tokio::spawn(pump(cdp, caller_sender, outbound_receiver, frames_receiver));
         Ok(JoinedCall {
             caller_audio,
-            transport: FaceTimeTransport::new(outbound, video),
+            transport: FaceTimeTransport::new(outbound, frames, video),
             browser,
         })
     }
@@ -438,21 +499,23 @@ pub(crate) mod live {
     /// The single owner of the DevTools connection once the call is up: it
     /// drains captured caller audio on a timer and writes outbound media as it
     /// arrives. Either side going quiet ends the call.
+    ///
+    /// The select is `biased`, in the order the call depends on: the caller's
+    /// own audio first — it is bounded work on a 60 ms timer and cannot starve
+    /// anything — then the assistant's speech, and video last. Video is the one
+    /// payload here that may be dropped, and it is by far the largest, so it
+    /// only ever gets the connection when nothing else wants it.
     async fn pump(
         mut cdp: Cdp,
         caller: mpsc::Sender<Vec<u8>>,
         mut outbound: mpsc::Receiver<CallMedia>,
+        mut frames: mpsc::Receiver<CallMedia>,
     ) {
         let mut ticks = tokio::time::interval(DRAIN_INTERVAL);
         ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             tokio::select! {
-                media = outbound.recv() => {
-                    let Some(media) = media else { return };
-                    if cdp.evaluate(&deliver_script(&media)).await.is_err() {
-                        return;
-                    }
-                }
+                biased;
                 _ = ticks.tick() => {
                     let Ok(value) = cdp.evaluate("window.__omi.drainAudio()").await else {
                         return;
@@ -470,6 +533,18 @@ pub(crate) mod live {
                         .and_then(|text| facetime_page::parse_status(&text).ok())
                         .is_none_or(|status| status.ended)
                     {
+                        return;
+                    }
+                }
+                media = outbound.recv() => {
+                    let Some(media) = media else { return };
+                    if cdp.evaluate(&deliver_script(&media)).await.is_err() {
+                        return;
+                    }
+                }
+                frame = frames.recv() => {
+                    let Some(frame) = frame else { return };
+                    if cdp.evaluate(&deliver_script(&frame)).await.is_err() {
                         return;
                     }
                 }
@@ -507,11 +582,138 @@ pub(crate) mod live {
             }
             tokio::time::sleep(Duration::from_millis(200)).await;
         };
-        let (socket, _) = tokio_tungstenite::connect_async(socket_url.as_str())
-            .await
-            .map_err(|_| JoinFailure::Protocol("could not attach to the browser".to_owned()))?;
+        // The default ceiling is 64 MiB per message, which is not a bound on a
+        // page that answers a 60 ms poll: an oversized reply is refused by the
+        // socket before it is ever decoded, allocated, or forwarded.
+        let config = tokio_tungstenite::tungstenite::protocol::WebSocketConfig::default()
+            .max_message_size(Some(MAX_CDP_MESSAGE_BYTES))
+            .max_frame_size(Some(MAX_CDP_MESSAGE_BYTES));
+        let (socket, _) =
+            tokio_tungstenite::connect_async_with_config(socket_url.as_str(), Some(config), false)
+                .await
+                .map_err(|_| JoinFailure::Protocol("could not attach to the browser".to_owned()))?;
         Ok(Cdp { socket, next_id: 0 })
     }
+}
+
+/// Unit tests have no browser to drive and must never spawn one, so the join
+/// entry point is replaced under `cfg(test)` by one that refuses. Everything
+/// above it — link parsing, the page script, the transport, the CDP framing —
+/// is exercised directly.
+#[cfg(test)]
+pub(crate) mod live {
+    use super::{JoinFailure, JoinedCall};
+
+    pub(crate) async fn join(
+        _link: &str,
+        _name: Option<&str>,
+        _video: bool,
+    ) -> Result<JoinedCall, JoinFailure> {
+        Err(JoinFailure::BrowserUnavailable(
+            "no browser is driven under test".to_owned(),
+        ))
+    }
+}
+
+/// Everything a single call needs. `ephemeral_token` and `model` open the
+/// realtime session the call is bridged to; they are minted by the client and
+/// are never logged.
+pub(crate) struct CallRequest {
+    pub(crate) link: String,
+    pub(crate) display_name: Option<String>,
+    pub(crate) video: bool,
+    pub(crate) ephemeral_token: String,
+    pub(crate) model: String,
+}
+
+/// Places a call and runs it to completion: join the link with the browser
+/// leg, open the realtime voice session it is bridged to, and hand both to
+/// [`crate::call_bridge::run_call`] under the configured budget.
+///
+/// Exactly one terminal [`CallPhase`] is reported. The browser is owned for
+/// the whole call and taken down by `BrowserProcess::drop` on every exit,
+/// including cancellation.
+pub(crate) async fn place_call(
+    request_id: &str,
+    request: CallRequest,
+    cancellation: &CancellationToken,
+) {
+    let session = RealtimeVoiceSession {
+        live_stream_id: format!("call-{request_id}"),
+        ephemeral_token: request.ephemeral_token,
+        model: request.model,
+        resumption_handle: None,
+    };
+    if let Err(message) = validate_session(&session) {
+        report(request_id, CallPhase::Failed, Some(message));
+        return;
+    }
+    report(request_id, CallPhase::Joining, None);
+    if cancellation.is_cancelled() {
+        report(
+            request_id,
+            CallPhase::Ended,
+            Some("the call was cancelled".to_owned()),
+        );
+        return;
+    }
+    let joined = tokio::select! {
+        biased;
+        () = cancellation.cancelled() => {
+            report(request_id, CallPhase::Ended, Some("the call was cancelled".to_owned()));
+            return;
+        }
+        joined = live::join(&request.link, request.display_name.as_deref(), request.video) => joined,
+    };
+    let JoinedCall {
+        caller_audio,
+        transport,
+        // Held for the whole call: dropping it kills the browser and removes
+        // its throwaway profile.
+        browser,
+    } = match joined {
+        Ok(joined) => joined,
+        Err(failure) => {
+            report(request_id, CallPhase::Failed, Some(failure.to_string()));
+            return;
+        }
+    };
+    let handle = match GeminiLiveProvider.open(session) {
+        Ok(handle) => handle,
+        Err(message) => {
+            report(request_id, CallPhase::Failed, Some(message));
+            return;
+        }
+    };
+    report(request_id, CallPhase::Joined, None);
+    let outcome = tokio::select! {
+        outcome = crate::call_bridge::run_call(
+            handle,
+            caller_audio,
+            transport,
+            crate::call_bridge::budget_from_env(),
+        ) => outcome,
+        () = cancellation.cancelled() => CallOutcome::Completed,
+    };
+    drop(browser);
+    match outcome {
+        CallOutcome::Completed => report(request_id, CallPhase::Ended, None),
+        CallOutcome::BudgetExhausted(reason) => {
+            report(request_id, CallPhase::Ended, Some(reason.to_owned()));
+        }
+        CallOutcome::Upstream(message) | CallOutcome::TransportLost(message) => {
+            report(request_id, CallPhase::Failed, Some(message));
+        }
+    }
+}
+
+fn report(request_id: &str, state: CallPhase, detail: Option<String>) {
+    NativeEvent::CallState(CallState {
+        request_id: request_id.to_owned(),
+        state,
+        detail,
+    })
+    .send();
 }
 
 #[cfg(test)]
@@ -685,8 +887,9 @@ mod tests {
 
     #[test]
     fn the_transport_drops_late_frames_and_reports_a_dead_call() {
-        let (sender, receiver) = mpsc::channel(1);
-        let mut transport = FaceTimeTransport::new(sender, true);
+        let (audio, audio_receiver) = mpsc::channel(1);
+        let (frames, frames_receiver) = mpsc::channel(1);
+        let mut transport = FaceTimeTransport::new(audio, frames, true);
         assert!(transport.wants_video());
         let frame = CallMedia::Video(VideoFrame {
             width: 1,
@@ -694,12 +897,115 @@ mod tests {
             luma: vec![0],
         });
         assert_eq!(transport.deliver(frame.clone()), Ok(()));
-        assert_eq!(transport.deliver(frame), Ok(()));
+        assert_eq!(transport.deliver(frame.clone()), Ok(()));
+        assert_eq!(transport.deliver(CallMedia::FlushAudio), Ok(()));
         assert!(transport.deliver(CallMedia::FlushAudio).is_err());
-        drop(receiver);
+        drop(audio_receiver);
         assert_eq!(
             transport.deliver(CallMedia::FlushAudio),
             Err("the call ended".to_owned())
+        );
+        drop(frames_receiver);
+        assert_eq!(transport.deliver(frame), Err("the call ended".to_owned()));
+    }
+
+    /// The hazard the split queues exist for: a video track that the page has
+    /// stopped draining must cost frames, never the call.
+    #[test]
+    fn a_stalled_video_track_never_ends_the_call() {
+        let (audio, _audio_receiver) = mpsc::channel(1);
+        let (frames, frames_receiver) = mpsc::channel(1);
+        let mut transport = FaceTimeTransport::new(audio, frames, true);
+        let frame = CallMedia::Video(VideoFrame {
+            width: 1,
+            height: 1,
+            luma: vec![0; 57_600],
+        });
+        for _ in 0..1_000 {
+            assert_eq!(transport.deliver(frame.clone()), Ok(()));
+        }
+        // Audio still has its whole queue: video never touched it.
+        assert_eq!(transport.deliver(CallMedia::FlushAudio), Ok(()));
+        drop(frames_receiver);
+    }
+
+    #[test]
+    fn an_implausibly_large_capture_is_refused_before_it_is_decoded() {
+        let oversized = "A".repeat(MAX_CAPTURE_BYTES * 2);
+        assert!(matches!(
+            decode_capture(&oversized),
+            Err(JoinFailure::PageChanged(_))
+        ));
+        // The largest legitimate drain still passes.
+        let legitimate = BASE64.encode(vec![0u8; 32_000 * 8]);
+        assert!(decode_capture(&legitimate).is_ok());
+    }
+
+    fn request(link: &str, token: &str) -> CallRequest {
+        CallRequest {
+            link: link.to_owned(),
+            display_name: Some("Omi".to_owned()),
+            video: true,
+            ephemeral_token: token.to_owned(),
+            model: "gemini-live".to_owned(),
+        }
+    }
+
+    fn phases() -> Vec<(CallPhase, Option<String>)> {
+        crate::signals::test_events::take()
+            .into_iter()
+            .filter_map(|event| match event {
+                NativeEvent::CallState(state) => Some((state.state, state.detail)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn a_call_without_session_credentials_fails_before_a_browser_starts() {
+        place_call(
+            "call-1",
+            request("https://facetime.apple.com/join#v=1", "  "),
+            &CancellationToken::new(),
+        )
+        .await;
+        let reported = phases();
+        assert_eq!(reported.len(), 1);
+        assert_eq!(reported[0].0, CallPhase::Failed);
+    }
+
+    /// The browser leg is stubbed out under test, so this reaches the join and
+    /// is refused there — which is exactly the shape of a machine with no
+    /// Chromium, and it must be reported rather than left hanging.
+    #[tokio::test]
+    async fn a_call_that_cannot_join_reports_one_terminal_phase() {
+        place_call(
+            "call-2",
+            request("https://facetime.apple.com/join#v=1", "token-1"),
+            &CancellationToken::new(),
+        )
+        .await;
+        let reported = phases();
+        assert_eq!(
+            reported.iter().map(|(phase, _)| *phase).collect::<Vec<_>>(),
+            vec![CallPhase::Joining, CallPhase::Failed]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_cancelled_call_ends_rather_than_failing() {
+        let cancellation = CancellationToken::new();
+        cancellation.cancel();
+        place_call(
+            "call-3",
+            request("https://facetime.apple.com/join#v=1", "token-1"),
+            &cancellation,
+        )
+        .await;
+        let reported = phases();
+        assert_eq!(
+            reported.iter().map(|(phase, _)| *phase).collect::<Vec<_>>(),
+            vec![CallPhase::Joining, CallPhase::Ended]
         );
     }
 }

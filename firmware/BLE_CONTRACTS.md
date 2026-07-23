@@ -85,18 +85,43 @@ offset 2 : uint8   chunk_index (0-based, resets per packet_id)
 offset 3 : ...     Opus payload bytes
 ```
 
-One encoded Opus frame is one `packet_id`. If the frame does not fit in a single
-notification it is split across consecutive `chunk_index` values with the same
-`packet_id`; concatenate them in order to recover the frame
-(`push_to_gatt()`). At any negotiated MTU above 163 a frame always fits in one
-notification, because `CODEC_OUTPUT_MAX_BYTES` is 160 (`src/lib/core/config.h`).
+At any negotiated MTU of **166 or more** an encoded Opus frame always fits in a
+single notification, because `CODEC_OUTPUT_MAX_BYTES` is 160
+(`src/lib/core/config.h`) and each notification costs 3 bytes of ATT header plus
+the 3-byte header above. This is the only case that occurs on a normal
+connection, and in it one frame is one notification with `chunk_index == 0`.
+
+**Multi-chunk reassembly — resolved: the code is right and the prose was
+wrong.** A frame too large for
+one notification is split across consecutive notifications in which **both**
+`packet_id` and `chunk_index` increment by one. A reader therefore joins on
+"`packet_id` is the previous id + 1 **and** `chunk_index` is the previous index
++ 1", not on equal `packet_id`.
+
+This was verified against the shipped consumer rather than decided on
+preference: `DeviceAudioFrameAssembler` in
+`app/lib/device/device_audio_frame.dart` treats chunks as contiguous only when
+`frame.packetId == previousPacketId + 1 && frame.packetIndex ==
+previousPacketIndex + 1`. Changing the firmware to emit one `packet_id` per
+frame would break every installed app, so the document was corrected to match
+the wire format instead. Reachable only at MTU < 166.
 
 A read returns an empty value; the characteristic is notify-only in practice.
 
 **Gaps are expected and are not errors.** `packet_id` is a free-running counter
-that is not reset on subscribe, and the firmware drops frames rather than
-blocking when the link stalls. Treat a jump in `packet_id` as lost audio, not as
+that is not reset on subscribe. Treat a jump in `packet_id` as lost audio, not as
 a protocol error.
+
+**A continuous `packet_id` sequence does not mean no audio was lost.** The pusher
+*blocks* (`k_sem_take(&audio_tx_sem, K_FOREVER)`) rather than dropping when the
+link is congested. The real loss happens earlier, in `write_to_tx_queue()`
+(`transport.c`), when the 32-frame ring buffer is full: that frame is discarded
+before it is ever assigned a `packet_id`, so it leaves **no gap in the sequence**.
+Device-side loss is therefore invisible to the phone. Consumers that need a
+faithful record — a phone-side write-ahead log, for example — must not infer
+completeness from `packet_id` continuity. There is currently no on-air signal for
+these drops; adding one (a drop counter in the user-event stream, or a deliberate
+`packet_id` skip) is open work.
 
 ### 2.2 Audio codec — `19B10002-…` — Read
 

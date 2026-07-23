@@ -3,6 +3,7 @@
 #include <zephyr/kernel.h>
 #include <zephyr/pm/device_runtime.h>
 #include <zephyr/shell/shell.h>
+#include <zephyr/shell/shell_uart.h>
 
 #include "battery.h"
 #include "button.h"

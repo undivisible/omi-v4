@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:omi/app_services.dart';
-import 'package:omi/api/dev_gemini.dart';
+import 'package:omi/api/dev_assistant.dart';
 import 'package:omi/api/worker_http.dart';
 import 'package:omi/auth/auth.dart';
 import 'package:omi/device/device.dart';
@@ -24,8 +24,8 @@ void main() {
   // Dev-key resolution reads real files (worker/.dev.vars relative to cwd),
   // which would make signed-out behavior depend on the machine running the
   // tests. Every test starts with no dev key; opt in per test.
-  setUp(() => DevGemini.debugOverride = null);
-  tearDownAll(() => DevGemini.debugOverride = null);
+  setUp(() => debugDevAssistantAccess = DevAssistantAccess.none);
+  tearDownAll(() => debugDevAssistantAccess = DevAssistantAccess.none);
   test('onboarding profile capture sends a chat memory event', () async {
     final auth = AuthController(
       _FakeAuthGateway(_session('user-a')),
@@ -2620,8 +2620,12 @@ void main() {
     debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
     addTearDown(() => debugDefaultTargetPlatformOverride = null);
     SharedPreferences.setMockInitialValues({});
-    DevGemini.debugOverride = 'AIzaTestDevKey';
-    addTearDown(() => DevGemini.debugOverride = null);
+    debugDevAssistantAccess = const DevAssistantAccess(
+      credential: 'AIzaTestDevKey',
+      liveModel: 'gemini-test-live',
+      missingKeyHint: '',
+    );
+    addTearDown(() => debugDevAssistantAccess = DevAssistantAccess.none);
     final auth = AuthController(
       _FakeAuthGateway(null),
       consentStore: VolatileConsentStore(),
@@ -2683,8 +2687,12 @@ void main() {
     debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
     addTearDown(() => debugDefaultTargetPlatformOverride = null);
     SharedPreferences.setMockInitialValues({});
-    DevGemini.debugOverride = 'AIzaTestDevKey';
-    addTearDown(() => DevGemini.debugOverride = null);
+    debugDevAssistantAccess = const DevAssistantAccess(
+      credential: 'AIzaTestDevKey',
+      liveModel: 'gemini-test-live',
+      missingKeyHint: '',
+    );
+    addTearDown(() => debugDevAssistantAccess = DevAssistantAccess.none);
     final localConversations = VolatileLocalConversationStore();
 
     Future<AppServices> launch(NativeHub hub) async {
@@ -2738,8 +2746,16 @@ void main() {
       'actionable message naming the key locations', () async {
     debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
     addTearDown(() => debugDefaultTargetPlatformOverride = null);
-    DevGemini.debugOverride = null;
-    addTearDown(() => DevGemini.debugOverride = null);
+    // The hint text itself is the hub's (`dev_gemini.rs` composes it from the
+    // candidate paths); what matters here is that the app relays it verbatim
+    // instead of inventing its own.
+    debugDevAssistantAccess = const DevAssistantAccess(
+      liveModel: 'gemini-test-live',
+      missingKeyHint:
+          'No developer Gemini key found. Set GEMINI_API_KEY in one of: '
+          '/home/dev/.config/omi/dev.env — then relaunch Omi.',
+    );
+    addTearDown(() => debugDevAssistantAccess = DevAssistantAccess.none);
     final auth = AuthController(
       _FakeAuthGateway(null),
       consentStore: VolatileConsentStore(),
@@ -2970,6 +2986,8 @@ final class _FakeAuthGateway implements AuthGateway {
 }
 
 final class _FakeHub implements NativeHub {
+  @override
+  void resolveDevAssistant(String requestId) {}
   final eventsController = StreamController<NativeEvent>.broadcast();
   final meetingAuth = <(TranscriptionAuth, String?)>[];
   final captureModes = <SystemAudioCaptureMode>[];
@@ -3043,6 +3061,23 @@ final class _FakeHub implements NativeHub {
   }) {
     meetingAuth.add((auth, trustedWorkerOrigin));
   }
+
+  @override
+  void composeBrief({
+    required String requestId,
+    required String nowLocal,
+    required List<BriefItem> items,
+  }) {}
+
+  @override
+  void joinCall({
+    required String requestId,
+    required String link,
+    required String ephemeralToken,
+    required String model,
+    String? displayName,
+    bool video = true,
+  }) {}
 
   @override
   void setSystemAudioCaptureMode({

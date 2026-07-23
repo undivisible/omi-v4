@@ -212,6 +212,7 @@
 		status = "okay";
 		mmc {
 			compatible = "zephyr,sdmmc-disk";
+			disk-name = "SD";
 			status = "okay";
 		};
 		spi-max-frequency = <24000000>;
@@ -257,5 +258,9 @@
 		#include "nrf70_common_5g.dtsi"
 	};
 };
-#include <common/nordic/nrf5340_shared_sram_partition.dtsi>
-#include <common/nordic/nrf5340_cpuapp_partition.dtsi>
+#include <nordic/nrf5340_shared_sram_partition.dtsi>
+#include <nordic/nrf5340_cpuapp_partition.dtsi>
+
+&uicr {
+	nfct-pins-as-gpios;
+};

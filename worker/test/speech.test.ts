@@ -352,7 +352,7 @@ describe("server-side transcription", () => {
     const { fetcher } = recorder(() => transcriptReply());
     for (const input of [
       { audio: audio(), format: "mp3", clientMessageId: "short" },
-      { audio: audio(), format: "ogg", clientMessageId: "wal:flush:0010" },
+      { audio: audio(), format: "flac", clientMessageId: "wal:flush:0010" },
       { audio: "", format: "mp3", clientMessageId: "wal:flush:0010" },
       {
         audio: "not base64!",
@@ -652,3 +652,130 @@ describe("MCP surface", () => {
 });
 
 type TranscriptSegments = ReturnType<typeof parseSegments>;
+
+describe("pendant capture uploads", () => {
+  // The write-ahead log ships the pendant's own audio: 16 kHz mono Opus at a
+  // fixed 32 000 bps, Ogg-encapsulated on the phone because bare Opus packets
+  // are not a container the model can be handed.
+  // 10 664 base64 characters decode to 7 998 bytes, which at 4 000 bytes per
+  // second of Opus is two seconds of pendant audio.
+  const oggSeconds = 2;
+  const oggAudio = "A".repeat(10_664);
+
+  test("reserves Opus seconds from the pendant's bitrate", async () => {
+    const calls: AdmissionCall[] = [];
+    const { fetcher } = recorder(() => transcriptReply());
+    const outcome = await transcribeAudioOperation(
+      environment({ STT_ADMISSION: admitting(calls) }),
+      "alpha",
+      {
+        audio: oggAudio,
+        format: "ogg",
+        clientMessageId: "wal:flush:ogg-0001",
+      },
+      fetcher,
+    );
+    expect(outcome.status).toBe(200);
+    const admit = calls.find((call) => call.path === "/admit");
+    expect(admit?.body.reservedSeconds).toBe(oggSeconds);
+  });
+
+  test("normalises an 'opus' payload to its Ogg container upstream", async () => {
+    const { calls: fetches, fetcher } = recorder(() => transcriptReply());
+    const outcome = await transcribeAudioOperation(
+      environment(),
+      "alpha",
+      {
+        audio: oggAudio,
+        format: "opus",
+        clientMessageId: "wal:flush:ogg-0002",
+      },
+      fetcher,
+    );
+    expect(outcome.status).toBe(200);
+    expect(outcome.body.format).toBe("ogg");
+    const content = (
+      bodyOf(fetches[0]).messages as [{ content: [unknown, unknown] }]
+    )[0].content[1];
+    expect(content).toEqual({
+      type: "input_audio",
+      input_audio: { data: oggAudio, format: "ogg" },
+    });
+  });
+
+  test("persists capture provenance and replays it on a retry", async () => {
+    const environmentWithAdmission = environment();
+    const { calls: fetches, fetcher } = recorder(() => transcriptReply());
+    const input = {
+      audio: oggAudio,
+      format: "ogg",
+      clientMessageId: "wal:flush:ogg-0003",
+      audioStreamId: "omi-AA:BB:CC-1712345678901234",
+      deviceId: "f".repeat(64),
+      startedAt: "2026-07-23T09:15:00.000Z",
+      gapBefore: true,
+    };
+    const first = await transcribeAudioOperation(
+      environmentWithAdmission,
+      "alpha",
+      input,
+      fetcher,
+    );
+    expect(first.status).toBe(200);
+    expect(first.body.audioStreamId).toBe(input.audioStreamId);
+    expect(first.body.deviceId).toBe(input.deviceId);
+    expect(first.body.startedAt).toBe(input.startedAt);
+    expect(first.body.gapBefore).toBe(true);
+    const row = await database
+      .prepare(
+        "SELECT result FROM managed_speech_requests WHERE client_message_id = 'wal:flush:ogg-0003'",
+      )
+      .first<{ result: string }>();
+    expect(JSON.parse(String(row?.result)).audioStreamId).toBe(
+      input.audioStreamId,
+    );
+    const second = await transcribeAudioOperation(
+      environmentWithAdmission,
+      "alpha",
+      input,
+      fetcher,
+    );
+    expect(second.body.idempotentReplay).toBe(true);
+    expect(second.body.gapBefore).toBe(true);
+    expect(fetches).toHaveLength(1);
+  });
+
+  test("refuses malformed provenance before reserving anything", async () => {
+    const calls: AdmissionCall[] = [];
+    const { calls: fetches, fetcher } = recorder(() => transcriptReply());
+    const outcome = await transcribeAudioOperation(
+      environment({ STT_ADMISSION: admitting(calls) }),
+      "alpha",
+      {
+        audio: oggAudio,
+        format: "ogg",
+        clientMessageId: "wal:flush:ogg-0004",
+        gapBefore: "yes",
+      },
+      fetcher,
+    );
+    expect(outcome.status).toBe(400);
+    expect(calls).toHaveLength(0);
+    expect(fetches).toHaveLength(0);
+  });
+
+  test("still refuses a container it has no duration estimate for", async () => {
+    const { fetcher } = recorder(() => transcriptReply());
+    const outcome = await transcribeAudioOperation(
+      environment(),
+      "alpha",
+      {
+        audio: oggAudio,
+        format: "flac",
+        clientMessageId: "wal:flush:ogg-0005",
+      },
+      fetcher,
+    );
+    expect(outcome.status).toBe(400);
+  });
+});

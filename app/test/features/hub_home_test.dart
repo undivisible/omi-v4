@@ -2,7 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:omi/api/dev_gemini.dart';
+import 'package:omi/api/dev_assistant.dart';
 import 'package:omi/app_services.dart';
 import 'package:omi/auth/auth.dart';
 import 'package:omi/currents/currents.dart';
@@ -65,8 +65,12 @@ void main() {
   testWidgets('sending lifts the greeter out and raises the message', (
     tester,
   ) async {
-    DevGemini.debugOverride = 'AIzaTestDevKey';
-    addTearDown(() => DevGemini.debugOverride = null);
+    debugDevAssistantAccess = const DevAssistantAccess(
+      credential: 'AIzaTestDevKey',
+      liveModel: 'gemini-test-live',
+      missingKeyHint: '',
+    );
+    addTearDown(() => debugDevAssistantAccess = DevAssistantAccess.none);
     final services = AppServices.forTesting(
       nativeHub: _EventHub(),
       deviceRelay: DeviceRelayService(
@@ -115,8 +119,12 @@ void main() {
   testWidgets('reduced motion lands the send with no animation to settle', (
     tester,
   ) async {
-    DevGemini.debugOverride = 'AIzaTestDevKey';
-    addTearDown(() => DevGemini.debugOverride = null);
+    debugDevAssistantAccess = const DevAssistantAccess(
+      credential: 'AIzaTestDevKey',
+      liveModel: 'gemini-test-live',
+      missingKeyHint: '',
+    );
+    addTearDown(() => debugDevAssistantAccess = DevAssistantAccess.none);
     final services = AppServices.forTesting(
       nativeHub: _EventHub(),
       deviceRelay: DeviceRelayService(
@@ -158,8 +166,12 @@ void main() {
   testWidgets('history top fade paints the page background over the tail', (
     tester,
   ) async {
-    DevGemini.debugOverride = 'AIzaTestDevKey';
-    addTearDown(() => DevGemini.debugOverride = null);
+    debugDevAssistantAccess = const DevAssistantAccess(
+      credential: 'AIzaTestDevKey',
+      liveModel: 'gemini-test-live',
+      missingKeyHint: '',
+    );
+    addTearDown(() => debugDevAssistantAccess = DevAssistantAccess.none);
     final services = AppServices.forTesting(
       nativeHub: _EventHub(),
       deviceRelay: DeviceRelayService(
@@ -209,8 +221,12 @@ void main() {
   testWidgets('placeholder text animates between rotating prompts', (
     tester,
   ) async {
-    DevGemini.debugOverride = 'AIzaTestDevKey';
-    addTearDown(() => DevGemini.debugOverride = null);
+    debugDevAssistantAccess = const DevAssistantAccess(
+      credential: 'AIzaTestDevKey',
+      liveModel: 'gemini-test-live',
+      missingKeyHint: '',
+    );
+    addTearDown(() => debugDevAssistantAccess = DevAssistantAccess.none);
     final services = AppServices.forTesting(
       nativeHub: _EventHub(),
       deviceRelay: DeviceRelayService(
@@ -299,8 +315,12 @@ void main() {
     VolatileHubChecklistStore store, {
     _EventHub? hub,
   }) async {
-    DevGemini.debugOverride = 'AIzaTestDevKey';
-    addTearDown(() => DevGemini.debugOverride = null);
+    debugDevAssistantAccess = const DevAssistantAccess(
+      credential: 'AIzaTestDevKey',
+      liveModel: 'gemini-test-live',
+      missingKeyHint: '',
+    );
+    addTearDown(() => debugDevAssistantAccess = DevAssistantAccess.none);
     final services = makeLocalServices(hub: hub);
     await services.initialize();
     await tester.pumpWidget(
@@ -589,8 +609,12 @@ void main() {
   testWidgets('hub blur fades and glow stay off under reduced motion', (
     tester,
   ) async {
-    DevGemini.debugOverride = 'AIzaTestDevKey';
-    addTearDown(() => DevGemini.debugOverride = null);
+    debugDevAssistantAccess = const DevAssistantAccess(
+      credential: 'AIzaTestDevKey',
+      liveModel: 'gemini-test-live',
+      missingKeyHint: '',
+    );
+    addTearDown(() => debugDevAssistantAccess = DevAssistantAccess.none);
     final services = makeLocalServices();
     await services.initialize();
     final store = VolatileHubChecklistStore()..tasks = ['Pick omi back up'];

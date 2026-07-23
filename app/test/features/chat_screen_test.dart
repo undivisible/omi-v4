@@ -2,7 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:omi/api/dev_gemini.dart';
+import 'package:omi/api/dev_assistant.dart';
 import 'package:omi/api/worker_http.dart';
 import 'package:omi/app_services.dart';
 import 'package:omi/auth/auth.dart';
@@ -273,8 +273,12 @@ void main() {
   testWidgets(
     'localMode enables chat with rotating prompts and skips currents network',
     (tester) async {
-      DevGemini.debugOverride = 'AIzaTestDevKey';
-      addTearDown(() => DevGemini.debugOverride = null);
+      debugDevAssistantAccess = const DevAssistantAccess(
+        credential: 'AIzaTestDevKey',
+        liveModel: 'gemini-test-live',
+        missingKeyHint: '',
+      );
+      addTearDown(() => debugDevAssistantAccess = DevAssistantAccess.none);
       final currentsTransport = _CountingCurrentsTransport();
       final conversationTransport = _ThrowingConversationTransport();
       final services = AppServices.forTesting(

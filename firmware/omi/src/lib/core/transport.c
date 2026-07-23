@@ -27,6 +27,7 @@
 #include "config.h"
 #include "features.h"
 #include "haptic.h"
+#include "lib/battery/battery.h"
 #include "mic.h"
 #ifdef CONFIG_OMI_ENABLE_MONITOR
 #include "monitor.h"
@@ -34,6 +35,7 @@
 #include "rtc.h"
 #include "sd_card.h"
 #include "settings.h"
+#include "speaker.h"
 #include "storage.h"
 #include "user_event.h"
 LOG_MODULE_REGISTER(transport, CONFIG_LOG_DEFAULT_LEVEL);
@@ -1032,9 +1034,9 @@ static void _transport_disconnected(struct bt_conn *conn, uint8_t err)
 
     // Reset the audio TX throttle semaphore so the pusher thread is not
     // left blocked forever if it was waiting for a slot when the connection dropped.
-    k_sem_init(&audio_tx_sem,
-               CONFIG_BT_CONN_TX_MAX - AUDIO_TX_RESERVED_SLOTS,
-               CONFIG_BT_CONN_TX_MAX - AUDIO_TX_RESERVED_SLOTS);
+    for (int i = 0; i < CONFIG_BT_CONN_TX_MAX - AUDIO_TX_RESERVED_SLOTS; i++) {
+        k_sem_give(&audio_tx_sem);
+    }
 }
 
 static bool _le_param_req(struct bt_conn *conn, struct bt_le_conn_param *param)
@@ -1111,13 +1113,23 @@ static struct bt_conn_cb _callback_references = {
 #define CONN_PARAM_RETRY_COUNT 3
 #define CONN_PARAM_RETRY_DELAY_MS 300
 
+#ifdef CONFIG_OMI_ENABLE_ADAPTIVE_CONN_PARAMS
+#define OMI_CONN_INTERVAL_IDLE_MIN CONFIG_OMI_CONN_INTERVAL_IDLE_MIN
+#define OMI_CONN_INTERVAL_IDLE_MAX CONFIG_OMI_CONN_INTERVAL_IDLE_MAX
+#define OMI_CONN_IDLE_LATENCY CONFIG_OMI_CONN_IDLE_LATENCY
+#else
+#define OMI_CONN_INTERVAL_IDLE_MIN CONFIG_OMI_CONN_INTERVAL_FAST_MIN
+#define OMI_CONN_INTERVAL_IDLE_MAX CONFIG_OMI_CONN_INTERVAL_FAST_MAX
+#define OMI_CONN_IDLE_LATENCY 0
+#endif
+
 static void update_conn_params_mode(struct bt_conn *conn, bool fast)
 {
     int err = 0;
     const struct bt_le_conn_param preferred_param = {
-        .interval_min = fast ? CONFIG_OMI_CONN_INTERVAL_FAST_MIN : CONFIG_OMI_CONN_INTERVAL_IDLE_MIN,
-        .interval_max = fast ? CONFIG_OMI_CONN_INTERVAL_FAST_MAX : CONFIG_OMI_CONN_INTERVAL_IDLE_MAX,
-        .latency = fast ? 0 : CONFIG_OMI_CONN_IDLE_LATENCY,
+        .interval_min = fast ? CONFIG_OMI_CONN_INTERVAL_FAST_MIN : OMI_CONN_INTERVAL_IDLE_MIN,
+        .interval_max = fast ? CONFIG_OMI_CONN_INTERVAL_FAST_MAX : OMI_CONN_INTERVAL_IDLE_MAX,
+        .latency = fast ? 0 : OMI_CONN_IDLE_LATENCY,
         .timeout = CONFIG_OMI_CONN_SUPERVISION_TIMEOUT,
     };
 
@@ -1607,10 +1619,17 @@ void pusher(void)
                 }
             }
 
+            bool delivered = false;
+
             if (conn && is_subscribed) {
                 push_to_gatt(conn);
+                delivered = true;
+            }
+            if (conn) {
                 bt_conn_unref(conn);
-            } else if (!conn) {
+            }
+
+            if (!delivered) {
 #ifdef CONFIG_OMI_ENABLE_OFFLINE_STORAGE
                 if (is_sd_on()) {
                     storage_full_warned = false;
@@ -1622,9 +1641,9 @@ void pusher(void)
                     }
                 }
 #endif
-            } else {
-                bt_conn_unref(conn);
-                k_sleep(K_MSEC(10));
+                if (conn) {
+                    k_sleep(K_MSEC(10));
+                }
             }
         }
     }
@@ -1791,7 +1810,7 @@ int transport_start()
     memset(storage_temp_data, 0, OPUS_PADDED_LENGTH * 4);
     bt_gatt_service_register(&storage_service);
 #endif
-    err = bt_le_adv_start(BT_LE_ADV_CONN, bt_ad, ARRAY_SIZE(bt_ad), bt_sd, ARRAY_SIZE(bt_sd));
+    err = bt_le_adv_start(BT_LE_ADV_CONN_FAST_2, bt_ad, ARRAY_SIZE(bt_ad), bt_sd, ARRAY_SIZE(bt_sd));
     if (err) {
         LOG_ERR("Transport advertising failed to start (err %d), continuing without BLE", err);
         // Non-fatal: continue with pusher and ring buffer so offline recording works

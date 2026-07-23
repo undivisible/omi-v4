@@ -5,6 +5,8 @@ import 'package:flutter/foundation.dart';
 
 import '../native/generated/signals/signals.dart' show NativeError;
 import '../native/native_hub.dart';
+import 'capture_gap_log.dart';
+import 'capture_wal.dart';
 import 'device_audio_frame.dart';
 import 'device_models.dart';
 import 'device_relay.dart';
@@ -87,7 +89,14 @@ final class DeviceAudioForwarder {
     this.startTimeout = const Duration(seconds: 5),
     this.stopTimeout = const Duration(seconds: 5),
     this.reconnectGrace = const Duration(seconds: 20),
-  });
+    this.wal,
+    this.gapRecorder,
+    this.autoRestart = false,
+    this.restartDelay = const Duration(seconds: 2),
+    this.maxConsecutiveRestarts = 5,
+    this.onCaptureStopped,
+    DateTime Function()? now,
+  }) : _now = now ?? DateTime.now;
 
   static const maxFrameBytes = 256 * 1024;
   static const maxPendingFrames = 8;
@@ -99,9 +108,47 @@ final class DeviceAudioForwarder {
   final Duration startTimeout;
   final Duration stopTimeout;
   final Duration reconnectGrace;
+
+  /// Every frame handed to the hub is written here first, so a dropped socket,
+  /// a dropped packet or a killed process leaves the audio on disk instead of
+  /// losing it. Null disables durability entirely (tests, desktop observers).
+  CaptureWal? wal;
+
+  /// Where a discontinuity is recorded before capture restarts across it.
+  CaptureGapRecorder? gapRecorder;
+
+  /// Whether a session that failed for a transient reason is restarted.
+  ///
+  /// The abort itself is not negotiable and stays: audio either side of a gap
+  /// is never spliced into one stream. Restart is the recovery half — a new
+  /// STT session with a new stream id, and a recorded gap between the two.
+  bool autoRestart;
+  final Duration restartDelay;
+
+  /// How many restarts may happen back to back without a session ever
+  /// delivering a frame. Beyond this the pendant or the link is genuinely
+  /// broken and retrying forever would just burn battery.
+  final int maxConsecutiveRestarts;
+
+  /// Called when capture ends and is not being restarted, with a short
+  /// user-facing reason. Wired to the capture-stopped alert.
+  void Function(String reason)? onCaptureStopped;
+
+  final DateTime Function() _now;
   _AudioSession? _sessionValue;
   int _startGeneration = 0;
   Object? lastError;
+
+  /// The most recent recorded discontinuity, for anything that renders capture
+  /// health. A gap the user cannot see is a gap they will read as continuous
+  /// audio.
+  final lastGapRecord = ValueNotifier<CaptureGapRecord?>(null);
+
+  RelayDevice? _restartDevice;
+  TranscriptionAuth? _restartAuth;
+  Timer? _restartTimer;
+  int _consecutiveRestarts = 0;
+  bool _gapBeforeNextSegment = false;
 
   /// Fires whenever capture starts or stops. [active] is a plain getter that a
   /// widget can only sample while it happens to be building, so a stream that
@@ -125,6 +172,13 @@ final class DeviceAudioForwarder {
 
   Future<void> start(RelayDevice device, {TranscriptionAuth? auth}) async {
     final generation = ++_startGeneration;
+    _restartTimer?.cancel();
+    _restartTimer = null;
+    _restartDevice = device;
+    _restartAuth = auth ?? this.auth;
+    // A supersede is not a failure, so the session being replaced must not
+    // trigger a gap-recording restart of its own.
+    _sessionValue?.intentionalStop = true;
     await _stopCurrent();
     if (generation != _startGeneration) {
       throw DeviceTranscriptionStartCancelled(device.id);
@@ -166,6 +220,32 @@ final class DeviceAudioForwarder {
       throw DeviceTranscriptionStartCancelled(session.requestId);
     }
     session.started = true;
+    final gapBefore = _gapBeforeNextSegment;
+    _gapBeforeNextSegment = false;
+    await wal?.beginSegment(
+      deviceId: session.deviceId,
+      audioStreamId: session.requestId,
+      encoding: session.encoding.name,
+      sampleRateHz: session.sampleRateHz,
+      channels: 1,
+      gapBefore: gapBefore,
+    );
+    if (gapBefore) {
+      // The resume side of the recorded gap. It names the NEW stream id, which
+      // is what makes it impossible to read the two sides as one recording.
+      await gapRecorder?.recordResume(
+        deviceId: session.deviceId,
+        at: _now(),
+        streamId: session.requestId,
+      );
+      final recorded = lastGapRecord.value;
+      if (recorded != null && recorded.resumedAt == null) {
+        lastGapRecord.value = recorded.resumed(
+          at: _now(),
+          streamId: session.requestId,
+        );
+      }
+    }
     session.audioSubscription = relay
         .audioFrames(device.id)
         .listen(
@@ -276,6 +356,9 @@ final class DeviceAudioForwarder {
         !(session.audioSubscription?.isPaused ?? false)) {
       session.audioSubscription?.pause();
     }
+    // A session that is actually carrying audio has recovered; the restart
+    // budget is about consecutive failures, not lifetime ones.
+    _consecutiveRestarts = 0;
     session.previousPacketId = frame.packetId;
     session.previousPacketIndex = frame.packetIndex;
     session.pending.add(frame.payload);
@@ -342,6 +425,13 @@ final class DeviceAudioForwarder {
     while (_session == session && session.pending.isNotEmpty) {
       final bytes = session.pending.removeFirst();
       await Future<void>.delayed(Duration.zero);
+      // Disk first. If the hub throws, the socket dies or the process is
+      // killed on the next line, the audio is already durable.
+      try {
+        await wal?.append(bytes);
+      } catch (error) {
+        lastError = error;
+      }
       try {
         hub.sendAudio(
           requestId: session.requestId,
@@ -368,8 +458,15 @@ final class DeviceAudioForwarder {
     }
   }
 
+  /// Ends capture at the user's request. Never restarts.
   Future<void> stop() async {
     _startGeneration += 1;
+    _restartTimer?.cancel();
+    _restartTimer = null;
+    _restartDevice = null;
+    _restartAuth = null;
+    _consecutiveRestarts = 0;
+    _sessionValue?.intentionalStop = true;
     await _stopCurrent();
   }
 
@@ -415,8 +512,82 @@ final class DeviceAudioForwarder {
     }
     if (stopping != null) await stopping;
     session.pending.clear();
+    // Sealing makes whatever this session captured uploadable. A segment left
+    // open would be skipped by the uploader forever.
+    try {
+      await wal?.seal();
+    } catch (error) {
+      lastError = error;
+    }
     if (_session == session) _session = null;
     if (!session.finished.isCompleted) session.finished.complete();
+    if (session.abortRequested && !session.intentionalStop) {
+      await _recover(session);
+    }
+  }
+
+  /// The recovery half of the fail-closed abort: record the discontinuity,
+  /// then open a *new* session rather than continuing the old one.
+  ///
+  /// Nothing here re-splices. The restarted session gets a new stream id, its
+  /// first write-ahead segment is marked `gapBefore`, and the gap itself is a
+  /// durable record with both sides' stream ids on it.
+  Future<void> _recover(_AudioSession session) async {
+    final device = _restartDevice;
+    final reason = switch (lastError) {
+      final DeviceAudioGap gap => gap.reason.name,
+      _ => 'sessionFailed',
+    };
+    final record = CaptureGapRecord(
+      deviceId: session.deviceId,
+      reason: reason,
+      endedAt: _now(),
+      endedStreamId: session.requestId,
+    );
+    await gapRecorder?.record(record);
+    lastGapRecord.value = record;
+    // Only a packet-level gap on a still-connected link is transient enough to
+    // restart from here. A dropped link is already handled by the reconnect
+    // grace, and a session that died for any other reason may have lost its
+    // authority with it — restarting on cached credentials would stream audio
+    // the account may no longer be allowed to send.
+    final transient = lastError is DeviceAudioGap && session.connected;
+    if (!autoRestart ||
+        !transient ||
+        device == null ||
+        _consecutiveRestarts >= maxConsecutiveRestarts) {
+      onCaptureStopped?.call(_stoppedMessage(reason));
+      return;
+    }
+    _consecutiveRestarts += 1;
+    _gapBeforeNextSegment = true;
+    final generation = _startGeneration;
+    _restartTimer?.cancel();
+    _restartTimer = Timer(restartDelay, () {
+      if (generation != _startGeneration) return;
+      final auth = _restartAuth;
+      unawaited(
+        start(device, auth: auth).catchError((Object error) {
+          lastError = error;
+          onCaptureStopped?.call(_stoppedMessage(reason));
+        }),
+      );
+    });
+  }
+
+  static String _stoppedMessage(String reason) => switch (reason) {
+    'packetDiscontinuity' => 'Audio from your Omi was interrupted.',
+    'frameTooLarge' ||
+    'invalidStart' => 'Your Omi sent audio Omi could not read.',
+    'bufferCapacity' => 'Audio arrived faster than it could be sent.',
+    _ => 'Capture stopped unexpectedly.',
+  };
+
+  void dispose() {
+    _restartTimer?.cancel();
+    _restartTimer = null;
+    lastGapRecord.dispose();
+    activeListenable.dispose();
   }
 
   Future<void> _stopTranscription(_AudioSession session) {
@@ -491,4 +662,9 @@ final class _AudioSession {
   bool stopAttempted = false;
   Future<void>? stopFuture;
   bool abortRequested = false;
+
+  /// True when this session ended because the app asked it to (an explicit
+  /// stop, or being superseded by a new start). Only unintentional endings are
+  /// eligible for a gap-recording restart.
+  bool intentionalStop = false;
 }

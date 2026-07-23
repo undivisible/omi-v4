@@ -1,5 +1,6 @@
 board:
   name: omi
+  full_name: Omi CV1
   vendor: omi
   socs:
   - name: nrf5340

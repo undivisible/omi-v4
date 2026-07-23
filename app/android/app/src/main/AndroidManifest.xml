@@ -5,6 +5,15 @@
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" android:maxSdkVersion="28" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" android:maxSdkVersion="30" />
     <uses-permission android:name="android.permission.BLUETOOTH_SCAN" android:usesPermissionFlags="neverForLocation" />
+    <!-- Capture keeps running while the app is off screen. Android only allows
+         that behind a foreground service, and from API 34 the service must
+         declare a type; connectedDevice is the honest one — the audio comes
+         from the paired pendant, not from the phone microphone. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <!-- Required on API 33+ both for the service's own ongoing notification and
+         for the low-battery / capture-stopped alerts. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <application
         android:label="omi"
         android:name="${applicationName}"
@@ -31,6 +40,10 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
+        <service
+            android:name=".CaptureForegroundService"
+            android:exported="false"
+            android:foregroundServiceType="connectedDevice" />
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data

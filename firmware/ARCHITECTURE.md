@@ -17,7 +17,7 @@ re-sync), [`README.md`](README.md) (build and flash), [`BLE_CONTRACTS.md`](BLE_C
 
 | Directory | Device | SoC | RTOS / SDK | Bootloader |
 | --- | --- | --- | --- | --- |
-| `omi/` | Omi CV1 pendant (production) | nRF5340, dual Cortex-M33 | Zephyr via nRF Connect SDK v2.9.0 | MCUboot, sysbuild, 4 images |
+| `omi/` | Omi CV1 pendant (production) | nRF5340, dual Cortex-M33 | Zephyr via nRF Connect SDK v3.4.0 | MCUboot, sysbuild, 4 images |
 | `devkit/` | Seeed XIAO nRF52840 Sense DevKit, three configurations | nRF52840, single Cortex-M4F | Zephyr | Adafruit UF2 bootloader |
 | `test/` | CV1 board bring-up + BLE throughput harness | nRF5340 | Zephyr, sysbuild | MCUboot |
 
@@ -53,8 +53,8 @@ Grounded in `boards/omi/omi_nrf5340_cpuapp.dts` unless noted.
   battery sense on P0.06 via SAADC AIN0 with a divider, charge detect on P0.07
   (`bat_chg_pin`, active low), and an RF switch enable on P1.03.
 - **Flash layout**: MCUboot at 0, 64 KB; `slot0` 256 KB; the partition manager
-  layout in `boards/omi/pm_static.yml` places the application at `0xf200` and
-  the MCUboot secondary in external flash at `0x130000`.
+  layout in `boards/omi/pm_static_omi_nrf5340_cpuapp.yml` places the application
+  at `0x10200` and the MCUboot secondary in external flash at `0x130000`.
 
 ### 1.3 CV1 runtime structure
 
@@ -574,7 +574,7 @@ running and zero after a reboot until the app writes `19B10031` again.
 
 **The DevKit board identifier is unresolved in-tree.**
 `devkit/CMakeLists.txt` says `seeed_xiao_nrf52840_sense`,
-`devkit/CMakePresets.json` says `xiao_ble_sense`, and NCS v2.9.0 wants
+`devkit/CMakePresets.json` says `xiao_ble_sense`, and NCS v3.4.0 wants
 `xiao_ble/nrf52840/sense`. `README.md` recommends passing `-b` explicitly and
 confirming with `west boards`; this cannot be settled without the SDK.
 

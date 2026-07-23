@@ -325,8 +325,9 @@ export const tools: ToolDefinition[] = [
         },
         format: {
           type: "string",
-          enum: ["wav", "mp3"],
-          description: "Container of the supplied audio.",
+          enum: ["wav", "mp3", "ogg", "opus"],
+          description:
+            "Container of the supplied audio. Opus must be Ogg-encapsulated.",
         },
         clientMessageId: {
           type: "string",

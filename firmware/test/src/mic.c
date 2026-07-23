@@ -7,6 +7,8 @@
 #include <zephyr/shell/shell.h>
 #include <zephyr/sys/util.h>
 
+#include "mic.h"
+
 #define BITS_PER_BYTE 8
 
 #define SAMPLE_RATE_HZ 16000

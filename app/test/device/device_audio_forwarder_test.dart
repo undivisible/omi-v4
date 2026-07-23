@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -693,6 +694,149 @@ void main() {
       await adapter.close();
     }
   });
+
+  group('gap-recording restart', () {
+    Future<
+      ({
+        _AudioAdapter adapter,
+        _RecordingHub hub,
+        DeviceAudioForwarder forwarder,
+        VolatileCaptureGapLog gaps,
+        List<String> stopped,
+      })
+    >
+    build({bool autoRestart = true}) async {
+      final adapter = _AudioAdapter();
+      final hub = _RecordingHub();
+      final gaps = VolatileCaptureGapLog();
+      final stopped = <String>[];
+      final forwarder = DeviceAudioForwarder(
+        relay: DeviceRelayService(
+          role: DeviceRelayRole.mobileOwner,
+          adapter: adapter,
+        ),
+        hub: hub,
+        gapRecorder: gaps,
+        autoRestart: autoRestart,
+        restartDelay: Duration.zero,
+        onCaptureStopped: stopped.add,
+      );
+      await forwarder.start(
+        const RelayDevice(
+          id: 'omi-restart',
+          name: 'Omi',
+          audioCodec: DeviceAudioCodec.opus,
+        ),
+      );
+      return (
+        adapter: adapter,
+        hub: hub,
+        forwarder: forwarder,
+        gaps: gaps,
+        stopped: stopped,
+      );
+    }
+
+    Future<void> settle() async {
+      for (var attempt = 0; attempt < 40; attempt += 1) {
+        await Future<void>.delayed(const Duration(milliseconds: 1));
+      }
+    }
+
+    test('restarts on a packet gap under a new stream id', () async {
+      final harness = await build();
+      harness.adapter.audio.add([10, 0, 0, 1]);
+      harness.adapter.audio.add([12, 0, 0, 2]);
+      await settle();
+
+      expect(harness.hub.starts, hasLength(2));
+      final streams = harness.hub.starts
+          .map((start) => start.audioStreamId)
+          .toSet();
+      expect(
+        streams,
+        hasLength(2),
+        reason: 'a restart must never continue the interrupted stream',
+      );
+      expect(harness.forwarder.active, isTrue);
+      await harness.forwarder.stop();
+      await harness.adapter.close();
+    });
+
+    test('records the discontinuity with both sides of the gap', () async {
+      final harness = await build();
+      harness.adapter.audio.add([10, 0, 0, 1]);
+      harness.adapter.audio.add([12, 0, 0, 2]);
+      await settle();
+
+      final recorded = await harness.gaps.read();
+      expect(recorded, hasLength(1));
+      final gap = recorded.single;
+      expect(gap.reason, DeviceAudioGapReason.packetDiscontinuity.name);
+      expect(gap.endedStreamId, harness.hub.starts.first.audioStreamId);
+      expect(gap.resumedStreamId, harness.hub.starts.last.audioStreamId);
+      expect(gap.resumedStreamId, isNot(gap.endedStreamId));
+      expect(gap.resumedAt, isNotNull);
+      expect(harness.forwarder.lastGapRecord.value?.resumedAt, isNotNull);
+      await harness.forwarder.stop();
+      await harness.adapter.close();
+    });
+
+    test('marks the resumed write-ahead segment as following a gap', () async {
+      final directory = Directory.systemTemp.createTempSync('omi-wal-restart');
+      addTearDown(() => directory.deleteSync(recursive: true));
+      final harness = await build();
+      // Installed after the first start so only the resumed session is logged.
+      harness.forwarder.wal = await CaptureWal.open(directory: directory);
+      harness.adapter.audio.add([10, 0, 0, 1]);
+      harness.adapter.audio.add([12, 0, 0, 2]);
+      await settle();
+
+      await harness.forwarder.stop();
+      final segments = await harness.forwarder.wal!.pending();
+      expect(segments, isNotEmpty);
+      expect(segments.first.gapBefore, isTrue);
+      expect(
+        segments.first.audioStreamId,
+        harness.hub.starts.last.audioStreamId,
+      );
+      await harness.forwarder.wal!.close();
+      await harness.adapter.close();
+    });
+
+    test('an explicit stop neither restarts nor records a gap', () async {
+      final harness = await build();
+      harness.adapter.audio.add([10, 0, 0, 1]);
+      await Future<void>.delayed(Duration.zero);
+      await harness.forwarder.stop();
+      await settle();
+
+      expect(harness.hub.starts, hasLength(1));
+      expect(await harness.gaps.read(), isEmpty);
+      expect(harness.stopped, isEmpty);
+      expect(harness.forwarder.active, isFalse);
+      await harness.adapter.close();
+    });
+
+    test(
+      'without autoRestart the gap is still recorded and reported',
+      () async {
+        final harness = await build(autoRestart: false);
+        harness.adapter.audio.add([10, 0, 0, 1]);
+        harness.adapter.audio.add([12, 0, 0, 2]);
+        await settle();
+
+        expect(harness.hub.starts, hasLength(1));
+        expect(harness.forwarder.active, isFalse);
+        final recorded = await harness.gaps.read();
+        expect(recorded, hasLength(1));
+        expect(recorded.single.resumedAt, isNull);
+        expect(harness.stopped, hasLength(1));
+        await harness.forwarder.stop();
+        await harness.adapter.close();
+      },
+    );
+  });
 }
 
 Future<void> _waitForInactive(DeviceAudioForwarder forwarder) async {
@@ -727,6 +871,8 @@ final class _SentAudio {
 }
 
 final class _RecordingHub implements NativeHub {
+  @override
+  void resolveDevAssistant(String requestId) {}
   _RecordingHub({
     this.available = true,
     this.failFirstData = false,
@@ -987,6 +1133,23 @@ final class _RecordingHub implements NativeHub {
     required String requestId,
     required TranscriptionAuth auth,
     String? trustedWorkerOrigin,
+  }) {}
+
+  @override
+  void composeBrief({
+    required String requestId,
+    required String nowLocal,
+    required List<BriefItem> items,
+  }) {}
+
+  @override
+  void joinCall({
+    required String requestId,
+    required String link,
+    required String ephemeralToken,
+    required String model,
+    String? displayName,
+    bool video = true,
   }) {}
 
   @override

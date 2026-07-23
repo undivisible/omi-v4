@@ -283,7 +283,7 @@ int transport_ble_test(void)
     LOG_INF("Test GATT service registered");
 
     // 3. Advertise
-    err = bt_le_adv_start(BT_LE_ADV_CONN, test_ad, ARRAY_SIZE(test_ad), NULL, 0);
+    err = bt_le_adv_start(BT_LE_ADV_CONN_FAST_2, test_ad, ARRAY_SIZE(test_ad), NULL, 0);
     if (err) {
         LOG_ERR("Advertising failed to start (err %d)", err);
         return err;

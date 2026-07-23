@@ -69,6 +69,12 @@ abstract class NativeEvent {
         return NativeEventMeetingTranscriptTurn.load(deserializer);
       case 23:
         return NativeEventMeetingCompleted.load(deserializer);
+      case 24:
+        return NativeEventBriefComposed.load(deserializer);
+      case 25:
+        return NativeEventCallState.load(deserializer);
+      case 26:
+        return NativeEventDevAssistantResolved.load(deserializer);
       default:
         throw Exception(
           'Unknown variant index for NativeEvent: ' + index.toString(),
@@ -1379,6 +1385,165 @@ class NativeEventMeetingCompleted extends NativeEvent {
     }());
 
     return fullString ?? 'NativeEventMeetingCompleted';
+  }
+}
+
+@immutable
+class NativeEventBriefComposed extends NativeEvent {
+  const NativeEventBriefComposed({required this.value}) : super();
+
+  static NativeEventBriefComposed load(BinaryDeserializer deserializer) {
+    deserializer.increaseContainerDepth();
+    final instance = NativeEventBriefComposed(
+      value: BriefComposed.deserialize(deserializer),
+    );
+    deserializer.decreaseContainerDepth();
+    return instance;
+  }
+
+  final BriefComposed value;
+
+  NativeEventBriefComposed copyWith({BriefComposed? value}) {
+    return NativeEventBriefComposed(value: value ?? this.value);
+  }
+
+  void serialize(BinarySerializer serializer) {
+    serializer.increaseContainerDepth();
+    serializer.serializeVariantIndex(24);
+    value.serialize(serializer);
+    serializer.decreaseContainerDepth();
+  }
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    if (other.runtimeType != runtimeType) return false;
+
+    return other is NativeEventBriefComposed && value == other.value;
+  }
+
+  @override
+  int get hashCode => value.hashCode;
+
+  @override
+  String toString() {
+    String? fullString;
+
+    assert(() {
+      fullString =
+          '$runtimeType('
+          'value: $value'
+          ')';
+      return true;
+    }());
+
+    return fullString ?? 'NativeEventBriefComposed';
+  }
+}
+
+@immutable
+class NativeEventCallState extends NativeEvent {
+  const NativeEventCallState({required this.value}) : super();
+
+  static NativeEventCallState load(BinaryDeserializer deserializer) {
+    deserializer.increaseContainerDepth();
+    final instance = NativeEventCallState(
+      value: CallState.deserialize(deserializer),
+    );
+    deserializer.decreaseContainerDepth();
+    return instance;
+  }
+
+  final CallState value;
+
+  NativeEventCallState copyWith({CallState? value}) {
+    return NativeEventCallState(value: value ?? this.value);
+  }
+
+  void serialize(BinarySerializer serializer) {
+    serializer.increaseContainerDepth();
+    serializer.serializeVariantIndex(25);
+    value.serialize(serializer);
+    serializer.decreaseContainerDepth();
+  }
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    if (other.runtimeType != runtimeType) return false;
+
+    return other is NativeEventCallState && value == other.value;
+  }
+
+  @override
+  int get hashCode => value.hashCode;
+
+  @override
+  String toString() {
+    String? fullString;
+
+    assert(() {
+      fullString =
+          '$runtimeType('
+          'value: $value'
+          ')';
+      return true;
+    }());
+
+    return fullString ?? 'NativeEventCallState';
+  }
+}
+
+@immutable
+class NativeEventDevAssistantResolved extends NativeEvent {
+  const NativeEventDevAssistantResolved({required this.value}) : super();
+
+  static NativeEventDevAssistantResolved load(BinaryDeserializer deserializer) {
+    deserializer.increaseContainerDepth();
+    final instance = NativeEventDevAssistantResolved(
+      value: DevAssistant.deserialize(deserializer),
+    );
+    deserializer.decreaseContainerDepth();
+    return instance;
+  }
+
+  final DevAssistant value;
+
+  NativeEventDevAssistantResolved copyWith({DevAssistant? value}) {
+    return NativeEventDevAssistantResolved(value: value ?? this.value);
+  }
+
+  void serialize(BinarySerializer serializer) {
+    serializer.increaseContainerDepth();
+    serializer.serializeVariantIndex(26);
+    value.serialize(serializer);
+    serializer.decreaseContainerDepth();
+  }
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    if (other.runtimeType != runtimeType) return false;
+
+    return other is NativeEventDevAssistantResolved && value == other.value;
+  }
+
+  @override
+  int get hashCode => value.hashCode;
+
+  @override
+  String toString() {
+    String? fullString;
+
+    assert(() {
+      fullString =
+          '$runtimeType('
+          'value: $value'
+          ')';
+      return true;
+    }());
+
+    return fullString ?? 'NativeEventDevAssistantResolved';
   }
 }
 

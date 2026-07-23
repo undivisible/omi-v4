@@ -10,7 +10,7 @@
 
 LOG_MODULE_REGISTER(IMU, CONFIG_SENSOR_LOG_LEVEL);
 
-static const struct device *const i2c_lsm6dso = DEVICE_DT_GET(DT_NODELABEL(lsm6dso));
+static const struct device *const i2c_lsm6dso = DEVICE_DT_GET(DT_NODELABEL(lsm6ds3tr_c));
 static const struct gpio_dt_spec lsm6dso_en = GPIO_DT_SPEC_GET_OR(DT_NODELABEL(lsm6dso_en_pin), gpios, {0});
 
 // LSM6DS3TR-C has WHO_AM_I = 0x6A, use lsm6dsl driver

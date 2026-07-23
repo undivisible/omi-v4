@@ -9,12 +9,12 @@ use crate::computer_use::{
 };
 use crate::signals::{
     ActionProposal, ActionRisk, ApprovalDecision, ApprovalDecisionAcknowledgement, AssistantDelta,
-    AssistantProvider as ProviderKind, CaptureSource, ClientCommand, Command, ComputerUseAction,
-    ComputerUseAuthorityReceipt, MemoryCaptured, MemoryCorrected, MemoryExportCommit,
-    MemoryExported, MemoryItem, MemoryItems, MemorySearchItem, MemorySearchResults,
-    MemorySourceDeleted, MessageOrigin, NativeError, NativeEvent, OnboardingScanCompleted,
-    OnboardingScanSource, OnboardingScanState, RuntimePhase, RuntimeStatus, ToolProgress,
-    ToolStatus, TranscriptLocator, TranscriptionStopAcknowledgement,
+    AssistantProvider as ProviderKind, BriefComposed, CaptureSource, ClientCommand, Command,
+    ComputerUseAction, ComputerUseAuthorityReceipt, MemoryCaptured, MemoryCorrected,
+    MemoryExportCommit, MemoryExported, MemoryItem, MemoryItems, MemorySearchItem,
+    MemorySearchResults, MemorySourceDeleted, MessageOrigin, NativeError, NativeEvent,
+    OnboardingScanCompleted, OnboardingScanSource, OnboardingScanState, RuntimePhase,
+    RuntimeStatus, ToolProgress, ToolStatus, TranscriptLocator, TranscriptionStopAcknowledgement,
 };
 #[cfg(test)]
 use crate::signals::{AudioChunk, TranscriptionAuth, TranscriptionRoute};
@@ -2112,6 +2112,35 @@ async fn execute(
             );
             false
         }
+        Command::ResolveDevAssistant => {
+            let request = request_id.clone();
+            let resolved = spawn_blocking(move || {
+                let credential = crate::dev_gemini::api_key();
+                Ok(crate::signals::DevAssistant {
+                    request_id: request,
+                    live_model: crate::dev_gemini::LIVE_MODEL.to_owned(),
+                    missing_key_hint: if credential.is_some() {
+                        String::new()
+                    } else {
+                        crate::dev_gemini::missing_key_hint()
+                    },
+                    credential: credential.map(|key| key.0),
+                })
+            });
+            match await_blocking(resolved, &cancellation).await {
+                BlockingOutcome::Complete(value) => {
+                    NativeEvent::DevAssistantResolved(value).send();
+                }
+                BlockingOutcome::Failed(error_value) => error(
+                    Some(request_id.clone()),
+                    "dev_assistant_unavailable",
+                    &error_value,
+                    false,
+                ),
+                BlockingOutcome::Cancelled => cancelled(&request_id),
+            }
+            false
+        }
         Command::SetSystemAudioCaptureMode { mode } => {
             crate::meeting::set_mode(mode);
             progress(
@@ -2122,7 +2151,65 @@ async fn execute(
             );
             false
         }
+        Command::ComposeBrief { now_local, items } => {
+            compose_brief(&request_id, &now_local, items, &cancellation).await;
+            false
+        }
+        Command::JoinCall {
+            link,
+            display_name,
+            video,
+            ephemeral_token,
+            model,
+        } => {
+            crate::facetime_bridge::place_call(
+                &request_id,
+                crate::facetime_bridge::CallRequest {
+                    link,
+                    display_name,
+                    video,
+                    ephemeral_token,
+                    model,
+                },
+                &cancellation,
+            )
+            .await;
+            false
+        }
     }
+}
+
+/// Composes the currents brief and answers with whatever came back.
+///
+/// Every way this can go wrong — no generator configured, a model failure, the
+/// compose timeout, a cancelled request, or a document the Flutter renderer
+/// would refuse — is the same answer: `crepus: None`. No `NativeEvent::Error`
+/// is ever raised from here, because a missing brief is not a fault the user
+/// can act on; the client's hand-built brief is already on screen.
+async fn compose_brief(
+    request_id: &str,
+    now_local: &str,
+    items: Vec<crate::signals::BriefItem>,
+    cancellation: &CancellationToken,
+) {
+    let items: Vec<crate::brief::BriefItem> = items
+        .into_iter()
+        .map(|item| crate::brief::BriefItem {
+            title: item.title,
+            when: item.when,
+            detail: item.detail,
+            next_step: item.next_step,
+        })
+        .collect();
+    let crepus = tokio::select! {
+        composed = crate::brief::compose(now_local, &items) => composed,
+        () = cancellation.cancelled() => None,
+    };
+    NativeEvent::BriefComposed(BriefComposed {
+        request_id: request_id.to_owned(),
+        crepus,
+    })
+    .send();
 }
 
 async fn scan_onboarding(

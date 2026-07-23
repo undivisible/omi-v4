@@ -16,13 +16,6 @@
 //! to a low bitrate at a small size: large solid discs with soft edges are
 //! about the most compressible legible shape there is.
 
-#![allow(dead_code)]
-// The call path is complete and tested end to end inside the hub, but nothing
-// in this crate calls into it yet: the command that places a FaceTime call and
-// hands back a join link lives in the Worker and the Dart UI, both outside this
-// change's ownership. `facetime_bridge::live::join` and `call_bridge::run_call`
-// are the two entry points that surface needs.
-
 use std::f32::consts::TAU;
 
 /// Ring centre and dot radius, in the SVG's 260x260 user space.
@@ -143,6 +136,9 @@ impl MarkAnimator {
         self.target = 0.0;
     }
 
+    /// The animator's own smoothed level. Read by the tests below; the call
+    /// path only ever pushes amplitude in and pulls frames out.
+    #[allow(dead_code)]
     pub(crate) fn level(&self) -> f32 {
         self.level
     }

@@ -17,6 +17,14 @@ export 'generated/signals/signals.dart'
         ApprovalDecisionAcknowledgement,
         AssistantDelta,
         AssistantProvider,
+        BriefComposed,
+        BriefItem,
+        CallPhase,
+        CallState,
+        NativeEventBriefComposed,
+        DevAssistant,
+        NativeEventCallState,
+        NativeEventDevAssistantResolved,
         MessageOrigin,
         NativeEvent,
         NativeEventActionProposal,
@@ -194,6 +202,30 @@ abstract interface class NativeHub {
     required bool includeAppleMail,
     required int recordedAtMs,
   });
+
+  /// Asks the hub to compose the currents brief. Answered by exactly one
+  /// [NativeEventBriefComposed]; a null `crepus` there means the hand-built
+  /// brief stands.
+  void composeBrief({
+    required String requestId,
+    required String nowLocal,
+    required List<BriefItem> items,
+  });
+
+  /// Joins a call link and bridges it to a realtime voice session. Progress
+  /// arrives as [NativeEventCallState].
+  void joinCall({
+    required String requestId,
+    required String link,
+    required String ephemeralToken,
+    required String model,
+    String? displayName,
+    bool video = true,
+  });
+
+  /// Resolves the dev-only assistant credential the app falls back to with no
+  /// account. Answered by exactly one [NativeEventDevAssistantResolved].
+  void resolveDevAssistant(String requestId);
   void dispose();
 }
 
@@ -386,6 +418,26 @@ final class UnavailableNativeHub implements NativeHub {
     required String requestId,
     required SystemAudioCaptureMode mode,
   }) => _unavailable();
+
+  @override
+  void composeBrief({
+    required String requestId,
+    required String nowLocal,
+    required List<BriefItem> items,
+  }) => _unavailable();
+
+  @override
+  void joinCall({
+    required String requestId,
+    required String link,
+    required String ephemeralToken,
+    required String model,
+    String? displayName,
+    bool video = true,
+  }) => _unavailable();
+
+  @override
+  void resolveDevAssistant(String requestId) => _unavailable();
 
   @override
   void cancel(String requestId) => _unavailable();
@@ -698,6 +750,36 @@ final class RinfNativeHub implements NativeHub {
     required String requestId,
     required SystemAudioCaptureMode mode,
   }) => _send(requestId, CommandSetSystemAudioCaptureMode(mode: mode));
+
+  @override
+  void composeBrief({
+    required String requestId,
+    required String nowLocal,
+    required List<BriefItem> items,
+  }) => _send(requestId, CommandComposeBrief(nowLocal: nowLocal, items: items));
+
+  @override
+  void joinCall({
+    required String requestId,
+    required String link,
+    required String ephemeralToken,
+    required String model,
+    String? displayName,
+    bool video = true,
+  }) => _send(
+    requestId,
+    CommandJoinCall(
+      link: link,
+      displayName: displayName,
+      video: video,
+      ephemeralToken: ephemeralToken,
+      model: model,
+    ),
+  );
+
+  @override
+  void resolveDevAssistant(String requestId) =>
+      _send(requestId, const CommandResolveDevAssistant());
 
   @override
   void cancel(String requestId) => _send(requestId, const CommandCancel());

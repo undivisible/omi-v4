@@ -2,8 +2,11 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../api/api_keys_client.dart';
+import '../api/facetime_client.dart';
 import '../api/worker_http.dart';
 import '../app_services.dart';
 import '../capabilities/desktop_capabilities.dart';
@@ -13,8 +16,14 @@ import '../integrations/apple_eventkit.dart';
 import '../integrations/apple_eventkit_import.dart';
 import '../integrations/eventkit_task_sync.dart';
 import '../native/generated/signals/signals.dart'
-    show AssistantProvider, SystemAudioCaptureMode;
+    show
+        AssistantProvider,
+        CallPhase,
+        NativeEvent,
+        NativeEventCallState,
+        SystemAudioCaptureMode;
 import '../providers/providers.dart';
+import '../random_id.dart';
 import '../settings/settings.dart';
 import '../ui/burst_glow.dart';
 import '../ui/scroll_edge_fade.dart';
@@ -25,6 +34,8 @@ enum SettingsSection {
   plan('Plan & Billing', Icons.credit_card_outlined),
   providers('AI Providers', Icons.key_outlined),
   permissions('Permissions', Icons.lock_outline_rounded),
+  developer('API & MCP', Icons.terminal_rounded),
+  calls('FaceTime', Icons.videocam_outlined),
   calendar('Calendar', Icons.calendar_today_outlined),
   advanced('Advanced', Icons.tune_rounded);
 
@@ -133,6 +144,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     SettingsSection.account,
     SettingsSection.plan,
     SettingsSection.providers,
+    SettingsSection.developer,
+    SettingsSection.calls,
     if (_isMacDesktop || _isWindowsStyle) SettingsSection.permissions,
     if (_isMacDesktop) SettingsSection.calendar,
     SettingsSection.advanced,
@@ -196,6 +209,30 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 'above.',
           ),
         ],
+      ],
+      SettingsSection.developer => [
+        if (previewMode || services.apiKeys == null)
+          const _InfoTile(
+            icon: Icons.terminal_rounded,
+            title: 'API keys unavailable',
+            detail: 'Sign in to mint a key for the public API and MCP server.',
+          )
+        else
+          _ApiKeysTile(
+            client: services.apiKeys!,
+            origin: services.apiOriginUri,
+          ),
+        _McpEndpointTile(origin: services.apiOriginUri),
+      ],
+      SettingsSection.calls => [
+        if (previewMode || services.facetime == null)
+          const _InfoTile(
+            icon: Icons.videocam_outlined,
+            title: 'FaceTime unavailable',
+            detail: 'Sign in to place a FaceTime call from Omi.',
+          )
+        else
+          _FaceTimeTile(services: services),
       ],
       SettingsSection.permissions => [
         ScreenCaptureSetupTile(
@@ -2025,6 +2062,763 @@ class _OmiNumbersCardState extends State<OmiNumbersCard> {
           ],
         ),
       ),
+    );
+  }
+}
+
+/// The base URL and MCP endpoint a key is for, with a copyable MCP host
+/// config. A key nobody knows where to paste is a key nobody mints.
+class _McpEndpointTile extends StatefulWidget {
+  const _McpEndpointTile({required this.origin});
+
+  final Uri? origin;
+
+  @override
+  State<_McpEndpointTile> createState() => _McpEndpointTileState();
+}
+
+class _McpEndpointTileState extends State<_McpEndpointTile> {
+  bool _copied = false;
+
+  String get _base =>
+      (widget.origin ?? Uri.parse(AppServices.apiOrigin())).origin;
+
+  String get _snippet =>
+      '{\n'
+      '  "mcpServers": {\n'
+      '    "omi": {\n'
+      '      "url": "$_base/mcp",\n'
+      '      "headers": {\n'
+      '        "Authorization": "Bearer omi_sk_your_key_here"\n'
+      '      }\n'
+      '    }\n'
+      '  }\n'
+      '}';
+
+  Future<void> _copy() async {
+    await Clipboard.setData(ClipboardData(text: _snippet));
+    if (mounted) setState(() => _copied = true);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = _SettingsColors.of(context);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.hub_outlined, size: 18, color: colors.ink),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  'Where the key goes',
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: colors.ink,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'REST base URL $_base/api/v1 — MCP endpoint $_base/mcp. Send the '
+            'key as Authorization: Bearer, or as X-API-Key.',
+            style: TextStyle(fontSize: 12, height: 1.35, color: colors.muted),
+          ),
+          const SizedBox(height: 10),
+          DecoratedBox(
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: colors.hairline),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(10),
+              child: SelectableText(
+                _snippet,
+                key: const Key('mcp_config_snippet'),
+                style: TextStyle(
+                  fontSize: 11,
+                  height: 1.4,
+                  fontFamily: 'monospace',
+                  color: colors.ink,
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 8),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton.icon(
+              key: const Key('mcp_config_copy'),
+              onPressed: _copy,
+              icon: const Icon(Icons.copy_rounded, size: 16),
+              label: Text(_copied ? 'Config copied' : 'Copy MCP config'),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ApiKeysTile extends StatefulWidget {
+  const _ApiKeysTile({required this.client, required this.origin});
+
+  final ApiKeysClient client;
+  final Uri? origin;
+
+  @override
+  State<_ApiKeysTile> createState() => _ApiKeysTileState();
+}
+
+class _ApiKeysTileState extends State<_ApiKeysTile> {
+  late Future<List<ApiKeySummary>> _keys = widget.client.listKeys();
+
+  void _reload() {
+    setState(() {
+      _keys = widget.client.listKeys();
+    });
+  }
+
+  Future<void> _open() async {
+    await showDialog<void>(
+      context: context,
+      builder: (context) => _ApiKeysDialog(client: widget.client),
+    );
+    if (mounted) _reload();
+  }
+
+  @override
+  Widget build(BuildContext context) => FutureBuilder<List<ApiKeySummary>>(
+    future: _keys,
+    builder: (context, snapshot) {
+      final live = [
+        for (final key in snapshot.data ?? const <ApiKeySummary>[])
+          if (!key.revoked) key,
+      ];
+      final detail = switch (snapshot.connectionState) {
+        ConnectionState.done when snapshot.hasError =>
+          'Could not load your keys: ${snapshot.error}',
+        ConnectionState.done when live.isEmpty =>
+          'No keys yet. Create one to use the public API or connect an MCP '
+              'host.',
+        ConnectionState.done =>
+          '${live.length} active ${live.length == 1 ? 'key' : 'keys'}: '
+              '${live.map((key) => key.name).join(', ')}',
+        _ => 'Loading your keys…',
+      };
+      return _Tile(
+        key: const Key('api_keys_tile'),
+        icon: Icons.vpn_key_outlined,
+        title: 'API keys',
+        detail: detail,
+        trailing: Icon(
+          Icons.arrow_forward_rounded,
+          size: 18,
+          color: _SettingsColors.of(context).muted,
+        ),
+        onTap: snapshot.connectionState == ConnectionState.done ? _open : null,
+      );
+    },
+  );
+}
+
+class _ApiKeysDialog extends StatefulWidget {
+  const _ApiKeysDialog({required this.client});
+
+  final ApiKeysClient client;
+
+  @override
+  State<_ApiKeysDialog> createState() => _ApiKeysDialogState();
+}
+
+class _ApiKeysDialogState extends State<_ApiKeysDialog> {
+  final _name = TextEditingController();
+  final _scopes = <ApiKeyScope>{...ApiKeyScope.values};
+  List<ApiKeySummary> _keys = const [];
+  bool _loading = true;
+  bool _busy = false;
+  String? _error;
+
+  /// The one-time plaintext key. Held in memory for exactly as long as the
+  /// reveal panel is on screen: never written to disk, never logged.
+  String? _revealed;
+  bool _copied = false;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_load());
+  }
+
+  @override
+  void dispose() {
+    _name.dispose();
+    _revealed = null;
+    super.dispose();
+  }
+
+  Future<void> _load() async {
+    try {
+      final keys = await widget.client.listKeys();
+      if (!mounted) return;
+      setState(() {
+        _keys = keys;
+        _loading = false;
+      });
+    } catch (failure) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error = '$failure';
+      });
+    }
+  }
+
+  Future<void> _create() async {
+    if (_name.text.trim().isEmpty || _scopes.isEmpty) {
+      setState(() => _error = 'Name the key and pick at least one scope.');
+      return;
+    }
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      final minted = await widget.client.createKey(
+        name: _name.text.trim(),
+        scopes: [
+          for (final scope in ApiKeyScope.values)
+            if (_scopes.contains(scope)) scope,
+        ],
+      );
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _copied = false;
+        _revealed = minted.plaintext;
+        _keys = [minted.summary, ..._keys];
+        _name.clear();
+      });
+    } catch (failure) {
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _error = '$failure';
+      });
+    }
+  }
+
+  Future<void> _revoke(ApiKeySummary key) async {
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      await widget.client.revokeKey(key.id);
+      final keys = await widget.client.listKeys();
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _keys = keys;
+      });
+    } catch (failure) {
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _error = '$failure';
+      });
+    }
+  }
+
+  Future<void> _copyRevealed() async {
+    final plaintext = _revealed;
+    if (plaintext == null) return;
+    await Clipboard.setData(ClipboardData(text: plaintext));
+    if (mounted) setState(() => _copied = true);
+  }
+
+  Widget _reveal(_SettingsColors colors) => DecoratedBox(
+    key: const Key('api_key_reveal'),
+    decoration: BoxDecoration(
+      borderRadius: BorderRadius.circular(8),
+      border: Border.all(color: colors.ink),
+    ),
+    child: Padding(
+      padding: const EdgeInsets.all(10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Copy this key now. It is shown once and cannot be retrieved '
+            'again — if you lose it, revoke it and create another.',
+            style: TextStyle(
+              fontSize: 12,
+              height: 1.35,
+              fontWeight: FontWeight.w600,
+              color: colors.ink,
+            ),
+          ),
+          const SizedBox(height: 8),
+          SelectableText(
+            _revealed!,
+            key: const Key('api_key_plaintext'),
+            style: TextStyle(
+              fontSize: 12,
+              fontFamily: 'monospace',
+              color: colors.ink,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Row(
+            children: [
+              TextButton.icon(
+                key: const Key('api_key_copy'),
+                onPressed: _copyRevealed,
+                icon: const Icon(Icons.copy_rounded, size: 16),
+                label: Text(_copied ? 'Key copied' : 'Copy key'),
+              ),
+              const Spacer(),
+              TextButton(
+                key: const Key('api_key_dismiss'),
+                onPressed: () => setState(() {
+                  _revealed = null;
+                  _copied = false;
+                }),
+                child: const Text('Done'),
+              ),
+            ],
+          ),
+        ],
+      ),
+    ),
+  );
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = _SettingsColors.of(context);
+    final live = [
+      for (final key in _keys)
+        if (!key.revoked) key,
+    ];
+    return AlertDialog(
+      key: const Key('api_keys_dialog'),
+      backgroundColor: colors.panel,
+      title: const Text('API keys'),
+      content: SizedBox(
+        width: 420,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'A key authenticates the public API at /api/v1 and the MCP '
+                'server at /mcp. It carries only the scopes you tick here.',
+                style: TextStyle(
+                  fontSize: 12,
+                  height: 1.35,
+                  color: colors.muted,
+                ),
+              ),
+              if (_revealed != null) ...[
+                const SizedBox(height: 12),
+                _reveal(colors),
+              ],
+              const SizedBox(height: 12),
+              TextField(
+                key: const Key('api_key_name_field'),
+                controller: _name,
+                enabled: !_busy,
+                autocorrect: false,
+                decoration: const InputDecoration(
+                  labelText: 'Key name',
+                  hintText: 'e.g. laptop-mcp',
+                ),
+              ),
+              const SizedBox(height: 10),
+              Text(
+                'Scopes',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: colors.ink,
+                ),
+              ),
+              for (final scope in ApiKeyScope.values)
+                CheckboxListTile(
+                  key: Key('api_key_scope_${scope.wireName}'),
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  controlAffinity: ListTileControlAffinity.leading,
+                  value: _scopes.contains(scope),
+                  onChanged: _busy
+                      ? null
+                      : (checked) => setState(() {
+                          if (checked == true) {
+                            _scopes.add(scope);
+                          } else {
+                            _scopes.remove(scope);
+                          }
+                        }),
+                  title: Text(
+                    scope.wireName,
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontFamily: 'monospace',
+                      color: colors.ink,
+                    ),
+                  ),
+                  subtitle: Text(
+                    scope.summary,
+                    style: TextStyle(fontSize: 11, color: colors.muted),
+                  ),
+                ),
+              if (_error != null) ...[
+                const SizedBox(height: 10),
+                Text(
+                  _error!,
+                  key: const Key('api_keys_error'),
+                  style: const TextStyle(fontSize: 12, color: Colors.redAccent),
+                ),
+              ],
+              const SizedBox(height: 16),
+              Text(
+                'Your keys',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: colors.ink,
+                ),
+              ),
+              if (_loading)
+                Padding(
+                  padding: const EdgeInsets.only(top: 6),
+                  child: Text(
+                    'Loading…',
+                    style: TextStyle(fontSize: 12, color: colors.muted),
+                  ),
+                )
+              else if (live.isEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(top: 6),
+                  child: Text(
+                    'No active keys.',
+                    style: TextStyle(fontSize: 12, color: colors.muted),
+                  ),
+                )
+              else
+                for (final key in live)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 6),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                key.name,
+                                key: Key('api_key_name_${key.id}'),
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: colors.ink,
+                                ),
+                              ),
+                              Text(
+                                '${key.prefix}… · '
+                                '${key.scopes.map((scope) => scope.wireName).join(', ')}',
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  color: colors.muted,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        TextButton(
+                          key: Key('api_key_revoke_${key.id}'),
+                          onPressed: _busy ? null : () => _revoke(key),
+                          child: const Text('Revoke'),
+                        ),
+                      ],
+                    ),
+                  ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _busy ? null : () => Navigator.of(context).pop(),
+          child: const Text('Close'),
+        ),
+        FilledButton(
+          key: const Key('api_key_create'),
+          onPressed: _busy ? null : _create,
+          child: const Text('Create key'),
+        ),
+      ],
+    );
+  }
+}
+
+class _FaceTimeTile extends StatelessWidget {
+  const _FaceTimeTile({required this.services});
+
+  final AppServices services;
+
+  @override
+  Widget build(BuildContext context) => _Tile(
+    key: const Key('facetime_tile'),
+    icon: Icons.videocam_outlined,
+    title: 'Place a FaceTime call',
+    detail:
+        'Omi rings a handle on FaceTime and joins the call with you. It rings '
+        'a real phone, so check the handle first.',
+    trailing: Icon(
+      Icons.arrow_forward_rounded,
+      size: 18,
+      color: _SettingsColors.of(context).muted,
+    ),
+    onTap: () => showDialog<void>(
+      context: context,
+      builder: (context) => _FaceTimeDialog(services: services),
+    ),
+  );
+}
+
+/// Places the call and then reflects [CallPhase] for the bridged session. The
+/// provider's "not yet available" answer is a state of this surface, not an
+/// error: nothing is retried and nothing pretends a call was placed.
+class _FaceTimeDialog extends StatefulWidget {
+  const _FaceTimeDialog({required this.services});
+
+  final AppServices services;
+
+  @override
+  State<_FaceTimeDialog> createState() => _FaceTimeDialogState();
+}
+
+class _FaceTimeDialogState extends State<_FaceTimeDialog> {
+  final _handle = TextEditingController();
+  StreamSubscription<NativeEvent>? _events;
+  bool _busy = false;
+  String? _error;
+  String? _unavailable;
+  String? _link;
+  CallPhase? _phase;
+  String? _phaseDetail;
+
+  @override
+  void dispose() {
+    unawaited(_events?.cancel());
+    _handle.dispose();
+    super.dispose();
+  }
+
+  Future<void> _call() async {
+    final handle = _handle.text.trim();
+    final client = widget.services.facetime;
+    if (handle.isEmpty || client == null) return;
+    setState(() {
+      _busy = true;
+      _error = null;
+      _unavailable = null;
+      _link = null;
+      _phase = null;
+      _phaseDetail = null;
+    });
+    try {
+      final call = await client.placeCall(handle: handle);
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _link = call.link;
+      });
+      await _join(call.link);
+    } on FaceTimeUnavailableException catch (unavailable) {
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _unavailable = unavailable.message;
+      });
+    } catch (failure) {
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _error = '$failure';
+      });
+    }
+  }
+
+  Future<void> _join(String link) async {
+    final tokens = widget.services.liveVoiceTokens;
+    if (tokens == null) return;
+    try {
+      final grant = await tokens.createGeminiToken();
+      if (!mounted) return;
+      final requestId = 'facetime-${randomId()}';
+      _events?.cancel();
+      _events = widget.services.nativeHub.events.listen((event) {
+        if (event is! NativeEventCallState) return;
+        if (event.value.requestId != requestId) return;
+        if (!mounted) return;
+        setState(() {
+          _phase = event.value.state;
+          _phaseDetail = event.value.detail;
+        });
+      });
+      setState(() => _phase = CallPhase.joining);
+      widget.services.nativeHub.joinCall(
+        requestId: requestId,
+        link: link,
+        ephemeralToken: grant.token,
+        model: grant.model,
+      );
+    } catch (failure) {
+      if (!mounted) return;
+      setState(() => _error = '$failure');
+    }
+  }
+
+  String _phaseLabel(CallPhase phase) => switch (phase) {
+    CallPhase.joining => 'Joining the call…',
+    CallPhase.joined => 'Joined. Omi is on the call.',
+    CallPhase.ended => 'The call ended.',
+    CallPhase.failed => 'The call could not be joined.',
+  };
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = _SettingsColors.of(context);
+    return AlertDialog(
+      key: const Key('facetime_dialog'),
+      backgroundColor: colors.panel,
+      title: const Text('FaceTime call'),
+      content: SizedBox(
+        width: 380,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Enter a phone number in international form or an email address. '
+              'Placing the call rings that person straight away.',
+              style: TextStyle(fontSize: 12, height: 1.35, color: colors.muted),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              key: const Key('facetime_handle_field'),
+              controller: _handle,
+              enabled: !_busy,
+              autocorrect: false,
+              keyboardType: TextInputType.emailAddress,
+              decoration: const InputDecoration(
+                labelText: 'Handle',
+                hintText: '+15551234567 or name@example.com',
+              ),
+              onSubmitted: (_) => _busy ? null : _call(),
+            ),
+            if (_unavailable != null) ...[
+              const SizedBox(height: 12),
+              DecoratedBox(
+                key: const Key('facetime_unavailable'),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: colors.hairline),
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.all(10),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Icon(
+                        Icons.schedule_rounded,
+                        size: 16,
+                        color: colors.muted,
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              "FaceTime calling isn't available yet",
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                                color: colors.ink,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              'Our calling provider has it switched off while '
+                              'they finish the call flow. Nobody was rung. '
+                              'This will start working here on its own once '
+                              'they enable it.',
+                              style: TextStyle(
+                                fontSize: 11,
+                                height: 1.35,
+                                color: colors.muted,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+            if (_phase case final phase?) ...[
+              const SizedBox(height: 12),
+              Text(
+                _phaseLabel(phase),
+                key: const Key('facetime_state'),
+                style: TextStyle(fontSize: 12, color: colors.ink),
+              ),
+              if (_phaseDetail case final detail?)
+                Text(
+                  detail,
+                  style: TextStyle(fontSize: 11, color: colors.muted),
+                ),
+            ],
+            if (_link != null && _phase == null) ...[
+              const SizedBox(height: 12),
+              SelectableText(
+                _link!,
+                key: const Key('facetime_link'),
+                style: TextStyle(fontSize: 11, color: colors.muted),
+              ),
+            ],
+            if (_error != null) ...[
+              const SizedBox(height: 10),
+              Text(
+                _error!,
+                key: const Key('facetime_error'),
+                style: const TextStyle(fontSize: 12, color: Colors.redAccent),
+              ),
+            ],
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _busy ? null : () => Navigator.of(context).pop(),
+          child: const Text('Close'),
+        ),
+        FilledButton(
+          key: const Key('facetime_call'),
+          onPressed: _busy ? null : _call,
+          child: Text(_busy ? 'Calling…' : 'Call'),
+        ),
+      ],
     );
   }
 }

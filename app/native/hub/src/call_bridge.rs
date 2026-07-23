@@ -26,13 +26,6 @@
 //! Credentials never appear here. The bridge is handed an already-opened
 //! handle, whose ephemeral token came from the environment or the Worker.
 
-#![allow(dead_code)]
-// The call path is complete and tested end to end inside the hub, but nothing
-// in this crate calls into it yet: the command that places a FaceTime call and
-// hands back a join link lives in the Worker and the Dart UI, both outside this
-// change's ownership. `facetime_bridge::live::join` and `call_bridge::run_call`
-// are the two entry points that surface needs.
-
 use crate::live_voice::{RealtimeVoiceEvent, RealtimeVoiceHandle};
 use crate::mark_video::{MarkAnimator, VideoFrame};
 use std::time::Duration;
@@ -71,7 +64,7 @@ pub(crate) trait CallTransport: Send {
 /// transcription: a wall-clock ceiling plus a metered budget, both refusing
 /// rather than degrading when exhausted. Values come from the caller, which
 /// reads them from configuration — nothing is hardcoded to a price.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct CallBudget {
     pub(crate) max_duration: Duration,
     /// Ceiling on caller audio forwarded upstream, in bytes of PCM16 at
@@ -105,6 +98,43 @@ impl Default for CallBudget {
     fn default() -> Self {
         Self::from_seconds(600, 600, 600)
     }
+}
+
+/// The default ceiling for every leg of a call, in seconds. Ten minutes of
+/// wall clock and ten minutes of speech each way is a generous call and a
+/// bounded bill; an operator raises or lowers it per deployment.
+const DEFAULT_CALL_SECONDS: u64 = 600;
+
+/// The environment variables the ceilings are read from, in the order
+/// [`CallBudget::from_seconds`] takes them.
+const CALL_BUDGET_VARS: [&str; 3] = [
+    "OMI_CALL_MAX_SECONDS",
+    "OMI_CALL_CALLER_SECONDS",
+    "OMI_CALL_ASSISTANT_SECONDS",
+];
+
+/// Resolves the per-call ceilings from a value lookup, the same way
+/// [`crate::model_tier::model_for_tier`] resolves a model id: configuration
+/// first, a documented default second, nothing hardcoded at the call site. A
+/// blank or unreadable value is configuration that says nothing, so it falls
+/// back rather than refusing the call.
+pub(crate) fn budget_from(value: impl Fn(&str) -> Option<String>) -> CallBudget {
+    let seconds = |name: &str| {
+        value(name)
+            .and_then(|configured| configured.trim().parse::<u64>().ok())
+            .filter(|configured| *configured > 0)
+            .unwrap_or(DEFAULT_CALL_SECONDS)
+    };
+    CallBudget::from_seconds(
+        seconds(CALL_BUDGET_VARS[0]),
+        seconds(CALL_BUDGET_VARS[1]),
+        seconds(CALL_BUDGET_VARS[2]),
+    )
+}
+
+/// Environment-backed variant of [`budget_from`].
+pub(crate) fn budget_from_env() -> CallBudget {
+    budget_from(|name| std::env::var(name).ok())
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -216,12 +246,19 @@ pub(crate) async fn run_call(
 /// the Dart side plays the audio and shows the mark frames. It is a real
 /// duplex path, not a stub, and it is what the FaceTime transport would be
 /// swapped in for.
+///
+/// Nothing constructs it outside the tests yet: the shipped call command joins
+/// a link, so it is [`crate::facetime_bridge::FaceTimeTransport`] that runs.
+/// This is the second transport the seam exists for, kept ready rather than
+/// deleted and re-derived when the app's own call surface lands.
+#[allow(dead_code)]
 pub(crate) struct ChannelCallTransport {
     sink: mpsc::Sender<CallMedia>,
     video: bool,
 }
 
 impl ChannelCallTransport {
+    #[allow(dead_code)]
     pub(crate) fn new(sink: mpsc::Sender<CallMedia>, video: bool) -> Self {
         Self { sink, video }
     }
@@ -636,5 +673,31 @@ mod tests {
         assert_eq!(budget.max_duration, Duration::from_secs(3_600));
         assert_eq!(budget.max_caller_audio_bytes, 60 * 32_000);
         assert_eq!(CallBudget::from_seconds(0, 1, 1).max_duration.as_secs(), 1);
+    }
+
+    #[test]
+    fn configured_ceilings_reach_the_budget() {
+        let configured = |name: &str| match name {
+            "OMI_CALL_MAX_SECONDS" => Some("120".to_owned()),
+            "OMI_CALL_CALLER_SECONDS" => Some("90".to_owned()),
+            "OMI_CALL_ASSISTANT_SECONDS" => Some("30".to_owned()),
+            _ => None,
+        };
+        let budget = budget_from(configured);
+        assert_eq!(budget.max_duration, Duration::from_secs(120));
+        assert_eq!(budget.max_caller_audio_bytes, 90 * 32_000);
+        assert_eq!(budget.max_assistant_audio_bytes, 30 * 64_000);
+    }
+
+    #[test]
+    fn unset_blank_and_nonsense_ceilings_fall_back_to_the_default() {
+        for lookup in [
+            (|_: &str| None) as fn(&str) -> Option<String>,
+            |_: &str| Some("   ".to_owned()),
+            |_: &str| Some("later".to_owned()),
+            |_: &str| Some("0".to_owned()),
+        ] {
+            assert_eq!(budget_from(lookup), CallBudget::default());
+        }
     }
 }

@@ -10,11 +10,101 @@ This tree is **excluded from the repository's CI** (`.github/workflows/ci.yml`
 has `paths-ignore: firmware/**`) because it needs the nRF Connect SDK toolchain,
 which no CI job installs.
 
-> **Not compile-verified.** The changes in this tree were written without a
-> Zephyr / nRF Connect SDK toolchain available. They were statically checked
-> (every `CONFIG_OMI_*` symbol referenced resolves, every devicetree node label
-> and alias resolves) but never compiled. Build all four targets before relying
-> on any of it.
+> **Partially compile-verified.** `omi-cv1` and `evt-test` build clean under
+> nRF Connect SDK v3.4.0 (Zephyr 4.4.0). The three `devkit-*` targets do **not**
+> build yet — see [Migration status](#migration-status). Before this SDK upgrade
+> nothing in this tree had ever been compiled, so several defects fixed during
+> the upgrade were pre-existing rather than caused by it.
+
+## Migration status
+
+This tree was migrated from nRF Connect SDK v2.9.0 (Zephyr 3.7) to v3.4.0
+(Zephyr 4.4.0). Build state per target:
+
+| Target | v3.4.0 build | Notes |
+| --- | --- | --- |
+| `omi-cv1` | builds clean | MCUboot slot layout verified unchanged |
+| `evt-test` | builds clean | |
+| `devkit-v1` | **does not build** | nrfx 3.x PDM API break, plus pre-existing defects |
+| `devkit-v1-spisd` | **does not build** | same |
+| `devkit-v2-adafruit` | **does not build** | same |
+
+### What the upgrade changed
+
+Partition Manager is deprecated in v3.4.0 and **no longer defaults to on**. It
+still works and is still selectable, and it is what pins this product's flash
+layout, so `SB_CONFIG_PARTITION_MANAGER=y` is now set explicitly in
+`omi/sysbuild.conf` and `test/sysbuild.conf`. Nordic intend to remove Partition
+Manager from `main` by the end of 2026; migrating this layout to devicetree is
+the next SDK-side task and must preserve the MCUboot slot addresses below.
+
+`boards/omi/pm_static.yml` was renamed to
+`boards/omi/pm_static_omi_nrf5340_cpuapp.yml`. In v3.4.0 the unqualified
+`pm_static.yml` name is also matched for the **CPUNET** domain, which made the
+build apply the application core's SRAM layout to the network core and fail.
+Scoping the filename to the `omi/nrf5340/cpuapp` board target restores the
+v2.9.0 behaviour: CPUAPP is pinned statically, CPUNET resolves dynamically.
+
+Other required changes:
+
+| Change | Why |
+| --- | --- |
+| `boards/omi/board.yml` gained `full_name` | now required by the Zephyr board schema |
+| `<common/nordic/*.dtsi>` → `<nordic/*.dtsi>` | the shared-SRAM and cpuapp-partition includes moved |
+| `disk-name = "SD"` added to the `mmc` node; `CONFIG_SDMMC_VOLUME_NAME` dropped | the SD disk name moved from Kconfig to devicetree |
+| `CONFIG_NFCT_PINS_AS_GPIOS` → `nfct-pins-as-gpios` on `&uicr` | moved from Kconfig to devicetree |
+| `CONFIG_BT_CTLR=y` and the `BT_CTLR` defconfig override removed | `BT_CTLR` has no prompt in Zephyr 4.x and is selected by the HCI driver |
+| `CONFIG_NRFX_PDM0` removed | the per-instance symbol is gone; `AUDIO_DMIC_NRFX_PDM` selects `NRFX_PDM` |
+| `CONFIG_BT_BUF_EVT_RX_COUNT=12` added | Zephyr 4.x asserts `BT_BUF_EVT_RX_COUNT > BT_BUF_ACL_TX_COUNT`, and this build sets the latter to 10 |
+| `BT_LE_ADV_CONN` → `BT_LE_ADV_CONN_FAST_2` | the old macro was removed; the replacement has identical advertising intervals |
+
+Dead configuration that the older SDK accepted silently and v3.4.0 rejects was
+removed: `CONFIG_I2S_NRFX` (no I2S node exists), the `BT_PERIPHERAL_PREF_*`
+block in `omi/sysbuild/ipc_radio.conf` (that image is HCI-raw and has no host,
+so they never applied — the working copies are in `omi/omi.conf`), and
+`CONFIG_NCS_SAMPLE_MCUMGR_BT_OTA_DFU` in `omi/sysbuild/mcuboot.conf` (an
+application symbol that has no effect on the bootloader image; the working copy
+is in `omi/omi.conf`).
+
+### Pre-existing defects fixed in passing
+
+These were latent because the tree had never been compiled. They are not SDK
+migration issues:
+
+- `omi/src/lib/core/transport.c` used `speak()` and the battery API without
+  including `speaker.h` or `lib/battery/battery.h`.
+- `battery_charging_state_read()` had no prototype in `battery.h`.
+- `CONFIG_OMI_CONN_INTERVAL_IDLE_*` and `CONFIG_OMI_CONN_IDLE_LATENCY` depend on
+  `OMI_ENABLE_ADAPTIVE_CONN_PARAMS`, which is `n`, but `transport.c` referenced
+  them unconditionally.
+- `test/app.overlay` and `test/src/imu.c` referenced a `lsm6dso` node label that
+  the board does not define (it is `lsm6ds3tr_c`).
+- `test/src/mic.c` did not include `mic.h`; `test/src/main.c` did not include
+  `shell_uart.h`; `test/src/motor.c` had a `SYS_INIT` function returning `void`.
+
+### Open risk: settings storage moved
+
+**Verify this on hardware before shipping an OTA.** The MCUboot-visible
+partitions are byte-identical to the v2.9.0 static layout:
+
+| Partition | Address | Size |
+| --- | --- | --- |
+| `mcuboot` | `0x0` | `0x10000` |
+| `mcuboot_pad` | `0x10000` | `0x200` |
+| `mcuboot_primary` | `0x10000` | `0xf0000` |
+| `mcuboot_primary_app` | `0x10200` | `0xefe00` |
+| `mcuboot_secondary` | external `0x0` | `0xf0000` |
+| `mcuboot_secondary_1` | external `0xf0000` | `0x40000` |
+
+so OTA to devices already in the field still works. However, inside the primary
+slot Partition Manager now also places `settings_storage` at `0xfc000` (8 KB)
+and an `EMPTY_0` filler at `0xfe000`, which shrinks the `app` partition from
+`0xefe00` to `0xebe00` (16 KB smaller). The NVS settings backend
+(`CONFIG_SETTINGS_NVS`) stores the writable device name (`19B10016`) and RTC
+state there. It has not been established where NVS lived under v2.9.0, so a
+device upgrading over the air may or may not find its existing settings.
+Confirm against a v2.9.0 build's `partitions.yml` before rollout.
+
 
 ## Build targets
 
@@ -30,22 +120,22 @@ which no CI job installs.
 XIAO nRF52840 Sense was renamed across Zephyr versions and the vendored files
 disagree with each other: `devkit/CMakeLists.txt` sets
 `set(BOARD seeed_xiao_nrf52840_sense)` while `devkit/CMakePresets.json` uses
-`BOARD: xiao_ble_sense`. Under NCS v2.9.0 (Zephyr 3.7, hardware model v2) the
-correct identifier is `xiao_ble/nrf52840/sense`. Pass `-b` explicitly on the
+`BOARD: xiao_ble_sense`. Under NCS v3.4.0 (Zephyr 4.4) the
+correct identifier is still `xiao_ble/nrf52840/sense`. Pass `-b` explicitly on the
 command line — it overrides the `set(BOARD ...)` in `CMakeLists.txt` — and
 confirm with `west boards | grep xiao` in your workspace before wiring this into
 CI.
 
 ## Toolchain
 
-nRF Connect SDK **v2.9.0**, installed through Nordic's toolchain manager. Do not
-mix SDK versions between the images in a sysbuild.
+nRF Connect SDK **v3.4.0** (Zephyr 4.4.0), installed through Nordic's toolchain
+manager. Do not mix SDK versions between the images in a sysbuild.
 
 ```sh
 # nrfutil itself
 brew install nrfutil            # macOS; or download from nordicsemi.com
 nrfutil install toolchain-manager
-nrfutil toolchain-manager install --ncs-version v2.9.0
+nrfutil toolchain-manager install --ncs-version v3.4.0   # ~900 MB download, 3.2 GB installed
 
 # host build tools
 brew install ninja ccache       # apt: ninja-build ccache
@@ -54,14 +144,15 @@ brew install ninja ccache       # apt: ninja-build ccache
 One-time west workspace, inside the SDK shell:
 
 ```sh
-nrfutil toolchain-manager launch --ncs-version v2.9.0 --shell
+nrfutil toolchain-manager launch --ncs-version v3.4.0 --shell
 
-mkdir -p <workspace>/v2.9.0 && cd <workspace>/v2.9.0
-west init -m https://github.com/nrfconnect/sdk-nrf --mr v2.9.0
-west update          # ~1.5 GB
+mkdir -p <workspace>/v3.4.0 && cd <workspace>/v3.4.0
+west init -m https://github.com/nrfconnect/sdk-nrf --mr v3.4.0 .
+west update          # ~2.9 GB
+west zephyr-export
 ```
 
-`<workspace>` can be anywhere; `firmware/v2.9.0/` is gitignored if you want it
+`<workspace>` can be anywhere; `firmware/v3.4.0/` is gitignored if you want it
 in-tree. Every build command below assumes you are inside the toolchain shell
 and inside the west workspace directory.
 
@@ -233,7 +324,7 @@ clang-format -i firmware/omi/src/**/*.c firmware/omi/src/**/*.h
 
 ## Notes for CI
 
-- Every target above needs the NCS v2.9.0 toolchain and a populated west
+- Every target above needs the NCS v3.4.0 toolchain and a populated west
   workspace; budget for caching `~/.cache/zephyr` and the west modules.
 - `omi-cv1` and `evt-test` need `-DBOARD_ROOT` pointing at `firmware/`.
 - `omi-cv1` and `evt-test` need the `omi.conf` → `prj.conf` copy step.
