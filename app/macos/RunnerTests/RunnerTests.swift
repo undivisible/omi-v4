@@ -202,7 +202,26 @@ class RunnerTests: XCTestCase {
   }
 
   @MainActor
-  func testTextPillSummonIsInteractiveStaticAndRestores() {
+  func testPillPanelIsItsOwnNonActivatingWindowThatStillBecomesKey() {
+    let panel = PillPanel.make(size: PillPanelController.defaultSize)
+    defer { panel.close() }
+    // Non-activating, so summoning it never yanks the whole app forward…
+    XCTAssertTrue(panel.styleMask.contains(.nonactivatingPanel))
+    XCTAssertFalse(panel.canBecomeMain)
+    // …but typable, which is the entire point of the surface.
+    XCTAssertTrue(panel.canBecomeKey)
+    XCTAssertFalse(panel.isOpaque)
+    XCTAssertFalse(panel.hasShadow)
+    XCTAssertFalse(panel.ignoresMouseEvents)
+    XCTAssertEqual(panel.level, .floating)
+    XCTAssertTrue(panel.collectionBehavior.contains(.canJoinAllSpaces))
+    panel.orderFrontRegardless()
+    panel.makeKey()
+    XCTAssertTrue(panel.isKeyWindow)
+  }
+
+  @MainActor
+  func testSummoningTheTextPillNeverTouchesTheMainWindow() {
     let initialFrame = NSRect(x: 40, y: 40, width: 400, height: 300)
     let window = MainFlutterWindow(
       contentRect: initialFrame,
@@ -211,21 +230,74 @@ class RunnerTests: XCTestCase {
       defer: false)
     window.isReleasedWhenClosed = false
     defer { window.close() }
+    let initialLevel = window.level
+    let initialStyleMask = window.styleMask
 
-    window.summonPill(width: 420, height: 230)
-    // The text input stays interactive and floats; it never covers the
-    // screen — that treatment belongs to the separate voice overlay.
+    window.summonPill(width: 460, height: 320)
+    // The pill lives in its own panel: the hub keeps its frame, level, and
+    // chrome, and stays interactive behind it.
+    XCTAssertEqual(window.frame, initialFrame)
+    XCTAssertEqual(window.level, initialLevel)
+    XCTAssertEqual(window.styleMask, initialStyleMask)
     XCTAssertFalse(window.ignoresMouseEvents)
-    XCTAssertEqual(window.level, .floating)
-    XCTAssertEqual(window.frame.size, NSSize(width: 420, height: 230))
-    let summonedFrame = window.frame
-    // Static once shown: a second summon while up keeps a stable size.
-    window.summonPill(width: 420, height: 230)
-    XCTAssertEqual(window.frame.size, summonedFrame.size)
 
     window.restoreFromPill()
-    XCTAssertFalse(window.ignoresMouseEvents)
     XCTAssertEqual(window.frame, initialFrame)
+    XCTAssertEqual(window.level, initialLevel)
+    XCTAssertEqual(window.styleMask, initialStyleMask)
+  }
+
+  @MainActor
+  func testHubChromeFillsTheScreenAndPersistsTheUsersFrame() {
+    NSWindow.removeFrame(usingName: MainFlutterWindow.hubFrameAutosaveName)
+    let window = MainFlutterWindow(
+      contentRect: NSRect(x: 40, y: 40, width: 400, height: 300),
+      styleMask: [.borderless],
+      backing: .buffered,
+      defer: false)
+    window.isReleasedWhenClosed = false
+    defer {
+      window.close()
+      NSWindow.removeFrame(usingName: MainFlutterWindow.hubFrameAutosaveName)
+    }
+
+    window.enterHubChrome()
+    let visible = (window.screen ?? NSScreen.main)?.visibleFrame
+    XCTAssertEqual(window.frame, visible)
+    // Maximized, not a fullscreen Space: it stays resizable, and the frame
+    // is autosaved so a user resize survives the next launch.
+    XCTAssertTrue(window.styleMask.contains(.resizable))
+    XCTAssertFalse(window.styleMask.contains(.fullScreen))
+    XCTAssertEqual(window.frameAutosaveName, MainFlutterWindow.hubFrameAutosaveName)
+
+    // A user resize is autosaved, and the next launch restores it instead of
+    // re-maximizing over the user's choice.
+    let resized = NSRect(x: 80, y: 80, width: 900, height: 600)
+    window.setFrame(resized, display: false)
+    window.saveFrame(usingName: MainFlutterWindow.hubFrameAutosaveName)
+
+    let relaunched = MainFlutterWindow(
+      contentRect: NSRect(x: 0, y: 0, width: 300, height: 200),
+      styleMask: [.borderless],
+      backing: .buffered,
+      defer: false)
+    relaunched.isReleasedWhenClosed = false
+    defer { relaunched.close() }
+    relaunched.enterHubChrome()
+    XCTAssertEqual(relaunched.frame, resized)
+  }
+
+  func testGlobalInputTapWatchesTheChordAndThePointer() {
+    let mask = GlobalInputTap.eventMask
+    XCTAssertNotEqual(mask & (1 << CGEventType.keyDown.rawValue), 0)
+    XCTAssertNotEqual(mask & (1 << CGEventType.flagsChanged.rawValue), 0)
+    XCTAssertNotEqual(mask & (1 << CGEventType.mouseMoved.rawValue), 0)
+    // Without the Accessibility grant the tap cannot exist, and the app must
+    // report that instead of pretending global capture is live.
+    let tap = GlobalInputTap()
+    tap.start()
+    defer { tap.stop() }
+    XCTAssertEqual(tap.isInstalled, AXIsProcessTrusted())
   }
 
   @MainActor

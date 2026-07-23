@@ -77,57 +77,6 @@ private final class OnboardingBlurView: OvalBlurView {
   override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 
-/// Native Liquid Glass backing for the cursor pill. On macOS 26+ this hosts
-/// the real NSGlassEffectView (looked up dynamically so older SDKs still
-/// build); earlier systems fall back to a behind-window NSVisualEffectView.
-/// The glass is masked to the pill's rounded-rect regions, which Dart
-/// reports through the omi/window_chrome channel so the native shape always
-/// matches the Flutter layout above it.
-private final class PillGlassView: NSView {
-  private let glass: NSView
-  private let maskLayer = CAShapeLayer()
-
-  override init(frame frameRect: NSRect) {
-    if let glassClass = NSClassFromString("NSGlassEffectView") as? NSView.Type {
-      glass = glassClass.init(frame: frameRect)
-    } else {
-      let effect = NSVisualEffectView(frame: frameRect)
-      effect.material = .hudWindow
-      effect.blendingMode = .behindWindow
-      effect.state = .active
-      effect.isEmphasized = true
-      glass = effect
-    }
-    super.init(frame: frameRect)
-    wantsLayer = true
-    glass.wantsLayer = true
-    glass.autoresizingMask = [.width, .height]
-    glass.frame = bounds
-    addSubview(glass)
-    layer?.mask = maskLayer
-    maskLayer.fillRule = .evenOdd
-    setRegions([], radius: 18)
-  }
-
-  required init?(coder: NSCoder) { nil }
-
-  override var isFlipped: Bool { true }
-
-  override func hitTest(_ point: NSPoint) -> NSView? { nil }
-
-  func setRegions(_ regions: [(rect: CGRect, radius: CGFloat)], radius fallback: CGFloat) {
-    let path = CGMutablePath()
-    for region in regions {
-      let radius = min(region.radius > 0 ? region.radius : fallback,
-                       min(region.rect.width, region.rect.height) / 2)
-      path.addRoundedRect(in: region.rect, cornerWidth: radius, cornerHeight: radius)
-    }
-    maskLayer.frame = bounds
-    maskLayer.fillRule = .nonZero
-    maskLayer.path = path
-  }
-}
-
 /// Pure shake detector mirroring the Dart onboarding logic
 /// (`lib/keyboard/shake_gesture.dart`): rapid horizontal direction reversals
 /// fill a progress meter that fires at 100, with time-based decay between
@@ -578,21 +527,19 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
   private var voicePlayoutBridge: VoicePlayoutBridge?
   private var keyboardSink: FlutterEventSink?
   private var localKeyboardMonitor: Any?
-  private var globalKeyboardMonitor: Any?
   private var localShakeMonitor: Any?
-  private var globalShakeMonitor: Any?
+  /// Session-wide capture for the chord and pointer shake while another app is
+  /// frontmost — the CGEventTap that replaces the old, unreliable global
+  /// NSEvent monitors. The local NSEvent monitors still cover in-app events.
+  private let globalInputTap = GlobalInputTap()
+  private var activationObservers: [NSObjectProtocol] = []
+  private var pillHostChannel: FlutterMethodChannel?
   private let shakeDetector = MouseShakeDetector()
   let voiceOverlayController = VoiceOverlayController()
   private let permissionService = MacPermissionService()
   private var permissionOverlay: PermissionDragOverlay?
-  private var pillPreviousFrame: NSRect?
-  private var pillPreviousLevel: NSWindow.Level = .normal
-  private var pillPreviousCollectionBehavior: NSWindow.CollectionBehavior = []
-  private var pillGlassView: PillGlassView?
-  private weak var hostContentView: NSView?
-  private weak var flutterContentView: NSView?
+  static let hubFrameAutosaveName = "OmiHubWindow"
   private weak var onboardingBlurView: NSView?
-  private var pillPreviousBlurHidden = true
 
   func requestSettings() {
     SettingsWindowController.show()
@@ -608,10 +555,12 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
   func onListen(withArguments arguments: Any?, eventSink events: @escaping FlutterEventSink) -> FlutterError? {
     keyboardSink = events
     emitSecureInput()
-    // Global NSEvent monitors only fire while another app is frontmost when
-    // the process holds the Accessibility grant; without it the double-shift
-    // chord and Option+Space work solely inside omi, so tell Dart to surface
-    // a clear notice.
+    events(["type": "appActivation", "active": NSApp.isActive])
+    // The session CGEventTap only captures global input once the process holds
+    // the Accessibility grant; without it the double-shift chord and
+    // Option+Space work solely inside omi, so tell Dart to surface a notice —
+    // and always report the live diagnostics so a missing grant is visible.
+    emitDiagnostics()
     if !AXIsProcessTrusted() {
       events(["type": "globalHotkeyUnavailable"])
     }
@@ -621,6 +570,17 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
   func onCancel(withArguments arguments: Any?) -> FlutterError? {
     keyboardSink = nil
     return nil
+  }
+
+  /// Reports whether the process is Accessibility-trusted and whether the
+  /// global capture tap is actually live, so the in-app diagnostic can show a
+  /// missing-permission or dead-tap state instead of failing silently.
+  private func emitDiagnostics() {
+    keyboardSink?([
+      "type": "diagnostics",
+      "trusted": AXIsProcessTrusted(),
+      "tapInstalled": globalInputTap.isInstalled,
+    ])
   }
 
   private func keyboardEvent(_ event: NSEvent) {
@@ -699,8 +659,6 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
     rootView.addSubview(blur)
     rootView.addSubview(flutterViewController.view)
     onboardingBlurView = blur
-    hostContentView = rootView
-    flutterContentView = flutterViewController.view
     let permissionOverlay = PermissionDragOverlay(
       frame: rootView.bounds,
       appBundleURL: permissionService.bundleURL
@@ -781,24 +739,52 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
       self?.makeKeyAndOrderFront(nil)
       result(nil)
     }
+    // In-app events flow through the local NSEvent monitors; system-wide
+    // events (chord, pointer shake while another app is frontmost) flow
+    // through the session CGEventTap, converted back to NSEvents so they reuse
+    // the exact same dispatch. The tap only acts while omi is in the
+    // background — foreground input is the local monitors' job — so a chord or
+    // shake is never handled twice.
     localKeyboardMonitor = NSEvent.addLocalMonitorForEvents(
       matching: [.flagsChanged, .keyDown]
     ) { [weak self] event in
       self?.keyboardEvent(event)
       return event
     }
-    globalKeyboardMonitor = NSEvent.addGlobalMonitorForEvents(
-      matching: [.flagsChanged, .keyDown]
-    ) { [weak self] event in self?.keyboardEvent(event) }
     localShakeMonitor = NSEvent.addLocalMonitorForEvents(
       matching: [.mouseMoved]
     ) { [weak self] event in
       self?.mouseMovedEvent()
       return event
     }
-    globalShakeMonitor = NSEvent.addGlobalMonitorForEvents(
-      matching: [.mouseMoved]
-    ) { [weak self] _ in self?.mouseMovedEvent() }
+    globalInputTap.onEvent = { [weak self] type, event in
+      guard let self, !NSApp.isActive else { return }
+      switch type {
+      case .mouseMoved:
+        self.mouseMovedEvent()
+      case .flagsChanged, .keyDown:
+        if let nsEvent = NSEvent(cgEvent: event) {
+          self.keyboardEvent(nsEvent)
+        }
+      default:
+        break
+      }
+    }
+    globalInputTap.onStateChange = { [weak self] in self?.emitDiagnostics() }
+    globalInputTap.start()
+    let activationCenter = NotificationCenter.default
+    for (name, active) in [
+      (NSApplication.didBecomeActiveNotification, true),
+      (NSApplication.didResignActiveNotification, false),
+    ] {
+      activationObservers.append(
+        activationCenter.addObserver(
+          forName: name, object: nil, queue: .main
+        ) { [weak self] _ in
+          self?.keyboardSink?(["type": "appActivation", "active": active])
+          self?.emitDiagnostics()
+        })
+    }
 
     let voiceOverlay = FlutterMethodChannel(
       name: "omi/voice_overlay",
@@ -813,6 +799,27 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
         result(nil)
       case "level":
         self?.voiceOverlayController.setAudioLevel(call.arguments as? Double ?? 0)
+        result(nil)
+      default:
+        result(FlutterMethodNotImplemented)
+      }
+    }
+
+    // The bridge between the primary engine's CursorPillController and the
+    // pill panel's own engine. The main engine pushes render state and shows/
+    // hides the panel; the panel's user actions are relayed back here so the
+    // live controller acts on them.
+    let pillHost = FlutterMethodChannel(
+      name: "omi/pill_host",
+      binaryMessenger: flutterViewController.engine.binaryMessenger)
+    pillHostChannel = pillHost
+    pillHost.setMethodCallHandler { [weak self] call, result in
+      switch call.method {
+      case "pushState":
+        PillPanelController.shared?.push(call.arguments as? [String: Any] ?? [:])
+        result(nil)
+      case "diagnostics":
+        self?.emitDiagnostics()
         result(nil)
       default:
         result(FlutterMethodNotImplemented)
@@ -841,12 +848,6 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
         result(nil)
       case "restoreFromPill":
         self?.restoreFromPill()
-        result(nil)
-      case "updatePillGlass":
-        let arguments = call.arguments as? [String: Any]
-        self?.updatePillGlass(
-          regions: arguments?["regions"] as? [[String: Any]] ?? [],
-          radius: arguments?["radius"] as? Double ?? 18)
         result(nil)
       default:
         result(FlutterMethodNotImplemented)
@@ -896,13 +897,15 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
 
   deinit {
     if let localKeyboardMonitor { NSEvent.removeMonitor(localKeyboardMonitor) }
-    if let globalKeyboardMonitor { NSEvent.removeMonitor(globalKeyboardMonitor) }
     if let localShakeMonitor { NSEvent.removeMonitor(localShakeMonitor) }
-    if let globalShakeMonitor { NSEvent.removeMonitor(globalShakeMonitor) }
+    globalInputTap.stop()
+    for observer in activationObservers {
+      NotificationCenter.default.removeObserver(observer)
+    }
     voiceOverlayController.stop()
   }
 
-  private func enterHubChrome() {
+  func enterHubChrome() {
     // The onboarding backdrop must never bleed into the hub (or the pill):
     // its grey radial-gradient blur shows through wherever Flutter is
     // transparent.
@@ -922,6 +925,17 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
     level = .normal
     collectionBehavior = [.fullScreenAuxiliary]
     invalidateShadow()
+    // The hub owns the whole screen: fill the visible frame (maximized, not a
+    // macOS fullscreen Space, so it stays resizable). A user resize is then
+    // persisted and restored across launches via the frame autosave name — the
+    // restore wins over the default maximize when a saved frame exists.
+    // Read the saved frame before adopting the autosave name, so assigning
+    // the name can never write over the answer it is being asked for.
+    let restored = setFrameUsingName(Self.hubFrameAutosaveName)
+    _ = setFrameAutosaveName(Self.hubFrameAutosaveName)
+    if !restored, let screen = screen ?? NSScreen.main {
+      setFrame(screen.visibleFrame, display: true)
+    }
   }
 
   private func enterOnboardingChrome() {
@@ -999,74 +1013,25 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
     return target
   }
 
+  /// Summons the text-input overlay as its own [PillPanel] at the cursor. The
+  /// main app window is never moved, resized, or restyled — the pill lives in a
+  /// separate non-activating panel backed by its own Flutter engine, so the
+  /// hub stays exactly where it is behind (or beside) the panel.
   func summonPill(width: Double, height: Double) {
-    if pillPreviousFrame == nil {
-      pillPreviousFrame = frame
-      pillPreviousLevel = level
-      pillPreviousCollectionBehavior = collectionBehavior
-      pillPreviousBlurHidden = onboardingBlurView?.isHidden ?? true
+    PillPanelController.present(
+      at: NSEvent.mouseLocation,
+      size: NSSize(width: width, height: height)
+    ) { [weak self] action, args, reply in
+      guard let channel = self?.pillHostChannel else {
+        reply(FlutterError(code: "pill_host_unavailable", message: nil, details: nil))
+        return
+      }
+      channel.invokeMethod(action, arguments: args, result: reply)
     }
-    // Only the native Liquid Glass may render behind the pill — the
-    // onboarding blur otherwise shows as a grey gradient wash inside the
-    // summoned window.
-    onboardingBlurView?.isHidden = true
-    let screen = Self.activeScreen
-    let target = Self.cursorPillFrame(
-      cursor: NSEvent.mouseLocation,
-      width: width, height: height,
-      visible: screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: width, height: height))
-    level = .floating
-    collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-    // The text input is static and interactive: it must accept mouse events
-    // so its input field and suggestion chips stay clickable.
-    ignoresMouseEvents = false
-    setFrame(target, display: true)
-    attachPillGlass()
-    NSApp.activate(ignoringOtherApps: true)
-    makeKeyAndOrderFront(nil)
-  }
-
-  private func attachPillGlass() {
-    guard pillGlassView == nil, let host = hostContentView else { return }
-    let glass = PillGlassView(frame: host.bounds)
-    glass.autoresizingMask = [.width, .height]
-    if let flutterView = flutterContentView {
-      host.addSubview(glass, positioned: .below, relativeTo: flutterView)
-    } else {
-      host.addSubview(glass)
-    }
-    pillGlassView = glass
-  }
-
-  private func updatePillGlass(regions: [[String: Any]], radius: Double) {
-    guard pillPreviousFrame != nil else { return }
-    attachPillGlass()
-    let parsed: [(rect: CGRect, radius: CGFloat)] = regions.compactMap { region in
-      guard
-        let x = region["x"] as? Double,
-        let y = region["y"] as? Double,
-        let width = region["w"] as? Double,
-        let height = region["h"] as? Double,
-        width > 0, height > 0
-      else { return nil }
-      return (
-        rect: CGRect(x: x, y: y, width: width, height: height),
-        radius: CGFloat(region["r"] as? Double ?? 0)
-      )
-    }
-    pillGlassView?.setRegions(parsed, radius: CGFloat(radius))
   }
 
   func restoreFromPill() {
-    pillGlassView?.removeFromSuperview()
-    pillGlassView = nil
-    ignoresMouseEvents = false
-    guard let previousFrame = pillPreviousFrame else { return }
-    pillPreviousFrame = nil
-    onboardingBlurView?.isHidden = pillPreviousBlurHidden
-    level = pillPreviousLevel
-    collectionBehavior = pillPreviousCollectionBehavior
-    setFrame(previousFrame, display: true)
+    PillPanelController.shared?.hide()
   }
 
   private func restart() {
