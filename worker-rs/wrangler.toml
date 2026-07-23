@@ -9,6 +9,12 @@ compatibility_date = "2026-07-21"
 # after the custom domain is attached, and gives rollback a working target.
 workers_dev = true
 
+# Native Workers Observability — parity with the TS worker so the shadow
+# deploy is just as inspectable during cutover.
+[observability]
+enabled = true
+head_sampling_rate = 1
+
 [build]
 command = "worker-build --release"
 

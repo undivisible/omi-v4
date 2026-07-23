@@ -4,6 +4,10 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-07-21",
   "compatibility_flags": ["nodejs_compat"],
+  // Native Workers Observability: structured invocation logs + metrics in the
+  // Cloudflare dashboard, queryable without a third-party sink. head_sampling_rate
+  // 1 keeps every request while volume is low; dial down if it gets noisy.
+  "observability": { "enabled": true, "head_sampling_rate": 1 },
   "routes": [{ "pattern": "omi.tsc.hk", "custom_domain": true }],
   "assets": { "directory": "./public" },
   "vars": {
