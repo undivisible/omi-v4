@@ -77,6 +77,11 @@ const NATIVE_CALL_APP_NAMES: &[&str] = &[
     "gotomeeting",
 ];
 
+/// Applications whose ownership of the microphone means a call is under way.
+///
+/// Slack and Discord are here because huddles and voice channels are meetings
+/// in every sense that matters here, and both hold the microphone only while
+/// one is running — the same signal the reference assistants rely on.
 #[cfg(any(target_os = "macos", test))]
 const NATIVE_CALL_BUNDLE_IDS: &[&str] = &[
     "us.zoom.xos",
@@ -84,24 +89,59 @@ const NATIVE_CALL_BUNDLE_IDS: &[&str] = &[
     "com.microsoft.teams2",
     "com.apple.facetime",
     "cisco-systems.spark",
+    "com.cisco.webex",
     "com.cisco.webexmeetingsapp",
     "com.webex.meetingmanager",
     "com.logmein.gotomeeting",
     "com.logmein.goto",
+    "com.tinyspeck.slackmacgap",
+    "com.slack.slack",
+    "com.hnc.discord",
+    "com.discordapp.discord",
 ];
 
 #[cfg(any(target_os = "macos", test))]
 const BROWSER_APP_NAMES: &[&str] = &[
     "google chrome",
+    "google chrome canary",
+    "chromium",
     "arc",
+    "dia",
     "safari",
+    "safari technology preview",
     "firefox",
+    "firefox developer edition",
     "microsoft edge",
     "brave browser",
     "opera",
+    "opera gx",
+    "vivaldi",
+    "comet",
 ];
+
+/// Window-title fragments that mean the front tab is a live call.
+///
+/// These stay narrow on purpose: a tab merely *about* a meeting product must
+/// not arm capture, so each keyword is either a join URL shape or the title a
+/// platform only uses once you are in the call.
 #[cfg(any(target_os = "macos", test))]
-const BROWSER_CALL_KEYWORDS: &[&str] = &["google meet", "meet.google.com", "teams - microsoft"];
+const BROWSER_CALL_KEYWORDS: &[&str] = &[
+    "google meet",
+    "meet.google.com",
+    "teams - microsoft",
+    "microsoft teams",
+    "zoom.us/j/",
+    "zoom.us/wc/",
+    "zoom meeting",
+    "whereby.com",
+    "app.gather.town",
+    "meet.jit.si",
+    "jitsi meet",
+    "huddle",
+    "app.around.co",
+    "livestorm",
+    "bluejeans",
+];
 
 #[cfg(any(target_os = "macos", test))]
 fn is_native_call_app(app: &MeetingApp) -> bool {
@@ -147,7 +187,7 @@ fn browser_process_running() -> bool {
     std::process::Command::new("/usr/bin/pgrep")
         .args([
             "-x",
-            "Safari|Google Chrome|Arc|firefox|Microsoft Edge|Brave Browser|Opera",
+            "Safari|Google Chrome|Chromium|Arc|Dia|firefox|Microsoft Edge|Brave Browser|Opera|Vivaldi|Comet",
         ])
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -319,6 +359,58 @@ mod tests {
         assert!(is_call_window(&browser, "Google Meet — Standup"));
         assert!(is_browser_call_window(&browser, "Google Meet — Standup"));
         assert!(!is_call_window(&browser, "GitHub - omi"));
+    }
+
+    #[test]
+    fn treats_slack_huddles_and_discord_calls_as_native_calls() {
+        for (name, bundle_id) in [
+            ("Slack", "com.tinyspeck.slackmacgap"),
+            ("Discord", "com.hnc.Discord"),
+            ("Webex", "com.cisco.webex"),
+        ] {
+            assert!(
+                is_native_call_app(&MeetingApp {
+                    name: name.into(),
+                    bundle_id: bundle_id.into(),
+                }),
+                "{bundle_id}"
+            );
+        }
+    }
+
+    #[test]
+    fn recognises_call_windows_across_the_wider_browser_and_platform_list() {
+        for (browser, title) in [
+            ("Vivaldi", "Zoom Meeting"),
+            ("Dia", "https://meet.jit.si/omi-standup"),
+            ("Chromium", "Slack | Huddle in #eng"),
+            ("Comet", "zoom.us/j/12345678"),
+            ("Opera GX", "whereby.com/omi"),
+        ] {
+            let app = MeetingApp {
+                name: browser.into(),
+                bundle_id: "com.example.browser".into(),
+            };
+            assert!(is_browser_call_window(&app, title), "{browser}: {title}");
+        }
+    }
+
+    #[test]
+    fn leaves_ordinary_browsing_and_unknown_apps_alone() {
+        let browser = MeetingApp {
+            name: "Vivaldi".into(),
+            bundle_id: "com.vivaldi.Vivaldi".into(),
+        };
+        assert!(!is_browser_call_window(&browser, "Pricing — Zoom"));
+        assert!(!is_browser_call_window(&browser, "Inbox (12)"));
+        assert!(!is_native_call_app(&browser));
+        assert!(!is_browser_call_window(
+            &MeetingApp {
+                name: "Notes".into(),
+                bundle_id: "com.apple.Notes".into(),
+            },
+            "Google Meet",
+        ));
     }
 
     #[test]
