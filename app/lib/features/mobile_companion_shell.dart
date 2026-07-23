@@ -6,15 +6,17 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:url_launcher/url_launcher.dart' as url_launcher;
 
 import '../app_services.dart';
+import '../auth/auth.dart';
 import '../currents/currents.dart';
 import '../device/device.dart';
 import '../features/setup_account_screens.dart' show EventKitProactiveSyncTile;
 import '../native/live_activity_bridge.dart';
 import '../native/native_hub.dart';
-import '../providers/providers.dart';
 import 'capture_notifier.dart';
+import 'mobile_update_check.dart';
 import 'transcript_log_store.dart';
 
 const _paper = Color(0xfff7f6f1);
@@ -34,6 +36,31 @@ const _inkSheet = Color(0xff1c1c1a);
 const _stateBlue = Color(0xff4a8fdd);
 const _stateRed = Color(0xffd9564a);
 
+// Vertical rhythm for the mobile home. Kept deliberately tight: the phone
+// screen only has room for the hero plus two short sections before the fold.
+const _sectionGap = 14.0;
+const _tileGap = 8.0;
+
+/// Where the "Install the Omi desktop app" row sends people. Overridable at
+/// build time so a fork can point at its own download page.
+const desktopDownloadUrl = String.fromEnvironment(
+  'OMI_DESKTOP_DOWNLOAD_URL',
+  defaultValue: 'https://github.com/undivisible/omi-v4/releases',
+);
+
+/// Opens an external link. Injected so widget tests can observe taps without
+/// reaching for the platform channel behind `url_launcher`.
+typedef LinkOpener = Future<void> Function(Uri uri);
+
+Future<void> _openExternalLink(Uri uri) async {
+  try {
+    await url_launcher.launchUrl(
+      uri,
+      mode: url_launcher.LaunchMode.externalApplication,
+    );
+  } catch (_) {}
+}
+
 bool _darkMode(BuildContext context) =>
     Theme.of(context).brightness == Brightness.dark;
 
@@ -48,6 +75,9 @@ class MobileCompanionShell extends StatefulWidget {
     this.pairedDevices,
     this.transcriptLog,
     this.captureNotifier,
+    this.captureEnabledStore,
+    this.updateChecker,
+    this.openLink,
     this.previewMode = false,
     super.key,
   });
@@ -56,6 +86,9 @@ class MobileCompanionShell extends StatefulWidget {
   final PairedDeviceStore? pairedDevices;
   final TranscriptLogStore? transcriptLog;
   final CaptureNotifier? captureNotifier;
+  final CaptureEnabledStore? captureEnabledStore;
+  final MobileUpdateChecker? updateChecker;
+  final LinkOpener? openLink;
   final bool previewMode;
 
   @override
@@ -173,6 +206,9 @@ class _MobileCompanionShellState extends State<MobileCompanionShell> {
               transcripts: _transcripts,
               interimText: _interimText,
               captureNotifier: _captureNotifier,
+              captureEnabledStore: widget.captureEnabledStore,
+              updateChecker: widget.updateChecker,
+              openLink: widget.openLink,
               previewMode: widget.previewMode,
             ),
           ],
@@ -231,6 +267,9 @@ class MobilePendantPage extends StatefulWidget {
     required this.pairedDevices,
     required this.transcripts,
     required this.captureNotifier,
+    this.captureEnabledStore,
+    this.updateChecker,
+    this.openLink,
     this.interimText = '',
     this.previewMode = false,
     super.key,
@@ -240,6 +279,9 @@ class MobilePendantPage extends StatefulWidget {
   final PairedDeviceStore pairedDevices;
   final List<TranscriptDelta> transcripts;
   final CaptureNotifier captureNotifier;
+  final CaptureEnabledStore? captureEnabledStore;
+  final MobileUpdateChecker? updateChecker;
+  final LinkOpener? openLink;
   final String interimText;
   final bool previewMode;
 
@@ -251,12 +293,22 @@ class MobilePendantPageState extends State<MobilePendantPage> {
   static const desktopNoticeKey = 'desktop_install_notice_dismissed_v1';
 
   late final DeviceRelayService relay = widget.services.deviceRelay;
+  late final CaptureEnabledStore _captureEnabledStore =
+      widget.captureEnabledStore ?? PreferencesCaptureEnabledStore();
   List<RelayDevice> devices = const [];
   DeviceRelaySnapshot? snapshot;
   Object? error;
   String? rememberedDeviceId;
   bool _reconnectAttempted = false;
   bool? _desktopNoticeDismissed;
+  // Capture is always on by default: connecting the pendant starts streaming
+  // and only this switch (rendered under the minutes chip) turns it off.
+  bool _captureEnabled = true;
+  bool _syncingCapture = false;
+  // A connect this page started already brings capture up on its own, so the
+  // snapshot that lands mid-connect must not race it with a second attempt.
+  bool _connectInFlight = false;
+  MobileRelease? _update;
   StreamSubscription<DeviceRelaySnapshot>? _snapshotSubscription;
   final LiveActivityBridge _liveActivity = LiveActivityBridge();
   final ScrollController _scrollController = ScrollController();
@@ -291,13 +343,66 @@ class MobilePendantPageState extends State<MobilePendantPage> {
           deviceName: next.device?.name,
         ),
       );
+      _syncCaptureWithConnection();
     });
+    unawaited(_restoreCaptureEnabled());
+    if (!widget.previewMode) unawaited(_ensureProcessingConsent());
     if (!widget.previewMode && _mobile) unawaited(_restorePairing());
     unawaited(_loadDesktopNotice());
+    if (!widget.previewMode) unawaited(_checkForUpdate());
     if (!widget.previewMode && widget.services.productionReady) {
       final currents = widget.services.currents;
       if (currents != null) unawaited(currents.load());
     }
+  }
+
+  // Processing consent is collected once, explicitly, during onboarding, and
+  // capture is gated on the receipt (AppServices.productionReady). The mobile
+  // settings sheet no longer surfaces a consent tile, so a receipt that went
+  // missing — reinstall, cleared preferences, a persistence failure — would
+  // otherwise leave capture permanently blocked with no way back. Re-record
+  // the receipt for the signed-in account instead of failing silently.
+  Future<void> _ensureProcessingConsent() async {
+    final auth = widget.services.auth;
+    final snapshot = auth.snapshot;
+    if (snapshot.phase != AuthPhase.signedIn ||
+        snapshot.hasProcessingAuthority) {
+      return;
+    }
+    await auth.grantProcessingConsent();
+  }
+
+  Future<void> _checkForUpdate() async {
+    final checker = widget.updateChecker ?? MobileUpdateChecker();
+    final release = await checker.check();
+    if (!mounted || release == null) return;
+    setState(() => _update = release);
+  }
+
+  Future<void> _restoreCaptureEnabled() async {
+    bool enabled;
+    try {
+      enabled = await _captureEnabledStore.read();
+    } catch (_) {
+      enabled = true;
+    }
+    if (!mounted) return;
+    setState(() => _captureEnabled = enabled);
+    _syncCaptureWithConnection();
+  }
+
+  // Keeps the audio stream matched to the switch: connecting (or reconnecting)
+  // a pendant resumes capture on its own, and flipping the switch off stops it
+  // even when the connection comes back later.
+  void _syncCaptureWithConnection() {
+    if (_syncingCapture || _connectInFlight || widget.previewMode) return;
+    if (_connectedDevice == null) return;
+    final active = widget.services.deviceAudio.active;
+    if (active == _captureEnabled) return;
+    _syncingCapture = true;
+    unawaited(
+      _setCapture(_captureEnabled).whenComplete(() => _syncingCapture = false),
+    );
   }
 
   Future<void> _loadDesktopNotice() async {
@@ -322,6 +427,13 @@ class MobilePendantPageState extends State<MobilePendantPage> {
     } catch (_) {}
   }
 
+  Future<void> _dismissUpdate(MobileRelease release) async {
+    setState(() => _update = null);
+    await (widget.updateChecker ?? MobileUpdateChecker()).dismiss(release);
+  }
+
+  void _open(Uri uri) => unawaited((widget.openLink ?? _openExternalLink)(uri));
+
   Future<void> _restorePairing() async {
     String? remembered;
     try {
@@ -335,11 +447,15 @@ class MobilePendantPageState extends State<MobilePendantPage> {
       return;
     }
     _reconnectAttempted = true;
+    _connectInFlight = true;
     try {
       await widget.services.connectDevice(remembered);
       unawaited(relay.sendHaptic(2));
     } catch (next) {
       if (mounted) setState(() => error = next);
+    } finally {
+      _connectInFlight = false;
+      _syncCaptureWithConnection();
     }
   }
 
@@ -364,6 +480,7 @@ class MobilePendantPageState extends State<MobilePendantPage> {
 
   Future<void> reconnect() async {
     setState(() => error = null);
+    _connectInFlight = true;
     try {
       var remembered = rememberedDeviceId;
       if (remembered == null) {
@@ -379,11 +496,15 @@ class MobilePendantPageState extends State<MobilePendantPage> {
       unawaited(relay.sendHaptic(2));
     } catch (next) {
       if (mounted) setState(() => error = next);
+    } finally {
+      _connectInFlight = false;
+      _syncCaptureWithConnection();
     }
   }
 
   Future<void> connect(RelayDevice device) async {
     setState(() => error = null);
+    _connectInFlight = true;
     try {
       await widget.services.connectDevice(device.id);
       await widget.pairedDevices.save(device.id);
@@ -391,6 +512,9 @@ class MobilePendantPageState extends State<MobilePendantPage> {
       unawaited(relay.sendHaptic(2));
     } catch (next) {
       if (mounted) setState(() => error = next);
+    } finally {
+      _connectInFlight = false;
+      _syncCaptureWithConnection();
     }
   }
 
@@ -442,11 +566,17 @@ class MobilePendantPageState extends State<MobilePendantPage> {
     }
   }
 
-  // Tap the pendant image to toggle capture on/off.
-  void _toggleCapture() {
-    if (_connectedDevice == null) return;
+  // The explicit capture switch under the minutes chip. Capture otherwise
+  // runs whenever the pendant is connected, so this is the only control that
+  // turns it off — and the choice is remembered across launches.
+  void _setCaptureEnabled(bool enabled) {
+    if (_captureEnabled == enabled) return;
     unawaited(HapticFeedback.selectionClick());
-    unawaited(_setCapture(!widget.services.deviceAudio.active));
+    setState(() => _captureEnabled = enabled);
+    unawaited(_captureEnabledStore.save(enabled).catchError((Object _) {}));
+    if (_connectedDevice == null) return;
+    _syncingCapture = true;
+    unawaited(_setCapture(enabled).whenComplete(() => _syncingCapture = false));
   }
 
   // Long-press the pendant image to disconnect, with a haptic + relay confirm
@@ -468,10 +598,10 @@ class MobilePendantPageState extends State<MobilePendantPage> {
     DeviceConnectionPhase.failed => 'Connection failed',
   };
 
-  // The pendant image itself is the primary control (tap to capture, hold to
-  // disconnect) and the hero owns the single connection indicator, so the
-  // main-screen DEVICE section only surfaces what the gestures cannot: the
-  // list of nearby pendants to pair with, and the last error.
+  // The pendant image is the disconnect gesture (hold), the switch under the
+  // minutes chip owns capture, and the hero owns the single connection
+  // indicator, so the main-screen DEVICE section only surfaces what those
+  // cannot: the list of nearby pendants to pair with, and the last error.
   List<Widget> _deviceTiles(
     DeviceConnectionPhase phase,
     bool connected,
@@ -493,6 +623,7 @@ class MobilePendantPageState extends State<MobilePendantPage> {
       if (!connected)
         for (final found in devices)
           _PaperTile(
+            key: Key('companion_connect_${found.id}'),
             icon: Icons.watch_outlined,
             title: found.name,
             detail: [
@@ -500,14 +631,10 @@ class MobilePendantPageState extends State<MobilePendantPage> {
               if (found.signalStrength case final signal?) '$signal dBm',
               if (found.batteryLevel case final battery?) '$battery% battery',
             ].join(' · '),
-            trailing: IconButton(
-              key: Key('companion_connect_${found.id}'),
-              tooltip: 'Connect',
-              onPressed: phase == DeviceConnectionPhase.connecting
-                  ? null
-                  : () => connect(found),
-              icon: const Icon(Icons.add_circle_outline_rounded),
-            ),
+            trailing: const _RowChevron(icon: Icons.add_circle_outline_rounded),
+            onTap: phase == DeviceConnectionPhase.connecting
+                ? null
+                : () => connect(found),
           ),
       if (lastError != null)
         _PaperTile(
@@ -547,8 +674,8 @@ class MobilePendantPageState extends State<MobilePendantPage> {
   String _captureHint(bool connected, bool capturing) {
     if (!connected) return 'Reconnect to control your Omi';
     return capturing
-        ? 'Tap to stop capture · Hold to disconnect'
-        : 'Tap to start capture · Hold to disconnect';
+        ? 'Capturing · Hold the pendant to disconnect'
+        : 'Capture is off · Hold the pendant to disconnect';
   }
 
   @override
@@ -581,17 +708,31 @@ class MobilePendantPageState extends State<MobilePendantPage> {
           widget.services.productionReady &&
           widget.services.currents != null)
         _MobileTasksSection(currents: widget.services.currents!),
-      const SizedBox(height: 22),
+      if (_update case final release?) ...[
+        const SizedBox(height: _sectionGap),
+        _UpdateCta(
+          release: release,
+          onOpen: () => _open(Uri.parse(release.url)),
+          onDismiss: () => unawaited(_dismissUpdate(release)),
+        ),
+      ],
+      const SizedBox(height: _sectionGap),
       const _SectionLabel('DEVICE'),
       ..._withGaps(_deviceTiles(phase, connected, lastError)),
       if (_desktopNoticeDismissed == false) ...[
-        const SizedBox(height: 22),
-        _DesktopCta(onDismiss: () => unawaited(_dismissDesktopNotice())),
+        const SizedBox(height: _sectionGap),
+        _DesktopCta(
+          onOpen: () {
+            _open(Uri.parse(desktopDownloadUrl));
+            unawaited(_dismissDesktopNotice());
+          },
+          onDismiss: () => unawaited(_dismissDesktopNotice()),
+        ),
       ],
-      const SizedBox(height: 22),
+      const SizedBox(height: _sectionGap),
       const _SectionLabel('CONVERSATIONS'),
       ..._withGaps(_transcriptTiles()),
-      const SizedBox(height: 8),
+      const SizedBox(height: 4),
     ];
     final body = CustomScrollView(
       key: const Key('companion_page_sections'),
@@ -610,8 +751,9 @@ class MobilePendantPageState extends State<MobilePendantPage> {
               capturedMinutes: (capturedMs / 60000).ceil(),
               hint: _captureHint(connected, capturing),
               busy: busy,
+              captureEnabled: _captureEnabled,
+              onCaptureChanged: widget.previewMode ? null : _setCaptureEnabled,
               onReconnect: () => unawaited(reconnect()),
-              onTapPendant: connected ? _toggleCapture : null,
               onHoldPendant: connected
                   ? () => unawaited(_disconnectByHold())
                   : null,
@@ -619,7 +761,7 @@ class MobilePendantPageState extends State<MobilePendantPage> {
           ),
         ),
         SliverPadding(
-          padding: const EdgeInsets.fromLTRB(18, 0, 18, 24),
+          padding: const EdgeInsets.fromLTRB(18, 0, 18, 16),
           sliver: SliverList(
             key: const Key('companion_session_list'),
             delegate: SliverChildListDelegate(content),
@@ -658,15 +800,17 @@ class MobilePendantPageState extends State<MobilePendantPage> {
   }
 
   void _openSettings() {
+    // The sheet's own surface is drawn inside the draggable child, so the
+    // modal itself stays transparent: a DraggableScrollableSheet always fills
+    // the bounded height it is given, and a coloured modal background would
+    // paint the whole screen behind it.
     unawaited(
       showModalBottomSheet<void>(
         context: context,
-        backgroundColor: _darkMode(context) ? _inkSheet : _paper,
+        backgroundColor: Colors.transparent,
+        elevation: 0,
         isScrollControlled: true,
         useSafeArea: true,
-        shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-        ),
         builder: (sheetContext) => _SettingsSheet(
           services: widget.services,
           previewMode: widget.previewMode,
@@ -698,7 +842,7 @@ class _MobileTasksSection extends StatelessWidget {
       return Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          const SizedBox(height: 22),
+          const SizedBox(height: _sectionGap),
           const _SectionLabel('TASKS'),
           ..._withGaps([
             for (final task in tasks)
@@ -709,12 +853,10 @@ class _MobileTasksSection extends StatelessWidget {
                 detail: task.sourceKind == null
                     ? task.summary
                     : '${task.summary} · ${task.sourceKind!.toUpperCase()}',
-                trailing: IconButton(
-                  key: ValueKey('companion_task_complete_${task.item.id}'),
-                  tooltip: 'Complete',
-                  onPressed: () => unawaited(currents.dismiss(task.item.id)),
-                  icon: const Icon(Icons.check_circle_outline_rounded),
+                trailing: const _RowChevron(
+                  icon: Icons.check_circle_outline_rounded,
                 ),
+                onTap: () => unawaited(currents.dismiss(task.item.id)),
               ),
           ]),
         ],
@@ -724,7 +866,7 @@ class _MobileTasksSection extends StatelessWidget {
 }
 
 List<Widget> _withGaps(List<Widget> tiles) => [
-  for (final tile in tiles) ...[const SizedBox(height: 10), tile],
+  for (final tile in tiles) ...[const SizedBox(height: _tileGap), tile],
 ];
 
 String _codecLabel(DeviceAudioCodec codec) => switch (codec) {
@@ -874,8 +1016,9 @@ class _PendantHero extends StatefulWidget {
     required this.capturedMinutes,
     required this.hint,
     required this.busy,
+    required this.captureEnabled,
+    required this.onCaptureChanged,
     required this.onReconnect,
-    required this.onTapPendant,
     required this.onHoldPendant,
   });
 
@@ -887,8 +1030,9 @@ class _PendantHero extends StatefulWidget {
   final int capturedMinutes;
   final String hint;
   final bool busy;
+  final bool captureEnabled;
+  final ValueChanged<bool>? onCaptureChanged;
   final VoidCallback onReconnect;
-  final VoidCallback? onTapPendant;
   final VoidCallback? onHoldPendant;
 
   @override
@@ -1032,13 +1176,10 @@ class _PendantHeroState extends State<_PendantHero>
         Align(
           child: Semantics(
             button: connected,
-            label: connected
-                ? (capturing ? 'Stop capture' : 'Start capture')
-                : null,
+            label: connected ? 'Hold to disconnect the pendant' : null,
             child: GestureDetector(
               key: const Key('companion_pendant_tap'),
               behavior: HitTestBehavior.opaque,
-              onTap: widget.onTapPendant,
               onLongPress: widget.onHoldPendant,
               child: pendantStack,
             ),
@@ -1053,14 +1194,14 @@ class _PendantHeroState extends State<_PendantHero>
                 child: Text(
                   'Omi',
                   style: TextStyle(
-                    fontSize: 46,
+                    fontSize: 40,
                     fontWeight: FontWeight.w700,
                     letterSpacing: -1,
                     color: _pageInk(context),
                   ),
                 ),
               ),
-              const SizedBox(height: 6),
+              const SizedBox(height: 3),
               if (!connected) ...[
                 Semantics(
                   label: 'Device status: ${widget.phaseLabel}',
@@ -1076,7 +1217,7 @@ class _PendantHeroState extends State<_PendantHero>
                     ),
                   ),
                 ),
-                const SizedBox(height: 14),
+                const SizedBox(height: 10),
                 OutlinedButton(
                   key: const Key('companion_reconnect'),
                   onPressed: widget.busy ? null : widget.onReconnect,
@@ -1114,7 +1255,7 @@ class _PendantHeroState extends State<_PendantHero>
                     ),
                   ),
                 ),
-              const SizedBox(height: 8),
+              const SizedBox(height: 5),
               Text(
                 widget.hint,
                 key: const Key('companion_pendant_hint'),
@@ -1128,7 +1269,7 @@ class _PendantHeroState extends State<_PendantHero>
               ),
               if (widget.batteryLevel case final battery?)
                 Padding(
-                  padding: const EdgeInsets.only(top: 10),
+                  padding: const EdgeInsets.only(top: 7),
                   child: Semantics(
                     label: 'Battery $battery percent',
                     excludeSemantics: true,
@@ -1172,13 +1313,90 @@ class _PendantHeroState extends State<_PendantHero>
               // Tight gap so the minutes chip sits directly under the battery
               // percentage — the only stat shown on the main screen.
               if (connected) ...[
-                const SizedBox(height: 6),
+                const SizedBox(height: 5),
                 _MinutesChip(minutes: widget.capturedMinutes),
               ],
+              // The capture switch lives directly under the minutes chip: it
+              // is the only control for a stream that is otherwise always on
+              // while the pendant is connected.
+              const SizedBox(height: 5),
+              _CaptureToggle(
+                enabled: widget.captureEnabled,
+                capturing: capturing,
+                connected: connected,
+                onChanged: widget.onCaptureChanged,
+              ),
             ],
           ),
         ),
       ],
+    );
+  }
+}
+
+class _CaptureToggle extends StatelessWidget {
+  const _CaptureToggle({
+    required this.enabled,
+    required this.capturing,
+    required this.connected,
+    required this.onChanged,
+  });
+
+  final bool enabled;
+  final bool capturing;
+  final bool connected;
+  final ValueChanged<bool>? onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final active = capturing || (enabled && connected);
+    return Semantics(
+      container: true,
+      label: 'Capture',
+      child: Builder(
+        builder: (context) => DecoratedBox(
+          key: const Key('companion_capture_toggle'),
+          decoration: BoxDecoration(
+            color: _surface,
+            border: Border.all(
+              color: active ? _stateBlue.withValues(alpha: .4) : _hairline,
+            ),
+            borderRadius: BorderRadius.circular(999),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(14, 2, 6, 2),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  active ? Icons.graphic_eq_rounded : Icons.mic_off_rounded,
+                  size: 15,
+                  color: active ? _stateBlue : _inkSoft,
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  enabled ? 'Capture on' : 'Capture off',
+                  style: const TextStyle(
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w600,
+                    color: _ink,
+                  ),
+                ),
+                const SizedBox(width: 4),
+                Transform.scale(
+                  scale: .78,
+                  child: Switch(
+                    key: const Key('companion_capture_switch'),
+                    value: enabled,
+                    onChanged: onChanged,
+                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
@@ -1249,10 +1467,10 @@ class _LiveTranscriptStrip extends StatelessWidget {
         : (latestFinal ??
               (capturing
                   ? 'Listening…'
-                  : 'Tap the pendant to '
-                        'start capturing.'));
+                  : 'Turn capture on to '
+                        'start listening.'));
     return Padding(
-      padding: const EdgeInsets.only(top: 4, bottom: 4),
+      padding: const EdgeInsets.only(top: 2, bottom: 2),
       child: DecoratedBox(
         key: const Key('companion_live_transcript'),
         decoration: BoxDecoration(
@@ -1314,6 +1532,21 @@ class _SectionLabel extends StatelessWidget {
   );
 }
 
+// Trailing affordance for a row whose whole surface is the tap target. It is
+// deliberately an Icon and not an IconButton: the row itself carries the
+// gesture, so a second, smaller hit target on the right would only compete
+// with it.
+class _RowChevron extends StatelessWidget {
+  const _RowChevron({this.icon = Icons.chevron_right_rounded, this.color});
+
+  final IconData icon;
+  final Color? color;
+
+  @override
+  Widget build(BuildContext context) =>
+      Icon(icon, size: 20, color: color ?? _inkSoft);
+}
+
 class _PaperTile extends StatelessWidget {
   const _PaperTile({
     required this.icon,
@@ -1321,98 +1554,184 @@ class _PaperTile extends StatelessWidget {
     required this.detail,
     this.trailing,
     this.iconColor,
+    this.onTap,
     super.key,
   });
+
+  static final BorderRadius radius = BorderRadius.circular(18);
 
   final IconData icon;
   final Color? iconColor;
   final String title;
   final String detail;
   final Widget? trailing;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) => DecoratedBox(
     decoration: BoxDecoration(
       color: _surface,
       border: Border.all(color: _hairline),
-      borderRadius: BorderRadius.circular(18),
+      borderRadius: radius,
     ),
-    child: ListTile(
-      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-      leading: Icon(icon, color: iconColor ?? _inkSoft),
-      title: Text(
-        title,
-        style: const TextStyle(
-          color: _ink,
-          fontSize: 15,
-          fontWeight: FontWeight.w600,
+    child: Material(
+      type: MaterialType.transparency,
+      child: ListTile(
+        // The entire row is the button; nothing on the right is separately
+        // tappable, so the touch target always spans the full width.
+        onTap: onTap,
+        shape: RoundedRectangleBorder(borderRadius: radius),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
+        leading: Icon(icon, color: iconColor ?? _inkSoft),
+        title: Text(
+          title,
+          style: const TextStyle(
+            color: _ink,
+            fontSize: 15,
+            fontWeight: FontWeight.w600,
+          ),
         ),
-      ),
-      subtitle: Padding(
-        padding: const EdgeInsets.only(top: 3),
-        child: Text(
-          detail,
-          style: const TextStyle(color: _inkSoft, fontSize: 13, height: 1.4),
+        subtitle: Padding(
+          padding: const EdgeInsets.only(top: 2),
+          child: Text(
+            detail,
+            style: const TextStyle(color: _inkSoft, fontSize: 13, height: 1.35),
+          ),
         ),
+        trailing: trailing,
       ),
-      trailing: trailing,
     ),
   );
 }
 
-class _DesktopCta extends StatelessWidget {
-  const _DesktopCta({required this.onDismiss});
+// A warm banner row that behaves like every other row: the whole card opens
+// the link, and dismissing lives on its own full-width control underneath.
+class _BannerCta extends StatelessWidget {
+  const _BannerCta({
+    required this.tileKey,
+    required this.dismissKey,
+    required this.icon,
+    required this.title,
+    required this.detail,
+    required this.dismissLabel,
+    required this.onOpen,
+    required this.onDismiss,
+  });
 
+  final Key tileKey;
+  final Key dismissKey;
+  final IconData icon;
+  final String title;
+  final String detail;
+  final String dismissLabel;
+  final VoidCallback onOpen;
   final VoidCallback onDismiss;
 
   @override
-  Widget build(BuildContext context) => DecoratedBox(
-    key: const Key('companion_desktop_notice_tile'),
-    decoration: BoxDecoration(
-      gradient: const LinearGradient(
-        begin: Alignment.topLeft,
-        end: Alignment.bottomRight,
-        colors: [Color(0xffddf2e8), Color(0xffffe9d8)],
-      ),
-      border: Border.all(color: _hairline),
-      borderRadius: BorderRadius.circular(18),
-    ),
-    child: Padding(
-      padding: const EdgeInsets.fromLTRB(16, 14, 8, 14),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Icon(Icons.desktop_mac_outlined, color: _teal),
-          const SizedBox(width: 12),
-          const Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Install the Omi desktop app',
-                  style: TextStyle(
-                    color: _ink,
-                    fontSize: 15,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                SizedBox(height: 3),
-                Text(
-                  'Omi learns more about you from your Mac or Windows PC.',
-                  style: TextStyle(color: _inkSoft, fontSize: 13, height: 1.4),
-                ),
-              ],
+  Widget build(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
+      DecoratedBox(
+        key: tileKey,
+        decoration: BoxDecoration(
+          gradient: const LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [Color(0xffddf2e8), Color(0xffffe9d8)],
+          ),
+          border: Border.all(color: _hairline),
+          borderRadius: _PaperTile.radius,
+        ),
+        child: Material(
+          type: MaterialType.transparency,
+          child: ListTile(
+            onTap: onOpen,
+            shape: RoundedRectangleBorder(borderRadius: _PaperTile.radius),
+            contentPadding: const EdgeInsets.symmetric(
+              horizontal: 16,
+              vertical: 2,
             ),
+            leading: Icon(icon, color: _teal),
+            title: Text(
+              title,
+              style: const TextStyle(
+                color: _ink,
+                fontSize: 15,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            subtitle: Padding(
+              padding: const EdgeInsets.only(top: 2),
+              child: Text(
+                detail,
+                style: const TextStyle(
+                  color: _inkSoft,
+                  fontSize: 13,
+                  height: 1.35,
+                ),
+              ),
+            ),
+            trailing: const _RowChevron(),
           ),
-          IconButton(
-            key: const Key('companion_desktop_notice_dismiss'),
-            tooltip: 'Dismiss',
-            onPressed: onDismiss,
-            icon: const Icon(Icons.close_rounded, size: 20),
-          ),
-        ],
+        ),
       ),
-    ),
+      SizedBox(
+        height: 30,
+        child: TextButton(
+          key: dismissKey,
+          onPressed: onDismiss,
+          style: TextButton.styleFrom(
+            foregroundColor: _inkSoft,
+            padding: EdgeInsets.zero,
+            textStyle: const TextStyle(fontSize: 12.5),
+          ),
+          child: Text(dismissLabel),
+        ),
+      ),
+    ],
+  );
+}
+
+class _DesktopCta extends StatelessWidget {
+  const _DesktopCta({required this.onOpen, required this.onDismiss});
+
+  final VoidCallback onOpen;
+  final VoidCallback onDismiss;
+
+  @override
+  Widget build(BuildContext context) => _BannerCta(
+    tileKey: const Key('companion_desktop_notice_tile'),
+    dismissKey: const Key('companion_desktop_notice_dismiss'),
+    icon: Icons.desktop_mac_outlined,
+    title: 'Install the Omi desktop app',
+    detail: 'Omi learns more about you from your Mac or Windows PC.',
+    dismissLabel: 'Not now',
+    onOpen: onOpen,
+    onDismiss: onDismiss,
+  );
+}
+
+class _UpdateCta extends StatelessWidget {
+  const _UpdateCta({
+    required this.release,
+    required this.onOpen,
+    required this.onDismiss,
+  });
+
+  final MobileRelease release;
+  final VoidCallback onOpen;
+  final VoidCallback onDismiss;
+
+  @override
+  Widget build(BuildContext context) => _BannerCta(
+    tileKey: const Key('companion_update_tile'),
+    dismissKey: const Key('companion_update_dismiss'),
+    icon: Icons.system_update_alt_rounded,
+    title: 'Update to ${release.version}',
+    detail: 'A newer Omi for your phone is ready to install.',
+    dismissLabel: 'Later',
+    onOpen: onOpen,
+    onDismiss: onDismiss,
   );
 }
 
@@ -1619,144 +1938,172 @@ class _SettingsSheetState extends State<_SettingsSheet> {
     final remembered = widget.rememberedDeviceId();
     final connected = widget.connectedDevice() != null;
     final supportsRename = widget.services.deviceRelay.supportsRename;
-    return SafeArea(
-      top: false,
-      child: ListView(
-        key: const Key('companion_settings_sheet'),
-        shrinkWrap: true,
-        padding: const EdgeInsets.fromLTRB(18, 20, 18, 24),
-        children: [
-          const _SectionLabel('SETTINGS'),
-          ..._withGaps(
-            _MobileSettingsSection.tiles(
-              context,
-              services: widget.services,
-              previewMode: widget.previewMode,
+    final dark = _darkMode(context);
+    // DraggableScrollableSheet links the list's scroll position to the sheet
+    // extent, so a downward drag while the list sits at offset 0 collapses the
+    // sheet to its minimum extent — which is what pops the modal route. A
+    // plain scrollable child swallows that drag and leaves the sheet stuck.
+    return DraggableScrollableSheet(
+      key: const Key('companion_settings_draggable'),
+      expand: false,
+      snap: true,
+      initialChildSize: .92,
+      minChildSize: 0,
+      maxChildSize: .92,
+      builder: (context, scrollController) => DecoratedBox(
+        decoration: BoxDecoration(
+          color: dark ? _inkSheet : _paper,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+        ),
+        child: ListView(
+          key: const Key('companion_settings_sheet'),
+          controller: scrollController,
+          padding: const EdgeInsets.fromLTRB(18, 8, 18, 24),
+          children: [
+            Center(
+              child: Container(
+                key: const Key('companion_settings_grabber'),
+                width: 38,
+                height: 4,
+                margin: const EdgeInsets.only(bottom: 12),
+                decoration: BoxDecoration(
+                  color: _pageInkSoft(context).withValues(alpha: .35),
+                  borderRadius: BorderRadius.circular(999),
+                ),
+              ),
             ),
-          ),
-          if (remembered != null || connected) ...[
-            const SizedBox(height: 22),
-            const _SectionLabel('DEVICE'),
-            ..._withGaps([
-              if (connected)
-                _PaperTile(
-                  key: const Key('companion_settings_disconnect'),
-                  icon: Icons.link_off_rounded,
-                  title: 'Disconnect',
-                  detail: 'Disconnect the pendant but keep it paired.',
-                  trailing: IconButton(
-                    key: const Key('companion_settings_disconnect_button'),
-                    tooltip: 'Disconnect',
-                    onPressed: () => unawaited(
+            const _SectionLabel('SETTINGS'),
+            ..._withGaps(
+              _MobileSettingsSection.tiles(
+                context,
+                services: widget.services,
+                previewMode: widget.previewMode,
+              ),
+            ),
+            if (remembered != null || connected) ...[
+              const SizedBox(height: _sectionGap),
+              const _SectionLabel('DEVICE'),
+              ..._withGaps([
+                if (connected)
+                  _PaperTile(
+                    key: const Key('companion_settings_disconnect'),
+                    icon: Icons.link_off_rounded,
+                    title: 'Disconnect',
+                    detail: 'Disconnect the pendant but keep it paired.',
+                    trailing: const _RowChevron(),
+                    onTap: () => unawaited(
                       widget.onDisconnect().then((_) {
                         if (mounted) setState(() {});
                       }),
                     ),
-                    icon: const Icon(Icons.link_off_rounded),
                   ),
-                ),
-              if (connected && supportsRename)
-                _PaperTile(
-                  key: const Key('companion_rename_device'),
-                  icon: Icons.drive_file_rename_outline_rounded,
-                  title: 'Rename device',
-                  detail: 'Change the name your pendant advertises.',
-                  trailing: IconButton(
-                    key: const Key('companion_rename_button'),
-                    tooltip: 'Rename device',
-                    onPressed: () => unawaited(_rename()),
-                    icon: const Icon(Icons.edit_outlined),
+                if (connected && supportsRename)
+                  _PaperTile(
+                    key: const Key('companion_rename_device'),
+                    icon: Icons.drive_file_rename_outline_rounded,
+                    title: 'Rename device',
+                    detail: 'Change the name your pendant advertises.',
+                    trailing: const _RowChevron(),
+                    onTap: () => unawaited(_rename()),
                   ),
-                ),
-              if (connected)
-                _PaperTile(
-                  key: const Key('companion_sleep_device'),
-                  icon: Icons.bedtime_outlined,
-                  title: 'Sleep now',
-                  detail: 'Power off the pendant until you wake it.',
-                  trailing: IconButton(
-                    key: const Key('companion_sleep_button'),
-                    tooltip: 'Sleep now',
-                    onPressed: () => unawaited(_sleep()),
-                    icon: const Icon(Icons.bedtime_outlined),
+                if (connected)
+                  _PaperTile(
+                    key: const Key('companion_sleep_device'),
+                    icon: Icons.bedtime_outlined,
+                    title: 'Sleep now',
+                    detail: 'Power off the pendant until you wake it.',
+                    trailing: const _RowChevron(),
+                    onTap: () => unawaited(_sleep()),
                   ),
-                ),
-              if (remembered != null)
-                _PaperTile(
-                  key: const Key('companion_remembered_tile'),
-                  icon: Icons.history_rounded,
-                  title: 'Remembered device',
-                  detail: remembered,
-                  trailing: IconButton(
-                    key: const Key('companion_forget'),
-                    tooltip: 'Forget',
-                    onPressed: () => unawaited(
+                if (remembered != null)
+                  _PaperTile(
+                    key: const Key('companion_remembered_tile'),
+                    icon: Icons.history_rounded,
+                    title: 'Remembered device',
+                    detail: remembered,
+                    trailing: const _RowChevron(
+                      icon: Icons.delete_outline_rounded,
+                    ),
+                    onTap: () => unawaited(
                       widget.onForget().then((_) {
                         if (mounted) setState(() {});
                       }),
                     ),
-                    icon: const Icon(Icons.delete_outline_rounded),
                   ),
-                ),
-              _PaperTile(
-                key: const Key('companion_developer_options'),
-                icon: Icons.code_rounded,
-                title: 'Developer options',
-                detail: 'Firmware, hardware, codec, and capture diagnostics.',
-                trailing: IconButton(
-                  key: const Key('companion_developer_options_button'),
-                  tooltip: 'Developer options',
-                  onPressed: _openDeveloperOptions,
-                  icon: const Icon(Icons.chevron_right_rounded),
-                ),
-              ),
-              if (remembered != null)
                 _PaperTile(
-                  key: const Key('companion_reset_pendant'),
-                  icon: Icons.restart_alt_rounded,
-                  iconColor: _coral,
-                  title: 'Reset pendant',
-                  detail: 'Disconnect and forget this pendant.',
-                  trailing: IconButton(
-                    key: const Key('companion_reset_pendant_button'),
-                    tooltip: 'Reset pendant',
-                    onPressed: () => unawaited(_resetPendant()),
-                    icon: const Icon(Icons.restart_alt_rounded, color: _coral),
+                  key: const Key('companion_developer_options'),
+                  icon: Icons.code_rounded,
+                  title: 'Developer options',
+                  detail: 'Firmware, hardware, codec, and capture diagnostics.',
+                  trailing: const _RowChevron(),
+                  onTap: _openDeveloperOptions,
+                ),
+                if (remembered != null)
+                  _PaperTile(
+                    key: const Key('companion_reset_pendant'),
+                    icon: Icons.restart_alt_rounded,
+                    iconColor: _coral,
+                    title: 'Reset pendant',
+                    detail: 'Disconnect and forget this pendant.',
+                    trailing: const _RowChevron(color: _coral),
+                    onTap: () => unawaited(_resetPendant()),
                   ),
-                ),
-            ]),
-          ],
-          const SizedBox(height: 22),
-          const _SectionLabel('CALENDAR & REMINDERS'),
-          EventKitProactiveSyncTile(
-            key: const Key('companion_eventkit_proactive_sync'),
-            previewMode: widget.previewMode,
-          ),
-          if (!widget.previewMode) ...[
-            const SizedBox(height: 22),
-            const _SectionLabel('DANGER ZONE'),
-            ..._withGaps([
-              _PaperTile(
-                key: const Key('companion_delete_account'),
-                icon: Icons.delete_forever_rounded,
-                iconColor: _coral,
-                title: 'Delete account',
-                detail: 'Permanently delete your account and data.',
-                trailing: IconButton(
-                  key: const Key('companion_delete_account_button'),
-                  tooltip: 'Delete account',
-                  onPressed: _deleting
-                      ? null
-                      : () => unawaited(_deleteAccount()),
-                  icon: const Icon(Icons.delete_forever_rounded, color: _coral),
-                ),
+              ]),
+            ],
+            const SizedBox(height: _sectionGap),
+            const _SectionLabel('CALENDAR & REMINDERS'),
+            const SizedBox(height: _tileGap),
+            // The EventKit tile is shared with the desktop settings window,
+            // where a surrounding group paints the surface. On the phone it
+            // stands alone, so give it the same paper card every other row on
+            // this sheet has.
+            _PaperCard(
+              child: EventKitProactiveSyncTile(
+                key: const Key('companion_eventkit_proactive_sync'),
+                previewMode: widget.previewMode,
               ),
-            ]),
+            ),
+            if (!widget.previewMode) ...[
+              const SizedBox(height: _sectionGap),
+              const _SectionLabel('DANGER ZONE'),
+              ..._withGaps([
+                _PaperTile(
+                  key: const Key('companion_delete_account'),
+                  icon: Icons.delete_forever_rounded,
+                  iconColor: _coral,
+                  title: 'Delete account',
+                  detail: 'Permanently delete your account and data.',
+                  trailing: const _RowChevron(color: _coral),
+                  onTap: _deleting ? null : () => unawaited(_deleteAccount()),
+                ),
+              ]),
+            ],
           ],
-        ],
+        ),
       ),
     );
   }
+}
+
+// The warm-paper card every mobile row sits on, without the row layout — for
+// tiles that bring their own content (the shared EventKit switch row).
+class _PaperCard extends StatelessWidget {
+  const _PaperCard({required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) => DecoratedBox(
+    decoration: BoxDecoration(
+      color: _surface,
+      border: Border.all(color: _hairline),
+      borderRadius: _PaperTile.radius,
+    ),
+    child: Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: child,
+    ),
+  );
 }
 
 class _MobileSettingsSection {
@@ -1771,7 +2118,6 @@ class _MobileSettingsSection {
     required bool previewMode,
   }) => [
     _AccountTiles(services: services, previewMode: previewMode),
-    _RouteTile(services: services),
     const _PaperTile(
       key: Key('companion_version_tile'),
       icon: Icons.info_outline_rounded,
@@ -1787,15 +2133,17 @@ class _AccountTiles extends StatelessWidget {
   final AppServices services;
   final bool previewMode;
 
+  // Processing consent is recorded once during onboarding and re-established
+  // automatically by the home screen when the receipt goes missing, so the
+  // phone shows the account, not the paperwork: no consent tile, and no
+  // transcription-route tile either.
   @override
   Widget build(BuildContext context) {
     final auth = services.auth;
     return ListenableBuilder(
       listenable: auth,
       builder: (context, _) {
-        final snapshot = auth.snapshot;
-        final session = snapshot.session;
-        final consent = snapshot.processingConsent;
+        final session = auth.snapshot.session;
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -1813,74 +2161,21 @@ class _AccountTiles extends StatelessWidget {
                   : session == null
                   ? services.configurationMessage
                   : 'Signed in.',
-              trailing: session == null || previewMode
-                  ? null
-                  : IconButton(
-                      key: const Key('companion_sign_out'),
-                      tooltip: 'Sign out',
-                      onPressed: () => unawaited(auth.signOut()),
-                      icon: const Icon(Icons.logout_rounded),
-                    ),
             ),
-            const SizedBox(height: 10),
-            _PaperTile(
-              key: const Key('companion_consent_tile'),
-              icon: Icons.privacy_tip_outlined,
-              title: 'Processing consent',
-              detail: consent == null
-                  ? 'Not granted. Audio never leaves this phone without it.'
-                  : 'Granted ${consent.acceptedAt.toLocal().toIso8601String().split('T').first} '
-                        '(policy v${consent.policyVersion}).',
-              trailing: consent == null || previewMode
-                  ? null
-                  : IconButton(
-                      key: const Key('companion_revoke_consent'),
-                      tooltip: 'Revoke',
-                      onPressed: () =>
-                          unawaited(auth.revokeProcessingConsent()),
-                      icon: const Icon(Icons.block_rounded),
-                    ),
-            ),
+            if (session != null && !previewMode) ...[
+              const SizedBox(height: _tileGap),
+              _PaperTile(
+                key: const Key('companion_sign_out'),
+                icon: Icons.logout_rounded,
+                title: 'Sign out',
+                detail: 'Leave this account on this phone.',
+                trailing: const _RowChevron(),
+                onTap: () => unawaited(auth.signOut()),
+              ),
+            ],
           ],
         );
       },
     );
   }
-}
-
-class _RouteTile extends StatefulWidget {
-  const _RouteTile({required this.services});
-
-  final AppServices services;
-
-  @override
-  State<_RouteTile> createState() => _RouteTileState();
-}
-
-class _RouteTileState extends State<_RouteTile> {
-  late Future<ProviderCredential?> credential = _read();
-
-  Future<ProviderCredential?> _read() async {
-    try {
-      return await widget.services.providerCredential;
-    } catch (_) {
-      return null;
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) => FutureBuilder<ProviderCredential?>(
-    future: credential,
-    builder: (context, snapshot) {
-      final byok = snapshot.data;
-      return _PaperTile(
-        key: const Key('companion_route_tile'),
-        icon: Icons.route_rounded,
-        title: 'Transcription route',
-        detail: byok == null
-            ? 'Managed Omi transcription.'
-            : 'Bring your own key · ${byok.model}',
-      );
-    },
-  );
 }

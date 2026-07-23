@@ -1,3 +1,4 @@
+export 'capture_enabled_store.dart';
 export 'device_audio_frame.dart';
 export 'device_audio_forwarder.dart';
 export 'device_models.dart';
