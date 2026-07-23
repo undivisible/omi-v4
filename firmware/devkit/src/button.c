@@ -248,6 +248,8 @@ void check_button_level(struct k_work *work_item)
 
         // Enter the low power mode
         is_off = true;
+        omi_user_event_emit(OMI_USER_EVENT_POWER_OFF, OMI_USER_EVENT_SRC_SYSTEM);
+        k_msleep(200);
         bt_off();
         turnoff_all();
     }
@@ -517,8 +519,6 @@ FSM_STATE_T get_current_button_state()
 
 void turnoff_all()
 {
-    omi_user_event_emit(OMI_USER_EVENT_POWER_OFF, OMI_USER_EVENT_SRC_SYSTEM);
-    k_msleep(200);
 
     mic_off();
     sd_off();

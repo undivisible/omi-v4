@@ -128,6 +128,8 @@ static void update_idle_sleep(void)
     idle_half_seconds++;
     if (idle_half_seconds >= (IDLE_SLEEP_TIMEOUT_SEC * 1000U / MAIN_LOOP_PERIOD_MS)) {
         LOG_INF("Idle timeout reached; entering system off");
+        omi_user_event_emit(OMI_USER_EVENT_POWER_OFF, OMI_USER_EVENT_SRC_SYSTEM);
+        k_msleep(200);
         bt_off();
         turnoff_all();
     }

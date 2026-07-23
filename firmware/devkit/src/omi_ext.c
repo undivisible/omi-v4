@@ -50,6 +50,8 @@ static void omi_rtc_set_utc(uint32_t epoch_s)
 
 /* ---- user events ---- */
 
+#ifdef CONFIG_OMI_ENABLE_USER_EVENTS
+
 struct omi_user_event_record {
     uint8_t code;
     uint8_t source;
@@ -163,6 +165,18 @@ static ssize_t settings_user_event_read_handler(struct bt_conn *conn,
     return bt_gatt_attr_read(conn, attr, buf, len, offset, user_event_last, sizeof(user_event_last));
 }
 
+#else /* CONFIG_OMI_ENABLE_USER_EVENTS */
+
+void omi_user_event_emit(uint8_t code, uint8_t source)
+{
+    ARG_UNUSED(code);
+    ARG_UNUSED(source);
+}
+
+void omi_user_event_flush(void) {}
+
+#endif /* CONFIG_OMI_ENABLE_USER_EVENTS */
+
 /* ---- settings service ---- */
 
 static struct bt_uuid_128 settings_service_uuid =
@@ -179,8 +193,10 @@ static struct bt_uuid_128 settings_sleep_cmd_characteristic_uuid =
 static struct bt_uuid_128 settings_capture_state_characteristic_uuid =
     BT_UUID_INIT_128(BT_UUID_128_ENCODE(0x19B10015, 0xE8F2, 0x537E, 0x4F6C, 0xD104768A1214));
 #endif
+#ifdef CONFIG_OMI_ENABLE_USER_EVENTS
 static struct bt_uuid_128 settings_user_event_characteristic_uuid =
     BT_UUID_INIT_128(BT_UUID_128_ENCODE(0x19B10017, 0xE8F2, 0x537E, 0x4F6C, 0xD104768A1214));
+#endif
 
 #ifdef CONFIG_OMI_ENABLE_USB
 static ssize_t settings_charging_status_read_handler(struct bt_conn *conn,
@@ -288,6 +304,7 @@ static struct bt_gatt_attr settings_service_attr[] = {
                            settings_capture_state_write_handler,
                            NULL),
 #endif
+#ifdef CONFIG_OMI_ENABLE_USER_EVENTS
     BT_GATT_CHARACTERISTIC(&settings_user_event_characteristic_uuid.uuid,
                            BT_GATT_CHRC_READ | BT_GATT_CHRC_NOTIFY,
                            BT_GATT_PERM_READ,
@@ -295,14 +312,17 @@ static struct bt_gatt_attr settings_service_attr[] = {
                            NULL,
                            NULL),
     BT_GATT_CCC(user_event_ccc_config_changed_handler, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
+#endif
 };
 
 static struct bt_gatt_service settings_service = BT_GATT_SERVICE(settings_service_attr);
 
+#ifdef CONFIG_OMI_ENABLE_USER_EVENTS
 static struct bt_gatt_attr *user_event_value_attr(void)
 {
     return &settings_service_attr[ARRAY_SIZE(settings_service_attr) - 2U];
 }
+#endif
 
 /* ---- features service ---- */
 
@@ -331,7 +351,11 @@ static struct bt_uuid_128 features_characteristic_uuid =
 static ssize_t
 features_read_handler(struct bt_conn *conn, const struct bt_gatt_attr *attr, void *buf, uint16_t len, uint16_t offset)
 {
-    uint32_t features = OMI_FEATURE_USER_EVENTS;
+    uint32_t features = 0;
+
+#ifdef CONFIG_OMI_ENABLE_USER_EVENTS
+    features |= OMI_FEATURE_USER_EVENTS;
+#endif
 
 #ifdef CONFIG_OMI_ENABLE_SPEAKER
     features |= OMI_FEATURE_SPEAKER;
