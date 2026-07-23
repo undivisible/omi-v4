@@ -71,6 +71,50 @@ class RunnerTests: XCTestCase {
     window.close()
   }
 
+  func testVoiceOverlayFrameCoversTheWholeScreen() {
+    XCTAssertEqual(MainFlutterWindow.voiceOverlayFrame(for: nil), .zero)
+    if let screen = NSScreen.main {
+      XCTAssertEqual(MainFlutterWindow.voiceOverlayFrame(for: screen), screen.frame)
+    }
+  }
+
+  func testCenteredPillFrameIsPinnedToTheUpperThird() {
+    let visible = NSRect(x: 0, y: 0, width: 1000, height: 800)
+    let frame = MainFlutterWindow.centeredPillFrame(width: 420, height: 230, visible: visible)
+    XCTAssertEqual(frame.size, NSSize(width: 420, height: 230))
+    XCTAssertEqual(frame.midX, visible.midX)
+    XCTAssertEqual(frame.maxY, visible.maxY - visible.height * 0.28)
+  }
+
+  @MainActor
+  func testVoiceSummonIsFullScreenClickThroughAndRestores() {
+    let initialFrame = NSRect(x: 40, y: 40, width: 400, height: 300)
+    let window = MainFlutterWindow(
+      contentRect: initialFrame,
+      styleMask: [.borderless],
+      backing: .buffered,
+      defer: false)
+    window.isReleasedWhenClosed = false
+    defer { window.close() }
+
+    window.summonPill(width: 420, height: 230, centered: false)
+    XCTAssertTrue(window.ignoresMouseEvents)
+    XCTAssertEqual(window.level, .floating)
+    let active =
+      NSScreen.screens.first { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) }
+      ?? NSScreen.main
+    if let active {
+      XCTAssertEqual(window.frame, active.frame)
+    }
+
+    window.summonPill(width: 420, height: 230, centered: true)
+    XCTAssertFalse(window.ignoresMouseEvents)
+
+    window.restoreFromPill()
+    XCTAssertFalse(window.ignoresMouseEvents)
+    XCTAssertEqual(window.frame, initialFrame)
+  }
+
   @MainActor
   func testSettingsWindowShowReusesTheExistingWindow() {
     let controller = NSViewController()

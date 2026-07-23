@@ -7,74 +7,92 @@ import 'package:omi/currents/currents.dart';
 import 'package:omi/features/cursor_pill.dart';
 import 'package:omi/features/cursor_pill_controller.dart';
 import 'package:omi/features/voice_intents.dart';
+import 'package:omi/keyboard/keyboard.dart';
 import 'package:omi/native/generated/signals/signals.dart';
 import 'package:omi/native/native_hub.dart';
 
 void main() {
-  test('double-shift toggles voice straight on and off', () async {
+  test('double-shift summons the overlay and dismisses it again', () async {
     final harness = _Harness();
     final controller = harness.controller();
 
-    // idle → voice: no intermediate input pill.
+    // idle → overlay: the chord is the primary summon.
     await controller.doubleShift();
-    expect(controller.state, CursorPillState.listening);
-    expect(harness.voiceStarts, 1);
+    expect(controller.state, CursorPillState.input);
+    expect(harness.voiceStarts, 0);
 
-    // voice → idle.
+    // overlay → idle.
     harness.advance(const Duration(seconds: 1));
     await controller.doubleShift();
     expect(controller.state, CursorPillState.hidden);
-    expect(harness.voiceStops, 1);
 
     controller.dispose();
     await harness.close();
   });
 
-  test('full transition table (idle/voice/overlay × gestures)', () async {
+  test('full transition table (idle/overlay/voice × gestures)', () async {
     final harness = _Harness();
     final controller = harness.controller();
     Future<void> settle() async => harness.advance(const Duration(seconds: 1));
 
-    // idle --double-shift--> voice
+    // idle --double-shift--> overlay
     await controller.doubleShift();
-    expect(controller.state, CursorPillState.listening);
-
-    // voice --Option+Space--> overlay (voice cancelled)
-    await controller.toggleOverlay();
     expect(controller.state, CursorPillState.input);
-    expect(harness.voiceCancels, 1);
 
-    // overlay --double-shift--> voice (overlay closed, voice started)
+    // overlay --Option+Space--> idle (secondary binding, same toggle)
     await settle();
-    await controller.doubleShift();
-    expect(controller.state, CursorPillState.listening);
-    expect(harness.voiceStarts, 2);
-
-    // voice --Esc--> idle (cancelled)
-    await controller.dismiss();
+    await controller.toggleOverlay();
     expect(controller.state, CursorPillState.hidden);
-    expect(harness.voiceCancels, 2);
 
     // idle --Option+Space--> overlay
+    await settle();
     await controller.toggleOverlay();
     expect(controller.state, CursorPillState.input);
 
-    // overlay --Option+Space--> idle (toggle closed)
-    await controller.toggleOverlay();
+    // overlay --Esc--> idle (identical to a second double-shift)
+    await controller.dismissSurface();
     expect(controller.state, CursorPillState.hidden);
 
     // idle --Esc--> idle (no-op)
-    await controller.dismiss();
+    await controller.dismissSurface();
     expect(controller.state, CursorPillState.hidden);
+    expect(harness.voiceStarts, 0);
 
-    // idle --double-shift--> voice --double-shift--> idle (submitted stop)
+    // overlay --mic--> voice
     await settle();
     await controller.doubleShift();
+    expect(controller.state, CursorPillState.input);
+    await controller.beginVoice();
     expect(controller.state, CursorPillState.listening);
+    expect(harness.voiceStarts, 1);
+
+    // voice --double-shift--> idle (stopped; the transcript still routes)
     await settle();
     await controller.doubleShift();
     expect(controller.state, CursorPillState.hidden);
     expect(harness.voiceStops, 1);
+
+    // voice --Esc--> idle behaves identically to the chord.
+    await settle();
+    await controller.beginVoice();
+    expect(controller.state, CursorPillState.listening);
+    await controller.dismissSurface();
+    expect(controller.state, CursorPillState.hidden);
+    expect(harness.voiceStops, 2);
+
+    // menu-bar voice keeps working: start explicitly, stop explicitly.
+    await controller.handleGesture(ShiftGestureAction.startVoice);
+    expect(controller.state, CursorPillState.listening);
+    await controller.handleGesture(ShiftGestureAction.stopVoice);
+    expect(controller.state, CursorPillState.hidden);
+    expect(harness.voiceStops, 3);
+
+    // secure-input cancel hard-cancels voice instead of routing it.
+    await controller.handleGesture(ShiftGestureAction.startVoice);
+    expect(controller.state, CursorPillState.listening);
+    await controller.handleGesture(ShiftGestureAction.cancel);
+    expect(controller.state, CursorPillState.hidden);
+    expect(harness.voiceCancels, 1);
 
     controller.dispose();
     await harness.close();
@@ -85,38 +103,35 @@ void main() {
     final controller = harness.controller();
 
     await controller.doubleShift();
-    expect(controller.state, CursorPillState.listening);
-    expect(harness.voiceStarts, 1);
-    // A bounced chord inside 500ms must not immediately stop voice.
+    expect(controller.state, CursorPillState.input);
+    // A bounced chord inside 500ms must not immediately dismiss the overlay.
     harness.advance(const Duration(milliseconds: 300));
     await controller.doubleShift();
-    expect(controller.state, CursorPillState.listening);
-    expect(harness.voiceStops, 0);
-    // Past the debounce, the toggle stops it.
+    expect(controller.state, CursorPillState.input);
+    // Past the debounce, the toggle dismisses it.
     harness.advance(const Duration(milliseconds: 600));
     await controller.doubleShift();
     expect(controller.state, CursorPillState.hidden);
-    expect(harness.voiceStops, 1);
 
     controller.dispose();
     await harness.close();
   });
 
-  test('escape dismisses from overlay and listening', () async {
+  test('escape dismisses from overlay and stops listening', () async {
     final harness = _Harness();
     final controller = harness.controller();
 
     await controller.summon();
     expect(controller.state, CursorPillState.input);
-    await controller.dismiss();
+    await controller.dismissSurface();
     expect(controller.state, CursorPillState.hidden);
 
-    harness.advance(const Duration(seconds: 1));
-    await controller.doubleShift();
+    await controller.beginVoice();
     expect(controller.state, CursorPillState.listening);
-    await controller.dismiss();
+    await controller.dismissSurface();
     expect(controller.state, CursorPillState.hidden);
-    expect(harness.voiceCancels, 1);
+    expect(harness.voiceStops, 1);
+    expect(harness.voiceCancels, 0);
 
     controller.dispose();
     await harness.close();
@@ -126,12 +141,31 @@ void main() {
     final harness = _Harness(stopTranscript: 'Show me my currents please');
     final controller = harness.controller();
 
-    await controller.doubleShift();
+    await controller.beginVoice();
     harness.advance(const Duration(seconds: 1));
     await controller.doubleShift();
 
     expect(harness.hubOpens, 1);
     expect(controller.state, CursorPillState.hidden);
+    controller.dispose();
+    await harness.close();
+  });
+
+  test('typed task commands open the hub instead of chatting', () async {
+    final harness = _Harness();
+    final controller = harness.controller();
+
+    await controller.summon();
+    await controller.submit('show me your tasks');
+    expect(harness.hubOpens, 1);
+    expect(harness.prompts, isEmpty);
+
+    harness.advance(const Duration(seconds: 1));
+    await controller.summon();
+    await controller.submit('what should I do about my tasks today?');
+    expect(harness.hubOpens, 1);
+    expect(harness.prompts, ['what should I do about my tasks today?']);
+
     controller.dispose();
     await harness.close();
   });
@@ -252,7 +286,7 @@ void main() {
     await harness.close();
   });
 
-  testWidgets('double-shift shows only the waveform, no input pill', (
+  testWidgets('voice shows only the full-screen waveform, no input pill', (
     tester,
   ) async {
     final harness = _Harness();
@@ -263,7 +297,7 @@ void main() {
       ),
     );
 
-    await controller.doubleShift();
+    await controller.beginVoice();
     await tester.pump();
 
     expect(find.byKey(const Key('cursor_pill_listening')), findsOneWidget);
@@ -272,6 +306,19 @@ void main() {
     // Voice is a bare glowing waveform — no glass pill container.
     expect(find.byType(LiquidGlass), findsNothing);
     expect(find.byType(ListeningGlow), findsOneWidget);
+    // The listening surface spans the whole window, with the glow hugging
+    // the edges and the waveform centered.
+    expect(
+      tester.getSize(find.byKey(const Key('cursor_pill'))),
+      tester.getSize(find.byType(Scaffold)),
+    );
+    final glow = find.byKey(const Key('cursor_pill_edge_glow'));
+    expect(glow, findsOneWidget);
+    expect(tester.getSize(glow), tester.getSize(find.byType(Scaffold)));
+    expect(
+      tester.getCenter(find.byKey(const Key('cursor_pill_waveform'))),
+      tester.getCenter(find.byType(Scaffold)),
+    );
 
     await tester.pumpWidget(const SizedBox());
     controller.dispose();
@@ -347,7 +394,7 @@ void main() {
       final controller = harness.controller();
 
       // A dead mic falls back to the text overlay carrying the error.
-      await controller.doubleShift();
+      await controller.beginVoice();
 
       expect(controller.state, CursorPillState.input);
       expect(controller.error, contains('Privacy & Security'));
@@ -389,7 +436,7 @@ void main() {
     final harness = _Harness(stopTranscript: 'show me my currents');
     final controller = harness.controller();
 
-    await controller.doubleShift();
+    await controller.beginVoice();
     expect(controller.state, CursorPillState.listening);
 
     harness.hub.add(

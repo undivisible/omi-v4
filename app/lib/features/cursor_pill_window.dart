@@ -9,9 +9,10 @@ abstract final class CursorPillWindow {
   static bool get _supported =>
       !kIsWeb && defaultTargetPlatform == TargetPlatform.macOS;
 
-  /// Summons the floating glass window. Voice (the waveform) rides the cursor
-  /// ([centered] false); the text overlay is a Spotlight-style panel pinned to
-  /// the upper third of the screen ([centered] true).
+  /// Summons the floating glass window. Voice (the waveform and glow) takes
+  /// the whole active screen as a click-through overlay ([centered] false);
+  /// the text overlay is a Spotlight-style panel pinned to the upper third of
+  /// the screen ([centered] true).
   static Future<void> summon({bool centered = false}) async {
     if (!_supported) return;
     try {

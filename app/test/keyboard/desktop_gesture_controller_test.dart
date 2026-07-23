@@ -4,7 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:omi/keyboard/keyboard.dart';
 
 void main() {
-  test('both Shift keys produce a voice toggle', () async {
+  test('both Shift keys produce an overlay toggle', () async {
     final events = StreamController<DesktopKeyboardEvent>();
     final controller = DesktopGestureController(events: events.stream);
     final actions = <ShiftGestureAction>[];
@@ -17,7 +17,7 @@ void main() {
     );
     await Future<void>.delayed(Duration.zero);
 
-    expect(actions, [ShiftGestureAction.voiceToggle]);
+    expect(actions, [ShiftGestureAction.openOverlay]);
     await subscription.cancel();
     await controller.dispose();
     await events.close();
@@ -60,7 +60,7 @@ void main() {
     await events.close();
   });
 
-  test('escape emits cancel', () async {
+  test('escape emits the shared dismissal', () async {
     final events = StreamController<DesktopKeyboardEvent>();
     final controller = DesktopGestureController(events: events.stream);
     final actions = <ShiftGestureAction>[];
@@ -70,7 +70,7 @@ void main() {
     events.add(const DesktopEscapeEvent());
     await Future<void>.delayed(Duration.zero);
 
-    expect(actions, [ShiftGestureAction.cancel]);
+    expect(actions, [ShiftGestureAction.escape]);
     await subscription.cancel();
     await controller.dispose();
     await events.close();

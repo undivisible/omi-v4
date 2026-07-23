@@ -132,7 +132,11 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
               complete: _useShakeComplete,
               onBurstDone: _finish,
             ),
-          if (showPill)
+          if (showPill && pill.state == CursorPillState.listening)
+            Positioned.fill(
+              child: CursorPill(controller: pill, autofocus: false),
+            )
+          else if (showPill)
             Builder(
               builder: (context) {
                 final size = MediaQuery.sizeOf(context);
@@ -938,6 +942,7 @@ class _OnboardingUseStepState extends State<OnboardingUseStep> {
   bool rightShiftDown = false;
   bool chordDown = false;
   bool _lessonSignalled = false;
+  bool _dismissLessonDone = false;
   CursorPillState lastPillState = CursorPillState.hidden;
   StreamSubscription<String>? transcriptEvents;
 
@@ -973,7 +978,11 @@ class _OnboardingUseStepState extends State<OnboardingUseStep> {
     if (!mounted) return;
     final state = widget.pill.state;
     final wasListening = lastPillState == CursorPillState.listening;
+    final wasInput = lastPillState == CursorPillState.input;
     lastPillState = state;
+    if (wasInput && state == CursorPillState.hidden) {
+      _dismissLessonDone = true;
+    }
     if (wasListening && state == CursorPillState.hidden && !widget.finale) {
       _signalVoiceLesson();
     }
@@ -983,7 +992,7 @@ class _OnboardingUseStepState extends State<OnboardingUseStep> {
   bool _handleKey(KeyEvent event) {
     final physical = event.physicalKey;
     if (physical == PhysicalKeyboardKey.escape && event is KeyDownEvent) {
-      unawaited(widget.pill.dismiss());
+      unawaited(widget.pill.dismissSurface());
       return false;
     }
     if (widget.finale) return false;
@@ -1111,10 +1120,16 @@ class _OnboardingUseStepState extends State<OnboardingUseStep> {
   }
 
   String get _prompt => switch (widget.pill.state) {
-    CursorPillState.hidden => 'Double-tap both Shift keys to talk to me.',
+    CursorPillState.hidden when !_dismissLessonDone =>
+      'Double-tap both Shift keys to summon me.',
+    CursorPillState.hidden =>
+      'Summon me again — double-tap both Shift keys — then tap the mic to talk.',
+    CursorPillState.input when !_dismissLessonDone =>
+      'This is where you type. Now press Esc — or double-shift again — to dismiss.',
     CursorPillState.input =>
-      'Type here, or press Esc. ($summonOverlayKeybindLabel opens this anywhere.)',
-    CursorPillState.listening => 'Say something — then press Esc to stop.',
+      'Tap the mic to talk. ($summonOverlayKeybindLabel opens this anywhere.)',
+    CursorPillState.listening =>
+      'Say something — then press Esc, or double-shift, to stop.',
   };
 
   @override

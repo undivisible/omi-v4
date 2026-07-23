@@ -2,12 +2,12 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:omi/keyboard/keyboard.dart';
 
 void main() {
-  test('both Shift keys emit a single voice toggle', () {
+  test('both Shift keys emit a single overlay toggle', () {
     final gesture = ShiftGestureMachine();
 
     expect(gesture.shift(PhysicalShift.left, true), isEmpty);
     expect(gesture.shift(PhysicalShift.right, true), [
-      ShiftGestureAction.voiceToggle,
+      ShiftGestureAction.openOverlay,
     ]);
     // Holding the chord does not re-fire.
     expect(gesture.shift(PhysicalShift.left, true), isEmpty);
@@ -18,14 +18,14 @@ void main() {
 
     gesture.shift(PhysicalShift.left, true);
     expect(gesture.shift(PhysicalShift.right, true), [
-      ShiftGestureAction.voiceToggle,
+      ShiftGestureAction.openOverlay,
     ]);
     gesture.shift(PhysicalShift.left, false);
     gesture.shift(PhysicalShift.right, false);
 
     gesture.shift(PhysicalShift.left, true);
     expect(gesture.shift(PhysicalShift.right, true), [
-      ShiftGestureAction.voiceToggle,
+      ShiftGestureAction.openOverlay,
     ]);
   });
 
@@ -41,9 +41,9 @@ void main() {
     expect(gesture.summonOverlay(), [ShiftGestureAction.openOverlay]);
   });
 
-  test('escape always emits cancel', () {
+  test('escape always emits the shared dismissal', () {
     final gesture = ShiftGestureMachine();
-    expect(gesture.escape(), [ShiftGestureAction.cancel]);
+    expect(gesture.escape(), [ShiftGestureAction.escape]);
   });
 
   test('secure input cancels and suppresses the chord and the overlay', () {
@@ -60,7 +60,7 @@ void main() {
     // press must not spuriously toggle.
     expect(gesture.shift(PhysicalShift.left, true), isEmpty);
     expect(gesture.shift(PhysicalShift.right, true), [
-      ShiftGestureAction.voiceToggle,
+      ShiftGestureAction.openOverlay,
     ]);
   });
 }
