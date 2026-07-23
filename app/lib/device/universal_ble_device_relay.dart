@@ -102,6 +102,17 @@ final class UniversalBleDeviceRelayAdapter
     return _devices.values.map(_relayDevice).toList(growable: false);
   }
 
+  // Transient BLE connect failures (e.g. Android GATT status 133, or a
+  // connect racing shortly after scan/discovery on iOS) are common and
+  // usually self-heal on a short retry. Retry the whole connect+discover+
+  // subscribe sequence up to _maxConnectRetries times with backoff before
+  // surfacing a terminal failure.
+  static const _maxConnectRetries = 2;
+  static const _connectRetryDelays = [
+    Duration(milliseconds: 400),
+    Duration(milliseconds: 1000),
+  ];
+
   @override
   Future<RelayDevice> connect(String deviceId) async {
     if (_connectedId == deviceId && _connectedDevice != null && _connected) {
@@ -113,13 +124,59 @@ final class UniversalBleDeviceRelayAdapter
     if (device == null) {
       throw ArgumentError.value(deviceId, 'deviceId', 'Scan before connecting');
     }
-    _snapshots.add(
-      DeviceRelaySnapshot(
-        phase: DeviceConnectionPhase.connecting,
-        capabilities: capabilities,
-        device: _relayDevice(device),
-      ),
-    );
+
+    Object? lastError;
+    for (var attempt = 0; attempt <= _maxConnectRetries; attempt++) {
+      if (attempt > 0) {
+        // Disconnect-before-reconnect: make sure the stack is in a clean
+        // state before retrying, otherwise a half-open connection can make
+        // the next attempt fail immediately too.
+        try {
+          await UniversalBle.disconnect(deviceId);
+        } catch (_) {}
+        // ignore: avoid_print
+        print(
+          'UniversalBleDeviceRelayAdapter: connect attempt $attempt for '
+          '$deviceId after error: $lastError',
+        );
+        await Future<void>.delayed(_connectRetryDelays[attempt - 1]);
+      }
+      _snapshots.add(
+        DeviceRelaySnapshot(
+          phase: DeviceConnectionPhase.connecting,
+          capabilities: capabilities,
+          device: _relayDevice(device),
+          message: attempt > 0 ? 'Retrying connection…' : null,
+        ),
+      );
+      try {
+        return await _attemptConnect(deviceId, device);
+      } catch (error) {
+        lastError = error;
+        // ignore: avoid_print
+        print(
+          'UniversalBleDeviceRelayAdapter: connect failed for $deviceId '
+          '(attempt $attempt): $error',
+        );
+        if (attempt == _maxConnectRetries) {
+          _snapshots.add(
+            DeviceRelaySnapshot(
+              phase: DeviceConnectionPhase.failed,
+              capabilities: capabilities,
+              device: _relayDevice(device),
+              message:
+                  'Could not connect to ${device.name?.isNotEmpty == true ? device.name : 'the device'} '
+                  'after ${_maxConnectRetries + 1} attempts. Move closer, '
+                  'make sure the device is charged, and try again.',
+            ),
+          );
+        }
+      }
+    }
+    throw lastError ?? StateError('connect failed');
+  }
+
+  Future<RelayDevice> _attemptConnect(String deviceId, BleDevice device) async {
     try {
       await UniversalBle.connect(deviceId, autoConnect: true);
       _connectedId = deviceId;
@@ -183,18 +240,12 @@ final class UniversalBleDeviceRelayAdapter
     } catch (error) {
       await _connectionSubscription?.cancel();
       _connectionSubscription = null;
-      await UniversalBle.disconnect(deviceId);
+      try {
+        await UniversalBle.disconnect(deviceId);
+      } catch (_) {}
       _connectedId = null;
       _connectedDevice = null;
       _connected = false;
-      _snapshots.add(
-        DeviceRelaySnapshot(
-          phase: DeviceConnectionPhase.failed,
-          capabilities: capabilities,
-          device: _relayDevice(device),
-          message: '$error',
-        ),
-      );
       rethrow;
     }
   }

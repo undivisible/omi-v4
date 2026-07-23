@@ -209,7 +209,7 @@ void main() {
     fixture.services.dispose();
   });
 
-  testWidgets('pendant page does not scroll and bounds the session list', (
+  testWidgets('pendant page scrolls and bounds the session list', (
     tester,
   ) async {
     await tester.binding.setSurfaceSize(const Size(800, 1600));
@@ -229,7 +229,7 @@ void main() {
     final sections = tester.widget<ListView>(
       find.byKey(const Key('companion_page_sections')),
     );
-    expect(sections.physics, isA<NeverScrollableScrollPhysics>());
+    expect(sections.physics, isNot(isA<NeverScrollableScrollPhysics>()));
     expect(find.byKey(const Key('companion_session_list')), findsOneWidget);
     fixture.services.dispose();
   });
