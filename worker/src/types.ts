@@ -23,6 +23,10 @@ export type Bindings = {
   MIMO_API_KEY?: string;
   MIMO_CHAT_COMPLETIONS_URL?: string;
   MIMO_MODEL?: string;
+  OMI_MODEL_SPEED?: string;
+  OMI_MODEL_BALANCED?: string;
+  OMI_MODEL_SMART?: string;
+  OMI_MODEL_MULTIMODAL?: string;
   MIMO_OUTPUT_MICROUSD_PER_MILLION_TOKENS?: string;
   MIMO_INPUT_MICROUSD_PER_MILLION_TOKENS?: string;
   MIMO_BUDGET_WINDOW_SECONDS?: string;

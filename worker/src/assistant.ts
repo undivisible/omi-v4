@@ -5,6 +5,7 @@ import {
   releaseAssistantRequest,
   settleAssistantRequest,
 } from "./assistant-admission";
+import { modelForTier } from "./model-tiers";
 import type { AppEnv } from "./types";
 
 const assistant = new Hono<AppEnv>();
@@ -448,7 +449,9 @@ export const runManagedInboxCompletion = async (
 ): Promise<string | null> => {
   const endpoint = env.MIMO_CHAT_COMPLETIONS_URL;
   const secret = env.MIMO_API_KEY;
-  const model = env.MIMO_MODEL;
+  // Meeting-note-style one-shot completions run on the BALANCED tier, which
+  // defaults to MIMO_MODEL when set.
+  const model = modelForTier(env, "balanced");
   if (!endpoint || !secret || !model || messages.length === 0) return null;
   const endpointUrl = validatePinnedEndpoint(
     endpoint,
@@ -621,7 +624,9 @@ export const runManagedInboxCompletion = async (
 assistant.post("/chat/completions", async (context) => {
   const endpoint = context.env.MIMO_CHAT_COMPLETIONS_URL;
   const secret = context.env.MIMO_API_KEY;
-  const model = context.env.MIMO_MODEL;
+  // Managed chat runs on the BALANCED tier (defaults to MIMO_MODEL when set);
+  // the client request is validated against this model id.
+  const model = modelForTier(context.env, "balanced");
   if (!endpoint || !secret || !model)
     return context.json({ error: "Managed AI unavailable" }, 503);
   const endpointUrl = validatePinnedEndpoint(

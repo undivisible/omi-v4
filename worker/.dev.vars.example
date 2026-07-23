@@ -1,6 +1,17 @@
 MIMO_API_KEY=your-mimo-api-key-here
 MIMO_CHAT_COMPLETIONS_URL=https://token-plan-sgp.xiaomimimo.com/v1/chat/completions
 GEMINI_API_KEY=your-gemini-api-key-here
+# Model-tier routing (single source of truth: worker/src/model-tiers.ts,
+# app/native/hub/src/model_tier.rs). Each tier is env-overridable; leave unset
+# to use the default shown. BALANCED falls back to MIMO_MODEL when unset.
+#   speed      latency-sensitive live insights/answers  default gemini-3.1-flash-lite
+#   balanced   meeting notes + general chat (default)   default mimo-v2.5-balanced
+#   smart      hard reasoning                           default mimo-v2.5-pro
+#   multimodal vision / visual computer-use             default gemini-3.6-flash
+# OMI_MODEL_SPEED=gemini-3.1-flash-lite
+# OMI_MODEL_BALANCED=mimo-v2.5-balanced
+# OMI_MODEL_SMART=mimo-v2.5-pro
+# OMI_MODEL_MULTIMODAL=gemini-3.6-flash
 OPENAI_OAUTH_CLIENT_ID=app_EMoamEEZ73f0CkXaXp7hrann
 XAI_OAUTH_CLIENT_ID=your-xai-oauth-client-id-here
 OAUTH_TOKEN_KEY=base64-encoded-32-byte-key-here
