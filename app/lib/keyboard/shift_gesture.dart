@@ -1,37 +1,42 @@
 enum PhysicalShift { left, right }
 
-enum ShiftGesturePhase { idle, chordPending, textInput, pushToTalk, handsFree }
-
+/// The interaction is now a thin detector: the physical chord and the
+/// overlay keybind each emit a single intent, and the surface that consumes
+/// them ([CursorPillController]) owns all real state (and the debounce).
+///
+/// - both Shift keys down: [voiceToggle] — start live voice, or stop it.
+/// - the overlay keybind (Option+Space): [openOverlay] — summon or dismiss
+///   the centered text overlay.
+/// - explicit [startVoice]/[stopVoice] drive the menu-bar controls.
+/// - Esc / secure-input emit [cancel].
 enum ShiftGestureAction {
-  openTextInput,
-  submitText,
+  voiceToggle,
+  openOverlay,
   startVoice,
-  continueVoice,
   stopVoice,
   cancel,
 }
 
 class ShiftGestureMachine {
-  ShiftGestureMachine({this.holdThreshold = const Duration(milliseconds: 350)});
+  ShiftGestureMachine();
 
-  final Duration holdThreshold;
-
-  ShiftGesturePhase phase = ShiftGesturePhase.idle;
   bool secureInput = false;
   bool _leftDown = false;
   bool _rightDown = false;
-  Duration? _chordStartedAt;
   bool _chordConsumed = false;
 
   List<ShiftGestureAction> setSecureInput(bool enabled) {
     secureInput = enabled;
-    if (!enabled) return const [];
-    final wasActive = phase != ShiftGesturePhase.idle;
+    // Reset on both edges: entering secure input must not leave voice
+    // running, and leaving it must not fire a chord from flags that were
+    // still being tracked while suppressed.
     _reset();
-    return wasActive ? const [ShiftGestureAction.cancel] : const [];
+    // The surface no-ops if nothing is active, so cancelling unconditionally
+    // when secure input engages is safe.
+    return enabled ? const [ShiftGestureAction.cancel] : const [];
   }
 
-  List<ShiftGestureAction> shift(PhysicalShift key, bool pressed, Duration at) {
+  List<ShiftGestureAction> shift(PhysicalShift key, bool pressed) {
     if (key == PhysicalShift.left) {
       _leftDown = pressed;
     } else {
@@ -46,78 +51,17 @@ class ShiftGestureMachine {
     final bothDown = _leftDown && _rightDown;
     if (bothDown && !_chordConsumed) {
       _chordConsumed = true;
-      if (phase == ShiftGesturePhase.textInput) {
-        _reset(keepKeys: true);
-        return const [ShiftGestureAction.submitText];
-      }
-      if (phase == ShiftGesturePhase.handsFree) {
-        _reset(keepKeys: true);
-        return const [ShiftGestureAction.stopVoice];
-      }
-      if (phase == ShiftGesturePhase.idle) {
-        phase = ShiftGesturePhase.chordPending;
-        _chordStartedAt = at;
-      }
-    }
-
-    if (!bothDown &&
-        phase == ShiftGesturePhase.chordPending &&
-        _chordStartedAt != null) {
-      if (at - _chordStartedAt! >= holdThreshold) {
-        phase = ShiftGesturePhase.handsFree;
-        _clearChordWhenReleased();
-        return const [
-          ShiftGestureAction.startVoice,
-          ShiftGestureAction.continueVoice,
-        ];
-      }
-      phase = ShiftGesturePhase.textInput;
-      _chordStartedAt = null;
-      _clearChordWhenReleased();
-      return const [ShiftGestureAction.openTextInput];
-    }
-
-    if (!bothDown && phase == ShiftGesturePhase.pushToTalk) {
-      phase = ShiftGesturePhase.handsFree;
-      _clearChordWhenReleased();
-      return const [ShiftGestureAction.continueVoice];
+      return const [ShiftGestureAction.voiceToggle];
     }
 
     _clearChordWhenReleased();
     return const [];
   }
 
-  List<ShiftGestureAction> advance(Duration at) {
-    if (secureInput ||
-        phase != ShiftGesturePhase.chordPending ||
-        _chordStartedAt == null) {
-      return const [];
-    }
-    if (at - _chordStartedAt! < holdThreshold) {
-      return const [];
-    }
-    phase = ShiftGesturePhase.pushToTalk;
-    return const [ShiftGestureAction.startVoice];
-  }
+  List<ShiftGestureAction> summonOverlay() =>
+      secureInput ? const [] : const [ShiftGestureAction.openOverlay];
 
-  List<ShiftGestureAction> stop() {
-    if (phase == ShiftGesturePhase.textInput) {
-      _reset();
-      return const [ShiftGestureAction.submitText];
-    }
-    if (phase == ShiftGesturePhase.pushToTalk ||
-        phase == ShiftGesturePhase.handsFree) {
-      _reset();
-      return const [ShiftGestureAction.stopVoice];
-    }
-    return const [];
-  }
-
-  List<ShiftGestureAction> escape() {
-    if (phase == ShiftGesturePhase.idle) return const [];
-    _reset();
-    return const [ShiftGestureAction.cancel];
-  }
+  List<ShiftGestureAction> escape() => const [ShiftGestureAction.cancel];
 
   void reset() => _reset();
 
@@ -125,13 +69,9 @@ class ShiftGestureMachine {
     if (!_leftDown && !_rightDown) _chordConsumed = false;
   }
 
-  void _reset({bool keepKeys = false}) {
-    phase = ShiftGesturePhase.idle;
-    _chordStartedAt = null;
-    if (!keepKeys) {
-      _leftDown = false;
-      _rightDown = false;
-      _chordConsumed = false;
-    }
+  void _reset() {
+    _leftDown = false;
+    _rightDown = false;
+    _chordConsumed = false;
   }
 }

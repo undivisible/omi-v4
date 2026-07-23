@@ -4,35 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:omi/keyboard/keyboard.dart';
 
 void main() {
-  test('physical left and right shift events produce a tap action', () async {
-    final events = StreamController<DesktopKeyboardEvent>();
-    var now = DateTime.fromMillisecondsSinceEpoch(0);
-    final controller = DesktopGestureController(
-      events: events.stream,
-      now: () => now,
-    );
-    final actions = <ShiftGestureAction>[];
-    final subscription = controller.actions.listen(actions.add);
-    controller.start();
-
-    events.add(const DesktopShiftEvent(key: PhysicalShift.left, pressed: true));
-    now = DateTime.fromMillisecondsSinceEpoch(20);
-    events.add(
-      const DesktopShiftEvent(key: PhysicalShift.right, pressed: true),
-    );
-    now = DateTime.fromMillisecondsSinceEpoch(100);
-    events.add(
-      const DesktopShiftEvent(key: PhysicalShift.left, pressed: false),
-    );
-    await Future<void>.delayed(Duration.zero);
-
-    expect(actions, [ShiftGestureAction.openTextInput]);
-    await subscription.cancel();
-    await controller.dispose();
-    await events.close();
-  });
-
-  test('secure input cancels pending input and suppresses its chord', () async {
+  test('both Shift keys produce a voice toggle', () async {
     final events = StreamController<DesktopKeyboardEvent>();
     final controller = DesktopGestureController(events: events.stream);
     final actions = <ShiftGestureAction>[];
@@ -43,13 +15,43 @@ void main() {
     events.add(
       const DesktopShiftEvent(key: PhysicalShift.right, pressed: true),
     );
+    await Future<void>.delayed(Duration.zero);
+
+    expect(actions, [ShiftGestureAction.voiceToggle]);
+    await subscription.cancel();
+    await controller.dispose();
+    await events.close();
+  });
+
+  test('the overlay keybind produces openOverlay', () async {
+    final events = StreamController<DesktopKeyboardEvent>();
+    final controller = DesktopGestureController(events: events.stream);
+    final actions = <ShiftGestureAction>[];
+    final subscription = controller.actions.listen(actions.add);
+    controller.start();
+
+    events.add(const DesktopSummonOverlayEvent());
+    await Future<void>.delayed(Duration.zero);
+
+    expect(actions, [ShiftGestureAction.openOverlay]);
+    await subscription.cancel();
+    await controller.dispose();
+    await events.close();
+  });
+
+  test('secure input cancels and suppresses the chord', () async {
+    final events = StreamController<DesktopKeyboardEvent>();
+    final controller = DesktopGestureController(events: events.stream);
+    final actions = <ShiftGestureAction>[];
+    final subscription = controller.actions.listen(actions.add);
+    controller.start();
+
+    events.add(const DesktopShiftEvent(key: PhysicalShift.left, pressed: true));
     events.add(const DesktopSecureInputEvent(true));
     events.add(
-      const DesktopShiftEvent(key: PhysicalShift.left, pressed: false),
+      const DesktopShiftEvent(key: PhysicalShift.right, pressed: true),
     );
-    events.add(
-      const DesktopShiftEvent(key: PhysicalShift.right, pressed: false),
-    );
+    events.add(const DesktopSummonOverlayEvent());
     await Future<void>.delayed(Duration.zero);
 
     expect(actions, [ShiftGestureAction.cancel]);
@@ -58,50 +60,17 @@ void main() {
     await events.close();
   });
 
-  test('reset reconciles a failed voice start', () async {
+  test('escape emits cancel', () async {
     final events = StreamController<DesktopKeyboardEvent>();
-    var now = DateTime.fromMillisecondsSinceEpoch(0);
-    final controller = DesktopGestureController(
-      events: events.stream,
-      now: () => now,
-    );
+    final controller = DesktopGestureController(events: events.stream);
     final actions = <ShiftGestureAction>[];
     final subscription = controller.actions.listen(actions.add);
     controller.start();
 
-    events.add(const DesktopShiftEvent(key: PhysicalShift.left, pressed: true));
-    events.add(
-      const DesktopShiftEvent(key: PhysicalShift.right, pressed: true),
-    );
-    await Future<void>.delayed(Duration.zero);
-    now = DateTime.fromMillisecondsSinceEpoch(400);
-    events.add(
-      const DesktopShiftEvent(key: PhysicalShift.left, pressed: false),
-    );
-    await Future<void>.delayed(Duration.zero);
-    expect(actions, [
-      ShiftGestureAction.startVoice,
-      ShiftGestureAction.continueVoice,
-    ]);
-
-    controller.reset();
-    actions.clear();
-    events.add(
-      const DesktopShiftEvent(key: PhysicalShift.right, pressed: false),
-    );
-    now = DateTime.fromMillisecondsSinceEpoch(500);
-    events.add(const DesktopShiftEvent(key: PhysicalShift.left, pressed: true));
-    events.add(
-      const DesktopShiftEvent(key: PhysicalShift.right, pressed: true),
-    );
-    await Future<void>.delayed(Duration.zero);
-    now = DateTime.fromMillisecondsSinceEpoch(550);
-    events.add(
-      const DesktopShiftEvent(key: PhysicalShift.left, pressed: false),
-    );
+    events.add(const DesktopEscapeEvent());
     await Future<void>.delayed(Duration.zero);
 
-    expect(actions, [ShiftGestureAction.openTextInput]);
+    expect(actions, [ShiftGestureAction.cancel]);
     await subscription.cancel();
     await controller.dispose();
     await events.close();
