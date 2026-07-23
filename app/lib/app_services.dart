@@ -368,6 +368,10 @@ final class AppServices {
   /// One-line status shown in the voice UI when the live voice route was
   /// downgraded (e.g. "Live voice needs Pro — using transcription only").
   final voiceNotice = ValueNotifier<String?>(null);
+
+  /// Non-fatal device-audio status (e.g. paired while signed out, so audio
+  /// streaming is deferred until an account grants processing authority).
+  final deviceAudioNotice = ValueNotifier<String?>(null);
   Future<void> _liveVoiceLifecycle = Future.value();
   int _liveVoiceGeneration = 0;
   final SystemAudioCaptureModeStore _captureModeStore;
@@ -1271,13 +1275,14 @@ final class AppServices {
       }
       final uid = auth.snapshot.session?.uid;
       if (!productionReady || !_nativeInitialized || uid == null) {
-        throw StateError(
-          _localFallbackEligible
-              ? 'Device audio streaming needs a connected account. Local '
-                    'mode covers chat and voice; sign in to stream from a '
-                    'device.'
-              : 'Sign in and grant current data consent first.',
-        );
+        // Pairing needs no account: connect the pendant (battery, status,
+        // haptics all work) and simply don't start audio streaming, which is
+        // the only part that needs backend authority. A notice lets the UI
+        // explain instead of failing the whole pairing flow.
+        final device = await deviceRelay.connect(deviceId);
+        deviceAudioNotice.value =
+            'Connected. Sign in to stream and transcribe audio from your Omi.';
+        return device;
       }
       final device = await deviceRelay.connect(deviceId);
       try {
@@ -1301,6 +1306,7 @@ final class AppServices {
           await deviceAudio.stop();
           throw StateError('Account authority changed while connecting.');
         }
+        deviceAudioNotice.value = null;
         return device;
       } catch (_) {
         await deviceRelay.disconnect();

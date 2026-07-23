@@ -1681,10 +1681,13 @@ void main() {
 
     expect(adapter.disconnectCalls, greaterThanOrEqualTo(2));
     expect(hub.cancelled, contains(hub.captures.single.requestId));
-    await expectLater(
-      services.connectDevice('omi-1'),
-      throwsA(isA<StateError>()),
-    );
+    // After revocation, pairing still succeeds — but audio streaming (the
+    // part that needs processing authority) must NOT start, and the notice
+    // explains why.
+    final reconnected = await services.connectDevice('omi-1');
+    expect(reconnected.id, 'omi-1');
+    expect(services.deviceAudio.active, isFalse);
+    expect(services.deviceAudioNotice.value, contains('Sign in'));
     services.dispose();
     await hub.close();
     await adapter.close();
@@ -2657,15 +2660,13 @@ void main() {
     await services.captureOnboardingProfile(name: 'Ada', languages: const []);
     expect(hub.captures, isNotEmpty);
 
+    // Signed-out connect no longer throws an account StateError: pairing
+    // proceeds without audio. This harness has no BLE adapter, so the call
+    // reaches the relay itself and fails there instead — proving the account
+    // gate no longer blocks pairing.
     await expectLater(
       services.connectDevice('device-1'),
-      throwsA(
-        isA<StateError>().having(
-          (error) => error.message,
-          'message',
-          contains('connected account'),
-        ),
-      ),
+      throwsA(isA<DeviceRelayUnavailable>()),
     );
 
     await services.cancelDesktopVoice();
