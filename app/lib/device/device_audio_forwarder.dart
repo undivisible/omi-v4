@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:collection';
-import 'dart:typed_data';
+
+import 'package:flutter/foundation.dart';
 
 import '../native/generated/signals/signals.dart' show NativeError;
 import '../native/native_hub.dart';
@@ -98,9 +99,23 @@ final class DeviceAudioForwarder {
   final Duration startTimeout;
   final Duration stopTimeout;
   final Duration reconnectGrace;
-  _AudioSession? _session;
+  _AudioSession? _sessionValue;
   int _startGeneration = 0;
   Object? lastError;
+
+  /// Fires whenever capture starts or stops. [active] is a plain getter that a
+  /// widget can only sample while it happens to be building, so a stream that
+  /// starts on connect (or ends on a dropped link) would otherwise never reach
+  /// the UI; anything rendering capture state listens to this instead.
+  final ValueNotifier<bool> activeListenable = ValueNotifier<bool>(false);
+
+  _AudioSession? get _session => _sessionValue;
+
+  set _session(_AudioSession? session) {
+    if (identical(_sessionValue, session)) return;
+    _sessionValue = session;
+    activeListenable.value = session != null;
+  }
 
   bool get active => _session != null;
   DeviceAudioGap? get lastGap => switch (lastError) {

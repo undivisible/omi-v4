@@ -13,6 +13,7 @@ const _serialNumber = '00002a25-0000-1000-8000-00805f9b34fb';
 const _firmwareRevision = '00002a26-0000-1000-8000-00805f9b34fb';
 const _hardwareRevision = '00002a27-0000-1000-8000-00805f9b34fb';
 const _manufacturerName = '00002a29-0000-1000-8000-00805f9b34fb';
+const _settingsService = '19b10010-e8f2-537e-4f6c-d104768a1214';
 const _sleep = '19b10014-e8f2-537e-4f6c-d104768a1214';
 const _captureLed = '19b10015-e8f2-537e-4f6c-d104768a1214';
 const _rename = '19b10016-e8f2-537e-4f6c-d104768a1214';
@@ -205,6 +206,53 @@ void main() {
     );
   });
 
+  test('discovery reports whether the capture LED can be driven', () async {
+    platform.systemDevices = _systemOmi;
+    await adapter.connect('omi-system');
+
+    expect(adapter.captureLedSupported, isTrue);
+  });
+
+  test(
+    'firmware without 19b10015 reports the capture LED as undrivable',
+    () async {
+      platform
+        ..systemDevices = _systemOmi
+        ..missingCharacteristics.add(_captureLed);
+      await adapter.connect('omi-system');
+
+      expect(adapter.captureLedSupported, isFalse);
+      expect(await adapter.writeCaptureLed(true), isFalse);
+    },
+  );
+
+  test('a platform that reports no characteristics stays optimistic until the '
+      'first write', () async {
+    platform
+      ..systemDevices = _systemOmi
+      ..gatt = const {}
+      ..missingCharacteristics.add(_captureLed);
+    await adapter.connect('omi-system');
+
+    expect(adapter.captureLedSupported, isTrue);
+    expect(await adapter.writeCaptureLed(true), isFalse);
+    expect(adapter.captureLedSupported, isFalse);
+  });
+
+  test('reconnecting re-asks whether the capture LED is there', () async {
+    platform
+      ..systemDevices = _systemOmi
+      ..missingCharacteristics.add(_captureLed);
+    await adapter.connect('omi-system');
+    expect(adapter.captureLedSupported, isFalse);
+
+    platform.missingCharacteristics.remove(_captureLed);
+    await adapter.disconnect();
+    await adapter.connect('omi-system');
+
+    expect(adapter.captureLedSupported, isTrue);
+  });
+
   test('sleep writes 0x01 to 19b10014', () async {
     platform.systemDevices = _systemOmi;
     await adapter.connect('omi-system');
@@ -333,11 +381,26 @@ final class _FakeBlePlatform extends UniversalBlePlatform {
     updateConnection(deviceId, false);
   }
 
+  // The GATT table discovery reports, minus anything in
+  // [missingCharacteristics]. An empty map stands in for a platform that
+  // reports no characteristics at all.
+  Map<String, List<String>> gatt = {
+    _omiService: [_audioCodec],
+    _settingsService: [_sleep, _captureLed, _rename],
+  };
+
   @override
   Future<List<BleService>> discoverServices(
     String deviceId,
     bool withDescriptors,
-  ) async => const [];
+  ) async => [
+    for (final service in gatt.entries)
+      BleService(service.key, [
+        for (final characteristic in service.value)
+          if (!missingCharacteristics.contains(characteristic))
+            BleCharacteristic(characteristic, const [], const []),
+      ]),
+  ];
 
   @override
   Future<void> setNotifiable(

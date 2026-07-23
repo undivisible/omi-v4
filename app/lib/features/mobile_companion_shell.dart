@@ -305,6 +305,10 @@ class MobilePendantPageState extends State<MobilePendantPage> {
   // and only this switch (rendered under the minutes chip) turns it off.
   bool _captureEnabled = true;
   bool _syncingCapture = false;
+  // Turns false once a capture-LED write has been refused, which is what old
+  // firmware without 19b10015 does. The switch keeps working — only the claim
+  // that the pendant light follows it is withdrawn.
+  bool _captureLedSupported = true;
   // A connect this page started already brings capture up on its own, so the
   // snapshot that lands mid-connect must not race it with a second attempt.
   bool _connectInFlight = false;
@@ -345,6 +349,12 @@ class MobilePendantPageState extends State<MobilePendantPage> {
       );
       _syncCaptureWithConnection();
     });
+    // Capture starts and stops without anyone touching the switch — it comes up
+    // with the connection and ends when the link drops — and `active` is a
+    // plain getter the hero can only sample while it happens to be rebuilding.
+    // Without this listener the auto-connect path renders capture as off for
+    // the whole session and never writes the pendant LED.
+    widget.services.deviceAudio.activeListenable.addListener(_captureChanged);
     unawaited(_restoreCaptureEnabled());
     if (!widget.previewMode) unawaited(_ensureProcessingConsent());
     if (!widget.previewMode && _mobile) unawaited(_restorePairing());
@@ -398,11 +408,34 @@ class MobilePendantPageState extends State<MobilePendantPage> {
     if (_syncingCapture || _connectInFlight || widget.previewMode) return;
     if (_connectedDevice == null) return;
     final active = widget.services.deviceAudio.active;
-    if (active == _captureEnabled) return;
+    if (active == _captureEnabled) {
+      // Already matched, but a reconnect resets the pendant's own LED state, so
+      // re-assert it instead of leaving the light stale.
+      unawaited(_reflectCaptureOnPendant(active));
+      return;
+    }
     _syncingCapture = true;
     unawaited(
       _setCapture(_captureEnabled).whenComplete(() => _syncingCapture = false),
     );
+  }
+
+  void _captureChanged() {
+    if (!mounted) return;
+    setState(() {});
+    unawaited(_reflectCaptureOnPendant(widget.services.deviceAudio.active));
+  }
+
+  // Mirrors the app's capture state onto the pendant LED (19b10015). Every
+  // capture transition runs through here, so the light follows a stream that
+  // started on its own just as well as one the switch started.
+  Future<void> _reflectCaptureOnPendant(bool capturing) async {
+    if (widget.previewMode || _connectedDevice == null) return;
+    final written = await relay.writeCaptureLed(capturing);
+    if (!mounted) return;
+    final supported = written && relay.captureLedSupported;
+    if (supported == _captureLedSupported) return;
+    setState(() => _captureLedSupported = supported);
   }
 
   Future<void> _loadDesktopNotice() async {
@@ -462,6 +495,9 @@ class MobilePendantPageState extends State<MobilePendantPage> {
   @override
   void dispose() {
     unawaited(_snapshotSubscription?.cancel());
+    widget.services.deviceAudio.activeListenable.removeListener(
+      _captureChanged,
+    );
     unawaited(_liveActivity.end());
     _scrollController.dispose();
     _scrollOffset.dispose();
@@ -547,12 +583,12 @@ class MobilePendantPageState extends State<MobilePendantPage> {
       if (!enabled) {
         await widget.services.deviceAudio.stop();
         // Reflect the idle state on the pendant LED (red) via the firmware
-        // capture-state characteristic; a no-op on firmware without it.
-        unawaited(relay.writeCaptureLed(false));
+        // capture-state characteristic; a no-op on firmware without it. The
+        // write itself is driven by the capture-state listener, so that the
+        // light follows every transition and not only this one.
         unawaited(widget.captureNotifier.captureStopped());
       } else if (device != null) {
         await widget.services.connectDevice(device.id);
-        unawaited(relay.writeCaptureLed(true));
         // Post an ambient local notification and surface the segment in the
         // conversations list (wired via the transcript log) when a capture
         // starts.
@@ -752,6 +788,7 @@ class MobilePendantPageState extends State<MobilePendantPage> {
               hint: _captureHint(connected, capturing),
               busy: busy,
               captureEnabled: _captureEnabled,
+              ledSupported: _captureLedSupported,
               onCaptureChanged: widget.previewMode ? null : _setCaptureEnabled,
               onReconnect: () => unawaited(reconnect()),
               onHoldPendant: connected
@@ -1017,6 +1054,7 @@ class _PendantHero extends StatefulWidget {
     required this.hint,
     required this.busy,
     required this.captureEnabled,
+    required this.ledSupported,
     required this.onCaptureChanged,
     required this.onReconnect,
     required this.onHoldPendant,
@@ -1031,6 +1069,7 @@ class _PendantHero extends StatefulWidget {
   final String hint;
   final bool busy;
   final bool captureEnabled;
+  final bool ledSupported;
   final ValueChanged<bool>? onCaptureChanged;
   final VoidCallback onReconnect;
   final VoidCallback? onHoldPendant;
@@ -1324,6 +1363,7 @@ class _PendantHeroState extends State<_PendantHero>
                 enabled: widget.captureEnabled,
                 capturing: capturing,
                 connected: connected,
+                ledSupported: widget.ledSupported,
                 onChanged: widget.onCaptureChanged,
               ),
             ],
@@ -1339,18 +1379,23 @@ class _CaptureToggle extends StatelessWidget {
     required this.enabled,
     required this.capturing,
     required this.connected,
+    required this.ledSupported,
     required this.onChanged,
   });
 
   final bool enabled;
   final bool capturing;
   final bool connected;
+  final bool ledSupported;
   final ValueChanged<bool>? onChanged;
 
   @override
   Widget build(BuildContext context) {
-    final active = capturing || (enabled && connected);
-    return Semantics(
+    // The switch reports what the app is doing, which is the part that is
+    // always true. Whether the pendant light agrees depends on the firmware,
+    // so say so rather than implying the light followed.
+    final active = capturing && connected;
+    final toggle = Semantics(
       container: true,
       label: 'Capture',
       child: Builder(
@@ -1397,6 +1442,23 @@ class _CaptureToggle extends StatelessWidget {
           ),
         ),
       ),
+    );
+    if (!connected || ledSupported) return toggle;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        toggle,
+        const Padding(
+          padding: EdgeInsets.only(top: 4),
+          child: Text(
+            'Your pendant light stays as it is: this firmware cannot be told '
+            'about capture.',
+            key: Key('companion_capture_led_unsupported'),
+            textAlign: TextAlign.center,
+            style: TextStyle(fontSize: 11.5, color: _inkSoft, height: 1.3),
+          ),
+        ),
+      ],
     );
   }
 }

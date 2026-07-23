@@ -526,6 +526,101 @@ void main() {
     fixture.services.dispose();
   });
 
+  // The regression the pendant surfaced as "capture always says off": the
+  // remembered-device reconnect starts capture without anything calling
+  // setState afterwards, so a hero that samples `deviceAudio.active` only while
+  // it happens to rebuild renders the whole session as idle.
+  testWidgets('capture reads as on after the remembered pendant reconnects on '
+      'its own', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(800, 1600));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final fixture = await _mobileFixture('user-a');
+    final paired = VolatilePairedDeviceStore();
+    await paired.save('omi-1');
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MobileCompanionShell(
+          services: fixture.services,
+          pairedDevices: paired,
+        ),
+      ),
+    );
+    await _settle(tester);
+
+    expect(fixture.services.deviceAudio.active, isTrue);
+    expect(find.byKey(const Key('companion_capture_ring')), findsOneWidget);
+    expect(
+      tester.widget<Text>(find.byKey(const Key('companion_pendant_hint'))).data,
+      'Capturing · Hold the pendant to disconnect',
+    );
+    fixture.services.dispose();
+  });
+
+  testWidgets('the pendant LED is driven for a capture nobody switched on', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(800, 1600));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final led = _LedAdapter();
+    final fixture = await _mobileFixture('user-a', adapter: led);
+    final paired = VolatilePairedDeviceStore();
+    await paired.save('omi-1');
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MobileCompanionShell(
+          services: fixture.services,
+          pairedDevices: paired,
+          captureEnabledStore: VolatileCaptureEnabledStore(),
+        ),
+      ),
+    );
+    await _settle(tester);
+
+    expect(led.ledWrites, contains(true));
+    expect(
+      find.byKey(const Key('companion_capture_led_unsupported')),
+      findsNothing,
+    );
+
+    await tester.tap(find.byKey(const Key('companion_capture_switch')));
+    await _settle(tester);
+
+    expect(led.ledWrites.last, isFalse);
+    fixture.services.dispose();
+  });
+
+  testWidgets('firmware without the capture-LED characteristic stops claiming '
+      'the pendant light follows the switch', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(800, 1600));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final led = _LedAdapter(ledSupported: false);
+    final fixture = await _mobileFixture('user-a', adapter: led);
+    final paired = VolatilePairedDeviceStore();
+    await paired.save('omi-1');
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MobileCompanionShell(
+          services: fixture.services,
+          pairedDevices: paired,
+        ),
+      ),
+    );
+    await _settle(tester);
+
+    // The LED cannot be driven, but the app-side capture state is still right.
+    expect(led.ledWrites, isEmpty);
+    expect(fixture.services.deviceAudio.active, isTrue);
+    expect(find.byKey(const Key('companion_capture_ring')), findsOneWidget);
+    expect(
+      find.byKey(const Key('companion_capture_led_unsupported')),
+      findsOneWidget,
+    );
+    fixture.services.dispose();
+  });
+
   testWidgets('the capture switch posts a local notification when it '
       'restarts capture', (tester) async {
     await tester.binding.setSurfaceSize(const Size(800, 1600));
@@ -1537,6 +1632,25 @@ final class _RenamingAdapter extends _Adapter implements DeviceRelayRename {
   Future<bool> renameDevice(String name) async {
     if (!accepts) return false;
     renames.add(name);
+    return true;
+  }
+}
+
+// A pendant whose firmware may or may not carry 19b10015. With [ledSupported]
+// false it refuses every write, exactly as a pre-capture-LED build does.
+final class _LedAdapter extends _Adapter implements DeviceRelayLed {
+  _LedAdapter({this.ledSupported = true});
+
+  final bool ledSupported;
+  final ledWrites = <bool>[];
+
+  @override
+  bool get captureLedSupported => ledSupported;
+
+  @override
+  Future<bool> writeCaptureLed(bool capturing) async {
+    if (!ledSupported) return false;
+    ledWrites.add(capturing);
     return true;
   }
 }

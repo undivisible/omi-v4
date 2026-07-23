@@ -13,6 +13,11 @@ abstract interface class DeviceRelayHaptics {
 /// semantics without failing.
 abstract interface class DeviceRelayLed {
   Future<bool> writeCaptureLed(bool capturing);
+
+  /// False once the adapter knows the connected firmware has no capture-LED
+  /// characteristic. Adapters start optimistic and learn from the first write,
+  /// so this only turns false when the pendant genuinely cannot be driven.
+  bool get captureLedSupported;
 }
 
 /// Commands the pendant to sleep/power off (settings characteristic 19b10014).
@@ -147,6 +152,15 @@ class DeviceRelayService {
 
   bool get supportsRename =>
       role == DeviceRelayRole.mobileOwner && adapter is DeviceRelayRename;
+
+  /// Whether the pendant LED can be driven from the app at all. Old firmware
+  /// predates the capture-state characteristic, and a relay that cannot write
+  /// it must not let the UI claim the light follows the switch.
+  bool get captureLedSupported {
+    if (role != DeviceRelayRole.mobileOwner) return false;
+    final Object led = adapter;
+    return led is DeviceRelayLed && led.captureLedSupported;
+  }
 
   Stream<DeviceAudioFrame> audioFrames(String deviceId) {
     _require(
