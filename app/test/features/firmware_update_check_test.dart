@@ -113,6 +113,40 @@ void main() {
     );
   });
 
+  group('the release source', () {
+    test('defaults to this repository\'s GitHub releases', () {
+      final uri = Uri.parse(firmwareUpdateEndpoint);
+
+      expect(uri.host, 'api.github.com');
+      expect(uri.pathSegments.take(4), [
+        'repos',
+        'undivisible',
+        'omi-v4',
+        'releases',
+      ]);
+      expect(firmwareReleaseTagPrefix, 'firmware-v');
+    });
+
+    test(
+      'falls back to this repository when a release omits its page',
+      () async {
+        Uri? requested;
+        final release = await FirmwareUpdateChecker(
+          client: MockClient((request) async {
+            requested = request.url;
+            return http.Response(
+              jsonEncode([(_release('firmware-v3.2.0')..remove('html_url'))]),
+              200,
+            );
+          }),
+        ).check(installedRevision: '3.1.0');
+
+        expect(requested.toString(), firmwareUpdateEndpoint);
+        expect(release?.url, 'https://github.com/undivisible/omi-v4/releases');
+      },
+    );
+  });
+
   group('the pre-flight gate', () {
     FirmwareUpdateBlock block({
       bool connected = true,

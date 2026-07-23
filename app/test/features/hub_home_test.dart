@@ -487,9 +487,12 @@ void main() {
 
     await tester.drag(
       find.byKey(const Key('chat_messages')),
-      Offset(0, -(position.pixels - 30)),
+      const Offset(0, -600),
     );
-    await tester.pumpAndSettle();
+    for (var i = 0; i < 60; i++) {
+      await tester.pump(const Duration(milliseconds: 50));
+      if (position.pixels == 0) break;
+    }
     expect(position.pixels, 0);
   });
 
