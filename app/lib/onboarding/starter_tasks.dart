@@ -15,6 +15,7 @@ List<String> deriveStarterTasks({
     for (final span in spans) {
       final subject = span.group(1)!.replaceAll(RegExp(r'\s+'), ' ').trim();
       if (subject.length < 3 || subject.length > 60) continue;
+      if (_vagueSubjects.contains(subject.toLowerCase())) continue;
       if (subjects.any(
         (existing) => existing.toLowerCase() == subject.toLowerCase(),
       )) {
@@ -24,9 +25,9 @@ List<String> deriveStarterTasks({
     }
   }
   const templates = [
-    'Pick “{}” back up where you left off.',
-    'Decide the next step for “{}”.',
-    'Tie up the loose ends in “{}”.',
+    'Open “{}” and write down its single next step.',
+    'Set a concrete deadline for “{}”.',
+    'Archive “{}” or schedule its next working session.',
   ];
   final tasks = <String>[
     for (final (index, subject) in subjects.indexed.take(templates.length))
@@ -38,12 +39,30 @@ List<String> deriveStarterTasks({
       final items = source.itemsFound.toBigInt();
       if (items <= BigInt.zero) continue;
       final name = source.source.replaceAll('_', ' ').trim();
-      if (name.isEmpty) continue;
+      if (name.isEmpty || _vagueSubjects.contains(name.toLowerCase())) {
+        continue;
+      }
       tasks.add(
-        'Go through the $items ${items == BigInt.one ? 'item' : 'items'} '
-        'I found in your $name.',
+        'Review the $items ${items == BigInt.one ? 'item' : 'items'} '
+        'found in your $name and archive the ones that are done.',
       );
     }
   }
   return List.unmodifiable(tasks.take(4));
 }
+
+const _vagueSubjects = {
+  'loose ends',
+  'misc',
+  'miscellaneous',
+  'stuff',
+  'things',
+  'various',
+  'general',
+  'other',
+  'everything',
+  'work',
+  'life',
+  'todo',
+  'todos',
+};

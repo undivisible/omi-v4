@@ -20,6 +20,34 @@ void main() {
     expect(tasks[0], contains('Alpenglow'));
     expect(tasks[1], contains('desktop handoff'));
     expect(tasks[2], contains('Friday planning'));
+    expect(tasks[0], contains('write down its single next step'));
+    expect(tasks[1], contains('deadline'));
+    for (final task in tasks) {
+      expect(task, isNot(contains('loose ends')));
+      expect(task, matches(RegExp(r'^(Open|Set|Archive|Review) ')));
+    }
+  });
+
+  test('drops vague subjects that cannot be made concrete', () {
+    expect(
+      deriveStarterTasks(summary: 'Tie up **loose ends** across **stuff**.'),
+      isEmpty,
+    );
+    final tasks = deriveStarterTasks(
+      summary: 'You juggle **misc** and **Alpenglow**.',
+    );
+    expect(tasks, hasLength(1));
+    expect(tasks.single, contains('Alpenglow'));
+  });
+
+  test('skips vague source names in the evidence fallback', () {
+    final tasks = deriveStarterTasks(
+      summary: null,
+      sources: [_source('other', 8), _source('apple_mail', 3)],
+    );
+    expect(tasks, hasLength(1));
+    expect(tasks.single, contains('apple mail'));
+    expect(tasks.single, contains('3'));
   });
 
   test('falls back to scanned sources with evidence and caps at four', () {
