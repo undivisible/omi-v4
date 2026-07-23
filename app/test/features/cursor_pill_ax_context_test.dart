@@ -116,14 +116,14 @@ void main() {
       await harness.close();
     });
 
-    test('a slow snapshot is abandoned and the plain question sent', () async {
+    test('a snapshot still in flight sends the plain question', () async {
+      // The background refresh has not resolved yet, so the cache is empty when
+      // the prompt goes out — the send never blocks on the accessibility read.
       final harness = _Harness(
-        snapshotDelay: const Duration(seconds: 5),
+        block: true,
         snapshot: const AxContextSnapshot(appName: 'Mail'),
       );
-      final controller = harness.controller(
-        axContextTimeout: const Duration(milliseconds: 20),
-      );
+      final controller = harness.controller();
 
       await controller.summon();
       await controller.submit('summarize this');
@@ -149,43 +149,45 @@ void main() {
 }
 
 final class _Harness {
-  _Harness({this.snapshot = AxContextSnapshot.empty, this.snapshotDelay});
+  _Harness({this.snapshot = AxContextSnapshot.empty, this.block = false});
 
   final AxContextSnapshot snapshot;
-  final Duration? snapshotDelay;
+
+  /// When set, the fetcher hangs on this gate so the cache stays empty — used
+  /// to prove the send never waits on the accessibility read.
+  final bool block;
+  final _gate = Completer<void>();
   final hub = _FakeNativeHub();
   final level = ValueNotifier<double>(0);
   final prompts = <String>[];
   int fetches = 0;
 
-  CursorPillController controller({
-    bool withFetcher = true,
-    Duration axContextTimeout = const Duration(milliseconds: 600),
-  }) => CursorPillController(
-    hub: hub,
-    events: hub.events,
-    startVoice: () async {},
-    stopVoice: () async => '',
-    cancelVoice: () async {},
-    sendPrompt: (text) async {
-      prompts.add(text);
-      return 'req-${prompts.length}';
-    },
-    fetchAxContext: withFetcher
-        ? () async {
-            fetches += 1;
-            if (snapshotDelay case final delay?) {
-              await Future<void>.delayed(delay);
-            }
-            return snapshot;
-          }
-        : null,
-    axContextTimeout: axContextTimeout,
-    openFlashDuration: Duration.zero,
-    level: level,
-  );
+  CursorPillController controller({bool withFetcher = true}) =>
+      CursorPillController(
+        hub: hub,
+        events: hub.events,
+        startVoice: () async {},
+        stopVoice: () async => '',
+        cancelVoice: () async {},
+        sendPrompt: (text) async {
+          prompts.add(text);
+          return 'req-${prompts.length}';
+        },
+        fetchAxContext: withFetcher
+            ? () async {
+                fetches += 1;
+                if (block) await _gate.future;
+                return snapshot;
+              }
+            : null,
+        openFlashDuration: Duration.zero,
+        level: level,
+      );
 
-  Future<void> close() => hub.close();
+  Future<void> close() async {
+    if (!_gate.isCompleted) _gate.complete();
+    await hub.close();
+  }
 }
 
 final class _FakeNativeHub implements NativeHub {

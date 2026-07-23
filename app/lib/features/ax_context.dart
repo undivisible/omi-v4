@@ -52,6 +52,21 @@ final class AxContextSnapshot {
 
   static bool _blank(String? value) => value == null || value.isEmpty;
 
+  /// Serializes back to the native map shape, so the primary engine can relay
+  /// a snapshot it read to the pill panel's own engine (which cannot reach the
+  /// `omi/ax_context` channel directly). Round-trips through [fromMap].
+  Map<String, Object?> toMap() => {
+    if (appName != null) 'app': appName,
+    if (bundleId != null) 'bundleId': bundleId,
+    if (focusedText != null) 'focusedText': focusedText,
+    if (selectedText != null) 'selectedText': selectedText,
+    if (surrounding != null) 'surrounding': surrounding,
+    if (windowTitle != null) 'windowTitle': windowTitle,
+    if (secure) 'secure': true,
+    if (truncated) 'truncated': true,
+    if (reason != null) 'reason': reason,
+  };
+
   static AxContextSnapshot fromMap(Map<Object?, Object?> map) {
     String? text(Object? value) =>
         value is String && value.trim().isNotEmpty ? value : null;

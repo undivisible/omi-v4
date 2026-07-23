@@ -255,6 +255,12 @@ class _CursorPillState extends State<CursorPill> {
             const SizedBox(height: 8),
           ],
           _pill(),
+          // The model's fuller answer sits in a bubble under the pill; the
+          // terse continuation lives inline as the ghost after the caret.
+          if (controller.answer case final answer?) ...[
+            const SizedBox(height: 8),
+            _AnswerBubble(text: answer),
+          ],
           if (controller.error case final message?) ...[
             const SizedBox(height: 6),
             Text(
@@ -663,6 +669,48 @@ class _SuggestionChip extends StatelessWidget {
       ),
     ),
   );
+}
+
+/// The bubble under the pill holding the model's fuller answer while typing.
+/// Fades in on first appearance and holds still as the answer refines; honors
+/// reduce-motion by skipping the fade.
+class _AnswerBubble extends StatelessWidget {
+  const _AnswerBubble({required this.text});
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    final reduceMotion = MediaQuery.disableAnimationsOf(context);
+    return TweenAnimationBuilder<double>(
+      tween: Tween<double>(begin: reduceMotion ? 1 : 0, end: 1),
+      duration: reduceMotion
+          ? Duration.zero
+          : const Duration(milliseconds: 200),
+      curve: Curves.easeOut,
+      builder: (context, t, child) => Opacity(opacity: t, child: child),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 360),
+        child: LiquidGlass(
+          radius: 14,
+          child: Padding(
+            key: const Key('cursor_pill_answer'),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+            child: Text(
+              text,
+              maxLines: 6,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                color: _pillInk,
+                fontSize: 13,
+                height: 1.35,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 /// Five slim, center-weighted bars next to the mic — the clicky look. The
