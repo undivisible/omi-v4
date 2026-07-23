@@ -514,9 +514,14 @@ class MobilePendantPageState extends State<MobilePendantPage> {
           constraints.maxHeight * .5,
           pendantWidth * .78 + 222,
         );
+        // Push the hero (pendant image, title, status, battery) down from
+        // the very top edge: respect the safe-area inset and add extra
+        // breathing room so the cord isn't flush against the top.
+        final topInset = MediaQuery.paddingOf(context).top;
         return Column(
           key: const Key('companion_pendant_column'),
           children: [
+            SizedBox(height: topInset + 52),
             SizedBox(
               height: heroHeight,
               child: OverflowBox(
@@ -535,7 +540,7 @@ class MobilePendantPageState extends State<MobilePendantPage> {
             Expanded(
               child: ListView(
                 key: const Key('companion_page_sections'),
-                physics: const NeverScrollableScrollPhysics(),
+                physics: const ClampingScrollPhysics(),
                 padding: const EdgeInsets.fromLTRB(18, 8, 18, 24),
                 children: [
                   _StatsRow(
