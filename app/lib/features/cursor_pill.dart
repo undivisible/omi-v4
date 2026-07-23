@@ -57,11 +57,17 @@ class CursorPill extends StatefulWidget {
   const CursorPill({
     required this.controller,
     this.autofocus = true,
+    this.hintText = 'Ask me anything…',
     super.key,
   });
 
   final CursorPillController controller;
   final bool autofocus;
+
+  /// The input placeholder. Subtly reflects the surface: the panel summoned
+  /// over another app can read what you are working on, so it invites exactly
+  /// that; the in-app pill keeps the generic prompt.
+  final String hintText;
 
   @override
   State<CursorPill> createState() => _CursorPillState();
@@ -493,14 +499,14 @@ class _CursorPillState extends State<CursorPill> {
               maxLines: 1,
               cursorColor: _pillInk,
               style: const TextStyle(color: _pillInk, fontSize: 14),
-              decoration: const InputDecoration(
+              decoration: InputDecoration(
                 isDense: true,
                 border: InputBorder.none,
                 enabledBorder: InputBorder.none,
                 focusedBorder: InputBorder.none,
                 filled: false,
-                hintText: 'Ask me anything…',
-                hintStyle: TextStyle(color: _pillMuted, fontSize: 14),
+                hintText: widget.hintText,
+                hintStyle: const TextStyle(color: _pillMuted, fontSize: 14),
               ),
               onSubmitted: (value) =>
                   unawaited(widget.controller.submit(value)),

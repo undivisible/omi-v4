@@ -300,7 +300,12 @@ class _PillPanelAppState extends State<PillPanelApp> {
         alignment: Alignment.topLeft,
         child: Padding(
           padding: const EdgeInsets.all(10),
-          child: CursorPill(controller: _client.controller),
+          child: CursorPill(
+            controller: _client.controller,
+            // The panel is always summoned over another app, where the reader
+            // can see the thread and the draft in progress — invite that.
+            hintText: 'Ask about what you’re working on…',
+          ),
         ),
       ),
     ),

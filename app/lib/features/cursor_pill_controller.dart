@@ -7,6 +7,7 @@ import '../app_services.dart';
 import '../currents/currents.dart';
 import '../keyboard/shift_gesture.dart';
 import '../native/native_hub.dart';
+import 'ax_context.dart';
 import 'cursor_pill_window.dart';
 import 'overlay_launcher.dart';
 import 'voice_intents.dart';
@@ -196,6 +197,65 @@ final class PillSuggestion {
   }
 }
 
+String _clampText(String text, int max) =>
+    text.length <= max ? text : '${text.substring(0, max).trimRight()}…';
+
+String _collapseLine(String text, int max) =>
+    _clampText(text.replaceAll(RegExp(r'\s+'), ' ').trim(), max);
+
+/// Assembles the outgoing agent prompt from the user's typed [question] plus
+/// the read-only on-screen [context] and the [memory] matches already surfaced
+/// this session — clearly labeled sections, the same shape as the email-draft
+/// assembly. Each section is length-capped and omitted when empty, so with
+/// nothing on hand the bare question is sent unchanged. A secure field
+/// contributes nothing: [AxContextSnapshot.focusedText] is already null there.
+String buildOverlayPrompt({
+  required String question,
+  AxContextSnapshot context = AxContextSnapshot.empty,
+  List<PillSuggestion> memory = const [],
+}) {
+  final sections = <String>[];
+  if (context.appName case final app? when app.isNotEmpty) {
+    final bundle = context.bundleId;
+    sections.add(
+      'App: $app${bundle != null && bundle.isNotEmpty ? ' ($bundle)' : ''}',
+    );
+  }
+  if (context.windowTitle case final title? when title.isNotEmpty) {
+    sections.add('Window: ${_collapseLine(title, 200)}');
+  }
+  if (context.focusedText case final written? when written.isNotEmpty) {
+    sections.add(
+      'What I have already written:\n"""\n${_clampText(written, 2000)}\n"""',
+    );
+  }
+  if (context.selectedText case final selected? when selected.isNotEmpty) {
+    sections.add(
+      'Currently selected:\n"""\n${_clampText(selected, 1000)}\n"""',
+    );
+  }
+  if (context.surrounding case final surrounding? when surrounding.isNotEmpty) {
+    final marker = context.truncated ? '\n… (truncated)' : '';
+    sections.add(
+      'On screen:\n"""\n${_clampText(surrounding, 4000)}$marker\n"""',
+    );
+  }
+  final memoryLines = <String>[
+    for (final item in memory.take(3))
+      if (sanitizeEvidenceText(item.prompt, maxLength: 280) case final line
+          when line.isNotEmpty)
+        '- $line',
+  ];
+  if (memoryLines.isNotEmpty) {
+    sections.add('From my memory:\n${memoryLines.join('\n')}');
+  }
+  if (sections.isEmpty) return question;
+  return '$question\n\n'
+      '--- Context (a read-only snapshot of what I am looking at right now; '
+      'use it to answer, do not repeat it back verbatim) ---\n'
+      '${sections.join('\n\n')}';
+}
+
 final class CursorPillController extends ChangeNotifier {
   CursorPillController({
     required this._hub,
@@ -221,6 +281,8 @@ final class CursorPillController extends ChangeNotifier {
     this._automate,
     this._openApp,
     this._decideProposal,
+    this._fetchAxContext,
+    this.axContextTimeout = const Duration(milliseconds: 600),
     this.draftTimeout = const Duration(milliseconds: 2500),
     this.predictionDebounce = const Duration(milliseconds: 300),
     this.predictionTimeout = const Duration(milliseconds: 1500),
@@ -248,6 +310,11 @@ final class CursorPillController extends ChangeNotifier {
       // frames them so the model acts as the user's desktop agent.
       sendPrompt: (text) =>
           services.sendChatMessage(text: text, origin: MessageOrigin.overlay),
+      // The reader is a no-op off macOS and returns a reasoned empty snapshot
+      // when Accessibility is not trusted (the native check is silent — it
+      // never triggers the permission prompt), so it needs no separate grant
+      // gate here; it shares the Accessibility grant the global tap uses.
+      fetchAxContext: AxContext.snapshot,
       openApp: const OverlayAppLauncher().openApp,
       decideProposal: (proposalId, decision) => services.decideChatApproval(
         proposalId: proposalId,
@@ -309,6 +376,17 @@ final class CursorPillController extends ChangeNotifier {
   final Future<String?> Function(String query)? _openApp;
   final Future<void> Function(String proposalId, ApprovalDecision decision)?
   _decideProposal;
+
+  /// Fetches the read-only accessibility snapshot of what the user is looking
+  /// at, injected so the platform channel is never touched from the controller
+  /// and the send path stays fakeable. Null off macOS and in tests that don't
+  /// exercise it, in which case the agent prompt carries no on-screen context.
+  final Future<AxContextSnapshot> Function()? _fetchAxContext;
+
+  /// How long the on-screen snapshot may take before the prompt is sent
+  /// without it — cheap and cancellable, so a slow accessibility read never
+  /// blocks the send.
+  final Duration axContextTimeout;
   final Duration draftTimeout;
 
   /// How long typing must pause before an inline AI completion is requested,
@@ -699,12 +777,18 @@ final class CursorPillController extends ChangeNotifier {
   /// it collapses when the reply starts streaming in chat (or when the turn
   /// completes silently), and holds open while a proposal awaits approval.
   Future<void> _sendToAgent(String text) async {
+    // Capture the memory matches already surfaced this session before
+    // _showWorking clears the suggestion state, so they can be folded into the
+    // prompt alongside the on-screen context.
+    final memory = _memorySuggestions;
     _showWorking('Working on it…');
     _sawAgentReply = false;
     _proposal = null;
+    final prompt = await _composeAgentPrompt(text, memory);
+    if (_disposed || _state != CursorPillState.working) return;
     String? requestId;
     try {
-      requestId = await _sendPrompt(text);
+      requestId = await _sendPrompt(prompt);
     } catch (_) {
       requestId = null;
     }
@@ -714,6 +798,31 @@ final class CursorPillController extends ChangeNotifier {
       return;
     }
     _agentRequestId = requestId;
+  }
+
+  /// Folds the user's question, the read-only on-screen snapshot, and the
+  /// session's memory matches into one labeled prompt. The snapshot fetch is
+  /// bounded by [axContextTimeout] and cancellable: if it isn't ready fast (or
+  /// there is no reader, as off macOS or without the Accessibility grant) the
+  /// prompt is built from whatever is on hand rather than blocking the send.
+  Future<String> _composeAgentPrompt(
+    String question,
+    List<PillSuggestion> memory,
+  ) async {
+    var snapshot = AxContextSnapshot.empty;
+    final fetch = _fetchAxContext;
+    if (fetch != null) {
+      try {
+        snapshot = await fetch().timeout(axContextTimeout);
+      } catch (_) {
+        snapshot = AxContextSnapshot.empty;
+      }
+    }
+    return buildOverlayPrompt(
+      question: question,
+      context: snapshot,
+      memory: memory,
+    );
   }
 
   void _showWorking(String status) {
