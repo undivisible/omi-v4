@@ -499,7 +499,7 @@ void main() {
   });
 }
 
-final class _LiveHub implements NativeHub, LiveVoiceHub {
+final class _LiveHub implements NativeHub {
   final _events = StreamController<NativeEvent>.broadcast();
   String? streamId;
   final sentAudio = <Uint8List>[];
@@ -614,7 +614,7 @@ Future<void> _drain(LiveVoiceCapture voice) async {
   }
 }
 
-final class _FakeHub implements NativeHub, LiveVoiceHub {
+final class _FakeHub implements NativeHub {
   final eventsController = StreamController<NativeEvent>.broadcast(sync: true);
   final startedStreams = <String>[];
 

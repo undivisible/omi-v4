@@ -29,7 +29,7 @@ final class _AllGrantedCapabilities implements DesktopCapabilityGateway {
   Future<void> dismissOverlay() async {}
 }
 
-final class _ScanHub implements NativeHub, OnboardingScanHub {
+final class _ScanHub implements NativeHub {
   final eventsController = StreamController<NativeEvent>.broadcast();
   final scanRequests = <String>[];
 

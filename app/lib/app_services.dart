@@ -406,9 +406,6 @@ final class AppServices {
 
   Future<String> scanOnboardingSources() async {
     await _queueProductionSync();
-    if (nativeHub is! OnboardingScanHub) {
-      throw StateError('Native scanning is not connected.');
-    }
     if (!await _ensureNativeInitialized()) {
       throw const NativeHubUnavailable(
         'Private scanning is unavailable on this platform.',
@@ -416,7 +413,7 @@ final class AppServices {
     }
     final root = await selectedWorkspaceRoot;
     final requestId = 'onboarding-scan-${randomId()}';
-    (nativeHub as OnboardingScanHub).scanOnboarding(
+    nativeHub.scanOnboarding(
       requestId: requestId,
       roots: [?root],
       includeAppleNotes: defaultTargetPlatform == TargetPlatform.macOS,
@@ -654,28 +651,28 @@ final class AppServices {
   }
 
   void startMeeting({String? title}) {
-    if (!chatReady || nativeHub is! MeetingHub) {
+    if (!chatReady) {
       throw StateError('Native services are not connected.');
     }
-    (nativeHub as MeetingHub).startMeeting(
+    nativeHub.startMeeting(
       requestId: 'meeting-start-${randomId()}',
       title: title,
     );
   }
 
   void stopMeeting() {
-    if (!chatReady || nativeHub is! MeetingHub) {
+    if (!chatReady) {
       throw StateError('Native services are not connected.');
     }
-    (nativeHub as MeetingHub).stopMeeting('meeting-stop-${randomId()}');
+    nativeHub.stopMeeting('meeting-stop-${randomId()}');
   }
 
   void jotMeetingNote(String text) {
     if (text.trim().isEmpty) return;
-    if (!chatReady || nativeHub is! MeetingHub) {
+    if (!chatReady) {
       throw StateError('Native services are not connected.');
     }
-    (nativeHub as MeetingHub).jotMeetingNote(
+    nativeHub.jotMeetingNote(
       requestId: 'meeting-jot-${randomId()}',
       text: text,
     );
@@ -754,7 +751,7 @@ final class AppServices {
     final session = auth.snapshot.session;
     final generation = _authorityGeneration;
     if (!chatReady || session == null) {
-      if (localMode && nativeHub is LiveVoiceHub) {
+      if (localMode) {
         await _startDesktopVoiceLocal(voiceGeneration);
         return;
       }
@@ -775,7 +772,7 @@ final class AppServices {
     _desktopVoiceRouteIsLive = false;
     voiceNotice.value = null;
     final tokens = liveVoiceTokens;
-    if (tokens != null && nativeHub is LiveVoiceHub) {
+    if (tokens != null) {
       GeminiLiveToken? grant;
       try {
         grant = await tokens.createGeminiToken();
@@ -1165,14 +1162,11 @@ final class AppServices {
         managedWorkerOrigin: _workerOrigin.toString(),
       );
     }
-    final hub = nativeHub;
-    if (hub is MeetingCaptureHub) {
-      final mode = await _captureModeStore.read();
-      (hub as MeetingCaptureHub).setSystemAudioCaptureMode(
-        requestId: 'set-system-audio-capture-mode-${_meetingAuthSequence++}',
-        mode: mode,
-      );
-    }
+    final mode = await _captureModeStore.read();
+    nativeHub.setSystemAudioCaptureMode(
+      requestId: 'set-system-audio-capture-mode-${_meetingAuthSequence++}',
+      mode: mode,
+    );
     return true;
   }
 
@@ -1181,9 +1175,8 @@ final class AppServices {
 
   Future<void> setSystemAudioCaptureMode(SystemAudioCaptureMode mode) async {
     await _captureModeStore.write(mode);
-    final hub = nativeHub;
-    if (_nativeInitialized && hub is MeetingCaptureHub) {
-      (hub as MeetingCaptureHub).setSystemAudioCaptureMode(
+    if (_nativeInitialized) {
+      nativeHub.setSystemAudioCaptureMode(
         requestId: 'set-system-audio-capture-mode-${_meetingAuthSequence++}',
         mode: mode,
       );
@@ -1192,11 +1185,7 @@ final class AppServices {
 
   Future<void> _provideMeetingAuth() async {
     final session = auth.snapshot.session;
-    final hub = nativeHub;
-    if (!chatReady ||
-        session == null ||
-        hub is! MeetingCaptureHub ||
-        _managedStt == null) {
+    if (!chatReady || session == null || _managedStt == null) {
       return;
     }
     final transcriptionAuth = await _managedTranscriptionAuthFor(
@@ -1210,7 +1199,7 @@ final class AppServices {
         auth.snapshot.session?.uid != session.uid) {
       return;
     }
-    (hub as MeetingCaptureHub).provideMeetingAuth(
+    nativeHub.provideMeetingAuth(
       requestId: 'provide-meeting-auth-${_meetingAuthSequence++}',
       auth: transcriptionAuth,
       trustedWorkerOrigin: _workerOrigin?.toString(),

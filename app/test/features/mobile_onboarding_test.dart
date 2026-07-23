@@ -835,4 +835,50 @@ final class _Hub implements NativeHub {
 
   @override
   void dispose() {}
+
+  @override
+  void startLiveVoice({
+    required String requestId,
+    required String liveStreamId,
+    required String ephemeralToken,
+    required String model,
+    String? resumptionHandle,
+  }) {}
+
+  @override
+  void stopLiveVoice({
+    required String requestId,
+    required String liveStreamId,
+  }) {}
+
+  @override
+  void startMeeting({required String requestId, String? title}) {}
+
+  @override
+  void stopMeeting(String requestId) {}
+
+  @override
+  void jotMeetingNote({required String requestId, required String text}) {}
+
+  @override
+  void provideMeetingAuth({
+    required String requestId,
+    required TranscriptionAuth auth,
+    String? trustedWorkerOrigin,
+  }) {}
+
+  @override
+  void setSystemAudioCaptureMode({
+    required String requestId,
+    required SystemAudioCaptureMode mode,
+  }) {}
+
+  @override
+  void scanOnboarding({
+    required String requestId,
+    required List<String> roots,
+    required bool includeAppleNotes,
+    required bool includeAppleMail,
+    required int recordedAtMs,
+  }) {}
 }

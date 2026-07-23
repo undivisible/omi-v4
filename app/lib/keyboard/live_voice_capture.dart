@@ -89,12 +89,7 @@ final class LiveVoiceCapture {
     required String model,
     required String authorityId,
   }) async {
-    if (hub is! LiveVoiceHub) {
-      throw const NativeHubUnavailable(
-        'Live voice is unavailable on this platform.',
-      );
-    }
-    final live = hub as LiveVoiceHub;
+    final live = hub;
     await cancel();
     final generation = ++_generation;
     _ephemeralToken = ephemeralToken;
@@ -323,13 +318,13 @@ final class LiveVoiceCapture {
   Future<void> _resume(_LiveVoiceSession dead, String handle) async {
     final token = _ephemeralToken;
     final model = _model;
-    if (token == null || model == null || hub is! LiveVoiceHub) {
+    if (token == null || model == null) {
       if (!dead.ended.isCompleted) dead.ended.complete();
       await _abort(dead);
       return;
     }
     final generation = _generation;
-    final live = hub as LiveVoiceHub;
+    final live = hub;
     final session = _LiveVoiceSession('${dead.streamId}-r')
       ..resumed = true
       ..audio = dead.audio;
@@ -414,8 +409,7 @@ final class LiveVoiceCapture {
   }
 
   void _stopNative(_LiveVoiceSession session) {
-    if (hub is! LiveVoiceHub) return;
-    (hub as LiveVoiceHub).stopLiveVoice(
+    hub.stopLiveVoice(
       requestId: session.stopRequestId,
       liveStreamId: session.streamId,
     );
