@@ -13,7 +13,8 @@ final class UniversalBleDeviceRelayAdapter
         DeviceRelayHaptics,
         DeviceRelayLed,
         DeviceRelaySleep,
-        DeviceRelayRename {
+        DeviceRelayRename,
+        DeviceRelayDfu {
   UniversalBleDeviceRelayAdapter({
     this.scanSettle = const Duration(seconds: 5),
   });
@@ -47,6 +48,9 @@ final class UniversalBleDeviceRelayAdapter
   // Device rename. Read/write UTF-8 string; firmware persists to NVS and
   // re-applies on boot. GAP Device Name (0x2a00) stays read-only.
   static const _renameCharacteristic = '19b10016-e8f2-537e-4f6c-d104768a1214';
+  // SMP (mcumgr) service. Its presence is what says the running firmware was
+  // built with MCUboot OTA and can take a `dfu_application.zip` over BLE.
+  static const _smpService = '8d53dc1d-1db7-4cd3-868b-8a527460aa84';
 
   final Duration scanSettle;
   final _snapshots = StreamController<DeviceRelaySnapshot>.broadcast();
@@ -63,6 +67,7 @@ final class UniversalBleDeviceRelayAdapter
   // first write answers it otherwise. Optimistic while unknown so the app does
   // not announce "no LED" on firmware that has one.
   bool? _captureLedPresent;
+  bool _smpPresent = false;
   bool _restoringNotifications = false;
   Timer? _restoreRetryTimer;
   int _restoreAttempts = 0;
@@ -176,6 +181,7 @@ final class UniversalBleDeviceRelayAdapter
     if (_connectedId != null) await disconnect();
     _restoreAttempts = 0;
     _captureLedPresent = null;
+    _smpPresent = false;
     var device = _devices[deviceId];
     if (device == null) {
       // The remembered pendant may already be connected at the system level
@@ -252,7 +258,7 @@ final class UniversalBleDeviceRelayAdapter
     try {
       await UniversalBle.connect(deviceId, autoConnect: true);
       _connectedId = deviceId;
-      _noteCaptureLed(await UniversalBle.discoverServices(deviceId));
+      _noteDiscoveredServices(await UniversalBle.discoverServices(deviceId));
       final codec = await _readFirst(deviceId, _omiService, _audioCodec);
       final battery = await _readFirst(
         deviceId,
@@ -420,10 +426,19 @@ final class UniversalBleDeviceRelayAdapter
   @override
   bool get captureLedSupported => _captureLedPresent ?? true;
 
+  // DFU is the opposite of the LED: unknown means no. Offering a firmware
+  // update that turns out to have nowhere to land is worse than not offering
+  // one, so this only turns true on a service the pendant actually advertised.
+  @override
+  bool get dfuSupported => _connected && _smpPresent;
+
   // A platform that reports no characteristics at all (some desktop stacks, and
   // any stub) leaves the answer unknown rather than declaring the LED missing.
-  void _noteCaptureLed(List<BleService> services) {
+  void _noteDiscoveredServices(List<BleService> services) {
     var sawCharacteristics = false;
+    _smpPresent = services.any(
+      (service) => service.uuid.toLowerCase() == _smpService,
+    );
     for (final service in services) {
       if (service.characteristics.isNotEmpty) sawCharacteristics = true;
       if (service.uuid.toLowerCase() != _settingsService) continue;
@@ -555,6 +570,7 @@ final class UniversalBleDeviceRelayAdapter
     _connectedDevice = null;
     _connected = false;
     _captureLedPresent = null;
+    _smpPresent = false;
     _restoreRetryTimer?.cancel();
     _restoreRetryTimer = null;
     _restoreAttempts = 0;
@@ -591,7 +607,7 @@ final class UniversalBleDeviceRelayAdapter
     if (_connectedId != deviceId || _restoringNotifications) return;
     _restoringNotifications = true;
     try {
-      await UniversalBle.discoverServices(deviceId);
+      _noteDiscoveredServices(await UniversalBle.discoverServices(deviceId));
       await UniversalBle.subscribeNotifications(
         deviceId,
         _omiService,

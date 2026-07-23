@@ -17,6 +17,7 @@ import '../native/live_activity_bridge.dart';
 import '../native/native_hub.dart';
 import '../ui/burst_glow.dart';
 import 'capture_notifier.dart';
+import 'firmware_update_check.dart';
 import 'mobile_update_check.dart';
 import 'transcript_log_store.dart';
 
@@ -78,6 +79,8 @@ class MobileCompanionShell extends StatefulWidget {
     this.captureNotifier,
     this.captureEnabledStore,
     this.updateChecker,
+    this.firmwareChecker,
+    this.firmwareDownloader,
     this.openLink,
     this.previewMode = false,
     super.key,
@@ -89,6 +92,8 @@ class MobileCompanionShell extends StatefulWidget {
   final CaptureNotifier? captureNotifier;
   final CaptureEnabledStore? captureEnabledStore;
   final MobileUpdateChecker? updateChecker;
+  final FirmwareUpdateChecker? firmwareChecker;
+  final FirmwareDownloader? firmwareDownloader;
   final LinkOpener? openLink;
   final bool previewMode;
 
@@ -209,6 +214,8 @@ class _MobileCompanionShellState extends State<MobileCompanionShell> {
               captureNotifier: _captureNotifier,
               captureEnabledStore: widget.captureEnabledStore,
               updateChecker: widget.updateChecker,
+              firmwareChecker: widget.firmwareChecker,
+              firmwareDownloader: widget.firmwareDownloader,
               openLink: widget.openLink,
               previewMode: widget.previewMode,
             ),
@@ -270,6 +277,8 @@ class MobilePendantPage extends StatefulWidget {
     required this.captureNotifier,
     this.captureEnabledStore,
     this.updateChecker,
+    this.firmwareChecker,
+    this.firmwareDownloader,
     this.openLink,
     this.interimText = '',
     this.previewMode = false,
@@ -282,6 +291,8 @@ class MobilePendantPage extends StatefulWidget {
   final CaptureNotifier captureNotifier;
   final CaptureEnabledStore? captureEnabledStore;
   final MobileUpdateChecker? updateChecker;
+  final FirmwareUpdateChecker? firmwareChecker;
+  final FirmwareDownloader? firmwareDownloader;
   final LinkOpener? openLink;
   final String interimText;
   final bool previewMode;
@@ -852,6 +863,9 @@ class MobilePendantPageState extends State<MobilePendantPage> {
         builder: (sheetContext) => _SettingsSheet(
           services: widget.services,
           previewMode: widget.previewMode,
+          firmwareChecker: widget.firmwareChecker,
+          firmwareDownloader: widget.firmwareDownloader,
+          openLink: widget.openLink ?? _openExternalLink,
           rememberedDeviceId: () => rememberedDeviceId,
           connectedDevice: () => _connectedDevice,
           capturing: () => widget.services.deviceAudio.active,
@@ -1003,6 +1017,238 @@ class _DeveloperOptionsPage extends StatelessWidget {
                 title: 'Capture state',
                 detail: capturing ? 'Live' : 'Idle',
               ),
+            ]),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// The pendant firmware update. Detection, gating and the download land here;
+// the flash itself does not. MCUboot on the nRF5340 is configured
+// overwrite-only with downgrade prevention, so a half-written image has nothing
+// to fall back to — the install control stays deliberately out of reach until
+// the mcumgr transport is wired and exercised on hardware. See
+// `docs/mobile-firmware-dfu.md` for what is left.
+class _FirmwareUpdatePage extends StatefulWidget {
+  const _FirmwareUpdatePage({
+    required this.device,
+    required this.capturing,
+    required this.dfuSupported,
+    required this.checker,
+    required this.downloader,
+    required this.openLink,
+  });
+
+  final RelayDevice? device;
+  final bool capturing;
+  final bool dfuSupported;
+  final FirmwareUpdateChecker checker;
+  final FirmwareDownloader downloader;
+  final LinkOpener openLink;
+
+  @override
+  State<_FirmwareUpdatePage> createState() => _FirmwareUpdatePageState();
+}
+
+class _FirmwareUpdatePageState extends State<_FirmwareUpdatePage> {
+  bool _checking = true;
+  FirmwareRelease? _release;
+  Object? _error;
+  double? _downloadProgress;
+  String? _downloadedPath;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_check());
+  }
+
+  Future<void> _check() async {
+    FirmwareRelease? release;
+    Object? failure;
+    try {
+      release = await widget.checker.check(
+        installedRevision: widget.device?.firmwareRevision,
+        target: widget.device?.modelNumber,
+      );
+    } catch (error) {
+      failure = error;
+    }
+    if (!mounted) return;
+    setState(() {
+      _checking = false;
+      _release = release;
+      _error = failure;
+    });
+  }
+
+  FirmwareUpdateBlock get _block => firmwareUpdateBlock(
+    connected: widget.device != null,
+    dfuSupported: widget.dfuSupported,
+    capturing: widget.capturing,
+    batteryLevel: widget.device?.batteryLevel,
+  );
+
+  Future<void> _download(FirmwareRelease release) async {
+    setState(() {
+      _downloadProgress = 0;
+      _error = null;
+    });
+    try {
+      final file = await widget.downloader.download(
+        release,
+        onProgress: (progress) {
+          if (mounted) setState(() => _downloadProgress = progress);
+        },
+      );
+      if (!mounted) return;
+      setState(() => _downloadedPath = file.path);
+    } catch (error) {
+      // A failed or interrupted download leaves the pendant untouched, so the
+      // only thing to undo is the progress bar.
+      if (!mounted) return;
+      setState(() {
+        _downloadProgress = null;
+        _error = error;
+      });
+    }
+  }
+
+  String _blockMessage(FirmwareUpdateBlock block, FirmwareRelease release) =>
+      switch (block) {
+        FirmwareUpdateBlock.none =>
+          'Downloaded. Installing from the app is not enabled yet — open the '
+              'release and flash ${release.assetName} with nRF Connect for '
+              'Mobile.',
+        FirmwareUpdateBlock.disconnected =>
+          'Connect your pendant before updating it.',
+        FirmwareUpdateBlock.unsupported =>
+          'This pendant cannot take an update over Bluetooth.',
+        FirmwareUpdateBlock.lowBattery =>
+          'Charge your pendant to at least $firmwareUpdateMinimumBattery% '
+              'first: an update that runs out of power mid-write cannot be '
+              'undone.',
+        FirmwareUpdateBlock.capturing =>
+          'Turn capture off first — updating interrupts the audio stream.',
+      };
+
+  @override
+  Widget build(BuildContext context) {
+    final dark = _darkMode(context);
+    final device = widget.device;
+    final release = _release;
+    final block = _block;
+    final progress = _downloadProgress;
+    return Scaffold(
+      key: const Key('companion_firmware_page'),
+      backgroundColor: dark ? _inkSheet : _paper,
+      appBar: AppBar(
+        backgroundColor: dark ? _inkSheet : _paper,
+        foregroundColor: _pageInk(context),
+        elevation: 0,
+        title: const Text('Firmware update'),
+      ),
+      body: SafeArea(
+        top: false,
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(18, 12, 18, 24),
+          children: [
+            const _SectionLabel('PENDANT'),
+            ..._withGaps([
+              _PaperTile(
+                key: const Key('companion_firmware_installed'),
+                icon: Icons.memory_rounded,
+                title: 'Installed',
+                detail: device?.firmwareRevision ?? 'Not reported',
+              ),
+              if (_checking)
+                const _PaperTile(
+                  key: Key('companion_firmware_checking'),
+                  icon: Icons.sync_rounded,
+                  title: 'Checking for updates…',
+                  detail: 'Reading the published firmware releases.',
+                )
+              else if (release == null)
+                _PaperTile(
+                  key: const Key('companion_firmware_up_to_date'),
+                  icon: Icons.check_circle_outline_rounded,
+                  title: _error == null
+                      ? 'Up to date'
+                      : 'Could not check for updates',
+                  detail: _error == null
+                      ? 'No newer firmware has been published.'
+                      : '$_error',
+                )
+              else ...[
+                _PaperTile(
+                  key: const Key('companion_firmware_available'),
+                  icon: Icons.system_update_alt_rounded,
+                  title: 'Firmware ${release.version} available',
+                  detail: release.assetName,
+                  trailing: const _RowChevron(),
+                  onTap: () =>
+                      unawaited(widget.openLink(Uri.parse(release.url))),
+                ),
+                if (block != FirmwareUpdateBlock.none ||
+                    _downloadedPath != null)
+                  _PaperTile(
+                    key: const Key('companion_firmware_block'),
+                    icon: block == FirmwareUpdateBlock.none
+                        ? Icons.info_outline_rounded
+                        : Icons.warning_amber_rounded,
+                    iconColor: block == FirmwareUpdateBlock.none
+                        ? null
+                        : _coral,
+                    title: block == FirmwareUpdateBlock.none
+                        ? 'Ready to flash'
+                        : 'Not ready to update',
+                    detail: _blockMessage(block, release),
+                  ),
+                if (progress != null)
+                  _PaperCard(
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Text(
+                            _downloadedPath == null
+                                ? 'Downloading ${(progress * 100).round()}%'
+                                : 'Downloaded',
+                            key: const Key('companion_firmware_progress_label'),
+                            style: const TextStyle(
+                              fontSize: 13,
+                              color: _inkSoft,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          LinearProgressIndicator(
+                            key: const Key('companion_firmware_progress'),
+                            value: progress,
+                            backgroundColor: _hairline,
+                            color: _teal,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                _PaperTile(
+                  key: const Key('companion_firmware_download'),
+                  icon: Icons.download_rounded,
+                  title: _downloadedPath == null
+                      ? 'Download update'
+                      : 'Download again',
+                  detail: release.sizeBytes == null
+                      ? 'Fetch the update package to this phone.'
+                      : '${(release.sizeBytes! / 1024).round()} KB',
+                  trailing: const _RowChevron(),
+                  onTap: progress != null && _downloadedPath == null
+                      ? null
+                      : () => unawaited(_download(release)),
+                ),
+              ],
             ]),
           ],
         ),
@@ -1900,6 +2146,9 @@ class _SettingsSheet extends StatefulWidget {
   const _SettingsSheet({
     required this.services,
     required this.previewMode,
+    required this.firmwareChecker,
+    required this.firmwareDownloader,
+    required this.openLink,
     required this.rememberedDeviceId,
     required this.connectedDevice,
     required this.capturing,
@@ -1910,6 +2159,9 @@ class _SettingsSheet extends StatefulWidget {
 
   final AppServices services;
   final bool previewMode;
+  final FirmwareUpdateChecker? firmwareChecker;
+  final FirmwareDownloader? firmwareDownloader;
+  final LinkOpener openLink;
   final String? Function() rememberedDeviceId;
   final RelayDevice? Function() connectedDevice;
   final bool Function() capturing;
@@ -2032,6 +2284,23 @@ class _SettingsSheetState extends State<_SettingsSheet> {
     }
   }
 
+  void _openFirmwareUpdate() {
+    unawaited(
+      Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (routeContext) => _FirmwareUpdatePage(
+            device: widget.connectedDevice(),
+            capturing: widget.capturing(),
+            dfuSupported: widget.services.deviceRelay.dfuSupported,
+            checker: widget.firmwareChecker ?? FirmwareUpdateChecker(),
+            downloader: widget.firmwareDownloader ?? HttpFirmwareDownloader(),
+            openLink: widget.openLink,
+          ),
+        ),
+      ),
+    );
+  }
+
   void _openDeveloperOptions() {
     unawaited(
       Navigator.of(context).push(
@@ -2142,6 +2411,19 @@ class _SettingsSheetState extends State<_SettingsSheet> {
                         if (mounted) setState(() {});
                       }),
                     ),
+                  ),
+                // Only pendants whose firmware carries the SMP service can be
+                // updated over BLE. Everything else — DevKit builds, and any
+                // image built without MCUboot OTA — never sees the row, rather
+                // than being walked to the end of a flow that cannot finish.
+                if (connected && widget.services.deviceRelay.dfuSupported)
+                  _PaperTile(
+                    key: const Key('companion_firmware_update'),
+                    icon: Icons.memory_rounded,
+                    title: 'Firmware update',
+                    detail: 'Check for a newer pendant firmware.',
+                    trailing: const _RowChevron(),
+                    onTap: _openFirmwareUpdate,
                   ),
                 _PaperTile(
                   key: const Key('companion_developer_options'),

@@ -17,6 +17,7 @@ const _settingsService = '19b10010-e8f2-537e-4f6c-d104768a1214';
 const _sleep = '19b10014-e8f2-537e-4f6c-d104768a1214';
 const _captureLed = '19b10015-e8f2-537e-4f6c-d104768a1214';
 const _rename = '19b10016-e8f2-537e-4f6c-d104768a1214';
+const _smpService = '8d53dc1d-1db7-4cd3-868b-8a527460aa84';
 
 final _systemOmi = [
   BleDevice(
@@ -252,6 +253,27 @@ void main() {
 
     expect(adapter.captureLedSupported, isTrue);
   });
+
+  test(
+    'DFU is offered only when the pendant advertises the SMP service',
+    () async {
+      platform.systemDevices = _systemOmi;
+      await adapter.connect('omi-system');
+      expect(adapter.dfuSupported, isFalse);
+
+      await adapter.disconnect();
+      platform.gatt = {
+        ...platform.gatt,
+        _smpService: const ['da2e7828-fbce-4e01-ae9e-261174997c48'],
+      };
+      await adapter.connect('omi-system');
+
+      expect(adapter.dfuSupported, isTrue);
+
+      await adapter.disconnect();
+      expect(adapter.dfuSupported, isFalse);
+    },
+  );
 
   test('sleep writes 0x01 to 19b10014', () async {
     platform.systemDevices = _systemOmi;

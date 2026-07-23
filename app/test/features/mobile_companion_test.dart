@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
@@ -11,6 +13,7 @@ import 'package:omi/auth/auth.dart';
 import 'package:omi/currents/currents.dart';
 import 'package:omi/device/device.dart';
 import 'package:omi/features/capture_notifier.dart';
+import 'package:omi/features/firmware_update_check.dart';
 import 'package:omi/features/mobile_companion_shell.dart';
 import 'package:omi/features/transcript_log_store.dart';
 import 'package:omi/main.dart';
@@ -1126,6 +1129,118 @@ void main() {
     fixture.services.dispose();
   });
 
+  testWidgets('a pendant that cannot take an OTA never sees the firmware '
+      'row', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(800, 2400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final fixture = await _mobileFixture('user-a');
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MobileCompanionShell(
+          services: fixture.services,
+          pairedDevices: VolatilePairedDeviceStore(),
+          captureEnabledStore: VolatileCaptureEnabledStore(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('companion_reconnect')));
+    await _settle(tester);
+    await tester.tap(find.byKey(const Key('companion_settings_button')));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('companion_firmware_update')), findsNothing);
+    fixture.services.dispose();
+  });
+
+  testWidgets('the firmware screen offers the update, refuses to flash while '
+      'capture streams, and downloads', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(800, 2400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final fixture = await _mobileFixture('user-a', adapter: _DfuAdapter());
+    final downloader = _FakeDownloader();
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MobileCompanionShell(
+          services: fixture.services,
+          pairedDevices: VolatilePairedDeviceStore(),
+          captureEnabledStore: VolatileCaptureEnabledStore(),
+          firmwareChecker: FirmwareUpdateChecker(
+            endpoint: 'https://example.test/releases',
+            client: MockClient(
+              (request) async => http.Response(
+                jsonEncode([
+                  {
+                    'tag_name': 'firmware-v9.9.9',
+                    'html_url': 'https://example.test/firmware-v9.9.9',
+                    'assets': [
+                      {
+                        'name': 'dfu_application.zip',
+                        'browser_download_url':
+                            'https://example.test/dfu_application.zip',
+                        'size': 440320,
+                      },
+                    ],
+                  },
+                ]),
+                200,
+              ),
+            ),
+          ),
+          firmwareDownloader: downloader,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('companion_reconnect')));
+    await _settle(tester);
+    await tester.tap(find.byKey(const Key('companion_settings_button')));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(
+      find.byKey(const Key('companion_firmware_update')),
+    );
+    await tester.tap(find.byKey(const Key('companion_firmware_update')));
+    await _settle(tester);
+
+    expect(find.byKey(const Key('companion_firmware_page')), findsOneWidget);
+    expect(
+      find.byKey(const Key('companion_firmware_available')),
+      findsOneWidget,
+    );
+    // Capture is streaming, so the screen says so instead of offering a flash.
+    expect(
+      tester
+          .widget<ListTile>(
+            find.descendant(
+              of: find.byKey(const Key('companion_firmware_block')),
+              matching: find.byType(ListTile),
+            ),
+          )
+          .title,
+      isA<Text>().having((text) => text.data, 'title', 'Not ready to update'),
+    );
+
+    await tester.tap(find.byKey(const Key('companion_firmware_download')));
+    await _settle(tester);
+
+    expect(
+      find.byKey(const Key('companion_firmware_progress')),
+      findsOneWidget,
+    );
+    expect(
+      tester
+          .widget<Text>(
+            find.byKey(const Key('companion_firmware_progress_label')),
+          )
+          .data,
+      'Downloaded',
+    );
+    expect(downloader.requested, ['dfu_application.zip']);
+    fixture.services.dispose();
+  });
+
   testWidgets('the settings disconnect action stops capture', (tester) async {
     await tester.binding.setSurfaceSize(const Size(800, 2400));
     addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -1724,6 +1839,30 @@ final class _RenamingAdapter extends _Adapter implements DeviceRelayRename {
     renames.add(name);
     return true;
   }
+}
+
+// The download is exercised for real in firmware_update_check_test; here it
+// only has to move the screen forward.
+final class _FakeDownloader implements FirmwareDownloader {
+  final requested = <String>[];
+
+  @override
+  Future<File> download(
+    FirmwareRelease release, {
+    void Function(double progress)? onProgress,
+  }) async {
+    requested.add(release.assetName);
+    onProgress?.call(.5);
+    onProgress?.call(1);
+    return File('/tmp/${release.assetName}');
+  }
+}
+
+// A pendant whose firmware carries the SMP service, so it can take an update
+// over BLE.
+final class _DfuAdapter extends _Adapter implements DeviceRelayDfu {
+  @override
+  bool get dfuSupported => true;
 }
 
 // A pendant whose firmware may or may not carry 19b10015. With [ledSupported]
