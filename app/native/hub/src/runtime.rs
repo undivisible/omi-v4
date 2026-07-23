@@ -69,6 +69,7 @@ struct RuntimeState {
     proposals: ProposalRegistry,
     managed_worker_origin: Option<String>,
     computer_use_ledger_path: Option<PathBuf>,
+    self_improve: Option<rx4::self_improve::SelfImprove>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1685,19 +1686,37 @@ async fn dispatch_assistant(
     // Online context is intentionally NOT de-identified: the cloud side has
     // to recognize the user across iMessage/Telegram channels, so identity
     // must survive the hop.
+    // Going online: the model router picks the tier (and therefore the model
+    // slug from `model_tier.rs`) for this prompt instead of a single fixed
+    // model, and the choice is reported alongside the online marker.
+    let routed_model = crate::chat_router::ChatRouter::from_env()
+        .model_for_prompt(&text, |name| std::env::var(name).ok());
     progress(
         request_id,
         CHAT_MODEL_TOOL,
         ToolStatus::Complete,
-        Some(ONLINE_CHAT_MODEL_DETAIL),
+        Some(&format!("{ONLINE_CHAT_MODEL_DETAIL}:{routed_model}")),
     );
     let prompt = framed_assistant_prompt(origin, context.as_deref(), &text);
+    let self_improve = state.lock().await.self_improve.clone();
+    let prompt = match self_improve.as_ref() {
+        Some(handle) => crate::self_improve::augment(handle, &text, &prompt).await,
+        None => prompt,
+    };
+    let mut reply = String::new();
     let mut events = provider.dispatch(request_id.to_owned(), prompt, cancellation.clone());
     loop {
         let next =
             match receive_provider_event(&mut events, cancellation, PROVIDER_EVENT_TIMEOUT).await {
                 ProviderReceive::Event(event) => event,
-                ProviderReceive::Closed => return,
+                ProviderReceive::Closed => {
+                    // The reflection write is fire-and-forget so it never adds
+                    // latency to the turn that produced it.
+                    if let Some(handle) = self_improve {
+                        tokio::spawn(crate::self_improve::record_turn(handle, text, reply));
+                    }
+                    return;
+                }
                 ProviderReceive::Cancelled => {
                     cancelled(request_id);
                     return;
@@ -1740,14 +1759,17 @@ async fn dispatch_assistant(
         };
         match event {
             AssistantProviderEvent::Delta {
-                text,
+                text: delta,
                 final_segment,
-            } => NativeEvent::AssistantDelta(AssistantDelta {
-                request_id: request_id.to_owned(),
-                text,
-                final_segment,
-            })
-            .send(),
+            } => {
+                reply.push_str(&delta);
+                NativeEvent::AssistantDelta(AssistantDelta {
+                    request_id: request_id.to_owned(),
+                    text: delta,
+                    final_segment,
+                })
+                .send();
+            }
             AssistantProviderEvent::Proposal(bound) => {
                 let BoundActionProposal {
                     mut proposal,
@@ -2300,16 +2322,26 @@ async fn configure_memory(
     };
     let computer_use_ledger_path = computer_use_ledger_path(&database_path);
     let task = spawn_blocking(move || {
+        // Self-improvement rides its own connection to the same database file;
+        // if it can't open we leave it `None` and the turn loop skips
+        // augmentation, mirroring the `memory_unavailable` degradation.
+        let self_improve =
+            crate::self_improve::open(&database_path, tenant_id.clone(), person_id.clone());
         MemoryDb::open(database_path)
-            .map(|database| MemoryContext {
-                database,
-                tenant_id,
-                person_id,
+            .map(|database| {
+                (
+                    MemoryContext {
+                        database,
+                        tenant_id,
+                        person_id,
+                    },
+                    self_improve,
+                )
             })
             .map_err(|error_value| error_value.to_string())
     });
     match await_blocking(task, cancellation).await {
-        BlockingOutcome::Complete(memory) => {
+        BlockingOutcome::Complete((memory, self_improve)) => {
             let mut state = state.lock().await;
             if !configuration_is_current(&state, configuration_generation) {
                 error(
@@ -2322,6 +2354,7 @@ async fn configure_memory(
             }
             let memory = Arc::new(StdMutex::new(memory));
             state.memory = Some(Arc::clone(&memory));
+            state.self_improve = self_improve;
             state.computer_use_ledger_path = computer_use_ledger_path;
             drop(state);
             NativeEvent::RuntimeStatus(runtime_status(true)).send();

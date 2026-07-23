@@ -14,6 +14,7 @@ pub mod meeting_detector;
 mod model_tier;
 mod runtime;
 mod scan;
+mod self_improve;
 pub mod signals;
 mod stt;
 mod transcription;
