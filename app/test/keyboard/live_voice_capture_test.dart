@@ -398,6 +398,73 @@ void main() {
     await capture.dispose();
   });
 
+  test('an echo-cancelling capture device keeps the mic open through '
+      'playback so barge-in still works', () async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(_playoutChannel, (call) async {
+          return call.method == 'feed' ? 0 : null;
+        });
+    final hub = _LiveHub();
+    addTearDown(hub.close);
+    final mic = StreamController<Uint8List>();
+    addTearDown(mic.close);
+    final capture = LiveVoiceCapture(
+      hub: hub,
+      startAudio: () async => mic.stream,
+      stopAudio: () async {},
+      disposeAudio: () async {},
+      permissionCheck: () async => true,
+      playbackHangover: const Duration(seconds: 5),
+      echoCancelledSource: true,
+      clock: () => DateTime.fromMillisecondsSinceEpoch(1000000),
+    );
+    final started = capture.start(
+      ephemeralToken: 'auth_tokens/fake',
+      model: 'gemini-live-test',
+      authorityId: 'g1',
+    );
+    await hub.startedStream();
+    hub.emitState(LiveVoicePhase.started);
+    await started;
+    expect(capture.echoCancelled, isTrue);
+
+    final frame = Uint8List.fromList(
+      List.generate(320, (i) => i.isEven ? 0x00 : 0x40),
+    );
+    hub.emitAudio(List<int>.filled(3200, 1), sampleRateHz: 16000);
+    await pumpEventQueue();
+    mic.add(frame);
+    await pumpEventQueue();
+    expect(
+      hub.sentAudio,
+      hasLength(1),
+      reason: 'the hardware removes the echo, so the mic stays open',
+    );
+
+    hub.emitState(LiveVoicePhase.ended);
+    await pumpEventQueue();
+    await capture.stop();
+    await capture.dispose();
+  });
+
+  test('the live transcript is published as segments finalize', () async {
+    final hub = _LiveHub();
+    addTearDown(hub.close);
+    final capture = await startedCapture(hub);
+    hub.emitTranscript('book the ', finalSegment: true);
+    hub.emitTranscript('draft', finalSegment: false);
+    hub.emitTranscript('flight', finalSegment: true);
+    hub.emitTranscript('on it', finalSegment: true, assistant: true);
+    await pumpEventQueue();
+    expect(capture.userTranscript.value, 'book the flight');
+    expect(capture.assistantTranscript.value, 'on it');
+    hub.emitState(LiveVoicePhase.ended);
+    await pumpEventQueue();
+    await capture.stop();
+    await capture.dispose();
+  });
+
   test('non-macOS platforms never touch the playout channel', () async {
     debugDefaultTargetPlatformOverride = TargetPlatform.linux;
     final calls = <MethodCall>[];
