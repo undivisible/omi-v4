@@ -475,10 +475,6 @@ fn computer_use_tools() -> Vec<ToolDefinition> {
     ]
 }
 
-fn should_enable_computer_tools(configured: bool, available: bool) -> bool {
-    configured && available
-}
-
 fn valid_computer_tool_identity(call_id: &str, tool_name: &str) -> bool {
     !call_id.is_empty()
         && call_id.len() <= 256
@@ -636,8 +632,7 @@ impl AssistantProvider for RsAiAssistantProvider {
             }
             .model(config.model);
             let client = base.api_key(config.credential);
-            let computer_tools_active =
-                should_enable_computer_tools(computer_use_enabled, computer_use_available());
+            let computer_tools_active = computer_use_enabled && computer_use_available();
             let client = if computer_tools_active {
                 client
                     .with_tools(computer_use_tools())
@@ -5589,14 +5584,6 @@ mod tests {
         for tool in computer_use_tools() {
             assert_schema(&tool.parameters);
         }
-    }
-
-    #[test]
-    fn computer_tools_require_configuration_and_runtime_availability() {
-        assert!(should_enable_computer_tools(true, true));
-        assert!(!should_enable_computer_tools(true, false));
-        assert!(!should_enable_computer_tools(false, true));
-        assert!(!should_enable_computer_tools(false, false));
     }
 
     #[test]
