@@ -28,9 +28,18 @@ fn start() {
     console_error_panic_hook::set_once();
 }
 
+// Scheduled cron handler. Each module group contributes one additively-combined
+// hook here; the merge concatenates the awaited slices. Currently: the Memory
+// group's backfill+drain slice.
+#[event(scheduled)]
+async fn scheduled(_event: worker::ScheduledEvent, env: Env, _ctx: worker::ScheduleContext) {
+    // --- Memory & Currents group cron slice ---
+    crate::routes_memory::cron_slice(&env).await;
+}
+
 #[event(fetch)]
 async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
-    Router::new()
+    let router = Router::new()
         .get("/health", |_req, _ctx| {
             Response::from_json(&json!({ "service": "omi-v4-api", "status": "ok" }))
         })
@@ -39,15 +48,16 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         .get_async("/v1/entitlement", handle_entitlement)
         .get_async("/v1/profile/onboarding", handle_onboarding_get)
         .put_async("/v1/profile/onboarding", handle_onboarding_put)
-        .delete_async("/v1/account", handle_account_delete)
-        .or_else_any_method("/*catchall", |_req, _ctx| {
-            error_json("Not found", 404)
-        })
+        .delete_async("/v1/account", handle_account_delete);
+    // Memory & Currents group route registrations (single hook).
+    let router = crate::routes_memory::register(router);
+    router
+        .or_else_any_method("/*catchall", |_req, _ctx| error_json("Not found", 404))
         .run(req, env)
         .await
 }
 
-fn error_json(message: &str, status: u16) -> Result<Response> {
+pub(crate) fn error_json(message: &str, status: u16) -> Result<Response> {
     Ok(Response::from_json(&json!({ "error": message }))?.with_status(status))
 }
 
@@ -88,12 +98,12 @@ async fn firebase_keys() -> Result<Vec<auth::FirebaseJwk>> {
 
 /// Result of the auth middleware: an authenticated identity, or a Response to
 /// short-circuit with (status/error-shape parity with requireAuth).
-enum AuthOutcome {
+pub(crate) enum AuthOutcome {
     Ok(Auth),
     Reject(Response),
 }
 
-async fn authenticate(req: &Request, ctx: &RouteContext<()>) -> AuthOutcome {
+pub(crate) async fn authenticate(req: &Request, ctx: &RouteContext<()>) -> AuthOutcome {
     let authorization = req
         .headers()
         .get("authorization")
@@ -272,7 +282,7 @@ async fn has_active_pro(ctx: &RouteContext<()>, uid: &str) -> Result<bool> {
 
 /// D1 returns numbers as JSON numbers, but large integers may arrive as
 /// strings; accept either.
-fn json_to_i64(value: &Value) -> Option<i64> {
+pub(crate) fn json_to_i64(value: &Value) -> Option<i64> {
     if value.is_null() {
         return None;
     }

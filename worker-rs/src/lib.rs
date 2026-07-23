@@ -13,4 +13,4 @@ pub mod routes_memory;
 pub mod setup_health;
 
 #[cfg(target_arch = "wasm32")]
-mod glue;
+pub(crate) mod glue;

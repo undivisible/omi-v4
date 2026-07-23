@@ -23,6 +23,7 @@ worker = { version = "0.8", features = ["d1", "http"] }
 worker-macros = "0.8"
 console_error_panic_hook = "0.1"
 getrandom = { version = "0.2", features = ["js"] }
+serde-wasm-bindgen = "0.6"
 
 [profile.release]
 opt-level = "s"

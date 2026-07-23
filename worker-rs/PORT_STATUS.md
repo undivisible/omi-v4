@@ -76,3 +76,45 @@ shared into the Worker as-is. Sharing later requires upstream feature-gating in
 zkr (SQLite optional / a non-C backend) and rx4 (drop `tokio` net + `mio`, wasm
 `getrandom` for `uuid`), or extracting the pure algorithms into a `no_std`/wasm
 crate. Do not integrate zkr/rx4 into `worker-rs` yet.
+
+## Memory & currents
+
+Parallel module-group port (memory-sync, memory-vectors, embeddings, currents,
+and the memory routes from `routes.ts`). All route registrations live in
+`src/routes_memory.rs` and its `routes_memory/wasm_glue.rs`, wired via one
+`register(router)` hook (single line in `glue.rs::fetch`) plus one
+`cron_slice(env)` hook (single clearly-marked call in the additive
+`#[event(scheduled)]` handler in `glue.rs`). Pure logic is host-tested; the
+workers-rs I/O layer is wasm-only.
+
+| TS module | Rust | Status | Notes |
+|---|---|---|---|
+| `memory-sync.ts` | `routes_memory.rs` (pure) + `wasm_glue.rs::handle_zkr_sync` | **ported** | `POST /v1/memory/zkr-sync`: scope checks (tenant/person == uid), commit/event staging + 409 conflict shapes, `applyCommit` (idempotent replay, correction/deletion), `touchedClaimIds` → vector enqueue + inline drain. Pure parsing/identity/canonical-json host-tested. |
+| `memory-vectors.ts` | `routes_memory.rs` (pure) + `wasm_glue.rs` | **ported** | `projectedClaimId`, `claimText`, drain partition (eligible→upsert / missing→delete), backfill, `searchMemoryClaims` (uid-filtered query + D1 re-check). Vectorize via hand-written `js_sys` FFI (`Vectorize::{query,upsert,delete_by_ids}`); AI via native `Ai` binding. |
+| `embeddings.ts` | `routes_memory.rs::{embedding_inputs,parse_embeddings}` + `wasm_glue.rs::embed_texts` | **ported** | `@cf/baai/bge-base-en-v1.5` via `Ai.run`; response-shape validation host-tested. |
+| `currents.ts` | `routes_memory.rs` (pure) + `wasm_glue.rs` | **ported** | generate/candidates/list/feedback/accept/approve/receipt-claim/reject/outcome. Deterministic confidence+learned-adjustment ordering (SQL) + weights host-tested; `rowToCurrent` projection + ISO formatting host-tested; sha256 (RustCrypto), receipt tokens (base64url), uuid v4. |
+| `memory-projection.ts` | `wasm_glue/projection_sql.rs` + `wasm_glue.rs::{project_zkr_memory,ensure_projected}` | **ported** | Needed by the group; 10-statement projection batch reproduced verbatim, run as per-route middleware. |
+| `routes.ts` memory routes | `wasm_glue.rs` | **ported** | `GET/POST /v1/memory/retrieve`, `GET /v1/memory/semantic-search`, `GET|POST /v1/memories`, `POST /v1/memory/sources/:id/revisions`, `DELETE /v1/memory/sources/:id`, `GET|POST /v1/memory/daily-reviews`. |
+
+Cron: `cron_slice` runs `backfillClaimVectors` then `drainPendingEmbeddings`
+(parity with `index.ts` scheduled block).
+
+**Divergence (documented):** the TS defers `drainPendingEmbeddings` via
+`executionCtx.waitUntil`; workers-rs `Router` handlers do not receive the
+execution `Context`, so drains are awaited inline. Vector state converges
+identically — only response latency differs.
+
+**Cargo:** enabled `serde_json` `preserve_order` (JS object-iteration parity for
+`deletionTarget` shorthand); added wasm-only `serde-wasm-bindgen` (Vectorize FFI
+arg/return conversion).
+
+**Parity tests (host, `routes_memory::tests`):** scope rejection, commit-window
+validation, canonical-json determinism, record-identity per kind, deletion-target
+normalization, touched-claim-id projection/dedupe, embedding-shape validation,
+drain partition, memory-context capping, `rowToCurrent` projection, learned
+weights + sort key, candidate/feedback/approval/receipt/outcome validation,
+retrieve-match quoting, ISO formatting, receipt/hash patterns.
+
+**Gates:** `cargo test` 50 green · `cargo clippy --all-targets -D warnings`
+(host) clean · `cargo clippy --target wasm32 -D warnings` clean ·
+`cargo build --release --target wasm32-unknown-unknown` clean.
