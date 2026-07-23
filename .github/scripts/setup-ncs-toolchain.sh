@@ -104,6 +104,24 @@ report_success() {
 note "checking whether the build tools are already on PATH (${PATH})"
 if command -v west >/dev/null 2>&1 && command -v cmake >/dev/null 2>&1 \
   && command -v ninja >/dev/null 2>&1; then
+  # The container image puts the toolchain on PATH for THIS step, but each
+  # GitHub Actions step runs in a fresh shell that does not inherit it — the
+  # next step got `west: command not found` (exit 127) while this one saw west
+  # perfectly well. Persist the directories holding the tools we just resolved
+  # to $GITHUB_PATH so later steps actually get them.
+  if [ -n "${GITHUB_PATH:-}" ]; then
+    for tool in west cmake ninja python3; do
+      resolved="$(command -v "${tool}" 2>/dev/null || true)"
+      [ -n "${resolved}" ] || continue
+      tool_dir="$(dirname "${resolved}")"
+      case ":${persisted_dirs:-}:" in
+        *":${tool_dir}:"*) continue ;;
+      esac
+      persisted_dirs="${persisted_dirs:-}:${tool_dir}"
+      echo "${tool_dir}" >> "${GITHUB_PATH}"
+      note "persisted ${tool_dir} to GITHUB_PATH (for ${tool})"
+    done
+  fi
   export_zephyr_sdk || true
   report_success
   exit 0
