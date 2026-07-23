@@ -91,3 +91,24 @@ jobs:
       - run: cargo clippy --all-targets --all-features -- -D warnings
       - run: cargo check --all-targets --all-features
       - run: cargo test --all-features
+
+  # The Rust worker is the production parity port of worker/. It had no CI, so a
+  # merge could pass the host `cargo test` while the wasm build — the actual
+  # deploy target — did not compile (this happened once, from cross-branch
+  # drift). Gate both here: host tests for logic, wasm clippy for the deploy
+  # target.
+  worker-rs:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: worker-rs
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+          targets: wasm32-unknown-unknown
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo clippy --lib --target wasm32-unknown-unknown -- -D warnings
+      - run: cargo test
