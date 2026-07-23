@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../app_services.dart';
+import '../ui/scroll_edge_fade.dart';
 import 'meeting_notes.dart';
 
 class MeetingNotesScreen extends StatefulWidget {
@@ -50,37 +51,39 @@ class _MeetingNotesScreenState extends State<MeetingNotesScreen> {
         (final List<MeetingNote> loaded, _) when loaded.isEmpty => const Center(
           child: Text('No meeting notes yet.'),
         ),
-        (final List<MeetingNote> loaded, _) => ListView.separated(
-          padding: const EdgeInsets.all(16),
-          itemCount: loaded.length,
-          separatorBuilder: (_, _) => const SizedBox(height: 8),
-          itemBuilder: (context, index) {
-            final note = loaded[index];
-            return ListTile(
-              key: Key('meeting_note_${note.id}'),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(14),
-              ),
-              tileColor: Theme.of(context).colorScheme.surface,
-              title: Text(note.title),
-              subtitle: Text(
-                note.summary,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-              ),
-              trailing: IconButton(
-                key: Key('meeting_note_delete_${note.id}'),
-                tooltip: 'Delete note',
-                icon: const Icon(Icons.delete_outline, size: 18),
-                onPressed: () => _remove(note),
-              ),
-              onTap: () => Navigator.of(context).push(
-                MaterialPageRoute<void>(
-                  builder: (context) => MeetingNoteDetailScreen(note: note),
+        (final List<MeetingNote> loaded, _) => ScrollEdgeFade(
+          child: ListView.separated(
+            padding: const EdgeInsets.all(16),
+            itemCount: loaded.length,
+            separatorBuilder: (_, _) => const SizedBox(height: 8),
+            itemBuilder: (context, index) {
+              final note = loaded[index];
+              return ListTile(
+                key: Key('meeting_note_${note.id}'),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(14),
                 ),
-              ),
-            );
-          },
+                tileColor: Theme.of(context).colorScheme.surface,
+                title: Text(note.title),
+                subtitle: Text(
+                  note.summary,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                trailing: IconButton(
+                  key: Key('meeting_note_delete_${note.id}'),
+                  tooltip: 'Delete note',
+                  icon: const Icon(Icons.delete_outline, size: 18),
+                  onPressed: () => _remove(note),
+                ),
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (context) => MeetingNoteDetailScreen(note: note),
+                  ),
+                ),
+              );
+            },
+          ),
         ),
       },
     );
@@ -111,11 +114,13 @@ class MeetingNoteDetailScreen extends StatelessWidget {
         ),
       ],
     ),
-    body: SingleChildScrollView(
-      padding: const EdgeInsets.all(20),
-      child: SelectableText(
-        note.markdown,
-        style: const TextStyle(fontSize: 13.5, height: 1.5),
+    body: ScrollEdgeFade(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(20),
+        child: SelectableText(
+          note.markdown,
+          style: const TextStyle(fontSize: 13.5, height: 1.5),
+        ),
       ),
     ),
   );

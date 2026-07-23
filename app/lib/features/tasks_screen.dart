@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../currents/currents.dart';
 import '../onboarding/hub_checklist.dart';
+import '../ui/scroll_edge_fade.dart';
 
 class TasksScreen extends StatefulWidget {
   const TasksScreen({
@@ -64,85 +65,88 @@ class _TasksScreenState extends State<TasksScreen> {
               listenable: widget.controller,
               builder: (context, _) {
                 final controller = widget.controller;
-                return ListView(
-                  key: const Key('tasks_list'),
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 24,
-                    vertical: 28,
+                return ScrollEdgeFade(
+                  color: colors.paper,
+                  child: ListView(
+                    key: const Key('tasks_list'),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 24,
+                      vertical: 28,
+                    ),
+                    children: [
+                      Row(
+                        children: [
+                          IconButton(
+                            key: const Key('tasks_back'),
+                            tooltip: 'Back',
+                            onPressed: () => Navigator.of(context).maybePop(),
+                            icon: Icon(
+                              Icons.arrow_back_rounded,
+                              color: colors.ink,
+                              size: 20,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Text(
+                            'ALL TASKS',
+                            style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w600,
+                              letterSpacing: 1.43,
+                              color: colors.muted,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      _SetupRow(
+                        done: _setupTaskDone,
+                        colors: colors,
+                        onToggle: _toggleSetupTask,
+                      ),
+                      if (controller.loading && controller.items.isEmpty)
+                        Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 24),
+                          child: Text(
+                            'Loading tasks…',
+                            key: const Key('tasks_loading'),
+                            style: TextStyle(fontSize: 13, color: colors.muted),
+                          ),
+                        )
+                      else if (controller.error != null)
+                        Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 24),
+                          child: Text(
+                            controller.error!,
+                            key: const Key('tasks_error'),
+                            style: TextStyle(fontSize: 13, color: colors.muted),
+                          ),
+                        )
+                      else if (controller.items.isEmpty)
+                        Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 24),
+                          child: Text(
+                            'Nothing else needs your attention right now.',
+                            key: const Key('tasks_empty'),
+                            style: TextStyle(fontSize: 13, color: colors.muted),
+                          ),
+                        )
+                      else
+                        for (final task in controller.items)
+                          _TaskCardRow(
+                            key: ValueKey('tasks_row_${task.item.id}'),
+                            task: task,
+                            colors: colors,
+                            onAccept: widget.onAccept == null
+                                ? null
+                                : () => widget.onAccept!(task),
+                            onComplete: () =>
+                                unawaited(controller.dismiss(task.item.id)),
+                            onReject: () =>
+                                unawaited(controller.dismiss(task.item.id)),
+                          ),
+                    ],
                   ),
-                  children: [
-                    Row(
-                      children: [
-                        IconButton(
-                          key: const Key('tasks_back'),
-                          tooltip: 'Back',
-                          onPressed: () => Navigator.of(context).maybePop(),
-                          icon: Icon(
-                            Icons.arrow_back_rounded,
-                            color: colors.ink,
-                            size: 20,
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        Text(
-                          'ALL TASKS',
-                          style: TextStyle(
-                            fontSize: 11,
-                            fontWeight: FontWeight.w600,
-                            letterSpacing: 1.43,
-                            color: colors.muted,
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 12),
-                    _SetupRow(
-                      done: _setupTaskDone,
-                      colors: colors,
-                      onToggle: _toggleSetupTask,
-                    ),
-                    if (controller.loading && controller.items.isEmpty)
-                      Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 24),
-                        child: Text(
-                          'Loading tasks…',
-                          key: const Key('tasks_loading'),
-                          style: TextStyle(fontSize: 13, color: colors.muted),
-                        ),
-                      )
-                    else if (controller.error != null)
-                      Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 24),
-                        child: Text(
-                          controller.error!,
-                          key: const Key('tasks_error'),
-                          style: TextStyle(fontSize: 13, color: colors.muted),
-                        ),
-                      )
-                    else if (controller.items.isEmpty)
-                      Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 24),
-                        child: Text(
-                          'Nothing else needs your attention right now.',
-                          key: const Key('tasks_empty'),
-                          style: TextStyle(fontSize: 13, color: colors.muted),
-                        ),
-                      )
-                    else
-                      for (final task in controller.items)
-                        _TaskCardRow(
-                          key: ValueKey('tasks_row_${task.item.id}'),
-                          task: task,
-                          colors: colors,
-                          onAccept: widget.onAccept == null
-                              ? null
-                              : () => widget.onAccept!(task),
-                          onComplete: () =>
-                              unawaited(controller.dismiss(task.item.id)),
-                          onReject: () =>
-                              unawaited(controller.dismiss(task.item.id)),
-                        ),
-                  ],
                 );
               },
             ),

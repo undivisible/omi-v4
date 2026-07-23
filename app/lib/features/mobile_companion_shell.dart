@@ -15,6 +15,7 @@ import '../device/device.dart';
 import '../features/setup_account_screens.dart' show EventKitProactiveSyncTile;
 import '../native/native_hub.dart';
 import '../ui/burst_glow.dart';
+import '../ui/scroll_edge_fade.dart';
 import 'capture_notifier.dart';
 import 'firmware_install.dart';
 import 'firmware_update_check.dart';
@@ -666,6 +667,17 @@ class MobilePendantPageState extends State<MobilePendantPage> {
     }
   }
 
+  // Tapping the pendant image is the capture control: connected it flips
+  // capture, disconnected it reconnects. One image, one tap, so the gesture
+  // never means two things at once.
+  void _tapPendant() {
+    if (_connectedDevice == null) {
+      unawaited(reconnect());
+      return;
+    }
+    _setCaptureEnabled(!_captureEnabled);
+  }
+
   // The explicit capture switch under the minutes chip. Capture otherwise
   // runs whenever the pendant is connected, so this is the only control that
   // turns it off — and the choice is remembered across launches.
@@ -771,11 +783,12 @@ class MobilePendantPageState extends State<MobilePendantPage> {
     return '$hours:$minutes';
   }
 
-  String _captureHint(bool connected, bool capturing) {
-    if (!connected) return 'Reconnect to control your Omi';
+  String _captureHint(bool connected, bool capturing, bool busy) {
+    if (busy) return 'Connecting…';
+    if (!connected) return 'Tap the pendant to reconnect';
     return capturing
-        ? 'Capturing · Hold the pendant to disconnect'
-        : 'Capture is off · Hold the pendant to disconnect';
+        ? 'Tap to stop · Hold to disconnect'
+        : 'Tap to start capturing · Hold to disconnect';
   }
 
   @override
@@ -793,6 +806,7 @@ class MobilePendantPageState extends State<MobilePendantPage> {
         phase == DeviceConnectionPhase.scanning ||
         phase == DeviceConnectionPhase.connecting ||
         phase == DeviceConnectionPhase.disconnecting;
+    final deviceTiles = _deviceTiles(phase, connected, lastError);
     // The pendant image reaches the very top edge past the notch, so the whole
     // page is one scroll view and only the hero fades/blurs as it scrolls off.
     final content = <Widget>[
@@ -816,9 +830,14 @@ class MobilePendantPageState extends State<MobilePendantPage> {
           onDismiss: () => unawaited(_dismissUpdate(release)),
         ),
       ],
-      const SizedBox(height: _sectionGap),
-      const _SectionLabel('DEVICE'),
-      ..._withGaps(_deviceTiles(phase, connected, lastError)),
+      // A connected pendant with nothing to pair and nothing wrong leaves the
+      // DEVICE section empty, and a lone heading over blank space is what put
+      // the yawning gap above the desktop invitation.
+      if (deviceTiles.isNotEmpty) ...[
+        const SizedBox(height: _sectionGap),
+        const _SectionLabel('DEVICE'),
+        ..._withGaps(deviceTiles),
+      ],
       // The pendant notice shares the desktop notice's slot and its component:
       // one full-row banner card, whole row tappable, dismissal persisted, and
       // present only when there is genuinely something to do. A waiting
@@ -861,12 +880,10 @@ class MobilePendantPageState extends State<MobilePendantPage> {
               capturing: capturing,
               batteryLevel: connected ? device?.batteryLevel : null,
               capturedMinutes: (capturedMs / 60000).ceil(),
-              hint: _captureHint(connected, capturing),
+              hint: _captureHint(connected, capturing, busy),
               busy: busy,
-              captureEnabled: _captureEnabled,
               ledSupported: _captureLedSupported,
-              onCaptureChanged: widget.previewMode ? null : _setCaptureEnabled,
-              onReconnect: () => unawaited(reconnect()),
+              onTapPendant: widget.previewMode ? null : _tapPendant,
               onHoldPendant: connected
                   ? () => unawaited(_disconnectByHold())
                   : null,
@@ -885,7 +902,7 @@ class MobilePendantPageState extends State<MobilePendantPage> {
     return Stack(
       clipBehavior: Clip.none,
       children: [
-        body,
+        ScrollEdgeFade(child: body),
         Positioned(
           top: 0,
           right: 0,
@@ -1518,10 +1535,8 @@ class _PendantHero extends StatefulWidget {
     required this.capturedMinutes,
     required this.hint,
     required this.busy,
-    required this.captureEnabled,
     required this.ledSupported,
-    required this.onCaptureChanged,
-    required this.onReconnect,
+    required this.onTapPendant,
     required this.onHoldPendant,
   });
 
@@ -1533,10 +1548,8 @@ class _PendantHero extends StatefulWidget {
   final int capturedMinutes;
   final String hint;
   final bool busy;
-  final bool captureEnabled;
   final bool ledSupported;
-  final ValueChanged<bool>? onCaptureChanged;
-  final VoidCallback onReconnect;
+  final VoidCallback? onTapPendant;
   final VoidCallback? onHoldPendant;
 
   @override
@@ -1550,6 +1563,9 @@ class _PendantHeroState extends State<_PendantHero>
     duration: const Duration(seconds: 6),
   );
   bool _animationsDisabled = false;
+  // The image is the control now, so it has to answer the finger: held down it
+  // dips in scale and opacity, exactly like a button would.
+  bool _pressed = false;
   // Bumped on every disconnected → connected edge so the burst glow is a new
   // widget each time; it fires exactly once per instance by design.
   int _connectEpoch = 0;
@@ -1605,6 +1621,7 @@ class _PendantHeroState extends State<_PendantHero>
               child: image,
             ),
           );
+    final ledColor = capturing ? _stateRed : _stateBlue;
     final glowSize = pendantWidth * 1.3;
     final stateColor = connected
         ? _stateBlue
@@ -1656,9 +1673,10 @@ class _PendantHeroState extends State<_PendantHero>
             ),
           ),
         ),
-        // Capture-on ring: a subtle blue halo around the pendant while audio
-        // is streaming, mirroring the LED's capture-blue semantics.
-        if (capturing)
+        // The on-screen LED. With the switch gone this ring is what says
+        // whether audio is streaming, so it is loud about it: blue while the
+        // pendant sits idle, recording-red the moment capture is live.
+        if (connected)
           Positioned(
             top: pendantWidth * .1,
             child: IgnorePointer(
@@ -1669,12 +1687,12 @@ class _PendantHeroState extends State<_PendantHero>
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
                   border: Border.all(
-                    color: _stateBlue.withValues(alpha: .55),
-                    width: 3,
+                    color: ledColor.withValues(alpha: capturing ? .7 : .38),
+                    width: capturing ? 3 : 2,
                   ),
                   boxShadow: [
                     BoxShadow(
-                      color: _stateBlue.withValues(alpha: .3),
+                      color: ledColor.withValues(alpha: capturing ? .34 : .16),
                       blurRadius: 26,
                       spreadRadius: 2,
                     ),
@@ -1716,13 +1734,40 @@ class _PendantHeroState extends State<_PendantHero>
       children: [
         Align(
           child: Semantics(
-            button: connected,
-            label: connected ? 'Hold to disconnect the pendant' : null,
+            button: true,
+            label: connected
+                ? (capturing
+                      ? 'Stop capturing. Hold to disconnect the pendant'
+                      : 'Start capturing. Hold to disconnect the pendant')
+                : 'Reconnect the pendant',
             child: GestureDetector(
               key: const Key('companion_pendant_tap'),
               behavior: HitTestBehavior.opaque,
+              onTap: widget.busy ? null : widget.onTapPendant,
+              onTapDown: (_) => setState(() => _pressed = true),
+              onTapUp: (_) => setState(() => _pressed = false),
+              onTapCancel: () => setState(() => _pressed = false),
               onLongPress: widget.onHoldPendant,
-              child: pendantStack,
+              // Until the asset decodes the image lays out with no height at
+              // all, and the pendant is now the only capture and reconnect
+              // control, so its hit area must never collapse to nothing.
+              child: ConstrainedBox(
+                constraints: BoxConstraints(minHeight: pendantWidth * .6),
+                child: AnimatedScale(
+                  scale: _pressed ? .96 : 1,
+                  duration: animationsDisabled
+                      ? Duration.zero
+                      : const Duration(milliseconds: 110),
+                  curve: Curves.easeOut,
+                  child: AnimatedOpacity(
+                    opacity: _pressed ? .78 : 1,
+                    duration: animationsDisabled
+                        ? Duration.zero
+                        : const Duration(milliseconds: 110),
+                    child: pendantStack,
+                  ),
+                ),
+              ),
             ),
           ),
         ),
@@ -1758,28 +1803,18 @@ class _PendantHeroState extends State<_PendantHero>
                     ),
                   ),
                 ),
-                const SizedBox(height: 10),
-                OutlinedButton(
-                  key: const Key('companion_reconnect'),
-                  onPressed: widget.busy ? null : widget.onReconnect,
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: _ink,
-                    side: const BorderSide(color: _hairline),
-                    backgroundColor: _surface,
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 26,
-                      vertical: 12,
-                    ),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(999),
-                    ),
-                    textStyle: const TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w600,
+                // The busy state has to be visible somewhere now that the
+                // button that used to grey itself out is gone.
+                if (widget.busy)
+                  const Padding(
+                    padding: EdgeInsets.only(top: 8),
+                    child: SizedBox(
+                      key: Key('companion_reconnect_busy'),
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
                     ),
                   ),
-                  child: const Text('Reconnect'),
-                ),
               ] else
                 Semantics(
                   label: widget.deviceName == null
@@ -1857,17 +1892,20 @@ class _PendantHeroState extends State<_PendantHero>
                 const SizedBox(height: 5),
                 _MinutesChip(minutes: widget.capturedMinutes),
               ],
-              // The capture switch lives directly under the minutes chip: it
-              // is the only control for a stream that is otherwise always on
-              // while the pendant is connected.
-              const SizedBox(height: 5),
-              _CaptureToggle(
-                enabled: widget.captureEnabled,
-                capturing: capturing,
-                connected: connected,
-                ledSupported: widget.ledSupported,
-                onChanged: widget.onCaptureChanged,
-              ),
+              if (connected && !widget.ledSupported) ...[
+                const SizedBox(height: 5),
+                const Text(
+                  'Your pendant light stays as it is: this firmware cannot be '
+                  'told about capture.',
+                  key: Key('companion_capture_led_unsupported'),
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 11.5,
+                    color: _inkSoft,
+                    height: 1.3,
+                  ),
+                ),
+              ],
             ],
           ),
         ),
@@ -1887,95 +1925,6 @@ List<double> _saturationMatrix(double saturation) {
     r * rest, g * rest, b + saturation * (1 - b), 0, 0, //
     0, 0, 0, 1, 0,
   ];
-}
-
-class _CaptureToggle extends StatelessWidget {
-  const _CaptureToggle({
-    required this.enabled,
-    required this.capturing,
-    required this.connected,
-    required this.ledSupported,
-    required this.onChanged,
-  });
-
-  final bool enabled;
-  final bool capturing;
-  final bool connected;
-  final bool ledSupported;
-  final ValueChanged<bool>? onChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    // The switch reports what the app is doing, which is the part that is
-    // always true. Whether the pendant light agrees depends on the firmware,
-    // so say so rather than implying the light followed.
-    final active = capturing && connected;
-    final toggle = Semantics(
-      container: true,
-      label: 'Capture',
-      child: Builder(
-        builder: (context) => DecoratedBox(
-          key: const Key('companion_capture_toggle'),
-          decoration: BoxDecoration(
-            color: _surface,
-            border: Border.all(
-              color: active ? _stateBlue.withValues(alpha: .4) : _hairline,
-            ),
-            borderRadius: BorderRadius.circular(999),
-          ),
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(14, 2, 6, 2),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(
-                  active ? Icons.graphic_eq_rounded : Icons.mic_off_rounded,
-                  size: 15,
-                  color: active ? _stateBlue : _inkSoft,
-                ),
-                const SizedBox(width: 6),
-                Text(
-                  enabled ? 'Capture on' : 'Capture off',
-                  style: const TextStyle(
-                    fontSize: 12.5,
-                    fontWeight: FontWeight.w600,
-                    color: _ink,
-                  ),
-                ),
-                const SizedBox(width: 4),
-                Transform.scale(
-                  scale: .78,
-                  child: Switch(
-                    key: const Key('companion_capture_switch'),
-                    value: enabled,
-                    onChanged: onChanged,
-                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-    if (!connected || ledSupported) return toggle;
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        toggle,
-        const Padding(
-          padding: EdgeInsets.only(top: 4),
-          child: Text(
-            'Your pendant light stays as it is: this firmware cannot be told '
-            'about capture.',
-            key: Key('companion_capture_led_unsupported'),
-            textAlign: TextAlign.center,
-            style: TextStyle(fontSize: 11.5, color: _inkSoft, height: 1.3),
-          ),
-        ),
-      ],
-    );
-  }
 }
 
 class _MinutesChip extends StatelessWidget {
@@ -2044,45 +1993,21 @@ class _LiveTranscriptStrip extends StatelessWidget {
         : (latestFinal ??
               (capturing
                   ? 'Listening…'
-                  : 'Turn capture on to '
+                  : 'Tap the pendant to '
                         'start listening.'));
+    // No card, no border, no fill: the live line reads as a continuation of
+    // the minutes-transcribed line right above it rather than a component.
     return Padding(
-      padding: const EdgeInsets.only(top: 2, bottom: 2),
-      child: DecoratedBox(
-        key: const Key('companion_live_transcript'),
-        decoration: BoxDecoration(
-          color: _surface,
-          border: Border.all(
-            color: interim ? _stateBlue.withValues(alpha: .4) : _hairline,
-          ),
-          borderRadius: BorderRadius.circular(18),
-        ),
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Icon(
-                interim || capturing
-                    ? Icons.graphic_eq_rounded
-                    : Icons.mic_none_rounded,
-                size: 18,
-                color: interim ? _stateBlue : _inkSoft,
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Text(
-                  text,
-                  style: TextStyle(
-                    color: interim ? _ink : _inkSoft,
-                    fontSize: 14,
-                    height: 1.4,
-                    fontStyle: interim ? FontStyle.normal : FontStyle.italic,
-                  ),
-                ),
-              ),
-            ],
-          ),
+      key: const Key('companion_live_transcript'),
+      padding: const EdgeInsets.fromLTRB(4, 2, 4, 2),
+      child: Text(
+        text,
+        textAlign: TextAlign.center,
+        style: TextStyle(
+          color: interim ? _pageInk(context) : _pageInkSoft(context),
+          fontSize: 14,
+          height: 1.4,
+          fontStyle: interim ? FontStyle.normal : FontStyle.italic,
         ),
       ),
     );

@@ -17,6 +17,7 @@ import '../native/generated/signals/signals.dart'
 import '../providers/providers.dart';
 import '../settings/settings.dart';
 import '../ui/burst_glow.dart';
+import '../ui/scroll_edge_fade.dart';
 import 'meeting_notes.dart';
 
 enum SettingsSection {
@@ -358,18 +359,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ),
         Divider(height: 1, color: colors.hairline),
         Expanded(
-          child: ListView(
-            padding: const EdgeInsets.symmetric(vertical: 16),
-            children: [
-              if (_numbersRevealed) ...[
-                OmiNumbersCard(
-                  loader: widget.numbersLoader ?? _defaultNumbersLoader,
-                  onDismiss: () => setState(() => _numbersRevealed = false),
-                ),
-                const SizedBox(height: 12),
+          child: ScrollEdgeFade(
+            color: colors.page,
+            child: ListView(
+              padding: const EdgeInsets.symmetric(vertical: 16),
+              children: [
+                if (_numbersRevealed) ...[
+                  OmiNumbersCard(
+                    loader: widget.numbersLoader ?? _defaultNumbersLoader,
+                    onDismiss: () => setState(() => _numbersRevealed = false),
+                  ),
+                  const SizedBox(height: 12),
+                ],
+                _SettingsGroup(children: _tiles(active)),
               ],
-              _SettingsGroup(children: _tiles(active)),
-            ],
+            ),
           ),
         ),
       ],

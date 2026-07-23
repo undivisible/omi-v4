@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 export 'omi_orb.dart';
+export 'scroll_edge_fade.dart';
 
 enum OmiButtonVariant { primary, secondary, destructive }
 

@@ -96,8 +96,8 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.byKey(const Key('companion_reconnect')), findsOneWidget);
-    await tester.tap(find.byKey(const Key('companion_reconnect')));
+    expect(find.byKey(const Key('companion_pendant_faded')), findsOneWidget);
+    await tester.tap(find.byKey(const Key('companion_pendant_tap')));
     await _settle(tester);
 
     expect(await pairedDevices.read(), 'omi-1');
@@ -110,13 +110,13 @@ void main() {
     await _settle(tester);
 
     expect(fixture.services.deviceAudio.active, isFalse);
-    expect(find.byKey(const Key('companion_reconnect')), findsOneWidget);
+    expect(find.byKey(const Key('companion_pendant_faded')), findsOneWidget);
     expect(
       find.byKey(const Key('companion_disconnected_label')),
       findsOneWidget,
     );
 
-    await tester.tap(find.byKey(const Key('companion_reconnect')));
+    await tester.tap(find.byKey(const Key('companion_pendant_tap')));
     await _settle(tester);
     expect(find.byKey(const Key('companion_battery_tile')), findsOneWidget);
     fixture.services.dispose();
@@ -187,7 +187,8 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('companion_reconnect')));
+    await _settle(tester);
+    await tester.tap(find.byKey(const Key('companion_pendant_tap')));
     await _settle(tester);
 
     fixture.hub.events0.add(
@@ -311,7 +312,7 @@ void main() {
       findsOneWidget,
     );
     expect(find.text('Omi disconnected'), findsOneWidget);
-    expect(find.byKey(const Key('companion_reconnect')), findsOneWidget);
+    expect(find.byKey(const Key('companion_pendant_faded')), findsOneWidget);
     expect(find.byKey(const Key('companion_scan_tile')), findsNothing);
     expect(find.byKey(const Key('companion_remembered_tile')), findsNothing);
     expect(find.byKey(const Key('companion_connection_tile')), findsNothing);
@@ -444,32 +445,37 @@ void main() {
         home: MobileCompanionShell(
           services: fixture.services,
           pairedDevices: VolatilePairedDeviceStore(),
+          captureEnabledStore: VolatileCaptureEnabledStore(),
         ),
       ),
     );
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('companion_reconnect')));
+    await _settle(tester);
+    await tester.tap(find.byKey(const Key('companion_pendant_tap')));
     await _settle(tester);
 
     expect(fixture.services.deviceAudio.active, isTrue);
     expect(find.byKey(const Key('companion_capture_ring')), findsOneWidget);
     expect(
       tester.widget<Text>(find.byKey(const Key('companion_pendant_hint'))).data,
-      'Capturing · Hold the pendant to disconnect',
+      'Tap to stop · Hold to disconnect',
     );
 
-    // Tapping the pendant image no longer does anything: capture is owned by
-    // the switch below the minutes chip.
+    // Tapping the pendant image is the capture control.
     await tester.tap(find.byKey(const Key('companion_pendant_tap')));
     await _settle(tester);
 
-    expect(fixture.services.deviceAudio.active, isTrue);
-    expect(find.byKey(const Key('companion_capture_ring')), findsOneWidget);
+    expect(fixture.services.deviceAudio.active, isFalse);
+    expect(
+      tester.widget<Text>(find.byKey(const Key('companion_pendant_hint'))).data,
+      'Tap to start capturing · Hold to disconnect',
+    );
     fixture.services.dispose();
   });
 
-  testWidgets('the capture switch sits under the minutes chip and stops and '
-      'restarts capture', (tester) async {
+  testWidgets('tapping the pendant image stops and restarts capture', (
+    tester,
+  ) async {
     await tester.binding.setSurfaceSize(const Size(800, 1600));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final fixture = await _mobileFixture('user-a');
@@ -485,34 +491,103 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('companion_reconnect')));
+    await _settle(tester);
+    await tester.tap(find.byKey(const Key('companion_pendant_tap')));
     await _settle(tester);
 
-    final chip = tester.getBottomLeft(
-      find.byKey(const Key('companion_stat_minutes')),
-    );
-    final toggle = tester.getTopLeft(
-      find.byKey(const Key('companion_capture_toggle')),
-    );
-    expect(toggle.dy, greaterThanOrEqualTo(chip.dy));
+    expect(find.byKey(const Key('companion_capture_switch')), findsNothing);
 
-    await tester.tap(find.byKey(const Key('companion_capture_switch')));
+    await tester.tap(find.byKey(const Key('companion_pendant_tap')));
     await _settle(tester);
 
     expect(fixture.services.deviceAudio.active, isFalse);
     expect(captureEnabled.enabled, isFalse);
-    expect(find.byKey(const Key('companion_capture_ring')), findsNothing);
+    // The ring is the on-screen LED, so it stays lit while connected and only
+    // changes colour: idle blue here, recording red once capture is back.
+    expect(find.byKey(const Key('companion_capture_ring')), findsOneWidget);
     expect(
       tester.widget<Text>(find.byKey(const Key('companion_pendant_hint'))).data,
-      'Capture is off · Hold the pendant to disconnect',
+      'Tap to start capturing · Hold to disconnect',
     );
 
-    await tester.tap(find.byKey(const Key('companion_capture_switch')));
+    await tester.tap(find.byKey(const Key('companion_pendant_tap')));
     await _settle(tester);
 
     expect(fixture.services.deviceAudio.active, isTrue);
     expect(captureEnabled.enabled, isTrue);
     expect(find.byKey(const Key('companion_capture_ring')), findsOneWidget);
+    fixture.services.dispose();
+  });
+
+  testWidgets('tapping the faded pendant image reconnects', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(800, 1600));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final fixture = await _mobileFixture('user-a');
+    final pairedDevices = VolatilePairedDeviceStore();
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MobileCompanionShell(
+          services: fixture.services,
+          pairedDevices: pairedDevices,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // Disconnected: the image is dimmed, and it is the only reconnect control.
+    expect(find.byKey(const Key('companion_pendant_faded')), findsOneWidget);
+    expect(find.text('Reconnect'), findsNothing);
+    expect(
+      tester.widget<Text>(find.byKey(const Key('companion_pendant_hint'))).data,
+      'Tap the pendant to reconnect',
+    );
+
+    await tester.tap(find.byKey(const Key('companion_pendant_tap')));
+    await _settle(tester);
+
+    expect(await pairedDevices.read(), 'omi-1');
+    expect(fixture.services.deviceAudio.active, isTrue);
+    expect(find.byKey(const Key('companion_pendant_faded')), findsNothing);
+    fixture.services.dispose();
+  });
+
+  testWidgets('the on-screen pendant LED is red while capturing and blue '
+      'while idle', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(800, 1600));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final fixture = await _mobileFixture('user-a');
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MobileCompanionShell(
+          services: fixture.services,
+          pairedDevices: VolatilePairedDeviceStore(),
+          captureEnabledStore: VolatileCaptureEnabledStore(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await _settle(tester);
+    await tester.tap(find.byKey(const Key('companion_pendant_tap')));
+    await _settle(tester);
+
+    int ringRgb() {
+      final ring = tester.widget<Container>(
+        find.byKey(const Key('companion_capture_ring')),
+      );
+      final border = (ring.decoration! as BoxDecoration).border! as Border;
+      return border.top.color.toARGB32() & 0x00ffffff;
+    }
+
+    expect(fixture.services.deviceAudio.active, isTrue);
+    expect(ringRgb(), 0xd9564a);
+
+    await tester.tap(find.byKey(const Key('companion_pendant_tap')));
+    await _settle(tester);
+
+    expect(fixture.services.deviceAudio.active, isFalse);
+    expect(ringRgb(), 0x4a8fdd);
     fixture.services.dispose();
   });
 
@@ -532,11 +607,12 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('companion_reconnect')));
+    await _settle(tester);
+    await tester.tap(find.byKey(const Key('companion_pendant_tap')));
     await _settle(tester);
 
     expect(fixture.services.deviceAudio.active, isFalse);
-    expect(find.byKey(const Key('companion_capture_ring')), findsNothing);
+    expect(find.byKey(const Key('companion_capture_ring')), findsOneWidget);
     fixture.services.dispose();
   });
 
@@ -566,7 +642,7 @@ void main() {
     expect(find.byKey(const Key('companion_capture_ring')), findsOneWidget);
     expect(
       tester.widget<Text>(find.byKey(const Key('companion_pendant_hint'))).data,
-      'Capturing · Hold the pendant to disconnect',
+      'Tap to stop · Hold to disconnect',
     );
     fixture.services.dispose();
   });
@@ -598,7 +674,7 @@ void main() {
       findsNothing,
     );
 
-    await tester.tap(find.byKey(const Key('companion_capture_switch')));
+    await tester.tap(find.byKey(const Key('companion_pendant_tap')));
     await _settle(tester);
 
     expect(led.ledWrites.last, isFalse);
@@ -606,7 +682,7 @@ void main() {
   });
 
   testWidgets('firmware without the capture-LED characteristic stops claiming '
-      'the pendant light follows the switch', (tester) async {
+      'the pendant light follows capture', (tester) async {
     await tester.binding.setSurfaceSize(const Size(800, 1600));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final led = _LedAdapter(ledSupported: false);
@@ -659,7 +735,7 @@ void main() {
     expect(find.byKey(const Key('companion_pendant_faded')), findsOneWidget);
     expect(find.byType(OmiBurstGlow), findsNothing);
 
-    await tester.tap(find.byKey(const Key('companion_reconnect')));
+    await tester.tap(find.byKey(const Key('companion_pendant_tap')));
     await _pumpFrames(tester);
 
     expect(find.byType(OmiBurstGlow), findsOneWidget);
@@ -703,7 +779,8 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('companion_reconnect')));
+    await _settle(tester);
+    await tester.tap(find.byKey(const Key('companion_pendant_tap')));
     await _settle(tester);
 
     // disableAnimations is on for the whole suite: the pendant lands warm in
@@ -726,21 +803,23 @@ void main() {
           services: fixture.services,
           pairedDevices: VolatilePairedDeviceStore(),
           captureNotifier: notifier,
+          captureEnabledStore: VolatileCaptureEnabledStore(),
         ),
       ),
     );
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('companion_reconnect')));
+    await _settle(tester);
+    await tester.tap(find.byKey(const Key('companion_pendant_tap')));
     await _settle(tester);
 
     expect(notifier.started, isEmpty);
 
-    await tester.tap(find.byKey(const Key('companion_capture_switch')));
+    await tester.tap(find.byKey(const Key('companion_pendant_tap')));
     await _settle(tester);
     expect(notifier.started, isEmpty);
     expect(notifier.stopped, 1);
 
-    await tester.tap(find.byKey(const Key('companion_capture_switch')));
+    await tester.tap(find.byKey(const Key('companion_pendant_tap')));
     await _settle(tester);
 
     expect(notifier.started, ['Omi Pendant']);
@@ -761,7 +840,8 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('companion_reconnect')));
+    await _settle(tester);
+    await tester.tap(find.byKey(const Key('companion_pendant_tap')));
     await _settle(tester);
     expect(fixture.services.deviceAudio.active, isTrue);
 
@@ -775,7 +855,7 @@ void main() {
     );
     expect(
       tester.widget<Text>(find.byKey(const Key('companion_pendant_hint'))).data,
-      'Reconnect to control your Omi',
+      'Tap the pendant to reconnect',
     );
     fixture.services.dispose();
   });
@@ -796,7 +876,8 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('companion_reconnect')));
+    await _settle(tester);
+    await tester.tap(find.byKey(const Key('companion_pendant_tap')));
     await _settle(tester);
     await tester.tap(find.byKey(const Key('companion_settings_button')));
     await tester.pumpAndSettle();
@@ -888,7 +969,8 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('companion_reconnect')));
+    await _settle(tester);
+    await tester.tap(find.byKey(const Key('companion_pendant_tap')));
     await _settle(tester);
 
     // Capture is gated on processing authority, so the tile going away must
@@ -1004,7 +1086,8 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('companion_reconnect')));
+    await _settle(tester);
+    await tester.tap(find.byKey(const Key('companion_pendant_tap')));
     await _settle(tester);
 
     expect(find.textContaining('Connected'), findsOneWidget);
@@ -1029,7 +1112,8 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('companion_reconnect')));
+    await _settle(tester);
+    await tester.tap(find.byKey(const Key('companion_pendant_tap')));
     await _settle(tester);
 
     expect(find.text('1.0.3'), findsNothing);
@@ -1090,7 +1174,8 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('companion_reconnect')));
+    await _settle(tester);
+    await tester.tap(find.byKey(const Key('companion_pendant_tap')));
     await _settle(tester);
 
     await tester.tap(find.byKey(const Key('companion_settings_button')));
@@ -1128,7 +1213,8 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('companion_reconnect')));
+    await _settle(tester);
+    await tester.tap(find.byKey(const Key('companion_pendant_tap')));
     await _settle(tester);
 
     // The stock fake adapter implements none of the settings-service writes,
@@ -1169,7 +1255,8 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('companion_reconnect')));
+    await _settle(tester);
+    await tester.tap(find.byKey(const Key('companion_pendant_tap')));
     await _settle(tester);
     await tester.tap(find.byKey(const Key('companion_settings_button')));
     await tester.pumpAndSettle();
@@ -1197,7 +1284,8 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('companion_reconnect')));
+    await _settle(tester);
+    await tester.tap(find.byKey(const Key('companion_pendant_tap')));
     await _settle(tester);
     await tester.tap(find.byKey(const Key('companion_settings_button')));
     await tester.pumpAndSettle();
@@ -1248,7 +1336,8 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('companion_reconnect')));
+    await _settle(tester);
+    await tester.tap(find.byKey(const Key('companion_pendant_tap')));
     await _settle(tester);
 
     final banner = find.byKey(const Key('companion_firmware_notice_tile'));
@@ -1296,7 +1385,8 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('companion_reconnect')));
+    await _settle(tester);
+    await tester.tap(find.byKey(const Key('companion_pendant_tap')));
     await _settle(tester);
     await tester.tap(find.byKey(const Key('companion_firmware_notice_tile')));
     await _settle(tester);
@@ -1333,7 +1423,8 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('companion_reconnect')));
+    await _settle(tester);
+    await tester.tap(find.byKey(const Key('companion_pendant_tap')));
     await _settle(tester);
 
     await tester.tap(find.byKey(const Key('companion_settings_button')));
@@ -1486,7 +1577,8 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('companion_reconnect')));
+    await _settle(tester);
+    await tester.tap(find.byKey(const Key('companion_pendant_tap')));
     await _settle(tester);
     expect(await pairedDevices.read(), 'omi-1');
 
