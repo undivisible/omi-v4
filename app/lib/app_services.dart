@@ -81,6 +81,7 @@ final class AppServices {
     this.billing,
     this.conversations,
     ConversationInboxTransport? conversationInbox,
+    LocalConversationStore? localConversations,
     CurrentsClient? currentsClient,
     EventKitTaskSync? currentsTaskSync,
     this._worker,
@@ -125,6 +126,7 @@ final class AppServices {
       now: _now,
       isReady: () => chatReady || localMode,
       isLocalOnly: () => localMode && !chatReady,
+      localStore: localConversations,
       isDisposed: () => _disposed,
       currentUid: () => auth.snapshot.session?.uid,
       currentIdToken: () async => (await auth.validSession())?.idToken,
@@ -140,7 +142,10 @@ final class AppServices {
   }
 
   factory AppServices.fromEnvironment() {
-    final auth = AuthController(const UnconfiguredAuthGateway());
+    final auth = AuthController(
+      const UnconfiguredAuthGateway(),
+      consentStore: PreferencesConsentStore(),
+    );
     final nativeHub = createNativeHub();
     final deviceRelay = _createDeviceRelay();
     final origin = apiOrigin();
@@ -162,6 +167,7 @@ final class AppServices {
       billing: WorkerBillingClient(worker),
       conversations: WorkerConversationTransport(worker),
       conversationInbox: WorkerConversationTransport(worker),
+      localConversations: PreferencesLocalConversationStore(),
       currentsClient: CurrentsClient(WorkerCurrentsTransport(worker)),
       currentsTaskSync: EventKitTaskSync.platformDefault(),
       worker: worker,
@@ -207,6 +213,7 @@ final class AppServices {
       billing: WorkerBillingClient(worker),
       conversations: WorkerConversationTransport(worker),
       conversationInbox: WorkerConversationTransport(worker),
+      localConversations: PreferencesLocalConversationStore(),
       currentsClient: CurrentsClient(WorkerCurrentsTransport(worker)),
       currentsTaskSync: EventKitTaskSync.platformDefault(),
       worker: worker,
@@ -232,6 +239,7 @@ final class AppServices {
     ManagedSttClient? managedStt,
     ConversationTransport? conversations,
     ConversationInboxTransport? conversationInbox,
+    LocalConversationStore? localConversations,
     CurrentsClient? currentsClient,
     EventKitTaskSync? currentsTaskSync,
     DateTime Function()? now,
@@ -259,6 +267,7 @@ final class AppServices {
     managedStt: managedStt,
     conversations: conversations,
     conversationInbox: conversationInbox,
+    localConversations: localConversations ?? VolatileLocalConversationStore(),
     currentsClient: currentsClient,
     currentsTaskSync: currentsTaskSync,
     workerOrigin: managedStt == null

@@ -71,6 +71,7 @@ final class ConversationController {
     required DateTime Function() now,
     required bool Function() isReady,
     bool Function()? isLocalOnly,
+    ConversationTransport? localStore,
     required bool Function() isDisposed,
     required String? Function() currentUid,
     required Future<String?> Function() currentIdToken,
@@ -86,6 +87,7 @@ final class ConversationController {
     now,
     isReady,
     isLocalOnly ?? (() => false),
+    localStore,
     isDisposed,
     currentUid,
     currentIdToken,
@@ -103,6 +105,7 @@ final class ConversationController {
     this._now,
     this._isReady,
     this._isLocalOnly,
+    this._localStore,
     this._isDisposed,
     this._currentUid,
     this._currentIdToken,
@@ -113,6 +116,7 @@ final class ConversationController {
 
   final NativeHub _nativeHub;
   final ConversationTransport? _transport;
+  final ConversationTransport? _localStore;
   final ConversationInboxTransport? _inbox;
   final CurrentsClient? _currents;
   final String _source;
@@ -168,6 +172,17 @@ final class ConversationController {
           source: _source,
           text: text,
         );
+      } else {
+        // Local-mode history is best-effort: a persistence failure must not
+        // block the chat turn itself.
+        try {
+          await _localStore?.append(
+            clientMessageId: requestId,
+            role: 'user',
+            source: _source,
+            text: text,
+          );
+        } catch (_) {}
       }
       _nativeHub.sendMessage(requestId: requestId, text: text);
       return requestId;
@@ -182,7 +197,17 @@ final class ConversationController {
     required String requestId,
     required String text,
   }) async {
-    if (_isLocalOnly()) return;
+    if (_isLocalOnly()) {
+      try {
+        await _localStore?.append(
+          clientMessageId: 'assistant:$requestId',
+          role: 'assistant',
+          source: _source,
+          text: text,
+        );
+      } catch (_) {}
+      return;
+    }
     await _transport?.append(
       clientMessageId: 'assistant:$requestId',
       role: 'assistant',
@@ -191,10 +216,17 @@ final class ConversationController {
     );
   }
 
-  Future<List<ConversationMessage>> replay({int after = 0}) =>
-      _isLocalOnly() || _transport == null
-      ? Future.value(const [])
-      : _transport.replay(after: after);
+  Future<List<ConversationMessage>> replay({int after = 0}) {
+    if (_isLocalOnly()) {
+      final localStore = _localStore;
+      return localStore == null
+          ? Future.value(const [])
+          : localStore.replay(after: after);
+    }
+    return _transport == null
+        ? Future.value(const [])
+        : _transport.replay(after: after);
+  }
 
   Future<String> handoff(CurrentActionHandoff handoff) async {
     if (_currents == null) {

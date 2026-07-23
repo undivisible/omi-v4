@@ -2674,6 +2674,62 @@ void main() {
     await hub.close();
   });
 
+  test('local-mode chat history persists across a service relaunch with the '
+      'same backing store', () async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    SharedPreferences.setMockInitialValues({});
+    DevGemini.debugOverride = 'AIzaTestDevKey';
+    addTearDown(() => DevGemini.debugOverride = null);
+    final localConversations = VolatileLocalConversationStore();
+
+    Future<AppServices> launch(NativeHub hub) async {
+      final auth = AuthController(
+        _FakeAuthGateway(null),
+        consentStore: VolatileConsentStore(),
+      );
+      await auth.restoreSession();
+      final services = AppServices.forTesting(
+        auth: auth,
+        nativeHub: hub,
+        deviceRelay: DeviceRelayService(
+          role: DeviceRelayRole.desktopObserver,
+          adapter: const UnavailableDeviceRelayAdapter(),
+        ),
+        memoryDatabasePath: (uid) => '/tmp/$uid.sqlite3',
+        localConversations: localConversations,
+      );
+      await services.initialize();
+      return services;
+    }
+
+    final firstHub = _FakeHub();
+    final services = await launch(firstHub);
+    expect(services.localMode, isTrue);
+
+    final requestId = await services.sendChatMessage(text: 'remember me');
+    await services.saveAssistantMessage(
+      requestId: requestId,
+      text: 'I will remember.',
+    );
+    services.dispose();
+    await firstHub.close();
+
+    final secondHub = _FakeHub();
+    final relaunched = await launch(secondHub);
+    expect(relaunched.localMode, isTrue);
+
+    final replayed = await relaunched.replayConversation();
+    expect(replayed, hasLength(2));
+    expect(replayed.first.role, 'user');
+    expect(replayed.first.text, 'remember me');
+    expect(replayed.last.role, 'assistant');
+    expect(replayed.last.text, 'I will remember.');
+
+    relaunched.dispose();
+    await secondHub.close();
+  });
+
   test('desktop voice signed out without a dev Gemini key fails with an '
       'actionable message naming the key locations', () async {
     debugDefaultTargetPlatformOverride = TargetPlatform.macOS;

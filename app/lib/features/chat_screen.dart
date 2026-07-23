@@ -328,7 +328,6 @@ class ChatScreenState extends State<ChatScreen> {
   }
 
   Future<void> _loadConversation() async {
-    if (widget.services.localMode && !widget.services.chatReady) return;
     final generation = _conversationLoadGeneration;
     if (!_conversationLoads.add(generation)) return;
     try {

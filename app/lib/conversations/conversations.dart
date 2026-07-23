@@ -1,6 +1,7 @@
 import '../api/worker_http.dart';
 
 export 'conversation_controller.dart';
+export 'local_conversation_store.dart';
 
 final class ConversationMessage {
   const ConversationMessage({
