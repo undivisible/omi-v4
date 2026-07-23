@@ -5,23 +5,30 @@
 //
 // | Tier       | When                                                      | Default model         | Provider |
 // |------------|-----------------------------------------------------------|-----------------------|----------|
-// | speed      | latency-sensitive: live insights, classification, answers | google/google/gemini-3.1-flash-lite | Gemini   |
+// | speed      | latency-sensitive: live insights, classification, answers | inception/mercury-2 | Inception   |
 // | balanced   | default (~80%): meeting notes, general chat               | xiaomi/mimo-v2.5          | MiMo     |
-// | smart      | hard reasoning                                            | xiaomi/xiaomi/mimo-v2.5-pro           | MiMo     |
-// | multimodal | vision / visual computer-use                              | google/google/gemini-3.6-flash         | Gemini   |
+// | smart      | hard reasoning                                            | xiaomi/mimo-v2.5-pro           | MiMo     |
+// | multimodal | vision / visual computer-use                              | google/gemini-3.6-flash         | Gemini   |
+// | search     | web-grounded answers (live search)                        | perplexity/sonar                | Perplexity |
 //
 // The default ids are best-effort and may need correcting against the real
 // provider APIs; that is why they are env-overridable rather than hardcoded.
 
 import type { Bindings } from "./types";
 
-export type ModelTier = "speed" | "balanced" | "smart" | "multimodal";
+export type ModelTier =
+  | "speed"
+  | "balanced"
+  | "smart"
+  | "multimodal"
+  | "search";
 
 export const defaultTierModels: Record<ModelTier, string> = {
-  speed: "google/google/gemini-3.1-flash-lite",
+  speed: "inception/mercury-2",
   balanced: "xiaomi/mimo-v2.5",
-  smart: "xiaomi/xiaomi/mimo-v2.5-pro",
-  multimodal: "google/google/gemini-3.6-flash",
+  smart: "xiaomi/mimo-v2.5-pro",
+  multimodal: "google/gemini-3.6-flash",
+  search: "perplexity/sonar",
 };
 
 const tierEnvVar: Record<ModelTier, keyof Bindings> = {
@@ -29,6 +36,7 @@ const tierEnvVar: Record<ModelTier, keyof Bindings> = {
   balanced: "OMI_MODEL_BALANCED",
   smart: "OMI_MODEL_SMART",
   multimodal: "OMI_MODEL_MULTIMODAL",
+  search: "OMI_MODEL_SEARCH",
 };
 
 const nonEmpty = (value: string | undefined): string | undefined => {

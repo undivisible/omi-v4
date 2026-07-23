@@ -28,22 +28,25 @@ pub const XIAOMI_HOSTNAME: &str = "token-plan-sgp.xiaomimimo.com";
 //
 // | Tier       | When                                                      | Default model         | Provider |
 // |------------|-----------------------------------------------------------|-----------------------|----------|
-// | speed      | latency-sensitive: live insights, classification, answers | google/google/gemini-3.1-flash-lite | Gemini   |
+// | speed      | latency-sensitive: live insights, classification, answers | inception/mercury-2 | Inception   |
 // | balanced   | default (~80%): meeting notes, general chat               | xiaomi/mimo-v2.5          | MiMo     |
-// | smart      | hard reasoning                                            | xiaomi/xiaomi/mimo-v2.5-pro           | MiMo     |
-// | multimodal | vision / visual computer-use                              | google/google/gemini-3.6-flash         | Gemini   |
+// | smart      | hard reasoning                                            | xiaomi/mimo-v2.5-pro           | MiMo     |
+// | multimodal | vision / visual computer-use                              | google/gemini-3.6-flash         | Gemini   |
+// | search     | web-grounded answers (live search)                        | perplexity/sonar                | Perplexity |
 //
 // The default ids are best-effort and may need correcting against the real
 // provider APIs; that is why they are env-overridable rather than hardcoded.
 
 /// SPEED tier default: latency-sensitive live insights and answer suggestions.
-pub const DEFAULT_SPEED_MODEL: &str = "google/google/gemini-3.1-flash-lite";
+pub const DEFAULT_SPEED_MODEL: &str = "inception/mercury-2";
 /// BALANCED tier default: the everyday model for meeting notes and chat.
 pub const DEFAULT_BALANCED_MODEL: &str = "xiaomi/mimo-v2.5";
 /// SMART tier default: reserved for hard reasoning.
-pub const DEFAULT_SMART_MODEL: &str = "xiaomi/xiaomi/mimo-v2.5-pro";
+pub const DEFAULT_SMART_MODEL: &str = "xiaomi/mimo-v2.5-pro";
 /// MULTIMODAL tier default: vision and visual computer-use.
-pub const DEFAULT_MULTIMODAL_MODEL: &str = "google/google/gemini-3.6-flash";
+pub const DEFAULT_MULTIMODAL_MODEL: &str = "google/gemini-3.6-flash";
+/// SEARCH tier default: web-grounded answers via a live-search model.
+pub const DEFAULT_SEARCH_MODEL: &str = "perplexity/sonar";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ModelTier {
@@ -51,6 +54,7 @@ pub enum ModelTier {
     Balanced,
     Smart,
     Multimodal,
+    Search,
 }
 
 impl ModelTier {
@@ -61,6 +65,7 @@ impl ModelTier {
             ModelTier::Balanced => "OMI_MODEL_BALANCED",
             ModelTier::Smart => "OMI_MODEL_SMART",
             ModelTier::Multimodal => "OMI_MODEL_MULTIMODAL",
+            ModelTier::Search => "OMI_MODEL_SEARCH",
         }
     }
 
@@ -71,6 +76,7 @@ impl ModelTier {
             ModelTier::Balanced => DEFAULT_BALANCED_MODEL,
             ModelTier::Smart => DEFAULT_SMART_MODEL,
             ModelTier::Multimodal => DEFAULT_MULTIMODAL_MODEL,
+            ModelTier::Search => DEFAULT_SEARCH_MODEL,
         }
     }
 }

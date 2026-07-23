@@ -10,14 +10,16 @@ GEMINI_API_KEY=your-gemini-api-key-here
 # to use the default shown. BALANCED falls back to MIMO_MODEL when unset. The
 # defaults are OpenRouter slugs (provider-prefixed) and only resolve against
 # the OpenRouter endpoint above.
-#   speed      latency-sensitive live insights/answers  default google/gemini-3.1-flash-lite
+#   speed      latency-sensitive live insights/answers  default inception/mercury-2
 #   balanced   meeting notes + general chat (default)   default xiaomi/mimo-v2.5
 #   smart      hard reasoning                           default xiaomi/mimo-v2.5-pro
 #   multimodal vision / visual computer-use             default google/gemini-3.6-flash
-# OMI_MODEL_SPEED=google/gemini-3.1-flash-lite
+#   search     web-grounded answers (live search)      default perplexity/sonar
+# OMI_MODEL_SPEED=inception/mercury-2
 # OMI_MODEL_BALANCED=xiaomi/mimo-v2.5
 # OMI_MODEL_SMART=xiaomi/mimo-v2.5-pro
 # OMI_MODEL_MULTIMODAL=google/gemini-3.6-flash
+# OMI_MODEL_SEARCH=perplexity/sonar
 OPENAI_OAUTH_CLIENT_ID=app_EMoamEEZ73f0CkXaXp7hrann
 XAI_OAUTH_CLIENT_ID=your-xai-oauth-client-id-here
 OAUTH_TOKEN_KEY=base64-encoded-32-byte-key-here

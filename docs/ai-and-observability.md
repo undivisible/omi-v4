@@ -13,10 +13,11 @@ see §4).
 
 | Tier | When | Default (OpenRouter slug) | Env override |
 |------|------|---------------------------|--------------|
-| speed | latency-sensitive: live meeting insights, classification, answers | `google/gemini-3.1-flash-lite` | `OMI_MODEL_SPEED` |
+| speed | latency-sensitive: live meeting insights, classification, answers | `inception/mercury-2` | `OMI_MODEL_SPEED` |
 | balanced | default, ~80% of tasks: **meeting notes**, general chat | `xiaomi/mimo-v2.5` | `OMI_MODEL_BALANCED` |
 | smart | hard reasoning | `xiaomi/mimo-v2.5-pro` | `OMI_MODEL_SMART` |
 | multimodal | vision / visual computer-use | `google/gemini-3.6-flash` | `OMI_MODEL_MULTIMODAL` |
+| search | web-grounded answers (live search) | `perplexity/sonar` | `OMI_MODEL_SEARCH` |
 
 Balanced also falls back to the legacy `MIMO_MODEL` when unset.
 
@@ -40,7 +41,9 @@ Balanced also falls back to the legacy `MIMO_MODEL` when unset.
   audio-input multimodal models (`audio → text`).
 - **Cheapest audio→text:** `google/gemini-2.5-flash-lite` / `gemini-3.5-flash-lite`
   at ~$0.30/M audio tokens, then `google/gemini-3.1-flash-lite` (~$0.50),
-  `openai/gpt-audio-mini` (~$0.60). (Mistral `voxtral` is ~$100/M — avoid.)
+  `openai/gpt-audio-mini` (~$0.60). (Mistral `voxtral` is ~$100/M — avoid.
+  The `inception/mercury-2` speed model has no audio input — it is not an
+  STT option.)
 
 **Decision:**
 - **Batch / file transcription →** `google/gemini-2.5-flash-lite` — cheapest,
