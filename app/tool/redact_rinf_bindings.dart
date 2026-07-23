@@ -156,8 +156,8 @@ void main(List<String> arguments) {
     messageStart,
     messageEnd,
   );
-  const exposedMemoryContext = "'memoryContext: \$memoryContext'";
-  const redactedMemoryContext = "'memoryContext: [REDACTED]'";
+  const exposedMemoryContext = "'memoryContext: \$memoryContext, '";
+  const redactedMemoryContext = "'memoryContext: [REDACTED], '";
   if (exposedText.allMatches(messageSource).length != 1 ||
       redactedText.allMatches(messageSource).isNotEmpty ||
       exposedMemoryContext.allMatches(messageSource).length != 1 ||

@@ -812,6 +812,7 @@ final class _Hub implements NativeHub {
     required String text,
     String? conversationId,
     String? memoryContext,
+    MessageOrigin? origin,
   }) {}
 
   @override

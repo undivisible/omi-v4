@@ -96,6 +96,29 @@ class TraitHelpers {
     }
   }
 
+  static void serializeOptionMessageOrigin(
+    MessageOrigin? value,
+    BinarySerializer serializer,
+  ) {
+    if (value == null) {
+      serializer.serializeOptionTag(false);
+    } else {
+      serializer.serializeOptionTag(true);
+      value.serialize(serializer);
+    }
+  }
+
+  static MessageOrigin? deserializeOptionMessageOrigin(
+    BinaryDeserializer deserializer,
+  ) {
+    final tag = deserializer.deserializeOptionTag();
+    if (tag) {
+      return MessageOriginExtension.deserialize(deserializer);
+    } else {
+      return null;
+    }
+  }
+
   static void serializeOptionTranscriptLocator(
     TranscriptLocator? value,
     BinarySerializer serializer,

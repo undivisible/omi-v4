@@ -715,8 +715,10 @@ final class AppServices {
     }
   }
 
-  Future<String> sendChatMessage({required String text}) =>
-      _sendChatMessage(text: text);
+  Future<String> sendChatMessage({
+    required String text,
+    MessageOrigin origin = MessageOrigin.chat,
+  }) => _sendChatMessage(text: text, origin: origin);
 
   Future<void> startDesktopVoice() {
     final voiceGeneration = ++_desktopVoiceGeneration;
@@ -1013,8 +1015,12 @@ final class AppServices {
   Future<String> _sendChatMessage({
     required String text,
     CurrentActionHandoff? currentHandoff,
-  }) =>
-      _conversationController.send(text: text, currentHandoff: currentHandoff);
+    MessageOrigin origin = MessageOrigin.chat,
+  }) => _conversationController.send(
+    text: text,
+    currentHandoff: currentHandoff,
+    origin: origin,
+  );
 
   Future<void> saveAssistantMessage({
     required String requestId,
