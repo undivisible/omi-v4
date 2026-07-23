@@ -1836,6 +1836,24 @@ async fn execute(
             }
             false
         }
+        Command::JotMeetingNote { text } => {
+            if crate::meeting::request_jot(text) {
+                progress(
+                    &request_id,
+                    "meeting",
+                    ToolStatus::Complete,
+                    Some("meeting note jotted"),
+                );
+            } else {
+                progress(
+                    &request_id,
+                    "meeting",
+                    ToolStatus::Failed,
+                    Some("meeting runtime is unavailable"),
+                );
+            }
+            false
+        }
         Command::StopMeeting => {
             if crate::meeting::request_stop() {
                 progress(

@@ -7,7 +7,6 @@ import 'package:omi/currents/currents.dart';
 import 'package:omi/features/cursor_pill.dart';
 import 'package:omi/features/cursor_pill_controller.dart';
 import 'package:omi/features/voice_intents.dart';
-import 'package:omi/native/generated/signals/signals.dart';
 import 'package:omi/native/native_hub.dart';
 
 void main() {

@@ -111,6 +111,9 @@ pub enum Command {
         title: Option<String>,
     },
     StopMeeting,
+    JotMeetingNote {
+        text: String,
+    },
     ProvideMeetingAuth {
         auth: TranscriptionAuth,
         trusted_worker_origin: Option<String>,
@@ -329,6 +332,13 @@ pub struct MeetingCompleted {
     pub title: String,
     pub summary: String,
     pub actions: Vec<String>,
+    pub started_at_ms: i64,
+    pub ended_at_ms: i64,
+    pub participants: Vec<String>,
+    pub key_points: Vec<String>,
+    pub decisions: Vec<String>,
+    pub note_markdown: String,
+    pub metadata_json: String,
 }
 
 impl std::fmt::Debug for MeetingCompleted {
@@ -338,6 +348,13 @@ impl std::fmt::Debug for MeetingCompleted {
             .field("title", &self.title)
             .field("summary", &"[redacted]")
             .field("actions", &self.actions.len())
+            .field("started_at_ms", &self.started_at_ms)
+            .field("ended_at_ms", &self.ended_at_ms)
+            .field("participants", &self.participants.len())
+            .field("key_points", &self.key_points.len())
+            .field("decisions", &self.decisions.len())
+            .field("note_markdown", &"[redacted]")
+            .field("metadata_json", &"[redacted]")
             .finish()
     }
 }

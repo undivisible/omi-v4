@@ -389,6 +389,13 @@ void main() {
           title: 'Standup',
           summary: 'Team agreed to ship Friday.',
           actions: ['Email release notes'],
+          startedAtMs: 5,
+          endedAtMs: 10,
+          participants: ['Ana'],
+          keyPoints: ['Friday is the date'],
+          decisions: ['Ship Friday'],
+          noteMarkdown: '# Standup',
+          metadataJson: '{"kind":"meeting"}',
         ),
       ),
     );

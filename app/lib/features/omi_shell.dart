@@ -11,6 +11,7 @@ import 'chat_screen.dart';
 import 'cursor_pill.dart';
 import 'cursor_pill_controller.dart';
 import 'hub_opener.dart';
+import 'meeting_assist_panel.dart';
 import 'setup_account_screens.dart';
 
 class OmiShell extends StatefulWidget {
@@ -183,21 +184,30 @@ class _OmiShellState extends State<OmiShell> {
       ),
     );
     final pill = _cursorPill;
+    final meetingAssist = widget.previewMode
+        ? null
+        : Align(
+            alignment: Alignment.topRight,
+            child: Padding(
+              padding: const EdgeInsets.only(top: 56, right: 20),
+              child: MeetingAssistPanel(services: widget.services),
+            ),
+          );
     return Scaffold(
       backgroundColor: Theme.of(context).brightness == Brightness.dark
           ? const Color(0xff171716)
           : const Color(0xfff7f6f1),
-      body: pill == null
-          ? paddedBody
-          : Stack(
-              children: [
-                paddedBody,
-                Align(
-                  alignment: Alignment.topLeft,
-                  child: CursorPill(controller: pill),
-                ),
-              ],
+      body: Stack(
+        children: [
+          paddedBody,
+          ?meetingAssist,
+          if (pill != null)
+            Align(
+              alignment: Alignment.topLeft,
+              child: CursorPill(controller: pill),
             ),
+        ],
+      ),
     );
   }
 }
