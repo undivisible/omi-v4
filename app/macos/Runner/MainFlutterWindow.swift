@@ -266,8 +266,6 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
   private var pillPreviousFrame: NSRect?
   private var pillPreviousLevel: NSWindow.Level = .normal
   private var pillPreviousCollectionBehavior: NSWindow.CollectionBehavior = []
-  private var pillLocalMouseMonitor: Any?
-  private var pillGlobalMouseMonitor: Any?
   private var pillGlassView: PillGlassView?
   private weak var hostContentView: NSView?
   private weak var flutterContentView: NSView?
@@ -497,7 +495,6 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
   deinit {
     if let localKeyboardMonitor { NSEvent.removeMonitor(localKeyboardMonitor) }
     if let globalKeyboardMonitor { NSEvent.removeMonitor(globalKeyboardMonitor) }
-    stopFollowingCursor()
   }
 
   private func enterHubChrome() {
@@ -533,57 +530,27 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
     collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
   }
 
-  private func pillFrame(cursor: NSPoint, width: Double, height: Double) -> NSRect {
-    var target = NSRect(
-      x: cursor.x + 18,
-      y: cursor.y - height - 18,
-      width: width,
-      height: height)
-    let screen =
-      NSScreen.screens.first { NSMouseInRect(cursor, $0.frame, false) }
+  private static var activeScreen: NSScreen? {
+    NSScreen.screens.first { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) }
       ?? NSScreen.main
-    if let visible = screen?.visibleFrame {
-      target.origin.x = min(max(target.origin.x, visible.minX), visible.maxX - width)
-      target.origin.y = min(max(target.origin.y, visible.minY), visible.maxY - height)
-    }
-    return target
   }
 
-  private func followCursor(width: Double, height: Double) {
-    let reposition: (NSPoint) -> Void = { [weak self] cursor in
-      guard let self else { return }
-      self.setFrameOrigin(self.pillFrame(cursor: cursor, width: width, height: height).origin)
-    }
-    pillLocalMouseMonitor = NSEvent.addLocalMonitorForEvents(
-      matching: [.mouseMoved]
-    ) { event in
-      reposition(NSEvent.mouseLocation)
-      return event
-    }
-    pillGlobalMouseMonitor = NSEvent.addGlobalMonitorForEvents(
-      matching: [.mouseMoved]
-    ) { _ in reposition(NSEvent.mouseLocation) }
+  /// The full-screen voice overlay covers the active screen edge to edge so
+  /// the waveform and its glow can hug the screen borders.
+  static func voiceOverlayFrame(for screen: NSScreen?) -> NSRect {
+    screen?.frame ?? .zero
   }
 
-  private func stopFollowingCursor() {
-    if let pillLocalMouseMonitor { NSEvent.removeMonitor(pillLocalMouseMonitor) }
-    if let pillGlobalMouseMonitor { NSEvent.removeMonitor(pillGlobalMouseMonitor) }
-    pillLocalMouseMonitor = nil
-    pillGlobalMouseMonitor = nil
-  }
-
-  private func centeredPillFrame(width: Double, height: Double) -> NSRect {
-    let screen =
-      NSScreen.screens.first { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) }
-      ?? NSScreen.main
-    let visible = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: width, height: height)
+  static func centeredPillFrame(
+    width: Double, height: Double, visible: NSRect
+  ) -> NSRect {
     // Spotlight-style: horizontally centered, pinned to the upper third.
     let x = visible.midX - width / 2
     let y = visible.maxY - visible.height * 0.28 - height
     return NSRect(x: x, y: y, width: width, height: height)
   }
 
-  private func summonPill(width: Double, height: Double, centered: Bool) {
+  func summonPill(width: Double, height: Double, centered: Bool) {
     if pillPreviousFrame == nil {
       pillPreviousFrame = frame
       pillPreviousLevel = level
@@ -594,20 +561,21 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
     // onboarding blur otherwise shows as a grey gradient wash inside the
     // summoned window.
     onboardingBlurView?.isHidden = true
+    let screen = Self.activeScreen
     let target = centered
-      ? centeredPillFrame(width: width, height: height)
-      : pillFrame(cursor: NSEvent.mouseLocation, width: width, height: height)
+      ? Self.centeredPillFrame(
+          width: width, height: height,
+          visible: screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: width, height: height))
+      : Self.voiceOverlayFrame(for: screen)
     level = .floating
     collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+    // Voice is click-through: the full-screen overlay must never swallow
+    // clicks meant for whatever the user is working in beneath it.
+    ignoresMouseEvents = !centered
     setFrame(target, display: true)
     attachPillGlass()
     NSApp.activate(ignoringOtherApps: true)
     makeKeyAndOrderFront(nil)
-    stopFollowingCursor()
-    // The overlay stays put; only the cursor-anchored voice waveform follows.
-    if !centered {
-      followCursor(width: width, height: height)
-    }
   }
 
   private func attachPillGlass() {
@@ -641,10 +609,10 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
     pillGlassView?.setRegions(parsed, radius: CGFloat(radius))
   }
 
-  private func restoreFromPill() {
-    stopFollowingCursor()
+  func restoreFromPill() {
     pillGlassView?.removeFromSuperview()
     pillGlassView = nil
+    ignoresMouseEvents = false
     guard let previousFrame = pillPreviousFrame else { return }
     pillPreviousFrame = nil
     onboardingBlurView?.isHidden = pillPreviousBlurHidden
