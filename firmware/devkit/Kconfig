@@ -1,0 +1,135 @@
+source "Kconfig.zephyr"
+
+menu "Omi Features Configuration"
+
+config OMI_CODEC_OPUS
+    bool "Opus Audio Codec"
+    help
+        "Enable the Opus audio codec support."
+    default n
+
+config OMI_ENABLE_OFFLINE_STORAGE
+	bool "Offline SD Card Storage"
+    select DISK_ACCESS
+    select FILE_SYSTEM
+    select FAT_FILESYSTEM_ELM
+    select FS_FATFS_MOUNT_MKFS
+    select FS_FATFS_EXFAT
+    help
+        "Enable the offline storage support. Requires a SD Card."
+	default n
+
+config OMI_ENABLE_ACCELEROMETER
+    bool "Accelerometer Support"
+    help
+        "Enable the accelerometer support."
+    default n
+
+config OMI_ENABLE_BUTTON
+    bool "Button support"
+    help
+        "Enable the software button support."
+    default n
+
+config OMI_ENABLE_SPEAKER
+    bool "Enable the speaker"
+    help
+        "Enable the speaker support."
+    default n
+
+config OMI_ENABLE_BATTERY
+    bool "Enable the battery"
+    help
+        "Enable the battery support."
+    default n
+
+config OMI_ENABLE_USB
+    bool "Enable the usb"
+    help
+        "Enable the USB power check support."
+    default n
+
+config OMI_ENABLE_HAPTIC
+    bool "Enable the haptic"
+    help
+        "Enable the haptic support."
+    default n
+
+config OMI_ENABLE_USER_EVENTS
+    bool "User/system event notify characteristic"
+    default y
+    help
+        "Expose a read/notify characteristic (19B10017) in a settings service
+         (19B10010) carrying device-originated events with a timestamp: single
+         button tap = bookmark, double tap = assistant trigger, imminent power
+         off. Port of the CV1 feature; see src/omi_ext.h for the payload."
+
+config OMI_USER_EVENT_QUEUE_LEN
+    int "User events buffered while no central is subscribed"
+    range 1 64
+    default 16
+    help
+        "Events emitted while disconnected are held in this RAM ring and
+         flushed on subscribe. Oldest dropped on overflow. Not persisted."
+
+config OMI_ENABLE_BLE_SLEEP_CMD
+    bool "BLE sleep command characteristic"
+    depends on OMI_ENABLE_BUTTON
+    default n
+    help
+        "Expose a write-only characteristic (19B10014) so the companion app can
+         command the device into system off. Write a single byte 0x01 to run the
+         same path as a long button press."
+
+config OMI_ENABLE_CAPTURE_LED
+    bool "Capture-state LED (blue capturing, red idle)"
+    default n
+    help
+        "Drive the status LED from the audio capture state instead of from the
+         connection state alone: blue only while a central is subscribed to the
+         audio stream. The app may override the flag by writing the
+         capture-state characteristic (19B10015)."
+
+config OMI_ENABLE_IDLE_SLEEP
+    bool "Idle auto-sleep (system off)"
+    depends on OMI_ENABLE_BUTTON
+    default n
+    help
+        "Automatically enter system off after OMI_IDLE_SLEEP_TIMEOUT_MIN minutes
+         with no audio streaming to a subscribed central and no USB power. Wake
+         with the user button, the same path as the long-press power off. The
+         BLE radio is off in system off, so a new connection cannot wake it."
+
+config OMI_IDLE_SLEEP_TIMEOUT_MIN
+    int "Idle timeout before auto-sleep (minutes)"
+    range 1 720
+    default 30
+    depends on OMI_ENABLE_IDLE_SLEEP
+
+config OMI_ENABLE_SW_VAD_GATE
+    bool "Software voice activity gate"
+    default n
+    help
+        "Only forward microphone frames to the codec and BLE when the average
+         absolute amplitude has been above OMI_SW_VAD_ABS_THRESHOLD within the
+         last OMI_SW_VAD_HOLD_MS.
+
+         This is NOT the CV1 hardware AAD path. The DevKit microphones have no
+         acoustic activity detector, so the microphone and PDM peripheral keep
+         running and keep drawing current; only the codec, the BLE stream and
+         the SD writes are suppressed. Expect a fraction of the CV1 power
+         saving."
+
+config OMI_SW_VAD_ABS_THRESHOLD
+    int "Software VAD average absolute amplitude threshold"
+    range 1 32767
+    default 250
+    depends on OMI_ENABLE_SW_VAD_GATE
+
+config OMI_SW_VAD_HOLD_MS
+    int "Software VAD hold time after last voice (ms)"
+    range 500 60000
+    default 10000
+    depends on OMI_ENABLE_SW_VAD_GATE
+
+endmenu

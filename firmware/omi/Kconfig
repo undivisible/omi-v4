@@ -1,0 +1,386 @@
+source "Kconfig.zephyr"
+
+menu "Omi Features Configuration"
+
+config OMI_CODEC_OPUS
+    bool "Opus Audio Codec"
+    help
+        "Enable the Opus audio codec support."
+    default n
+
+config OMI_ENABLE_OFFLINE_STORAGE
+	bool "Offline SD Card Storage"
+    help
+        "Enable the offline storage support. Requires a SD Card."
+	default n
+
+config OMI_ENABLE_ACCELEROMETER
+    bool "Accelerometer Support"
+    help
+        "Enable the accelerometer support."
+    default n
+
+config OMI_ENABLE_BUTTON
+    bool "Button support"
+    help
+        "Enable the software button support."
+    default n
+
+config OMI_ENABLE_SPEAKER
+    bool "Enable the speaker"
+    help
+        "Enable the speaker support."
+    default n
+
+config OMI_ENABLE_BATTERY
+    bool "Enable the battery"
+    help
+        "Enable the battery support."
+    default n
+
+config OMI_ENABLE_USB
+    bool "Enable the usb"
+    help
+        "Enable the USB power check support."
+    default n
+
+config OMI_ENABLE_HAPTIC
+    bool "Enable the haptic"
+    help
+        "Enable the haptic support."
+    default n
+
+config OMI_ENABLE_RFSW_CTRL
+    bool "Enable RFSwitch Control"
+    help
+        "Enable RFSwitch Control support."
+    default y
+
+config OMI_CONN_INTERVAL_FAST_MIN
+    int "Preferred connection interval, minimum (1.25 ms units)"
+    range 6 3200
+    default 6
+    help
+        "Lower bound of the connection interval requested while audio is
+         streaming or an offline sync is running. 6 units = 7.5 ms, the BLE
+         minimum, which maximises connection events per second and therefore
+         throughput."
+
+config OMI_CONN_INTERVAL_FAST_MAX
+    int "Preferred connection interval, maximum (1.25 ms units)"
+    range 6 3200
+    default 12
+    help
+        "Upper bound of the fast connection interval. 12 units = 15 ms."
+
+config OMI_CONN_SUPERVISION_TIMEOUT
+    int "Connection supervision timeout (10 ms units)"
+    range 10 3200
+    default 400
+    help
+        "Link supervision timeout requested for the connection. 400 units =
+         4 seconds. Must satisfy timeout > (1 + latency) * interval_max * 2."
+
+config OMI_ENABLE_ADAPTIVE_CONN_PARAMS
+    bool "Relax connection parameters when the link is idle"
+    default n
+    help
+        "Request a slower connection interval with peripheral latency whenever
+         no central is subscribed to the audio stream and no offline sync is
+         running, and switch back to the fast interval as soon as either
+         starts. Saves radio time on a link that is up but carrying nothing.
+
+         Off by default: an earlier attempt to force a slow interval plus
+         latency from the AAD sleep path caused dropped BLE connections on some
+         phones (see the comment in src/mic.c enter_hw_aad). Enable only after
+         validating against the phones you ship to."
+
+config OMI_CONN_INTERVAL_IDLE_MIN
+    int "Idle connection interval, minimum (1.25 ms units)"
+    range 6 3200
+    default 24
+    depends on OMI_ENABLE_ADAPTIVE_CONN_PARAMS
+    help
+        "24 units = 30 ms."
+
+config OMI_CONN_INTERVAL_IDLE_MAX
+    int "Idle connection interval, maximum (1.25 ms units)"
+    range 6 3200
+    default 40
+    depends on OMI_ENABLE_ADAPTIVE_CONN_PARAMS
+    help
+        "40 units = 50 ms."
+
+config OMI_CONN_IDLE_LATENCY
+    int "Idle peripheral latency (connection events)"
+    range 0 499
+    default 4
+    depends on OMI_ENABLE_ADAPTIVE_CONN_PARAMS
+    help
+        "Connection events the pendant may skip while idle. Keep
+         (1 + latency) * interval_max * 2 well under
+         OMI_CONN_SUPERVISION_TIMEOUT."
+
+config OMI_CONN_PARAM_SETTLE_MS
+    int "Delay before applying a connection parameter change (ms)"
+    range 0 10000
+    default 1000
+    depends on OMI_ENABLE_ADAPTIVE_CONN_PARAMS
+    help
+        "Debounce, so a burst of subscribe/unsubscribe or start/stop-sync
+         transitions results in one parameter update rather than several."
+
+config OMI_ENABLE_USER_EVENTS
+    bool "User/system event notify characteristic"
+    default n
+    help
+        "Expose a read/notify characteristic (19B10017) in the settings service
+         carrying device-originated events with an RTC timestamp: single button
+         tap = bookmark ('mark this moment'), double tap = assistant trigger,
+         imminent power off, microphone AAD sleep/wake and IMU gestures.
+         See src/lib/core/user_event.h for the 8-byte payload layout."
+
+config OMI_USER_EVENT_QUEUE_LEN
+    int "User events buffered while no central is subscribed"
+    range 1 64
+    default 16
+    depends on OMI_ENABLE_USER_EVENTS
+    help
+        "Events emitted while disconnected (or before the app subscribes) are
+         held in this RAM ring and flushed on subscribe. The oldest event is
+         dropped on overflow. The queue does not survive reboot or system off."
+
+config OMI_ENABLE_MONITOR
+    bool "Enable monitoring/metrics system"
+    help
+        "Enable the monitoring system for debugging and metrics collection.
+         Disable in production to save power, RAM, and flash space."
+    default n
+
+config OMI_ENABLE_VAD_GATE
+    bool "Enable voice activity gate"
+    help
+        "Only forward microphone audio to codec/transport when voice activity
+         is detected."
+    default n
+
+config OMI_VAD_ABS_THRESHOLD
+    int "VAD average absolute amplitude threshold"
+    range 1 32767
+    default 600
+    depends on OMI_ENABLE_VAD_GATE
+    help
+        "Voice is considered active when average absolute amplitude of one
+         microphone frame is greater than or equal to this threshold."
+
+config OMI_VAD_HOLD_MS
+    int "VAD hold time after last voice (ms)"
+    range 500 30000
+    default 3000
+    depends on OMI_ENABLE_VAD_GATE
+    help
+        "Time in milliseconds to keep recording after the last frame with
+         voice activity. Prevents cutting off speech pauses and sentence
+         endings. Default 3000 = 3 seconds."
+
+config OMI_ENABLE_T5838_AAD
+    bool "Enable T5838 hardware AAD (ultra-low-power mic sleep)"
+    depends on OMI_ENABLE_VAD_GATE
+    default n
+    help
+        "When the software VAD gate enters SLEEP, pause the PDM clock so
+         the T5838 MEMS microphone enters its built-in Acoustic Activity
+         Detection mode (~15 µA). The mic hardware monitors sound and
+         asserts the WAKE pin when it detects acoustic activity, at which
+         point the driver resumes PDM and the software VAD takes over.
+         Requires THSEL (P1.5) and WAKE (P1.2) to be wired to the T5838."
+
+config OMI_AAD_SETTLE_MS
+    int "T5838 AAD settle time before arming WAKE (ms)"
+    range 100 3000
+    default 800
+    depends on OMI_ENABLE_T5838_AAD
+    help
+        "Time to wait after clocking the T5838 into hardware AAD sleep before
+         arming the WAKE interrupt. Lets the mic settle its noise floor and
+         swallow the entry transient so it does not immediately false-wake."
+
+config OMI_AAD_A_LPF
+    int "T5838 AAD mode-A low-pass filter (register 0x35)"
+    range 0 3
+    default 2
+    depends on OMI_ENABLE_T5838_AAD
+    help
+        "Raw value written to the T5838 AAD_A_LPF register. Selects the
+         bandwidth the mic's hardware detector listens over. 2 (the default) is
+         the 2.0 kHz setting, which covers speech. Lower values narrow the band
+         (fewer false wakes from broadband noise); higher values widen it."
+
+config OMI_AAD_A_THRESHOLD
+    int "T5838 AAD mode-A acoustic threshold (register 0x36)"
+    range 0 15
+    default 6
+    depends on OMI_ENABLE_T5838_AAD
+    help
+        "Raw value written to the T5838 AAD_A_THR register. 0 is the most
+         sensitive setting (~60 dB SPL) and triggers on ambient room noise;
+         6 (the default) is ~75 dB, which wakes on nearby speech but ignores a
+         quiet room. Raise it if the pendant never sleeps, lower it if it misses
+         the start of conversations."
+
+config OMI_WATCHDOG_TIMEOUT_MS
+    int "Watchdog timeout (ms)"
+    range 5000 300000
+    default 30000
+    help
+        "Watchdog reset timeout in milliseconds. Increase this when boot-time
+         operations can run longer (e.g. SD/LFS pre-warm) to avoid false
+         watchdog resets."
+
+config OMI_ENABLE_IMU_GESTURES
+    bool "IMU wake-on-motion and tap gestures"
+    depends on OMI_ENABLE_USER_EVENTS
+    default n
+    help
+        "Use the LSM6DS3TR-C embedded activity detector on INT1 (P1.13,
+         irq-gpios on the lsm6dsl alias) to emit user events on motion and to
+         wake the SoC out of system off without a button press. Requires the
+         Zephyr LSM6DSL trigger support to stay disabled
+         (LSM6DSL_TRIGGER_NONE, the default) because this code owns INT1
+         directly."
+
+config OMI_IMU_WAKE_THRESHOLD
+    int "IMU wake-up threshold (WAKE_UP_THS, 0-63)"
+    range 1 63
+    default 32
+    depends on OMI_ENABLE_IMU_GESTURES
+    help
+        "Acceleration above which motion counts as activity, in units of
+         full-scale/64. At the +/-2 g full scale this driver programs, 32 is
+         about 1 g of extra acceleration: a deliberate lift or shake rather
+         than a table vibration. Lower it to make the pendant easier to wake,
+         raise it if it wakes in a bag or pocket."
+
+config OMI_IMU_WAKE_DURATION
+    int "IMU wake-up duration (WAKE_UP_DUR, 0-3)"
+    range 0 3
+    default 0
+    depends on OMI_ENABLE_IMU_GESTURES
+    help
+        "Number of consecutive over-threshold samples required before the
+         wake-up event fires, in ODR periods. 0 reacts on the first sample."
+
+config OMI_ENABLE_IMU_DOUBLE_TAP
+    bool "IMU double-tap gesture (tap the pendant body)"
+    depends on OMI_ENABLE_IMU_GESTURES
+    default n
+    help
+        "Alternative trigger for the assistant: double-tap the pendant instead
+         of the button. Reliable tap detection needs the accelerometer at
+         416 Hz instead of the 26 Hz used for wake-on-motion, which costs
+         noticeably more idle current, and the gesture can misfire when the
+         pendant knocks against clothing. Off by default; enable only after
+         validating the thresholds on real hardware."
+
+config OMI_IMU_TAP_THRESHOLD
+    int "IMU tap threshold (TAP_THS_6D, 0-31)"
+    range 0 31
+    default 12
+    depends on OMI_ENABLE_IMU_GESTURES
+    help
+        "Tap detection threshold in units of full-scale/32."
+
+config OMI_IMU_TAP_SHOCK
+    int "IMU tap shock window (INT_DUR2 SHOCK, 0-3)"
+    range 0 3
+    default 3
+    depends on OMI_ENABLE_IMU_GESTURES
+    help
+        "Maximum duration of the over-threshold event, in ODR periods * 8."
+
+config OMI_IMU_TAP_QUIET
+    int "IMU tap quiet window (INT_DUR2 QUIET, 0-3)"
+    range 0 3
+    default 3
+    depends on OMI_ENABLE_IMU_GESTURES
+    help
+        "Settling time after a tap before the next one is evaluated, in ODR
+         periods * 4."
+
+config OMI_IMU_TAP_DURATION
+    int "IMU double-tap window (INT_DUR2 DUR, 0-15)"
+    range 0 15
+    default 7
+    depends on OMI_ENABLE_IMU_GESTURES
+    help
+        "Maximum gap between the two taps of a double tap, in ODR periods * 32."
+
+config OMI_ENABLE_IDLE_SLEEP
+    bool "Idle auto-sleep (system off)"
+    depends on OMI_ENABLE_BUTTON
+    default n
+    help
+        "Automatically enter system off (deep sleep) after the device has been
+         idle for OMI_IDLE_SLEEP_TIMEOUT_MIN minutes. Idle means no audio is
+         streaming to a subscribed central and the device is not charging.
+         Wake by pressing the user button (same wake path as the long-press
+         power off). The BLE radio is off in system off, so a new connection
+         cannot wake the device."
+
+config OMI_IDLE_SLEEP_TIMEOUT_MIN
+    int "Idle timeout before auto-sleep (minutes)"
+    range 1 720
+    default 30
+    depends on OMI_ENABLE_IDLE_SLEEP
+    help
+        "Minutes of continuous idle before the device powers off to conserve
+         battery."
+
+config OMI_ENABLE_BLE_SLEEP_CMD
+    bool "BLE sleep command characteristic"
+    depends on OMI_ENABLE_BUTTON
+    default n
+    help
+        "Expose a write-only characteristic (19B10014) in the settings service
+         so the companion app can command the device into system off (e.g. an
+         end-of-day 'put Omi to sleep' action). Write a single byte 0x01 to
+         trigger the same power-off path as a long button press."
+
+config OMI_ENABLE_BATTERY_LOW_LED
+    bool "Low-battery LED warning"
+    depends on OMI_ENABLE_BATTERY
+    default n
+    help
+        "Blink the red LED when the battery level drops to or below
+         OMI_BATTERY_LOW_THRESHOLD percent and the device is not charging."
+
+config OMI_BATTERY_LOW_THRESHOLD
+    int "Low-battery LED threshold (percent)"
+    range 1 50
+    default 10
+    depends on OMI_ENABLE_BATTERY_LOW_LED
+    help
+        "Battery percentage at or below which the low-battery LED warning
+         activates."
+
+config OMI_ENABLE_CAPTURE_LED
+    bool "Capture-state LED (blue capturing, red idle)"
+    default n
+    help
+        "Drive the status LED from the audio capture state: blue while a
+         central is subscribed to the audio stream (capturing), red when
+         connected but not capturing or disconnected. The audio CCC handler
+         updates the flag automatically, and the app may override it by
+         writing the capture-state characteristic (19B10015)."
+
+config OMI_ENABLE_DEVICE_NAME_RW
+    bool "Writable, persisted BLE device name"
+    select BT_DEVICE_NAME_DYNAMIC
+    default n
+    help
+        "Expose a read/write name characteristic (19B10016) in the settings
+         service so the companion app can rename the pendant. The name is
+         stored in NVS and re-applied via bt_set_name() on boot, so it
+         survives reboot without enabling CONFIG_BT_SETTINGS."
+
+endmenu

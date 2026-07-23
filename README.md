@@ -13,7 +13,7 @@ Omi v4 captures what happens around you (pendant audio, meetings, your workspace
 | `app/macos/Runner` | macOS native layer — window chrome, summoned input overlay, voice waveform/glow overlays, global input, menu bar, EventKit |
 | `worker` | Cloudflare Worker (Bun, Hono, TypeScript) — auth, D1 persistence, billing, channel delivery |
 | `worker-rs` | Rust/workers-rs parity port of the Worker, cutover-ready |
-| `firmware` | nRF5340 pendant firmware, vendored from upstream with our feature work |
+| `firmware` | Pendant firmware (nRF5340 CV1 and nRF52840 DevKits), vendored from upstream with our feature work. Built out of band with the nRF Connect SDK and excluded from CI — see [`firmware/README.md`](firmware/README.md), [`firmware/BLE_CONTRACTS.md`](firmware/BLE_CONTRACTS.md), [`firmware/PROVENANCE.md`](firmware/PROVENANCE.md) |
 
 External engines: [`tschk/zkr`](https://github.com/tschk/zkr) for evidence-backed temporal memory, `rx4` for extraction and ranking, `praefectus` for desktop computer-use.
 
