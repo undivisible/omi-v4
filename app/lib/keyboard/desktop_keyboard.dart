@@ -5,6 +5,13 @@ import 'package:flutter/services.dart';
 
 import 'shift_gesture.dart';
 
+/// Human-readable label for the global keybind that summons the centered
+/// text overlay. The actual key detection lives natively
+/// (`MainFlutterWindow.swift`, `summonOverlayKeyCode`); this constant is the
+/// single place the shortcut is named so it can be surfaced in UI/onboarding
+/// and later made configurable.
+const summonOverlayKeybindLabel = 'Option + Space';
+
 sealed class DesktopKeyboardEvent {
   const DesktopKeyboardEvent();
 }
@@ -24,6 +31,12 @@ final class DesktopSecureInputEvent extends DesktopKeyboardEvent {
 
 final class DesktopEscapeEvent extends DesktopKeyboardEvent {
   const DesktopEscapeEvent();
+}
+
+/// The global overlay keybind ([summonOverlayKeybindLabel], Option+Space by
+/// default) fired system-wide from the native keyboard monitor.
+final class DesktopSummonOverlayEvent extends DesktopKeyboardEvent {
+  const DesktopSummonOverlayEvent();
 }
 
 final class DesktopKeyboard {
@@ -63,6 +76,7 @@ final class DesktopKeyboard {
       ),
       'secureInput' => DesktopSecureInputEvent(raw['enabled'] == true),
       'escape' => const DesktopEscapeEvent(),
+      'summonOverlay' => const DesktopSummonOverlayEvent(),
       _ => throw const FormatException('unknown keyboard event'),
     };
   }

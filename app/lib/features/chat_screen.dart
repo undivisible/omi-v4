@@ -264,11 +264,15 @@ class ChatScreenState extends State<ChatScreen> {
   Future<void> handleDesktopGesture(ShiftGestureAction action) async {
     if (!mounted) return;
     switch (action) {
-      case ShiftGestureAction.openTextInput:
+      case ShiftGestureAction.openOverlay:
         await _desktopKeyboard.focusApplication();
         if (mounted) _inputFocus.requestFocus();
-      case ShiftGestureAction.submitText:
-        await _send();
+      case ShiftGestureAction.voiceToggle:
+        if (widget.services.desktopVoice.active) {
+          await handleDesktopGesture(ShiftGestureAction.stopVoice);
+        } else {
+          await handleDesktopGesture(ShiftGestureAction.startVoice);
+        }
       case ShiftGestureAction.cancel:
         if (widget.services.desktopVoice.active) {
           await widget.services.cancelDesktopVoice();
@@ -292,14 +296,6 @@ class ChatScreenState extends State<ChatScreen> {
             return;
           }
           setState(() => _progress = 'Listening');
-        } catch (failure) {
-          widget.onDesktopGestureReset?.call();
-          if (mounted) setState(() => _error = _describeError(failure));
-        }
-      case ShiftGestureAction.continueVoice:
-        try {
-          await widget.services.continueDesktopVoice();
-          if (mounted) setState(() => _progress = 'Listening');
         } catch (failure) {
           widget.onDesktopGestureReset?.call();
           if (mounted) setState(() => _error = _describeError(failure));
@@ -421,8 +417,6 @@ class ChatScreenState extends State<ChatScreen> {
     setState(() => _shakeProgress = 0);
     try {
       await handleDesktopGesture(ShiftGestureAction.startVoice);
-      if (!mounted) return;
-      await handleDesktopGesture(ShiftGestureAction.continueVoice);
     } finally {
       _activatingShakeVoice = false;
     }

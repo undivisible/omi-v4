@@ -1,9 +1,12 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../app_services.dart';
+import '../keyboard/keyboard.dart';
+import '../keyboard/shake_gesture.dart';
 import '../keyboard/voice_transcripts.dart';
 import '../capabilities/desktop_capabilities.dart';
 import '../native/native_hub.dart';
@@ -66,6 +69,18 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   String? finishError;
   CursorPillController? _pillController;
 
+  // Shake finale (use step): after the voice lesson the user is asked to
+  // press Esc and shake the cursor. The shake fills a glow that then bursts
+  // to the screen edges before onboarding completes into the hub.
+  bool _useVoiceDone = false;
+  double _useShakeProgress = 0;
+  bool _useShakeComplete = false;
+  Offset _useShakeCursor = Offset.zero;
+  double? _lastUseShakeX;
+  int _lastUseShakeDirection = 0;
+  DateTime _lastUseShakeReversalAt = DateTime.fromMillisecondsSinceEpoch(0);
+  Timer? _useShakeDecayTimer;
+
   CursorPillController get _usePillController {
     final existing = _pillController;
     if (existing != null) return existing;
@@ -98,12 +113,25 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         pill != null &&
         pill.state != CursorPillState.hidden &&
         onboarding.stage == OnboardingStage.use;
+    final shakeActive =
+        onboarding.stage == OnboardingStage.use && _useVoiceDone;
     return MouseRegion(
       opaque: false,
-      onHover: (event) => setState(() => _pointerPosition = event.position),
+      onHover: (event) {
+        setState(() => _pointerPosition = event.position);
+        if (shakeActive && !_useShakeComplete) _trackUseShake(event.position);
+      },
       child: Stack(
         children: [
           base,
+          if (shakeActive && _useShakeProgress > 0)
+            _UseShakeGlow(
+              key: const Key('use_shake_glow'),
+              position: _useShakeCursor,
+              progress: _useShakeProgress / 100,
+              complete: _useShakeComplete,
+              onBurstDone: _finish,
+            ),
           if (showPill)
             Builder(
               builder: (context) {
@@ -143,6 +171,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
 
   @override
   void dispose() {
+    _useShakeDecayTimer?.cancel();
     unawaited(scanEvents?.cancel());
     onboarding.removeListener(_refresh);
     widget.services.auth.removeListener(_refresh);
@@ -237,6 +266,45 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
 
   void _openPreview() {
     setState(() => previewing = true);
+  }
+
+  void _onVoiceLessonComplete() {
+    if (_useVoiceDone) return;
+    setState(() => _useVoiceDone = true);
+    _useShakeDecayTimer ??= Timer.periodic(const Duration(milliseconds: 120), (
+      _,
+    ) {
+      if (!mounted || _useShakeComplete || _useShakeProgress <= 0) return;
+      setState(() => _useShakeProgress = (_useShakeProgress - 8).clamp(0, 100));
+    });
+  }
+
+  void _trackUseShake(Offset position) {
+    _useShakeCursor = position;
+    final now = DateTime.now();
+    final lastX = _lastUseShakeX;
+    _lastUseShakeX = position.dx;
+    if (lastX == null) return;
+    final movement = position.dx - lastX;
+    if (movement.abs() < 7) return;
+    final direction = movement.isNegative ? -1 : 1;
+    final elapsedMs = now.difference(_lastUseShakeReversalAt).inMilliseconds;
+    if (isShakeReversal(
+      _lastUseShakeDirection,
+      direction,
+      elapsedMs,
+      movement,
+    )) {
+      final progress = advanceShakeProgress(_useShakeProgress, movement);
+      setState(() => _useShakeProgress = progress);
+      if (progress >= 100 && !_useShakeComplete) {
+        setState(() => _useShakeComplete = true);
+      }
+      _lastUseShakeReversalAt = now;
+    } else if (direction != _lastUseShakeDirection) {
+      _lastUseShakeReversalAt = now;
+    }
+    _lastUseShakeDirection = direction;
   }
 
   Future<void> _finish() async {
@@ -403,6 +471,10 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                         ),
                         finishing: finishing,
                         error: finishError,
+                        finale: _useVoiceDone,
+                        shakeProgress: _useShakeProgress,
+                        shakeComplete: _useShakeComplete,
+                        onVoiceLessonComplete: _onVoiceLessonComplete,
                         onFinish: _finish,
                       ),
                     },
@@ -836,6 +908,10 @@ class OnboardingUseStep extends StatefulWidget {
     required this.transcripts,
     required this.finishing,
     required this.error,
+    required this.finale,
+    required this.shakeProgress,
+    required this.shakeComplete,
+    required this.onVoiceLessonComplete,
     required this.onFinish,
     super.key,
   });
@@ -844,6 +920,13 @@ class OnboardingUseStep extends StatefulWidget {
   final Stream<String> transcripts;
   final bool finishing;
   final String? error;
+
+  /// True once the voice lesson is satisfied and the step is in its shake
+  /// finale (the parent screen owns the shake tracking + glow burst).
+  final bool finale;
+  final double shakeProgress;
+  final bool shakeComplete;
+  final VoidCallback onVoiceLessonComplete;
   final FutureOr<void> Function() onFinish;
 
   @override
@@ -854,10 +937,15 @@ class _OnboardingUseStepState extends State<OnboardingUseStep> {
   bool leftShiftDown = false;
   bool rightShiftDown = false;
   bool chordDown = false;
-  bool completed = false;
-  bool heardTranscript = false;
+  bool _lessonSignalled = false;
   CursorPillState lastPillState = CursorPillState.hidden;
   StreamSubscription<String>? transcriptEvents;
+
+  void _signalVoiceLesson() {
+    if (_lessonSignalled) return;
+    _lessonSignalled = true;
+    widget.onVoiceLessonComplete();
+  }
 
   @override
   void initState() {
@@ -869,14 +957,6 @@ class _OnboardingUseStepState extends State<OnboardingUseStep> {
   }
 
   @override
-  void didUpdateWidget(covariant OnboardingUseStep old) {
-    super.didUpdateWidget(old);
-    // A failed finish surfaces an error and stops finishing; re-arm the
-    // gesture so the user can trigger it again.
-    if (widget.error != null && !widget.finishing) completed = false;
-  }
-
-  @override
   void dispose() {
     HardwareKeyboard.instance.removeHandler(_handleKey);
     widget.pill.removeListener(_pillChanged);
@@ -884,19 +964,18 @@ class _OnboardingUseStepState extends State<OnboardingUseStep> {
     super.dispose();
   }
 
-  /// A double-shift (or Esc) while listening stops the session and hides
-  /// the pill. Performing that stop IS the lesson completing — the user
-  /// walked the whole pill → live → stop sequence — so finish onboarding
-  /// rather than resetting to the "press both Shift keys" prompt, even when
-  /// speech recognition produced no transcript (the live route can drain
-  /// late or be unavailable entirely in offline setups).
+  /// A double-shift (or Esc) while listening stops voice and hides the pill.
+  /// Performing that stop IS the voice lesson completing — the user talked
+  /// and stopped — so hand off to the shake finale rather than finishing
+  /// outright, even when speech recognition produced no transcript (the live
+  /// route can drain late or be unavailable in offline setups).
   void _pillChanged() {
     if (!mounted) return;
     final state = widget.pill.state;
     final wasListening = lastPillState == CursorPillState.listening;
     lastPillState = state;
-    if (wasListening && state == CursorPillState.hidden && !completed) {
-      _complete();
+    if (wasListening && state == CursorPillState.hidden && !widget.finale) {
+      _signalVoiceLesson();
     }
     setState(() {});
   }
@@ -907,6 +986,7 @@ class _OnboardingUseStepState extends State<OnboardingUseStep> {
       unawaited(widget.pill.dismiss());
       return false;
     }
+    if (widget.finale) return false;
     final isLeft = physical == PhysicalKeyboardKey.shiftLeft;
     final isRight = physical == PhysicalKeyboardKey.shiftRight;
     if (!isLeft && !isRight) return false;
@@ -927,23 +1007,18 @@ class _OnboardingUseStepState extends State<OnboardingUseStep> {
   }
 
   void _handleTranscript(String text) {
-    heardTranscript = true;
-    if (completed) return;
+    if (widget.finale) return;
     if (matchesShowHubIntent(text)) {
       unawaited(widget.pill.dismiss());
-      _complete();
+      _signalVoiceLesson();
       return;
     }
     // Final transcripts can land after the stop already hid the pill (the
-    // provider drains asynchronously); a late transcript still counts as
-    // the lesson being satisfied.
-    if (widget.pill.state == CursorPillState.hidden) _complete();
-  }
-
-  void _complete() {
-    if (completed || widget.finishing) return;
-    completed = true;
-    unawaited(Future<void>.value(widget.onFinish()));
+    // provider drains asynchronously); a late transcript still satisfies the
+    // voice lesson.
+    if (widget.pill.state == CursorPillState.hidden) {
+      _signalVoiceLesson();
+    }
   }
 
   Widget _shiftKey({
@@ -1036,14 +1111,15 @@ class _OnboardingUseStepState extends State<OnboardingUseStep> {
   }
 
   String get _prompt => switch (widget.pill.state) {
-    CursorPillState.hidden => 'Press both Shift keys at the same time.',
-    CursorPillState.input => 'Don’t type — press both Shift keys again.',
-    CursorPillState.listening =>
-      'Say “Show me my currents.” Press both Shift keys — or Esc — to stop.',
+    CursorPillState.hidden => 'Double-tap both Shift keys to talk to me.',
+    CursorPillState.input =>
+      'Type here, or press Esc. ($summonOverlayKeybindLabel opens this anywhere.)',
+    CursorPillState.listening => 'Say something — then press Esc to stop.',
   };
 
   @override
   Widget build(BuildContext context) {
+    if (widget.finale) return _shakeFinale(context);
     final listening = widget.pill.state == CursorPillState.listening;
     final expectingDoubleShift = !listening;
     return Column(
@@ -1098,6 +1174,235 @@ class _OnboardingUseStepState extends State<OnboardingUseStep> {
           ),
         ],
       ],
+    );
+  }
+
+  /// The closing teaching beat: with voice learned, ask the user to press Esc
+  /// and shake the cursor. The parent screen fills the glow and bursts it; on
+  /// completion onboarding drops into the hub.
+  Widget _shakeFinale(BuildContext context) => Column(
+    key: const Key('use_shake_finale'),
+    mainAxisSize: MainAxisSize.min,
+    crossAxisAlignment: CrossAxisAlignment.center,
+    children: [
+      _CursorCue(active: !widget.shakeComplete),
+      const SizedBox(height: 20),
+      RandomizedText(
+        segments: widget.shakeComplete
+            ? const [('I’m listening.', null)]
+            : const [('Press Esc — then shake your cursor.', null)],
+        textAlign: TextAlign.center,
+        style: const TextStyle(
+          color: Color(0xfffffcec),
+          fontFamily: 'Avenir Next',
+          fontSize: 34,
+          fontWeight: FontWeight.w500,
+          height: 1.15,
+          letterSpacing: -1,
+        ),
+      ),
+      const SizedBox(height: 16),
+      Opacity(
+        opacity: .55,
+        child: Semantics(
+          liveRegion: true,
+          child: Text(
+            widget.shakeComplete
+                ? 'Shake anytime to reach me.'
+                : '${widget.shakeProgress.round()}%',
+            key: const Key('use_shake_prompt'),
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              color: Color(0xb3fffcec),
+              fontFamily: 'Avenir Next',
+              fontSize: 15,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ),
+      ),
+      if (widget.error case final message?) ...[
+        const SizedBox(height: 12),
+        Semantics(
+          liveRegion: true,
+          child: Text(
+            message,
+            textAlign: TextAlign.center,
+            style: const TextStyle(color: Color(0xffffb4ab)),
+          ),
+        ),
+      ],
+    ],
+  );
+}
+
+/// The ↔ nudge that oscillates while the user is asked to shake the cursor,
+/// mirroring the reference `cursor-cue` animation.
+class _CursorCue extends StatefulWidget {
+  const _CursorCue({required this.active});
+
+  final bool active;
+
+  @override
+  State<_CursorCue> createState() => _CursorCueState();
+}
+
+class _CursorCueState extends State<_CursorCue>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 700),
+  );
+
+  bool get _animated =>
+      widget.active && !MediaQuery.disableAnimationsOf(context);
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_animated) {
+      if (!_controller.isAnimating) _controller.repeat();
+    } else {
+      _controller.stop();
+      _controller.value = 0;
+    }
+  }
+
+  @override
+  void didUpdateWidget(covariant _CursorCue old) {
+    super.didUpdateWidget(old);
+    if (_animated) {
+      if (!_controller.isAnimating) _controller.repeat();
+    } else {
+      _controller.stop();
+      _controller.value = 0;
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => AnimatedBuilder(
+    animation: _controller,
+    builder: (context, child) {
+      final dx = math.sin(_controller.value * 2 * math.pi) * 4;
+      return Transform.translate(offset: Offset(dx, 0), child: child);
+    },
+    child: const Text(
+      '↔',
+      style: TextStyle(fontSize: 34, color: Color(0xff96c4ff)),
+    ),
+  );
+}
+
+/// Ports the web demo's shake glow: a warm radial glow that grows with shake
+/// progress and, on completion, bursts past the screen edges (scale ~4.8,
+/// fading out) over ~720ms before signalling [onBurstDone].
+class _UseShakeGlow extends StatefulWidget {
+  const _UseShakeGlow({
+    required this.position,
+    required this.progress,
+    required this.complete,
+    required this.onBurstDone,
+    super.key,
+  });
+
+  final Offset position;
+  final double progress;
+  final bool complete;
+  final VoidCallback onBurstDone;
+
+  @override
+  State<_UseShakeGlow> createState() => _UseShakeGlowState();
+}
+
+class _UseShakeGlowState extends State<_UseShakeGlow>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _burst = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 720),
+  );
+  bool _fired = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _burst.addStatusListener((status) {
+      if (status == AnimationStatus.completed && !_fired) {
+        _fired = true;
+        widget.onBurstDone();
+      }
+    });
+    if (widget.complete) _maybeBurst();
+  }
+
+  @override
+  void didUpdateWidget(covariant _UseShakeGlow old) {
+    super.didUpdateWidget(old);
+    if (widget.complete) _maybeBurst();
+  }
+
+  void _maybeBurst() {
+    if (_burst.isAnimating || _burst.isCompleted) return;
+    if (MediaQuery.disableAnimationsOf(context)) {
+      if (!_fired) {
+        _fired = true;
+        widget.onBurstDone();
+      }
+      return;
+    }
+    _burst.forward();
+  }
+
+  @override
+  void dispose() {
+    _burst.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final base = 120 + widget.progress * 360;
+    return AnimatedBuilder(
+      animation: _burst,
+      builder: (context, child) {
+        // cubic-bezier(0.16, 1, 0.3, 1) easing → strong ease-out.
+        final t = Curves.easeOutCubic.transform(_burst.value);
+        final scale = widget.complete
+            ? 0.7 + widget.progress * 0.3 + t * 4.1
+            : 1.0;
+        final opacity =
+            (widget.complete ? (1 - t) : 1.0) * (widget.progress * 0.84);
+        final size = base * scale;
+        return Positioned(
+          left: widget.position.dx - size / 2,
+          top: widget.position.dy - size / 2,
+          width: size,
+          height: size,
+          child: IgnorePointer(
+            child: Opacity(
+              opacity: opacity.clamp(0.0, 1.0),
+              child: const DecoratedBox(
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  gradient: RadialGradient(
+                    colors: [
+                      Color(0xff96c4ff),
+                      Color(0xfff2c2ac),
+                      Color(0x00f2c2ac),
+                    ],
+                    stops: [0.0, 0.42, 0.72],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 }

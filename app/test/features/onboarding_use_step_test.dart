@@ -16,250 +16,176 @@ void main() {
     await tester.pump();
   }
 
-  testWidgets(
-    'double-shift sequence teaches pill, voice, and completes on currents',
-    (tester) async {
-      final harness = _Harness();
-      final controller = harness.controller();
-      final transcripts = StreamController<String>.broadcast(sync: true);
-      var finished = 0;
-
-      await tester.pumpWidget(
-        MaterialApp(
-          home: Scaffold(
-            body: OnboardingUseStep(
-              pill: controller,
-              transcripts: transcripts.stream,
-              finishing: false,
-              error: null,
-              onFinish: () => finished += 1,
-            ),
-          ),
-        ),
-      );
-
-      expect(find.byKey(const Key('shift_left')), findsOneWidget);
-      expect(
-        find.textContaining('Press both Shift keys at the same time'),
-        findsOneWidget,
-      );
-      await chord(tester);
-      expect(controller.state, CursorPillState.input);
-      expect(find.textContaining('Don’t type'), findsOneWidget);
-
-      harness.advance(const Duration(seconds: 1));
-      await chord(tester);
-      expect(controller.state, CursorPillState.listening);
-      expect(harness.voiceStarts, 1);
-      expect(find.textContaining('Show me my currents'), findsOneWidget);
-      expect(find.textContaining('or Esc — to stop'), findsOneWidget);
-
-      transcripts.add('show me my currents');
-      await tester.pump();
-      expect(finished, 1);
-
-      await tester.pumpWidget(const SizedBox());
-      controller.dispose();
-      await transcripts.close();
-      await harness.close();
-    },
+  Widget host(
+    CursorPillController controller,
+    Stream<String> transcripts, {
+    bool finale = false,
+    double shakeProgress = 0,
+    bool shakeComplete = false,
+    VoidCallback? onVoiceLessonComplete,
+    VoidCallback? onFinish,
+  }) => MaterialApp(
+    home: Scaffold(
+      body: OnboardingUseStep(
+        pill: controller,
+        transcripts: transcripts,
+        finishing: false,
+        error: null,
+        finale: finale,
+        shakeProgress: shakeProgress,
+        shakeComplete: shakeComplete,
+        onVoiceLessonComplete: onVoiceLessonComplete ?? () {},
+        onFinish: onFinish ?? () {},
+      ),
+    ),
   );
 
-  testWidgets('stopping voice after any speech completes the lesson', (
+  testWidgets('double-shift talks; stopping satisfies the voice lesson', (
     tester,
   ) async {
     final harness = _Harness();
     final controller = harness.controller();
     final transcripts = StreamController<String>.broadcast(sync: true);
-    var finished = 0;
+    var lessonDone = 0;
 
     await tester.pumpWidget(
-      MaterialApp(
-        home: Scaffold(
-          body: OnboardingUseStep(
-            pill: controller,
-            transcripts: transcripts.stream,
-            finishing: false,
-            error: null,
-            onFinish: () => finished += 1,
-          ),
-        ),
+      host(
+        controller,
+        transcripts.stream,
+        onVoiceLessonComplete: () => lessonDone += 1,
       ),
     );
 
-    await chord(tester);
-    harness.advance(const Duration(seconds: 1));
-    await chord(tester);
-    expect(controller.state, CursorPillState.listening);
-
-    // Something was said, but not the magic phrase.
-    transcripts.add('hello there omi');
-    await tester.pump();
-    expect(finished, 0);
-
-    harness.advance(const Duration(seconds: 1));
-    await chord(tester);
-    expect(controller.state, CursorPillState.hidden);
-    expect(finished, 1);
-
-    await tester.pumpWidget(const SizedBox());
-    controller.dispose();
-    await transcripts.close();
-    await harness.close();
-  });
-
-  testWidgets(
-    'a late transcript arriving after the stop still completes the lesson',
-    (tester) async {
-      final harness = _Harness();
-      final controller = harness.controller();
-      final transcripts = StreamController<String>.broadcast(sync: true);
-      var finished = 0;
-
-      await tester.pumpWidget(
-        MaterialApp(
-          home: Scaffold(
-            body: OnboardingUseStep(
-              pill: controller,
-              transcripts: transcripts.stream,
-              finishing: false,
-              error: null,
-              onFinish: () => finished += 1,
-            ),
-          ),
-        ),
-      );
-
-      await chord(tester);
-      harness.advance(const Duration(seconds: 1));
-      await chord(tester);
-      harness.advance(const Duration(seconds: 1));
-      await chord(tester);
-      expect(controller.state, CursorPillState.hidden);
-      // The stop itself completes the lesson now.
-      expect(finished, 1);
-
-      // A transcript draining late must not double-complete.
-      transcripts.add('hello omi');
-      await tester.pump();
-      expect(finished, 1);
-
-      await tester.pumpWidget(const SizedBox());
-      controller.dispose();
-      await transcripts.close();
-      await harness.close();
-    },
-  );
-
-  testWidgets('a silent stop still completes the lesson', (tester) async {
-    final harness = _Harness();
-    final controller = harness.controller();
-    final transcripts = StreamController<String>.broadcast(sync: true);
-    var finished = 0;
-
-    await tester.pumpWidget(
-      MaterialApp(
-        home: Scaffold(
-          body: OnboardingUseStep(
-            pill: controller,
-            transcripts: transcripts.stream,
-            finishing: false,
-            error: null,
-            onFinish: () => finished += 1,
-          ),
-        ),
-      ),
-    );
-
-    await chord(tester);
-    harness.advance(const Duration(seconds: 1));
-    await chord(tester);
-    harness.advance(const Duration(seconds: 1));
-    await chord(tester);
-    await tester.pump();
-
-    expect(controller.state, CursorPillState.hidden);
-    // Performing the full pill → live → stop sequence is the lesson; even a
-    // stop with no recognized speech completes onboarding rather than
-    // resetting to the first prompt.
-    expect(finished, 1);
-
-    await tester.pumpWidget(const SizedBox());
-    controller.dispose();
-    await transcripts.close();
-    await harness.close();
-  });
-
-  testWidgets('immediate re-chord is debounced and does not start voice', (
-    tester,
-  ) async {
-    final harness = _Harness();
-    final controller = harness.controller();
-    final transcripts = StreamController<String>.broadcast(sync: true);
-
-    await tester.pumpWidget(
-      MaterialApp(
-        home: Scaffold(
-          body: OnboardingUseStep(
-            pill: controller,
-            transcripts: transcripts.stream,
-            finishing: false,
-            error: null,
-            onFinish: () {},
-          ),
-        ),
-      ),
-    );
-
-    await chord(tester);
-    await chord(tester);
-    expect(controller.state, CursorPillState.input);
-    expect(harness.voiceStarts, 0);
-
-    await tester.pumpWidget(const SizedBox());
-    controller.dispose();
-    await transcripts.close();
-    await harness.close();
-  });
-
-  testWidgets('escape dismisses the pill back to the first prompt', (
-    tester,
-  ) async {
-    final harness = _Harness();
-    final controller = harness.controller();
-    final transcripts = StreamController<String>.broadcast(sync: true);
-
-    await tester.pumpWidget(
-      MaterialApp(
-        home: Scaffold(
-          body: OnboardingUseStep(
-            pill: controller,
-            transcripts: transcripts.stream,
-            finishing: false,
-            error: null,
-            onFinish: () {},
-          ),
-        ),
-      ),
-    );
-
-    await chord(tester);
-    expect(controller.state, CursorPillState.input);
-    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
-    await tester.pump();
-    expect(controller.state, CursorPillState.hidden);
+    expect(find.byKey(const Key('shift_left')), findsOneWidget);
     expect(
-      find.textContaining('Press both Shift keys at the same time'),
+      find.textContaining('Double-tap both Shift keys to talk'),
       findsOneWidget,
     );
 
+    // Straight to voice — no intermediate input pill.
+    await chord(tester);
+    expect(controller.state, CursorPillState.listening);
+    expect(harness.voiceStarts, 1);
+    expect(find.textContaining('press Esc to stop'), findsOneWidget);
+
+    harness.advance(const Duration(seconds: 1));
+    await chord(tester);
+    expect(controller.state, CursorPillState.hidden);
+    expect(lessonDone, 1);
+
     await tester.pumpWidget(const SizedBox());
     controller.dispose();
     await transcripts.close();
     await harness.close();
   });
 
-  testWidgets('×2 hint and shimmer show while double-shift is expected', (
+  testWidgets('a currents phrase satisfies the voice lesson', (tester) async {
+    final harness = _Harness();
+    final controller = harness.controller();
+    final transcripts = StreamController<String>.broadcast(sync: true);
+    var lessonDone = 0;
+
+    await tester.pumpWidget(
+      host(
+        controller,
+        transcripts.stream,
+        onVoiceLessonComplete: () => lessonDone += 1,
+      ),
+    );
+
+    await chord(tester);
+    expect(controller.state, CursorPillState.listening);
+    transcripts.add('show me my currents');
+    await tester.pump();
+    expect(lessonDone, 1);
+
+    await tester.pumpWidget(const SizedBox());
+    controller.dispose();
+    await transcripts.close();
+    await harness.close();
+  });
+
+  testWidgets('a silent stop still satisfies the voice lesson', (tester) async {
+    final harness = _Harness();
+    final controller = harness.controller();
+    final transcripts = StreamController<String>.broadcast(sync: true);
+    var lessonDone = 0;
+
+    await tester.pumpWidget(
+      host(
+        controller,
+        transcripts.stream,
+        onVoiceLessonComplete: () => lessonDone += 1,
+      ),
+    );
+
+    await chord(tester);
+    harness.advance(const Duration(seconds: 1));
+    await chord(tester);
+    await tester.pump();
+
+    expect(controller.state, CursorPillState.hidden);
+    expect(lessonDone, 1);
+
+    await tester.pumpWidget(const SizedBox());
+    controller.dispose();
+    await transcripts.close();
+    await harness.close();
+  });
+
+  testWidgets('immediate re-chord is debounced and does not stop voice', (
+    tester,
+  ) async {
+    final harness = _Harness();
+    final controller = harness.controller();
+    final transcripts = StreamController<String>.broadcast(sync: true);
+
+    await tester.pumpWidget(host(controller, transcripts.stream));
+
+    await chord(tester);
+    await chord(tester);
+    // The bounced second chord is swallowed by the 500ms debounce.
+    expect(controller.state, CursorPillState.listening);
+    expect(harness.voiceStarts, 1);
+
+    await tester.pumpWidget(const SizedBox());
+    controller.dispose();
+    await transcripts.close();
+    await harness.close();
+  });
+
+  testWidgets('escape dismisses voice back to the first prompt', (
+    tester,
+  ) async {
+    final harness = _Harness();
+    final controller = harness.controller();
+    final transcripts = StreamController<String>.broadcast(sync: true);
+    var lessonDone = 0;
+
+    await tester.pumpWidget(
+      host(
+        controller,
+        transcripts.stream,
+        onVoiceLessonComplete: () => lessonDone += 1,
+      ),
+    );
+
+    await chord(tester);
+    expect(controller.state, CursorPillState.listening);
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pump();
+    expect(controller.state, CursorPillState.hidden);
+    // Esc-stop counts as the voice lesson being satisfied (hands off to the
+    // shake finale).
+    expect(lessonDone, 1);
+
+    await tester.pumpWidget(const SizedBox());
+    controller.dispose();
+    await transcripts.close();
+    await harness.close();
+  });
+
+  testWidgets('the finale asks the user to press Esc and shake', (
     tester,
   ) async {
     final harness = _Harness();
@@ -267,45 +193,14 @@ void main() {
     final transcripts = StreamController<String>.broadcast(sync: true);
 
     await tester.pumpWidget(
-      MaterialApp(
-        home: Scaffold(
-          body: OnboardingUseStep(
-            pill: controller,
-            transcripts: transcripts.stream,
-            finishing: false,
-            error: null,
-            onFinish: () {},
-          ),
-        ),
-      ),
+      host(controller, transcripts.stream, finale: true, shakeProgress: 40),
     );
 
-    expect(find.byKey(const Key('shift_times_two')), findsNothing);
-    expect(find.byType(KeycapShimmer), findsNWidgets(2));
-    expect(
-      tester
-          .widgetList<KeycapShimmer>(find.byType(KeycapShimmer))
-          .every((shimmer) => shimmer.enabled),
-      isTrue,
-    );
-    expect(find.byType(ShaderMask), findsNWidgets(2));
-
-    await chord(tester);
-    expect(controller.state, CursorPillState.input);
-    await tester.pump(const Duration(milliseconds: 400));
-    expect(find.byKey(const Key('shift_times_two')), findsOneWidget);
-    expect(find.byType(ShaderMask), findsNWidgets(2));
-
-    harness.advance(const Duration(seconds: 1));
-    await chord(tester);
-    expect(controller.state, CursorPillState.listening);
-    expect(find.byKey(const Key('shift_times_two')), findsNothing);
-    expect(
-      tester
-          .widgetList<KeycapShimmer>(find.byType(KeycapShimmer))
-          .every((shimmer) => shimmer.enabled),
-      isFalse,
-    );
+    expect(find.byKey(const Key('use_shake_finale')), findsOneWidget);
+    expect(find.textContaining('shake your cursor'), findsOneWidget);
+    expect(find.text('40%'), findsOneWidget);
+    // The voice keycaps are gone in the finale.
+    expect(find.byKey(const Key('shift_left')), findsNothing);
 
     await tester.pumpWidget(const SizedBox());
     controller.dispose();
@@ -313,7 +208,7 @@ void main() {
     await harness.close();
   });
 
-  testWidgets('shimmer stays static when animations are disabled', (
+  testWidgets('keycap shimmer stays static when animations are disabled', (
     tester,
   ) async {
     final harness = _Harness();
@@ -330,6 +225,10 @@ void main() {
               transcripts: transcripts.stream,
               finishing: false,
               error: null,
+              finale: false,
+              shakeProgress: 0,
+              shakeComplete: false,
+              onVoiceLessonComplete: () {},
               onFinish: () {},
             ),
           ),
@@ -337,7 +236,6 @@ void main() {
       ),
     );
 
-    expect(find.byKey(const Key('shift_times_two')), findsNothing);
     expect(find.byType(ShaderMask), findsNothing);
 
     await tester.pumpWidget(const SizedBox());

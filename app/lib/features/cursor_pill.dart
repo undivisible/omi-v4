@@ -94,7 +94,10 @@ class _CursorPillState extends State<CursorPill> {
   }
 
   void _focusChanged() {
-    if (_focus.hasFocus || !mounted) return;
+    if (!mounted) return;
+    // Rebuild so the typing shimmer starts/stops with focus.
+    setState(() {});
+    if (_focus.hasFocus) return;
     if (widget.controller.state == CursorPillState.input) {
       unawaited(widget.controller.dismiss());
     }
@@ -202,6 +205,7 @@ class _CursorPillState extends State<CursorPill> {
       _chipKeys.add(GlobalKey());
     }
     WidgetsBinding.instance.addPostFrameCallback((_) => _reportGlassRegions());
+    if (listening) return _voice();
     return Focus(
       onKeyEvent: _handleKey,
       child: Column(
@@ -209,42 +213,31 @@ class _CursorPillState extends State<CursorPill> {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          if (!listening && controller.suggestions.isNotEmpty) ...[
-            SingleChildScrollView(
+          if (controller.suggestions.isNotEmpty) ...[
+            Column(
               key: const Key('cursor_pill_chips'),
-              scrollDirection: Axis.horizontal,
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  for (final (index, suggestion)
-                      in controller.suggestions.indexed) ...[
-                    if (index > 0) const SizedBox(width: 6),
-                    KeyedSubtree(
-                      key: _chipKeys[index],
-                      child: _ChipEntrance(
-                        index: index,
-                        child: _SuggestionChip(
-                          suggestion: suggestion,
-                          onTap: () => unawaited(controller.choose(suggestion)),
-                        ),
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                for (final (index, suggestion)
+                    in controller.suggestions.indexed) ...[
+                  if (index > 0) const SizedBox(height: 6),
+                  KeyedSubtree(
+                    key: _chipKeys[index],
+                    child: _ChipEntrance(
+                      index: index,
+                      child: _SuggestionChip(
+                        suggestion: suggestion,
+                        onTap: () => unawaited(controller.choose(suggestion)),
                       ),
                     ),
-                  ],
+                  ),
                 ],
-              ),
+              ],
             ),
             const SizedBox(height: 8),
           ],
-          _pill(listening),
-          if (listening)
-            if (controller.notice case final notice?) ...[
-              const SizedBox(height: 6),
-              Text(
-                notice,
-                key: const Key('cursor_pill_notice'),
-                style: const TextStyle(fontSize: 12, color: _pillMuted),
-              ),
-            ],
+          _pill(),
           if (controller.error case final message?) ...[
             const SizedBox(height: 6),
             Text(
@@ -258,7 +251,51 @@ class _CursorPillState extends State<CursorPill> {
     );
   }
 
-  Widget _pill(bool listening) => LiquidGlass(
+  /// Live voice: no pill, just the clicky waveform inside a soft warm glow
+  /// (a subtle, steady-state cousin of the shake-complete burst).
+  Widget _voice() => Column(
+    key: const Key('cursor_pill'),
+    mainAxisSize: MainAxisSize.min,
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      SizedBox(
+        key: const Key('cursor_pill_listening'),
+        width: 96,
+        height: 72,
+        child: Stack(
+          alignment: Alignment.center,
+          children: [
+            ListeningGlow(
+              level: widget.controller.level,
+              animated: !MediaQuery.disableAnimationsOf(context),
+            ),
+            PillWaveform(
+              key: const Key('cursor_pill_waveform'),
+              level: widget.controller.level,
+            ),
+          ],
+        ),
+      ),
+      if (widget.controller.notice case final notice?) ...[
+        const SizedBox(height: 6),
+        Text(
+          notice,
+          key: const Key('cursor_pill_notice'),
+          style: const TextStyle(fontSize: 12, color: _pillMuted),
+        ),
+      ],
+      if (widget.controller.error case final message?) ...[
+        const SizedBox(height: 6),
+        Text(
+          message,
+          key: const Key('cursor_pill_error'),
+          style: const TextStyle(fontSize: 12, color: Color(0xffb3261e)),
+        ),
+      ],
+    ],
+  );
+
+  Widget _pill() => LiquidGlass(
     key: _pillKey,
     child: AnimatedContainer(
       duration: MediaQuery.disableAnimationsOf(context)
@@ -267,77 +304,66 @@ class _CursorPillState extends State<CursorPill> {
       curve: Curves.easeOut,
       height: pillHeight,
       padding: const EdgeInsets.symmetric(horizontal: 14),
-      child: _pillContent(listening),
+      child: Stack(
+        children: [
+          _pillContent(),
+          Positioned.fill(
+            child: IgnorePointer(
+              child: TypingShimmer(
+                enabled:
+                    _focus.hasFocus && !MediaQuery.disableAnimationsOf(context),
+              ),
+            ),
+          ),
+        ],
+      ),
     ),
   );
 
-  Widget _pillContent(bool listening) => listening
-      ? Row(
-          key: const Key('cursor_pill_listening'),
-          children: [
-            const Icon(Icons.mic_rounded, size: 16, color: _pillGreen),
-            const SizedBox(width: 8),
-            const Expanded(
-              child: Text(
-                'Listening…',
-                style: TextStyle(
-                  color: _pillGreen,
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
+  Widget _pillContent() => Stack(
+    alignment: Alignment.centerLeft,
+    children: [
+      if (_ghostRemainder case final remainder?)
+        IgnorePointer(
+          child: Text.rich(
+            TextSpan(
+              children: [
+                TextSpan(
+                  text: _text.text,
+                  style: const TextStyle(color: Colors.transparent),
                 ),
-              ),
-            ),
-            PillWaveform(
-              key: const Key('cursor_pill_waveform'),
-              level: widget.controller.level,
-            ),
-          ],
-        )
-      : Stack(
-          alignment: Alignment.centerLeft,
-          children: [
-            if (_ghostRemainder case final remainder?)
-              IgnorePointer(
-                child: Text.rich(
-                  TextSpan(
-                    children: [
-                      TextSpan(
-                        text: _text.text,
-                        style: const TextStyle(color: Colors.transparent),
-                      ),
-                      TextSpan(
-                        text: remainder,
-                        style: const TextStyle(color: _pillMuted),
-                      ),
-                    ],
-                  ),
-                  maxLines: 1,
-                  overflow: TextOverflow.clip,
-                  style: const TextStyle(fontSize: 14),
+                TextSpan(
+                  text: remainder,
+                  style: const TextStyle(color: _pillMuted),
                 ),
-              ),
-            TextField(
-              key: const Key('cursor_pill_input'),
-              controller: _text,
-              focusNode: _focus,
-              autofocus: widget.autofocus,
-              maxLines: 1,
-              cursorColor: _pillInk,
-              style: const TextStyle(color: _pillInk, fontSize: 14),
-              decoration: const InputDecoration(
-                isDense: true,
-                border: InputBorder.none,
-                enabledBorder: InputBorder.none,
-                focusedBorder: InputBorder.none,
-                filled: false,
-                hintText: 'Ask me anything…',
-                hintStyle: TextStyle(color: _pillMuted, fontSize: 14),
-              ),
-              onSubmitted: (value) =>
-                  unawaited(widget.controller.submit(value)),
+              ],
             ),
-          ],
-        );
+            maxLines: 1,
+            overflow: TextOverflow.clip,
+            style: const TextStyle(fontSize: 14),
+          ),
+        ),
+      TextField(
+        key: const Key('cursor_pill_input'),
+        controller: _text,
+        focusNode: _focus,
+        autofocus: widget.autofocus,
+        maxLines: 1,
+        cursorColor: _pillInk,
+        style: const TextStyle(color: _pillInk, fontSize: 14),
+        decoration: const InputDecoration(
+          isDense: true,
+          border: InputBorder.none,
+          enabledBorder: InputBorder.none,
+          focusedBorder: InputBorder.none,
+          filled: false,
+          hintText: 'Ask me anything…',
+          hintStyle: TextStyle(color: _pillMuted, fontSize: 14),
+        ),
+        onSubmitted: (value) => unawaited(widget.controller.submit(value)),
+      ),
+    ],
+  );
 }
 
 /// Animates a suggestion chip into view: a quick fade/rise plus a single
@@ -588,4 +614,176 @@ class PillWaveformPainter extends CustomPainter {
   @override
   bool shouldRepaint(PillWaveformPainter old) =>
       old.level != level || old.phase != phase || old.color != color;
+}
+
+/// The warm listening glow behind the waveform — the same web-demo treatment
+/// as the shake glow (blue core bleeding into peach), held at a subtle,
+/// steady intensity that swells gently with the live audio level. With
+/// animations disabled it renders a still glow with no breathing pulse.
+class ListeningGlow extends StatefulWidget {
+  const ListeningGlow({required this.level, required this.animated, super.key});
+
+  final ValueListenable<double> level;
+  final bool animated;
+
+  @override
+  State<ListeningGlow> createState() => _ListeningGlowState();
+}
+
+class _ListeningGlowState extends State<ListeningGlow>
+    with SingleTickerProviderStateMixin {
+  Ticker? _ticker;
+  double _phase = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.level.addListener(_changed);
+  }
+
+  @override
+  void didUpdateWidget(covariant ListeningGlow old) {
+    super.didUpdateWidget(old);
+    _syncTicker();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _syncTicker();
+  }
+
+  void _syncTicker() {
+    if (widget.animated) {
+      _ticker ??= createTicker((elapsed) {
+        setState(
+          () =>
+              _phase = elapsed.inMicroseconds / Duration.microsecondsPerSecond,
+        );
+      })..start();
+    } else {
+      _ticker?.dispose();
+      _ticker = null;
+    }
+  }
+
+  void _changed() {
+    if (_ticker == null && mounted) setState(() {});
+  }
+
+  @override
+  void dispose() {
+    widget.level.removeListener(_changed);
+    _ticker?.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final level = widget.level.value.clamp(0.0, 1.0);
+    final breathe = widget.animated ? (math.sin(_phase * 2.2) + 1) / 2 : 0.5;
+    final intensity = (0.28 + level * 0.5 + breathe * 0.12).clamp(0.0, 0.9);
+    final scale = 0.82 + level * 0.5 + breathe * 0.06;
+    return IgnorePointer(
+      child: Transform.scale(
+        scale: scale,
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            gradient: RadialGradient(
+              colors: [
+                const Color(0xff96c4ff).withValues(alpha: intensity),
+                Color.lerp(
+                  const Color(0xfff2c2ac),
+                  const Color(0x00f2c2ac),
+                  0.45,
+                )!.withValues(alpha: intensity * 0.6),
+                const Color(0x00f2c2ac),
+              ],
+              stops: const [0.0, 0.42, 0.72],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// A slow diagonal light sweep looping across the input glass while it holds
+/// focus — the typing shimmer. Rendered as a non-interactive overlay (it takes
+/// no child) so it never intercepts text entry. Honors reduced motion via
+/// [enabled]: when off it paints nothing.
+class TypingShimmer extends StatefulWidget {
+  const TypingShimmer({required this.enabled, super.key});
+
+  static const period = Duration(milliseconds: 2200);
+
+  final bool enabled;
+
+  @override
+  State<TypingShimmer> createState() => _TypingShimmerState();
+}
+
+class _TypingShimmerState extends State<TypingShimmer>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _sweep = AnimationController(
+    vsync: this,
+    duration: TypingShimmer.period,
+  );
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _sync();
+  }
+
+  @override
+  void didUpdateWidget(covariant TypingShimmer old) {
+    super.didUpdateWidget(old);
+    _sync();
+  }
+
+  void _sync() {
+    if (widget.enabled) {
+      if (!_sweep.isAnimating) _sweep.repeat();
+    } else {
+      _sweep.stop();
+      _sweep.value = 0;
+    }
+  }
+
+  @override
+  void dispose() {
+    _sweep.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!widget.enabled) return const SizedBox.shrink();
+    return AnimatedBuilder(
+      animation: _sweep,
+      builder: (context, child) {
+        final travel = -0.4 + 1.8 * _sweep.value;
+        return DecoratedBox(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.centerLeft,
+              end: Alignment.centerRight,
+              colors: const [
+                Color(0x00fffefa),
+                Color(0x33fffefa),
+                Color(0x00fffefa),
+              ],
+              stops: [
+                (travel - 0.22).clamp(0.0, 1.0),
+                travel.clamp(0.0, 1.0),
+                (travel + 0.22).clamp(0.0, 1.0),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
 }
