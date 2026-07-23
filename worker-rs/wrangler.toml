@@ -28,6 +28,24 @@ database_id = "74aab5eb-a81d-4494-9283-d48052b8a068"
 #   APP_URL, MIMO_API_KEY, DEEPGRAM_API_KEY, GEMINI_API_KEY,
 #   FIREBASE_SERVICE_ACCOUNT_EMAIL, FIREBASE_SERVICE_ACCOUNT_PRIVATE_KEY, etc.
 #
-# Durable Objects, Vectorize, and the AI binding are NOT declared yet — the
-# Phase-1 routes do not use them. See PORT_STATUS.md for the plan and the
-# workers-rs binding-support notes.
+# Vectorize and the AI binding are NOT declared yet — the ported routes do not
+# use them. See PORT_STATUS.md for the plan and the workers-rs binding notes.
+
+# Durable Objects for the managed-AI route group. The Rust structs carry the
+# #[durable_object] attribute (class names below); the binding names match the
+# `env.durable_object("…")` lookups in src/routes_ai.rs.
+[[durable_objects.bindings]]
+name = "ASSISTANT_ADMISSION"
+class_name = "AssistantAdmissionDo"
+
+[[durable_objects.bindings]]
+name = "STT_ADMISSION"
+class_name = "SttAdmissionDo"
+
+[[durable_objects.bindings]]
+name = "RATE_LIMITER"
+class_name = "RateLimiterDo"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["AssistantAdmissionDo", "SttAdmissionDo", "RateLimiterDo"]

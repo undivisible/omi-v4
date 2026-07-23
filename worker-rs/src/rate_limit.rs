@@ -8,7 +8,7 @@ use serde_json::Value;
 use crate::assistant_admission::Outcome;
 
 /// Persisted counter window: `{ count, windowStart }` in the TS storage.
-#[derive(Default)]
+#[derive(Default, serde::Serialize, serde::Deserialize)]
 pub struct RateLimiter {
     window: Option<(i64, i64)>, // (count, window_start)
     lock_until: Option<i64>,

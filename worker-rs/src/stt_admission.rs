@@ -48,7 +48,7 @@ impl Limits {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 struct Reservation {
     session_id: String,
     uid: String,
@@ -60,7 +60,7 @@ struct Reservation {
     acquisition_token: String,
 }
 
-#[derive(Default)]
+#[derive(Default, serde::Serialize, serde::Deserialize)]
 pub struct SttAdmission {
     reservations: Vec<Reservation>,
 }
@@ -68,6 +68,16 @@ pub struct SttAdmission {
 impl SttAdmission {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// The earliest pending claim deadline, used by the DO glue to schedule
+    /// the next storage alarm (mirrors `scheduleNextAlarm`'s MIN query).
+    pub fn next_alarm(&self) -> Option<i64> {
+        self.reservations
+            .iter()
+            .filter(|r| r.in_flight == 1 && r.claim_by.is_some())
+            .filter_map(|r| r.claim_by)
+            .min()
     }
 
     /// Deadline alarm: expire in-flight reservations whose claim window has

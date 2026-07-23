@@ -47,7 +47,7 @@ impl Limits {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 struct Reservation {
     request_id: String,
     uid: String,
@@ -76,7 +76,7 @@ impl Outcome {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, serde::Serialize, serde::Deserialize)]
 pub struct AssistantAdmission {
     reservations: Vec<Reservation>,
 }

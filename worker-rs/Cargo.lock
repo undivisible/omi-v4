@@ -464,6 +464,7 @@ version = "0.1.0"
 dependencies = [
  "base64",
  "console_error_panic_hook",
+ "futures-util",
  "getrandom",
  "rand",
  "rsa",
@@ -471,6 +472,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "url",
+ "wasm-bindgen-futures",
  "worker",
  "worker-macros",
 ]
