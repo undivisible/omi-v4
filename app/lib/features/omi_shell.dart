@@ -185,7 +185,7 @@ class _OmiShellState extends State<OmiShell> {
     final pill = _cursorPill;
     return Scaffold(
       backgroundColor: Theme.of(context).brightness == Brightness.dark
-          ? const Color(0xff171716)
+          ? const Color(0xff1c1c1a)
           : const Color(0xfff7f6f1),
       body: pill == null
           ? paddedBody
@@ -243,16 +243,10 @@ class _WarmPaperHub extends StatelessWidget {
           ),
         ),
       ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(28),
-        child: ColoredBox(
-          key: const Key('warm_paper_hub'),
-          color: dark ? const Color(0xff1c1c1a) : const Color(0xfff7f6f1),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-            child: child,
-          ),
-        ),
+      child: Padding(
+        key: const Key('warm_paper_hub'),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        child: child,
       ),
     );
   }

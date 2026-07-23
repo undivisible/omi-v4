@@ -44,10 +44,8 @@ void main() {
   }
 
   Color hubBackground(WidgetTester tester) {
-    final box = tester.widget<ColoredBox>(
-      find.byKey(const Key('warm_paper_hub')),
-    );
-    return box.color;
+    final scaffold = tester.widget<Scaffold>(find.byType(Scaffold).first);
+    return scaffold.backgroundColor!;
   }
 
   testWidgets('chat opens in the warm paper hub', (tester) async {
@@ -65,6 +63,15 @@ void main() {
     );
     expect(hubBackground(tester), const Color(0xfff7f6f1));
     expect(greetingColor(tester), const Color(0xff171716));
+
+    final paperBoxes = tester
+        .widgetList<ColoredBox>(find.byType(ColoredBox))
+        .where(
+          (box) =>
+              box.color == const Color(0xfff7f6f1) ||
+              box.color == const Color(0xff1c1c1a),
+        );
+    expect(paperBoxes, isEmpty);
   });
 
   testWidgets('hub adapts to dark mode with readable contrast', (tester) async {
