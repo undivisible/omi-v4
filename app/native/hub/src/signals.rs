@@ -867,7 +867,34 @@ impl AudioChunk {
 
 impl NativeEvent {
     pub(crate) fn send(self) {
+        #[cfg(test)]
+        {
+            test_events::record(self);
+        }
+        #[cfg(not(test))]
         self.send_signal_to_dart();
+    }
+}
+
+/// Unit tests have no Dart end to receive signals, so `send` diverts them into
+/// a per-thread log instead. The log is per-thread because libtest gives each
+/// test its own thread, which keeps concurrently running tests from seeing one
+/// another's events.
+#[cfg(test)]
+pub(crate) mod test_events {
+    use super::NativeEvent;
+    use std::cell::RefCell;
+
+    thread_local! {
+        static EVENTS: RefCell<Vec<NativeEvent>> = const { RefCell::new(Vec::new()) };
+    }
+
+    pub(crate) fn record(event: NativeEvent) {
+        EVENTS.with(|events| events.borrow_mut().push(event));
+    }
+
+    pub(crate) fn take() -> Vec<NativeEvent> {
+        EVENTS.with(|events| events.borrow_mut().drain(..).collect())
     }
 }
 

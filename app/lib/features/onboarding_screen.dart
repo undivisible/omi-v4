@@ -13,10 +13,9 @@ import '../native/native_hub.dart';
 import '../onboarding/hub_checklist.dart';
 import '../onboarding/onboarding_controller.dart';
 import '../onboarding/starter_tasks.dart';
-import '../ui/burst_glow.dart';
 import '../ui/omi_ui.dart';
-import 'cursor_pill.dart';
 import 'cursor_pill_controller.dart';
+import 'cursor_pill_window.dart';
 import 'onboarding/backdrop.dart';
 import 'onboarding/permission_gate.dart';
 import 'onboarding/randomized_text.dart';
@@ -76,7 +75,6 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   bool _useVoiceDone = false;
   double _useShakeProgress = 0;
   bool _useShakeComplete = false;
-  Offset _useShakeCursor = Offset.zero;
   double? _lastUseShakeX;
   int _lastUseShakeDirection = 0;
   DateTime _lastUseShakeReversalAt = DateTime.fromMillisecondsSinceEpoch(0);
@@ -98,71 +96,35 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         widget.services.desktopVoice.level,
         widget.services.liveVoice.level,
       ]),
+      // The lesson drives the same native surfaces the real gesture does —
+      // a static pill panel at the cursor and a full-screen glow — so what
+      // is taught is exactly what ships, not an in-window imitation clipped
+      // to the onboarding frame.
+      presentWindow: (centered) =>
+          centered ? CursorPillWindow.summon() : VoiceOverlayWindow.start(),
+      dismissWindow: () async {
+        await CursorPillWindow.restore();
+        await VoiceOverlayWindow.stop();
+      },
+      voiceLevelSink: VoiceOverlayWindow.level,
     );
     controller.addListener(_refresh);
     _pillController = controller;
     return controller;
   }
 
-  Offset? _pointerPosition;
-
-  // The lesson's pill floats at the bottom-right of the cursor and follows
-  // it, matching the real summoned pill's behavior.
+  // The pill and the glow are native windows owned by the platform side, so
+  // the lesson only tracks the pointer for the shake meter — there is nothing
+  // left to draw in-window.
   Widget _withCursorPillOverlay(Widget base) {
-    final pill = _pillController;
-    final showPill =
-        pill != null &&
-        pill.state != CursorPillState.hidden &&
-        onboarding.stage == OnboardingStage.use;
     final shakeActive =
         onboarding.stage == OnboardingStage.use && _useVoiceDone;
     return MouseRegion(
       opaque: false,
       onHover: (event) {
-        setState(() => _pointerPosition = event.position);
         if (shakeActive && !_useShakeComplete) _trackUseShake(event.position);
       },
-      child: Stack(
-        children: [
-          base,
-          if (shakeActive && _useShakeProgress > 0)
-            _UseShakeGlow(
-              key: const Key('use_shake_glow'),
-              position: _useShakeCursor,
-              progress: _useShakeProgress / 100,
-              complete: _useShakeComplete,
-              onBurstDone: _finish,
-            ),
-          if (showPill && pill.state == CursorPillState.listening)
-            Positioned.fill(
-              child: CursorPill(controller: pill, autofocus: false),
-            )
-          else if (showPill)
-            Builder(
-              builder: (context) {
-                final size = MediaQuery.sizeOf(context);
-                final pointer =
-                    _pointerPosition ?? Offset(size.width / 2, size.height / 2);
-                final left = (pointer.dx + 18).clamp(
-                  0.0,
-                  (size.width - 340).clamp(0.0, size.width),
-                );
-                final top = (pointer.dy + 18).clamp(
-                  0.0,
-                  (size.height - 120).clamp(0.0, size.height),
-                );
-                return Positioned(
-                  left: left,
-                  top: top,
-                  child: ConstrainedBox(
-                    constraints: const BoxConstraints(maxWidth: 420),
-                    child: CursorPill(controller: pill, autofocus: false),
-                  ),
-                );
-              },
-            ),
-        ],
-      ),
+      child: base,
     );
   }
 
@@ -285,7 +247,6 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   }
 
   void _trackUseShake(Offset position) {
-    _useShakeCursor = position;
     final now = DateTime.now();
     final lastX = _lastUseShakeX;
     _lastUseShakeX = position.dx;
@@ -301,9 +262,14 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       movement,
     )) {
       final progress = advanceShakeProgress(_useShakeProgress, movement);
+      if (_useShakeProgress <= 0 && progress > 0) {
+        unawaited(VoiceOverlayWindow.startGlow());
+      }
       setState(() => _useShakeProgress = progress);
+      unawaited(VoiceOverlayWindow.level(progress / 100));
       if (progress >= 100 && !_useShakeComplete) {
         setState(() => _useShakeComplete = true);
+        unawaited(VoiceOverlayWindow.burst().then((_) => _finish()));
       }
       _lastUseShakeReversalAt = now;
     } else if (direction != _lastUseShakeDirection) {
@@ -1332,39 +1298,6 @@ class _CursorCueState extends State<_CursorCue>
     child: const Text(
       '↔',
       style: TextStyle(fontSize: 34, color: Color(0xff96c4ff)),
-    ),
-  );
-}
-
-/// Ports the web demo's shake glow: a warm radial glow that grows with shake
-/// progress and, on completion, bursts past the screen edges (scale ~4.8,
-/// fading out) over ~720ms before signalling [onBurstDone]. The motion itself
-/// lives in [OmiBurstGlow]; this only anchors it on the cursor.
-class _UseShakeGlow extends StatelessWidget {
-  const _UseShakeGlow({
-    required this.position,
-    required this.progress,
-    required this.complete,
-    required this.onBurstDone,
-    super.key,
-  });
-
-  final Offset position;
-  final double progress;
-  final bool complete;
-  final VoidCallback onBurstDone;
-
-  @override
-  Widget build(BuildContext context) => Positioned(
-    left: position.dx,
-    top: position.dy,
-    child: FractionalTranslation(
-      translation: const Offset(-.5, -.5),
-      child: OmiBurstGlow(
-        progress: progress,
-        complete: complete,
-        onBurstDone: onBurstDone,
-      ),
     ),
   );
 }

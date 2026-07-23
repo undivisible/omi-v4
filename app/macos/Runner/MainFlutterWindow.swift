@@ -219,6 +219,25 @@ final class VoiceGlowOverlayWindow: NSWindow {
   func setAudioLevel(_ level: Double) {
     (contentView as? VoiceEdgeGlowView)?.setAudioLevel(level)
   }
+
+  /// Flares every edge to full and fades out, so the onboarding shake finale
+  /// bursts across the whole screen instead of being clipped to the app
+  /// window it used to be drawn inside.
+  func burst(completion: @escaping () -> Void) {
+    guard let contentView else {
+      completion()
+      return
+    }
+    setAudioLevel(1)
+    NSAnimationContext.runAnimationGroup(
+      { context in
+        context.duration = Self.burstDuration
+        context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        contentView.animator().alphaValue = 0
+      }, completionHandler: completion)
+  }
+
+  static let burstDuration: TimeInterval = 0.55
 }
 
 /// The native waveform bars shown next to the cursor while listening,
@@ -392,6 +411,26 @@ final class VoiceOverlayController {
   func setAudioLevel(_ level: Double) {
     glowWindow?.setAudioLevel(level)
     waveformPanel?.setAudioLevel(level)
+  }
+
+  /// Shows the glow alone (no waveform) so a gesture that is not speech —
+  /// the onboarding shake — can fill the same full-screen surface.
+  func startGlowOnly() {
+    guard glowWindow == nil else { return }
+    let glow = VoiceGlowOverlayWindow.make(frame: Self.activeScreen?.frame ?? .zero)
+    glow.orderFrontRegardless()
+    glowWindow = glow
+  }
+
+  func burst(completion: @escaping () -> Void) {
+    guard let glow = glowWindow else {
+      completion()
+      return
+    }
+    glow.burst { [weak self] in
+      self?.stop()
+      completion()
+    }
   }
 }
 
@@ -804,6 +843,15 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
       case "level":
         self?.voiceOverlayController.setAudioLevel(call.arguments as? Double ?? 0)
         result(nil)
+      case "startGlow":
+        self?.voiceOverlayController.startGlowOnly()
+        result(nil)
+      case "burst":
+        guard let self else {
+          result(nil)
+          return
+        }
+        self.voiceOverlayController.burst { result(nil) }
       default:
         result(FlutterMethodNotImplemented)
       }

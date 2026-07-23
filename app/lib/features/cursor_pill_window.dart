@@ -75,6 +75,33 @@ abstract final class VoiceOverlayWindow {
     }
   }
 
+  /// Shows the full-screen edge glow on its own, without the waveform, for a
+  /// gesture that is not speech — the onboarding shake fills it as the meter
+  /// rises.
+  static Future<void> startGlow() async {
+    if (!_supported) return;
+    try {
+      await _channel.invokeMethod('startGlow');
+    } on MissingPluginException {
+      return;
+    } on PlatformException {
+      return;
+    }
+  }
+
+  /// Flares the glow to full and fades it out, resolving once the animation
+  /// has finished and the surface is gone.
+  static Future<void> burst() async {
+    if (!_supported) return;
+    try {
+      await _channel.invokeMethod('burst');
+    } on MissingPluginException {
+      return;
+    } on PlatformException {
+      return;
+    }
+  }
+
   /// Streams the live audio level (0..1) that drives the native glow swell
   /// and waveform bars.
   static Future<void> level(double value) async {
