@@ -58,7 +58,6 @@ export type Auth = { uid: string; email: string | null };
 
 export type AppEnv = { Bindings: Bindings; Variables: { auth: Auth } };
 
-export type Plan = "byok" | "pro";
 export type Channel = "telegram" | "blooio";
 
 export type PersonalMemory = {
