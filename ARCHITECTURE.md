@@ -389,7 +389,9 @@ Upstream here means the BasedHardware/omi monorepo (read for this section at `~/
 
 ### 5.2 What we deliberately skip
 
-Upstream is a mature, shipped product with substantially more surface area. The following are real upstream capabilities this repository does not attempt: the plugins/apps ecosystem, `omiGlass`, the published MCP servers and SDKs, the dedicated diarizer and NLLB translation services, and the multi-datastore search/vector tier (Pinecone, Qdrant, Typesense, Redis). Upstream's `backend/database` also carries feature modules with no counterpart here. The mobile and desktop documents enumerate the per-surface omissions in detail.
+Upstream covers substantially more surface area, and some of it we deliberately do not want. The following are real upstream capabilities this repository does not attempt: the plugins/apps ecosystem, `omiGlass`, the published MCP servers and SDKs, the dedicated diarizer and NLLB translation services, and the multi-datastore search/vector tier (Pinecone, Qdrant, Typesense, Redis). Upstream's `backend/database` also carries feature modules with no counterpart here. The mobile and desktop documents enumerate the per-surface omissions in detail.
+
+Surface area is not the same thing as capability delivered to the user. Several of these omissions — particularly the multi-datastore tier — are load we chose not to carry, not functionality we lack.
 
 ### 5.3 What we do differently
 
@@ -399,18 +401,21 @@ Upstream is a mature, shipped product with substantially more surface area. The 
 - **One Flutter codebase for mobile and desktop**, where upstream maintains a separate native desktop product.
 - **A Rust parity port of the backend** (`worker-rs/`) so the hub and the edge can share a language.
 
-### 5.4 What we believe is better here
+### 5.4 The bet: lighter, steadier, and ultimately broader
 
-These are defensible from the code, but they are architectural bets, not measured wins — no cost, latency, or reliability benchmark against upstream has been run.
+The goal is not to reproduce upstream's surface area. It is to carry far less machinery, keep the moving parts few enough to reason about, and spend the savings on capability that reaches the user.
 
-- Markedly fewer moving parts in the backend: one platform and one relational store plus Durable Objects and Vectorize, versus five-plus managed services.
-- Memory is evidence-backed and citable by construction rather than similarity-only retrieval (§3.2).
-- Computer-use is gated behind an explicit, auditable approval ledger (§3.5).
-- Keeping ordinary chat turns on-device reduces both cost and data egress.
+- **Fewer moving parts.** One backend platform with one relational store plus Durable Objects and Vectorize, versus five-plus managed services. Every service removed is a failure mode removed.
+- **Fewer processes.** The assistant runtime is linked into the client rather than split across separate agent and cloud-agent services, so there is one memory authority and no cross-process drift.
+- **Fail-closed by construction.** Memory is evidence-backed and citable rather than similarity-only (§3.2); computer-use is gated behind an explicit, auditable approval ledger (§3.5); channel identity binds only through consumed single-use tokens (§4).
+- **Enforced gates.** Format, lint (`-D warnings`), typecheck, and full test suites run across Flutter, Rust, and the Worker before anything lands.
+- **Less egress.** Ordinary chat turns stay on-device (`chat_router.rs`), escalating only when the work warrants it.
 
-### 5.5 Where upstream is ahead
+These are design properties readable from the code. They are not benchmark results: no cost, latency, or reliability comparison against upstream has been run from this repository, and §6 lists what remains unproven here.
 
-Feature breadth across the mobile app, the plugin/app ecosystem and its marketplace, translation and diarization, additional hardware (`omiGlass`), published SDKs and MCP integrations, and a production deployment operating at real scale. Nothing in this repository has been proven against live provider credentials or physical hardware at that scale (§6).
+### 5.5 Upstream capabilities not yet covered here
+
+Tracked as gaps to close or consciously decline, not as a scoreboard. Reviewing upstream is worthwhile precisely for this list: the mobile feature surface (see [`app/ARCHITECTURE-mobile.md`](app/ARCHITECTURE-mobile.md)), the plugin/app extension model, translation and diarization, additional hardware such as `omiGlass`, and published SDK/MCP integration points. Each should be evaluated on whether it earns its complexity here before being adopted.
 
 ## 6. Known gaps / proof still required
 
