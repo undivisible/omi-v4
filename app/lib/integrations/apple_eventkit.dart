@@ -123,7 +123,10 @@ final class AppleEventKitService implements AppleEventKitWriter {
 
   @override
   bool get available =>
-      _available ?? (!kIsWeb && defaultTargetPlatform == TargetPlatform.macOS);
+      _available ??
+      (!kIsWeb &&
+          (defaultTargetPlatform == TargetPlatform.macOS ||
+              defaultTargetPlatform == TargetPlatform.iOS));
 
   @override
   Future<AppleEventKitAuthorization> status(AppleEventKitSource source) async {

@@ -7,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../app_services.dart';
 import '../currents/currents.dart';
 import '../device/device.dart';
+import '../features/setup_account_screens.dart' show EventKitProactiveSyncTile;
 import '../native/native_hub.dart';
 import '../providers/providers.dart';
 
@@ -1289,6 +1290,12 @@ class _SettingsSheetState extends State<_SettingsSheet> {
               ),
             ]),
           ],
+          const SizedBox(height: 22),
+          const _SectionLabel('CALENDAR & REMINDERS'),
+          EventKitProactiveSyncTile(
+            key: const Key('companion_eventkit_proactive_sync'),
+            previewMode: widget.previewMode,
+          ),
           if (!widget.previewMode) ...[
             const SizedBox(height: 22),
             const _SectionLabel('DANGER ZONE'),

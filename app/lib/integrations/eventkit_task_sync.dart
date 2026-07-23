@@ -103,7 +103,9 @@ final class EventKitTaskSync {
   EventKitTaskSync({required this.writer, required this.store});
 
   static EventKitTaskSync? platformDefault() =>
-      !kIsWeb && defaultTargetPlatform == TargetPlatform.macOS
+      !kIsWeb &&
+          (defaultTargetPlatform == TargetPlatform.macOS ||
+              defaultTargetPlatform == TargetPlatform.iOS)
       ? EventKitTaskSync(
           writer: AppleEventKitService(),
           store: PreferencesEventKitTaskSyncStore(),
