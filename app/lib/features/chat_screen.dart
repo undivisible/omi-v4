@@ -138,6 +138,8 @@ class ChatScreenState extends State<ChatScreen> {
   late final HubChecklistStore _checklist =
       widget.checklistStore ?? PreferencesHubChecklistStore();
   bool _setupTaskDone = true;
+  List<String> _starterTasks = const [];
+  final _doneStarterTasks = <String>{};
 
   @override
   void initState() {
@@ -198,14 +200,33 @@ class ChatScreenState extends State<ChatScreen> {
 
   Future<void> _loadChecklist() async {
     bool done;
+    List<String> starters;
     try {
       done = await _checklist.isSetupComplete();
     } catch (_) {
       done = true;
     }
-    if (mounted && done != _setupTaskDone) {
-      setState(() => _setupTaskDone = done);
+    try {
+      starters = await _checklist.starterTasks();
+    } catch (_) {
+      starters = const [];
     }
+    if (mounted && (done != _setupTaskDone || starters.isNotEmpty)) {
+      setState(() {
+        _setupTaskDone = done;
+        _starterTasks = starters;
+      });
+    }
+  }
+
+  void _toggleStarterTask(String title) {
+    setState(() {
+      if (!_doneStarterTasks.remove(title)) _doneStarterTasks.add(title);
+    });
+    final pending = _starterTasks
+        .where((task) => !_doneStarterTasks.contains(task))
+        .toList();
+    unawaited(_checklist.setStarterTasks(pending).catchError((Object _) {}));
   }
 
   void _toggleSetupTask() {
@@ -747,6 +768,9 @@ class ChatScreenState extends State<ChatScreen> {
                             greeting: _greeting(),
                             setupTaskDone: _setupTaskDone,
                             onToggleSetupTask: _toggleSetupTask,
+                            starterTasks: _starterTasks,
+                            doneStarterTasks: _doneStarterTasks,
+                            onToggleStarterTask: _toggleStarterTask,
                             tasks: tasks,
                             onComplete: currents == null
                                 ? null
@@ -1035,6 +1059,9 @@ class _ChatHome extends StatelessWidget {
     required this.greeting,
     required this.setupTaskDone,
     required this.onToggleSetupTask,
+    required this.starterTasks,
+    required this.doneStarterTasks,
+    required this.onToggleStarterTask,
     required this.tasks,
     required this.onComplete,
     required this.onPrompt,
@@ -1044,6 +1071,9 @@ class _ChatHome extends StatelessWidget {
   final String greeting;
   final bool setupTaskDone;
   final VoidCallback onToggleSetupTask;
+  final List<String> starterTasks;
+  final Set<String> doneStarterTasks;
+  final ValueChanged<String> onToggleStarterTask;
   final List<CurrentCard> tasks;
   final ValueChanged<String>? onComplete;
   final ValueChanged<String> onPrompt;
@@ -1103,6 +1133,15 @@ class _ChatHome extends StatelessWidget {
                   onComplete: onToggleSetupTask,
                   onTap: onToggleSetupTask,
                 ),
+                for (final title in starterTasks)
+                  _TaskRow(
+                    key: ValueKey('starter_task_$title'),
+                    title: title,
+                    done: doneStarterTasks.contains(title),
+                    completeKey: ValueKey('complete_starter_$title'),
+                    onComplete: () => onToggleStarterTask(title),
+                    onTap: () => onPrompt(title),
+                  ),
                 for (final task in tasks)
                   _TaskRow(
                     key: ValueKey('task_${task.item.id}'),

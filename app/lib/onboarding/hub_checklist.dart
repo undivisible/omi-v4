@@ -8,10 +8,18 @@ abstract interface class HubChecklistStore {
   Future<bool> isSetupComplete();
 
   Future<void> setSetupComplete(bool value);
+
+  /// Starter task titles derived from the onboarding scan, shown on the hub
+  /// when there is no server-side currents pipeline (local mode) or before
+  /// the first generate cycle lands.
+  Future<List<String>> starterTasks();
+
+  Future<void> setStarterTasks(List<String> titles);
 }
 
 final class PreferencesHubChecklistStore implements HubChecklistStore {
   static const _key = 'hub_setup_omi_complete_v1';
+  static const _starterKey = 'hub_starter_tasks_v1';
 
   @override
   Future<bool> isSetupComplete() async =>
@@ -21,16 +29,37 @@ final class PreferencesHubChecklistStore implements HubChecklistStore {
   Future<void> setSetupComplete(bool value) async {
     await (await SharedPreferences.getInstance()).setBool(_key, value);
   }
+
+  @override
+  Future<List<String>> starterTasks() async =>
+      (await SharedPreferences.getInstance()).getStringList(_starterKey) ??
+      const [];
+
+  @override
+  Future<void> setStarterTasks(List<String> titles) async {
+    await (await SharedPreferences.getInstance()).setStringList(
+      _starterKey,
+      titles,
+    );
+  }
 }
 
 final class VolatileHubChecklistStore implements HubChecklistStore {
   VolatileHubChecklistStore({this.setupComplete = true});
 
   bool setupComplete;
+  List<String> tasks = const [];
 
   @override
   Future<bool> isSetupComplete() async => setupComplete;
 
   @override
   Future<void> setSetupComplete(bool value) async => setupComplete = value;
+
+  @override
+  Future<List<String>> starterTasks() async => tasks;
+
+  @override
+  Future<void> setStarterTasks(List<String> titles) async =>
+      tasks = List.of(titles);
 }
