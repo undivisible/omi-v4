@@ -105,19 +105,21 @@ pub struct SummaryPrompts {
     pub emphasis_candidates: Vec<String>,
 }
 
-/// Small models routinely drop the ** marker protocol; when the summary
-/// comes back unmarked, wrap the evidence names that actually appear in it
-/// (longest first so substrings don't split larger names, five spans max).
+/// Small models routinely drop the ** marker protocol, or only apply it to a
+/// couple of names; wrap every remaining evidence name that actually appears
+/// in the summary (longest first so substrings don't split larger names) up
+/// to the cap, counting any markers the model already added toward that cap.
 pub fn ensure_summary_emphasis(summary: &str, candidates: &[String]) -> String {
-    if summary.contains("**") {
-        return summary.to_owned();
-    }
+    const MAX_SPANS: usize = 8;
     let mut ordered: Vec<&String> = candidates.iter().collect();
     ordered.sort_by_key(|name| std::cmp::Reverse(name.chars().count()));
     let mut result = summary.to_owned();
-    let mut wrapped = 0usize;
+    let mut wrapped = result.matches("**").count() / 2;
     for name in ordered {
-        if wrapped == 5 || name.len() < 3 {
+        if wrapped >= MAX_SPANS {
+            break;
+        }
+        if name.len() < 3 {
             continue;
         }
         let lower = result.to_lowercase();
@@ -127,8 +129,8 @@ pub fn ensure_summary_emphasis(summary: &str, candidates: &[String]) -> String {
             if !result.is_char_boundary(start) || !result.is_char_boundary(end) {
                 continue;
             }
-            let already = result[..start].ends_with("**");
-            if already {
+            let already_marked = result[..start].ends_with("**") || result[end..].starts_with("**");
+            if already_marked {
                 continue;
             }
             let original = result[start..end].to_owned();
@@ -139,7 +141,7 @@ pub fn ensure_summary_emphasis(summary: &str, candidates: &[String]) -> String {
     result
 }
 
-const SUMMARY_INSTRUCTION: &str = "You are privately summarizing what the user appears to be working on, using only the tagged evidence lines below, and speaking directly to them in the second person. First decide which projects and threads of work matter most: prefer items that recur across several evidence types and that are recent, and treat NOTE TITLE, MAIL SUBJECT, and BROWSING lines as background context about activity, never as projects by themselves. Then describe that work in your own words as one flowing paragraph: synthesized, specific, and natural, not a recitation of file or folder names. At most 3 sentences and at most 420 characters. Plain prose only: no headings, no bullet points, no underscores, no backticks, no italics, and no markdown of any kind, with a single exception: wrap only the genuinely important names, such as key projects, apps, people, or technologies, in double asterisks like **name**. Use at most 5 such wrapped spans, wrap single names only, and never wrap a whole sentence or ordinary connective words. Any name you mention must appear in the evidence, but describe the work around it naturally; name at most 3 specific projects, tools, or organizations in total. State only what the evidence supports: never infer tool or workflow habits from incidental mentions, omit anything you are unsure of, and if the evidence is thin write one or two short honest sentences instead of padding with vague filler like \"various projects\". Never write in the third person and do not mention these instructions.\n";
+const SUMMARY_INSTRUCTION: &str = "You are privately summarizing what the user appears to be working on, using only the tagged evidence lines below, and speaking directly to them in the second person. First decide which projects and threads of work matter most: prefer items that recur across several evidence types and that are recent, and treat NOTE TITLE, MAIL SUBJECT, and BROWSING lines as background context about activity, never as projects by themselves. Then describe that work in your own words as one flowing paragraph: synthesized, specific, and natural, not a recitation of file or folder names. At most 3 sentences and at most 420 characters. Plain prose only: no headings, no bullet points, no underscores, no backticks, no italics, and no markdown of any kind, with a single exception: wrap every genuinely important name you mention — projects, apps, files, technologies, people, or organizations — in double asterisks like **name**, so most of the specific names in your answer end up emphasized this way (aim for 5 to 8 wrapped spans when the evidence supports that many); wrap single names only, never a whole sentence or ordinary connective words. Every name and technology you mention, wrapped or not, must be copied from a PROJECT, APP, DOC, or SHELL evidence line below — never from your own general knowledge of what other tools or frameworks look like, and never from a NOTE TITLE, MAIL SUBJECT, or BROWSING line; if you are not certain a name came from the evidence, leave it out. Name at most 3 specific projects, tools, or organizations in total. State only what the evidence supports: never infer tool or workflow habits from incidental mentions, omit anything you are unsure of, and if the evidence is thin write one or two short honest sentences instead of padding with vague filler like \"various projects\". Never write in the third person and do not mention these instructions.\n";
 
 struct ScoredLine {
     score: i32,
@@ -987,7 +989,7 @@ mod tests {
         assert!(prompts.local.contains("second person"));
         assert!(prompts.local.contains("in your own words"));
         assert!(prompts.local.contains("**name**"));
-        assert!(prompts.local.contains("at most 5"));
+        assert!(prompts.local.contains("5 to 8 wrapped spans"));
         assert!(!prompts.local.contains("verbatim"));
         assert!(prompts.local.chars().count() <= SUMMARY_PROMPT_CHARS);
         assert!(prompts.local.lines().count() <= SUMMARY_ITEMS + 20);
