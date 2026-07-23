@@ -15,6 +15,7 @@ import '../device/device.dart';
 import '../features/setup_account_screens.dart' show EventKitProactiveSyncTile;
 import '../native/live_activity_bridge.dart';
 import '../native/native_hub.dart';
+import '../ui/burst_glow.dart';
 import 'capture_notifier.dart';
 import 'mobile_update_check.dart';
 import 'transcript_log_store.dart';
@@ -1085,6 +1086,15 @@ class _PendantHeroState extends State<_PendantHero>
     duration: const Duration(seconds: 6),
   );
   bool _animationsDisabled = false;
+  // Bumped on every disconnected → connected edge so the burst glow is a new
+  // widget each time; it fires exactly once per instance by design.
+  int _connectEpoch = 0;
+
+  @override
+  void didUpdateWidget(covariant _PendantHero old) {
+    super.didUpdateWidget(old);
+    if (widget.connected && !old.connected) _connectEpoch += 1;
+  }
 
   @override
   void didChangeDependencies() {
@@ -1110,28 +1120,27 @@ class _PendantHeroState extends State<_PendantHero>
     final pendantWidth = math.min(width * .82, 420.0);
     final connected = widget.connected;
     final capturing = widget.capturing;
-    Widget pendant = Image.asset(
+    final image = Image.asset(
       'assets/images/omi_pendant.png',
       key: const Key('companion_pendant_image'),
       width: pendantWidth,
       fit: BoxFit.fitWidth,
       excludeFromSemantics: true,
     );
-    if (!connected) {
-      pendant = Opacity(
-        key: const Key('companion_pendant_faded'),
-        opacity: .35,
-        child: ColorFiltered(
-          colorFilter: const ColorFilter.matrix([
-            .2126, .7152, .0722, 0, 0, //
-            .2126, .7152, .0722, 0, 0, //
-            .2126, .7152, .0722, 0, 0, //
-            0, 0, 0, 1, 0,
-          ]),
-          child: pendant,
-        ),
-      );
-    }
+    // The pendant warms up rather than snapping: colour and opacity are two
+    // continuous ramps over the same 0…1, so connecting fades and saturates the
+    // image in and disconnecting runs the identical curve backwards. Fully
+    // warm is the untouched asset, so the filter drops out entirely there.
+    Widget pendantFor(double warmth) => warmth >= 1
+        ? image
+        : Opacity(
+            key: const Key('companion_pendant_faded'),
+            opacity: .35 + warmth * .65,
+            child: ColorFiltered(
+              colorFilter: ColorFilter.matrix(_saturationMatrix(warmth)),
+              child: image,
+            ),
+          );
     final glowSize = pendantWidth * 1.3;
     final stateColor = connected
         ? _stateBlue
@@ -1142,6 +1151,21 @@ class _PendantHeroState extends State<_PendantHero>
       alignment: Alignment.center,
       clipBehavior: Clip.none,
       children: [
+        // The connect finale: the warm glow bursts outward once, keyed on the
+        // connection so a later reconnect fires a fresh one. Skipped under
+        // reduced motion, where a burst that cannot animate would only leave a
+        // static blob behind the pendant.
+        if (connected && !animationsDisabled)
+          Positioned(
+            top: pendantWidth * .55 - glowSize / 2,
+            child: OmiBurstGlow(
+              key: ValueKey('companion_connect_burst_$_connectEpoch'),
+              progress: .72,
+              complete: true,
+              baseDiameter: glowSize * .58,
+              growth: 0,
+            ),
+          ),
         Positioned(
           top: pendantWidth * .55 - glowSize / 2,
           child: IgnorePointer(
@@ -1195,18 +1219,32 @@ class _PendantHeroState extends State<_PendantHero>
               ),
             ),
           ),
-        AnimatedBuilder(
-          animation: _sway,
-          child: pendant,
-          builder: (context, child) {
-            final t = _sway.value * 2 * math.pi;
-            final angle = animationsDisabled ? 0.0 : math.sin(t) * .012;
-            return Transform.rotate(
-              angle: angle,
+        TweenAnimationBuilder<double>(
+          tween: Tween<double>(end: connected ? 1 : 0),
+          duration: animationsDisabled
+              ? Duration.zero
+              : const Duration(milliseconds: 520),
+          curve: Curves.easeOutCubic,
+          builder: (context, warmth, _) => AnimatedBuilder(
+            animation: _sway,
+            // Anchored to the top edge, which the layout above pins to the very
+            // top of the screen: scaling about the centre would walk the
+            // pendant down the page as it warms up.
+            child: Transform.scale(
+              scale: .965 + warmth * .035,
               alignment: Alignment.topCenter,
-              child: child,
-            );
-          },
+              child: pendantFor(warmth),
+            ),
+            builder: (context, child) {
+              final t = _sway.value * 2 * math.pi;
+              final angle = animationsDisabled ? 0.0 : math.sin(t) * .012;
+              return Transform.rotate(
+                angle: angle,
+                alignment: Alignment.topCenter,
+                child: child,
+              );
+            },
+          ),
         ),
       ],
     );
@@ -1372,6 +1410,19 @@ class _PendantHeroState extends State<_PendantHero>
       ],
     );
   }
+}
+
+// Rec. 709 luminance weights, the same ones the fully desaturated pendant used
+// before it learned to fade: [saturation] 0 is grey, 1 is the original colour.
+List<double> _saturationMatrix(double saturation) {
+  const r = .2126, g = .7152, b = .0722;
+  final rest = 1 - saturation;
+  return [
+    r + saturation * (1 - r), g * rest, b * rest, 0, 0, //
+    r * rest, g + saturation * (1 - g), b * rest, 0, 0, //
+    r * rest, g * rest, b + saturation * (1 - b), 0, 0, //
+    0, 0, 0, 1, 0,
+  ];
 }
 
 class _CaptureToggle extends StatelessWidget {

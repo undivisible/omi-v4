@@ -16,6 +16,7 @@ import 'package:omi/features/transcript_log_store.dart';
 import 'package:omi/main.dart';
 import 'package:omi/native/native_hub.dart';
 import 'package:omi/onboarding/onboarding_completion.dart';
+import 'package:omi/ui/burst_glow.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
@@ -618,6 +619,84 @@ void main() {
       find.byKey(const Key('companion_capture_led_unsupported')),
       findsOneWidget,
     );
+    fixture.services.dispose();
+  });
+
+  testWidgets('connecting warms the pendant image and bursts the glow', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(800, 1600));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    binding.platformDispatcher.clearAccessibilityFeaturesTestValue();
+    final fixture = await _mobileFixture('user-a');
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MobileCompanionShell(
+          services: fixture.services,
+          pairedDevices: VolatilePairedDeviceStore(),
+          captureEnabledStore: VolatileCaptureEnabledStore(),
+        ),
+      ),
+    );
+    // The pendant sways forever with motion on, so nothing here can settle.
+    await _pumpFrames(tester);
+
+    // Disconnected: grey, dimmed, and no burst.
+    expect(find.byKey(const Key('companion_pendant_faded')), findsOneWidget);
+    expect(find.byType(OmiBurstGlow), findsNothing);
+
+    await tester.tap(find.byKey(const Key('companion_reconnect')));
+    await _pumpFrames(tester);
+
+    expect(find.byType(OmiBurstGlow), findsOneWidget);
+
+    // Partway through the warm-up the image is neither ghost nor asset.
+    final midway = tester.widget<Opacity>(
+      find.byKey(const Key('companion_pendant_faded')),
+    );
+    expect(midway.opacity, greaterThan(.35));
+    expect(midway.opacity, lessThan(1));
+
+    await tester.pump(const Duration(milliseconds: 700));
+    expect(find.byKey(const Key('companion_pendant_faded')), findsNothing);
+
+    // Disconnecting runs the same ramp backwards and retires the burst.
+    await tester.longPress(find.byKey(const Key('companion_pendant_tap')));
+    await _pumpFrames(tester);
+
+    expect(find.byType(OmiBurstGlow), findsNothing);
+    final cooling = tester.widget<Opacity>(
+      find.byKey(const Key('companion_pendant_faded')),
+    );
+    expect(cooling.opacity, lessThan(1));
+    fixture.services.dispose();
+  });
+
+  testWidgets('the connect burst is inert under reduced motion', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(800, 1600));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final fixture = await _mobileFixture('user-a');
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MobileCompanionShell(
+          services: fixture.services,
+          pairedDevices: VolatilePairedDeviceStore(),
+          captureEnabledStore: VolatileCaptureEnabledStore(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('companion_reconnect')));
+    await _settle(tester);
+
+    // disableAnimations is on for the whole suite: the pendant lands warm in
+    // one frame and nothing bursts.
+    expect(find.byType(OmiBurstGlow), findsNothing);
+    expect(find.byKey(const Key('companion_pendant_faded')), findsNothing);
     fixture.services.dispose();
   });
 
@@ -1370,6 +1449,17 @@ void main() {
 // Device work hops between the fake test clock and real async (stream
 // cancellation, the native hub's acknowledgement round-trips), so give it a
 // few real turns and pump between each one before asserting.
+// The motion-enabled sibling of [_settle]: with animations on the pendant sway
+// never ends, so advance a fixed number of frames instead of settling.
+Future<void> _pumpFrames(WidgetTester tester) async {
+  for (var round = 0; round < 3; round += 1) {
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 20)),
+    );
+    await tester.pump(const Duration(milliseconds: 60));
+  }
+}
+
 Future<void> _settle(WidgetTester tester) async {
   for (var round = 0; round < 3; round += 1) {
     await tester.runAsync(
