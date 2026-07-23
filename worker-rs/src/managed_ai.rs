@@ -22,6 +22,72 @@ pub const XIAOMI_COMPLETION_ENDPOINT: &str =
     "https://token-plan-sgp.xiaomimimo.com/v1/chat/completions";
 pub const XIAOMI_HOSTNAME: &str = "token-plan-sgp.xiaomimimo.com";
 
+// Model-tier routing config. Single source of truth mirrored by the hub
+// (app/native/hub/src/model_tier.rs) and worker (worker/src/model-tiers.ts):
+// the same OMI_MODEL_* variables with the same defaults.
+//
+// | Tier       | When                                                      | Default model         | Provider |
+// |------------|-----------------------------------------------------------|-----------------------|----------|
+// | speed      | latency-sensitive: live insights, classification, answers | gemini-3.1-flash-lite | Gemini   |
+// | balanced   | default (~80%): meeting notes, general chat               | mimo-v2.5-balanced    | MiMo     |
+// | smart      | hard reasoning                                            | mimo-v2.5-pro         | MiMo     |
+// | multimodal | vision / visual computer-use                              | gemini-3.6-flash      | Gemini   |
+//
+// The default ids are best-effort and may need correcting against the real
+// provider APIs; that is why they are env-overridable rather than hardcoded.
+
+/// SPEED tier default: latency-sensitive live insights and answer suggestions.
+pub const DEFAULT_SPEED_MODEL: &str = "gemini-3.1-flash-lite";
+/// BALANCED tier default: the everyday model for meeting notes and chat.
+pub const DEFAULT_BALANCED_MODEL: &str = "mimo-v2.5-balanced";
+/// SMART tier default: reserved for hard reasoning.
+pub const DEFAULT_SMART_MODEL: &str = "mimo-v2.5-pro";
+/// MULTIMODAL tier default: vision and visual computer-use.
+pub const DEFAULT_MULTIMODAL_MODEL: &str = "gemini-3.6-flash";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ModelTier {
+    Speed,
+    Balanced,
+    Smart,
+    Multimodal,
+}
+
+impl ModelTier {
+    /// The env var that overrides this tier's model id.
+    pub fn env_var(self) -> &'static str {
+        match self {
+            ModelTier::Speed => "OMI_MODEL_SPEED",
+            ModelTier::Balanced => "OMI_MODEL_BALANCED",
+            ModelTier::Smart => "OMI_MODEL_SMART",
+            ModelTier::Multimodal => "OMI_MODEL_MULTIMODAL",
+        }
+    }
+
+    /// The fallback model id when nothing is configured.
+    pub fn default_model(self) -> &'static str {
+        match self {
+            ModelTier::Speed => DEFAULT_SPEED_MODEL,
+            ModelTier::Balanced => DEFAULT_BALANCED_MODEL,
+            ModelTier::Smart => DEFAULT_SMART_MODEL,
+            ModelTier::Multimodal => DEFAULT_MULTIMODAL_MODEL,
+        }
+    }
+}
+
+/// Resolves a tier to its model id from a value lookup, falling back to the
+/// tier default. BALANCED additionally accepts the legacy `MIMO_MODEL` name so
+/// the existing managed-AI configuration keeps working as the balanced default.
+pub fn model_for_tier(tier: ModelTier, value: impl Fn(&str) -> Option<String>) -> String {
+    let nonempty = |name: &str| value(name).filter(|candidate| !candidate.trim().is_empty());
+    nonempty(tier.env_var())
+        .or_else(|| match tier {
+            ModelTier::Balanced => nonempty("MIMO_MODEL"),
+            _ => None,
+        })
+        .unwrap_or_else(|| tier.default_model().to_string())
+}
+
 const ALLOWED_KEYS: &[&str] = &[
     "messages",
     "model",
@@ -444,6 +510,46 @@ mod tests {
         // 64 + 16 + 4 + 21 = 105.
         assert_eq!(est_input, 105);
         assert_eq!(cost_for(est_input, 256, 1_000_000, 1_000_000), 361);
+    }
+
+    #[test]
+    fn tiers_resolve_with_defaults_overrides_and_legacy_mimo_model() {
+        let empty = |_: &str| None;
+        assert_eq!(model_for_tier(ModelTier::Speed, empty), DEFAULT_SPEED_MODEL);
+        assert_eq!(
+            model_for_tier(ModelTier::Balanced, empty),
+            DEFAULT_BALANCED_MODEL
+        );
+        assert_eq!(model_for_tier(ModelTier::Smart, empty), DEFAULT_SMART_MODEL);
+        assert_eq!(
+            model_for_tier(ModelTier::Multimodal, empty),
+            DEFAULT_MULTIMODAL_MODEL
+        );
+
+        let overridden = |name: &str| match name {
+            "OMI_MODEL_BALANCED" => Some("custom-balanced".to_string()),
+            _ => None,
+        };
+        assert_eq!(
+            model_for_tier(ModelTier::Balanced, overridden),
+            "custom-balanced"
+        );
+
+        let legacy = |name: &str| match name {
+            "MIMO_MODEL" => Some("mimo-configured".to_string()),
+            _ => None,
+        };
+        assert_eq!(
+            model_for_tier(ModelTier::Balanced, legacy),
+            "mimo-configured"
+        );
+        assert_eq!(
+            model_for_tier(ModelTier::Smart, legacy),
+            DEFAULT_SMART_MODEL
+        );
+
+        let blank = |_: &str| Some("   ".to_string());
+        assert_eq!(model_for_tier(ModelTier::Speed, blank), DEFAULT_SPEED_MODEL);
     }
 
     #[test]

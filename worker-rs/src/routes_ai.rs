@@ -188,7 +188,10 @@ pub async fn run_managed_inbox_completion(
 ) -> Option<String> {
     let endpoint = env_get(env, "MIMO_CHAT_COMPLETIONS_URL")?;
     let secret = env_get(env, "MIMO_API_KEY")?;
-    let model = env_get(env, "MIMO_MODEL")?;
+    // Meeting-note-style one-shot completions run on the BALANCED tier, which
+    // defaults to MIMO_MODEL when set.
+    let model =
+        managed_ai::model_for_tier(managed_ai::ModelTier::Balanced, |name| env_get(env, name));
     if messages.is_empty() {
         return None;
     }
@@ -463,8 +466,12 @@ async fn settle_managed_inbox(
 async fn handle_chat_completions(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
     let endpoint = env_get(&ctx.env, "MIMO_CHAT_COMPLETIONS_URL");
     let secret = env_get(&ctx.env, "MIMO_API_KEY");
-    let model = env_get(&ctx.env, "MIMO_MODEL");
-    let (Some(endpoint), Some(secret), Some(model)) = (endpoint, secret, model) else {
+    // Managed chat runs on the BALANCED tier (defaults to MIMO_MODEL when set);
+    // the client request is validated against this model id.
+    let model = managed_ai::model_for_tier(managed_ai::ModelTier::Balanced, |name| {
+        env_get(&ctx.env, name)
+    });
+    let (Some(endpoint), Some(secret)) = (endpoint, secret) else {
         return error_json("Managed AI unavailable", 503);
     };
     let Some(endpoint_url) = managed_ai::validate_pinned_endpoint(

@@ -4,11 +4,23 @@ use crate::signals::{
     CaptureSource, ClientCommand, Command, MeetingCompleted, MeetingInsight, MeetingStateChanged,
     MeetingTranscriptTurn, NativeError, NativeEvent, TranscriptionAuth,
 };
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
+
+/// One-shot note generator injected by the runtime: given a prompt it produces
+/// meeting-note text (or `None` on failure). This lets the configured assistant
+/// provider (BALANCED tier) reach meeting-note generation without the meeting
+/// module depending on the runtime's streaming provider types.
+pub type NoteGenerator = Arc<
+    dyn Fn(String, CancellationToken) -> Pin<Box<dyn Future<Output = Option<String>> + Send>>
+        + Send
+        + Sync,
+>;
 
 pub const INSIGHT_INTERVAL: Duration = Duration::from_secs(20);
 pub const SUMMARY_TRANSCRIPT_CHARS: usize = 12_000;
@@ -884,6 +896,7 @@ pub enum MeetingControl {
     SetMode {
         mode: SystemAudioCaptureMode,
     },
+    ConfigureNoteProvider(NoteGenerator),
 }
 
 pub fn capture_allowed(mode: SystemAudioCaptureMode, session_active: bool) -> bool {
@@ -1001,6 +1014,13 @@ pub fn set_mode(mode: SystemAudioCaptureMode) {
     notify(MeetingControl::SetMode { mode });
 }
 
+/// Installs the note generator (the configured BALANCED-tier provider) so
+/// meeting notes are produced by the user's provider rather than falling back
+/// to sentence-clipping. Delivered the same way transcription auth is.
+pub fn configure_note_provider(generator: NoteGenerator) {
+    notify(MeetingControl::ConfigureNoteProvider(generator));
+}
+
 /// Delivers a final transcript segment to the meeting runtime.
 ///
 /// Unlike `notify`, this must not silently drop the segment when the control
@@ -1048,6 +1068,7 @@ pub struct MeetingRuntime {
     cancellation: CancellationToken,
     classifying: Arc<AtomicBool>,
     capture: CaptureSlot<crate::meeting_capture::MeetingCaptureHandle>,
+    note_generator: Option<NoteGenerator>,
 }
 
 pub fn channel(
@@ -1063,6 +1084,7 @@ pub fn channel(
             cancellation: CancellationToken::new(),
             classifying: Arc::new(AtomicBool::new(false)),
             capture: CaptureSlot::new(),
+            note_generator: None,
         },
     )
 }
@@ -1200,6 +1222,9 @@ impl MeetingRuntime {
                     self.mode = mode;
                     self.sync_capture(session.is_some());
                 }
+                MeetingControl::ConfigureNoteProvider(generator) => {
+                    self.note_generator = Some(generator);
+                }
             }
             announce(session.as_ref(), &mut announced);
         }
@@ -1274,6 +1299,7 @@ impl MeetingRuntime {
     fn finish(&self, session: MeetingSession) {
         let captures = self.captures.clone();
         let cancellation = self.cancellation.clone();
+        let generator = self.note_generator.clone();
         tokio::spawn(async move {
             if session.transcript().trim().is_empty() {
                 return;
@@ -1290,7 +1316,7 @@ impl MeetingRuntime {
                             chunk_summary_prompt(chunk, index + 1, chunks.len(), session.title());
                         let digest = tokio::select! {
                             () = cancellation.cancelled() => return,
-                            output = generate_note_output(&prompt) => output,
+                            output = generate_note_output(&prompt, generator.as_ref(), &cancellation) => output,
                         };
                         digests.push(digest.unwrap_or_else(|| chunk.clone()));
                     }
@@ -1303,7 +1329,7 @@ impl MeetingRuntime {
             };
             let output = tokio::select! {
                 () = cancellation.cancelled() => return,
-                output = generate_note_output(&prompt) => output,
+                output = generate_note_output(&prompt, generator.as_ref(), &cancellation) => output,
             };
             let note = output
                 .as_deref()
@@ -1316,7 +1342,43 @@ impl MeetingRuntime {
     }
 }
 
-async fn generate_note_output(prompt: &str) -> Option<String> {
+/// Meeting-note generation (BALANCED tier). On-device generation first, then
+/// the configured provider (MiMo balanced), and only then the dev-only Gemini
+/// fallback. Notes are one-shot: the provider stream is collected in full by
+/// the generator before it returns.
+async fn generate_note_output(
+    prompt: &str,
+    generator: Option<&NoteGenerator>,
+    cancellation: &CancellationToken,
+) -> Option<String> {
+    if let Some(output) = crate::local_ai::respond(prompt).await {
+        return Some(output);
+    }
+    note_output_without_local(prompt, generator, cancellation).await
+}
+
+/// The remote fallback order once on-device generation has been ruled out: the
+/// configured provider (BALANCED tier) must be tried before the dev-only Gemini
+/// path. Split out so the ordering is unit-testable without depending on
+/// whether on-device generation happens to be available.
+async fn note_output_without_local(
+    prompt: &str,
+    generator: Option<&NoteGenerator>,
+    cancellation: &CancellationToken,
+) -> Option<String> {
+    if let Some(generator) = generator
+        && let Some(output) = generator(prompt.to_owned(), cancellation.clone()).await
+    {
+        return Some(output);
+    }
+    let key = crate::dev_gemini::api_key()?;
+    crate::dev_gemini::generate(&key, prompt).await
+}
+
+/// Latency-sensitive live output (SPEED tier): on-device generation, then the
+/// dev-only Gemini fallback (`gemini-3.1-flash-lite`). Live insights and answer
+/// suggestions must not wait on the heavier balanced provider.
+async fn generate_speed_output(prompt: &str) -> Option<String> {
     if let Some(output) = crate::local_ai::respond(prompt).await {
         return Some(output);
     }
@@ -1332,7 +1394,7 @@ async fn suggest_answer(
     let prompt = answer_prompt(question, context);
     let output = tokio::select! {
         () = cancellation.cancelled() => return None,
-        output = generate_note_output(&prompt) => output,
+        output = generate_speed_output(&prompt) => output,
     };
     output.as_deref().and_then(clean_answer)
 }
@@ -1396,6 +1458,43 @@ mod tests {
         assert_eq!(parse_classification("none"), Some(None));
         assert_eq!(parse_classification("unsure"), None);
         assert_eq!(parse_classification(""), None);
+    }
+
+    #[tokio::test]
+    async fn meeting_notes_use_the_configured_provider_before_the_dev_fallback() {
+        // With on-device generation ruled out, a configured provider that yields
+        // a note must be returned without the dev-only Gemini path being reached.
+        let generator: NoteGenerator =
+            Arc::new(|_prompt, _cancel| Box::pin(async { Some("PROVIDER_NOTE".to_owned()) }));
+        let output = note_output_without_local(
+            "summarize the meeting",
+            Some(&generator),
+            &CancellationToken::new(),
+        )
+        .await;
+        assert_eq!(output.as_deref(), Some("PROVIDER_NOTE"));
+    }
+
+    #[tokio::test]
+    async fn meeting_notes_pass_the_note_prompt_to_the_configured_provider() {
+        let seen = Arc::new(std::sync::Mutex::new(None));
+        let sink = Arc::clone(&seen);
+        let generator: NoteGenerator = Arc::new(move |prompt, _cancel| {
+            let sink = Arc::clone(&sink);
+            Box::pin(async move {
+                *sink.lock().unwrap_or_else(|failure| failure.into_inner()) = Some(prompt);
+                Some("ok".to_owned())
+            })
+        });
+        let _ =
+            note_output_without_local("PROMPT_TEXT", Some(&generator), &CancellationToken::new())
+                .await;
+        assert_eq!(
+            seen.lock()
+                .unwrap_or_else(|failure| failure.into_inner())
+                .as_deref(),
+            Some("PROMPT_TEXT")
+        );
     }
 
     #[test]
