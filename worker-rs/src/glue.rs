@@ -30,7 +30,7 @@ fn start() {
 
 #[event(fetch)]
 async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
-    Router::new()
+    let router = Router::new()
         .get("/health", |_req, _ctx| {
             Response::from_json(&json!({ "service": "omi-v4-api", "status": "ok" }))
         })
@@ -39,7 +39,11 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         .get_async("/v1/entitlement", handle_entitlement)
         .get_async("/v1/profile/onboarding", handle_onboarding_get)
         .put_async("/v1/profile/onboarding", handle_onboarding_put)
-        .delete_async("/v1/account", handle_account_delete)
+        .delete_async("/v1/account", handle_account_delete);
+    // MERGE SEAM: each module group extends the router through its own
+    // `register` hook. Delivery/OAuth group's routes are added here.
+    let router = crate::routes_channels::register(router);
+    router
         .or_else_any_method("/*catchall", |_req, _ctx| {
             error_json("Not found", 404)
         })
@@ -47,7 +51,7 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         .await
 }
 
-fn error_json(message: &str, status: u16) -> Result<Response> {
+pub(crate) fn error_json(message: &str, status: u16) -> Result<Response> {
     Ok(Response::from_json(&json!({ "error": message }))?.with_status(status))
 }
 
@@ -88,12 +92,12 @@ async fn firebase_keys() -> Result<Vec<auth::FirebaseJwk>> {
 
 /// Result of the auth middleware: an authenticated identity, or a Response to
 /// short-circuit with (status/error-shape parity with requireAuth).
-enum AuthOutcome {
+pub(crate) enum AuthOutcome {
     Ok(Auth),
     Reject(Response),
 }
 
-async fn authenticate(req: &Request, ctx: &RouteContext<()>) -> AuthOutcome {
+pub(crate) async fn authenticate(req: &Request, ctx: &RouteContext<()>) -> AuthOutcome {
     let authorization = req
         .headers()
         .get("authorization")
