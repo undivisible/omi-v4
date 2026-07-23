@@ -8,6 +8,7 @@ import '../app_services.dart';
 import '../currents/currents.dart';
 import '../device/device.dart';
 import '../features/setup_account_screens.dart' show EventKitProactiveSyncTile;
+import '../native/live_activity_bridge.dart';
 import '../native/native_hub.dart';
 import '../providers/providers.dart';
 
@@ -206,6 +207,7 @@ class MobilePendantPageState extends State<MobilePendantPage> {
   bool _reconnectAttempted = false;
   bool? _desktopNoticeDismissed;
   StreamSubscription<DeviceRelaySnapshot>? _snapshotSubscription;
+  final LiveActivityBridge _liveActivity = LiveActivityBridge();
 
   bool get _mobile => relay.role == DeviceRelayRole.mobileOwner;
 
@@ -220,6 +222,13 @@ class MobilePendantPageState extends State<MobilePendantPage> {
     super.initState();
     _snapshotSubscription = relay.snapshots.listen((next) {
       if (mounted) setState(() => snapshot = next);
+      unawaited(
+        _liveActivity.update(
+          connected: next.phase == DeviceConnectionPhase.connected,
+          batteryLevel: next.device?.batteryLevel,
+          deviceName: next.device?.name,
+        ),
+      );
     });
     if (!widget.previewMode && _mobile) unawaited(_restorePairing());
     unawaited(_loadDesktopNotice());
@@ -276,6 +285,7 @@ class MobilePendantPageState extends State<MobilePendantPage> {
   @override
   void dispose() {
     unawaited(_snapshotSubscription?.cancel());
+    unawaited(_liveActivity.end());
     super.dispose();
   }
 
