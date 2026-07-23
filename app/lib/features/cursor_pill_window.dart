@@ -9,12 +9,16 @@ abstract final class CursorPillWindow {
   static bool get _supported =>
       !kIsWeb && defaultTargetPlatform == TargetPlatform.macOS;
 
-  static Future<void> summon() async {
+  /// Summons the floating glass window. Voice (the waveform) rides the cursor
+  /// ([centered] false); the text overlay is a Spotlight-style panel pinned to
+  /// the upper third of the screen ([centered] true).
+  static Future<void> summon({bool centered = false}) async {
     if (!_supported) return;
     try {
       await _channel.invokeMethod('summonPill', {
         'width': width,
         'height': height,
+        'centered': centered,
       });
     } on MissingPluginException {
       return;

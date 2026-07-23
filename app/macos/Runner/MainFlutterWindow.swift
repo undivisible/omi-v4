@@ -284,6 +284,10 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
   override var canBecomeKey: Bool { true }
   override var canBecomeMain: Bool { true }
 
+  /// Key code for the global overlay keybind (49 = Space, combined with a
+  /// bare Option modifier). Single source of truth on the native side.
+  static let summonOverlayKeyCode: UInt16 = 49
+
   func onListen(withArguments arguments: Any?, eventSink events: @escaping FlutterEventSink) -> FlutterError? {
     keyboardSink = events
     emitSecureInput()
@@ -302,6 +306,16 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
       permissionOverlay?.dismiss()
       keyboardSink?(["type": "escape"])
       return
+    }
+    // Global keybind for the centered text overlay (Option+Space). Changeable
+    // here and mirrored in Dart as `summonOverlayKeybindLabel`. Bare Option
+    // only — Command/Control/Shift combos are left to other apps.
+    if event.type == .keyDown && event.keyCode == Self.summonOverlayKeyCode {
+      let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+      if flags == .option {
+        keyboardSink?(["type": "summonOverlay"])
+        return
+      }
     }
     guard event.type == .flagsChanged, event.keyCode == 56 || event.keyCode == 60 else { return }
     keyboardSink?([
@@ -455,7 +469,8 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
         let arguments = call.arguments as? [String: Any]
         self?.summonPill(
           width: arguments?["width"] as? Double ?? 420,
-          height: arguments?["height"] as? Double ?? 230)
+          height: arguments?["height"] as? Double ?? 230,
+          centered: arguments?["centered"] as? Bool ?? false)
         result(nil)
       case "restoreFromPill":
         self?.restoreFromPill()
@@ -558,7 +573,18 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
     pillGlobalMouseMonitor = nil
   }
 
-  private func summonPill(width: Double, height: Double) {
+  private func centeredPillFrame(width: Double, height: Double) -> NSRect {
+    let screen =
+      NSScreen.screens.first { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) }
+      ?? NSScreen.main
+    let visible = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: width, height: height)
+    // Spotlight-style: horizontally centered, pinned to the upper third.
+    let x = visible.midX - width / 2
+    let y = visible.maxY - visible.height * 0.28 - height
+    return NSRect(x: x, y: y, width: width, height: height)
+  }
+
+  private func summonPill(width: Double, height: Double, centered: Bool) {
     if pillPreviousFrame == nil {
       pillPreviousFrame = frame
       pillPreviousLevel = level
@@ -569,7 +595,9 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
     // onboarding blur otherwise shows as a grey gradient wash inside the
     // summoned window.
     onboardingBlurView?.isHidden = true
-    let target = pillFrame(cursor: NSEvent.mouseLocation, width: width, height: height)
+    let target = centered
+      ? centeredPillFrame(width: width, height: height)
+      : pillFrame(cursor: NSEvent.mouseLocation, width: width, height: height)
     level = .floating
     collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
     setFrame(target, display: true)
@@ -577,7 +605,10 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
     NSApp.activate(ignoringOtherApps: true)
     makeKeyAndOrderFront(nil)
     stopFollowingCursor()
-    followCursor(width: width, height: height)
+    // The overlay stays put; only the cursor-anchored voice waveform follows.
+    if !centered {
+      followCursor(width: width, height: height)
+    }
   }
 
   private func attachPillGlass() {
