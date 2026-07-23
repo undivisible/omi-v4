@@ -31,6 +31,7 @@ class ChatScreen extends StatefulWidget {
     this.previewMode = false,
     this.desktopKeyboard,
     this.onDesktopGestureReset,
+    this.onShakeSummon,
     this.checklistStore,
     super.key,
   });
@@ -39,6 +40,11 @@ class ChatScreen extends StatefulWidget {
   final bool previewMode;
   final DesktopKeyboard? desktopKeyboard;
   final VoidCallback? onDesktopGestureReset;
+
+  /// When set, a completed cursor shake summons voice through this callback
+  /// (the full-screen pill overlay) instead of the in-window listening view.
+  final Future<void> Function()? onShakeSummon;
+
   final HubChecklistStore? checklistStore;
 
   @override
@@ -267,12 +273,7 @@ class ChatScreenState extends State<ChatScreen> {
       case ShiftGestureAction.openOverlay:
         await _desktopKeyboard.focusApplication();
         if (mounted) _inputFocus.requestFocus();
-      case ShiftGestureAction.voiceToggle:
-        if (widget.services.desktopVoice.active) {
-          await handleDesktopGesture(ShiftGestureAction.stopVoice);
-        } else {
-          await handleDesktopGesture(ShiftGestureAction.startVoice);
-        }
+      case ShiftGestureAction.escape:
       case ShiftGestureAction.cancel:
         if (widget.services.desktopVoice.active) {
           await widget.services.cancelDesktopVoice();
@@ -416,10 +417,22 @@ class ChatScreenState extends State<ChatScreen> {
     _activatingShakeVoice = true;
     setState(() => _shakeProgress = 0);
     try {
-      await handleDesktopGesture(ShiftGestureAction.startVoice);
+      if (widget.onShakeSummon case final summon?) {
+        await summon();
+      } else {
+        await handleDesktopGesture(ShiftGestureAction.startVoice);
+      }
     } finally {
       _activatingShakeVoice = false;
     }
+  }
+
+  /// Brings the hub to the tasks view — the overlay's "show me your tasks"
+  /// command lands here.
+  void showAllTasks() {
+    if (!mounted) return;
+    final currents = widget.services.currents;
+    if (currents != null) _openAllTasks(currents);
   }
 
   void _handleEvent(NativeEvent event) {

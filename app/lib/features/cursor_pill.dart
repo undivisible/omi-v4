@@ -128,7 +128,7 @@ class _CursorPillState extends State<CursorPill> {
   KeyEventResult _handleKey(FocusNode node, KeyEvent event) {
     if (event is! KeyDownEvent) return KeyEventResult.ignored;
     if (event.logicalKey == LogicalKeyboardKey.escape) {
-      unawaited(widget.controller.dismiss());
+      unawaited(widget.controller.dismissSurface());
       return KeyEventResult.handled;
     }
     if (_ghostRemainder != null &&
@@ -252,47 +252,68 @@ class _CursorPillState extends State<CursorPill> {
   }
 
   /// Live voice: no pill, just the clicky waveform inside a soft warm glow
-  /// (a subtle, steady-state cousin of the shake-complete burst).
-  Widget _voice() => Column(
+  /// (a subtle, steady-state cousin of the shake-complete burst). The whole
+  /// surface spans the screen: an entry burst sweeps to the edges and settles
+  /// into a glow hugging the screen borders, with the waveform centered.
+  Widget _voice() => SizedBox.expand(
     key: const Key('cursor_pill'),
-    mainAxisSize: MainAxisSize.min,
-    crossAxisAlignment: CrossAxisAlignment.start,
-    children: [
-      SizedBox(
-        key: const Key('cursor_pill_listening'),
-        width: 96,
-        height: 72,
-        child: Stack(
-          alignment: Alignment.center,
-          children: [
-            ListeningGlow(
-              level: widget.controller.level,
-              animated: !MediaQuery.disableAnimationsOf(context),
-            ),
-            PillWaveform(
-              key: const Key('cursor_pill_waveform'),
-              level: widget.controller.level,
-            ),
-          ],
+    child: Stack(
+      alignment: Alignment.center,
+      children: [
+        Positioned.fill(
+          child: ListeningEdgeGlow(
+            key: const Key('cursor_pill_edge_glow'),
+            level: widget.controller.level,
+            animated: !MediaQuery.disableAnimationsOf(context),
+          ),
         ),
-      ),
-      if (widget.controller.notice case final notice?) ...[
-        const SizedBox(height: 6),
-        Text(
-          notice,
-          key: const Key('cursor_pill_notice'),
-          style: const TextStyle(fontSize: 12, color: _pillMuted),
+        SizedBox(
+          key: const Key('cursor_pill_listening'),
+          width: 96,
+          height: 72,
+          child: Stack(
+            alignment: Alignment.center,
+            children: [
+              ListeningGlow(
+                level: widget.controller.level,
+                animated: !MediaQuery.disableAnimationsOf(context),
+              ),
+              PillWaveform(
+                key: const Key('cursor_pill_waveform'),
+                level: widget.controller.level,
+              ),
+            ],
+          ),
+        ),
+        Positioned(
+          left: 0,
+          right: 0,
+          bottom: 48,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (widget.controller.notice case final notice?)
+                Text(
+                  notice,
+                  key: const Key('cursor_pill_notice'),
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(fontSize: 12, color: _pillMuted),
+                ),
+              if (widget.controller.error case final message?)
+                Text(
+                  message,
+                  key: const Key('cursor_pill_error'),
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: Color(0xffb3261e),
+                  ),
+                ),
+            ],
+          ),
         ),
       ],
-      if (widget.controller.error case final message?) ...[
-        const SizedBox(height: 6),
-        Text(
-          message,
-          key: const Key('cursor_pill_error'),
-          style: const TextStyle(fontSize: 12, color: Color(0xffb3261e)),
-        ),
-      ],
-    ],
+    ),
   );
 
   Widget _pill() => LiquidGlass(
@@ -320,47 +341,65 @@ class _CursorPillState extends State<CursorPill> {
     ),
   );
 
-  Widget _pillContent() => Stack(
-    alignment: Alignment.centerLeft,
+  Widget _pillContent() => Row(
     children: [
-      if (_ghostRemainder case final remainder?)
-        IgnorePointer(
-          child: Text.rich(
-            TextSpan(
-              children: [
-                TextSpan(
-                  text: _text.text,
-                  style: const TextStyle(color: Colors.transparent),
+      Expanded(
+        child: Stack(
+          alignment: Alignment.centerLeft,
+          children: [
+            if (_ghostRemainder case final remainder?)
+              IgnorePointer(
+                child: Text.rich(
+                  TextSpan(
+                    children: [
+                      TextSpan(
+                        text: _text.text,
+                        style: const TextStyle(color: Colors.transparent),
+                      ),
+                      TextSpan(
+                        text: remainder,
+                        style: const TextStyle(color: _pillMuted),
+                      ),
+                    ],
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.clip,
+                  style: const TextStyle(fontSize: 14),
                 ),
-                TextSpan(
-                  text: remainder,
-                  style: const TextStyle(color: _pillMuted),
-                ),
-              ],
+              ),
+            TextField(
+              key: const Key('cursor_pill_input'),
+              controller: _text,
+              focusNode: _focus,
+              autofocus: widget.autofocus,
+              maxLines: 1,
+              cursorColor: _pillInk,
+              style: const TextStyle(color: _pillInk, fontSize: 14),
+              decoration: const InputDecoration(
+                isDense: true,
+                border: InputBorder.none,
+                enabledBorder: InputBorder.none,
+                focusedBorder: InputBorder.none,
+                filled: false,
+                hintText: 'Ask me anything…',
+                hintStyle: TextStyle(color: _pillMuted, fontSize: 14),
+              ),
+              onSubmitted: (value) =>
+                  unawaited(widget.controller.submit(value)),
             ),
-            maxLines: 1,
-            overflow: TextOverflow.clip,
-            style: const TextStyle(fontSize: 14),
-          ),
+          ],
         ),
-      TextField(
-        key: const Key('cursor_pill_input'),
-        controller: _text,
-        focusNode: _focus,
-        autofocus: widget.autofocus,
-        maxLines: 1,
-        cursorColor: _pillInk,
-        style: const TextStyle(color: _pillInk, fontSize: 14),
-        decoration: const InputDecoration(
-          isDense: true,
-          border: InputBorder.none,
-          enabledBorder: InputBorder.none,
-          focusedBorder: InputBorder.none,
-          filled: false,
-          hintText: 'Ask me anything…',
-          hintStyle: TextStyle(color: _pillMuted, fontSize: 14),
-        ),
-        onSubmitted: (value) => unawaited(widget.controller.submit(value)),
+      ),
+      const SizedBox(width: 6),
+      IconButton(
+        key: const Key('cursor_pill_mic'),
+        tooltip: 'Talk instead',
+        padding: EdgeInsets.zero,
+        constraints: const BoxConstraints.tightFor(width: 26, height: 26),
+        iconSize: 16,
+        color: _pillMuted,
+        icon: const Icon(Icons.mic_none_rounded),
+        onPressed: () => unawaited(widget.controller.beginVoice()),
       ),
     ],
   );
@@ -707,6 +746,184 @@ class _ListeningGlowState extends State<ListeningGlow>
       ),
     );
   }
+}
+
+/// The full-screen listening treatment: an entry burst that sweeps from the
+/// center past the screen edges (the shake-complete burst, writ large), then
+/// a steady glow hugging all four screen edges — the same blue-into-peach
+/// palette as [ListeningGlow] — swelling gently with the live audio level.
+/// With animations disabled it renders the settled edge glow with no burst
+/// and no breathing pulse.
+class ListeningEdgeGlow extends StatefulWidget {
+  const ListeningEdgeGlow({
+    required this.level,
+    required this.animated,
+    super.key,
+  });
+
+  static const burstDuration = Duration(milliseconds: 720);
+
+  final ValueListenable<double> level;
+  final bool animated;
+
+  @override
+  State<ListeningEdgeGlow> createState() => _ListeningEdgeGlowState();
+}
+
+class _ListeningEdgeGlowState extends State<ListeningEdgeGlow>
+    with TickerProviderStateMixin {
+  late final AnimationController _burst = AnimationController(
+    vsync: this,
+    duration: ListeningEdgeGlow.burstDuration,
+  );
+  Ticker? _ticker;
+  double _phase = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.level.addListener(_changed);
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _syncMotion();
+  }
+
+  @override
+  void didUpdateWidget(covariant ListeningEdgeGlow old) {
+    super.didUpdateWidget(old);
+    _syncMotion();
+  }
+
+  void _syncMotion() {
+    if (widget.animated) {
+      if (!_burst.isAnimating && !_burst.isCompleted) _burst.forward();
+      _ticker ??= createTicker((elapsed) {
+        setState(
+          () =>
+              _phase = elapsed.inMicroseconds / Duration.microsecondsPerSecond,
+        );
+      })..start();
+    } else {
+      _burst.value = 1;
+      _ticker?.dispose();
+      _ticker = null;
+    }
+  }
+
+  void _changed() {
+    if (_ticker == null && mounted) setState(() {});
+  }
+
+  @override
+  void dispose() {
+    widget.level.removeListener(_changed);
+    _burst.dispose();
+    _ticker?.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final level = widget.level.value.clamp(0.0, 1.0);
+    final breathe = widget.animated ? (math.sin(_phase * 2.2) + 1) / 2 : 0.5;
+    return IgnorePointer(
+      child: AnimatedBuilder(
+        animation: _burst,
+        builder: (context, _) => CustomPaint(
+          painter: ListeningEdgeGlowPainter(
+            level: level,
+            breathe: breathe,
+            burst: Curves.easeOutCubic.transform(_burst.value),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class ListeningEdgeGlowPainter extends CustomPainter {
+  ListeningEdgeGlowPainter({
+    required this.level,
+    required this.breathe,
+    required this.burst,
+  });
+
+  static const core = Color(0xff96c4ff);
+  static const warm = Color(0xfff2c2ac);
+
+  final double level;
+  final double breathe;
+  final double burst;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (size.isEmpty) return;
+    final bounds = Offset.zero & size;
+    if (burst < 1) {
+      final radius =
+          (0.25 + burst * 1.05) * size.longestSide * 0.75 +
+          size.shortestSide * 0.1;
+      final opacity = (1 - burst) * 0.8;
+      final paint = Paint()
+        ..shader = RadialGradient(
+          colors: [
+            core.withValues(alpha: opacity),
+            warm.withValues(alpha: opacity * 0.6),
+            warm.withValues(alpha: 0),
+          ],
+          stops: const [0.0, 0.42, 0.72],
+        ).createShader(Rect.fromCircle(center: bounds.center, radius: radius));
+      canvas.drawRect(bounds, paint);
+    }
+    final settled = burst.clamp(0.0, 1.0);
+    final intensity =
+        (0.22 + level * 0.5 + breathe * 0.1).clamp(0.0, 0.85) * settled;
+    if (intensity <= 0) return;
+    final thickness =
+        size.shortestSide * (0.16 + level * 0.08 + breathe * 0.02);
+    void edge(Rect rect, Alignment begin, Alignment end) {
+      final paint = Paint()
+        ..shader = LinearGradient(
+          begin: begin,
+          end: end,
+          colors: [
+            core.withValues(alpha: intensity),
+            warm.withValues(alpha: intensity * 0.4),
+            warm.withValues(alpha: 0),
+          ],
+          stops: const [0.0, 0.45, 1.0],
+        ).createShader(rect);
+      canvas.drawRect(rect, paint);
+    }
+
+    edge(
+      Rect.fromLTWH(0, 0, size.width, thickness),
+      Alignment.topCenter,
+      Alignment.bottomCenter,
+    );
+    edge(
+      Rect.fromLTWH(0, size.height - thickness, size.width, thickness),
+      Alignment.bottomCenter,
+      Alignment.topCenter,
+    );
+    edge(
+      Rect.fromLTWH(0, 0, thickness, size.height),
+      Alignment.centerLeft,
+      Alignment.centerRight,
+    );
+    edge(
+      Rect.fromLTWH(size.width - thickness, 0, thickness, size.height),
+      Alignment.centerRight,
+      Alignment.centerLeft,
+    );
+  }
+
+  @override
+  bool shouldRepaint(ListeningEdgeGlowPainter old) =>
+      old.level != level || old.breathe != breathe || old.burst != burst;
 }
 
 /// A slow diagonal light sweep looping across the input glass while it holds

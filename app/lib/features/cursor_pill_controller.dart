@@ -9,6 +9,7 @@ import '../keyboard/shift_gesture.dart';
 import '../native/generated/signals/signals.dart';
 import '../native/native_hub.dart';
 import 'cursor_pill_window.dart';
+import 'overlay_commands.dart';
 import 'voice_intents.dart';
 
 enum CursorPillState { hidden, input, listening }
@@ -300,10 +301,10 @@ final class CursorPillController extends ChangeNotifier {
 
   Future<void> handleGesture(ShiftGestureAction action) async {
     switch (action) {
-      case ShiftGestureAction.voiceToggle:
-        await doubleShift();
       case ShiftGestureAction.openOverlay:
         await toggleOverlay();
+      case ShiftGestureAction.escape:
+        await dismissSurface();
       case ShiftGestureAction.startVoice:
         await beginVoice();
       case ShiftGestureAction.stopVoice:
@@ -313,32 +314,39 @@ final class CursorPillController extends ChangeNotifier {
     }
   }
 
-  /// Both-Shift chord: talk directly. From idle (or with the text overlay
-  /// open) it drops straight into live voice — only the waveform shows near
-  /// the cursor; while already listening it stops. The 500ms debounce guards
-  /// against a bounced or double-fired chord.
-  Future<void> doubleShift() async {
+  /// Both-Shift chord: the primary summon. From idle it opens the centered
+  /// text overlay; while any surface is up (overlay or voice) it dismisses,
+  /// exactly like Esc. The 500ms debounce guards against a bounced or
+  /// double-fired chord.
+  Future<void> doubleShift() => toggleOverlay();
+
+  /// Option+Space (or the menu-bar capture control): the secondary binding
+  /// for the same toggle as the double-shift chord — summon the centered
+  /// text overlay from idle, dismiss whatever surface is up otherwise.
+  Future<void> toggleOverlay() async {
     final at = _now();
     final last = _lastTransitionAt;
     if (last != null && at.difference(last) < doubleShiftDebounce) return;
     _lastTransitionAt = at;
     switch (_state) {
-      case CursorPillState.hidden || CursorPillState.input:
-        await beginVoice();
-      case CursorPillState.listening:
-        await finishListening();
+      case CursorPillState.hidden:
+        await summon();
+      case CursorPillState.input || CursorPillState.listening:
+        await dismissSurface();
     }
   }
 
-  /// Option+Space (or the menu-bar capture control): toggle the centered text
-  /// overlay. Summoning it while voice is live cancels the voice session
-  /// first — opening one surface always closes the other.
-  Future<void> toggleOverlay() async {
+  /// The shared dismissal Esc and a second double-shift both perform: with
+  /// the overlay up it hides; while listening it stops voice and routes any
+  /// transcript (hub intent included); from idle it is a no-op.
+  Future<void> dismissSurface() async {
     switch (_state) {
+      case CursorPillState.hidden:
+        return;
       case CursorPillState.input:
-        await dismiss();
-      case CursorPillState.hidden || CursorPillState.listening:
-        await summon();
+        await _hide();
+      case CursorPillState.listening:
+        await finishListening();
     }
   }
 
@@ -350,7 +358,8 @@ final class CursorPillController extends ChangeNotifier {
     _currentSuggestions = const [];
     _memorySuggestions = const [];
     _notify();
-    // Voice rides the cursor; the waveform, not a pill, is all that shows.
+    // Voice takes the whole screen: the waveform and its glow render in a
+    // full-screen click-through overlay, not a pill.
     await _presentWindow?.call(false);
     _subscription ??= _events.listen(_handleEvent);
     try {
@@ -474,7 +483,7 @@ final class CursorPillController extends ChangeNotifier {
     final normalized = text.trim();
     if (normalized.isEmpty || _state != CursorPillState.input) return;
     await _hide();
-    if (matchesShowHubIntent(normalized)) {
+    if (matchOverlayCommand(normalized) == OverlayCommand.showTasks) {
       _openHub?.call();
       return;
     }

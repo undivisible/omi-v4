@@ -40,9 +40,7 @@ void main() {
     ),
   );
 
-  testWidgets('double-shift talks; stopping satisfies the voice lesson', (
-    tester,
-  ) async {
+  testWidgets('the lesson walks summon, dismiss, then voice', (tester) async {
     final harness = _Harness();
     final controller = harness.controller();
     final transcripts = StreamController<String>.broadcast(sync: true);
@@ -58,16 +56,41 @@ void main() {
 
     expect(find.byKey(const Key('shift_left')), findsOneWidget);
     expect(
-      find.textContaining('Double-tap both Shift keys to talk'),
+      find.textContaining('Double-tap both Shift keys to summon'),
       findsOneWidget,
     );
 
-    // Straight to voice — no intermediate input pill.
+    // Summon: the chord opens the centered input overlay, not voice.
     await chord(tester);
+    expect(controller.state, CursorPillState.input);
+    expect(harness.voiceStarts, 0);
+    expect(
+      find.textContaining('press Esc — or double-shift again — to dismiss'),
+      findsOneWidget,
+    );
+
+    // Dismiss: a second chord hides it and unlocks the voice beat.
+    harness.advance(const Duration(seconds: 1));
+    await chord(tester);
+    expect(controller.state, CursorPillState.hidden);
+    expect(lessonDone, 0);
+    expect(find.textContaining('then tap the mic to talk'), findsOneWidget);
+
+    // Re-summon, then the mic affordance starts listening.
+    harness.advance(const Duration(seconds: 1));
+    await chord(tester);
+    expect(controller.state, CursorPillState.input);
+    expect(find.textContaining('Tap the mic to talk'), findsOneWidget);
+    await controller.beginVoice();
+    await tester.pump();
     expect(controller.state, CursorPillState.listening);
     expect(harness.voiceStarts, 1);
-    expect(find.textContaining('press Esc to stop'), findsOneWidget);
+    expect(
+      find.textContaining('press Esc, or double-shift, to stop'),
+      findsOneWidget,
+    );
 
+    // Stopping (chord or Esc) completes the voice lesson.
     harness.advance(const Duration(seconds: 1));
     await chord(tester);
     expect(controller.state, CursorPillState.hidden);
@@ -94,6 +117,8 @@ void main() {
     );
 
     await chord(tester);
+    await controller.beginVoice();
+    await tester.pump();
     expect(controller.state, CursorPillState.listening);
     transcripts.add('show me my currents');
     await tester.pump();
@@ -120,6 +145,8 @@ void main() {
     );
 
     await chord(tester);
+    await controller.beginVoice();
+    await tester.pump();
     harness.advance(const Duration(seconds: 1));
     await chord(tester);
     await tester.pump();
@@ -133,7 +160,7 @@ void main() {
     await harness.close();
   });
 
-  testWidgets('immediate re-chord is debounced and does not stop voice', (
+  testWidgets('immediate re-chord is debounced and keeps the overlay up', (
     tester,
   ) async {
     final harness = _Harness();
@@ -145,8 +172,8 @@ void main() {
     await chord(tester);
     await chord(tester);
     // The bounced second chord is swallowed by the 500ms debounce.
-    expect(controller.state, CursorPillState.listening);
-    expect(harness.voiceStarts, 1);
+    expect(controller.state, CursorPillState.input);
+    expect(harness.voiceStarts, 0);
 
     await tester.pumpWidget(const SizedBox());
     controller.dispose();
@@ -154,7 +181,7 @@ void main() {
     await harness.close();
   });
 
-  testWidgets('escape dismisses voice back to the first prompt', (
+  testWidgets('escape dismisses exactly like a second double-shift', (
     tester,
   ) async {
     final harness = _Harness();
@@ -170,7 +197,17 @@ void main() {
       ),
     );
 
+    // Esc closes the summoned overlay.
     await chord(tester);
+    expect(controller.state, CursorPillState.input);
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pump();
+    expect(controller.state, CursorPillState.hidden);
+    expect(find.textContaining('then tap the mic to talk'), findsOneWidget);
+
+    // Esc also stops listening, satisfying the voice lesson.
+    await controller.beginVoice();
+    await tester.pump();
     expect(controller.state, CursorPillState.listening);
     await tester.sendKeyEvent(LogicalKeyboardKey.escape);
     await tester.pump();

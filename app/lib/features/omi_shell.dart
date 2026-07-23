@@ -55,7 +55,10 @@ class _OmiShellState extends State<OmiShell> {
     }
     _cursorPill = CursorPillController.forServices(
       widget.services,
-      openHub: () => unawaited(openHubWindow()),
+      openHub: () {
+        unawaited(openHubWindow());
+        _chatKey.currentState?.showAllTasks();
+      },
     );
     _menuBar = DesktopMenuBarController(
       currents: widget.services.currents,
@@ -159,6 +162,9 @@ class _OmiShellState extends State<OmiShell> {
         previewMode: widget.previewMode,
         desktopKeyboard: _desktopKeyboard,
         onDesktopGestureReset: _desktopGesture?.reset,
+        onShakeSummon: _cursorPill == null
+            ? null
+            : () => _handleDesktopGesture(ShiftGestureAction.startVoice),
       ),
     );
     final topPadding = widget.previewMode ? 20.0 : 48.0;
@@ -183,21 +189,34 @@ class _OmiShellState extends State<OmiShell> {
       ),
     );
     final pill = _cursorPill;
-    return Scaffold(
-      backgroundColor: Theme.of(context).brightness == Brightness.dark
-          ? const Color(0xff171716)
-          : const Color(0xfff7f6f1),
-      body: pill == null
-          ? paddedBody
-          : Stack(
-              children: [
-                paddedBody,
-                Align(
-                  alignment: Alignment.topLeft,
-                  child: CursorPill(controller: pill),
-                ),
-              ],
-            ),
+    final hubBackground = Theme.of(context).brightness == Brightness.dark
+        ? const Color(0xff171716)
+        : const Color(0xfff7f6f1);
+    if (pill == null) {
+      return Scaffold(backgroundColor: hubBackground, body: paddedBody);
+    }
+    return ListenableBuilder(
+      listenable: pill,
+      builder: (context, _) {
+        if (pill.state == CursorPillState.listening) {
+          return Scaffold(
+            backgroundColor: Colors.transparent,
+            body: CursorPill(controller: pill),
+          );
+        }
+        return Scaffold(
+          backgroundColor: hubBackground,
+          body: Stack(
+            children: [
+              paddedBody,
+              Align(
+                alignment: Alignment.topLeft,
+                child: CursorPill(controller: pill),
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 }

@@ -4,18 +4,15 @@ enum PhysicalShift { left, right }
 /// overlay keybind each emit a single intent, and the surface that consumes
 /// them ([CursorPillController]) owns all real state (and the debounce).
 ///
-/// - both Shift keys down: [voiceToggle] — start live voice, or stop it.
-/// - the overlay keybind (Option+Space): [openOverlay] — summon or dismiss
-///   the centered text overlay.
+/// - both Shift keys down: [openOverlay] — summon the centered text overlay,
+///   or dismiss it (and voice) when a surface is already up.
+/// - the overlay keybind (Option+Space): [openOverlay] — the secondary
+///   binding for the same overlay toggle.
+/// - Esc: [escape] — dismiss whatever surface is up, identical to a second
+///   double-shift.
 /// - explicit [startVoice]/[stopVoice] drive the menu-bar controls.
-/// - Esc / secure-input emit [cancel].
-enum ShiftGestureAction {
-  voiceToggle,
-  openOverlay,
-  startVoice,
-  stopVoice,
-  cancel,
-}
+/// - secure-input emits [cancel].
+enum ShiftGestureAction { openOverlay, escape, startVoice, stopVoice, cancel }
 
 class ShiftGestureMachine {
   ShiftGestureMachine();
@@ -51,7 +48,7 @@ class ShiftGestureMachine {
     final bothDown = _leftDown && _rightDown;
     if (bothDown && !_chordConsumed) {
       _chordConsumed = true;
-      return const [ShiftGestureAction.voiceToggle];
+      return const [ShiftGestureAction.openOverlay];
     }
 
     _clearChordWhenReleased();
@@ -61,7 +58,7 @@ class ShiftGestureMachine {
   List<ShiftGestureAction> summonOverlay() =>
       secureInput ? const [] : const [ShiftGestureAction.openOverlay];
 
-  List<ShiftGestureAction> escape() => const [ShiftGestureAction.cancel];
+  List<ShiftGestureAction> escape() => const [ShiftGestureAction.escape];
 
   void reset() => _reset();
 
