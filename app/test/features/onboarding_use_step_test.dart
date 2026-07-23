@@ -16,6 +16,18 @@ void main() {
     await tester.pump();
   }
 
+  /// A single chord resolves only after the double-chord window elapses.
+  Future<void> singleChord(WidgetTester tester) async {
+    await chord(tester);
+    await tester.pump(const Duration(milliseconds: 450));
+  }
+
+  Future<void> doubleChord(WidgetTester tester) async {
+    await chord(tester);
+    await chord(tester);
+    await tester.pump();
+  }
+
   Widget host(
     CursorPillController controller,
     Stream<String> transcripts, {
@@ -40,7 +52,7 @@ void main() {
     ),
   );
 
-  testWidgets('the lesson walks talk, then stop', (tester) async {
+  testWidgets('the lesson walks type, then talk, then stop', (tester) async {
     final harness = _Harness();
     final controller = harness.controller();
     final transcripts = StreamController<String>.broadcast(sync: true);
@@ -55,23 +67,35 @@ void main() {
     );
 
     expect(find.byKey(const Key('shift_left')), findsOneWidget);
-    expect(
-      find.textContaining('Double-tap both Shift keys to start talking'),
-      findsOneWidget,
-    );
+    expect(find.textContaining('Press both Shift keys once'), findsOneWidget);
 
-    // Talk: the chord starts listening directly — no mic tap in between.
-    await chord(tester);
+    // Type: a single chord summons the typing bar next to the cursor.
+    await singleChord(tester);
+    expect(controller.state, CursorPillState.input);
+    expect(harness.voiceStarts, 0);
+    expect(find.textContaining('This is where you type'), findsOneWidget);
+
+    // Dismissing the typing bar completes the type lesson and reveals the
+    // double-chord hint.
+    harness.advance(const Duration(seconds: 1));
+    await singleChord(tester);
+    expect(controller.state, CursorPillState.hidden);
+    expect(find.textContaining('tap the chord twice'), findsOneWidget);
+    expect(find.byKey(const Key('shift_times_two')), findsOneWidget);
+
+    // Talk: the double chord starts listening directly.
+    harness.advance(const Duration(seconds: 1));
+    await doubleChord(tester);
     expect(controller.state, CursorPillState.listening);
     expect(harness.voiceStarts, 1);
     expect(
-      find.textContaining('press Esc, or double-shift, to stop'),
+      find.textContaining('press Esc, or the chord, to stop'),
       findsOneWidget,
     );
 
     // Stopping (chord or Esc) completes the voice lesson.
     harness.advance(const Duration(seconds: 1));
-    await chord(tester);
+    await doubleChord(tester);
     expect(controller.state, CursorPillState.hidden);
     expect(lessonDone, 1);
 
@@ -95,7 +119,6 @@ void main() {
       ),
     );
 
-    await chord(tester);
     await controller.beginVoice();
     await tester.pump();
     expect(controller.state, CursorPillState.listening);
@@ -123,11 +146,10 @@ void main() {
       ),
     );
 
-    await chord(tester);
     await controller.beginVoice();
     await tester.pump();
     harness.advance(const Duration(seconds: 1));
-    await chord(tester);
+    await doubleChord(tester);
     await tester.pump();
 
     expect(controller.state, CursorPillState.hidden);
@@ -139,7 +161,7 @@ void main() {
     await harness.close();
   });
 
-  testWidgets('immediate re-chord is debounced and keeps the overlay up', (
+  testWidgets('immediate re-chord is debounced and keeps voice up', (
     tester,
   ) async {
     final harness = _Harness();
@@ -148,9 +170,10 @@ void main() {
 
     await tester.pumpWidget(host(controller, transcripts.stream));
 
-    await chord(tester);
-    await chord(tester);
-    // The bounced second chord is swallowed by the 500ms debounce.
+    await doubleChord(tester);
+    expect(controller.state, CursorPillState.listening);
+    await doubleChord(tester);
+    // The bounced repeat is swallowed by the 500ms debounce.
     expect(controller.state, CursorPillState.listening);
     expect(harness.voiceStarts, 1);
 
@@ -160,9 +183,7 @@ void main() {
     await harness.close();
   });
 
-  testWidgets('escape dismisses exactly like a second double-shift', (
-    tester,
-  ) async {
+  testWidgets('escape dismisses exactly like a repeated chord', (tester) async {
     final harness = _Harness();
     final controller = harness.controller();
     final transcripts = StreamController<String>.broadcast(sync: true);
@@ -177,8 +198,8 @@ void main() {
     );
 
     // Esc stops listening, satisfying the voice lesson — identical to a
-    // second chord.
-    await chord(tester);
+    // second double chord.
+    await doubleChord(tester);
     expect(controller.state, CursorPillState.listening);
     await tester.sendKeyEvent(LogicalKeyboardKey.escape);
     await tester.pump();
