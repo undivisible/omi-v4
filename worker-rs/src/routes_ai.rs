@@ -79,7 +79,12 @@ fn rate_limiter_stub(env: &Env, key: &str) -> Result<Stub> {
     env.durable_object("RATE_LIMITER")?.get_by_name(key)
 }
 
-async fn consume_rate_limit(env: &Env, key: &str, limit: i64, window_ms: i64) -> (bool, i64) {
+pub(crate) async fn consume_rate_limit(
+    env: &Env,
+    key: &str,
+    limit: i64,
+    window_ms: i64,
+) -> (bool, i64) {
     let stub = match rate_limiter_stub(env, key) {
         Ok(stub) => stub,
         Err(_) => return (true, 0),

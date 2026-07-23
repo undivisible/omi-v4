@@ -300,15 +300,16 @@ async fn channel_binding(
 }
 
 async fn unlinked_reply_allowed(env: &Env, channel: Channel, channel_user_id: &str) -> bool {
-    consume_rate_limit(
+    // Shares the one canonical rate limiter with the managed-AI routes; the
+    // deletion pass removed the old standalone module this used to call.
+    let (allowed, _) = crate::routes_ai::consume_rate_limit(
         env,
         &format!("channel-link-code:{}:{channel_user_id}", channel.as_str()),
         5,
         60 * 60_000,
     )
-    .await
-    .map(|(allowed, _)| allowed)
-    .unwrap_or(false)
+    .await;
+    allowed
 }
 
 /// The outcome of dispatching an inbound message: an optional immediate reply

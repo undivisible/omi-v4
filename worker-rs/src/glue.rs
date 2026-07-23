@@ -261,13 +261,13 @@ async fn handle_channel_link_redeem(mut req: Request, ctx: RouteContext<()>) -> 
     else {
         return error_json("Invalid code", 400);
     };
-    let (allowed, retry_after) = crate::rate_limit_lock::consume_rate_limit(
+    let (allowed, retry_after) = crate::routes_ai::consume_rate_limit(
         &ctx.env,
         &format!("channel-link-redeem:{}", auth.uid),
         10,
         10 * 60_000,
     )
-    .await?;
+    .await;
     if !allowed {
         let headers = worker::Headers::new();
         headers.set("retry-after", &retry_after.to_string())?;
