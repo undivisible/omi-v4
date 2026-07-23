@@ -10,6 +10,7 @@ import '../api/worker_http.dart'
     show BillingEntitlement, OmiPlan, WorkerAuthenticationException;
 import '../app_services.dart';
 import '../channels/channels.dart';
+import '../currents/crepus_current.dart';
 import '../currents/currents.dart';
 import '../keyboard/keyboard.dart';
 import '../keyboard/shake_gesture.dart';
@@ -1726,7 +1727,21 @@ class _ChatHome extends StatelessWidget {
                       onTap: () => onPrompt(title),
                     ),
                 for (final task in tasks)
-                  if (task.metadata != null &&
+                  if (currentCrepusSource(task.metadata) case final crepus?)
+                    // AI-authored current: render the constrained .crepus widget
+                    // kit instead of the classic row (same slot). The action
+                    // whitelist inside CrepusCurrentRow is the security boundary.
+                    CrepusCurrentRow(
+                      key: ValueKey('task_${task.item.id}'),
+                      source: crepus,
+                      palette: _crepusPalette(colors),
+                      proposedNextStep: task.item.proposedNextStep,
+                      onComplete: onComplete == null
+                          ? null
+                          : () => onComplete!(task.item.id),
+                      onPrompt: onPrompt,
+                    )
+                  else if (task.metadata != null &&
                       HubTaskMeta.fromJson(task.metadata!) != null)
                     _RichTaskRow(
                       key: ValueKey('task_${task.item.id}'),
@@ -1897,6 +1912,16 @@ class _TaskRow extends StatelessWidget {
     );
   }
 }
+
+CrepusCurrentPalette _crepusPalette(_HubColors colors) => CrepusCurrentPalette(
+  ink: colors.ink,
+  muted: colors.muted,
+  hairline: colors.hairline,
+  cardBg: colors.cardBg,
+  cardShadow: colors.cardShadow,
+  accent: colors.hintBlue,
+  rowHover: colors.rowHover,
+);
 
 class _RichTaskRow extends StatelessWidget {
   const _RichTaskRow({

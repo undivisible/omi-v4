@@ -48,6 +48,22 @@ const exactText = (value: unknown, limit: number) =>
 const onlyKeys = (body: Record<string, unknown>, keys: string[]) =>
   Object.keys(body).every((key) => keys.includes(key));
 
+// A current may carry an AI-authored `.crepus` widget description. The real
+// safety boundary is the client renderer (crepuscularity_flutter is generic;
+// the omi app whitelists actions). The worker only applies cheap defense-in-
+// depth: a length cap so an oversized/hostile blob never reaches the client.
+// Keep in step with CREPUS_MAX_LEN in worker-rs (crepus_currents parity) and
+// CrepusLimits.maxSourceLength in the Flutter package.
+const crepusMaxLen = 8000;
+
+const sanitizeCrepus = (value: unknown): string | null => {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 && Array.from(trimmed).length <= crepusMaxLen
+    ? trimmed
+    : null;
+};
+
 const sha256 = async (value: string) =>
   Array.from(
     new Uint8Array(
@@ -99,6 +115,11 @@ const rowToCurrent = (row: Record<string, unknown>) => ({
     row.execution_reference == null ? null : String(row.execution_reference),
   createdAt: new Date(Number(row.created_at)).toISOString(),
   updatedAt: new Date(Number(row.updated_at)).toISOString(),
+  // Surface the AI-authored .crepus source (if any) under metadata so the
+  // client can render it via the constrained crepuscularity_flutter renderer.
+  ...(sanitizeCrepus(row.crepus) === null
+    ? {}
+    : { metadata: { crepus: sanitizeCrepus(row.crepus) } }),
 });
 
 const selectCurrent = async (
@@ -220,6 +241,8 @@ currents.post("/candidates", async (context) => {
   const confidence = body?.confidence;
   const surfaceAt = body?.surfaceAt;
   const expiresAt = body?.expiresAt ?? null;
+  // Optional AI-authored .crepus widget description; length-capped pass-through.
+  const crepus = sanitizeCrepus(body?.crepus);
   if (
     !evidenceId ||
     !title ||
@@ -254,8 +277,8 @@ currents.post("/candidates", async (context) => {
   await context.env.DB.prepare(
     `INSERT INTO currents
       (id, uid, evidence_id, title, summary, reason, confidence_basis_points, proposed_action,
-       status, surface_at, expires_at, created_at, updated_at)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'candidate', ?9, ?10, ?11, ?11)`,
+       status, surface_at, expires_at, created_at, updated_at, crepus)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'candidate', ?9, ?10, ?11, ?11, ?12)`,
   )
     .bind(
       id,
@@ -269,6 +292,7 @@ currents.post("/candidates", async (context) => {
       surfaceAt,
       expiresAt,
       now,
+      crepus,
     )
     .run();
   return context.json(

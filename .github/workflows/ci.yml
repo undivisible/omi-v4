@@ -23,6 +23,12 @@ jobs:
         with:
           channel: stable
           cache: true
+      # crepuscularity_flutter (the currents renderer) is pinned in app/pubspec.yaml
+      # to a public GitHub ref, so `flutter pub get` resolves it without a sibling
+      # checkout. Once the package is published to pub.dev, pin it via the crepus
+      # tooling instead by enabling the step below (emits the exact dependency
+      # block, so the ref/version lives in one place):
+      #   - run: crepus flutter add --version "$CREPUS_FLUTTER_VERSION"
       - run: cargo install rinf_cli --version 8.10.0 --locked
       - run: bash tool/check_rinf_bindings.sh
       - run: dart format --output=none --set-exit-if-changed lib test
