@@ -1,6 +1,9 @@
 import { Hono } from "hono";
-import type { AppEnv, Channel } from "./types";
+import type { AppEnv, Bindings, Channel } from "./types";
+import { handleChannelMessage } from "./channel-commands";
+import { digest, hmacHex } from "./channel-link";
 import { appendConversationMessage } from "./conversations";
+import { sendChannelText } from "./delivery";
 
 const webhooks = new Hono<AppEnv>();
 const encoder = new TextEncoder();
@@ -12,20 +15,6 @@ const equal = (left: string, right: string): boolean => {
   for (let index = 0; index < left.length; index++)
     mismatch |= left.charCodeAt(index) ^ right.charCodeAt(index);
   return mismatch === 0;
-};
-
-const hmac = async (secret: string, payload: string): Promise<string> => {
-  const key = await crypto.subtle.importKey(
-    "raw",
-    encoder.encode(secret),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"],
-  );
-  const digest = await crypto.subtle.sign("HMAC", key, encoder.encode(payload));
-  return Array.from(new Uint8Array(digest), (byte) =>
-    byte.toString(16).padStart(2, "0"),
-  ).join("");
 };
 
 const verifyTimestampedSignature = async (
@@ -44,7 +33,7 @@ const verifyTimestampedSignature = async (
   if (!Number.isSafeInteger(timestampSeconds)) return false;
   const age = Math.floor(Date.now() / 1_000) - timestampSeconds;
   if (Math.abs(age) > toleranceSeconds) return false;
-  const expected = await hmac(secret, `${timestamp}.${rawBody}`);
+  const expected = await hmacHex(secret, `${timestamp}.${rawBody}`);
   return signatures.some(
     (signature) =>
       /^[a-f0-9]{64}$/.test(signature) && equal(expected, signature),
@@ -63,13 +52,6 @@ const recordWebhook = async (
     .bind(channel, eventId, Date.now())
     .run();
   return result.meta.changes === 1;
-};
-
-const digest = async (value: string): Promise<string> => {
-  const hash = await crypto.subtle.digest("SHA-256", encoder.encode(value));
-  return Array.from(new Uint8Array(hash), (byte) =>
-    byte.toString(16).padStart(2, "0"),
-  ).join("");
 };
 
 const bind = async (
@@ -208,6 +190,46 @@ const enqueue = async (
   return message !== null;
 };
 
+// Both webhooks are thin transports: they authenticate, parse, and hand the
+// message to the one shared command dispatcher, which decides whether the
+// sender gets an immediate reply or the message reaches the assistant.
+const processChannelMessage = async (
+  env: Bindings,
+  channel: Channel,
+  fresh: boolean,
+  eventId: string,
+  messageId: string,
+  channelUserId: string,
+  channelChatId: string,
+  text: string,
+  payload: unknown,
+): Promise<{ queued: boolean; replied: boolean }> => {
+  const outcome = await handleChannelMessage(
+    env,
+    channel,
+    channelUserId,
+    channelChatId,
+    text,
+  );
+  // A retried webhook re-runs the (idempotent) command, but must not send the
+  // sender a second copy of the answer.
+  if (fresh && outcome.reply !== null)
+    await sendChannelText(env, channel, channelChatId, outcome.reply);
+  if (!outcome.enqueue)
+    return { queued: false, replied: outcome.reply !== null };
+  const queued = await enqueue(
+    env.DB,
+    channel,
+    eventId,
+    messageId,
+    channelUserId,
+    channelChatId,
+    text,
+    payload,
+  );
+  return { queued, replied: false };
+};
+
 const linkToken = (text: string, telegram = false): string | null => {
   const value = telegram
     ? /^\/start(?:@[A-Za-z0-9_]+)? ([a-f0-9]{48})$/.exec(text)?.[1]
@@ -264,9 +286,10 @@ webhooks.post("/telegram", async (context) => {
     );
     return context.json({ accepted: true, linked: linked === "linked" });
   }
-  const queued = await enqueue(
-    context.env.DB,
+  const processed = await processChannelMessage(
+    context.env,
     "telegram",
+    fresh,
     eventId,
     String(messageId),
     userId,
@@ -275,7 +298,7 @@ webhooks.post("/telegram", async (context) => {
     body,
   );
   if (!fresh) return context.json({ accepted: true, duplicate: true });
-  return context.json({ accepted: queued, queued });
+  return context.json({ accepted: true, ...processed });
 });
 
 type BlooioEvent = {
@@ -332,9 +355,10 @@ webhooks.post("/blooio", async (context) => {
     );
     return context.json({ accepted: true, linked: linked === "linked" });
   }
-  const queued = await enqueue(
-    context.env.DB,
+  const processed = await processChannelMessage(
+    context.env,
     "blooio",
+    fresh,
     eventId,
     body.message_id,
     body.sender,
@@ -343,7 +367,7 @@ webhooks.post("/blooio", async (context) => {
     body,
   );
   if (!fresh) return context.json({ accepted: true, duplicate: true });
-  return context.json({ accepted: queued, queued });
+  return context.json({ accepted: true, ...processed });
 });
 
 type StripeEvent = {

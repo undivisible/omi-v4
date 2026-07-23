@@ -1,4 +1,5 @@
 import { type ManagedMessage, runManagedInboxCompletion } from "./assistant";
+import { channelCommandPrompt } from "./channel-commands";
 import { completeInboxItemDone } from "./conversations";
 import { hasActivePro } from "./entitlement";
 import { memoryContextFor } from "./memory-vectors";
@@ -14,10 +15,10 @@ const maxAttempts = 5;
 const historyLimit = 12;
 const maxReplyCharacters = 4_096;
 
-const systemPrompt =
+export const systemPrompt =
   "You are Omi, the user's personal assistant, replying over a messaging " +
   "channel while their desktop is offline. Answer the user's latest message " +
-  "directly and concisely in plain text.";
+  `directly and concisely in plain text.\n\n${channelCommandPrompt}`;
 
 type StaleRow = { id: string; uid: string };
 
@@ -31,14 +32,19 @@ type ClaimedItem = {
 const recentHistory = async (
   db: D1Database,
   uid: string,
+  channel: string,
 ): Promise<ManagedMessage[]> => {
   const rows = await db
     .prepare(
       `SELECT role, text FROM conversation_messages
        WHERE uid = ?1 AND conversation_id = ?1
+         AND cursor > COALESCE(
+           (SELECT MAX(conversation_reset_cursor) FROM channel_bindings
+            WHERE uid = ?1 AND channel = ?3 AND revoked_at IS NULL),
+           0)
        ORDER BY cursor DESC LIMIT ?2`,
     )
-    .bind(uid, historyLimit)
+    .bind(uid, historyLimit, channel)
     .all<{ role: string; text: string }>();
   return (rows.results ?? [])
     .reverse()
@@ -115,7 +121,7 @@ const respondToItem = async (
       row.uid,
       String(item.text),
     );
-    const history = await recentHistory(env.DB, row.uid);
+    const history = await recentHistory(env.DB, row.uid, String(item.channel));
     const completion = await runManagedInboxCompletion(
       env,
       row.uid,

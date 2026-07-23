@@ -54,6 +54,7 @@ beforeAll(async () => {
     "migrations/0007_channel_delivery.sql",
     "migrations/0013_conversations.sql",
     "migrations/0014_channel_inbox_dispatch.sql",
+    "migrations/0022_channel_link_codes.sql",
   ]) {
     const sql = (await Bun.file(migration).text()).replace(
       "PRAGMA foreign_keys = ON;",
@@ -132,7 +133,11 @@ describe("channel webhooks", () => {
         chat: { id: 42 },
       },
     });
-    expect(await queued.json()).toEqual({ accepted: true, queued: true });
+    expect(await queued.json()).toEqual({
+      accepted: true,
+      queued: true,
+      replied: false,
+    });
     expect(
       await database
         .prepare(
@@ -200,7 +205,11 @@ describe("channel webhooks", () => {
         },
       );
     const first = await send();
-    expect(await first.json()).toEqual({ accepted: true, queued: true });
+    expect(await first.json()).toEqual({
+      accepted: true,
+      queued: true,
+      replied: false,
+    });
     const duplicate = await send();
     expect(await duplicate.json()).toEqual({ accepted: true, duplicate: true });
     expect(

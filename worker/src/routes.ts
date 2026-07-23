@@ -18,7 +18,14 @@ import oauthProxy from "./oauth-proxy";
 import stt from "./stt";
 import voice from "./voice";
 import conversations, { appendConversationMessage } from "./conversations";
-import { dispatchChannelMessage, dispatchChannelUnlink } from "./delivery";
+import { linkConfirmationText } from "./channel-commands";
+import { normalizeLinkCode, resolveLinkCode } from "./channel-link";
+import {
+  dispatchChannelMessage,
+  dispatchChannelUnlink,
+  sendChannelText,
+} from "./delivery";
+import { consumeRateLimit } from "./rate-limit";
 import type {
   AppEnv,
   Channel,
@@ -829,6 +836,77 @@ routes.delete("/account", async (context) => {
 routes.get("/entitlement", async (context) => {
   const pro = await hasActivePro(context.env, context.get("auth").uid);
   return context.json({ plan: pro ? "pro" : "byok", active: pro });
+});
+
+// Reverse linking: the user texts the bot, the bot answers with a short code,
+// and the app redeems it here. The chat identity comes from the stored code
+// row, never from the request body.
+routes.post("/channels/link", async (context) => {
+  const uid = context.get("auth").uid;
+  const body = await json(context.req.raw);
+  const code = normalizeLinkCode(body?.code);
+  if (!code) return context.json({ error: "Invalid code" }, 400);
+  const limit = await consumeRateLimit(
+    context.env,
+    `channel-link-redeem:${uid}`,
+    10,
+    10 * 60_000,
+  );
+  if (!limit.allowed)
+    return context.json({ error: "Too many attempts" }, 429, {
+      "retry-after": String(limit.retryAfter),
+    });
+  const now = Date.now();
+  const pending = await resolveLinkCode(context.env.DB, code, now);
+  if (!pending) return context.json({ error: "Unknown or expired code" }, 404);
+  const existing = await context.env.DB.prepare(
+    "SELECT uid FROM channel_bindings WHERE channel = ?1 AND channel_user_id = ?2 AND revoked_at IS NULL",
+  )
+    .bind(pending.channel, pending.channelUserId)
+    .first<{ uid: string }>();
+  if (existing && String(existing.uid) !== uid)
+    return context.json({ error: "Chat is linked to another account" }, 409);
+  const results = await context.env.DB.batch([
+    context.env.DB.prepare(
+      `INSERT INTO channel_bindings (channel, channel_user_id, uid, verified_at, revoked_at, channel_chat_id)
+       VALUES (?1, ?2, ?3, ?4, NULL, ?5)
+       ON CONFLICT(channel, channel_user_id) DO UPDATE SET
+         uid = excluded.uid, verified_at = excluded.verified_at,
+         revoked_at = NULL, channel_chat_id = excluded.channel_chat_id`,
+    ).bind(
+      pending.channel,
+      pending.channelUserId,
+      uid,
+      now,
+      pending.channelChatId,
+    ),
+    context.env.DB.prepare(
+      `INSERT INTO audit_events
+         (id, uid, actor_type, action, target_type, target_id, details, created_at)
+       VALUES (?1, ?2, 'channel', 'channel.linked', 'channel', ?3, ?4, ?5)`,
+    ).bind(
+      crypto.randomUUID(),
+      uid,
+      pending.channel,
+      JSON.stringify({
+        channelUserId: pending.channelUserId,
+        channelChatId: pending.channelChatId,
+      }),
+      now,
+    ),
+    context.env.DB.prepare(
+      "UPDATE channel_link_codes SET consumed_at = ?1 WHERE code_hash = ?2 AND consumed_at IS NULL AND expires_at > ?1",
+    ).bind(now, pending.codeHash),
+  ]);
+  if (results[2].meta.changes !== 1)
+    return context.json({ error: "Unknown or expired code" }, 404);
+  await sendChannelText(
+    context.env,
+    pending.channel,
+    pending.channelChatId,
+    linkConfirmationText(context.get("auth").email),
+  );
+  return context.json({ channel: pending.channel, linked: true }, 201);
 });
 
 routes.post("/channels/:channel/link", async (context) => {

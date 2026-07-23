@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { Hono } from "hono";
 import { Miniflare } from "miniflare";
 import routes from "../src/routes";
+import { issueLinkCode } from "../src/channel-link";
 import {
   DeliveryCoordinator,
   dispatchChannelMessage,
@@ -91,6 +92,7 @@ beforeAll(async () => {
   await migration("migrations/0013_conversations.sql");
   await migration("migrations/0014_channel_inbox_dispatch.sql");
   await migration("migrations/0021_memory_vectors.sql");
+  await migration("migrations/0022_channel_link_codes.sql");
   const now = Date.now();
   await database
     .prepare(
@@ -1108,6 +1110,97 @@ describe("channel routes", () => {
     } finally {
       globalThis.fetch = originalFetch;
     }
+  });
+});
+
+describe("channel link redemption", () => {
+  const allowingRateLimiter = {
+    getByName: () => ({
+      fetch: async (url: string | URL) =>
+        new URL(String(url)).pathname === "/consume"
+          ? Response.json({ allowed: true, retryAfter: 0 })
+          : new Response(null, { status: 404 }),
+    }),
+  } as unknown as DurableObjectNamespace;
+
+  test("binds the chat from a texted code and confirms over the channel", async () => {
+    const originalFetch = globalThis.fetch;
+    const sends: string[] = [];
+    globalThis.fetch = async (input) => {
+      sends.push(String(input));
+      return Response.json({ ok: true, result: { message_id: 1 } });
+    };
+    try {
+      const environment = {
+        RATE_LIMITER: allowingRateLimiter,
+        TELEGRAM_WEBHOOK_SECRET: "telegram-secret",
+        TELEGRAM_BOT_TOKEN: "bot-token",
+      };
+      const issued = await issueLinkCode(
+        testBindings(environment),
+        "telegram",
+        "link-user",
+        "link-chat",
+      );
+      const response = await request(
+        "alpha",
+        "/channels/link",
+        { method: "POST", body: JSON.stringify({ code: issued?.code }) },
+        environment,
+      );
+      expect(response.status).toBe(201);
+      expect(await response.json()).toEqual({
+        channel: "telegram",
+        linked: true,
+      });
+      const binding = await database
+        .prepare(
+          "SELECT uid, channel_chat_id FROM channel_bindings WHERE channel = 'telegram' AND channel_user_id = 'link-user' AND revoked_at IS NULL",
+        )
+        .first<{ uid: string; channel_chat_id: string }>();
+      expect(binding).toMatchObject({
+        uid: "alpha",
+        channel_chat_id: "link-chat",
+      });
+      expect(sends.some((url) => url.includes("api.telegram.org"))).toBe(true);
+      const audit = await database
+        .prepare(
+          "SELECT COUNT(*) AS count FROM audit_events WHERE uid = 'alpha' AND action = 'channel.linked' AND target_id = 'telegram'",
+        )
+        .first<{ count: number }>();
+      expect(audit?.count).toBe(1);
+      // Single use: a second redemption of the same code fails.
+      const reused = await request(
+        "alpha",
+        "/channels/link",
+        { method: "POST", body: JSON.stringify({ code: issued?.code }) },
+        environment,
+      );
+      expect(reused.status).toBe(404);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("rejects a malformed code and an unknown code", async () => {
+    const environment = {
+      RATE_LIMITER: allowingRateLimiter,
+      TELEGRAM_WEBHOOK_SECRET: "telegram-secret",
+    };
+    const bad = await request(
+      "alpha",
+      "/channels/link",
+      { method: "POST", body: JSON.stringify({ code: "nope" }) },
+      environment,
+    );
+    expect(bad.status).toBe(400);
+    const missing = await request(
+      "alpha",
+      "/channels/link",
+      { method: "POST", body: JSON.stringify({ code: "ABCDEFG" }) },
+      environment,
+    );
+    expect(missing.status).toBe(404);
   });
 });
 

@@ -35,7 +35,7 @@ export const dispatchChannelMessage = async (
   if (!response.ok) throw new Error("Delivery coordinator unavailable");
 };
 
-const unlinkChannel = async (
+export const unlinkChannel = async (
   env: Bindings,
   uid: string,
   channel: Channel,
@@ -217,11 +217,14 @@ const stableIdempotencyKey = async (delivery: Delivery): Promise<string> => {
   ).join("");
 };
 
-const requestFor = async (
-  delivery: Delivery,
+const providerRequest = (
   env: Bindings,
-): Promise<{ url: string; init: RequestInit } | null> => {
-  if (delivery.channel === "telegram") {
+  channel: Channel,
+  channelChatId: string,
+  text: string,
+  idempotencyKey: string | null,
+): { url: string; init: RequestInit } | null => {
+  if (channel === "telegram") {
     if (!env.TELEGRAM_BOT_TOKEN) return null;
     return {
       url: `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`,
@@ -230,27 +233,63 @@ const requestFor = async (
         signal: AbortSignal.timeout(15_000),
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          chat_id: delivery.channel_chat_id,
-          text: delivery.text,
+          chat_id: channelChatId,
+          text,
         }),
       },
     };
   }
   if (!env.BLOOIO_API_KEY) return null;
   return {
-    url: `https://api.blooio.com/v2/api/chats/${encodeURIComponent(delivery.channel_chat_id)}/messages`,
+    url: `https://api.blooio.com/v2/api/chats/${encodeURIComponent(channelChatId)}/messages`,
     init: {
       method: "POST",
       signal: AbortSignal.timeout(15_000),
       headers: {
         authorization: `Bearer ${env.BLOOIO_API_KEY}`,
         "content-type": "application/json",
-        "idempotency-key": await stableIdempotencyKey(delivery),
+        ...(idempotencyKey === null
+          ? {}
+          : { "idempotency-key": idempotencyKey }),
       },
-      body: JSON.stringify({ text: delivery.text }),
+      body: JSON.stringify({ text }),
     },
   };
 };
+
+// Control-plane replies (link codes, command output, unlink confirmations)
+// bypass `channel_deliveries`: they can address a sender who has no uid yet, or
+// whose binding was just revoked, and the queue requires both.
+export const sendChannelText = async (
+  env: Bindings,
+  channel: Channel,
+  channelChatId: string,
+  text: string,
+  fetcher: typeof fetch = fetch,
+): Promise<boolean> => {
+  const request = providerRequest(env, channel, channelChatId, text, null);
+  if (!request) return false;
+  try {
+    const response = await fetcher(request.url, request.init);
+    return response.ok;
+  } catch {
+    return false;
+  }
+};
+
+const requestFor = async (
+  delivery: Delivery,
+  env: Bindings,
+): Promise<{ url: string; init: RequestInit } | null> =>
+  providerRequest(
+    env,
+    delivery.channel,
+    delivery.channel_chat_id,
+    delivery.text,
+    delivery.channel === "telegram"
+      ? null
+      : await stableIdempotencyKey(delivery),
+  );
 
 const update = async (
   env: Bindings,

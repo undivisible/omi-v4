@@ -194,6 +194,7 @@ beforeAll(async () => {
     "migrations/0013_conversations.sql",
     "migrations/0014_channel_inbox_dispatch.sql",
     "migrations/0021_memory_vectors.sql",
+    "migrations/0022_channel_link_codes.sql",
   ]) {
     await migration(file);
   }

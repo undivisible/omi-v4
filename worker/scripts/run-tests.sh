@@ -18,6 +18,7 @@ suites=(
   test/stt.test.ts
   test/stt-admission.test.ts
   test/webhooks.test.ts
+  test/channel-commands.test.ts
   test/desktop-auth.test.ts
   test/voice-oauth.test.ts
   test/asr-oauth-proxy.test.ts
