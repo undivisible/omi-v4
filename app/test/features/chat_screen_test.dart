@@ -318,6 +318,12 @@ void main() {
       await tester.pump();
 
       expect(conversationTransport.replayCalls, greaterThan(0));
+      // Replayed history lives above the home view; scroll up to reach it.
+      await tester.drag(
+        find.byKey(const Key('chat_messages')),
+        const Offset(0, 600),
+      );
+      await tester.pump();
       expect(find.textContaining('Instance of'), findsNothing);
       expect(
         find.text(
@@ -367,6 +373,13 @@ void main() {
       ),
     );
     await tester.pump();
+    await tester.pump();
+    // The home view holds the viewport until the user engages, so messages
+    // that arrive on their own sit above the fold; scroll up to reach them.
+    await tester.drag(
+      find.byKey(const Key('chat_messages')),
+      const Offset(0, 600),
+    );
     await tester.pump();
     expect(find.text('Meeting detected: Standup'), findsOneWidget);
 

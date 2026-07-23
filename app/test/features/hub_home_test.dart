@@ -135,7 +135,14 @@ void main() {
     expect(gradient.colors.first, const Color(0xfff7f6f1));
     expect(gradient.colors.last.a, 0);
     final rect = tester.getRect(find.byKey(const Key('history_top_fade')));
-    expect(rect.height, 90);
+    expect(rect.height, 36);
+
+    // The home view stops short of the viewport so the newest message stays
+    // partly visible above it; without that gap scrolling up looks inert.
+    final listRect = tester.getRect(find.byKey(const Key('chat_messages')));
+    final greeting = tester.getRect(find.byKey(const Key('hub_greeting')));
+    expect(greeting.top, greaterThan(listRect.top));
+    expect(listRect.bottom - greeting.bottom, greaterThan(0));
   });
 
   testWidgets('placeholder text animates between rotating prompts', (

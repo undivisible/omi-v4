@@ -1,7 +1,9 @@
 import 'dart:async';
+import 'dart:math' as math;
 import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show ScrollCacheExtent;
 
 import '../api/worker_http.dart' show WorkerAuthenticationException;
 import '../app_services.dart';
@@ -28,6 +30,10 @@ import 'cursor_pill_controller.dart' show CombinedVoiceLevel;
 import 'hub_task_meta.dart';
 import 'in_app_voice_view.dart';
 import 'tasks_screen.dart';
+
+/// Height of the sliver of conversation left visible above the home view, so
+/// the newest message peeks in and scrolling up is discoverable.
+const double _historyPeekExtent = 44;
 
 class ChatScreen extends StatefulWidget {
   const ChatScreen({
@@ -873,55 +879,91 @@ class ChatScreenState extends State<ChatScreen> {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   Expanded(
-                    child: Stack(
-                      children: [
-                        NotificationListener<ScrollEndNotification>(
-                          onNotification: _handleScrollEnd,
-                          child: ListView.builder(
-                            key: const Key('chat_messages'),
-                            controller: _scroll,
-                            physics: const AlwaysScrollableScrollPhysics(),
-                            reverse: true,
-                            itemCount: history.length + 1,
-                            itemBuilder: (context, index) {
-                              if (index == 0) {
-                                return KeyedSubtree(
-                                  key: _greeterKey,
-                                  child: _GreeterSwitcher(
-                                    dismissed: _greeterDismissed,
-                                    child: _ChatHome(
-                                      greeting: _greeting(),
-                                      setupTaskDone: _setupTaskDone,
-                                      onToggleSetupTask: _toggleSetupTask,
-                                      starterTasks: _starterTasks,
-                                      doneStarterTasks: _doneStarterTasks,
-                                      onToggleStarterTask: _toggleStarterTask,
-                                      tasks: tasks,
-                                      onComplete: currents == null
-                                          ? null
-                                          : (id) =>
-                                                unawaited(currents.dismiss(id)),
-                                      onPrompt: _sendPrompt,
-                                      onAllTasks: currents == null
-                                          ? null
-                                          : () => _openAllTasks(currents),
-                                    ),
-                                  ),
-                                );
-                              }
-                              return history[index - 1]();
-                            },
-                          ),
-                        ),
-                        if (_messages.isNotEmpty)
-                          const Positioned(
-                            top: 0,
-                            left: 0,
-                            right: 0,
-                            height: 90,
-                            child: IgnorePointer(child: _HistoryTopFade()),
-                          ),
-                      ],
+                    child: LayoutBuilder(
+                      builder: (context, constraints) {
+                        // The home view fills the viewport apart from a thin
+                        // strip at the top, so the tail of the newest message
+                        // stays on screen and scrolling up reads as revealing
+                        // history rather than as an empty gesture.
+                        // Once the greeter is dismissed the conversation owns
+                        // the viewport; reserving its slot would strand the
+                        // newest messages below the fold.
+                        final greeterExtent = _greeterDismissed
+                            ? 0.0
+                            : _messages.isEmpty
+                            ? constraints.maxHeight
+                            : math.max(
+                                0.0,
+                                constraints.maxHeight - _historyPeekExtent,
+                              );
+                        return Stack(
+                          children: [
+                            NotificationListener<ScrollEndNotification>(
+                              onNotification: _handleScrollEnd,
+                              child: ListView.builder(
+                                key: const Key('chat_messages'),
+                                controller: _scroll,
+                                physics: const AlwaysScrollableScrollPhysics(),
+                                reverse: true,
+                                // The message directly above the home view is
+                                // the peek, so it has to be built even when the
+                                // home view is taller than the viewport.
+                                scrollCacheExtent:
+                                    const ScrollCacheExtent.pixels(800),
+                                itemCount: history.length + 1,
+                                itemBuilder: (context, index) {
+                                  if (index == 0) {
+                                    return KeyedSubtree(
+                                      key: _greeterKey,
+                                      child: ConstrainedBox(
+                                        constraints: BoxConstraints(
+                                          minHeight: greeterExtent,
+                                        ),
+                                        child: Center(
+                                          child: _GreeterSwitcher(
+                                            dismissed: _greeterDismissed,
+                                            child: _ChatHome(
+                                              greeting: _greeting(),
+                                              setupTaskDone: _setupTaskDone,
+                                              onToggleSetupTask:
+                                                  _toggleSetupTask,
+                                              starterTasks: _starterTasks,
+                                              doneStarterTasks:
+                                                  _doneStarterTasks,
+                                              onToggleStarterTask:
+                                                  _toggleStarterTask,
+                                              tasks: tasks,
+                                              onComplete: currents == null
+                                                  ? null
+                                                  : (id) => unawaited(
+                                                      currents.dismiss(id),
+                                                    ),
+                                              onPrompt: _sendPrompt,
+                                              onAllTasks: currents == null
+                                                  ? null
+                                                  : () =>
+                                                        _openAllTasks(currents),
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    );
+                                  }
+                                  return history[index - 1]();
+                                },
+                              ),
+                            ),
+                            if (_messages.isNotEmpty)
+                              const Positioned(
+                                top: 0,
+                                left: 0,
+                                right: 0,
+                                height: 36,
+                                child: IgnorePointer(child: _HistoryTopFade()),
+                              ),
+                          ],
+                        );
+                      },
                     ),
                   ),
                   const SizedBox(height: 12),
