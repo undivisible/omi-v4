@@ -77,6 +77,31 @@ class RelayDevice {
   final int? batteryLevel;
   final DeviceAudioCodec audioCodec;
   final bool systemConnected;
+
+  RelayDevice copyWith({
+    String? name,
+    int? signalStrength,
+    String? modelNumber,
+    String? firmwareRevision,
+    String? hardwareRevision,
+    String? manufacturerName,
+    String? serialNumber,
+    int? batteryLevel,
+    DeviceAudioCodec? audioCodec,
+    bool? systemConnected,
+  }) => RelayDevice(
+    id: id,
+    name: name ?? this.name,
+    signalStrength: signalStrength ?? this.signalStrength,
+    modelNumber: modelNumber ?? this.modelNumber,
+    firmwareRevision: firmwareRevision ?? this.firmwareRevision,
+    hardwareRevision: hardwareRevision ?? this.hardwareRevision,
+    manufacturerName: manufacturerName ?? this.manufacturerName,
+    serialNumber: serialNumber ?? this.serialNumber,
+    batteryLevel: batteryLevel ?? this.batteryLevel,
+    audioCodec: audioCodec ?? this.audioCodec,
+    systemConnected: systemConnected ?? this.systemConnected,
+  );
 }
 
 class DeviceRelaySnapshot {

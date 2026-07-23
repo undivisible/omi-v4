@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -5,6 +6,27 @@ import 'package:omi/device/device.dart';
 import 'package:universal_ble/universal_ble.dart';
 
 const _omiService = '19b10000-e8f2-537e-4f6c-d104768a1214';
+const _audioCodec = '19b10002-e8f2-537e-4f6c-d104768a1214';
+const _batteryLevel = '00002a19-0000-1000-8000-00805f9b34fb';
+const _modelNumber = '00002a24-0000-1000-8000-00805f9b34fb';
+const _serialNumber = '00002a25-0000-1000-8000-00805f9b34fb';
+const _firmwareRevision = '00002a26-0000-1000-8000-00805f9b34fb';
+const _hardwareRevision = '00002a27-0000-1000-8000-00805f9b34fb';
+const _manufacturerName = '00002a29-0000-1000-8000-00805f9b34fb';
+const _sleep = '19b10014-e8f2-537e-4f6c-d104768a1214';
+const _captureLed = '19b10015-e8f2-537e-4f6c-d104768a1214';
+const _rename = '19b10016-e8f2-537e-4f6c-d104768a1214';
+
+final _systemOmi = [
+  BleDevice(
+    deviceId: 'omi-system',
+    name: 'Omi',
+    services: const [_omiService],
+    isSystemDevice: true,
+  ),
+];
+
+Uint8List _ascii(String value) => Uint8List.fromList(value.codeUnits);
 
 void main() {
   late _FakeBlePlatform platform;
@@ -93,6 +115,150 @@ void main() {
     ]);
   });
 
+  test('connect reads the Device Information Service metadata', () async {
+    platform
+      ..systemDevices = _systemOmi
+      ..reads.addAll({
+        _modelNumber: _ascii('Omi DevKit 2'),
+        _firmwareRevision: _ascii('3.0.20'),
+        _hardwareRevision: _ascii('Seeed Xiao BLE Sense'),
+        _manufacturerName: _ascii('Based Hardware'),
+        _batteryLevel: Uint8List.fromList([64]),
+        _audioCodec: Uint8List.fromList([21]),
+      });
+
+    final device = await adapter.connect('omi-system');
+
+    expect(device.modelNumber, 'Omi DevKit 2');
+    expect(device.firmwareRevision, '3.0.20');
+    expect(device.hardwareRevision, 'Seeed Xiao BLE Sense');
+    expect(device.manufacturerName, 'Based Hardware');
+    expect(device.batteryLevel, 64);
+    expect(device.audioCodec, DeviceAudioCodec.opusFs320);
+  });
+
+  test('connect leaves firmware metadata null when 0x180a is absent', () async {
+    platform
+      ..systemDevices = _systemOmi
+      ..missingCharacteristics.addAll({
+        _modelNumber,
+        _firmwareRevision,
+        _hardwareRevision,
+        _manufacturerName,
+        _serialNumber,
+      });
+
+    final device = await adapter.connect('omi-system');
+
+    expect(device.firmwareRevision, isNull);
+    expect(device.hardwareRevision, isNull);
+    expect(device.modelNumber, isNull);
+    expect(device.manufacturerName, isNull);
+  });
+
+  test('battery notifications refresh the connected snapshot', () async {
+    platform
+      ..systemDevices = _systemOmi
+      ..reads[_batteryLevel] = Uint8List.fromList([64]);
+    await adapter.connect('omi-system');
+    expect(platform.notifiable, contains(_batteryLevel));
+
+    final levels = <int?>[];
+    final subscription = adapter.snapshots.listen(
+      (snapshot) => levels.add(snapshot.device?.batteryLevel),
+    );
+    platform.pushNotification('omi-system', _batteryLevel, [41]);
+    await Future<void>.delayed(Duration.zero);
+    await subscription.cancel();
+
+    expect(levels, [41]);
+  });
+
+  test('a battery characteristic that cannot notify keeps the read', () async {
+    platform
+      ..systemDevices = _systemOmi
+      ..reads[_batteryLevel] = Uint8List.fromList([64])
+      ..missingCharacteristics.add(_batteryLevel);
+
+    final device = await adapter.connect('omi-system');
+
+    expect(device.batteryLevel, isNull);
+    expect(platform.notifiable, isNot(contains(_batteryLevel)));
+  });
+
+  test('capture LED writes 0x01 on and 0x00 off to 19b10015', () async {
+    platform.systemDevices = _systemOmi;
+    await adapter.connect('omi-system');
+
+    expect(await adapter.writeCaptureLed(true), isTrue);
+    expect(await adapter.writeCaptureLed(false), isTrue);
+
+    expect(
+      [
+        for (final write in platform.writes)
+          if (write.characteristic == _captureLed) write.value,
+      ],
+      [
+        [1],
+        [0],
+      ],
+    );
+  });
+
+  test('sleep writes 0x01 to 19b10014', () async {
+    platform.systemDevices = _systemOmi;
+    await adapter.connect('omi-system');
+
+    expect(await adapter.sleepDevice(), isTrue);
+    expect(
+      [
+        for (final write in platform.writes)
+          if (write.characteristic == _sleep) write.value,
+      ],
+      [
+        [1],
+      ],
+    );
+  });
+
+  test('rename writes UTF-8 to 19b10016 and republishes the name', () async {
+    platform.systemDevices = _systemOmi;
+    await adapter.connect('omi-system');
+    final names = <String?>[];
+    final subscription = adapter.snapshots.listen(
+      (snapshot) => names.add(snapshot.device?.name),
+    );
+
+    expect(await adapter.renameDevice('Studio Omi'), isTrue);
+    await Future<void>.delayed(Duration.zero);
+    await subscription.cancel();
+
+    expect(
+      platform.writes.where((w) => w.characteristic == _rename).single.value,
+      utf8.encode('Studio Omi'),
+    );
+    expect(names, ['Studio Omi']);
+  });
+
+  test('the settings-service writes degrade on older firmware', () async {
+    platform
+      ..systemDevices = _systemOmi
+      ..missingCharacteristics.addAll({_captureLed, _sleep, _rename});
+    await adapter.connect('omi-system');
+
+    expect(await adapter.writeCaptureLed(true), isFalse);
+    expect(await adapter.sleepDevice(), isFalse);
+    expect(await adapter.renameDevice('Studio Omi'), isFalse);
+    expect(platform.writes, isEmpty);
+  });
+
+  test('the settings-service writes no-op while disconnected', () async {
+    expect(await adapter.writeCaptureLed(true), isFalse);
+    expect(await adapter.sleepDevice(), isFalse);
+    expect(await adapter.renameDevice('Studio Omi'), isFalse);
+    expect(platform.writes, isEmpty);
+  });
+
   test(
     'scan ends in the disconnected phase when nothing is connected',
     () async {
@@ -118,6 +284,12 @@ final class _FakeBlePlatform extends UniversalBlePlatform {
   List<BleDevice> advertisedDevices = const [];
   final List<String> connectedIds = [];
   int startScanCalls = 0;
+  // Characteristics an older pendant firmware does not expose: reads and
+  // writes against them fail the way the platform channel would.
+  final Set<String> missingCharacteristics = {};
+  final Map<String, Uint8List> reads = {};
+  final List<({String characteristic, List<int> value})> writes = [];
+  final Set<String> notifiable = {};
 
   @override
   Future<AvailabilityState> getBluetoothAvailabilityState() async =>
@@ -173,7 +345,12 @@ final class _FakeBlePlatform extends UniversalBlePlatform {
     String service,
     String characteristic,
     BleInputProperty bleInputProperty,
-  ) async {}
+  ) async {
+    if (missingCharacteristics.contains(characteristic)) {
+      throw StateError('characteristic $characteristic not found');
+    }
+    notifiable.add(characteristic);
+  }
 
   @override
   Future<Uint8List> readValue(
@@ -181,7 +358,12 @@ final class _FakeBlePlatform extends UniversalBlePlatform {
     String service,
     String characteristic, {
     Duration? timeout,
-  }) async => Uint8List.fromList([20]);
+  }) async {
+    if (missingCharacteristics.contains(characteristic)) {
+      throw StateError('characteristic $characteristic not found');
+    }
+    return reads[characteristic] ?? Uint8List.fromList([20]);
+  }
 
   @override
   Future<void> writeValue(
@@ -190,7 +372,20 @@ final class _FakeBlePlatform extends UniversalBlePlatform {
     String characteristic,
     Uint8List value,
     BleOutputProperty bleOutputProperty,
-  ) async {}
+  ) async {
+    if (missingCharacteristics.contains(characteristic)) {
+      throw StateError('characteristic $characteristic not found');
+    }
+    writes.add((characteristic: characteristic, value: value.toList()));
+  }
+
+  void pushNotification(String deviceId, String characteristic, List<int> v) =>
+      updateCharacteristicValue(
+        deviceId,
+        characteristic,
+        Uint8List.fromList(v),
+        null,
+      );
 
   @override
   Future<int> requestMtu(String deviceId, int expectedMtu) async => expectedMtu;

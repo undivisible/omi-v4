@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:universal_ble/universal_ble.dart';
@@ -7,7 +8,12 @@ import 'device_relay.dart';
 import 'device_models.dart';
 
 final class UniversalBleDeviceRelayAdapter
-    implements DeviceRelayAdapter, DeviceRelayHaptics {
+    implements
+        DeviceRelayAdapter,
+        DeviceRelayHaptics,
+        DeviceRelayLed,
+        DeviceRelaySleep,
+        DeviceRelayRename {
   UniversalBleDeviceRelayAdapter({
     this.scanSettle = const Duration(seconds: 5),
   });
@@ -19,6 +25,28 @@ final class UniversalBleDeviceRelayAdapter
   static const _batteryLevel = '00002a19-0000-1000-8000-00805f9b34fb';
   static const _speakerService = 'cab1ab95-2ea5-4f4d-bb56-874b72cfc984';
   static const _speakerHaptic = 'cab1ab96-2ea5-4f4d-bb56-874b72cfc984';
+  // Device Information Service (0000180a) developer metadata. Read once on
+  // connect, mirroring the upstream firmware's getDeviceInfo() reads.
+  static const _deviceInfoService = '0000180a-0000-1000-8000-00805f9b34fb';
+  static const _modelNumber = '00002a24-0000-1000-8000-00805f9b34fb';
+  static const _firmwareRevision = '00002a26-0000-1000-8000-00805f9b34fb';
+  static const _hardwareRevision = '00002a27-0000-1000-8000-00805f9b34fb';
+  static const _manufacturerName = '00002a29-0000-1000-8000-00805f9b34fb';
+  static const _serialNumber = '00002a25-0000-1000-8000-00805f9b34fb';
+  // Settings service (19b10010) hosts the firmware's app-writable control
+  // characteristics. Guarded reads/writes degrade gracefully on older firmware
+  // that predates these characteristics.
+  static const _settingsService = '19b10010-e8f2-537e-4f6c-d104768a1214';
+  // App-commanded sleep/power-off. Write-only, 1 byte: 0x01 triggers sleep.
+  static const _sleepCharacteristic = '19b10014-e8f2-537e-4f6c-d104768a1214';
+  // Capture-state LED. Read/write, 1 byte: 0x00 = idle (red), 0x01 = capturing
+  // (blue). Explicit override that stays consistent with firmware's own
+  // audio-subscription-driven capture state.
+  static const _captureLedCharacteristic =
+      '19b10015-e8f2-537e-4f6c-d104768a1214';
+  // Device rename. Read/write UTF-8 string; firmware persists to NVS and
+  // re-applies on boot. GAP Device Name (0x2a00) stays read-only.
+  static const _renameCharacteristic = '19b10016-e8f2-537e-4f6c-d104768a1214';
 
   final Duration scanSettle;
   final _snapshots = StreamController<DeviceRelaySnapshot>.broadcast();
@@ -28,6 +56,7 @@ final class UniversalBleDeviceRelayAdapter
   String? _connectedId;
   RelayDevice? _connectedDevice;
   StreamSubscription<bool>? _connectionSubscription;
+  StreamSubscription<List<int>>? _batterySubscription;
   bool _connected = false;
   bool _restoringNotifications = false;
   Timer? _restoreRetryTimer;
@@ -224,14 +253,21 @@ final class UniversalBleDeviceRelayAdapter
         _batteryService,
         _batteryLevel,
       );
+      final info = await _readDeviceInfo(deviceId);
       await UniversalBle.subscribeNotifications(
         deviceId,
         _omiService,
         _audioStream,
       );
-      final connected = _relayDevice(device, codec: codec, battery: battery);
+      final connected = _relayDevice(
+        device,
+        codec: codec,
+        battery: battery,
+        info: info,
+      );
       _connectedDevice = connected;
       _connected = true;
+      await _subscribeBattery(deviceId);
       await _connectionSubscription?.cancel();
       _connectionSubscription = UniversalBle.connectionStream(deviceId).listen(
         (connected) {
@@ -300,6 +336,157 @@ final class UniversalBleDeviceRelayAdapter
     }
   }
 
+  Future<String?> _readString(
+    String deviceId,
+    String service,
+    String characteristic,
+  ) async {
+    try {
+      final value = await UniversalBle.read(deviceId, service, characteristic);
+      if (value.isEmpty) return null;
+      final text = String.fromCharCodes(value).trim();
+      return text.isEmpty ? null : text;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<_DeviceInfo> _readDeviceInfo(String deviceId) async => _DeviceInfo(
+    modelNumber: await _readString(deviceId, _deviceInfoService, _modelNumber),
+    firmwareRevision: await _readString(
+      deviceId,
+      _deviceInfoService,
+      _firmwareRevision,
+    ),
+    hardwareRevision: await _readString(
+      deviceId,
+      _deviceInfoService,
+      _hardwareRevision,
+    ),
+    manufacturerName: await _readString(
+      deviceId,
+      _deviceInfoService,
+      _manufacturerName,
+    ),
+    serialNumber: await _readString(
+      deviceId,
+      _deviceInfoService,
+      _serialNumber,
+    ),
+  );
+
+  // Prefer a live battery notification over the one-shot read so the reported
+  // level follows the pendant as it drains and charges. Firmware that does not
+  // push notifications simply never fires the stream, leaving the initial read.
+  Future<void> _subscribeBattery(String deviceId) async {
+    await _batterySubscription?.cancel();
+    _batterySubscription = null;
+    try {
+      await UniversalBle.subscribeNotifications(
+        deviceId,
+        _batteryService,
+        _batteryLevel,
+      );
+    } catch (_) {
+      return;
+    }
+    _batterySubscription =
+        UniversalBle.characteristicValueStream(deviceId, _batteryLevel).listen((
+          value,
+        ) {
+          if (value.isEmpty || _connectedId != deviceId) return;
+          final level = value.first;
+          final device = _connectedDevice;
+          if (device == null || device.batteryLevel == level) return;
+          _connectedDevice = device.copyWith(batteryLevel: level);
+          if (_connected) {
+            _snapshots.add(
+              DeviceRelaySnapshot(
+                phase: DeviceConnectionPhase.connected,
+                capabilities: capabilities,
+                device: _connectedDevice,
+              ),
+            );
+          }
+        }, onError: (Object _) {});
+  }
+
+  @override
+  Future<bool> writeCaptureLed(bool capturing) async {
+    final deviceId = _connectedId;
+    if (deviceId == null || !_connected) return false;
+    final payload = Uint8List.fromList([capturing ? 1 : 0]);
+    try {
+      await UniversalBle.write(
+        deviceId,
+        _settingsService,
+        _captureLedCharacteristic,
+        payload,
+      );
+      return true;
+    } catch (_) {
+      try {
+        await UniversalBle.write(
+          deviceId,
+          _settingsService,
+          _captureLedCharacteristic,
+          payload,
+          withoutResponse: true,
+        );
+        return true;
+      } catch (_) {
+        return false;
+      }
+    }
+  }
+
+  @override
+  Future<bool> sleepDevice() async {
+    final deviceId = _connectedId;
+    if (deviceId == null || !_connected) return false;
+    final payload = Uint8List.fromList([1]);
+    try {
+      await UniversalBle.write(
+        deviceId,
+        _settingsService,
+        _sleepCharacteristic,
+        payload,
+      );
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  @override
+  Future<bool> renameDevice(String name) async {
+    final deviceId = _connectedId;
+    if (deviceId == null || !_connected) return false;
+    final payload = Uint8List.fromList(utf8.encode(name));
+    try {
+      await UniversalBle.write(
+        deviceId,
+        _settingsService,
+        _renameCharacteristic,
+        payload,
+      );
+      final device = _connectedDevice;
+      if (device != null) {
+        _connectedDevice = device.copyWith(name: name);
+        _snapshots.add(
+          DeviceRelaySnapshot(
+            phase: DeviceConnectionPhase.connected,
+            capabilities: capabilities,
+            device: _connectedDevice,
+          ),
+        );
+      }
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
   @override
   Future<bool> sendHaptic(int level) async {
     final deviceId = _connectedId;
@@ -343,8 +530,13 @@ final class UniversalBleDeviceRelayAdapter
     _restoreAttempts = 0;
     await _connectionSubscription?.cancel();
     _connectionSubscription = null;
+    await _batterySubscription?.cancel();
+    _batterySubscription = null;
     try {
       await UniversalBle.unsubscribe(deviceId, _omiService, _audioStream);
+    } catch (_) {}
+    try {
+      await UniversalBle.unsubscribe(deviceId, _batteryService, _batteryLevel);
     } catch (_) {}
     await UniversalBle.disconnect(deviceId);
     _snapshots.add(
@@ -432,19 +624,28 @@ final class UniversalBleDeviceRelayAdapter
     }
   }
 
-  RelayDevice _relayDevice(BleDevice device, {int? codec, int? battery}) =>
-      RelayDevice(
-        id: device.deviceId,
-        name: device.name?.isNotEmpty == true ? device.name! : 'Omi',
-        signalStrength: device.rssi,
-        batteryLevel: battery,
-        audioCodec: codec == null
-            ? DeviceAudioCodec.unknown
-            : DeviceAudioCodec.fromFirmwareId(codec),
-        systemConnected:
-            device.isSystemDevice == true ||
-            _systemDeviceIds.contains(device.deviceId),
-      );
+  RelayDevice _relayDevice(
+    BleDevice device, {
+    int? codec,
+    int? battery,
+    _DeviceInfo? info,
+  }) => RelayDevice(
+    id: device.deviceId,
+    name: device.name?.isNotEmpty == true ? device.name! : 'Omi',
+    signalStrength: device.rssi,
+    batteryLevel: battery,
+    modelNumber: info?.modelNumber,
+    firmwareRevision: info?.firmwareRevision,
+    hardwareRevision: info?.hardwareRevision,
+    manufacturerName: info?.manufacturerName,
+    serialNumber: info?.serialNumber,
+    audioCodec: codec == null
+        ? DeviceAudioCodec.unknown
+        : DeviceAudioCodec.fromFirmwareId(codec),
+    systemConnected:
+        device.isSystemDevice == true ||
+        _systemDeviceIds.contains(device.deviceId),
+  );
 
   void _emitUnavailable(DeviceCapabilityState state) {
     final unavailable = DeviceRelayCapabilities.unavailable(state);
@@ -456,4 +657,20 @@ final class UniversalBleDeviceRelayAdapter
       ),
     );
   }
+}
+
+class _DeviceInfo {
+  const _DeviceInfo({
+    this.modelNumber,
+    this.firmwareRevision,
+    this.hardwareRevision,
+    this.manufacturerName,
+    this.serialNumber,
+  });
+
+  final String? modelNumber;
+  final String? firmwareRevision;
+  final String? hardwareRevision;
+  final String? manufacturerName;
+  final String? serialNumber;
 }
