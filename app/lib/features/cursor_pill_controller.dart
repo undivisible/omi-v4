@@ -210,6 +210,7 @@ final class CursorPillController extends ChangeNotifier {
     Future<bool> Function(Uri link)? launchLink,
     this._presentWindow,
     this._dismissWindow,
+    this._voiceLevelSink,
     String Function()? requestId,
     DateTime Function()? now,
     this.doubleShiftDebounce = const Duration(milliseconds: 500),
@@ -219,12 +220,15 @@ final class CursorPillController extends ChangeNotifier {
     this._openApp,
     this._decideProposal,
     this.draftTimeout = const Duration(milliseconds: 2500),
+    this.predictionDebounce = const Duration(milliseconds: 300),
+    this.predictionTimeout = const Duration(milliseconds: 1500),
     this.emailLookupTimeout = const Duration(milliseconds: 800),
     this.openFlashDuration = const Duration(milliseconds: 900),
   }) : _launchLink = launchLink ?? launcher.launchUrl,
        _requestId = requestId ?? _defaultRequestId,
        _now = now ?? DateTime.now {
     _voiceNotice?.addListener(_notify);
+    if (_voiceLevelSink != null) level.addListener(_forwardVoiceLevel);
   }
 
   factory CursorPillController.forServices(
@@ -253,8 +257,13 @@ final class CursorPillController extends ChangeNotifier {
       ]),
       voiceNotice: services.voiceNotice,
       openHub: openHub,
-      presentWindow: (centered) => CursorPillWindow.summon(centered: centered),
-      dismissWindow: CursorPillWindow.restore,
+      presentWindow: (centered) =>
+          centered ? CursorPillWindow.summon() : VoiceOverlayWindow.start(),
+      dismissWindow: () async {
+        await CursorPillWindow.restore();
+        await VoiceOverlayWindow.stop();
+      },
+      voiceLevelSink: VoiceOverlayWindow.level,
       currents: services.currents,
       draft: services.generateDraft,
       automate: services.currents == null
@@ -278,6 +287,7 @@ final class CursorPillController extends ChangeNotifier {
   final Future<bool> Function(Uri link) _launchLink;
   final Future<void> Function(bool centered)? _presentWindow;
   final Future<void> Function()? _dismissWindow;
+  final Future<void> Function(double level)? _voiceLevelSink;
   final String Function() _requestId;
   final DateTime Function() _now;
   final Duration doubleShiftDebounce;
@@ -290,6 +300,13 @@ final class CursorPillController extends ChangeNotifier {
   final Future<void> Function(String proposalId, ApprovalDecision decision)?
   _decideProposal;
   final Duration draftTimeout;
+
+  /// How long typing must pause before an inline AI completion is requested,
+  /// and how long that request may take before it is abandoned. The
+  /// completion renders as the dimmed ghost remainder after the caret.
+  final Duration predictionDebounce;
+  final Duration predictionTimeout;
+  static const predictionMinChars = 3;
   final Duration emailLookupTimeout;
 
   /// How long the "Opening …" confirmation lingers before the overlay
@@ -297,6 +314,9 @@ final class CursorPillController extends ChangeNotifier {
   final Duration openFlashDuration;
   Completer<List<MemorySearchItem>>? _emailLookup;
   String? _emailLookupRequestId;
+  String? _prediction;
+  Timer? _predictionTimer;
+  int _predictionEpoch = 0;
 
   DateTime? _lastTransitionAt;
   CursorPillState _state = CursorPillState.hidden;
@@ -347,8 +367,9 @@ final class CursorPillController extends ChangeNotifier {
     }
   }
 
-  /// Both-Shift chord: talk. From idle it starts listening immediately
-  /// (full-screen waveform); while any surface is up (voice or overlay) it
+  /// The chord twice (or a cursor shake mapped through startVoice): talk.
+  /// From idle it starts listening immediately (native edge glow plus the
+  /// follow-cursor waveform); while any surface is up (voice or overlay) it
   /// dismisses, exactly like Esc. The 500ms debounce guards against a
   /// bounced or double-fired chord.
   Future<void> doubleShift() async {
@@ -363,8 +384,9 @@ final class CursorPillController extends ChangeNotifier {
     }
   }
 
-  /// Option+Space (or the menu-bar capture control): summon the centered
-  /// text overlay from idle, dismiss whatever surface is up otherwise.
+  /// The single chord, Option+Space, or the menu-bar capture control:
+  /// summon the text input next to the cursor from idle, dismiss whatever
+  /// surface is up otherwise.
   Future<void> toggleOverlay() async {
     if (!_debounced()) return;
     switch (_state) {
@@ -409,8 +431,9 @@ final class CursorPillController extends ChangeNotifier {
     _currentSuggestions = const [];
     _memorySuggestions = const [];
     _notify();
-    // Voice takes the whole screen: the waveform and its glow render in a
-    // full-screen click-through overlay, not a pill.
+    // Voice never touches the main window: the edge glow lives in its own
+    // click-through overlay window and the waveform in a small panel that
+    // follows the cursor, both rendered natively.
     await _presentWindow?.call(false);
     _subscription ??= _events.listen(_handleEvent);
     try {
@@ -530,6 +553,88 @@ final class CursorPillController extends ChangeNotifier {
     if (text.isNotEmpty && matchesShowHubIntent(text)) _openHub?.call();
   }
 
+  /// Called by the overlay on every edit of the in-progress input. Debounces
+  /// a short AI continuation request through the draft plumbing; the result
+  /// shows as the ghost remainder while the typed text stays a prefix of it.
+  /// Typing again cancels the in-flight request (its epoch goes stale), so a
+  /// late reply never flashes an outdated completion.
+  void inputChanged(String text) {
+    _predictionTimer?.cancel();
+    _predictionTimer = null;
+    _predictionEpoch += 1;
+    if (_prediction case final prediction?
+        when !_matchesPrediction(prediction, text)) {
+      _prediction = null;
+      _notify();
+    }
+    if (_draft == null || _state != CursorPillState.input) return;
+    final typed = text;
+    if (typed.trim().length < predictionMinChars) return;
+    if (_prediction != null) return;
+    _predictionTimer = Timer(
+      predictionDebounce,
+      () => unawaited(_requestPrediction(typed)),
+    );
+  }
+
+  static bool _matchesPrediction(String prediction, String typed) =>
+      typed.isNotEmpty &&
+      prediction.length > typed.length &&
+      prediction.toLowerCase().startsWith(typed.toLowerCase());
+
+  /// The dimmed ghost continuation for the current [typed] text, or null
+  /// when no valid prediction extends it.
+  String? predictedRemainder(String typed) {
+    final prediction = _prediction;
+    if (prediction == null || !_matchesPrediction(prediction, typed)) {
+      return null;
+    }
+    return prediction.substring(typed.length);
+  }
+
+  Future<void> _requestPrediction(String typed) async {
+    final draft = _draft;
+    if (draft == null) return;
+    final epoch = _predictionEpoch;
+    String? completion;
+    try {
+      completion = await draft(
+        'Continue this partially typed instruction to a desktop assistant. '
+        'Reply with only the most likely short continuation of the text — '
+        'no quotes, no restating what was already typed, one line.\n'
+        'Typed so far: "$typed"',
+        predictionTimeout,
+      );
+    } catch (_) {
+      completion = null;
+    }
+    if (_disposed ||
+        epoch != _predictionEpoch ||
+        _state != CursorPillState.input) {
+      return;
+    }
+    final cleaned = completion
+        ?.replaceAll(RegExp(r'\s+'), ' ')
+        .replaceAll(RegExp(r'^["“”]+|["“”]+$'), '')
+        .trimRight();
+    if (cleaned == null || cleaned.isEmpty) return;
+    // The model may either continue the text or restate it in full; fold
+    // both shapes into one full predicted string.
+    final full = cleaned.toLowerCase().startsWith(typed.toLowerCase())
+        ? cleaned
+        : '$typed$cleaned';
+    if (!_matchesPrediction(full, typed)) return;
+    _prediction = full;
+    _notify();
+  }
+
+  void _clearPrediction() {
+    _predictionTimer?.cancel();
+    _predictionTimer = null;
+    _predictionEpoch += 1;
+    _prediction = null;
+  }
+
   Future<void> submit(String text) async {
     final normalized = text.trim();
     if (normalized.isEmpty || _state != CursorPillState.input) return;
@@ -597,6 +702,7 @@ final class CursorPillController extends ChangeNotifier {
   }
 
   void _showWorking(String status) {
+    _clearPrediction();
     _state = CursorPillState.working;
     _status = status;
     _error = null;
@@ -765,6 +871,7 @@ final class CursorPillController extends ChangeNotifier {
   }
 
   Future<void> _hide() async {
+    _clearPrediction();
     _state = CursorPillState.hidden;
     _searchRequestId = null;
     _status = null;
@@ -858,9 +965,18 @@ final class CursorPillController extends ChangeNotifier {
     if (!_disposed) notifyListeners();
   }
 
+  /// Relays the live audio level to the native voice surfaces while
+  /// listening, so the glow swell and waveform bars track the mic.
+  void _forwardVoiceLevel() {
+    if (_disposed || _state != CursorPillState.listening) return;
+    unawaited(_voiceLevelSink?.call(level.value));
+  }
+
   @override
   void dispose() {
     _disposed = true;
+    _predictionTimer?.cancel();
+    if (_voiceLevelSink != null) level.removeListener(_forwardVoiceLevel);
     _voiceNotice?.removeListener(_notify);
     unawaited(_subscription?.cancel());
     super.dispose();

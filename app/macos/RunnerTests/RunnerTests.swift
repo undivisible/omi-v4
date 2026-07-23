@@ -61,16 +61,102 @@ class RunnerTests: XCTestCase {
     XCTAssertTrue(applications.allSatisfy { $0.pathExtension == "app" })
   }
 
-  func testCenteredPillWindowAcceptsMouseEventsAndVoiceOverlayDoesNot() {
-    // The centered text overlay must stay interactive (clickable input and
-    // suggestion chips); only the full-screen voice surface is click-through.
-    XCTAssertFalse(MainFlutterWindow.pillIgnoresMouseEvents(centered: true))
-    XCTAssertTrue(MainFlutterWindow.pillIgnoresMouseEvents(centered: false))
+  func testCursorPillFrameSitsBelowRightOfTheCursorAndClamps() {
     let visible = NSRect(x: 0, y: 0, width: 1440, height: 900)
-    let centered = MainFlutterWindow.centeredPillFrame(
-      width: 420, height: 230, visible: visible)
-    XCTAssertEqual(centered.midX, visible.midX, accuracy: 0.5)
-    XCTAssertLessThan(centered.maxY, visible.maxY)
+    let frame = MainFlutterWindow.cursorPillFrame(
+      cursor: NSPoint(x: 500, y: 500), width: 420, height: 230, visible: visible)
+    XCTAssertEqual(frame.origin.x, 518)
+    XCTAssertEqual(frame.origin.y, 500 - 230 - 18)
+    XCTAssertEqual(frame.size, NSSize(width: 420, height: 230))
+
+    // Near the bottom-right corner the pill clamps inside the visible frame.
+    let clamped = MainFlutterWindow.cursorPillFrame(
+      cursor: NSPoint(x: 1430, y: 10), width: 420, height: 230, visible: visible)
+    XCTAssertEqual(clamped.maxX, visible.maxX)
+    XCTAssertEqual(clamped.minY, visible.minY)
+  }
+
+  func testVoiceGlowOverlayIsItsOwnClickThroughWindow() {
+    let glow = VoiceGlowOverlayWindow.make(
+      frame: NSRect(x: 0, y: 0, width: 1440, height: 900))
+    defer { glow.close() }
+    XCTAssertTrue(glow.ignoresMouseEvents)
+    XCTAssertFalse(glow.isOpaque)
+    XCTAssertFalse(glow.hasShadow)
+    XCTAssertEqual(glow.level, .screenSaver)
+    XCTAssertTrue(glow.collectionBehavior.contains(.canJoinAllSpaces))
+    XCTAssertTrue(glow.contentView is VoiceEdgeGlowView)
+    // Click-through all the way down: the glow view swallows no hits.
+    XCTAssertNil(glow.contentView?.hitTest(NSPoint(x: 10, y: 10)))
+  }
+
+  func testWaveformPanelFollowFrameHugsTheCursorAndClamps() {
+    let visible = NSRect(x: 0, y: 0, width: 1000, height: 800)
+    let size = VoiceWaveformPanel.waveformSize
+    let frame = VoiceWaveformPanel.panelFrame(
+      cursor: NSPoint(x: 300, y: 300), size: size, visible: visible)
+    XCTAssertEqual(frame.origin.x, 318)
+    XCTAssertEqual(frame.origin.y, 300 - size.height - 18)
+
+    let clamped = VoiceWaveformPanel.panelFrame(
+      cursor: NSPoint(x: 995, y: 5), size: size, visible: visible)
+    XCTAssertEqual(clamped.maxX, visible.maxX)
+    XCTAssertEqual(clamped.minY, visible.minY)
+  }
+
+  func testWaveformPanelIsNonActivatingAndClickThrough() {
+    let panel = VoiceWaveformPanel.make()
+    defer { panel.close() }
+    XCTAssertTrue(panel.ignoresMouseEvents)
+    XCTAssertFalse(panel.isOpaque)
+    XCTAssertEqual(panel.level, .screenSaver)
+    XCTAssertTrue(panel.styleMask.contains(.nonactivatingPanel))
+    XCTAssertTrue(panel.collectionBehavior.contains(.canJoinAllSpaces))
+  }
+
+  @MainActor
+  func testVoiceOverlayNeverTouchesTheMainWindow() {
+    let initialFrame = NSRect(x: 40, y: 40, width: 400, height: 300)
+    let window = MainFlutterWindow(
+      contentRect: initialFrame,
+      styleMask: [.borderless],
+      backing: .buffered,
+      defer: false)
+    window.isReleasedWhenClosed = false
+    defer { window.close() }
+
+    let overlay = window.voiceOverlayController
+    overlay.start()
+    XCTAssertTrue(overlay.isActive)
+    // The main app window stays exactly where it was, unaffected.
+    XCTAssertEqual(window.frame, initialFrame)
+    XCTAssertFalse(window.ignoresMouseEvents)
+    overlay.stop()
+    XCTAssertFalse(overlay.isActive)
+    XCTAssertEqual(window.frame, initialFrame)
+  }
+
+  func testMouseShakeDetectorFiresOnRapidReversalsOnly() {
+    let detector = MouseShakeDetector()
+    // Steady travel in one direction never fires.
+    var atMs = 0.0
+    for step in 0..<60 {
+      XCTAssertFalse(detector.feed(x: CGFloat(step * 30), atMs: atMs))
+      atMs += 16
+    }
+    // Rapid wide reversals fill the meter and fire exactly once.
+    detector.reset()
+    atMs = 0
+    var position: CGFloat = 0
+    var fired = 0
+    for step in 0..<9 {
+      position = step % 2 == 0 ? 60 : 0
+      if detector.feed(x: position, atMs: atMs) { fired += 1 }
+      atMs += 40
+    }
+    XCTAssertEqual(fired, 1)
+    // After firing, the meter restarts from zero.
+    XCTAssertEqual(detector.progress, 0)
   }
 
   func testVoicePlayoutQueueTracksQueuedMilliseconds() {
@@ -115,23 +201,8 @@ class RunnerTests: XCTestCase {
     window.close()
   }
 
-  func testVoiceOverlayFrameCoversTheWholeScreen() {
-    XCTAssertEqual(MainFlutterWindow.voiceOverlayFrame(for: nil), .zero)
-    if let screen = NSScreen.main {
-      XCTAssertEqual(MainFlutterWindow.voiceOverlayFrame(for: screen), screen.frame)
-    }
-  }
-
-  func testCenteredPillFrameIsPinnedToTheUpperThird() {
-    let visible = NSRect(x: 0, y: 0, width: 1000, height: 800)
-    let frame = MainFlutterWindow.centeredPillFrame(width: 420, height: 230, visible: visible)
-    XCTAssertEqual(frame.size, NSSize(width: 420, height: 230))
-    XCTAssertEqual(frame.midX, visible.midX)
-    XCTAssertEqual(frame.maxY, visible.maxY - visible.height * 0.28)
-  }
-
   @MainActor
-  func testVoiceSummonIsFullScreenClickThroughAndRestores() {
+  func testTextPillSummonIsInteractiveStaticAndRestores() {
     let initialFrame = NSRect(x: 40, y: 40, width: 400, height: 300)
     let window = MainFlutterWindow(
       contentRect: initialFrame,
@@ -141,18 +212,16 @@ class RunnerTests: XCTestCase {
     window.isReleasedWhenClosed = false
     defer { window.close() }
 
-    window.summonPill(width: 420, height: 230, centered: false)
-    XCTAssertTrue(window.ignoresMouseEvents)
-    XCTAssertEqual(window.level, .floating)
-    let active =
-      NSScreen.screens.first { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) }
-      ?? NSScreen.main
-    if let active {
-      XCTAssertEqual(window.frame, active.frame)
-    }
-
-    window.summonPill(width: 420, height: 230, centered: true)
+    window.summonPill(width: 420, height: 230)
+    // The text input stays interactive and floats; it never covers the
+    // screen — that treatment belongs to the separate voice overlay.
     XCTAssertFalse(window.ignoresMouseEvents)
+    XCTAssertEqual(window.level, .floating)
+    XCTAssertEqual(window.frame.size, NSSize(width: 420, height: 230))
+    let summonedFrame = window.frame
+    // Static once shown: a second summon while up keeps a stable size.
+    window.summonPill(width: 420, height: 230)
+    XCTAssertEqual(window.frame.size, summonedFrame.size)
 
     window.restoreFromPill()
     XCTAssertFalse(window.ignoresMouseEvents)

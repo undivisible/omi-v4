@@ -128,6 +128,324 @@ private final class PillGlassView: NSView {
   }
 }
 
+/// Pure shake detector mirroring the Dart onboarding logic
+/// (`lib/keyboard/shake_gesture.dart`): rapid horizontal direction reversals
+/// fill a progress meter that fires at 100, with time-based decay between
+/// reversals so ordinary pointer travel never triggers it.
+final class MouseShakeDetector {
+  private var lastX: CGFloat?
+  private var lastDirection = 0
+  private var lastReversalAtMs = 0.0
+  private var lastEventAtMs: Double?
+  private(set) var progress = 0.0
+
+  /// Feeds one pointer sample; returns true exactly when the shake meter
+  /// fills, then resets for the next gesture.
+  func feed(x: CGFloat, atMs: Double) -> Bool {
+    if let lastEventAtMs, progress > 0 {
+      progress = max(0, progress - (atMs - lastEventAtMs) * 8.0 / 120.0)
+    }
+    lastEventAtMs = atMs
+    defer { lastX = x }
+    guard let lastX else { return false }
+    let movement = x - lastX
+    let direction = movement > 0 ? 1 : (movement < 0 ? -1 : 0)
+    let elapsed = atMs - lastReversalAtMs
+    if abs(movement) >= 7, lastDirection != 0, direction != 0,
+      direction != lastDirection, elapsed < 260 {
+      progress = min(100, progress + min(abs(movement), 20))
+      lastReversalAtMs = atMs
+    } else if direction != lastDirection {
+      lastReversalAtMs = atMs
+    }
+    if direction != 0 { lastDirection = direction }
+    if progress >= 100 {
+      reset()
+      return true
+    }
+    return false
+  }
+
+  func reset() {
+    progress = 0
+    lastDirection = 0
+    lastReversalAtMs = 0
+    lastEventAtMs = nil
+    lastX = nil
+  }
+}
+
+/// The full-screen listening glow, rendered natively: four warm gradient
+/// bands hugging the screen edges whose intensity swells with the live audio
+/// level. Lives in its own click-through overlay window so the main app
+/// window is never touched while voice is up.
+final class VoiceEdgeGlowView: NSView {
+  private var edgeLayers: [CAGradientLayer] = []
+  private static let glowThickness: CGFloat = 150
+
+  override init(frame frameRect: NSRect) {
+    super.init(frame: frameRect)
+    wantsLayer = true
+    let core = NSColor(calibratedRed: 1, green: 0.72, blue: 0.45, alpha: 0.6)
+    for _ in 0..<4 {
+      let gradient = CAGradientLayer()
+      gradient.colors = [core.cgColor, core.withAlphaComponent(0).cgColor]
+      gradient.opacity = 0
+      layer?.addSublayer(gradient)
+      edgeLayers.append(gradient)
+    }
+    layoutEdges()
+    // Entry burst: sweep the glow in, then settle at the resting level.
+    let entry = CABasicAnimation(keyPath: "opacity")
+    entry.fromValue = 0
+    entry.toValue = 0.85
+    entry.duration = 0.45
+    entry.timingFunction = CAMediaTimingFunction(name: .easeOut)
+    for gradient in edgeLayers {
+      gradient.opacity = 0.55
+      gradient.add(entry, forKey: "entry")
+    }
+  }
+
+  required init?(coder: NSCoder) { nil }
+
+  override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+  override func layout() {
+    super.layout()
+    layoutEdges()
+  }
+
+  private func layoutEdges() {
+    guard edgeLayers.count == 4 else { return }
+    let thickness = Self.glowThickness
+    let size = bounds.size
+    let frames = [
+      NSRect(x: 0, y: 0, width: size.width, height: thickness),
+      NSRect(x: 0, y: size.height - thickness, width: size.width, height: thickness),
+      NSRect(x: 0, y: 0, width: thickness, height: size.height),
+      NSRect(x: size.width - thickness, y: 0, width: thickness, height: size.height),
+    ]
+    let directions: [(CGPoint, CGPoint)] = [
+      (CGPoint(x: 0.5, y: 1), CGPoint(x: 0.5, y: 0)),
+      (CGPoint(x: 0.5, y: 0), CGPoint(x: 0.5, y: 1)),
+      (CGPoint(x: 1, y: 0.5), CGPoint(x: 0, y: 0.5)),
+      (CGPoint(x: 0, y: 0.5), CGPoint(x: 1, y: 0.5)),
+    ]
+    for (index, gradient) in edgeLayers.enumerated() {
+      gradient.frame = frames[index]
+      gradient.endPoint = directions[index].0
+      gradient.startPoint = directions[index].1
+    }
+  }
+
+  func setAudioLevel(_ level: Double) {
+    let clamped = min(max(level, 0), 1)
+    for gradient in edgeLayers {
+      gradient.opacity = Float(0.45 + 0.55 * clamped)
+    }
+  }
+}
+
+/// The separate borderless, transparent, click-through overlay window that
+/// hosts the edge glow while listening. It joins all Spaces at a level above
+/// normal windows, and — crucially — is its own window instance: summoning
+/// it never moves, resizes, or restyles the main app window.
+final class VoiceGlowOverlayWindow: NSWindow {
+  static func make(frame: NSRect) -> VoiceGlowOverlayWindow {
+    let window = VoiceGlowOverlayWindow(
+      contentRect: frame, styleMask: [.borderless], backing: .buffered, defer: false)
+    window.isOpaque = false
+    window.backgroundColor = .clear
+    window.hasShadow = false
+    window.ignoresMouseEvents = true
+    window.level = .screenSaver
+    window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+    window.isReleasedWhenClosed = false
+    window.contentView = VoiceEdgeGlowView(
+      frame: NSRect(origin: .zero, size: frame.size))
+    return window
+  }
+
+  func setAudioLevel(_ level: Double) {
+    (contentView as? VoiceEdgeGlowView)?.setAudioLevel(level)
+  }
+}
+
+/// The native waveform bars shown next to the cursor while listening,
+/// animated from the live audio level.
+final class VoiceWaveformView: NSView {
+  private var bars: [CALayer] = []
+  private var timer: Timer?
+  private var level = 0.0
+
+  override init(frame frameRect: NSRect) {
+    super.init(frame: frameRect)
+    wantsLayer = true
+    for _ in 0..<5 {
+      let bar = CALayer()
+      bar.backgroundColor = NSColor(calibratedWhite: 1, alpha: 0.92).cgColor
+      bar.cornerRadius = 2.5
+      bar.shadowColor = NSColor(
+        calibratedRed: 1, green: 0.72, blue: 0.45, alpha: 1).cgColor
+      bar.shadowOpacity = 0.8
+      bar.shadowRadius = 8
+      bar.shadowOffset = .zero
+      layer?.addSublayer(bar)
+      bars.append(bar)
+    }
+    layoutBars()
+    let timer = Timer(timeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
+      self?.layoutBars()
+    }
+    RunLoop.main.add(timer, forMode: .common)
+    self.timer = timer
+  }
+
+  required init?(coder: NSCoder) { nil }
+
+  deinit { timer?.invalidate() }
+
+  override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+  func setAudioLevel(_ level: Double) {
+    self.level = min(max(level, 0), 1)
+  }
+
+  private func layoutBars() {
+    let width: CGFloat = 5
+    let gap: CGFloat = 7
+    let total = CGFloat(bars.count) * width + CGFloat(bars.count - 1) * gap
+    let left = (bounds.width - total) / 2
+    CATransaction.begin()
+    CATransaction.setAnimationDuration(1.0 / 15.0)
+    for (index, bar) in bars.enumerated() {
+      let jitter = 0.35 + 0.65 * Double.random(in: 0...1)
+      let height = 6 + CGFloat(level * jitter) * (bounds.height - 12)
+      bar.frame = NSRect(
+        x: left + CGFloat(index) * (width + gap),
+        y: (bounds.height - height) / 2,
+        width: width,
+        height: height)
+    }
+    CATransaction.commit()
+  }
+}
+
+/// A small non-activating, click-through panel hosting the waveform. It is
+/// summoned next to the cursor and follows it while listening, clamped to
+/// the screen's visible frame — again its own window, so the main app window
+/// stays untouched.
+final class VoiceWaveformPanel: NSPanel {
+  static let waveformSize = NSSize(width: 120, height: 64)
+
+  static func panelFrame(cursor: NSPoint, size: NSSize, visible: NSRect) -> NSRect {
+    var target = NSRect(
+      x: cursor.x + 18,
+      y: cursor.y - size.height - 18,
+      width: size.width,
+      height: size.height)
+    target.origin.x = min(max(target.origin.x, visible.minX), visible.maxX - size.width)
+    target.origin.y = min(max(target.origin.y, visible.minY), visible.maxY - size.height)
+    return target
+  }
+
+  static func make() -> VoiceWaveformPanel {
+    let panel = VoiceWaveformPanel(
+      contentRect: NSRect(origin: .zero, size: waveformSize),
+      styleMask: [.borderless, .nonactivatingPanel],
+      backing: .buffered,
+      defer: false)
+    panel.isOpaque = false
+    panel.backgroundColor = .clear
+    panel.hasShadow = false
+    panel.ignoresMouseEvents = true
+    panel.level = .screenSaver
+    panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+    panel.isReleasedWhenClosed = false
+    panel.contentView = VoiceWaveformView(
+      frame: NSRect(origin: .zero, size: waveformSize))
+    return panel
+  }
+
+  func setAudioLevel(_ level: Double) {
+    (contentView as? VoiceWaveformView)?.setAudioLevel(level)
+  }
+}
+
+/// Owns the two native voice surfaces (glow overlay + follow-cursor waveform
+/// panel) and the mouse monitors that keep the panel glued to the cursor.
+/// Shown without activating the app, so voice summoned from the background
+/// never steals focus from whatever the user is working in.
+final class VoiceOverlayController {
+  private var glowWindow: VoiceGlowOverlayWindow?
+  private var waveformPanel: VoiceWaveformPanel?
+  private var localMouseMonitor: Any?
+  private var globalMouseMonitor: Any?
+
+  var isActive: Bool { glowWindow != nil }
+
+  private static var activeScreen: NSScreen? {
+    NSScreen.screens.first { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) }
+      ?? NSScreen.main
+  }
+
+  func start() {
+    guard glowWindow == nil else { return }
+    let screen = Self.activeScreen
+    let glow = VoiceGlowOverlayWindow.make(frame: screen?.frame ?? .zero)
+    glow.orderFrontRegardless()
+    glowWindow = glow
+    let panel = VoiceWaveformPanel.make()
+    reposition(panel: panel, cursor: NSEvent.mouseLocation)
+    panel.orderFrontRegardless()
+    waveformPanel = panel
+    let follow: () -> Void = { [weak self] in
+      guard let self, let panel = self.waveformPanel else { return }
+      self.reposition(panel: panel, cursor: NSEvent.mouseLocation)
+    }
+    localMouseMonitor = NSEvent.addLocalMonitorForEvents(
+      matching: [.mouseMoved]
+    ) { event in
+      follow()
+      return event
+    }
+    globalMouseMonitor = NSEvent.addGlobalMonitorForEvents(
+      matching: [.mouseMoved]
+    ) { _ in follow() }
+  }
+
+  private func reposition(panel: VoiceWaveformPanel, cursor: NSPoint) {
+    let screen =
+      NSScreen.screens.first { NSMouseInRect(cursor, $0.frame, false) }
+      ?? NSScreen.main
+    let frame = VoiceWaveformPanel.panelFrame(
+      cursor: cursor,
+      size: VoiceWaveformPanel.waveformSize,
+      visible: screen?.visibleFrame
+        ?? NSRect(origin: cursor, size: VoiceWaveformPanel.waveformSize))
+    panel.setFrameOrigin(frame.origin)
+  }
+
+  func stop() {
+    if let localMouseMonitor { NSEvent.removeMonitor(localMouseMonitor) }
+    if let globalMouseMonitor { NSEvent.removeMonitor(globalMouseMonitor) }
+    localMouseMonitor = nil
+    globalMouseMonitor = nil
+    glowWindow?.orderOut(nil)
+    glowWindow?.close()
+    glowWindow = nil
+    waveformPanel?.orderOut(nil)
+    waveformPanel?.close()
+    waveformPanel = nil
+  }
+
+  func setAudioLevel(_ level: Double) {
+    glowWindow?.setAudioLevel(level)
+    waveformPanel?.setAudioLevel(level)
+  }
+}
+
 private final class ShortcutDragView: NSImageView, NSDraggingSource {
   private let shortcutURL: URL
 
@@ -261,6 +579,10 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
   private var keyboardSink: FlutterEventSink?
   private var localKeyboardMonitor: Any?
   private var globalKeyboardMonitor: Any?
+  private var localShakeMonitor: Any?
+  private var globalShakeMonitor: Any?
+  private let shakeDetector = MouseShakeDetector()
+  let voiceOverlayController = VoiceOverlayController()
   private let permissionService = MacPermissionService()
   private var permissionOverlay: PermissionDragOverlay?
   private var pillPreviousFrame: NSRect?
@@ -329,6 +651,19 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
 
   private func emitSecureInput() {
     keyboardSink?(["type": "secureInput", "enabled": IsSecureEventInputEnabled()])
+  }
+
+  /// Feeds every pointer sample (local, and global once Accessibility is
+  /// granted) to the shake detector; a completed shake reaches Dart as its
+  /// own keyboard event, the mouse twin of the double chord.
+  private func mouseMovedEvent() {
+    if IsSecureEventInputEnabled() { return }
+    let firedShake = shakeDetector.feed(
+      x: NSEvent.mouseLocation.x,
+      atMs: ProcessInfo.processInfo.systemUptime * 1000)
+    if firedShake {
+      keyboardSink?(["type": "shake"])
+    }
   }
 
   override func awakeFromNib() {
@@ -455,6 +790,34 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
     globalKeyboardMonitor = NSEvent.addGlobalMonitorForEvents(
       matching: [.flagsChanged, .keyDown]
     ) { [weak self] event in self?.keyboardEvent(event) }
+    localShakeMonitor = NSEvent.addLocalMonitorForEvents(
+      matching: [.mouseMoved]
+    ) { [weak self] event in
+      self?.mouseMovedEvent()
+      return event
+    }
+    globalShakeMonitor = NSEvent.addGlobalMonitorForEvents(
+      matching: [.mouseMoved]
+    ) { [weak self] _ in self?.mouseMovedEvent() }
+
+    let voiceOverlay = FlutterMethodChannel(
+      name: "omi/voice_overlay",
+      binaryMessenger: flutterViewController.engine.binaryMessenger)
+    voiceOverlay.setMethodCallHandler { [weak self] call, result in
+      switch call.method {
+      case "start":
+        self?.voiceOverlayController.start()
+        result(nil)
+      case "stop":
+        self?.voiceOverlayController.stop()
+        result(nil)
+      case "level":
+        self?.voiceOverlayController.setAudioLevel(call.arguments as? Double ?? 0)
+        result(nil)
+      default:
+        result(FlutterMethodNotImplemented)
+      }
+    }
 
     let windowChrome = FlutterMethodChannel(
       name: "omi/window_chrome",
@@ -474,8 +837,7 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
         let arguments = call.arguments as? [String: Any]
         self?.summonPill(
           width: arguments?["width"] as? Double ?? 420,
-          height: arguments?["height"] as? Double ?? 230,
-          centered: arguments?["centered"] as? Bool ?? false)
+          height: arguments?["height"] as? Double ?? 230)
         result(nil)
       case "restoreFromPill":
         self?.restoreFromPill()
@@ -535,6 +897,9 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
   deinit {
     if let localKeyboardMonitor { NSEvent.removeMonitor(localKeyboardMonitor) }
     if let globalKeyboardMonitor { NSEvent.removeMonitor(globalKeyboardMonitor) }
+    if let localShakeMonitor { NSEvent.removeMonitor(localShakeMonitor) }
+    if let globalShakeMonitor { NSEvent.removeMonitor(globalShakeMonitor) }
+    voiceOverlayController.stop()
   }
 
   private func enterHubChrome() {
@@ -575,8 +940,6 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
       ?? NSScreen.main
   }
 
-  /// The full-screen voice overlay covers the active screen edge to edge so
-  /// the waveform and its glow can hug the screen borders.
   /// Directories scanned for the overlay's deterministic "open <app>" fast
   /// path. Shallow, launch-time cheap; NSWorkspace performs the real open.
   static var launcherSearchRoots: [URL] {
@@ -621,27 +984,22 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
     return prefixMatch ?? substringMatch
   }
 
-  static func voiceOverlayFrame(for screen: NSScreen?) -> NSRect {
-    screen?.frame ?? .zero
-  }
-
-  /// Only the full-screen voice/waveform surface is click-through; the
-  /// centered text overlay must accept mouse events so its input field and
-  /// suggestion chips stay clickable.
-  static func pillIgnoresMouseEvents(centered: Bool) -> Bool {
-    !centered
-  }
-
-  static func centeredPillFrame(
-    width: Double, height: Double, visible: NSRect
+  /// The text-input pill sits just below-right of the cursor, clamped to the
+  /// screen's visible frame; once summoned it does not move.
+  static func cursorPillFrame(
+    cursor: NSPoint, width: Double, height: Double, visible: NSRect
   ) -> NSRect {
-    // Spotlight-style: horizontally centered, pinned to the upper third.
-    let x = visible.midX - width / 2
-    let y = visible.maxY - visible.height * 0.28 - height
-    return NSRect(x: x, y: y, width: width, height: height)
+    var target = NSRect(
+      x: cursor.x + 18,
+      y: cursor.y - height - 18,
+      width: width,
+      height: height)
+    target.origin.x = min(max(target.origin.x, visible.minX), visible.maxX - width)
+    target.origin.y = min(max(target.origin.y, visible.minY), visible.maxY - height)
+    return target
   }
 
-  func summonPill(width: Double, height: Double, centered: Bool) {
+  func summonPill(width: Double, height: Double) {
     if pillPreviousFrame == nil {
       pillPreviousFrame = frame
       pillPreviousLevel = level
@@ -653,16 +1011,15 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
     // summoned window.
     onboardingBlurView?.isHidden = true
     let screen = Self.activeScreen
-    let target = centered
-      ? Self.centeredPillFrame(
-          width: width, height: height,
-          visible: screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: width, height: height))
-      : Self.voiceOverlayFrame(for: screen)
+    let target = Self.cursorPillFrame(
+      cursor: NSEvent.mouseLocation,
+      width: width, height: height,
+      visible: screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: width, height: height))
     level = .floating
     collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-    // Voice is click-through: the full-screen overlay must never swallow
-    // clicks meant for whatever the user is working in beneath it.
-    ignoresMouseEvents = Self.pillIgnoresMouseEvents(centered: centered)
+    // The text input is static and interactive: it must accept mouse events
+    // so its input field and suggestion chips stay clickable.
+    ignoresMouseEvents = false
     setFrame(target, display: true)
     attachPillGlass()
     NSApp.activate(ignoringOtherApps: true)

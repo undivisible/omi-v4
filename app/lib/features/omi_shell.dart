@@ -234,22 +234,21 @@ class _OmiShellState extends State<OmiShell> {
     return ListenableBuilder(
       listenable: pill,
       builder: (context, _) {
-        if (pill.state == CursorPillState.listening) {
-          return Scaffold(
-            backgroundColor: Colors.transparent,
-            body: CursorPill(controller: pill),
-          );
-        }
+        // Listening renders nothing here: the edge glow and follow-cursor
+        // waveform are native windows, and the hub must stay exactly as it
+        // is while voice is up.
+        final showPill = pill.state != CursorPillState.listening;
         return Scaffold(
           backgroundColor: hubBackground,
           body: Stack(
             children: [
               paddedBody,
               ?meetingAssist,
-              Align(
-                alignment: Alignment.topLeft,
-                child: CursorPill(controller: pill),
-              ),
+              if (showPill)
+                Align(
+                  alignment: Alignment.topLeft,
+                  child: CursorPill(controller: pill),
+                ),
             ],
           ),
         );

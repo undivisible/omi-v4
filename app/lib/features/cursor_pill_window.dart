@@ -9,17 +9,16 @@ abstract final class CursorPillWindow {
   static bool get _supported =>
       !kIsWeb && defaultTargetPlatform == TargetPlatform.macOS;
 
-  /// Summons the floating glass window. Voice (the waveform and glow) takes
-  /// the whole active screen as a click-through overlay ([centered] false);
-  /// the text overlay is a Spotlight-style panel pinned to the upper third of
-  /// the screen ([centered] true).
-  static Future<void> summon({bool centered = false}) async {
+  /// Summons the floating glass text-input window next to the cursor. Once
+  /// shown it stays put (static, interactive, key) — voice never goes through
+  /// this window; its glow and waveform are native surfaces owned by
+  /// [VoiceOverlayWindow].
+  static Future<void> summon() async {
     if (!_supported) return;
     try {
       await _channel.invokeMethod('summonPill', {
         'width': width,
         'height': height,
-        'centered': centered,
       });
     } on MissingPluginException {
       return;
@@ -61,6 +60,52 @@ abstract final class CursorPillWindow {
     if (!_supported) return;
     try {
       await _channel.invokeMethod('restoreFromPill');
+    } on MissingPluginException {
+      return;
+    } on PlatformException {
+      return;
+    }
+  }
+}
+
+/// The native voice surfaces: a separate borderless click-through NSWindow
+/// hosting the full-screen edge glow, plus a small follow-cursor waveform
+/// panel — both rendered natively in Swift so the main app window never
+/// moves or changes while listening.
+abstract final class VoiceOverlayWindow {
+  static const _channel = MethodChannel('omi/voice_overlay');
+
+  static bool get _supported =>
+      !kIsWeb && defaultTargetPlatform == TargetPlatform.macOS;
+
+  static Future<void> start() async {
+    if (!_supported) return;
+    try {
+      await _channel.invokeMethod('start');
+    } on MissingPluginException {
+      return;
+    } on PlatformException {
+      return;
+    }
+  }
+
+  static Future<void> stop() async {
+    if (!_supported) return;
+    try {
+      await _channel.invokeMethod('stop');
+    } on MissingPluginException {
+      return;
+    } on PlatformException {
+      return;
+    }
+  }
+
+  /// Streams the live audio level (0..1) that drives the native glow swell
+  /// and waveform bars.
+  static Future<void> level(double value) async {
+    if (!_supported) return;
+    try {
+      await _channel.invokeMethod('level', value);
     } on MissingPluginException {
       return;
     } on PlatformException {
