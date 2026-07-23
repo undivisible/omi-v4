@@ -16,77 +16,12 @@ from pathlib import Path
 # NCS workspace rather than from the checkout.
 REPO_TOKEN = "%%REPO_ROOT%%"
 
-FALLBACK_TARGETS = [
-    {
-        "id": "omi-cv1",
-        "device": "Omi CV1 pendant (nRF5340)",
-        "board": "omi/nrf5340/cpuapp",
-        "app_dir": "firmware/omi",
-        "conf": "firmware/omi/omi.conf",
-        "sysbuild": "true",
-        "cmake_args": "",
-        "conf_copy_from": "firmware/omi/omi.conf",
-        "conf_copy_to": "firmware/omi/prj.conf",
-    },
-    {
-        "id": "omi-devkit-v1",
-        "device": "Omi DevKit v1 (Seeed XIAO nRF52840 Sense)",
-        "board": "xiao_ble/nrf52840/sense",
-        "app_dir": "firmware/devkit",
-        "conf": "firmware/devkit/prj_xiao_ble_sense_devkitv1.conf",
-        "sysbuild": "false",
-        "cmake_args": f"-DCONF_FILE={REPO_TOKEN}/firmware/devkit/prj_xiao_ble_sense_devkitv1.conf",
-    },
-    {
-        "id": "omi-devkit-v1-spisd",
-        "device": "Omi DevKit v1 with SPI SD card (Seeed XIAO nRF52840 Sense)",
-        "board": "xiao_ble/nrf52840/sense",
-        "app_dir": "firmware/devkit",
-        "conf": "firmware/devkit/prj_xiao_ble_sense_devkitv1-spisd.conf",
-        "sysbuild": "false",
-        "cmake_args": f"-DCONF_FILE={REPO_TOKEN}/firmware/devkit/prj_xiao_ble_sense_devkitv1-spisd.conf",
-    },
-    {
-        "id": "omi-devkit-v2-adafruit",
-        "device": "Omi DevKit v2 Adafruit (Seeed XIAO nRF52840 Sense)",
-        "board": "xiao_ble/nrf52840/sense",
-        "app_dir": "firmware/devkit",
-        "conf": "firmware/devkit/prj_xiao_ble_sense_devkitv2-adafruit.conf",
-        "sysbuild": "false",
-        "cmake_args": f"-DCONF_FILE={REPO_TOKEN}/firmware/devkit/prj_xiao_ble_sense_devkitv2-adafruit.conf",
-    },
-]
-
 BOARD_HINTS = [
     ("xiao", "xiao_ble/nrf52840/sense"),
     ("devkit", "xiao_ble/nrf52840/sense"),
     ("nrf5340", "omi/nrf5340/cpuapp"),
     ("cv1", "omi/nrf5340/cpuapp"),
 ]
-
-SKIPPED_CONF_NAMES = {
-    "sysbuild.conf",
-    "mcuboot.conf",
-    "b0.conf",
-    "hci_ipc.conf",
-    "ipc_radio.conf",
-    "empty_net_core.conf",
-}
-
-SKIPPED_DIR_PARTS = {
-    ".git",
-    "build",
-    "boards",
-    "dts",
-    "modules",
-    "sysbuild",
-    "tests",
-    "samples",
-    "node_modules",
-    "zephyr",
-    "nrf",
-    "bootloader",
-}
 
 CONF_CMAKE_KEYS = ("CONF_FILE", "EXTRA_CONF_FILE", "OVERLAY_CONFIG", "FILE_SUFFIX")
 
@@ -505,66 +440,6 @@ def targets_from_readme(root: Path, boards: list[dict]) -> list[dict]:
     return targets
 
 
-def candidate_app_dirs(firmware: Path) -> list[Path]:
-    results = []
-    for cmake in sorted(firmware.rglob("CMakeLists.txt")):
-        app = cmake.parent
-        parts = set(app.relative_to(firmware).parts)
-        if parts & SKIPPED_DIR_PARTS:
-            continue
-        text = read_text(cmake)
-        if "find_package(Zephyr" not in text and "FIND_PACKAGE(Zephyr" not in text.upper():
-            continue
-        confs = [p for p in app.glob("*.conf") if p.name not in SKIPPED_CONF_NAMES]
-        if not confs:
-            continue
-        results.append(app)
-    return results
-
-
-def targets_from_tree(root: Path, boards: list[dict]) -> list[dict]:
-    firmware = root / "firmware"
-    targets: list[dict] = []
-    seen: set[str] = set()
-    for app in candidate_app_dirs(firmware):
-        confs = sorted(p for p in app.glob("*.conf") if p.name not in SKIPPED_CONF_NAMES)
-        variants = [p for p in confs if p.name != "prj.conf"]
-        chosen = variants or confs
-        for conf in chosen:
-            stem = conf.stem
-            if stem.startswith("prj_"):
-                stem = stem[len("prj_") :]
-            identifier = slug(stem if stem != "prj" else app.name)
-            if identifier in seen:
-                identifier = slug(f"{app.name}-{stem}")
-            base = identifier
-            suffix = 2
-            while identifier in seen:
-                identifier = f"{base}-{suffix}"
-                suffix += 1
-            seen.add(identifier)
-            app_rel = str(app.relative_to(root))
-            conf_rel = str(conf.relative_to(root))
-            board = board_for(f"{app_rel} {conf.name}", boards)
-            sysbuild = is_sysbuild_conf(root, app, conf_rel, False)
-            cmake_args = ""
-            if conf.name != "prj.conf":
-                prefix = f"{app.name}_" if sysbuild else ""
-                cmake_args = f"-D{prefix}CONF_FILE={REPO_TOKEN}/{conf_rel}"
-            targets.append(
-                {
-                    "id": identifier,
-                    "device": f"{app.name} ({conf.name})",
-                    "board": board,
-                    "app_dir": app_rel,
-                    "conf": conf_rel,
-                    "sysbuild": "true" if sysbuild else "false",
-                    "cmake_args": cmake_args,
-                }
-            )
-    return targets
-
-
 def emit(output_path: str, key: str, value: str) -> None:
     if not output_path:
         print(f"{key}={value}")
@@ -599,16 +474,11 @@ def main() -> int:
     source = "readme"
     targets = targets_from_readme(root, boards)
     if not targets:
-        source = "tree"
-        targets = targets_from_tree(root, boards)
-    if not targets:
-        source = "fallback"
-        targets = [dict(entry) for entry in FALLBACK_TARGETS]
         print(
-            "::warning::Neither firmware/README.md nor the firmware tree yielded a buildable "
-            "Zephyr application. Falling back to the declared matrix; every entry that does not "
-            "exist on disk will fail loudly during its build step."
+            "::error::firmware/README.md declared no buildable Zephyr application. Fix the "
+            "firmware target table in firmware/README.md and re-run this workflow."
         )
+        return 1
 
     for target in targets:
         target["board_root"] = board_root

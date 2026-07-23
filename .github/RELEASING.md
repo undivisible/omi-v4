@@ -160,32 +160,23 @@ checkout and emits the matrix as JSON, which the `zephyr` job consumes via
    `-D…` cmake arguments (including everything after a `--` separator). The nearest
    preceding Markdown heading becomes the target id and device name. Documenting a target's
    exact build command in `firmware/README.md` is therefore all it takes to add or fix it.
-2. **Otherwise the tree is walked.** Any directory under `firmware/` that contains a
-   `CMakeLists.txt` calling `find_package(Zephyr …)` plus at least one `*.conf` is treated
-   as an application. `sysbuild.conf`, `mcuboot.conf`, `b0.conf`, `hci_ipc.conf`,
-   `ipc_radio.conf` and `empty_net_core.conf` are ignored, as are `boards/`, `dts/`,
-   `modules/`, `tests/`, `samples/` and vendored `zephyr`/`nrf`/`bootloader` subtrees. Each
-   remaining `prj_*.conf` becomes its own target (falling back to `prj.conf` when there are
-   no variants). Sysbuild is enabled when the app has a `sysbuild.conf`/`sysbuild/` or its
-   config sets `CONFIG_BOOTLOADER_MCUBOOT=y`.
-3. **Boards come from `firmware/boards`.** Every `board.yml` is parsed for its name, socs
+2. **Boards come from `firmware/boards`.** Every `board.yml` is parsed for its name, socs
    and cpuclusters to build a qualified board string such as `omi/nrf5340/cpuapp`; legacy
    `*_defconfig` files contribute bare names. `-DBOARD_ROOT` is passed only when
    `firmware/boards` actually exists. A target's board is taken from the README command
    first, then by matching a discovered board name against the app path and config
    filename, then via the small declared `BOARD_HINTS` table in the script, then — if
    exactly one board exists in the tree — that one.
-4. **A declared fallback matrix** (`FALLBACK_TARGETS` in the script) is used only when
-   neither the README nor the tree yields anything.
 
 Nothing here silently passes:
 
-- No `firmware/` directory at all → the `discover` job fails with an explicit error, which
-  skips `zephyr`, `bundle` and `publish`.
+- No `firmware/` directory at all, or a README that declares no buildable application →
+  the `discover` job fails with an explicit error, which skips `zephyr`, `bundle` and
+  `publish`.
 - A target whose board could not be resolved → its build job fails and prints every
   `board.yml` and `*_defconfig` under `firmware/boards`.
-- A target whose `app_dir`/`conf` does not exist on disk (the fallback-matrix case) → its
-  build job fails and lists the Zephyr application directories and `.conf` files it found.
+- A target whose `app_dir`/`conf` does not exist on disk → its build job fails and lists
+  the Zephyr application directories and `.conf` files it found.
 - A build that produces none of the expected images → the collect step fails and dumps the
   build tree.
 
