@@ -43,7 +43,10 @@ void main() {
     await tester.pump();
     await tester.runAsync(() => Future<void>.delayed(Duration.zero));
     await tester.pump();
-    await tester.pumpAndSettle();
+    // Voice is now live (the waveform overlay animates continuously, so a
+    // blanket pumpAndSettle would never return); the underlying chat surface
+    // must remain mounted and usable beneath it.
+    await tester.pump(const Duration(milliseconds: 200));
 
     expect(find.byKey(const Key('chat_input')), findsOne);
     await tester.pumpWidget(const SizedBox());

@@ -63,7 +63,7 @@ class _OmiShellState extends State<OmiShell> {
     _menuBar = DesktopMenuBarController(
       currents: widget.services.currents,
       isListening: () => widget.services.desktopVoice.active,
-      onCapture: () => _handleDesktopGesture(ShiftGestureAction.openTextInput),
+      onCapture: () => _handleDesktopGesture(ShiftGestureAction.openOverlay),
       onToggleListening: () => _handleDesktopGesture(
         widget.services.desktopVoice.active
             ? ShiftGestureAction.stopVoice
