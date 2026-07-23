@@ -500,6 +500,20 @@ async fn search_memory_claims(
     Ok(items)
 }
 
+/// Port of `memoryContextFor` (memory-vectors.ts). Vector-searches the user's
+/// synced memory claims and folds the top matches into the `Relevant synced
+/// memory` context block, capped at `CONTEXT_CHARACTER_CAP`. Returns `None` when
+/// Vectorize/AI is unbound, there are no matches, or any step fails — matching
+/// the TS `try/catch → null` contract so callers degrade gracefully.
+pub async fn memory_context_for(env: &Env, uid: &str, query: &str) -> Option<String> {
+    let items = search_memory_claims(env, uid, query, 8).await.ok()?;
+    let contents: Vec<String> = items
+        .iter()
+        .map(|item| str_field(item, "content"))
+        .collect();
+    super::build_memory_context(&contents, super::CONTEXT_CHARACTER_CAP)
+}
+
 // ---------------------------------------------------------------------------
 // memory-projection.ts
 // ---------------------------------------------------------------------------

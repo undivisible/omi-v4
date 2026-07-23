@@ -193,6 +193,250 @@ async fn finalize_managed_request(
     }
 }
 
+/// Worker-side inbox completion output cap. Mirrors `workerCompletionMaxOutputTokens`.
+const WORKER_COMPLETION_MAX_OUTPUT_TOKENS: i64 = managed_ai::WORKER_COMPLETION_MAX_OUTPUT_TOKENS;
+
+/// Port of `runManagedInboxCompletion` (assistant.ts). Non-streaming managed
+/// completion used by the channel inbox fallback responder. Returns the trimmed
+/// assistant reply, or `None` when managed AI is unconfigured / admission is
+/// denied / the upstream fails — exactly the cases where TS returns `null` and
+/// the caller releases the claim for retry.
+pub async fn run_managed_inbox_completion(
+    env: &Env,
+    uid: &str,
+    messages: &[managed_ai::Message],
+) -> Option<String> {
+    let endpoint = env_get(env, "MIMO_CHAT_COMPLETIONS_URL")?;
+    let secret = env_get(env, "MIMO_API_KEY")?;
+    let model = env_get(env, "MIMO_MODEL")?;
+    if messages.is_empty() {
+        return None;
+    }
+    let endpoint_url = managed_ai::validate_pinned_endpoint(
+        &endpoint,
+        managed_ai::XIAOMI_COMPLETION_ENDPOINT,
+        managed_ai::XIAOMI_HOSTNAME,
+    )?;
+    let input_price = managed_ai::price(env_get(env, "MIMO_INPUT_MICROUSD_PER_MILLION_TOKENS").as_deref())?;
+    let output_price = managed_ai::price(env_get(env, "MIMO_OUTPUT_MICROUSD_PER_MILLION_TOKENS").as_deref())?;
+
+    let estimated_input_tokens = managed_ai::input_token_reservation(messages);
+    let estimated_cost = managed_ai::cost_for(
+        estimated_input_tokens,
+        WORKER_COMPLETION_MAX_OUTPUT_TOKENS,
+        input_price,
+        output_price,
+    );
+
+    let request_id = uuid_v4();
+    let stub = assistant_admission_stub(env).ok()?;
+    let admission = do_post(
+        &stub,
+        "https://assistant-admission.internal/admit",
+        &json!({
+            "requestId": request_id,
+            "uid": uid,
+            "tokenBudget": estimated_input_tokens + WORKER_COMPLETION_MAX_OUTPUT_TOKENS,
+            "costBudgetMicrousd": estimated_cost,
+        }),
+    )
+    .await
+    .ok()?;
+    if admission.status_code() >= 300 {
+        return None;
+    }
+
+    let now = now_ms();
+    let input_characters: i64 = messages
+        .iter()
+        .map(|m| m.content.encode_utf16().count() as i64)
+        .sum();
+    if insert_managed_request_env(
+        env,
+        &request_id,
+        uid,
+        "mimo",
+        &model,
+        input_characters,
+        WORKER_COMPLETION_MAX_OUTPUT_TOKENS,
+        Some(estimated_cost),
+        now,
+    )
+    .await
+    .is_err()
+    {
+        release_assistant(&stub, &request_id).await;
+        return None;
+    }
+
+    let message_values: Vec<Value> = messages
+        .iter()
+        .map(|m| json!({ "role": m.role, "content": m.content }))
+        .collect();
+    let body = json!({
+        "model": model,
+        "messages": message_values,
+        "stream": false,
+        "max_tokens": WORKER_COMPLETION_MAX_OUTPUT_TOKENS,
+    });
+
+    let mut init = RequestInit::new();
+    init.with_method(Method::Post);
+    let headers = Headers::new();
+    let _ = headers.set("authorization", &format!("Bearer {secret}"));
+    let _ = headers.set("content-type", "application/json");
+    init.with_headers(headers);
+    init.with_body(Some(JsValue::from_str(&body.to_string())));
+    let Ok(upstream_request) = Request::new_with_init(endpoint_url.as_str(), &init) else {
+        settle_managed_inbox(env, &stub, &request_id, "failed", None, None, None, input_price, output_price).await;
+        return None;
+    };
+    let mut upstream = match worker::Fetch::Request(upstream_request).send().await {
+        Ok(response) => response,
+        Err(_) => {
+            settle_managed_inbox(env, &stub, &request_id, "failed", None, None, None, input_price, output_price).await;
+            return None;
+        }
+    };
+    let upstream_status = upstream.status_code() as i64;
+    if upstream_status >= 300 {
+        settle_managed_inbox(env, &stub, &request_id, "failed", None, None, Some(upstream_status), input_price, output_price).await;
+        return None;
+    }
+
+    let value = upstream.json::<Value>().await.ok();
+    let (content, input_tokens, output_tokens) = match value.as_ref() {
+        Some(v) => managed_ai::parse_completion(v),
+        None => (None, None, None),
+    };
+    let status = if content.is_none() { "failed" } else { "complete" };
+    settle_managed_inbox(
+        env,
+        &stub,
+        &request_id,
+        status,
+        input_tokens,
+        output_tokens,
+        Some(upstream_status),
+        input_price,
+        output_price,
+    )
+    .await;
+    content
+}
+
+/// Env-based variant of `insert_managed_request` for the inbox completion path
+/// (which has an `&Env`, not a `RouteContext`).
+#[allow(clippy::too_many_arguments)]
+async fn insert_managed_request_env(
+    env: &Env,
+    request_id: &str,
+    uid: &str,
+    provider: &str,
+    model: &str,
+    input_characters: i64,
+    requested_max_output_tokens: i64,
+    estimated_cost_microusd: Option<i64>,
+    now: i64,
+) -> Result<()> {
+    let db = env.d1("DB")?;
+    let statement = if let Some(cost) = estimated_cost_microusd {
+        db.prepare(
+            "INSERT INTO managed_ai_requests\n             (id, uid, provider, model, status, input_characters, requested_max_output_tokens,\n              estimated_cost_microusd, created_at, updated_at)\n             VALUES (?1, ?2, ?3, ?4, 'started', ?5, ?6, ?7, ?8, ?8)",
+        )
+        .bind(&[
+            request_id.into(),
+            uid.into(),
+            provider.into(),
+            model.into(),
+            (input_characters as f64).into(),
+            (requested_max_output_tokens as f64).into(),
+            (cost as f64).into(),
+            (now as f64).into(),
+        ])?
+    } else {
+        db.prepare(
+            "INSERT INTO managed_ai_requests\n             (id, uid, provider, model, status, input_characters, requested_max_output_tokens,\n              created_at, updated_at)\n             VALUES (?1, ?2, ?3, ?4, 'started', ?5, ?6, ?7, ?7)",
+        )
+        .bind(&[
+            request_id.into(),
+            uid.into(),
+            provider.into(),
+            model.into(),
+            (input_characters as f64).into(),
+            (requested_max_output_tokens as f64).into(),
+            (now as f64).into(),
+        ])?
+    };
+    statement.run().await.map(|_| ())
+}
+
+/// Port of the `settle` closure inside `runManagedInboxCompletion`: finalize the
+/// ledger row then settle (or release) the admission reservation.
+#[allow(clippy::too_many_arguments)]
+async fn settle_managed_inbox(
+    env: &Env,
+    stub: &Stub,
+    request_id: &str,
+    status: &str,
+    input_tokens: Option<i64>,
+    output_tokens: Option<i64>,
+    upstream_status: Option<i64>,
+    input_price: i64,
+    output_price: i64,
+) {
+    let actual_cost = match (input_tokens, output_tokens) {
+        (Some(i), Some(o)) => Some(managed_ai::cost_for(i, o, input_price, output_price)),
+        _ => None,
+    };
+    let now = now_ms();
+    if let Ok(db) = env.d1("DB") {
+        let coalesce = |v: Option<i64>| v.map(|n| (n as f64).into()).unwrap_or(JsValue::NULL);
+        if let Ok(statement) = db
+            .prepare(
+                "UPDATE managed_ai_requests\n                 SET status = ?1, input_tokens = COALESCE(?2, input_tokens),\n                     output_tokens = COALESCE(?3, output_tokens),\n                     actual_cost_microusd = COALESCE(?4, actual_cost_microusd),\n                     upstream_status = COALESCE(?5, upstream_status),\n                     finalization_attempts = finalization_attempts + 1,\n                     finalized_at = COALESCE(finalized_at, ?6), updated_at = ?6\n                 WHERE id = ?7 AND finalized_at IS NULL",
+            )
+            .bind(&[
+                status.into(),
+                coalesce(input_tokens),
+                coalesce(output_tokens),
+                coalesce(actual_cost),
+                coalesce(upstream_status),
+                (now as f64).into(),
+                request_id.into(),
+            ])
+        {
+            let _ = statement.run().await;
+        }
+    }
+    let settled = match (input_tokens, output_tokens, actual_cost) {
+        (Some(i), Some(o), Some(c)) => do_post(
+            stub,
+            "https://assistant-admission.internal/settle",
+            &json!({ "requestId": request_id, "tokenBudget": i + o, "costBudgetMicrousd": c }),
+        )
+        .await
+        .is_ok(),
+        _ => do_post(
+            stub,
+            "https://assistant-admission.internal/release",
+            &json!({ "requestId": request_id }),
+        )
+        .await
+        .is_ok(),
+    };
+    if settled {
+        if let Ok(db) = env.d1("DB") {
+            if let Ok(statement) = db
+                .prepare("UPDATE managed_ai_requests SET admission_settled_at = COALESCE(admission_settled_at, ?1), updated_at = ?1 WHERE id = ?2")
+                .bind(&[(now as f64).into(), request_id.into()])
+            {
+                let _ = statement.run().await;
+            }
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Managed assistant: POST /v1/chat/completions
 // ---------------------------------------------------------------------------

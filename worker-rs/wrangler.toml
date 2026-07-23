@@ -1,7 +1,7 @@
 # Rust parity port of the omi-v4 API worker. Kept entirely separate from
 # worker/wrangler.jsonc so the TypeScript worker stays deployable until cutover.
-# Binds the SAME D1 database — the TS worker's migrations remain the schema of
-# record; this worker does NOT own migrations.
+# Binds the SAME D1 database (database_id matches) — the TS worker's migrations
+# remain the schema of record; this worker does NOT own migrations.
 name = "omi-v4-api-rs"
 main = "build/worker/shim.mjs"
 compatibility_date = "2026-07-21"
@@ -9,31 +9,94 @@ compatibility_date = "2026-07-21"
 [build]
 command = "worker-build --release"
 
+# ---------------------------------------------------------------------------
+# CUTOVER — custom domain (COMMENTED OUT ON PURPOSE).
+# The live TS worker (omi-v4-api) currently owns `omi.tsc.hk`. Do NOT enable
+# this block in a dry run or a non-cutover deploy: taking the route steals the
+# domain from the live worker. At cutover, deploy this worker first WITHOUT the
+# route, verify /health on the *.workers.dev URL, then uncomment and redeploy to
+# swap the domain (or remove the route from the TS worker first). See CUTOVER.md.
+# [[routes]]
+# pattern = "omi.tsc.hk"
+# custom_domain = true
+
+# Static assets — the TS worker serves worker/public at the custom domain root.
+# wrangler resolves this relative to THIS project dir; a path outside the
+# project (../worker/public) is accepted by wrangler 4.x (verified with
+# `deploy --dry-run`). If a future wrangler rejects it, copy the files into
+# worker-rs/public as a [build] step instead. See CUTOVER.md.
+[assets]
+directory = "../worker/public"
+
 [vars]
 ENVIRONMENT = "production"
 FIREBASE_PROJECT_ID = "based-hardware"
+MIMO_CHAT_COMPLETIONS_URL = "https://token-plan-sgp.xiaomimimo.com/v1/chat/completions"
+MIMO_MODEL = "mimo-v2.5-pro"
+MIMO_INPUT_MICROUSD_PER_MILLION_TOKENS = "435000"
+MIMO_OUTPUT_MICROUSD_PER_MILLION_TOKENS = "870000"
+MIMO_BUDGET_WINDOW_SECONDS = "3600"
+MIMO_UID_IN_FLIGHT_LIMIT = "2"
+MIMO_GLOBAL_IN_FLIGHT_LIMIT = "32"
+MIMO_UID_TOKEN_BUDGET = "100000"
+MIMO_GLOBAL_TOKEN_BUDGET = "2000000"
+MIMO_UID_COST_BUDGET_MICROUSD = "1000000"
+MIMO_GLOBAL_COST_BUDGET_MICROUSD = "20000000"
+GEMINI_LIVE_MODEL = "gemini-3.1-flash-live-preview"
+STT_MAX_SESSION_SECONDS = "900"
+STT_COST_MICROUSD_PER_MINUTE = "10000"
+STT_UPSTREAM_CONNECT_TIMEOUT_MS = "10000"
+STT_CLAIM_DEADLINE_SECONDS = "60"
+STT_BUDGET_WINDOW_SECONDS = "3600"
+STT_UID_IN_FLIGHT_LIMIT = "2"
+STT_GLOBAL_IN_FLIGHT_LIMIT = "64"
+STT_UID_SECONDS_BUDGET = "3600"
+STT_GLOBAL_SECONDS_BUDGET = "115200"
+STT_UID_COST_BUDGET_MICROUSD = "300000"
+STT_GLOBAL_COST_BUDGET_MICROUSD = "9600000"
 
-# Same physical D1 database as worker/wrangler.jsonc (database_id matches).
+# Minutely cron — parity with the TS worker's `triggers.crons`. Drives
+# deliverDueChannelMessages, respondToStaleInboxItems,
+# reconcileManagedAssistantRequests, and backfillClaimVectors→drainPendingEmbeddings
+# via the single `#[event(scheduled)]` handler.
+[triggers]
+crons = ["* * * * *"]
+
+# Same physical D1 database as worker/wrangler.jsonc (binding + database_id
+# match the TS worker). Intentionally NO migrations_dir: the TS worker owns
+# migrations.
 [[d1_databases]]
 binding = "DB"
 database_name = "omi-v4"
 database_id = "74aab5eb-a81d-4494-9283-d48052b8a068"
-# Intentionally NO migrations_dir: the TS worker owns migrations.
 
-# Secrets (set via `wrangler secret put`), NOT committed:
-#   FIREBASE_PROJECT_ID is a var above; the following are secrets in the TS
-#   worker and should be provisioned identically before cutover:
+# Semantic memory search — parity with the TS worker's `vectorize` binding.
+# One-time setup before deploy (see CUTOVER.md):
+#   wrangler vectorize create omi-memory-claims --dimensions=768 --metric=cosine
+#   wrangler vectorize create-metadata-index omi-memory-claims --property-name=uid --type=string
+# Dimensions match Workers AI @cf/baai/bge-base-en-v1.5. The Rust worker binds
+# MEMORY_VECTORS via js_sys FFI with a graceful fallback (memory context is null
+# when the binding is absent), so this is safe to declare before the index
+# exists — but create the index before relying on semantic search.
+[[vectorize]]
+binding = "MEMORY_VECTORS"
+index_name = "omi-memory-claims"
+
+# Workers AI — parity with the TS worker's `ai` binding (bge embeddings).
+[ai]
+binding = "AI"
+
+# Secrets (set via `wrangler secret put`), NOT committed — provision the same
+# set the TS worker uses before cutover (see CUTOVER.md for the full list):
 #   TELEGRAM_WEBHOOK_SECRET, TELEGRAM_BOT_TOKEN, BLOOIO_WEBHOOK_SIGNING_SECRET,
 #   BLOOIO_API_KEY, STRIPE_SECRET_KEY, STRIPE_PRO_PRICE_ID, STRIPE_WEBHOOK_SECRET,
 #   APP_URL, MIMO_API_KEY, DEEPGRAM_API_KEY, GEMINI_API_KEY,
 #   FIREBASE_SERVICE_ACCOUNT_EMAIL, FIREBASE_SERVICE_ACCOUNT_PRIVATE_KEY, etc.
-#
-# Vectorize and the AI binding are NOT declared yet outside the `vectorize`
-# feature — see PORT_STATUS.md for the plan and the workers-rs binding notes.
 
-# Durable Objects across the delivery/OAuth and managed-AI route groups. One
-# canonical RATE_LIMITER binding (RateLimiterDo) is shared by both — see
-# rate_limit_lock.rs for why there is only one rate-limiter DO class.
+# Durable Objects. Binding names match the TS worker; class_name values are the
+# Rust `#[durable_object]` struct names (this worker owns its own DO namespace).
+# One canonical RATE_LIMITER binding (RateLimiterDo) is shared across the
+# delivery/OAuth and managed-AI route groups.
 [[durable_objects.bindings]]
 name = "DELIVERY_COORDINATOR"
 class_name = "DeliveryCoordinator"
