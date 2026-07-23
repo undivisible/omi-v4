@@ -9,6 +9,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'storage/omi_directory.dart';
 
 import 'api/dev_gemini.dart';
+import 'api/byok_client.dart';
 import 'api/worker_http.dart';
 import 'auth/auth.dart';
 import 'auth/firebase_bootstrap.dart';
@@ -73,6 +74,7 @@ final class AppServices {
     this.settings,
     this.channels,
     this.billing,
+    this.byok,
     this.conversations,
     ConversationInboxTransport? conversationInbox,
     LocalConversationStore? localConversations,
@@ -159,6 +161,7 @@ final class AppServices {
       settings: SettingsClient(WorkerSettingsTransport(worker)),
       channels: ChannelClient(WorkerChannelTransport(worker)),
       billing: WorkerBillingClient(worker),
+      byok: WorkerByokClient(worker),
       conversations: WorkerConversationTransport(worker),
       conversationInbox: WorkerConversationTransport(worker),
       localConversations: PreferencesLocalConversationStore(),
@@ -205,6 +208,7 @@ final class AppServices {
       settings: SettingsClient(WorkerSettingsTransport(worker)),
       channels: ChannelClient(WorkerChannelTransport(worker)),
       billing: WorkerBillingClient(worker),
+      byok: WorkerByokClient(worker),
       conversations: WorkerConversationTransport(worker),
       conversationInbox: WorkerConversationTransport(worker),
       localConversations: PreferencesLocalConversationStore(),
@@ -300,6 +304,10 @@ final class AppServices {
   final SettingsClient? settings;
   final ChannelClient? channels;
   final WorkerBillingClient? billing;
+
+  /// BYOK plan and price negotiation. The negotiated price lives on the
+  /// worker; this client only reads and settles it.
+  final WorkerByokClient? byok;
   final ConversationTransport? conversations;
   final CurrentsController? currents;
   final WorkerHttpClient? _worker;

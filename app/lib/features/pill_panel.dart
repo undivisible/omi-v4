@@ -8,6 +8,7 @@ import '../native/native_hub.dart';
 import 'ax_context.dart';
 import 'cursor_pill.dart';
 import 'cursor_pill_controller.dart';
+import '../ui/omi_typography.dart';
 
 /// The channel the primary Flutter engine answers on: the Runner relays every
 /// action the panel takes here, and the shell pushes render state back the
@@ -315,7 +316,7 @@ class _PillPanelAppState extends State<PillPanelApp> {
   Widget build(BuildContext context) => MaterialApp(
     title: 'Omi',
     debugShowCheckedModeBanner: false,
-    theme: ThemeData(brightness: Brightness.dark, fontFamily: 'SF Pro Display'),
+    theme: ThemeData(brightness: Brightness.dark, fontFamily: OmiFonts.sans),
     home: Scaffold(
       backgroundColor: Colors.transparent,
       body: Align(

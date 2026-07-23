@@ -1,4 +1,6 @@
 mod approval;
+pub mod brief;
+mod call_bridge;
 pub mod capture_policy;
 mod chat_router;
 mod computer_use;
@@ -6,8 +8,11 @@ mod daily_review;
 mod dev_gemini;
 mod evidence;
 mod extraction;
+mod facetime_bridge;
+mod facetime_page;
 mod live_voice;
 mod local_ai;
+mod mark_video;
 pub mod meeting;
 mod meeting_capture;
 pub mod meeting_detector;

@@ -69,7 +69,8 @@ pub(crate) trait RealtimeVoiceProvider: Send + Sync {
     fn open(&self, session: RealtimeVoiceSession) -> Result<RealtimeVoiceHandle, String>;
 }
 
-enum LiveControl {
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum LiveControl {
     Finish,
     Cancel,
 }
@@ -126,6 +127,25 @@ impl RealtimeVoiceHandle {
 
     pub(crate) fn take_events(&mut self) -> Option<mpsc::Receiver<RealtimeVoiceEvent>> {
         self.events.take()
+    }
+
+    /// Build a handle backed by caller-supplied channels instead of a live
+    /// socket, so the session machinery above can be exercised — and reused by
+    /// the call bridge — without any network. Test-only: production handles
+    /// only ever come from `RealtimeVoiceProvider::open`.
+    #[cfg(test)]
+    pub(crate) fn from_parts(
+        audio_sender: mpsc::UnboundedSender<Vec<u8>>,
+        control_sender: mpsc::UnboundedSender<LiveControl>,
+        events: mpsc::Receiver<RealtimeVoiceEvent>,
+    ) -> Self {
+        Self {
+            audio_sender: Some(audio_sender),
+            control_sender: Some(control_sender),
+            pending_audio_bytes: Arc::new(AtomicUsize::new(0)),
+            draining: Arc::new(AtomicBool::new(false)),
+            events: Some(events),
+        }
     }
 }
 

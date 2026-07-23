@@ -169,4 +169,155 @@ void main() {
       throwsA(isA<NativeHubUnavailable>()),
     );
   });
+
+  test('unavailable hub refuses every command and names the reason', () {
+    const hub = UnavailableNativeHub('web uses the Worker');
+
+    for (final call in _everyCommand(hub)) {
+      expect(
+        call,
+        throwsA(
+          isA<NativeHubUnavailable>().having(
+            (error) => error.message,
+            'message',
+            'web uses the Worker',
+          ),
+        ),
+      );
+    }
+    expect(
+      const NativeHubUnavailable('nope').toString(),
+      'NativeHubUnavailable: nope',
+    );
+  });
+
+  test('unavailable hub tolerates lifecycle calls', () async {
+    const hub = UnavailableNativeHub('web uses the Worker');
+
+    await hub.initialize();
+    hub.dispose();
+    hub.dispose();
+  });
+
+  test('rinf hub refuses every command before initialize', () {
+    final hub = RinfNativeHub();
+
+    expect(hub.available, isTrue);
+    for (final call in _everyCommand(hub)) {
+      expect(
+        call,
+        throwsA(
+          isA<NativeHubUnavailable>().having(
+            (error) => error.message,
+            'message',
+            'Native hub is not initialized.',
+          ),
+        ),
+      );
+    }
+  });
+
+  test('rinf hub disposing before initialize is a no-op', () {
+    final hub = RinfNativeHub();
+
+    hub.dispose();
+    expect(() => hub.cancel('request'), throwsA(isA<NativeHubUnavailable>()));
+  });
 }
+
+/// Every mutating entry point on the hub, so a hub that cannot serve them is
+/// forced to say so uniformly instead of dropping commands on the floor.
+List<void Function()> _everyCommand(NativeHub hub) => [
+  () => hub.configureMemory(
+    requestId: 'request',
+    databasePath: '/tmp/omi.db',
+    tenantId: 'tenant',
+    personId: 'person',
+  ),
+  () => hub.capture(
+    requestId: 'request',
+    ingestionKey: 'key',
+    source: CaptureSource.screen,
+    occurredAtMs: 1,
+    recordedAtMs: 2,
+  ),
+  () => hub.search(requestId: 'request', query: 'memory'),
+  () => hub.exportMemory(requestId: 'request'),
+  () => hub.listMemoryItems(requestId: 'request'),
+  () => hub.correctMemory(
+    requestId: 'request',
+    claimId: 'claim',
+    text: 'text',
+    value: 'value',
+    occurredAtMs: 1,
+    recordedAtMs: 2,
+  ),
+  () => hub.deleteMemorySource(
+    requestId: 'request',
+    sourceId: 'source',
+    deletedAtMs: 3,
+  ),
+  () => hub.scanOnboarding(
+    requestId: 'request',
+    roots: const ['/tmp'],
+    includeAppleNotes: false,
+    includeAppleMail: false,
+    recordedAtMs: 4,
+  ),
+  () => hub.sendMessage(requestId: 'request', text: 'hello'),
+  () => hub.configureAssistant(
+    requestId: 'request',
+    provider: AssistantProvider.worker,
+    model: 'managed-chat',
+    credential: 'token',
+  ),
+  () => hub.configureTrustedAssistant(
+    requestId: 'request',
+    managedWorkerOrigin: 'https://assistant.example.test',
+  ),
+  () => hub.clearAssistant('request'),
+  () => hub.decideApproval(
+    requestId: 'request',
+    proposalId: 'proposal',
+    decision: ApprovalDecision.approveOnce,
+  ),
+  () => hub.startTranscription(
+    requestId: 'request',
+    audioStreamId: 'voice-1',
+    deviceId: 'device-1',
+    auth: const TranscriptionAuthLocal(),
+    language: 'en',
+    sampleRateHz: 16000,
+    channels: 1,
+    encoding: AudioEncoding.pcmS16Le,
+  ),
+  () => hub.stopTranscription(requestId: 'request', audioStreamId: 'voice-1'),
+  () => hub.startLiveVoice(
+    requestId: 'request',
+    liveStreamId: 'live-1',
+    ephemeralToken: 'token',
+    model: 'live',
+  ),
+  () => hub.stopLiveVoice(requestId: 'request', liveStreamId: 'live-1'),
+  () => hub.startMeeting(requestId: 'request', title: 'standup'),
+  () => hub.stopMeeting('request'),
+  () => hub.jotMeetingNote(requestId: 'request', text: 'note'),
+  () => hub.provideMeetingAuth(
+    requestId: 'request',
+    auth: const TranscriptionAuthLocal(),
+  ),
+  () => hub.setSystemAudioCaptureMode(
+    requestId: 'request',
+    mode: SystemAudioCaptureMode.onlyDuringMeetings,
+  ),
+  () => hub.cancel('request'),
+  () => hub.sendAudio(
+    requestId: 'request',
+    sequence: 0,
+    sampleRateHz: 16000,
+    channels: 1,
+    encoding: AudioEncoding.pcmS16Le,
+    endOfStream: false,
+    bytes: Uint8List.fromList([1, 2]),
+  ),
+];

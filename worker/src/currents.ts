@@ -231,6 +231,89 @@ currents.post("/generate", async (context) => {
   });
 });
 
+export type CurrentInput = {
+  evidenceId: string | null;
+  title: string;
+  summary: string;
+  reason: string;
+  instruction: string;
+  confidence: number;
+  surfaceAt: number;
+  expiresAt: number | null;
+  crepus: string | null;
+};
+
+// A Current always cites evidence. First-party callers pass an evidence id
+// they already hold; programmatic callers (public API, MCP) have none, so the
+// citation is minted here as an `integration` source whose quote is the reason
+// the caller gave. Either way the row satisfies the same citation joins.
+export const createCurrent = async (
+  env: AppEnv["Bindings"],
+  uid: string,
+  input: CurrentInput,
+): Promise<Record<string, unknown> | null> => {
+  const now = Date.now();
+  let evidenceId = input.evidenceId;
+  if (evidenceId === null) {
+    const sourceId = crypto.randomUUID();
+    const revisionId = crypto.randomUUID();
+    evidenceId = crypto.randomUUID();
+    await env.DB.batch([
+      env.DB.prepare(
+        "INSERT INTO memory_sources (id, uid, kind, created_at, updated_at) VALUES (?1, ?2, 'integration', ?3, ?3)",
+      ).bind(sourceId, uid, now),
+      env.DB.prepare(
+        `INSERT INTO memory_source_revisions
+           (id, source_id, uid, revision, content_hash, payload, observed_at, created_at)
+         VALUES (?1, ?2, ?3, 1, ?4, ?5, ?6, ?6)`,
+      ).bind(
+        revisionId,
+        sourceId,
+        uid,
+        await sha256(input.reason),
+        JSON.stringify({ title: input.title, reason: input.reason }),
+        now,
+      ),
+      env.DB.prepare(
+        "INSERT INTO memory_evidence (id, uid, source_revision_id, quote, locator, created_at) VALUES (?1, ?2, ?3, ?4, '[]', ?5)",
+      ).bind(evidenceId, uid, revisionId, input.reason, now),
+    ]);
+  } else {
+    const evidence = await env.DB.prepare(
+      `SELECT e.id FROM memory_evidence e
+     JOIN memory_source_revisions r ON r.id = e.source_revision_id AND r.uid = e.uid
+     JOIN memory_sources s ON s.id = r.source_id AND s.uid = r.uid
+     WHERE e.id = ?1 AND e.uid = ?2 AND e.tombstoned_at IS NULL AND s.tombstoned_at IS NULL`,
+    )
+      .bind(evidenceId, uid)
+      .first();
+    if (!evidence) return null;
+  }
+  const id = crypto.randomUUID();
+  await env.DB.prepare(
+    `INSERT INTO currents
+      (id, uid, evidence_id, title, summary, reason, confidence_basis_points, proposed_action,
+       status, surface_at, expires_at, created_at, updated_at, crepus)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'candidate', ?9, ?10, ?11, ?11, ?12)`,
+  )
+    .bind(
+      id,
+      uid,
+      evidenceId,
+      input.title,
+      input.summary,
+      input.reason,
+      Math.round(input.confidence * 10_000),
+      JSON.stringify({ kind: "review", instruction: input.instruction }),
+      input.surfaceAt,
+      input.expiresAt,
+      now,
+      input.crepus,
+    )
+    .run();
+  return rowToCurrent((await selectCurrent(env, uid, id))!);
+};
+
 currents.post("/candidates", async (context) => {
   const body = await object(context.req.raw);
   const evidenceId = text(body?.evidenceId, 200);
@@ -261,68 +344,45 @@ currents.post("/candidates", async (context) => {
         expiresAt <= surfaceAt))
   )
     return context.json({ error: "Invalid Current candidate" }, 400);
-  const uid = context.get("auth").uid;
-  const evidence = await context.env.DB.prepare(
-    `SELECT e.id FROM memory_evidence e
-     JOIN memory_source_revisions r ON r.id = e.source_revision_id AND r.uid = e.uid
-     JOIN memory_sources s ON s.id = r.source_id AND s.uid = r.uid
-     WHERE e.id = ?1 AND e.uid = ?2 AND e.tombstoned_at IS NULL AND s.tombstoned_at IS NULL`,
-  )
-    .bind(evidenceId, uid)
-    .first();
-  if (!evidence)
-    return context.json({ error: "Cited evidence not found" }, 404);
-  const id = crypto.randomUUID();
-  const now = Date.now();
-  await context.env.DB.prepare(
-    `INSERT INTO currents
-      (id, uid, evidence_id, title, summary, reason, confidence_basis_points, proposed_action,
-       status, surface_at, expires_at, created_at, updated_at, crepus)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'candidate', ?9, ?10, ?11, ?11, ?12)`,
-  )
-    .bind(
-      id,
-      uid,
-      evidenceId,
-      title,
-      summary,
-      reason,
-      Math.round(confidence * 10_000),
-      JSON.stringify({ kind: "review", instruction }),
-      surfaceAt,
-      expiresAt,
-      now,
-      crepus,
-    )
-    .run();
-  return context.json(
-    { current: rowToCurrent((await selectCurrent(context.env, uid, id))!) },
-    201,
-  );
+  const current = await createCurrent(context.env, context.get("auth").uid, {
+    evidenceId,
+    title,
+    summary,
+    reason,
+    instruction,
+    confidence,
+    surfaceAt,
+    expiresAt,
+    crepus,
+  });
+  if (!current) return context.json({ error: "Cited evidence not found" }, 404);
+  return context.json({ current }, 201);
 });
 
-currents.get("/", async (context) => {
-  const uid = context.get("auth").uid;
+export const listCurrents = async (
+  env: AppEnv["Bindings"],
+  uid: string,
+): Promise<Record<string, unknown>[]> => {
   const now = Date.now();
-  await context.env.DB.prepare(
+  await env.DB.prepare(
     `UPDATE currents SET status = 'expired', updated_at = ?1
      WHERE uid = ?2 AND status IN ('candidate', 'surfaced', 'snoozed') AND expires_at IS NOT NULL AND expires_at <= ?1`,
   )
     .bind(now, uid)
     .run();
-  await context.env.DB.prepare(
+  await env.DB.prepare(
     `UPDATE currents SET status = 'surfaced', snoozed_until = NULL, updated_at = ?1
      WHERE uid = ?2 AND status = 'snoozed' AND snoozed_until <= ?1`,
   )
     .bind(now, uid)
     .run();
-  await context.env.DB.prepare(
+  await env.DB.prepare(
     `UPDATE currents SET status = 'surfaced', updated_at = ?1
      WHERE uid = ?2 AND status = 'candidate' AND surface_at <= ?1`,
   )
     .bind(now, uid)
     .run();
-  const rows = await context.env.DB.prepare(
+  const rows = await env.DB.prepare(
     `SELECT c.*, s.id AS source_id, s.kind AS source_kind, json_extract(c.proposed_action, '$.instruction') AS instruction,
        COALESCE((SELECT SUM(CASE f.kind WHEN 'dismissed' THEN -1000 ELSE -250 END)
                  FROM current_feedback f
@@ -350,8 +410,14 @@ currents.get("/", async (context) => {
   )
     .bind(uid)
     .all<Record<string, unknown>>();
-  return context.json({ currents: (rows.results ?? []).map(rowToCurrent) });
-});
+  return (rows.results ?? []).map(rowToCurrent);
+};
+
+currents.get("/", async (context) =>
+  context.json({
+    currents: await listCurrents(context.env, context.get("auth").uid),
+  }),
+);
 
 currents.post("/:id/feedback", async (context) => {
   const uid = context.get("auth").uid;

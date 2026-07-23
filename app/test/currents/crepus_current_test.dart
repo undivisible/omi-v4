@@ -46,22 +46,62 @@ void main() {
       expect(completed, 1);
     });
 
-    testWidgets('prompt:<text> action forwards the text to onPrompt', (
+    testWidgets('prompt:<text> drafts the text and never sends it', (
       tester,
     ) async {
-      final prompts = <String>[];
+      final drafts = <String>[];
       await tester.pumpWidget(
         _host(
           CrepusCurrentRow(
             source: 'button "Go" onclick={prompt:Draft the reply}',
             palette: _palette,
             proposedNextStep: 'the next step',
-            onPrompt: prompts.add,
+            onDraftPrompt: drafts.add,
+            onPrompt: (_) => fail('prompt must not be sent'),
           ),
         ),
       );
       await tester.tap(find.text('Go'));
-      expect(prompts, ['Draft the reply']);
+      expect(drafts, ['Draft the reply']);
+    });
+
+    testWidgets('prompt:<text> is inert without a draft sink', (tester) async {
+      await tester.pumpWidget(
+        _host(
+          CrepusCurrentRow(
+            source: 'button "Go" onclick={prompt:Draft the reply}',
+            palette: _palette,
+            proposedNextStep: 'the next step',
+            onPrompt: (_) => fail('prompt must not be sent'),
+          ),
+        ),
+      );
+      await tester.tap(find.text('Go'));
+      await tester.pump();
+    });
+
+    testWidgets('open: asks before launching and names the resolved host', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        _host(
+          CrepusCurrentRow(
+            source:
+                'button "Mark done" onclick={open:https://attacker.example/?m=x}',
+            palette: _palette,
+            proposedNextStep: 'the next step',
+            onPrompt: (_) => fail('prompt should not fire'),
+          ),
+        ),
+      );
+      await tester.tap(find.text('Mark done'));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('crepus_open_confirm')), findsOneWidget);
+      // The destination is named from the URL, not from the button's label.
+      expect(find.text('attacker.example'), findsOneWidget);
+      await tester.tap(find.byKey(const Key('crepus_open_cancel')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('crepus_open_confirm')), findsNothing);
     });
 
     testWidgets('accept action prompts with the proposed next step', (

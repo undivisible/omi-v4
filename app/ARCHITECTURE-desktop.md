@@ -1,8 +1,8 @@
 # Omi v4 Desktop Architecture
 
-*Generated from a read-only pass over this repository and over the upstream `BasedHardware/omi` monorepo on 2026-07-23, reflecting the tree at commit `7baf8ac`. Every claim below is grounded in files that were actually read; paths are cited inline so each statement is checkable. Upstream paths are cited relative to the upstream checkout root (`desktop/…`). This describes what exists right now, not a roadmap.*
+*Generated from a read-only pass over this repository, revised 2026-07-23. Every claim below is grounded in files that were actually read; paths are cited inline so each statement is checkable. This describes what exists right now, not a roadmap.*
 
-*Scope note: this document covers the desktop surface only — macOS primarily, Windows secondarily. The whole-system view (Worker, D1, billing, channels, mobile) lives in the root `ARCHITECTURE.md`; this document does not repeat it and defers to it wherever the two overlap.*
+*Scope note: this document covers the desktop surface only — macOS primarily, Windows secondarily. The whole-system view (Worker, D1, billing, channels, mobile) lives in the root [`ARCHITECTURE.md`](../ARCHITECTURE.md); this document does not repeat it and defers to it wherever the two overlap. Comparison with upstream Omi's desktop product lives entirely in [`COMPARISON.md`](../COMPARISON.md) §3.*
 
 ---
 
@@ -13,8 +13,8 @@ The desktop experience is not a separate application. It is the same Flutter bin
 | Layer | Language | Where | Owns |
 | --- | --- | --- | --- |
 | **Flutter UI** | Dart | `app/lib/` | The single continuous-chat hub, the summoned overlay pill, onboarding, settings, task rows, meeting panel, all gesture state machines |
-| **The hub** | Rust | `app/native/hub/src/` (19 modules, ~15k lines) | Assistant dispatch, Gemini Live duplex voice, memory (`zkr`), workspace/Notes/Mail/evidence scan, meetings, computer use, extraction, daily review |
-| **macOS Runner** | Swift | `app/macos/Runner/` (7 files, ~1.9k lines) | Window chrome, the summoned pill window, native voice waveform + edge-glow overlay windows, global keyboard/mouse monitoring, menu bar, the settings window (a second Flutter engine), EventKit, audio playout |
+| **The hub** | Rust | `app/native/hub/src/` (21 modules) | Assistant dispatch and online model-tier routing, Gemini Live duplex voice, memory (`zkr`), workspace/Notes/Mail/evidence scan, meetings, computer use, extraction, daily review, self-improvement |
+| **macOS Runner** | Swift | `app/macos/Runner/` (10 files) | Window chrome, the summoned pill window, native voice waveform + edge-glow overlay windows, global keyboard/mouse monitoring, menu bar, the settings window (a second Flutter engine), EventKit, audio playout, accessibility context reads |
 
 On Windows the third layer is a much thinner C++ runner (`app/windows/runner/flutter_window.cpp`, 236 lines) — see §9.
 
@@ -74,8 +74,8 @@ flowchart TD
 
     subgraph Hub["Rust hub (Rinf, in-process) — app/native/hub/src"]
         RT["runtime.rs<br/>CommandDispatcher, dispatch_assistant"]
-        ROUTER["chat_router.rs<br/>Core vs Serious turn class"]
-        LOCAL["local_ai.rs<br/>Apple FoundationModels<br/>(macOS arm64 only)"]
+        ROUTER["chat_router.rs + model_tier.rs<br/>online tier router (rx4)"]
+        LOCAL["local_ai.rs<br/>Apple FoundationModels<br/>(macOS arm64 only)<br/>summaries + extraction only"]
         LV["live_voice.rs<br/>Gemini Live duplex WS"]
         STT["stt.rs / transcription.rs"]
         SCAN["scan.rs + evidence.rs<br/>workspace / Notes / Mail /<br/>apps / shell / browsing / docs"]
@@ -111,8 +111,9 @@ flowchart TD
 
     SVC <-- "Rinf typed signals + binary AudioChunk" --> RT
     RT --> ROUTER
-    ROUTER -->|Core| LOCAL
-    ROUTER -->|Serious| LLM
+    ROUTER -->|"tier -> model slug"| LLM
+    MEETR --> LOCAL
+    EXTR --> LOCAL
     RT --> LV
     RT --> STT
     RT --> SCAN
@@ -132,18 +133,39 @@ flowchart TD
 
 ## 3. The assistant / chat loop
 
-The desktop hub is a single continuous-chat surface, not a multi-destination app (`PLAN.md` line 31; `app/lib/features/chat_screen.dart`, 2,219 lines, renders the chat timeline, `_TaskRow`/`_RichTaskRow` "what matters next" rows sourced from `CurrentsController`, and `_ChatInputCard`). `app/lib/features/omi_shell.dart` is the desktop shell that owns the chat key, the desktop keyboard, the gesture controller, the menu-bar controller, and the cursor pill.
+The desktop hub is a single continuous-chat surface, not a multi-destination app (`app/lib/features/chat_screen.dart` renders the chat timeline, the `_TaskRow`/`_RichTaskRow` "what matters next" rows sourced from `CurrentsController`, and `_ChatInputCard`). `app/lib/features/omi_shell.dart` is the desktop shell that owns the chat key, the desktop keyboard, the gesture controller, the menu-bar controller, and the cursor pill.
 
-A turn dispatched from either surface reaches `dispatch_assistant()` in `app/native/hub/src/runtime.rs:1565`. The distinctive part of the desktop loop is the **local-first router**:
+### 3.1 Routing: online, tiered
 
-- `app/native/hub/src/chat_router.rs` classifies each turn as `TurnClass::Core` or `TurnClass::Serious` using purely local heuristics: >400 characters, code markers (` ``` `, `fn `, `def `, `class `, `#include`, …), or any of ~40 "serious" phrases (`implement`, `refactor`, `stack trace`, `analyze`, `draft an email`, `click`, `open the`, `computer`, …).
-- `should_route_local(local_available, text)` returns true only for `Core` turns when local inference exists.
-- In `dispatch_assistant`, a `Core` turn is answered by `crate::local_ai::respond()` — Apple Foundation Models via `rs_ai_local`, entirely on-device — and the loop returns without any network call (`runtime.rs:1589-1615`). Anything else falls through to the configured provider.
-- Overlay-originated turns (`MessageOrigin::Overlay`) are **never** routed local, because the overlay is an agent-instruction surface that needs the tool/action pipeline (`runtime.rs:1586-1589`, comment retained in source).
+A turn dispatched from either surface reaches `dispatch_assistant()` in `app/native/hub/src/runtime.rs`. **Chat always goes to the configured cloud provider.** There is no local-inference path for chat: `dispatch_assistant` explicitly discards both the `local_ai_available` flag and the message origin (`let _ = (local_ai_available, origin);`) before dispatch, and the comment above that line records the reason — Apple Foundation Models refuses too many requests and has no tool or memory access, so it is kept for small local jobs only. `chat_router.rs` no longer contains `TurnClass`, `classify`, or `should_route_local`; the local-vs-remote classifier is gone.
 
-`local_ai.rs` is gated at `#[cfg(all(target_os = "macos", target_arch = "aarch64"))]`; on every other target `is_available()` is a constant `false` and `summarize`/`respond` return `None`, so the router degrades to the remote provider.
+What remains in `chat_router.rs` is an **online model-tier router** built on `rx4::model_router`:
 
-Provider selection, endpoint validation, and the managed-vs-BYOK split are shared with mobile and are documented in root `ARCHITECTURE.md` §3.3.
+- `SEARCH_MARKERS` and `VISION_MARKERS` are checked first against the lowercased prompt, short-circuiting to `ModelTier::Search` and `ModelTier::Multimodal` — neither has an `rx4` `TaskTier` equivalent, so the hub detects them itself.
+- Everything else is delegated to `rx4`'s `ModelRouter`, configured with extra `HEAVY_KEYWORDS` prompt heuristics (`reasoning`, `prove`, `algorithm`, `refactor`, `step by step`, …) so hard reasoning lands on Heavy rather than falling through to Standard.
+- `rx4`'s Lite/Standard/Heavy/Subagent tiers map to the hub's Speed/Balanced/Smart/Balanced, and every tier is given Balanced as its fallback so a failed tier degrades to the everyday model.
+- The per-tier model ids come from `model_tier.rs` rather than being re-hardcoded, and each is `OMI_MODEL_*`-overridable. The table is in root [`ARCHITECTURE.md`](../ARCHITECTURE.md) §3.3.
+
+The resolved slug is reported to the UI as a `ToolProgress` detail alongside the online marker, so the chat surface can show which model answered. Online context is deliberately *not* de-identified — a comment in `runtime.rs` explains that the cloud side has to recognise the user across iMessage/Telegram channels, so identity has to survive the hop.
+
+`self_improve.rs` sits on the same path: it opens its own connection to the memory database, augments the outgoing prompt with at most `LESSON_LIMIT` (3) accumulated lessons, and records a lesson from the finished turn. Both halves degrade to a clean no-op when the memory database is unavailable, and the write is fire-and-forget so it never adds latency to the turn that produced it.
+
+### 3.2 Where the local model *is* used on desktop
+
+`local_ai.rs` is gated at `#[cfg(all(target_os = "macos", target_arch = "aarch64"))]`; elsewhere `is_available()` is a constant `false` and `summarize`/`respond` return `None`. Its four real consumers are the onboarding scan summary, transcript claim extraction, `daily_review.rs`, and `meeting.rs` (insight classification and the end-of-meeting summary). See root [`ARCHITECTURE.md`](../ARCHITECTURE.md) §3.11.
+
+Provider selection, endpoint validation, and the managed-vs-BYOK split are shared with mobile and are documented in root [`ARCHITECTURE.md`](../ARCHITECTURE.md) §3.3.
+
+### 3.3 The chat surface
+
+Two behaviours define how the hub window is navigated, and both are deliberate substitutes for chrome:
+
+- **There is no back button.** The chat screen is the destination, not a page in a stack.
+- **Overscrolling past the newest message returns to the home view.** The message list is `reverse: true`, so the newest message is at the bottom; pulling past it beyond `_homeOverscroll` (−64 logical pixels) sets `_greeterDismissed = false` and the home view — greeting, setup and starter tasks, "what matters next" rows, meeting notes — comes back. The list uses `BouncingScrollPhysics` specifically so that overscroll is possible at all, and the check runs on every scroll update rather than at gesture end because the bouncing spring returns before the gesture finishes. A `_ScrollHomeHint` ("Scroll down to go home") is shown once the greeter has been dismissed.
+
+While the home view is showing, it is laid out to fill the viewport minus `_historyPeekExtent` (44 px), so the tail of the newest message stays visible and scrolling up reads as revealing history. Once the greeter is dismissed the conversation owns the whole viewport. A scrollbar is hung off the full-width window edge rather than inside the 680-pixel reading column.
+
+`ScrollEdgeFade` (`app/lib/ui/scroll_edge_fade.dart`) is the shared scroll-edge treatment used across the other scrolling surfaces — the tasks screen, meeting notes, account setup, and the mobile companion. It wraps a vertical scrollable with page-coloured gradients at top and bottom, each hidden while the view is already resting against that edge, defaulting to the ambient scaffold background so the fade reads as the page dissolving content rather than as a scrim.
 
 ---
 
@@ -176,7 +198,8 @@ This is the most desktop-specific part of the product, and it is split deliberat
 
 - The **pill** is a real relocation of the main window: `summonPill(width:height:)` (`MainFlutterWindow.swift:1002`) moves and resizes the window next to `NSEvent.mouseLocation` using `cursorPillFrame(...)`, saving the previous window level and collection behavior so `restoreFromPill` can put it back. The Dart side declares its geometry once (`CursorPillWindow.width = 420`, `height = 230` in `app/lib/features/cursor_pill_window.dart`).
 - The **glass** under the pill is native: `PillGlassView` (`MainFlutterWindow.swift:86`) uses `NSGlassEffectView` when the class exists at runtime and falls back to an `NSVisualEffectView` with `.hudWindow` material otherwise. Flutter reports rounded-rect regions in logical points via `updatePillGlass`, and the Swift layer masks the glass to match (`CursorPillWindow.updateGlass`).
-- The **voice surfaces are separate windows entirely**, so the main window never moves or changes while listening (comment in `cursor_pill_window.dart`): `VoiceGlowOverlayWindow` (a borderless click-through full-screen edge glow, `MainFlutterWindow.swift:254`) and `VoiceWaveformPanel` (a small `NSPanel` that follows the cursor, line 339), coordinated by `VoiceOverlayController` (line 380) which re-positions on both local and global mouse-move. Both override `hitTest` to return `nil` so they never take clicks. Flutter drives them with `start`/`stop`/`level(0..1)` over `omi/voice_overlay`.
+- The **voice surfaces are separate windows entirely**, so the main window never moves or changes while listening (comment in `cursor_pill_window.dart`): `VoiceGlowOverlayWindow` (a borderless, transparent, click-through full-screen edge glow) and `VoiceWaveformPanel` (a small `NSPanel` that follows the cursor), coordinated by `VoiceOverlayController`, which re-positions on both local and global mouse-move. The glow window sets `ignoresMouseEvents`, sits at `.screenSaver` level, and joins all Spaces; both override `hitTest` to return `nil` so they never take clicks. Flutter drives them with `start`/`stop`/`level(0..1)` over `omi/voice_overlay`.
+- **The cursor-shake glow burst lives in that detached overlay window, not in the hub window.** `VoiceGlowOverlayWindow.burst(completion:)` flares every edge to full and fades out over `burstDuration` (0.55 s); the source comment states plainly that this is so the shake finale bursts across the whole screen instead of being clipped to the app window it used to be drawn inside. Dart reaches it through a `burst` method on `omi/voice_overlay` (`CursorPillWindow.burst()`), which routes to `VoiceOverlayController.burst`. The in-Flutter `OmiBurstGlow` widget (`app/lib/ui/burst_glow.dart`) is a *different*, shared burst used inside ordinary Flutter surfaces — account setup and the mobile companion's connect finale — and is not what draws the desktop shake glow.
 - Window chrome has two modes: `enterHubChrome()` (normal titled window, native traffic lights) and `enterOnboardingChrome()` (borderless, `OnboardingBlurView`) — `MainFlutterWindow.swift:905` and `:927`, matching `PLAN.md` line 100.
 - The **launcher fast path**: `app/lib/features/overlay_launcher.dart` resolves bare `open chrome` / `launch spotify` / `open github.com` inputs locally, and hands app launches to Swift's `omi/launcher` → `resolveApplicationURL` + `NSWorkspace.openApplication` (`MainFlutterWindow.swift:856-887`). Anything that is not a bare launch request falls through to the assistant as an agent instruction.
 
@@ -202,7 +225,9 @@ Two distinct paths exist on desktop.
 
 ## 6. Memory, scan, and local evidence
 
-Memory itself (`zkr`, tenant = person = Firebase UID) is shared with mobile — see root `ARCHITECTURE.md` §3.2. What is desktop-only is *where the evidence comes from*.
+Memory itself (`zkr`, tenant = person = Firebase UID) is shared with mobile — see root [`ARCHITECTURE.md`](../ARCHITECTURE.md) §3.2. On desktop the database file, and the computer-use ledger beside it, live under `$HOME/.omi` (`app/lib/storage/omi_directory.dart`); the home-relative dot-directory was chosen because it survives a bundle-identifier change, which an Application Support path does not. See root `ARCHITECTURE.md` §5.1.
+
+What is desktop-only is *where the evidence comes from*.
 
 `app/native/hub/src/scan.rs` (1,261 lines) walks approved workspace roots and, on macOS only (`#[cfg(target_os = "macos")]` at lines 488, 682), opens Apple Notes' `NoteStore.sqlite` and Mail's Envelope Index read-only.
 
@@ -249,117 +274,24 @@ What exists (`app/windows/runner/flutter_window.cpp`, 236 lines):
 - `omi/desktop_keyboard` — a `WH_KEYBOARD_LL` low-level hook feeding the same Shift/secure-input event stream the gesture machine expects.
 - `omi/desktop_keyboard_control` — `ShowWindow` + `SetForegroundWindow`.
 
-What does not exist on Windows: `omi/window_chrome` (so no summoned pill window, no glass, no chrome switching), `omi/voice_overlay` (no edge glow, no follow-cursor waveform), `omi/menu_bar`, `omi/launcher`, `omi/apple_eventkit`, and `omi/voice_playout` (so Gemini Live reply audio has no playout host — `LiveVoiceCapture` counts and drops it). There is no mouse-shake monitor. `meeting_capture.rs` and `meeting_detector.rs` are macOS-gated, so meeting system-audio capture and meeting detection are unavailable. `local_ai.rs` is macOS-arm64-gated, so the local-first chat router always falls through to the network. `scan.rs`'s Notes/Mail collectors are macOS-only.
+What does not exist on Windows: `omi/window_chrome` (so no summoned pill window, no glass, no chrome switching), `omi/voice_overlay` (no edge glow, no follow-cursor waveform), `omi/menu_bar`, `omi/launcher`, `omi/apple_eventkit`, and `omi/voice_playout` (so Gemini Live reply audio has no playout host — `LiveVoiceCapture` counts and drops it). There is no mouse-shake monitor. `meeting_capture.rs` and `meeting_detector.rs` are macOS-gated, so meeting system-audio capture and meeting detection are unavailable. `local_ai.rs` is macOS-arm64-gated, so onboarding summaries, transcript extraction, daily review, and meeting insights produce nothing on Windows — chat is unaffected, since it always goes to the cloud provider on every platform. `scan.rs`'s Notes/Mail collectors are macOS-only. The cursor-shake glow burst is part of `VoiceGlowOverlayWindow`, so it is macOS-only too.
 
 What is *not* platform-limited on Windows: `praefectus` computer use compiles for Windows, and `PLAN.md` line 119 states Windows computer use is intended as a first-class UI-Automation path — but that path has not been proven on real hardware (`PLAN.md` line 62, line 378 area, "Known constraints").
 
 ---
 
-## 10. What upstream's desktop actually is
+## 10. Known gaps and rough edges
 
-Upstream `BasedHardware/omi` ships a real desktop product at `desktop/`. It covers substantially more surface area than ours and is decomposed completely differently. Surface area is the only thing that can be read off a repository; nothing below should be taken as a statement about upstream's stability, reliability, or quality in either direction — this pass measured neither. Read for this comparison: `desktop/macos/README.md`, `desktop/macos/AGENTS.md` (547 lines), `desktop/macos/Backend-Rust/ARCHITECTURE.md`, `desktop/macos/agent/src/ARCHITECTURE.md`, `desktop/macos/Desktop/Sources/FloatingControlBar/ARCHITECTURE.md`, `desktop/macos/e2e/SKILL.md`, `desktop/macos/Desktop/Package.swift`, `desktop/windows/README.md` and `desktop/windows/package.json`.
-
-**macOS** (`desktop/macos/`) is four processes' worth of code in one bundle:
-
-1. **`Desktop/`** — a SwiftPM package (no `.xcodeproj`) named "Omi Computer", macOS 14.0 floor, being incrementally split into library targets (`OmiTheme`, `OmiWAL`, `OmiSupport`, `VoiceTurnDomain`). Dependencies include Firebase iOS SDK, PostHog, Sentry, GRDB, **Sparkle**, swift-markdown-ui, **onnxruntime**, and **FluidAudio**. Feature areas under `Desktop/Sources/` include: `Rewind/` (continuous screen capture with `VideoChunkEncoder`, OCR + embeddings, a timeline player, retention, search), `FloatingControlBar/` (~50 files: the notch/compact presentation, `PushToTalkManager`, `RealtimeHubController` split across seven extension files, `GlobalShortcutManager`, `StreamingPCMPlayer`, `ScreenCaptureManager`, agent pills), `ProactiveAssistants/` (Focus, Goals, Insight, MemoryExtraction, TaskAgent, TaskExtraction assistants with a coordinator, `WindowMonitor`, `GeminiClient`), `LiveNotes/`, `FileIndexing/` (plus a knowledge graph store), `Bluetooth/` (a full desktop BLE stack for Omi hardware, including WiFi sync types), `SpatialOverlay/`, `Chat/` (kernel journal projection, agent bridge/lifecycle, stall detection), `Onboarding/` (24 step views), `RealtimeOmni/`, `Automation/` + `DesktopAutomationBridge.swift`, `MemoryExport*`, `GmailReaderService`, `CalendarReaderService`, `AppleNotesReaderService`, `LocalTranscriptionService.swift`, `SystemAudioCaptureService`, `VADGateService`, `UpdaterViewModel` (Sparkle), `TierManager`, `TrialBannerService`.
-2. **`Backend-Rust/`** — a deployed Rust service (Axum-style, Firestore + Redis) described by its own `ARCHITECTURE.md` as "the desktop control and provider proxy plane… not a second implementation of the product data API". Live routes: auth, provider proxies, realtime session minting, desktop chat, TTS, screen-activity ingestion, release manifests, agent VM control, support webhooks, health/config. Old data routes remain as a state-free HTTP 410 facade (`routes/deprecated.rs`) pointing clients at the Python backend.
-3. **`agent/`** — a **Node/TypeScript agent daemon** bundled into the app. Its `ARCHITECTURE.md` says it "owns durable agent identity, execution profiles, routing, context admission, run/attempt state, physical-tool authorization, and the cross-surface conversation journal. Swift is a transport and presentation client." It speaks a versioned JSONL protocol to Swift, has a `runtime/kernel.ts` facade split into `kernel-{core,sessions,runs,coordinator,artifacts}`, a `conversation-journal.ts` as sole durable writer, `run-tool-capability.ts` + `tool-invocation-ledger.ts` for physical-effect authorization, and `sqlite-store.ts`. Its dependencies are `@earendil-works/pi-coding-agent`, `@zed-industries/claude-agent-acp`, and `@playwright/mcp` — i.e. a coding-agent runtime, the Agent Client Protocol, and browser MCP.
-4. **`agent-cloud/`** — a separate Node service built on `@anthropic-ai/claude-agent-sdk` with `better-sqlite3` and a WebSocket server, for cloud/VM-side agent runs. Plus **`acp-bridge/`** (prebuilt `dist`) and **`pi-mono-extension/`**, which registers "omi" as an OpenAI-compatible provider routed through the Rust proxy for server-side cost control, denies a set of dangerous shell operations, and appends every tool invocation to `~/.omi/pi-mono-audit.log`.
-
-Around that sits considerable release and test machinery: a Codemagic-signed, notarized universal DMG + Sparkle ZIP pipeline with a self-hosted qualification runner, digest-matched evidence, and separate beta/stable pointers (`AGENTS.md` "Release Pipeline"); an in-app HTTP automation bridge (`omi-ctl navigate/state/action`) that auto-enables on non-production bundles; named side-by-side dev bundles with auth seeding; a tiered E2E harness (`e2e/CORE_E2E.md`, `e2e/flows/`); and enforced invariants (INV-6 chat continuity, collection-safety, test-quality ratchets).
-
-**Windows** (`desktop/windows/`) is a **separate Electron + React + TypeScript application** (`electron-vite`, `electron-builder`, React 19, Tailwind, `better-sqlite3`, three.js/`d3-force-3d` for a knowledge graph view). Its main process has `overlay/` (window + global shortcut + height tween), `rewind/` (capture decision, frame hashing, OCR, retention, grouping, search), `fileIndex/`, `insight/`, `memoryExport`/`memoryImport`, `integrations/google.ts` + `oauth.ts`, `screenSynth/`, and `automation/` with a **C# helper** (`automation/helper/Program.cs`, `win-automation-helper.csproj`) for UI Automation, plus a PowerShell-built OCR helper. `src-tauri/` contains only a `gen/` directory and is not the shipping shell. It shares Omi's Firebase project but is otherwise an independent codebase from the macOS app.
-
----
-
-## 11. Comparison
-
-### 11.1 What we deliberately skip
-
-Grounded in the upstream files listed in §10. Each of these exists upstream and does not exist here. These are load we chose not to carry, not a deficiency list — each one is a subsystem with its own storage, failure modes, permissions, and maintenance cost. §11.4 revisits the subset worth reconsidering.
-
-- **Continuous screen recording ("Rewind").** Upstream captures the screen continuously, encodes video chunks, OCRs frames, embeds the OCR text, and gives it a searchable timeline UI with retention policy and capture-health reporting (`desktop/macos/Desktop/Sources/Rewind/{Core,Services,UI}`, mirrored on Windows in `desktop/windows/src/main/rewind/`). We have no screen-recording, OCR, or timeline subsystem at all. Our screen-derived context is limited to the `CaptureSource::Screen` capture path and computer-use's semantic accessibility snapshots.
-- **A bundled agent runtime.** Upstream ships a whole Node agent kernel inside the app (`desktop/macos/agent/`), plus a cloud agent (`agent-cloud/`), an ACP bridge, and a pi-mono provider extension with a shell denylist and audit log. We have no embedded coding-agent runtime, no ACP, no Playwright/MCP tool surface, no background agent sessions, no agent pills, and no agent VM control. Our action surface is exactly two typed `praefectus` verbs.
-- **On-device speech-to-text.** Upstream runs NVIDIA Parakeet TDT via FluidAudio/CoreML on the Neural Engine with source-based diarization and a SoundAnalysis music gate (`desktop/macos/Desktop/Sources/LocalTranscriptionService.swift`; `FluidAudio` + `onnxruntime` in `Package.swift`). Ours is a deliberate fail-closed stub (`TranscriptionAuth::Local`, `SttError::Unavailable`); all STT is remote.
-- **Auto-update and a release channel system.** Upstream has Sparkle (`UpdaterViewModel.swift`), a signed/notarized universal DMG + Sparkle ZIP built by Codemagic, a self-hosted qualification runner, immutable manifests, and separate beta/stable pointers. We have no updater in `app/macos` at all and no release-channel machinery.
-- **Product telemetry and crash reporting.** Upstream wires PostHog + Sentry throughout, with an explicit analytics-integrity contract and a `DesktopDiagnosticsManager.recordFallback` health-event schema (`AGENTS.md`). We ship neither, and the repository's rules forbid outbound telemetry.
-- **Desktop BLE.** Upstream has a full desktop Bluetooth stack for Omi hardware (`Desktop/Sources/Bluetooth/`, `Audio/BleAudioService.swift`, WiFi sync types). Ours is mobile-owned by explicit decision (`PLAN.md` line 373: "upstream has no macOS/Windows BLE bridge" — note that statement is now stale for upstream's own desktop; either way we do not ship desktop BLE).
-- **Proactive on-screen assistants.** Upstream runs a coordinator over Focus/Goals/Insight/MemoryExtraction/TaskAgent/TaskExtraction assistants against captured frames and a window monitor. Our proactive layer is Currents, generated server-side in the Worker, plus `daily_review.rs`.
-- **Cloud connectors.** Upstream has Gmail/Calendar/Notes reader services, browser-extension setup, `CloudConnectorFormAutomation`, OAuth flows, memory export/import, and a connector roadmap (`desktop/macos/docs/cloud-connectors-roadmap.md`, `connector-checklist.md`). We have EventKit Calendar/Reminders and read-only local Notes/Mail SQLite scans; there is no OAuth connector surface on desktop.
-- **A file index + knowledge graph.** Upstream indexes files into a knowledge-graph store on both platforms (`FileIndexing/KnowledgeGraph*`, `windows/src/main/ipc/kg*.ts`, with a 3D graph view). We scan for bounded evidence and write claims into `zkr`; there is no graph store or graph UI.
-- **TTS, Live Notes, spatial overlay, tiering/trial UI.** Upstream has `routes/tts.rs`, `LiveNotes/`, `SpatialOverlay/`, `TierManager`, `TrialBannerService`, `UsageLimitPopupView`. We have none of these as desktop features (entitlements are checked server-side; there is no desktop trial/usage UI).
-- **An in-app automation bridge and desktop E2E harness.** Upstream's `DesktopAutomationBridge.swift` + `omi-ctl` + `e2e/flows/` let an agent navigate and drive the real app in-process. We have no equivalent.
-
-### 11.2 What we do differently (and why)
-
-Neutral differences in approach, not claims of superiority.
-
-- **One Flutter codebase across all platforms vs. two native desktop apps.** Upstream maintains SwiftUI for macOS and a separate Electron/React app for Windows (`desktop/windows/`), with independent implementations of overlay, rewind, file indexing, and automation. We ship one Dart codebase to macOS, Windows, iOS, Android, and web, and push platform specificity down into thin native runners. The cost is visible in §9: our Windows runner is 236 lines and consequently carries far less of the desktop experience, whereas upstream's Windows app covers its own full feature set. The consequence on our side is that chat, gesture, onboarding, settings, and task surfaces have exactly one implementation.
-- **In-process Rust hub vs. out-of-process agent daemon + deployed backend.** Upstream's authority lives in a bundled Node kernel (`agent/`) that Swift talks to over JSONL, backed by a deployed Rust control plane (`Backend-Rust/`) and a Python product API. Ours lives in a Rinf-linked Rust crate inside the app process with no local IPC and no local server, and the only server-side component is a Cloudflare Worker. Upstream's decomposition gives process isolation, independent agent restarts, and a natural home for durable multi-run agent state; ours gives a single address space, no subprocess lifecycle, no packaged interpreter, and no local port. These are different placements of the same responsibilities, with different failure surfaces.
-- **Cloudflare Workers + D1 vs. Firebase/Firestore + Redis + Typesense + a deployed Rust service.** Upstream's desktop authenticates against Firebase and reads/writes Firestore through `api.omi.me`, with Redis caching and Typesense search, plus the Rust proxy plane for realtime minting and provider proxying (`Backend-Rust/ARCHITECTURE.md`). We use Firebase strictly for identity, and everything server-side is a Worker (`worker/` TypeScript, `worker-rs/` Rust port) over D1. Both designs put managed inference behind a server proxy for cost control; the storage and runtime substrates differ entirely.
-- **Two typed computer-use verbs under a signed approval fence vs. a general tool runtime with a denylist.** Upstream's agent can run shell/browser tools, gated by `run-tool-capability.ts`, an invocation ledger, an external-surface tool policy, and (in `pi-mono-extension/index.ts`) a regex denylist for clearly dangerous commands plus an audit log. We expose only `computer_invoke` and `computer_set_value` against a uniquely-matched accessibility element, and every one requires a fresh user approval before an Ed25519 authority is minted. Upstream's surface is much broader and open-ended; ours is much narrower and closed.
-- **Local-first turn routing vs. always-remote chat.** Our `chat_router.rs` answers short personal turns entirely on-device via Apple Foundation Models. Upstream's desktop chat routes through the Rust proxy / provider adapters (`Backend-Rust/src/routes/chat`, `agent/src/adapters/`); its on-device model work is transcription, not chat.
-- **Screen understanding by accessibility snapshot vs. by pixels.** Upstream's context comes substantially from captured frames + OCR + embeddings (Rewind, ProactiveAssistants). Ours comes from `praefectus`'s semantic accessibility tree plus bounded filesystem/app/browser-domain evidence. Different privacy and reliability trade-offs; neither is strictly dominant.
-- **Meeting audio via a CoreAudio process tap in Rust vs. a Swift `SystemAudioCaptureService`.** Both capture system audio on macOS; we do it in the hub through `corti-coreaudio` with a two-track WAV, upstream does it in Swift (`SystemAudioCaptureService.swift`, gated `#available(macOS 14.4, *)` per `AGENTS.md`).
-
-### 11.3 Design properties we are optimizing for
-
-These are properties readable directly from the code in this repository. They are **not** benchmark results, and none of them is a comparative quality claim about any other project. The intent of the architecture is to be *lighter* (fewer moving parts), *steadier* (fewer places state can diverge), and eventually *broader* (one implementation reaching more platforms) — the code below is the evidence that those are the intended properties, not proof that they have been achieved in the field.
-
-**Lighter — fewer moving parts.**
-- One process. The hub is linked into the app (`app/native/hub/src/lib.rs`, `write_interface!()`); there is no sidecar daemon, no bundled interpreter, no local port, no subprocess supervision, and correspondingly no runtime-handshake or runtime-version failure mode.
-- One UI implementation per surface. Chat, onboarding, settings, task rows, the gesture machine, and the pill exist once in Dart (`app/lib/features/`, `app/lib/keyboard/`) and are reached from macOS, Windows, iOS, Android, and web.
-- Nine native method channels and two Rinf enums are the entire desktop platform boundary (§1.1) — small enough to enumerate in a table, which is itself the point.
-
-**Steadier — fewer places state can diverge.**
-- One memory authority. `zkr`'s `MemoryDb` inside the hub is the single writer of durable personal memory; the Worker holds only a rebuildable D1 projection (root `ARCHITECTURE.md` §3.2). There is no second durable transcript, no cross-process journal to reconcile, and no local/remote write race to arbitrate.
-- One assistant session. `runtime.rs`'s dispatcher owns the turn; the pill, the chat screen, and the menu bar are all views onto it rather than independent clients.
-- Generation fencing is used consistently rather than ad hoc: `configuration_generation` on assistant dispatch (`runtime.rs:1575`, re-checked before emitting), a voice generation counter around `startDesktopVoice`/`startLiveVoice` (`app/lib/app_services.dart:735, 953`), and authority generation on the approval registry.
-
-**Fail-closed by construction.**
-- Computer use: `computer_use.rs` + `approval.rs` bind an action to a *uniquely* matched accessibility target (ambiguous or missing targets fail closed), compute a `normalized_action_hash` that the user approves against, and only then mint a process-local Ed25519 signature that the engine re-verifies against session id, deadline, and hash. Nothing executes without a fresh approval.
-- Capture: `capture_policy.rs`'s default `OnlyDuringMeetings` requires both a settled meeting state *and* an active meeting before the microphone turns on; `Never` never requests system audio. Both are unit-tested.
-- Local STT: absent rather than approximated — `TranscriptionAuth::Local` / `SttError::Unavailable` fail closed instead of degrading silently.
-- Non-macOS meeting capture returns an explicit error with a test asserting it (`non_macos_capture_is_unavailable`), rather than silently producing nothing.
-- Memory is evidence-backed: every capture carries evidence and, for transcripts, a `TranscriptLocator`, so a claim can be traced to its source (root `ARCHITECTURE.md` §3.2).
-
-**Bounded inputs.**
-- Every collector in `evidence.rs` and `scan.rs` has a named numeric cap (`MAX_APPS`, `MAX_BROWSER_ROWS`, `MAX_DOC_READS`, `DOC_READ_BYTES`, `EVIDENCE_LINE_CHARS`, …), and credential-shaped shell commands and sensitive URLs are filtered before prompting (`SHELL_SECRET_MARKERS`, `SENSITIVE_URL_MARKERS`).
-- Wire paths are bounded too: `MAX_AUDIO_CHUNK_BYTES` on the Rinf audio signal, 256 KiB pending audio and a 64-event queue in `live_voice.rs`, 16 KiB values and 1 KiB target names in `computer_use.rs`.
-
-**Enforced quality gates.**
-- `app/native/hub/Cargo.toml` sets `unsafe_code = "forbid"` and denies `clippy::all`, `unwrap_used`, `expect_used`, and `wildcard_imports` crate-wide. That is a compile-time property of the whole hub, not a review convention.
-
-**No telemetry.** No PostHog, no Sentry, no analytics SDK anywhere in `app/`. Nothing leaves the machine for measurement purposes. The direct trade-off is stated honestly in §12: we also cannot observe field failures.
-
-Claims deliberately **not** made: startup time, memory footprint, latency, and battery were not measured. Reliability and crash rate were not measured (we have no crash reporting, so they cannot be). UI quality is not compared. Security is asserted only as a structural property — a narrow, approval-fenced surface — not as an audited outcome; nothing here was externally reviewed in this pass.
-
-### 11.4 Upstream capabilities not yet covered here
-
-A review-derived gap list, for evaluating adoption. Each entry names the upstream implementation, what it would buy here, and what complexity it would drag in. Ordering is by how clearly the value exceeds the cost for *this* codebase, not by upstream's investment in it.
-
-1. **Auto-update.** Upstream: Sparkle (`UpdaterViewModel.swift`) plus a signed/notarized DMG + Sparkle ZIP pipeline and beta/stable channel pointers. Buys: the ability to ship a fix to installed users at all. Costs: a signing/notarization pipeline and an appcast host. **Assessment: this earns its complexity.** Without it, every desktop fix requires manual redistribution, and the gap compounds with the absence of crash reporting (§12).
-2. **On-device STT.** Upstream: Parakeet TDT via FluidAudio/CoreML with source-based diarization and a music gate (`LocalTranscriptionService.swift`). Buys: dictation and meeting transcription with no network egress and no per-minute cost, and it would complete the local-first story that `chat_router.rs` starts. Costs: a CoreML model download/lifecycle, a second STT code path, and platform gating that mirrors `local_ai.rs`'s. **Assessment: strong fit with the existing local-first design**; the main open question is model size in the bundle and whether it can be made to degrade cleanly on Intel and Windows.
-3. **A desktop automation/verification bridge.** Upstream: `DesktopAutomationBridge.swift` + `omi-ctl navigate/state/action` + typed flows in `e2e/flows/`. Buys: the ability to exercise the real desktop app programmatically instead of relying on unit tests plus manual use — directly addresses a gap named in §12. Costs: a control surface that must be hard-disabled in production builds (upstream gates it off on prod bundles for exactly this reason). **Assessment: worth evaluating**, scoped narrowly to navigation and state readout rather than a general action registry.
-4. **Cloud connectors (Gmail / Calendar / Drive-class sources).** Upstream: `GmailReaderService`, `CalendarReaderService`, OAuth flows, `CloudConnectorFormAutomation`, and a connector roadmap. Buys: evidence that is not confined to one machine — the main structural limit of `evidence.rs`, which can only see the local disk. Costs: OAuth token custody, refresh, revocation, and per-provider API drift. Partially anticipated already: `PLAN.md` line 310 defers Worker-brokered Google Calendar/Tasks sync until EventKit proves the contract. **Assessment: the right shape is probably Worker-brokered**, keeping token custody off the device rather than porting upstream's client-side connector layer.
-5. **Screen capture with OCR ("Rewind").** Upstream: continuous capture, `VideoChunkEncoder`, OCR + embeddings, timeline UI, retention policy, on both platforms. Buys: recall of anything seen on screen, and much richer grounding for proactive suggestions. Costs: the single largest subsystem upstream has — a video store, an OCR pipeline, an embedding index, retention/privacy policy, capture-health monitoring, and continuous CPU/disk load. **Assessment: does not obviously earn its complexity here yet.** Our grounding currently comes from accessibility snapshots and bounded local evidence, which is a coherent alternative. If pursued, the interesting subset is event-triggered capture (on meeting start, on a proposed action) rather than always-on recording.
-6. **A general agent/tool runtime.** Upstream: the Node kernel (`agent/`) with pi-coding-agent, ACP, Playwright MCP, an invocation ledger, and durable multi-run sessions; plus `agent-cloud/`. Buys: multi-step background work, browser automation, and file/shell tools — far beyond our two `praefectus` verbs. Costs: a bundled interpreter, a JSONL protocol with version negotiation, a second durable store, and an authorization model that must be at least as strict as the current approval fence. **Assessment: the capability is attractive; adopting the architecture is not.** Any move here should extend `praefectus`'s typed-verb-plus-approval model rather than introduce a second runtime, or the "one memory authority, one process" property in §11.3 is lost.
-7. **Desktop BLE for Omi hardware.** Upstream: a full `Bluetooth/` stack with WiFi sync types. Buys: hardware capture without a phone present. Costs: a second BLE implementation alongside mobile's, plus its own pairing/firmware/connection-health surface. **Assessment: revisit only if a desktop-without-phone workflow becomes a real requirement**; `PLAN.md` line 30 currently assigns all device ownership to mobile deliberately.
-8. **Crash reporting.** Upstream: Sentry, with a documented rule that raw prompts, paths, and titles never leave the device. Buys: knowledge that a shipped build is failing. Costs: an outbound reporting path, which the repository's rules currently forbid. **Assessment: genuinely in tension with the no-telemetry property in §11.3.** If adopted at all, it should be opt-in and carry crash signatures only — this is a product decision, not an architectural one.
-9. **File index / knowledge graph, TTS, Live Notes, spatial overlay, in-app tier and trial UI.** Upstream has all of these (`FileIndexing/`, `routes/tts.rs`, `LiveNotes/`, `SpatialOverlay/`, `TierManager`, `TrialBannerService`). **Assessment: no clear case for any of them here today.** The graph store overlaps with what `zkr` already models as claims and evidence; the tier/trial UI duplicates a check the Worker already enforces server-side.
-
----
-
-## 12. Known gaps and rough edges
-
-- **Local Foundation Models are macOS-arm64-only.** `local_ai.rs` is `#[cfg(all(target_os = "macos", target_arch = "aarch64"))]`. On Intel Macs, Windows, and everywhere else, `is_available()` is false and every turn goes to the network. The local-first router silently becomes a no-op; nothing surfaces this to the user.
+- **Local Foundation Models are macOS-arm64-only.** `local_ai.rs` is `#[cfg(all(target_os = "macos", target_arch = "aarch64"))]`. On Intel Macs, Windows, and everywhere else, `is_available()` is false, so onboarding summaries, transcript extraction, daily review, and meeting insights all silently produce nothing rather than falling back to a remote model. Nothing surfaces this to the user. Chat is unaffected, because chat never used the local model.
 - **Windows overlay/global-input parity is largely absent.** See §9. The Shift chord and secure-input detection work via the low-level hook, but the summoned pill, glass, edge glow, waveform, shake gesture, menu bar, launcher, and voice playout are all macOS-only. Live-voice reply audio on Windows is counted and discarded because there is no playout host.
 - **Windows computer use is unproven.** `praefectus` compiles for Windows and `PLAN.md` line 119 calls it a first-class UI-Automation path, but there is no Windows-specific native code in this repository exercising it and `PLAN.md` still lists physical Windows proof as outstanding.
 - **Meeting detection and system-audio capture are macOS-only** (`meeting_detector.rs` emitter is `#[cfg(target_os = "macos")]`; `meeting_capture.rs` non-macOS `start()` returns an error unconditionally). Meetings on Windows degrade to mic-only.
 - **Apple Notes and Mail scanning are macOS-only** and depend on Full Disk Access; `MacPermissionService.swift` probes FDA heuristically (attempting to stat `TCC.db` and the Notes container), which is a heuristic, not an API.
 - **`PLAN.md`'s gesture table is stale relative to the code.** `PLAN.md` line ~190 documents a hold-both-Shift-for-a-threshold model with hands-free continuation. `app/lib/keyboard/shift_gesture.dart` as written implements chord-once → `openOverlay`, chord-twice-within-400 ms → `toggleVoice`, plus Option+Space and a mouse-shake path, with no hold threshold. The code is authoritative; the plan text has not caught up.
 - **No auto-update, no signed release channel, no crash reporting.** There is no updater in `app/macos`. Shipping a fix currently means shipping a new build by hand, and there is no mechanism to learn that a build is crashing in the field.
-- **No desktop E2E or in-app automation surface.** Unlike upstream's `omi-ctl` bridge and flow harness, there is no way to drive our real desktop app programmatically for verification; desktop coverage is unit/logic tests plus manual use.
+- **No desktop E2E or in-app automation surface.** There is no way to drive the real desktop app programmatically for verification; desktop coverage is unit/logic tests plus manual use.
 - **macOS ships unsandboxed by necessity.** `app/macos/Runner/Release.entitlements` requests only audio input, calendars, and network client — App Sandbox is deliberately absent because broad workspace discovery conflicts with sandbox scope (`PLAN.md` line 117). That is a considered decision, but it means the usual sandbox containment does not apply.
-- **Not verified in this pass:** whether the pill/overlay behaves correctly across multiple displays or Spaces beyond what `VoiceOverlayController` and `cursorPillFrame` do with `NSScreen.screens`; whether the second Flutter engine for Settings has any measurable startup or memory cost; and any live-credential behavior of Gemini Live, managed STT, or the Worker on desktop — the root `ARCHITECTURE.md` §5 gaps all still apply here.
-- **Concurrency caveat on this document.** `app/lib/`, `app/macos/`, and `app/native/hub/` were being edited by other sessions while this was written. Line numbers cited above were accurate at commit `7baf8ac` and may drift; file-level and behavioral claims should survive, but re-check any exact line reference before relying on it.
+- **The overscroll-to-home gesture is discoverable only through a hint.** Returning to the home view is a pull past the newest message plus a `_ScrollHomeHint` line; there is no button and no back affordance, so a user who does not read the hint has no other route.
+- **The model tiers are unverified.** `chat_router.rs` picks a tier per prompt from keyword heuristics plus `rx4`'s classifier, and `model_tier.rs` says outright that the default model ids are best-effort. Neither the routing decisions nor the slugs have been checked against live provider APIs.
+- **Not verified in this pass:** whether the pill/overlay behaves correctly across multiple displays or Spaces beyond what `VoiceOverlayController` and `cursorPillFrame` do with `NSScreen.screens`; whether the second Flutter engine for Settings has any measurable startup or memory cost; and any live-credential behaviour of Gemini Live, managed STT, or the Worker on desktop — the root [`ARCHITECTURE.md`](../ARCHITECTURE.md) §6 gaps all still apply here.
+- **Concurrency caveat on this document.** `app/lib/`, `app/macos/`, and `app/native/hub/` were being edited by other sessions while this was written. File-level and behavioural claims were read from source, but re-check any exact line reference before relying on it.

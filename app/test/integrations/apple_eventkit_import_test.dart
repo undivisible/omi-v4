@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:omi/integrations/apple_eventkit.dart';
 import 'package:omi/integrations/apple_eventkit_import.dart';
 import 'package:omi/native/native_hub.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -91,6 +92,112 @@ void main() {
 
     expect(hub.recordedAtMs, first);
     expect(hub.ingestionKey, 'eventkit:calendar:event-1:$first');
+  });
+
+  test('the default observation time is persisted and then reused', () async {
+    SharedPreferences.setMockInitialValues(const {});
+    var recordedAt = '2026-07-21T12:00:00Z';
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(
+          channel,
+          (_) async => [
+            {
+              'id': 'apple_calendar:event-2',
+              'nativeId': 'event-2',
+              'source': 'calendar',
+              'title': 'Ship Omi',
+              'notes': '',
+              'calendar': 'Work',
+              'startAt': '2026-07-22T15:00:00Z',
+              'endAt': '2026-07-22T16:00:00Z',
+              'occurredAt': '2026-07-22T15:00:00Z',
+              'recordedAt': recordedAt,
+            },
+          ],
+        );
+    final hub = _CaptureHub();
+    final coordinator = AppleEventKitImportCoordinator(
+      eventKit: AppleEventKitService(channel: channel, available: true),
+      hub: hub,
+      personId: 'person-1',
+    );
+
+    expect(await coordinator.import(AppleEventKitSource.calendar), 1);
+    final first = hub.recordedAtMs;
+    recordedAt = '2026-07-21T18:00:00Z';
+    await coordinator.import(AppleEventKitSource.calendar);
+
+    expect(first, DateTime.utc(2026, 7, 21, 12).millisecondsSinceEpoch);
+    expect(hub.recordedAtMs, first);
+    expect(
+      (await SharedPreferences.getInstance()).getKeys().where(
+        (key) => key.startsWith('eventkit_recorded_at_'),
+      ),
+      hasLength(1),
+    );
+  });
+
+  test('an edited item is treated as a new observation', () async {
+    SharedPreferences.setMockInitialValues(const {});
+    var title = 'Ship Omi';
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(
+          channel,
+          (_) async => [
+            {
+              'id': 'apple_calendar:event-3',
+              'nativeId': 'event-3',
+              'source': 'calendar',
+              'title': title,
+              'notes': '',
+              'calendar': 'Work',
+              'occurredAt': '2026-07-22T15:00:00Z',
+              'recordedAt': '2026-07-21T12:00:00Z',
+            },
+          ],
+        );
+    final coordinator = AppleEventKitImportCoordinator(
+      eventKit: AppleEventKitService(channel: channel, available: true),
+      hub: _CaptureHub(),
+      personId: 'person-1',
+    );
+
+    await coordinator.import(AppleEventKitSource.calendar);
+    title = 'Ship Omi v4';
+    await coordinator.import(AppleEventKitSource.calendar);
+
+    expect(
+      (await SharedPreferences.getInstance()).getKeys().where(
+        (key) => key.startsWith('eventkit_recorded_at_'),
+      ),
+      hasLength(2),
+    );
+  });
+
+  test('an empty calendar imports nothing and captures nothing', () async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (_) async => const <Object?>[]);
+    final hub = _CaptureHub();
+    final coordinator = AppleEventKitImportCoordinator(
+      eventKit: AppleEventKitService(channel: channel, available: true),
+      hub: hub,
+      personId: 'person-1',
+    );
+
+    expect(await coordinator.import(AppleEventKitSource.reminders), 0);
+    expect(hub.ingestionKey, isNull);
+  });
+
+  test('an unavailable EventKit imports nothing', () async {
+    final hub = _CaptureHub();
+    final coordinator = AppleEventKitImportCoordinator(
+      eventKit: AppleEventKitService(channel: channel, available: false),
+      hub: hub,
+      personId: 'person-1',
+    );
+
+    expect(await coordinator.import(AppleEventKitSource.calendar), 0);
+    expect(hub.ingestionKey, isNull);
   });
 }
 

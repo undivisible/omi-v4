@@ -2,11 +2,13 @@
 
 *Generated from a read-only pass over the repository on 2026-07-22 and revised 2026-07-23. Every claim below is grounded in code under `app/`, `worker/`, `worker-rs/`, and `PLAN.md`; file paths are cited inline so each statement is checkable against the source. This describes what exists in the repository right now, not the eventual product vision.*
 
-This document covers the system as a whole and compares it to the upstream Omi project (§5). Three companion documents go deeper on each surface:
+This document covers the system as a whole and describes only how it is built — it makes no comparison with any other project. Companion documents:
 
+- [`COMPARISON.md`](COMPARISON.md) — everything comparative: this system against upstream `BasedHardware/omi`.
 - [`app/ARCHITECTURE-mobile.md`](app/ARCHITECTURE-mobile.md) — the iOS/Android companion and the BLE pendant relay.
 - [`app/ARCHITECTURE-desktop.md`](app/ARCHITECTURE-desktop.md) — the Flutter desktop UI, the Rust hub, and the macOS Runner.
 - [`firmware/ARCHITECTURE.md`](firmware/ARCHITECTURE.md) — the vendored nRF5340 pendant firmware.
+- [`docs/ai-and-observability.md`](docs/ai-and-observability.md) — the decision record behind model selection, transcription, and the observability stack.
 
 ## 1. Product summary
 
@@ -26,8 +28,9 @@ flowchart TD
         ZKR["zkr crate<br/>Personal Memory engine"]
         STT["stt.rs + live_voice.rs<br/>legacy Deepgram STT and Gemini Live duplex voice"]
         CU["computer_use.rs + approval.rs<br/>praefectus semantic actions"]
-        SCAN["scan.rs<br/>workspace / Notes / Mail scan"]
-        LOCAL["local_ai.rs<br/>Apple FoundationModels (aarch64 macOS only)"]
+        SCAN["scan.rs + evidence.rs<br/>workspace / Notes / Mail / local evidence"]
+        ROUTER["chat_router.rs + model_tier.rs<br/>online model-tier router (rx4)"]
+        LOCAL["local_ai.rs<br/>Apple FoundationModels (aarch64 macOS only)<br/>summaries + extraction, never chat"]
     end
 
     subgraph Worker["Bun/Hono Cloudflare Worker — worker/src"]
@@ -45,6 +48,7 @@ flowchart TD
     subgraph External["External providers"]
         FB["Firebase Auth"]
         DG["Gemini Live (realtime voice)<br/>MiMo mimo-v2.5-asr (batch)<br/>Deepgram (legacy STT)"]
+        GW["Cloudflare AI Gateway<br/>(optional, in front of upstream chat)"]
         LLM["Claude / GPT / Gemini / xAI / MiMo"]
         STRIPE["Stripe"]
         TG["Telegram Bot API"]
@@ -57,15 +61,17 @@ flowchart TD
     RT --> STT
     RT --> CU
     RT --> SCAN
+    RT --> ROUTER
     RT --> LOCAL
     STT <-- "wss BYOK/managed" --> DG
-    RT <-- "rs_ai streaming client" --> LLM
+    RT <-- "rs_ai streaming client<br/>(tier chosen by ROUTER)" --> LLM
 
     SVC <-- "HTTPS + Firebase ID token" --> AUTH
     AUTH --> ROUTES
     ROUTES --> D1
     AST --> D1
-    AST <-- "managed mimo-v2.5* route" --> LLM
+    AST <-- "managed balanced-tier route" --> GW
+    GW --> LLM
     STTW --> D1
     STTW -.->|"issues short-lived wss auth"| STT
     CURR --> D1
@@ -143,9 +149,10 @@ sequenceDiagram
     App->>Svc: sendChatMessage(text)
     Svc->>Hub: ClientCommand::SendMessage (Rinf signal)
     Hub->>Hub: dispatch_assistant() picks RsAiAssistantProvider<br/>by configured provider kind
+    Hub->>Hub: ChatRouter::route_prompt() picks a model tier<br/>(speed/balanced/smart/multimodal/search)
     alt Managed (Omi AI plan)
         Hub->>W: POST /v1/chat/completions (OpenAI-compatible SSE)<br/>Bearer <Firebase idToken>
-        W->>W: admitAssistantRequest() reserves token/cost budget,<br/>proxies to MiMo (mimo-v2.5 / mimo-v2.5-pro)
+        W->>W: admitAssistantRequest() reserves token/cost budget,<br/>proxies upstream (optionally via Cloudflare AI Gateway)
         W-->>Hub: SSE stream, stream_options.include_usage
     else BYOK
         Hub->>Prov: rs_ai::claude()/chatgpt()/gemini()/xai()/compatible() .stream(text)
@@ -159,7 +166,31 @@ sequenceDiagram
     end
 ```
 
-Chat is dispatched through `RsAiAssistantProvider` (`runtime.rs`), which wraps the external `rs_ai` crate's per-provider builders (`rs_ai::chatgpt()`, `claude()`, `gemini()`, `xai()`, or `compatible(endpoint)` for BYOK-compatible/managed-worker routing). Endpoint validation is strict: HTTPS only, no credentials/query/fragment in the URL, no IP literals or localhost, and for the managed "Worker" route the endpoint must resolve to the exact allow-listed Worker origin (`validate_endpoint`, `managed_worker_base`) plus a DNS public-IP preflight (`endpoint_resolves_publicly`) before every dispatch. `AppServices.configureAssistant` (`app/lib/app_services.dart`) selects BYOK when the user has stored a `ProviderCredential`, else falls back to the managed route using the live Firebase ID token as the bearer credential against the Worker's `/v1` origin, provided the account has an active `pro` entitlement. The Worker's managed endpoint (`worker/src/assistant.ts`) strictly allow-lists request shape (only `messages/model/stream/max_tokens/temperature/top_p/stream_options`), enforces per-request/message byte and token ceilings, proxies only to Xiaomi's `mimo-v2.5*` chat-completions endpoint, and wraps every request in an admission/settlement cost-reservation pass (`assistant-admission.ts`) so a UID's rolling spend is reserved before the call and reconciled after (including a scheduled reconciliation sweep, `reconcileManagedAssistantRequests`, wired into the Worker's `scheduled()` handler in `worker/src/index.ts`). When computer-use is available and enabled, the assistant is given two tool schemas (`computer_invoke`, `computer_set_value`) and any tool call becomes an `ActionProposal` requiring user approval (section 3.5) rather than being auto-executed. **Status**: implemented for both managed and BYOK routing and streaming; requires real provider/Firebase/Worker credentials for a live end-to-end run.
+**Chat always goes to the configured cloud provider.** There is no local-inference path for chat and no on-device fallback: `dispatch_assistant` (`runtime.rs`) discards the `local_ai_available` flag and the message origin before dispatching, with a comment recording why — Apple Foundation Models refuses too many requests and has no tool or memory access, so it is reserved for small local jobs (§3.7, §3.11). `chat_router.rs` no longer classifies turns as local-vs-remote; what remains is an *online* model-tier router.
+
+Before dispatch, `ChatRouter::route_prompt` picks one of five tiers for the prompt. Search and vision intents are detected first from keyword markers (`SEARCH_MARKERS`, `VISION_MARKERS`); everything else is delegated to `rx4::model_router::ModelRouter`, whose Lite/Standard/Heavy decision maps to Speed/Balanced/Smart, with extra heuristics (`HEAVY_KEYWORDS`) pushing hard reasoning to Smart. The chosen tier resolves to a model id through `model_tier.rs` and is reported to the UI as a `ToolProgress` detail alongside the online marker, so the user can see which model answered.
+
+Chat is dispatched through `RsAiAssistantProvider` (`runtime.rs`), which wraps the external `rs_ai` crate's per-provider builders (`rs_ai::chatgpt()`, `claude()`, `gemini()`, `xai()`, or `compatible(endpoint)` for BYOK-compatible/managed-worker routing). Endpoint validation is strict: HTTPS only, no credentials/query/fragment in the URL, no IP literals or localhost, and for the managed "Worker" route the endpoint must resolve to the exact allow-listed Worker origin (`validate_endpoint`, `managed_worker_base`) plus a DNS public-IP preflight (`endpoint_resolves_publicly`) before every dispatch. `AppServices.configureAssistant` (`app/lib/app_services.dart`) selects BYOK when the user has stored a `ProviderCredential`, else falls back to the managed route using the live Firebase ID token as the bearer credential against the Worker's `/v1` origin, provided the account has an active `pro` entitlement. The Worker's managed endpoint (`worker/src/assistant.ts`) strictly allow-lists request shape (only `messages/model/stream/max_tokens/temperature/top_p/stream_options`), enforces per-request/message byte and token ceilings, pins the upstream endpoint to an exact configured URL (`validatePinnedEndpoint` against `xiaomiCompletionEndpoint`), serves the model id resolved by `modelForTier(env, "balanced")` and validates the client's requested model against it, and wraps every request in an admission/settlement cost-reservation pass (`assistant-admission.ts`) so a UID's rolling spend is reserved before the call and reconciled after (including a scheduled reconciliation sweep, `reconcileManagedAssistantRequests`, wired into the Worker's `scheduled()` handler in `worker/src/index.ts`). When computer-use is available and enabled, the assistant is given two tool schemas (`computer_invoke`, `computer_set_value`) and any tool call becomes an `ActionProposal` requiring user approval (section 3.5) rather than being auto-executed. **Status**: implemented for both managed and BYOK routing and streaming; requires real provider/Firebase/Worker credentials for a live end-to-end run.
+
+#### Model tiers
+
+One env-driven tier table is the single source of truth, mirrored in three places that must agree: `app/native/hub/src/model_tier.rs`, `worker/src/model-tiers.ts`, and `worker-rs/src/managed_ai.rs`. Each mirror reads the same `OMI_MODEL_*` variables with the same defaults, so a model id is corrected in one place.
+
+| Tier | When | Default id | Env override |
+| --- | --- | --- | --- |
+| `speed` | latency-sensitive: live meeting insights, classification, answer suggestions | `inception/mercury-2` | `OMI_MODEL_SPEED` |
+| `balanced` | the default path, including meeting notes and managed chat | `xiaomi/mimo-v2.5` | `OMI_MODEL_BALANCED` |
+| `smart` | hard reasoning | `xiaomi/mimo-v2.5-pro` | `OMI_MODEL_SMART` |
+| `multimodal` | vision / visual computer-use | `google/gemini-3.6-flash` | `OMI_MODEL_MULTIMODAL` |
+| `search` | web-grounded answers | `perplexity/sonar` | `OMI_MODEL_SEARCH` |
+
+`balanced` additionally accepts the legacy `MIMO_MODEL` name so existing managed-AI configuration keeps working. The defaults are OpenRouter-style slugs; the reasoning behind each pick, and the caveat that the ids are best-effort and need verifying against the real provider APIs, is recorded in [`docs/ai-and-observability.md`](docs/ai-and-observability.md). On the Worker side only the `balanced` tier is currently read (`worker/src/assistant.ts` for both managed chat and one-shot inbox completions); the hub reads `speed` directly for its dev Gemini path and reaches the other tiers through the router.
+
+#### The Cloudflare AI Gateway route
+
+`aiGatewayRoute(env)` (`worker/src/assistant.ts`) returns an alternate upstream URL and headers when `CF_AI_GATEWAY_ACCOUNT_ID` and `CF_AI_GATEWAY_ID` are both set, and `null` otherwise. Both ids land in a URL path, so they are validated rather than trusted: the account id must be 32 hex characters and the gateway id a bounded slug. The resulting URL is `https://gateway.ai.cloudflare.com/v1/{account}/{gateway}/openrouter/v1/chat/completions`, and `CF_AI_GATEWAY_TOKEN`, when set, is sent as `cf-aig-authorization`. The provider key still travels as the `Authorization` bearer and the gateway forwards it.
+
+Three call sites use it, each falling back to the pinned direct endpoint when the route is `null`: the streaming managed chat handler and `runManagedInboxCompletion` in `worker/src/assistant.ts`, and batch transcription in `worker/src/asr.ts`. Unset ids mean no gateway and no behaviour change. What the gateway buys — caching, retries, per-model cost and latency analytics, rate limiting — and its current setup state are documented in [`docs/ai-and-observability.md`](docs/ai-and-observability.md) §4.
 
 ### 3.4 Live voice / STT
 
@@ -345,6 +376,23 @@ flowchart TD
 
 `MacPermissionService.swift` exposes raw TCC state (`AXIsProcessTrusted` for Accessibility, `AVCaptureDevice.authorizationStatus` for microphone, `CGPreflightScreenCaptureAccess`/`CGRequestScreenCaptureAccess` for screen capture) plus heuristic Full-Disk-Access probes (attempting to stat `TCC.db` and the Notes container, classifying `NSFileReadNoSuchFileError` as "absent" vs. anything else as "denied"). It also opens System Settings privacy panes directly (`x-apple.systempreferences:` URLs) for Accessibility/Microphone/Screen-Capture/All-Files. This is consumed on the Dart side by `app/lib/capabilities/desktop_capabilities.dart`, which maps raw state into the typed capability lattice described in `PLAN.md` (`unsupported/notApplicable/unknown/notDetermined/denied/requiresSettings/requiresSelection/limited/granted`). `MainFlutterWindow.swift` (442 lines) hosts window chrome — native traffic-light controls for the normal titled hub window, plus a global keyboard event monitor that reports physical left/right Shift key transitions to Flutter for the both-Shift gesture state machine (`app/lib/keyboard/shift_gesture.dart`). `MenuBarBridge.swift` implements the menu-bar status item companion referenced in `PLAN.md` as surfacing the single most important current task plus capture/listening state. `AppleEventKitBridge.swift` bridges Calendar/Reminders access for the EventKit-backed setup tasks (`app/lib/integrations/apple_eventkit.dart`, `apple_eventkit_import.dart`), importing bounded evidence into `zkr` per `PLAN.md`. **Status**: implemented; macOS v0 ships notarized, non-sandboxed direct distribution (broad workspace discovery is incompatible with App Sandbox scope, per `PLAN.md`), and Windows equivalents use different mechanisms (UI Automation, privacy-aware mic access, per-session capture selection) not reviewed in this pass.
 
+### 3.11 Where the local model is used
+
+`local_ai.rs` wraps Apple Foundation Models through `rs_ai_local` and is gated at `#[cfg(all(target_os = "macos", target_arch = "aarch64"))]`. On every other target `is_available()` is a constant `false` and `summarize`/`respond` return `None`, so each call site below degrades to doing nothing rather than to a network call.
+
+```mermaid
+flowchart LR
+    LA["local_ai.rs<br/>Apple FoundationModels<br/>macOS arm64 only"]
+    ONB["runtime.rs — onboarding scan summary<br/>summarize_with_dev_fallback()"] --> LA
+    EXT["runtime.rs — transcript claim extraction<br/>spawn_transcript_extraction()"] --> LA
+    DR["daily_review.rs — daily review summary"] --> LA
+    MEET["meeting.rs — insight classification<br/>and meeting summary"] --> LA
+    STATUS["runtime.rs — RuntimeStatus.local_ai_available"] -.->|"reports availability only"| LA
+    CHAT["Chat turns"] -. "never routed here" .-> LA
+```
+
+Four real consumers: the onboarding scan summary, transcript claim extraction (only for `OmiDevice` and `Chat` capture sources), the daily review, and meeting insight classification plus the end-of-meeting summary. A fifth reference simply reports availability in `RuntimeStatus`. Chat is not among them — see §3.3. This is the reverse of the usual local-first split: transcription is entirely remote and the small text jobs are local.
+
 ## 4. Data / tenancy diagram
 
 ```mermaid
@@ -372,50 +420,38 @@ flowchart TD
 
 The Firebase UID is the sole tenant key on both sides of the system. On the Worker/D1 side, every table that stores user data is scoped by `uid` (`users`, `entitlements`, conversations, `channel_bindings`, `currents`/`current_executions`, memory projection tables) and nearly every query in `worker/src/*.ts` includes an explicit `uid = ?` predicate. On the Rust hub side, `zkr`'s `TenantId` and `PersonId` are both required to equal the same Firebase UID (`firebase_memory_scope` in `runtime.rs`) — there is intentionally no separate tenant/person split in v0. Channel identity (Telegram user/chat id, Blooio E.164/chat id) is mapped to a UID only through a consumed, hashed, single-use link token (`channel_link_tokens` → `channel_bindings`), never by trusting a channel-supplied identity claim directly. This is also how "same account links mobile, desktop, web, Telegram, and Blooio to one Firebase UID and assistant session" (`PLAN.md` v0 acceptance §1) is enforced structurally rather than just by convention.
 
-## 5. Comparison with upstream Omi
+## 5. Storage, configuration, and observability
 
-Upstream here means the BasedHardware/omi monorepo (read for this section at `~/projects/omi`). The relationship is not a fork: this repository shares the pendant hardware and the product concept, but the app and backend are independently implemented. The one directly inherited component is the pendant firmware, which is vendored from upstream into `firmware/` (see [`firmware/ARCHITECTURE.md`](firmware/ARCHITECTURE.md)).
+### 5.1 Where local data lives
 
-### 5.1 Shape of the two codebases
+All of the client's durable local data sits under a single `.omi` directory resolved by `omiDataDirectory()` (`app/lib/storage/omi_directory.dart`). On macOS, Linux, and Windows that is `$HOME/.omi` (or `%USERPROFILE%\.omi`) — a stable home-relative dot-directory chosen deliberately because it does not move when the bundle identifier changes; a previous rename orphaned everything under the old Application Support folder. On mobile and web, where there is no writable home, it falls back to a `.omi` subfolder of the platform's private application-support area. The directory is created on demand.
 
-| Area | Upstream | Omi v4 (this repo) |
-| --- | --- | --- |
-| Client apps | Flutter app (~593 Dart files under `app/lib`) plus a separate native desktop product (`desktop/macos`: a Swift package, a `Backend-Rust` component, `agent/`, `agent-cloud/`, `acp-bridge/`; `desktop/windows`: Node) | One Flutter codebase (~160 Dart files under `app/lib`) serving iOS, Android, macOS, Windows, and web, plus an embedded Rust hub (`app/native/hub/src`) and a macOS Runner (`app/macos/Runner`) |
-| Backend | Python/FastAPI on GCP — Firestore, Cloud Storage, Cloud Tasks, Redis, Pinecone *and* Qdrant for vectors, Typesense for search, SQLAlchemy, Modal jobs; provisioned with OpenTofu (`backend/`, `infrastructure/`) | Cloudflare Workers — `worker/` (TypeScript/Hono) with `worker-rs/` (a Rust/workers-rs parity port); D1 for relational data, Durable Objects for coordination, Vectorize for embeddings, Workers AI |
-| Auth | Firebase Auth | Firebase Auth, verified at the edge (`worker/src/auth.ts`) |
-| Memory | Vector stores (Pinecone/Qdrant) behind backend services | `zkr` evidence-backed temporal memory in-process on the client, projected to D1/Vectorize for cloud recall |
-| Firmware | `omi/firmware` — production `omi/` plus legacy `devkit/` and `test/` variants | `firmware/` — the production tree vendored; `devkit/` and `test/` deliberately excluded |
-| Also in tree | `omiGlass`, a plugins/apps ecosystem, MCP servers, SDKs, contract tests | none of these |
+The per-user memory database is a file inside it: `omi-memory-<sha256(uid)>.sqlite3` (`_defaultMemoryDatabasePath`, `app/lib/app_services.dart`). The computer-use ledger is written under the same directory (`computer_use_ledger_path`). Smaller preferences — paired device id, transcript log, onboarding completion, dismissed notices, capture-enabled state — remain in `shared_preferences`, and BYOK provider credentials are in `flutter_secure_storage`, not in `.omi`.
 
-### 5.2 What we deliberately skip
+### 5.2 Worker configuration
 
-Upstream covers substantially more surface area, and some of it we deliberately do not want. The following are real upstream capabilities this repository does not attempt: the plugins/apps ecosystem, `omiGlass`, the published MCP servers and SDKs, the dedicated diarizer and NLLB translation services, and the multi-datastore search/vector tier (Pinecone, Qdrant, Typesense, Redis). Upstream's `backend/database` also carries feature modules with no counterpart here. The mobile and desktop documents enumerate the per-surface omissions in detail.
+Both Workers are configured declaratively: `worker/wrangler.jsonc` for the TypeScript worker (`omi-v4-api`, custom domain `omi.tsc.hk`) and `worker-rs/wrangler.toml` for the Rust parity port (`omi-v4-api-rs`, `workers.dev` only). They bind the *same* physical D1 database; the TypeScript worker owns migrations and the Rust worker deliberately declares no `migrations_dir`. Each declares its own Durable Object namespace. The Rust worker's custom-domain route and cron trigger are commented out on purpose during the shadow window — both workers sharing one D1 while running separate admission DOs would let one worker settle rows the other admitted, leaking in-flight slots. `worker-rs/CUTOVER.md` is the procedure.
 
-Surface area is not the same thing as capability delivered to the user. Several of these omissions — particularly the multi-datastore tier — are load we chose not to carry, not functionality we lack.
+Non-secret configuration lives in `vars` (model ids, budget ceilings and window sizes for both the managed-AI and STT admission paths, Firebase project id, the pinned upstream completions URL, AI Gateway ids). Secrets — provider keys, Stripe, Telegram, Blooio, Firebase service account — are set with `wrangler secret put` and are not in the tree.
 
-### 5.3 What we do differently
+### 5.3 Observability
 
-- **One backend platform instead of several.** All persistence, coordination, and vector search run on Cloudflare primitives rather than a fleet of managed GCP services.
-- **The assistant runtime is embedded in the client**, not a separate agent process: `app/native/hub` is linked into the app over Rinf, so chat, voice, scan, memory, and computer-use share one process and one memory authority.
-- **Local-first inference with cloud escalation.** `app/native/hub/src/chat_router.rs` routes ordinary turns to on-device Apple Foundation Models and escalates heavier turns to a hosted model.
-- **One Flutter codebase for mobile and desktop**, where upstream maintains a separate native desktop product.
-- **A Rust parity port of the backend** (`worker-rs/`) so the hub and the edge can share a language.
+```mermaid
+flowchart LR
+    W1["worker (TypeScript)<br/>omi-v4-api"] --> OBS["Workers Observability<br/>observability.enabled = true<br/>head_sampling_rate = 1"]
+    W2["worker-rs (Rust shadow)<br/>omi-v4-api-rs"] --> OBS
+    W1 --> HEALTH["GET /health"]
+    W2 --> HEALTH
+    HEALTH --> BS["Better Stack<br/>uptime monitors"]
+    CRON["minutely cron<br/>(TypeScript worker)"] -.->|"not yet wired"| HB["Better Stack heartbeat<br/>'Omi worker cron', pending"]
+    W1 --> GWA["AI Gateway analytics<br/>(when CF_AI_GATEWAY_* set)"]
+```
 
-### 5.4 The bet: lighter, steadier, and ultimately broader
+**Workers Observability is enabled on both workers** — `"observability": { "enabled": true, "head_sampling_rate": 1 }` in `worker/wrangler.jsonc` and the equivalent `[observability]` block in `worker-rs/wrangler.toml`. That gives structured invocation logs and metrics in the Cloudflare dashboard with no third-party sink. Full sampling is deliberate while volume is low.
 
-The goal is not to reproduce upstream's surface area. It is to carry far less machinery, keep the moving parts few enough to reason about, and spend the savings on capability that reaches the user.
+**Better Stack is provisioned outside this repository.** Three uptime monitors exist — the marketing site, `https://omi.tsc.hk/health` (the production TypeScript worker), and `https://omi-v4-api-rs.undivisible.workers.dev/health` (the Rust shadow) — plus one heartbeat for the minutely cron. Nothing in this tree references Better Stack: there is no SDK, no token, and no code that posts to the heartbeat, which is why that heartbeat is still in a pending state. Treat the monitors as external configuration, not as a property of the code.
 
-- **Fewer moving parts.** One backend platform with one relational store plus Durable Objects and Vectorize, versus five-plus managed services. Every service removed is a failure mode removed.
-- **Fewer processes.** The assistant runtime is linked into the client rather than split across separate agent and cloud-agent services, so there is one memory authority and no cross-process drift.
-- **Fail-closed by construction.** Memory is evidence-backed and citable rather than similarity-only (§3.2); computer-use is gated behind an explicit, auditable approval ledger (§3.5); channel identity binds only through consumed single-use tokens (§4).
-- **Enforced gates.** Format, lint (`-D warnings`), typecheck, and full test suites run across Flutter, Rust, and the Worker before anything lands.
-- **Less egress.** Ordinary chat turns stay on-device (`chat_router.rs`), escalating only when the work warrants it.
-
-These are design properties readable from the code. They are not benchmark results: no cost, latency, or reliability comparison against upstream has been run from this repository, and §6 lists what remains unproven here.
-
-### 5.5 Upstream capabilities not yet covered here
-
-Tracked as gaps to close or consciously decline, not as a scoreboard. Reviewing upstream is worthwhile precisely for this list: the mobile feature surface (see [`app/ARCHITECTURE-mobile.md`](app/ARCHITECTURE-mobile.md)), the plugin/app extension model, translation and diarization, additional hardware such as `omiGlass`, and published SDK/MCP integration points. Each should be evaluated on whether it earns its complexity here before being adopted.
+**Not wired anywhere yet:** error/APM reporting. `docs/ai-and-observability.md` records Sentry on both the Worker and the Flutter client as the decision, and LLM tracing/eval as deliberately deferred; neither exists in the repository today. That document is the decision record for all of the above and should be read as the "why".
 
 ## 6. Known gaps / proof still required
 
@@ -423,9 +459,12 @@ Directly from `PLAN.md`'s "Active build checklist," "Current release train," and
 
 - **No credentialed live-provider proof yet.** Gemini Live, MiMo (chat and ASR), Deepgram (legacy), Firebase, Stripe, Telegram, Blooio, and the model routes are all implemented against real protocols but have not been exercised against live provider credentials in this repository state.
 - **No physical-device proof.** Omi BLE hardware capture, iOS/Android transcription lifecycle, and macOS/Windows both-Shift gesture timing are implemented but only unit/logic-tested, not run against real hardware or OS input.
-- **`rotary` is still unintegrated.** `rx4` is now genuinely load-bearing — `extraction.rs` calls `rx4::extract_proactive_loose`, `rx4::extract_knowledge_loose`, and `rx4::top_n` to derive claims from model output — but `rotary` has no usage anywhere in `app/native/hub/src`.
-- **Local STT does not exist.** `TranscriptionAuth::Local` and `SttError::Unavailable` are deliberate fail-closed stand-ins until a real local STT provider (`rs_ai_local` or similar) is integrated; MiMo remains batch-only ASR.
+- **`rotary` is not a dependency.** `rx4` (`0.3.25`, `zkr-memory` feature) is genuinely load-bearing across three modules — `extraction.rs` derives claims from model output, `chat_router.rs` uses `rx4::model_router`, and `self_improve.rs` uses `rx4::self_improve` — but `rotary` appears nowhere in `app/native/hub`, neither in `Cargo.toml` nor in any source file. Planning documents that describe it as pending integration are describing something that has not been started.
+- **Local STT does not exist.** `TranscriptionAuth::Local` and `SttError::Unavailable` are deliberate fail-closed stand-ins until a real local STT provider (`rs_ai_local` or similar) is integrated; MiMo remains batch-only ASR. `docs/ai-and-observability.md` records an intended move off Deepgram onto a dedicated STT model, and flags that whether that model supports streaming is unverified — that migration has not started in code.
+- **The tier model ids are unverified against the providers.** Both the hub and the Worker carry the same default slugs, and both source files say plainly that the ids are best-effort. Nothing in this repository has resolved them against a live provider API.
+- **Observability is partly external and partly unwired.** Workers Observability is enabled in both wrangler configs. Better Stack monitors exist only outside the repository, and no code posts to the cron heartbeat, so that heartbeat has never fired. Error/APM reporting (Sentry) is decided in `docs/ai-and-observability.md` but is not present in either the Worker or the client.
 - **Nightly Daily Review orchestration is unwired.** Currents currently only supports a single idempotent cited recommendation generated on demand when the surface loads — no scheduled nightly reflection cycle exists yet.
 - **Windows computer-use and cross-platform release-build proof are outstanding**, per `PLAN.md`'s test-day checklist; this review did not inspect any Windows-specific native code. Desktop computer-use is provided by the `praefectus` crate (`app/native/hub/src/computer_use.rs`, behind the `computer-use` feature), which supersedes the `rs_peekaboo` naming used in older planning documents.
-- **Cloudflare bindings/secrets are still placeholders** in the reference backend; deployment proof (real D1/Stripe/Telegram/Blooio credentials in a live preview environment) has not happened.
-- **Some source files referenced in the task (`chat_screen.dart`, `omi_shell.dart`, `setup_account_screens.dart`, `onboarding_screen.dart`) were noted as possibly mid-edit by concurrent sessions** and were not deep-read for this document; their described behavior above is inferred from `AppServices` and `PLAN.md` rather than from reading those UI files directly.
+- **Secrets are unprovisioned in this tree.** Non-secret `vars` are committed in both wrangler configs and the D1 database and AI Gateway ids are real, but every provider secret is set out of band; deployment proof with real Stripe/Telegram/Blooio credentials has not happened.
+- **The Rust worker has not cut over.** `worker-rs` is deployed only as a shadow on `workers.dev`, with its custom-domain route and cron trigger commented out for the reasons given in §5.2. Parity is claimed by `worker-rs/PORT_STATUS.md`, not proven by production traffic.
+- **Concurrency caveat.** `app/lib/`, `app/native/hub/`, `worker/` and `docs/` were being edited by other sessions while this document was written. File-level and behavioural claims were read from source, but any exact line reference should be re-checked before being relied on.

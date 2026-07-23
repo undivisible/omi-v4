@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 
+import 'omi_typography.dart';
+
 export 'omi_orb.dart';
+export 'omi_typography.dart';
 export 'scroll_edge_fade.dart';
 
 enum OmiButtonVariant { primary, secondary, destructive }
@@ -22,7 +25,7 @@ class OmiButton extends StatelessWidget {
   final OmiButtonVariant variant;
 
   static const _textStyle = TextStyle(
-    fontFamily: 'Avenir Next',
+    fontFamily: OmiFonts.sans,
     fontSize: 16,
     fontWeight: FontWeight.w600,
   );

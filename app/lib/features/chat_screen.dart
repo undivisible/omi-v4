@@ -42,9 +42,20 @@ import 'tasks_screen.dart';
 /// the newest message peeks in and scrolling up is discoverable.
 const double _historyPeekExtent = 44;
 
-/// How far past the newest message you have to keep pulling before the chat
-/// hands you back to the home view.
-const double _homeOverscroll = -64;
+/// How far past the newest message the pull has to reach before the hold that
+/// starts a new conversation begins counting.
+const double _newChatPullStart = -56;
+
+/// How long that pull has to be held. A flick is over in a few frames and its
+/// spring-back is not a drag at all, so it can never reach this.
+const Duration _newChatHold = Duration(milliseconds: 650);
+
+/// How often the held pull repaints its progress bar.
+const Duration _newChatPullTick = Duration(milliseconds: 40);
+
+/// The send transition: the greeter leaves and the new message climbs the
+/// viewport on this one clock.
+const Duration _sendEnterDuration = Duration(milliseconds: 620);
 
 /// Reads the plan this account is on. Null means there is nothing to ask —
 /// no billing backend — which is itself a free setup.
@@ -155,7 +166,8 @@ const _kPlaceholderPrompts = [
   'Draft the desktop handoff',
 ];
 
-class ChatScreenState extends State<ChatScreen> {
+class ChatScreenState extends State<ChatScreen>
+    with SingleTickerProviderStateMixin {
   final _input = TextEditingController();
   final _inputFocus = FocusNode();
   Timer? _placeholderTimer;
@@ -193,9 +205,18 @@ class ChatScreenState extends State<ChatScreen> {
   bool _byokHintDismissed = true;
   bool _byokPlanFree = false;
   bool _setupTaskDone = true;
-  bool _greeterDismissed = false;
+
+  /// Index into [_messages] of the first message of the exchange currently on
+  /// screen. Everything before it is history, parked above the home view; null
+  /// means there is no live exchange and the home view owns the viewport.
+  int? _exchangeStart;
+  late final AnimationController _sendEnter;
+  late final CurvedAnimation _sendEntered;
+  Timer? _pullTimer;
+  double _pullProgress = 0;
   final _scroll = ScrollController();
-  final _greeterKey = GlobalKey();
+  final _exchangeKey = GlobalKey();
+  bool _userDragged = false;
   bool _snapping = false;
   bool _pendingChatReveal = false;
   Timer? _chatRevealTimer;
@@ -210,6 +231,12 @@ class ChatScreenState extends State<ChatScreen> {
   @override
   void initState() {
     super.initState();
+    _sendEnter = AnimationController(vsync: this, duration: _sendEnterDuration);
+    _sendEntered = CurvedAnimation(
+      parent: _sendEnter,
+      // Settles rather than snaps: away quickly, then a long slowing landing.
+      curve: const Cubic(.22, 1, .36, 1),
+    );
     unawaited(_loadChecklist());
     unawaited(_loadMeetingNotes());
     unawaited(_loadByokHint());
@@ -448,7 +475,7 @@ class ChatScreenState extends State<ChatScreen> {
           setState(() {
             _progress = submission == null ? null : 'Thinking';
             if (submission != null) {
-              _dismissGreeter();
+              _beginExchange();
               _messages.add(
                 _ChatMessage(
                   requestId: submission.requestId,
@@ -527,6 +554,9 @@ class ChatScreenState extends State<ChatScreen> {
     _placeholderTimer?.cancel();
     _shakeDecayTimer?.cancel();
     _chatRevealTimer?.cancel();
+    _pullTimer?.cancel();
+    _sendEntered.dispose();
+    _sendEnter.dispose();
     _scroll.dispose();
     _voiceLevel.dispose();
     _input.dispose();
@@ -534,35 +564,92 @@ class ChatScreenState extends State<ChatScreen> {
     super.dispose();
   }
 
-  void _dismissGreeter() {
-    if (!_greeterDismissed) {
-      _pendingChatReveal = true;
-      _chatRevealTimer?.cancel();
-      _chatRevealTimer = Timer(const Duration(milliseconds: 450), () {
-        _pendingChatReveal = false;
-      });
+  /// Opens a fresh exchange around the message about to be added: what came
+  /// before becomes history, and the send transition starts from zero.
+  void _beginExchange() {
+    _exchangeStart = _messages.length;
+    _pendingChatReveal = true;
+    _chatRevealTimer?.cancel();
+    _chatRevealTimer = Timer(const Duration(milliseconds: 450), () {
+      _pendingChatReveal = false;
+    });
+    _cancelNewChatPull();
+    if (MediaQuery.disableAnimationsOf(context)) {
+      _sendEnter.value = 1;
+    } else {
+      _sendEnter.forward(from: 0);
     }
-    _greeterDismissed = true;
+    // The new exchange is the bottom of the reversed list; whatever the user
+    // had scrolled to is no longer what they are looking at.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && _scroll.hasClients) _scroll.jumpTo(0);
+    });
+  }
+
+  /// Puts the transcript behind the home view again: the pull-and-hold past
+  /// the newest message is the "new chat" gesture.
+  void _startNewConversation() {
+    _cancelNewChatPull();
+    _sendEnter.value = 0;
+    setState(() => _exchangeStart = null);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && _scroll.hasClients && _scroll.offset > 0) {
+        _scroll.jumpTo(0);
+      }
+    });
+  }
+
+  void _beginNewChatPull() {
+    if (_pullTimer != null) return;
+    // Counted in ticks rather than off the wall clock: the hold has to advance
+    // with the frames the pull is drawn in.
+    _pullTimer = Timer.periodic(_newChatPullTick, (_) {
+      if (!mounted) return;
+      final step =
+          _newChatPullTick.inMilliseconds / _newChatHold.inMilliseconds;
+      final progress = (_pullProgress + step).clamp(0.0, 1.0);
+      setState(() => _pullProgress = progress);
+      if (progress >= 1) _startNewConversation();
+    });
+  }
+
+  void _cancelNewChatPull() {
+    _pullTimer?.cancel();
+    _pullTimer = null;
+    if (_pullProgress != 0 && mounted) setState(() => _pullProgress = 0);
   }
 
   bool _handleScroll(ScrollNotification notification) {
-    if (_snapping || _messages.isEmpty) return false;
     final metrics = notification.metrics;
-    // Past the newest message (the list is reversed, so that is the bottom)
-    // there is nothing left to read: keep pulling and you land back home. The
-    // check runs on every update because bouncing physics springs the
-    // overscroll back before the gesture ends.
-    if (_greeterDismissed) {
-      if (metrics.pixels < _homeOverscroll) {
-        setState(() => _greeterDismissed = false);
+    if (notification is ScrollStartNotification) {
+      _cancelNewChatPull();
+      _userDragged = notification.dragDetails != null;
+      return false;
+    }
+    if (notification is ScrollUpdateNotification) {
+      // Only a live finger counts. The spring-back after a flick reports the
+      // same deep overscroll with no drag behind it, and that must never open
+      // a new conversation.
+      if (notification.dragDetails == null ||
+          metrics.pixels > _newChatPullStart ||
+          _exchangeStart == null) {
+        _cancelNewChatPull();
+      } else {
+        _userDragged = true;
+        _beginNewChatPull();
       }
       return false;
     }
     if (notification is! ScrollEndNotification) return false;
-    final render = _greeterKey.currentContext?.findRenderObject();
+    _cancelNewChatPull();
+    // Only a scroll the user drove gets rearranged under them: an
+    // ensureVisible that put something on screen must be left alone.
+    if (_snapping || !_userDragged || _exchangeStart == null) return false;
+    final render = _exchangeKey.currentContext?.findRenderObject();
     if (render is! RenderBox || !render.hasSize) return false;
-    final boundary = (render.size.height - metrics.viewportDimension * .35)
-        .clamp(0.0, metrics.maxScrollExtent);
+    // Two stops: the live exchange, and the home view directly above it. The
+    // snap keeps a half-scroll from stranding the user between them.
+    final boundary = render.size.height.clamp(0.0, metrics.maxScrollExtent);
     if (boundary <= 0) return false;
     final pixels = metrics.pixels;
     if (pixels <= 1 || pixels >= boundary - 1) return false;
@@ -779,11 +866,11 @@ class ChatScreenState extends State<ChatScreen> {
       final requestId = await widget.services.sendChatMessage(text: text);
       if (!mounted) return;
       setState(() {
+        _beginExchange();
         _messages.add(
           _ChatMessage(requestId: requestId, text: text, fromUser: true),
         );
         _activeRequestId = requestId;
-        _dismissGreeter();
         _progress = 'Thinking';
         _error = null;
         _input.clear();
@@ -803,6 +890,7 @@ class ChatScreenState extends State<ChatScreen> {
   Future<void> _redeemLinkCode(ChannelClient channels, String code) async {
     _sending = true;
     setState(() {
+      _beginExchange();
       _messages.add(
         _ChatMessage(
           requestId: 'channel-link:$code',
@@ -810,7 +898,6 @@ class ChatScreenState extends State<ChatScreen> {
           fromUser: true,
         ),
       );
-      _dismissGreeter();
       _progress = 'Linking chat';
       _error = null;
       _input.clear();
@@ -1039,6 +1126,7 @@ class ChatScreenState extends State<ChatScreen> {
         currents != null && !currents.loading && currents.error == null
         ? currents.items.take(4).toList()
         : const <CurrentCard>[];
+    final exchange = _exchangeBuilders();
     final history = _historyBuildersNewestFirst();
     return MouseRegion(
       onHover: ready ? (event) => _trackShake(event.localPosition) : null,
@@ -1063,12 +1151,7 @@ class ChatScreenState extends State<ChatScreen> {
                           // strip at the top, so the tail of the newest message
                           // stays on screen and scrolling up reads as revealing
                           // history rather than as an empty gesture.
-                          // Once the greeter is dismissed the conversation owns
-                          // the viewport; reserving its slot would strand the
-                          // newest messages below the fold.
-                          final greeterExtent = _greeterDismissed
-                              ? 0.0
-                              : _messages.isEmpty
+                          final greeterExtent = _messages.isEmpty
                               ? constraints.maxHeight
                               : math.max(
                                   0.0,
@@ -1099,54 +1182,63 @@ class ChatScreenState extends State<ChatScreen> {
                                     // home view is taller than the viewport.
                                     scrollCacheExtent:
                                         const ScrollCacheExtent.pixels(800),
-                                    itemCount: history.length + 1,
+                                    itemCount:
+                                        history.length +
+                                        1 +
+                                        (exchange.isEmpty ? 0 : 1),
                                     itemBuilder: (context, index) {
-                                      if (index == 0) {
-                                        return KeyedSubtree(
-                                          key: _greeterKey,
-                                          child: ConstrainedBox(
-                                            constraints: BoxConstraints(
-                                              minHeight: greeterExtent,
-                                            ),
-                                            child: Center(
-                                              child: _GreeterSwitcher(
-                                                dismissed: _greeterDismissed,
-                                                child: _ChatHome(
-                                                  greeting: _greeting(),
-                                                  setupTaskDone: _setupTaskDone,
-                                                  onToggleSetupTask:
-                                                      _toggleSetupTask,
-                                                  starterTasks: _starterTasks,
-                                                  doneStarterTasks:
-                                                      _doneStarterTasks,
-                                                  onToggleStarterTask:
-                                                      _toggleStarterTask,
-                                                  tasks: tasks,
-                                                  meetingNotes: _meetingNotes,
-                                                  onOpenMeetingNotes:
-                                                      _openMeetingNotes,
-                                                  onComplete: currents == null
-                                                      ? null
-                                                      : (id) => unawaited(
-                                                          currents.dismiss(id),
-                                                        ),
-                                                  onPrompt: _sendPrompt,
-                                                  showByokHint:
-                                                      !_byokHintDismissed &&
-                                                      _byokPlanFree,
-                                                  onOpenByok: widget
-                                                      .onOpenProviderSettings,
-                                                  onDismissByok: () =>
-                                                      unawaited(
-                                                        _dismissByokHint(),
+                                      var slot = index;
+                                      if (exchange.isNotEmpty) {
+                                        if (slot == 0) {
+                                          return _buildExchangeSlot(
+                                            exchange,
+                                            constraints.maxHeight,
+                                          );
+                                        }
+                                        slot -= 1;
+                                      }
+                                      if (slot == 0) {
+                                        return ConstrainedBox(
+                                          constraints: BoxConstraints(
+                                            minHeight: greeterExtent,
+                                          ),
+                                          child: Center(
+                                            child: _Greeter(
+                                              child: _ChatHome(
+                                                greeting: _greeting(),
+                                                setupTaskDone: _setupTaskDone,
+                                                onToggleSetupTask:
+                                                    _toggleSetupTask,
+                                                starterTasks: _starterTasks,
+                                                doneStarterTasks:
+                                                    _doneStarterTasks,
+                                                onToggleStarterTask:
+                                                    _toggleStarterTask,
+                                                tasks: tasks,
+                                                meetingNotes: _meetingNotes,
+                                                onOpenMeetingNotes:
+                                                    _openMeetingNotes,
+                                                onComplete: currents == null
+                                                    ? null
+                                                    : (id) => unawaited(
+                                                        currents.dismiss(id),
                                                       ),
+                                                onPrompt: _sendPrompt,
+                                                onDraftPrompt: _usePrompt,
+                                                showByokHint:
+                                                    !_byokHintDismissed &&
+                                                    _byokPlanFree,
+                                                onOpenByok: widget
+                                                    .onOpenProviderSettings,
+                                                onDismissByok: () => unawaited(
+                                                  _dismissByokHint(),
                                                 ),
                                               ),
                                             ),
                                           ),
                                         );
                                       }
-                                      return history[index - 1]();
+                                      return history[slot - 1]();
                                     },
                                   ),
                                 ),
@@ -1181,7 +1273,7 @@ class ChatScreenState extends State<ChatScreen> {
                         onCancel: _cancel,
                       ),
                     ),
-                    _ScrollHomeHint(visible: _greeterDismissed),
+                    _buildBottomHint(),
                   ],
                 ),
               ),
@@ -1210,37 +1302,76 @@ class ChatScreenState extends State<ChatScreen> {
     );
   }
 
-  List<Widget Function()> _historyBuildersNewestFirst() {
-    final history = <Widget Function()>[
-      for (final message in _messages)
-        () => _BlurFadeIn(
-          key: ValueKey(
-            'msg_fade_${message.requestId}_${message.fromUser ? 'user' : 'assistant'}',
+  /// The one row allowed to carry the turning mark: the assistant's newest
+  /// turn. While a reply is still on its way the skeleton carries it instead,
+  /// so the two never spin side by side.
+  int get _latestOrbIndex => _activeRequestId != null
+      ? -1
+      : _messages.lastIndexWhere((message) => !message.fromUser);
+
+  Widget _messageRow(
+    _ChatMessage message, {
+    required bool latest,
+  }) => _BlurFadeIn(
+    key: ValueKey(
+      'msg_fade_${message.requestId}_${message.fromUser ? 'user' : 'assistant'}',
+    ),
+    delayMs: _pendingChatReveal ? 220 : 0,
+    // The user's own words are bare: the card belongs to the assistant,
+    // so the absence of one is what tells the two sides apart.
+    child: message.fromUser
+        ? Align(
+            alignment: Alignment.centerRight,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(48, 12, 12, 12),
+              child: Text(
+                message.text,
+                textAlign: TextAlign.right,
+                style: TextStyle(color: _HubColors.of(context).muted),
+              ),
+            ),
+          )
+        : _AssistantRow(
+            showOrb: latest,
+            child: Card(
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: AssistantMarkdown(message.text),
+              ),
+            ),
           ),
-          delayMs: _pendingChatReveal ? 220 : 0,
-          // The user's own words are bare: the card belongs to the assistant,
-          // so the absence of one is what tells the two sides apart.
-          child: message.fromUser
-              ? Align(
-                  alignment: Alignment.centerRight,
-                  child: Padding(
-                    padding: const EdgeInsets.fromLTRB(48, 12, 12, 12),
-                    child: Text(
-                      message.text,
-                      textAlign: TextAlign.right,
-                      style: TextStyle(color: _HubColors.of(context).muted),
-                    ),
-                  ),
-                )
-              : _AssistantRow(
-                  child: Card(
-                    child: Padding(
-                      padding: const EdgeInsets.all(12),
-                      child: AssistantMarkdown(message.text),
-                    ),
-                  ),
-                ),
-        ),
+  );
+
+  /// Rows for the exchange on screen right now — the message just sent and the
+  /// reply forming under it. Empty when the home view owns the viewport.
+  List<Widget Function()> _exchangeBuilders() {
+    final start = _exchangeStart;
+    if (start == null || start >= _messages.length) {
+      return const <Widget Function()>[];
+    }
+    final latest = _latestOrbIndex;
+    return <Widget Function()>[
+      for (var index = start; index < _messages.length; index++)
+        () => _messageRow(_messages[index], latest: index == latest),
+      ..._tailBuilders(),
+    ];
+  }
+
+  List<Widget Function()> _historyBuildersNewestFirst() {
+    final end = _exchangeStart ?? _messages.length;
+    final latest = _latestOrbIndex;
+    final history = <Widget Function()>[
+      for (var index = 0; index < end; index++)
+        () => _messageRow(_messages[index], latest: index == latest),
+      // With no live exchange the pending work has nowhere else to go, so it
+      // stays at the near end of history, right above the home view.
+      if (_exchangeStart == null) ..._tailBuilders(),
+    ];
+    return history.reversed.toList(growable: false);
+  }
+
+  List<Widget Function()> _tailBuilders() {
+    return <Widget Function()>[
       for (final proposal in _proposals.values)
         () => Card(
           key: ValueKey('proposal_${proposal.proposalId}'),
@@ -1323,7 +1454,64 @@ class ChatScreenState extends State<ChatScreen> {
           style: const TextStyle(color: Colors.redAccent),
         ),
     ];
-    return history.reversed.toList(growable: false);
+  }
+
+  /// The live exchange, anchored to the bottom of the reversed list. Its height
+  /// is the whole transition: growing to a viewport lifts the home view out of
+  /// sight, and because the slot hangs off the bottom edge its top carries the
+  /// new message up from below the fold to the top of the screen.
+  Widget _buildExchangeSlot(
+    List<Widget Function()> exchange,
+    double viewportExtent,
+  ) => KeyedSubtree(
+    key: _exchangeKey,
+    child: AnimatedBuilder(
+      animation: _sendEnter,
+      builder: (context, child) {
+        final t = _sendEntered.value;
+        if (t >= 1) {
+          return ConstrainedBox(
+            constraints: BoxConstraints(minHeight: viewportExtent),
+            child: child,
+          );
+        }
+        return SizedBox(
+          // Never exactly zero: a zero-extent leading item is one the reversed
+          // list can decline to build, and the message would pop in mid-rise.
+          height: math.max(1, viewportExtent * t),
+          child: OverflowBox(
+            alignment: Alignment.topCenter,
+            minHeight: 0,
+            maxHeight: double.infinity,
+            child: child,
+          ),
+        );
+      },
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
+        children: [for (final build in exchange) build()],
+      ),
+    ),
+  );
+
+  Widget _buildBottomHint() {
+    if (_pullProgress > 0) {
+      return _NewChatPullProgress(progress: _pullProgress);
+    }
+    if (_exchangeStart != null) {
+      return const _ChatHint(
+        text: 'Pull past this message and hold for a new chat',
+        icon: Icons.autorenew_rounded,
+      );
+    }
+    if (_messages.isNotEmpty) {
+      return const _ChatHint(
+        text: 'Earlier messages are above',
+        icon: Icons.keyboard_arrow_up_rounded,
+      );
+    }
+    return const SizedBox(height: 26);
   }
 
   void _openAllTasks(CurrentsController currents) {
@@ -1365,47 +1553,21 @@ class ChatScreenState extends State<ChatScreen> {
   }
 }
 
-class _GreeterSwitcher extends StatelessWidget {
-  const _GreeterSwitcher({required this.dismissed, required this.child});
+/// The home view's slot. It is never torn down any more — a send lifts it out
+/// of the viewport and scrolling back up brings the same one back — so the
+/// entrance fade is all that is left here.
+class _Greeter extends StatelessWidget {
+  const _Greeter({required this.child});
 
-  final bool dismissed;
   final Widget child;
 
   @override
-  Widget build(BuildContext context) {
-    final disableAnimations = MediaQuery.disableAnimationsOf(context);
-    return AnimatedSwitcher(
-      duration: disableAnimations
-          ? Duration.zero
-          : const Duration(milliseconds: 420),
-      reverseDuration: disableAnimations
-          ? Duration.zero
-          : const Duration(milliseconds: 200),
-      switchInCurve: Curves.easeOutCubic,
-      switchOutCurve: Curves.easeInCubic,
-      transitionBuilder: (child, animation) => FadeTransition(
-        opacity: animation,
-        child: SlideTransition(
-          position: Tween(
-            begin: const Offset(0, .04),
-            end: Offset.zero,
-          ).animate(animation),
-          child: child,
-        ),
-      ),
-      child: dismissed
-          ? const SizedBox.shrink(key: Key('hub_greeter_hidden'))
-          : KeyedSubtree(
-              key: const Key('hub_greeter'),
-              child: disableAnimations
-                  ? child
-                  : _BlurFadeIn(
-                      key: const Key('hub_greeter_blur_fade'),
-                      child: child,
-                    ),
-            ),
-    );
-  }
+  Widget build(BuildContext context) => KeyedSubtree(
+    key: const Key('hub_greeter'),
+    child: MediaQuery.disableAnimationsOf(context)
+        ? child
+        : _BlurFadeIn(key: const Key('hub_greeter_blur_fade'), child: child),
+  );
 }
 
 class _BlurFadeIn extends StatelessWidget {
@@ -1519,34 +1681,68 @@ class _CompletionFadeState extends State<_CompletionFade>
   );
 }
 
-class _ScrollHomeHint extends StatelessWidget {
-  const _ScrollHomeHint({required this.visible});
+/// One quiet line under the composer teaching the gesture that applies right
+/// now. Never two at once: a stack of tips reads as a manual, not as a hint.
+class _ChatHint extends StatelessWidget {
+  const _ChatHint({required this.text, required this.icon});
 
-  final bool visible;
+  final String text;
+  final IconData icon;
 
   @override
   Widget build(BuildContext context) {
     final colors = _HubColors.of(context);
-    return AnimatedOpacity(
-      opacity: visible ? 1 : 0,
-      duration: const Duration(milliseconds: 240),
+    return SizedBox(
+      height: 26,
       child: Padding(
         padding: const EdgeInsets.only(top: 8),
         child: Row(
-          key: const Key('chat_scroll_home_hint'),
+          key: const Key('chat_hint'),
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(
-              Icons.keyboard_arrow_down_rounded,
-              size: 15,
-              color: colors.muted,
-            ),
+            Icon(icon, size: 15, color: colors.muted),
             const SizedBox(width: 4),
-            Text(
-              'Scroll down to go home',
-              style: TextStyle(fontSize: 11.5, color: colors.muted),
-            ),
+            Text(text, style: TextStyle(fontSize: 11.5, color: colors.muted)),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+/// How much of the hold is done. Without it the threshold is invisible and the
+/// gesture is a guess about how long is long enough.
+class _NewChatPullProgress extends StatelessWidget {
+  const _NewChatPullProgress({required this.progress});
+
+  final double progress;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = _HubColors.of(context);
+    return SizedBox(
+      height: 26,
+      child: Padding(
+        padding: const EdgeInsets.only(top: 8, left: 24, right: 24),
+        child: Align(
+          alignment: Alignment.topCenter,
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(999),
+            child: SizedBox(
+              key: const Key('chat_new_chat_progress'),
+              height: 3,
+              child: Stack(
+                children: [
+                  Positioned.fill(child: ColoredBox(color: colors.hairline)),
+                  FractionallySizedBox(
+                    alignment: Alignment.centerLeft,
+                    widthFactor: progress.clamp(0.0, 1.0),
+                    child: ColoredBox(color: colors.ink),
+                  ),
+                ],
+              ),
+            ),
+          ),
         ),
       ),
     );
@@ -1633,6 +1829,7 @@ class _ChatHome extends StatelessWidget {
     required this.onOpenMeetingNotes,
     required this.onComplete,
     required this.onPrompt,
+    required this.onDraftPrompt,
     this.showByokHint = false,
     this.onOpenByok,
     this.onDismissByok,
@@ -1649,6 +1846,10 @@ class _ChatHome extends StatelessWidget {
   final VoidCallback onOpenMeetingNotes;
   final ValueChanged<String>? onComplete;
   final ValueChanged<String> onPrompt;
+
+  /// Drafts text into the composer without sending it, so model-authored
+  /// `prompt:` actions are seen before they are submitted.
+  final ValueChanged<String> onDraftPrompt;
   final bool showByokHint;
   final VoidCallback? onOpenByok;
   final VoidCallback? onDismissByok;
@@ -1727,6 +1928,7 @@ class _ChatHome extends StatelessWidget {
                       source: crepus,
                       palette: _crepusPalette(colors),
                       proposedNextStep: task.item.proposedNextStep,
+                      onDraftPrompt: onDraftPrompt,
                       onComplete: onComplete == null
                           ? null
                           : () => onComplete!(task.item.id),
@@ -2097,12 +2299,19 @@ class _RichTaskRow extends StatelessWidget {
 
 /// The assistant's turn: the omi mark as its profile picture, left of the
 /// bubble. [spinning] turns the mark fast to read as "thinking" while a reply
-/// is still coming.
+/// is still coming. [showOrb] is false on older turns — a column of marks all
+/// turning at once reads as several things happening, when only the newest
+/// turn is live.
 class _AssistantRow extends StatelessWidget {
-  const _AssistantRow({required this.child, this.spinning = false});
+  const _AssistantRow({
+    required this.child,
+    this.spinning = false,
+    this.showOrb = true,
+  });
 
   final Widget child;
   final bool spinning;
+  final bool showOrb;
 
   @override
   Widget build(BuildContext context) => Row(
@@ -2110,9 +2319,14 @@ class _AssistantRow extends StatelessWidget {
     children: [
       Padding(
         padding: const EdgeInsets.only(top: 4, right: 10),
-        child: spinning
-            ? const OmiActivityOrb.loading(size: 26)
-            : const OmiActivityOrb(size: 26),
+        child: showOrb
+            ? (spinning
+                  ? const OmiActivityOrb.loading(
+                      size: 26,
+                      key: Key('chat_latest_orb'),
+                    )
+                  : const OmiActivityOrb(size: 26, key: Key('chat_latest_orb')))
+            : const SizedBox.square(dimension: 26),
       ),
       Flexible(child: child),
     ],

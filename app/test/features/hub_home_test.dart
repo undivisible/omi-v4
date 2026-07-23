@@ -13,6 +13,16 @@ import 'package:omi/native/native_hub.dart';
 import 'package:omi/onboarding/hub_checklist.dart';
 
 void main() {
+  Rect listRect(WidgetTester tester) =>
+      tester.getRect(find.byKey(const Key('chat_messages')));
+
+  /// Built but scrolled past counts as gone: the home view and the older
+  /// history stay in the list, they just live above the viewport.
+  bool onScreen(WidgetTester tester, Finder finder) {
+    if (finder.evaluate().isEmpty) return false;
+    return tester.getRect(finder).overlaps(listRect(tester));
+  }
+
   AppServices makeServices({CurrentsClient? currentsClient}) =>
       AppServices.forTesting(
         nativeHub: const UnavailableNativeHub('test'),
@@ -52,7 +62,9 @@ void main() {
     });
   });
 
-  testWidgets('greeter fades out after the first send', (tester) async {
+  testWidgets('sending lifts the greeter out and raises the message', (
+    tester,
+  ) async {
     DevGemini.debugOverride = 'AIzaTestDevKey';
     addTearDown(() => DevGemini.debugOverride = null);
     final services = AppServices.forTesting(
@@ -86,12 +98,61 @@ void main() {
     await tester.enterText(find.byKey(const Key('chat_input')), 'hello');
     await tester.tap(find.byKey(const Key('send_chat')));
     await tester.pump();
-    await tester.pump(const Duration(milliseconds: 600));
+    // Mid-flight the message is still climbing: it starts below the fold.
+    await tester.pump(const Duration(milliseconds: 60));
+    final rising = tester.getRect(find.text('hello'));
+    expect(rising.top, greaterThan(listRect(tester).top));
 
-    expect(find.byKey(const Key('hub_greeter')), findsNothing);
-    expect(find.byKey(const Key('hub_greeting')), findsNothing);
+    await tester.pump(const Duration(milliseconds: 900));
+    expect(onScreen(tester, find.byKey(const Key('hub_greeting'))), isFalse);
     expect(find.text('hello'), findsOneWidget);
+    final landed = tester.getRect(find.text('hello'));
+    expect(landed.top, lessThan(rising.top));
+    expect(landed.top - listRect(tester).top, lessThan(48));
     expect(find.byKey(const Key('history_top_fade')), findsOneWidget);
+  });
+
+  testWidgets('reduced motion lands the send with no animation to settle', (
+    tester,
+  ) async {
+    DevGemini.debugOverride = 'AIzaTestDevKey';
+    addTearDown(() => DevGemini.debugOverride = null);
+    final services = AppServices.forTesting(
+      nativeHub: _EventHub(),
+      deviceRelay: DeviceRelayService(
+        role: DeviceRelayRole.desktopObserver,
+        adapter: const UnavailableDeviceRelayAdapter(),
+      ),
+      auth: AuthController(const UnconfiguredAuthGateway()),
+      memoryDatabasePath: (uid) => '/tmp/$uid.sqlite3',
+    );
+    addTearDown(services.dispose);
+    await services.initialize();
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MediaQuery(
+          data: const MediaQueryData(disableAnimations: true),
+          child: Scaffold(
+            body: ChatScreen(
+              services: services,
+              checklistStore: VolatileHubChecklistStore(),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.enterText(find.byKey(const Key('chat_input')), 'hello');
+    await tester.tap(find.byKey(const Key('send_chat')));
+    await tester.pump();
+
+    expect(onScreen(tester, find.byKey(const Key('hub_greeting'))), isFalse);
+    expect(
+      tester.getRect(find.text('hello')).top - listRect(tester).top,
+      lessThan(48),
+    );
+    await tester.pumpAndSettle();
   });
 
   testWidgets('history top fade paints the page background over the tail', (
@@ -219,9 +280,9 @@ void main() {
     expect(find.byKey(const Key('chat_placeholder')), findsNothing);
   });
 
-  AppServices makeLocalServices() {
+  AppServices makeLocalServices({_EventHub? hub}) {
     final services = AppServices.forTesting(
-      nativeHub: _EventHub(),
+      nativeHub: hub ?? _EventHub(),
       deviceRelay: DeviceRelayService(
         role: DeviceRelayRole.desktopObserver,
         adapter: const UnavailableDeviceRelayAdapter(),
@@ -235,11 +296,12 @@ void main() {
 
   Future<AppServices> pumpLocalHub(
     WidgetTester tester,
-    VolatileHubChecklistStore store,
-  ) async {
+    VolatileHubChecklistStore store, {
+    _EventHub? hub,
+  }) async {
     DevGemini.debugOverride = 'AIzaTestDevKey';
     addTearDown(() => DevGemini.debugOverride = null);
-    final services = makeLocalServices();
+    final services = makeLocalServices(hub: hub);
     await services.initialize();
     await tester.pumpWidget(
       MaterialApp(
@@ -263,10 +325,11 @@ void main() {
       find.byKey(const ValueKey('starter_task_Pick omi back up')),
     );
     await tester.pump();
-    await tester.pump(const Duration(milliseconds: 600));
+    await tester.pump(const Duration(milliseconds: 900));
 
-    expect(find.byKey(const Key('hub_greeter')), findsNothing);
-    expect(find.text('Pick omi back up'), findsOneWidget);
+    expect(onScreen(tester, find.byKey(const Key('hub_greeting'))), isFalse);
+    expect(find.text('Pick omi back up'), findsWidgets);
+    expect(onScreen(tester, find.text('Pick omi back up').last), isTrue);
     expect(
       tester
           .widget<TextField>(find.byKey(const Key('chat_input')))
@@ -289,7 +352,7 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 800));
 
-    expect(find.byKey(const Key('hub_greeter')), findsOneWidget);
+    expect(onScreen(tester, find.byKey(const Key('hub_greeting'))), isTrue);
     expect(store.doneTasks, ['Pick omi back up']);
     expect(store.tasks, ['Pick omi back up']);
   });
@@ -316,35 +379,196 @@ void main() {
     expect(pendingRow, findsNothing);
   });
 
-  testWidgets('scrolling past the newest message returns to the greeter', (
+  /// The composer glows and the skeleton shimmers for as long as a reply is
+  /// pending, so no frame is ever the last one; drain the gesture instead of
+  /// settling.
+  Future<void> drain(WidgetTester tester) async {
+    for (var i = 0; i < 24; i++) {
+      await tester.pump(const Duration(milliseconds: 50));
+    }
+  }
+
+  /// Sends [text] and lets the whole send transition land.
+  Future<void> send(WidgetTester tester, String text) async {
+    await tester.enterText(find.byKey(const Key('chat_input')), text);
+    await tester.tap(find.byKey(const Key('send_chat')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 900));
+  }
+
+  /// Pulls past the newest message and keeps holding for [hold].
+  Future<TestGesture> pullPastNewest(
+    WidgetTester tester, {
+    required Duration hold,
+  }) async {
+    final gesture = await tester.startGesture(
+      tester.getCenter(find.byKey(const Key('chat_messages'))),
+    );
+    await gesture.moveBy(const Offset(0, -240));
+    await tester.pump();
+    for (var elapsed = Duration.zero; elapsed < hold;) {
+      await tester.pump(const Duration(milliseconds: 50));
+      elapsed += const Duration(milliseconds: 50);
+    }
+    return gesture;
+  }
+
+  testWidgets('pulling past the newest message and holding starts a new '
+      'conversation', (tester) async {
+    final store = VolatileHubChecklistStore();
+    await pumpLocalHub(tester, store);
+    await send(tester, 'hello');
+    expect(
+      find.text('Pull past this message and hold for a new chat'),
+      findsOneWidget,
+    );
+
+    final gesture = await pullPastNewest(
+      tester,
+      hold: const Duration(milliseconds: 200),
+    );
+    // Part way there the bar shows how much of the hold is left.
+    expect(find.byKey(const Key('chat_new_chat_progress')), findsOneWidget);
+    expect(onScreen(tester, find.byKey(const Key('hub_greeting'))), isFalse);
+
+    for (var i = 0; i < 12; i++) {
+      await tester.pump(const Duration(milliseconds: 50));
+    }
+    await gesture.up();
+    await drain(tester);
+
+    expect(onScreen(tester, find.byKey(const Key('hub_greeting'))), isTrue);
+    expect(find.byKey(const Key('chat_new_chat_progress')), findsNothing);
+    expect(find.text('Earlier messages are above'), findsOneWidget);
+    expect(onScreen(tester, find.text('hello')), isFalse);
+  });
+
+  testWidgets('releasing the pull early keeps the conversation', (
     tester,
   ) async {
     final store = VolatileHubChecklistStore();
     await pumpLocalHub(tester, store);
+    await send(tester, 'hello');
 
-    await tester.enterText(find.byKey(const Key('chat_input')), 'hello');
-    await tester.tap(find.byKey(const Key('send_chat')));
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 600));
-    expect(find.byKey(const Key('hub_greeter')), findsNothing);
-    expect(find.byKey(const Key('chat_scroll_home_hint')), findsOneWidget);
-
-    await tester.drag(
-      find.byKey(const Key('chat_messages')),
-      const Offset(0, -200),
+    final gesture = await pullPastNewest(
+      tester,
+      hold: const Duration(milliseconds: 200),
     );
+    expect(find.byKey(const Key('chat_new_chat_progress')), findsOneWidget);
+    await gesture.up();
+    await drain(tester);
+
+    expect(find.byKey(const Key('chat_new_chat_progress')), findsNothing);
+    expect(
+      find.text('Pull past this message and hold for a new chat'),
+      findsOneWidget,
+    );
+    expect(onScreen(tester, find.text('hello')), isTrue);
+    expect(onScreen(tester, find.byKey(const Key('hub_greeting'))), isFalse);
+  });
+
+  testWidgets('a flick past the newest message never starts a new '
+      'conversation', (tester) async {
+    final store = VolatileHubChecklistStore();
+    await pumpLocalHub(tester, store);
+    await send(tester, 'hello');
+
+    await tester.fling(
+      find.byKey(const Key('chat_messages')),
+      const Offset(0, -300),
+      2000,
+    );
+    await drain(tester);
+
+    expect(find.byKey(const Key('chat_new_chat_progress')), findsNothing);
+    expect(onScreen(tester, find.text('hello')), isTrue);
+    expect(onScreen(tester, find.byKey(const Key('hub_greeting'))), isFalse);
+  });
+
+  testWidgets('scrolling up reaches the greeter before it reaches history', (
+    tester,
+  ) async {
+    final store = VolatileHubChecklistStore();
+    await pumpLocalHub(tester, store);
+    await send(tester, 'first');
+    // The dev key never answers, so retire the pending request before the
+    // composer is needed again.
+    await tester.tap(find.byKey(const Key('cancel_chat')));
     await tester.pump();
-    await tester.pump(const Duration(milliseconds: 600));
-    expect(find.byKey(const Key('hub_greeter')), findsOneWidget);
-    // The greeter fills the viewport with the newest turn (a thinking
-    // skeleton, since the dev key never answers) peeking; scroll history up
-    // to confirm "hello" is still there.
+
+    final gesture = await pullPastNewest(
+      tester,
+      hold: const Duration(milliseconds: 800),
+    );
+    await gesture.up();
+    await drain(tester);
+    await send(tester, 'second');
+    expect(onScreen(tester, find.text('second')), isTrue);
+    expect(onScreen(tester, find.byKey(const Key('hub_greeting'))), isFalse);
+    expect(onScreen(tester, find.text('first')), isFalse);
+
+    // One scroll up out of the live exchange: the home view, not history.
     await tester.drag(
       find.byKey(const Key('chat_messages')),
       const Offset(0, 400),
     );
+    await drain(tester);
+    final greeting = find.byKey(const Key('hub_greeting'));
+    expect(onScreen(tester, greeting), isTrue);
+    // The older conversation is only ever a peek at this stop: it lives above
+    // the home view, not inside it.
+    expect(
+      tester.getRect(find.text('first')).bottom,
+      lessThan(tester.getRect(greeting).top),
+    );
+
+    // Keep going and history is what fills the viewport.
+    await tester.drag(
+      find.byKey(const Key('chat_messages')),
+      const Offset(0, 700),
+    );
+    await drain(tester);
+    expect(onScreen(tester, find.text('first')), isTrue);
+  });
+
+  testWidgets('only the newest assistant turn carries the omi mark', (
+    tester,
+  ) async {
+    final hub = _EventHub();
+    final store = VolatileHubChecklistStore();
+    await pumpLocalHub(tester, store, hub: hub);
+    await send(tester, 'hello');
+
+    hub.eventsController.add(
+      const NativeEventMeetingCompleted(
+        value: MeetingCompleted(
+          title: 'Standup',
+          summary: 'Standup wrapped',
+          actions: ['Send the notes'],
+          startedAtMs: 0,
+          endedAtMs: 0,
+          participants: [],
+          keyPoints: [],
+          decisions: [],
+          noteMarkdown: '',
+          metadataJson: '',
+        ),
+      ),
+    );
     await tester.pump();
-    expect(find.text('hello'), findsOneWidget);
+    await tester.pump(const Duration(milliseconds: 600));
+
+    // The reply is still coming, so the skeleton is the live turn and the
+    // finished assistant row beside it must sit still.
+    expect(find.byKey(const Key('chat_skeleton')), findsOneWidget);
+    expect(find.textContaining('Standup wrapped'), findsOneWidget);
+    expect(find.byKey(const Key('chat_latest_orb')), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('cancel_chat')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 600));
+    expect(find.byKey(const Key('chat_skeleton')), findsNothing);
+    expect(find.byKey(const Key('chat_latest_orb')), findsOneWidget);
   });
 
   testWidgets('input card glows while the assistant is thinking', (
@@ -439,31 +663,11 @@ void main() {
     expect(find.text('hello'), findsOneWidget);
   });
 
-  testWidgets('history is reachable from home and snaps to the latest '
-      'message', (tester) async {
-    tester.view.physicalSize = const Size(800, 500);
-    tester.view.devicePixelRatio = 1;
-    addTearDown(tester.view.reset);
-    final store = VolatileHubChecklistStore()
-      ..tasks = [
-        'Pick omi back up',
-        'Decide next step for tsc.hk',
-        'Review the desktop handoff',
-        'Plan the week',
-      ];
+  testWidgets('a half scroll out of the exchange snaps to one of the two '
+      'stops', (tester) async {
+    final store = VolatileHubChecklistStore();
     await pumpLocalHub(tester, store);
-
-    await tester.enterText(find.byKey(const Key('chat_input')), 'hello');
-    await tester.tap(find.byKey(const Key('send_chat')));
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 700));
-    await tester.drag(
-      find.byKey(const Key('chat_messages')),
-      const Offset(0, -200),
-    );
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 700));
-    expect(find.byKey(const Key('hub_greeter')), findsOneWidget);
+    await send(tester, 'hello');
 
     final scrollable = find.descendant(
       of: find.byKey(const Key('chat_messages')),
@@ -472,28 +676,24 @@ void main() {
     final position = tester.state<ScrollableState>(scrollable).position;
     expect(position.maxScrollExtent, greaterThan(0));
 
-    await tester.fling(
-      find.byKey(const Key('chat_messages')),
-      const Offset(0, 120),
-      900,
-    );
-    for (var i = 0; i < 40; i++) {
-      await tester.pump(const Duration(milliseconds: 50));
-    }
-    expect(position.pixels, greaterThan(48));
-    final messageRect = tester.getRect(find.text('hello'));
-    expect(messageRect.top, greaterThanOrEqualTo(0));
-    expect(messageRect.bottom, lessThanOrEqualTo(500));
-
+    // A nudge out of the exchange falls back to it rather than stranding the
+    // user between the two stops.
     await tester.drag(
       find.byKey(const Key('chat_messages')),
-      const Offset(0, -600),
+      const Offset(0, 20),
     );
-    for (var i = 0; i < 60; i++) {
-      await tester.pump(const Duration(milliseconds: 50));
-      if (position.pixels == 0) break;
-    }
+    await drain(tester);
     expect(position.pixels, 0);
+    expect(onScreen(tester, find.text('hello')), isTrue);
+
+    // Past the halfway mark it commits to the home view instead.
+    await tester.drag(
+      find.byKey(const Key('chat_messages')),
+      const Offset(0, 120),
+    );
+    await drain(tester);
+    expect(position.pixels, greaterThan(48));
+    expect(onScreen(tester, find.byKey(const Key('hub_greeting'))), isTrue);
   });
 
   testWidgets('tasks with meeting metadata render as rich calendar rows', (

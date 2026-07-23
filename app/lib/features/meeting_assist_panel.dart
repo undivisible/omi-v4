@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../app_services.dart';
 import '../native/native_hub.dart';
+import '../ui/omi_typography.dart';
 import 'meeting_notes_screen.dart';
 
 class MeetingAssistPanel extends StatefulWidget {
@@ -255,7 +256,7 @@ class MeetingAssistPanelState extends State<MeetingAssistPanel> {
                   const SizedBox(height: 6),
                   Text(
                     'FROM MEMORY',
-                    style: TextStyle(
+                    style: OmiAccentText.sectionLabel.copyWith(
                       fontSize: 10,
                       letterSpacing: 1.1,
                       color: scheme.onSurfaceVariant,
@@ -350,7 +351,7 @@ class _InsightRow extends StatelessWidget {
       children: [
         Text(
           speaker.isEmpty ? label : '$label · $speaker',
-          style: TextStyle(
+          style: OmiAccentText.label.copyWith(
             fontSize: 10,
             letterSpacing: 1.1,
             fontWeight: FontWeight.w600,

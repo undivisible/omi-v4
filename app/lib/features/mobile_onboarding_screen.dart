@@ -9,12 +9,13 @@ import 'onboarding/authentication_gate.dart';
 import 'onboarding/backdrop.dart';
 import 'onboarding/lightspeed.dart';
 import 'onboarding/randomized_text.dart';
+import '../ui/omi_typography.dart';
 
 enum MobileOnboardingStage { intro, account, pair, teach, finish }
 
 const _headingStyle = TextStyle(
   color: Color(0xfffffcec),
-  fontFamily: 'Avenir Next',
+  fontFamily: OmiFonts.sans,
   fontSize: 30,
   fontWeight: FontWeight.w500,
   height: 1.2,
@@ -138,7 +139,7 @@ class _MobileOnboardingScreenState extends State<MobileOnboardingScreen> {
     shadowColor: const Color(0x59000000),
     shape: const StadiumBorder(),
     textStyle: const TextStyle(
-      fontFamily: 'Avenir Next',
+      fontFamily: OmiFonts.sans,
       fontSize: 16,
       fontWeight: FontWeight.w600,
     ),
@@ -406,7 +407,7 @@ class _IntroStage extends StatelessWidget {
             textAlign: TextAlign.center,
             style: TextStyle(
               color: Color(0xfffffcec),
-              fontFamily: 'Avenir Next',
+              fontFamily: OmiFonts.sans,
               fontSize: 33,
               fontWeight: FontWeight.w500,
               height: 1.12,
@@ -436,7 +437,7 @@ class _IntroStage extends StatelessWidget {
               style: TextButton.styleFrom(
                 foregroundColor: _secondaryCream,
                 textStyle: const TextStyle(
-                  fontFamily: 'Avenir Next',
+                  fontFamily: OmiFonts.sans,
                   fontSize: 14,
                   fontWeight: FontWeight.w500,
                 ),
@@ -697,7 +698,7 @@ class _PairStageState extends State<_PairStage> {
             style: TextButton.styleFrom(
               foregroundColor: _secondaryCream,
               textStyle: const TextStyle(
-                fontFamily: 'Avenir Next',
+                fontFamily: OmiFonts.sans,
                 fontSize: 14,
                 fontWeight: FontWeight.w500,
               ),

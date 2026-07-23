@@ -448,6 +448,9 @@ void main() {
     await tester.enterText(find.byKey(const Key('chat_input')), 'Help me plan');
     await tester.tap(find.byKey(const Key('send_chat')));
     await tester.pump();
+    // Let the send transition land: mid-flight the exchange is still climbing
+    // into the viewport and nothing in it can be tapped.
+    await tester.pump(const Duration(milliseconds: 900));
     final requestId = hub.messages.single.$1;
     expect(hub.messages.single.$2, 'Help me plan');
     expect(conversations.appended.single.text, 'Help me plan');
@@ -638,6 +641,7 @@ void main() {
       const ValueKey('approve_proposal-non-executable'),
     );
     await tester.ensureVisible(approveNonExecutable);
+    await tester.pump(const Duration(milliseconds: 400));
     await tester.tap(approveNonExecutable);
     expect(hub.approvals.map((approval) => approval.$1), [
       'proposal-1',

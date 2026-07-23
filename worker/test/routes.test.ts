@@ -93,6 +93,7 @@ beforeAll(async () => {
   await migration("migrations/0014_channel_inbox_dispatch.sql");
   await migration("migrations/0021_memory_vectors.sql");
   await migration("migrations/0022_channel_link_codes.sql");
+  await migration("migrations/0025_byok_price_negotiation.sql");
   const now = Date.now();
   await database
     .prepare(
@@ -1252,6 +1253,72 @@ describe("billing routes", () => {
       expect(portal.status).toBe(201);
       expect(requests[1]?.body.get("customer")).toBe("cus_alpha");
       expect(requests[1]?.url).toEndWith("/billing_portal/sessions");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  // The figure the user agreed to in the BYOK negotiation is what Stripe has
+  // to bill, so a negotiated agreement becomes an inline price_data line item
+  // rather than the standard price id.
+  test("charges the negotiated BYOK price rather than the standard one", async () => {
+    const originalFetch = globalThis.fetch;
+    const requests: Array<{ url: string; body: URLSearchParams }> = [];
+    globalThis.fetch = async (input, init) => {
+      const url = String(input);
+      if (url.endsWith("/prices/price_pro"))
+        return Response.json({
+          currency: "usd",
+          product: "prod_pro",
+          unit_amount: 1200,
+          recurring: { interval: "month", interval_count: 1 },
+        });
+      requests.push({
+        url,
+        body: new URLSearchParams(String(init?.body)),
+      });
+      return Response.json({
+        id: "session-negotiated",
+        url: "https://stripe.test/session",
+      });
+    };
+    try {
+      await database
+        .prepare(
+          "INSERT OR IGNORE INTO users (uid, created_at, updated_at) VALUES ('haggler', ?1, ?1)",
+        )
+        .bind(Date.now())
+        .run();
+      await database
+        .prepare(
+          `INSERT INTO byok_price_agreements
+             (uid, session_id, outcome, price_cents, standard_price_cents,
+              floor_price_cents, grants, transcript, agreed_at, created_at,
+              updated_at)
+           VALUES ('haggler', 'sess', 'negotiated', 700, 1200, 700, '[]', '[]',
+                   ?1, ?1, ?1)`,
+        )
+        .bind(Date.now())
+        .run();
+      const checkout = await request(
+        "haggler",
+        "/payments/stripe/checkout",
+        { method: "POST" },
+        {
+          STRIPE_SECRET_KEY: "sk_test",
+          STRIPE_PRO_PRICE_ID: "price_pro",
+          APP_URL: "https://app.example.test",
+        },
+      );
+      expect(checkout.status).toBe(201);
+      const body = requests[0]?.body;
+      expect(body?.get("line_items[0][price]")).toBe(null);
+      expect(body?.get("line_items[0][price_data][unit_amount]")).toBe("700");
+      expect(body?.get("line_items[0][price_data][currency]")).toBe("usd");
+      expect(body?.get("line_items[0][price_data][product]")).toBe("prod_pro");
+      expect(body?.get("line_items[0][price_data][recurring][interval]")).toBe(
+        "month",
+      );
     } finally {
       globalThis.fetch = originalFetch;
     }

@@ -21,6 +21,9 @@ void main() {
     expect(controller.stage, OnboardingStage.profile);
 
     controller.completeProfile();
+    expect(controller.stage, OnboardingStage.byok);
+
+    controller.completeByok();
     expect(controller.stage, OnboardingStage.use);
   });
 

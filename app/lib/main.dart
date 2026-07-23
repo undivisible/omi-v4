@@ -14,6 +14,7 @@ import 'features/pill_panel.dart';
 import 'features/setup_account_screens.dart';
 import 'onboarding/hub_checklist.dart';
 import 'onboarding/onboarding_completion.dart';
+import 'ui/omi_typography.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -106,7 +107,8 @@ class _SettingsWindowAppState extends State<SettingsWindowApp> {
     themeMode: ThemeMode.system,
     theme: ThemeData(
       brightness: Brightness.light,
-      fontFamily: 'SF Pro Display',
+      fontFamily: OmiFonts.sans,
+      textTheme: omiTextTheme,
       scaffoldBackgroundColor: const Color(0xfff7f6f1),
       colorScheme: const ColorScheme.light(
         primary: Color(0xff171716),
@@ -117,7 +119,8 @@ class _SettingsWindowAppState extends State<SettingsWindowApp> {
     ),
     darkTheme: ThemeData(
       brightness: Brightness.dark,
-      fontFamily: 'SF Pro Display',
+      fontFamily: OmiFonts.sans,
+      textTheme: omiTextTheme,
       scaffoldBackgroundColor: const Color(0xff171716),
       colorScheme: const ColorScheme.dark(
         primary: Color(0xfffffcec),
@@ -238,15 +241,7 @@ class _OmiAppState extends State<OmiApp> {
     const paper = Color(0xfff7f6f1);
     const paperSurface = Color(0xfffffefa);
     const ink = Color(0xff171716);
-    const textTheme = TextTheme(
-      displaySmall: TextStyle(fontWeight: FontWeight.w600, letterSpacing: -1),
-      headlineMedium: TextStyle(
-        fontWeight: FontWeight.w600,
-        letterSpacing: -.5,
-      ),
-      titleMedium: TextStyle(fontWeight: FontWeight.w600),
-      bodyLarge: TextStyle(height: 1.45),
-    );
+    const textTheme = omiTextTheme;
     return MaterialApp(
       title: 'Omi',
       debugShowCheckedModeBanner: false,
@@ -261,7 +256,7 @@ class _OmiAppState extends State<OmiApp> {
           onSurfaceVariant: Color(0xff706e68),
           secondary: Color(0xff2f9d8a),
         ),
-        fontFamily: 'SF Pro Display',
+        fontFamily: OmiFonts.sans,
         textTheme: textTheme,
         inputDecorationTheme: InputDecorationTheme(
           filled: true,
@@ -280,7 +275,7 @@ class _OmiAppState extends State<OmiApp> {
           surface: surface,
           onSurface: Color(0xfff4f7f6),
         ),
-        fontFamily: 'SF Pro Display',
+        fontFamily: OmiFonts.sans,
         textTheme: textTheme,
         inputDecorationTheme: InputDecorationTheme(
           filled: true,

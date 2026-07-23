@@ -766,29 +766,36 @@ impl AssistantProvider for RsAiAssistantProvider {
     }
 }
 
+/// The provider configuration the hub starts with: the user's configured
+/// provider, else the dev Gemini key, else nothing.
+fn production_assistant_config() -> Result<Option<AssistantProviderConfig>, String> {
+    if let Some(config) = AssistantProviderConfig::from_values(|name| std::env::var(name).ok())? {
+        return Ok(Some(config));
+    }
+    Ok(
+        crate::dev_gemini::api_key().map(|key| AssistantProviderConfig {
+            kind: AssistantProviderKind::Gemini,
+            model: crate::model_tier::model_for_tier_env(crate::model_tier::ModelTier::Speed),
+            credential: key.0,
+            endpoint: None,
+        }),
+    )
+}
+
 fn production_assistant_provider() -> Arc<dyn AssistantProvider> {
-    match configured_assistant_provider(|name| std::env::var(name).ok()) {
-        Ok(Some(provider)) => provider,
-        Ok(None) => match crate::dev_gemini::api_key() {
-            Some(key) => Arc::new(RsAiAssistantProvider {
-                config: AssistantProviderConfig {
-                    kind: AssistantProviderKind::Gemini,
-                    model: crate::model_tier::model_for_tier_env(
-                        crate::model_tier::ModelTier::Speed,
-                    ),
-                    credential: key.0,
-                    endpoint: None,
-                },
-                computer_use_enabled: computer_use_available(),
-            }),
-            None => Arc::new(UnavailableAssistantProvider {
-                reason: "no model provider is configured".to_owned(),
-            }),
-        },
+    match production_assistant_config() {
+        Ok(Some(config)) => Arc::new(RsAiAssistantProvider {
+            config,
+            computer_use_enabled: computer_use_available(),
+        }),
+        Ok(None) => Arc::new(UnavailableAssistantProvider {
+            reason: "no model provider is configured".to_owned(),
+        }),
         Err(reason) => Arc::new(UnavailableAssistantProvider { reason }),
     }
 }
 
+#[cfg(test)]
 fn configured_assistant_provider(
     value: impl FnMut(&str) -> Option<String>,
 ) -> Result<Option<Arc<dyn AssistantProvider>>, String> {
@@ -806,10 +813,11 @@ fn configured_assistant_provider(
 /// timeout, or cancellation all yield `None` so the caller can fall back.
 async fn generate_once(
     provider: &Arc<dyn AssistantProvider>,
+    label: &str,
     prompt: &str,
     cancellation: &CancellationToken,
 ) -> Option<String> {
-    let request_id = format!("meeting-note-{}", unix_time_ms());
+    let request_id = format!("{label}-{}", unix_time_ms());
     let mut events = provider.dispatch(request_id, prompt.to_owned(), cancellation.clone());
     let mut text = String::new();
     loop {
@@ -839,7 +847,32 @@ async fn generate_once(
 fn note_generator(provider: Arc<dyn AssistantProvider>) -> crate::meeting::NoteGenerator {
     Arc::new(move |prompt, cancellation| {
         let provider = Arc::clone(&provider);
-        Box::pin(async move { generate_once(&provider, &prompt, &cancellation).await })
+        Box::pin(
+            async move { generate_once(&provider, "meeting-note", &prompt, &cancellation).await },
+        )
+    })
+}
+
+/// Wraps a provider configuration as the currents-brief generator.
+///
+/// The brief is latency-sensitive presentation, so it runs on the SPEED tier
+/// rather than the configured chat model, and it runs against the same cloud
+/// provider dispatch every other generated surface uses — never the local
+/// Apple Foundation Models path, which does not compose chat-class documents.
+/// Tool calls are disabled: the brief authors a document, it never acts.
+fn brief_generator(config: &AssistantProviderConfig) -> crate::brief::BriefGenerator {
+    let provider: Arc<dyn AssistantProvider> = Arc::new(RsAiAssistantProvider {
+        config: AssistantProviderConfig {
+            model: crate::model_tier::model_for_tier_env(crate::model_tier::ModelTier::Speed),
+            ..config.clone()
+        },
+        computer_use_enabled: false,
+    });
+    Arc::new(move |prompt, cancellation| {
+        let provider = Arc::clone(&provider);
+        Box::pin(
+            async move { generate_once(&provider, "currents-brief", &prompt, &cancellation).await },
+        )
     })
 }
 
@@ -851,6 +884,12 @@ fn publish_note_provider(provider: &Arc<StdMutex<Arc<dyn AssistantProvider>>>) {
         .unwrap_or_else(|failure| failure.into_inner())
         .clone();
     crate::meeting::configure_note_provider(note_generator(current));
+}
+
+/// Pushes (or with `None` withdraws) the brief generator. Withdrawn means the
+/// brief simply is not composed and the client's hand-built brief renders.
+fn publish_brief_provider(config: Option<&AssistantProviderConfig>) {
+    crate::brief::configure_generator(config.map(brief_generator));
 }
 
 #[derive(Default)]
@@ -939,6 +978,7 @@ impl CommandDispatcher {
         let mut completed = CompletedCaptures::default();
         let mut authority_generation = 0_u64;
         publish_note_provider(&self.assistant_provider);
+        publish_brief_provider(production_assistant_config().ok().flatten().as_ref());
         loop {
             reap_ready(
                 &mut tasks,
@@ -1169,10 +1209,11 @@ impl CommandDispatcher {
                             .lock()
                             .unwrap_or_else(|failure| failure.into_inner()) =
                             Arc::new(RsAiAssistantProvider {
-                                config,
+                                config: config.clone(),
                                 computer_use_enabled: computer_use_available(),
                             });
                         publish_note_provider(&self.assistant_provider);
+                        publish_brief_provider(Some(&config));
                         progress(
                             &request_id,
                             "assistant_configuration",
@@ -1199,6 +1240,7 @@ impl CommandDispatcher {
                         reason: "no model provider is configured".to_owned(),
                     });
                 publish_note_provider(&self.assistant_provider);
+                publish_brief_provider(None);
                 progress(
                     &request_id,
                     "assistant_configuration",

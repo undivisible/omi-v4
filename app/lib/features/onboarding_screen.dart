@@ -17,6 +17,7 @@ import '../ui/omi_ui.dart';
 import 'cursor_pill_controller.dart';
 import 'cursor_pill_window.dart';
 import 'onboarding/backdrop.dart';
+import 'onboarding/byok_step.dart';
 import 'onboarding/permission_gate.dart';
 import 'onboarding/randomized_text.dart';
 import 'omi_shell.dart';
@@ -435,6 +436,15 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                         onContinue: (name, languages) =>
                             unawaited(_completeProfile(name, languages)),
                       ),
+                      // Bringing your own provider is offered once, right
+                      // after the profile: the negotiated price only applies
+                      // to a key that is actually connected.
+                      OnboardingStage.byok => OnboardingByokStep(
+                        key: const ValueKey('byok'),
+                        client: widget.services.byok,
+                        onConnect: widget.services.saveProviderCredential,
+                        onFinish: onboarding.completeByok,
+                      ),
                       OnboardingStage.use => OnboardingUseStep(
                         key: const ValueKey('use'),
                         pill: _usePillController,
@@ -490,7 +500,7 @@ class _Introduction extends StatelessWidget {
         textAlign: TextAlign.center,
         style: TextStyle(
           color: Color(0xfffffcec),
-          fontFamily: 'Avenir Next',
+          fontFamily: OmiFonts.sans,
           fontSize: 46,
           fontWeight: FontWeight.w500,
           height: 1.08,
@@ -519,7 +529,7 @@ class _Introduction extends StatelessWidget {
           style: TextButton.styleFrom(
             foregroundColor: const Color(0xb3fffcec),
             textStyle: const TextStyle(
-              fontFamily: 'Avenir Next',
+              fontFamily: OmiFonts.sans,
               fontSize: 14,
               fontWeight: FontWeight.w500,
             ),
@@ -661,7 +671,7 @@ class _OnboardingProfileStepState extends State<OnboardingProfileStep> {
               label,
               style: const TextStyle(
                 color: _ink,
-                fontFamily: 'Avenir Next',
+                fontFamily: OmiFonts.sans,
                 fontSize: 20,
                 fontWeight: FontWeight.w600,
               ),
@@ -678,7 +688,7 @@ class _OnboardingProfileStepState extends State<OnboardingProfileStep> {
   Widget build(BuildContext context) {
     const prose = TextStyle(
       color: _cream,
-      fontFamily: 'Avenir Next',
+      fontFamily: OmiFonts.sans,
       fontSize: 24,
       fontWeight: FontWeight.w500,
       height: 1.5,
@@ -693,7 +703,7 @@ class _OnboardingProfileStepState extends State<OnboardingProfileStep> {
           textAlign: TextAlign.center,
           style: TextStyle(
             color: _cream,
-            fontFamily: 'Avenir Next',
+            fontFamily: OmiFonts.sans,
             fontSize: 38,
             fontWeight: FontWeight.w500,
             height: 1.2,
@@ -716,7 +726,7 @@ class _OnboardingProfileStepState extends State<OnboardingProfileStep> {
                   autofocus: true,
                   style: const TextStyle(
                     color: _cream,
-                    fontFamily: 'Avenir Next',
+                    fontFamily: OmiFonts.sans,
                     fontSize: 20,
                     fontWeight: FontWeight.w600,
                   ),
@@ -780,7 +790,7 @@ class _OnboardingProfileStepState extends State<OnboardingProfileStep> {
             textAlign: TextAlign.center,
             style: const TextStyle(
               color: _cream,
-              fontFamily: 'Avenir Next',
+              fontFamily: OmiFonts.sans,
               fontSize: 20,
               fontWeight: FontWeight.w500,
               height: 1.5,
@@ -807,7 +817,7 @@ class _OnboardingProfileStepState extends State<OnboardingProfileStep> {
                   'Preparing your tasks…',
                   style: TextStyle(
                     color: _cream,
-                    fontFamily: 'Avenir Next',
+                    fontFamily: OmiFonts.sans,
                     fontSize: 15,
                     fontWeight: FontWeight.w500,
                   ),
@@ -845,7 +855,7 @@ class _ScanStep extends StatelessWidget {
           textAlign: TextAlign.center,
           style: const TextStyle(
             color: Color(0xfffffcec),
-            fontFamily: 'Avenir Next',
+            fontFamily: OmiFonts.sans,
             fontSize: 38,
             fontWeight: FontWeight.w500,
             height: 1.2,
@@ -1058,7 +1068,7 @@ class _OnboardingUseStepState extends State<OnboardingUseStep> {
               : pressed
               ? const Color(0xff171716)
               : const Color(0xb3fffcec),
-          fontFamily: 'Avenir Next',
+          fontFamily: OmiFonts.sans,
           fontSize: 19,
           fontWeight: FontWeight.w600,
         ),
@@ -1093,7 +1103,7 @@ class _OnboardingUseStepState extends State<OnboardingUseStep> {
                   textAlign: TextAlign.center,
                   style: TextStyle(
                     color: Color(0xb3fffcec),
-                    fontFamily: 'Avenir Next',
+                    fontFamily: OmiFonts.sans,
                     fontSize: 21,
                     fontWeight: FontWeight.w600,
                   ),
@@ -1158,7 +1168,7 @@ class _OnboardingUseStepState extends State<OnboardingUseStep> {
               textAlign: TextAlign.center,
               style: const TextStyle(
                 color: Color(0xb3fffcec),
-                fontFamily: 'Avenir Next',
+                fontFamily: OmiFonts.sans,
                 fontSize: 15,
                 fontWeight: FontWeight.w500,
               ),
@@ -1197,7 +1207,7 @@ class _OnboardingUseStepState extends State<OnboardingUseStep> {
         textAlign: TextAlign.center,
         style: const TextStyle(
           color: Color(0xfffffcec),
-          fontFamily: 'Avenir Next',
+          fontFamily: OmiFonts.sans,
           fontSize: 34,
           fontWeight: FontWeight.w500,
           height: 1.15,
@@ -1217,7 +1227,7 @@ class _OnboardingUseStepState extends State<OnboardingUseStep> {
             textAlign: TextAlign.center,
             style: const TextStyle(
               color: Color(0xb3fffcec),
-              fontFamily: 'Avenir Next',
+              fontFamily: OmiFonts.sans,
               fontSize: 15,
               fontWeight: FontWeight.w500,
             ),

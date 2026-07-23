@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../currents/currents.dart';
 import '../onboarding/hub_checklist.dart';
+import '../ui/omi_typography.dart';
 import '../ui/scroll_edge_fade.dart';
 
 class TasksScreen extends StatefulWidget {
@@ -89,9 +90,8 @@ class _TasksScreenState extends State<TasksScreen> {
                           const SizedBox(width: 8),
                           Text(
                             'ALL TASKS',
-                            style: TextStyle(
+                            style: OmiAccentText.sectionLabel.copyWith(
                               fontSize: 11,
-                              fontWeight: FontWeight.w600,
                               letterSpacing: 1.43,
                               color: colors.muted,
                             ),
@@ -360,7 +360,7 @@ class _StatusTag extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
       child: Text(
         text,
-        style: TextStyle(
+        style: OmiAccentText.label.copyWith(
           fontSize: 9,
           fontWeight: FontWeight.w600,
           letterSpacing: 1.17,

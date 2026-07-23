@@ -9,7 +9,7 @@ Omi v4 captures what happens around you (pendant audio, meetings, your workspace
 | Path | What it is |
 | --- | --- |
 | `app` | Flutter client for iOS, Android, macOS, Windows, and web — one codebase, mobile and desktop surfaces |
-| `app/native/hub` | The Rust "hub" (Rinf-bridged): assistant dispatch, Gemini Live voice, workspace scan, meetings, memory, computer-use |
+| `app/native/hub` | The Rust "hub" (Rinf-bridged): assistant dispatch and model-tier routing, Gemini Live voice, workspace scan, meetings, memory, computer-use |
 | `app/macos/Runner` | macOS native layer — window chrome, summoned input overlay, voice waveform/glow overlays, global input, menu bar, EventKit |
 | `worker` | Cloudflare Worker (Bun, Hono, TypeScript) — auth, D1 persistence, billing, channel delivery |
 | `worker-rs` | Rust/workers-rs parity port of the Worker, cutover-ready |
@@ -19,17 +19,21 @@ External engines: [`tschk/zkr`](https://github.com/tschk/zkr) for evidence-backe
 
 ## How it fits together
 
-The pendant streams Opus audio over BLE to the phone; the desktop hub captures voice, meetings, and workspace context directly. Everything becomes evidenced memory in `zkr`, projected to Cloudflare D1 and Vectorize so the messaging channels stay memory-aware. One assistant conversation spans every surface, keyed by a single Firebase UID. Ordinary chat turns run on-device via Apple Foundation Models; heavier turns escalate to a hosted model.
+The pendant streams Opus audio over BLE to the phone; the desktop hub captures voice, meetings, and workspace context directly. Everything becomes evidenced memory in `zkr`, stored under `~/.omi` and projected to Cloudflare D1 and Vectorize so the messaging channels stay memory-aware. One assistant conversation spans every surface, keyed by a single Firebase UID.
+
+Chat always goes to the configured cloud provider — managed through the Worker, or direct with your own key. A per-prompt router picks one of five model tiers (speed, balanced, smart, multimodal, search) from one env-driven table shared by the hub and both workers. Apple Foundation Models runs on-device for the small jobs only: summaries, onboarding scan summaries, meeting extraction, and the daily review.
 
 ## Documentation
 
-- [`ARCHITECTURE.md`](ARCHITECTURE.md) — the system as a whole, with a comparison against the upstream Omi project
+- [`ARCHITECTURE.md`](ARCHITECTURE.md) — the system as a whole
+- [`COMPARISON.md`](COMPARISON.md) — how this compares to the upstream Omi project: what we skip, what we do differently, where upstream is ahead
 - [`app/ARCHITECTURE-mobile.md`](app/ARCHITECTURE-mobile.md) — mobile companion and BLE pendant relay
 - [`app/ARCHITECTURE-desktop.md`](app/ARCHITECTURE-desktop.md) — desktop UI, Rust hub, and macOS Runner
 - [`firmware/ARCHITECTURE.md`](firmware/ARCHITECTURE.md) — pendant firmware
+- [`docs/ai-and-observability.md`](docs/ai-and-observability.md) — model routing, transcription, and the observability stack
 - [`PLAN.md`](PLAN.md) — product and implementation decisions · [`CONTEXT.md`](CONTEXT.md) — domain language
 
-Each architecture document states plainly what we skip relative to upstream, what we do differently, and where upstream is ahead.
+The architecture documents describe only how this system is built; every comparative claim lives in `COMPARISON.md`.
 
 ## Quality gates
 

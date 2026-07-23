@@ -148,6 +148,13 @@ void main() {
       for (var i = 0; i < 10; i++) {
         await tester.pump(const Duration(milliseconds: 100));
       }
+      // The profile step now hands off to the BYOK step; skipping it keeps
+      // this test about starter tasks rather than about provider setup.
+      await tester.ensureVisible(find.byKey(const Key('byok_skip_connect')));
+      await tester.tap(find.byKey(const Key('byok_skip_connect')));
+      for (var i = 0; i < 10; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
 
       // Tasks were seeded from the user's own scan data before the use step.
       expect(find.byKey(const Key('shift_left')), findsOneWidget);
@@ -204,6 +211,13 @@ void main() {
       expect(find.byKey(const Key('preparing_tasks')), findsOneWidget);
       expect(find.text('Preparing your tasks…'), findsOneWidget);
 
+      for (var i = 0; i < 10; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+      // The profile step now hands off to the BYOK step; skipping it keeps
+      // this test about starter tasks rather than about provider setup.
+      await tester.ensureVisible(find.byKey(const Key('byok_skip_connect')));
+      await tester.tap(find.byKey(const Key('byok_skip_connect')));
       for (var i = 0; i < 10; i++) {
         await tester.pump(const Duration(milliseconds: 100));
       }

@@ -182,7 +182,7 @@ class _ProductionGateState extends State<ProductionGate>
         textAlign: TextAlign.left,
         style: TextStyle(
           color: Color(0xfffffcec),
-          fontFamily: 'Avenir Next',
+          fontFamily: OmiFonts.sans,
           fontSize: 38,
           fontWeight: FontWeight.w500,
           letterSpacing: -1.5,

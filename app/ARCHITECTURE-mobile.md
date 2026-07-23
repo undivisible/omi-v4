@@ -1,6 +1,6 @@
 # Omi v4 Mobile Architecture
 
-*Generated from a read-only pass over this repository and over the upstream `BasedHardware/omi` checkout at `~/projects/omi` on 2026-07-23, reflecting the repo at commit `7baf8ac`. Every claim is grounded in files read during this pass; paths are cited inline so each statement is checkable against the source. Where a claim could not be verified from code it is marked as unverified rather than asserted. This describes what exists now, not the roadmap — the roadmap for this surface lives in `docs/mobile-companion-app.md`.*
+*Generated from a read-only pass over this repository, revised 2026-07-23. Every claim is grounded in files read during this pass; paths are cited inline so each statement is checkable against the source. Where a claim could not be verified from code it is marked as unverified rather than asserted. This describes what exists now, not the roadmap — the roadmap for this surface lives in `docs/mobile-companion-app.md`, and comparison with upstream Omi's mobile app lives in [`COMPARISON.md`](../COMPARISON.md) §2.*
 
 ## 1. What the mobile app is
 
@@ -16,7 +16,7 @@ This mirrors the ownership split locked in `PLAN.md` ("Mobile owns BLE, backgrou
 | Role gating (mobile owns the pendant; desktop/web observe) | `app/lib/device/device_relay.dart`, `app/lib/app_services.dart:1487` (`_createDeviceRelay`) |
 | 3-byte packet reassembly into audio frames | `app/lib/device/device_audio_frame.dart` |
 | Bounded forwarding of frames into the Rust hub's STT session | `app/lib/device/device_audio_forwarder.dart` |
-| Companion home (pendant hero, capture toggle, stats, tasks, transcripts) | `app/lib/features/mobile_companion_shell.dart` |
+| Companion home (pendant hero doubling as the capture control, stats, tasks, transcripts) | `app/lib/features/mobile_companion_shell.dart` |
 | Five-stage mobile onboarding (intro → account → pair → teach → finish) | `app/lib/features/mobile_onboarding_screen.dart` |
 | Mobile settings sheet (account, consent, route, device, danger zone) | `app/lib/features/mobile_companion_shell.dart:1200-1496` |
 | Account/consent, memory, currents, settings, worker HTTP | shared `app/lib/{auth,memory,currents,settings,api}` |
@@ -26,7 +26,7 @@ Everything under `app/lib/keyboard/`, `app/lib/menu_bar/`, `app/lib/capabilities
 
 ### 1.2 The Rust hub runs on mobile too
 
-`createNativeHub()` (`app/lib/native/native_hub.dart:210`) returns the real `RinfNativeHub` on every non-web platform, so the same Rinf-bridged Rust crate (`app/native/hub`, `crate-type = ["lib", "cdylib", "staticlib"]`) is embedded in the iOS and Android binaries. On mobile the hub is used for the STT session lifecycle (`startTranscription`/`sendAudio`/`stopTranscription`) and for `zkr` memory capture; the desktop-only subsystems inside it (computer use, workspace/Notes/Mail scan) are simply never invoked. The per-user memory database path is a SHA-256 of the Firebase UID under the app support directory (`app/lib/app_services.dart:1504`), identical to desktop.
+`createNativeHub()` (`app/lib/native/native_hub.dart:210`) returns the real `RinfNativeHub` on every non-web platform, so the same Rinf-bridged Rust crate (`app/native/hub`, `crate-type = ["lib", "cdylib", "staticlib"]`) is embedded in the iOS and Android binaries. On mobile the hub is used for the STT session lifecycle (`startTranscription`/`sendAudio`/`stopTranscription`) and for `zkr` memory capture; the desktop-only subsystems inside it (computer use, workspace/Notes/Mail scan) are simply never invoked. The per-user memory database path is a SHA-256 of the Firebase UID inside the `.omi` directory (`_defaultMemoryDatabasePath`, `app/lib/app_services.dart`), resolved the same way as on desktop.
 
 ## 2. Mobile data flow
 
@@ -82,9 +82,9 @@ flowchart TD
 - Battery service `0000180f-…` / battery level `00002a19-…`
 - Speaker service `cab1ab95-…` / haptic characteristic `cab1ab96-…`
 
-These match upstream's constants exactly (`~/projects/omi/app/lib/services/devices/models.dart:12-38`). The Device Information service (`180a`) and part of the settings service (`19b10010`) are also read/written here: `universal_ble_device_relay.dart` reads model, firmware, hardware, manufacturer, and serial from `180a`, and writes the capture-state LED (`19b10015`), sleep command (`19b10014`), and device rename (`19b10016`) characteristics, each guarded so older firmware degrades gracefully. Everything else upstream defines — button, image capture, SD-card storage, accelerometer, time sync, and the remaining settings characteristics (dim ratio, mic gain, charging status) — is not referenced anywhere in `app/lib`.
+The Device Information service (`180a`) and part of the settings service (`19b10010`) are also read/written here: `universal_ble_device_relay.dart` reads model, firmware, hardware, manufacturer, and serial from `180a`, and writes the capture-state LED (`19b10015`), sleep command (`19b10014`), and device rename (`19b10016`) characteristics, each guarded so older firmware degrades gracefully. The remaining characteristics the firmware defines — button, image capture, SD-card storage, accelerometer, time sync, dim ratio, mic gain, charging status — are not referenced anywhere in `app/lib`.
 
-Codec ids map the same way as upstream (`DeviceAudioCodec.fromFirmwareId`, `app/lib/device/device_models.dart:27-32`: `1 → pcm8`, `20 → opus`, `21 → opusFs320`, everything else `unknown`), except upstream falls back to `pcm8` on an unknown id (`~/projects/omi/app/lib/services/devices/connectors/omi_connection.dart:152-154`) while we fail closed: an `unknown` codec makes `DeviceAudioForwarder.start` throw "The connected Omi reported an unknown audio codec." (`app/lib/device/device_audio_forwarder.dart:129-131`). Note `DeviceAudioCodec.pcm16` exists in the enum and is handled downstream but is never produced by `fromFirmwareId` — no firmware id maps to it.
+Codec ids are mapped by `DeviceAudioCodec.fromFirmwareId` (`app/lib/device/device_models.dart`): `1 → pcm8`, `20 → opus`, `21 → opusFs320`, everything else `unknown`. An `unknown` codec fails closed — `DeviceAudioForwarder.start` throws "The connected Omi reported an unknown audio codec." rather than guessing a format. Note `DeviceAudioCodec.pcm16` exists in the enum and is handled downstream but is never produced by `fromFirmwareId` — no firmware id maps to it.
 
 ### 3.2 Scan
 
@@ -139,7 +139,7 @@ Captured memory is pushed to the Worker by `MemorySyncPump` on a 30-second timer
 
 ## 5. Persistence on mobile
 
-All mobile-local persistence is `shared_preferences`; there is no local audio file store and no local SQLite outside the hub's `zkr` database.
+All mobile-local persistence is `shared_preferences`; there is no local audio file store and no local SQLite outside the hub's `zkr` database. That database lives inside the shared `.omi` directory resolved by `omiDataDirectory()` (`app/lib/storage/omi_directory.dart`) — on iOS and Android, where there is no writable home, that resolves to a `.omi` subfolder of the platform's private application-support area. See root [`ARCHITECTURE.md`](../ARCHITECTURE.md) §5.1.
 
 | Store | Key | File |
 |---|---|---|
@@ -149,7 +149,8 @@ All mobile-local persistence is `shared_preferences`; there is no local audio fi
 | Onboarding completion (local + Worker-backed layer) | — | `app/lib/onboarding/onboarding_completion.dart`, wired at `app_services.dart:310` |
 | Processing-consent receipt | — | `app/lib/auth/consent_store.dart` |
 | BYOK provider credentials | — | `app/lib/providers/provider_credentials.dart` (`flutter_secure_storage`) |
-| Personal memory | — | `zkr` SQLite at `omi-memory-<sha256(uid)>.sqlite3` (`app_services.dart:1504`) |
+| Capture enabled | — | `app/lib/device/capture_enabled_store.dart` |
+| Personal memory | — | `zkr` SQLite at `<.omi>/omi-memory-<sha256(uid)>.sqlite3` (`_defaultMemoryDatabasePath`, `app_services.dart`) |
 
 `AppServices.deleteAccount()` (line 317) calls `DELETE /v1/account` when signed in, then deletes BYOK credentials, clears all SharedPreferences, signs out, and bumps a `dataWipes` notifier that `main.dart` listens to in order to re-evaluate onboarding state.
 
@@ -162,6 +163,20 @@ All mobile-local persistence is `shared_preferences`; there is no local audio fi
 - **pair** scans, auto-connects the first non-excluded result, persists the device id, fires a haptic, and auto-advances 1200 ms after a successful connect. "Not this one?" excludes that device id and rescans; "Pair later" skips the stage entirely. The pendant glow is tinted blue when connected and red when disconnected/failed, deliberately mirroring the firmware LED (comment at lines 615-624 notes charging state is not exposed over the relay, so the green charging states cannot be mirrored).
 - **teach** is three static one-line cards.
 - **finish** plays a `LightspeedTransition` — "lightspeed" if a pendant is connected and processing authority is granted, plain fade otherwise (lines 99-111) — then persists completion via `OnboardingCompletionStore` and the hub checklist (`main.dart:149-161`).
+
+### 6.1 The companion home: one image, one gesture
+
+The pendant image is the whole control surface. `_tapPendant` (`app/lib/features/mobile_companion_shell.dart`) is the only capture control:
+
+- **Connected** — a tap toggles capture (`_setCaptureEnabled(!_captureEnabled)`), which fires a selection haptic, persists the choice through `CaptureEnabledStore` so it survives a relaunch, and writes the matching state to the pendant's capture LED (`19b10015`).
+- **Disconnected** — a tap reconnects. The image is faded and desaturated in that state: `pendantFor(warmth)` ramps opacity and saturation continuously over the same 0…1, so connecting fades and saturates the asset in and disconnecting runs the identical curve backwards; fully warm is the untouched asset with the filter dropped out entirely.
+- **Hold** — a long press disconnects, behind a heavy haptic plus a relay-side haptic confirm so it cannot be triggered by accident.
+
+**There is no capture switch and no reconnect button.** The comment in the source calling out "the switch under the minutes chip" is stale; no `Switch` exists in this file. With the switch gone, the on-screen LED ring carries the state instead — blue while the pendant sits idle, recording-red the moment capture is live, mirroring the firmware LED semantics. A hint line under the image spells the gesture out: "Tap the pendant to reconnect" when disconnected, "Tap to stop · Hold to disconnect" or "Tap to start capturing · Hold to disconnect" when connected.
+
+Capture is on by default: connecting the pendant starts streaming without further interaction, and the remembered off state is re-applied on reconnect. On the connect edge an `OmiBurstGlow` (`app/lib/ui/burst_glow.dart`) fires once behind the pendant, keyed on a connection epoch so a later reconnect produces a fresh burst; it is skipped entirely under reduced motion, where a burst that cannot animate would leave a static blob behind.
+
+The scrolling body of the companion home is wrapped in `ScrollEdgeFade` (`app/lib/ui/scroll_edge_fade.dart`), the shared scroll-edge treatment also used by the tasks screen, meeting notes, and account setup: page-coloured gradients at the top and bottom of the scroll view, each hidden while the view is already resting against that edge.
 
 ## 7. Settings on mobile
 
@@ -185,103 +200,16 @@ That is the entire mobile settings surface. There is no language picker, no tran
 
 The hub's outbound STT socket is the only path pendant audio takes; it goes to the managed Worker-minted `wss` endpoint or, with a BYOK credential, straight to Deepgram (see `ARCHITECTURE.md` §3.4). Opus is passed through to the provider as `encoding=opus` rather than decoded on the phone (`app/native/hub/src/stt.rs:131`).
 
-## 9. Comparison against upstream `BasedHardware/omi`
-
-This section compares observable structure only — which code exists in which tree. It makes no claim about either project's stability, reliability, or quality in either direction; nothing here has been measured, and surface area is not evidence of either maturity or fragility.
-
-Structural scale: upstream's Flutter app is 593 Dart files (543 excluding generated localizations); ours is 160 (87 excluding the generated Rinf/serde codecs). Upstream's app talks to a Python/FastAPI + Firebase backend; ours talks to a Cloudflare Workers backend (`worker/`, with a Rust port in `worker-rs/`) plus an embedded Rust hub.
-
-### 9.1 What we deliberately skip
-
-Every item below was verified to exist upstream by reading files under `~/projects/omi/app/lib`, and verified absent here by searching `app/lib`.
-
-These are omissions, not deficits. Most are load this codebase chose not to carry — surfaces, SDKs, protocols, and vendor integrations each of which brings its own state, failure modes, permissions, and maintenance cost. A few are things worth evaluating for adoption; those are collected separately in §9.4 rather than mixed in here.
-
-**Device breadth**
-- **Nine other device integrations** — Apple Watch, Bee, Fieldy, Friend pendant, Limitless, Plaud, Ray-Ban Meta, OmiGlass, and a generic "custom" connector (`~/projects/omi/app/lib/services/devices/connectors/`), with matching discoverers, transports and bridges. We support exactly one device: the Omi pendant over `universal_ble`.
-- **Button characteristic and voice-command sessions** — upstream binds `23ba7924-…` and implements press/long-press-to-talk with haptic feedback (`~/projects/omi/app/lib/services/capture/capture_controller.dart:840-855`).
-- **Image/photo capture** (`19b10005`/`19b10006`) with orientation handling, a photos grid and a photo viewer.
-- **SD-card and flash-page storage sync** — a whole storage-service protocol (`30295780-…`) plus `pages/sdcard/` and `services/wals/{sdcard_wal_sync,flash_page_wal_sync,ring_storage_sync}.dart`.
-- **Accelerometer stream** (`32403790-…`), **time sync** (`19b10030-…`), and the remaining **settings service** characteristics (`19b10010`: dim ratio, mic gain, charging status). The Device Information service (`180a`) and the capture-LED/sleep/rename settings characteristics are implemented here — see §3.
-- **In-app firmware OTA** — `nordic_dfu` + `mcumgr_flutter` with `pages/home/firmware_update.dart`, `firmware_update_dialog.dart`, and a separate OmiGlass OTA command set.
-
-**Capture reliability**
-- **Write-ahead log for offline audio** — `services/wals/` implements a full WAL with `WalStatus{inProgress,miss,uploaded,synced,corrupted}`, storage tiers `{mem,disk,sdcard,flashPage}`, a sync reconciler, rate limiter, retry ceiling, and a user-facing sync state machine (`~/projects/omi/app/lib/services/wals/wal.dart`). We buffer at most 8 frames in memory and abort the session on any gap.
-- **Background execution** — upstream depends on `flutter_background_service` and `flutter_foreground_task` and has a `NativeMicRecorderService`. We have no foreground service and no background service of any kind.
-- **Phone microphone as an audio source** — `services/audio_sources/phone_mic_source.dart`, `services/mic/mic_arbiter.dart`, `phone_mic_interface.dart`. Our mobile app has no mic capture at all (and, correspondingly, `app/ios/Runner/Info.plist` declares no `NSMicrophoneUsageDescription`, while `app/android/app/src/main/AndroidManifest.xml` declares no `RECORD_AUDIO`).
-- **On-device STT** — upstream ships both a Whisper provider and an Apple on-device provider (`services/sockets/on_device_whisper_provider.dart`, `on_device_apple_provider.dart`). Ours is a typed fail-closed stub (`AppServices.localTranscriptionAvailable = false`).
-
-**Product surface**
-- **Apps / plugins ecosystem** — install, explore, create, update, review, and MCP-server registration (`pages/apps/`, `backend/http/api/apps.dart`, `mcp_api.dart`, `providers/mcp_provider.dart`).
-- **Speech profile and diarization onboarding** — enrollment recording, percentage-bar progress, sample management, plus people/speaker tagging (`pages/speech_profile/`, `pages/settings/people.dart`, `backend/schema/person.dart`). We have no speaker identity concept.
-- **Conversations UI** — list, detail, capturing, processing, folders, audio player, recording detail, geolocation on conversations (`flutter_map`, `geolocator`). Our mobile shows a flat list of recent final transcript segments.
-- **Chat on mobile** — upstream has a full chat page with agents and TTS. Our mobile has no chat surface whatsoever.
-- **Action items, goals, daily summaries, knowledge graph, announcements, "Wrapped 2025", referral program** (`pages/action_items/`, `providers/goals_provider.dart`, `pages/settings/daily_summary_*`, `knowledge_graph_api.dart`, `pages/announcements/`, `pages/settings/wrapped_2025_page.dart`, `pages/referral/`).
-- **Third-party task/health integrations** — Asana, ClickUp, Todoist, Google Tasks, Google Calendar, Apple Health, Apple Reminders (`services/integrations/`). We have only Apple EventKit (`app/lib/integrations/`).
-- **Payments in-app** — Stripe Connect and PayPal creator payouts, a payments page, plan pricing and a usage page (`pages/payments/`, `utils/plan_pricing.dart`, `pages/settings/usage_page.dart`). Our mobile has no billing surface at all; billing exists only as a Worker-side client used by the desktop settings screen.
-- **Phone calls** (`pages/phone_calls/`, `services/phone_call_service.dart`).
-- **Push notifications** — Firebase Messaging + `awesome_notifications` with dedicated handlers for action items, important conversations and merges (`services/notifications/`). We have none.
-- **Localization** — ~40 locales as `.arb` + generated Dart (`~/projects/omi/app/lib/l10n/`), with an in-app language picker and primary-language onboarding. Our strings are hard-coded English.
-- **Deep settings** — upstream has ~40 settings pages (developer mode, dev API keys, webhooks, custom vocabulary, conversation display/timeout, data privacy, import history, device diagnostics, permissions, transcription model selection, notification settings, fair use…). We have six tiles.
-- **Analytics, crash reporting and support chat** — PostHog, Intercom, Firebase Crashlytics, `talker_flutter`, plus in-app review prompts and `upgrader` (upstream `app/pubspec.yaml`). None of these appear in our `app/pubspec.yaml` or anywhere in `app/lib`.
-- **Home-screen widgets, quick actions, shortcuts, Apple Watch companion** (`services/battery_widget_service.dart`, `quick_actions_service.dart`, `shortcut_service.dart`, `widgets/apple_watch_setup_bottom_sheet.dart`).
-
-### 9.2 What we do differently (and why)
-
-- **Transcription runs through an in-process Rust hub, not a socket to our own backend.** Upstream opens a websocket to `<api>/v4/listen` and streams headerless packets there, letting the backend do STT, VAD, diarization, speaker auto-assignment and conversation segmentation (`~/projects/omi/app/lib/services/sockets/transcription_service.dart:98-130`). We hand frames to `app/native/hub` over Rinf, and the hub speaks directly to the STT provider — managed via a Worker-minted short-lived `wss` URL, or BYOK straight to Deepgram. Consequence: our Worker never sees raw audio bytes on the live path, and the same hub code serves desktop capture; but we also inherit none of upstream's server-side conversation intelligence.
-- **The phone reassembles fragments; upstream forwards packets.** Upstream's `BleDeviceSource.processBytes` strips the 3-byte header and emits one payload per BLE packet, sending each straight to the socket (`~/projects/omi/app/lib/services/audio_sources/ble_device_source.dart:30-44`, `capture_controller.dart:877`). We concatenate fragments into whole frames and assert continuity twice before anything is sent. Whether upstream reconstructs frames server-side was not read in this pass.
-- **Memory is local-first.** Final transcript segments are captured into a per-UID `zkr` SQLite database on the device and only then projected to D1 via `POST /v1/memory/zkr-sync`. Upstream's conversations and memories are server-owned records fetched over HTTP.
-- **Mobile is a companion, by construction.** Upstream's phone app is the primary product surface (bottom nav with conversations / chat / memories / apps). Ours routes to a single pendant page and points the user at the desktop app. This is the ownership split in `PLAN.md`, and it is why chat, memory management, currents detail and computer use are absent from mobile rather than merely unfinished.
-- **Backend shape.** Upstream: Python/FastAPI + Firebase/Firestore, with the app talking to ~26 REST modules (`~/projects/omi/app/lib/backend/http/api/`). Ours: a Cloudflare Worker with a handful of routes, and the phone using only five of them.
-- **Fail-closed defaults where upstream degrades gracefully.** Unknown codec: we throw, upstream assumes PCM8. Packet discontinuity: we end the session with a typed gap, upstream keeps streaming and lets the WAL/backend cope. Local STT: we return a typed unavailable error rather than falling back to Whisper.
-- **State management.** Upstream uses `provider` with ~30 `ChangeNotifier` providers; ours uses a single `AppServices` facade plus `StatefulWidget` state and a few `ValueNotifier`s. Neither is better in the abstract; it is a direct consequence of surface size.
-
-### 9.3 What is stronger here (substantiated)
-
-The design bet on this side is **lighter, steadier, and ultimately broader**: fewer moving parts and fewer processes now, fail-closed construction at every boundary that touches audio or account authority, and test coverage concentrated on the lifecycle that has to hold — so that breadth can be added later onto a foundation that holds, rather than assembled up front.
-
-Each property below is readable directly from the code in this repo and is stated as a design property, **not a benchmark result** — nothing in this repository has been measured against upstream, and no comparative performance, reliability, or quality claim is made or implied. Comparisons to upstream are strictly limited to what was read in this pass.
-
-- **No analytics, crash-reporting, or support-chat SDKs.** `app/pubspec.yaml` contains no PostHog, Intercom, Crashlytics, or equivalent, and a search of `app/lib` finds no telemetry client. For a device that records ambient conversation, "there is no third-party telemetry in the binary" is a property a reader can check for themselves rather than a policy statement they have to take on trust.
-- **Audio cannot leave the phone without an explicit, versioned consent receipt.** `connectDevice` refuses to start streaming unless `productionReady` (signed in *and* `hasProcessingAuthority`), and pairing degrades to a status-only connection with a user-visible notice instead of failing (`app_services.dart:1326-1334`). The consent receipt is surfaced with its grant date and policy version, and is revocable from the settings sheet (`mobile_companion_shell.dart:1436-1453`).
-- **Account-authority fencing through the whole capture path.** The UID and the exact Firebase ID token are re-verified before, during, and after starting audio (`app_services.dart:1338-1357`); `TranscriptMemoryIngestor.fence` cancels in-flight captures and drops ingestion state on any account change; the memory database path and `zkr` tenant/person ids are both derived from the UID. An account switch cannot leak one user's audio into another's memory.
-- **Explicit, typed audio-gap semantics.** `DeviceAudioGapReason{invalidStart, packetDiscontinuity, frameTooLarge, bufferCapacity}` and `DeviceAudioFrameError{discontinuity, tooLarge}` make lost audio a first-class, surfaced event: the gap reason reaches the UI (`companion_error_tile` renders `deviceAudio.lastError`) instead of being absorbed into the stream. Continuity is asserted twice — once in the reassembler, once at session level — so a missing packet cannot be silently spliced over.
-- **Real backpressure on the BLE producer.** An 8-frame queue that pauses and resumes the notification subscription, plus a 256 KiB per-frame ceiling (`device_audio_forwarder.dart:91-92, 256-263, 349-353`), bounds memory under a stalled hub instead of growing an unbounded send buffer.
-- **Idempotent, evidence-linked memory capture.** Every captured segment carries a `TranscriptLocator` (device, provider, stream id, segment id, start/end ms) and a deterministic SHA-256 ingestion key, with fingerprint-conflict detection (`transcript_memory_ingestor.dart:75-102`). Whether upstream's server-side ingestion has an equivalent guarantee was not examined, so this is stated as a property of ours, not a deficiency of theirs.
-- **The relay lifecycle is unit-tested in depth.** `app/test/device/device_audio_forwarder_test.dart` is 995 lines covering packet-id rollover, queue saturation, concurrent start/stop, EOS-vs-stop exclusivity, and reconnect resume; `app/test/features/mobile_companion_test.dart` (961 lines) and `mobile_onboarding_test.dart` (838 lines) cover the mobile surfaces widget-level. Across `app/test/device/` and the two mobile feature suites that is roughly 3,200 lines of test against roughly 3,900 lines of mobile-specific product code (`app/lib/device/` plus the two mobile screens, and the transcript log store).
-- **Few moving parts, few processes.** 87 hand-written Dart files and 14 direct dependencies (`app/pubspec.yaml`), one capture path, one relay role, one persistence mechanism on the phone, and one outbound socket. Less code and fewer dependencies is a smaller thing to keep correct — a direct consequence of the narrower scope, not a claim that the same job is done better.
-
-Claims deliberately **not** made: that our BLE connection is more reliable than upstream's (no physical-device evidence exists in this repo), that our transcription quality is better (no A/B evidence), that reassembling client-side is more correct than upstream's per-packet forwarding (upstream's server-side handling was not read), or anything at all about either project's stability in production.
-
-### 9.4 Upstream capabilities not yet covered here
-
-A review-derived list of upstream capabilities worth *evaluating* for this codebase. Inclusion here is not a commitment: each is judged on whether the behaviour it buys earns the state, permissions, and failure modes it brings. Items already scheduled in `docs/mobile-companion-app.md` are marked with their phase.
-
-| Capability | Upstream reference | Assessment for here |
-|---|---|---|
-| Offline write-ahead log for captured audio | `services/wals/` (status machine, storage tiers, reconciler, retry ceiling) | **Worth adopting in reduced form.** Today a single dropped packet loses the audio in flight (§10). A bounded on-disk ring plus idempotent batch upload to `/v1/asr/transcribe` buys real durability. Upstream's four storage tiers and sync-rate reconciliation do not obviously earn their complexity at our scope. `docs/mobile-companion-app.md` Phase 4. |
-| Background execution (Android foreground service, iOS state restoration) | `flutter_background_service`, `flutter_foreground_task`, `NativeMicRecorderService` | **Worth adopting.** Without it "wear it and it captures" is only true while foregrounded, which contradicts what onboarding tells the user (`mobile_onboarding_screen.dart:727`). Phase 3. |
-| Battery-level notifications rather than a one-shot read | `omi_connection.dart` battery stream | **Worth adopting; low cost.** One extra subscription removes a permanently stale number from the home screen. Phase 2. |
-| Device Information service (`180a`) reads | `services/devices/models.dart:40-45` | **Adopted.** Read on connect and surfaced in Settings → Developer options. |
-| Automatic session restart after a transient gap | upstream keeps streaming and defers to the WAL | **Worth evaluating.** Our fail-closed abort is deliberate, but the missing half is recovery. Restart should be explicit and gap-recording, never a silent re-splice. |
-| Firmware OTA in-app | `nordic_dfu`, `mcumgr_flutter`, `pages/home/firmware_update.dart` | **Defer.** Signed-image pipeline plus disconnect/resume handling is a large, sharp subsystem; it belongs with the vendored `firmware/` work, not the relay. Phase 6. |
-| Pendant SD-card / flash-page retrieval | storage service `30295780-…`, `services/wals/sdcard_wal_sync.dart` | **Defer.** Only matters once the pendant is expected to record while unpaired; a phone-side WAL covers the common case first. Phase 6. |
-| Speech profile / speaker identity | `pages/speech_profile/`, `backend/schema/person.dart` | **Blocked, not declined.** Requires diarization our transcription route does not currently provide; revisit when the STT path returns speaker labels. |
-| On-device STT | `on_device_whisper_provider.dart`, `on_device_apple_provider.dart` | **Blocked on a provider.** `PLAN.md` keeps `TranscriptionAuth::Local` fail-closed until `rs_ai_local` supplies a real one; the fail-closed stub is the right placeholder, not the end state. |
-| Push notifications | `services/notifications/` (FCM + `awesome_notifications`) | **Evaluate narrowly.** A low-battery or capture-stopped alert is genuinely useful; a general notification framework with per-type handlers is not obviously warranted for a companion surface. |
-| Localization | ~40 locale bundles under `l10n/` | **Evaluate when the surface stabilises.** Our mobile string count is small enough that extracting it later is cheap; doing it now would freeze copy that is still moving. |
-| Additional device vendors, button/photo/accelerometer characteristics, in-app payments, apps/plugins ecosystem, conversations UI, integrations breadth | §9.1 | **Out of scope by design**, not gaps. These belong to a different product shape (phone-as-primary-surface) than the companion role fixed in `PLAN.md`. |
-
-## 10. Known gaps and rough edges
+## 9. Known gaps and rough edges
 
 Honest list, all verified against the code:
 
 - **No background operation.** `app/ios/Runner/Info.plist` declares `UIBackgroundModes: [bluetooth-central]` — enough for BLE notifications to keep arriving — but there is no CoreBluetooth state restoration identifier, and Android has no foreground service and no `FOREGROUND_SERVICE` permission in `app/android/app/src/main/AndroidManifest.xml`. In practice, capture is only dependable while the app is foregrounded. This is `docs/mobile-companion-app.md` Phase 3, unstarted.
 - **One dropped BLE packet ends the capture session.** `_continuityGap` → `_fail` → `_finish(abort: true)` tears the STT session down, and nothing restarts it automatically; the user must toggle Capture (or reconnect) to resume. There is no WAL, so the audio in flight is gone. This is deliberate ("never synthesize continuity") but the recovery half — Phase 4 in `docs/mobile-companion-app.md` — does not exist yet.
-- **Battery is read exactly once, at connect.** `_readFirst(deviceId, _batteryService, _batteryLevel)` is a one-shot read; the app never subscribes to battery-level notifications, so the percentage on the pendant hero goes stale for the whole session and low-battery is never surfaced.
 - **Device metadata depends on firmware support.** `RelayDevice` carries `modelNumber`, `firmwareRevision`, `hardwareRevision`, `manufacturerName`, and `serialNumber`, populated from the Device Information service (`180a`) on connect. Pendants running firmware without that service leave the fields null and the Developer options page shows "Not reported" — expected degradation rather than a defect.
 - **`DeviceAudioCodec.pcm16` is unreachable.** No firmware id maps to it in `fromFirmwareId`, though the rest of the pipeline handles it.
 - **The capture toggle is asymmetric.** Turning capture off calls `deviceAudio.stop()`; turning it back on calls `connectDevice(device.id)` again — i.e. a full reconnect-and-restart rather than resuming a streaming session (`_setCapture` in `mobile_companion_shell.dart`).
+- **Capture and reconnect share one gesture with no visible affordance.** Tapping the pendant image means "toggle capture" when connected and "reconnect" when not (§6.1). The only cue is the hint line under the image; there is no button, so a user who does not read it has no other route.
 - **Diagnostic `print` calls ship in the BLE adapter.** Two `// ignore: avoid_print` sites in `universal_ble_device_relay.dart` log connect failures to stdout in release builds.
 - **No physical-device proof.** `PLAN.md` still lists "Credentialed live Deepgram, physical iOS/Android sessions, and background recovery" as outstanding for the mobile relay slice. Everything above is logic- and widget-tested only; no run against real hardware or real STT credentials is recorded in this repository.
 - **No pendant firmware coupling.** The pendant firmware is being vendored into `firmware/` as the device counterpart to this relay; it gets its own document. Nothing in `app/lib` reads or writes firmware images today.

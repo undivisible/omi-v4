@@ -1,0 +1,788 @@
+# Omi Public API
+
+Base URL: `https://omi.tsc.hk`
+
+Two programmatic surfaces are served by the same Cloudflare Worker:
+
+| Surface | Base path | Protocol |
+| --- | --- | --- |
+| Public REST API | `/api/v1` | JSON over HTTPS |
+| MCP server | `/mcp` | MCP streamable HTTP (JSON-RPC 2.0) |
+
+Both surfaces accept the same credentials, enforce the same scopes, resolve to
+the same uid, and share one rate-limit budget per user. Everything they expose
+is scoped to a single Omi account: there is no cross-account access and no
+admin surface.
+
+The first-party routes under `/v1/...` are **not** part of this contract. They
+require a Firebase ID token, change with the apps, and are documented only by
+the source. Build against `/api/v1` and `/mcp`.
+
+---
+
+## 1. Authentication
+
+Every request to `/api/v1/*` and `/mcp` must carry a credential. Two are
+accepted.
+
+### 1.1 API keys (recommended for programmatic access)
+
+An API key is a long-lived, per-account, revocable credential. Send it as a
+bearer token:
+
+```
+Authorization: Bearer omi_sk_1f3c9ab2_9pQ7...43-chars
+```
+
+or, equivalently, in a dedicated header:
+
+```
+X-API-Key: omi_sk_1f3c9ab2_9pQ7...43-chars
+```
+
+`Authorization` wins when both are present.
+
+Key format: `omi_sk_` + 8 lowercase hex characters (the public prefix) + `_` +
+43 base64url characters (the secret). Total length is 59 characters. Match keys
+with `^omi_sk_[0-9a-f]{8}_[A-Za-z0-9_-]{43}$`.
+
+Storage: only the SHA-256 digest of the full key is persisted, in the D1 table
+`api_keys`. Lookup is by public prefix and the digest comparison is
+constant-time, so neither the database nor response timing reveals a usable
+credential. The plaintext key is returned exactly once, at creation.
+
+### 1.2 Firebase ID tokens
+
+The apps' own credential also works on the public surface:
+
+```
+Authorization: Bearer <Firebase ID token>
+```
+
+A Firebase-authenticated caller is the account owner in person and therefore
+carries **every** scope. Tokens expire in about an hour; do not use them for
+unattended integrations.
+
+### 1.3 Scopes
+
+| Scope | Grants |
+| --- | --- |
+| `memory:read` | `GET /api/v1/memory/search`, `GET /api/v1/memories`; tools `search_memory`, `list_memories` |
+| `currents:read` | `GET /api/v1/currents`; tool `list_currents` |
+| `currents:write` | `POST /api/v1/currents`; tool `create_current` |
+| `conversations:read` | `GET /api/v1/conversations/messages`, `GET /api/v1/notes`; tools `list_conversation_messages`, `list_meeting_notes` |
+| `assistant:write` | `POST /api/v1/assistant/messages`; tool `ask_omi` |
+| `facetime:write` | `POST /api/v1/facetime/calls`; tool `start_facetime_call` |
+
+`GET /api/v1/me` requires a valid credential but no scope.
+
+A key missing the scope for a route gets `403` with
+`{"error":"Missing scope","scope":"<scope>"}`. On MCP the same condition is a
+JSON-RPC error with code `-32000`.
+
+### 1.4 Managing keys
+
+Key management is deliberately **not** available to API keys — a key cannot
+mint or revoke keys. These three routes live on the first-party surface and
+require a Firebase ID token.
+
+#### `POST /v1/api-keys`
+
+Create a key.
+
+Request:
+
+```json
+{
+  "name": "my-integration",
+  "scopes": ["memory:read", "currents:read", "currents:write"],
+  "expiresAt": 1793664000000
+}
+```
+
+| Field | Type | Required | Notes |
+| --- | --- | --- | --- |
+| `name` | string | yes | 1–120 characters after trimming. Label only. |
+| `scopes` | string[] | no | Defaults to all six scopes. Must be non-empty and contain only known scopes. Duplicates are collapsed. |
+| `expiresAt` | integer \| null | no | Unix epoch **milliseconds**. Must be in the future. `null` or omitted means no expiry. |
+
+`201` response:
+
+```json
+{
+  "key": "omi_sk_1f3c9ab2_9pQ7...",
+  "apiKey": {
+    "id": "b3f1c0e2-...",
+    "name": "my-integration",
+    "prefix": "omi_sk_1f3c9ab2",
+    "scopes": ["memory:read", "currents:read", "currents:write"],
+    "createdAt": 1761177600000,
+    "lastUsedAt": null,
+    "expiresAt": 1793664000000,
+    "revokedAt": null
+  }
+}
+```
+
+`key` is shown only here. Store it immediately.
+
+Errors: `400 {"error":"Invalid API key request"}`,
+`409 {"error":"API key limit reached"}` (25 live keys per account),
+`429 {"error":"Too many requests"}` (10 creations per hour per account).
+
+#### `GET /v1/api-keys`
+
+`200` → `{"keys":[ <apiKey object>, ... ]}`, newest first, up to 100. Includes
+revoked keys. Never includes the secret.
+
+#### `DELETE /v1/api-keys/{id}`
+
+`204` on success. `404 {"error":"API key not found"}` if the id is unknown,
+belongs to another account, or is already revoked. Revocation is immediate: the
+next request with that key gets `401`.
+
+### 1.5 Authentication errors
+
+| Status | Body | Cause |
+| --- | --- | --- |
+| `401` | `{"error":"Authentication required"}` | No credential presented. |
+| `401` | `{"error":"Authentication failed"}` | Unknown, malformed, expired or revoked key; invalid Firebase token. |
+| `503` | `{"error":"Authentication unavailable"}` | Credential store or Firebase key set unreachable. Retry. |
+
+---
+
+## 2. Rate limits
+
+Limits are fixed windows counted per account (uid), shared between the REST API
+and MCP. Firebase-authenticated calls count against the same budget.
+
+| Bucket | Applies to | Limit |
+| --- | --- | --- |
+| `public-read` | `GET /memory/search`, `GET /memories`, `GET /currents`, `GET /conversations/messages`, `GET /notes`; and their tools | 120 requests / 60 s |
+| `public-write` | `POST /currents`; tool `create_current` | 60 requests / 60 s |
+| `public-assistant` | `POST /assistant/messages`; tool `ask_omi` | 20 requests / 60 s |
+| `public-facetime` | `POST /facetime/calls`; tool `start_facetime_call` | 5 requests / 60 s |
+| key creation | `POST /v1/api-keys` | 10 / 60 min |
+
+Exceeding a limit returns `429` with `{"error":"Too many requests"}` and a
+`Retry-After` header in whole seconds. On MCP the same condition arrives as a
+tool result with `isError: true` and body `{"error":"Too many requests"}`.
+
+`GET /api/v1/me` is not rate limited.
+
+Managed-AI capacity control applies to `ask_omi` / `POST /assistant/messages`
+independently of these buckets and can also produce `429`.
+
+---
+
+## 3. Conventions
+
+- All request and response bodies are JSON; `Content-Type: application/json`.
+- All timestamps in request and response bodies are Unix epoch **milliseconds**
+  (integers), except inside a Current's `timing` block and `createdAt` /
+  `updatedAt`, which are ISO-8601 strings — see §4.4.
+- Errors are always `{"error": "<human-readable message>"}`, sometimes with
+  extra fields (`scope` on a scope failure).
+- Unknown query parameters and unknown body fields are ignored.
+- Malformed JSON, a non-object body, or a body that fails validation is `400`.
+- Unknown paths are `404 {"error":"Not found"}`.
+
+---
+
+## 4. REST endpoints
+
+### 4.1 `GET /api/v1/me`
+
+Identify the credential. No scope required.
+
+`200`:
+
+```json
+{
+  "uid": "firebase-uid",
+  "email": "person@example.com",
+  "auth": "api_key",
+  "keyId": "b3f1c0e2-...",
+  "scopes": ["memory:read", "currents:read"]
+}
+```
+
+`auth` is `"api_key"` or `"firebase"`. For a Firebase caller, `keyId` and
+`scopes` are `null` (meaning: all scopes).
+
+### 4.2 `GET /api/v1/memory/search`
+
+Scope: `memory:read`.
+
+Search the account's memory. Every result cites the evidence it came from;
+claims with no surviving citation are never returned.
+
+| Query parameter | Type | Default | Range |
+| --- | --- | --- | --- |
+| `q` | string | — (required) | 1–500 characters |
+| `limit` | integer | `12` | 1–50 (clamped to 20 in `semantic` mode) |
+| `mode` | `keyword` \| `semantic` | `keyword` | — |
+
+`keyword` is a BM25-ranked full-text match; every whitespace-separated term
+(first 16) must be present. `semantic` is embedding similarity over the same
+claims and is better for paraphrases.
+
+`200`, `mode=keyword`:
+
+```json
+{
+  "query": "release notes",
+  "items": [
+    {
+      "memory": { "kind": "claim", "id": "claim-uuid" },
+      "excerpt": "Ship the v4 release notes before Friday",
+      "relevance_basis_points": 10000,
+      "evidence_ids": ["evidence-uuid"]
+    }
+  ],
+  "gaps": [],
+  "mode": "keyword"
+}
+```
+
+`relevance_basis_points` is a rank-derived score out of 10000, descending.
+`gaps` contains `["No cited memory matched the query."]` when `items` is empty,
+and is otherwise `[]`.
+
+`200`, `mode=semantic`:
+
+```json
+{
+  "query": "release notes",
+  "mode": "semantic",
+  "items": [
+    { "id": "claim-uuid", "content": "Ship the v4 release notes before Friday", "score": 0.83 }
+  ]
+}
+```
+
+`score` is cosine similarity in `[0, 1]`. If the vector index is unavailable,
+`items` is `[]` rather than an error.
+
+Errors: `400 {"error":"Invalid memory search"}`, `403`, `429`.
+
+### 4.3 `GET /api/v1/memories`
+
+Scope: `memory:read`.
+
+List the account's active profile memories — the durable view of who the user
+is and what they are currently doing — newest updated first.
+
+| Query parameter | Type | Default | Range |
+| --- | --- | --- | --- |
+| `limit` | integer | `100` | 1–100 |
+
+`200`:
+
+```json
+{
+  "memories": [
+    {
+      "id": "profile-entry-uuid",
+      "content": "Prefers async written updates over meetings",
+      "source": "conversation",
+      "evidence": [
+        {
+          "id": "evidence-uuid",
+          "sourceId": "source-uuid",
+          "sourceRevisionId": "revision-uuid",
+          "quote": "let's keep it in writing",
+          "locator": null
+        }
+      ],
+      "profileKind": "stable",
+      "status": "active",
+      "validFrom": 1761177600000,
+      "validTo": null,
+      "createdAt": 1761177600000,
+      "updatedAt": 1761181200000
+    }
+  ]
+}
+```
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `source` | string | Originating source kind: `conversation`, `screen`, `audio`, `document`, `integration`, `user_correction`. |
+| `evidence[].locator` | any \| null | Opaque source-specific position; may be `null`. |
+| `profileKind` | `stable` \| `current` | Enduring trait vs present context. |
+| `status` | `active` \| `pinned` | Archived entries are never returned. |
+| `validFrom` / `validTo` | integer \| null | Validity window; `validTo: null` means open-ended. |
+
+Errors: `400 {"error":"Invalid memory list"}`, `403`, `429`.
+
+### 4.4 `GET /api/v1/currents`
+
+Scope: `currents:read`.
+
+List open Currents — proposed next actions derived from memory — ranked by
+confidence adjusted by the user's past feedback. Only `surfaced` and `accepted`
+Currents are returned; candidates not yet due, snoozed, dismissed and expired
+ones are not. Up to 100 items. Reading this endpoint promotes due candidates and
+expires overdue ones as a side effect, exactly as the app does.
+
+`200`:
+
+```json
+{
+  "currents": [
+    {
+      "id": "current-uuid",
+      "status": "surfaced",
+      "title": "Send the release notes",
+      "summary": "The release shipped but nobody has been told.",
+      "evidence": [{ "sourceId": "source-uuid", "reason": "Based on: let's ship Friday" }],
+      "sourceKind": "conversation",
+      "reason": "Based on: let's ship Friday",
+      "confidence": 0.9,
+      "proposedNextStep": "Draft a two-line note and send it.",
+      "proposedAction": { "kind": "review", "instruction": "Draft a two-line note and send it." },
+      "timing": {
+        "surfaceAt": "2026-07-23T09:00:00.000Z",
+        "expiresAt": null,
+        "snoozedUntil": null
+      },
+      "feedbackReference": null,
+      "executionReference": null,
+      "createdAt": "2026-07-23T08:59:00.000Z",
+      "updatedAt": "2026-07-23T09:00:00.000Z",
+      "metadata": { "crepus": "<widget source>" }
+    }
+  ]
+}
+```
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `status` | `surfaced` \| `accepted` | — |
+| `confidence` | number | `0`–`1`. |
+| `timing.*`, `createdAt`, `updatedAt` | ISO-8601 string \| null | Note: these are strings, not epoch milliseconds. |
+| `sourceKind` | string \| null | Kind of the cited memory source. |
+| `metadata.crepus` | string | Present only when the Current carries an AI-authored widget description. Treat as untrusted display data. |
+
+Errors: `403`, `429`.
+
+### 4.5 `POST /api/v1/currents`
+
+Scope: `currents:write`.
+
+Create a Current. It is created with status `candidate` and becomes visible to
+the user at `surfaceAt`; it will therefore usually **not** appear in
+`GET /api/v1/currents` until then.
+
+Request:
+
+```json
+{
+  "title": "Send the release notes",
+  "summary": "The release shipped but nobody has been told.",
+  "reason": "The user said the release was ready yesterday.",
+  "proposedNextStep": "Draft a two-line note and send it.",
+  "confidence": 0.8,
+  "surfaceAt": 1761177600000,
+  "expiresAt": 1761264000000
+}
+```
+
+| Field | Type | Required | Default | Constraints |
+| --- | --- | --- | --- | --- |
+| `title` | string | yes | — | 1–120 characters. |
+| `summary` | string | yes | — | 1–500 characters. |
+| `reason` | string | yes | — | 1–500 characters. Recorded as the citation quote when `evidenceId` is omitted. |
+| `proposedNextStep` | string | yes | — | 1–500 characters. |
+| `confidence` | number | no | `0.7` | `0`–`1` inclusive. |
+| `surfaceAt` | integer | no | now | Epoch ms, positive. |
+| `expiresAt` | integer \| null | no | `null` | Epoch ms, strictly greater than `surfaceAt`. |
+| `evidenceId` | string \| null | no | `null` | An existing Omi evidence id. Omit unless you hold one. |
+
+Every Current must cite evidence. When `evidenceId` is omitted, a memory source
+of kind `integration` is created for the account with `reason` as its quote, and
+the new Current cites it. When `evidenceId` is supplied it must be a live,
+non-tombstoned evidence id belonging to the caller's account.
+
+`201` → `{"current": <Current object as in §4.4>}`.
+
+Errors: `400 {"error":"Invalid Current"}`,
+`404 {"error":"Cited evidence not found"}`, `403`, `429`.
+
+### 4.6 `GET /api/v1/conversations/messages`
+
+Scope: `conversations:read`.
+
+Read the account's single assistant conversation in cursor order. `cursor` is a
+monotonically increasing integer; page forward by passing the previous
+`nextCursor` as `after`.
+
+| Query parameter | Type | Default | Range |
+| --- | --- | --- | --- |
+| `after` | integer | `0` | ≥ 0 |
+| `limit` | integer | `100` | 1–200 |
+
+`200`:
+
+```json
+{
+  "conversationId": "default",
+  "messages": [
+    {
+      "cursor": 42,
+      "id": "message-uuid",
+      "clientMessageId": "api:9f0c...",
+      "role": "user",
+      "source": "web",
+      "text": "what did I say about the release?",
+      "channelMessageId": null,
+      "deliveryId": null,
+      "createdAt": 1761177600000
+    }
+  ],
+  "nextCursor": 42
+}
+```
+
+`role` is `user` or `assistant`. `source` is `app`, `web`, `desktop`,
+`telegram` or `blooio`. `nextCursor` equals `after` when no messages were
+returned, so polling is safe. `channelMessageId` and `deliveryId` are non-null
+only for messages that travelled over a linked chat channel.
+
+Errors: `400 {"error":"Invalid replay range"}`, `403`, `429`.
+
+### 4.7 `GET /api/v1/notes`
+
+Scope: `conversations:read`.
+
+List generated notes — one per local day, written from that day's conversation
+and meeting evidence — newest day first. This is the same corpus the MCP tool
+`list_meeting_notes` reads.
+
+| Query parameter | Type | Default | Range |
+| --- | --- | --- | --- |
+| `limit` | integer | `50` | 1–100 |
+
+`200`:
+
+```json
+{
+  "notes": [
+    {
+      "id": "review-uuid",
+      "localDate": "2026-07-22",
+      "inputRevision": "revision-fingerprint",
+      "body": "Standup: the release is cut...",
+      "citations": [
+        {
+          "id": "evidence-uuid",
+          "sourceId": "source-uuid",
+          "sourceRevisionId": "revision-uuid",
+          "quote": "the release is cut",
+          "locator": null
+        }
+      ],
+      "createdAt": 1761177600000,
+      "updatedAt": 1761181200000
+    }
+  ]
+}
+```
+
+`localDate` is `YYYY-MM-DD` in the user's local timezone. `inputRevision`
+identifies the input the note was generated from; a day can have more than one
+note if its input changed. Retracted notes are never returned.
+
+Errors: `400 {"error":"Invalid note list"}`, `403`, `429`.
+
+### 4.8 `POST /api/v1/assistant/messages`
+
+Scope: `assistant:write`. **Requires an active Omi Pro subscription on the
+account.**
+
+Send a message to the user's assistant and get the reply. The assistant answers
+with the account's synced memory and the last 12 conversation messages in
+context. Both the question and the reply are appended to the conversation read
+by `GET /api/v1/conversations/messages`, recorded with source `web`.
+
+Request:
+
+```json
+{
+  "text": "summarise what I decided about the release",
+  "clientMessageId": "my-app:2026-07-23:001"
+}
+```
+
+| Field | Type | Required | Notes |
+| --- | --- | --- | --- |
+| `text` | string | yes | 1–20000 characters after trimming. |
+| `clientMessageId` | string | no | Idempotency key. 8–120 characters matching `[A-Za-z0-9._:-]`. Defaults to a generated `api:<uuid>`. The reply is stored under `<clientMessageId>:reply`. |
+
+`200`:
+
+```json
+{
+  "reply": "You decided to cut the release Friday and send notes after.",
+  "message": {
+    "cursor": 42,
+    "id": "message-uuid",
+    "clientMessageId": "my-app:2026-07-23:001",
+    "role": "user",
+    "source": "web",
+    "text": "summarise what I decided about the release",
+    "channelMessageId": null,
+    "deliveryId": null,
+    "createdAt": 1761177600000,
+    "replayed": false
+  },
+  "answer": { "...": "same shape, role: assistant" }
+}
+```
+
+`reply` is trimmed and truncated to 4096 characters. `message.replayed` is
+`true` when the `clientMessageId` had already been stored with identical
+content.
+
+Reusing a `clientMessageId` with *different* text is a conflict, not a replay.
+
+Errors:
+
+| Status | Body | Cause |
+| --- | --- | --- |
+| `400` | `{"error":"Invalid assistant message"}` | Missing/oversized `text`, or malformed `clientMessageId`. |
+| `403` | `{"error":"Managed Pro required"}` | Account has no active Pro entitlement. |
+| `403` | `{"error":"Missing scope","scope":"assistant:write"}` | Key lacks the scope. |
+| `409` | `{"error":"Client message ID conflict"}` | `clientMessageId` reused with different content. |
+| `429` | `{"error":"Too many requests"}` | Rate limit or managed-AI capacity. |
+| `502` | `{"error":"Managed AI unavailable"}` | Upstream model failed or is unconfigured. |
+
+This endpoint is synchronous and can take tens of seconds. Allow at least a
+60-second client timeout. It does not stream; for token streaming, use the
+first-party `/v1/chat/completions` route with a Firebase token.
+
+### 4.9 `POST /api/v1/facetime/calls`
+
+Scope: `facetime:write`.
+
+> **Status: not currently available.** Blooio's FaceTime endpoint is
+> implemented and wired up end to end, but the provider has it switched off
+> while they stabilise the call flow and answers `501`. This route therefore
+> returns `503` with `code: "facetime_unavailable"` for every call today. The
+> integration needs no change when the provider enables it.
+
+Place a FaceTime Audio call. On success the provider mints a shareable FaceTime
+link, rings the handle on the recipient's real device, and auto-admits the first
+person who joins via the link.
+
+This is **side-effectful and not undoable**: it rings a real person's phone.
+Confirm the handle with the user before calling it.
+
+Request:
+
+```json
+{
+  "handle": "+15551234567",
+  "idempotencyKey": "my-app:call:001"
+}
+```
+
+| Field | Type | Required | Notes |
+| --- | --- | --- | --- |
+| `handle` | string | yes | Who to call. Either an E.164 phone number — `+` then 7–15 digits, first digit non-zero — or an email address. Maximum 254 characters. Emails are lowercased; phone numbers are passed through verbatim. |
+| `idempotencyKey` | string | no | 8–120 characters matching `[A-Za-z0-9._:-]`. Forwarded to the provider (hashed with the uid) as `Idempotency-Key` so a retry does not place a second call. Defaults to a fresh UUID, which makes each call distinct. |
+
+A handle that is neither an E.164 number nor a plausible email address is
+rejected locally with `400`; nothing is sent upstream.
+
+`201`:
+
+```json
+{
+  "call": {
+    "handle": "+15551234567",
+    "link": "https://facetime.apple.com/join#v=1&p=..."
+  }
+}
+```
+
+Errors:
+
+| Status | Body | Cause |
+| --- | --- | --- |
+| `400` | `{"error":"Invalid FaceTime handle"}` | Handle failed local validation, or `idempotencyKey` is malformed. No upstream call was made. |
+| `400` | `{"error":"Handle rejected by provider"}` | Handle passed local validation but the provider refused it (upstream `400`/`422`) — for example a number with no FaceTime account. |
+| `403` | `{"error":"Missing scope","scope":"facetime:write"}` | Key lacks the scope. |
+| `429` | `{"error":"Too many requests"}` | Rate limit; see §2. |
+| `502` | `{"error":"FaceTime calling unavailable"}` | Provider error, timeout, or an unusable response body. Safe to retry with the same `idempotencyKey`. |
+| `503` | `{"error":"FaceTime calling is not yet available from Blooio","code":"facetime_unavailable"}` | The provider has FaceTime calling disabled (upstream `501`). **Do not retry** — this is a product state, not a transient fault. Distinguish it by `code`, not by the status. |
+
+---
+
+## 5. MCP server
+
+Endpoint: `POST https://omi.tsc.hk/mcp`
+
+Transport: MCP **streamable HTTP**, protocol version `2025-06-18`. The
+implementation is JSON-RPC 2.0 over a single POST endpoint and is stateless:
+there are no session ids, no `Mcp-Session-Id` header, and no server-initiated
+messages. Every request carries its own credential.
+
+- `GET /mcp` → `405` (the optional SSE stream is not offered).
+- `DELETE /mcp` → `405` (there is no session to terminate).
+- Request bodies larger than 256 KiB → `413`.
+
+Responses are `application/json`; the server never replies with
+`text/event-stream`. Successful responses carry
+`MCP-Protocol-Version: 2025-06-18`.
+
+### 5.1 Authentication
+
+Identical to §1: an `omi_sk_` API key or a Firebase ID token in
+`Authorization: Bearer ...` (or the key in `X-API-Key`). A request with no valid
+credential is rejected with HTTP `401` before any JSON-RPC parsing.
+
+Client configuration example:
+
+```json
+{
+  "mcpServers": {
+    "omi": {
+      "type": "http",
+      "url": "https://omi.tsc.hk/mcp",
+      "headers": { "Authorization": "Bearer omi_sk_..." }
+    }
+  }
+}
+```
+
+### 5.2 Supported methods
+
+| Method | Behaviour |
+| --- | --- |
+| `initialize` | Returns `protocolVersion`, `capabilities: {"tools":{"listChanged":false}}`, `serverInfo: {"name":"omi","version":"1.0.0"}`, and `instructions`. |
+| `ping` | Returns `{}`. |
+| `tools/list` | Returns `{"tools":[...]}`. No pagination; the full list is always returned and never changes at runtime. |
+| `tools/call` | Runs a tool. See §5.3. |
+| `notifications/*` | Accepted and ignored; the server replies HTTP `202` with an empty body. |
+
+Any other method returns JSON-RPC error `-32601`.
+
+A JSON array of messages (a batch) is answered with an array of the responses
+that have ids, in request order. A batch containing only notifications returns
+HTTP `202` with an empty body.
+
+Error codes: `-32700` malformed JSON, `-32600` invalid JSON-RPC envelope,
+`-32601` unknown method, `-32602` unknown tool or malformed `params`, `-32000`
+missing scope or tool execution failure.
+
+### 5.3 `tools/call` result shape
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 4,
+  "result": {
+    "content": [{ "type": "text", "text": "{\"currents\":[]}" }],
+    "structuredContent": { "currents": [] },
+    "isError": false
+  }
+}
+```
+
+`structuredContent` is the exact JSON body the corresponding REST endpoint
+returns; `content[0].text` is that same object serialized. Application-level
+failures (validation, rate limits, missing Pro, not found) come back as a
+**successful** JSON-RPC response with `isError: true` and
+`structuredContent: {"error": "..."}` — matching the REST error bodies in §4.
+Protocol-level failures (unknown tool, missing scope) come back as JSON-RPC
+errors.
+
+### 5.4 Tools
+
+| Tool | Scope | REST equivalent |
+| --- | --- | --- |
+| `search_memory` | `memory:read` | `GET /api/v1/memory/search` |
+| `list_memories` | `memory:read` | `GET /api/v1/memories` |
+| `list_currents` | `currents:read` | `GET /api/v1/currents` |
+| `create_current` | `currents:write` | `POST /api/v1/currents` |
+| `list_meeting_notes` | `conversations:read` | `GET /api/v1/notes` |
+| `list_conversation_messages` | `conversations:read` | `GET /api/v1/conversations/messages` |
+| `ask_omi` | `assistant:write` | `POST /api/v1/assistant/messages` |
+| `start_facetime_call` | `facetime:write` | `POST /api/v1/facetime/calls` |
+
+Every input schema is a JSON Schema object with `additionalProperties: false`.
+
+#### `search_memory`
+
+```
+query    string   required, 1–500
+limit    integer  optional, 1–50, default 12
+mode     enum     optional, "keyword" | "semantic", default "keyword"
+```
+
+#### `list_memories`
+
+```
+limit    integer  optional, 1–100, default 100
+```
+
+#### `list_currents`
+
+No arguments.
+
+#### `create_current`
+
+```
+title             string   required, 1–120
+summary           string   required, 1–500
+reason            string   required, 1–500
+proposedNextStep  string   required, 1–500
+confidence        number   optional, 0–1, default 0.7
+surfaceAt         integer  optional, epoch ms, default now
+expiresAt         integer  optional, epoch ms, > surfaceAt
+evidenceId        string   optional, ≤ 200
+```
+
+#### `list_meeting_notes`
+
+```
+limit    integer  optional, 1–100, default 50
+```
+
+#### `list_conversation_messages`
+
+```
+after    integer  optional, ≥ 0, default 0
+limit    integer  optional, 1–200, default 100
+```
+
+#### `ask_omi`
+
+```
+text     string   required, 1–20000
+```
+
+Requires an active Omi Pro subscription; without one the result is
+`isError: true` with `{"error":"Managed Pro required"}`.
+
+#### `start_facetime_call`
+
+```
+handle          string   required, 3-254, E.164 phone or email address
+idempotencyKey  string   optional, 8-120 chars of [A-Za-z0-9._:-]
+```
+
+Side-effectful: it rings a real person's device. See §4.9 for the full
+semantics and for its current unavailability. The provider is switched off
+today, so this tool currently returns `isError: true` with
+`{"error":"FaceTime calling is not yet available from Blooio","code":"facetime_unavailable"}`.
+
+---
+
+## 6. Data lifetime and deletion
+
+Deleting an Omi account (`DELETE /v1/account`, first-party, Firebase-only)
+removes every row this API can read, including all API keys for that account.
+Revoking a key is immediate and irreversible; there is no un-revoke.

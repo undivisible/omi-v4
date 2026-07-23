@@ -366,24 +366,19 @@ conversations.post(
   },
 );
 
-conversations.get("/conversations/default/messages", async (context) => {
-  const after = Number(context.req.query("after") ?? 0);
-  const limit = Number(context.req.query("limit") ?? 100);
-  if (
-    !Number.isSafeInteger(after) ||
-    after < 0 ||
-    !Number.isSafeInteger(limit) ||
-    limit < 1 ||
-    limit > 200
-  )
-    return context.json({ error: "Invalid replay range" }, 400);
-  const uid = context.get("auth").uid;
-  const rows = await context.env.DB.prepare(
-    `SELECT cursor, id, client_message_id, role, source, text, channel_message_id, delivery_id, created_at
+export const listConversationMessages = async (
+  database: D1Database,
+  uid: string,
+  after: number,
+  limit: number,
+) => {
+  const rows = await database
+    .prepare(
+      `SELECT cursor, id, client_message_id, role, source, text, channel_message_id, delivery_id, created_at
      FROM conversation_messages
      WHERE uid = ?1 AND conversation_id = ?1 AND cursor > ?2
      ORDER BY cursor LIMIT ?3`,
-  )
+    )
     .bind(uid, after, limit)
     .all();
   const messages = (rows.results ?? []).map((row) => ({
@@ -398,11 +393,32 @@ conversations.get("/conversations/default/messages", async (context) => {
     deliveryId: row.delivery_id === null ? null : String(row.delivery_id),
     createdAt: Number(row.created_at),
   }));
-  return context.json({
+  return {
     conversationId: "default",
     messages,
     nextCursor: messages.at(-1)?.cursor ?? after,
-  });
+  };
+};
+
+conversations.get("/conversations/default/messages", async (context) => {
+  const after = Number(context.req.query("after") ?? 0);
+  const limit = Number(context.req.query("limit") ?? 100);
+  if (
+    !Number.isSafeInteger(after) ||
+    after < 0 ||
+    !Number.isSafeInteger(limit) ||
+    limit < 1 ||
+    limit > 200
+  )
+    return context.json({ error: "Invalid replay range" }, 400);
+  return context.json(
+    await listConversationMessages(
+      context.env.DB,
+      context.get("auth").uid,
+      after,
+      limit,
+    ),
+  );
 });
 
 conversations.post("/conversations/default/messages", async (context) => {

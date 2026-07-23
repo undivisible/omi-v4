@@ -40,6 +40,11 @@ export type Bindings = {
   MIMO_GLOBAL_TOKEN_BUDGET?: string;
   MIMO_UID_COST_BUDGET_MICROUSD?: string;
   MIMO_GLOBAL_COST_BUDGET_MICROUSD?: string;
+  BYOK_STANDARD_PRICE_CENTS?: string;
+  BYOK_FLOOR_PRICE_CENTS?: string;
+  BYOK_NEGOTIATION_MAX_TURNS?: string;
+  BYOK_NEGOTIATION_COOLDOWN_HOURS?: string;
+  BYOK_NEGOTIATION_CONCESSIONS?: string;
   DEV_FAKE_PRO?: string;
   CHANNEL_FALLBACK_RESPONDER?: string;
   GEMINI_API_KEY?: string;
@@ -60,7 +65,20 @@ export type Bindings = {
 
 export type Auth = { uid: string; email: string | null };
 
-export type AppEnv = { Bindings: Bindings; Variables: { auth: Auth } };
+export type ApiKeyScope =
+  | "memory:read"
+  | "currents:read"
+  | "currents:write"
+  | "conversations:read"
+  | "assistant:write"
+  | "facetime:write";
+
+export type ApiKeyContext = { id: string; scopes: ApiKeyScope[] };
+
+export type AppEnv = {
+  Bindings: Bindings;
+  Variables: { auth: Auth; apiKey?: ApiKeyContext };
+};
 
 export type Channel = "telegram" | "blooio";
 

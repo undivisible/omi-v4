@@ -1,6 +1,6 @@
 import 'package:flutter/foundation.dart';
 
-enum OnboardingStage { introduction, access, scan, profile, use }
+enum OnboardingStage { introduction, access, scan, profile, byok, use }
 
 final class OnboardingController extends ChangeNotifier {
   OnboardingStage stage = OnboardingStage.introduction;
@@ -39,6 +39,15 @@ final class OnboardingController extends ChangeNotifier {
 
   void completeProfile() {
     if (stage != OnboardingStage.profile) return;
+    stage = OnboardingStage.byok;
+    notifyListeners();
+  }
+
+  /// The bring-your-own-AI step, including the price negotiation it opens
+  /// when a key is connected. Both connecting and negotiating are optional,
+  /// so this is reached whether the user engaged with the step or skipped it.
+  void completeByok() {
+    if (stage != OnboardingStage.byok) return;
     stage = OnboardingStage.use;
     notifyListeners();
   }
