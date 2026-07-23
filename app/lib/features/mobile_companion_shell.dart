@@ -1,7 +1,10 @@
 import 'dart:async';
 import 'dart:math' as math;
+import 'dart:ui' as ui;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../app_services.dart';
@@ -11,6 +14,7 @@ import '../features/setup_account_screens.dart' show EventKitProactiveSyncTile;
 import '../native/live_activity_bridge.dart';
 import '../native/native_hub.dart';
 import '../providers/providers.dart';
+import 'capture_notifier.dart';
 import 'transcript_log_store.dart';
 
 const _paper = Color(0xfff7f6f1);
@@ -43,6 +47,7 @@ class MobileCompanionShell extends StatefulWidget {
     required this.services,
     this.pairedDevices,
     this.transcriptLog,
+    this.captureNotifier,
     this.previewMode = false,
     super.key,
   });
@@ -50,6 +55,7 @@ class MobileCompanionShell extends StatefulWidget {
   final AppServices services;
   final PairedDeviceStore? pairedDevices;
   final TranscriptLogStore? transcriptLog;
+  final CaptureNotifier? captureNotifier;
   final bool previewMode;
 
   @override
@@ -63,7 +69,15 @@ class _MobileCompanionShellState extends State<MobileCompanionShell> {
       widget.pairedDevices ?? PreferencesPairedDeviceStore();
   late final TranscriptLogStore _transcriptLog =
       widget.transcriptLog ?? PreferencesTranscriptLogStore();
+  late final CaptureNotifier _captureNotifier =
+      widget.captureNotifier ??
+      (widget.previewMode
+          ? const NoopCaptureNotifier()
+          : LocalCaptureNotifier());
   final List<TranscriptDelta> _transcripts = [];
+  // The most recent interim (non-final) transcript text, rendered live under
+  // the hero while the user is speaking. Cleared once the segment finalizes.
+  String _interimText = '';
   StreamSubscription<NativeEvent>? _nativeEventSubscription;
 
   @override
@@ -71,11 +85,14 @@ class _MobileCompanionShellState extends State<MobileCompanionShell> {
     super.initState();
     unawaited(_restoreTranscripts());
     _nativeEventSubscription = widget.services.nativeEvents.listen((event) {
-      if (event case NativeEventTranscriptDelta(
-        :final value,
-      ) when value.finalSegment) {
+      if (event case NativeEventTranscriptDelta(:final value)) {
         if (!mounted) return;
+        if (!value.finalSegment) {
+          setState(() => _interimText = value.text);
+          return;
+        }
         setState(() {
+          _interimText = '';
           _transcripts.insert(0, value);
           if (_transcripts.length > _maxTranscripts) {
             _transcripts.removeRange(_maxTranscripts, _transcripts.length);
@@ -154,6 +171,8 @@ class _MobileCompanionShellState extends State<MobileCompanionShell> {
               services: widget.services,
               pairedDevices: _pairedDevices,
               transcripts: _transcripts,
+              interimText: _interimText,
+              captureNotifier: _captureNotifier,
               previewMode: widget.previewMode,
             ),
           ],
@@ -211,6 +230,8 @@ class MobilePendantPage extends StatefulWidget {
     required this.services,
     required this.pairedDevices,
     required this.transcripts,
+    required this.captureNotifier,
+    this.interimText = '',
     this.previewMode = false,
     super.key,
   });
@@ -218,6 +239,8 @@ class MobilePendantPage extends StatefulWidget {
   final AppServices services;
   final PairedDeviceStore pairedDevices;
   final List<TranscriptDelta> transcripts;
+  final CaptureNotifier captureNotifier;
+  final String interimText;
   final bool previewMode;
 
   @override
@@ -236,6 +259,11 @@ class MobilePendantPageState extends State<MobilePendantPage> {
   bool? _desktopNoticeDismissed;
   StreamSubscription<DeviceRelaySnapshot>? _snapshotSubscription;
   final LiveActivityBridge _liveActivity = LiveActivityBridge();
+  final ScrollController _scrollController = ScrollController();
+  // Drives the hero blur/fade. Only the hero reads this; the rest of the page
+  // scrolls normally, so the value lives outside setState to avoid rebuilding
+  // the whole list on every scroll frame.
+  final ValueNotifier<double> _scrollOffset = ValueNotifier<double>(0);
 
   bool get _mobile => relay.role == DeviceRelayRole.mobileOwner;
 
@@ -248,6 +276,11 @@ class MobilePendantPageState extends State<MobilePendantPage> {
   @override
   void initState() {
     super.initState();
+    _scrollController.addListener(
+      () => _scrollOffset.value = _scrollController.hasClients
+          ? _scrollController.offset
+          : 0,
+    );
     snapshot = relay.lastSnapshot;
     _snapshotSubscription = relay.snapshots.listen((next) {
       if (mounted) setState(() => snapshot = next);
@@ -314,6 +347,8 @@ class MobilePendantPageState extends State<MobilePendantPage> {
   void dispose() {
     unawaited(_snapshotSubscription?.cancel());
     unawaited(_liveActivity.end());
+    _scrollController.dispose();
+    _scrollOffset.dispose();
     super.dispose();
   }
 
@@ -387,13 +422,40 @@ class MobilePendantPageState extends State<MobilePendantPage> {
     try {
       if (!enabled) {
         await widget.services.deviceAudio.stop();
+        // Reflect the idle state on the pendant LED (red) via the firmware
+        // capture-state characteristic; a no-op on firmware without it.
+        unawaited(relay.writeCaptureLed(false));
+        unawaited(widget.captureNotifier.captureStopped());
       } else if (device != null) {
         await widget.services.connectDevice(device.id);
+        unawaited(relay.writeCaptureLed(true));
+        // Post an ambient local notification and surface the segment in the
+        // conversations list (wired via the transcript log) when a capture
+        // starts.
+        unawaited(
+          widget.captureNotifier.captureStarted(deviceName: device.name),
+        );
       }
       if (mounted) setState(() {});
     } catch (next) {
       if (mounted) setState(() => error = next);
     }
+  }
+
+  // Tap the pendant image to toggle capture on/off.
+  void _toggleCapture() {
+    if (_connectedDevice == null) return;
+    unawaited(HapticFeedback.selectionClick());
+    unawaited(_setCapture(!widget.services.deviceAudio.active));
+  }
+
+  // Long-press the pendant image to disconnect, with a haptic + relay confirm
+  // so it cannot be triggered by accident.
+  Future<void> _disconnectByHold() async {
+    if (_connectedDevice == null) return;
+    unawaited(HapticFeedback.heavyImpact());
+    unawaited(relay.sendHaptic(1));
+    await disconnect();
   }
 
   String _phaseLabel(DeviceConnectionPhase phase) => switch (phase) {
@@ -406,19 +468,13 @@ class MobilePendantPageState extends State<MobilePendantPage> {
     DeviceConnectionPhase.failed => 'Connection failed',
   };
 
-  String _codecLabel(DeviceAudioCodec codec) => switch (codec) {
-    DeviceAudioCodec.pcm8 => 'PCM 8 kHz',
-    DeviceAudioCodec.pcm16 => 'PCM 16 kHz',
-    DeviceAudioCodec.opus => 'Opus 16 kHz',
-    DeviceAudioCodec.opusFs320 => 'Opus 16 kHz (fs320)',
-    DeviceAudioCodec.unknown => 'Unknown',
-  };
-
+  // The pendant image itself is the primary control (tap to capture, hold to
+  // disconnect) and the hero owns the single connection indicator, so the
+  // main-screen DEVICE section only surfaces what the gestures cannot: the
+  // list of nearby pendants to pair with, and the last error.
   List<Widget> _deviceTiles(
     DeviceConnectionPhase phase,
-    RelayDevice? device,
     bool connected,
-    bool capturing,
     Object? lastError,
   ) => [
     if (widget.previewMode)
@@ -434,56 +490,7 @@ class MobilePendantPageState extends State<MobilePendantPage> {
         detail: 'Device pairing is intentionally unavailable on this client.',
       )
     else ...[
-      if (connected)
-        _PaperTile(
-          key: const Key('companion_connection_tile'),
-          icon: Icons.bluetooth_connected_rounded,
-          iconColor: _stateBlue,
-          title: device?.name ?? 'No device connected',
-          detail: [_phaseLabel(phase), ?snapshot?.message].join(' · '),
-          trailing: IconButton(
-            key: const Key('companion_disconnect'),
-            tooltip: 'Disconnect',
-            onPressed: disconnect,
-            icon: const Icon(Icons.link_off_rounded),
-          ),
-        ),
-      if (connected && device != null) ...[
-        _PaperTile(
-          key: const Key('companion_codec_tile'),
-          icon: Icons.graphic_eq_rounded,
-          title: 'Audio codec',
-          detail: _codecLabel(device.audioCodec),
-        ),
-        _PaperTile(
-          key: const Key('companion_firmware_tile'),
-          icon: Icons.memory_rounded,
-          title: 'Firmware',
-          detail: device.firmwareRevision ?? 'Not reported',
-        ),
-        if (device.signalStrength case final signal?)
-          _PaperTile(
-            icon: Icons.network_check_rounded,
-            title: 'Signal',
-            detail: '$signal dBm',
-          ),
-        _PaperTile(
-          key: const Key('companion_capture_tile'),
-          icon: capturing
-              ? Icons.fiber_manual_record_rounded
-              : Icons.pause_circle_outline_rounded,
-          iconColor: capturing ? _coral : null,
-          title: 'Capture',
-          detail: capturing
-              ? 'Streaming audio to transcription.'
-              : 'Capture is off.',
-          trailing: Switch(
-            key: const Key('companion_capture_switch'),
-            value: capturing,
-            onChanged: (value) => unawaited(_setCapture(value)),
-          ),
-        ),
-      ] else ...[
+      if (!connected)
         for (final found in devices)
           _PaperTile(
             icon: Icons.watch_outlined,
@@ -502,7 +509,6 @@ class MobilePendantPageState extends State<MobilePendantPage> {
               icon: const Icon(Icons.add_circle_outline_rounded),
             ),
           ),
-      ],
       if (lastError != null)
         _PaperTile(
           key: const Key('companion_error_tile'),
@@ -538,6 +544,13 @@ class MobilePendantPageState extends State<MobilePendantPage> {
     return '$hours:$minutes';
   }
 
+  String _captureHint(bool connected, bool capturing) {
+    if (!connected) return 'Reconnect to control your Omi';
+    return capturing
+        ? 'Tap to stop capture · Hold to disconnect'
+        : 'Tap to start capture · Hold to disconnect';
+  }
+
   @override
   Widget build(BuildContext context) {
     final phase = _phase;
@@ -545,7 +558,6 @@ class MobilePendantPageState extends State<MobilePendantPage> {
     final connected = _connectedDevice != null;
     final capturing = widget.services.deviceAudio.active;
     final lastError = error ?? widget.services.deviceAudio.lastError;
-    final capturedSegments = widget.transcripts.length;
     final capturedMs = widget.transcripts.fold<int>(
       0,
       (sum, delta) => sum + math.max(0, delta.endMs - delta.startMs),
@@ -554,85 +566,66 @@ class MobilePendantPageState extends State<MobilePendantPage> {
         phase == DeviceConnectionPhase.scanning ||
         phase == DeviceConnectionPhase.connecting ||
         phase == DeviceConnectionPhase.disconnecting;
-    final body = LayoutBuilder(
-      builder: (context, constraints) {
-        final pendantWidth = math.min(constraints.maxWidth * .82, 420.0);
-        final heroHeight = math.min(
-          constraints.maxHeight * .5,
-          pendantWidth * .78 + 196,
-        );
-        // Push the hero (pendant image, title, status, battery) down from
-        // the very top edge: respect the safe-area inset and add extra
-        // breathing room so the cord isn't flush against the top.
-        final topInset = MediaQuery.paddingOf(context).top;
-        return Column(
-          key: const Key('companion_pendant_column'),
-          children: [
-            SizedBox(height: topInset + 28),
-            SizedBox(
-              height: heroHeight,
-              child: OverflowBox(
-                maxHeight: double.infinity,
-                alignment: Alignment.bottomCenter,
-                child: _PendantHero(
-                  deviceName: device?.name,
-                  phaseLabel: _phaseLabel(phase),
-                  connected: connected,
-                  batteryLevel: connected ? device?.batteryLevel : null,
-                  busy: busy,
-                  onReconnect: () => unawaited(reconnect()),
-                ),
-              ),
+    // The pendant image reaches the very top edge past the notch, so the whole
+    // page is one scroll view and only the hero fades/blurs as it scrolls off.
+    final content = <Widget>[
+      _LiveTranscriptStrip(
+        connected: connected,
+        capturing: capturing,
+        interimText: widget.interimText,
+        latestFinal: widget.transcripts.isEmpty
+            ? null
+            : widget.transcripts.first.text,
+      ),
+      if (!widget.previewMode &&
+          widget.services.productionReady &&
+          widget.services.currents != null)
+        _MobileTasksSection(currents: widget.services.currents!),
+      const SizedBox(height: 22),
+      const _SectionLabel('DEVICE'),
+      ..._withGaps(_deviceTiles(phase, connected, lastError)),
+      if (_desktopNoticeDismissed == false) ...[
+        const SizedBox(height: 22),
+        _DesktopCta(onDismiss: () => unawaited(_dismissDesktopNotice())),
+      ],
+      const SizedBox(height: 22),
+      const _SectionLabel('CONVERSATIONS'),
+      ..._withGaps(_transcriptTiles()),
+      const SizedBox(height: 8),
+    ];
+    final body = CustomScrollView(
+      key: const Key('companion_page_sections'),
+      controller: _scrollController,
+      physics: const ClampingScrollPhysics(),
+      slivers: [
+        SliverToBoxAdapter(
+          child: _FadingHero(
+            scrollOffset: _scrollOffset,
+            child: _PendantHero(
+              deviceName: device?.name,
+              phaseLabel: _phaseLabel(phase),
+              connected: connected,
+              capturing: capturing,
+              batteryLevel: connected ? device?.batteryLevel : null,
+              capturedMinutes: (capturedMs / 60000).ceil(),
+              hint: _captureHint(connected, capturing),
+              busy: busy,
+              onReconnect: () => unawaited(reconnect()),
+              onTapPendant: connected ? _toggleCapture : null,
+              onHoldPendant: connected
+                  ? () => unawaited(_disconnectByHold())
+                  : null,
             ),
-            Expanded(
-              child: ListView(
-                key: const Key('companion_page_sections'),
-                physics: const ClampingScrollPhysics(),
-                padding: const EdgeInsets.fromLTRB(18, 0, 18, 24),
-                children: [
-                  _StatsRow(
-                    capturedSegments: capturedSegments,
-                    capturedMinutes: (capturedMs / 60000).ceil(),
-                    capturing: capturing,
-                  ),
-                  if (!widget.previewMode &&
-                      widget.services.productionReady &&
-                      widget.services.currents != null)
-                    _MobileTasksSection(currents: widget.services.currents!),
-                  const SizedBox(height: 22),
-                  const _SectionLabel('DEVICE'),
-                  ..._withGaps(
-                    _deviceTiles(
-                      phase,
-                      device,
-                      connected,
-                      capturing,
-                      lastError,
-                    ),
-                  ),
-                  if (_desktopNoticeDismissed == false) ...[
-                    const SizedBox(height: 22),
-                    _DesktopCta(
-                      onDismiss: () => unawaited(_dismissDesktopNotice()),
-                    ),
-                  ],
-                  const SizedBox(height: 22),
-                  const _SectionLabel('THIS SESSION'),
-                  SizedBox(
-                    height: 232,
-                    child: ListView(
-                      key: const Key('companion_session_list'),
-                      padding: EdgeInsets.zero,
-                      children: [..._withGaps(_transcriptTiles())],
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                ],
-              ),
-            ),
-          ],
-        );
-      },
+          ),
+        ),
+        SliverPadding(
+          padding: const EdgeInsets.fromLTRB(18, 0, 18, 24),
+          sliver: SliverList(
+            key: const Key('companion_session_list'),
+            delegate: SliverChildListDelegate(content),
+          ),
+        ),
+      ],
     );
     return Stack(
       clipBehavior: Clip.none,
@@ -678,7 +671,11 @@ class MobilePendantPageState extends State<MobilePendantPage> {
           services: widget.services,
           previewMode: widget.previewMode,
           rememberedDeviceId: () => rememberedDeviceId,
+          connectedDevice: () => _connectedDevice,
+          capturing: () => widget.services.deviceAudio.active,
+          segmentCount: () => widget.transcripts.length,
           onForget: forget,
+          onDisconnect: disconnect,
         ),
       ),
     );
@@ -730,22 +727,169 @@ List<Widget> _withGaps(List<Widget> tiles) => [
   for (final tile in tiles) ...[const SizedBox(height: 10), tile],
 ];
 
+String _codecLabel(DeviceAudioCodec codec) => switch (codec) {
+  DeviceAudioCodec.pcm8 => 'PCM 8 kHz',
+  DeviceAudioCodec.pcm16 => 'PCM 16 kHz',
+  DeviceAudioCodec.opus => 'Opus 16 kHz',
+  DeviceAudioCodec.opusFs320 => 'Opus 16 kHz (fs320)',
+  DeviceAudioCodec.unknown => 'Unknown',
+};
+
+// The technical diagnostics moved off the main screen: audio codec, firmware
+// version, hardware revision, model number, segment count, and the raw capture
+// state. Read once from the connected device when the subpage opens.
+class _DeveloperOptionsPage extends StatelessWidget {
+  const _DeveloperOptionsPage({
+    required this.device,
+    required this.capturing,
+    required this.segmentCount,
+  });
+
+  final RelayDevice? device;
+  final bool capturing;
+  final int segmentCount;
+
+  @override
+  Widget build(BuildContext context) {
+    final dark = _darkMode(context);
+    final device = this.device;
+    return Scaffold(
+      key: const Key('companion_developer_options_page'),
+      backgroundColor: dark ? _inkSheet : _paper,
+      appBar: AppBar(
+        backgroundColor: dark ? _inkSheet : _paper,
+        foregroundColor: _pageInk(context),
+        elevation: 0,
+        title: const Text('Developer options'),
+      ),
+      body: SafeArea(
+        top: false,
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(18, 12, 18, 24),
+          children: [
+            const _SectionLabel('DIAGNOSTICS'),
+            ..._withGaps([
+              if (device == null)
+                const _PaperTile(
+                  icon: Icons.bluetooth_disabled_rounded,
+                  title: 'No device connected',
+                  detail: 'Connect your pendant to read firmware details.',
+                )
+              else ...[
+                _PaperTile(
+                  key: const Key('companion_dev_codec_tile'),
+                  icon: Icons.graphic_eq_rounded,
+                  title: 'Audio codec',
+                  detail: _codecLabel(device.audioCodec),
+                ),
+                _PaperTile(
+                  key: const Key('companion_dev_firmware_tile'),
+                  icon: Icons.memory_rounded,
+                  title: 'Firmware version',
+                  detail: device.firmwareRevision ?? 'Not reported',
+                ),
+                _PaperTile(
+                  key: const Key('companion_dev_hardware_tile'),
+                  icon: Icons.developer_board_rounded,
+                  title: 'Hardware revision',
+                  detail: device.hardwareRevision ?? 'Not reported',
+                ),
+                _PaperTile(
+                  key: const Key('companion_dev_model_tile'),
+                  icon: Icons.qr_code_2_rounded,
+                  title: 'Model number',
+                  detail: device.modelNumber ?? 'Not reported',
+                ),
+                if (device.signalStrength case final signal?)
+                  _PaperTile(
+                    key: const Key('companion_dev_signal_tile'),
+                    icon: Icons.network_check_rounded,
+                    title: 'Signal',
+                    detail: '$signal dBm',
+                  ),
+              ],
+              _PaperTile(
+                key: const Key('companion_dev_segments_tile'),
+                icon: Icons.format_list_numbered_rounded,
+                title: 'Segments captured',
+                detail: '$segmentCount',
+              ),
+              _PaperTile(
+                key: const Key('companion_dev_capture_tile'),
+                icon: capturing
+                    ? Icons.fiber_manual_record_rounded
+                    : Icons.pause_circle_outline_rounded,
+                iconColor: capturing ? _coral : null,
+                title: 'Capture state',
+                detail: capturing ? 'Live' : 'Idle',
+              ),
+            ]),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// Blurs and fades the hero as the page scrolls: only this widget reacts to the
+// scroll offset, so the rest of the page scrolls without fading. Increasing
+// blur (ImageFiltered) pairs with decreasing opacity tied to scroll position.
+class _FadingHero extends StatelessWidget {
+  const _FadingHero({required this.scrollOffset, required this.child});
+
+  static const _fadeDistance = 220.0;
+  static const _maxBlur = 9.0;
+
+  final ValueListenable<double> scrollOffset;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) => ValueListenableBuilder<double>(
+    valueListenable: scrollOffset,
+    child: child,
+    builder: (context, offset, child) {
+      final progress = (offset / _fadeDistance).clamp(0.0, 1.0);
+      final sigma = progress * _maxBlur;
+      final hero = Opacity(
+        key: const Key('companion_hero_fade'),
+        opacity: 1 - progress,
+        child: child,
+      );
+      if (sigma <= 0.01) return hero;
+      return ImageFiltered(
+        imageFilter: ui.ImageFilter.blur(sigmaX: sigma, sigmaY: sigma),
+        child: hero,
+      );
+    },
+  );
+}
+
 class _PendantHero extends StatefulWidget {
   const _PendantHero({
     required this.deviceName,
     required this.phaseLabel,
     required this.connected,
+    required this.capturing,
     required this.batteryLevel,
+    required this.capturedMinutes,
+    required this.hint,
     required this.busy,
     required this.onReconnect,
+    required this.onTapPendant,
+    required this.onHoldPendant,
   });
 
   final String? deviceName;
   final String phaseLabel;
   final bool connected;
+  final bool capturing;
   final int? batteryLevel;
+  final int capturedMinutes;
+  final String hint;
   final bool busy;
   final VoidCallback onReconnect;
+  final VoidCallback? onTapPendant;
+  final VoidCallback? onHoldPendant;
 
   @override
   State<_PendantHero> createState() => _PendantHeroState();
@@ -782,6 +926,7 @@ class _PendantHeroState extends State<_PendantHero>
     final width = MediaQuery.sizeOf(context).width;
     final pendantWidth = math.min(width * .82, 420.0);
     final connected = widget.connected;
+    final capturing = widget.capturing;
     Widget pendant = Image.asset(
       'assets/images/omi_pendant.png',
       key: const Key('companion_pendant_image'),
@@ -810,53 +955,93 @@ class _PendantHeroState extends State<_PendantHero>
         : (widget.busy ? null : _stateRed);
     Color glow(Color warm, double blend) =>
         stateColor == null ? warm : Color.lerp(warm, stateColor, blend)!;
+    final pendantStack = Stack(
+      alignment: Alignment.center,
+      clipBehavior: Clip.none,
+      children: [
+        Positioned(
+          top: pendantWidth * .55 - glowSize / 2,
+          child: IgnorePointer(
+            child: Container(
+              key: const Key('companion_pendant_glow'),
+              width: glowSize,
+              height: glowSize,
+              decoration: BoxDecoration(
+                gradient: RadialGradient(
+                  colors: [
+                    glow(
+                      const Color(0xfff2a78f),
+                      .3,
+                    ).withValues(alpha: connected ? .32 : .14),
+                    glow(
+                      const Color(0xfff6c9a0),
+                      .22,
+                    ).withValues(alpha: connected ? .16 : .07),
+                    const Color(0x00f2a78f),
+                  ],
+                  stops: const [0, .45, 1],
+                ),
+              ),
+            ),
+          ),
+        ),
+        // Capture-on ring: a subtle blue halo around the pendant while audio
+        // is streaming, mirroring the LED's capture-blue semantics.
+        if (capturing)
+          Positioned(
+            top: pendantWidth * .1,
+            child: IgnorePointer(
+              child: Container(
+                key: const Key('companion_capture_ring'),
+                width: pendantWidth * .82,
+                height: pendantWidth * .82,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: _stateBlue.withValues(alpha: .55),
+                    width: 3,
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: _stateBlue.withValues(alpha: .3),
+                      blurRadius: 26,
+                      spreadRadius: 2,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        AnimatedBuilder(
+          animation: _sway,
+          child: pendant,
+          builder: (context, child) {
+            final t = _sway.value * 2 * math.pi;
+            final angle = animationsDisabled ? 0.0 : math.sin(t) * .012;
+            return Transform.rotate(
+              angle: angle,
+              alignment: Alignment.topCenter,
+              child: child,
+            );
+          },
+        ),
+      ],
+    );
     return Column(
       children: [
         Align(
-          child: Stack(
-            alignment: Alignment.center,
-            clipBehavior: Clip.none,
-            children: [
-              Positioned(
-                top: pendantWidth * .55 - glowSize / 2,
-                child: IgnorePointer(
-                  child: Container(
-                    key: const Key('companion_pendant_glow'),
-                    width: glowSize,
-                    height: glowSize,
-                    decoration: BoxDecoration(
-                      gradient: RadialGradient(
-                        colors: [
-                          glow(
-                            const Color(0xfff2a78f),
-                            .3,
-                          ).withValues(alpha: connected ? .32 : .14),
-                          glow(
-                            const Color(0xfff6c9a0),
-                            .22,
-                          ).withValues(alpha: connected ? .16 : .07),
-                          const Color(0x00f2a78f),
-                        ],
-                        stops: const [0, .45, 1],
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-              AnimatedBuilder(
-                animation: _sway,
-                child: pendant,
-                builder: (context, child) {
-                  final t = _sway.value * 2 * math.pi;
-                  final angle = animationsDisabled ? 0.0 : math.sin(t) * .012;
-                  return Transform.rotate(
-                    angle: angle,
-                    alignment: Alignment.topCenter,
-                    child: child,
-                  );
-                },
-              ),
-            ],
+          child: Semantics(
+            button: connected,
+            label: connected
+                ? (capturing ? 'Stop capture' : 'Start capture')
+                : null,
+            child: GestureDetector(
+              key: const Key('companion_pendant_tap'),
+              behavior: HitTestBehavior.opaque,
+              onTap: widget.onTapPendant,
+              onLongPress: widget.onHoldPendant,
+              child: pendantStack,
+            ),
           ),
         ),
         Transform.translate(
@@ -929,47 +1114,66 @@ class _PendantHeroState extends State<_PendantHero>
                     ),
                   ),
                 ),
-              if (widget.batteryLevel case final battery?) ...[
-                const SizedBox(height: 10),
-                Semantics(
-                  label: 'Battery $battery percent',
-                  excludeSemantics: true,
-                  child: DecoratedBox(
-                    key: const Key('companion_battery_tile'),
-                    decoration: BoxDecoration(
-                      color: _surface,
-                      border: Border.all(color: _hairline),
-                      borderRadius: BorderRadius.circular(999),
-                    ),
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 14,
-                        vertical: 6,
+              const SizedBox(height: 8),
+              Text(
+                widget.hint,
+                key: const Key('companion_pendant_hint'),
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 12.5,
+                  color: capturing
+                      ? Color.lerp(_pageInkSoft(context), _stateBlue, .5)
+                      : _pageInkSoft(context),
+                ),
+              ),
+              if (widget.batteryLevel case final battery?)
+                Padding(
+                  padding: const EdgeInsets.only(top: 10),
+                  child: Semantics(
+                    label: 'Battery $battery percent',
+                    excludeSemantics: true,
+                    child: DecoratedBox(
+                      key: const Key('companion_battery_tile'),
+                      decoration: BoxDecoration(
+                        color: _surface,
+                        border: Border.all(color: _hairline),
+                        borderRadius: BorderRadius.circular(999),
                       ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(
-                            battery > 20
-                                ? Icons.battery_std_rounded
-                                : Icons.battery_alert_rounded,
-                            size: 18,
-                            color: battery > 20 ? _teal : _coral,
-                          ),
-                          const SizedBox(width: 6),
-                          Text(
-                            '$battery%',
-                            style: const TextStyle(
-                              fontSize: 14,
-                              fontWeight: FontWeight.w600,
-                              color: _ink,
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 14,
+                          vertical: 6,
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              battery > 20
+                                  ? Icons.battery_std_rounded
+                                  : Icons.battery_alert_rounded,
+                              size: 18,
+                              color: battery > 20 ? _teal : _coral,
                             ),
-                          ),
-                        ],
+                            const SizedBox(width: 6),
+                            Text(
+                              '$battery%',
+                              style: const TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w600,
+                                color: _ink,
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
                     ),
                   ),
                 ),
+              // Tight gap so the minutes chip sits directly under the battery
+              // percentage — the only stat shown on the main screen.
+              if (connected) ...[
+                const SizedBox(height: 6),
+                _MinutesChip(minutes: widget.capturedMinutes),
               ],
             ],
           ),
@@ -979,100 +1183,115 @@ class _PendantHeroState extends State<_PendantHero>
   }
 }
 
-class _StatsRow extends StatelessWidget {
-  const _StatsRow({
-    required this.capturedSegments,
-    required this.capturedMinutes,
-    required this.capturing,
-  });
+class _MinutesChip extends StatelessWidget {
+  const _MinutesChip({required this.minutes});
 
-  final int capturedSegments;
-  final int capturedMinutes;
-  final bool capturing;
-
-  @override
-  Widget build(BuildContext context) => Row(
-    children: [
-      Expanded(
-        child: _StatCard(
-          key: const Key('companion_stat_segments'),
-          value: '$capturedSegments',
-          label: 'segments captured',
-        ),
-      ),
-      const SizedBox(width: 10),
-      Expanded(
-        child: _StatCard(
-          key: const Key('companion_stat_minutes'),
-          value: '$capturedMinutes',
-          label: 'minutes transcribed',
-        ),
-      ),
-      const SizedBox(width: 10),
-      Expanded(
-        child: _StatCard(
-          key: const Key('companion_stat_capture'),
-          value: capturing ? 'Live' : 'Idle',
-          label: 'capture state',
-          accent: capturing ? _coral : null,
-        ),
-      ),
-    ],
-  );
-}
-
-class _StatCard extends StatelessWidget {
-  const _StatCard({
-    required this.value,
-    required this.label,
-    this.accent,
-    super.key,
-  });
-
-  final String value;
-  final String label;
-  final Color? accent;
+  final int minutes;
 
   @override
   Widget build(BuildContext context) => Semantics(
-    label: '$value $label',
+    label: '$minutes minutes transcribed',
     excludeSemantics: true,
     child: DecoratedBox(
+      key: const Key('companion_stat_minutes'),
       decoration: BoxDecoration(
         color: _surface,
         border: Border.all(color: _hairline),
-        borderRadius: BorderRadius.circular(18),
-        boxShadow: const [
-          BoxShadow(
-            color: Color(0x0d171716),
-            blurRadius: 14,
-            offset: Offset(0, 6),
-          ),
-        ],
+        borderRadius: BorderRadius.circular(999),
       ),
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
-        child: Column(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
           children: [
+            const Icon(Icons.graphic_eq_rounded, size: 15, color: _inkSoft),
+            const SizedBox(width: 6),
             Text(
-              value,
-              style: TextStyle(
-                fontSize: 22,
-                fontWeight: FontWeight.w700,
-                color: accent ?? _ink,
+              '$minutes min transcribed',
+              style: const TextStyle(
+                fontSize: 12.5,
+                fontWeight: FontWeight.w600,
+                color: _ink,
               ),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              label,
-              textAlign: TextAlign.center,
-              style: const TextStyle(fontSize: 11, color: _inkSoft),
             ),
           ],
         ),
       ),
     ),
   );
+}
+
+// The live "what you're saying" transcript, rendered directly under the hero
+// and updating from the native transcript deltas as the user speaks. Interim
+// text is shown while speaking; once a segment finalizes it moves into the
+// session list below and this strip shows the latest final line.
+class _LiveTranscriptStrip extends StatelessWidget {
+  const _LiveTranscriptStrip({
+    required this.connected,
+    required this.capturing,
+    required this.interimText,
+    required this.latestFinal,
+  });
+
+  final bool connected;
+  final bool capturing;
+  final String interimText;
+  final String? latestFinal;
+
+  @override
+  Widget build(BuildContext context) {
+    if (!connected && interimText.isEmpty && latestFinal == null) {
+      return const SizedBox.shrink();
+    }
+    final interim = interimText.trim().isNotEmpty;
+    final text = interim
+        ? interimText
+        : (latestFinal ??
+              (capturing
+                  ? 'Listening…'
+                  : 'Tap the pendant to '
+                        'start capturing.'));
+    return Padding(
+      padding: const EdgeInsets.only(top: 4, bottom: 4),
+      child: DecoratedBox(
+        key: const Key('companion_live_transcript'),
+        decoration: BoxDecoration(
+          color: _surface,
+          border: Border.all(
+            color: interim ? _stateBlue.withValues(alpha: .4) : _hairline,
+          ),
+          borderRadius: BorderRadius.circular(18),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(
+                interim || capturing
+                    ? Icons.graphic_eq_rounded
+                    : Icons.mic_none_rounded,
+                size: 18,
+                color: interim ? _stateBlue : _inkSoft,
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  text,
+                  style: TextStyle(
+                    color: interim ? _ink : _inkSoft,
+                    fontSize: 14,
+                    height: 1.4,
+                    fontStyle: interim ? FontStyle.normal : FontStyle.italic,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class _SectionLabel extends StatelessWidget {
@@ -1197,18 +1416,74 @@ class _DesktopCta extends StatelessWidget {
   );
 }
 
+// Owns the rename field's controller so it outlives the dialog's exit
+// transition; disposing it inline as soon as showDialog resolves tears the
+// controller out from under the still-animating route.
+class _RenameDialog extends StatefulWidget {
+  const _RenameDialog({required this.initialName});
+
+  final String initialName;
+
+  @override
+  State<_RenameDialog> createState() => _RenameDialogState();
+}
+
+class _RenameDialogState extends State<_RenameDialog> {
+  late final TextEditingController _controller = TextEditingController(
+    text: widget.initialName,
+  );
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    title: const Text('Rename device'),
+    content: TextField(
+      key: const Key('companion_rename_field'),
+      controller: _controller,
+      autofocus: true,
+      maxLength: 20,
+      decoration: const InputDecoration(labelText: 'Device name'),
+      onSubmitted: (value) => Navigator.of(context).pop(value.trim()),
+    ),
+    actions: [
+      TextButton(
+        onPressed: () => Navigator.of(context).pop(),
+        child: const Text('Cancel'),
+      ),
+      TextButton(
+        key: const Key('companion_rename_confirm'),
+        onPressed: () => Navigator.of(context).pop(_controller.text.trim()),
+        child: const Text('Save'),
+      ),
+    ],
+  );
+}
+
 class _SettingsSheet extends StatefulWidget {
   const _SettingsSheet({
     required this.services,
     required this.previewMode,
     required this.rememberedDeviceId,
+    required this.connectedDevice,
+    required this.capturing,
+    required this.segmentCount,
     required this.onForget,
+    required this.onDisconnect,
   });
 
   final AppServices services;
   final bool previewMode;
   final String? Function() rememberedDeviceId;
+  final RelayDevice? Function() connectedDevice;
+  final bool Function() capturing;
+  final int Function() segmentCount;
   final Future<void> Function() onForget;
+  final Future<void> Function() onDisconnect;
 
   @override
   State<_SettingsSheet> createState() => _SettingsSheetState();
@@ -1283,9 +1558,67 @@ class _SettingsSheetState extends State<_SettingsSheet> {
     }
   }
 
+  Future<void> _rename() async {
+    final device = widget.connectedDevice();
+    if (device == null) return;
+    final name = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => _RenameDialog(initialName: device.name),
+    );
+    if (name == null || name.isEmpty) return;
+    final ok = await widget.services.deviceRelay.renameDevice(name);
+    if (!mounted) return;
+    setState(() {});
+    if (!ok) {
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+        const SnackBar(
+          content: Text('Renaming is not supported on this firmware.'),
+        ),
+      );
+    }
+  }
+
+  Future<void> _sleep() async {
+    final confirmed = await _confirm(
+      title: 'Put Omi to sleep?',
+      message: 'This powers off your pendant. Press its button to wake it.',
+      action: 'Sleep',
+      confirmKey: const Key('companion_sleep_confirm'),
+    );
+    if (!confirmed) return;
+    final ok = await widget.services.deviceRelay.sleepDevice();
+    if (!mounted) return;
+    if (!ok) {
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Sleep is not supported on this '
+            'firmware.',
+          ),
+        ),
+      );
+    }
+  }
+
+  void _openDeveloperOptions() {
+    unawaited(
+      Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (routeContext) => _DeveloperOptionsPage(
+            device: widget.connectedDevice(),
+            capturing: widget.capturing(),
+            segmentCount: widget.segmentCount(),
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final remembered = widget.rememberedDeviceId();
+    final connected = widget.connectedDevice() != null;
+    final supportsRename = widget.services.deviceRelay.supportsRename;
     return SafeArea(
       top: false,
       child: ListView(
@@ -1301,39 +1634,96 @@ class _SettingsSheetState extends State<_SettingsSheet> {
               previewMode: widget.previewMode,
             ),
           ),
-          if (remembered != null) ...[
+          if (remembered != null || connected) ...[
             const SizedBox(height: 22),
             const _SectionLabel('DEVICE'),
             ..._withGaps([
-              _PaperTile(
-                key: const Key('companion_remembered_tile'),
-                icon: Icons.history_rounded,
-                title: 'Remembered device',
-                detail: remembered,
-                trailing: IconButton(
-                  key: const Key('companion_forget'),
-                  tooltip: 'Forget',
-                  onPressed: () => unawaited(
-                    widget.onForget().then((_) {
-                      if (mounted) setState(() {});
-                    }),
+              if (connected)
+                _PaperTile(
+                  key: const Key('companion_settings_disconnect'),
+                  icon: Icons.link_off_rounded,
+                  title: 'Disconnect',
+                  detail: 'Disconnect the pendant but keep it paired.',
+                  trailing: IconButton(
+                    key: const Key('companion_settings_disconnect_button'),
+                    tooltip: 'Disconnect',
+                    onPressed: () => unawaited(
+                      widget.onDisconnect().then((_) {
+                        if (mounted) setState(() {});
+                      }),
+                    ),
+                    icon: const Icon(Icons.link_off_rounded),
                   ),
-                  icon: const Icon(Icons.delete_outline_rounded),
                 ),
-              ),
+              if (connected && supportsRename)
+                _PaperTile(
+                  key: const Key('companion_rename_device'),
+                  icon: Icons.drive_file_rename_outline_rounded,
+                  title: 'Rename device',
+                  detail: 'Change the name your pendant advertises.',
+                  trailing: IconButton(
+                    key: const Key('companion_rename_button'),
+                    tooltip: 'Rename device',
+                    onPressed: () => unawaited(_rename()),
+                    icon: const Icon(Icons.edit_outlined),
+                  ),
+                ),
+              if (connected)
+                _PaperTile(
+                  key: const Key('companion_sleep_device'),
+                  icon: Icons.bedtime_outlined,
+                  title: 'Sleep now',
+                  detail: 'Power off the pendant until you wake it.',
+                  trailing: IconButton(
+                    key: const Key('companion_sleep_button'),
+                    tooltip: 'Sleep now',
+                    onPressed: () => unawaited(_sleep()),
+                    icon: const Icon(Icons.bedtime_outlined),
+                  ),
+                ),
+              if (remembered != null)
+                _PaperTile(
+                  key: const Key('companion_remembered_tile'),
+                  icon: Icons.history_rounded,
+                  title: 'Remembered device',
+                  detail: remembered,
+                  trailing: IconButton(
+                    key: const Key('companion_forget'),
+                    tooltip: 'Forget',
+                    onPressed: () => unawaited(
+                      widget.onForget().then((_) {
+                        if (mounted) setState(() {});
+                      }),
+                    ),
+                    icon: const Icon(Icons.delete_outline_rounded),
+                  ),
+                ),
               _PaperTile(
-                key: const Key('companion_reset_pendant'),
-                icon: Icons.restart_alt_rounded,
-                iconColor: _coral,
-                title: 'Reset pendant',
-                detail: 'Disconnect and forget this pendant.',
+                key: const Key('companion_developer_options'),
+                icon: Icons.code_rounded,
+                title: 'Developer options',
+                detail: 'Firmware, hardware, codec, and capture diagnostics.',
                 trailing: IconButton(
-                  key: const Key('companion_reset_pendant_button'),
-                  tooltip: 'Reset pendant',
-                  onPressed: () => unawaited(_resetPendant()),
-                  icon: const Icon(Icons.restart_alt_rounded, color: _coral),
+                  key: const Key('companion_developer_options_button'),
+                  tooltip: 'Developer options',
+                  onPressed: _openDeveloperOptions,
+                  icon: const Icon(Icons.chevron_right_rounded),
                 ),
               ),
+              if (remembered != null)
+                _PaperTile(
+                  key: const Key('companion_reset_pendant'),
+                  icon: Icons.restart_alt_rounded,
+                  iconColor: _coral,
+                  title: 'Reset pendant',
+                  detail: 'Disconnect and forget this pendant.',
+                  trailing: IconButton(
+                    key: const Key('companion_reset_pendant_button'),
+                    tooltip: 'Reset pendant',
+                    onPressed: () => unawaited(_resetPendant()),
+                    icon: const Icon(Icons.restart_alt_rounded, color: _coral),
+                  ),
+                ),
             ]),
           ],
           const SizedBox(height: 22),

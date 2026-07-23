@@ -7,6 +7,27 @@ abstract interface class DeviceRelayHaptics {
   Future<bool> sendHaptic(int level);
 }
 
+/// Drives the pendant capture-aware LED (blue while capturing, red while idle).
+/// The firmware team is adding an app-writable characteristic; adapters that
+/// cannot reach it return false so the UI falls back to connection-LED
+/// semantics without failing.
+abstract interface class DeviceRelayLed {
+  Future<bool> writeCaptureLed(bool capturing);
+}
+
+/// Commands the pendant to sleep/power off (settings characteristic 19b10014).
+/// Adapters return false when the write is unsupported.
+abstract interface class DeviceRelaySleep {
+  Future<bool> sleepDevice();
+}
+
+/// Writes the firmware rename characteristic (19b10016) as a persisted UTF-8
+/// name. Adapters return false when the write is unsupported so the rename
+/// field can hide or disable itself gracefully.
+abstract interface class DeviceRelayRename {
+  Future<bool> renameDevice(String name);
+}
+
 abstract interface class DeviceRelayAdapter {
   DeviceRelayCapabilities get capabilities;
   Stream<DeviceRelaySnapshot> get snapshots;
@@ -83,6 +104,49 @@ class DeviceRelayService {
       return false;
     }
   }
+
+  /// Reflects the capture state on the pendant LED. Returns false (a no-op the
+  /// caller can ignore) when the role or adapter cannot drive the LED, which
+  /// is the expected path until the firmware ships the writable characteristic.
+  Future<bool> writeCaptureLed(bool capturing) async {
+    if (role != DeviceRelayRole.mobileOwner) return false;
+    final Object led = adapter;
+    if (led is! DeviceRelayLed) return false;
+    try {
+      return await led.writeCaptureLed(capturing);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Commands the connected pendant to sleep. Returns false when the role or
+  /// adapter cannot reach the sleep characteristic.
+  Future<bool> sleepDevice() async {
+    if (role != DeviceRelayRole.mobileOwner) return false;
+    final Object sleep = adapter;
+    if (sleep is! DeviceRelaySleep) return false;
+    try {
+      return await sleep.sleepDevice();
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Renames the connected pendant. Returns false when renaming is
+  /// unsupported so the settings field can disable itself.
+  Future<bool> renameDevice(String name) async {
+    if (role != DeviceRelayRole.mobileOwner) return false;
+    final Object rename = adapter;
+    if (rename is! DeviceRelayRename) return false;
+    try {
+      return await rename.renameDevice(name);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  bool get supportsRename =>
+      role == DeviceRelayRole.mobileOwner && adapter is DeviceRelayRename;
 
   Stream<DeviceAudioFrame> audioFrames(String deviceId) {
     _require(
