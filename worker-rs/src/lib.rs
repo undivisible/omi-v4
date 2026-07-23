@@ -34,11 +34,10 @@ pub mod voice_logic;
 #[cfg(target_arch = "wasm32")]
 pub(crate) mod glue;
 
-// Hand-written Vectorize JS FFI. Compiled only when the `vectorize` feature is
-// enabled AND targeting wasm (it binds the JS `VectorizeIndex` object). Off by
-// default — see PORT_STATUS.md for the interop outcome.
-#[cfg(all(target_arch = "wasm32", feature = "vectorize"))]
-mod vectorize_ffi;
+// The Vectorize JS FFI is the single implementation in
+// `routes_memory::wasm_glue` (compiled by default). It binds the JS
+// `VectorizeIndex` object via `js_sys` with a graceful runtime fallback when
+// `MEMORY_VECTORS`/`AI` are unbound. See PORT_STATUS.md for the interop outcome.
 #[cfg(target_arch = "wasm32")]
 mod rate_limit_lock;
 #[cfg(target_arch = "wasm32")]

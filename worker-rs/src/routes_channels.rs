@@ -546,28 +546,31 @@ pub async fn deliver_due_channel_messages(env: &Env) -> Result<()> {
 // inbox-fallback.ts — unclaimed-inbox responder
 // ===========================================================================
 
-// MERGE PLACEHOLDERS: these three functions are owned by other module groups.
-// Until their ports land in this crate, they are thin stand-ins wired at merge.
-//   - runManagedInboxCompletion  -> assistant group
-//   - memoryContextFor           -> memory/vectors group
-//   - completeInboxItemDone      -> conversations group
-// The lease-claim fencing and retry/ack transitions below are fully ported and
-// use only `channel_inbox`, which this group can drive on its own.
+// Cross-group wiring: the inbox fallback responder composes replies from three
+// implementations owned by other module groups, now landed in this crate:
+//   - runManagedInboxCompletion  -> routes_ai::run_managed_inbox_completion
+//   - memoryContextFor           -> routes_memory::memory_context_for
+//   - completeInboxItemDone      -> glue::complete_inbox_done
+// The lease-claim fencing and retry/ack transitions below drive `channel_inbox`
+// on their own.
 
-#[allow(unused_variables)]
 async fn managed_inbox_completion(
     env: &Env,
     uid: &str,
     messages: &[fallback::Message],
 ) -> Option<String> {
-    // MERGE: assistant group's `runManagedInboxCompletion`.
-    None
+    let managed: Vec<crate::managed_ai::Message> = messages
+        .iter()
+        .map(|m| crate::managed_ai::Message {
+            role: m.role.clone(),
+            content: m.content.clone(),
+        })
+        .collect();
+    crate::routes_ai::run_managed_inbox_completion(env, uid, &managed).await
 }
 
-#[allow(unused_variables)]
 async fn memory_context_for(env: &Env, uid: &str, text: &str) -> Option<String> {
-    // MERGE: memory group's `memoryContextFor`.
-    None
+    crate::routes_memory::memory_context_for(env, uid, text).await
 }
 
 struct InboxDoneResult {
@@ -575,7 +578,6 @@ struct InboxDoneResult {
     error: String,
 }
 
-#[allow(unused_variables)]
 async fn complete_inbox_item_done(
     env: &Env,
     uid: &str,
@@ -584,12 +586,25 @@ async fn complete_inbox_item_done(
     reply: &str,
     now: i64,
 ) -> InboxDoneResult {
-    // MERGE: conversations group's `completeInboxItemDone` (writes the
-    // conversation message + `channel_deliveries` row). Until then the claim is
-    // released for retry so no item is silently dropped.
-    InboxDoneResult {
-        ok: false,
-        error: "Inbox completion pending merge".to_string(),
+    let db = match env.d1("DB") {
+        Ok(db) => db,
+        Err(_) => {
+            return InboxDoneResult {
+                ok: false,
+                error: "Inbox completion unavailable".to_string(),
+            }
+        }
+    };
+    match crate::glue::complete_inbox_done(env, &db, uid, id, lease_token, reply, now as f64).await {
+        Ok(Ok(_)) => InboxDoneResult {
+            ok: true,
+            error: String::new(),
+        },
+        Ok(Err(error)) => InboxDoneResult { ok: false, error },
+        Err(_) => InboxDoneResult {
+            ok: false,
+            error: "Inbox completion failed".to_string(),
+        },
     }
 }
 

@@ -8,13 +8,6 @@ publish = false
 [lib]
 crate-type = ["cdylib", "rlib"]
 
-[features]
-# Vectorize interop is hand-written JS FFI (no native workers-rs binding in
-# 0.8.5). It is OFF by default: enabling it wires `vectorize_ffi` into the
-# memory-context path. See PORT_STATUS.md for the FFI outcome/caveats.
-default = []
-vectorize = []
-
 [dependencies]
 base64 = "0.22"
 serde = { version = "1", features = ["derive"] }
@@ -41,7 +34,13 @@ serde-wasm-bindgen = "0.6"
 [profile.release]
 opt-level = "s"
 lto = true
-strip = true
+# NOTE: do NOT set `strip = true` here. Cargo's strip drops the wasm
+# `target_features` custom section, which wasm-bindgen reads to detect the
+# `reference-types` feature (enabled via .cargo/config.toml). Without that
+# section, worker-build's `--force-enable-abort-handler` step fails with
+# "externref table required for catch wrappers". wasm-opt (run by worker-build)
+# strips debug info for size afterward, so binary size is unaffected.
+strip = false
 
 [lints.clippy]
 all = "deny"

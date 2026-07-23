@@ -29,12 +29,21 @@ fn start() {
     console_error_panic_hook::set_once();
 }
 
-// Scheduled cron handler. Each module group contributes one additively-combined
-// hook here; the merge concatenates the awaited slices. Currently: the Memory
-// group's backfill+drain slice.
+// Scheduled cron handler — parity with the TS `index.ts` minutely cron, which
+// runs `Promise.all([deliverDueChannelMessages, respondToStaleInboxItems,
+// reconcileManagedAssistantRequests, backfillClaimVectors→drainPendingEmbeddings])`.
+// workers-rs Router handlers do not receive the execution `Context`, so the
+// TS `waitUntil` deferral is awaited inline here; each slice fails independently
+// (errors ignored, matching the TS `.catch(() => undefined)` on each branch).
 #[event(scheduled)]
 async fn scheduled(_event: worker::ScheduledEvent, env: Env, _ctx: worker::ScheduleContext) {
-    // --- Memory & Currents group cron slice ---
+    // --- Delivery group: deliver due channel messages ---
+    let _ = crate::routes_channels::deliver_due_channel_messages(&env).await;
+    // --- Inbox fallback responder: reply to unclaimed inbox items ---
+    let _ = crate::routes_channels::respond_to_stale_inbox_items(&env).await;
+    // --- Managed AI: reconcile in-flight/streaming assistant requests ---
+    let _ = crate::routes_ai::reconcile_managed_assistant_requests(&env).await;
+    // --- Memory & Currents group: backfillClaimVectors → drainPendingEmbeddings ---
     crate::routes_memory::cron_slice(&env).await;
 }
 
@@ -1322,18 +1331,12 @@ async fn handle_inbox_claim(req: Request, ctx: RouteContext<()>) -> Result<Respo
 
 /// Server-retrieved memory context for an inbox item.
 ///
-/// Requires the Vectorize FFI + Workers AI embeddings. With the `vectorize`
-/// feature OFF (default), this returns `null` — parity-safe because the TS
-/// `memoryContextFor` also returns `null` whenever `MEMORY_VECTORS`/`AI` are
-/// unbound or the search yields nothing. See PORT_STATUS.md.
-#[cfg(not(feature = "vectorize"))]
-async fn memory_context_for(_env: &Env, _uid: &str, _query: &str) -> Value {
-    Value::Null
-}
-
-#[cfg(feature = "vectorize")]
+/// Delegates to the canonical `routes_memory::memory_context_for` (the single
+/// Vectorize FFI + Workers AI embeddings implementation). Returns `null` when
+/// `MEMORY_VECTORS`/`AI` are unbound or the search yields nothing — parity-safe
+/// with the TS `memoryContextFor` graceful fallback. See PORT_STATUS.md.
 async fn memory_context_for(env: &Env, uid: &str, query: &str) -> Value {
-    match crate::vectorize_ffi::memory_context_for(env, uid, query).await {
+    match crate::routes_memory::memory_context_for(env, uid, query).await {
         Some(text) => Value::String(text),
         None => Value::Null,
     }
@@ -1399,7 +1402,7 @@ async fn handle_inbox_complete(mut req: Request, ctx: RouteContext<()>) -> Resul
 
 /// Port of `completeInboxItemDone`. Returns Ok(delivery) or Err(message).
 #[allow(clippy::too_many_arguments)]
-async fn complete_inbox_done(
+pub(crate) async fn complete_inbox_done(
     _env: &Env,
     db: &worker::D1Database,
     uid: &str,
