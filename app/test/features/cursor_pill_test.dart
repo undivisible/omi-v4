@@ -11,17 +11,67 @@ import 'package:omi/native/generated/signals/signals.dart';
 import 'package:omi/native/native_hub.dart';
 
 void main() {
-  test('double-shift walks hidden → input → listening → hidden', () async {
+  test('double-shift toggles voice straight on and off', () async {
     final harness = _Harness();
     final controller = harness.controller();
 
-    await controller.doubleShift();
-    expect(controller.state, CursorPillState.input);
-    harness.advance(const Duration(seconds: 1));
+    // idle → voice: no intermediate input pill.
     await controller.doubleShift();
     expect(controller.state, CursorPillState.listening);
     expect(harness.voiceStarts, 1);
+
+    // voice → idle.
     harness.advance(const Duration(seconds: 1));
+    await controller.doubleShift();
+    expect(controller.state, CursorPillState.hidden);
+    expect(harness.voiceStops, 1);
+
+    controller.dispose();
+    await harness.close();
+  });
+
+  test('full transition table (idle/voice/overlay × gestures)', () async {
+    final harness = _Harness();
+    final controller = harness.controller();
+    Future<void> settle() async => harness.advance(const Duration(seconds: 1));
+
+    // idle --double-shift--> voice
+    await controller.doubleShift();
+    expect(controller.state, CursorPillState.listening);
+
+    // voice --Option+Space--> overlay (voice cancelled)
+    await controller.toggleOverlay();
+    expect(controller.state, CursorPillState.input);
+    expect(harness.voiceCancels, 1);
+
+    // overlay --double-shift--> voice (overlay closed, voice started)
+    await settle();
+    await controller.doubleShift();
+    expect(controller.state, CursorPillState.listening);
+    expect(harness.voiceStarts, 2);
+
+    // voice --Esc--> idle (cancelled)
+    await controller.dismiss();
+    expect(controller.state, CursorPillState.hidden);
+    expect(harness.voiceCancels, 2);
+
+    // idle --Option+Space--> overlay
+    await controller.toggleOverlay();
+    expect(controller.state, CursorPillState.input);
+
+    // overlay --Option+Space--> idle (toggle closed)
+    await controller.toggleOverlay();
+    expect(controller.state, CursorPillState.hidden);
+
+    // idle --Esc--> idle (no-op)
+    await controller.dismiss();
+    expect(controller.state, CursorPillState.hidden);
+
+    // idle --double-shift--> voice --double-shift--> idle (submitted stop)
+    await settle();
+    await controller.doubleShift();
+    expect(controller.state, CursorPillState.listening);
+    await settle();
     await controller.doubleShift();
     expect(controller.state, CursorPillState.hidden);
     expect(harness.voiceStops, 1);
@@ -35,29 +85,32 @@ void main() {
     final controller = harness.controller();
 
     await controller.doubleShift();
-    expect(controller.state, CursorPillState.input);
+    expect(controller.state, CursorPillState.listening);
+    expect(harness.voiceStarts, 1);
+    // A bounced chord inside 500ms must not immediately stop voice.
     harness.advance(const Duration(milliseconds: 300));
     await controller.doubleShift();
-    expect(controller.state, CursorPillState.input);
-    expect(harness.voiceStarts, 0);
+    expect(controller.state, CursorPillState.listening);
+    expect(harness.voiceStops, 0);
+    // Past the debounce, the toggle stops it.
     harness.advance(const Duration(milliseconds: 600));
     await controller.doubleShift();
-    expect(controller.state, CursorPillState.listening);
+    expect(controller.state, CursorPillState.hidden);
+    expect(harness.voiceStops, 1);
 
     controller.dispose();
     await harness.close();
   });
 
-  test('escape dismisses from input and listening', () async {
+  test('escape dismisses from overlay and listening', () async {
     final harness = _Harness();
     final controller = harness.controller();
 
-    await controller.doubleShift();
+    await controller.summon();
+    expect(controller.state, CursorPillState.input);
     await controller.dismiss();
     expect(controller.state, CursorPillState.hidden);
 
-    harness.advance(const Duration(seconds: 1));
-    await controller.doubleShift();
     harness.advance(const Duration(seconds: 1));
     await controller.doubleShift();
     expect(controller.state, CursorPillState.listening);
@@ -73,8 +126,6 @@ void main() {
     final harness = _Harness(stopTranscript: 'Show me my currents please');
     final controller = harness.controller();
 
-    await controller.doubleShift();
-    harness.advance(const Duration(seconds: 1));
     await controller.doubleShift();
     harness.advance(const Duration(seconds: 1));
     await controller.doubleShift();
@@ -201,7 +252,7 @@ void main() {
     await harness.close();
   });
 
-  testWidgets('second double-shift switches the pill to listening', (
+  testWidgets('double-shift shows only the waveform, no input pill', (
     tester,
   ) async {
     final harness = _Harness();
@@ -214,15 +265,13 @@ void main() {
 
     await controller.doubleShift();
     await tester.pump();
-    expect(find.byKey(const Key('cursor_pill_input')), findsOneWidget);
-
-    harness.advance(const Duration(seconds: 1));
-    await controller.doubleShift();
-    await tester.pump();
 
     expect(find.byKey(const Key('cursor_pill_listening')), findsOneWidget);
     expect(find.byKey(const Key('cursor_pill_waveform')), findsOneWidget);
     expect(find.byKey(const Key('cursor_pill_input')), findsNothing);
+    // Voice is a bare glowing waveform — no glass pill container.
+    expect(find.byType(LiquidGlass), findsNothing);
+    expect(find.byType(ListeningGlow), findsOneWidget);
 
     await tester.pumpWidget(const SizedBox());
     controller.dispose();
@@ -297,8 +346,7 @@ void main() {
       );
       final controller = harness.controller();
 
-      await controller.doubleShift();
-      harness.advance(const Duration(seconds: 1));
+      // A dead mic falls back to the text overlay carrying the error.
       await controller.doubleShift();
 
       expect(controller.state, CursorPillState.input);
@@ -341,8 +389,6 @@ void main() {
     final harness = _Harness(stopTranscript: 'show me my currents');
     final controller = harness.controller();
 
-    await controller.doubleShift();
-    harness.advance(const Duration(seconds: 1));
     await controller.doubleShift();
     expect(controller.state, CursorPillState.listening);
 
@@ -600,7 +646,7 @@ void main() {
     },
   );
 
-  testWidgets('chips render in a single horizontal row', (tester) async {
+  testWidgets('suggestions render as a vertical column', (tester) async {
     final harness = _Harness();
     final controller = harness.controller();
     await tester.pumpWidget(
@@ -646,16 +692,22 @@ void main() {
 
     expect(controller.suggestions, hasLength(3));
     final chips = find.byKey(const Key('cursor_pill_chips'));
-    expect(
-      tester.widget<SingleChildScrollView>(chips).scrollDirection,
-      Axis.horizontal,
-    );
+    expect(tester.widget(chips), isA<Column>());
+    // Stacked rows: each suggestion sits strictly below the previous one, all
+    // sharing the same left edge.
     final tops = [
       tester.getTopLeft(find.textContaining('quarterly report')).dy,
       tester.getTopLeft(find.textContaining('dentist')).dy,
       tester.getTopLeft(find.textContaining('design review')).dy,
     ];
-    expect(tops.toSet(), hasLength(1));
+    expect(tops.toSet(), hasLength(3));
+    expect(tops[0] < tops[1] && tops[1] < tops[2], isTrue);
+    final lefts = [
+      tester.getTopLeft(find.textContaining('quarterly report')).dx,
+      tester.getTopLeft(find.textContaining('dentist')).dx,
+      tester.getTopLeft(find.textContaining('design review')).dx,
+    ];
+    expect(lefts.toSet(), hasLength(1));
 
     await tester.pumpWidget(const SizedBox());
     controller.dispose();
@@ -738,7 +790,10 @@ void main() {
       ),
       findsOneWidget,
     );
-    await tester.pumpAndSettle();
+    // The chip sweep is one-shot; past its window the chip is bare again.
+    // (A blanket pumpAndSettle would hang on the input's looping typing
+    // shimmer, so advance a fixed span instead.)
+    await tester.pump(const Duration(milliseconds: 700));
     expect(
       find.descendant(
         of: find.byKey(const Key('cursor_pill_chips')),

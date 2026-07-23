@@ -242,7 +242,7 @@ final class CursorPillController extends ChangeNotifier {
       ]),
       voiceNotice: services.voiceNotice,
       openHub: openHub,
-      presentWindow: CursorPillWindow.summon,
+      presentWindow: (centered) => CursorPillWindow.summon(centered: centered),
       dismissWindow: CursorPillWindow.restore,
       currents: services.currents,
       draft: services.generateDraft,
@@ -265,7 +265,7 @@ final class CursorPillController extends ChangeNotifier {
   final Future<void> Function(String text) _sendPrompt;
   final VoidCallback? _openHub;
   final Future<bool> Function(Uri link) _launchLink;
-  final Future<void> Function()? _presentWindow;
+  final Future<void> Function(bool centered)? _presentWindow;
   final Future<void> Function()? _dismissWindow;
   final String Function() _requestId;
   final DateTime Function() _now;
@@ -300,42 +300,86 @@ final class CursorPillController extends ChangeNotifier {
 
   Future<void> handleGesture(ShiftGestureAction action) async {
     switch (action) {
-      case ShiftGestureAction.openTextInput ||
-          ShiftGestureAction.submitText ||
-          ShiftGestureAction.startVoice ||
-          ShiftGestureAction.stopVoice:
+      case ShiftGestureAction.voiceToggle:
         await doubleShift();
-      case ShiftGestureAction.continueVoice:
-        break;
+      case ShiftGestureAction.openOverlay:
+        await toggleOverlay();
+      case ShiftGestureAction.startVoice:
+        await beginVoice();
+      case ShiftGestureAction.stopVoice:
+        await finishListening();
       case ShiftGestureAction.cancel:
         await dismiss();
     }
   }
 
+  /// Both-Shift chord: talk directly. From idle (or with the text overlay
+  /// open) it drops straight into live voice — only the waveform shows near
+  /// the cursor; while already listening it stops. The 500ms debounce guards
+  /// against a bounced or double-fired chord.
   Future<void> doubleShift() async {
     final at = _now();
     final last = _lastTransitionAt;
     if (last != null && at.difference(last) < doubleShiftDebounce) return;
     _lastTransitionAt = at;
     switch (_state) {
-      case CursorPillState.hidden:
-        await summon();
-      case CursorPillState.input:
-        await beginListening();
+      case CursorPillState.hidden || CursorPillState.input:
+        await beginVoice();
       case CursorPillState.listening:
         await finishListening();
     }
   }
 
+  /// Option+Space (or the menu-bar capture control): toggle the centered text
+  /// overlay. Summoning it while voice is live cancels the voice session
+  /// first — opening one surface always closes the other.
+  Future<void> toggleOverlay() async {
+    switch (_state) {
+      case CursorPillState.input:
+        await dismiss();
+      case CursorPillState.hidden || CursorPillState.listening:
+        await summon();
+    }
+  }
+
+  Future<void> beginVoice() async {
+    if (_state == CursorPillState.listening) return;
+    _state = CursorPillState.listening;
+    _error = null;
+    _suggestions = const [];
+    _currentSuggestions = const [];
+    _memorySuggestions = const [];
+    _notify();
+    // Voice rides the cursor; the waveform, not a pill, is all that shows.
+    await _presentWindow?.call(false);
+    _subscription ??= _events.listen(_handleEvent);
+    try {
+      await _startVoice();
+    } catch (error) {
+      if (_disposed || _state != CursorPillState.listening) return;
+      // A dead mic falls back to the text overlay so the message has a
+      // surface to live on.
+      _state = CursorPillState.input;
+      _error = voiceStartErrorMessage(error);
+      _notify();
+      await _presentWindow?.call(true);
+    }
+  }
+
   Future<void> summon() async {
-    if (_state != CursorPillState.hidden) return;
+    if (_state == CursorPillState.input) return;
+    if (_state == CursorPillState.listening) {
+      try {
+        await _cancelVoice();
+      } catch (_) {}
+    }
     _state = CursorPillState.input;
     _error = null;
     _suggestions = const [];
     _currentSuggestions = const [];
     _memorySuggestions = const [];
     _notify();
-    await _presentWindow?.call();
+    await _presentWindow?.call(true);
     _subscription ??= _events.listen(_handleEvent);
     final currents = _currents;
     if (currents != null) {
@@ -392,21 +436,6 @@ final class CursorPillController extends ChangeNotifier {
       if (seen.add(suggestion.label.toLowerCase())) merged.add(suggestion);
     }
     _suggestions = List.unmodifiable(merged);
-  }
-
-  Future<void> beginListening() async {
-    if (_state != CursorPillState.input) return;
-    _state = CursorPillState.listening;
-    _error = null;
-    _notify();
-    try {
-      await _startVoice();
-    } catch (error) {
-      if (_disposed || _state != CursorPillState.listening) return;
-      _state = CursorPillState.input;
-      _error = voiceStartErrorMessage(error);
-      _notify();
-    }
   }
 
   static String voiceStartErrorMessage(Object error) =>
