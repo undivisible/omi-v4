@@ -6,9 +6,7 @@
 
 use serde_json::Value;
 
-use crate::jsnum::{
-    non_negative_integer_value, number_from_str, positive_integer_str, positive_integer_value,
-};
+use crate::jsnum::{non_negative_integer_value, positive_integer_str, positive_integer_value};
 
 /// Budget limits, resolved from the bound env vars with the same defaults as
 /// `limitsFrom` in the TypeScript source.
@@ -248,11 +246,6 @@ pub fn window_ms_from_seconds(value: Option<&str>) -> i64 {
     positive_integer_str(value)
         .map(|s| s * 1000)
         .unwrap_or(3_600_000)
-}
-
-#[allow(dead_code)]
-fn _number_from_str_reexport(v: &str) -> f64 {
-    number_from_str(v)
 }
 
 #[cfg(test)]

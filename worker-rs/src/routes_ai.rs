@@ -1319,9 +1319,6 @@ async fn bridge_sockets(
 // ---------------------------------------------------------------------------
 
 /// Settle stale/finalized managed assistant requests against the admission DO.
-/// Exposed for the scheduled handler to call at cutover (a single line in the
-/// glue `scheduled` event, kept out of this file to avoid conflicts).
-#[allow(dead_code)]
 pub async fn reconcile_managed_assistant_requests(env: &Env) -> Result<()> {
     let now = now_ms();
     let db = env.d1("DB")?;

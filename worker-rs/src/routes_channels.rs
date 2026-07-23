@@ -473,11 +473,6 @@ async fn dispatch_to_coordinator(
 }
 
 /// `deliverDueChannelMessages` — the scheduled dispatch pass.
-///
-/// MERGE NOTE: this is the additive cron piece. At merge, call it from the
-/// unified `#[event(scheduled)]` handler alongside the other groups' ticks:
-/// `crate::routes_channels::deliver_due_channel_messages(&env).await`.
-#[allow(dead_code)]
 pub async fn deliver_due_channel_messages(env: &Env) -> Result<()> {
     let now = now_ms();
     let db = env.d1("DB")?;
@@ -698,9 +693,6 @@ async fn respond_to_item(env: &Env, id: &str, uid: &str, now: i64) -> Result<()>
 }
 
 /// `respondToStaleInboxItems`.
-///
-/// MERGE NOTE: additive cron piece — call from the unified scheduled handler.
-#[allow(dead_code)]
 pub async fn respond_to_stale_inbox_items(env: &Env) -> Result<()> {
     if fallback::responder_disabled(
         env.var("CHANNEL_FALLBACK_RESPONDER")
