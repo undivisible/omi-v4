@@ -559,10 +559,7 @@ fn computer_use_proposal(
     })
 }
 
-#[cfg(all(
-    feature = "computer-use",
-    any(target_os = "macos", target_os = "windows", target_os = "linux")
-))]
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 async fn bind_computer_use_action(
     action: ComputerUseAction,
     cancellation: &CancellationToken,
@@ -586,10 +583,7 @@ async fn bind_computer_use_action(
     result
 }
 
-#[cfg(not(all(
-    feature = "computer-use",
-    any(target_os = "macos", target_os = "windows", target_os = "linux")
-)))]
+#[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
 async fn bind_computer_use_action(
     _action: ComputerUseAction,
     _cancellation: &CancellationToken,
@@ -3200,10 +3194,7 @@ fn error(request_id: Option<String>, code: &str, message: &str, retryable: bool)
     .send();
 }
 
-#[cfg(all(
-    feature = "computer-use",
-    any(target_os = "macos", target_os = "windows", target_os = "linux")
-))]
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 async fn execute_bound_computer_use(
     action: PreparedComputerUseAction,
     policy_generation: u64,
@@ -3235,10 +3226,7 @@ async fn execute_bound_computer_use(
     result
 }
 
-#[cfg(not(all(
-    feature = "computer-use",
-    any(target_os = "macos", target_os = "windows", target_os = "linux")
-)))]
+#[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
 async fn execute_bound_computer_use(
     _action: PreparedComputerUseAction,
     _policy_generation: u64,
@@ -4407,10 +4395,7 @@ mod tests {
         ));
     }
 
-    #[cfg(all(
-        feature = "computer-use",
-        any(target_os = "macos", target_os = "windows", target_os = "linux")
-    ))]
+    #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
     #[tokio::test]
     async fn failed_receipt_claim_cannot_reach_authority_mint() {
         let action = ComputerUseAction::Invoke {
