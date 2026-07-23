@@ -28,6 +28,21 @@ database_id = "74aab5eb-a81d-4494-9283-d48052b8a068"
 #   APP_URL, MIMO_API_KEY, DEEPGRAM_API_KEY, GEMINI_API_KEY,
 #   FIREBASE_SERVICE_ACCOUNT_EMAIL, FIREBASE_SERVICE_ACCOUNT_PRIVATE_KEY, etc.
 #
-# Durable Objects, Vectorize, and the AI binding are NOT declared yet — the
-# Phase-1 routes do not use them. See PORT_STATUS.md for the plan and the
-# workers-rs binding-support notes.
+# Vectorize and the AI binding are NOT declared yet — the Phase-1 routes do not
+# use them. See PORT_STATUS.md for the plan and the workers-rs binding notes.
+
+# --- Delivery & OAuth group: Durable Objects ---------------------------------
+# MERGE NOTE: additive bindings for this group's Durable Objects. Other groups
+# append their own DO bindings (ASSISTANT_ADMISSION, STT_ADMISSION); dedupe the
+# RATE_LIMITER entry with the rate-limit group at merge if it also declares it.
+[[durable_objects.bindings]]
+name = "DELIVERY_COORDINATOR"
+class_name = "DeliveryCoordinator"
+
+[[durable_objects.bindings]]
+name = "RATE_LIMITER"
+class_name = "RateLimiter"
+
+[[migrations]]
+tag = "v1-delivery-oauth"
+new_classes = ["DeliveryCoordinator", "RateLimiter"]
