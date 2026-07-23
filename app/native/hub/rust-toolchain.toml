@@ -1,0 +1,12 @@
+# rinf's Native Assets build hook (PR #681) reads this to pick the toolchain and
+# the targets it compiles the hub for. Homebrew's rustc has no std for these
+# cross targets, so the rustup stable toolchain is the one that must be used.
+[toolchain]
+channel = "1.97.0"
+targets = [
+  "aarch64-apple-darwin",
+  "x86_64-apple-darwin",
+  "aarch64-apple-ios",
+  "aarch64-apple-ios-sim",
+  "x86_64-apple-ios",
+]

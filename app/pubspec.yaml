@@ -82,6 +82,14 @@ rinf:
   gen_output_dir: lib/native/generated
 
 dependency_overrides:
+  # rinf PR #681 (Dart Native Assets for macOS/iOS) — replaces the
+  # CocoaPods-driven Rust build. The upstream SPM PR (#675) was closed as
+  # structurally unworkable, so this branch is the migration path.
+  rinf:
+    git:
+      url: https://github.com/robertmsale/rinf.git
+      ref: 5bef72c979af35ecd7b20e506a68ca672a63f8bc
+      path: flutter_package
   flutter_secure_storage_darwin: 0.4.0
   hooks: 2.1.0
   intl: 0.20.3

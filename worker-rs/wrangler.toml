@@ -62,8 +62,14 @@ STT_GLOBAL_COST_BUDGET_MICROUSD = "9600000"
 # deliverDueChannelMessages, respondToStaleInboxItems,
 # reconcileManagedAssistantRequests, and backfillClaimVectors→drainPendingEmbeddings
 # via the single `#[event(scheduled)]` handler.
-[triggers]
-crons = ["* * * * *"]
+# DISABLED DURING THE SHADOW WINDOW. Both workers share one D1 but declare
+# SEPARATE Durable Object namespaces, so a cron here reconciles admission rows
+# this worker's DOs never admitted: the release is a no-op, the row is marked
+# settled, and the OTHER worker's DO leaks its in-flight slot until the window
+# rolls — users hit a permanent 429 for up to an hour. Re-enable ONLY as part of
+# cutover, and only after removing the cron from the TS worker first.
+# [triggers]
+# crons = ["* * * * *"]
 
 # Same physical D1 database as worker/wrangler.jsonc (binding + database_id
 # match the TS worker). Intentionally NO migrations_dir: the TS worker owns
