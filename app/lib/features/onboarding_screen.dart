@@ -13,6 +13,7 @@ import '../native/native_hub.dart';
 import '../onboarding/hub_checklist.dart';
 import '../onboarding/onboarding_controller.dart';
 import '../onboarding/starter_tasks.dart';
+import '../ui/burst_glow.dart';
 import '../ui/omi_ui.dart';
 import 'cursor_pill.dart';
 import 'cursor_pill_controller.dart';
@@ -1337,8 +1338,9 @@ class _CursorCueState extends State<_CursorCue>
 
 /// Ports the web demo's shake glow: a warm radial glow that grows with shake
 /// progress and, on completion, bursts past the screen edges (scale ~4.8,
-/// fading out) over ~720ms before signalling [onBurstDone].
-class _UseShakeGlow extends StatefulWidget {
+/// fading out) over ~720ms before signalling [onBurstDone]. The motion itself
+/// lives in [OmiBurstGlow]; this only anchors it on the cursor.
+class _UseShakeGlow extends StatelessWidget {
   const _UseShakeGlow({
     required this.position,
     required this.progress,
@@ -1353,94 +1355,18 @@ class _UseShakeGlow extends StatefulWidget {
   final VoidCallback onBurstDone;
 
   @override
-  State<_UseShakeGlow> createState() => _UseShakeGlowState();
-}
-
-class _UseShakeGlowState extends State<_UseShakeGlow>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _burst = AnimationController(
-    vsync: this,
-    duration: const Duration(milliseconds: 720),
+  Widget build(BuildContext context) => Positioned(
+    left: position.dx,
+    top: position.dy,
+    child: FractionalTranslation(
+      translation: const Offset(-.5, -.5),
+      child: OmiBurstGlow(
+        progress: progress,
+        complete: complete,
+        onBurstDone: onBurstDone,
+      ),
+    ),
   );
-  bool _fired = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _burst.addStatusListener((status) {
-      if (status == AnimationStatus.completed && !_fired) {
-        _fired = true;
-        widget.onBurstDone();
-      }
-    });
-    if (widget.complete) _maybeBurst();
-  }
-
-  @override
-  void didUpdateWidget(covariant _UseShakeGlow old) {
-    super.didUpdateWidget(old);
-    if (widget.complete) _maybeBurst();
-  }
-
-  void _maybeBurst() {
-    if (_burst.isAnimating || _burst.isCompleted) return;
-    if (MediaQuery.disableAnimationsOf(context)) {
-      if (!_fired) {
-        _fired = true;
-        widget.onBurstDone();
-      }
-      return;
-    }
-    _burst.forward();
-  }
-
-  @override
-  void dispose() {
-    _burst.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final base = 120 + widget.progress * 360;
-    return AnimatedBuilder(
-      animation: _burst,
-      builder: (context, child) {
-        // cubic-bezier(0.16, 1, 0.3, 1) easing → strong ease-out.
-        final t = Curves.easeOutCubic.transform(_burst.value);
-        final scale = widget.complete
-            ? 0.7 + widget.progress * 0.3 + t * 4.1
-            : 1.0;
-        final opacity =
-            (widget.complete ? (1 - t) : 1.0) * (widget.progress * 0.84);
-        final size = base * scale;
-        return Positioned(
-          left: widget.position.dx - size / 2,
-          top: widget.position.dy - size / 2,
-          width: size,
-          height: size,
-          child: IgnorePointer(
-            child: Opacity(
-              opacity: opacity.clamp(0.0, 1.0),
-              child: const DecoratedBox(
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  gradient: RadialGradient(
-                    colors: [
-                      Color(0xff96c4ff),
-                      Color(0xfff2c2ac),
-                      Color(0x00f2c2ac),
-                    ],
-                    stops: [0.0, 0.42, 0.72],
-                  ),
-                ),
-              ),
-            ),
-          ),
-        );
-      },
-    );
-  }
 }
 
 class KeycapShimmer extends StatefulWidget {

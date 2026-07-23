@@ -835,7 +835,7 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
         self?.enterHubChrome()
         result(nil)
       case "openSettings":
-        SettingsWindowController.show()
+        SettingsWindowController.show(section: call.arguments as? String)
         result(nil)
       case "enterOnboarding":
         self?.enterOnboardingChrome()

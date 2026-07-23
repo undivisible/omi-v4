@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import 'app_services.dart';
 import 'features/desktop_auth_screen.dart';
@@ -44,10 +45,59 @@ Future<void> pillMain() async {
   runApp(const PillPanelApp());
 }
 
-class SettingsWindowApp extends StatelessWidget {
+/// The channel the settings engine shares with the Runner. Opening settings
+/// can name a section, and the window may already be up when that happens, so
+/// the Runner both answers `pendingSection` while this engine boots and calls
+/// `showSection` on it afterwards.
+const settingsRouteChannel = MethodChannel('omi/settings_route');
+
+class SettingsWindowApp extends StatefulWidget {
   const SettingsWindowApp({required this.services, super.key});
 
   final AppServices services;
+
+  @override
+  State<SettingsWindowApp> createState() => _SettingsWindowAppState();
+}
+
+class _SettingsWindowAppState extends State<SettingsWindowApp> {
+  SettingsSection? _section;
+
+  @override
+  void initState() {
+    super.initState();
+    settingsRouteChannel.setMethodCallHandler(_handle);
+    unawaited(_readPendingSection());
+  }
+
+  @override
+  void dispose() {
+    settingsRouteChannel.setMethodCallHandler(null);
+    super.dispose();
+  }
+
+  Future<void> _readPendingSection() async {
+    String? name;
+    try {
+      name = await settingsRouteChannel.invokeMethod<String>('pendingSection');
+    } on MissingPluginException {
+      return;
+    } on PlatformException {
+      return;
+    }
+    _select(SettingsSection.tryParse(name));
+  }
+
+  Future<Object?> _handle(MethodCall call) async {
+    if (call.method != 'showSection') return null;
+    _select(SettingsSection.tryParse(call.arguments as String?));
+    return null;
+  }
+
+  void _select(SettingsSection? section) {
+    if (section == null || !mounted || section == _section) return;
+    setState(() => _section = section);
+  }
 
   @override
   Widget build(BuildContext context) => MaterialApp(
@@ -76,7 +126,7 @@ class SettingsWindowApp extends StatelessWidget {
         onSurfaceVariant: Color(0xffa6a49c),
       ),
     ),
-    home: SettingsScreen(services: services),
+    home: SettingsScreen(services: widget.services, initialSection: _section),
   );
 }
 
