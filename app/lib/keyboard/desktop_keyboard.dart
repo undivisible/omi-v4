@@ -39,6 +39,13 @@ final class DesktopSummonOverlayEvent extends DesktopKeyboardEvent {
   const DesktopSummonOverlayEvent();
 }
 
+/// A completed cursor shake detected by the native global mouse monitor
+/// (rapid direction reversals filling the shake meter) — "talk to the
+/// agent", equivalent to the double chord.
+final class DesktopShakeEvent extends DesktopKeyboardEvent {
+  const DesktopShakeEvent();
+}
+
 /// Emitted once at stream start when the process lacks the Accessibility
 /// grant, meaning the global keyboard monitor cannot see keystrokes while
 /// another app is frontmost — the chord and overlay keybind only work
@@ -85,6 +92,7 @@ final class DesktopKeyboard {
       'secureInput' => DesktopSecureInputEvent(raw['enabled'] == true),
       'escape' => const DesktopEscapeEvent(),
       'summonOverlay' => const DesktopSummonOverlayEvent(),
+      'shake' => const DesktopShakeEvent(),
       'globalHotkeyUnavailable' => const DesktopGlobalHotkeyUnavailableEvent(),
       _ => throw const FormatException('unknown keyboard event'),
     };

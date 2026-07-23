@@ -32,13 +32,21 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('chat_input')), findsOne);
 
-    events.add(const DesktopShiftEvent(key: PhysicalShift.left, pressed: true));
-    events.add(
-      const DesktopShiftEvent(key: PhysicalShift.right, pressed: true),
-    );
-    events.add(
-      const DesktopShiftEvent(key: PhysicalShift.left, pressed: false),
-    );
+    // The double chord: two full both-Shift presses inside the window.
+    for (var press = 0; press < 2; press += 1) {
+      events.add(
+        const DesktopShiftEvent(key: PhysicalShift.left, pressed: true),
+      );
+      events.add(
+        const DesktopShiftEvent(key: PhysicalShift.right, pressed: true),
+      );
+      events.add(
+        const DesktopShiftEvent(key: PhysicalShift.left, pressed: false),
+      );
+      events.add(
+        const DesktopShiftEvent(key: PhysicalShift.right, pressed: false),
+      );
+    }
     await tester.pump();
     await tester.pump();
     await tester.runAsync(() => Future<void>.delayed(Duration.zero));
