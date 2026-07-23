@@ -88,7 +88,6 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         );
     // MERGE SEAM: each module group extends the router through its own
     // `register` hook.
-    let router = crate::routes_channels::register(router);
     let router = crate::routes_ai::register(router);
     let router = crate::routes_memory::register(router);
     router

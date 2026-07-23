@@ -73,7 +73,6 @@ build is honest with or without the index provisioned. The scheduled
 | `stt.ts`, `stt-admission.ts` (DO), `asr.ts`, `voice.ts` | pending | WebSocket upgrade + upstream fetch; workers-rs supports `WebSocketPair`. |
 | `memory-projection.ts`, `memory-sync.ts` | pending | D1 + zkr (see wasm note). |
 | `memory-vectors.ts`, `embeddings.ts` | **blocked** | **Vectorize** has no native workers-rs binding (0.8.5) and **Workers AI** embeddings via the `Ai` binding — see below. |
-| `oauth-broker.ts`, `oauth-proxy.ts` | pending | Dev-only, gated by `ENABLE_DEV_OAUTH_BROKER`. |
 
 ## workers-rs 0.8.5 binding support (findings)
 
@@ -109,32 +108,24 @@ zkr (SQLite optional / a non-C backend) and rx4 (drop `tokio` net + `mio`, wasm
 `getrandom` for `uuid`), or extracting the pure algorithms into a `no_std`/wasm
 crate. Do not integrate zkr/rx4 into `worker-rs` yet.
 
-## Delivery & OAuth
+## Delivery
 
-Group port of `delivery.ts`, `inbox-fallback.ts`, `oauth-broker.ts`,
-`oauth-proxy.ts`, plus a self-contained `rate-limit.ts` copy. Pure logic lives
-in `src/delivery.rs`, `src/oauth.rs`, `src/inbox_fallback.rs` (host-testable);
-the wasm I/O layer is `src/routes_channels.rs` + `src/rate_limit_lock.rs`.
-Routes join the shared Router via `routes_channels::register` (single merge seam
-line in `glue.rs::fetch`); `mod routes_channels` + `mod rate_limit_lock` are the
-two lib.rs lines. AES-GCM at rest uses RustCrypto `aes-gcm` (wasm-clean,
-byte-compatible with the TS WebCrypto layout: 12-byte IV prepended, 16-byte tag
-appended).
+Group port of `delivery.ts` and `inbox-fallback.ts`. Pure logic lives in
+`src/delivery.rs` and `src/inbox_fallback.rs` (host-testable); the wasm I/O
+layer is `src/routes_channels.rs`, added to lib.rs by the single
+`mod routes_channels` line.
+
+The dev-only OAuth broker/proxy that this group also carried was deleted along
+with its TS originals.
 
 | TS module | Rust | Status | Notes |
 |---|---|---|---|
 | `delivery.ts` | `src/delivery.rs` + `routes_channels.rs` | **ported** | `DeliveryCoordinator` DO (`#[durable_object]`, per-uid/channel identity fencing, `/deliver` `/unlink` `/cancel-orphans`), Telegram/Blooio provider sends, retry-after (header seconds + HTTP-date + JSON `retry_after`) with jittered exponential backoff, orphan cancellation, ambiguous-Telegram `unknown` outcome, stable idempotency-key digest. `deliverDueChannelMessages` cron piece ported as `deliver_due_channel_messages(env)` (additive; wire into the unified `#[event(scheduled)]` at merge). 15 pure unit tests. |
 | `inbox-fallback.ts` | `src/inbox_fallback.rs` + `routes_channels.rs` | **ported** | 2-min claim threshold, lease claim/fencing (`channel_inbox` UPDATE…RETURNING + `lease_token` guard), retry/failed release transitions, non-Pro static ack, final-attempt ack, `CHANNEL_FALLBACK_RESPONDER` flag, prompt assembly + reply trim/cap. Cross-group calls now WIRED: `runManagedInboxCompletion` → `routes_ai::run_managed_inbox_completion` (admission DO admit/settle/release + `managed_ai_requests` ledger + non-streaming MIMO completion), `memoryContextFor` → `routes_memory::memory_context_for` (single Vectorize impl), `completeInboxItemDone` → `glue::complete_inbox_done` (delivery + conversation-message batch with the `Channel is not linked` re-read). 6 pure unit tests. |
-| `oauth-broker.ts` | `src/oauth.rs` + `routes_channels.rs` | **ported** | Device start/poll/status/delete, AES-GCM encrypt/decrypt at rest, pinned x.ai discovery with per-isolate cache + endpoint allowlist, poll error allowlist (202 pending vs 400), `account_id` pattern, `ENABLE_DEV_OAUTH_BROKER` gate, `oauth-device-start`/`oauth-device-poll` rate limits. 10 pure unit tests. |
-| `oauth-proxy.ts` | `src/oauth.rs` + `routes_channels.rs` | **ported** | Subscription chat proxy, `needs_refresh` leeway check, refresh with `expires_in` fallback TTL, compare-and-swap rotation keyed on the old refresh token + loser re-read, per-`(uid,provider)` refresh lock, streaming upstream passthrough with `no-store`/`nosniff` headers. |
-| `rate-limit.ts` | `src/rate_limit_lock.rs` | **ported (self-contained copy)** | `RateLimiter` DO (fixed-window counter + refresh mutex) + `consume_rate_limit`/`acquire_refresh_lock`/`release_refresh_lock`. Dedupe with the rate-limit group at merge (keep one DO + one binding). |
 
 wrangler.toml: appended `DELIVERY_COORDINATOR` + `RATE_LIMITER` DO bindings and
 a `new_classes` migration in a marked block (dedupe `RATE_LIMITER` at merge).
 
-glue.rs edits (minimal, additive, no reformatting): `authenticate` /
-`AuthOutcome` / `error_json` made `pub(crate)` for reuse by the OAuth handlers;
-one merge-seam line calling `routes_channels::register(router)`.
 
 Known parity gaps (documented, not defects):
 - Provider `fetch` omits the TS `AbortSignal.timeout(15s)` — workers-rs
@@ -253,7 +244,7 @@ is green. Known residual risks, none blocking a cutover:
   reset; both are short-TTL/self-healing and reconverge within a cron cycle.
 - **Provider `fetch` timeouts**: workers-rs `RequestInit` has no `AbortSignal`
   field, so the TS per-request `AbortSignal.timeout(...)` guards are dropped in
-  favour of the platform subrequest timeout (delivery, MIMO completion, OAuth).
+  favour of the platform subrequest timeout (delivery, MIMO completion).
 - **Streaming usage-tail settlement** for `/v1/chat/completions` is reconciled
   by the minutely cron rather than parsed inline; budgets converge within one
   cron cycle (TS-equivalent deferral).

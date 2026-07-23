@@ -302,9 +302,6 @@ final class AppServices {
   final CurrentsController? currents;
   final WorkerHttpClient? _worker;
 
-  WorkerOAuthClient? get oauthConnections =>
-      _worker == null ? null : WorkerOAuthClient(_worker);
-
   late final OnboardingCompletionStore onboardingCompletion = _worker == null
       ? PreferencesOnboardingCompletionStore()
       : LayeredOnboardingCompletionStore(

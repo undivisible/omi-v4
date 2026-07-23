@@ -15,7 +15,6 @@ pub mod delivery;
 pub mod desktop_auth;
 pub mod entitlement;
 pub mod inbox_fallback;
-pub mod oauth;
 pub mod routes_memory;
 pub mod setup_health;
 pub mod webhooks;
@@ -40,8 +39,6 @@ pub(crate) mod worker_util;
 // `routes_memory::wasm_glue` (compiled by default). It binds the JS
 // `VectorizeIndex` object via `js_sys` with a graceful runtime fallback when
 // `MEMORY_VECTORS`/`AI` are unbound. See PORT_STATUS.md for the interop outcome.
-#[cfg(target_arch = "wasm32")]
-mod rate_limit_lock;
 #[cfg(target_arch = "wasm32")]
 mod routes_ai;
 #[cfg(target_arch = "wasm32")]

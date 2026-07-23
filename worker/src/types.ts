@@ -36,9 +36,6 @@ export type Bindings = {
   CHANNEL_FALLBACK_RESPONDER?: string;
   GEMINI_API_KEY?: string;
   GEMINI_LIVE_MODEL?: string;
-  OAUTH_TOKEN_KEY?: string;
-  OPENAI_OAUTH_CLIENT_ID?: string;
-  XAI_OAUTH_CLIENT_ID?: string;
   DEEPGRAM_API_KEY?: string;
   STT_MAX_SESSION_SECONDS?: string;
   STT_COST_MICROUSD_PER_MINUTE?: string;
@@ -51,7 +48,6 @@ export type Bindings = {
   STT_GLOBAL_SECONDS_BUDGET?: string;
   STT_UID_COST_BUDGET_MICROUSD?: string;
   STT_GLOBAL_COST_BUDGET_MICROUSD?: string;
-  ENABLE_DEV_OAUTH_BROKER?: string;
 };
 
 export type Auth = { uid: string; email: string | null };
