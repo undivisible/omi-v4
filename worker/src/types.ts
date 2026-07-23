@@ -28,6 +28,14 @@ export type Bindings = {
   OMI_MODEL_SMART?: string;
   OMI_MODEL_MULTIMODAL?: string;
   OMI_MODEL_SEARCH?: string;
+  OMI_MODEL_TRANSCRIBE?: string;
+  OMI_MODEL_SPEAK?: string;
+  OPENROUTER_API_KEY?: string;
+  OPENROUTER_CHAT_COMPLETIONS_URL?: string;
+  SPEECH_MAX_AUDIO_SECONDS?: string;
+  SPEECH_TRANSCRIBE_COST_MICROUSD_PER_MINUTE?: string;
+  SPEECH_SPEAK_COST_MICROUSD_PER_MINUTE?: string;
+  SPEECH_UPSTREAM_TIMEOUT_MS?: string;
   CF_AI_GATEWAY_ACCOUNT_ID?: string;
   CF_AI_GATEWAY_ID?: string;
   CF_AI_GATEWAY_TOKEN?: string;
@@ -72,7 +80,8 @@ export type ApiKeyScope =
   | "currents:write"
   | "conversations:read"
   | "assistant:write"
-  | "facetime:write";
+  | "facetime:write"
+  | "speech:write";
 
 export type ApiKeyContext = { id: string; scopes: ApiKeyScope[] };
 

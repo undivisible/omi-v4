@@ -7,8 +7,11 @@
 //! `wasm32-unknown-unknown` so the host test build never pulls the `worker`
 //! crate.
 
+pub mod api_keys;
 pub mod auth;
 pub mod billing;
+pub mod byok_negotiation;
+pub mod byok_pricing;
 pub mod channel_commands;
 pub mod channel_link;
 pub mod conversations;
@@ -17,7 +20,10 @@ pub mod currents;
 pub mod delivery;
 pub mod desktop_auth;
 pub mod entitlement;
+pub mod facetime;
 pub mod inbox_fallback;
+pub mod mcp;
+pub mod public_api;
 pub mod routes_memory;
 pub mod settings;
 pub mod setup_health;
@@ -47,3 +53,7 @@ pub(crate) mod worker_util;
 mod routes_ai;
 #[cfg(target_arch = "wasm32")]
 mod routes_channels;
+#[cfg(target_arch = "wasm32")]
+mod routes_keys;
+#[cfg(target_arch = "wasm32")]
+mod routes_public;

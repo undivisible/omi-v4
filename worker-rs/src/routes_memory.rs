@@ -880,7 +880,7 @@ pub fn relevance_basis_points(index: usize) -> i64 {
 }
 
 #[cfg(target_arch = "wasm32")]
-mod wasm_glue;
+pub(crate) mod wasm_glue;
 
 #[cfg(target_arch = "wasm32")]
 pub use wasm_glue::{cron_slice, memory_context_for, register};

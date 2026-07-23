@@ -106,6 +106,11 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
     // `register` hook.
     let router = crate::routes_ai::register(router);
     let router = crate::routes_memory::register(router);
+    // API keys + BYOK negotiation (first-party, Firebase-authenticated).
+    let router = crate::routes_keys::register(router);
+    // Third-party surface: the public API and the MCP transport, which carry
+    // their own `requireApiAccess` credential gate.
+    let router = crate::routes_public::register(router);
     router
         .or_else_any_method("/*catchall", |_req, _ctx| error_json("Not found", 404))
         .run(req, env)
@@ -963,18 +968,18 @@ fn now_seconds() -> i64 {
     (Date::now().as_millis() / 1000) as i64
 }
 
-fn js_str(value: &str) -> JsValue {
+pub(crate) fn js_str(value: &str) -> JsValue {
     value.into()
 }
 
-fn js_opt(value: Option<&str>) -> JsValue {
+pub(crate) fn js_opt(value: Option<&str>) -> JsValue {
     match value {
         Some(v) => v.into(),
         None => JsValue::NULL,
     }
 }
 
-fn row_str(row: &Value, key: &str) -> Option<String> {
+pub(crate) fn row_str(row: &Value, key: &str) -> Option<String> {
     row.get(key).and_then(Value::as_str).map(String::from)
 }
 
@@ -982,26 +987,26 @@ fn row_str(row: &Value, key: &str) -> Option<String> {
 // Conversations: appendConversationMessage (shared by webhooks + POST /messages)
 // ===========================================================================
 
-struct ConvMessage {
-    uid: String,
-    client_message_id: String,
-    role: String,
-    source: String,
-    text: String,
-    channel_message_id: Option<String>,
-    delivery_id: Option<String>,
-    created_at: f64,
+pub(crate) struct ConvMessage {
+    pub(crate) uid: String,
+    pub(crate) client_message_id: String,
+    pub(crate) role: String,
+    pub(crate) source: String,
+    pub(crate) text: String,
+    pub(crate) channel_message_id: Option<String>,
+    pub(crate) delivery_id: Option<String>,
+    pub(crate) created_at: f64,
 }
 
-struct AppendedMessage {
-    value: Value,
-    replayed: bool,
+pub(crate) struct AppendedMessage {
+    pub(crate) value: Value,
+    pub(crate) replayed: bool,
 }
 
 /// Port of `appendConversationMessage`. Runs `extra` statements atomically with
 /// the conversation + message idempotent inserts, then re-reads the stored row
 /// and verifies the payload hash. Returns `None` on hash mismatch (conflict).
-async fn append_conversation_message(
+pub(crate) async fn append_conversation_message(
     db: &worker::D1Database,
     message: &ConvMessage,
     extra: Vec<worker::D1PreparedStatement>,
@@ -2066,11 +2071,22 @@ async fn handle_messages_get(req: Request, ctx: RouteContext<()>) -> Result<Resp
         return error_json("Invalid replay range", 400);
     }
     let db = ctx.env.d1("DB")?;
+    Response::from_json(&list_conversation_messages(&db, &auth.uid, after, limit).await?)
+}
+
+/// Port of `listConversationMessages` (conversations.ts): the shared read used
+/// by both the first-party route and the public API / MCP surface.
+pub(crate) async fn list_conversation_messages(
+    db: &worker::D1Database,
+    uid: &str,
+    after: i64,
+    limit: i64,
+) -> Result<Value> {
     let rows = db
         .prepare(
             "SELECT cursor, id, client_message_id, role, source, text, channel_message_id, delivery_id, created_at\n             FROM conversation_messages\n             WHERE uid = ?1 AND conversation_id = ?1 AND cursor > ?2\n             ORDER BY cursor LIMIT ?3",
         )
-        .bind(&[js_str(&auth.uid), (after as f64).into(), (limit as f64).into()])?
+        .bind(&[js_str(uid), (after as f64).into(), (limit as f64).into()])?
         .all()
         .await?;
     let raw: Vec<Value> = rows.results::<Value>()?;
@@ -2094,7 +2110,7 @@ async fn handle_messages_get(req: Request, ctx: RouteContext<()>) -> Result<Resp
         .last()
         .and_then(|m| m.get("cursor").and_then(json_to_i64))
         .unwrap_or(after);
-    Response::from_json(&json!({
+    Ok(json!({
         "conversationId": "default",
         "messages": messages,
         "nextCursor": next_cursor,

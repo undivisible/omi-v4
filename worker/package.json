@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "check": "bun run format && bun run lint && bun run typecheck && bun run test",
-    "deploy": "WRANGLER_SEND_METRICS=false wrangler deploy",
+    "build:hub": "bash scripts/build-hub.sh",
+    "deploy": "bun run build:hub && WRANGLER_SEND_METRICS=false wrangler deploy",
     "dev": "WRANGLER_SEND_METRICS=false wrangler dev",
     "format": "biome format --write .",
     "lint": "biome lint .",

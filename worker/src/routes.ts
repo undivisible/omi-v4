@@ -25,6 +25,7 @@ import voice from "./voice";
 import conversations, { appendConversationMessage } from "./conversations";
 import { linkConfirmationText } from "./channel-commands";
 import { normalizeLinkCode, resolveLinkCode } from "./channel-link";
+import { liveChannelAccount } from "./channel-signup";
 import {
   dispatchChannelMessage,
   dispatchChannelUnlink,
@@ -668,6 +669,7 @@ const uidScopedTables = [
   "legacy_currents_uncited",
   "managed_ai_requests",
   "managed_stt_sessions",
+  "managed_speech_requests",
   "oauth_connections",
   "owner_confirmation_receipts",
   "setting_scopes",
@@ -730,9 +732,36 @@ routes.post("/channels/link", async (context) => {
   )
     .bind(pending.channel, pending.channelUserId)
     .first<{ uid: string }>();
-  if (existing && String(existing.uid) !== uid)
+  // A chat that signed itself up holds a placeholder account. Redeeming its
+  // code from a real sign-in claims that placeholder — it is retired in the
+  // same breath, so the identity can never be handed out twice.
+  const placeholder = await liveChannelAccount(
+    context.env.DB,
+    pending.channel,
+    pending.channelUserId,
+  );
+  if (
+    existing &&
+    String(existing.uid) !== uid &&
+    String(existing.uid) !== placeholder?.uid
+  )
     return context.json({ error: "Chat is linked to another account" }, 409);
-  const results = await context.env.DB.batch([
+  // Consuming the code is the first write and it decides the winner on its
+  // own: a concurrent redemption that finds the code already spent stops here
+  // with nothing claimed and no binding rewritten. Everything that follows is
+  // one batch, so a link either lands whole or not at all.
+  const consumed = await context.env.DB.prepare(
+    "UPDATE channel_link_codes SET consumed_at = ?1 WHERE code_hash = ?2 AND consumed_at IS NULL AND expires_at > ?1",
+  )
+    .bind(now, pending.codeHash)
+    .run();
+  if (consumed.meta.changes !== 1)
+    return context.json({ error: "Unknown or expired code" }, 404);
+  await context.env.DB.batch([
+    context.env.DB.prepare(
+      `UPDATE channel_accounts SET claimed_at = ?1, claimed_by_uid = ?2
+       WHERE uid = ?3 AND claimed_at IS NULL AND retired_at IS NULL`,
+    ).bind(now, uid, placeholder?.uid ?? null),
     context.env.DB.prepare(
       `INSERT INTO channel_bindings (channel, channel_user_id, uid, verified_at, revoked_at, channel_chat_id)
        VALUES (?1, ?2, ?3, ?4, NULL, ?5)
@@ -760,12 +789,7 @@ routes.post("/channels/link", async (context) => {
       }),
       now,
     ),
-    context.env.DB.prepare(
-      "UPDATE channel_link_codes SET consumed_at = ?1 WHERE code_hash = ?2 AND consumed_at IS NULL AND expires_at > ?1",
-    ).bind(now, pending.codeHash),
   ]);
-  if (results[2].meta.changes !== 1)
-    return context.json({ error: "Unknown or expired code" }, 404);
   await sendChannelText(
     context.env,
     pending.channel,

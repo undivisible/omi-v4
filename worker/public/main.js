@@ -68,3 +68,75 @@
     revealer.observe(el);
   }
 })();
+
+// The hero shows the real hub — the Flutter web build served from /hub/. It is
+// several megabytes, so nothing is fetched until the reader asks for it; until
+// then the frame holds a still drawn in CSS. The iframe keeps the app's errors
+// and its canvas out of this document.
+(() => {
+  const frame = document.getElementById("hub-frame");
+  const start = document.getElementById("hub-start");
+  const note = document.getElementById("hub-note");
+
+  if (!frame || !start || !note) return;
+
+  let status = null;
+
+  const fail = () => {
+    if (frame.dataset.state === "failed") return;
+    frame.dataset.state = "failed";
+    const live = frame.querySelector("iframe");
+    if (live) live.remove();
+    if (status) status.remove();
+    note.textContent =
+      "The hub could not start in this browser. Open Omi to use it instead.";
+    start.textContent = "Open Omi";
+  };
+
+  window.addEventListener("message", (event) => {
+    if (event.source !== frame.querySelector("iframe")?.contentWindow) return;
+    if (event.data?.source !== "omi-hub") return;
+    if (event.data.status === "ready") {
+      frame.dataset.state = "ready";
+      if (status) status.remove();
+    } else {
+      fail();
+    }
+  });
+
+  start.addEventListener("click", () => {
+    if (frame.dataset.state === "failed") {
+      window.location.href = "/portal";
+      return;
+    }
+    if (frame.dataset.state !== "idle") return;
+
+    frame.dataset.state = "loading";
+    status = document.createElement("p");
+    status.className = "shot-status";
+    status.setAttribute("role", "status");
+    status.textContent = "Loading the hub…";
+    frame.append(status);
+
+    const live = document.createElement("iframe");
+    live.title = "The Omi hub, running live";
+    live.src = "/hub/";
+    live.loading = "lazy";
+    live.allow = "clipboard-write";
+    live.addEventListener("error", fail);
+    // An aborted or blocked navigation leaves the frame on about:blank and
+    // fires load all the same, so the fallback does not wait for the timeout.
+    live.addEventListener("load", () => {
+      try {
+        if (live.contentWindow.location.href === "about:blank") fail();
+      } catch {
+        fail();
+      }
+    });
+    frame.append(live);
+
+    setTimeout(() => {
+      if (frame.dataset.state === "loading") fail();
+    }, 45000);
+  });
+})();

@@ -94,6 +94,7 @@ beforeAll(async () => {
   await migration("migrations/0021_memory_vectors.sql");
   await migration("migrations/0022_channel_link_codes.sql");
   await migration("migrations/0025_byok_price_negotiation.sql");
+  await migration("migrations/0026_channel_accounts.sql");
   const now = Date.now();
   await database
     .prepare(
@@ -1183,6 +1184,135 @@ describe("channel link redemption", () => {
     }
   });
 
+  // Two taps on Link race each other. Whichever loses has to change nothing:
+  // the placeholder account it did not claim stays claimable, and the binding
+  // and audit record describe exactly one redemption.
+  test("leaves nothing half-applied when two redemptions race", async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async () =>
+      Response.json({ ok: true, result: { message_id: 1 } });
+    try {
+      const environment = {
+        RATE_LIMITER: allowingRateLimiter,
+        TELEGRAM_WEBHOOK_SECRET: "telegram-secret",
+        TELEGRAM_BOT_TOKEN: "bot-token",
+      };
+      await database
+        .prepare(
+          `INSERT INTO channel_accounts
+             (uid, channel, channel_user_id, channel_chat_id, created_at)
+           VALUES ('beta', 'telegram', 'race-user', 'race-chat', ?1)`,
+        )
+        .bind(Date.now())
+        .run();
+      const issued = await issueLinkCode(
+        testBindings(environment),
+        "telegram",
+        "race-user",
+        "race-chat",
+      );
+      const send = () =>
+        request(
+          "alpha",
+          "/channels/link",
+          { method: "POST", body: JSON.stringify({ code: issued?.code }) },
+          environment,
+        );
+      const [first, second] = await Promise.all([send(), send()]);
+      const statuses = [first.status, second.status].sort();
+      expect(statuses).toEqual([201, 404]);
+      const account = await database
+        .prepare(
+          "SELECT claimed_at, claimed_by_uid FROM channel_accounts WHERE uid = 'beta'",
+        )
+        .first<{ claimed_at: number | null; claimed_by_uid: string | null }>();
+      expect(account?.claimed_by_uid).toBe("alpha");
+      expect(account?.claimed_at).not.toBeNull();
+      const audit = await database
+        .prepare(
+          "SELECT COUNT(*) AS count FROM audit_events WHERE uid = 'alpha' AND action = 'channel.linked' AND json_extract(details, '$.channelUserId') = 'race-user'",
+        )
+        .first<{ count: number }>();
+      expect(audit?.count).toBe(1);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  // A code spent a moment earlier must not claim the placeholder or rewrite
+  // the binding on its way to the 404.
+  test("claims nothing when the code was already consumed", async () => {
+    const environment = {
+      RATE_LIMITER: allowingRateLimiter,
+      TELEGRAM_WEBHOOK_SECRET: "telegram-secret",
+      TELEGRAM_BOT_TOKEN: "bot-token",
+    };
+    await database.prepare("DELETE FROM channel_accounts").run();
+    await database
+      .prepare(
+        `INSERT INTO channel_accounts
+           (uid, channel, channel_user_id, channel_chat_id, created_at)
+         VALUES ('beta', 'telegram', 'spent-user', 'spent-chat', ?1)`,
+      )
+      .bind(Date.now())
+      .run();
+    const issued = await issueLinkCode(
+      testBindings(environment),
+      "telegram",
+      "spent-user",
+      "spent-chat",
+    );
+    const response = await request(
+      "alpha",
+      "/channels/link",
+      { method: "POST", body: JSON.stringify({ code: issued?.code }) },
+      {
+        ...environment,
+        // Another redemption spends the code after this one resolved it and
+        // before it consumes it: the race the ordering fix exists for.
+        DB: {
+          prepare: (query: string) => {
+            const statement = database.prepare(query);
+            if (!query.startsWith("UPDATE channel_link_codes SET consumed_at"))
+              return statement;
+            return {
+              bind: (...values: unknown[]) => {
+                const bound = statement.bind(...values);
+                return {
+                  run: async () => {
+                    await database
+                      .prepare(
+                        "UPDATE channel_link_codes SET consumed_at = ?1 WHERE channel_user_id = 'spent-user'",
+                      )
+                      .bind(Date.now() - 1)
+                      .run();
+                    return bound.run();
+                  },
+                };
+              },
+            };
+          },
+          batch: (statements: D1PreparedStatement[]) =>
+            database.batch(statements),
+        } as unknown as D1Database,
+      },
+    );
+    expect(response.status).toBe(404);
+    const account = await database
+      .prepare(
+        "SELECT claimed_at, claimed_by_uid FROM channel_accounts WHERE uid = 'beta'",
+      )
+      .first<{ claimed_at: number | null; claimed_by_uid: string | null }>();
+    expect(account?.claimed_at).toBeNull();
+    expect(account?.claimed_by_uid).toBeNull();
+    const binding = await database
+      .prepare(
+        "SELECT uid FROM channel_bindings WHERE channel = 'telegram' AND channel_user_id = 'spent-user'",
+      )
+      .first<{ uid: string }>();
+    expect(binding).toBeNull();
+  });
+
   test("rejects a malformed code and an unknown code", async () => {
     const environment = {
       RATE_LIMITER: allowingRateLimiter,
@@ -1232,9 +1362,14 @@ describe("billing routes", () => {
         environment,
       );
       expect(checkout.status).toBe(201);
-      expect(requests[0]?.body.get("client_reference_id")).toBe("alpha");
+      // A customer lookup by email precedes the session, so the assertions
+      // pick the session out by URL rather than by position.
+      const session = requests.find((entry) =>
+        entry.url.endsWith("/checkout/sessions"),
+      );
+      expect(session?.body.get("client_reference_id")).toBe("alpha");
       expect(
-        requests[0]?.body.get("subscription_data[metadata][firebase_uid]"),
+        session?.body.get("subscription_data[metadata][firebase_uid]"),
       ).toBe("alpha");
       await database
         .prepare(
@@ -1251,8 +1386,10 @@ describe("billing routes", () => {
         environment,
       );
       expect(portal.status).toBe(201);
-      expect(requests[1]?.body.get("customer")).toBe("cus_alpha");
-      expect(requests[1]?.url).toEndWith("/billing_portal/sessions");
+      const portalRequest = requests.find((entry) =>
+        entry.url.endsWith("/billing_portal/sessions"),
+      );
+      expect(portalRequest?.body.get("customer")).toBe("cus_alpha");
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -1311,7 +1448,9 @@ describe("billing routes", () => {
         },
       );
       expect(checkout.status).toBe(201);
-      const body = requests[0]?.body;
+      const body = requests.find((entry) =>
+        entry.url.endsWith("/checkout/sessions"),
+      )?.body;
       expect(body?.get("line_items[0][price]")).toBe(null);
       expect(body?.get("line_items[0][price_data][unit_amount]")).toBe("700");
       expect(body?.get("line_items[0][price_data][currency]")).toBe("usd");

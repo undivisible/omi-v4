@@ -12,6 +12,7 @@ export { SttAdmission } from "./stt-admission";
 export { DeliveryCoordinator } from "./delivery";
 export { RateLimiter } from "./rate-limit";
 import routes from "./routes";
+import { reconcileStripeSubscriptions } from "./stripe-sync";
 import type { AppEnv } from "./types";
 import webhooks from "./webhooks";
 
@@ -56,6 +57,10 @@ export default {
         deliverDueChannelMessages(env),
         respondToStaleInboxItems(env).catch(() => undefined),
         reconcileManagedAssistantRequests(env),
+        // A Stripe webhook that never arrives would otherwise leave a paying
+        // customer with nothing, silently and permanently. This re-reads a
+        // bounded handful of stale subscriptions per tick.
+        reconcileStripeSubscriptions(env).catch(() => undefined),
         backfillClaimVectors(env)
           .then(() => drainPendingEmbeddings(env))
           .catch(() => undefined),

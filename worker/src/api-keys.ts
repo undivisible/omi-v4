@@ -22,6 +22,7 @@ export const allScopes: readonly ApiKeyScope[] = [
   "conversations:read",
   "assistant:write",
   "facetime:write",
+  "speech:write",
 ];
 
 const scopeSet = new Set<string>(allScopes);

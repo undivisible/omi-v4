@@ -84,11 +84,11 @@ pub async fn cron_slice(env: &Env) {
 // Small helpers
 // ---------------------------------------------------------------------------
 
-fn s(value: &str) -> JsValue {
+pub(crate) fn s(value: &str) -> JsValue {
     JsValue::from_str(value)
 }
 
-fn n(value: i64) -> JsValue {
+pub(crate) fn n(value: i64) -> JsValue {
     JsValue::from_f64(value as f64)
 }
 
@@ -96,7 +96,7 @@ fn nullable_s(value: Option<&str>) -> JsValue {
     value.map(JsValue::from_str).unwrap_or(JsValue::NULL)
 }
 
-fn nullable_n(value: Option<i64>) -> JsValue {
+pub(crate) fn nullable_n(value: Option<i64>) -> JsValue {
     value
         .map(|v| JsValue::from_f64(v as f64))
         .unwrap_or(JsValue::NULL)
@@ -141,23 +141,27 @@ macro_rules! authed {
     };
 }
 
-async fn d1_first(db: &D1Database, sql: &str, binds: &[JsValue]) -> Result<Option<Value>> {
+pub(crate) async fn d1_first(
+    db: &D1Database,
+    sql: &str,
+    binds: &[JsValue],
+) -> Result<Option<Value>> {
     db.prepare(sql).bind(binds)?.first::<Value>(None).await
 }
 
-async fn d1_all(db: &D1Database, sql: &str, binds: &[JsValue]) -> Result<Vec<Value>> {
+pub(crate) async fn d1_all(db: &D1Database, sql: &str, binds: &[JsValue]) -> Result<Vec<Value>> {
     db.prepare(sql).bind(binds)?.all().await?.results::<Value>()
 }
 
-async fn d1_run(db: &D1Database, sql: &str, binds: &[JsValue]) -> Result<D1Result> {
+pub(crate) async fn d1_run(db: &D1Database, sql: &str, binds: &[JsValue]) -> Result<D1Result> {
     db.prepare(sql).bind(binds)?.run().await
 }
 
-fn stmt(db: &D1Database, sql: &str, binds: &[JsValue]) -> Result<D1PreparedStatement> {
+pub(crate) fn stmt(db: &D1Database, sql: &str, binds: &[JsValue]) -> Result<D1PreparedStatement> {
     db.prepare(sql).bind(binds)
 }
 
-fn str_field(row: &Value, key: &str) -> String {
+pub(crate) fn str_field(row: &Value, key: &str) -> String {
     match row.get(key) {
         Some(Value::String(s)) => s.clone(),
         Some(Value::Null) | None => String::new(),
@@ -439,7 +443,12 @@ async fn backfill_claim_vectors(env: &Env, limit: i64) -> Result<i64> {
 }
 
 /// Direct vector search + D1 re-check (`searchMemoryClaims`).
-async fn search_memory_claims(env: &Env, uid: &str, query: &str, top_k: i64) -> Result<Vec<Value>> {
+pub(crate) async fn search_memory_claims(
+    env: &Env,
+    uid: &str,
+    query: &str,
+    top_k: i64,
+) -> Result<Vec<Value>> {
     let Some(index) = vectorize(env) else {
         return Ok(Vec::new());
     };
@@ -528,7 +537,7 @@ async fn project_zkr_memory(db: &D1Database, uid: &str, replica_id: &str) -> Res
     Ok(())
 }
 
-async fn ensure_projected(db: &D1Database, uid: &str) -> Result<()> {
+pub(crate) async fn ensure_projected(db: &D1Database, uid: &str) -> Result<()> {
     let pending = d1_all(
         db,
         "SELECT records.replica_id\n       FROM (\n         SELECT replica_id, MAX(source_sequence) AS source_sequence\n         FROM zkr_memory_records WHERE uid = ?1 GROUP BY replica_id\n       ) records\n       LEFT JOIN zkr_memory_projection_state state\n         ON state.uid = ?1 AND state.replica_id = records.replica_id\n       WHERE state.source_sequence IS NULL OR state.source_sequence < records.source_sequence\n       ORDER BY records.replica_id LIMIT 100",
@@ -851,12 +860,23 @@ async fn handle_retrieve(mut req: Request, ctx: RouteContext<()>) -> Result<Resp
     if !(1..=50).contains(&limit) {
         return error_json("Invalid retrieval", 400);
     }
-    let matcher = retrieve_match(&query);
+    Response::from_json(&retrieve_cited_memory(&db, &auth.uid, &query, limit).await?)
+}
+
+/// Port of `retrieveCitedMemory` (memory-read.ts): the one keyword retrieval
+/// shared by the first-party `/v1` route, the public API and the MCP server.
+pub(crate) async fn retrieve_cited_memory(
+    db: &D1Database,
+    uid: &str,
+    query: &str,
+    limit: i64,
+) -> Result<Value> {
+    let matcher = retrieve_match(query);
     let now = now_ms();
     let candidates = d1_all(
-        &db,
+        db,
         "SELECT c.id, c.content, bm25(memory_claims_fts) AS score\n     FROM memory_claims_fts\n     JOIN memory_claims c ON c.id = memory_claims_fts.id AND c.uid = memory_claims_fts.uid\n     WHERE memory_claims_fts.uid = ?1 AND memory_claims_fts MATCH ?2\n       AND c.status = 'accepted' AND c.retracted_at IS NULL\n       AND (c.valid_from IS NULL OR c.valid_from <= ?4)\n       AND (c.valid_to IS NULL OR c.valid_to > ?4)\n       AND (c.recorded_until IS NULL OR c.recorded_until > ?4)\n       AND (c.zkr_tier IS NULL OR c.zkr_tier != 'archive')\n       AND (c.zkr_processing_state IS NULL OR c.zkr_processing_state = 'processed')\n     ORDER BY score, c.recorded_at DESC LIMIT ?3",
-        &[s(&auth.uid), s(&matcher), n(limit), n(now)],
+        &[s(uid), s(&matcher), n(limit), n(now)],
     )
     .await?;
 
@@ -866,9 +886,9 @@ async fn handle_retrieve(mut req: Request, ctx: RouteContext<()>) -> Result<Resp
             .iter()
             .map(|row| {
                 stmt(
-                    &db,
+                    db,
                     "SELECT ce.evidence_id FROM memory_claim_evidence ce\n           JOIN memory_evidence e ON e.id = ce.evidence_id AND e.uid = ce.uid\n           JOIN memory_source_revisions r ON r.id = e.source_revision_id AND r.uid = e.uid\n           JOIN memory_sources s ON s.id = r.source_id AND s.uid = r.uid\n           WHERE ce.claim_id = ?1 AND ce.uid = ?2 AND ce.relation = 'supports'\n             AND e.tombstoned_at IS NULL AND s.tombstoned_at IS NULL",
-                    &[s(&str_field(row, "id")), s(&auth.uid)],
+                    &[s(&str_field(row, "id")), s(uid)],
                 )
             })
             .collect::<Result<Vec<_>>>()?;
@@ -894,7 +914,7 @@ async fn handle_retrieve(mut req: Request, ctx: RouteContext<()>) -> Result<Resp
     } else {
         json!([])
     };
-    Response::from_json(&json!({ "query": query, "items": items, "gaps": gaps }))
+    Ok(json!({ "query": query, "items": items, "gaps": gaps }))
 }
 
 async fn handle_semantic_search(req: Request, ctx: RouteContext<()>) -> Result<Response> {
@@ -926,11 +946,20 @@ async fn handle_memories_get(req: Request, ctx: RouteContext<()>) -> Result<Resp
     let auth = authed!(req, ctx);
     let db = ctx.env.d1("DB")?;
     ensure_projected(&db, &auth.uid).await?;
+    Response::from_json(&json!({ "memories": list_profile_memories(&db, &auth.uid, 100).await? }))
+}
+
+/// Port of `listProfileMemories` (memory-read.ts).
+pub(crate) async fn list_profile_memories(
+    db: &D1Database,
+    uid: &str,
+    limit: usize,
+) -> Result<Vec<Value>> {
     let now = now_ms();
     let rows = d1_all(
-        &db,
+        db,
         "SELECT p.id, c.value, c.valid_from, c.valid_to, c.recorded_at, p.updated_at,\n            p.profile_kind, p.status, s.kind AS source, e.id AS evidence_id,\n            e.source_revision_id, e.quote, e.locator, s.id AS source_id\n     FROM memory_profile_entries p\n     JOIN memory_claims c ON c.id = p.claim_id AND c.uid = p.uid\n     JOIN memory_claim_evidence ce ON ce.claim_id = c.id AND ce.uid = c.uid\n     JOIN memory_evidence e ON e.id = ce.evidence_id AND e.uid = ce.uid\n     JOIN memory_source_revisions r ON r.id = e.source_revision_id AND r.uid = e.uid\n     JOIN memory_sources s ON s.id = r.source_id AND s.uid = r.uid\n     WHERE p.uid = ?1 AND p.status != 'archived' AND c.status = 'accepted' AND c.retracted_at IS NULL\n       AND (c.valid_from IS NULL OR c.valid_from <= ?2)\n       AND (c.valid_to IS NULL OR c.valid_to > ?2)\n       AND (c.recorded_until IS NULL OR c.recorded_until > ?2)\n       AND (c.zkr_tier IS NULL OR c.zkr_tier != 'archive')\n       AND (c.zkr_processing_state IS NULL OR c.zkr_processing_state = 'processed')\n       AND ce.relation = 'supports' AND e.tombstoned_at IS NULL AND s.tombstoned_at IS NULL\n     ORDER BY p.updated_at DESC LIMIT 500",
-        &[s(&auth.uid), n(now)],
+        &[s(uid), n(now)],
     )
     .await?;
 
@@ -968,15 +997,14 @@ async fn handle_memories_get(req: Request, ctx: RouteContext<()>) -> Result<Resp
             }),
         );
     }
-    let memories: Vec<Value> = order
+    Ok(order
         .into_iter()
-        .take(100)
+        .take(limit)
         .filter_map(|id| indexed.remove(&id))
-        .collect();
-    Response::from_json(&json!({ "memories": memories }))
+        .collect())
 }
 
-fn parse_locator(value: Option<&Value>) -> Value {
+pub(crate) fn parse_locator(value: Option<&Value>) -> Value {
     match value {
         Some(Value::String(s)) => serde_json::from_str(s).unwrap_or(Value::Null),
         _ => Value::Null,
@@ -1185,10 +1213,19 @@ async fn handle_daily_reviews_get(req: Request, ctx: RouteContext<()>) -> Result
     let auth = authed!(req, ctx);
     let db = ctx.env.d1("DB")?;
     ensure_projected(&db, &auth.uid).await?;
+    Response::from_json(&json!({ "reviews": list_daily_reviews(&db, &auth.uid, 100).await? }))
+}
+
+/// Port of `listDailyReviews` (memory-read.ts).
+pub(crate) async fn list_daily_reviews(
+    db: &D1Database,
+    uid: &str,
+    limit: usize,
+) -> Result<Vec<Value>> {
     let rows = d1_all(
-        &db,
+        db,
         "SELECT r.id, r.local_date, r.input_revision, r.body, r.created_at, r.updated_at,\n            e.id AS evidence_id, e.quote, e.locator, e.source_revision_id, sr.source_id\n     FROM memory_daily_reviews r\n     LEFT JOIN memory_daily_review_citations rc ON rc.review_id = r.id AND rc.uid = r.uid\n     LEFT JOIN memory_evidence e ON e.id = rc.evidence_id AND e.uid = rc.uid\n     LEFT JOIN memory_source_revisions sr ON sr.id = e.source_revision_id AND sr.uid = e.uid\n     WHERE r.uid = ?1 AND r.retracted_at IS NULL\n     ORDER BY r.local_date DESC, r.updated_at DESC LIMIT 300",
-        &[s(&auth.uid)],
+        &[s(uid)],
     )
     .await?;
     let mut order: Vec<String> = Vec::new();
@@ -1219,12 +1256,11 @@ async fn handle_daily_reviews_get(req: Request, ctx: RouteContext<()>) -> Result
             }
         }
     }
-    let out: Vec<Value> = order
+    Ok(order
         .into_iter()
-        .take(100)
+        .take(limit)
         .filter_map(|id| reviews.remove(&id))
-        .collect();
-    Response::from_json(&json!({ "reviews": out }))
+        .collect())
 }
 
 async fn handle_daily_reviews_post(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
@@ -1310,7 +1346,7 @@ fn is_iso_date(value: &str) -> bool {
 
 const SELECT_CURRENT_SQL: &str = "SELECT c.*, s.id AS source_id, s.kind AS source_kind, json_extract(c.proposed_action, '$.instruction') AS instruction\n     FROM currents c\n     JOIN memory_evidence e ON e.id = c.evidence_id AND e.uid = c.uid\n     JOIN memory_source_revisions r ON r.id = e.source_revision_id AND r.uid = e.uid\n     JOIN memory_sources s ON s.id = r.source_id AND s.uid = r.uid\n     WHERE c.id = ?1 AND c.uid = ?2 AND e.tombstoned_at IS NULL AND s.tombstoned_at IS NULL";
 
-async fn select_current(db: &D1Database, uid: &str, id: &str) -> Result<Option<Value>> {
+pub(crate) async fn select_current(db: &D1Database, uid: &str, id: &str) -> Result<Option<Value>> {
     d1_first(db, SELECT_CURRENT_SQL, &[s(id), s(uid)]).await
 }
 
@@ -1460,33 +1496,38 @@ async fn handle_currents_list(req: Request, ctx: RouteContext<()>) -> Result<Res
     let auth = authed!(req, ctx);
     let db = ctx.env.d1("DB")?;
     ensure_projected(&db, &auth.uid).await?;
+    Response::from_json(&json!({ "currents": list_currents(&db, &auth.uid).await? }))
+}
+
+/// Port of `listCurrents` (currents.ts): rolls expiry/snooze/surface forward,
+/// then returns the ranked open Currents.
+pub(crate) async fn list_currents(db: &D1Database, uid: &str) -> Result<Vec<Value>> {
     let now = now_ms();
     d1_run(
-        &db,
+        db,
         "UPDATE currents SET status = 'expired', updated_at = ?1\n     WHERE uid = ?2 AND status IN ('candidate', 'surfaced', 'snoozed') AND expires_at IS NOT NULL AND expires_at <= ?1",
-        &[n(now), s(&auth.uid)],
+        &[n(now), s(uid)],
     )
     .await?;
     d1_run(
-        &db,
+        db,
         "UPDATE currents SET status = 'surfaced', snoozed_until = NULL, updated_at = ?1\n     WHERE uid = ?2 AND status = 'snoozed' AND snoozed_until <= ?1",
-        &[n(now), s(&auth.uid)],
+        &[n(now), s(uid)],
     )
     .await?;
     d1_run(
-        &db,
+        db,
         "UPDATE currents SET status = 'surfaced', updated_at = ?1\n     WHERE uid = ?2 AND status = 'candidate' AND surface_at <= ?1",
-        &[n(now), s(&auth.uid)],
+        &[n(now), s(uid)],
     )
     .await?;
     let rows = d1_all(
-        &db,
+        db,
         "SELECT c.*, s.id AS source_id, s.kind AS source_kind, json_extract(c.proposed_action, '$.instruction') AS instruction,\n       COALESCE((SELECT SUM(CASE f.kind WHEN 'dismissed' THEN -1000 ELSE -250 END)\n                 FROM current_feedback f\n                 JOIN currents prior ON prior.id = f.current_id AND prior.uid = f.uid\n                 JOIN memory_evidence pe ON pe.id = prior.evidence_id AND pe.uid = prior.uid\n                 JOIN memory_source_revisions pr ON pr.id = pe.source_revision_id AND pr.uid = pe.uid\n                 JOIN memory_sources ps ON ps.id = pr.source_id AND ps.uid = pr.uid\n                 WHERE f.uid = c.uid AND ps.kind = s.kind), 0)\n       + COALESCE((SELECT SUM(CASE x.state WHEN 'succeeded' THEN 500 WHEN 'failed' THEN -500 ELSE -250 END)\n                   FROM current_executions x\n                   JOIN currents prior ON prior.id = x.current_id AND prior.uid = x.uid\n                   JOIN memory_evidence pe ON pe.id = prior.evidence_id AND pe.uid = prior.uid\n                   JOIN memory_source_revisions pr ON pr.id = pe.source_revision_id AND pr.uid = pe.uid\n                   JOIN memory_sources ps ON ps.id = pr.source_id AND ps.uid = pr.uid\n                   WHERE x.uid = c.uid AND ps.kind = s.kind\n                     AND x.state IN ('succeeded', 'failed', 'outcome_unknown')), 0) AS learned_adjustment\n     FROM currents c\n     JOIN memory_evidence e ON e.id = c.evidence_id AND e.uid = c.uid\n     JOIN memory_source_revisions r ON r.id = e.source_revision_id AND r.uid = e.uid\n     JOIN memory_sources s ON s.id = r.source_id AND s.uid = r.uid\n     WHERE c.uid = ?1 AND s.tombstoned_at IS NULL\n       AND e.tombstoned_at IS NULL\n       AND c.status IN ('surfaced', 'accepted')\n     ORDER BY c.confidence_basis_points + learned_adjustment DESC, c.updated_at DESC, c.id ASC LIMIT 100",
-        &[s(&auth.uid)],
+        &[s(uid)],
     )
     .await?;
-    let currents: Vec<Value> = rows.iter().map(row_to_current).collect();
-    Response::from_json(&json!({ "currents": currents }))
+    Ok(rows.iter().map(row_to_current).collect())
 }
 
 async fn handle_current_feedback(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
@@ -1810,4 +1851,94 @@ async fn handle_execution_outcome(mut req: Request, ctx: RouteContext<()>) -> Re
         }
     }
     Response::from_json(&json!({ "executionId": id, "state": state }))
+}
+
+/// Port of `createCurrent` (currents.ts) — the shared write behind the public
+/// API `POST /api/v1/currents` and the `create_current` MCP tool.
+///
+/// When no evidence id is cited, a source/revision/evidence triple is
+/// synthesised from the caller's `reason` so every Current still carries a
+/// citation. When one *is* cited it must resolve, per-uid, to live evidence;
+/// otherwise `None` (the TS `null` → 404 "Cited evidence not found").
+pub(crate) async fn create_current(
+    db: &D1Database,
+    uid: &str,
+    input: &crate::public_api::CurrentInput,
+) -> Result<Option<Value>> {
+    let now = now_ms();
+    let evidence_id = match input.evidence_id.as_deref() {
+        None => {
+            let source_id = uuid_v4();
+            let revision_id = uuid_v4();
+            let evidence_id = uuid_v4();
+            let payload = json!({ "title": input.title, "reason": input.reason }).to_string();
+            db.batch(vec![
+                stmt(
+                    db,
+                    "INSERT INTO memory_sources (id, uid, kind, created_at, updated_at) VALUES (?1, ?2, 'integration', ?3, ?3)",
+                    &[s(&source_id), s(uid), n(now)],
+                )?,
+                stmt(
+                    db,
+                    "INSERT INTO memory_source_revisions\n                       (id, source_id, uid, revision, content_hash, payload, observed_at, created_at)\n                     VALUES (?1, ?2, ?3, 1, ?4, ?5, ?6, ?6)",
+                    &[
+                        s(&revision_id),
+                        s(&source_id),
+                        s(uid),
+                        s(&sha256_hex(&input.reason)),
+                        s(&payload),
+                        n(now),
+                    ],
+                )?,
+                stmt(
+                    db,
+                    "INSERT INTO memory_evidence (id, uid, source_revision_id, quote, locator, created_at) VALUES (?1, ?2, ?3, ?4, '[]', ?5)",
+                    &[
+                        s(&evidence_id),
+                        s(uid),
+                        s(&revision_id),
+                        s(&input.reason),
+                        n(now),
+                    ],
+                )?,
+            ])
+            .await?;
+            evidence_id
+        }
+        Some(cited) => {
+            let evidence = d1_first(
+                db,
+                "SELECT e.id FROM memory_evidence e\n     JOIN memory_source_revisions r ON r.id = e.source_revision_id AND r.uid = e.uid\n     JOIN memory_sources s ON s.id = r.source_id AND s.uid = r.uid\n     WHERE e.id = ?1 AND e.uid = ?2 AND e.tombstoned_at IS NULL AND s.tombstoned_at IS NULL",
+                &[s(cited), s(uid)],
+            )
+            .await?;
+            if evidence.is_none() {
+                return Ok(None);
+            }
+            cited.to_string()
+        }
+    };
+    let id = uuid_v4();
+    let proposed_action = json!({ "kind": "review", "instruction": input.instruction }).to_string();
+    d1_run(
+        db,
+        "INSERT INTO currents\n      (id, uid, evidence_id, title, summary, reason, confidence_basis_points, proposed_action,\n       status, surface_at, expires_at, created_at, updated_at, crepus)\n     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'candidate', ?9, ?10, ?11, ?11, NULL)",
+        &[
+            s(&id),
+            s(uid),
+            s(&evidence_id),
+            s(&input.title),
+            s(&input.summary),
+            s(&input.reason),
+            n((input.confidence * 10_000.0).round() as i64),
+            s(&proposed_action),
+            n(input.surface_at),
+            nullable_n(input.expires_at),
+            n(now),
+        ],
+    )
+    .await?;
+    Ok(select_current(db, uid, &id)
+        .await?
+        .map(|row| row_to_current(&row)))
 }

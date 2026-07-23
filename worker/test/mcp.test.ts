@@ -260,7 +260,9 @@ describe("MCP tool dispatch", () => {
         "list_meeting_notes",
         "list_memories",
         "search_memory",
+        "speak_text",
         "start_facetime_call",
+        "transcribe_audio",
       ].sort(),
     );
     expect(listed).toHaveLength(tools.length);

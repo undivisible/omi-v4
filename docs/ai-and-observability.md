@@ -18,6 +18,8 @@ see §4).
 | smart | hard reasoning | `xiaomi/mimo-v2.5-pro` | `OMI_MODEL_SMART` |
 | multimodal | vision / visual computer-use | `google/gemini-3.6-flash` | `OMI_MODEL_MULTIMODAL` |
 | search | web-grounded answers (live search) | `perplexity/sonar` | `OMI_MODEL_SEARCH` |
+| transcribe | server-side speech-to-text for callers with no hub | `google/gemini-2.5-flash-lite` | `OMI_MODEL_TRANSCRIBE` |
+| speak | server-side text-to-speech | `openai/gpt-audio-mini` | `OMI_MODEL_SPEAK` |
 
 Balanced also falls back to the legacy `MIMO_MODEL` when unset.
 
@@ -33,21 +35,41 @@ Balanced also falls back to the legacy `MIMO_MODEL` when unset.
 
 ## 2. Speech-to-text (transcription)
 
-**Off Deepgram, onto `x-ai/grok-stt-1.0` via OpenRouter.**
+**Off Deepgram, onto OpenRouter.** The model originally named here does not
+exist on OpenRouter; see the verification note below for what was chosen
+instead.
 
-- **Primary: `x-ai/grok-stt-1.0`** — xAI's dedicated STT model, released
-  2026-07 on OpenRouter, cheap. A purpose-built transcription model beats
-  bending a chat model into STT.
-- **Fallback / batch: `google/gemini-2.5-flash-lite`** (audio→text, ~$0.30/M
-  audio) — unifies on Gemini and covers the case where grok-stt is
-  unavailable. `openai/gpt-audio-mini` is the next option. (`inception/mercury-2`
-  and `xiaomi/mimo-v2.5*` are not audio models.)
+- **Was planned: `x-ai/grok-stt-1.0`** — xAI's dedicated STT model. A
+  purpose-built transcription model would beat bending a chat model into STT,
+  but it is not on OpenRouter (see below), so it is not what ships.
+- **Primary today: `google/gemini-2.5-flash-lite`** (audio→text, ~$0.30/M
+  audio) — the `transcribe` tier default. `openai/gpt-audio-mini` is the next
+  option. (`inception/mercury-2` and `xiaomi/mimo-v2.5*` are not audio models.)
 
-**Verify before shipping:** whether `grok-stt-1.0` supports *streaming*
-transcription or only batch. Deepgram was a streaming WebSocket; if grok-stt is
-request/response we chunk audio at ~2–5s (added latency). For the truly
-realtime path, Gemini Live's **built-in streaming transcription** remains the
-lowest-latency option and needs no separate STT call.
+**Verified 2026-07-23 against the live OpenRouter model list:
+`x-ai/grok-stt-1.0` is not published on OpenRouter.** Nothing matching
+`grok-stt` appears in `GET https://openrouter.ai/api/v1/models`, and the only
+`x-ai` entries are the Grok chat models. The audio-*input* models actually
+available are, cheapest first:
+
+| Model | Audio input | Note |
+|-------|-------------|------|
+| `google/gemini-2.5-flash-lite` | $0.30/M audio tokens | **Chosen default for the `transcribe` tier.** It is the fallback this document already named, it is the cheapest audio-capable model on the list, and it keeps the batch path on the same provider family as the multimodal tier. |
+| `google/gemini-3.1-flash-lite` | $0.50/M | Newer, ~1.7x the price; the upgrade path if 2.5-flash-lite's accuracy disappoints. |
+| `openai/gpt-audio-mini` | $0.60/M | Best if we want one model doing both directions; slightly dearer for input and it is the TTS choice already. |
+| `mistralai/voxtral-small-24b-2507` | $100/M | A dedicated audio model but priced far above the rest for this workload. |
+
+The tier is env-overridable, so the moment `x-ai/grok-stt-1.0` (or any better
+STT model) does appear on OpenRouter, setting `OMI_MODEL_TRANSCRIBE` switches
+to it with no code change.
+
+**Still true:** OpenRouter is request/response, so none of these gives
+*streaming* transcription. The server-side path
+(`worker/src/speech.ts`, `POST /api/v1/speech/transcriptions`) is therefore
+batch-only, for callers that have no hub — the FaceTime/Gemini Live bridge, a
+phone flushing a write-ahead log after a dropout, API/MCP consumers. For the
+truly realtime path, Gemini Live's **built-in streaming transcription** remains
+the lowest-latency option and needs no separate STT call.
 
 ## 2a. Embeddings
 
@@ -71,6 +93,31 @@ non-text.**
 - **Net:** hybrid — Workers AI for text (the 95% path), a multimodal model for
   images. Going all-in on `gemini-embedding-2` is only worth it if multimodal
   quality is the priority and the re-index + cost are acceptable.
+
+## 2b. Text-to-speech
+
+**`openai/gpt-audio-mini` via OpenRouter, as the `speak` tier.**
+
+OpenRouter has no dedicated TTS endpoint; the only way to get audio out is a
+chat completion with `modalities: ["text","audio"]` and an `audio: {voice,
+format}` block. As of 2026-07-23 exactly four models on OpenRouter list `audio`
+in their output modalities:
+
+| Model | Audio output | Verdict |
+|-------|--------------|---------|
+| `openai/gpt-audio-mini` | $2.40/M audio tokens | **Chosen.** Real speech synthesis, the eight OpenAI voices, and ~27x cheaper than its full-size sibling. Quality is more than adequate for reading assistant replies aloud. |
+| `openai/gpt-audio` | $64/M audio tokens | Same family, better prosody, 27x the cost. The override to reach for if synthesis quality ever becomes the product. |
+| `google/lyria-3-pro-preview` | free (preview) | **Music generation, not TTS.** Wrong tool. |
+| `google/lyria-3-clip-preview` | free (preview) | Ditto. |
+
+So the honest summary is: OpenRouter *does* have usable TTS, but only through
+OpenAI's audio chat models — there is no ElevenLabs-style dedicated TTS slug to
+point at.
+
+Bounds and discipline (`worker/src/speech.ts`): 1000 characters per call,
+compressed containers only (`mp3`, `opus`) so the audio fits in one D1 row for
+idempotent replay, and the same admission reservation + cost settlement as
+STT.
 
 ## 3. Gemini Live
 
@@ -113,8 +160,9 @@ limiting** — server-side, no client involvement.
 4. The OpenRouter API key still travels as the `Authorization` bearer; the
    gateway forwards it.
 
-Wired in `worker/src/assistant.ts` (see `aiGatewayBase`). Mirror in
-`worker-rs` and the hub for full parity.
+Wired in `worker/src/assistant.ts` (see `aiGatewayBase`), and reused verbatim
+by `worker/src/speech.ts` for both speech directions. Mirror in `worker-rs` and
+the hub for full parity.
 
 ## 4a. Cloudflare AI Search
 

@@ -43,6 +43,7 @@ type SessionRow = {
   turns: number;
   grants: string;
   transcript: string;
+  created_at: number;
 };
 
 export type AgreedPrice = {
@@ -273,7 +274,7 @@ const loadSession = async (
   id: string,
 ): Promise<SessionRow | null> => {
   const row = await env.DB.prepare(
-    "SELECT id, uid, status, turns, grants, transcript FROM byok_negotiation_sessions WHERE id = ?1 AND uid = ?2",
+    "SELECT id, uid, status, turns, grants, transcript, created_at FROM byok_negotiation_sessions WHERE id = ?1 AND uid = ?2",
   )
     .bind(id, uid)
     .first<SessionRow>();
@@ -342,21 +343,27 @@ byok.post("/negotiation", async (context) => {
       `Standard with your own key is ${formatPrice(band.standardCents)} a month. ` +
       "If that is not right for you, tell me why and I will see what I can do.",
   };
-  await context.env.DB.prepare(
-    `INSERT INTO byok_negotiation_sessions
+  // Only one conversation is live at a time. Leaving earlier ones open would
+  // let a user bank sessions and accept a stale one after settling, which
+  // resets the cooldown the accept path has no reason to expect.
+  await context.env.DB.batch([
+    context.env.DB.prepare(
+      "UPDATE byok_negotiation_sessions SET status = 'closed', updated_at = ?1 WHERE uid = ?2 AND status = 'open'",
+    ).bind(now, uid),
+    context.env.DB.prepare(
+      `INSERT INTO byok_negotiation_sessions
        (id, uid, status, turns, standard_price_cents, floor_price_cents, price_cents,
         grants, transcript, created_at, updated_at)
      VALUES (?1, ?2, 'open', 0, ?3, ?4, ?3, '[]', ?5, ?6, ?6)`,
-  )
-    .bind(
+    ).bind(
       id,
       uid,
       band.standardCents,
       band.floorCents,
       JSON.stringify([opening]),
       now,
-    )
-    .run();
+    ),
+  ]);
   return context.json(
     {
       sessionId: id,
@@ -450,6 +457,27 @@ byok.post("/negotiation/:id/accept", async (context) => {
     );
   if (session.status !== "open")
     return context.json({ error: "Negotiation closed" }, 409);
+  // A session that was still open when a later agreement was settled has been
+  // superseded: accepting it now would rewrite `agreed_at` and restart the
+  // cooldown, and the audit record would name a conversation that is not the
+  // one in force. The cooldown is checked here as well as at the start.
+  const settled = await context.env.DB.prepare(
+    "SELECT session_id, agreed_at FROM byok_price_agreements WHERE uid = ?1",
+  )
+    .bind(uid)
+    .first<{ session_id: string | null; agreed_at: number }>();
+  if (
+    settled &&
+    String(settled.session_id ?? "") !== session.id &&
+    Number(settled.agreed_at) >= Number(session.created_at)
+  )
+    return context.json(
+      {
+        error: "Price already agreed",
+        ...planPayload(band, await agreedByokPrice(context.env, uid), now),
+      },
+      409,
+    );
   const grants = normalizeGrants(band, parseJsonArray(session.grants));
   const priceCents = priceForGrants(band, grants);
   await context.env.DB.prepare(

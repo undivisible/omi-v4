@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<meta name="robots" content="noindex">
+<base href="/hub/">
+<title>Omi hub</title>
+<link rel="icon" type="image/png" href="favicon.png">
+<style>
+  html, body { height: 100%; margin: 0; background: #171716; overflow: hidden; }
+  #boot {
+    position: fixed; inset: 0; display: grid; place-items: center;
+    font: 400 0.85rem/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    color: rgba(255, 252, 236, 0.46); letter-spacing: 0.02em;
+  }
+  flt-glass-pane, flutter-view { outline: none; }
+</style>
+</head>
+<body>
+<div id="boot">Starting the hub…</div>
+<script src="flutter.js"></script>
+<script>
+  window._flutter = window._flutter || {};
+  _flutter.buildConfig = {
+    builds: [{ compileTarget: "dart2js", renderer: "canvaskit", mainJsPath: "main.dart.js" }]
+  };
+  // The web build has no native hub, so onboarding's private scan cannot run
+  // and would greet a visitor with an error. Onboarding is gated on the
+  // shared_preferences flag below, which the demo seeds so the page opens on
+  // the shell itself. Signing in still runs the real onboarding.
+  try {
+    localStorage.setItem("flutter.onboarding_complete_v1_local", "true");
+  } catch (e) {}
+
+  var reported = false;
+  function report(kind) {
+    if (reported) return;
+    reported = true;
+    try { parent.postMessage({ source: "omi-hub", status: kind }, "*"); } catch (e) {}
+  }
+  window.addEventListener("error", function () { report("error"); });
+  setTimeout(function () { report("error"); }, 40000);
+  _flutter.loader.load({
+    config: { canvasKitBaseUrl: "canvaskit/", useLocalCanvasKit: true },
+    onEntrypointLoaded: function (engineInitializer) {
+      engineInitializer
+        .initializeEngine()
+        .then(function (appRunner) { return appRunner.runApp(); })
+        .then(function () {
+          var boot = document.getElementById("boot");
+          if (boot) boot.remove();
+          report("ready");
+        })
+        .catch(function () { report("error"); });
+    }
+  });
+</script>
+</body>
+</html>

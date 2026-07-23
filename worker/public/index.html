@@ -77,10 +77,37 @@
     </div>
 
     <figure class="shot reveal">
-      <img src="/hub.png" srcset="/hub.png 1x, /hub-2x.png 2x"
-           width="1440" height="900" loading="eager" decoding="async"
-           alt="The Omi hub: a chat thread alongside a list of what matters next, with citations under each answer.">
-      <figcaption>The hub, running on macOS.</figcaption>
+      <div class="shot-frame" id="hub-frame" data-state="idle">
+        <div class="shot-still" aria-hidden="true">
+          <div class="still-rail">
+            <span></span><span></span><span></span><span></span>
+          </div>
+          <div class="still-thread">
+            <p class="still-line w70"></p>
+            <p class="still-line w45"></p>
+            <p class="still-line w60"></p>
+            <p class="still-cite"></p>
+            <p class="still-composer"></p>
+          </div>
+          <div class="still-side">
+            <p class="still-line w80"></p>
+            <p class="still-line w55"></p>
+            <p class="still-line w65"></p>
+          </div>
+        </div>
+        <div class="shot-cta">
+          <button type="button" class="btn btn-solid" id="hub-start">
+            Try the hub
+          </button>
+          <p class="shot-note" id="hub-note">
+            The real app, compiled to the web — about 5 MB, so it loads only
+            when you ask for it.
+          </p>
+        </div>
+      </div>
+      <figcaption>The hub itself, running in this page. Capture, the pendant
+        and on-device transcription need the desktop build; everything you can
+        reach here is the same UI.</figcaption>
     </figure>
   </section>
 

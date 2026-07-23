@@ -10,6 +10,8 @@
 // | smart      | hard reasoning                                            | xiaomi/mimo-v2.5-pro           | MiMo     |
 // | multimodal | vision / visual computer-use                              | google/gemini-3.6-flash         | Gemini   |
 // | search     | web-grounded answers (live search)                        | perplexity/sonar                | Perplexity |
+// | transcribe | server-side speech-to-text (no hub on the caller)         | google/gemini-2.5-flash-lite    | Gemini   |
+// | speak      | server-side text-to-speech                                | openai/gpt-audio-mini           | OpenAI   |
 //
 // The default ids are best-effort and may need correcting against the real
 // provider APIs; that is why they are env-overridable rather than hardcoded.
@@ -21,7 +23,9 @@ export type ModelTier =
   | "balanced"
   | "smart"
   | "multimodal"
-  | "search";
+  | "search"
+  | "transcribe"
+  | "speak";
 
 export const defaultTierModels: Record<ModelTier, string> = {
   speed: "inception/mercury-2",
@@ -29,6 +33,8 @@ export const defaultTierModels: Record<ModelTier, string> = {
   smart: "xiaomi/mimo-v2.5-pro",
   multimodal: "google/gemini-3.6-flash",
   search: "perplexity/sonar",
+  transcribe: "google/gemini-2.5-flash-lite",
+  speak: "openai/gpt-audio-mini",
 };
 
 const tierEnvVar: Record<ModelTier, keyof Bindings> = {
@@ -37,6 +43,8 @@ const tierEnvVar: Record<ModelTier, keyof Bindings> = {
   smart: "OMI_MODEL_SMART",
   multimodal: "OMI_MODEL_MULTIMODAL",
   search: "OMI_MODEL_SEARCH",
+  transcribe: "OMI_MODEL_TRANSCRIBE",
+  speak: "OMI_MODEL_SPEAK",
 };
 
 const nonEmpty = (value: string | undefined): string | undefined => {

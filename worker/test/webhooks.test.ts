@@ -55,6 +55,8 @@ beforeAll(async () => {
     "migrations/0013_conversations.sql",
     "migrations/0014_channel_inbox_dispatch.sql",
     "migrations/0022_channel_link_codes.sql",
+    "migrations/0026_channel_accounts.sql",
+    "migrations/0028_channel_checkout.sql",
   ]) {
     const sql = (await Bun.file(migration).text()).replace(
       "PRAGMA foreign_keys = ON;",
@@ -77,7 +79,78 @@ afterAll(async () => {
   await miniflare.dispose();
 });
 
+const rateLimiter = {
+  getByName: () => ({
+    fetch: async () => Response.json({ allowed: true, retryAfter: 0 }),
+  }),
+} as unknown as DurableObjectNamespace;
+
 describe("channel webhooks", () => {
+  test("an unknown sender is greeted once, and a replayed update changes nothing", async () => {
+    const send = (updateId: number, text: string) =>
+      app.request(
+        "/v1/webhooks/telegram",
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-telegram-bot-api-secret-token": "telegram-secret",
+          },
+          body: JSON.stringify({
+            update_id: updateId,
+            message: {
+              message_id: updateId + 500,
+              text,
+              from: { id: 909 },
+              chat: { id: 909 },
+            },
+          }),
+        },
+        {
+          DB: database,
+          FIREBASE_PROJECT_ID: "test",
+          TELEGRAM_WEBHOOK_SECRET: "telegram-secret",
+          RATE_LIMITER: rateLimiter,
+        },
+      );
+    expect(await (await send(101, "hi")).json()).toEqual({
+      accepted: true,
+      queued: false,
+      replied: true,
+    });
+    expect(await (await send(102, "nope")).json()).toEqual({
+      accepted: true,
+      queued: false,
+      replied: true,
+    });
+    const account = await database
+      .prepare(
+        "SELECT uid FROM channel_accounts WHERE channel = 'telegram' AND channel_user_id = '909'",
+      )
+      .first<{ uid: string }>();
+    expect(account?.uid).toMatch(/^chan_/);
+    const replay = await send(102, "nope");
+    expect(await replay.json()).toEqual({ accepted: true, duplicate: true });
+    expect(
+      await database
+        .prepare(
+          "SELECT COUNT(*) AS count FROM channel_accounts WHERE channel_user_id = '909'",
+        )
+        .first(),
+    ).toMatchObject({ count: 1 });
+    expect(
+      await database
+        .prepare("SELECT COUNT(*) AS count FROM users WHERE uid LIKE 'chan_%'")
+        .first(),
+    ).toMatchObject({ count: 1 });
+    await database
+      .prepare("DELETE FROM channel_inbox WHERE channel_user_id = '909'")
+      .run();
+    await database
+      .prepare("DELETE FROM conversation_messages WHERE uid LIKE 'chan_%'")
+      .run();
+  });
+
   test("links Telegram once and queues later messages for the Firebase UID", async () => {
     const token = "a".repeat(48);
     const now = Date.now();
@@ -473,5 +546,91 @@ describe("Stripe webhook", () => {
         .prepare("SELECT status FROM entitlements WHERE uid = 'alpha'")
         .first(),
     ).toMatchObject({ status: "active" });
+  });
+
+  // One person, two Omi accounts, one email: Stripe reuses the customer, and
+  // `entitlements_stripe_customer` is unique. The second account still has to
+  // get what it paid for, and the event must never be able to strand itself
+  // by failing before its own receipt is written.
+  test("grants the entitlement when Stripe reuses a customer across accounts", async () => {
+    const now = Date.now();
+    await database
+      .prepare(
+        "INSERT INTO users (uid, email, created_at, updated_at) VALUES ('twin', 'alpha@example.test', ?1, ?1)",
+      )
+      .bind(now)
+      .run();
+    const post = async (body: string) =>
+      app.request(
+        "/v1/webhooks/stripe",
+        {
+          method: "POST",
+          headers: { "stripe-signature": await sign(body) },
+          body,
+        },
+        {
+          DB: database,
+          FIREBASE_PROJECT_ID: "test",
+          STRIPE_WEBHOOK_SECRET: secret,
+        },
+      );
+    const checkout = JSON.stringify({
+      id: "evt_twin_checkout",
+      type: "checkout.session.completed",
+      created: Math.floor(Date.now() / 1_000),
+      data: {
+        object: {
+          id: "cs_twin",
+          customer: "cus_123",
+          client_reference_id: "twin",
+          payment_status: "paid",
+        },
+      },
+    });
+    const checkoutResponse = await post(checkout);
+    expect(checkoutResponse.status).toBe(200);
+    expect(
+      (await checkoutResponse.json()) as Record<string, unknown>,
+    ).toMatchObject({ received: true, duplicate: false });
+    const subscription = JSON.stringify({
+      id: "evt_twin_subscription",
+      type: "customer.subscription.updated",
+      created: Math.floor(Date.now() / 1_000),
+      data: {
+        object: {
+          id: "sub_twin",
+          customer: "cus_123",
+          status: "active",
+          current_period_end: Math.floor(Date.now() / 1_000) + 3600,
+          metadata: { firebase_uid: "twin" },
+        },
+      },
+    });
+    const subscriptionResponse = await post(subscription);
+    expect(subscriptionResponse.status).toBe(200);
+    expect(
+      await database
+        .prepare(
+          "SELECT plan, status, stripe_customer_id FROM entitlements WHERE uid = 'twin'",
+        )
+        .first(),
+    ).toMatchObject({
+      plan: "pro",
+      status: "active",
+      // The id stays with the account that claimed it first; the collision
+      // costs addressability, not access.
+      stripe_customer_id: null,
+    });
+    // The receipts survived, so Stripe stops redelivering.
+    const receipts = await database
+      .prepare(
+        "SELECT COUNT(*) AS count FROM stripe_events WHERE event_id IN ('evt_twin_checkout', 'evt_twin_subscription')",
+      )
+      .first<{ count: number }>();
+    expect(receipts?.count).toBe(2);
+    // A redelivery of either event is recognised rather than reapplied blind.
+    expect(
+      (await (await post(subscription)).json()) as Record<string, unknown>,
+    ).toMatchObject({ received: true, duplicate: true });
   });
 });

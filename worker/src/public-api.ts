@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { requireApiAccess, requireScope } from "./api-keys";
-import { runManagedInboxCompletion } from "./assistant";
+import { boundedJson, runManagedInboxCompletion } from "./assistant";
 import {
   appendConversationMessage,
   listConversationMessages,
@@ -16,6 +16,11 @@ import {
 } from "./memory-read";
 import { memoryContextFor, searchMemoryClaims } from "./memory-vectors";
 import { consumeRateLimit } from "./rate-limit";
+import {
+  maximumTranscribeBodyBytes,
+  speakTextOperation,
+  transcribeAudioOperation,
+} from "./speech";
 import type { AppEnv, Bindings } from "./types";
 
 // The third-party surface. Every route here is a thin adapter over an
@@ -473,6 +478,50 @@ publicApi.post(
       return context.json({ error: "Invalid FaceTime handle" }, 400);
     return respond(
       await startFaceTimeOperation(
+        context.env,
+        context.get("auth").uid,
+        body as Record<string, unknown>,
+      ),
+    );
+  },
+);
+
+// Audio uploads are read through a size-bounded reader rather than
+// `req.json()`: the body can be megabytes and an oversized one must be
+// refused before it is buffered, not after.
+publicApi.post(
+  "/speech/transcriptions",
+  requireScope("speech:write"),
+  async (context) => {
+    const declared = Number(context.req.header("content-length"));
+    if (Number.isFinite(declared) && declared > maximumTranscribeBodyBytes)
+      return context.json({ error: "Audio too large" }, 413);
+    const body = await boundedJson(context.req.raw, maximumTranscribeBodyBytes);
+    if (!body) return context.json({ error: "Audio too large" }, 413);
+    return respond(
+      await transcribeAudioOperation(
+        context.env,
+        context.get("auth").uid,
+        body,
+      ),
+    );
+  },
+);
+
+publicApi.post(
+  "/speech/synthesis",
+  requireScope("speech:write"),
+  async (context) => {
+    let body: unknown;
+    try {
+      body = await context.req.json();
+    } catch {
+      return context.json({ error: "Invalid speech request" }, 400);
+    }
+    if (body === null || typeof body !== "object" || Array.isArray(body))
+      return context.json({ error: "Invalid speech request" }, 400);
+    return respond(
+      await speakTextOperation(
         context.env,
         context.get("auth").uid,
         body as Record<string, unknown>,

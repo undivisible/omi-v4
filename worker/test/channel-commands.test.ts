@@ -18,6 +18,12 @@ import {
   normalizeLinkCode,
   resolveLinkCode,
 } from "../src/channel-link";
+import {
+  claimChannelAccount,
+  liveChannelAccount,
+  parseSignupAnswer,
+  signUpChannelSender,
+} from "../src/channel-signup";
 import { systemPrompt as fallbackSystemPrompt } from "../src/inbox-fallback";
 import type { Bindings, Channel } from "../src/types";
 
@@ -31,6 +37,7 @@ let database: D1Database;
 
 // A rate limiter whose window can be toggled shut, to exercise the abuse cap.
 let rateAllowed = true;
+const rateBlocked: string[] = [];
 const rateHits: string[] = [];
 const rateLimiter = {
   getByName: (name: string) => ({
@@ -38,9 +45,11 @@ const rateLimiter = {
       const pathname = new URL(String(url)).pathname;
       if (pathname === "/consume") {
         rateHits.push(name);
+        const allowed =
+          rateAllowed && !rateBlocked.some((key) => name.includes(key));
         return Response.json(
-          { allowed: rateAllowed, retryAfter: rateAllowed ? 0 : 60 },
-          { status: rateAllowed ? 200 : 429 },
+          { allowed, retryAfter: allowed ? 0 : 60 },
+          { status: allowed ? 200 : 429 },
         );
       }
       return new Response(null, { status: 404 });
@@ -112,6 +121,7 @@ beforeAll(async () => {
     "migrations/0013_conversations.sql",
     "migrations/0014_channel_inbox_dispatch.sql",
     "migrations/0022_channel_link_codes.sql",
+    "migrations/0026_channel_accounts.sql",
   ])
     await migrate(file);
   const now = Date.now();
@@ -129,10 +139,14 @@ afterAll(async () => {
 
 beforeEach(async () => {
   rateAllowed = true;
+  rateBlocked.length = 0;
   rateHits.length = 0;
   unlinkCalls.length = 0;
   await database.prepare("DELETE FROM channel_link_codes").run();
   await database.prepare("DELETE FROM channel_bindings").run();
+  await database.prepare("DELETE FROM channel_accounts").run();
+  await database.prepare("DELETE FROM channel_first_contact").run();
+  await database.prepare("DELETE FROM users WHERE uid LIKE 'chan_%'").run();
 });
 
 describe("link codes", () => {
@@ -181,7 +195,7 @@ describe("link codes", () => {
 });
 
 describe("unlinked sender", () => {
-  test("greets with a code instead of silence", async () => {
+  test("asks whether they have an account instead of staying silent", async () => {
     const outcome = await handleChannelMessage(
       env(),
       "telegram",
@@ -190,11 +204,99 @@ describe("unlinked sender", () => {
       "hello?",
     );
     expect(outcome.enqueue).toBe(false);
+    expect(outcome.reply).toContain("Do you already have an Omi account");
+    const stored = await database
+      .prepare("SELECT COUNT(*) AS count FROM channel_link_codes")
+      .first<{ count: number }>();
+    expect(stored?.count).toBe(0);
+    const asked = await database
+      .prepare("SELECT COUNT(*) AS count FROM channel_first_contact")
+      .first<{ count: number }>();
+    expect(asked?.count).toBe(1);
+  });
+
+  test("answering yes falls through to the unchanged code-linking path", async () => {
+    await handleChannelMessage(env(), "telegram", "42", "42", "hi");
+    const outcome = await handleChannelMessage(
+      env(),
+      "telegram",
+      "42",
+      "42",
+      "Yes, I do!",
+    );
     expect(outcome.reply).toContain("link code");
     const stored = await database
       .prepare("SELECT COUNT(*) AS count FROM channel_link_codes")
       .first<{ count: number }>();
     expect(stored?.count).toBe(1);
+    const account = await liveChannelAccount(database, "telegram", "42");
+    expect(account).toBeNull();
+  });
+
+  test("answering no signs the sender up and binds the chat", async () => {
+    await handleChannelMessage(env(), "telegram", "77", "77", "hey");
+    const outcome = await handleChannelMessage(
+      env(),
+      "telegram",
+      "77",
+      "77",
+      "nope",
+    );
+    expect(outcome.reply).toContain("this chat is your Omi account");
+    const account = await liveChannelAccount(database, "telegram", "77");
+    expect(account?.uid).toMatch(/^chan_[a-f0-9]{32}$/);
+    const binding = await database
+      .prepare(
+        "SELECT uid FROM channel_bindings WHERE channel = 'telegram' AND channel_user_id = '77'",
+      )
+      .first<{ uid: string }>();
+    expect(binding?.uid).toBe(account?.uid ?? "");
+    const after = await handleChannelMessage(
+      env(),
+      "telegram",
+      "77",
+      "77",
+      "what can you do?",
+    );
+    expect(after).toEqual({ reply: null, enqueue: true });
+  });
+
+  test("an answer it cannot read asks again rather than guessing", async () => {
+    await handleChannelMessage(env(), "telegram", "31", "31", "hello");
+    const outcome = await handleChannelMessage(
+      env(),
+      "telegram",
+      "31",
+      "31",
+      "what is this thing anyway",
+    );
+    expect(outcome.reply).toContain("Reply yes");
+    expect(await liveChannelAccount(database, "telegram", "31")).toBeNull();
+  });
+
+  test("/signup creates the account without the yes/no question", async () => {
+    const outcome = await handleChannelMessage(
+      env(),
+      "telegram",
+      "55",
+      "55",
+      "/signup",
+    );
+    expect(outcome.reply).toContain("this chat is your Omi account");
+    expect(await liveChannelAccount(database, "telegram", "55")).not.toBeNull();
+  });
+
+  test("signup is rate-limited per sender", async () => {
+    rateBlocked.push("channel-signup:");
+    const outcome = await handleChannelMessage(
+      env(),
+      "telegram",
+      "56",
+      "56",
+      "/signup",
+    );
+    expect(outcome.reply).toBeNull();
+    expect(await liveChannelAccount(database, "telegram", "56")).toBeNull();
   });
 
   test("rate-limits code issuance so the bot cannot relay spam", async () => {
@@ -341,6 +443,99 @@ describe("linked commands", () => {
         conversation_reset_cursor: number | null;
       }>();
     expect(binding?.revoked_at).toBeNull();
+  });
+});
+
+describe("channel-created accounts", () => {
+  test("reads however a person types yes or no", () => {
+    for (const value of ["yes", "Y", "i do", "already have one", "Sure."])
+      expect(parseSignupAnswer(value)).toBe("has-account");
+    for (const value of ["no", "Nope!", "nah", "new", "sign me up", "i dont"])
+      expect(parseSignupAnswer(value)).toBe("needs-account");
+    for (const value of ["maybe", "who are you", ""])
+      expect(parseSignupAnswer(value)).toBeNull();
+  });
+
+  test("a replayed signup returns the same account and one user row", async () => {
+    const first = await signUpChannelSender(env(), "blooio", "+1555", "+1555");
+    const second = await signUpChannelSender(env(), "blooio", "+1555", "+1555");
+    expect(first.status).toBe("created");
+    expect(second).toEqual({
+      status: "existing",
+      uid: first.status === "created" ? first.uid : "",
+    });
+    const users = await database
+      .prepare("SELECT COUNT(*) AS count FROM users WHERE uid LIKE 'chan_%'")
+      .first<{ count: number }>();
+    expect(users?.count).toBe(1);
+  });
+
+  test("never overwrites a chat already linked to a real account", async () => {
+    await bind("telegram", "42", "alpha");
+    const result = await signUpChannelSender(env(), "telegram", "42", "42");
+    expect(result.status).toBe("conflict");
+    const binding = await database
+      .prepare(
+        "SELECT uid FROM channel_bindings WHERE channel = 'telegram' AND channel_user_id = '42'",
+      )
+      .first<{ uid: string }>();
+    expect(binding?.uid).toBe("alpha");
+  });
+
+  test("claiming retires the placeholder so the handle cannot be reused", async () => {
+    const created = await signUpChannelSender(env(), "telegram", "61", "61");
+    const uid = created.status === "created" ? created.uid : "";
+    expect(await claimChannelAccount(database, "telegram", "61", "alpha")).toBe(
+      uid,
+    );
+    expect(await liveChannelAccount(database, "telegram", "61")).toBeNull();
+    expect(
+      await claimChannelAccount(database, "telegram", "61", "mallory"),
+    ).toBeNull();
+  });
+
+  test("/status and /whoami say the chat is the account", async () => {
+    await signUpChannelSender(env(), "telegram", "62", "62");
+    const status = await handleChannelMessage(
+      env(),
+      "telegram",
+      "62",
+      "62",
+      "/status",
+    );
+    expect(status.reply).toContain("This chat is your Omi account");
+    const whoami = await handleChannelMessage(
+      env(),
+      "telegram",
+      "62",
+      "62",
+      "/whoami",
+    );
+    expect(whoami.reply).toContain("lives in this chat");
+  });
+
+  test("/logout explains, then closes the account and retires the row", async () => {
+    const created = await signUpChannelSender(env(), "telegram", "63", "63");
+    const uid = created.status === "created" ? created.uid : "";
+    const prompt = await handleChannelMessage(
+      env(),
+      "telegram",
+      "63",
+      "63",
+      "/logout",
+    );
+    expect(prompt.reply).toContain("no separate login");
+    expect(unlinkCalls.length).toBe(0);
+    const confirmed = await handleChannelMessage(
+      env(),
+      "telegram",
+      "63",
+      "63",
+      "/logout confirm",
+    );
+    expect(confirmed.reply).toContain("Closed");
+    expect(unlinkCalls).toEqual([{ uid, channel: "telegram" }]);
+    expect(await liveChannelAccount(database, "telegram", "63")).toBeNull();
   });
 });
 

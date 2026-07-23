@@ -1,9 +1,19 @@
 import { Hono } from "hono";
 import type { AppEnv, Bindings, Channel } from "./types";
+import {
+  completeChannelCheckout,
+  expireChannelCheckout,
+} from "./channel-checkout";
 import { handleChannelMessage } from "./channel-commands";
 import { digest, hmacHex } from "./channel-link";
 import { appendConversationMessage } from "./conversations";
 import { sendChannelText } from "./delivery";
+import {
+  applySubscriptionState,
+  claimStripeCustomer,
+  customerForDispute,
+  deactivateForCustomer,
+} from "./stripe-entitlement";
 
 const webhooks = new Hono<AppEnv>();
 const encoder = new TextEncoder();
@@ -397,16 +407,16 @@ webhooks.post("/stripe", async (context) => {
   if (typeof event.created !== "number" || !Number.isSafeInteger(event.created))
     return context.json({ error: "Invalid event" }, 400);
   const object = event.data?.object;
-  const receipt = context.env.DB.prepare(
+  // The receipt is written on its own, before any entitlement work: folding it
+  // into the same batch meant a failing write erased the record that the event
+  // ever arrived, so Stripe redelivered it forever into the same failure.
+  const receipt = await context.env.DB.prepare(
     "INSERT OR IGNORE INTO stripe_events (event_id, event_type, received_at) VALUES (?1, ?2, ?3)",
-  ).bind(event.id, event.type, Date.now());
-  if (!object) {
-    const inserted = await receipt.run();
-    return context.json({
-      received: true,
-      duplicate: inserted.meta.changes === 0,
-    });
-  }
+  )
+    .bind(event.id, event.type, Date.now())
+    .run();
+  const duplicate = receipt.meta.changes === 0;
+  if (!object) return context.json({ received: true, duplicate });
   const metadata =
     object.metadata !== null && typeof object.metadata === "object"
       ? (object.metadata as Record<string, unknown>)
@@ -417,6 +427,39 @@ webhooks.post("/stripe", async (context) => {
       : typeof metadata.firebase_uid === "string"
         ? metadata.firebase_uid
         : null;
+  // A session the payer walked away from: release it so the chat can be
+  // offered a fresh link. It carries no entitlement change.
+  if (event.type === "checkout.session.expired") {
+    if (typeof object.id === "string")
+      await expireChannelCheckout(context.env, object.id);
+    return context.json({ received: true, duplicate, updated: false });
+  }
+  // Neither a failed invoice nor a chargeback carries our uid, so both revoke
+  // against the Stripe customer. Access has to stop in both cases.
+  if (
+    event.type === "invoice.payment_failed" ||
+    event.type === "charge.dispute.created"
+  ) {
+    const disputed =
+      event.type === "charge.dispute.created"
+        ? await customerForDispute(context.env, object)
+        : typeof object.customer === "string"
+          ? object.customer
+          : null;
+    if (!disputed) {
+      return context.json({ received: true, duplicate, updated: false });
+    }
+    const revoked = await deactivateForCustomer(
+      context.env,
+      disputed,
+      event.created,
+    ).run();
+    return context.json({
+      received: true,
+      duplicate,
+      updated: revoked.meta.changes > 0,
+    });
+  }
   const customer = typeof object.customer === "string" ? object.customer : null;
   const subscription =
     typeof object.subscription === "string"
@@ -425,39 +468,41 @@ webhooks.post("/stripe", async (context) => {
           event.type.startsWith("customer.subscription.")
         ? object.id
         : null;
-  if (!uid || !customer) {
-    const inserted = await receipt.run();
-    return context.json({
-      received: true,
-      duplicate: inserted.meta.changes === 0,
-      updated: false,
-    });
-  }
+  if (!uid || !customer)
+    return context.json({ received: true, duplicate, updated: false });
   if (event.type === "checkout.session.completed") {
-    const results = await context.env.DB.batch([
-      receipt,
-      context.env.DB.prepare(
-        `INSERT INTO entitlements (uid, plan, status, stripe_customer_id, updated_at)
-           SELECT uid, 'byok', 'inactive', ?1, ?2 FROM users WHERE uid = ?3
-           ON CONFLICT(uid) DO UPDATE SET stripe_customer_id = excluded.stripe_customer_id,
-             updated_at = excluded.updated_at`,
-      ).bind(customer, Date.now(), uid),
-    ]);
+    const provisioned = await claimStripeCustomer(
+      context.env,
+      uid,
+      customer,
+    ).run();
+    // An account that was signed up inside a chat finishes signing up here:
+    // the entitlement is provisioned and the confirmation goes back into the
+    // same conversation, with no further step for the payer.
+    const completion = await completeChannelCheckout(context.env, {
+      sessionId: typeof object.id === "string" ? object.id : null,
+      uid,
+      customer,
+      subscription,
+      paid:
+        object.payment_status === "paid" ||
+        object.payment_status === "no_payment_required",
+      email:
+        typeof (object.customer_details as { email?: unknown } | undefined)
+          ?.email === "string"
+          ? (object.customer_details as { email: string }).email
+          : null,
+      eventCreated: event.created,
+    });
     return context.json({
       received: true,
-      duplicate: results[0].meta.changes === 0,
-      updated: results[1].meta.changes === 1,
+      duplicate,
+      updated: provisioned.meta.changes === 1,
+      channel: completion.provisioned,
     });
   }
-  if (!event.type.startsWith("customer.subscription.")) {
-    const inserted = await receipt.run();
-    return context.json({
-      received: true,
-      duplicate: inserted.meta.changes === 0,
-      updated: false,
-    });
-  }
-  const active = object.status === "active" || object.status === "trialing";
+  if (!event.type.startsWith("customer.subscription."))
+    return context.json({ received: true, duplicate, updated: false });
   const validUntil =
     typeof object.current_period_end === "number" &&
     Number.isSafeInteger(object.current_period_end)
@@ -470,35 +515,19 @@ webhooks.post("/stripe", async (context) => {
     typeof price?.data?.[0]?.price?.id === "string"
       ? price.data[0].price.id
       : null;
-  const results = await context.env.DB.batch([
-    receipt,
-    context.env.DB.prepare(
-      `INSERT INTO entitlements
-           (uid, plan, status, valid_until, stripe_customer_id, updated_at, stripe_subscription_id, stripe_price_id, stripe_event_created)
-         SELECT uid, 'pro', ?1, ?2, ?3, ?4, ?5, ?6, ?7 FROM users WHERE uid = ?8
-         ON CONFLICT(uid) DO UPDATE SET
-           plan = 'pro', status = excluded.status, valid_until = excluded.valid_until,
-           stripe_customer_id = excluded.stripe_customer_id,
-           stripe_subscription_id = COALESCE(excluded.stripe_subscription_id, entitlements.stripe_subscription_id),
-           stripe_price_id = COALESCE(excluded.stripe_price_id, entitlements.stripe_price_id),
-           stripe_event_created = excluded.stripe_event_created,
-           updated_at = excluded.updated_at
-         WHERE excluded.stripe_event_created >= entitlements.stripe_event_created`,
-    ).bind(
-      active ? "active" : "inactive",
-      validUntil,
-      customer,
-      Date.now(),
-      subscription,
-      priceId,
-      event.created,
-      uid,
-    ),
-  ]);
+  const applied = await applySubscriptionState(context.env, {
+    uid,
+    status: typeof object.status === "string" ? object.status : null,
+    validUntil,
+    customer,
+    subscriptionId: subscription,
+    priceId,
+    eventCreated: event.created,
+  }).run();
   return context.json({
     received: true,
-    duplicate: results[0].meta.changes === 0,
-    updated: results[1].meta.changes === 1,
+    duplicate,
+    updated: applied.meta.changes === 1,
   });
 });
 

@@ -11,6 +11,11 @@ import {
   startFaceTimeOperation,
   type OperationResult,
 } from "./public-api";
+import {
+  maximumSpeakCharacters,
+  speakTextOperation,
+  transcribeAudioOperation,
+} from "./speech";
 import type { ApiKeyScope, AppEnv, Bindings } from "./types";
 
 // A direct implementation of the MCP streamable-HTTP transport: JSON-RPC 2.0
@@ -298,6 +303,102 @@ export const tools: ToolDefinition[] = [
       ["handle"],
     ),
     run: (env, uid, input) => startFaceTimeOperation(env, uid, input),
+  },
+  {
+    name: "transcribe_audio",
+    title: "Transcribe audio",
+    description:
+      "Transcribe a recording server-side and return timed segments. The " +
+      "audio is sent inline as base64, so the whole JSON-RPC request must " +
+      "stay under 256 KiB — roughly 180 KiB of audio, about 45 seconds of " +
+      "mp3. For anything larger use POST /api/v1/speech/transcriptions. " +
+      "clientMessageId makes the call idempotent: retrying with the same id " +
+      "replays the stored transcript instead of transcribing again. " +
+      "Requires an active Omi Pro account.",
+    scope: "speech:write",
+    inputSchema: object(
+      {
+        audio: {
+          type: "string",
+          description: "Base64-encoded audio bytes, no data: URL prefix.",
+          minLength: 1,
+        },
+        format: {
+          type: "string",
+          enum: ["wav", "mp3"],
+          description: "Container of the supplied audio.",
+        },
+        clientMessageId: {
+          type: "string",
+          description:
+            "Caller-supplied idempotency id, 8-120 characters of [A-Za-z0-9._:-].",
+          minLength: 8,
+          maxLength: 120,
+        },
+        language: {
+          type: "string",
+          description:
+            "BCP-47 language hint such as 'en' or 'en-US'. Defaults to 'auto'.",
+          maxLength: 32,
+        },
+        durationSeconds: integer(
+          "Known duration of the audio in seconds. Improves the budget reservation.",
+          1,
+          3600,
+        ),
+      },
+      ["audio", "format", "clientMessageId"],
+    ),
+    run: (env, uid, input) => transcribeAudioOperation(env, uid, input),
+  },
+  {
+    name: "speak_text",
+    title: "Synthesize speech",
+    description:
+      "Read text aloud and return the spoken audio as base64. Bounded to " +
+      `${maximumSpeakCharacters} characters per call. clientMessageId makes ` +
+      "the call idempotent: retrying with the same id replays the stored " +
+      "audio instead of synthesizing again. Requires an active Omi Pro " +
+      "account.",
+    scope: "speech:write",
+    inputSchema: object(
+      {
+        text: {
+          type: "string",
+          description: "The text to speak, read out verbatim.",
+          minLength: 1,
+          maxLength: maximumSpeakCharacters,
+        },
+        clientMessageId: {
+          type: "string",
+          description:
+            "Caller-supplied idempotency id, 8-120 characters of [A-Za-z0-9._:-].",
+          minLength: 8,
+          maxLength: 120,
+        },
+        voice: {
+          type: "string",
+          enum: [
+            "alloy",
+            "ash",
+            "ballad",
+            "coral",
+            "echo",
+            "sage",
+            "shimmer",
+            "verse",
+          ],
+          description: "Voice to speak with. Defaults to 'alloy'.",
+        },
+        format: {
+          type: "string",
+          enum: ["mp3", "opus"],
+          description: "Container of the returned audio. Defaults to 'mp3'.",
+        },
+      },
+      ["text", "clientMessageId"],
+    ),
+    run: (env, uid, input) => speakTextOperation(env, uid, input),
   },
 ];
 

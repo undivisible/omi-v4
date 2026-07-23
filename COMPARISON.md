@@ -40,7 +40,7 @@ flowchart TB
 | Backend | Python/FastAPI on GCP — Firestore, Cloud Storage, Cloud Tasks, Redis, Pinecone *and* Qdrant for vectors, Typesense for search, SQLAlchemy, Modal jobs; provisioned with OpenTofu (`backend/`, `infrastructure/`) | Cloudflare Workers — `worker/` (TypeScript/Hono/Bun) with `worker-rs/` (a Rust/workers-rs parity port, shadow-deployed); D1 for relational data, Durable Objects for coordination, Vectorize for embeddings, Workers AI for embedding generation |
 | Auth | Firebase Auth | Firebase Auth, verified at the edge by hand-rolled JWT/JWKS checks (`worker/src/auth.ts`) |
 | Memory | Vector stores (Pinecone/Qdrant) behind backend services | `zkr` evidence-backed temporal memory in-process on the client, projected to D1/Vectorize for cloud recall |
-| Firmware | `omi/firmware` — production `omi/` plus legacy `devkit/` and `test/` variants | `firmware/` — the production tree vendored; `devkit/` and `test/` deliberately excluded |
+| Firmware | `omi/firmware` — production `omi/` plus legacy `devkit/` and `test/` variants | `firmware/` — the production tree vendored, with `devkit/` and `test/` included; see [`firmware/COMPARISON.md`](firmware/COMPARISON.md) |
 | Also in tree | `omiGlass`, a plugins/apps ecosystem, MCP servers, SDKs, contract tests | none of these |
 
 ## 2. Mobile

@@ -118,7 +118,7 @@ beforeAll(async () => {
   const now = Date.now();
   await database
     .prepare(
-      "INSERT INTO users (uid, email, created_at, updated_at) VALUES (?1, ?2, ?3, ?3), (?4, ?5, ?3, ?3), (?6, ?7, ?3, ?3), (?8, ?9, ?3, ?3), (?10, ?11, ?3, ?3)",
+      "INSERT INTO users (uid, email, created_at, updated_at) VALUES (?1, ?2, ?3, ?3), (?4, ?5, ?3, ?3), (?6, ?7, ?3, ?3), (?8, ?9, ?3, ?3), (?10, ?11, ?3, ?3), (?12, ?13, ?3, ?3), (?14, ?15, ?3, ?3)",
     )
     .bind(
       "haggler",
@@ -132,6 +132,10 @@ beforeAll(async () => {
       "forger@example.test",
       "guest",
       "guest@example.test",
+      "stacker",
+      "stacker@example.test",
+      "hoarder",
+      "hoarder@example.test",
     )
     .run();
 });
@@ -251,6 +255,57 @@ describe("negotiation", () => {
     // The cooldown, read from the record, refuses a fresh negotiation.
     const again = await post("haggler", "/byok/negotiation");
     expect(again.status).toBe(409);
+  });
+
+  // The cooldown is a control, not a suggestion: banking a second session and
+  // accepting it after settling would restart the 30-day clock and leave the
+  // audit record naming a conversation nobody settled on.
+  test("refuses a session superseded by a later agreement", async () => {
+    const session = await startSession("stacker");
+    const standard = await post("stacker", "/byok/plan/standard");
+    expect(standard.status).toBe(201);
+    const settled = await database
+      .prepare(
+        "SELECT agreed_at, session_id FROM byok_price_agreements WHERE uid = 'stacker'",
+      )
+      .first<{ agreed_at: number; session_id: string | null }>();
+    const accepted = await post(
+      "stacker",
+      `/byok/negotiation/${session.sessionId}/accept`,
+    );
+    expect(accepted.status).toBe(409);
+    const unchanged = await database
+      .prepare(
+        "SELECT agreed_at, session_id FROM byok_price_agreements WHERE uid = 'stacker'",
+      )
+      .first<{ agreed_at: number; session_id: string | null }>();
+    expect(unchanged).toEqual(settled);
+  });
+
+  test("starting a negotiation closes the one before it", async () => {
+    const first = await startSession("hoarder");
+    const second = await startSession("hoarder");
+    const status = await database
+      .prepare("SELECT status FROM byok_negotiation_sessions WHERE id = ?1")
+      .bind(first.sessionId)
+      .first<{ status: string }>();
+    expect(status?.status).toBe("closed");
+    const stale = await post(
+      "hoarder",
+      `/byok/negotiation/${first.sessionId}/accept`,
+    );
+    expect(stale.status).toBe(409);
+    const accepted = await post(
+      "hoarder",
+      `/byok/negotiation/${second.sessionId}/accept`,
+    );
+    expect(accepted.status).toBe(201);
+    const row = await database
+      .prepare(
+        "SELECT session_id FROM byok_price_agreements WHERE uid = 'hoarder'",
+      )
+      .first<{ session_id: string }>();
+    expect(row?.session_id).toBe(second.sessionId);
   });
 
   test("repeat negotiations are rate limited", async () => {

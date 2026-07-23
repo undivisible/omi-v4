@@ -73,6 +73,7 @@ unattended integrations.
 | `conversations:read` | `GET /api/v1/conversations/messages`, `GET /api/v1/notes`; tools `list_conversation_messages`, `list_meeting_notes` |
 | `assistant:write` | `POST /api/v1/assistant/messages`; tool `ask_omi` |
 | `facetime:write` | `POST /api/v1/facetime/calls`; tool `start_facetime_call` |
+| `speech:write` | `POST /api/v1/speech/transcriptions`, `POST /api/v1/speech/synthesis`; tools `transcribe_audio`, `speak_text` |
 
 `GET /api/v1/me` requires a valid credential but no scope.
 
@@ -162,6 +163,8 @@ and MCP. Firebase-authenticated calls count against the same budget.
 | `public-write` | `POST /currents`; tool `create_current` | 60 requests / 60 s |
 | `public-assistant` | `POST /assistant/messages`; tool `ask_omi` | 20 requests / 60 s |
 | `public-facetime` | `POST /facetime/calls`; tool `start_facetime_call` | 5 requests / 60 s |
+| `public-transcribe` | `POST /speech/transcriptions`; tool `transcribe_audio` | 10 requests / 60 s |
+| `public-speak` | `POST /speech/synthesis`; tool `speak_text` | 20 requests / 60 s |
 | key creation | `POST /v1/api-keys` | 10 / 60 min |
 
 Exceeding a limit returns `429` with `{"error":"Too many requests"}` and a
@@ -171,7 +174,9 @@ tool result with `isError: true` and body `{"error":"Too many requests"}`.
 `GET /api/v1/me` is not rate limited.
 
 Managed-AI capacity control applies to `ask_omi` / `POST /assistant/messages`
-independently of these buckets and can also produce `429`.
+independently of these buckets and can also produce `429`. The speech routes
+sit behind the same managed-STT admission and cost reservation the live STT
+sessions use, which can also produce `429` — see §4.10 and §4.11.
 
 ---
 
@@ -618,6 +623,159 @@ Errors:
 | `502` | `{"error":"FaceTime calling unavailable"}` | Provider error, timeout, or an unusable response body. Safe to retry with the same `idempotencyKey`. |
 | `503` | `{"error":"FaceTime calling is not yet available from Blooio","code":"facetime_unavailable"}` | The provider has FaceTime calling disabled (upstream `501`). **Do not retry** — this is a product state, not a transient fault. Distinguish it by `code`, not by the status. |
 
+### 4.10 `POST /api/v1/speech/transcriptions`
+
+Scope: `speech:write`. **Requires an active Omi Pro subscription on the
+account.**
+
+Transcribe a recording server-side. This is the path for callers that have no
+in-process Omi hub — the FaceTime / Gemini Live bridge, a phone flushing a
+write-ahead log of buffered audio after a dropout, and third-party
+integrations. The live capture path in the desktop and mobile apps does not use
+this route; it transcribes in the hub.
+
+The call runs as an OpenRouter chat completion against the `transcribe` model
+tier (`OMI_MODEL_TRANSCRIBE`, default `google/gemini-2.5-flash-lite`), through
+the Cloudflare AI Gateway when one is configured.
+
+Request:
+
+```json
+{
+  "audio": "<base64>",
+  "format": "mp3",
+  "clientMessageId": "phone:wal:2026-07-23:0007",
+  "language": "en",
+  "durationSeconds": 42
+}
+```
+
+| Field | Type | Required | Notes |
+| --- | --- | --- | --- |
+| `audio` | string | yes | Base64 of the raw audio bytes; no `data:` prefix. Maximum 10 MiB decoded (about 14 MiB of base64). |
+| `format` | string | yes | `wav` or `mp3`. |
+| `clientMessageId` | string | yes | Idempotency key. 8–120 characters matching `[A-Za-z0-9._:-]`. Required, not defaulted: a retry that generated a fresh id would be charged twice. |
+| `language` | string | no | `auto` (default) or a BCP-47 tag such as `en` or `en-US`. A hint only. |
+| `durationSeconds` | integer | no | Known duration. When omitted it is estimated from the upload size, conservatively (`wav` at 32 kB/s, `mp3` at 4 kB/s), and the estimate is what gets reserved against the budget. |
+
+The whole request body is capped at roughly 14 MiB; a larger body is rejected
+before it is buffered. Audio longer than `SPEECH_MAX_AUDIO_SECONDS` (default
+900 s) is rejected before any upstream call.
+
+`200`:
+
+```json
+{
+  "requestId": "sha256-of-uid-and-clientMessageId",
+  "clientMessageId": "phone:wal:2026-07-23:0007",
+  "model": "google/gemini-2.5-flash-lite",
+  "language": "en",
+  "durationSeconds": 42,
+  "text": "hello there second line",
+  "segments": [
+    { "index": 0, "start": 0, "end": 1.5, "text": "hello there" },
+    { "index": 1, "start": 1.5, "end": 3, "text": "second line" }
+  ]
+}
+```
+
+`start` and `end` are seconds from the beginning of the audio, **as reported by
+the model** — treat them as approximate, and expect `null` on both when the
+model returns an untimed transcript. In that case the whole transcript is
+returned as a single segment.
+
+**Idempotency.** The `clientMessageId` decides identity. Retrying a completed
+request with the same id and the same payload replays the stored transcript
+verbatim with `"idempotentReplay": true` added — no second upstream call, no
+second charge, no duplicated segments. Reusing the id with a *different*
+payload is `409`. A retry that arrives while the first attempt is still running
+is also `409`; retry once it settles.
+
+Errors:
+
+| Status | Body | Cause |
+| --- | --- | --- |
+| `400` | `{"error":"Invalid transcription request"}` | Missing or malformed `audio`, `format`, `clientMessageId`, `language`, or `durationSeconds`. |
+| `403` | `{"error":"Managed Pro required"}` | Account has no active Pro entitlement. |
+| `403` | `{"error":"Missing scope","scope":"speech:write"}` | Key lacks the scope. |
+| `409` | `{"error":"Client message ID conflict"}` | `clientMessageId` reused with a different payload. |
+| `409` | `{"error":"Speech request in progress"}` | An earlier attempt under this id is still running. |
+| `413` | `{"error":"Audio too large"}` | Body or `audio` beyond the size ceiling. Nothing was buffered upstream. |
+| `413` | `{"error":"Audio too long"}` | Audio beyond `SPEECH_MAX_AUDIO_SECONDS`. |
+| `429` | `{"error":"Too many requests"}` | Rate limit; see §2. |
+| `429` | `{"error":"Managed speech capacity exceeded"}` | Admission/cost budget exhausted. `Retry-After` in whole seconds. |
+| `502` | `{"error":"Managed speech unavailable"}` | Provider error, timeout, or an unusable response body. The reservation is settled and released; safe to retry with the same `clientMessageId`. |
+| `503` | `{"error":"Managed speech unavailable"}` | Speech is unconfigured on the deployment. |
+
+Synchronous, and long audio takes a while: allow at least a 120-second client
+timeout.
+
+### 4.11 `POST /api/v1/speech/synthesis`
+
+Scope: `speech:write`. **Requires an active Omi Pro subscription on the
+account.**
+
+Read text aloud and return the audio. Runs as an OpenRouter chat completion
+with the audio output modality against the `speak` model tier
+(`OMI_MODEL_SPEAK`, default `openai/gpt-audio-mini`), through the Cloudflare AI
+Gateway when one is configured.
+
+Request:
+
+```json
+{
+  "text": "Your car is booked for Friday at nine.",
+  "clientMessageId": "assistant:tts:0007",
+  "voice": "alloy",
+  "format": "mp3"
+}
+```
+
+| Field | Type | Required | Notes |
+| --- | --- | --- | --- |
+| `text` | string | yes | 1–1000 characters, spoken verbatim. |
+| `clientMessageId` | string | yes | Idempotency key. 8–120 characters matching `[A-Za-z0-9._:-]`. |
+| `voice` | string | no | One of `alloy`, `ash`, `ballad`, `coral`, `echo`, `sage`, `shimmer`, `verse`. Defaults to `alloy`. |
+| `format` | string | no | `mp3` (default) or `opus`. Uncompressed formats are not offered: the audio is retained for idempotent replay and has to fit in one row. |
+
+`200`:
+
+```json
+{
+  "requestId": "sha256-of-uid-and-clientMessageId",
+  "clientMessageId": "assistant:tts:0007",
+  "model": "openai/gpt-audio-mini",
+  "voice": "alloy",
+  "format": "mp3",
+  "characters": 38,
+  "estimatedSeconds": 3,
+  "audio": "<base64>"
+}
+```
+
+`estimatedSeconds` is the reservation estimate (about 14 characters per second
+of speech), not a measurement of the returned audio.
+
+**Idempotency.** Same rules as §4.10: a retry with the same id and same text,
+voice and format replays the stored audio with `"idempotentReplay": true` and
+is not charged again.
+
+Errors:
+
+| Status | Body | Cause |
+| --- | --- | --- |
+| `400` | `{"error":"Invalid speech request"}` | Missing or blank `text`, malformed `clientMessageId`, unknown `voice` or `format`. |
+| `403` | `{"error":"Managed Pro required"}` | Account has no active Pro entitlement. |
+| `403` | `{"error":"Missing scope","scope":"speech:write"}` | Key lacks the scope. |
+| `409` | `{"error":"Client message ID conflict"}` | `clientMessageId` reused with different text, voice or format. |
+| `409` | `{"error":"Speech request in progress"}` | An earlier attempt under this id is still running. |
+| `413` | `{"error":"Text too long"}` | `text` beyond 1000 characters. Nothing was sent upstream. |
+| `429` | `{"error":"Too many requests"}` | Rate limit; see §2. |
+| `429` | `{"error":"Managed speech capacity exceeded"}` | Admission/cost budget exhausted. `Retry-After` in whole seconds. |
+| `502` | `{"error":"Managed speech unavailable"}` | Provider error, timeout, or no audio in the response. |
+| `502` | `{"error":"Synthesized audio too large"}` | The provider returned audio too large to retain for replay. Shorten the text. |
+| `503` | `{"error":"Managed speech unavailable"}` | Speech is unconfigured on the deployment. |
+
 ---
 
 ## 5. MCP server
@@ -778,6 +936,33 @@ Side-effectful: it rings a real person's device. See §4.9 for the full
 semantics and for its current unavailability. The provider is switched off
 today, so this tool currently returns `isError: true` with
 `{"error":"FaceTime calling is not yet available from Blooio","code":"facetime_unavailable"}`.
+
+#### `transcribe_audio`
+
+```
+audio            string   required, base64 audio bytes
+format           string   required, 'wav' or 'mp3'
+clientMessageId  string   required, 8-120 chars of [A-Za-z0-9._:-]
+language         string   optional, BCP-47 hint, defaults to 'auto'
+durationSeconds  integer  optional, 1-3600
+```
+
+Server-side transcription; see §4.10 for the full semantics. The audio travels
+inline in the JSON-RPC request, so the **256 KiB body cap applies**: that is
+roughly 180 KiB of audio, about 45 seconds of mp3. Anything longer must go to
+`POST /api/v1/speech/transcriptions`.
+
+#### `speak_text`
+
+```
+text             string   required, 1-1000
+clientMessageId  string   required, 8-120 chars of [A-Za-z0-9._:-]
+voice            string   optional, one of alloy|ash|ballad|coral|echo|sage|shimmer|verse
+format           string   optional, 'mp3' (default) or 'opus'
+```
+
+Returns base64 audio; see §4.11. Both tools require an active Omi Pro
+subscription and are idempotent on `clientMessageId`.
 
 ---
 
