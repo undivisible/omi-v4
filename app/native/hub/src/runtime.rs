@@ -1431,6 +1431,10 @@ pub fn runtime_status(memory_available: bool) -> RuntimeStatus {
 
 const MEMORY_CONTEXT_CHARACTER_LIMIT: usize = 2_000;
 const LOCAL_MEMORY_CONTEXT_ITEMS: u32 = 6;
+const PROFILE_CONTEXT_ITEMS: u32 = 12;
+const CHAT_MODEL_TOOL: &str = "chat_model";
+const LOCAL_CHAT_MODEL_DETAIL: &str = "local:apple-foundation-models";
+const ONLINE_CHAT_MODEL_DETAIL: &str = "online:configured-provider";
 
 fn assistant_prompt(memory_context: Option<&str>, text: &str) -> String {
     match memory_context
@@ -1489,20 +1493,120 @@ async fn local_memory_context(
     }
 }
 
+struct ProfileContext {
+    lines: String,
+    names: Vec<String>,
+}
+
+async fn local_profile_context(
+    state: &Mutex<RuntimeState>,
+    cancellation: &CancellationToken,
+) -> Option<ProfileContext> {
+    let memory = state.lock().await.memory.clone()?;
+    let task = spawn_blocking(move || {
+        let memory = memory
+            .lock()
+            .map_err(|_| "memory database lock was poisoned".to_owned())?;
+        memory
+            .database
+            .profiles(ProfilesInput {
+                tenant_id: memory.tenant_id.clone(),
+                person_id: memory.person_id.clone(),
+                limit: PROFILE_CONTEXT_ITEMS,
+            })
+            .map_err(|error_value| error_value.to_string())
+    });
+    match await_blocking(task, cancellation).await {
+        BlockingOutcome::Complete(profiles) => {
+            let mut names = Vec::new();
+            let lines: Vec<String> = profiles
+                .into_iter()
+                .map(|profile| {
+                    if profile.key.to_lowercase().contains("name") {
+                        names.push(profile.value.clone());
+                    }
+                    format!("- {}: {}", profile.key, profile.value)
+                })
+                .collect();
+            if lines.is_empty() {
+                None
+            } else {
+                Some(ProfileContext {
+                    lines: lines.join("\n"),
+                    names,
+                })
+            }
+        }
+        BlockingOutcome::Failed(_) | BlockingOutcome::Cancelled => None,
+    }
+}
+
+fn combined_context(profile: Option<&str>, memory: Option<&str>) -> Option<String> {
+    match (profile, memory) {
+        (Some(profile), Some(memory)) => Some(format!("{profile}\n{memory}")),
+        (Some(profile), None) => Some(profile.to_owned()),
+        (None, Some(memory)) => Some(memory.to_owned()),
+        (None, None) => None,
+    }
+}
+
 async fn dispatch_assistant(
     request_id: &str,
     state: &Mutex<RuntimeState>,
     provider: Arc<dyn AssistantProvider>,
     text: String,
     memory_context: Option<String>,
+    local_ai_available: bool,
     cancellation: &CancellationToken,
 ) {
     let generation = state.lock().await.configuration_generation;
+    let profile = local_profile_context(state, cancellation).await;
     let memory_context = match memory_context {
         Some(context) => Some(context),
         None => local_memory_context(state, &text, cancellation).await,
     };
-    let prompt = assistant_prompt(memory_context.as_deref(), &text);
+    let context = combined_context(
+        profile.as_ref().map(|value| value.lines.as_str()),
+        memory_context.as_deref(),
+    );
+    if crate::chat_router::should_route_local(local_ai_available, &text) {
+        let prompt = assistant_prompt(context.as_deref(), &text);
+        let reply = tokio::select! {
+            _ = cancellation.cancelled() => {
+                cancelled(request_id);
+                return;
+            }
+            value = crate::local_ai::respond(&prompt) => value,
+        };
+        if state.lock().await.configuration_generation != generation {
+            cancelled(request_id);
+            return;
+        }
+        if let Some(reply) = reply {
+            progress(
+                request_id,
+                CHAT_MODEL_TOOL,
+                ToolStatus::Complete,
+                Some(LOCAL_CHAT_MODEL_DETAIL),
+            );
+            NativeEvent::AssistantDelta(AssistantDelta {
+                request_id: request_id.to_owned(),
+                text: reply,
+                final_segment: true,
+            })
+            .send();
+            return;
+        }
+    }
+    let names = profile.map(|value| value.names).unwrap_or_default();
+    let context = context.map(|value| crate::chat_router::deidentify(&value, &names));
+    progress(
+        request_id,
+        CHAT_MODEL_TOOL,
+        ToolStatus::Complete,
+        Some(ONLINE_CHAT_MODEL_DETAIL),
+    );
+    let prompt = assistant_prompt(context.as_deref(), &text);
     let mut events = provider.dispatch(request_id.to_owned(), prompt, cancellation.clone());
     loop {
         let next =
@@ -1779,6 +1883,7 @@ async fn execute(
                 assistant_provider,
                 text,
                 memory_context,
+                crate::local_ai::is_available(),
                 &cancellation,
             )
             .await;
@@ -5664,6 +5769,7 @@ mod tests {
             Arc::clone(&provider),
             "what coffee do I like?".to_owned(),
             Some("Relevant synced memory:\n- Sam prefers espresso".to_owned()),
+            false,
             &CancellationToken::new(),
         )
         .await;
@@ -5682,6 +5788,7 @@ mod tests {
             provider,
             "plain message".to_owned(),
             None,
+            false,
             &CancellationToken::new(),
         )
         .await;
@@ -5697,6 +5804,73 @@ mod tests {
         assert!(bounded.len() < 2 * MEMORY_CONTEXT_CHARACTER_LIMIT);
         assert!(bounded.ends_with("\n\ntail"));
         assert_eq!(assistant_prompt(Some("   "), "tail"), "tail");
+    }
+
+    #[tokio::test]
+    async fn assistant_dispatch_retrieves_configured_memory_into_the_prompt() {
+        let (path, memory, _) = lifecycle_memory("assistant-context");
+        let state = Arc::new(Mutex::new(RuntimeState {
+            memory: Some(Arc::new(StdMutex::new(memory))),
+            configuration_generation: 3,
+            authority_uid: Some("user-a".to_owned()),
+            ..RuntimeState::default()
+        }));
+        let prompt = Arc::new(StdMutex::new(None));
+        let provider: Arc<dyn AssistantProvider> = Arc::new(CapturingAssistantProvider {
+            prompt: Arc::clone(&prompt),
+        });
+        dispatch_assistant(
+            "chat-mem-1",
+            state.as_ref(),
+            provider,
+            "where do I work?".to_owned(),
+            None,
+            false,
+            &CancellationToken::new(),
+        )
+        .await;
+        let captured = prompt
+            .lock()
+            .unwrap_or_else(|failure| failure.into_inner())
+            .clone()
+            .unwrap_or_else(|| panic!("provider receives a prompt"));
+        assert!(captured.starts_with("Relevant things you know about the user:\n"));
+        assert!(captured.contains("Acme"));
+        assert!(captured.ends_with("\n\nwhere do I work?"));
+        state.lock().await.memory = None;
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn assistant_dispatch_deidentifies_context_for_online_models() {
+        let state = Arc::new(Mutex::new(RuntimeState {
+            configuration_generation: 3,
+            authority_uid: Some("user-a".to_owned()),
+            ..RuntimeState::default()
+        }));
+        let prompt = Arc::new(StdMutex::new(None));
+        let provider: Arc<dyn AssistantProvider> = Arc::new(CapturingAssistantProvider {
+            prompt: Arc::clone(&prompt),
+        });
+        dispatch_assistant(
+            "chat-redact-1",
+            state.as_ref(),
+            provider,
+            "email sam.jones@example.com about my plans".to_owned(),
+            Some("- Email is sam.jones@example.com\n- Phone is +1 (555) 123-4567".to_owned()),
+            false,
+            &CancellationToken::new(),
+        )
+        .await;
+        let captured = prompt
+            .lock()
+            .unwrap_or_else(|failure| failure.into_inner())
+            .clone()
+            .unwrap_or_else(|| panic!("provider receives a prompt"));
+        assert!(captured.starts_with("Relevant things you know about the user:\n"));
+        assert!(captured.contains("- Email is [email]"));
+        assert!(captured.contains("- Phone is [phone]"));
+        assert!(captured.ends_with("\n\nemail sam.jones@example.com about my plans"));
     }
 
     #[tokio::test]
@@ -5729,6 +5903,7 @@ mod tests {
             provider,
             "plan".to_owned(),
             None,
+            false,
             &CancellationToken::new(),
         )
         .await;
@@ -5757,6 +5932,7 @@ mod tests {
             cancelled_provider,
             "cancel".to_owned(),
             None,
+            false,
             &cancellation,
         )
         .await;
@@ -5784,6 +5960,7 @@ mod tests {
             reconfiguring_provider,
             "reconfigure".to_owned(),
             None,
+            false,
             &CancellationToken::new(),
         )
         .await;

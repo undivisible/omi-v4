@@ -1,5 +1,6 @@
 mod approval;
 pub mod capture_policy;
+mod chat_router;
 mod computer_use;
 mod daily_review;
 mod dev_gemini;
