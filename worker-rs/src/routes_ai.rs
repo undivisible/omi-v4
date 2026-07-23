@@ -13,14 +13,15 @@ use serde_json::{json, Value};
 use worker::wasm_bindgen;
 use worker::wasm_bindgen::JsValue;
 use worker::{
-    durable_object, Date, Env, Headers, Method, Request, RequestInit, Response, Result,
-    RouteContext, Router, State, Stub, WebSocketPair,
+    durable_object, Env, Headers, Method, Request, RequestInit, Response, Result, RouteContext,
+    Router, State, Stub, WebSocketPair,
 };
 
 use crate::assistant_admission::{AssistantAdmission, Limits as AssistantLimits, Outcome};
 use crate::glue::{authenticate, error_json, has_active_pro, AuthOutcome};
 use crate::rate_limit::RateLimiter;
 use crate::stt_admission::{Limits as SttLimits, SttAdmission};
+use crate::worker_util::{now_ms, secret_or_var as env_get, uuid_v4};
 use crate::{asr_logic, managed_ai, stt_logic, voice_logic};
 
 const DO_STATE_KEY: &str = "state";
@@ -38,35 +39,6 @@ pub fn register(router: Router<'static, ()>) -> Router<'static, ()> {
 // ---------------------------------------------------------------------------
 // Small shared helpers
 // ---------------------------------------------------------------------------
-
-fn now_ms() -> i64 {
-    Date::now().as_millis() as i64
-}
-
-/// A v4 UUID sourced from the JS `getrandom` backend (parity with
-/// `crypto.randomUUID()` for request/session identifiers).
-fn uuid_v4() -> String {
-    let mut b = [0u8; 16];
-    let _ = getrandom::getrandom(&mut b);
-    b[6] = (b[6] & 0x0f) | 0x40;
-    b[8] = (b[8] & 0x3f) | 0x80;
-    let h = |bytes: &[u8]| bytes.iter().map(|x| format!("{x:02x}")).collect::<String>();
-    format!(
-        "{}-{}-{}-{}-{}",
-        h(&b[0..4]),
-        h(&b[4..6]),
-        h(&b[6..8]),
-        h(&b[8..10]),
-        h(&b[10..16])
-    )
-}
-
-fn env_get(env: &Env, key: &str) -> Option<String> {
-    env.var(key)
-        .ok()
-        .map(|v| v.to_string())
-        .or_else(|| env.secret(key).ok().map(|v| v.to_string()))
-}
 
 /// Materialize a DO state-machine outcome into a `Response`.
 fn outcome_response(outcome: Outcome) -> Result<Response> {

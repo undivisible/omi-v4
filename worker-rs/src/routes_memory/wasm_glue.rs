@@ -10,14 +10,15 @@
 
 use base64::Engine as _;
 use serde_json::{json, Value};
-use sha2::{Digest, Sha256};
 use worker::wasm_bindgen::{JsCast, JsValue};
 use worker::wasm_bindgen_futures::JsFuture;
-use worker::{js_sys, Date, Env, Request, Response, Result, RouteContext, Router};
+use worker::{js_sys, Env, Request, Response, Result, RouteContext, Router};
 use worker::{D1Database, D1PreparedStatement, D1Result};
 
 use crate::auth::Auth;
+use crate::crypto_util::sha256_hex;
 use crate::glue::{authenticate, error_json, json_to_i64, AuthOutcome};
+use crate::worker_util::{changes, now_ms, uuid_v4};
 
 use super::*;
 
@@ -83,10 +84,6 @@ pub async fn cron_slice(env: &Env) {
 // Small helpers
 // ---------------------------------------------------------------------------
 
-fn now_ms() -> i64 {
-    Date::now().as_millis() as i64
-}
-
 fn s(value: &str) -> JsValue {
     JsValue::from_str(value)
 }
@@ -103,36 +100,6 @@ fn nullable_n(value: Option<i64>) -> JsValue {
     value
         .map(|v| JsValue::from_f64(v as f64))
         .unwrap_or(JsValue::NULL)
-}
-
-fn changes(result: &D1Result) -> usize {
-    result
-        .meta()
-        .ok()
-        .flatten()
-        .and_then(|m| m.changes)
-        .unwrap_or(0)
-}
-
-fn uuid_v4() -> String {
-    let mut b = [0u8; 16];
-    let _ = getrandom::getrandom(&mut b);
-    b[6] = (b[6] & 0x0f) | 0x40;
-    b[8] = (b[8] & 0x3f) | 0x80;
-    format!(
-        "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
-        b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7], b[8], b[9], b[10], b[11], b[12], b[13],
-        b[14], b[15]
-    )
-}
-
-fn sha256_hex(value: &str) -> String {
-    let digest = Sha256::digest(value.as_bytes());
-    let mut out = String::with_capacity(64);
-    for byte in digest {
-        out.push_str(&format!("{byte:02x}"));
-    }
-    out
 }
 
 fn receipt_token() -> String {
@@ -1347,14 +1314,10 @@ async fn select_current(db: &D1Database, uid: &str, id: &str) -> Result<Option<V
     d1_first(db, SELECT_CURRENT_SQL, &[s(id), s(uid)]).await
 }
 
-async fn ensure_currents_projected(db: &D1Database, uid: &str) -> Result<()> {
-    ensure_projected(db, uid).await
-}
-
 async fn handle_current_generate(req: Request, ctx: RouteContext<()>) -> Result<Response> {
     let auth = authed!(req, ctx);
     let db = ctx.env.d1("DB")?;
-    ensure_currents_projected(&db, &auth.uid).await?;
+    ensure_projected(&db, &auth.uid).await?;
     let uid = auth.uid;
 
     let settings = d1_first(
@@ -1451,7 +1414,7 @@ async fn handle_current_generate(req: Request, ctx: RouteContext<()>) -> Result<
 async fn handle_current_candidates(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
     let auth = authed!(req, ctx);
     let db = ctx.env.d1("DB")?;
-    ensure_currents_projected(&db, &auth.uid).await?;
+    ensure_projected(&db, &auth.uid).await?;
     let body = json_object(&mut req).await;
     let input = match validate_candidate(body.as_ref()) {
         Ok(input) => input,
@@ -1496,7 +1459,7 @@ async fn handle_current_candidates(mut req: Request, ctx: RouteContext<()>) -> R
 async fn handle_currents_list(req: Request, ctx: RouteContext<()>) -> Result<Response> {
     let auth = authed!(req, ctx);
     let db = ctx.env.d1("DB")?;
-    ensure_currents_projected(&db, &auth.uid).await?;
+    ensure_projected(&db, &auth.uid).await?;
     let now = now_ms();
     d1_run(
         &db,
@@ -1529,7 +1492,7 @@ async fn handle_currents_list(req: Request, ctx: RouteContext<()>) -> Result<Res
 async fn handle_current_feedback(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
     let auth = authed!(req, ctx);
     let db = ctx.env.d1("DB")?;
-    ensure_currents_projected(&db, &auth.uid).await?;
+    ensure_projected(&db, &auth.uid).await?;
     let id = ctx.param("id").cloned().unwrap_or_default();
     let body = json_object(&mut req).await;
     let now = now_ms();
@@ -1571,7 +1534,7 @@ async fn handle_current_feedback(mut req: Request, ctx: RouteContext<()>) -> Res
 async fn handle_current_accept(req: Request, ctx: RouteContext<()>) -> Result<Response> {
     let auth = authed!(req, ctx);
     let db = ctx.env.d1("DB")?;
-    ensure_currents_projected(&db, &auth.uid).await?;
+    ensure_projected(&db, &auth.uid).await?;
     let id = ctx.param("id").cloned().unwrap_or_default();
     let current = select_current(&db, &auth.uid, &id).await?;
     let Some(current) = current else {
@@ -1629,7 +1592,7 @@ async fn handle_current_accept(req: Request, ctx: RouteContext<()>) -> Result<Re
 async fn handle_execution_approve(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
     let auth = authed!(req, ctx);
     let db = ctx.env.d1("DB")?;
-    ensure_currents_projected(&db, &auth.uid).await?;
+    ensure_projected(&db, &auth.uid).await?;
     let body = json_object(&mut req).await;
     let input = match validate_approval(body.as_ref()) {
         Ok(input) => input,
@@ -1695,7 +1658,7 @@ const UNREPORTED_OUTCOME: &str =
 async fn handle_receipt_claim(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
     let auth = authed!(req, ctx);
     let db = ctx.env.d1("DB")?;
-    ensure_currents_projected(&db, &auth.uid).await?;
+    ensure_projected(&db, &auth.uid).await?;
     let body = json_object(&mut req).await;
     let input = match validate_receipt_claim(body.as_ref(), &auth.uid) {
         Ok(input) => input,
@@ -1765,7 +1728,7 @@ async fn handle_receipt_claim(mut req: Request, ctx: RouteContext<()>) -> Result
 async fn handle_execution_reject(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
     let auth = authed!(req, ctx);
     let db = ctx.env.d1("DB")?;
-    ensure_currents_projected(&db, &auth.uid).await?;
+    ensure_projected(&db, &auth.uid).await?;
     let body = json_object(&mut req).await;
     let nonce = trimmed(body.as_ref().and_then(|b| b.get("approvalNonce")), 200);
     let Some(nonce) = nonce else {
@@ -1797,7 +1760,7 @@ async fn handle_execution_reject(mut req: Request, ctx: RouteContext<()>) -> Res
 async fn handle_execution_outcome(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
     let auth = authed!(req, ctx);
     let db = ctx.env.d1("DB")?;
-    ensure_currents_projected(&db, &auth.uid).await?;
+    ensure_projected(&db, &auth.uid).await?;
     let body = json_object(&mut req).await;
     let (state, detail) = match validate_outcome(body.as_ref()) {
         Ok(parsed) => parsed,

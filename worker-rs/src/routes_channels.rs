@@ -28,42 +28,11 @@ use crate::oauth::{
     valid_xai_endpoint, xai_config, PollOutcome, ProviderConfig, OPENAI_UPSTREAM, XAI_UPSTREAM,
 };
 use crate::rate_limit_lock::{acquire_refresh_lock, consume_rate_limit, release_refresh_lock};
+use crate::worker_util::{now_ms, uuid_v4 as random_uuid};
 
 // ---------------------------------------------------------------------------
 // Small utilities
 // ---------------------------------------------------------------------------
-
-fn now_ms() -> i64 {
-    Date::now().as_millis() as i64
-}
-
-/// A v4-shaped random UUID (parity with `crypto.randomUUID()`).
-fn random_uuid() -> String {
-    let mut bytes = [0u8; 16];
-    getrandom::getrandom(&mut bytes).expect("getrandom");
-    bytes[6] = (bytes[6] & 0x0f) | 0x40;
-    bytes[8] = (bytes[8] & 0x3f) | 0x80;
-    let h = |b: u8| format!("{b:02x}");
-    format!(
-        "{}{}{}{}-{}{}-{}{}-{}{}-{}{}{}{}{}{}",
-        h(bytes[0]),
-        h(bytes[1]),
-        h(bytes[2]),
-        h(bytes[3]),
-        h(bytes[4]),
-        h(bytes[5]),
-        h(bytes[6]),
-        h(bytes[7]),
-        h(bytes[8]),
-        h(bytes[9]),
-        h(bytes[10]),
-        h(bytes[11]),
-        h(bytes[12]),
-        h(bytes[13]),
-        h(bytes[14]),
-        h(bytes[15]),
-    )
-}
 
 /// A random jitter draw in `[0, 1)` for the backoff computation.
 fn random_jitter() -> f64 {

@@ -33,6 +33,8 @@ pub mod voice_logic;
 
 #[cfg(target_arch = "wasm32")]
 pub(crate) mod glue;
+#[cfg(target_arch = "wasm32")]
+pub(crate) mod worker_util;
 
 // The Vectorize JS FFI is the single implementation in
 // `routes_memory::wasm_glue` (compiled by default). It binds the JS

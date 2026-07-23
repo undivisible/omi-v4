@@ -13,6 +13,8 @@ use worker::{
 use crate::auth::{self, Auth, FirebaseJwks};
 use crate::entitlement::{self, DevFakePro, EntitlementRow};
 use crate::setup_health::{setup_health_body, SetupHealthInputs};
+use crate::worker_util::now_ms_f64 as now_ms;
+use crate::worker_util::{changes, secret_or_var, uuid_v4};
 use crate::{billing, conversations as conv, crypto_util, desktop_auth, webhooks as wh};
 
 const JWKS_URL: &str =
@@ -466,49 +468,8 @@ async fn handle_account_delete(req: Request, ctx: RouteContext<()>) -> Result<Re
 // Phase 2 shared helpers
 // ===========================================================================
 
-/// Read a value from `[vars]` first, then from secrets (parity with the
-/// setup-health `any()` fallback so presence works regardless of binding kind).
-fn secret_or_var(env: &Env, name: &str) -> Option<String> {
-    env.var(name)
-        .ok()
-        .map(|v| v.to_string())
-        .or_else(|| env.secret(name).ok().map(|v| v.to_string()))
-}
-
-/// Number of rows changed by a run/batch statement (D1 `meta.changes`).
-fn changes(result: &worker::D1Result) -> usize {
-    result
-        .meta()
-        .ok()
-        .flatten()
-        .and_then(|m| m.changes)
-        .unwrap_or(0)
-}
-
-/// Random UUID v4 (parity with `crypto.randomUUID`). Uses the JS getrandom
-/// backend already enabled for wasm.
-fn uuid_v4() -> String {
-    let mut bytes = [0u8; 16];
-    getrandom::getrandom(&mut bytes).expect("getrandom");
-    bytes[6] = (bytes[6] & 0x0f) | 0x40;
-    bytes[8] = (bytes[8] & 0x3f) | 0x80;
-    let h = crypto_util::to_hex_lower(&bytes);
-    format!(
-        "{}-{}-{}-{}-{}",
-        &h[0..8],
-        &h[8..12],
-        &h[12..16],
-        &h[16..20],
-        &h[20..32]
-    )
-}
-
 fn header(req: &Request, name: &str) -> String {
     req.headers().get(name).ok().flatten().unwrap_or_default()
-}
-
-fn now_ms() -> f64 {
-    Date::now().as_millis() as f64
 }
 
 fn now_seconds() -> i64 {
