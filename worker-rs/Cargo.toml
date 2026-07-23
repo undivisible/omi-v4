@@ -24,6 +24,7 @@ sha2 = { version = "0.10", default-features = false }
 hmac = { version = "0.12", default-features = false }
 subtle = { version = "2.6", default-features = false }
 url = "2"
+aes-gcm = { version = "0.10", default-features = false, features = ["aes", "alloc"] }
 
 [dev-dependencies]
 rand = "0.8"

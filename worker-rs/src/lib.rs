@@ -12,7 +12,10 @@ pub mod billing;
 pub mod conversations;
 pub mod crypto_util;
 pub mod desktop_auth;
+pub mod delivery;
 pub mod entitlement;
+pub mod inbox_fallback;
+pub mod oauth;
 pub mod setup_health;
 pub mod webhooks;
 
@@ -24,3 +27,7 @@ mod glue;
 // default — see PORT_STATUS.md for the interop outcome.
 #[cfg(all(target_arch = "wasm32", feature = "vectorize"))]
 mod vectorize_ffi;
+#[cfg(target_arch = "wasm32")]
+mod rate_limit_lock;
+#[cfg(target_arch = "wasm32")]
+mod routes_channels;
