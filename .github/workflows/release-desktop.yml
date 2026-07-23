@@ -124,12 +124,34 @@ jobs:
           rm -f "${cert}"
           security find-identity -v -p codesigning "${keychain}"
 
+      # app/macos/Runner.xcodeproj signs automatically against a fixed
+      # DEVELOPMENT_TEAM, which no certificate-less runner can satisfy. When the
+      # signing secrets are absent, override those settings through the global
+      # xcconfig xcodebuild reads from XCODE_XCCONFIG_FILE: `flutter build macos`
+      # does not forward SETTING=value arguments, and the Xcode project is not
+      # this workflow's to edit. The bundle is ad-hoc signed further down.
       - name: Build the macOS release app
         working-directory: app
+        env:
+          SIGN: ${{ steps.signing.outputs.sign }}
         run: |
           set -euo pipefail
           mkdir -p build/macos/SourcePackages
           flutter pub get
+          if [ "${SIGN}" != "true" ]; then
+            xcconfig="${RUNNER_TEMP}/unsigned.xcconfig"
+            {
+              echo 'CODE_SIGNING_ALLOWED = NO'
+              echo 'CODE_SIGNING_REQUIRED = NO'
+              echo 'CODE_SIGN_IDENTITY ='
+              echo 'CODE_SIGN_STYLE = Manual'
+              echo 'DEVELOPMENT_TEAM ='
+              echo 'PROVISIONING_PROFILE_SPECIFIER ='
+            } > "${xcconfig}"
+            echo "Building without code signing using:"
+            cat "${xcconfig}"
+            export XCODE_XCCONFIG_FILE="${xcconfig}"
+          fi
           flutter build macos --release
 
       - name: Locate the built app bundle
