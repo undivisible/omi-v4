@@ -28,6 +28,9 @@ export type Bindings = {
   OMI_MODEL_SMART?: string;
   OMI_MODEL_MULTIMODAL?: string;
   OMI_MODEL_SEARCH?: string;
+  CF_AI_GATEWAY_ACCOUNT_ID?: string;
+  CF_AI_GATEWAY_ID?: string;
+  CF_AI_GATEWAY_TOKEN?: string;
   MIMO_OUTPUT_MICROUSD_PER_MILLION_TOKENS?: string;
   MIMO_INPUT_MICROUSD_PER_MILLION_TOKENS?: string;
   MIMO_BUDGET_WINDOW_SECONDS?: string;

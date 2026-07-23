@@ -6,7 +6,7 @@ import {
   settleAssistantRequest,
 } from "./assistant-admission";
 import { modelForTier } from "./model-tiers";
-import type { AppEnv } from "./types";
+import type { AppEnv, Bindings } from "./types";
 
 const assistant = new Hono<AppEnv>();
 const maximumBodyBytes = 64 * 1024;
@@ -62,6 +62,32 @@ export const validatePinnedEndpoint = (
   } catch {
     return null;
   }
+};
+
+// When a Cloudflare AI Gateway is configured, upstream completions go through
+// it rather than straight to the provider: response caching, retries, and
+// per-model cost/latency analytics, all server-side. The provider key still
+// travels as the Authorization bearer and the gateway forwards it; an
+// authenticated gateway additionally demands its own token, which is why the
+// route carries headers rather than just a URL. Unset account or gateway id
+// means no gateway and no behaviour change.
+export const aiGatewayRoute = (
+  env: Bindings,
+): { url: URL; headers: Record<string, string> } | null => {
+  const account = env.CF_AI_GATEWAY_ACCOUNT_ID?.trim();
+  const gateway = env.CF_AI_GATEWAY_ID?.trim();
+  if (!account || !gateway) return null;
+  // Both ids land in a URL path, so they are validated rather than trusted:
+  // an account id is a 32-character hex tag and a gateway id is a slug.
+  if (!/^[0-9a-f]{32}$/.test(account)) return null;
+  if (!/^[0-9a-z][0-9a-z-]{0,63}$/.test(gateway)) return null;
+  const token = env.CF_AI_GATEWAY_TOKEN?.trim();
+  return {
+    url: new URL(
+      `https://gateway.ai.cloudflare.com/v1/${account}/${gateway}/openrouter/v1/chat/completions`,
+    ),
+    headers: token ? { "cf-aig-authorization": `Bearer ${token}` } : {},
+  };
 };
 
 export const boundedJson = async (
@@ -563,13 +589,15 @@ export const runManagedInboxCompletion = async (
     } catch {}
     return null;
   }
+  const gateway = aiGatewayRoute(env);
   let upstream: Response;
   try {
-    upstream = await fetcher(endpointUrl, {
+    upstream = await fetcher(gateway?.url ?? endpointUrl, {
       method: "POST",
       headers: {
         authorization: `Bearer ${secret}`,
         "content-type": "application/json",
+        ...gateway?.headers,
       },
       body: JSON.stringify({
         model,
@@ -713,13 +741,15 @@ assistant.post("/chat/completions", async (context) => {
     timedOut = true;
     abort.abort();
   }, upstreamTimeoutMs);
+  const gateway = aiGatewayRoute(context.env);
   let upstream: Response;
   try {
-    upstream = await fetch(endpointUrl, {
+    upstream = await fetch(gateway?.url ?? endpointUrl, {
       method: "POST",
       headers: {
         authorization: `Bearer ${secret}`,
         "content-type": "application/json",
+        ...gateway?.headers,
       },
       body: JSON.stringify({
         ...parsed,

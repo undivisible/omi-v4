@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { hasActivePro } from "./entitlement";
 import {
   boundedJson,
+  aiGatewayRoute,
   validatePinnedEndpoint,
   xiaomiCompletionEndpoint,
 } from "./assistant";
@@ -93,13 +94,15 @@ asr.post("/transcribe", async (context) => {
       .run()
       .then(() => undefined)
       .catch(() => undefined);
+  const gateway = aiGatewayRoute(context.env);
   let upstream: Response;
   try {
-    upstream = await fetch(endpointUrl, {
+    upstream = await fetch(gateway?.url ?? endpointUrl, {
       method: "POST",
       headers: {
         authorization: `Bearer ${secret}`,
         "content-type": "application/json",
+        ...gateway?.headers,
       },
       body: JSON.stringify({
         model: asrModel,

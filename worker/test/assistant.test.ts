@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { Hono } from "hono";
 import { Miniflare } from "miniflare";
 import assistant, {
+  aiGatewayRoute,
   finalizeCancelledStream,
   price,
   reconcileManagedAssistantRequests,
@@ -463,5 +464,56 @@ describe("managed assistant", () => {
       },
     );
     expect(finalized).toBe(1);
+  });
+});
+
+describe("aiGatewayRoute", () => {
+  const base = {} as Bindings;
+
+  test("stays off until both ids are configured", () => {
+    expect(aiGatewayRoute(base)).toBeNull();
+    expect(
+      aiGatewayRoute({ ...base, CF_AI_GATEWAY_ACCOUNT_ID: "a".repeat(32) }),
+    ).toBeNull();
+    expect(aiGatewayRoute({ ...base, CF_AI_GATEWAY_ID: "default" })).toBeNull();
+  });
+
+  test("rejects ids that would smuggle a path into the gateway URL", () => {
+    expect(
+      aiGatewayRoute({
+        ...base,
+        CF_AI_GATEWAY_ACCOUNT_ID: "../evil",
+        CF_AI_GATEWAY_ID: "default",
+      }),
+    ).toBeNull();
+    expect(
+      aiGatewayRoute({
+        ...base,
+        CF_AI_GATEWAY_ACCOUNT_ID: "f".repeat(32),
+        CF_AI_GATEWAY_ID: "a/../../b",
+      }),
+    ).toBeNull();
+  });
+
+  test("routes to the gateway and carries its token when authenticated", () => {
+    const account = "f".repeat(32);
+    const open = aiGatewayRoute({
+      ...base,
+      CF_AI_GATEWAY_ACCOUNT_ID: account,
+      CF_AI_GATEWAY_ID: "default",
+    });
+    expect(open?.url.href).toBe(
+      `https://gateway.ai.cloudflare.com/v1/${account}/default/openrouter/v1/chat/completions`,
+    );
+    expect(open?.headers).toEqual({});
+    const authenticated = aiGatewayRoute({
+      ...base,
+      CF_AI_GATEWAY_ACCOUNT_ID: account,
+      CF_AI_GATEWAY_ID: "default",
+      CF_AI_GATEWAY_TOKEN: "gateway-token",
+    });
+    expect(authenticated?.headers["cf-aig-authorization"]).toBe(
+      "Bearer gateway-token",
+    );
   });
 });
