@@ -10,6 +10,11 @@ on:
         description: Version label used for artifact names on manual runs
         required: false
         default: dev
+      dry_run:
+        description: Build and upload artifacts without creating a GitHub Release
+        type: boolean
+        required: false
+        default: true
 
 permissions:
   contents: read
@@ -24,19 +29,30 @@ jobs:
     runs-on: macos-15
     outputs:
       version: ${{ steps.meta.outputs.version }}
+      dry_run: ${{ steps.meta.outputs.dry_run }}
     steps:
       - uses: actions/checkout@v4
 
       - id: meta
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_DRY_RUN: ${{ inputs.dry_run }}
         run: |
           set -euo pipefail
           if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
             version="${GITHUB_REF_NAME#desktop-v}"
+            dry_run=false
           else
-            version="${{ inputs.version || 'dev' }}"
+            version="${INPUT_VERSION:-dev}"
+            dry_run="${INPUT_DRY_RUN:-true}"
           fi
           echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "dry_run=${dry_run}" >> "$GITHUB_OUTPUT"
+          echo "RELEASE_VERSION=${version}" >> "$GITHUB_ENV"
           echo "Desktop release version: ${version}"
+          if [ "${dry_run}" = "true" ]; then
+            echo "::notice::Dry run: artifacts will be uploaded to this workflow run only. No GitHub Release will be created."
+          fi
 
       - uses: subosito/flutter-action@v2
         with:
@@ -126,6 +142,7 @@ jobs:
             exit 1
           fi
           echo "path=${app}" >> "$GITHUB_OUTPUT"
+          echo "APP_BUNDLE=${app}" >> "$GITHUB_ENV"
           echo "Built ${app}"
 
       - name: Sign the app bundle
@@ -133,7 +150,7 @@ jobs:
           MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
         run: |
           set -euo pipefail
-          app="${{ steps.bundle.outputs.path }}"
+          app="${APP_BUNDLE}"
           if [ "${{ steps.signing.outputs.sign }}" = "true" ]; then
             codesign --force --deep --timestamp --options runtime \
               --entitlements app/macos/Runner/Release.entitlements \
@@ -148,8 +165,8 @@ jobs:
           set -euo pipefail
           mkdir -p artifacts
           ditto -c -k --sequesterRsrc --keepParent \
-            "${{ steps.bundle.outputs.path }}" \
-            "artifacts/omi-${{ steps.meta.outputs.version }}-macos.zip"
+            "${APP_BUNDLE}" \
+            "artifacts/omi-${RELEASE_VERSION}-macos.zip"
 
       - name: Notarize and staple the app
         if: steps.signing.outputs.notarize == 'true'
@@ -159,16 +176,16 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           set -euo pipefail
-          zip="artifacts/omi-${{ steps.meta.outputs.version }}-macos.zip"
+          zip="artifacts/omi-${RELEASE_VERSION}-macos.zip"
           xcrun notarytool submit "${zip}" \
             --apple-id "${APPLE_ID}" \
             --password "${APPLE_APP_SPECIFIC_PASSWORD}" \
             --team-id "${APPLE_TEAM_ID}" \
             --wait
-          xcrun stapler staple "${{ steps.bundle.outputs.path }}"
+          xcrun stapler staple "${APP_BUNDLE}"
           rm -f "${zip}"
           ditto -c -k --sequesterRsrc --keepParent \
-            "${{ steps.bundle.outputs.path }}" "${zip}"
+            "${APP_BUNDLE}" "${zip}"
 
       - name: Build the DMG
         run: |
@@ -176,10 +193,10 @@ jobs:
           staging="${RUNNER_TEMP}/dmg"
           rm -rf "${staging}"
           mkdir -p "${staging}"
-          cp -R "${{ steps.bundle.outputs.path }}" "${staging}/"
+          cp -R "${APP_BUNDLE}" "${staging}/"
           ln -s /Applications "${staging}/Applications"
           hdiutil create -volname "Omi" -srcfolder "${staging}" -ov -format UDZO \
-            "artifacts/omi-${{ steps.meta.outputs.version }}-macos.dmg"
+            "artifacts/omi-${RELEASE_VERSION}-macos.dmg"
 
       - name: Sign, notarize and staple the DMG
         if: steps.signing.outputs.notarize == 'true'
@@ -190,7 +207,7 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           set -euo pipefail
-          dmg="artifacts/omi-${{ steps.meta.outputs.version }}-macos.dmg"
+          dmg="artifacts/omi-${RELEASE_VERSION}-macos.dmg"
           codesign --force --timestamp --sign "${MACOS_SIGNING_IDENTITY}" "${dmg}"
           xcrun notarytool submit "${dmg}" \
             --apple-id "${APPLE_ID}" \
@@ -203,7 +220,7 @@ jobs:
         if: steps.signing.outputs.sign != 'true'
         run: |
           set -euo pipefail
-          version="${{ steps.meta.outputs.version }}"
+          version="${RELEASE_VERSION}"
           mv "artifacts/omi-${version}-macos.zip" "artifacts/omi-${version}-macos-unsigned.zip"
           mv "artifacts/omi-${version}-macos.dmg" "artifacts/omi-${version}-macos-unsigned.dmg"
           ls -l artifacts
@@ -215,12 +232,10 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-  release:
-    name: Publish desktop release
+  bundle:
+    name: Bundle desktop artifacts
     runs-on: ubuntu-24.04
     needs: macos
-    permissions:
-      contents: write
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -242,8 +257,36 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+      - name: Summarise the run
+        env:
+          DRY_RUN: ${{ needs.macos.outputs.dry_run }}
+          RELEASE_VERSION: ${{ needs.macos.outputs.version }}
+        run: |
+          set -euo pipefail
+          {
+            echo "### Desktop ${RELEASE_VERSION}"
+            echo
+            if [ "${DRY_RUN}" = "true" ]; then
+              echo "- Dry run: no GitHub Release was created. Download \`desktop-release-bundle\` from this run."
+            else
+              echo "- Publishing a GitHub Release for \`${GITHUB_REF_NAME}\`."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  publish:
+    name: Publish desktop release
+    runs-on: ubuntu-24.04
+    needs: [macos, bundle]
+    if: needs.macos.outputs.dry_run == 'false'
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: desktop-release-bundle
+          path: dist
+
       - name: Create the GitHub release
-        if: github.ref_type == 'tag'
         uses: softprops/action-gh-release@v2
         with:
           name: Desktop ${{ needs.macos.outputs.version }}

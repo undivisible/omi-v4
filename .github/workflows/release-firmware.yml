@@ -10,6 +10,11 @@ on:
         description: Version label used for artifact names on manual runs
         required: false
         default: dev
+      dry_run:
+        description: Build and upload artifacts without creating a GitHub Release
+        type: boolean
+        required: false
+        default: true
 
 permissions:
   contents: read
@@ -28,53 +33,52 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       version: ${{ steps.meta.outputs.version }}
+      dry_run: ${{ steps.meta.outputs.dry_run }}
     steps:
       - id: meta
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_DRY_RUN: ${{ inputs.dry_run }}
         run: |
           set -euo pipefail
           if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
             version="${GITHUB_REF_NAME#firmware-v}"
+            dry_run=false
           else
-            version="${{ inputs.version || 'dev' }}"
+            version="${INPUT_VERSION:-dev}"
+            dry_run="${INPUT_DRY_RUN:-true}"
           fi
           echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "dry_run=${dry_run}" >> "$GITHUB_OUTPUT"
           echo "Firmware release version: ${version}"
+          if [ "${dry_run}" = "true" ]; then
+            echo "::notice::Dry run: artifacts will be uploaded to this workflow run only. No GitHub Release will be created."
+          fi
+
+  discover:
+    name: Discover firmware targets
+    runs-on: ubuntu-24.04
+    outputs:
+      matrix: ${{ steps.targets.outputs.matrix }}
+      count: ${{ steps.targets.outputs.count }}
+      source: ${{ steps.targets.outputs.source }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Derive the build matrix from the vendored firmware tree
+        id: targets
+        run: python3 .github/scripts/discover_firmware_targets.py --repo-root .
 
   zephyr:
     name: ${{ matrix.id }}
     runs-on: ubuntu-24.04
-    needs: version
+    needs: [version, discover]
     container:
       image: ghcr.io/nrfconnect/sdk-nrf-toolchain:v2.9.0
       options: --user root
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - id: omi-cv1
-            device: Omi CV1 pendant (nRF5340)
-            board: omi/nrf5340/cpuapp
-            app_hint: firmware/omi
-            conf: omi.conf
-            sysbuild: 'true'
-          - id: omi-devkit-v1
-            device: Omi DevKit v1 (Seeed XIAO nRF52840 Sense)
-            board: xiao_ble/nrf52840/sense
-            app_hint: firmware/devkit
-            conf: prj_xiao_ble_sense_devkitv1.conf
-            sysbuild: 'false'
-          - id: omi-devkit-v1-spisd
-            device: Omi DevKit v1 with SPI SD card (Seeed XIAO nRF52840 Sense)
-            board: xiao_ble/nrf52840/sense
-            app_hint: firmware/devkit
-            conf: prj_xiao_ble_sense_devkitv1-spisd.conf
-            sysbuild: 'false'
-          - id: omi-devkit-v2-adafruit
-            device: Omi DevKit v2 Adafruit (Seeed XIAO nRF52840 Sense)
-            board: xiao_ble/nrf52840/sense
-            app_hint: firmware/devkit
-            conf: prj_xiao_ble_sense_devkitv2-adafruit.conf
-            sysbuild: 'false'
+      matrix: ${{ fromJSON(needs.discover.outputs.matrix) }}
     steps:
       - name: Trust the workspace inside the container
         run: git config --global --add safe.directory '*'
@@ -82,130 +86,126 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Resolve the NCS toolchain on PATH
-        run: |
-          set -euo pipefail
-          if command -v west >/dev/null 2>&1; then
-            echo "west: $(command -v west)"
-            exit 0
-          fi
-          root="$(find /opt/nordic/ncs/toolchains -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort | head -n1 || true)"
-          if [ -z "${root}" ]; then
-            echo "::error::No nRF Connect SDK toolchain found under /opt/nordic/ncs/toolchains in image ghcr.io/nrfconnect/sdk-nrf-toolchain:${NCS_VERSION}. The container image layout changed; update this workflow."
-            exit 1
-          fi
-          for d in "${root}/bin" "${root}/usr/bin" "${root}/usr/local/bin" "${root}/opt/bin" "${root}/opt/nanopb/generator-bin"; do
-            if [ -d "${d}" ]; then echo "${d}" >> "$GITHUB_PATH"; fi
-          done
-          echo "ZEPHYR_TOOLCHAIN_VARIANT=zephyr" >> "$GITHUB_ENV"
-          if [ -d "${root}/opt/zephyr-sdk" ]; then
-            echo "ZEPHYR_SDK_INSTALL_DIR=${root}/opt/zephyr-sdk" >> "$GITHUB_ENV"
-          fi
+        run: bash .github/scripts/setup-ncs-toolchain.sh
 
-      - name: Verify the vendored firmware layout
+      - name: Confirm the discovered target exists on disk
         id: layout
+        env:
+          TARGET_ID: ${{ matrix.id }}
+          APP_DIR: ${{ matrix.app_dir }}
+          CONF: ${{ matrix.conf }}
+          BOARD: ${{ matrix.board }}
+          BOARD_ROOT: ${{ matrix.board_root }}
         run: |
           set -euo pipefail
-          if [ ! -d firmware ]; then
-            echo "::error::firmware/ is not present in this repository. The pendant firmware has not been vendored yet, so ${{ matrix.id }} cannot be built. Vendor the nRF Connect SDK ${NCS_VERSION} firmware tree into firmware/ and re-run this workflow."
+          if [ -z "${BOARD}" ]; then
+            echo "::error::No board could be resolved for ${TARGET_ID}. Document the exact west build command for this target in firmware/README.md, or add it to FALLBACK_TARGETS/BOARD_HINTS in .github/scripts/discover_firmware_targets.py."
+            echo "Boards present under firmware/boards:"
+            find firmware/boards -maxdepth 4 \( -name board.yml -o -name '*_defconfig' \) 2>/dev/null | sort || echo "  (firmware/boards is absent)"
             exit 1
           fi
-          app_dir=""
-          if [ -f "${{ matrix.app_hint }}/${{ matrix.conf }}" ]; then
-            app_dir="${{ matrix.app_hint }}"
-          else
-            found="$(find firmware -maxdepth 4 -name '${{ matrix.conf }}' -type f | head -n1 || true)"
-            if [ -n "${found}" ]; then
-              app_dir="$(dirname "${found}")"
-              echo "::notice::${{ matrix.conf }} was not at ${{ matrix.app_hint }}; using ${app_dir} instead."
-            fi
-          fi
-          if [ -z "${app_dir}" ]; then
-            echo "::error::Could not find ${{ matrix.conf }} anywhere under firmware/ (expected ${{ matrix.app_hint }}/${{ matrix.conf }}). This target of the firmware matrix is not vendored, or firmware/README.md documents a different layout. Fix the matrix entry for ${{ matrix.id }}."
-            echo "Files present under firmware/:"
-            find firmware -maxdepth 3 -type f -name '*.conf' | sort
+          if [ ! -f "${APP_DIR}/CMakeLists.txt" ]; then
+            echo "::error::${APP_DIR} does not contain a CMakeLists.txt, so ${TARGET_ID} is not a buildable Zephyr application. The firmware tree does not match the discovered or fallback matrix."
+            echo "Zephyr application directories present under firmware/:"
+            find firmware -maxdepth 4 -name CMakeLists.txt -type f 2>/dev/null | sort || echo "  (firmware/ is absent)"
             exit 1
           fi
-          if [ ! -f "${app_dir}/CMakeLists.txt" ]; then
-            echo "::error::${app_dir} contains ${{ matrix.conf }} but no CMakeLists.txt, so it is not a Zephyr application directory."
+          if [ -n "${CONF}" ] && [ ! -f "${APP_DIR}/${CONF}" ]; then
+            echo "::error::${APP_DIR}/${CONF} does not exist, so ${TARGET_ID} cannot be configured."
+            echo "Config files present in ${APP_DIR}:"
+            ls -1 "${APP_DIR}"/*.conf 2>/dev/null || echo "  (none)"
             exit 1
           fi
-          echo "app_dir=${GITHUB_WORKSPACE}/${app_dir}" >> "$GITHUB_OUTPUT"
-          if [ -d firmware/boards ]; then
-            echo "board_root=${GITHUB_WORKSPACE}/firmware" >> "$GITHUB_OUTPUT"
+          echo "app_dir=${GITHUB_WORKSPACE}/${APP_DIR}" >> "$GITHUB_OUTPUT"
+          if [ -n "${BOARD_ROOT}" ] && [ -d "${BOARD_ROOT}/boards" ]; then
+            echo "board_root=${GITHUB_WORKSPACE}/${BOARD_ROOT}" >> "$GITHUB_OUTPUT"
           else
             echo "board_root=" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Cache the nRF Connect SDK workspace
-        id: ncs-cache
-        uses: actions/cache@v4
-        with:
-          path: ${{ env.NCS_WORKSPACE }}
-          key: ncs-${{ env.NCS_VERSION }}-narrow-v1
-
       - name: Fetch the nRF Connect SDK
-        if: steps.ncs-cache.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
           mkdir -p "${NCS_WORKSPACE}"
-          west init -m https://github.com/nrfconnect/sdk-nrf --mr "${NCS_VERSION}" "${NCS_WORKSPACE}"
+          if [ ! -d "${NCS_WORKSPACE}/.west" ]; then
+            west init -m https://github.com/nrfconnect/sdk-nrf --mr "${NCS_VERSION}" "${NCS_WORKSPACE}"
+          fi
           cd "${NCS_WORKSPACE}"
+          west config manifest.group-filter -- -babblesim,-ci,-optional,-debug
           west update --narrow -o=--depth=1
           west zephyr-export
-
-      - name: Export the Zephyr CMake package
-        run: |
-          set -euo pipefail
-          cd "${NCS_WORKSPACE}"
-          west zephyr-export
+          du -sh "${NCS_WORKSPACE}" || true
 
       - name: Build ${{ matrix.device }}
+        env:
+          BOARD: ${{ matrix.board }}
+          SYSBUILD: ${{ matrix.sysbuild }}
+          CMAKE_ARGS: ${{ matrix.cmake_args }}
+          APP_DIR: ${{ steps.layout.outputs.app_dir }}
+          BOARD_ROOT: ${{ steps.layout.outputs.board_root }}
+          BUILD_DIR_NAME: ${{ matrix.id }}
         run: |
           set -euo pipefail
-          app_dir="${{ steps.layout.outputs.app_dir }}"
-          if [ "${{ matrix.conf }}" != "prj.conf" ]; then
-            cp "${app_dir}/${{ matrix.conf }}" "${app_dir}/prj.conf"
-          fi
-          build_dir="${GITHUB_WORKSPACE}/build/${{ matrix.id }}"
+          build_dir="${GITHUB_WORKSPACE}/build/${BUILD_DIR_NAME}"
           extra=()
-          if [ -n "${{ steps.layout.outputs.board_root }}" ]; then
-            extra+=("-DBOARD_ROOT=${{ steps.layout.outputs.board_root }}")
+          if [ -n "${BOARD_ROOT}" ]; then
+            extra+=("-DBOARD_ROOT=${BOARD_ROOT}")
+          fi
+          if [ -n "${CMAKE_ARGS}" ]; then
+            read -r -a parsed <<< "${CMAKE_ARGS}"
+            extra+=("${parsed[@]}")
           fi
           sysbuild=()
-          if [ "${{ matrix.sysbuild }}" = "true" ]; then
+          if [ "${SYSBUILD}" = "true" ]; then
             sysbuild+=("--sysbuild")
           fi
           cd "${NCS_WORKSPACE}"
-          west build -b "${{ matrix.board }}" "${app_dir}" \
+          set -x
+          west build -b "${BOARD}" "${APP_DIR}" \
             --build-dir "${build_dir}" \
             --pristine always \
             "${sysbuild[@]}" \
             -- "${extra[@]}"
 
       - name: Collect flashable artifacts
+        env:
+          BUILD_DIR_NAME: ${{ matrix.id }}
+          PREFIX: ${{ matrix.id }}-${{ needs.version.outputs.version }}
         run: |
           set -euo pipefail
-          build_dir="${GITHUB_WORKSPACE}/build/${{ matrix.id }}"
+          build_dir="${GITHUB_WORKSPACE}/build/${BUILD_DIR_NAME}"
           out="${GITHUB_WORKSPACE}/artifacts"
           mkdir -p "${out}"
-          prefix="${{ matrix.id }}-${{ needs.version.outputs.version }}"
-          copy_first() {
-            src="$(find "${build_dir}" -name "$1" -type f | sort | head -n1 || true)"
-            if [ -n "${src}" ]; then
-              cp "${src}" "${out}/${prefix}-$2"
-              echo "collected ${src} -> ${prefix}-$2"
-            fi
+          collect() {
+            pattern="$1"
+            while IFS= read -r src; do
+              case "${src}" in
+                */CMakeFiles/*|*/mcuboot/*|*/b0/*|*/b0n/*|*/hci_ipc/*|*/ipc_radio/*|*/empty_net_core/*|*/_sysbuild/*)
+                  continue
+                  ;;
+              esac
+              base="$(basename "${src}")"
+              dest="${out}/${PREFIX}-${base}"
+              if [ -e "${dest}" ]; then
+                continue
+              fi
+              cp "${src}" "${dest}"
+              echo "collected ${src} -> $(basename "${dest}")"
+            done < <(find "${build_dir}" -type f -name "${pattern}" | sort)
           }
-          copy_first dfu_application.zip dfu_application.zip
-          copy_first merged.hex merged.hex
-          copy_first merged_domains.hex merged_domains.hex
-          copy_first app_update.bin app_update.bin
-          copy_first zephyr.hex zephyr.hex
-          copy_first zephyr.bin zephyr.bin
-          copy_first zephyr.uf2 zephyr.uf2
+          collect 'dfu_application.zip'
+          collect 'dfu_multi_image.bin'
+          collect 'merged.hex'
+          collect 'merged_domains.hex'
+          collect 'app_update.bin'
+          collect 'zephyr.hex'
+          collect 'zephyr.bin'
+          collect 'zephyr.uf2'
+          collect 'zephyr.elf'
+          collect '*.uf2'
           if [ -z "$(ls -A "${out}" 2>/dev/null)" ]; then
-            echo "::error::The build for ${{ matrix.id }} produced none of the expected artifacts (dfu_application.zip, merged.hex, zephyr.hex, zephyr.bin, zephyr.uf2) under ${build_dir}."
-            find "${build_dir}" -maxdepth 3 -type f | sort | head -n 100
+            echo "::error::The build for ${BUILD_DIR_NAME} produced none of the expected artifacts (dfu_application.zip, merged.hex, zephyr.hex, zephyr.bin, zephyr.uf2) under ${build_dir}."
+            find "${build_dir}" -maxdepth 4 -type f | sort | head -n 200
             exit 1
           fi
           ls -l "${out}"
@@ -268,16 +268,18 @@ jobs:
 
       - name: Collect PlatformIO artifacts
         if: steps.detect.outputs.present == 'true'
+        env:
+          PIO_DIR: ${{ steps.detect.outputs.dir }}
+          PREFIX: omiglass-${{ needs.version.outputs.version }}
         run: |
           set -euo pipefail
           out="${GITHUB_WORKSPACE}/artifacts"
           mkdir -p "${out}"
-          prefix="omiglass-${{ needs.version.outputs.version }}"
           found=0
           while IFS= read -r f; do
-            cp "${f}" "${out}/${prefix}-$(basename "${f}")"
+            cp "${f}" "${out}/${PREFIX}-$(basename "${f}")"
             found=1
-          done < <(find "${{ steps.detect.outputs.dir }}/.pio/build" -maxdepth 2 -type f \( -name 'firmware.bin' -o -name 'firmware.elf' -o -name 'bootloader.bin' -o -name 'partitions.bin' \) 2>/dev/null || true)
+          done < <(find "${PIO_DIR}/.pio/build" -maxdepth 2 -type f \( -name 'firmware.bin' -o -name 'firmware.elf' -o -name 'bootloader.bin' -o -name 'partitions.bin' \) 2>/dev/null || true)
           if [ "${found}" -eq 0 ]; then
             echo "::error::The PlatformIO build produced no firmware.bin under .pio/build."
             exit 1
@@ -292,12 +294,10 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-  release:
-    name: Publish firmware release
+  bundle:
+    name: Bundle firmware artifacts
     runs-on: ubuntu-24.04
-    needs: [version, zephyr, omiglass]
-    permissions:
-      contents: write
+    needs: [version, discover, zephyr, omiglass]
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -319,8 +319,39 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+      - name: Summarise the run
+        env:
+          DRY_RUN: ${{ needs.version.outputs.dry_run }}
+          RELEASE_VERSION: ${{ needs.version.outputs.version }}
+          TARGET_COUNT: ${{ needs.discover.outputs.count }}
+          TARGET_SOURCE: ${{ needs.discover.outputs.source }}
+        run: |
+          set -euo pipefail
+          {
+            echo "### Firmware ${RELEASE_VERSION}"
+            echo
+            echo "- Targets built: ${TARGET_COUNT} (discovered from: ${TARGET_SOURCE})"
+            if [ "${DRY_RUN}" = "true" ]; then
+              echo "- Dry run: no GitHub Release was created. Download \`firmware-release-bundle\` from this run."
+            else
+              echo "- Publishing a GitHub Release for \`${GITHUB_REF_NAME}\`."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  publish:
+    name: Publish firmware release
+    runs-on: ubuntu-24.04
+    needs: [version, bundle]
+    if: needs.version.outputs.dry_run == 'false'
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: firmware-release-bundle
+          path: dist
+
       - name: Create the GitHub release
-        if: github.ref_type == 'tag'
         uses: softprops/action-gh-release@v2
         with:
           name: Firmware ${{ needs.version.outputs.version }}

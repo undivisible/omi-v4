@@ -10,6 +10,11 @@ on:
         description: Version label used for artifact names on manual runs
         required: false
         default: dev
+      dry_run:
+        description: Build and upload artifacts without creating a GitHub Release
+        type: boolean
+        required: false
+        default: true
 
 permissions:
   contents: read
@@ -24,17 +29,27 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       version: ${{ steps.meta.outputs.version }}
+      dry_run: ${{ steps.meta.outputs.dry_run }}
     steps:
       - id: meta
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_DRY_RUN: ${{ inputs.dry_run }}
         run: |
           set -euo pipefail
           if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
             version="${GITHUB_REF_NAME#mobile-v}"
+            dry_run=false
           else
-            version="${{ inputs.version || 'dev' }}"
+            version="${INPUT_VERSION:-dev}"
+            dry_run="${INPUT_DRY_RUN:-true}"
           fi
           echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "dry_run=${dry_run}" >> "$GITHUB_OUTPUT"
           echo "Mobile release version: ${version}"
+          if [ "${dry_run}" = "true" ]; then
+            echo "::notice::Dry run: artifacts will be uploaded to this workflow run only. No GitHub Release will be created."
+          fi
 
   android:
     name: Android
@@ -74,14 +89,6 @@ jobs:
           restore-keys: |
             mobile-android-${{ runner.os }}-
 
-      - name: Build the release APK and app bundle
-        working-directory: app
-        run: |
-          set -euo pipefail
-          flutter pub get
-          flutter build apk --release
-          flutter build appbundle --release
-
       - name: Decide whether release signing is possible
         id: signing
         env:
@@ -91,58 +98,66 @@ jobs:
         run: |
           set -euo pipefail
           if [ -n "${ANDROID_KEYSTORE_BASE64}" ] && [ -n "${ANDROID_KEYSTORE_PASSWORD}" ] && [ -n "${ANDROID_KEY_ALIAS}" ]; then
+            keystore="${RUNNER_TEMP}/release.keystore"
+            printf '%s' "${ANDROID_KEYSTORE_BASE64}" | base64 -d > "${keystore}"
+            if [ ! -s "${keystore}" ]; then
+              echo "::error::ANDROID_KEYSTORE_BASE64 did not decode to a non-empty keystore file."
+              exit 1
+            fi
             echo "enabled=true" >> "$GITHUB_OUTPUT"
+            echo "keystore=${keystore}" >> "$GITHUB_OUTPUT"
           else
             echo "enabled=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::ANDROID_KEYSTORE_BASE64 / ANDROID_KEYSTORE_PASSWORD / ANDROID_KEY_ALIAS are not all set. Publishing the APK and AAB as built, which means they carry the Flutter debug signature and are not suitable for Play Store upload."
+            echo "keystore=" >> "$GITHUB_OUTPUT"
+            echo "::notice::ANDROID_KEYSTORE_BASE64 / ANDROID_KEYSTORE_PASSWORD / ANDROID_KEY_ALIAS are not all set. Gradle will fall back to the debug signing config, which means the APK and AAB are not suitable for Play Store upload."
           fi
 
-      - name: Re-sign the APK and app bundle for release
-        if: steps.signing.outputs.enabled == 'true'
+      - name: Build the release APK and app bundle
+        working-directory: app
         env:
-          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PATH: ${{ steps.signing.outputs.keystore }}
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           set -euo pipefail
-          keystore="${RUNNER_TEMP}/release.keystore"
-          printf '%s' "${ANDROID_KEYSTORE_BASE64}" | base64 -d > "${keystore}"
-          if [ -z "${ANDROID_KEY_PASSWORD}" ]; then
-            ANDROID_KEY_PASSWORD="${ANDROID_KEYSTORE_PASSWORD}"
-          fi
-          export ANDROID_KEY_PASSWORD
+          flutter pub get
+          flutter build apk --release
+          flutter build appbundle --release
+
+      - name: Verify the release signature
+        if: steps.signing.outputs.enabled == 'true'
+        run: |
+          set -euo pipefail
           build_tools="$(find "${ANDROID_HOME}/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n1)"
           apk=app/build/app/outputs/flutter-apk/app-release.apk
-          aab=app/build/app/outputs/bundle/release/app-release.aab
-          "${build_tools}/apksigner" sign \
-            --ks "${keystore}" \
-            --ks-pass env:ANDROID_KEYSTORE_PASSWORD \
-            --ks-key-alias "${ANDROID_KEY_ALIAS}" \
-            --key-pass env:ANDROID_KEY_PASSWORD \
-            "${apk}"
-          "${build_tools}/apksigner" verify --print-certs "${apk}"
-          zip -d "${aab}" 'META-INF/*.SF' 'META-INF/*.RSA' 'META-INF/*.DSA' >/dev/null 2>&1 || true
-          jarsigner -verbose:summary -sigalg SHA256withRSA -digestalg SHA-256 \
-            -keystore "${keystore}" \
-            -storepass "${ANDROID_KEYSTORE_PASSWORD}" \
-            -keypass "${ANDROID_KEY_PASSWORD}" \
-            "${aab}" "${ANDROID_KEY_ALIAS}"
-          rm -f "${keystore}"
+          certs="$("${build_tools}/apksigner" verify --print-certs "${apk}")"
+          echo "${certs}"
+          if printf '%s' "${certs}" | grep -q 'CN=Android Debug'; then
+            echo "::error::${apk} is signed with the Android debug certificate even though the release signing secrets were provided. Gradle did not pick up the release signingConfig; check ANDROID_KEYSTORE_PATH / ANDROID_KEYSTORE_PASSWORD / ANDROID_KEY_ALIAS handling in app/android/app/build.gradle.kts."
+            exit 1
+          fi
+
+      - name: Remove the decoded keystore
+        if: always()
+        run: rm -f "${RUNNER_TEMP}/release.keystore"
 
       - name: Collect Android artifacts
+        env:
+          SIGNED: ${{ steps.signing.outputs.enabled }}
+          RELEASE_VERSION: ${{ needs.version.outputs.version }}
         run: |
           set -euo pipefail
           out=artifacts
           mkdir -p "${out}"
           suffix=""
-          if [ "${{ steps.signing.outputs.enabled }}" != "true" ]; then
+          if [ "${SIGNED}" != "true" ]; then
             suffix="-unsigned"
           fi
           cp app/build/app/outputs/flutter-apk/app-release.apk \
-            "${out}/omi-${{ needs.version.outputs.version }}-android${suffix}.apk"
+            "${out}/omi-${RELEASE_VERSION}-android${suffix}.apk"
           cp app/build/app/outputs/bundle/release/app-release.aab \
-            "${out}/omi-${{ needs.version.outputs.version }}-android${suffix}.aab"
+            "${out}/omi-${RELEASE_VERSION}-android${suffix}.aab"
           ls -l "${out}"
 
       - uses: actions/upload-artifact@v4
@@ -238,9 +253,15 @@ jobs:
         env:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           IOS_EXPORT_METHOD: ${{ secrets.IOS_EXPORT_METHOD }}
+          IOS_SIGNING_STYLE: ${{ secrets.IOS_SIGNING_STYLE }}
         run: |
           set -euo pipefail
           method="${IOS_EXPORT_METHOD:-app-store}"
+          style="${IOS_SIGNING_STYLE:-automatic}"
+          if [ "${style}" != "automatic" ] && [ "${style}" != "manual" ]; then
+            echo "::error::IOS_SIGNING_STYLE must be 'automatic' or 'manual', got '${style}'."
+            exit 1
+          fi
           plist="${RUNNER_TEMP}/ExportOptions.plist"
           {
             echo '<?xml version="1.0" encoding="UTF-8"?>'
@@ -252,7 +273,7 @@ jobs:
             echo '<key>teamID</key>'
             echo "<string>${APPLE_TEAM_ID}</string>"
             echo '<key>signingStyle</key>'
-            echo '<string>manual</string>'
+            echo "<string>${style}</string>"
             echo '<key>uploadBitcode</key>'
             echo '<false/>'
             echo '<key>uploadSymbols</key>'
@@ -261,25 +282,28 @@ jobs:
             echo '</plist>'
           } > "${plist}"
           plutil -lint "${plist}"
+          echo "Export options (signing style ${style}, matching CODE_SIGN_STYLE in app/ios/Runner.xcodeproj):"
+          cat "${plist}"
           flutter pub get
           flutter build ipa --release --export-options-plist="${plist}"
 
       - name: Collect iOS artifacts
+        env:
+          RELEASE_VERSION: ${{ needs.version.outputs.version }}
         run: |
           set -euo pipefail
           out=artifacts
           mkdir -p "${out}"
-          version="${{ needs.version.outputs.version }}"
           collected=0
           ipa="$(find app/build/ios/ipa -name '*.ipa' -type f 2>/dev/null | head -n1 || true)"
           if [ -n "${ipa}" ]; then
-            cp "${ipa}" "${out}/omi-${version}-ios.ipa"
+            cp "${ipa}" "${out}/omi-${RELEASE_VERSION}-ios.ipa"
             collected=1
           fi
           if [ -d app/build/ios/iphoneos/Runner.app ]; then
             ditto -c -k --sequesterRsrc --keepParent \
               app/build/ios/iphoneos/Runner.app \
-              "${out}/omi-${version}-ios-unsigned-app.zip"
+              "${out}/omi-${RELEASE_VERSION}-ios-unsigned-app.zip"
             collected=1
           fi
           if [ "${collected}" -eq 0 ]; then
@@ -295,12 +319,10 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-  release:
-    name: Publish mobile release
+  bundle:
+    name: Bundle mobile artifacts
     runs-on: ubuntu-24.04
     needs: [version, android, ios]
-    permissions:
-      contents: write
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -322,8 +344,36 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+      - name: Summarise the run
+        env:
+          DRY_RUN: ${{ needs.version.outputs.dry_run }}
+          RELEASE_VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          {
+            echo "### Mobile ${RELEASE_VERSION}"
+            echo
+            if [ "${DRY_RUN}" = "true" ]; then
+              echo "- Dry run: no GitHub Release was created. Download \`mobile-release-bundle\` from this run."
+            else
+              echo "- Publishing a GitHub Release for \`${GITHUB_REF_NAME}\`."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  publish:
+    name: Publish mobile release
+    runs-on: ubuntu-24.04
+    needs: [version, bundle]
+    if: needs.version.outputs.dry_run == 'false'
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: mobile-release-bundle
+          path: dist
+
       - name: Create the GitHub release
-        if: github.ref_type == 'tag'
         uses: softprops/action-gh-release@v2
         with:
           name: Mobile ${{ needs.version.outputs.version }}
