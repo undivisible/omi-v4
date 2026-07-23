@@ -222,9 +222,10 @@ pub fn note_prompt(transcript: &str, jots: &[String], title: &str) -> String {
          - The transcript is speech-to-text and the jotted notes are typed in a hurry, so both \
          contain errors. Read through them for the intended meaning.\n\
          - Transcript lines prefixed \"You:\" are the attendee running this app; lines prefixed \
-         \"Them:\" are the other side of the call. Unprefixed lines could be either. Use those \
-         prefixes to attribute decisions and to fill in action owners, and set an owner only \
-         when the transcript makes it clear.\n\
+         \"Them:\" or \"Speaker 1:\", \"Speaker 2:\" and so on are other people on the call, one \
+         number per voice. Unprefixed lines could be anyone. Use those prefixes to attribute \
+         decisions and to fill in action owners, and set an owner only when the transcript makes \
+         it clear. A \"Speaker N\" label is not a name, so never present it as one.\n\
          - Give every section a concrete topic heading and at least two specific points. Do not \
          create generic \"Overview\", \"Introduction\", \"Summary\", or \"Participants\" \
          sections; the summary and participants have their own fields.\n\
@@ -461,12 +462,86 @@ pub fn clean_answer(output: &str) -> Option<String> {
     (!answer.is_empty()).then_some(answer)
 }
 
+/// How many diarized voices one meeting keeps numbers for. Beyond this the
+/// roster stops growing and the segment falls back to the energy heuristic,
+/// which is the behaviour a provider that never diarizes already gets.
+const MAX_DIARIZED_SPEAKERS: usize = 16;
+
+#[derive(Debug)]
+struct RosterEntry {
+    key: u64,
+    local: u32,
+    remote: u32,
+    number: Option<u32>,
+}
+
+/// Resolves the transcription provider's diarization indices into the speaker
+/// labels the transcript uses.
+///
+/// The provider numbers voices arbitrarily and has no idea which of them is
+/// the person running the app; the two capture tracks do. So each diarized
+/// index accumulates which side of the call the energy heuristic saw while it
+/// was speaking, and the index that keeps coming back on the microphone track
+/// is reported as `You`. Every other diarized voice gets a stable number, so
+/// three people on the far end stop collapsing into one "Them".
+#[derive(Debug, Default)]
+pub struct SpeakerRoster {
+    entries: Vec<RosterEntry>,
+    assigned: u32,
+}
+
+impl SpeakerRoster {
+    /// Real diarization takes precedence over the energy heuristic whenever
+    /// the provider supplied an index; without one the heuristic's answer is
+    /// passed through untouched.
+    pub fn resolve(&mut self, diarized: Option<u64>, tracked: MeetingSpeaker) -> MeetingSpeaker {
+        let Some(key) = diarized else {
+            return tracked;
+        };
+        let position = match self.entries.iter().position(|entry| entry.key == key) {
+            Some(position) => position,
+            None if self.entries.len() < MAX_DIARIZED_SPEAKERS => {
+                self.entries.push(RosterEntry {
+                    key,
+                    local: 0,
+                    remote: 0,
+                    number: None,
+                });
+                self.entries.len() - 1
+            }
+            None => return tracked,
+        };
+        let local = {
+            let entry = &mut self.entries[position];
+            match tracked {
+                MeetingSpeaker::You => entry.local = entry.local.saturating_add(1),
+                MeetingSpeaker::Them => entry.remote = entry.remote.saturating_add(1),
+                MeetingSpeaker::Unknown | MeetingSpeaker::Diarized(_) => {}
+            }
+            entry.local > entry.remote
+        };
+        if local {
+            return MeetingSpeaker::You;
+        }
+        let number = match self.entries[position].number {
+            Some(number) => number,
+            None => {
+                self.assigned = self.assigned.saturating_add(1);
+                self.entries[position].number = Some(self.assigned);
+                self.assigned
+            }
+        };
+        MeetingSpeaker::Diarized(number)
+    }
+}
+
 #[derive(Debug)]
 pub struct MeetingSession {
     title: Option<String>,
     manual: bool,
     transcript: String,
     last_speaker: Option<MeetingSpeaker>,
+    roster: SpeakerRoster,
     limiter: InsightLimiter,
     started_at_ms: i64,
     jots: Vec<String>,
@@ -483,6 +558,7 @@ impl MeetingSession {
             manual,
             transcript: String::new(),
             last_speaker: None,
+            roster: SpeakerRoster::default(),
             limiter: InsightLimiter::default(),
             started_at_ms,
             jots: Vec::new(),
@@ -517,9 +593,9 @@ impl MeetingSession {
         if text.is_empty() || accumulated >= RAW_TRANSCRIPT_CHARS {
             return;
         }
-        let continues = speaker.label().is_some()
-            && self.last_speaker == Some(speaker)
-            && !self.transcript.is_empty();
+        let label = speaker.label();
+        let continues =
+            label.is_some() && self.last_speaker == Some(speaker) && !self.transcript.is_empty();
         let mut prefix = String::new();
         if continues {
             prefix.push(' ');
@@ -527,8 +603,8 @@ impl MeetingSession {
             if !self.transcript.is_empty() {
                 prefix.push('\n');
             }
-            if let Some(label) = speaker.label() {
-                prefix.push_str(label);
+            if let Some(label) = label {
+                prefix.push_str(&label);
                 prefix.push_str(": ");
             }
         }
@@ -540,6 +616,16 @@ impl MeetingSession {
         self.transcript
             .extend(text.chars().take(remaining - prefix.chars().count()));
         self.last_speaker = Some(speaker);
+    }
+
+    /// Combines the provider's diarization index, when there is one, with the
+    /// side of the call the capture tracks heard.
+    pub fn resolve_speaker(
+        &mut self,
+        diarized: Option<u64>,
+        tracked: MeetingSpeaker,
+    ) -> MeetingSpeaker {
+        self.roster.resolve(diarized, tracked)
     }
 
     pub fn transcript(&self) -> &str {
@@ -627,6 +713,7 @@ pub enum MeetingControl {
     },
     FinalSegment {
         speaker: MeetingSpeaker,
+        diarized: Option<u64>,
         text: String,
     },
     Jot {
@@ -764,7 +851,11 @@ pub fn set_mode(mode: SystemAudioCaptureMode) {
 ///
 /// The speaker is sampled here rather than inside the runtime because the two
 /// capture tracks only describe the moment the segment was spoken.
-pub async fn observe_final_segment(text: &str) {
+///
+/// `diarized` is the transcription provider's own speaker index for the
+/// segment, when the provider returned one; it takes precedence over the
+/// capture-track heuristic inside the session's roster.
+pub async fn observe_final_segment(text: &str, diarized: Option<u64>) {
     if text.trim().is_empty() {
         return;
     }
@@ -773,6 +864,7 @@ pub async fn observe_final_segment(text: &str) {
     };
     let control = MeetingControl::FinalSegment {
         speaker: crate::meeting_capture::dominant_speaker(),
+        diarized,
         text: text.to_owned(),
     };
     match sender.try_send(control) {
@@ -859,11 +951,16 @@ impl MeetingRuntime {
                         self.finish(finished);
                     }
                 }
-                MeetingControl::FinalSegment { speaker, text } => {
+                MeetingControl::FinalSegment {
+                    speaker,
+                    diarized,
+                    text,
+                } => {
                     if let Some(current) = &mut session {
+                        let speaker = current.resolve_speaker(diarized, speaker);
                         current.push_final(speaker, &text);
                         NativeEvent::MeetingTranscriptTurn(MeetingTranscriptTurn {
-                            speaker: speaker.name().to_owned(),
+                            speaker: speaker.name(),
                             text: text.trim().to_owned(),
                             occurred_at_ms: chrono::Utc::now().timestamp_millis(),
                         })
@@ -950,7 +1047,7 @@ impl MeetingRuntime {
                     kind: kind.name().to_owned(),
                     text,
                     source_text: source,
-                    speaker: speaker.name().to_owned(),
+                    speaker: speaker.name(),
                 })
                 .send();
             }
@@ -1300,6 +1397,69 @@ mod tests {
         session.push_final(MeetingSpeaker::Them, "dropped entirely");
         assert!(session.transcript().chars().count() <= RAW_TRANSCRIPT_CHARS);
         assert!(!session.transcript().contains("Them"));
+    }
+
+    #[test]
+    fn provider_diarization_outranks_the_energy_heuristic_and_numbers_the_far_end() {
+        let mut session = MeetingSession::new_at(None, true, 0);
+        // The heuristic hears the far end; diarization separates two voices in it.
+        let first = session.resolve_speaker(Some(1), MeetingSpeaker::Them);
+        let second = session.resolve_speaker(Some(2), MeetingSpeaker::Them);
+        assert_eq!(first, MeetingSpeaker::Diarized(1));
+        assert_eq!(second, MeetingSpeaker::Diarized(2));
+        assert_eq!(
+            session.resolve_speaker(Some(1), MeetingSpeaker::Unknown),
+            MeetingSpeaker::Diarized(1)
+        );
+        // The voice the microphone track keeps carrying is the attendee.
+        assert_eq!(
+            session.resolve_speaker(Some(0), MeetingSpeaker::You),
+            MeetingSpeaker::You
+        );
+        assert_eq!(
+            session.resolve_speaker(Some(0), MeetingSpeaker::Unknown),
+            MeetingSpeaker::You
+        );
+        session.push_final(first, "QA finishes Thursday.");
+        session.push_final(second, "Pricing is unresolved.");
+        session.push_final(MeetingSpeaker::You, "Then we ship Friday.");
+        assert_eq!(
+            session.transcript(),
+            "Speaker 1: QA finishes Thursday.\nSpeaker 2: Pricing is unresolved.\nYou: Then we \
+             ship Friday."
+        );
+    }
+
+    #[test]
+    fn without_provider_diarization_the_energy_heuristic_still_decides() {
+        let mut session = MeetingSession::new_at(None, true, 0);
+        assert_eq!(
+            session.resolve_speaker(None, MeetingSpeaker::You),
+            MeetingSpeaker::You
+        );
+        assert_eq!(
+            session.resolve_speaker(None, MeetingSpeaker::Them),
+            MeetingSpeaker::Them
+        );
+        assert_eq!(
+            session.resolve_speaker(None, MeetingSpeaker::Unknown),
+            MeetingSpeaker::Unknown
+        );
+    }
+
+    #[test]
+    fn the_roster_stops_growing_and_falls_back_once_it_is_full() {
+        let mut roster = SpeakerRoster::default();
+        for index in 0..MAX_DIARIZED_SPEAKERS as u64 {
+            assert!(matches!(
+                roster.resolve(Some(index), MeetingSpeaker::Them),
+                MeetingSpeaker::Diarized(_)
+            ));
+        }
+        assert_eq!(
+            roster.resolve(Some(999), MeetingSpeaker::Them),
+            MeetingSpeaker::Them
+        );
     }
 
     #[test]

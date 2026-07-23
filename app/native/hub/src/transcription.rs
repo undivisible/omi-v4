@@ -617,6 +617,8 @@ impl AudioSessions {
             occurred_at_ms: event.end_ms,
             text: event.text,
             final_segment: event.final_segment,
+            speaker: None,
+            channel_index: None,
             language: Some(session.language.clone()),
         };
         if event.final_segment {

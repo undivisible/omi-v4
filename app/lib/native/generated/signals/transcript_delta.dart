@@ -16,6 +16,8 @@ class TranscriptDelta {
     required this.occurredAtMs,
     required this.text,
     required this.finalSegment,
+    this.speaker,
+    this.channelIndex,
     this.language,
   });
 
@@ -34,6 +36,8 @@ class TranscriptDelta {
       occurredAtMs: deserializer.deserializeInt64(),
       text: deserializer.deserializeString(),
       finalSegment: deserializer.deserializeBool(),
+      speaker: TraitHelpers.deserializeOptionU32(deserializer),
+      channelIndex: TraitHelpers.deserializeOptionU32(deserializer),
       language: TraitHelpers.deserializeOptionStr(deserializer),
     );
     deserializer.decreaseContainerDepth();
@@ -61,6 +65,8 @@ class TranscriptDelta {
   final int occurredAtMs;
   final String text;
   final bool finalSegment;
+  final int? speaker;
+  final int? channelIndex;
   final String? language;
 
   TranscriptDelta copyWith({
@@ -76,6 +82,8 @@ class TranscriptDelta {
     int? occurredAtMs,
     String? text,
     bool? finalSegment,
+    int? Function()? speaker,
+    int? Function()? channelIndex,
     String? Function()? language,
   }) {
     return TranscriptDelta(
@@ -91,6 +99,8 @@ class TranscriptDelta {
       occurredAtMs: occurredAtMs ?? this.occurredAtMs,
       text: text ?? this.text,
       finalSegment: finalSegment ?? this.finalSegment,
+      speaker: speaker == null ? this.speaker : speaker(),
+      channelIndex: channelIndex == null ? this.channelIndex : channelIndex(),
       language: language == null ? this.language : language(),
     );
   }
@@ -109,6 +119,8 @@ class TranscriptDelta {
     serializer.serializeInt64(occurredAtMs);
     serializer.serializeString(text);
     serializer.serializeBool(finalSegment);
+    TraitHelpers.serializeOptionU32(speaker, serializer);
+    TraitHelpers.serializeOptionU32(channelIndex, serializer);
     TraitHelpers.serializeOptionStr(language, serializer);
     serializer.decreaseContainerDepth();
   }
@@ -137,6 +149,8 @@ class TranscriptDelta {
         occurredAtMs == other.occurredAtMs &&
         text == other.text &&
         finalSegment == other.finalSegment &&
+        speaker == other.speaker &&
+        channelIndex == other.channelIndex &&
         language == other.language;
   }
 
@@ -154,6 +168,8 @@ class TranscriptDelta {
     occurredAtMs,
     text,
     finalSegment,
+    speaker,
+    channelIndex,
     language,
   );
 
@@ -176,6 +192,8 @@ class TranscriptDelta {
           'occurredAtMs: $occurredAtMs, '
           'text: [REDACTED], '
           'finalSegment: $finalSegment, '
+          'speaker: $speaker, '
+          'channelIndex: $channelIndex, '
           'language: $language'
           ')';
       return true;

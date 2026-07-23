@@ -178,6 +178,24 @@ class TraitHelpers {
     }
   }
 
+  static void serializeOptionU32(int? value, BinarySerializer serializer) {
+    if (value == null) {
+      serializer.serializeOptionTag(false);
+    } else {
+      serializer.serializeOptionTag(true);
+      serializer.serializeUint32(value);
+    }
+  }
+
+  static int? deserializeOptionU32(BinaryDeserializer deserializer) {
+    final tag = deserializer.deserializeOptionTag();
+    if (tag) {
+      return deserializer.deserializeUint32();
+    } else {
+      return null;
+    }
+  }
+
   static void serializeOptionU8(int? value, BinarySerializer serializer) {
     if (value == null) {
       serializer.serializeOptionTag(false);
