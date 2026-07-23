@@ -144,36 +144,45 @@ class _OmiShellState extends State<OmiShell> {
   }
 
   @visibleForTesting
-  void debugOpenSettingsForTest() => _openSettings();
+  void debugOpenSettingsForTest({SettingsSection? section}) =>
+      _openSettings(section: section);
 
   /// On macOS settings live in their own native window (a second Flutter
   /// engine hosted by SettingsWindowController); the channel call asks the
   /// Runner to open or front it. Elsewhere — and in tests or previews where
   /// the native side is absent — fall back to the in-window route.
-  void _openSettings() {
+  ///
+  /// [section] is the anchor the caller wants: it rides the channel as the
+  /// section's plain name so the settings engine can land there instead of at
+  /// the top, and the in-window fallback honours the same request.
+  void _openSettings({SettingsSection? section}) {
     if (!mounted) return;
     if (_isMacDesktop && !widget.previewMode) {
       unawaited(() async {
         try {
-          await _windowChromeChannel.invokeMethod<void>('openSettings');
+          await _windowChromeChannel.invokeMethod<void>(
+            'openSettings',
+            section?.name,
+          );
         } on MissingPluginException {
-          _openSettingsRoute();
+          _openSettingsRoute(section);
         } on PlatformException {
-          _openSettingsRoute();
+          _openSettingsRoute(section);
         }
       }());
       return;
     }
-    _openSettingsRoute();
+    _openSettingsRoute(section);
   }
 
-  void _openSettingsRoute() {
+  void _openSettingsRoute([SettingsSection? section]) {
     if (!mounted) return;
     Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (context) => SettingsScreen(
           services: widget.services,
           previewMode: widget.previewMode,
+          initialSection: section,
         ),
         fullscreenDialog: true,
       ),
@@ -228,6 +237,8 @@ class _OmiShellState extends State<OmiShell> {
         onShakeSummon: _cursorPill == null
             ? null
             : () => _handleDesktopGesture(ShiftGestureAction.startVoice),
+        onOpenProviderSettings: () =>
+            _openSettings(section: SettingsSection.providers),
       ),
     );
     final topPadding = widget.previewMode ? 20.0 : 48.0;

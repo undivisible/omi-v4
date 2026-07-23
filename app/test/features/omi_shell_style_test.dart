@@ -5,8 +5,11 @@ import 'package:omi/auth/auth.dart';
 import 'package:omi/device/device.dart';
 import 'package:omi/features/omi_shell.dart';
 import 'package:omi/native/native_hub.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
   AppServices makeServices() {
     return AppServices.forTesting(
       nativeHub: const UnavailableNativeHub('test'),
@@ -25,6 +28,9 @@ void main() {
     required Brightness brightness,
     Size size = const Size(900, 700),
   }) async {
+    // The BYOK hint reads its dismissal out of preferences before it can
+    // decide to show, so the hub needs a preference store in these tests.
+    SharedPreferences.setMockInitialValues({});
     tester.view.physicalSize = size;
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);

@@ -4,8 +4,10 @@ import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show ScrollCacheExtent;
+import 'package:shared_preferences/shared_preferences.dart';
 
-import '../api/worker_http.dart' show WorkerAuthenticationException;
+import '../api/worker_http.dart'
+    show BillingEntitlement, OmiPlan, WorkerAuthenticationException;
 import '../app_services.dart';
 import '../currents/currents.dart';
 import '../keyboard/keyboard.dart';
@@ -35,6 +37,10 @@ import 'tasks_screen.dart';
 /// the newest message peeks in and scrolling up is discoverable.
 const double _historyPeekExtent = 44;
 
+/// Reads the plan this account is on. Null means there is nothing to ask —
+/// no billing backend — which is itself a free setup.
+typedef EntitlementProbe = Future<BillingEntitlement?> Function();
+
 class ChatScreen extends StatefulWidget {
   const ChatScreen({
     required this.services,
@@ -43,6 +49,8 @@ class ChatScreen extends StatefulWidget {
     this.onDesktopGestureReset,
     this.onShakeSummon,
     this.checklistStore,
+    this.onOpenProviderSettings,
+    this.entitlementProbe,
     super.key,
   });
 
@@ -56,6 +64,13 @@ class ChatScreen extends StatefulWidget {
   final Future<void> Function()? onShakeSummon;
 
   final HubChecklistStore? checklistStore;
+
+  /// Opens settings at the BYOK/provider-keys section, for the hint row under
+  /// the task list.
+  final VoidCallback? onOpenProviderSettings;
+
+  /// Override for the plan lookup that gates the BYOK hint.
+  final EntitlementProbe? entitlementProbe;
 
   @override
   State<ChatScreen> createState() => ChatScreenState();
@@ -161,6 +176,14 @@ class ChatScreenState extends State<ChatScreen> {
   bool _activatingShakeVoice = false;
   late final HubChecklistStore _checklist =
       widget.checklistStore ?? PreferencesHubChecklistStore();
+  static const byokHintDismissedKey = 'hub_byok_hint_dismissed_v1';
+  late final EntitlementProbe _entitlementProbe =
+      widget.entitlementProbe ??
+      () async => widget.previewMode
+          ? null
+          : await widget.services.billing?.getEntitlement();
+  bool _byokHintDismissed = true;
+  bool _byokPlanFree = false;
   bool _setupTaskDone = true;
   bool _greeterDismissed = false;
   final _scroll = ScrollController();
@@ -179,6 +202,7 @@ class ChatScreenState extends State<ChatScreen> {
   void initState() {
     super.initState();
     unawaited(_loadChecklist());
+    unawaited(_loadByokHint());
     if (!widget.previewMode) {
       unawaited(
         widget.services.localProfileName().then((value) {
@@ -263,6 +287,48 @@ class ChatScreenState extends State<ChatScreen> {
           ..addAll(doneStarters);
       });
     }
+  }
+
+  /// The BYOK hint is only true for accounts that are not already paying for
+  /// managed AI, so the plan is checked before it is ever shown. No billing
+  /// backend at all (local mode, previews) counts as free.
+  Future<void> _loadByokHint() async {
+    bool dismissed;
+    try {
+      dismissed =
+          (await SharedPreferences.getInstance()).getBool(
+            byokHintDismissedKey,
+          ) ??
+          false;
+    } catch (_) {
+      dismissed = false;
+    }
+    if (!mounted) return;
+    setState(() => _byokHintDismissed = dismissed);
+    if (dismissed) return;
+    BillingEntitlement? entitlement;
+    try {
+      entitlement = await _entitlementProbe();
+    } catch (_) {
+      entitlement = null;
+    }
+    if (!mounted) return;
+    setState(
+      () => _byokPlanFree =
+          entitlement == null ||
+          entitlement.plan != OmiPlan.pro ||
+          !entitlement.active,
+    );
+  }
+
+  Future<void> _dismissByokHint() async {
+    setState(() => _byokHintDismissed = true);
+    try {
+      await (await SharedPreferences.getInstance()).setBool(
+        byokHintDismissedKey,
+        true,
+      );
+    } catch (_) {}
   }
 
   void _toggleStarterTask(String title) {
@@ -943,6 +1009,13 @@ class ChatScreenState extends State<ChatScreen> {
                                                   ? null
                                                   : () =>
                                                         _openAllTasks(currents),
+                                              showByokHint:
+                                                  !_byokHintDismissed &&
+                                                  _byokPlanFree,
+                                              onOpenByok:
+                                                  widget.onOpenProviderSettings,
+                                              onDismissByok: () =>
+                                                  unawaited(_dismissByokHint()),
                                             ),
                                           ),
                                         ),
@@ -1455,6 +1528,9 @@ class _ChatHome extends StatelessWidget {
     required this.onComplete,
     required this.onPrompt,
     this.onAllTasks,
+    this.showByokHint = false,
+    this.onOpenByok,
+    this.onDismissByok,
   });
 
   final String greeting;
@@ -1467,6 +1543,9 @@ class _ChatHome extends StatelessWidget {
   final ValueChanged<String>? onComplete;
   final ValueChanged<String> onPrompt;
   final VoidCallback? onAllTasks;
+  final bool showByokHint;
+  final VoidCallback? onOpenByok;
+  final VoidCallback? onDismissByok;
 
   @override
   Widget build(BuildContext context) {
@@ -1591,7 +1670,8 @@ class _ChatHome extends StatelessWidget {
                       ),
                     ),
                   ),
-                const _HintRow(),
+                if (showByokHint)
+                  _ByokHintRow(onOpen: onOpenByok, onDismiss: onDismissByok),
               ],
             ),
           ),
@@ -1888,44 +1968,77 @@ class _RichTaskRow extends StatelessWidget {
   }
 }
 
-class _HintRow extends StatelessWidget {
-  const _HintRow();
+/// The BYOK nudge under the task list. The whole row opens settings at the
+/// provider-keys section, and the close control retires it for good — a hint
+/// that cannot be acted on or put away is just noise.
+class _ByokHintRow extends StatelessWidget {
+  const _ByokHintRow({required this.onOpen, required this.onDismiss});
+
+  final VoidCallback? onOpen;
+  final VoidCallback? onDismiss;
 
   @override
   Widget build(BuildContext context) {
     final colors = _HubColors.of(context);
     return DecoratedBox(
+      key: const Key('hub_byok_hint'),
       decoration: BoxDecoration(
         border: Border(
           top: BorderSide(color: colors.hairline),
           bottom: BorderSide(color: colors.hairline),
         ),
       ),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 16),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Padding(
-              padding: const EdgeInsets.only(top: 2),
-              child: Text(
-                '↳',
-                style: TextStyle(fontSize: 14, color: colors.hintBlue),
-              ),
-            ),
-            const SizedBox(width: 16),
-            Expanded(
-              child: Text(
-                'By the way, if you bring your own keys, Omi becomes free.',
-                style: TextStyle(
-                  fontSize: 12,
-                  height: 20 / 12,
-                  color: colors.hintBlue,
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            child: InkWell(
+              key: const Key('hub_byok_hint_open'),
+              onTap: onOpen,
+              hoverColor: colors.rowHover,
+              splashColor: Colors.transparent,
+              highlightColor: Colors.transparent,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 16),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.only(top: 2),
+                      child: Text(
+                        '↳',
+                        style: TextStyle(fontSize: 14, color: colors.hintBlue),
+                      ),
+                    ),
+                    const SizedBox(width: 16),
+                    Expanded(
+                      child: Text(
+                        'By the way, if you bring your own keys, Omi becomes '
+                        'free.',
+                        style: TextStyle(
+                          fontSize: 12,
+                          height: 20 / 12,
+                          color: colors.hintBlue,
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ),
-          ],
-        ),
+          ),
+          Padding(
+            padding: const EdgeInsets.only(top: 10),
+            child: IconButton(
+              key: const Key('hub_byok_hint_dismiss'),
+              tooltip: 'Hide this tip',
+              iconSize: 14,
+              visualDensity: VisualDensity.compact,
+              onPressed: onDismiss,
+              icon: Icon(Icons.close_rounded, color: colors.muted),
+            ),
+          ),
+        ],
       ),
     );
   }
