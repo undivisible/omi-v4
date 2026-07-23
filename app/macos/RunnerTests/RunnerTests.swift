@@ -56,4 +56,35 @@ class RunnerTests: XCTestCase {
     XCTAssertEqual(first, second)
   }
 
+  @MainActor
+  func testSettingsWindowIsTitledClosableResizableAtDefaultSize() {
+    let window = SettingsWindowController.makeWindow(
+      contentViewController: NSViewController())
+    XCTAssertEqual(window.title, SettingsWindowController.windowTitle)
+    XCTAssertTrue(window.styleMask.contains(.titled))
+    XCTAssertTrue(window.styleMask.contains(.closable))
+    XCTAssertTrue(window.styleMask.contains(.resizable))
+    XCTAssertEqual(
+      window.contentRect(forFrameRect: window.frame).size,
+      SettingsWindowController.defaultContentSize)
+    XCTAssertFalse(window.isReleasedWhenClosed)
+    window.close()
+  }
+
+  @MainActor
+  func testSettingsWindowShowReusesTheExistingWindow() {
+    let controller = NSViewController()
+    controller.view = NSView()
+    let existing = SettingsWindowController(
+      window: SettingsWindowController.makeWindow(contentViewController: controller))
+    SettingsWindowController.shared = existing
+    defer {
+      existing.window?.close()
+      SettingsWindowController.shared = nil
+    }
+    SettingsWindowController.show()
+    XCTAssertTrue(SettingsWindowController.shared === existing)
+    XCTAssertEqual(existing.window?.isVisible, true)
+  }
+
 }

@@ -73,37 +73,42 @@ class _OmiActivityOrbState extends State<OmiActivityOrb>
             curve: Curves.easeOutCubic,
             builder: (context, morph, child) => AnimatedBuilder(
               animation: _motion,
-              builder: (context, child) => Stack(
-                fit: StackFit.expand,
-                children: [
-                  const DecoratedBox(
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      gradient: LinearGradient(
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
-                        colors: [Color(0xfffffcec), Color(0xffe9e4cf)],
+              builder: (context, child) => Transform.scale(
+                // Ease the orb slightly as it morphs between idle and active
+                // states; idle itself stays ticker-free so the UI can settle.
+                scale: .97 + .03 * (_active ? morph : 1 - morph),
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    const DecoratedBox(
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        gradient: LinearGradient(
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                          colors: [Color(0xfffffcec), Color(0xffe9e4cf)],
+                        ),
+                        boxShadow: [
+                          BoxShadow(color: Color(0x40fffcec), blurRadius: 30),
+                        ],
                       ),
-                      boxShadow: [
-                        BoxShadow(color: Color(0x40fffcec), blurRadius: 30),
-                      ],
                     ),
-                  ),
-                  CustomPaint(
-                    painter: OmiOrbPainter(
-                      state: widget.state,
-                      phase: reducedMotion ? 0 : _motion.value,
-                      morph: morph,
+                    CustomPaint(
+                      painter: OmiOrbPainter(
+                        state: widget.state,
+                        phase: reducedMotion ? 0 : _motion.value,
+                        morph: morph,
+                      ),
                     ),
-                  ),
-                  Opacity(
-                    opacity: 1 - morph,
-                    child: const Icon(
-                      Icons.blur_on_rounded,
-                      color: Color(0xff171716),
+                    Opacity(
+                      opacity: 1 - morph,
+                      child: const Icon(
+                        Icons.blur_on_rounded,
+                        color: Color(0xff171716),
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
           ),

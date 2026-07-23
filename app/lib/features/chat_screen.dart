@@ -56,6 +56,8 @@ class _HubColors {
     required this.sendBg,
     required this.sendFg,
     required this.sendDisabledBg,
+    required this.rowHover,
+    required this.focusRing,
   });
 
   const _HubColors.light()
@@ -69,6 +71,8 @@ class _HubColors {
         sendBg: const Color(0xff171716),
         sendFg: Colors.white,
         sendDisabledBg: const Color(0x33171716),
+        rowHover: const Color(0x8cffffff),
+        focusRing: const Color(0x40171716),
       );
 
   const _HubColors.dark()
@@ -82,6 +86,8 @@ class _HubColors {
         sendBg: const Color(0xfffffcec),
         sendFg: const Color(0xff171716),
         sendDisabledBg: const Color(0x33fffcec),
+        rowHover: const Color(0x14ffffff),
+        focusRing: const Color(0x59fffcec),
       );
 
   final Color ink;
@@ -93,6 +99,8 @@ class _HubColors {
   final Color sendBg;
   final Color sendFg;
   final Color sendDisabledBg;
+  final Color rowHover;
+  final Color focusRing;
 
   static _HubColors of(BuildContext context) =>
       Theme.of(context).brightness == Brightness.dark
@@ -138,6 +146,8 @@ class ChatScreenState extends State<ChatScreen> {
   late final HubChecklistStore _checklist =
       widget.checklistStore ?? PreferencesHubChecklistStore();
   bool _setupTaskDone = true;
+  List<String> _starterTasks = const [];
+  final _doneStarterTasks = <String>{};
 
   @override
   void initState() {
@@ -198,14 +208,33 @@ class ChatScreenState extends State<ChatScreen> {
 
   Future<void> _loadChecklist() async {
     bool done;
+    List<String> starters;
     try {
       done = await _checklist.isSetupComplete();
     } catch (_) {
       done = true;
     }
-    if (mounted && done != _setupTaskDone) {
-      setState(() => _setupTaskDone = done);
+    try {
+      starters = await _checklist.starterTasks();
+    } catch (_) {
+      starters = const [];
     }
+    if (mounted && (done != _setupTaskDone || starters.isNotEmpty)) {
+      setState(() {
+        _setupTaskDone = done;
+        _starterTasks = starters;
+      });
+    }
+  }
+
+  void _toggleStarterTask(String title) {
+    setState(() {
+      if (!_doneStarterTasks.remove(title)) _doneStarterTasks.add(title);
+    });
+    final pending = _starterTasks
+        .where((task) => !_doneStarterTasks.contains(task))
+        .toList();
+    unawaited(_checklist.setStarterTasks(pending).catchError((Object _) {}));
   }
 
   void _toggleSetupTask() {
@@ -747,6 +776,9 @@ class ChatScreenState extends State<ChatScreen> {
                             greeting: _greeting(),
                             setupTaskDone: _setupTaskDone,
                             onToggleSetupTask: _toggleSetupTask,
+                            starterTasks: _starterTasks,
+                            doneStarterTasks: _doneStarterTasks,
+                            onToggleStarterTask: _toggleStarterTask,
                             tasks: tasks,
                             onComplete: currents == null
                                 ? null
@@ -1035,6 +1067,9 @@ class _ChatHome extends StatelessWidget {
     required this.greeting,
     required this.setupTaskDone,
     required this.onToggleSetupTask,
+    required this.starterTasks,
+    required this.doneStarterTasks,
+    required this.onToggleStarterTask,
     required this.tasks,
     required this.onComplete,
     required this.onPrompt,
@@ -1044,6 +1079,9 @@ class _ChatHome extends StatelessWidget {
   final String greeting;
   final bool setupTaskDone;
   final VoidCallback onToggleSetupTask;
+  final List<String> starterTasks;
+  final Set<String> doneStarterTasks;
+  final ValueChanged<String> onToggleStarterTask;
   final List<CurrentCard> tasks;
   final ValueChanged<String>? onComplete;
   final ValueChanged<String> onPrompt;
@@ -1103,6 +1141,15 @@ class _ChatHome extends StatelessWidget {
                   onComplete: onToggleSetupTask,
                   onTap: onToggleSetupTask,
                 ),
+                for (final title in starterTasks)
+                  _TaskRow(
+                    key: ValueKey('starter_task_$title'),
+                    title: title,
+                    done: doneStarterTasks.contains(title),
+                    completeKey: ValueKey('complete_starter_$title'),
+                    onComplete: () => onToggleStarterTask(title),
+                    onTap: () => onPrompt(title),
+                  ),
                 for (final task in tasks)
                   _TaskRow(
                     key: ValueKey('task_${task.item.id}'),
@@ -1123,6 +1170,9 @@ class _ChatHome extends StatelessWidget {
                     child: InkWell(
                       key: const Key('hub_all_tasks'),
                       onTap: onAllTasks,
+                      hoverColor: colors.rowHover,
+                      splashColor: Colors.transparent,
+                      highlightColor: Colors.transparent,
                       child: Padding(
                         padding: const EdgeInsets.symmetric(vertical: 10),
                         child: Text(
@@ -1173,6 +1223,9 @@ class _TaskRow extends StatelessWidget {
       ),
       child: InkWell(
         onTap: onTap,
+        hoverColor: colors.rowHover,
+        splashColor: Colors.transparent,
+        highlightColor: Colors.transparent,
         child: Opacity(
           opacity: done ? .45 : 1,
           child: Padding(
@@ -1289,7 +1342,7 @@ class _HintRow extends StatelessWidget {
   }
 }
 
-class _ChatInputCard extends StatelessWidget {
+class _ChatInputCard extends StatefulWidget {
   const _ChatInputCard({
     required this.controller,
     required this.focusNode,
@@ -1309,18 +1362,53 @@ class _ChatInputCard extends StatelessWidget {
   final VoidCallback onCancel;
 
   @override
+  State<_ChatInputCard> createState() => _ChatInputCardState();
+}
+
+class _ChatInputCardState extends State<_ChatInputCard> {
+  @override
+  void initState() {
+    super.initState();
+    widget.focusNode.addListener(_focusChanged);
+  }
+
+  @override
+  void didUpdateWidget(covariant _ChatInputCard old) {
+    super.didUpdateWidget(old);
+    if (old.focusNode != widget.focusNode) {
+      old.focusNode.removeListener(_focusChanged);
+      widget.focusNode.addListener(_focusChanged);
+    }
+  }
+
+  @override
+  void dispose() {
+    widget.focusNode.removeListener(_focusChanged);
+    super.dispose();
+  }
+
+  void _focusChanged() {
+    if (mounted) setState(() {});
+  }
+
+  @override
   Widget build(BuildContext context) {
     final colors = _HubColors.of(context);
-    return Container(
+    final focused = widget.focusNode.hasFocus;
+    return AnimatedContainer(
+      duration: MediaQuery.disableAnimationsOf(context)
+          ? Duration.zero
+          : const Duration(milliseconds: 160),
+      curve: Curves.easeOut,
       decoration: BoxDecoration(
         color: colors.cardBg,
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: colors.hairline),
+        border: Border.all(color: focused ? colors.focusRing : colors.hairline),
         boxShadow: [
           BoxShadow(
             color: colors.cardShadow,
-            offset: const Offset(0, 14),
-            blurRadius: 44,
+            offset: Offset(0, focused ? 10 : 14),
+            blurRadius: focused ? 34 : 44,
           ),
         ],
       ),
@@ -1330,11 +1418,11 @@ class _ChatInputCard extends StatelessWidget {
           Expanded(
             child: TextField(
               key: const Key('chat_input'),
-              controller: controller,
-              focusNode: focusNode,
-              enabled: enabled,
-              readOnly: busy,
-              onSubmitted: (_) => onSend(),
+              controller: widget.controller,
+              focusNode: widget.focusNode,
+              enabled: widget.enabled,
+              readOnly: widget.busy,
+              onSubmitted: (_) => widget.onSend(),
               style: TextStyle(fontSize: 15, color: colors.ink),
               decoration: InputDecoration(
                 isDense: true,
@@ -1344,7 +1432,7 @@ class _ChatInputCard extends StatelessWidget {
                 focusedBorder: InputBorder.none,
                 disabledBorder: InputBorder.none,
                 contentPadding: EdgeInsets.zero,
-                hintText: hintText,
+                hintText: widget.hintText,
                 hintStyle: TextStyle(fontSize: 15, color: colors.muted),
               ),
             ),
@@ -1353,10 +1441,10 @@ class _ChatInputCard extends StatelessWidget {
           SizedBox(
             width: 38,
             height: 38,
-            child: busy
+            child: widget.busy
                 ? IconButton(
                     key: const Key('cancel_chat'),
-                    onPressed: onCancel,
+                    onPressed: widget.onCancel,
                     padding: EdgeInsets.zero,
                     style: IconButton.styleFrom(
                       backgroundColor: colors.sendBg,
@@ -1367,7 +1455,7 @@ class _ChatInputCard extends StatelessWidget {
                   )
                 : IconButton(
                     key: const Key('send_chat'),
-                    onPressed: enabled ? onSend : null,
+                    onPressed: widget.enabled ? widget.onSend : null,
                     padding: EdgeInsets.zero,
                     style: IconButton.styleFrom(
                       backgroundColor: colors.sendBg,

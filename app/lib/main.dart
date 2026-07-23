@@ -10,6 +10,7 @@ import 'features/mobile_companion_shell.dart';
 import 'features/mobile_onboarding_screen.dart';
 import 'features/omi_shell.dart';
 import 'features/onboarding_screen.dart';
+import 'features/setup_account_screens.dart';
 import 'onboarding/hub_checklist.dart';
 import 'onboarding/onboarding_completion.dart';
 
@@ -18,6 +19,54 @@ Future<void> main() async {
   final services = await AppServices.initializeFromEnvironment();
   await services.initialize();
   runApp(OmiApp(services: services));
+}
+
+/// Entrypoint for the dedicated settings window on macOS. A second
+/// FlutterEngine in the Runner (SettingsWindowController) runs this instead
+/// of [main]; it renders only the settings screen inside its own native
+/// titled window.
+@pragma('vm:entry-point')
+Future<void> settingsMain() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  final services = await AppServices.initializeFromEnvironment();
+  await services.initialize();
+  runApp(SettingsWindowApp(services: services));
+}
+
+class SettingsWindowApp extends StatelessWidget {
+  const SettingsWindowApp({required this.services, super.key});
+
+  final AppServices services;
+
+  @override
+  Widget build(BuildContext context) => MaterialApp(
+    title: 'Omi Settings',
+    debugShowCheckedModeBanner: false,
+    themeMode: ThemeMode.system,
+    theme: ThemeData(
+      brightness: Brightness.light,
+      fontFamily: 'SF Pro Display',
+      scaffoldBackgroundColor: const Color(0xfff7f6f1),
+      colorScheme: const ColorScheme.light(
+        primary: Color(0xff171716),
+        surface: Color(0xfffffefa),
+        onSurface: Color(0xff171716),
+        onSurfaceVariant: Color(0xff706e68),
+      ),
+    ),
+    darkTheme: ThemeData(
+      brightness: Brightness.dark,
+      fontFamily: 'SF Pro Display',
+      scaffoldBackgroundColor: const Color(0xff171716),
+      colorScheme: const ColorScheme.dark(
+        primary: Color(0xfffffcec),
+        surface: Color(0xff232321),
+        onSurface: Color(0xfff4f2ea),
+        onSurfaceVariant: Color(0xffa6a49c),
+      ),
+    ),
+    home: SettingsScreen(services: services),
+  );
 }
 
 class OmiApp extends StatefulWidget {

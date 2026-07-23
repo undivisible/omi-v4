@@ -263,7 +263,6 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
   private var globalKeyboardMonitor: Any?
   private let permissionService = MacPermissionService()
   private var permissionOverlay: PermissionDragOverlay?
-  private var windowChromeChannel: FlutterMethodChannel?
   private var pillPreviousFrame: NSRect?
   private var pillPreviousLevel: NSWindow.Level = .normal
   private var pillPreviousCollectionBehavior: NSWindow.CollectionBehavior = []
@@ -276,9 +275,7 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
   private var pillPreviousBlurHidden = true
 
   func requestSettings() {
-    NSApp.activate(ignoringOtherApps: true)
-    makeKeyAndOrderFront(nil)
-    windowChromeChannel?.invokeMethod("openSettings", arguments: nil)
+    SettingsWindowController.show()
   }
 
   override var canBecomeKey: Bool { true }
@@ -448,6 +445,9 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
       case "enterHub":
         self?.enterHubChrome()
         result(nil)
+      case "openSettings":
+        SettingsWindowController.show()
+        result(nil)
       case "enterOnboarding":
         self?.enterOnboardingChrome()
         result(nil)
@@ -470,7 +470,6 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
         result(FlutterMethodNotImplemented)
       }
     }
-    windowChromeChannel = windowChrome
 
     super.awakeFromNib()
     NSAnimationContext.runAnimationGroup { context in

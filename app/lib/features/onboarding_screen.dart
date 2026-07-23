@@ -7,7 +7,9 @@ import '../app_services.dart';
 import '../keyboard/voice_transcripts.dart';
 import '../capabilities/desktop_capabilities.dart';
 import '../native/native_hub.dart';
+import '../onboarding/hub_checklist.dart';
 import '../onboarding/onboarding_controller.dart';
+import '../onboarding/starter_tasks.dart';
 import '../ui/omi_ui.dart';
 import 'cursor_pill.dart';
 import 'cursor_pill_controller.dart';
@@ -22,12 +24,22 @@ class OnboardingScreen extends StatefulWidget {
     required this.services,
     required this.onFinish,
     this.capabilities,
+    this.checklistStore,
+    this.starterTaskTimeout = const Duration(seconds: 8),
     super.key,
   });
 
   final AppServices services;
   final DesktopCapabilityGateway? capabilities;
   final FutureOr<void> Function() onFinish;
+
+  /// Where locally derived starter tasks are seeded so the hub can show
+  /// them; the hub reads the same store.
+  final HubChecklistStore? checklistStore;
+
+  /// How long to wait for the signed-in currents generate cycle before
+  /// continuing anyway.
+  final Duration starterTaskTimeout;
 
   @override
   State<OnboardingScreen> createState() => _OnboardingScreenState();
@@ -49,6 +61,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   // nullability.
   int _scanGeneration = 0;
   bool previewing = false;
+  bool preparingTasks = false;
   bool finishing = false;
   String? finishError;
   CursorPillController? _pillController;
@@ -255,7 +268,8 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   List<String> get _defaultProfileLanguages =>
       {...scanDetectedLanguages, ..._deviceLanguageNames()}.toList();
 
-  void _completeProfile(String name, List<String> languages) {
+  Future<void> _completeProfile(String name, List<String> languages) async {
+    if (preparingTasks) return;
     final trimmed = name.trim();
     unawaited(
       widget.services
@@ -265,7 +279,38 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
           )
           .onError((_, _) {}),
     );
+    setState(() => preparingTasks = true);
+    try {
+      await _prepareStarterTasks();
+    } catch (_) {}
+    if (!mounted) return;
+    setState(() => preparingTasks = false);
     onboarding.completeProfile();
+  }
+
+  /// Turns the scan results into the user's initial hub tasks before the
+  /// profile step completes. Signed in, the profile capture already landed,
+  /// so trigger a currents generate cycle and wait (bounded) for real cards;
+  /// otherwise — or when the cycle produces nothing in time — derive 2–4
+  /// starter tasks locally from the scan summary and evidence and seed the
+  /// hub's local checklist store with them. Failures never block onboarding.
+  Future<void> _prepareStarterTasks() async {
+    final currents = widget.services.currents;
+    if (currents != null && widget.services.canUseApi) {
+      try {
+        await currents.load().timeout(widget.starterTaskTimeout);
+        if (currents.error == null && currents.items.isNotEmpty) return;
+      } catch (_) {}
+    }
+    final derived = deriveStarterTasks(
+      summary: scanSummary,
+      sources: scanSources ?? const [],
+    );
+    if (derived.isEmpty) return;
+    final store = widget.checklistStore ?? PreferencesHubChecklistStore();
+    try {
+      await store.setStarterTasks(derived);
+    } catch (_) {}
   }
 
   @override
@@ -346,7 +391,9 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                         notice: scanSummary,
                         defaultName: _defaultProfileName,
                         defaultLanguages: _defaultProfileLanguages,
-                        onContinue: _completeProfile,
+                        preparing: preparingTasks,
+                        onContinue: (name, languages) =>
+                            unawaited(_completeProfile(name, languages)),
                       ),
                       OnboardingStage.use => OnboardingUseStep(
                         key: const ValueKey('use'),
@@ -505,12 +552,14 @@ class OnboardingProfileStep extends StatefulWidget {
     required this.defaultName,
     required this.defaultLanguages,
     required this.onContinue,
+    this.preparing = false,
     super.key,
   });
 
   final String? notice;
   final String defaultName;
   final List<String> defaultLanguages;
+  final bool preparing;
   final void Function(String name, List<String> languages) onContinue;
 
   @override
@@ -695,11 +744,39 @@ class _OnboardingProfileStepState extends State<OnboardingProfileStep> {
           ),
         ],
         const SizedBox(height: 36),
-        OmiButton(
-          key: const Key('keep_profile'),
-          onPressed: () => widget.onContinue(name, List.of(languages)),
-          child: const Text('Continue'),
-        ),
+        if (widget.preparing)
+          Semantics(
+            liveRegion: true,
+            child: Row(
+              key: const Key('preparing_tasks'),
+              mainAxisSize: MainAxisSize.min,
+              children: const [
+                SizedBox.square(
+                  dimension: 16,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: _cream,
+                  ),
+                ),
+                SizedBox(width: 12),
+                Text(
+                  'Preparing your tasks…',
+                  style: TextStyle(
+                    color: _cream,
+                    fontFamily: 'Avenir Next',
+                    fontSize: 15,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ],
+            ),
+          )
+        else
+          OmiButton(
+            key: const Key('keep_profile'),
+            onPressed: () => widget.onContinue(name, List.of(languages)),
+            child: const Text('Continue'),
+          ),
       ],
     );
   }
