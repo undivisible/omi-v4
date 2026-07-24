@@ -316,10 +316,6 @@ struct omi_user_event_record {
     uint32_t epoch_s;
 };
 
-static struct omi_user_event_record user_event_queue[CONFIG_OMI_USER_EVENT_QUEUE_LEN];
-static uint8_t user_event_head;
-static uint8_t user_event_count;
-static uint16_t user_event_next_seq;
 static uint8_t user_event_last[OMI_USER_EVENT_PAYLOAD_LEN];
 static K_MUTEX_DEFINE(user_event_lock);
 
@@ -353,18 +349,6 @@ static bool user_event_try_notify(const struct omi_user_event_record *rec)
     return true;
 }
 
-static void user_event_queue_push(const struct omi_user_event_record *rec)
-{
-    if (user_event_count == CONFIG_OMI_USER_EVENT_QUEUE_LEN) {
-        user_event_head = (user_event_head + 1U) % CONFIG_OMI_USER_EVENT_QUEUE_LEN;
-        user_event_count--;
-    }
-
-    uint8_t tail = (user_event_head + user_event_count) % CONFIG_OMI_USER_EVENT_QUEUE_LEN;
-    user_event_queue[tail] = *rec;
-    user_event_count++;
-}
-
 void omi_user_event_emit(uint8_t code, uint8_t source)
 {
     struct omi_user_event_record rec = {
@@ -374,11 +358,11 @@ void omi_user_event_emit(uint8_t code, uint8_t source)
     };
 
     k_mutex_lock(&user_event_lock, K_FOREVER);
-    rec.seq = user_event_next_seq++;
+    rec.seq = omi_rust_user_event_alloc_seq();
     user_event_encode(&rec, user_event_last);
 
-    if (user_event_count > 0U || !user_event_try_notify(&rec)) {
-        user_event_queue_push(&rec);
+    if (omi_rust_user_event_queue_len() > 0U || !user_event_try_notify(&rec)) {
+        omi_rust_user_event_queue_push(rec.code, rec.source, rec.seq, rec.epoch_s);
     }
     k_mutex_unlock(&user_event_lock);
 
@@ -387,13 +371,17 @@ void omi_user_event_emit(uint8_t code, uint8_t source)
 
 void omi_user_event_flush(void)
 {
+    struct omi_user_event_record rec;
+
     k_mutex_lock(&user_event_lock, K_FOREVER);
-    while (user_event_count > 0U) {
-        if (!user_event_try_notify(&user_event_queue[user_event_head])) {
+    while (omi_rust_user_event_queue_len() > 0U) {
+        if (!omi_rust_user_event_queue_peek(&rec.code, &rec.source, &rec.seq, &rec.epoch_s)) {
             break;
         }
-        user_event_head = (user_event_head + 1U) % CONFIG_OMI_USER_EVENT_QUEUE_LEN;
-        user_event_count--;
+        if (!user_event_try_notify(&rec)) {
+            break;
+        }
+        omi_rust_user_event_queue_pop();
     }
     k_mutex_unlock(&user_event_lock);
 }

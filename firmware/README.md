@@ -324,6 +324,8 @@ what MCUboot's downgrade prevention compares.
 
 ## Rust in the firmware
 
+Migration end-state and checklist: [`RUST_GOAL.md`](RUST_GOAL.md).
+
 `omi-cv1` builds and links the `omi-rust` static library. **`CONFIG_OMI_RUST`
 defaults `y`**, and the `omi-cv1` CI and release builds always link `omi-rust` —
 it is no longer an opt-in dual path. `omi/rust/` is where the firmware's pure

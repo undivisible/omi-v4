@@ -1,4 +1,6 @@
-// User-event wire format and drop-oldest queue. GATT notify and mutex stay in C.
+// User-event wire format and drop-oldest queue (`Queue<16>` via FFI).
+// GATT notify and mutex stay in C. `DEFAULT_QUEUE_LEN` must match
+// `CONFIG_OMI_USER_EVENT_QUEUE_LEN` in omi.conf (currently 16).
 
 pub const PAYLOAD_LEN: usize = 8;
 pub const DEFAULT_QUEUE_LEN: usize = 16;

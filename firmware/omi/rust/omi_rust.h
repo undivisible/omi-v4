@@ -134,6 +134,12 @@ uint64_t omi_rust_imu_boot_epoch_ms(uint64_t base_epoch_s, uint32_t base_ts, uin
 
 void omi_rust_user_event_encode(uint8_t code, uint8_t source, uint16_t seq, uint32_t epoch_s,
                                 uint8_t *out);
+uint16_t omi_rust_user_event_alloc_seq(void);
+void omi_rust_user_event_queue_push(uint8_t code, uint8_t source, uint16_t seq, uint32_t epoch_s);
+bool omi_rust_user_event_queue_peek(uint8_t *out_code, uint8_t *out_source, uint16_t *out_seq,
+                                    uint32_t *out_epoch);
+bool omi_rust_user_event_queue_pop(void);
+uint8_t omi_rust_user_event_queue_len(void);
 
 typedef struct {
     bool speaker;

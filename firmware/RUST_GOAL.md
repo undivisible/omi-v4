@@ -33,6 +33,6 @@ orchestration that calls Rust.
 - [x] Settings dim/gain clamps + legacy time-base blob
 - [x] Offline SD Opus packer FSM
 - [x] Features GATT bitmask assemble
-- [ ] Transport user-event queue ownership (still C arrays; encode is Rust)
+- [x] Transport user-event queue ownership (Rust `Queue<16>`; C mutex+GATT)
 - [ ] Any remaining byte-packing helpers found in future audits
 - [ ] Drivers / Opus / `main` control flow — blocked on `zephyr` crate

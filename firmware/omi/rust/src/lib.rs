@@ -226,6 +226,95 @@ pub unsafe extern "C" fn omi_rust_user_event_encode(
     }
 }
 
+/// Fixed capacity; must match `CONFIG_OMI_USER_EVENT_QUEUE_LEN` (16 in omi.conf).
+static mut USER_EVENT_QUEUE: user_event::Queue<{ user_event::DEFAULT_QUEUE_LEN }> =
+    user_event::Queue::new();
+
+/// Allocate the next monotonic sequence number for a user event.
+#[no_mangle]
+pub extern "C" fn omi_rust_user_event_alloc_seq() -> u16 {
+    // SAFETY: C transport layer holds `user_event_lock` before calling.
+    unsafe {
+        (&raw mut USER_EVENT_QUEUE)
+            .as_mut()
+            .unwrap_unchecked()
+            .alloc_seq()
+    }
+}
+
+/// Push one event into the drop-oldest queue.
+#[no_mangle]
+pub extern "C" fn omi_rust_user_event_queue_push(code: u8, source: u8, seq: u16, epoch_s: u32) {
+    // SAFETY: C transport layer holds `user_event_lock` before calling.
+    unsafe {
+        (&raw mut USER_EVENT_QUEUE)
+            .as_mut()
+            .unwrap_unchecked()
+            .push(user_event::Record {
+                code,
+                source,
+                seq,
+                epoch_s,
+            });
+    }
+}
+
+/// Peek the head of the queue without removing it.
+///
+/// # Safety
+///
+/// All `out_*` pointers must be non-null when called.
+#[no_mangle]
+pub unsafe extern "C" fn omi_rust_user_event_queue_peek(
+    out_code: *mut u8,
+    out_source: *mut u8,
+    out_seq: *mut u16,
+    out_epoch: *mut u32,
+) -> bool {
+    if out_code.is_null() || out_source.is_null() || out_seq.is_null() || out_epoch.is_null() {
+        return false;
+    }
+    // SAFETY: C transport layer holds `user_event_lock` before calling.
+    let q = unsafe { (&raw mut USER_EVENT_QUEUE).as_mut().unwrap_unchecked() };
+    if let Some(rec) = q.peek() {
+        // SAFETY: caller guarantees writable out pointers.
+        unsafe {
+            *out_code = rec.code;
+            *out_source = rec.source;
+            *out_seq = rec.seq;
+            *out_epoch = rec.epoch_s;
+        }
+        true
+    } else {
+        false
+    }
+}
+
+/// Pop the head of the queue.
+#[no_mangle]
+pub extern "C" fn omi_rust_user_event_queue_pop() -> bool {
+    // SAFETY: C transport layer holds `user_event_lock` before calling.
+    unsafe {
+        (&raw mut USER_EVENT_QUEUE)
+            .as_mut()
+            .unwrap_unchecked()
+            .pop()
+            .is_some()
+    }
+}
+
+/// Current queue length (0..=16).
+#[no_mangle]
+pub extern "C" fn omi_rust_user_event_queue_len() -> u8 {
+    // SAFETY: C transport layer holds `user_event_lock` before calling.
+    unsafe {
+        (&raw mut USER_EVENT_QUEUE)
+            .as_ref()
+            .unwrap_unchecked()
+            .len() as u8
+    }
+}
+
 /// Battery voltage-to-percentage lookup with interpolation. `is_charging` is
 /// non-zero when charging, matching the C `is_charging` global.
 #[no_mangle]
