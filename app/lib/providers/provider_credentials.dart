@@ -10,6 +10,8 @@ final class ProviderCredential {
     required this.model,
     required this.credential,
     this.endpoint,
+    this.refreshToken,
+    this.expiresAt,
   });
 
   final AssistantProvider provider;
@@ -17,11 +19,36 @@ final class ProviderCredential {
   final String credential;
   final String? endpoint;
 
+  /// Present only for the xAI OAuth path: the refresh token used to mint a new
+  /// [credential] (the bearer) ahead of [expiresAt]. API-key credentials leave
+  /// both null.
+  final String? refreshToken;
+  final DateTime? expiresAt;
+
+  /// Whether this credential is an OAuth session (xAI Grok sign-in) rather than
+  /// a static API key.
+  bool get isOAuth => refreshToken != null && refreshToken!.trim().isNotEmpty;
+
+  ProviderCredential copyWith({
+    String? credential,
+    String? refreshToken,
+    DateTime? expiresAt,
+  }) => ProviderCredential(
+    provider: provider,
+    model: model,
+    credential: credential ?? this.credential,
+    endpoint: endpoint,
+    refreshToken: refreshToken ?? this.refreshToken,
+    expiresAt: expiresAt ?? this.expiresAt,
+  );
+
   Map<String, Object?> toJson() => {
     'provider': provider.name,
     'model': model,
     'credential': credential,
     if (endpoint != null) 'endpoint': endpoint,
+    if (refreshToken != null) 'refreshToken': refreshToken,
+    if (expiresAt != null) 'expiresAt': expiresAt!.toIso8601String(),
   };
 
   static ProviderCredential? fromJson(Object? value) {
@@ -32,13 +59,17 @@ final class ProviderCredential {
     final model = value['model'];
     final credential = value['credential'];
     final endpoint = value['endpoint'];
+    final refreshToken = value['refreshToken'];
+    final expiresAtRaw = value['expiresAt'];
     if (provider.length != 1 ||
         provider.single == AssistantProvider.worker ||
         model is! String ||
         model.trim().isEmpty ||
         credential is! String ||
         credential.trim().isEmpty ||
-        (endpoint != null && endpoint is! String)) {
+        (endpoint != null && endpoint is! String) ||
+        (refreshToken != null && refreshToken is! String) ||
+        (expiresAtRaw != null && expiresAtRaw is! String)) {
       return null;
     }
     return ProviderCredential(
@@ -46,6 +77,10 @@ final class ProviderCredential {
       model: model.trim(),
       credential: credential.trim(),
       endpoint: (endpoint as String?)?.trim(),
+      refreshToken: (refreshToken as String?)?.trim(),
+      expiresAt: expiresAtRaw is String
+          ? DateTime.tryParse(expiresAtRaw)
+          : null,
     );
   }
 }

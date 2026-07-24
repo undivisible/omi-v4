@@ -464,24 +464,6 @@ async fn settle_managed_inbox(
 // ---------------------------------------------------------------------------
 
 async fn handle_chat_completions(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
-    let endpoint = env_get(&ctx.env, "MIMO_CHAT_COMPLETIONS_URL");
-    let secret = env_get(&ctx.env, "MIMO_API_KEY");
-    // Managed chat runs on the BALANCED tier (defaults to MIMO_MODEL when set);
-    // the client request is validated against this model id.
-    let model = managed_ai::model_for_tier(managed_ai::ModelTier::Balanced, |name| {
-        env_get(&ctx.env, name)
-    });
-    let (Some(endpoint), Some(secret)) = (endpoint, secret) else {
-        return error_json("Managed AI unavailable", 503);
-    };
-    let Some(endpoint_url) = managed_ai::validate_pinned_endpoint(
-        &endpoint,
-        managed_ai::XIAOMI_COMPLETION_ENDPOINT,
-        managed_ai::XIAOMI_HOSTNAME,
-    ) else {
-        return error_json("Managed AI unavailable", 503);
-    };
-
     let content_length = req.headers().get("content-length").ok().flatten();
     let bytes = req.bytes().await.ok();
     let body = managed_ai::bounded_json(
@@ -489,6 +471,56 @@ async fn handle_chat_completions(mut req: Request, ctx: RouteContext<()>) -> Res
         bytes.as_deref(),
         managed_ai::MAXIMUM_BODY_BYTES,
     );
+
+    // The requested model decides the tier and therefore the upstream: BALANCED
+    // is pinned to MiMo, SEARCH is routed to OpenRouter (perplexity/sonar) whose
+    // grounded reply carries its `url_citation` sources through unchanged. A
+    // model naming neither tier is rejected.
+    let requested_model = body
+        .as_ref()
+        .and_then(|b| b.get("model"))
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    let tier = requested_model.as_deref().and_then(|model| {
+        managed_ai::completion_tier_for_model(model, |name| env_get(&ctx.env, name))
+    });
+    let Some(tier) = tier else {
+        return error_json("Invalid request", 400);
+    };
+
+    let (endpoint, secret, pinned, hostname, model, provider) = match tier {
+        managed_ai::ManagedCompletionTier::Balanced => (
+            env_get(&ctx.env, "MIMO_CHAT_COMPLETIONS_URL"),
+            env_get(&ctx.env, "MIMO_API_KEY"),
+            managed_ai::XIAOMI_COMPLETION_ENDPOINT,
+            managed_ai::XIAOMI_HOSTNAME,
+            managed_ai::model_for_tier(managed_ai::ModelTier::Balanced, |name| {
+                env_get(&ctx.env, name)
+            }),
+            "mimo",
+        ),
+        managed_ai::ManagedCompletionTier::Search => (
+            Some(
+                env_get(&ctx.env, "OPENROUTER_CHAT_COMPLETIONS_URL")
+                    .unwrap_or_else(|| managed_ai::OPENROUTER_COMPLETION_ENDPOINT.to_owned()),
+            ),
+            env_get(&ctx.env, "OPENROUTER_API_KEY"),
+            managed_ai::OPENROUTER_COMPLETION_ENDPOINT,
+            managed_ai::OPENROUTER_HOSTNAME,
+            managed_ai::model_for_tier(managed_ai::ModelTier::Search, |name| {
+                env_get(&ctx.env, name)
+            }),
+            "openrouter",
+        ),
+    };
+    let (Some(endpoint), Some(secret)) = (endpoint, secret) else {
+        return error_json("Managed AI unavailable", 503);
+    };
+    let Some(endpoint_url) = managed_ai::validate_pinned_endpoint(&endpoint, pinned, hostname)
+    else {
+        return error_json("Managed AI unavailable", 503);
+    };
+
     let Some(parsed) = body
         .as_ref()
         .and_then(|b| managed_ai::parse_request(b, &model))
@@ -562,7 +594,7 @@ async fn handle_chat_completions(mut req: Request, ctx: RouteContext<()>) -> Res
         &ctx,
         &request_id,
         &auth.uid,
-        "mimo",
+        provider,
         &model,
         input_characters,
         parsed.max_tokens,

@@ -20,6 +20,8 @@ const upstreamTimeoutMs = 45_000;
 const staleRequestMs = 120_000;
 export const xiaomiCompletionEndpoint =
   "https://token-plan-sgp.xiaomimimo.com/v1/chat/completions";
+export const openrouterCompletionEndpoint =
+  "https://openrouter.ai/api/v1/chat/completions";
 const allowedKeys = new Set([
   "messages",
   "model",
@@ -87,6 +89,76 @@ export const aiGatewayRoute = (
       `https://gateway.ai.cloudflare.com/v1/${account}/${gateway}/openrouter/v1/chat/completions`,
     ),
     headers: token ? { "cf-aig-authorization": `Bearer ${token}` } : {},
+  };
+};
+
+// The upstream a managed turn is forwarded to, chosen by tier. The balanced
+// tier is pinned to the MiMo endpoint (optionally via the AI Gateway); the
+// search tier is pinned to OpenRouter, which resolves the search model
+// (perplexity/sonar) and returns its sources as `url_citation` annotations the
+// client surfaces. Missing configuration yields `unavailable` rather than a
+// wrong route, so a search request never silently falls back to the balanced
+// model.
+type ManagedRoute = {
+  model: string;
+  endpointUrl: URL;
+  secret: string;
+  provider: "mimo" | "openrouter";
+  allowGateway: boolean;
+  unavailable: boolean;
+};
+
+const unavailableRoute: ManagedRoute = {
+  model: "",
+  endpointUrl: new URL(xiaomiCompletionEndpoint),
+  secret: "",
+  provider: "mimo",
+  allowGateway: false,
+  unavailable: true,
+};
+
+export const managedRoute = (
+  env: Bindings,
+  tier: "balanced" | "search",
+): ManagedRoute => {
+  if (tier === "balanced") {
+    const endpoint = env.MIMO_CHAT_COMPLETIONS_URL;
+    const secret = env.MIMO_API_KEY;
+    const model = modelForTier(env, "balanced");
+    const endpointUrl = endpoint
+      ? validatePinnedEndpoint(
+          endpoint,
+          xiaomiCompletionEndpoint,
+          "token-plan-sgp.xiaomimimo.com",
+        )
+      : null;
+    if (!endpoint || !secret || !model || !endpointUrl) return unavailableRoute;
+    return {
+      model,
+      endpointUrl,
+      secret,
+      provider: "mimo",
+      allowGateway: true,
+      unavailable: false,
+    };
+  }
+  const endpoint =
+    env.OPENROUTER_CHAT_COMPLETIONS_URL ?? openrouterCompletionEndpoint;
+  const secret = env.OPENROUTER_API_KEY;
+  const model = modelForTier(env, "search");
+  const endpointUrl = validatePinnedEndpoint(
+    endpoint,
+    openrouterCompletionEndpoint,
+    "openrouter.ai",
+  );
+  if (!secret || !model || !endpointUrl) return unavailableRoute;
+  return {
+    model,
+    endpointUrl,
+    secret,
+    provider: "openrouter",
+    allowGateway: false,
+    unavailable: false,
   };
 };
 
@@ -650,21 +722,29 @@ export const runManagedInboxCompletion = async (
 };
 
 assistant.post("/chat/completions", async (context) => {
-  const endpoint = context.env.MIMO_CHAT_COMPLETIONS_URL;
-  const secret = context.env.MIMO_API_KEY;
-  // Managed chat runs on the BALANCED tier (defaults to MIMO_MODEL when set);
-  // the client request is validated against this model id.
-  const model = modelForTier(context.env, "balanced");
-  if (!endpoint || !secret || !model)
-    return context.json({ error: "Managed AI unavailable" }, 503);
-  const endpointUrl = validatePinnedEndpoint(
-    endpoint,
-    xiaomiCompletionEndpoint,
-    "token-plan-sgp.xiaomimimo.com",
-  );
-  if (!endpointUrl)
+  // Managed chat runs on the BALANCED tier (defaults to MIMO_MODEL when set),
+  // except the SEARCH tier: a search-intent turn from a paying user is routed
+  // to the search model (perplexity/sonar) on OpenRouter, whose grounded reply
+  // carries its `url_citation` sources through unchanged. The requested model
+  // decides the upstream, so the two paths share one route, one admission
+  // gate, and one accounting path.
+  const balancedModel = modelForTier(context.env, "balanced");
+  const searchModel = modelForTier(context.env, "search");
+  if (!balancedModel)
     return context.json({ error: "Managed AI unavailable" }, 503);
   const body = await boundedJson(context.req.raw);
+  const requestedModel =
+    body && typeof body.model === "string" ? body.model : null;
+  const route =
+    requestedModel === balancedModel
+      ? managedRoute(context.env, "balanced")
+      : requestedModel === searchModel && searchModel !== balancedModel
+        ? managedRoute(context.env, "search")
+        : null;
+  if (!route) return context.json({ error: "Invalid request" }, 400);
+  if (route.unavailable)
+    return context.json({ error: "Managed AI unavailable" }, 503);
+  const { model, endpointUrl, secret, provider, allowGateway } = route;
   const parsed = body ? parseRequest(body, model) : null;
   if (!parsed) return context.json({ error: "Invalid request" }, 400);
   const auth = context.get("auth");
@@ -715,11 +795,12 @@ assistant.post("/chat/completions", async (context) => {
       `INSERT INTO managed_ai_requests
        (id, uid, provider, model, status, input_characters, requested_max_output_tokens,
         estimated_cost_microusd, created_at, updated_at)
-     VALUES (?1, ?2, 'mimo', ?3, 'started', ?4, ?5, ?6, ?7, ?7)`,
+     VALUES (?1, ?2, ?3, ?4, 'started', ?5, ?6, ?7, ?8, ?8)`,
     )
       .bind(
         requestId,
         auth.uid,
+        provider,
         model,
         inputCharacters,
         parsed.max_tokens,
@@ -741,7 +822,9 @@ assistant.post("/chat/completions", async (context) => {
     timedOut = true;
     abort.abort();
   }, upstreamTimeoutMs);
-  const gateway = aiGatewayRoute(context.env);
+  // The balanced path may go through a configured Cloudflare AI Gateway; the
+  // search path talks to OpenRouter directly with its own key, so it opts out.
+  const gateway = allowGateway ? aiGatewayRoute(context.env) : null;
   let upstream: Response;
   try {
     upstream = await fetch(gateway?.url ?? endpointUrl, {

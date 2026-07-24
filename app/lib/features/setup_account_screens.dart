@@ -6,7 +6,6 @@ import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../api/api_keys_client.dart';
-import '../api/facetime_client.dart';
 import '../api/worker_http.dart';
 import '../app_services.dart';
 import '../capabilities/desktop_capabilities.dart';
@@ -17,14 +16,8 @@ import '../integrations/apple_eventkit_import.dart';
 import '../integrations/eventkit_task_sync.dart';
 import '../integrations/oauth/oauth.dart';
 import '../native/generated/signals/signals.dart'
-    show
-        AssistantProvider,
-        CallPhase,
-        NativeEvent,
-        NativeEventCallState,
-        SystemAudioCaptureMode;
+    show AssistantProvider, SystemAudioCaptureMode;
 import '../providers/providers.dart';
-import '../random_id.dart';
 import '../settings/settings.dart';
 import '../ui/burst_glow.dart';
 import '../ui/scroll_edge_fade.dart';
@@ -37,7 +30,6 @@ enum SettingsSection {
   providers('AI Providers', Icons.key_outlined),
   permissions('Permissions', Icons.lock_outline_rounded),
   developer('API & MCP', Icons.terminal_rounded),
-  calls('FaceTime', Icons.videocam_outlined),
   calendar('Calendar', Icons.calendar_today_outlined),
   connections('Connections', Icons.hub_outlined),
   rewind('Rewind', Icons.history_toggle_off_rounded),
@@ -149,7 +141,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     SettingsSection.plan,
     SettingsSection.providers,
     SettingsSection.developer,
-    SettingsSection.calls,
     if (_isMacDesktop || _isWindowsStyle) SettingsSection.permissions,
     if (_isMacDesktop) SettingsSection.calendar,
     SettingsSection.connections,
@@ -208,11 +199,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
           _ProviderTile(services: services),
           const _InfoTile(
             icon: Icons.savings_outlined,
-            title: 'Bring your own key',
+            title: 'Bring your own AI',
             detail:
-                'Managed Omi AI runs about \$35/mo of usage. A personal API '
-                'key runs the same usage for about \$5/mo — configure it '
-                'above.',
+                'Sign in with an xAI (SuperGrok / X Premium+) or ChatGPT '
+                '(Plus / Pro) subscription you already pay for, so there is no '
+                'separate inference bill — or bring an API key for OpenAI, '
+                'Anthropic, Gemini or a compatible endpoint and pay that '
+                "provider directly. Either way Omi's own price is negotiable.",
           ),
         ],
       ],
@@ -229,16 +222,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
             origin: services.apiOriginUri,
           ),
         _McpEndpointTile(origin: services.apiOriginUri),
-      ],
-      SettingsSection.calls => [
-        if (previewMode || services.facetime == null)
-          const _InfoTile(
-            icon: Icons.videocam_outlined,
-            title: 'FaceTime unavailable',
-            detail: 'Sign in to place a FaceTime call from Omi.',
-          )
-        else
-          _FaceTimeTile(services: services),
       ],
       SettingsSection.permissions => [
         ScreenCaptureSetupTile(
@@ -1660,12 +1643,86 @@ class _ProviderTileState extends State<_ProviderTile> {
     credentials = widget.services.allProviderCredentials;
   });
 
+  /// Runs the sanctioned subscription OAuth flow for [provider] (xAI device
+  /// code, or ChatGPT authorization code), stores the resulting bearer +
+  /// refresh token, and closes the dialog. A 403 — an account xAI or OpenAI has
+  /// not allow-listed for the OAuth surface — surfaces as guidance to use an
+  /// API key instead, which the field above still accepts.
+  Future<void> _oauthSignIn(
+    BuildContext context,
+    AssistantProvider provider,
+    String typedModel,
+    void Function(String?) setInfo,
+    void Function() clearError,
+    void Function(String) setError,
+  ) async {
+    clearError();
+    final model = typedModel.trim().isNotEmpty
+        ? typedModel.trim()
+        : (defaultBalancedModel[provider] ?? '');
+    try {
+      final ProviderCredential credential;
+      if (provider == AssistantProvider.xai) {
+        setInfo('Opening xAI sign-in…');
+        final oauth = widget.services.xaiOAuth;
+        final (authorization, pkce) = await oauth.requestDeviceCode();
+        setInfo('Enter code ${authorization.userCode} in your browser.');
+        final target = authorization.verificationUriComplete.isNotEmpty
+            ? authorization.verificationUriComplete
+            : authorization.verificationUri;
+        if (target.isNotEmpty) {
+          await launchUrl(
+            Uri.parse(target),
+            mode: LaunchMode.externalApplication,
+          );
+        }
+        final tokens = await oauth.pollForTokens(authorization, pkce);
+        credential = ProviderCredential(
+          provider: AssistantProvider.xai,
+          model: model,
+          credential: tokens.accessToken,
+          refreshToken: tokens.refreshToken,
+          expiresAt: tokens.expiresAt,
+        );
+      } else {
+        setInfo('Opening ChatGPT sign-in…');
+        final oauth = widget.services.openAiOAuth;
+        final pending = await oauth.beginSignIn();
+        await launchUrl(
+          pending.authorizeUrl,
+          mode: LaunchMode.externalApplication,
+        );
+        final tokens = await pending.tokens;
+        credential = ProviderCredential(
+          provider: AssistantProvider.openAi,
+          model: model,
+          credential: tokens.accessToken,
+          refreshToken: tokens.refreshToken,
+          expiresAt: tokens.expiresAt,
+          endpoint: openAiCodexBaseUrl,
+        );
+      }
+      await widget.services.saveProviderCredential(credential);
+      if (context.mounted) Navigator.pop(context);
+    } on XaiOAuthException catch (failure) {
+      setInfo(null);
+      setError(failure.message);
+    } on OpenAiOAuthException catch (failure) {
+      setInfo(null);
+      setError(failure.message);
+    } catch (failure) {
+      setInfo(null);
+      setError('$failure');
+    }
+  }
+
   Future<void> configure(ProviderCredential? existing) async {
     var provider = existing?.provider ?? AssistantProvider.openAi;
     final model = TextEditingController(text: existing?.model);
     final secret = TextEditingController();
     final endpoint = TextEditingController(text: existing?.endpoint);
     String? error;
+    String? info;
     await showDialog<void>(
       context: context,
       builder: (context) => StatefulBuilder(
@@ -1700,6 +1757,49 @@ class _ProviderTileState extends State<_ProviderTile> {
                   obscureText: true,
                   decoration: const InputDecoration(labelText: 'API key'),
                 ),
+                if (provider == AssistantProvider.xai ||
+                    provider == AssistantProvider.openAi) ...[
+                  const SizedBox(height: 12),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: OutlinedButton.icon(
+                      key: Key('signin_${provider.name}'),
+                      icon: const Icon(Icons.login_rounded, size: 18),
+                      label: Text(
+                        provider == AssistantProvider.xai
+                            ? 'Sign in with xAI'
+                            : 'Sign in with ChatGPT',
+                      ),
+                      onPressed: () => _oauthSignIn(
+                        context,
+                        provider,
+                        model.text,
+                        (value) => update(() => info = value),
+                        () => update(() => error = null),
+                        (message) => update(() => error = message),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    provider == AssistantProvider.xai
+                        ? 'Uses your SuperGrok or X Premium+ subscription — no '
+                              'separate inference bill. The API key above still '
+                              'works as a fallback.'
+                        : 'Uses your ChatGPT Plus or Pro subscription — no '
+                              'separate inference bill. The API key above still '
+                              'works as a fallback.',
+                    style: const TextStyle(fontSize: 11, height: 1.35),
+                  ),
+                  if (info != null) ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      info!,
+                      key: const Key('signin_info'),
+                      style: const TextStyle(fontSize: 12),
+                    ),
+                  ],
+                ],
                 if (provider == AssistantProvider.compatible) ...[
                   const SizedBox(height: 12),
                   TextField(
@@ -2585,261 +2685,6 @@ class _ApiKeysDialogState extends State<_ApiKeysDialog> {
           key: const Key('api_key_create'),
           onPressed: _busy ? null : _create,
           child: const Text('Create key'),
-        ),
-      ],
-    );
-  }
-}
-
-class _FaceTimeTile extends StatelessWidget {
-  const _FaceTimeTile({required this.services});
-
-  final AppServices services;
-
-  @override
-  Widget build(BuildContext context) => _Tile(
-    key: const Key('facetime_tile'),
-    icon: Icons.videocam_outlined,
-    title: 'Place a FaceTime call',
-    detail:
-        'Omi rings a handle on FaceTime and joins the call with you. It rings '
-        'a real phone, so check the handle first.',
-    trailing: Icon(
-      Icons.arrow_forward_rounded,
-      size: 18,
-      color: _SettingsColors.of(context).muted,
-    ),
-    onTap: () => showDialog<void>(
-      context: context,
-      builder: (context) => _FaceTimeDialog(services: services),
-    ),
-  );
-}
-
-/// Places the call and then reflects [CallPhase] for the bridged session. The
-/// provider's "not yet available" answer is a state of this surface, not an
-/// error: nothing is retried and nothing pretends a call was placed.
-class _FaceTimeDialog extends StatefulWidget {
-  const _FaceTimeDialog({required this.services});
-
-  final AppServices services;
-
-  @override
-  State<_FaceTimeDialog> createState() => _FaceTimeDialogState();
-}
-
-class _FaceTimeDialogState extends State<_FaceTimeDialog> {
-  final _handle = TextEditingController();
-  StreamSubscription<NativeEvent>? _events;
-  bool _busy = false;
-  String? _error;
-  String? _unavailable;
-  String? _link;
-  CallPhase? _phase;
-  String? _phaseDetail;
-
-  @override
-  void dispose() {
-    unawaited(_events?.cancel());
-    _handle.dispose();
-    super.dispose();
-  }
-
-  Future<void> _call() async {
-    final handle = _handle.text.trim();
-    final client = widget.services.facetime;
-    if (handle.isEmpty || client == null) return;
-    setState(() {
-      _busy = true;
-      _error = null;
-      _unavailable = null;
-      _link = null;
-      _phase = null;
-      _phaseDetail = null;
-    });
-    try {
-      final call = await client.placeCall(handle: handle);
-      if (!mounted) return;
-      setState(() {
-        _busy = false;
-        _link = call.link;
-      });
-      await _join(call.link);
-    } on FaceTimeUnavailableException catch (unavailable) {
-      if (!mounted) return;
-      setState(() {
-        _busy = false;
-        _unavailable = unavailable.message;
-      });
-    } catch (failure) {
-      if (!mounted) return;
-      setState(() {
-        _busy = false;
-        _error = '$failure';
-      });
-    }
-  }
-
-  Future<void> _join(String link) async {
-    final tokens = widget.services.liveVoiceTokens;
-    if (tokens == null) return;
-    try {
-      final grant = await tokens.createGeminiToken();
-      if (!mounted) return;
-      final requestId = 'facetime-${randomId()}';
-      _events?.cancel();
-      _events = widget.services.nativeHub.events.listen((event) {
-        if (event is! NativeEventCallState) return;
-        if (event.value.requestId != requestId) return;
-        if (!mounted) return;
-        setState(() {
-          _phase = event.value.state;
-          _phaseDetail = event.value.detail;
-        });
-      });
-      setState(() => _phase = CallPhase.joining);
-      widget.services.nativeHub.joinCall(
-        requestId: requestId,
-        link: link,
-        ephemeralToken: grant.token,
-        model: grant.model,
-      );
-    } catch (failure) {
-      if (!mounted) return;
-      setState(() => _error = '$failure');
-    }
-  }
-
-  String _phaseLabel(CallPhase phase) => switch (phase) {
-    CallPhase.joining => 'Joining the call…',
-    CallPhase.joined => 'Joined. Omi is on the call.',
-    CallPhase.ended => 'The call ended.',
-    CallPhase.failed => 'The call could not be joined.',
-  };
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = _SettingsColors.of(context);
-    return AlertDialog(
-      key: const Key('facetime_dialog'),
-      backgroundColor: colors.panel,
-      title: const Text('FaceTime call'),
-      content: SizedBox(
-        width: 380,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Enter a phone number in international form or an email address. '
-              'Placing the call rings that person straight away.',
-              style: TextStyle(fontSize: 12, height: 1.35, color: colors.muted),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              key: const Key('facetime_handle_field'),
-              controller: _handle,
-              enabled: !_busy,
-              autocorrect: false,
-              keyboardType: TextInputType.emailAddress,
-              decoration: const InputDecoration(
-                labelText: 'Handle',
-                hintText: '+15551234567 or name@example.com',
-              ),
-              onSubmitted: (_) => _busy ? null : _call(),
-            ),
-            if (_unavailable != null) ...[
-              const SizedBox(height: 12),
-              DecoratedBox(
-                key: const Key('facetime_unavailable'),
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: colors.hairline),
-                ),
-                child: Padding(
-                  padding: const EdgeInsets.all(10),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Icon(
-                        Icons.schedule_rounded,
-                        size: 16,
-                        color: colors.muted,
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              "FaceTime calling isn't available yet",
-                              style: TextStyle(
-                                fontSize: 12,
-                                fontWeight: FontWeight.w600,
-                                color: colors.ink,
-                              ),
-                            ),
-                            const SizedBox(height: 4),
-                            Text(
-                              'Our calling provider has it switched off while '
-                              'they finish the call flow. Nobody was rung. '
-                              'This will start working here on its own once '
-                              'they enable it.',
-                              style: TextStyle(
-                                fontSize: 11,
-                                height: 1.35,
-                                color: colors.muted,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ],
-            if (_phase case final phase?) ...[
-              const SizedBox(height: 12),
-              Text(
-                _phaseLabel(phase),
-                key: const Key('facetime_state'),
-                style: TextStyle(fontSize: 12, color: colors.ink),
-              ),
-              if (_phaseDetail case final detail?)
-                Text(
-                  detail,
-                  style: TextStyle(fontSize: 11, color: colors.muted),
-                ),
-            ],
-            if (_link != null && _phase == null) ...[
-              const SizedBox(height: 12),
-              SelectableText(
-                _link!,
-                key: const Key('facetime_link'),
-                style: TextStyle(fontSize: 11, color: colors.muted),
-              ),
-            ],
-            if (_error != null) ...[
-              const SizedBox(height: 10),
-              Text(
-                _error!,
-                key: const Key('facetime_error'),
-                style: const TextStyle(fontSize: 12, color: Colors.redAccent),
-              ),
-            ],
-          ],
-        ),
-      ),
-      actions: [
-        TextButton(
-          onPressed: _busy ? null : () => Navigator.of(context).pop(),
-          child: const Text('Close'),
-        ),
-        FilledButton(
-          key: const Key('facetime_call'),
-          onPressed: _busy ? null : _call,
-          child: Text(_busy ? 'Calling…' : 'Call'),
         ),
       ],
     );

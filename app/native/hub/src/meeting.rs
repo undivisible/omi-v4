@@ -2032,6 +2032,7 @@ mod tests {
             .remember(RememberInput {
                 tenant_id: TenantId::new("tenant-1")
                     .unwrap_or_else(|error_value| panic!("valid tenant: {error_value}")),
+                feature_flag: None,
                 person_id: PersonId::new("person-1")
                     .unwrap_or_else(|error_value| panic!("valid person: {error_value}")),
                 ingestion_key: Some(ingestion_key),

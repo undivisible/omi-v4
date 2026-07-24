@@ -4,6 +4,7 @@ import { Miniflare } from "miniflare";
 import assistant, {
   aiGatewayRoute,
   finalizeCancelledStream,
+  managedRoute,
   price,
   reconcileManagedAssistantRequests,
 } from "../src/assistant";
@@ -515,5 +516,40 @@ describe("aiGatewayRoute", () => {
     expect(authenticated?.headers["cf-aig-authorization"]).toBe(
       "Bearer gateway-token",
     );
+  });
+});
+
+describe("managedRoute", () => {
+  test("balanced pins to MiMo and search pins to OpenRouter", () => {
+    const env = {
+      MIMO_CHAT_COMPLETIONS_URL:
+        "https://token-plan-sgp.xiaomimimo.com/v1/chat/completions",
+      MIMO_API_KEY: "mimo-secret",
+      OPENROUTER_API_KEY: "openrouter-secret",
+    } as unknown as Bindings;
+
+    const balanced = managedRoute(env, "balanced");
+    expect(balanced.unavailable).toBe(false);
+    expect(balanced.provider).toBe("mimo");
+    expect(balanced.model).toBe("xiaomi/mimo-v2.5");
+    expect(balanced.allowGateway).toBe(true);
+
+    const search = managedRoute(env, "search");
+    expect(search.unavailable).toBe(false);
+    expect(search.provider).toBe("openrouter");
+    expect(search.model).toBe("perplexity/sonar");
+    expect(search.endpointUrl.href).toBe(
+      "https://openrouter.ai/api/v1/chat/completions",
+    );
+    expect(search.allowGateway).toBe(false);
+  });
+
+  test("search is unavailable without an OpenRouter key", () => {
+    const env = {
+      MIMO_CHAT_COMPLETIONS_URL:
+        "https://token-plan-sgp.xiaomimimo.com/v1/chat/completions",
+      MIMO_API_KEY: "mimo-secret",
+    } as unknown as Bindings;
+    expect(managedRoute(env, "search").unavailable).toBe(true);
   });
 });

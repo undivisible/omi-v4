@@ -393,6 +393,19 @@ final class AppServices {
   final ManagedSttClient? _managedStt;
   final Uri? _workerOrigin;
   final DateTime Function() _now;
+
+  /// Refreshes xAI Grok OAuth sessions before their short-lived bearer expires.
+  /// Injectable so tests can drive the flow without a real device-code round
+  /// trip; defaults to the real client.
+  XaiOAuthClient xaiOAuth = XaiOAuthClient();
+
+  /// Refreshes ChatGPT-subscription (Codex) OAuth sessions the same way.
+  OpenAiOAuthClient openAiOAuth = OpenAiOAuthClient();
+
+  /// How far ahead of an OAuth bearer's expiry to refresh it, so an inference
+  /// turn never lands on a just-expired token.
+  static const _oAuthRefreshLead = Duration(minutes: 5);
+
   final Duration _assistantRefreshLead;
   final Duration _assistantMinimumRefreshDelay;
   final Future<String> Function(String uid) memoryDatabasePath;
@@ -645,11 +658,13 @@ final class AppServices {
     }
     if (_disposed || auth.snapshot.session?.uid != expectedUid) return;
     if (credential != null) {
+      final fresh = await _refreshedOAuthCredential(expectedUid, credential);
+      if (_disposed || auth.snapshot.session?.uid != expectedUid) return;
       configureAssistant(
-        provider: credential.provider,
-        model: credential.model,
-        endpoint: credential.endpoint,
-        credential: credential.credential,
+        provider: fresh.provider,
+        model: fresh.model,
+        endpoint: fresh.endpoint,
+        credential: fresh.credential,
       );
       return;
     }
@@ -666,6 +681,52 @@ final class AppServices {
       return;
     }
     await _configureManagedAssistant(expectedUid);
+  }
+
+  /// Refreshes an xAI or ChatGPT OAuth bearer that is at or near expiry and
+  /// writes the rotated tokens back to secure storage. Any failure (including
+  /// the 403 an un-entitled account gets) leaves the stored credential
+  /// untouched and returns it as-is, so the hub still tries the existing bearer
+  /// and the user can re-sign-in or switch to an API key.
+  Future<ProviderCredential> _refreshedOAuthCredential(
+    String uid,
+    ProviderCredential credential,
+  ) async {
+    if (!credential.isOAuth) return credential;
+    final refreshToken = credential.refreshToken;
+    if (refreshToken == null) return credential;
+    final expiresAt = credential.expiresAt;
+    if (expiresAt != null && expiresAt.isAfter(_now().add(_oAuthRefreshLead))) {
+      return credential;
+    }
+    try {
+      final (String access, String refresh, DateTime expiry)? rotated =
+          switch (credential.provider) {
+            AssistantProvider.xai => await _rotateXai(refreshToken),
+            AssistantProvider.openAi => await _rotateOpenAi(refreshToken),
+            _ => null,
+          };
+      if (rotated == null) return credential;
+      final refreshed = credential.copyWith(
+        credential: rotated.$1,
+        refreshToken: rotated.$2,
+        expiresAt: rotated.$3,
+      );
+      await providerCredentials.write(uid, refreshed);
+      return refreshed;
+    } catch (_) {
+      return credential;
+    }
+  }
+
+  Future<(String, String, DateTime)> _rotateXai(String refreshToken) async {
+    final tokens = await xaiOAuth.refresh(refreshToken);
+    return (tokens.accessToken, tokens.refreshToken, tokens.expiresAt);
+  }
+
+  Future<(String, String, DateTime)> _rotateOpenAi(String refreshToken) async {
+    final tokens = await openAiOAuth.refresh(refreshToken);
+    return (tokens.accessToken, tokens.refreshToken, tokens.expiresAt);
   }
 
   Future<void> _configureManagedAssistant(String expectedUid) async {

@@ -274,6 +274,7 @@ mod tests {
             .database
             .remember(RememberInput {
                 tenant_id,
+                feature_flag: None,
                 person_id,
                 ingestion_key: Some(key.to_owned()),
                 kind: SourceKind::Conversation,

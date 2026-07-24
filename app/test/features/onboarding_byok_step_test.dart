@@ -191,6 +191,7 @@ void main() {
       ),
     );
 
+    await tester.ensureVisible(find.byKey(const Key('byok_skip_connect')));
     await tester.tap(find.byKey(const Key('byok_skip_connect')));
     await tester.pump();
 

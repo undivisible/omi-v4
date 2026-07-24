@@ -2429,9 +2429,9 @@ checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
 
 [[package]]
 name = "rx4"
-version = "0.3.25"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "901f986d96a321dcfaaff48ccb71c0f10d4561753cd3ddedbc44c04035b8f659"
+checksum = "98a6f8536d86cf5ffee36f42ac93008f04f1ab898c8e41400f8512a55249e70f"
 dependencies = [
  "async-trait",
  "chrono",
@@ -3966,9 +3966,9 @@ dependencies = [
 
 [[package]]
 name = "zkr"
-version = "0.3.1"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d4cad430a77adac42848046980982a5cd08a8b680b7da99d6e3853b70debef42"
+checksum = "bd9f18bf77fc0d1567d66fa2630c72763a340b7cc88e8ec5f0289f9b7ac2ad88"
 dependencies = [
  "rusqlite",
  "serde",

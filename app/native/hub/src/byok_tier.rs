@@ -13,16 +13,23 @@
 //! | `balanced`   | gpt-5.6-terra     | claude-sonnet-5    | gemini-3.6-flash       | grok-4.5  |
 //! | `smart`      | gpt-5.6-sol       | claude-opus-4-8    | gemini-3.5-flash       | grok-4.5  |
 //! | `multimodal` | gpt-5.6-terra     | claude-sonnet-5    | gemini-3.6-flash       | grok-4.5  |
-//! | `search`     | gpt-5-search-api  | claude-sonnet-5    | gemini-3.6-flash       | grok-4.5  |
+//! | `search`     | gpt-5.6-terra     | claude-sonnet-5    | gemini-3.6-flash       | grok-4.5  |
 //!
 //! Every id above was read off the provider's own live model documentation
-//! rather than guessed. `gpt-5-search-api` is OpenAI's documented
-//! Chat-Completions path to their hosted web search, which is the only hosted
-//! search this client can reach: the `{"type": "web_search"}` tool OpenAI and
-//! xAI both host is a Responses-API construct, and `rs_ai` speaks only
-//! `/chat/completions` with function tools. The remaining providers have no
-//! Chat-Completions search path, so their search tier stays on the balanced
-//! model rather than pretending to be grounded.
+//! rather than guessed. The OpenAI ids are exactly the picker-visible models the
+//! ChatGPT-subscription Codex Responses endpoint serves (per Zed's
+//! `openai_subscribed.rs` model list), and the xAI ids are the Grok models the
+//! SuperGrok OAuth surface serves, so the same table backs both the API-key and
+//! the OAuth sign-in paths for those two providers. The SEARCH tier for OpenAI
+//! and xAI is dispatched through their Responses API's hosted
+//! `{"type": "web_search"}` tool
+//! (`hosted_search.rs`) rather than through `rs_ai`, which speaks only
+//! `/chat/completions` with function tools and cannot emit that tool shape.
+//! Any general model drives the hosted tool, so OpenAI's search tier is a
+//! normal model (gpt-5.6-terra) and no longer the Chat-Completions-only
+//! `gpt-5-search-api`. Anthropic and Gemini expose no such passthrough here,
+//! so their search tier stays on the balanced model rather than pretending to
+//! be grounded.
 
 use crate::model_tier::{Capability, ModelTier};
 
@@ -42,7 +49,11 @@ const OPENAI_TIERS: &[(ModelTier, &str)] = &[
     (ModelTier::Balanced, "gpt-5.6-terra"),
     (ModelTier::Smart, "gpt-5.6-sol"),
     (ModelTier::Multimodal, "gpt-5.6-terra"),
-    (ModelTier::Search, "gpt-5-search-api"),
+    // The SEARCH tier is dispatched through the Responses API's hosted
+    // `web_search` tool (`hosted_search.rs`), which any general model drives —
+    // the fine-tuned `gpt-5-search-api` is a Chat-Completions-only construct
+    // and is no longer the search path.
+    (ModelTier::Search, "gpt-5.6-terra"),
 ];
 
 const ANTHROPIC_TIERS: &[(ModelTier, &str)] = &[
@@ -77,9 +88,6 @@ const BYOK_CAPABILITIES: &[(&str, &[Capability])] = &[
     ("gpt-5.6-luna", &[Capability::Text, Capability::ImageIn]),
     ("gpt-5.6-terra", &[Capability::Text, Capability::ImageIn]),
     ("gpt-5.6-sol", &[Capability::Text, Capability::ImageIn]),
-    // The search model is a fine-tuned Chat-Completions endpoint, not a
-    // general multimodal one, so it claims text only.
-    ("gpt-5-search-api", &[Capability::Text]),
     ("claude-haiku-4-5", &[Capability::Text, Capability::ImageIn]),
     ("claude-sonnet-5", &[Capability::Text, Capability::ImageIn]),
     ("claude-opus-4-8", &[Capability::Text, Capability::ImageIn]),

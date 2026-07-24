@@ -8,6 +8,7 @@ use crate::computer_use::{
     BoundComputerUseAction, ComputerUseError, ExecutionOutcome, PreparedComputerUseAction,
     available as computer_use_available, capabilities as computer_use_capabilities,
 };
+use crate::hosted_search::{SearchBackend, dispatch as dispatch_hosted_search};
 use crate::model_tier::{Capability, ModelTier};
 use crate::signals::{
     ActionProposal, ActionRisk, ApprovalDecision, ApprovalDecisionAcknowledgement, AssistantDelta,
@@ -72,6 +73,7 @@ struct RuntimeState {
     managed_worker_origin: Option<String>,
     computer_use_ledger_path: Option<PathBuf>,
     self_improve: Option<rx4::self_improve::SelfImprove>,
+    personality: Option<rx4::Personality>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -291,6 +293,23 @@ impl AssistantProviderConfig {
                 }
                 Some(validated.url)
             }
+            // The OpenAI provider optionally carries the ChatGPT-subscription
+            // Codex base (`https://chatgpt.com/backend-api/codex`) when signed in
+            // via OAuth; it is pinned to that host so a stray endpoint can never
+            // redirect the OAuth bearer somewhere else. Absent, the API-key path
+            // keeps its default `api.openai.com` base.
+            AssistantProviderKind::OpenAi => {
+                match endpoint.filter(|value| !value.trim().is_empty()) {
+                    Some(endpoint) => {
+                        let validated = validate_endpoint(&endpoint, false, None)?;
+                        if validated.host != "chatgpt.com" {
+                            return Err("OpenAI OAuth endpoint must be chatgpt.com".to_owned());
+                        }
+                        Some(validated.url)
+                    }
+                    None => None,
+                }
+            }
             _ => None,
         };
         Ok(Self {
@@ -378,12 +397,77 @@ impl AssistantProviderConfig {
         {
             return model.clone();
         }
+        // The managed worker is not a BYOK provider and has no catalogue of its
+        // own, but it does resolve tiers server-side against the shared table
+        // (`worker/src/model-tiers.ts`). The SEARCH tier is the one that
+        // matters: a search-intent prompt from a paying managed user has to
+        // reach `perplexity/sonar` rather than the balanced model the user was
+        // configured with, and the worker only routes it there when the client
+        // asks for it by name. Every other tier keeps the configured model,
+        // which is the only one the managed route accepts.
+        if self.kind == AssistantProviderKind::Worker && tier == ModelTier::Search {
+            return crate::model_tier::model_for_tier_env(tier);
+        }
         if tier == ModelTier::Balanced {
             return self.model.clone();
         }
         self.byok_provider()
             .and_then(|provider| provider.default_model(tier))
             .map_or_else(|| self.model.clone(), str::to_owned)
+    }
+
+    /// The hosted-search backend for this provider, `None` when the provider
+    /// hosts no web-search tool this client can reach.
+    ///
+    /// OpenAI and xAI both expose `{"type": "web_search"}` on their Responses
+    /// API, and the managed worker resolves the SEARCH tier to Perplexity Sonar
+    /// server-side; those three are grounded. Anthropic, Gemini and an
+    /// unspecified `compatible` endpoint are not, so their SEARCH tier keeps
+    /// running as an ordinary completion rather than claiming a grounding it
+    /// never performed.
+    /// Whether this configuration is the ChatGPT-subscription OAuth path, whose
+    /// inference base is the Codex Responses endpoint rather than
+    /// `api.openai.com`. Recognised by the OpenAI provider carrying the pinned
+    /// `chatgpt.com` base that `from_runtime` validated.
+    fn codex_base(&self) -> Option<String> {
+        (self.kind == AssistantProviderKind::OpenAi)
+            .then(|| self.endpoint.clone())
+            .flatten()
+    }
+
+    /// The hosted transport to run this tier through instead of `rs_ai`, `None`
+    /// when the ordinary `rs_ai` chat path should handle it.
+    ///
+    /// The Codex OAuth surface speaks only the Responses API (Chat Completions
+    /// is retired there), so every tier routes through the hosted transport —
+    /// SEARCH with the hosted `web_search` tool, the rest as plain Responses
+    /// turns. For all other providers only the SEARCH tier has a hosted backend.
+    fn hosted_backend(&self, tier: ModelTier) -> Option<SearchBackend> {
+        if let Some(base_url) = self.codex_base() {
+            return Some(SearchBackend::CodexResponses {
+                base_url,
+                account_id: crate::hosted_search::account_id_from_bearer(&self.credential),
+                web_search: tier == ModelTier::Search,
+            });
+        }
+        (tier == ModelTier::Search).then(|| self.search_backend())?
+    }
+
+    fn search_backend(&self) -> Option<SearchBackend> {
+        match self.kind {
+            AssistantProviderKind::OpenAi => Some(SearchBackend::OpenAiResponses),
+            AssistantProviderKind::Xai => Some(SearchBackend::XaiResponses),
+            AssistantProviderKind::Worker => {
+                self.endpoint
+                    .clone()
+                    .map(|endpoint| SearchBackend::ManagedChat {
+                        endpoint: endpoint.trim_end_matches('/').to_owned(),
+                    })
+            }
+            AssistantProviderKind::Anthropic
+            | AssistantProviderKind::Gemini
+            | AssistantProviderKind::Compatible => None,
+        }
     }
 
     /// Resolves a tier and refuses the result when the model cannot carry what
@@ -739,6 +823,79 @@ impl AssistantProvider for RsAiAssistantProvider {
                 return receiver;
             }
         };
+        // The SEARCH tier is grounded through the provider's hosted web-search
+        // tool, which `rs_ai` cannot emit (see `hosted_search.rs`). For the
+        // providers that host one — OpenAI, xAI, and the managed worker's Sonar
+        // route — the turn is dispatched directly against the Responses API (or
+        // the worker's chat completions) so the `url_citation` sources survive
+        // to the reply instead of being dropped by the crate's stream parser.
+        if let Some(backend) = config.hosted_backend(tier) {
+            let search_model = model.clone();
+            tokio::spawn(async move {
+                if let SearchBackend::ManagedChat { endpoint } = &backend {
+                    let preflight = tokio::select! {
+                        () = cancellation.cancelled() => return,
+                        result = endpoint_resolves_publicly(endpoint) => result,
+                    };
+                    if let Err(message) = preflight {
+                        let _ = sender.send(Err(message)).await;
+                        return;
+                    }
+                }
+                let opened = tokio::select! {
+                    () = cancellation.cancelled() => return,
+                    result = dispatch_hosted_search(
+                        &backend,
+                        &search_model,
+                        &config.credential,
+                        &text,
+                        PROVIDER_CONNECT_TIMEOUT,
+                    ) => result,
+                };
+                let mut stream = match opened {
+                    Ok(stream) => stream,
+                    Err(message) => {
+                        let _ = sender.send(Err(message)).await;
+                        return;
+                    }
+                };
+                loop {
+                    let next = tokio::select! {
+                        () = cancellation.cancelled() => return,
+                        result = tokio::time::timeout(PROVIDER_EVENT_TIMEOUT, stream.next()) => result,
+                    };
+                    let event = match next {
+                        Ok(Some(Ok(delta))) => AssistantProviderEvent::Delta {
+                            text: delta,
+                            final_segment: false,
+                        },
+                        Ok(Some(Err(message))) => {
+                            let _ = sender.send(Err(message)).await;
+                            return;
+                        }
+                        Ok(None) => {
+                            let _ = sender
+                                .send(Ok(AssistantProviderEvent::Delta {
+                                    text: String::new(),
+                                    final_segment: true,
+                                }))
+                                .await;
+                            return;
+                        }
+                        Err(_) => {
+                            let _ = sender
+                                .send(Err("assistant provider stream timed out".to_owned()))
+                                .await;
+                            return;
+                        }
+                    };
+                    if sender.send(Ok(event)).await.is_err() {
+                        return;
+                    }
+                }
+            });
+            return receiver;
+        }
         tokio::spawn(async move {
             if let Some(endpoint) = config.endpoint.as_deref() {
                 let preflight = tokio::select! {
@@ -1722,6 +1879,7 @@ async fn local_memory_context(
             .database
             .search(SearchInput {
                 tenant_id: memory.tenant_id.clone(),
+                enabled_features: Vec::new(),
                 person_id: memory.person_id.clone(),
                 query,
                 limit: LOCAL_MEMORY_CONTEXT_ITEMS,
@@ -1864,9 +2022,18 @@ async fn dispatch_assistant(
         Some(&format!("{ONLINE_CHAT_MODEL_DETAIL}:{routed_model}")),
     );
     let prompt = framed_assistant_prompt(origin, context.as_deref(), &text);
-    let self_improve = state.lock().await.self_improve.clone();
+    let (self_improve, personality) = {
+        let guard = state.lock().await;
+        (guard.self_improve.clone(), guard.personality.clone())
+    };
     let prompt = match self_improve.as_ref() {
         Some(handle) => crate::self_improve::augment(handle, &text, &prompt).await,
+        None => prompt,
+    };
+    // Personality context layers on after lessons: both only ever add to the
+    // prompt, and both fall back to it unchanged when they have nothing.
+    let prompt = match personality.as_ref() {
+        Some(handle) => crate::personality::augment(handle, &text, &prompt).await,
         None => prompt,
     };
     let mut reply = String::new();
@@ -1881,8 +2048,15 @@ async fn dispatch_assistant(
             match receive_provider_event(&mut events, cancellation, PROVIDER_EVENT_TIMEOUT).await {
                 ProviderReceive::Event(event) => event,
                 ProviderReceive::Closed => {
-                    // The reflection write is fire-and-forget so it never adds
-                    // latency to the turn that produced it.
+                    // The reflection and personality writes are fire-and-forget
+                    // so they never add latency to the turn that produced them.
+                    if let Some(handle) = personality {
+                        tokio::spawn(crate::personality::record_turn(
+                            handle,
+                            text.clone(),
+                            reply.clone(),
+                        ));
+                    }
                     if let Some(handle) = self_improve {
                         tokio::spawn(crate::self_improve::record_turn(handle, text, reply));
                     }
@@ -2415,6 +2589,7 @@ async fn scan_onboarding(
                         .database
                         .remember(RememberInput {
                             tenant_id,
+                            feature_flag: None,
                             person_id,
                             ingestion_key: Some(format!(
                                 "onboarding-scan:{}:{}:{recorded_at_ms}",
@@ -2585,6 +2760,10 @@ async fn configure_memory(
         // augmentation, mirroring the `memory_unavailable` degradation.
         let self_improve =
             crate::self_improve::open(&database_path, tenant_id.clone(), person_id.clone());
+        // Personality rides its own connection to the same database file, the
+        // same way self-improvement does, and degrades to `None` identically.
+        let personality =
+            crate::personality::open(&database_path, tenant_id.clone(), person_id.clone());
         MemoryDb::open(database_path)
             .map(|database| {
                 (
@@ -2594,12 +2773,13 @@ async fn configure_memory(
                         person_id,
                     },
                     self_improve,
+                    personality,
                 )
             })
             .map_err(|error_value| error_value.to_string())
     });
     match await_blocking(task, cancellation).await {
-        BlockingOutcome::Complete((memory, self_improve)) => {
+        BlockingOutcome::Complete((memory, self_improve, personality)) => {
             let mut state = state.lock().await;
             if !configuration_is_current(&state, configuration_generation) {
                 error(
@@ -2613,6 +2793,7 @@ async fn configure_memory(
             let memory = Arc::new(StdMutex::new(memory));
             state.memory = Some(Arc::clone(&memory));
             state.self_improve = self_improve;
+            state.personality = personality;
             state.computer_use_ledger_path = computer_use_ledger_path;
             drop(state);
             NativeEvent::RuntimeStatus(runtime_status(true)).send();
@@ -2826,6 +3007,7 @@ fn remember_capture(
         .remember_with_locator(
             RememberInput {
                 tenant_id: memory.tenant_id.clone(),
+                feature_flag: None,
                 person_id: memory.person_id.clone(),
                 ingestion_key: Some(ingestion_key),
                 kind: source_kind(source),
@@ -2912,6 +3094,7 @@ fn ingest_onboarding_profile(
             .database
             .remember(RememberInput {
                 tenant_id: memory.tenant_id.clone(),
+                feature_flag: None,
                 person_id: memory.person_id.clone(),
                 ingestion_key: Some(format!("onboarding-profile:{predicate}")),
                 kind: SourceKind::Integration,
@@ -2948,6 +3131,7 @@ fn ingest_onboarding_profile(
             .database
             .remember(RememberInput {
                 tenant_id: memory.tenant_id.clone(),
+                feature_flag: None,
                 person_id: memory.person_id.clone(),
                 ingestion_key: Some("onboarding-profile:summary".to_owned()),
                 kind: SourceKind::Integration,
@@ -2986,6 +3170,7 @@ fn store_candidate_claims(
             .database
             .remember(RememberInput {
                 tenant_id: memory.tenant_id.clone(),
+                feature_flag: None,
                 person_id: memory.person_id.clone(),
                 ingestion_key: Some(format!("{ingestion_key}:extract:{index}")),
                 kind: SourceKind::Conversation,
@@ -3040,6 +3225,7 @@ async fn search(
             .database
             .search(SearchInput {
                 tenant_id: memory.tenant_id.clone(),
+                enabled_features: Vec::new(),
                 person_id: memory.person_id.clone(),
                 query,
                 limit,
@@ -4095,6 +4281,7 @@ mod tests {
             .database
             .remember(RememberInput {
                 tenant_id: memory.tenant_id.clone(),
+                feature_flag: None,
                 person_id: memory.person_id.clone(),
                 ingestion_key: Some(format!("{label}-capture")),
                 kind: SourceKind::Conversation,
@@ -4161,6 +4348,7 @@ mod tests {
             .database
             .remember(RememberInput {
                 tenant_id: memory.tenant_id.clone(),
+                feature_flag: None,
                 person_id: memory.person_id.clone(),
                 ingestion_key: Some("profile-capture".to_owned()),
                 kind: SourceKind::Conversation,
@@ -4256,6 +4444,7 @@ mod tests {
                 .remember(RememberInput {
                     tenant_id: TenantId::new(tenant_id)
                         .unwrap_or_else(|error_value| panic!("valid tenant: {error_value}")),
+                    feature_flag: None,
                     person_id: PersonId::new(person_id)
                         .unwrap_or_else(|error_value| panic!("valid person: {error_value}")),
                     ingestion_key: Some(format!("outside-{tenant_id}-{person_id}")),
@@ -4311,6 +4500,7 @@ mod tests {
             .database
             .search(SearchInput {
                 tenant_id: memory.tenant_id.clone(),
+                enabled_features: Vec::new(),
                 person_id: memory.person_id.clone(),
                 query: "Beta".to_owned(),
                 limit: 5,
@@ -4329,6 +4519,7 @@ mod tests {
             .database
             .search(SearchInput {
                 tenant_id: memory.tenant_id.clone(),
+                enabled_features: Vec::new(),
                 person_id: memory.person_id.clone(),
                 query: "Acme".to_owned(),
                 limit: 5,
@@ -4374,6 +4565,7 @@ mod tests {
             .database
             .search(SearchInput {
                 tenant_id: memory.tenant_id.clone(),
+                enabled_features: Vec::new(),
                 person_id: memory.person_id.clone(),
                 query: "Acme".to_owned(),
                 limit: 5,
@@ -4458,6 +4650,7 @@ mod tests {
             .database
             .search(SearchInput {
                 tenant_id: memory.tenant_id.clone(),
+                enabled_features: Vec::new(),
                 person_id: memory.person_id.clone(),
                 query: "Remember this".to_owned(),
                 limit: 5,
@@ -4473,6 +4666,7 @@ mod tests {
             .database
             .search(SearchInput {
                 tenant_id: memory.tenant_id.clone(),
+                enabled_features: Vec::new(),
                 person_id: memory.person_id.clone(),
                 query: "Remember this".to_owned(),
                 limit: 5,
@@ -4883,9 +5077,10 @@ mod tests {
         assert_eq!(config.model_for_tier(ModelTier::Balanced), "gpt-5.6-terra");
         assert_eq!(config.model_for_tier(ModelTier::Speed), "gpt-5.6-luna");
         assert_eq!(config.model_for_tier(ModelTier::Smart), "gpt-5.6-sol");
-        // The one hosted search this client can reach: OpenAI's documented
-        // Chat-Completions search model, not a separate search provider.
-        assert_eq!(config.model_for_tier(ModelTier::Search), "gpt-5-search-api");
+        // The SEARCH tier drives OpenAI's Responses-API hosted web-search tool,
+        // which any general model runs, so it is a normal model rather than the
+        // Chat-Completions-only search endpoint.
+        assert_eq!(config.model_for_tier(ModelTier::Search), "gpt-5.6-terra");
         // The typed model owns balanced even when it is not the table default.
         let custom = byok_config(AssistantProviderKind::Anthropic, "claude-opus-4-8");
         assert_eq!(
@@ -4951,7 +5146,7 @@ mod tests {
                 .unwrap_or_else(|| panic!("BYOK configuration parses"));
         assert_eq!(config.model_for_tier(ModelTier::Smart), "gpt-5.6-sol");
         // A blank override is no override; the table default still applies.
-        assert_eq!(config.model_for_tier(ModelTier::Search), "gpt-5-search-api");
+        assert_eq!(config.model_for_tier(ModelTier::Search), "gpt-5.6-terra");
     }
 
     #[test]
@@ -6404,6 +6599,7 @@ mod tests {
             .database
             .remember(RememberInput {
                 tenant_id: memory.tenant_id.clone(),
+                feature_flag: None,
                 person_id: memory.person_id.clone(),
                 ingestion_key: Some("onboarding-profile-1".to_owned()),
                 kind: SourceKind::Conversation,

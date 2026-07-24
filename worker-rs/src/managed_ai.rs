@@ -21,6 +21,38 @@ pub const WORKER_COMPLETION_MAX_OUTPUT_TOKENS: i64 = 1024;
 pub const XIAOMI_COMPLETION_ENDPOINT: &str =
     "https://token-plan-sgp.xiaomimimo.com/v1/chat/completions";
 pub const XIAOMI_HOSTNAME: &str = "token-plan-sgp.xiaomimimo.com";
+pub const OPENROUTER_COMPLETION_ENDPOINT: &str = "https://openrouter.ai/api/v1/chat/completions";
+pub const OPENROUTER_HOSTNAME: &str = "openrouter.ai";
+
+/// Which managed tier a completion request is forwarded on. The BALANCED tier
+/// is pinned to the MiMo endpoint; the SEARCH tier is pinned to OpenRouter,
+/// which resolves the search model (perplexity/sonar) and returns its sources
+/// as `url_citation` annotations the client surfaces. A request whose model is
+/// neither tier's model is rejected.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ManagedCompletionTier {
+    Balanced,
+    Search,
+}
+
+/// Resolves the tier a request's `model` names, or `None` when it matches
+/// neither the balanced nor the search model. The search tier only applies
+/// when its model differs from the balanced one, so a deployment that has not
+/// configured a distinct search model never routes there.
+pub fn completion_tier_for_model(
+    model: &str,
+    value: impl Fn(&str) -> Option<String>,
+) -> Option<ManagedCompletionTier> {
+    let balanced = model_for_tier(ModelTier::Balanced, &value);
+    if model == balanced {
+        return Some(ManagedCompletionTier::Balanced);
+    }
+    let search = model_for_tier(ModelTier::Search, &value);
+    if model == search && search != balanced {
+        return Some(ManagedCompletionTier::Search);
+    }
+    None
+}
 
 // Model-tier routing config. Single source of truth mirrored by the hub
 // (app/native/hub/src/model_tier.rs) and worker (worker/src/model-tiers.ts):
@@ -619,6 +651,38 @@ mod tests {
             "max_tokens": 256,
             "stream_options": { "include_usage": true }
         })
+    }
+
+    #[test]
+    fn completion_tier_routes_balanced_and_search_by_model() {
+        // No overrides: balanced and search resolve to their defaults, and the
+        // two tiers are distinct.
+        assert_eq!(
+            completion_tier_for_model(DEFAULT_BALANCED_MODEL, |_| None),
+            Some(ManagedCompletionTier::Balanced)
+        );
+        assert_eq!(
+            completion_tier_for_model(DEFAULT_SEARCH_MODEL, |_| None),
+            Some(ManagedCompletionTier::Search)
+        );
+        assert_eq!(
+            completion_tier_for_model("some/other-model", |_| None),
+            None
+        );
+    }
+
+    #[test]
+    fn search_tier_is_ignored_when_it_collapses_onto_balanced() {
+        // An override that points search at the balanced model must not create a
+        // second route: the balanced tier wins and search never applies.
+        let value = |name: &str| match name {
+            "OMI_MODEL_SEARCH" => Some(DEFAULT_BALANCED_MODEL.to_owned()),
+            _ => None,
+        };
+        assert_eq!(
+            completion_tier_for_model(DEFAULT_BALANCED_MODEL, value),
+            Some(ManagedCompletionTier::Balanced)
+        );
     }
 
     #[test]
