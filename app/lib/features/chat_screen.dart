@@ -202,6 +202,7 @@ class ChatScreenState extends State<ChatScreen>
   String? _activeRequestId;
   String? _progress;
   String? _error;
+  String? _memorySyncNotice;
   ComputerUseCapabilities? _computerUseCapabilities;
   bool _sending = false;
   int _conversationLoadGeneration = 0;
@@ -281,6 +282,8 @@ class ChatScreenState extends State<ChatScreen>
       unawaited(_refreshCurrents());
       unawaited(_loadConversation());
       _events = widget.services.nativeEvents.listen(_handleEvent);
+      widget.services.memorySyncNotice.addListener(_memorySyncNoticeChanged);
+      _memorySyncNotice = widget.services.memorySyncNotice.value;
       _authorityChanges = widget.services.chatAuthorityChanges.listen((_) {
         if (!mounted) return;
         _conversationLoadGeneration += 1;
@@ -560,11 +563,17 @@ class ChatScreenState extends State<ChatScreen>
     }
   }
 
+  void _memorySyncNoticeChanged() {
+    if (!mounted) return;
+    setState(() => _memorySyncNotice = widget.services.memorySyncNotice.value);
+  }
+
   @override
   void dispose() {
     _conversationLoadGeneration += 1;
     _conversationRefreshTimer?.cancel();
     widget.services.currents?.removeListener(_currentsChanged);
+    widget.services.memorySyncNotice.removeListener(_memorySyncNoticeChanged);
     widget.onDesktopGestureReset?.call();
     unawaited(widget.services.cancelDesktopVoice());
     unawaited(_events?.cancel());
@@ -1528,6 +1537,12 @@ class ChatScreenState extends State<ChatScreen>
           _error!,
           key: const Key('chat_error'),
           style: const TextStyle(color: Colors.redAccent),
+        ),
+      if (_memorySyncNotice != null)
+        () => Text(
+          _memorySyncNotice!,
+          key: const Key('chat_memory_sync_notice'),
+          style: TextStyle(color: Colors.orange.shade300),
         ),
     ];
   }

@@ -288,6 +288,30 @@ void main() {
     await hub.close();
   });
 
+  test('upload failures invoke onFailure without advancing the cursor', () async {
+    Object? reported;
+    final hub = _ExportHub([_page()]);
+    final store = _CursorStore();
+    final pump = MemorySyncPump(
+      hub: hub,
+      events: hub.events,
+      transport: _RecordingTransport(
+        (_) => throw StateError('Memory sync was rejected (503)'),
+      ),
+      cursorStore: store,
+      interval: const Duration(days: 1),
+      onFailure: (error, _) => reported = error,
+    );
+
+    pump.start('person-1');
+    await _settle();
+
+    expect(reported, isA<StateError>());
+    expect(store.saved, isEmpty);
+    pump.dispose();
+    await hub.close();
+  });
+
   group('the persisted cursor', () {
     test('starts at the beginning when nothing is stored', () async {
       SharedPreferences.setMockInitialValues(const {});

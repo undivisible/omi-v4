@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
 
+import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../api/worker_http.dart';
@@ -108,6 +109,11 @@ final class WorkerMemorySyncTransport implements MemorySyncTransport {
   }
 }
 
+typedef MemorySyncFailureHandler =
+    void Function(Object error, StackTrace stackTrace);
+
+typedef MemorySyncUploadedHandler = Future<void> Function(String uid);
+
 final class MemorySyncPump {
   MemorySyncPump({
     required this.hub,
@@ -115,6 +121,8 @@ final class MemorySyncPump {
     required this.transport,
     required this.cursorStore,
     this.interval = const Duration(seconds: 30),
+    this.onFailure,
+    this.onUploaded,
   });
 
   final NativeHub hub;
@@ -122,6 +130,8 @@ final class MemorySyncPump {
   final MemorySyncTransport transport;
   final MemorySyncCursorStore cursorStore;
   final Duration interval;
+  MemorySyncFailureHandler? onFailure;
+  MemorySyncUploadedHandler? onUploaded;
   Timer? _timer;
   String? _uid;
   int _generation = 0;
@@ -229,7 +239,15 @@ final class MemorySyncPump {
         await cursorStore.save(uid, cursor);
         if (page.complete) break;
       }
-    } catch (_) {
+      if (_uid == uid && generation == _generation) {
+        await onUploaded?.call(uid);
+      }
+    } on Object catch (error, stackTrace) {
+      onFailure?.call(error, stackTrace);
+      assert(() {
+        debugPrint('MemorySyncPump failed: $error');
+        return true;
+      }());
     } finally {
       _running = false;
     }

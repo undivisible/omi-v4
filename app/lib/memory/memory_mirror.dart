@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../api/worker_http.dart';
@@ -117,6 +118,9 @@ final class InMemoryMemoryMirrorStore implements MemoryMirrorStore {
 
 /// Applies mirrored cloud log records into the Rust hub's zkr database so local
 /// search sees memory from other replicas and cloud writes.
+typedef MemoryMirrorFailureHandler =
+    void Function(Object error, StackTrace stackTrace);
+
 final class HubMemoryMirrorStore implements MemoryMirrorStore {
   HubMemoryMirrorStore({
     required this.hub,
@@ -144,33 +148,50 @@ final class HubMemoryMirrorStore implements MemoryMirrorStore {
     final foreign = records
         .where((record) => record.originReplica != replicaId)
         .toList();
-    if (foreign.isNotEmpty && hub.available) {
-      final requestId = 'memory-apply-${DateTime.now().microsecondsSinceEpoch}';
-      final response = events
-          .where(
-            (event) =>
-                event is NativeEventMemoryApplied &&
-                event.value.requestId == requestId,
-          )
-          .cast<NativeEventMemoryApplied>()
-          .map((event) => event.value)
-          .first
-          .timeout(timeout);
-      hub.applyMemory(
-        requestId: requestId,
-        commits: foreign
-            .map(
-              (record) => MemoryApplyCommit(
-                sequence: record.sequence,
-                recordedAtMs: record.recordedAt,
-                recordKind: record.recordKind,
-                recordJson: jsonEncode(record.payload),
-              ),
-            )
-            .toList(),
-      );
-      await response;
+    if (foreign.isEmpty) {
+      _mirroredSequence = high;
+      return;
     }
+    if (!hub.available) {
+      throw const MemoryMirrorException(
+        'Native hub unavailable for memory apply',
+      );
+    }
+    final requestId = 'memory-apply-${DateTime.now().microsecondsSinceEpoch}';
+    final response = events
+        .where(
+          (event) =>
+              (event is NativeEventMemoryApplied &&
+                  event.value.requestId == requestId) ||
+              (event is NativeEventError &&
+                  event.value.requestId == requestId),
+        )
+        .map((event) {
+          if (event is NativeEventError) {
+            throw MemoryMirrorException(event.value.message);
+          }
+          return (event as NativeEventMemoryApplied).value;
+        })
+        .first
+        .timeout(
+          timeout,
+          onTimeout: () =>
+              throw const MemoryMirrorException('Memory apply timed out'),
+        );
+    hub.applyMemory(
+      requestId: requestId,
+      commits: foreign
+          .map(
+            (record) => MemoryApplyCommit(
+              sequence: record.sequence,
+              recordedAtMs: record.recordedAt,
+              recordKind: record.recordKind,
+              recordJson: jsonEncode(record.payload),
+            ),
+          )
+          .toList(),
+    );
+    await response;
     _mirroredSequence = high;
   }
 }
@@ -259,6 +280,7 @@ final class MemoryMirrorPump {
     required this.replicaId,
     this.pageSize = 200,
     this.interval = const Duration(seconds: 30),
+    this.onFailure,
   });
 
   final MemoryMirrorTransport transport;
@@ -267,6 +289,7 @@ final class MemoryMirrorPump {
   final String replicaId;
   final int pageSize;
   final Duration interval;
+  MemoryMirrorFailureHandler? onFailure;
   Timer? _timer;
   String? _uid;
   int _generation = 0;
@@ -316,6 +339,12 @@ final class MemoryMirrorPump {
         await cursor.save(uid, after);
         if (page.complete) break;
       }
+    } on Object catch (error, stackTrace) {
+      onFailure?.call(error, stackTrace);
+      assert(() {
+        debugPrint('MemoryMirrorPump failed: $error');
+        return true;
+      }());
     } finally {
       _running = false;
     }

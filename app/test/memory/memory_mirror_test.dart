@@ -1,5 +1,10 @@
+import 'dart:async';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:omi/memory/memory.dart';
+import 'package:omi/native/generated/serde/serde.dart';
+import 'package:omi/native/generated/signals/signals.dart';
+import 'package:omi/native/native_hub.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 Map<String, Object?> _record(int sequence, String replica, String value) => {
@@ -44,6 +49,126 @@ final class _FailingStore implements MemoryMirrorStore {
   @override
   Future<void> apply(String uid, List<MemoryMirrorRecord> records) async =>
       throw StateError('store is offline');
+}
+
+final class _ApplyHub implements NativeHub {
+  _ApplyHub(this._events);
+
+  final StreamController<NativeEvent> _events;
+  final applyCalls = <List<MemoryApplyCommit>>[];
+
+  @override
+  bool get available => true;
+
+  @override
+  Stream<NativeEvent> get events => _events.stream;
+
+  @override
+  void applyMemory({
+    required String requestId,
+    required List<MemoryApplyCommit> commits,
+  }) {
+    applyCalls.add(commits);
+    _events.add(
+      NativeEventMemoryApplied(
+        value: MemoryApplied(
+          requestId: requestId,
+          commitsApplied: _count(commits.length),
+          commitsSkipped: _count(0),
+          recordsApplied: _count(commits.length),
+          recordsSkipped: _count(0),
+        ),
+      ),
+    );
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+final class _IdempotentApplyHub implements NativeHub {
+  _IdempotentApplyHub(this._events);
+
+  final StreamController<NativeEvent> _events;
+  final applyCalls = <List<MemoryApplyCommit>>[];
+
+  @override
+  bool get available => true;
+
+  @override
+  Stream<NativeEvent> get events => _events.stream;
+
+  @override
+  void applyMemory({
+    required String requestId,
+    required List<MemoryApplyCommit> commits,
+  }) {
+    applyCalls.add(commits);
+    final skipped = applyCalls.length == 1 ? 0 : commits.length;
+    _events.add(
+      NativeEventMemoryApplied(
+        value: MemoryApplied(
+          requestId: requestId,
+          commitsApplied: _count(commits.length - skipped),
+          commitsSkipped: _count(skipped),
+          recordsApplied: _count(commits.length - skipped),
+          recordsSkipped: _count(skipped),
+        ),
+      ),
+    );
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+final class _FailingApplyHub implements NativeHub {
+  _FailingApplyHub(this._events);
+
+  final StreamController<NativeEvent> _events;
+
+  @override
+  bool get available => true;
+
+  @override
+  Stream<NativeEvent> get events => _events.stream;
+
+  @override
+  void applyMemory({
+    required String requestId,
+    required List<MemoryApplyCommit> commits,
+  }) {
+    _events.add(
+      NativeEventError(
+        value: NativeError(
+          requestId: requestId,
+          code: 'memory_apply_failed',
+          message: 'apply rejected',
+          retryable: false,
+        ),
+      ),
+    );
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+final class _BlockingTransport implements MemoryMirrorTransport {
+  _BlockingTransport(this.page);
+
+  final Map<String, Object?> page;
+  final blocked = Completer<void>();
+
+  @override
+  Future<Map<String, Object?>> fetchLog({
+    required int after,
+    required int limit,
+    required String replicaId,
+  }) async {
+    await blocked.future;
+    return page;
+  }
 }
 
 void main() {
@@ -152,7 +277,7 @@ void main() {
       replicaId: 'desktop',
     );
 
-    await expectLater(pump.pull('alpha'), throwsStateError);
+    expect(await pump.pull('alpha'), 0);
     expect(await cursor.load('alpha'), 0);
   });
 
@@ -211,4 +336,137 @@ void main() {
       throwsA(isA<MemoryMirrorException>()),
     );
   });
+
+  test('hub mirror store skips records from the local replica', () async {
+    final events = StreamController<NativeEvent>.broadcast();
+    final hub = _ApplyHub(events);
+    final store = HubMemoryMirrorStore(
+      hub: hub,
+      events: events.stream,
+      replicaId: 'desktop',
+    );
+
+    await store.apply('alpha', [
+      _mirrorRecord(1, 'desktop', 'local'),
+      _mirrorRecord(2, 'cloud', 'remote'),
+    ]);
+
+    expect(hub.applyCalls, hasLength(1));
+    expect(hub.applyCalls.single.single.sequence, 2);
+    expect(await store.mirroredSequence('alpha'), 2);
+    await events.close();
+  });
+
+  test('hub mirror store accepts idempotent re-apply', () async {
+    final events = StreamController<NativeEvent>.broadcast();
+    final hub = _IdempotentApplyHub(events);
+    final store = HubMemoryMirrorStore(
+      hub: hub,
+      events: events.stream,
+      replicaId: 'desktop',
+    );
+    final records = [_mirrorRecord(1, 'cloud', 'remote')];
+
+    await store.apply('alpha', records);
+    await store.apply('alpha', records);
+
+    expect(hub.applyCalls, hasLength(2));
+    expect(await store.mirroredSequence('alpha'), 1);
+    await events.close();
+  });
+
+  test('hub mirror store surfaces apply failures from the hub', () async {
+    final events = StreamController<NativeEvent>.broadcast();
+    final hub = _FailingApplyHub(events);
+    final store = HubMemoryMirrorStore(
+      hub: hub,
+      events: events.stream,
+      replicaId: 'desktop',
+    );
+
+    await expectLater(
+      store.apply('alpha', [_mirrorRecord(1, 'cloud', 'remote')]),
+      throwsA(
+        isA<MemoryMirrorException>().having(
+          (error) => error.message,
+          'message',
+          'apply rejected',
+        ),
+      ),
+    );
+    await events.close();
+  });
+
+  test('a concurrent pull returns without overlapping work', () async {
+    final transport = _BlockingTransport({
+      'records': [_record(1, 'desktop', 'Acme')],
+      'next_after': 1,
+      'head': 1,
+      'complete': true,
+    });
+    final pump = MemoryMirrorPump(
+      transport: transport,
+      store: InMemoryMemoryMirrorStore(),
+      cursor: PreferencesMemoryMirrorCursor(),
+      replicaId: 'desktop',
+    );
+
+    final first = pump.pull('alpha');
+    final second = pump.pull('alpha');
+    transport.blocked.complete();
+    expect(await second, 0);
+    expect(await first, 1);
+  });
+
+  test('mirror failures invoke onFailure without crashing the pump', () async {
+    Object? reported;
+    final pump = MemoryMirrorPump(
+      transport: _FakeTransport([
+        {
+          'records': [_record(1, 'desktop', 'Acme')],
+          'next_after': 1,
+          'head': 1,
+          'complete': true,
+        },
+      ]),
+      store: _FailingStore(),
+      cursor: PreferencesMemoryMirrorCursor(),
+      replicaId: 'desktop',
+      onFailure: (error, _) => reported = error,
+    );
+
+    expect(await pump.pull('alpha'), 0);
+    expect(reported, isA<StateError>());
+  });
+
+  test('stop invalidates generation-bound pulls', () async {
+    final pump = MemoryMirrorPump(
+      transport: _FakeTransport([
+        {
+          'records': [_record(1, 'desktop', 'Acme')],
+          'next_after': 1,
+          'head': 1,
+          'complete': true,
+        },
+      ]),
+      store: InMemoryMemoryMirrorStore(),
+      cursor: PreferencesMemoryMirrorCursor(),
+      replicaId: 'desktop',
+    );
+
+    pump.start('alpha');
+    pump.stop();
+    expect(await pump.pull('alpha', 2), 0);
+  });
 }
+
+MemoryMirrorRecord _mirrorRecord(int sequence, String replica, String value) => (
+  sequence: sequence,
+  originReplica: replica,
+  recordKind: 'claim',
+  recordId: 'claim-1',
+  payload: {'value': value},
+  recordedAt: 11,
+);
+
+Uint64 _count(int value) => Uint64.fromBigInt(BigInt.from(value));

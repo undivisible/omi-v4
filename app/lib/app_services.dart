@@ -120,6 +120,11 @@ final class AppServices {
       _now,
       _nativeEvents.addError,
     );
+    memorySyncPump?.onFailure = _reportMemoryFailure;
+    memorySyncPump?.onUploaded = (uid) async {
+      _clearMemoryFailureNotice();
+      await _pullMemoryMirror(uid);
+    };
     _conversationController = ConversationController(
       nativeHub: nativeHub,
       transport: conversations,
@@ -451,6 +456,10 @@ final class AppServices {
   /// chat router ("local:apple-foundation-models" or
   /// "online:configured-provider"). Null until a routed turn completes.
   final chatModelNotice = ValueNotifier<String?>(null);
+
+  /// The most recent memory upload or mirror failure, cleared on the next
+  /// successful sync cycle.
+  final memorySyncNotice = ValueNotifier<String?>(null);
   Future<void> _liveVoiceLifecycle = Future.value();
   int _liveVoiceGeneration = 0;
   final SystemAudioCaptureModeStore _captureModeStore;
@@ -1319,8 +1328,53 @@ final class AppServices {
       ),
       cursor: PreferencesMemoryMirrorCursor(),
       replicaId: replicaId,
+      onFailure: _reportMemoryFailure,
     );
+    _memoryMirrorPump!.onFailure = _reportMemoryFailure;
     _memoryMirrorPump!.start(uid);
+  }
+
+  void _reportMemoryFailure(Object error, StackTrace stackTrace) {
+    if (_disposed) return;
+    memorySyncNotice.value = _describeMemoryFailure(error);
+    assert(() {
+      debugPrint('Memory sync failure: $error');
+      return true;
+    }());
+    if (_nativeEvents.isClosed) return;
+    try {
+      _nativeEvents.addError(error, stackTrace);
+    } catch (_) {}
+  }
+
+  void _clearMemoryFailureNotice() {
+    if (_disposed) return;
+    memorySyncNotice.value = null;
+  }
+
+  String _describeMemoryFailure(Object error) {
+    if (error is MemoryMirrorException) return error.message;
+    if (error is StateError) return error.message;
+    final message = error.toString();
+    if (message.contains('401') || message.contains('403')) {
+      return 'Memory sync needs you to sign in again.';
+    }
+    if (message.contains('503') || message.contains('SocketException')) {
+      return 'Memory sync is offline. Your messages are saved locally and will sync when the network returns.';
+    }
+    return 'Memory sync failed. New memories may not reach the cloud until this clears.';
+  }
+
+  Future<void> _pullMemoryMirror(String uid) async {
+    if (_disposed || auth.snapshot.session?.uid != uid) return;
+    final pump = _memoryMirrorPump;
+    if (pump == null) return;
+    try {
+      await pump.pull(uid);
+      _clearMemoryFailureNotice();
+    } on Object catch (error, stackTrace) {
+      _reportMemoryFailure(error, stackTrace);
+    }
   }
 
   Future<void> _resolveDevAssistant() async {
