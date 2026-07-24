@@ -65,6 +65,10 @@ void main() {
       expect(find.byType(AssistantMarkdown), findsNWidgets(2));
 
       await tester.tap(find.text('Find flights'));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('crepus_compute_confirm')), findsOneWidget);
+      await tester.tap(find.byKey(const Key('crepus_compute_confirm_action')));
+      await tester.pumpAndSettle();
       expect(prompts, ['Search my inbox']);
     },
   );
@@ -102,4 +106,29 @@ void main() {
     // The raw block is shown as markdown instead of a blank card.
     expect(find.byType(AssistantMarkdown), findsOneWidget);
   });
+
+  testWidgets(
+    'listitem inline text in artifact renders without empty bullets',
+    (tester) async {
+      await tester.pumpWidget(
+        _host(
+          'Here is your profile:\n\n'
+          '```crepus\n'
+          'stack col gap-2\n'
+          '  text "Recent Context & Email Activity"\n'
+          '  list\n'
+          '    listitem "Mar 12 — Sam asked about the Q2 roadmap"\n'
+          '    listitem "Mar 10 — Invoice reminder from Acme"\n'
+          '    listitem "Mar 8 — Calendar invite for design review"\n'
+          '```',
+        ),
+      );
+      expect(
+        find.text('Mar 12 — Sam asked about the Q2 roadmap'),
+        findsOneWidget,
+      );
+      expect(find.text('Mar 10 — Invoice reminder from Acme'), findsOneWidget);
+      expect(find.text('•'), findsNWidgets(3));
+    },
+  );
 }

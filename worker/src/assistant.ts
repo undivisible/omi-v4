@@ -40,16 +40,36 @@ type Message = { role: "assistant" | "system" | "user"; content: string };
 // nodes and the action whitelist (`prompt:`/`open:`/`compute:`).
 const crepusArtifactsGuidance: Message = {
   role: "system",
-  content: `You may render an interactive artifact instead of prose when a structured, visual, or actionable answer beats plain text — comparisons, plans, dashboards, checklists, forms, progress recaps. Emit it as a fenced block tagged \`crepus\`. The syntax is indentation-based; supported nodes are: text, stack (row/col, gap-N), scroll, button, toggle, checkbox, progress, meter, badge, divider, spacer, image, if, foreach, list, listitem. A button's onclick takes ONE of these verbs and nothing else: prompt:<text> (drafts a follow-up into the composer, never sends), open:<https-url> (opens after the user confirms), compute:<instruction> (starts a computer-use task). Example:
+  content: `You may render an interactive artifact instead of prose when a structured, visual, or actionable answer beats plain text — comparisons, plans, dashboards, checklists, profile/memory summaries, progress recaps. Emit it as a fenced block tagged \`crepus\`. When an artifact fits, put the structured content ONLY inside the artifact — do not repeat the same bullets or lists as markdown above or below it.
+
+The syntax is indentation-based. Parent containers (\`stack\`, \`view\`, \`card\`, \`section\`, \`scroll\`) nest child arrays by indenting children underneath. Supported nodes: text, stack (row/col, gap-N), scroll, button, toggle, checkbox, progress, meter, badge, divider, spacer, image, if, foreach, list, listitem.
+
+Lists: put each row under \`list\` as either a bare \`"line"\` or \`listitem "line"\`. Do not emit empty listitem rows. Example profile section:
 \`\`\`crepus
 stack col gap-2
-  text "Weekend plan"
-  checkbox "Book the train"
-  progress value=2 max=5
-  button "Draft the email" onclick={prompt:Write the booking email}
-  button "Open the schedule" onclick={open:https://example.com/schedule}
-  button "Find my flights" onclick={compute:Search my inbox for flight confirmations}
+  text "Recent Context & Email Activity"
+  list
+    listitem "Mar 12 — Sam asked about the Q2 roadmap"
+    listitem "Mar 10 — Invoice reminder from Acme"
+    listitem "Mar 8 — Calendar invite for design review"
+  button "Summarize inbox" onclick={prompt:Summarize my recent email threads}
 \`\`\`
+
+Tasks / currents-style boards — nest containers and use static rows or \`foreach items as item\` when iterating structured data:
+\`\`\`crepus
+stack col gap-2
+  text "Open tasks"
+  list
+    listitem "Ship the firmware fix"
+    listitem "Review PR #42"
+  progress value=2 max=5
+  button "Review all" onclick={prompt:Review my open tasks}
+\`\`\`
+
+Progress and meter always show a percentage in the UI — set value/max (and min for meter); do not duplicate a separate \`%\` text line unless you also need a caption.
+
+Data bindings: \`text bind=fieldName\` or \`text "{item.title}"\` inside \`foreach items as item\`. Actions: \`onclick={prompt:...}\`, \`onclick={open:https://...}\`, or \`onclick={compute:...}\` on \`button\` or \`listitem\`. ONE verb per action, nothing else.
+
 Do NOT invent other node kinds or verbs. When an artifact would not help, answer in normal markdown.`,
 };
 type CompletionRequest = {
