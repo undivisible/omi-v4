@@ -97,9 +97,6 @@ class MeetingAssistPanelState extends State<MeetingAssistPanel> {
       case NativeEventError(:final value)
           when _active && value.code == 'meeting_far_end_silent':
         setState(() => _farEndSilent = true);
-      // System-audio capture could not open (no support on this platform, or a
-      // device error): the call falls back to microphone-only, so say why the
-      // other side of the call is missing instead of failing silently.
       case NativeEventError(:final value)
           when _active && value.code == 'meeting_system_audio_unavailable':
         final reason = value.message.trim();
@@ -158,34 +155,39 @@ class MeetingAssistPanelState extends State<MeetingAssistPanel> {
     if (!_active) return const SizedBox.shrink();
     final scheme = Theme.of(context).colorScheme;
     final dark = Theme.of(context).brightness == Brightness.dark;
+    final hairline = dark ? const Color(0x1affffff) : const Color(0x1a000000);
+    final surface = dark ? const Color(0xff232321) : const Color(0xfffffefa);
     return Semantics(
       label: 'Meeting assistant',
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 340, maxHeight: 420),
-        child: DecoratedBox(
-          key: const Key('meeting_assist_panel'),
-          decoration: BoxDecoration(
-            color: dark ? const Color(0xf0232321) : const Color(0xf0fffefa),
-            borderRadius: BorderRadius.circular(20),
-            border: Border.all(
-              color: dark ? const Color(0x1affffff) : const Color(0x1a000000),
-            ),
-            boxShadow: const [
-              BoxShadow(
-                color: Color(0x33000000),
-                blurRadius: 24,
-                offset: Offset(0, 8),
-              ),
-            ],
+      child: DecoratedBox(
+        key: const Key('meeting_assist_panel'),
+        decoration: BoxDecoration(
+          color: surface,
+          borderRadius: const BorderRadius.vertical(
+            bottom: Radius.circular(20),
           ),
-          child: Padding(
-            padding: const EdgeInsets.all(14),
+          border: Border(
+            left: BorderSide(color: hairline),
+            right: BorderSide(color: hairline),
+            bottom: BorderSide(color: hairline),
+          ),
+        ),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxHeight: 360),
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(4, 4, 14, 14),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Row(
                   children: [
+                    IconButton(
+                      key: const Key('meeting_stop'),
+                      tooltip: 'End meeting',
+                      onPressed: _stop,
+                      icon: Icon(Icons.close_rounded, color: scheme.onSurface),
+                    ),
                     const Icon(
                       Icons.fiber_manual_record,
                       size: 10,
@@ -204,17 +206,16 @@ class MeetingAssistPanelState extends State<MeetingAssistPanel> {
                         ),
                       ),
                     ),
-                    IconButton(
+                    TextButton(
                       key: const Key('meeting_open_notes'),
-                      tooltip: 'Meeting notes',
                       onPressed: _openNotes,
-                      icon: const Icon(Icons.sticky_note_2_outlined, size: 17),
-                    ),
-                    IconButton(
-                      key: const Key('meeting_stop'),
-                      tooltip: 'End meeting',
-                      onPressed: _stop,
-                      icon: const Icon(Icons.stop_circle_outlined, size: 18),
+                      style: TextButton.styleFrom(
+                        foregroundColor: scheme.onSurfaceVariant,
+                        padding: const EdgeInsets.symmetric(horizontal: 10),
+                        minimumSize: Size.zero,
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      ),
+                      child: const Text('Notes'),
                     ),
                   ],
                 ),

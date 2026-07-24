@@ -44,8 +44,8 @@ class _MeetingNotesScreenState extends State<MeetingNotesScreen> {
   @override
   Widget build(BuildContext context) {
     final notes = _notes;
-    return Scaffold(
-      appBar: AppBar(title: const Text('Meeting notes')),
+    return _MeetingNotesShell(
+      title: 'Meeting notes',
       body: switch ((notes, _error)) {
         (_, final String error) => Center(child: Text(error)),
         (null, _) => const Center(child: OmiActivityOrb.loading(size: 44)),
@@ -54,32 +54,42 @@ class _MeetingNotesScreenState extends State<MeetingNotesScreen> {
         ),
         (final List<MeetingNote> loaded, _) => ScrollEdgeFade(
           child: ListView.separated(
-            padding: const EdgeInsets.all(16),
+            padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
             itemCount: loaded.length,
-            separatorBuilder: (_, _) => const SizedBox(height: 8),
+            separatorBuilder: (_, _) => const SizedBox(height: 0),
             itemBuilder: (context, index) {
               final note = loaded[index];
-              return ListTile(
-                key: Key('meeting_note_${note.id}'),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(14),
+              final colors = _MeetingNotesColors.of(context);
+              return DecoratedBox(
+                decoration: BoxDecoration(
+                  border: Border(top: BorderSide(color: colors.hairline)),
                 ),
-                tileColor: Theme.of(context).colorScheme.surface,
-                title: Text(note.title),
-                subtitle: Text(
-                  note.summary,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                trailing: IconButton(
-                  key: Key('meeting_note_delete_${note.id}'),
-                  tooltip: 'Delete note',
-                  icon: const Icon(Icons.delete_outline, size: 18),
-                  onPressed: () => _remove(note),
-                ),
-                onTap: () => Navigator.of(context).push(
-                  MaterialPageRoute<void>(
-                    builder: (context) => MeetingNoteDetailScreen(note: note),
+                child: ListTile(
+                  key: Key('meeting_note_${note.id}'),
+                  contentPadding: const EdgeInsets.symmetric(vertical: 4),
+                  title: Text(
+                    note.title,
+                    style: TextStyle(
+                      fontWeight: FontWeight.w600,
+                      color: colors.ink,
+                    ),
+                  ),
+                  subtitle: Text(
+                    note.summary,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(color: colors.muted),
+                  ),
+                  trailing: IconButton(
+                    key: Key('meeting_note_delete_${note.id}'),
+                    tooltip: 'Delete note',
+                    icon: Icon(Icons.delete_outline, size: 18, color: colors.muted),
+                    onPressed: () => _remove(note),
+                  ),
+                  onTap: () => Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (context) => MeetingNoteDetailScreen(note: note),
+                    ),
                   ),
                 ),
               );
@@ -97,32 +107,118 @@ class MeetingNoteDetailScreen extends StatelessWidget {
   final MeetingNote note;
 
   @override
-  Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(
-      title: Text(note.title),
-      actions: [
-        IconButton(
-          key: const Key('meeting_note_copy'),
-          tooltip: 'Copy as markdown',
-          icon: const Icon(Icons.copy_outlined, size: 18),
-          onPressed: () async {
-            await Clipboard.setData(ClipboardData(text: note.markdown));
-            if (!context.mounted) return;
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('Copied note as markdown.')),
-            );
-          },
-        ),
-      ],
+  Widget build(BuildContext context) => _MeetingNotesShell(
+    title: note.title,
+    trailing: IconButton(
+      key: const Key('meeting_note_copy'),
+      tooltip: 'Copy as markdown',
+      icon: Icon(Icons.copy_outlined, size: 18, color: _MeetingNotesColors.of(context).muted),
+      onPressed: () async {
+        await Clipboard.setData(ClipboardData(text: note.markdown));
+        if (!context.mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Copied note as markdown.')),
+        );
+      },
     ),
     body: ScrollEdgeFade(
       child: SingleChildScrollView(
-        padding: const EdgeInsets.all(20),
+        padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
         child: SelectableText(
           note.markdown,
-          style: const TextStyle(fontSize: 13.5, height: 1.5),
+          style: TextStyle(
+            fontSize: 13.5,
+            height: 1.5,
+            color: _MeetingNotesColors.of(context).ink,
+          ),
         ),
       ),
     ),
   );
+}
+
+class _MeetingNotesColors {
+  const _MeetingNotesColors._({
+    required this.ink,
+    required this.muted,
+    required this.hairline,
+    required this.surface,
+  });
+
+  final Color ink;
+  final Color muted;
+  final Color hairline;
+  final Color surface;
+
+  static _MeetingNotesColors of(BuildContext context) {
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    return dark
+        ? const _MeetingNotesColors._(
+            ink: Color(0xfff4f2ea),
+            muted: Color(0xffa6a49c),
+            hairline: Color(0x1affffff),
+            surface: Color(0xff1c1c1a),
+          )
+        : const _MeetingNotesColors._(
+            ink: Color(0xff171716),
+            muted: Color(0xff706e68),
+            hairline: Color(0x1a000000),
+            surface: Color(0xfff7f6f1),
+          );
+  }
+}
+
+class _MeetingNotesShell extends StatelessWidget {
+  const _MeetingNotesShell({
+    required this.title,
+    required this.body,
+    this.trailing,
+  });
+
+  final String title;
+  final Widget body;
+  final Widget? trailing;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = _MeetingNotesColors.of(context);
+    return Scaffold(
+      backgroundColor: colors.surface,
+      body: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          SafeArea(
+            bottom: false,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(4, 4, 12, 8),
+              child: Row(
+                children: [
+                  IconButton(
+                    key: const Key('meeting_notes_close'),
+                    tooltip: 'Close',
+                    onPressed: () => Navigator.of(context).maybePop(),
+                    icon: Icon(Icons.close_rounded, color: colors.ink),
+                  ),
+                  Expanded(
+                    child: Text(
+                      title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                        color: colors.ink,
+                      ),
+                    ),
+                  ),
+                  ?trailing,
+                ],
+              ),
+            ),
+          ),
+          Expanded(child: body),
+        ],
+      ),
+    );
+  }
 }

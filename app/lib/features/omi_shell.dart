@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 
 import '../app_services.dart';
 import '../capabilities/desktop_capabilities.dart';
+import '../demo/demo_mode.dart';
 import '../keyboard/keyboard.dart';
 import '../menu_bar/desktop_menu_bar.dart';
 import '../native/native_hub.dart';
@@ -307,14 +308,21 @@ class _OmiShellState extends State<OmiShell> {
             _openSettings(section: SettingsSection.providers),
       ),
     );
-    final topPadding = widget.previewMode ? 20.0 : 48.0;
+    final topPadding = widget.previewMode
+        ? 20.0
+        : omiDemoMode
+        ? 16.0
+        : 48.0;
+    final sidePadding = wide
+        ? (omiDemoMode ? 20.0 : 32.0)
+        : (omiDemoMode ? 12.0 : 18.0);
     final paddedBody = SafeArea(
       left: !wide,
       child: Padding(
         padding: EdgeInsets.fromLTRB(
-          wide ? 32 : 18,
+          sidePadding,
           topPadding,
-          wide ? 32 : 18,
+          sidePadding,
           12,
         ),
         child: Column(
@@ -353,11 +361,8 @@ class _OmiShellState extends State<OmiShell> {
     final meetingAssist = widget.previewMode
         ? null
         : Align(
-            alignment: Alignment.topRight,
-            child: Padding(
-              padding: const EdgeInsets.only(top: 56, right: 20),
-              child: MeetingAssistPanel(services: widget.services),
-            ),
+            alignment: Alignment.topCenter,
+            child: MeetingAssistPanel(services: widget.services),
           );
     if (pill == null) {
       return Scaffold(
