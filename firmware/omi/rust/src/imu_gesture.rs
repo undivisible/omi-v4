@@ -35,6 +35,7 @@ pub struct ImuRegisters {
     pub tap_cfg: u8,
     pub wake_ths: u8,
     pub int_dur2: u8,
+    pub md1_cfg: u8,
 }
 
 /// Mirrors the register computation in `imu_program_registers`. `double_tap` is
@@ -49,12 +50,14 @@ pub fn program_registers(
 ) -> ImuRegisters {
     let mut tap_cfg = LSM6DS_TAP_CFG_INTERRUPTS_ENABLE | LSM6DS_TAP_CFG_LIR;
     let mut wake_ths = wake_threshold & LSM6DS_WAKE_UP_THS_WK_THS_MASK;
+    let mut md1_cfg = LSM6DS_MD1_CFG_INT1_WU;
     let mut odr = LSM6DS_CTRL1_XL_ODR_26HZ;
     let mut int_dur2 = 0u8;
 
     if double_tap {
         tap_cfg |= LSM6DS_TAP_CFG_TAP_X_EN | LSM6DS_TAP_CFG_TAP_Y_EN | LSM6DS_TAP_CFG_TAP_Z_EN;
         wake_ths |= LSM6DS_WAKE_UP_THS_SINGLE_DOUBLE_TAP;
+        md1_cfg |= LSM6DS_MD1_CFG_INT1_DOUBLE_TAP;
         odr = LSM6DS_CTRL1_XL_ODR_416HZ;
 
         int_dur2 = ((tap_duration & 0x0F) << 4) | ((tap_quiet & 0x03) << 2) | (tap_shock & 0x03);
@@ -65,6 +68,7 @@ pub fn program_registers(
         tap_cfg,
         wake_ths,
         int_dur2,
+        md1_cfg,
     }
 }
 
@@ -98,6 +102,27 @@ pub fn classify(wake_src: u8, tap_src: u8, double_tap_enabled: bool) -> Gesture 
     Gesture::None
 }
 
+pub fn selftest() -> i32 {
+    let mut failures = 0;
+    let r = program_registers(false, 32, 7, 3, 3);
+    if r.md1_cfg != LSM6DS_MD1_CFG_INT1_WU || r.int_dur2 != 0 {
+        failures += 1;
+    }
+    let r = program_registers(true, 32, 7, 3, 3);
+    if r.int_dur2 != 0x7F
+        || r.md1_cfg != (LSM6DS_MD1_CFG_INT1_WU | LSM6DS_MD1_CFG_INT1_DOUBLE_TAP)
+    {
+        failures += 1;
+    }
+    if merge_wake_up_dur(0x1F, 3) != (0x1F | 0x60) {
+        failures += 1;
+    }
+    if classify(LSM6DS_WAKE_UP_SRC_WU, 0, true) != Gesture::Motion {
+        failures += 1;
+    }
+    failures
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -113,6 +138,7 @@ mod tests {
         );
         assert_eq!(r.wake_ths, 32);
         assert_eq!(r.int_dur2, 0);
+        assert_eq!(r.md1_cfg, LSM6DS_MD1_CFG_INT1_WU);
     }
 
     #[test]
@@ -131,6 +157,10 @@ mod tests {
         assert_eq!(r.wake_ths, 32 | LSM6DS_WAKE_UP_THS_SINGLE_DOUBLE_TAP);
         // (7<<4) | (3<<2) | 3 = 0x70 | 0x0C | 0x03 = 0x7F.
         assert_eq!(r.int_dur2, 0x7F);
+        assert_eq!(
+            r.md1_cfg,
+            LSM6DS_MD1_CFG_INT1_WU | LSM6DS_MD1_CFG_INT1_DOUBLE_TAP
+        );
     }
 
     #[test]

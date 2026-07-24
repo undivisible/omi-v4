@@ -124,17 +124,35 @@ static void imu_int1_isr(const struct device *dev, struct gpio_callback *cb, uin
 static int imu_program_registers(void)
 {
     int err;
+#ifdef CONFIG_OMI_RUST
+    omi_rust_imu_registers_t regs;
+    omi_rust_imu_program_registers(IS_ENABLED(CONFIG_OMI_ENABLE_IMU_DOUBLE_TAP),
+                                   (uint8_t) CONFIG_OMI_IMU_WAKE_THRESHOLD,
+                                   (uint8_t) CONFIG_OMI_IMU_TAP_DURATION,
+                                   (uint8_t) CONFIG_OMI_IMU_TAP_QUIET,
+                                   (uint8_t) CONFIG_OMI_IMU_TAP_SHOCK,
+                                   &regs);
+    uint8_t tap_cfg = regs.tap_cfg;
+    uint8_t wake_ths = regs.wake_ths;
+    uint8_t md1_cfg = regs.md1_cfg;
+    uint8_t odr = regs.ctrl1_xl_odr;
+    uint8_t int_dur2 = regs.int_dur2;
+#else
     uint8_t tap_cfg = LSM6DS_TAP_CFG_INTERRUPTS_ENABLE | LSM6DS_TAP_CFG_LIR;
     uint8_t wake_ths = (uint8_t) (CONFIG_OMI_IMU_WAKE_THRESHOLD & LSM6DS_WAKE_UP_THS_WK_THS_MASK);
     uint8_t md1_cfg = LSM6DS_MD1_CFG_INT1_WU;
     uint8_t odr = LSM6DS_CTRL1_XL_ODR_26HZ;
+    uint8_t int_dur2 = 0;
 
     if (IS_ENABLED(CONFIG_OMI_ENABLE_IMU_DOUBLE_TAP)) {
         tap_cfg |= LSM6DS_TAP_CFG_TAP_X_EN | LSM6DS_TAP_CFG_TAP_Y_EN | LSM6DS_TAP_CFG_TAP_Z_EN;
         wake_ths |= LSM6DS_WAKE_UP_THS_SINGLE_DOUBLE_TAP;
         md1_cfg |= LSM6DS_MD1_CFG_INT1_DOUBLE_TAP;
         odr = LSM6DS_CTRL1_XL_ODR_416HZ;
+        int_dur2 = (uint8_t) (((CONFIG_OMI_IMU_TAP_DURATION & 0x0F) << 4) |
+                              ((CONFIG_OMI_IMU_TAP_QUIET & 0x03) << 2) | (CONFIG_OMI_IMU_TAP_SHOCK & 0x03));
     }
+#endif
 
     err = i2c_reg_write_byte_dt(&imu_i2c, LSM6DS_REG_CTRL1_XL, odr);
     if (err) {
@@ -149,8 +167,6 @@ static int imu_program_registers(void)
             return err;
         }
 
-        uint8_t int_dur2 = (uint8_t) (((CONFIG_OMI_IMU_TAP_DURATION & 0x0F) << 4) |
-                                      ((CONFIG_OMI_IMU_TAP_QUIET & 0x03) << 2) | (CONFIG_OMI_IMU_TAP_SHOCK & 0x03));
         err = i2c_reg_write_byte_dt(&imu_i2c, LSM6DS_REG_INT_DUR2, int_dur2);
         if (err) {
             LOG_ERR("Failed to write INT_DUR2 (err %d)", err);
@@ -170,9 +186,13 @@ static int imu_program_registers(void)
         LOG_ERR("Failed to read WAKE_UP_DUR (err %d)", err);
         return err;
     }
+#ifdef CONFIG_OMI_RUST
+    wake_up_dur = omi_rust_imu_merge_wake_up_dur(wake_up_dur, (uint8_t) CONFIG_OMI_IMU_WAKE_DURATION);
+#else
     wake_up_dur &= (uint8_t) ~LSM6DS_WAKE_UP_DUR_WAKE_DUR_MASK;
     wake_up_dur |= (uint8_t) ((CONFIG_OMI_IMU_WAKE_DURATION << LSM6DS_WAKE_UP_DUR_WAKE_DUR_SHIFT) &
                               LSM6DS_WAKE_UP_DUR_WAKE_DUR_MASK);
+#endif
     err = i2c_reg_write_byte_dt(&imu_i2c, LSM6DS_REG_WAKE_UP_DUR, wake_up_dur);
     if (err) {
         LOG_ERR("Failed to write WAKE_UP_DUR (err %d)", err);

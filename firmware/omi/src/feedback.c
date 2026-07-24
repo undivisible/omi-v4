@@ -3,6 +3,9 @@
 #include <zephyr/kernel.h>
 
 #include "lib/core/led.h"
+#ifdef CONFIG_OMI_RUST
+#include "omi_rust.h"
+#endif
 
 /**
  * @brief Show error indication with color-coded pattern
@@ -32,6 +35,71 @@ static void show_error(bool r, bool g, bool b, int blinks)
     k_msleep(1000); // Final pause before returning
 }
 
+#ifdef CONFIG_OMI_RUST
+static void show_error_kind(omi_rust_error_kind_t kind)
+{
+    omi_rust_error_pattern_t pattern;
+    if (!omi_rust_feedback_error_pattern((uint8_t) kind, &pattern)) {
+        return;
+    }
+    show_error(pattern.red, pattern.green, pattern.blue, pattern.blinks);
+}
+
+void error_settings(void)
+{
+    show_error_kind(OMI_RUST_ERROR_SETTINGS);
+}
+
+void error_led_driver(void)
+{
+    show_error_kind(OMI_RUST_ERROR_LED_DRIVER);
+}
+
+void error_battery_init(void)
+{
+    show_error_kind(OMI_RUST_ERROR_BATTERY_INIT);
+}
+
+void error_battery_charge(void)
+{
+    show_error_kind(OMI_RUST_ERROR_BATTERY_CHARGE);
+}
+
+void error_button(void)
+{
+    show_error_kind(OMI_RUST_ERROR_BUTTON);
+}
+
+void error_haptic(void)
+{
+    show_error_kind(OMI_RUST_ERROR_HAPTIC);
+}
+
+void error_sd_card(void)
+{
+    show_error_kind(OMI_RUST_ERROR_SD_CARD);
+}
+
+void error_storage(void)
+{
+    show_error_kind(OMI_RUST_ERROR_STORAGE);
+}
+
+void error_transport(void)
+{
+    show_error_kind(OMI_RUST_ERROR_TRANSPORT);
+}
+
+void error_codec(void)
+{
+    show_error_kind(OMI_RUST_ERROR_CODEC);
+}
+
+void error_microphone(void)
+{
+    show_error_kind(OMI_RUST_ERROR_MICROPHONE);
+}
+#else
 void error_settings(void)
 {
     show_error(true, false, false, 1); // RED alert + 1 RED blink
@@ -86,3 +154,4 @@ void error_microphone(void)
 {
     show_error(true, false, true, 2); // RED alert + 2 MAGENTA blinks
 }
+#endif

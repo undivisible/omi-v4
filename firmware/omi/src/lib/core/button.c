@@ -24,6 +24,9 @@
 #ifdef CONFIG_OMI_ENABLE_OFFLINE_STORAGE
 #include "sd_card.h"
 #endif
+#ifdef CONFIG_OMI_RUST
+#include "omi_rust.h"
+#endif
 
 LOG_MODULE_REGISTER(button, CONFIG_LOG_DEFAULT_LEVEL);
 
@@ -162,6 +165,7 @@ typedef enum {
     BUTTON_EVENT_RELEASE
 } ButtonEvent;
 
+#ifndef CONFIG_OMI_RUST
 static uint32_t current_time = 0;
 static uint32_t btn_press_start_time;
 static uint32_t btn_release_time;
@@ -169,9 +173,47 @@ static uint32_t btn_last_tap_time;
 static bool btn_is_pressed;
 
 static u_int8_t btn_last_event = BUTTON_EVENT_NONE;
+#endif
 
 void check_button_level(struct k_work *work_item)
 {
+#ifdef CONFIG_OMI_RUST
+    ARG_UNUSED(work_item);
+
+    uint8_t rust_event = omi_rust_button_step(was_pressed);
+    ButtonEvent event = (ButtonEvent) rust_event;
+
+    if (event == BUTTON_EVENT_SINGLE_TAP) {
+        LOG_INF("single tap detected\n");
+        notify_tap();
+#ifdef CONFIG_OMI_ENABLE_USER_EVENTS
+        omi_note_user_activity();
+        omi_user_event_emit(OMI_USER_EVENT_BOOKMARK, OMI_USER_EVENT_SRC_BUTTON);
+#endif
+    }
+
+    if (event == BUTTON_EVENT_DOUBLE_TAP) {
+        LOG_INF("double tap detected\n");
+        notify_double_tap();
+#ifdef CONFIG_OMI_ENABLE_USER_EVENTS
+        omi_note_user_activity();
+        omi_user_event_emit(OMI_USER_EVENT_ASSISTANT, OMI_USER_EVENT_SRC_BUTTON);
+#endif
+    }
+
+    if (event == BUTTON_EVENT_LONG_PRESS) {
+        LOG_INF("long press detected\n");
+        turnoff_all();
+    }
+
+    if (event == BUTTON_EVENT_RELEASE) {
+        LOG_PRINTK("release detected\n");
+        notify_unpress();
+        current_button_state = GRACE;
+    }
+
+    k_work_reschedule(&button_work, K_MSEC(BUTTON_CHECK_INTERVAL));
+#else
     current_time = current_time + 1;
 
     u_int8_t btn_state = was_pressed ? BUTTON_PRESSED : BUTTON_RELEASED;
@@ -263,6 +305,7 @@ void check_button_level(struct k_work *work_item)
     }
 
     k_work_reschedule(&button_work, K_MSEC(BUTTON_CHECK_INTERVAL));
+#endif
 }
 
 static ssize_t button_data_read_characteristic(struct bt_conn *conn,
