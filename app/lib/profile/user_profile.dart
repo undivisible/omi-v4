@@ -183,6 +183,29 @@ String formatAboutUser(UserProfileDocument document) {
   return 'About the user:\n${facts.join('\n')}';
 }
 
+/// Full inventory for the settings chat opener — every soul section, even empty.
+String formatProfileChatInventory(UserProfileDocument document) {
+  final lines = <String>['About the user:'];
+  final name = document.name?.trim();
+  lines.add(name == null || name.isEmpty ? 'Name: (not set)' : "Name: $name");
+  lines.add(
+    document.languages.isEmpty
+        ? 'Languages: (not set)'
+        : 'Languages: ${document.languages.join(', ')}',
+  );
+  for (final section in userProfileSoulSections) {
+    final text = document.soul[section]?.trim() ?? '';
+    lines.add(text.isEmpty ? '$section: (empty)' : '$section:\n$text');
+  }
+  final custom = document.customPrompt.trim();
+  lines.add(
+    custom.isEmpty
+        ? 'Standing instructions: (none)'
+        : 'Standing instructions:\n$custom',
+  );
+  return lines.join('\n');
+}
+
 String formatPromptPreview(UserProfileDocument document) {
   final parts = <String>[formatAboutUser(document)];
   final custom = document.customPrompt.trim();
@@ -192,14 +215,14 @@ String formatPromptPreview(UserProfileDocument document) {
 
 String openingProfileChatMessage(UserProfileDocument document) {
   final buffer = StringBuffer()
-    ..writeln("Here's what I currently use about you in prompts.")
+    ..writeln("Here's everything I currently keep about you for prompts.")
     ..writeln()
-    ..writeln(formatPromptPreview(document))
+    ..writeln(formatProfileChatInventory(document))
     ..writeln()
     ..write(
-      'Tell me what to change — beliefs, goals, preferences, name, '
-      'languages, or standing instructions — and I will update this '
-      'and show you the new prompt.',
+      'Tell me what to change — any section above, your name, languages, '
+      'or standing instructions — and I will update it and show you the '
+      'new prompt.',
     );
   return buffer.toString();
 }

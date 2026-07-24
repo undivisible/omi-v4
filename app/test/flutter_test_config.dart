@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:omi/api/dev_assistant.dart';
 import 'package:omi/ui/omi_ui.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 /// Flutter loads this for every test in the package. The Omi mark rotates
 /// forever in production; held still here so `pumpAndSettle` can return on any
@@ -10,5 +11,6 @@ import 'package:omi/ui/omi_ui.dart';
 Future<void> testExecutable(FutureOr<void> Function() testMain) async {
   debugOmiOrbStatic = true;
   debugDevAssistantAccess = DevAssistantAccess.none;
+  SharedPreferences.setMockInitialValues({});
   await testMain();
 }

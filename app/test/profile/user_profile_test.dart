@@ -22,15 +22,18 @@ void main() {
     expect(restored.customPrompt, 'Be direct.');
   });
 
-  test('opening chat message lists current prompt material', () {
+  test('opening chat message lists every soul section', () {
     const document = UserProfileDocument(
       name: 'Ada',
       soul: {'Beliefs': 'Honesty over comfort.'},
     );
     final opening = openingProfileChatMessage(document);
     expect(opening, contains('About the user:'));
-    expect(opening, contains("The user's name is Ada."));
-    expect(opening, contains('User context — Beliefs:'));
+    expect(opening, contains('Name: Ada'));
+    expect(opening, contains('Beliefs:\nHonesty over comfort.'));
+    expect(opening, contains('Goals: (empty)'));
+    expect(opening, contains('Work: (empty)'));
+    expect(opening, contains('Standing instructions: (none)'));
     expect(opening, contains('Tell me what to change'));
   });
 

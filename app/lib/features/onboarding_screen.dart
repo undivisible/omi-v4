@@ -133,7 +133,10 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     super.initState();
     onboarding.addListener(_refresh);
     widget.services.auth.addListener(_refresh);
-    scanEvents = widget.services.nativeEvents.listen(_handleNativeEvent);
+    scanEvents = widget.services.nativeEvents.listen(
+      _handleNativeEvent,
+      onError: (_, _) {},
+    );
   }
 
   @override

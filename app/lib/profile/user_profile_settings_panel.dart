@@ -99,7 +99,10 @@ class _UserProfileSettingsPanelState extends State<UserProfileSettingsPanel> {
           _Turn(role: _Role.assistant, text: openingProfileChatMessage(seeded)),
         );
     });
-    _events = widget.services.nativeEvents.listen(_onNativeEvent);
+    _events = widget.services.nativeEvents.listen(
+      _onNativeEvent,
+      onError: (_, _) {},
+    );
     _scrollToEnd();
   }
 
@@ -370,15 +373,28 @@ class _Bubble extends StatelessWidget {
   Widget build(BuildContext context) {
     final isUser = turn.role == _Role.user;
     final text = turn.text.isEmpty && !isUser ? '…' : turn.text;
+    // Match main chat: assistant text is bare; only the user turn is framed.
+    if (!isUser) {
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 12),
+        child: Align(
+          alignment: Alignment.centerLeft,
+          child: SelectableText(
+            text,
+            style: TextStyle(fontSize: 12.5, height: 1.45, color: colors.ink),
+          ),
+        ),
+      );
+    }
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),
       child: Align(
-        alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
+        alignment: Alignment.centerRight,
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 420),
           child: DecoratedBox(
             decoration: BoxDecoration(
-              color: isUser ? colors.page : colors.panel,
+              color: colors.page,
               borderRadius: BorderRadius.circular(8),
               border: Border.all(color: colors.hairline),
             ),
@@ -389,7 +405,7 @@ class _Bubble extends StatelessWidget {
                 style: TextStyle(
                   fontSize: 12.5,
                   height: 1.4,
-                  color: isUser ? colors.ink : colors.ink,
+                  color: colors.ink,
                 ),
               ),
             ),
