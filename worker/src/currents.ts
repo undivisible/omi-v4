@@ -1,4 +1,10 @@
 import { Hono } from "hono";
+import {
+  crepusMaxLen,
+  findDisallowedCrepusAction,
+  findUnsafeCrepusImageUrl,
+  sanitizeCrepus,
+} from "./crepus-safety";
 import { ensureMemoryProjected } from "./memory-projection";
 import type { AppEnv } from "./types";
 
@@ -48,21 +54,11 @@ const exactText = (value: unknown, limit: number) =>
 const onlyKeys = (body: Record<string, unknown>, keys: string[]) =>
   Object.keys(body).every((key) => keys.includes(key));
 
-// A current may carry an AI-authored `.crepus` widget description. The real
-// safety boundary is the client renderer (crepuscularity_flutter is generic;
-// the omi app whitelists actions). The worker only applies cheap defense-in-
-// depth: a length cap so an oversized/hostile blob never reaches the client.
+// A current may carry an AI-authored `.crepus` widget description. The client
+// renderer is the primary boundary; `validateCrepus` in crepus-safety.ts is
+// the server-side mirror (length cap, action verb allowlist, safe image URLs).
 // Keep in step with CREPUS_MAX_LEN in worker-rs (crepus_currents parity) and
 // CrepusLimits.maxSourceLength in the Flutter package.
-const crepusMaxLen = 8000;
-
-const sanitizeCrepus = (value: unknown): string | null => {
-  if (typeof value !== "string") return null;
-  const trimmed = value.trim();
-  return trimmed.length > 0 && Array.from(trimmed).length <= crepusMaxLen
-    ? trimmed
-    : null;
-};
 
 // Authors the hero `.crepus` infographic for a generated current, so the hub
 // (and the mobile agent) render it as the Now-Brief card rather than a bare
@@ -80,21 +76,11 @@ const crepusText = (value: string, limit: number): string =>
     .slice(0, limit)
     .join("");
 
-// The action verbs `dispatchCrepusAction` in crepus_current.dart actually
-// honors, and nothing else: `accept` (drafts the current's proposed next step
-// into the composer), `complete` (marks it done), `prompt:<text>` (drafts an
-// arbitrary prompt), and `open:<http(s) url>` (opens after a host-named
-// confirmation). Two deliberate gaps the generator must respect:
-//   * only http/https opens are honored — `confirmCrepusOpen` rejects any other
-//     scheme, so a `mailto:`/app deeplink would render an inert button and is
-//     not authored here; and
-//   * there is no computer-use action verb in the whitelist yet, so a
-//     mail-triage current cannot start an agent session from the card — see the
-//     report's follow-up note. Emitting an unsanctioned verb would only produce
-//     a button that does nothing, so the generator stays inside the whitelist.
-// The action is chosen to fit the item: when the current's own text carries an
-// http(s) link, the hero also offers to open it; otherwise the single action is
-// `accept`, which routes the proposed next step through the chat prompt.
+// The action verbs `dispatchCrepusAction` in crepus_current.dart honors, and
+// nothing else: `accept`, `complete`, `prompt:<text>`, `open:<http(s) url>`
+// (opens after confirmation), and `compute:<instruction>` (starts computer-use
+// after confirmation). The hero generator only emits `accept` and, when the
+// current's own text carries an http(s) link, `open:` — never `compute:`.
 const httpUrlPattern = /https?:\/\/[^\s"]+/;
 
 const heroCrepus = (
@@ -380,8 +366,19 @@ currents.post("/candidates", async (context) => {
   const confidence = body?.confidence;
   const surfaceAt = body?.surfaceAt;
   const expiresAt = body?.expiresAt ?? null;
-  // Optional AI-authored .crepus widget description; length-capped pass-through.
-  const crepus = sanitizeCrepus(body?.crepus);
+  let crepus: string | null = null;
+  if (body?.crepus !== undefined && body?.crepus !== null) {
+    if (typeof body.crepus !== "string")
+      return context.json({ error: "Invalid crepus: expected a string" }, 400);
+    const trimmed = body.crepus.trim();
+    if (trimmed.length > 0) {
+      const actionError = findDisallowedCrepusAction(trimmed);
+      if (actionError) return context.json({ error: actionError }, 400);
+      const imageError = findUnsafeCrepusImageUrl(trimmed);
+      if (imageError) return context.json({ error: imageError }, 400);
+      if (Array.from(trimmed).length <= crepusMaxLen) crepus = trimmed;
+    }
+  }
   if (
     !evidenceId ||
     !title ||

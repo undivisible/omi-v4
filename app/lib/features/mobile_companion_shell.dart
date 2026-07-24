@@ -1014,6 +1014,7 @@ class _MobileTasksSection extends StatelessWidget {
           const SizedBox(height: _tileGap),
           CurrentsBrief(
             cards: currents.items,
+            briefCrepus: currents.briefCrepus,
             palette: _mobileCrepusPalette(context),
             onPrompt: (prompt) => _surfacePrepHint(context, prompt),
             onComplete: (id) => unawaited(currents.dismiss(id)),

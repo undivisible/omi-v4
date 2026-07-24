@@ -1285,6 +1285,8 @@ class ChatScreenState extends State<ChatScreen>
                                                 onToggleStarterTask:
                                                     _toggleStarterTask,
                                                 tasks: tasks,
+                                                briefCrepus:
+                                                    currents?.briefCrepus,
                                                 meetingNotes: _meetingNotes,
                                                 onOpenMeetingNotes:
                                                     _openMeetingNotes,
@@ -1899,6 +1901,7 @@ class _ChatHome extends StatelessWidget {
     required this.doneStarterTasks,
     required this.onToggleStarterTask,
     required this.tasks,
+    this.briefCrepus,
     required this.meetingNotes,
     required this.onOpenMeetingNotes,
     required this.onComplete,
@@ -1916,6 +1919,7 @@ class _ChatHome extends StatelessWidget {
   final Set<String> doneStarterTasks;
   final ValueChanged<String> onToggleStarterTask;
   final List<CurrentCard> tasks;
+  final String? briefCrepus;
   final List<MeetingNote> meetingNotes;
   final VoidCallback onOpenMeetingNotes;
   final ValueChanged<String>? onComplete;
@@ -1992,47 +1996,15 @@ class _ChatHome extends StatelessWidget {
                       onComplete: () => onToggleStarterTask(title),
                       onTap: () => onPrompt(title),
                     ),
-                for (final task in tasks)
-                  if (currentCrepusSource(task.metadata) case final crepus?)
-                    // AI-authored current: render the constrained .crepus widget
-                    // kit instead of the classic row (same slot). The action
-                    // whitelist inside CrepusCurrentRow is the security boundary.
-                    CrepusCurrentRow(
-                      key: ValueKey('task_${task.item.id}'),
-                      source: crepus,
-                      palette: _crepusPalette(colors),
-                      proposedNextStep: task.item.proposedNextStep,
-                      onDraftPrompt: onDraftPrompt,
-                      onComplete: onComplete == null
-                          ? null
-                          : () => onComplete!(task.item.id),
-                      onPrompt: onPrompt,
-                    )
-                  else if (task.metadata != null &&
-                      HubTaskMeta.fromJson(task.metadata!) != null)
-                    _RichTaskRow(
-                      key: ValueKey('task_${task.item.id}'),
-                      meta: HubTaskMeta.fromJson(task.metadata!)!,
-                      done: false,
-                      sourceTag: task.sourceKind,
-                      completeKey: ValueKey('complete_${task.item.id}'),
-                      onComplete: onComplete == null
-                          ? null
-                          : () => onComplete!(task.item.id),
-                      onTap: () => onPrompt(task.item.proposedNextStep),
-                    )
-                  else
-                    _TaskRow(
-                      key: ValueKey('task_${task.item.id}'),
-                      title: task.title,
-                      done: false,
-                      sourceTag: task.sourceKind,
-                      completeKey: ValueKey('complete_${task.item.id}'),
-                      onComplete: onComplete == null
-                          ? null
-                          : () => onComplete!(task.item.id),
-                      onTap: () => onPrompt(task.item.proposedNextStep),
-                    ),
+                if (tasks.isNotEmpty)
+                  CurrentsBrief(
+                    cards: tasks,
+                    briefCrepus: briefCrepus,
+                    palette: _crepusPalette(colors),
+                    onPrompt: onPrompt,
+                    onDraftPrompt: onDraftPrompt,
+                    onComplete: onComplete,
+                  ),
                 for (final note in meetingNotes.take(3))
                   _MeetingNoteRow(
                     key: ValueKey('meeting_note_${note.id}'),

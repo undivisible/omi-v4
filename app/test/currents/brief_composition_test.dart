@@ -21,10 +21,12 @@ void main() {
       'Review release checklist',
     );
     expect(controller.items.single.metadata?['crepus'], isNull);
+    expect(controller.briefCrepus, isNull);
 
     hub.answer(hub.composed.single.requestId, 'text "Ship release"');
     await Future<void>.delayed(Duration.zero);
-    expect(controller.items.single.metadata?['crepus'], 'text "Ship release"');
+    expect(controller.briefCrepus, 'text "Ship release"');
+    expect(controller.items.single.metadata?['crepus'], isNull);
   });
 
   test('nothing composed leaves the hand-built brief alone', () async {
@@ -38,6 +40,7 @@ void main() {
     await controller.load();
     hub.answer(hub.composed.single.requestId, null);
     await Future<void>.delayed(Duration.zero);
+    expect(controller.briefCrepus, isNull);
     expect(controller.items.single.metadata?['crepus'], isNull);
   });
 
@@ -54,6 +57,7 @@ void main() {
     await controller.load();
     hub.answer(stale, 'text "stale"');
     await Future<void>.delayed(Duration.zero);
+    expect(controller.briefCrepus, isNull);
     expect(controller.items.single.metadata?['crepus'], isNull);
   });
 
@@ -63,6 +67,7 @@ void main() {
       hub: const UnavailableNativeHub('no native hub here'),
     );
     await controller.load();
+    expect(controller.briefCrepus, isNull);
     expect(controller.items.single.metadata?['crepus'], isNull);
   });
 }

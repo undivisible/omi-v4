@@ -166,6 +166,7 @@ pub struct CurrentInput {
     pub confidence: f64,
     pub surface_at: i64,
     pub expires_at: Option<i64>,
+    pub crepus: Option<String>,
 }
 
 pub fn validate_current(input: &Value, now: i64) -> Result<CurrentInput, OperationResult> {
@@ -202,6 +203,13 @@ pub fn validate_current(input: &Value, now: i64) -> Result<CurrentInput, Operati
             Some(parsed as i64)
         }
     };
+    let crepus = match input.get("crepus") {
+        None | Some(Value::Null) => None,
+        Some(value) => {
+            let raw = value.as_str().ok_or_else(error)?;
+            Some(crate::currents::sanitize_crepus(raw).ok_or_else(error)?)
+        }
+    };
     Ok(CurrentInput {
         title,
         summary,
@@ -211,6 +219,7 @@ pub fn validate_current(input: &Value, now: i64) -> Result<CurrentInput, Operati
         confidence,
         surface_at,
         expires_at,
+        crepus,
     })
 }
 
@@ -410,6 +419,15 @@ mod tests {
             validate_current(&expiring, 0).unwrap().expires_at,
             Some(2_000)
         );
+        let mut with_crepus = base.clone();
+        with_crepus["crepus"] = json!("stack col\n  text \"Call Ada\"");
+        assert_eq!(
+            validate_current(&with_crepus, 1_000).unwrap().crepus,
+            Some("stack col\n  text \"Call Ada\"".to_string())
+        );
+        let mut bad_crepus = base.clone();
+        bad_crepus["crepus"] = json!("x".repeat(8001));
+        assert!(validate_current(&bad_crepus, 1_000).is_err());
     }
 
     #[test]

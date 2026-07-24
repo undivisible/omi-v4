@@ -133,6 +133,21 @@ void main() {
     final seeded = <CurrentCard>[
       CurrentCard(
         item: CurrentItem.candidate(
+          id: 'other-task',
+          evidence: [
+            CurrentEvidence(sourceId: 'memory-other', reason: 'Commitment'),
+          ],
+          reason: 'Commitment',
+          timing: CurrentTiming(surfaceAt: createdAt),
+          confidence: .95,
+          proposedNextStep: 'Do the other thing',
+          createdAt: createdAt,
+        ).transitionTo(CurrentStatus.surfaced, at: createdAt),
+        title: 'Do the other thing',
+        summary: 'Do the other thing',
+      ),
+      CurrentCard(
+        item: CurrentItem.candidate(
           id: 'meeting-follow-up',
           evidence: [
             CurrentEvidence(sourceId: 'zkr:meeting', reason: 'Commitment'),
@@ -164,7 +179,8 @@ void main() {
     services.currents!.items = seeded;
     await tester.pump();
 
-    expect(find.byKey(const Key('task_meeting-follow-up')), findsOneWidget);
+    expect(find.byKey(const Key('brief_hero')), findsOneWidget);
+    expect(find.byKey(const ValueKey('brief_row_meeting-follow-up')), findsOneWidget);
     expect(find.text('CONVERSATION'), findsOneWidget);
   });
 
@@ -186,7 +202,7 @@ void main() {
         createdAt: createdAt,
       ).transitionTo(CurrentStatus.surfaced, at: createdAt),
       title: title,
-      summary: title,
+      summary: '$title summary',
     );
     currents.items = [
       current('first', 'Finish the release'),
@@ -219,17 +235,18 @@ void main() {
     services.currents!.items = currents.items;
     await tester.pump();
 
-    expect(find.byKey(const Key('task_first')), findsOneWidget);
-    expect(find.byKey(const Key('task_second')), findsOneWidget);
-    expect(find.text('Finish the release'), findsOneWidget);
+    expect(find.byKey(const Key('brief_hero')), findsOneWidget);
+    expect(find.byKey(const ValueKey('brief_row_second')), findsOneWidget);
+    expect(find.byKey(const Key('brief_hero_title')), findsOneWidget);
     expect(find.text('Reply to Alex'), findsOneWidget);
 
-    await tester.tap(find.byKey(const Key('complete_first')));
+    await tester.tap(find.byKey(const Key('brief_hero_done')));
     await tester.pump();
     await tester.pump();
 
-    expect(find.byKey(const Key('task_first')), findsNothing);
-    expect(find.byKey(const Key('task_second')), findsOneWidget);
+    expect(find.byKey(const Key('brief_hero_title')), findsOneWidget);
+    expect(find.text('Reply to Alex'), findsOneWidget);
+    expect(find.text('Reply to Alex summary'), findsOneWidget);
   });
 
   // Full hint rotation only kicks in once chatReady is true, which requires

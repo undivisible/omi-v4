@@ -654,6 +654,23 @@ describe("Currents", () => {
     ).toBe(409);
   });
 
+  test("rejects crepus with unknown action verbs", async () => {
+    const response = await post("delta", "/candidates", {
+      evidenceId: "delta-evidence",
+      title: "Bad action",
+      summary: "Bad action summary",
+      reason: "Cited conversation",
+      confidence: 0.8,
+      proposedNextStep: "Ignore",
+      surfaceAt: Date.now(),
+      crepus: 'button "Danger" onclick={exec:Delete everything}',
+    });
+    expect(response.status).toBe(400);
+    expect(((await response.json()) as { error: string }).error).toContain(
+      "Invalid crepus action",
+    );
+  });
+
   test("attaches a .crepus widget description and length-caps it", async () => {
     const now = Date.now();
     const crepus =

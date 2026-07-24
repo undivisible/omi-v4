@@ -1922,7 +1922,7 @@ pub(crate) async fn create_current(
     let proposed_action = json!({ "kind": "review", "instruction": input.instruction }).to_string();
     d1_run(
         db,
-        "INSERT INTO currents\n      (id, uid, evidence_id, title, summary, reason, confidence_basis_points, proposed_action,\n       status, surface_at, expires_at, created_at, updated_at, crepus)\n     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'candidate', ?9, ?10, ?11, ?11, NULL)",
+        "INSERT INTO currents\n      (id, uid, evidence_id, title, summary, reason, confidence_basis_points, proposed_action,\n       status, surface_at, expires_at, created_at, updated_at, crepus)\n     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'candidate', ?9, ?10, ?11, ?11, ?12)",
         &[
             s(&id),
             s(uid),
@@ -1935,6 +1935,7 @@ pub(crate) async fn create_current(
             n(input.surface_at),
             nullable_n(input.expires_at),
             n(now),
+            nullable_s(input.crepus.as_deref()),
         ],
     )
     .await?;

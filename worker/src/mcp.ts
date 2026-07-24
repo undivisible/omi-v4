@@ -163,7 +163,14 @@ export const tools: ToolDefinition[] = [
       "Create a new Current (a proposed next action) for the user. It is " +
       "created as a candidate and surfaces to the user at surfaceAt. Omit " +
       "evidenceId unless you hold a real Omi evidence id; when omitted the " +
-      "citation is recorded from the `reason` you supply.",
+      "citation is recorded from the `reason` you supply. Prefer a rich " +
+      "`.crepus` widget in the optional `crepus` field over plain title/summary " +
+      "alone — the hub renders it as a Now Brief infographic (hero meeting, " +
+      "task list, progress meters, chips). Use indentation-based syntax; " +
+      "supported nodes: stack, scroll, text, button, badge, divider, spacer, " +
+      "list, listitem, progress, meter, checkbox. Button onclick verbs: " +
+      "accept, complete, prompt:<text>, open:<https url>, compute:<instruction>. " +
+      "State only facts from title/summary/reason — never invent times or people.",
     scope: "currents:write",
     inputSchema: object(
       {
@@ -191,6 +198,15 @@ export const tools: ToolDefinition[] = [
           description: "The single smallest concrete next step to take.",
           minLength: 1,
           maxLength: 500,
+        },
+        crepus: {
+          type: "string",
+          description:
+            "Optional `.crepus` infographic for this Current (≤8000 chars). " +
+            'Example: stack col gap-2\\n  badge "Now"\\n  text text-2xl "Design review"\\n  ' +
+            'text text-sm text-muted "In 12 min · Ana, Bo"\\n  progress value=2 max=5\\n  ' +
+            'button "Prep me" onclick={prompt:pull up the latest mocks}',
+          maxLength: 8000,
         },
         confidence: {
           type: "number",

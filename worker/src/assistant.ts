@@ -70,7 +70,7 @@ Progress and meter always show a percentage in the UI — set value/max (and min
 
 Data bindings: \`text bind=fieldName\` or \`text "{item.title}"\` inside \`foreach items as item\`. Actions: \`onclick={prompt:...}\`, \`onclick={open:https://...}\`, or \`onclick={compute:...}\` on \`button\` or \`listitem\`. ONE verb per action, nothing else.
 
-Do NOT invent other node kinds or verbs. When an artifact would not help, answer in normal markdown.`,
+Do NOT invent other node kinds or verbs. When an artifact would not help, answer in normal markdown. When you create a Current with create_current, put a matching crepus infographic in the crepus field (hero + supporting lines, progress/meter/chips) instead of relying on plain title/summary alone.`,
 };
 type CompletionRequest = {
   messages: Message[];

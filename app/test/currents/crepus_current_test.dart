@@ -80,6 +80,32 @@ void main() {
       await tester.pump();
     });
 
+    testWidgets('compute: asks before starting computer-use', (tester) async {
+      final prompts = <String>[];
+      await tester.pumpWidget(
+        _host(
+          CrepusCurrentRow(
+            source: 'button "Find flights" onclick={compute:Search my inbox}',
+            palette: _palette,
+            proposedNextStep: 'the next step',
+            onPrompt: prompts.add,
+          ),
+        ),
+      );
+      await tester.tap(find.text('Find flights'));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('crepus_compute_confirm')), findsOneWidget);
+      expect(find.text('Search my inbox'), findsOneWidget);
+      await tester.tap(find.byKey(const Key('crepus_compute_cancel')));
+      await tester.pumpAndSettle();
+      expect(prompts, isEmpty);
+      await tester.tap(find.text('Find flights'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('crepus_compute_confirm_action')));
+      await tester.pumpAndSettle();
+      expect(prompts, ['Search my inbox']);
+    });
+
     testWidgets('open: asks before launching and names the resolved host', (
       tester,
     ) async {

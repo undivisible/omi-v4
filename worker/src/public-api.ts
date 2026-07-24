@@ -6,6 +6,7 @@ import {
   listConversationMessages,
 } from "./conversations";
 import { createCurrent, listCurrents } from "./currents";
+import { validateCrepus } from "./crepus-safety";
 import { hasActivePro } from "./entitlement";
 import { normalizeHandle } from "./facetime";
 import { startFaceTimeSession } from "./facetime-session";
@@ -183,6 +184,12 @@ export const createCurrentOperation = async (
       (!Number.isSafeInteger(expiresAt) || expiresAt <= surfaceAt))
   )
     return invalid("Invalid Current");
+  let crepus: string | null = null;
+  if (input.crepus !== undefined && input.crepus !== null) {
+    const validated = validateCrepus(input.crepus);
+    if (!validated.ok) return invalid(validated.error);
+    crepus = validated.value;
+  }
   const limited = await gate(env, uid, "public-write", writeLimit);
   if (limited) return limited;
   await ensureMemoryProjected(env.DB, uid);
@@ -195,7 +202,7 @@ export const createCurrentOperation = async (
     confidence,
     surfaceAt,
     expiresAt,
-    crepus: null,
+    crepus,
   });
   return current === null
     ? { status: 404, body: { error: "Cited evidence not found" } }

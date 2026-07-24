@@ -26,6 +26,11 @@ final class CurrentsController extends ChangeNotifier {
   final NativeHub? hub;
   final DateTime Function() _now;
   List<CurrentCard> items = const [];
+
+  /// The hub-composed Now Brief infographic, when the model returns a valid
+  /// `.crepus` document for the whole surface. Kept separate from per-item
+  /// metadata so a hero-only widget on one current does not suppress the rest.
+  String? briefCrepus;
   String? error;
   bool loading = false;
   Future<void>? _loadFuture;
@@ -36,6 +41,7 @@ final class CurrentsController extends ChangeNotifier {
   Future<void> _load() async {
     loading = true;
     error = null;
+    briefCrepus = null;
     notifyListeners();
     try {
       await _client.generate();
@@ -94,7 +100,7 @@ final class CurrentsController extends ChangeNotifier {
       _requestBrief(hub, [hero, ...plan.rest])
           .then((crepus) {
             if (crepus == null || generation != _composeGeneration) return;
-            _attachCrepus(hero.card.item.id, crepus);
+            _attachBrief(crepus);
           })
           .catchError((Object _) {}),
     );
@@ -130,23 +136,9 @@ final class CurrentsController extends ChangeNotifier {
     return answered;
   }
 
-  /// Replaces the hero card with one carrying the composed document in its
-  /// metadata, which is where `currentCrepusSource` reads it from.
-  void _attachCrepus(String id, String crepus) {
-    if (!items.any((card) => card.item.id == id)) return;
-    items = List.unmodifiable([
-      for (final card in items)
-        if (card.item.id != id)
-          card
-        else
-          CurrentCard(
-            item: card.item,
-            title: card.title,
-            summary: card.summary,
-            sourceKind: card.sourceKind,
-            metadata: {...?card.metadata, 'crepus': crepus},
-          ),
-    ]);
+  void _attachBrief(String crepus) {
+    if (items.isEmpty) return;
+    briefCrepus = crepus;
     notifyListeners();
   }
 }

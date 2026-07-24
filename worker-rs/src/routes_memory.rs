@@ -616,7 +616,7 @@ pub fn row_to_current(row: &Value) -> Value {
     let proposed_action_raw = field_str(row, "proposed_action");
     let proposed_action: Value = serde_json::from_str(&proposed_action_raw).unwrap_or(Value::Null);
     let confidence = field_i64(row, "confidence_basis_points") as f64 / 10_000.0;
-    json!({
+    let mut current = json!({
         "id": field_str(row, "id"),
         "status": field_str(row, "status"),
         "title": field_str(row, "title"),
@@ -639,7 +639,13 @@ pub fn row_to_current(row: &Value) -> Value {
         "executionReference": field_opt_str(row, "execution_reference"),
         "createdAt": iso_from_ms(field_i64(row, "created_at")),
         "updatedAt": iso_from_ms(field_i64(row, "updated_at")),
-    })
+    });
+    if let Some(crepus) = field_opt_str(row, "crepus")
+        .and_then(|value| crate::currents::sanitize_crepus(&value))
+    {
+        current["metadata"] = json!({ "crepus": crepus });
+    }
+    current
 }
 
 /// Validated `POST /currents/candidates` input.

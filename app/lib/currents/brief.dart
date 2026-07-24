@@ -117,6 +117,7 @@ class CurrentsBrief extends StatefulWidget {
     required this.cards,
     required this.palette,
     required this.onPrompt,
+    this.briefCrepus,
     this.onDraftPrompt,
     this.onComplete,
     this.now,
@@ -126,6 +127,11 @@ class CurrentsBrief extends StatefulWidget {
   final List<CurrentCard> cards;
   final CrepusCurrentPalette palette;
   final ValueChanged<String> onPrompt;
+
+  /// Hub-composed infographic for the whole brief. When this renders, the
+  /// hand-built hero and THEN rows stay hidden so the model's layout is not
+  /// duplicated underneath.
+  final String? briefCrepus;
 
   /// Drafts text into the composer without sending it. Model-authored
   /// `prompt:` actions land here, never on [onPrompt].
@@ -165,6 +171,21 @@ class _CurrentsBriefState extends State<CurrentsBrief> {
     final now = widget.now ?? DateTime.now();
     final plan = planBrief(widget.cards, now: now);
     final palette = widget.palette;
+    final composed = widget.briefCrepus;
+    if (composed != null && crepusRenders(composed)) {
+      final hero = plan.hero;
+      return _BriefInfographic(
+        key: const Key('brief_infographic'),
+        source: composed,
+        palette: palette,
+        proposedNextStep: hero?.card.item.proposedNextStep ?? '',
+        onPrompt: widget.onPrompt,
+        onDraftPrompt: widget.onDraftPrompt,
+        onComplete: hero == null || widget.onComplete == null
+            ? null
+            : () => widget.onComplete!(hero.card.item.id),
+      );
+    }
     final hero = plan.hero;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -242,6 +263,56 @@ class _BriefShell extends StatelessWidget {
     ),
     child: Padding(padding: const EdgeInsets.all(20), child: child),
   );
+}
+
+/// The full-screen Now Brief the hub composes as one `.crepus` document.
+class _BriefInfographic extends StatelessWidget {
+  const _BriefInfographic({
+    required this.source,
+    required this.palette,
+    required this.proposedNextStep,
+    required this.onPrompt,
+    this.onDraftPrompt,
+    this.onComplete,
+    super.key,
+  });
+
+  final String source;
+  final CrepusCurrentPalette palette;
+  final String proposedNextStep;
+  final ValueChanged<String> onPrompt;
+  final ValueChanged<String>? onDraftPrompt;
+  final VoidCallback? onComplete;
+
+  @override
+  Widget build(BuildContext context) {
+    final shell = _BriefShell(
+      palette: palette,
+      child: CrepusView.fromSource(
+        source,
+        theme: crepusThemeFor(palette),
+        onAction: (action) => unawaited(
+          dispatchCrepusAction(
+            action,
+            context: context,
+            onPrompt: onPrompt,
+            onDraftPrompt: onDraftPrompt,
+            proposedNextStep: proposedNextStep,
+            onComplete: onComplete,
+          ),
+        ),
+      ),
+    );
+    if (MediaQuery.maybeDisableAnimationsOf(context) ?? false) return shell;
+    return TweenAnimationBuilder<double>(
+      tween: Tween(begin: 0, end: 1),
+      duration: const Duration(milliseconds: 260),
+      curve: Curves.easeOut,
+      builder: (context, value, child) =>
+          Opacity(opacity: value, child: child!),
+      child: shell,
+    );
+  }
 }
 
 class _BriefEyebrow extends StatelessWidget {

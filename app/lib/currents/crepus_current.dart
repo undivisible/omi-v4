@@ -24,18 +24,27 @@ String? currentCrepusSource(Map<String, Object?>? metadata) {
 bool crepusRenders(String source) {
   final ir = viewIrFromSource(source);
   if (ir.root.isEmpty) return false;
-  var text = false;
+  var substantive = false;
   bool walk(List<ViewNode> nodes) {
     for (final node in nodes) {
       if (node is UnsupportedNode) return false;
-      if (node is TextNode && node.content.trim().isNotEmpty) text = true;
-      if (node is ButtonNode && node.label.trim().isNotEmpty) text = true;
+      substantive =
+          substantive ||
+          switch (node) {
+            TextNode(:final content) => content.trim().isNotEmpty,
+            ButtonNode(:final label) => label.trim().isNotEmpty,
+            BadgeNode(:final label) => label.trim().isNotEmpty,
+            CheckboxNode(:final label) => label.trim().isNotEmpty,
+            ToggleNode(:final label) => label.trim().isNotEmpty,
+            ProgressNode() || MeterNode() => true,
+            _ => false,
+          };
       if (!walk(childrenOf(node))) return false;
     }
     return true;
   }
 
-  return walk(ir.root) && text;
+  return walk(ir.root) && substantive;
 }
 
 // ── ACTION WHITELIST — SECURITY BOUNDARY ───────────────────────────────────
@@ -56,9 +65,8 @@ bool crepusRenders(String source) {
 //     launches only if the user agrees.
 //   * `prompt:` only drafts into the composer. It never sends, so the exact
 //     text is on screen before the user chooses to submit it.
-//   * `compute:` sends the instruction as a prompt to start a task (a
-//     computer-use turn acts on it). The instruction is visible in the card
-//     before the tap, and the tap is the user's deliberate act.
+//   * `compute:` starts computer-use only after a confirmation that shows the
+//     instruction parsed from the action (never from the button label).
 // Keep this allowlist exhaustive and small.
 Future<void> dispatchCrepusAction(
   String action, {
@@ -87,13 +95,10 @@ Future<void> dispatchCrepusAction(
   }
   const computePrefix = 'compute:';
   if (action.startsWith(computePrefix)) {
-    // Launch a task: the instruction is sent as a prompt, which a
-    // computer-use-capable assistant turn picks up and drives. Like `accept`
-    // it goes through `onPrompt` (sent, not drafted) because starting the
-    // session is the point — but the instruction is visible in the card
-    // before the tap, and the tap is the user's deliberate act.
     final text = action.substring(computePrefix.length).trim();
-    if (text.isNotEmpty) onPrompt(text);
+    if (text.isEmpty) return;
+    if (!await confirmCrepusCompute(context, text)) return;
+    onPrompt(text);
     return;
   }
   const openPrefix = 'open:';
@@ -138,6 +143,47 @@ Future<bool> confirmCrepusOpen(BuildContext context, Uri uri) async {
           key: const Key('crepus_open_confirm_action'),
           onPressed: () => Navigator.of(dialogContext).pop(true),
           child: const Text('Open'),
+        ),
+      ],
+    ),
+  );
+  return agreed ?? false;
+}
+
+/// The confirmation shown before a model-authored `compute:` action starts
+/// computer-use. It shows the instruction parsed from the action string, not
+/// the button label, because the label is untrusted.
+Future<bool> confirmCrepusCompute(
+  BuildContext context,
+  String instruction,
+) async {
+  final agreed = await showDialog<bool>(
+    context: context,
+    builder: (dialogContext) => AlertDialog(
+      key: const Key('crepus_compute_confirm'),
+      title: const Text('Start computer-use task?'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('This instruction was written by the assistant:'),
+          const SizedBox(height: 8),
+          Text(
+            instruction,
+            style: const TextStyle(fontWeight: FontWeight.w600),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          key: const Key('crepus_compute_cancel'),
+          onPressed: () => Navigator.of(dialogContext).pop(false),
+          child: const Text('Cancel'),
+        ),
+        TextButton(
+          key: const Key('crepus_compute_confirm_action'),
+          onPressed: () => Navigator.of(dialogContext).pop(true),
+          child: const Text('Start'),
         ),
       ],
     ),

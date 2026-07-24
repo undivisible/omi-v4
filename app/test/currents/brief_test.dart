@@ -143,6 +143,11 @@ void main() {
       expect(crepusRenders('stack col gap-2\n  text "Design review"'), isTrue);
     });
 
+    test('accepts progress and meter widgets', () {
+      expect(crepusRenders('stack col\n  progress value=3 max=5'), isTrue);
+      expect(crepusRenders('stack col\n  meter value=72'), isTrue);
+    });
+
     test('rejects blank, unsupported, and oversized documents', () {
       expect(crepusRenders('   '), isFalse);
       expect(crepusRenders('webview src=https://example.com'), isFalse);
@@ -152,6 +157,39 @@ void main() {
   });
 
   group('CurrentsBrief', () {
+    testWidgets(
+      'renders a composed infographic without duplicating THEN rows',
+      (tester) async {
+        const composed =
+            'stack col gap-2\n'
+            '  text text-3xl "Design review"\n'
+            '  divider\n'
+            '  list\n'
+            '    listitem "Reply to Ana"';
+        await tester.pumpWidget(
+          _host(
+            CurrentsBrief(
+              cards: [
+                _card(
+                  id: 'a',
+                  title: 'Design review',
+                  startsAt: _now.add(const Duration(minutes: 12)),
+                ),
+                _card(id: 'b', title: 'Reply to Ana'),
+              ],
+              briefCrepus: composed,
+              palette: _palette,
+              now: _now,
+              onPrompt: (_) {},
+            ),
+          ),
+        );
+        expect(find.byKey(const Key('brief_infographic')), findsOneWidget);
+        expect(find.text('THEN'), findsNothing);
+        expect(find.text('Reply to Ana'), findsOneWidget);
+      },
+    );
+
     testWidgets('renders the AI-composed hero when the source is supported', (
       tester,
     ) async {
