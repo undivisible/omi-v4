@@ -1836,6 +1836,26 @@ casual chat: when a step can be carried out here, propose the concrete action or
 the user's approval instead of only describing it. Keep any text reply short enough to read at \
 a glance.";
 
+const CREPUS_ARTIFACTS_GUIDANCE: &str = "You may render an interactive artifact instead of prose \
+when a structured, visual, or actionable answer beats plain text — comparisons, plans, \
+dashboards, checklists, forms, progress recaps. Emit it as a fenced block tagged `crepus`. The \
+syntax is indentation-based; supported nodes are: text, stack (row/col, gap-N), scroll, button, \
+toggle, checkbox, progress, meter, badge, divider, spacer, image, if, foreach, list, listitem. \
+A button's onclick takes ONE of these verbs and nothing else: prompt:<text> (drafts a follow-up \
+into the composer, never sends), open:<https-url> (opens after the user confirms), \
+compute:<instruction> (starts a computer-use task). Example:\n\
+```crepus\n\
+stack col gap-2\n\
+  text \"Weekend plan\"\n\
+  checkbox \"Book the train\"\n\
+  progress value=2 max=5\n\
+  button \"Draft the email\" onclick={prompt:Write the booking email}\n\
+  button \"Open the schedule\" onclick={open:https://example.com/schedule}\n\
+  button \"Find my flights\" onclick={compute:Search my inbox for flight confirmations}\n\
+```\n\
+Do NOT invent other node kinds or verbs. When an artifact would not help, answer in normal \
+markdown.";
+
 fn framed_assistant_prompt(
     origin: Option<MessageOrigin>,
     memory_context: Option<&str>,
@@ -1844,7 +1864,7 @@ fn framed_assistant_prompt(
     let prompt = assistant_prompt(memory_context, text);
     match origin {
         Some(MessageOrigin::Overlay) => format!("{OVERLAY_AGENT_FRAMING}\n\n{prompt}"),
-        Some(MessageOrigin::Chat) | None => prompt,
+        Some(MessageOrigin::Chat) | None => format!("{CREPUS_ARTIFACTS_GUIDANCE}\n\n{prompt}"),
     }
 }
 
@@ -6458,7 +6478,8 @@ mod tests {
             .unwrap_or_else(|failure| failure.into_inner())
             .clone()
             .unwrap_or_else(|| panic!("provider receives a prompt"));
-        assert!(captured.starts_with("Relevant things you know about the user:\n"));
+        assert!(captured.starts_with(CREPUS_ARTIFACTS_GUIDANCE));
+        assert!(captured.contains("Relevant things you know about the user:\n"));
         assert!(captured.contains("Sam prefers espresso"));
         assert!(captured.ends_with("\n\nwhat coffee do I like?"));
 
@@ -6478,7 +6499,8 @@ mod tests {
             .unwrap_or_else(|failure| failure.into_inner())
             .clone()
             .unwrap_or_else(|| panic!("provider receives a prompt"));
-        assert_eq!(plain, "plain message");
+        assert!(plain.starts_with(CREPUS_ARTIFACTS_GUIDANCE));
+        assert!(plain.ends_with("plain message"));
 
         let oversized = "x".repeat(3 * MEMORY_CONTEXT_CHARACTER_LIMIT);
         let bounded = assistant_prompt(Some(&oversized), "tail");
@@ -6498,13 +6520,13 @@ mod tests {
         assert!(framed.contains("Relevant things you know about the user:\n- Works at Acme"));
         assert!(framed.ends_with("open the quarterly report"));
 
-        // Chat and unspecified origins keep the plain prompt.
-        assert_eq!(
-            framed_assistant_prompt(Some(MessageOrigin::Chat), None, "hello"),
-            "hello"
-        );
-        assert_eq!(framed_assistant_prompt(None, None, "hello"), "hello");
-        assert!(!framed_assistant_prompt(None, None, "hello").contains("desktop agent"),);
+        // Chat and unspecified origins carry the crepus-artifacts guidance and
+        // end with the user's own words, but never the desktop-agent framing.
+        let chat = framed_assistant_prompt(Some(MessageOrigin::Chat), None, "hello");
+        assert!(chat.starts_with(CREPUS_ARTIFACTS_GUIDANCE));
+        assert!(chat.ends_with("hello"));
+        assert_eq!(framed_assistant_prompt(None, None, "hello"), chat);
+        assert!(!chat.contains("desktop agent"));
     }
 
     #[tokio::test]
@@ -6569,7 +6591,7 @@ mod tests {
             .unwrap_or_else(|failure| failure.into_inner())
             .clone()
             .unwrap_or_else(|| panic!("provider receives a prompt"));
-        assert!(captured.starts_with("Relevant things you know about the user:\n"));
+        assert!(captured.contains("Relevant things you know about the user:\n"));
         assert!(captured.contains("Acme"));
         assert!(captured.ends_with("\n\nwhere do I work?"));
         state.lock().await.memory = None;
@@ -6650,7 +6672,7 @@ mod tests {
                 .unwrap_or_else(|failure| failure.into_inner())
                 .clone()
                 .unwrap_or_else(|| panic!("provider receives a prompt"));
-            assert!(captured.starts_with("Relevant things you know about the user:\n"));
+            assert!(captured.contains("Relevant things you know about the user:\n"));
             assert!(captured.contains("Max"));
             assert!(captured.contains("Russian"));
             assert!(captured.ends_with("\n\nwhat is my name?"));
@@ -6737,7 +6759,7 @@ mod tests {
             .unwrap_or_else(|failure| failure.into_inner())
             .clone()
             .unwrap_or_else(|| panic!("provider receives a prompt"));
-        assert!(captured.starts_with("Relevant things you know about the user:\n"));
+        assert!(captured.contains("Relevant things you know about the user:\n"));
         assert!(captured.contains("Max"));
         assert!(captured.contains("Russian"));
         assert!(captured.ends_with("\n\nwhat do you know about me?"));
@@ -6774,7 +6796,7 @@ mod tests {
             .unwrap_or_else(|failure| failure.into_inner())
             .clone()
             .unwrap_or_else(|| panic!("provider receives a prompt"));
-        assert!(captured.starts_with("Relevant things you know about the user:\n"));
+        assert!(captured.contains("Relevant things you know about the user:\n"));
         assert!(captured.contains("- Email is sam.jones@example.com"));
         assert!(captured.contains("- Phone is +1 (555) 123-4567"));
         assert!(captured.ends_with("\n\nemail sam.jones@example.com about my plans"));

@@ -519,7 +519,11 @@ void main() {
       ),
     );
     await tester.pump();
-    expect(find.text('planner · running · Reading tasks'), findsOneWidget);
+    // The wait shows only the skeleton and the animated mark now — no status
+    // label — so a streamed tool-progress detail is handled without being
+    // painted as a line under the shimmer.
+    expect(find.text('planner · running · Reading tasks'), findsNothing);
+    expect(find.byKey(const Key('chat_skeleton')), findsOneWidget);
 
     hub.eventsController.add(
       const NativeEventRuntimeStatus(

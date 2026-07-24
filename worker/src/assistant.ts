@@ -33,6 +33,25 @@ const allowedKeys = new Set([
 ]);
 
 type Message = { role: "assistant" | "system" | "user"; content: string };
+
+// Teaches the managed model the interactive-artifact capability: it MAY answer
+// with a crepus artifact the app renders inline. Kept in step with the hub's
+// `CREPUS_ARTIFACTS_GUIDANCE` and constrained to the renderer's allowlisted
+// nodes and the action whitelist (`prompt:`/`open:`/`compute:`).
+const crepusArtifactsGuidance: Message = {
+  role: "system",
+  content: `You may render an interactive artifact instead of prose when a structured, visual, or actionable answer beats plain text — comparisons, plans, dashboards, checklists, forms, progress recaps. Emit it as a fenced block tagged \`crepus\`. The syntax is indentation-based; supported nodes are: text, stack (row/col, gap-N), scroll, button, toggle, checkbox, progress, meter, badge, divider, spacer, image, if, foreach, list, listitem. A button's onclick takes ONE of these verbs and nothing else: prompt:<text> (drafts a follow-up into the composer, never sends), open:<https-url> (opens after the user confirms), compute:<instruction> (starts a computer-use task). Example:
+\`\`\`crepus
+stack col gap-2
+  text "Weekend plan"
+  checkbox "Book the train"
+  progress value=2 max=5
+  button "Draft the email" onclick={prompt:Write the booking email}
+  button "Open the schedule" onclick={open:https://example.com/schedule}
+  button "Find my flights" onclick={compute:Search my inbox for flight confirmations}
+\`\`\`
+Do NOT invent other node kinds or verbs. When an artifact would not help, answer in normal markdown.`,
+};
 type CompletionRequest = {
   messages: Message[];
   model: string;
@@ -836,6 +855,7 @@ assistant.post("/chat/completions", async (context) => {
       },
       body: JSON.stringify({
         ...parsed,
+        messages: [crepusArtifactsGuidance, ...parsed.messages],
         stream_options: { include_usage: true },
       }),
       signal: abort.signal,

@@ -30,7 +30,7 @@ import '../native/generated/signals/signals.dart'
         ComputerUseTargetProvenance;
 import '../native/native_hub.dart';
 import '../onboarding/hub_checklist.dart';
-import '../ui/markdown_text.dart';
+import '../ui/assistant_content.dart';
 import '../ui/omi_ui.dart';
 import 'composer_dictation.dart';
 import 'cursor_pill_controller.dart' show CombinedVoiceLevel;
@@ -1365,7 +1365,12 @@ class ChatScreenState extends State<ChatScreen>
             child: Card(
               child: Padding(
                 padding: const EdgeInsets.all(12),
-                child: AssistantMarkdown(message.text),
+                child: AssistantContent(
+                  message.text,
+                  onPrompt: _sendPrompt,
+                  onDraftPrompt: _usePrompt,
+                  palette: _crepusPalette(_HubColors.of(context)),
+                ),
               ),
             ),
           ),
