@@ -25,7 +25,6 @@
 #include "accel.h"
 #include "button.h"
 #include "config.h"
-#include "features.h"
 #include "haptic.h"
 #include "lib/battery/battery.h"
 #include "omi_rust.h"
@@ -674,10 +673,7 @@ static ssize_t settings_dim_ratio_write_handler(struct bt_conn *conn,
         return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
     }
 
-    uint8_t new_ratio = ((uint8_t *) buf)[0];
-    if (new_ratio > 100) {
-        new_ratio = 100; // Cap the value at 100
-    }
+    uint8_t new_ratio = omi_rust_settings_clamp_dim_ratio(((uint8_t *) buf)[0]);
 
     LOG_INF("Received new dim ratio: %u", new_ratio);
     int err = app_settings_save_dim_ratio(new_ratio);
@@ -711,10 +707,7 @@ static ssize_t settings_mic_gain_write_handler(struct bt_conn *conn,
         return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
     }
 
-    uint8_t new_gain = ((uint8_t *) buf)[0];
-    if (new_gain > 8) {
-        new_gain = 8; // Cap the value at level 8
-    }
+    uint8_t new_gain = omi_rust_settings_clamp_mic_gain(((uint8_t *) buf)[0]);
 
     LOG_INF("Received new mic gain level: %u", new_gain);
     int err = app_settings_save_mic_gain(new_gain);
@@ -794,53 +787,22 @@ void transport_notify_charging_changed(void)
 static ssize_t
 features_read_handler(struct bt_conn *conn, const struct bt_gatt_attr *attr, void *buf, uint16_t len, uint16_t offset)
 {
-    uint32_t features = 0;
-
-#ifdef CONFIG_OMI_ENABLE_SPEAKER
-    features |= OMI_FEATURE_SPEAKER;
-#endif
-#ifdef CONFIG_OMI_ENABLE_ACCELEROMETER
-    features |= OMI_FEATURE_ACCELEROMETER;
-#endif
-#ifdef CONFIG_OMI_ENABLE_BUTTON
-    features |= OMI_FEATURE_BUTTON;
-#endif
-#ifdef CONFIG_OMI_ENABLE_BATTERY
-    features |= OMI_FEATURE_BATTERY;
-#endif
-#ifdef CONFIG_OMI_ENABLE_USB
-    features |= OMI_FEATURE_USB;
-#endif
-#ifdef CONFIG_OMI_ENABLE_HAPTIC
-    features |= OMI_FEATURE_HAPTIC;
-#endif
-#ifdef CONFIG_OMI_ENABLE_OFFLINE_STORAGE
-    features |= OMI_FEATURE_OFFLINE_STORAGE;
-#endif
-#ifdef CONFIG_OMI_ENABLE_USER_EVENTS
-    features |= OMI_FEATURE_USER_EVENTS;
-#endif
-#ifdef CONFIG_OMI_ENABLE_IMU_GESTURES
-    features |= OMI_FEATURE_IMU_GESTURES;
-#endif
-#ifdef CONFIG_OMI_ENABLE_T5838_AAD
-    features |= OMI_FEATURE_HW_VAD;
-#endif
-#ifdef CONFIG_OMI_ENABLE_BLE_SLEEP_CMD
-    features |= OMI_FEATURE_BLE_SLEEP_CMD;
-#endif
-#ifdef CONFIG_OMI_ENABLE_CAPTURE_LED
-    features |= OMI_FEATURE_CAPTURE_STATE;
-#endif
-#ifdef CONFIG_OMI_ENABLE_DEVICE_NAME_RW
-    features |= OMI_FEATURE_DEVICE_NAME_RW;
-#endif
-    // The charging-state characteristic is always present in the settings service.
-    features |= OMI_FEATURE_CHARGING_STATE;
-    // LED dimming is always enabled now with PWM.
-    features |= OMI_FEATURE_LED_DIMMING;
-    // Mic gain control is always enabled.
-    features |= OMI_FEATURE_MIC_GAIN;
+    const omi_rust_feature_flags_t flags = {
+        .speaker = IS_ENABLED(CONFIG_OMI_ENABLE_SPEAKER),
+        .accelerometer = IS_ENABLED(CONFIG_OMI_ENABLE_ACCELEROMETER),
+        .button = IS_ENABLED(CONFIG_OMI_ENABLE_BUTTON),
+        .battery = IS_ENABLED(CONFIG_OMI_ENABLE_BATTERY),
+        .usb = IS_ENABLED(CONFIG_OMI_ENABLE_USB),
+        .haptic = IS_ENABLED(CONFIG_OMI_ENABLE_HAPTIC),
+        .offline_storage = IS_ENABLED(CONFIG_OMI_ENABLE_OFFLINE_STORAGE),
+        .user_events = IS_ENABLED(CONFIG_OMI_ENABLE_USER_EVENTS),
+        .imu_gestures = IS_ENABLED(CONFIG_OMI_ENABLE_IMU_GESTURES),
+        .hw_vad = IS_ENABLED(CONFIG_OMI_ENABLE_T5838_AAD),
+        .ble_sleep_cmd = IS_ENABLED(CONFIG_OMI_ENABLE_BLE_SLEEP_CMD),
+        .capture_state = IS_ENABLED(CONFIG_OMI_ENABLE_CAPTURE_LED),
+        .device_name_rw = IS_ENABLED(CONFIG_OMI_ENABLE_DEVICE_NAME_RW),
+    };
+    uint32_t features = omi_rust_features_assemble(&flags);
 
     return bt_gatt_attr_read(conn, attr, buf, len, offset, &features, sizeof(features));
 }
@@ -1515,41 +1477,36 @@ static bool push_to_gatt(struct bt_conn *conn)
     return true;
 }
 
-#define OPUS_PREFIX_LENGTH 1
 #define OPUS_PADDED_LENGTH 80
 static uint32_t offset = 0;
-static uint16_t buffer_offset = 0;
 
 #ifdef CONFIG_OMI_ENABLE_OFFLINE_STORAGE
 static uint8_t storage_temp_data[MAX_WRITE_SIZE];
 bool write_to_storage(void)
 {
     uint8_t *buffer = tx_buffer + 2;
-    uint8_t packet_size = (uint8_t) (tx_buffer_size + OPUS_PREFIX_LENGTH);
+    omi_rust_offline_packer_step_t step;
 
-    // buffer_offset = buffer_offset+amount_to_fill;
-    // check if adding the new packet will cause a overflow
-    if (buffer_offset + packet_size > MAX_WRITE_SIZE - 1) {
+    omi_rust_offline_packer_step(tx_buffer_size, &step);
 
-        storage_temp_data[buffer_offset] = tx_buffer_size;
-        uint8_t *write_ptr = storage_temp_data;
-        write_to_file(write_ptr, MAX_WRITE_SIZE);
-
-        buffer_offset = packet_size;
-        storage_temp_data[0] = tx_buffer_size;
-        memcpy(storage_temp_data + 1, buffer, tx_buffer_size);
-
-    } else if (buffer_offset + packet_size == MAX_WRITE_SIZE - 1) {
-        // exact frame needed
-        storage_temp_data[buffer_offset] = tx_buffer_size;
-        memcpy(storage_temp_data + buffer_offset + 1, buffer, tx_buffer_size);
-        buffer_offset = 0;
-        uint8_t *write_ptr = (uint8_t *) storage_temp_data;
-        write_to_file(write_ptr, MAX_WRITE_SIZE);
-    } else {
-        storage_temp_data[buffer_offset] = tx_buffer_size;
-        memcpy(storage_temp_data + buffer_offset + 1, buffer, tx_buffer_size);
-        buffer_offset = buffer_offset + packet_size;
+    switch (step.action) {
+    case OMI_RUST_PACKER_APPEND:
+        storage_temp_data[step.prefix_offset] = tx_buffer_size;
+        memcpy(storage_temp_data + step.data_offset, buffer, tx_buffer_size);
+        break;
+    case OMI_RUST_PACKER_FLUSH_EXACT:
+        storage_temp_data[step.prefix_offset] = tx_buffer_size;
+        memcpy(storage_temp_data + step.data_offset, buffer, tx_buffer_size);
+        write_to_file(storage_temp_data, step.flush_size);
+        break;
+    case OMI_RUST_PACKER_FLUSH_OVERFLOW:
+        storage_temp_data[step.trailing_prefix_offset] = tx_buffer_size;
+        write_to_file(storage_temp_data, step.flush_size);
+        storage_temp_data[step.prefix_offset] = tx_buffer_size;
+        memcpy(storage_temp_data + step.data_offset, buffer, tx_buffer_size);
+        break;
+    default:
+        return false;
     }
 
 #ifdef CONFIG_OMI_ENABLE_MONITOR

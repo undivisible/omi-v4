@@ -13,6 +13,7 @@
 #include <zephyr/sys/atomic.h>
 
 #include "lib/core/settings.h"
+#include "omi_rust.h"
 
 #ifdef CONFIG_OMI_ENABLE_T5838_AAD
 #include <zephyr/devicetree.h>
@@ -90,23 +91,6 @@ static void aad_track_silence(const int16_t *buf, size_t n);
 static int aad_hw_start(void);
 #endif
 
-static inline void
-interleaved_stereo_to_mono(const int16_t *restrict interleaved, size_t frames, int16_t *restrict mono_out)
-{
-    /* Mix L and R channels directly from interleaved format: L0, R0, L1, R1, ... */
-    for (size_t i = 0, j = 0; i < frames; ++i, j += 2) {
-        int32_t left = (int32_t) interleaved[j + 0];
-        int32_t right = (int32_t) interleaved[j + 1];
-        int32_t sum = left + right;
-        sum >>= 1; /* divide by 2 to avoid clipping */
-        if (sum > 32767)
-            sum = 32767;
-        if (sum < -32768)
-            sum = -32768;
-        mono_out[i] = (int16_t) sum;
-    }
-}
-
 static void process_audio_buffer(void *buffer, uint32_t size)
 {
     /* size is total interleaved stereo size: frames * 2ch * 2bytes */
@@ -121,7 +105,7 @@ static void process_audio_buffer(void *buffer, uint32_t size)
         return;
     }
 
-    interleaved_stereo_to_mono(inter, frames, mono_buffer);
+    omi_rust_audio_stereo_to_mono(inter, frames, mono_buffer);
 
 #ifdef CONFIG_OMI_ENABLE_T5838_AAD
     aad_track_silence(mono_buffer, frames);
@@ -333,19 +317,6 @@ static void pdm_hw_disable(void)
 #endif
 }
 
-static uint32_t avg_abs_amplitude(const int16_t *buf, size_t n)
-{
-    if (n == 0) {
-        return 0;
-    }
-    uint64_t sum = 0;
-    for (size_t i = 0; i < n; i++) {
-        int32_t s = buf[i];
-        sum += (uint32_t) (s < 0 ? -s : s);
-    }
-    return (uint32_t) (sum / n);
-}
-
 static void aad_wake_irq(bool enable)
 {
     gpio_pin_interrupt_configure_dt(&aad_wake, enable ? GPIO_INT_EDGE_RISING : GPIO_INT_DISABLE);
@@ -443,7 +414,7 @@ static void aad_track_silence(const int16_t *buf, size_t n)
     if (atomic_cas(&aad_woke, 1, 0)) {
         aad_last_voice_ms = now;
     }
-    if (avg_abs_amplitude(buf, n) >= CONFIG_OMI_VAD_ABS_THRESHOLD) {
+    if (omi_rust_audio_avg_abs_amplitude(buf, n) >= CONFIG_OMI_VAD_ABS_THRESHOLD) {
         aad_last_voice_ms = now;
     }
     /* Sleep after a long silence whether online or offline. When connected, the
@@ -567,10 +538,7 @@ void mic_set_gain(uint8_t gain_level)
         0x50  // Level 8: +40dB
     };
 
-    // Clamp to valid level range
-    if (gain_level > 8) {
-        gain_level = 8;
-    }
+    gain_level = omi_rust_settings_clamp_mic_gain(gain_level);
 
     uint8_t hw_gain = gain_map[gain_level];
 

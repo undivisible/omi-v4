@@ -1,12 +1,16 @@
 #![cfg_attr(target_os = "none", no_std)]
 
+pub mod audio_dsp;
 pub mod battery;
 pub mod button;
+pub mod features;
 pub mod feedback;
 pub mod framing;
 pub mod haptic;
 pub mod imu_gesture;
 pub mod led;
+pub mod offline_packer;
+pub mod settings_math;
 pub mod storage_proto;
 pub mod time;
 pub mod user_event;
@@ -25,14 +29,18 @@ fn panic(_info: &core::panic::PanicInfo) -> ! {
 #[no_mangle]
 pub extern "C" fn omi_rust_selftest() -> i32 {
     framing::selftest()
+        + audio_dsp::selftest()
         + imu_gesture::selftest()
         + button::selftest()
         + haptic::selftest()
         + led::selftest()
         + feedback::selftest()
+        + settings_math::selftest()
         + storage_proto::selftest()
         + time::selftest()
         + user_event::selftest()
+        + features::selftest()
+        + offline_packer::selftest()
 }
 
 /// # Safety
@@ -85,6 +93,92 @@ pub unsafe extern "C" fn omi_rust_packet_header(id: u16, index: u8, out: *mut u8
 #[no_mangle]
 pub extern "C" fn omi_rust_audio_chunk_size(mtu: u16, remaining: u32) -> u32 {
     framing::audio_chunk_size(mtu, remaining)
+}
+
+/// # Safety
+///
+/// `interleaved` must be null or point at `2 * frames` readable i16 samples.
+/// `mono_out` must be null or point at `frames` writable i16 samples.
+#[no_mangle]
+pub unsafe extern "C" fn omi_rust_audio_stereo_to_mono(
+    interleaved: *const i16,
+    frames: usize,
+    mono_out: *mut i16,
+) {
+    if interleaved.is_null() || mono_out.is_null() || frames == 0 {
+        return;
+    }
+    // SAFETY: caller guarantees slice lengths.
+    unsafe {
+        let inter = core::slice::from_raw_parts(interleaved, frames * 2);
+        let out = core::slice::from_raw_parts_mut(mono_out, frames);
+        audio_dsp::interleaved_stereo_to_mono(inter, out);
+    }
+}
+
+/// # Safety
+///
+/// `buf` must be null or point at `n` readable i16 samples.
+#[no_mangle]
+pub unsafe extern "C" fn omi_rust_audio_avg_abs_amplitude(buf: *const i16, n: usize) -> u32 {
+    if buf.is_null() || n == 0 {
+        return 0;
+    }
+    // SAFETY: caller guarantees `n` readable samples at `buf`.
+    unsafe {
+        let slice = core::slice::from_raw_parts(buf, n);
+        audio_dsp::avg_abs_amplitude(slice)
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn omi_rust_settings_clamp_dim_ratio(value: u8) -> u8 {
+    settings_math::clamp_dim_ratio(value)
+}
+
+#[no_mangle]
+pub extern "C" fn omi_rust_settings_clamp_mic_gain(value: u8) -> u8 {
+    settings_math::clamp_mic_gain(value)
+}
+
+#[repr(C)]
+pub struct OmiRustLsm6dslTimeBase {
+    pub epoch_s: u64,
+    pub ts: u32,
+    pub reserved: u32,
+}
+
+/// Returns 0 on success, -22 (`EINVAL`) when `len` is not 12 or 16.
+///
+/// # Safety
+///
+/// `buf` must be null or point at `len` readable bytes. `out` must be null or
+/// point at a writable `omi_rust_lsm6dsl_time_base_t`.
+#[no_mangle]
+pub unsafe extern "C" fn omi_rust_settings_parse_lsm6dsl_time_base(
+    buf: *const u8,
+    len: usize,
+    out: *mut OmiRustLsm6dslTimeBase,
+) -> i32 {
+    if buf.is_null() || out.is_null() {
+        return -22;
+    }
+    // SAFETY: caller guarantees `len` readable bytes at `buf`.
+    let slice = unsafe { core::slice::from_raw_parts(buf, len) };
+    match settings_math::parse_lsm6dsl_time_base(slice) {
+        Ok(parsed) => {
+            // SAFETY: caller guarantees writable `out`.
+            unsafe {
+                *out = OmiRustLsm6dslTimeBase {
+                    epoch_s: parsed.epoch_s,
+                    ts: parsed.ts,
+                    reserved: parsed.reserved,
+                };
+            }
+            0
+        }
+        Err(err) => err,
+    }
 }
 
 #[no_mangle]
@@ -412,6 +506,54 @@ pub unsafe extern "C" fn omi_rust_storage_encode_ring_info(
     len as u16
 }
 
+/// # Safety
+///
+/// `out` must be null or point at at least `storage_proto::READ_BEGIN_PAYLOAD_LEN` writable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn omi_rust_storage_encode_read_begin(
+    start_seq: u64,
+    packet_count: u32,
+    out: *mut u8,
+) -> u16 {
+    if out.is_null() {
+        return 0;
+    }
+    let mut buf = [0u8; storage_proto::READ_BEGIN_PAYLOAD_LEN];
+    let len = storage_proto::encode_read_begin(start_seq, packet_count, &mut buf);
+    // SAFETY: caller guarantees writable output buffer.
+    unsafe {
+        core::ptr::copy_nonoverlapping(buf.as_ptr(), out, len);
+    }
+    len as u16
+}
+
+/// # Safety
+///
+/// `payload` must be null or point at `payload_len` readable bytes when `payload_len > 0`.
+/// `out` must be null or point at at least `1 + payload_len` writable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn omi_rust_storage_encode_data(
+    payload: *const u8,
+    payload_len: u16,
+    out: *mut u8,
+) -> u16 {
+    if out.is_null() {
+        return 0;
+    }
+    if payload_len > 0 && payload.is_null() {
+        return 0;
+    }
+    let payload_slice = if payload_len > 0 {
+        // SAFETY: caller guarantees `payload_len` readable bytes at `payload`.
+        unsafe { core::slice::from_raw_parts(payload, payload_len as usize) }
+    } else {
+        &[]
+    };
+    // SAFETY: caller guarantees `1 + payload_len` writable bytes at `out`.
+    let out_slice = unsafe { core::slice::from_raw_parts_mut(out, 1 + payload_len as usize) };
+    storage_proto::encode_data(payload_slice, out_slice) as u16
+}
+
 fn storage_command_to_u8(command: storage_proto::StorageCommand) -> u8 {
     match command {
         storage_proto::StorageCommand::Invalid => 0,
@@ -420,6 +562,108 @@ fn storage_command_to_u8(command: storage_proto::StorageCommand) -> u8 {
         storage_proto::StorageCommand::RingAdvance => 3,
         storage_proto::StorageCommand::RingClear => 4,
         storage_proto::StorageCommand::StopSync => 5,
+    }
+}
+
+#[repr(C)]
+pub struct OmiRustFeatureFlags {
+    pub speaker: bool,
+    pub accelerometer: bool,
+    pub button: bool,
+    pub battery: bool,
+    pub usb: bool,
+    pub haptic: bool,
+    pub offline_storage: bool,
+    pub user_events: bool,
+    pub imu_gestures: bool,
+    pub hw_vad: bool,
+    pub ble_sleep_cmd: bool,
+    pub capture_state: bool,
+    pub device_name_rw: bool,
+}
+
+/// Assemble the BLE features bitmask from compile-time `IS_ENABLED` flags.
+///
+/// # Safety
+///
+/// `flags` must be null or point at a readable `omi_rust_feature_flags_t`.
+#[no_mangle]
+pub unsafe extern "C" fn omi_rust_features_assemble(flags: *const OmiRustFeatureFlags) -> u32 {
+    if flags.is_null() {
+        return features::assemble(&features::FeatureFlags::default());
+    }
+    // SAFETY: caller guarantees readable `flags`.
+    let f = unsafe { &*flags };
+    features::assemble(&features::FeatureFlags {
+        speaker: f.speaker,
+        accelerometer: f.accelerometer,
+        button: f.button,
+        battery: f.battery,
+        usb: f.usb,
+        haptic: f.haptic,
+        offline_storage: f.offline_storage,
+        user_events: f.user_events,
+        imu_gestures: f.imu_gestures,
+        hw_vad: f.hw_vad,
+        ble_sleep_cmd: f.ble_sleep_cmd,
+        capture_state: f.capture_state,
+        device_name_rw: f.device_name_rw,
+    })
+}
+
+#[repr(C)]
+pub struct OmiRustOfflinePackerStep {
+    pub action: u8,
+    pub prefix_offset: u16,
+    pub data_offset: u16,
+    pub trailing_prefix_offset: u16,
+    pub flush_size: u16,
+    pub new_buffer_offset: u16,
+}
+
+static mut OFFLINE_PACKER: offline_packer::OfflinePacker = offline_packer::OfflinePacker::new();
+
+/// Advance the offline SD batching FSM for one Opus frame.
+///
+/// # Safety
+///
+/// `out` must be null or point at a writable `omi_rust_offline_packer_step_t`.
+#[no_mangle]
+pub unsafe extern "C" fn omi_rust_offline_packer_step(
+    tx_buffer_size: u8,
+    out: *mut OmiRustOfflinePackerStep,
+) {
+    if out.is_null() {
+        return;
+    }
+    // SAFETY: pusher thread is the only caller; no concurrent access.
+    let step = unsafe {
+        (&raw mut OFFLINE_PACKER)
+            .as_mut()
+            .unwrap_unchecked()
+            .step(tx_buffer_size)
+    };
+    // SAFETY: caller guarantees writable `out`.
+    unsafe {
+        *out = OmiRustOfflinePackerStep {
+            action: step.action as u8,
+            prefix_offset: step.prefix_offset,
+            data_offset: step.data_offset,
+            trailing_prefix_offset: step.trailing_prefix_offset,
+            flush_size: step.flush_size,
+            new_buffer_offset: step.new_buffer_offset,
+        };
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn omi_rust_offline_packer_reset() {
+    // SAFETY: same single-threaded pusher caller as omi_rust_offline_packer_step.
+    unsafe {
+        (&raw mut OFFLINE_PACKER)
+            .as_mut()
+            .unwrap_unchecked()
+            .reset();
     }
 }
 

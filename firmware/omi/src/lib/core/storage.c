@@ -10,7 +10,6 @@
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/sys/atomic.h>
-#include <zephyr/sys/byteorder.h>
 
 #include "rtc.h"
 #include "sd_card.h"
@@ -26,9 +25,6 @@ LOG_MODULE_REGISTER(storage, CONFIG_LOG_DEFAULT_LEVEL);
 #define INVALID_COMMAND 6
 #define STORAGE_NOT_READY 9
 #define SEQ_OUT_OF_RANGE 10
-
-#define NOTIFY_DATA 0x03
-#define NOTIFY_READ_BEGIN 0x05
 
 #define STORAGE_IDLE_POLL_MS_OFFLINE 2000
 #define STORAGE_IDLE_POLL_MS_CONNECTED 1
@@ -477,11 +473,10 @@ static void write_to_gatt(struct bt_conn *conn)
     }
 
     if (!read_begin_sent) {
-        control_notify_buf[0] = NOTIFY_READ_BEGIN;
-        sys_put_be64(transfer_start_seq, control_notify_buf + 1);
-        sys_put_be32(remaining_packets, control_notify_buf + 9);
+        uint16_t len = omi_rust_storage_encode_read_begin(
+            transfer_start_seq, remaining_packets, control_notify_buf);
 
-        int err = storage_notify(conn, control_notify_buf, 13);
+        int err = storage_notify(conn, control_notify_buf, len);
         if (err == -ENOMEM) {
             k_yield();
             consume_stop_request();
@@ -543,10 +538,10 @@ static void write_to_gatt(struct bt_conn *conn)
             }
 
             uint32_t payload = MIN(bytes_read - bytes_sent, (uint32_t) ble_chunk);
-            data_notify_buf[0] = NOTIFY_DATA;
-            memcpy(data_notify_buf + 1, storage_buffer + bytes_sent, payload);
+            uint16_t len = omi_rust_storage_encode_data(
+                storage_buffer + bytes_sent, payload, data_notify_buf);
 
-            int err = storage_notify_data(conn, data_notify_buf, payload + 1U);
+            int err = storage_notify_data(conn, data_notify_buf, len);
             if (err == -ENOMEM) {
                 k_yield();
                 if (consume_stop_request()) {

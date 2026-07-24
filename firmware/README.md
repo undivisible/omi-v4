@@ -329,9 +329,10 @@ defaults `y`**, and the `omi-cv1` CI and release builds always link `omi-rust` �
 it is no longer an opt-in dual path. `omi/rust/` is where the firmware's pure
 logic lives: tx ring/GATT framing, battery SoC/EMA math, IMU register packing
 and gesture classify, button tap FSM, haptic BLE→duration map, LED pulse-width
-math, and feedback error-pattern tables. C keeps the Zephyr I/O — GPIO, I2C,
-BLE, PWM, threads and `k_msleep` timing — and calls into these helpers. `main()`
-runs `omi_rust_selftest()` at boot.
+math, feedback error-pattern tables, storage BLE sync wire format, user-event
+payload encode, RTC/IMU time math, and audio ATT chunk sizing. C keeps the
+Zephyr I/O — GPIO, I2C, BLE, PWM, threads and `k_msleep` timing — and calls
+into these helpers. `main()` runs `omi_rust_selftest()` at boot.
 
 ### Why an out-of-tree module is needed
 

@@ -4,6 +4,8 @@
 #include <zephyr/logging/log.h>
 #include <zephyr/settings/settings.h>
 
+#include "omi_rust.h"
+
 LOG_MODULE_REGISTER(app_settings, CONFIG_LOG_DEFAULT_LEVEL);
 
 // Default values if not found in flash
@@ -113,31 +115,28 @@ static int settings_set(const char *name, size_t len, settings_read_cb read_cb, 
     }
 
     if (settings_name_steq(name, "lsm6dsl_time_base", &next) && !next) {
-        if (len == sizeof(lsm6dsl_time_base)) {
-            rc = read_cb(cb_arg, &lsm6dsl_time_base, sizeof(lsm6dsl_time_base));
-            if (rc >= 0) {
-                LOG_INF("Loaded lsm6dsl_time_base: epoch_s=%llu ts=0x%08x",
-                        lsm6dsl_time_base.epoch_s,
-                        lsm6dsl_time_base.ts);
-                return 0;
-            }
-            return rc;
-        }
+        if (len == sizeof(lsm6dsl_time_base) || len == (sizeof(uint64_t) + sizeof(uint32_t))) {
+            uint8_t blob[sizeof(lsm6dsl_time_base)];
 
-        /* Backward compatibility: older builds may have stored without reserved (12 bytes). */
-        if (len == (sizeof(uint64_t) + sizeof(uint32_t))) {
-            struct {
-                uint64_t epoch_s;
-                uint32_t ts;
-            } legacy;
-
-            rc = read_cb(cb_arg, &legacy, sizeof(legacy));
+            rc = read_cb(cb_arg, blob, len);
             if (rc >= 0) {
-                lsm6dsl_time_base.epoch_s = legacy.epoch_s;
-                lsm6dsl_time_base.ts = legacy.ts;
-                lsm6dsl_time_base.reserved = 0;
-                LOG_INF("Loaded lsm6dsl_time_base(legacy): epoch_s=%llu ts=0x%08x", legacy.epoch_s, legacy.ts);
-                return 0;
+                omi_rust_lsm6dsl_time_base_t parsed;
+
+                if (omi_rust_settings_parse_lsm6dsl_time_base(blob, len, &parsed) == 0) {
+                    lsm6dsl_time_base.epoch_s = parsed.epoch_s;
+                    lsm6dsl_time_base.ts = parsed.ts;
+                    lsm6dsl_time_base.reserved = parsed.reserved;
+                    if (len == (sizeof(uint64_t) + sizeof(uint32_t))) {
+                        LOG_INF("Loaded lsm6dsl_time_base(legacy): epoch_s=%llu ts=0x%08x",
+                                parsed.epoch_s,
+                                parsed.ts);
+                    } else {
+                        LOG_INF("Loaded lsm6dsl_time_base: epoch_s=%llu ts=0x%08x",
+                                parsed.epoch_s,
+                                parsed.ts);
+                    }
+                    return 0;
+                }
             }
             return rc;
         }

@@ -13,11 +13,14 @@ pub const SEQ_OUT_OF_RANGE: u8 = 10;
 
 pub const NOTIFY_ACK: u8 = 0x01;
 pub const NOTIFY_INFO: u8 = 0x02;
+pub const NOTIFY_DATA: u8 = 0x03;
 pub const NOTIFY_DONE: u8 = 0x04;
+pub const NOTIFY_READ_BEGIN: u8 = 0x05;
 
 pub const ACK_PAYLOAD_LEN: usize = 2;
 pub const DONE_PAYLOAD_LEN: usize = 10;
 pub const RING_INFO_PAYLOAD_LEN: usize = 31;
+pub const READ_BEGIN_PAYLOAD_LEN: usize = 13;
 
 pub const RAW_AUDIO_TIMESTAMP_BYTES: u16 = 4;
 pub const MAX_WRITE_SIZE: u16 = 440;
@@ -171,6 +174,22 @@ pub fn encode_ring_info(info: &RingInfoFields, out: &mut [u8]) -> usize {
     RING_INFO_PAYLOAD_LEN
 }
 
+pub fn encode_read_begin(start_seq: u64, packet_count: u32, out: &mut [u8]) -> usize {
+    out[0] = NOTIFY_READ_BEGIN;
+    put_be64(start_seq, &mut out[1..9]);
+    put_be32(packet_count, &mut out[9..13]);
+    READ_BEGIN_PAYLOAD_LEN
+}
+
+pub fn encode_data(payload: &[u8], out: &mut [u8]) -> usize {
+    out[0] = NOTIFY_DATA;
+    let payload_len = payload.len();
+    if payload_len > 0 {
+        out[1..1 + payload_len].copy_from_slice(payload);
+    }
+    1 + payload_len
+}
+
 pub fn selftest() -> i32 {
     let mut failures = 0;
 
@@ -183,9 +202,7 @@ pub fn selftest() -> i32 {
     if encode_done(9, 0x0123_4567_89AB_CDEF, &mut done) != DONE_PAYLOAD_LEN {
         failures += 1;
     }
-    if done[0] != NOTIFY_DONE
-        || done[1] != 9
-        || &done[2..] != &0x0123_4567_89AB_CDEFu64.to_be_bytes()
+    if done[0] != NOTIFY_DONE || done[1] != 9 || done[2..] != 0x0123_4567_89AB_CDEFu64.to_be_bytes()
     {
         failures += 1;
     }
@@ -199,6 +216,23 @@ pub fn selftest() -> i32 {
     };
     let mut ring = [0u8; RING_INFO_PAYLOAD_LEN];
     if encode_ring_info(&info, &mut ring) != RING_INFO_PAYLOAD_LEN || ring[0] != NOTIFY_INFO {
+        failures += 1;
+    }
+
+    let mut read_begin = [0u8; READ_BEGIN_PAYLOAD_LEN];
+    if encode_read_begin(0x0123_4567_89AB_CDEF, 42, &mut read_begin) != READ_BEGIN_PAYLOAD_LEN {
+        failures += 1;
+    }
+    if read_begin[0] != NOTIFY_READ_BEGIN
+        || read_begin[1..9] != 0x0123_4567_89AB_CDEFu64.to_be_bytes()
+        || read_begin[9..13] != 42u32.to_be_bytes()
+    {
+        failures += 1;
+    }
+
+    let payload = [0xAA, 0xBB, 0xCC];
+    let mut data = [0u8; 4];
+    if encode_data(&payload, &mut data) != 4 || data != [NOTIFY_DATA, 0xAA, 0xBB, 0xCC] {
         failures += 1;
     }
 
@@ -252,6 +286,30 @@ mod tests {
         assert_eq!(out[0], NOTIFY_DONE);
         assert_eq!(out[1], 0);
         assert_eq!(&out[2..], &0xDEAD_BEEF_CAFE_BABEu64.to_be_bytes());
+    }
+
+    #[test]
+    fn read_begin_wire_format() {
+        let mut out = [0u8; READ_BEGIN_PAYLOAD_LEN];
+        assert_eq!(encode_read_begin(0x0123_4567_89AB_CDEF, 99, &mut out), 13);
+        assert_eq!(out[0], NOTIFY_READ_BEGIN);
+        assert_eq!(&out[1..9], &0x0123_4567_89AB_CDEFu64.to_be_bytes());
+        assert_eq!(&out[9..13], &99u32.to_be_bytes());
+    }
+
+    #[test]
+    fn data_wire_format() {
+        let payload = [0xDE, 0xAD, 0xBE, 0xEF];
+        let mut out = [0u8; 5];
+        assert_eq!(encode_data(&payload, &mut out), 5);
+        assert_eq!(out, [NOTIFY_DATA, 0xDE, 0xAD, 0xBE, 0xEF]);
+    }
+
+    #[test]
+    fn data_empty_payload() {
+        let mut out = [0xFF; 1];
+        assert_eq!(encode_data(&[], &mut out), 1);
+        assert_eq!(out, [NOTIFY_DATA]);
     }
 
     #[test]

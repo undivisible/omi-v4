@@ -62,6 +62,14 @@ impl<const N: usize> Queue<N> {
         }
     }
 
+    pub fn len(&self) -> usize {
+        self.count
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.count == 0
+    }
+
     pub fn alloc_seq(&mut self) -> u16 {
         let seq = self.next_seq;
         self.next_seq = self.next_seq.wrapping_add(1);
@@ -98,9 +106,11 @@ impl<const N: usize> Queue<N> {
         self.count -= 1;
         Some(rec)
     }
+}
 
-    pub fn len(&self) -> usize {
-        self.count
+impl<const N: usize> Default for Queue<N> {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
