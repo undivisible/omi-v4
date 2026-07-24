@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show RenderAbstractViewport;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:omi/api/dev_assistant.dart';
 import 'package:omi/app_services.dart';
@@ -718,6 +719,145 @@ void main() {
     await drain(tester);
     expect(position.pixels, greaterThan(48));
     expect(onScreen(tester, find.byKey(const Key('hub_greeting'))), isTrue);
+  });
+
+  /// Snap boundaries of every laid-out history turn, measured the way the
+  /// widget measures them: each turn's trailing edge aligned to the reversed
+  /// viewport's edge.
+  List<double> historyBoundaries(WidgetTester tester) {
+    final rows = find.byWidgetPredicate(
+      (widget) =>
+          widget.runtimeType.toString() == '_BlurFadeIn' &&
+          widget.key.toString().contains('msg_fade_'),
+    );
+    final boundaries = <double>[];
+    for (final element in rows.evaluate()) {
+      final box = element.renderObject! as RenderBox;
+      if (!box.hasSize) continue;
+      boundaries.add(
+        RenderAbstractViewport.of(box).getOffsetToReveal(box, 1).offset,
+      );
+    }
+    boundaries.sort();
+    return boundaries;
+  }
+
+  /// Sends four turns, each pushed behind a new conversation so it becomes a
+  /// history turn above the home view, then leaves a fresh exchange on screen.
+  Future<ScrollPosition> seedHistory(WidgetTester tester) async {
+    for (final word in ['alpha', 'bravo', 'charlie', 'delta']) {
+      await send(tester, word);
+      await tester.tap(find.byKey(const Key('cancel_chat')));
+      await tester.pump();
+      final gesture = await pullPastNewest(
+        tester,
+        hold: const Duration(milliseconds: 800),
+      );
+      await gesture.up();
+      await drain(tester);
+    }
+    await send(tester, 'echo');
+    final scrollable = find.descendant(
+      of: find.byKey(const Key('chat_messages')),
+      matching: find.byType(Scrollable),
+    );
+    return tester.state<ScrollableState>(scrollable).position;
+  }
+
+  testWidgets('a scroll that ends mid-history settles on a message '
+      'boundary', (tester) async {
+    final store = VolatileHubChecklistStore();
+    await pumpLocalHub(tester, store);
+    final position = await seedHistory(tester);
+    expect(position.maxScrollExtent, greaterThan(0));
+
+    // Reach the top so every history turn is laid out and its boundary can be
+    // measured.
+    await tester.drag(
+      find.byKey(const Key('chat_messages')),
+      Offset(0, position.maxScrollExtent),
+    );
+    await drain(tester);
+    final boundaries = historyBoundaries(tester);
+    expect(
+      boundaries.length,
+      greaterThan(2),
+      reason: 'need several turns to snap between',
+    );
+
+    double nearest(double value) => boundaries
+        .map((boundary) => (boundary - value).abs())
+        .reduce((a, b) => a < b ? a : b);
+
+    // Aim the scroll at the midpoint between two adjacent turn boundaries —
+    // squarely mid-message, no natural rest there.
+    boundaries.sort();
+    final midway = (boundaries[1] + boundaries[2]) / 2;
+    expect(nearest(midway), greaterThan(4), reason: 'midway must be off-grid');
+
+    position.jumpTo(midway);
+    // A short user drag to end the gesture where the snap logic can act on it.
+    await tester.drag(
+      find.byKey(const Key('chat_messages')),
+      const Offset(0, 3),
+    );
+    await drain(tester);
+
+    // It settled on one of the turn boundaries rather than the mid-message
+    // offset it was aimed at.
+    expect(nearest(position.pixels), lessThan(2));
+    expect((position.pixels - midway).abs(), greaterThan(4));
+  });
+
+  testWidgets('the home and exchange stops still hold with history above', (
+    tester,
+  ) async {
+    final store = VolatileHubChecklistStore();
+    await pumpLocalHub(tester, store);
+    final position = await seedHistory(tester);
+
+    // A nudge out of the live exchange falls back to it.
+    await tester.drag(
+      find.byKey(const Key('chat_messages')),
+      const Offset(0, 20),
+    );
+    await drain(tester);
+    expect(position.pixels, 0);
+    expect(onScreen(tester, find.text('echo')), isTrue);
+
+    // Past the commit point it settles on the home view above the exchange.
+    await tester.drag(
+      find.byKey(const Key('chat_messages')),
+      const Offset(0, 120),
+    );
+    await drain(tester);
+    expect(position.pixels, greaterThan(48));
+    expect(onScreen(tester, find.byKey(const Key('hub_greeting'))), isTrue);
+  });
+
+  testWidgets('history snapping leaves the new-chat pull untouched', (
+    tester,
+  ) async {
+    final store = VolatileHubChecklistStore();
+    await pumpLocalHub(tester, store);
+    await seedHistory(tester);
+
+    // The pull-and-hold past the newest message still starts a new chat; the
+    // snap logic never fires during the pull and never fights it.
+    final gesture = await pullPastNewest(
+      tester,
+      hold: const Duration(milliseconds: 200),
+    );
+    expect(find.byKey(const Key('chat_new_chat_progress')), findsOneWidget);
+    for (var i = 0; i < 12; i++) {
+      await tester.pump(const Duration(milliseconds: 50));
+    }
+    await gesture.up();
+    await drain(tester);
+
+    expect(onScreen(tester, find.byKey(const Key('hub_greeting'))), isTrue);
+    expect(onScreen(tester, find.text('echo')), isFalse);
+    expect(find.text('Earlier messages are above'), findsOneWidget);
   });
 
   testWidgets('tasks with meeting metadata render as rich calendar rows', (

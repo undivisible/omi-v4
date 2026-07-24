@@ -3,7 +3,8 @@ import 'dart:math' as math;
 import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart' show ScrollCacheExtent;
+import 'package:flutter/rendering.dart'
+    show RenderAbstractViewport, ScrollCacheExtent;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../api/worker_http.dart'
@@ -44,6 +45,11 @@ import 'tasks_screen.dart';
 /// Height of the sliver of conversation left visible above the home view, so
 /// the newest message peeks in and scrolling up is discoverable.
 const double _historyPeekExtent = 44;
+
+// ponytail: 120px is roughly one turn's worth of slack. A scroll that ends
+// within this of a message boundary settles onto it; a clean flick that lands
+// further out between turns is left where it stopped rather than yanked back.
+const double _historySnapThreshold = 120;
 
 /// How far past the newest message the pull has to reach before the hold that
 /// starts a new conversation begins counting.
@@ -233,6 +239,11 @@ class ChatScreenState extends State<ChatScreen>
   double _pullProgress = 0;
   final _scroll = ScrollController();
   final _exchangeKey = GlobalKey();
+  // One key per history message index, so each turn's scroll offset can be
+  // measured and used as a snap boundary. Keyed by index to stay stable across
+  // rebuilds; a given index is only ever built in history, never the exchange,
+  // so the key is never mounted twice.
+  final _historyKeys = <int, GlobalKey>{};
   bool _userDragged = false;
   bool _snapping = false;
   bool _pendingChatReveal = false;
@@ -675,14 +686,58 @@ class ChatScreenState extends State<ChatScreen>
     if (_snapping || !_userDragged || _exchangeStart == null) return false;
     final render = _exchangeKey.currentContext?.findRenderObject();
     if (render is! RenderBox || !render.hasSize) return false;
-    // Two stops: the live exchange, and the home view directly above it. The
-    // snap keeps a half-scroll from stranding the user between them.
+    // The live exchange, and the home view directly above it. The snap keeps a
+    // half-scroll from stranding the user between them.
     final boundary = render.size.height.clamp(0.0, metrics.maxScrollExtent);
     if (boundary <= 0) return false;
     final pixels = metrics.pixels;
-    if (pixels <= 1 || pixels >= boundary - 1) return false;
-    _snapTo(pixels > 48 ? boundary : 0.0);
+    if (pixels < boundary) {
+      // Leaving the exchange: a low commit point, so a nudge falls back to it
+      // but a decisive pull settles on the home view above.
+      if (pixels <= 1) return false;
+      _snapTo(pixels > 48 ? boundary : 0.0);
+      return false;
+    }
+    // Above the home view the message history scrolls: settle on the nearest
+    // turn boundary so a half-scroll doesn't strand the user mid-message.
+    final stop = _nearestHistoryStop(pixels, boundary, metrics.maxScrollExtent);
+    if (stop == null) return false;
+    _snapTo(stop);
     return false;
+  }
+
+  /// The history turn boundary nearest [pixels], or null when there is nothing
+  /// above the home view to snap to or the drag ended too far from any boundary
+  /// to warrant moving it. Boundaries are measured from each turn's real render
+  /// geometry, so variable-height rows (artifacts, skeletons, rich task rows)
+  /// each land on their own edge rather than a fixed increment.
+  double? _nearestHistoryStop(double pixels, double boundary, double max) {
+    final stops = <double>[boundary];
+    for (final key in _historyKeys.values) {
+      final box = key.currentContext?.findRenderObject();
+      if (box is! RenderBox || !box.hasSize) continue;
+      final viewport = RenderAbstractViewport.maybeOf(box);
+      if (viewport == null) continue;
+      // Alignment 1, not 0: the list is reversed, so a turn's boundary is
+      // reachable when its trailing edge meets the viewport edge. Alignment 0
+      // asks for the leading edge and returns offsets past maxScrollExtent for
+      // the turns near the top, which can never actually be scrolled to.
+      final offset = viewport.getOffsetToReveal(box, 1).offset;
+      if (!offset.isFinite || offset <= boundary || offset > max) continue;
+      stops.add(offset);
+    }
+    if (stops.length < 2) return null;
+    var best = stops.first;
+    var bestDistance = (best - pixels).abs();
+    for (final stop in stops.skip(1)) {
+      final distance = (stop - pixels).abs();
+      if (distance < bestDistance) {
+        best = stop;
+        bestDistance = distance;
+      }
+    }
+    if (bestDistance > _historySnapThreshold || bestDistance <= 1) return null;
+    return best;
   }
 
   void _snapTo(double target) {
@@ -1396,7 +1451,10 @@ class ChatScreenState extends State<ChatScreen>
     final latest = _latestOrbIndex;
     final history = <Widget Function()>[
       for (var index = 0; index < end; index++)
-        () => _messageRow(_messages[index], latest: index == latest),
+        () => KeyedSubtree(
+          key: _historyKeys.putIfAbsent(index, GlobalKey.new),
+          child: _messageRow(_messages[index], latest: index == latest),
+        ),
       // With no live exchange the pending work has nowhere else to go, so it
       // stays at the near end of history, right above the home view.
       if (_exchangeStart == null) ..._tailBuilders(),
