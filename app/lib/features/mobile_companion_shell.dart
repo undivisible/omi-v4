@@ -1561,10 +1561,16 @@ class _PendantHero extends StatefulWidget {
 }
 
 class _PendantHeroState extends State<_PendantHero>
-    with SingleTickerProviderStateMixin {
+    with TickerProviderStateMixin {
   late final AnimationController _sway = AnimationController(
     vsync: this,
     duration: const Duration(seconds: 6),
+  );
+  // While the pendant is connecting it breathes: the image itself pulses in
+  // opacity, which is the busy signal now that the spinner beside it is gone.
+  late final AnimationController _pulse = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 1100),
   );
   bool _animationsDisabled = false;
   // The image is the control now, so it has to answer the finger: held down it
@@ -1579,28 +1585,44 @@ class _PendantHeroState extends State<_PendantHero>
   bool _bursting = false;
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _animationsDisabled = MediaQuery.disableAnimationsOf(context);
+    if (_animationsDisabled) {
+      _sway.stop();
+      _pulse.stop();
+    } else if (!_sway.isAnimating) {
+      _sway.repeat();
+    }
+    _syncPulse();
+  }
+
+  @override
   void didUpdateWidget(covariant _PendantHero old) {
     super.didUpdateWidget(old);
     if (widget.connected && !old.connected) {
       _connectEpoch += 1;
       _bursting = true;
     }
+    if (widget.busy != old.busy) _syncPulse();
   }
 
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    _animationsDisabled = MediaQuery.disableAnimationsOf(context);
-    if (_animationsDisabled) {
-      _sway.stop();
-    } else if (!_sway.isAnimating) {
-      _sway.repeat();
+  // The pulse only runs while connecting, and only when motion is allowed;
+  // otherwise the image sits at full opacity.
+  void _syncPulse() {
+    if (widget.busy && !_animationsDisabled) {
+      if (!_pulse.isAnimating) _pulse.repeat(reverse: true);
+    } else {
+      _pulse
+        ..stop()
+        ..value = 1;
     }
   }
 
   @override
   void dispose() {
     _sway.dispose();
+    _pulse.dispose();
     super.dispose();
   }
 
@@ -1628,6 +1650,16 @@ class _PendantHeroState extends State<_PendantHero>
     // continuous ramps over the same 0…1, so connecting fades and saturates the
     // image in and disconnecting runs the identical curve backwards. Fully
     // warm is the untouched asset, so the filter drops out entirely there.
+    // While connecting, the pendant breathes in opacity; otherwise it sits
+    // solid. This is the busy indicator now that the spinner is gone.
+    Widget pulsing(Widget child) => widget.busy && !animationsDisabled
+        ? AnimatedBuilder(
+            animation: _pulse,
+            builder: (context, inner) =>
+                Opacity(opacity: .4 + _pulse.value * .6, child: inner),
+            child: child,
+          )
+        : child;
     Widget pendantFor(double warmth) => warmth >= 1
         ? image
         : Opacity(
@@ -1640,11 +1672,6 @@ class _PendantHeroState extends State<_PendantHero>
           );
     final glowSize = pendantWidth * 2.2;
     final glowTop = pendantHeight * .82 - glowSize / 2;
-    final stateColor = connected
-        ? _stateBlue
-        : (widget.busy ? null : _stateRed);
-    Color glow(Color warm, double blend) =>
-        stateColor == null ? warm : Color.lerp(warm, stateColor, blend)!;
     final pendantStack = Stack(
       alignment: Alignment.center,
       clipBehavior: Clip.none,
@@ -1674,17 +1701,19 @@ class _PendantHeroState extends State<_PendantHero>
               key: const Key('companion_pendant_glow'),
               width: glowSize,
               height: glowSize,
+              // A single warm halo, never tinted by connection state: the blue
+              // ring that used to appear on connect is gone, and the burst
+              // above carries the moment instead. It brightens a little once
+              // warm, but keeps the same hue.
               decoration: BoxDecoration(
                 gradient: RadialGradient(
                   colors: [
-                    glow(
-                      const Color(0xfff2a78f),
-                      .3,
-                    ).withValues(alpha: connected ? .32 : .14),
-                    glow(
-                      const Color(0xfff6c9a0),
-                      .22,
-                    ).withValues(alpha: connected ? .16 : .07),
+                    const Color(
+                      0xfff2a78f,
+                    ).withValues(alpha: connected ? .2 : .12),
+                    const Color(
+                      0xfff6c9a0,
+                    ).withValues(alpha: connected ? .1 : .06),
                     const Color(0x00f2a78f),
                   ],
                   stops: const [0, .45, 1],
@@ -1707,7 +1736,7 @@ class _PendantHeroState extends State<_PendantHero>
             child: Transform.scale(
               scale: .965 + warmth * .035,
               alignment: Alignment.topCenter,
-              child: pendantFor(warmth),
+              child: pulsing(pendantFor(warmth)),
             ),
             builder: (context, child) {
               final t = _sway.value * 2 * math.pi;
@@ -1796,18 +1825,6 @@ class _PendantHeroState extends State<_PendantHero>
                   ),
                 ),
               ),
-              // The busy state has to be visible somewhere now that the
-              // button that used to grey itself out is gone.
-              if (widget.busy)
-                const Padding(
-                  padding: EdgeInsets.only(top: 8),
-                  child: SizedBox(
-                    key: Key('companion_reconnect_busy'),
-                    width: 16,
-                    height: 16,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  ),
-                ),
             ] else
               Semantics(
                 label: widget.deviceName == null
@@ -1824,18 +1841,22 @@ class _PendantHeroState extends State<_PendantHero>
                   ),
                 ),
               ),
-            const SizedBox(height: 5),
-            Text(
-              widget.hint,
-              key: const Key('companion_pendant_hint'),
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 12.5,
-                color: capturing
-                    ? Color.lerp(_pageInkSoft(context), _stateBlue, .5)
-                    : _pageInkSoft(context),
+            // Hidden while connecting: the status line above already says so,
+            // and the hint would only repeat "Connecting…" underneath it.
+            if (!widget.busy) ...[
+              const SizedBox(height: 5),
+              Text(
+                widget.hint,
+                key: const Key('companion_pendant_hint'),
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 12.5,
+                  color: capturing
+                      ? Color.lerp(_pageInkSoft(context), _stateBlue, .5)
+                      : _pageInkSoft(context),
+                ),
               ),
-            ),
+            ],
             if (widget.batteryLevel case final battery?)
               Padding(
                 padding: const EdgeInsets.only(top: 7),
