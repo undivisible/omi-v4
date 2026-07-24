@@ -140,8 +140,16 @@ fn provider_send_request(
                 .secret("SENDBLUE_API_KEY_SECRET")
                 .ok()
                 .map(|v| v.to_string())
-                .or_else(|| env.var("SENDBLUE_API_KEY_SECRET").ok().map(|v| v.to_string()))
-                .or_else(|| env.secret("SENDBLUE_SECRET_KEY").ok().map(|v| v.to_string()))
+                .or_else(|| {
+                    env.var("SENDBLUE_API_KEY_SECRET")
+                        .ok()
+                        .map(|v| v.to_string())
+                })
+                .or_else(|| {
+                    env.secret("SENDBLUE_SECRET_KEY")
+                        .ok()
+                        .map(|v| v.to_string())
+                })
                 .or_else(|| env.var("SENDBLUE_SECRET_KEY").ok().map(|v| v.to_string()))
                 .filter(|v| !v.is_empty());
             let from_number = env

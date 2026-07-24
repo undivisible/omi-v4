@@ -748,7 +748,8 @@ async fn handle_setup_health(req: Request, ctx: RouteContext<()>) -> Result<Resp
     let telegram_webhook_secret = any("TELEGRAM_WEBHOOK_SECRET");
     let telegram_bot_token = any("TELEGRAM_BOT_TOKEN");
     let sendblue_api_key_id = any("SENDBLUE_API_KEY_ID").or_else(|| any("SENDBLUE_API_KEY"));
-    let sendblue_api_key_secret = any("SENDBLUE_API_KEY_SECRET").or_else(|| any("SENDBLUE_SECRET_KEY"));
+    let sendblue_api_key_secret =
+        any("SENDBLUE_API_KEY_SECRET").or_else(|| any("SENDBLUE_SECRET_KEY"));
     let sendblue_number = any("SENDBLUE_NUMBER");
     let sendblue_webhook_signing_secret = any("SENDBLUE_WEBHOOK_SIGNING_SECRET");
     let sendblue_webhook_path_token = any("SENDBLUE_WEBHOOK_PATH_TOKEN");

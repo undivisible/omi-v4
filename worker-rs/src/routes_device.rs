@@ -10,8 +10,8 @@ use serde_json::{json, Value};
 use worker::{Headers, Request, Response, Result, RouteContext, Router};
 
 use crate::device_sync::{
-    self, DeviceTokenCandidate, MAXIMUM_REGISTERS_PER_HOUR, MAXIMUM_UPLOAD_BYTES,
-    MAXIMUM_UPLOADS_PER_MINUTE, REGISTER_RATE_WINDOW_MS,
+    self, DeviceTokenCandidate, MAXIMUM_REGISTERS_PER_HOUR, MAXIMUM_UPLOADS_PER_MINUTE,
+    MAXIMUM_UPLOAD_BYTES, REGISTER_RATE_WINDOW_MS,
 };
 use crate::glue::{authenticate, error_json, AuthOutcome};
 use crate::routes_ai::consume_rate_limit;
@@ -166,9 +166,11 @@ async fn handle_register(mut req: Request, ctx: RouteContext<()>) -> Result<Resp
     if !allowed {
         let headers = Headers::new();
         headers.set("retry-after", &retry_after.to_string())?;
-        return Ok(Response::from_json(&json!({ "error": "Too many requests" }))?
-            .with_status(429)
-            .with_headers(headers));
+        return Ok(
+            Response::from_json(&json!({ "error": "Too many requests" }))?
+                .with_status(429)
+                .with_headers(headers),
+        );
     }
     let db = ctx.env.d1("DB")?;
     let now = now_ms();

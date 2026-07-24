@@ -167,7 +167,10 @@ mod tests {
             coordinator_name("u1", Channel::Telegram),
             "u1\u{0000}telegram"
         );
-        assert_eq!(coordinator_name("u1", Channel::IMessage), "u1\u{0000}imessage");
+        assert_eq!(
+            coordinator_name("u1", Channel::IMessage),
+            "u1\u{0000}imessage"
+        );
     }
 
     #[test]

@@ -431,7 +431,6 @@ async fn handle_assistant_messages(mut req: Request, ctx: RouteContext<()>) -> R
     respond(ask_omi_operation(&ctx, &auth.uid, &body).await)
 }
 
-
 // ---------------------------------------------------------------------------
 // /mcp — JSON-RPC 2.0 over a single POST endpoint
 // ---------------------------------------------------------------------------

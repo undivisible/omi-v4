@@ -940,6 +940,7 @@ pub unsafe extern "C" fn omi_rust_wifi_encode_softap_header(
     }
     let mut buf = [0u8; wifi_proto::SOFTAP_HEADER_LEN];
     let len = wifi_proto::encode_softap_header(read_seq, write_seq, packet_bytes, &mut buf);
+    // SAFETY: caller guarantees `out` has SOFTAP_HEADER_LEN writable bytes; null rejected above.
     unsafe {
         core::ptr::copy_nonoverlapping(buf.as_ptr(), out, len);
     }
@@ -960,6 +961,7 @@ pub unsafe extern "C" fn omi_rust_wifi_encode_softap_done(
     }
     let mut buf = [0u8; 10];
     let len = wifi_proto::encode_softap_done(next_seq, status, &mut buf);
+    // SAFETY: caller guarantees 10 writable bytes at `out`; null rejected above.
     unsafe {
         core::ptr::copy_nonoverlapping(buf.as_ptr(), out, len);
     }

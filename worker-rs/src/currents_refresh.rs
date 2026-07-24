@@ -91,7 +91,8 @@ pub fn heuristic_needs_refresh(
             reason: "new_memory",
         };
     }
-    if state.last_regenerated_at > 0 && now - state.last_regenerated_at >= MIN_REGENERATE_INTERVAL_MS
+    if state.last_regenerated_at > 0
+        && now - state.last_regenerated_at >= MIN_REGENERATE_INTERVAL_MS
     {
         return HeuristicDecision {
             refresh: true,
@@ -106,9 +107,7 @@ pub fn heuristic_needs_refresh(
 
 /// `check_ttl` short-circuit used by `refreshCurrents` before heuristics.
 pub fn within_check_ttl(state: &RefreshState, now: i64, force: bool) -> bool {
-    !force
-        && state.last_checked_at > 0
-        && now - state.last_checked_at < MIN_CHECK_INTERVAL_MS
+    !force && state.last_checked_at > 0 && now - state.last_checked_at < MIN_CHECK_INTERVAL_MS
 }
 
 #[cfg(test)]

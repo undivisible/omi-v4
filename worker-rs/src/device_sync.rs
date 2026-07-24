@@ -240,24 +240,25 @@ mod tests {
         assert!(minted.token.starts_with(DEVICE_TOKEN_PREFIX));
         assert_eq!(minted.prefix.len(), 8);
         assert_eq!(minted.hash.len(), 64);
-        assert_eq!(parse_device_token(&minted.token), Some(minted.prefix.as_str()));
+        assert_eq!(
+            parse_device_token(&minted.token),
+            Some(minted.prefix.as_str())
+        );
         assert_eq!(digest(&minted.token), minted.hash);
     }
 
     #[test]
     fn rejects_malformed_tokens() {
-        assert!(parse_device_token(
-            "omi_sk_abcd1234_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-        )
-        .is_none());
-        assert!(parse_device_token(
-            "omi_dev_ABCD1234_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-        )
-        .is_none());
-        assert!(parse_device_token(
-            "omi_dev_abcd123_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-        )
-        .is_none());
+        assert!(
+            parse_device_token("omi_sk_abcd1234_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx").is_none()
+        );
+        assert!(
+            parse_device_token("omi_dev_ABCD1234_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")
+                .is_none()
+        );
+        assert!(
+            parse_device_token("omi_dev_abcd123_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx").is_none()
+        );
     }
 
     #[test]

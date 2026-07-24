@@ -640,8 +640,8 @@ pub fn row_to_current(row: &Value) -> Value {
         "createdAt": iso_from_ms(field_i64(row, "created_at")),
         "updatedAt": iso_from_ms(field_i64(row, "updated_at")),
     });
-    if let Some(crepus) = field_opt_str(row, "crepus")
-        .and_then(|value| crate::currents::sanitize_crepus(&value))
+    if let Some(crepus) =
+        field_opt_str(row, "crepus").and_then(|value| crate::currents::sanitize_crepus(&value))
     {
         current["metadata"] = json!({ "crepus": crepus });
     }

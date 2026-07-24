@@ -454,10 +454,6 @@ mod tests {
         assert!(parse_telegram(&json!({})).is_err());
     }
 
-    
-
-    
-
     #[test]
     fn stripe_subscription_extraction() {
         let created = 1_700_000_000i64;
