@@ -75,6 +75,7 @@ struct RuntimeState {
     proposals: ProposalRegistry,
     managed_worker_origin: Option<String>,
     computer_use_ledger_path: Option<PathBuf>,
+    user_profile_path: Option<PathBuf>,
     self_improve: Option<rx4::self_improve::SelfImprove>,
     personality: Option<rx4::Personality>,
 }
@@ -1995,6 +1996,7 @@ async fn local_profile_context(
         BlockingOutcome::Complete(profiles) => {
             let lines: Vec<String> = profiles
                 .into_iter()
+                .filter(|profile| !crate::user_profile::is_soul_section_key(&profile.key))
                 .map(|profile| format!("- {}: {}", profile.key, profile.value))
                 .collect();
             if lines.is_empty() {
@@ -2009,13 +2011,32 @@ async fn local_profile_context(
     }
 }
 
-fn combined_context(profile: Option<&str>, memory: Option<&str>) -> Option<String> {
-    match (profile, memory) {
-        (Some(profile), Some(memory)) => Some(format!("{profile}\n{memory}")),
-        (Some(profile), None) => Some(profile.to_owned()),
-        (None, Some(memory)) => Some(memory.to_owned()),
-        (None, None) => None,
+fn combined_context(
+    about_user: Option<&str>,
+    profile: Option<&str>,
+    memory: Option<&str>,
+) -> Option<String> {
+    let mut parts: Vec<&str> = Vec::new();
+    if let Some(about_user) = about_user.map(str::trim).filter(|value| !value.is_empty()) {
+        parts.push(about_user);
     }
+    if let Some(profile) = profile.map(str::trim).filter(|value| !value.is_empty()) {
+        parts.push(profile);
+    }
+    if let Some(memory) = memory.map(str::trim).filter(|value| !value.is_empty()) {
+        parts.push(memory);
+    }
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join("\n"))
+    }
+}
+
+fn local_user_profile_context(user_profile_path: Option<&Path>) -> Option<String> {
+    let path = user_profile_path?;
+    let document = crate::user_profile::read_user_profile(path)?;
+    crate::user_profile::format_about_user(&document)
 }
 
 #[expect(
@@ -2033,12 +2054,15 @@ async fn dispatch_assistant(
     origin: Option<MessageOrigin>,
 ) {
     let generation = state.lock().await.configuration_generation;
+    let user_profile_path = state.lock().await.user_profile_path.clone();
     let profile = local_profile_context(state, cancellation).await;
     let memory_context = match memory_context {
         Some(context) => Some(context),
         None => local_memory_context(state, &text, cancellation).await,
     };
+    let about_user = local_user_profile_context(user_profile_path.as_deref());
     let context = combined_context(
+        about_user.as_deref(),
         profile.as_ref().map(|value| value.lines.as_str()),
         memory_context.as_deref(),
     );
@@ -2062,7 +2086,14 @@ async fn dispatch_assistant(
         ToolStatus::Complete,
         Some(&format!("{ONLINE_CHAT_MODEL_DETAIL}:{routed_model}")),
     );
-    let prompt = framed_assistant_prompt(origin, context.as_deref(), &text);
+    let mut prompt = framed_assistant_prompt(origin, context.as_deref(), &text);
+    if let Some(path) = user_profile_path.as_deref() {
+        if let Some(document) = crate::user_profile::read_user_profile(path) {
+            if let Some(custom_prompt) = crate::user_profile::custom_prompt(&document) {
+                prompt = format!("{prompt}\n\n{custom_prompt}");
+            }
+        }
+    }
     let (self_improve, personality) = {
         let guard = state.lock().await;
         (guard.self_improve.clone(), guard.personality.clone())
@@ -2812,6 +2843,8 @@ async fn configure_memory(
         }
     };
     let computer_use_ledger_path = computer_use_ledger_path(&database_path);
+    let user_profile_path = crate::user_profile::user_profile_path(&database_path);
+    let database_path_for_open = database_path.clone();
     let task = spawn_blocking(move || {
         // Self-improvement rides its own connection to the same database file;
         // if it can't open we leave it `None` and the turn loop skips
@@ -2822,7 +2855,7 @@ async fn configure_memory(
         // same way self-improvement does, and degrades to `None` identically.
         let personality =
             crate::personality::open(&database_path, tenant_id.clone(), person_id.clone());
-        MemoryDb::open(database_path)
+        MemoryDb::open(database_path_for_open)
             .map(|database| {
                 (
                     MemoryContext {
@@ -2853,6 +2886,7 @@ async fn configure_memory(
             state.self_improve = self_improve;
             state.personality = personality;
             state.computer_use_ledger_path = computer_use_ledger_path;
+            state.user_profile_path = Some(user_profile_path);
             drop(state);
             NativeEvent::RuntimeStatus(runtime_status(true)).send();
             let review_cancellation = cancellation.clone();

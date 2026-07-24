@@ -30,6 +30,7 @@ import 'random_id.dart';
 import 'memory/transcript_memory_ingestor.dart';
 import 'native/native_hub.dart';
 import 'onboarding/onboarding_completion.dart';
+import 'profile/user_profile.dart';
 import 'providers/providers.dart';
 import 'settings/settings.dart';
 
@@ -580,6 +581,14 @@ final class AppServices {
     } catch (_) {
       return null;
     }
+  }
+
+  Future<void> _syncUserProfileSidecar(String uid, String databasePath) async {
+    try {
+      final document = await PreferencesUserProfileStore().load(uid);
+      if (document.isEmpty) return;
+      await PreferencesUserProfileStore().writeSidecar(databasePath, document);
+    } catch (_) {}
   }
 
   Future<void> initialize() async {
@@ -1282,6 +1291,7 @@ final class AppServices {
         tenantId: _localOfflinePersonId,
         personId: _localOfflinePersonId,
       );
+      unawaited(_syncUserProfileSidecar(_localOfflinePersonId, databasePath));
       _transcriptMemoryIngestor.configure(
         personId: _localOfflinePersonId,
         authorityGeneration: _authorityGeneration,
@@ -1322,6 +1332,7 @@ final class AppServices {
       tenantId: session.uid,
       personId: session.uid,
     );
+    unawaited(_syncUserProfileSidecar(session.uid, databasePath));
     _transcriptMemoryIngestor.configure(
       personId: session.uid,
       authorityGeneration: _authorityGeneration,

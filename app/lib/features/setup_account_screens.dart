@@ -22,10 +22,12 @@ import '../settings/settings.dart';
 import '../ui/burst_glow.dart';
 import '../ui/scroll_edge_fade.dart';
 import 'meeting_notes.dart';
+import '../profile/user_profile_settings_panel.dart';
 import 'rewind/rewind_settings_tile.dart';
 
 enum SettingsSection {
   account('Account', Icons.person_outline_rounded),
+  personal('Personal context', Icons.psychology_outlined),
   plan('Plan & Billing', Icons.credit_card_outlined),
   providers('AI Providers', Icons.key_outlined),
   permissions('Permissions', Icons.lock_outline_rounded),
@@ -138,6 +140,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   List<SettingsSection> get sections => [
     SettingsSection.account,
+    SettingsSection.personal,
     SettingsSection.plan,
     SettingsSection.providers,
     SettingsSection.developer,
@@ -177,6 +180,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
             _ChannelLinkTile(client: services.channels!),
         ] else if (!previewMode)
           DeleteLocalDataTile(services: services),
+      ],
+      SettingsSection.personal => [
+        UserProfileSettingsPanel(
+          services: services,
+          previewMode: previewMode,
+        ),
       ],
       SettingsSection.plan => [
         if (previewMode || services.billing == null)

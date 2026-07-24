@@ -28,6 +28,7 @@ mod self_improve;
 pub mod signals;
 mod stt;
 mod transcription;
+mod user_profile;
 
 use rinf::{dart_shutdown, write_interface};
 use runtime::{CommandDispatcher, runtime_status};

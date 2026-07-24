@@ -100,7 +100,7 @@ export const listProfileMemories = async (
 ): Promise<PersonalMemory[]> => {
   const rows = await database
     .prepare(
-      `SELECT p.id, c.value, c.valid_from, c.valid_to, c.recorded_at, p.updated_at,
+      `SELECT p.id, p.profile_key, c.value, c.valid_from, c.valid_to, c.recorded_at, p.updated_at,
             p.profile_kind, p.status, s.kind AS source, e.id AS evidence_id,
             e.source_revision_id, e.quote, e.locator, s.id AS source_id
      FROM memory_profile_entries p
@@ -137,6 +137,7 @@ export const listProfileMemories = async (
     }
     indexed.set(id, {
       id,
+      profileKey: String(row.profile_key ?? row.id),
       content: String(row.value),
       source: String(row.source),
       evidence: [evidence],

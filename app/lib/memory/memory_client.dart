@@ -115,6 +115,37 @@ final class MemoryClient {
     return _decode(response.body, CreatedMemory.fromJson);
   }
 
+  Future<CreatedMemory> createProfileMemory({
+    required String content,
+    required String profileKey,
+    String profileKind = 'stable',
+    String subject = 'user',
+    String? predicate,
+    String source = 'note',
+  }) async {
+    if (content.trim().isEmpty) {
+      throw const MemoryDecodingException('content must not be empty');
+    }
+    if (profileKind != 'stable' && profileKind != 'current') {
+      throw const MemoryDecodingException('profileKind must be stable or current');
+    }
+    final response = await _send(
+      MemoryRequest(
+        method: MemoryHttpMethod.post,
+        path: '/v1/memories',
+        body: {
+          'content': content,
+          'subject': subject,
+          'predicate': predicate ?? profileKey.toLowerCase(),
+          'profileKey': profileKey,
+          'profileKind': profileKind,
+          'source': source,
+        },
+      ),
+    );
+    return _decode(response.body, CreatedMemory.fromJson);
+  }
+
   Future<RetrievalPack> retrieve({
     required String query,
     int limit = 12,

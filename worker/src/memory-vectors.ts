@@ -1,4 +1,6 @@
 import { embedTexts } from "./embeddings";
+import { listProfileMemories } from "./memory-read";
+import { formatAboutUser, isSoulSectionKey } from "./user-profile";
 import type { Bindings } from "./types";
 
 const maximumAttempts = 8;
@@ -248,15 +250,40 @@ export const memoryContextFor = async (
   cap = contextCharacterCap,
 ): Promise<string | null> => {
   try {
+    const profiles = await listProfileMemories(env.DB, uid, 24);
+    const soul: Record<string, string> = {};
+    let name: string | undefined;
+    let languages: string[] = [];
+    for (const memory of profiles) {
+      const key = memory.profileKey;
+      const content = memory.content;
+      if (key === "name") {
+        name = content;
+        continue;
+      }
+      if (key === "languages") {
+        languages = content.split(",").map((value) => value.trim());
+        continue;
+      }
+      if (isSoulSectionKey(key)) {
+        soul[key] = content;
+      }
+    }
+    const aboutUser = formatAboutUser({ name, languages, soul });
     const items = await searchMemoryClaims(env, uid, query, 8);
-    if (items.length === 0) return null;
-    let output = "Relevant synced memory (server-retrieved, may be partial):";
-    for (const item of items) {
-      const line = `\n- ${item.content.slice(0, snippetCharacters)}`;
+    const claimLines = items.map(
+      (item) => `\n- ${item.content.slice(0, snippetCharacters)}`,
+    );
+    let output = aboutUser ?? "Relevant synced memory (server-retrieved, may be partial):";
+    if (aboutUser && claimLines.length > 0) {
+      output = `${aboutUser}\n\nRelevant synced memory (server-retrieved, may be partial):`;
+    }
+    for (const line of claimLines) {
       if (output.length + line.length > cap) break;
       output += line;
     }
-    return output;
+    if (aboutUser || claimLines.length > 0) return output;
+    return null;
   } catch {
     return null;
   }
