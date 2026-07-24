@@ -12,8 +12,10 @@ pub mod channel_link;
 pub mod conversations;
 pub mod crypto_util;
 pub mod currents;
+pub mod currents_refresh;
 pub mod delivery;
 pub mod desktop_auth;
+pub mod device_sync;
 pub mod entitlement;
 pub mod facetime;
 pub mod inbox_fallback;
@@ -50,6 +52,8 @@ pub(crate) mod worker_util;
 mod routes_ai;
 #[cfg(target_arch = "wasm32")]
 mod routes_channels;
+#[cfg(target_arch = "wasm32")]
+mod routes_device;
 #[cfg(target_arch = "wasm32")]
 mod routes_keys;
 #[cfg(target_arch = "wasm32")]

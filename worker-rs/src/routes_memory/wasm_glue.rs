@@ -92,7 +92,7 @@ pub(crate) fn n(value: i64) -> JsValue {
     JsValue::from_f64(value as f64)
 }
 
-fn nullable_s(value: Option<&str>) -> JsValue {
+pub(crate) fn nullable_s(value: Option<&str>) -> JsValue {
     value.map(JsValue::from_str).unwrap_or(JsValue::NULL)
 }
 

@@ -17,7 +17,7 @@ use crate::public_api::{self as api, Budget, OperationResult};
 use crate::routes_ai::consume_rate_limit;
 use crate::routes_keys::{require_api_access, require_scope, ApiAuth};
 use crate::routes_memory::wasm_glue as memory;
-use crate::worker_util::{now_ms, secret_or_var as env_get, uuid_v4};
+use crate::worker_util::{now_ms, uuid_v4};
 
 /// Register the public API and MCP routes on the shared glue router.
 pub fn register(router: Router<'static, ()>) -> Router<'static, ()> {

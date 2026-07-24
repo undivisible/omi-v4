@@ -110,6 +110,9 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
     // Third-party surface: the public API and the MCP transport, which carry
     // their own `requireApiAccess` credential gate.
     let router = crate::routes_public::register(router);
+    // Pendant home-STA self-sync: register (Firebase) + upload (device token).
+    // Mounted beside publicApi so device-token auth is not forced through API keys.
+    let router = crate::routes_device::register(router);
     router
         .or_else_any_method("/*catchall", |_req, _ctx| error_json("Not found", 404))
         .run(req, env)
@@ -925,10 +928,16 @@ const UID_SCOPED_TABLES: &[&str] = &[
     "channel_link_tokens",
     "current_feedback",
     "current_executions",
+    "currents_daily_batches",
+    "currents_refresh_state",
     "currents",
     "legacy_currents_uncited",
+    "device_audio_uploads",
+    "device_tokens",
+    "devices",
     "managed_ai_requests",
     "managed_stt_sessions",
+    "managed_speech_requests",
     "oauth_connections",
     "owner_confirmation_receipts",
     "setting_scopes",
@@ -936,6 +945,7 @@ const UID_SCOPED_TABLES: &[&str] = &[
     "entitlements",
     "desktop_auth_sessions",
     "audit_events",
+    "api_keys",
     "users",
 ];
 
