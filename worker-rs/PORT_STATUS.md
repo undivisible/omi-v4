@@ -7,6 +7,40 @@
 > host + wasm clippy `-D warnings` clean. Remaining risks are listed at the
 > bottom.
 
+## Audit snapshot (2026-07-24)
+
+**Why TypeScript still owns production (`omi.tsc.hk`):** intentional. Per
+ARCHITECTURE.md §5.2 and CUTOVER.md, `worker-rs` is the shadow/cutover target
+(`omi-v4-api-rs` on `*.workers.dev` only). The custom-domain `[[routes]]` block
+stays commented so a deploy cannot steal production. Shared D1 + separate DO
+namespaces means dual cron/admission during shadow is unsafe until the domain
+swap. FaceTime stays TS-only (needs the Gemini Live bridge container).
+
+**Rough route-surface parity: ~92%.** Nearly all first-party `/v1/*`, public
+`/api/v1/*`, MCP, webhooks, billing, desktop-auth, managed AI, delivery, and
+memory/currents CRUD are ported. Remaining gaps that matter for cutover:
+
+| Gap | Severity | Status |
+|---|---|---|
+| `device-sync.ts` → `POST /api/v1/devices/register` + `…/:id/audio` | High (WiFi SoftAP/home-STA path) | **ported** (this update) |
+| `currents-refresh.ts` → `POST /v1/currents/refresh` + AI regenerate | Medium (app refresh UX) | **partial** — pure heuristics in `currents_refresh.rs`; full OpenRouter draft/route **pending** |
+| FaceTime / `facetime-bridge` | High if product-critical | **intentionally absent** (TS + bridge) |
+| `DELETE /account` Vectorize claim purge | Low (uid-filtered orphans) | deferred |
+| Digests / Stripe reconcile / observability cron extras | Low–medium | check TS `index.ts` scheduled vs Rust `scheduled` |
+| Audio bytes persistence on device upload | Known stub | both TS and RS return `persisted: false` |
+
+**Cutover blockers (do not uncomment domain yet):**
+1. Wire or accept gap for `POST /v1/currents/refresh` (AI path).
+2. Confirm FaceTime is out-of-scope for first cutover (or keep TS for that route).
+3. Shadow smoke on `omi-v4-api-rs.*.workers.dev` (auth, device register/upload, currents, webhooks).
+4. Secrets parity (`wrangler secret list` mirror) + Vectorize index present.
+5. Decide cron ownership during swap (disable one worker's `[triggers]`).
+
+**Recommended next steps:** (1) deploy shadow + smoke device-sync;
+(2) finish `currents-refresh` route glue (heuristics already ported);
+(3) run CUTOVER.md when the table above is green — one runbook away, no
+code flip until then.
+
 Tracks every module in `worker/src/*.ts` against its Rust port status.
 Source of truth for behaviour parity is the TS file; the Rust worker binds the
 same D1 database and does not own migrations.
@@ -60,17 +94,31 @@ build is honest with or without the index provisioned. The scheduled
 `DELETE /account` vector cleanup remains the one deferred Vectorize consumer
 (documented in Phase 1).
 
+## Device cloud sync (home STA)
+
+| TS module | Rust | Status | Notes |
+|---|---|---|---|
+| `device-sync.ts` | `src/device_sync.rs` + `routes_device.rs` | **ported** | `POST /api/v1/devices/register` (Firebase) mints `omi_dev_` token (SHA-256 digest stored; prior tokens revoked); 10/hour register rate limit via RateLimiter DO. `POST /api/v1/devices/:deviceId/audio` requires Bearer/`x-device-token`, rejects revoked device **or** token (SQL join), enforces 4 MiB + 30/min upload rate limit, inserts `device_audio_uploads` metadata, returns `persisted: false` (same stub as TS). `startSeq` accepted as number or decimal string (u64-safe). `parseHomeUploadPreamble` host-tested. Account-delete table list updated (`devices` / `device_tokens` / `device_audio_uploads`). |
+
+## Currents refresh
+
+| TS module | Rust | Status | Notes |
+|---|---|---|---|
+| `currents-refresh.ts` | `src/currents_refresh.rs` | **partial** | Host-tested: `normalizeContentKind`, `heuristicNeedsRefresh`, check-TTL constants. **Not wired:** OpenRouter speed completion, AI draft parse, `regenerateCurrents`, `POST /v1/currents/refresh` route. **Cutover blocker** for app refresh UX parity — heuristic-only fallback possible but not shipped. |
+
 ## Later phases (larger surface / binding-dependent)
 
 | TS module | Status | Notes |
 |---|---|---|
-| `assistant.ts`, `assistant-admission.ts` (DO) | pending | DO native; large logic surface. |
+| `assistant.ts`, `assistant-admission.ts` (DO) | **ported** | See "AI routes" below. |
 | `conversations.ts` | **ported** | See the Delivery / AI / Memory sections below; D1 replay + inbox landed. |
-| `currents.ts` | **ported** | See "Memory & currents" below (`routes_memory.rs` + `wasm_glue.rs`). This row previously (and wrongly) read `pending`. |
-| `delivery.ts` (DeliveryCoordinator DO) | pending | DO native. |
-| `stt.ts`, `stt-admission.ts` (DO), `asr.ts`, `voice.ts` | pending | WebSocket upgrade + upstream fetch; workers-rs supports `WebSocketPair`. |
-| `memory-projection.ts`, `memory-sync.ts` | pending | D1 + zkr (see wasm note). |
-| `memory-vectors.ts`, `embeddings.ts` | **blocked** | **Vectorize** has no native workers-rs binding (0.8.5) and **Workers AI** embeddings via the `Ai` binding — see below. |
+| `currents.ts` | **ported** | See "Memory & currents" below. Refresh path is separate (partial above). |
+| `delivery.ts` (DeliveryCoordinator DO) | **ported** | See "Delivery" below. |
+| `stt.ts`, `stt-admission.ts` (DO), `asr.ts`, `voice.ts` | **ported** | See "AI routes" below. |
+| `memory-projection.ts`, `memory-sync.ts` | **ported** | See "Memory & currents" below. |
+| `memory-vectors.ts`, `embeddings.ts` | **ported (default)** | Vectorize via `js_sys` FFI; see Vectorize section. |
+| `facetime.ts` / bridge | **intentionally absent** | Needs Gemini Live bridge container; keep on TS until that stack exists for RS. |
+| `digests.ts`, `stripe-sync.ts`, observability cron | pending / partial | Compare `worker/src/index.ts` `scheduled` vs `glue.rs::scheduled`. |
 
 ## workers-rs 0.8.5 binding support (findings)
 
@@ -228,8 +276,9 @@ retrieve-match quoting, ISO formatting, receipt/hash patterns.
 
 ## Cutover readiness — remaining risks (honest list)
 
-Everything the TS worker's routes/cron touch is ported and the deploy pipeline
-is green. Known residual risks, none blocking a cutover:
+Most of the TS worker's routes/cron are ported and the deploy pipeline is green.
+**Not cutover-ready yet** until currents-refresh route parity (or an accepted
+product gap) and FaceTime scope are decided. Known residual risks:
 
 - **DELETE /account Vectorize cleanup** still deferred: account deletion removes
   all D1 rows but does not delete the user's claim vectors from the
