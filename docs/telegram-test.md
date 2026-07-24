@@ -59,9 +59,12 @@ Use high `update_id` values that will not collide with live Telegram traffic.
 2. Send `/start`.
 3. Bot replies with a **7-character** link code (15-minute TTL, single use).
 4. In Omi desktop or mobile: **Settings → Account → Link a chat**, paste the code  
+   — type the code in the desktop chat box (plain or in a sentence, e.g. *"my telegram code is XXXXXXX"*)  
    — or call `POST /v1/channels/link` with Firebase auth and body `{"code":"XXXXXXX"}`.
 5. Bot sends confirmation: *"Linked — this chat now answers as …"*
 6. Send `/status` — should show linked account and date.
+
+**New users:** `/signup` (or answering **no** to the first-contact question) explains how to download the app, sign in at the portal, and link — it does **not** create a chat-only account.
 
 **Alternative (app-initiated):** `POST /v1/channels/telegram/link` returns a 48-char token; send `/start <token>` in Telegram.
 

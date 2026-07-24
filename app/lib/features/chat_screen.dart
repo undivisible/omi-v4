@@ -933,9 +933,9 @@ class ChatScreenState extends State<ChatScreen>
   Future<void> _send() async {
     final text = _input.text.trim();
     if (text.isEmpty || _activeRequestId != null || _sending) return;
-    // A bare channel link code typed into the chat box is a link action, not a
-    // message for the assistant — redeem it here and confirm inline.
-    final code = ChannelLinkCode.tryParse(text);
+    // A channel link code in the chat box is a link action, not a message for
+    // the assistant — redeem it here and confirm inline (bare code or prose).
+    final code = ChannelLinkCode.extractFrom(text);
     final channels = widget.services.channels;
     if (code != null && channels != null) {
       await _redeemLinkCode(channels, code);

@@ -233,7 +233,7 @@ describe("unlinked sender", () => {
     expect(account).toBeNull();
   });
 
-  test("answering no signs the sender up and binds the chat", async () => {
+  test("answering no sends signup guidance instead of creating a channel account", async () => {
     await handleChannelMessage(env(), "telegram", "77", "77", "hey");
     const outcome = await handleChannelMessage(
       env(),
@@ -242,26 +242,19 @@ describe("unlinked sender", () => {
       "77",
       "nope",
     );
-    expect(outcome.reply).toContain("this chat is your Omi account");
+    expect(outcome.reply).toContain("Omi accounts are created in the app");
+    expect(outcome.reply).toContain("omi.me/download");
     const account = await liveChannelAccount(database, "telegram", "77");
-    expect(account?.uid).toMatch(/^chan_[a-f0-9]{32}$/);
+    expect(account).toBeNull();
     const binding = await database
       .prepare(
         "SELECT uid FROM channel_bindings WHERE channel = 'telegram' AND channel_user_id = '77'",
       )
       .first<{ uid: string }>();
-    expect(binding?.uid).toBe(account?.uid ?? "");
-    const after = await handleChannelMessage(
-      env(),
-      "telegram",
-      "77",
-      "77",
-      "what can you do?",
-    );
-    expect(after).toEqual({ reply: null, enqueue: true });
+    expect(binding).toBeNull();
   });
 
-  test("an answer it cannot read asks again rather than guessing", async () => {
+  test("refuses to issue a link code in a group chat", async () => {
     await handleChannelMessage(env(), "telegram", "31", "31", "hello");
     const outcome = await handleChannelMessage(
       env(),
@@ -274,7 +267,7 @@ describe("unlinked sender", () => {
     expect(await liveChannelAccount(database, "telegram", "31")).toBeNull();
   });
 
-  test("/signup creates the account without the yes/no question", async () => {
+  test("/signup points new senders at the app instead of creating an account", async () => {
     const outcome = await handleChannelMessage(
       env(),
       "telegram",
@@ -282,21 +275,9 @@ describe("unlinked sender", () => {
       "55",
       "/signup",
     );
-    expect(outcome.reply).toContain("this chat is your Omi account");
-    expect(await liveChannelAccount(database, "telegram", "55")).not.toBeNull();
-  });
-
-  test("signup is rate-limited per sender", async () => {
-    rateBlocked.push("channel-signup:");
-    const outcome = await handleChannelMessage(
-      env(),
-      "telegram",
-      "56",
-      "56",
-      "/signup",
-    );
-    expect(outcome.reply).toBeNull();
-    expect(await liveChannelAccount(database, "telegram", "56")).toBeNull();
+    expect(outcome.reply).toContain("Omi accounts are created in the app");
+    expect(outcome.reply).toContain("omi.me/download");
+    expect(await liveChannelAccount(database, "telegram", "55")).toBeNull();
   });
 
   test("refuses to issue a link code in a group chat", async () => {

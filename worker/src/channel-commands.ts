@@ -13,7 +13,6 @@ import {
   parseSignupAnswer,
   recordFirstContact,
   retireChannelAccount,
-  signUpChannelSender,
 } from "./channel-signup";
 import { dispatchChannelUnlink } from "./delivery";
 import { consumeRateLimit } from "./rate-limit";
@@ -35,7 +34,7 @@ export const channelCommands: ChannelCommand[] = [
   {
     name: "/signup",
     aliases: ["/new"],
-    summary: "create an Omi account from this chat",
+    summary: "how to create an Omi account and link this chat",
   },
   {
     name: "/subscribe",
@@ -110,16 +109,22 @@ export const firstContactText = [
 ].join("\n\n");
 
 export const clarifyAnswerText =
-  "Reply yes if you already have an Omi account, or no and I'll set one up " +
-  "for you here.";
+  "Reply yes if you already have an Omi account, or no and I'll walk you " +
+  "through signing up.";
 
-export const signupWelcomeText = [
-  "Done — this chat is your Omi account now. No password, no sign-up form: " +
-    "the account belongs to this chat.",
-  "Talk to me here and I'll remember. When you want Omi on your phone or " +
-    "desktop, sign in there and send /start here to move this account across.",
+export const signupGuideText = [
+  "Omi accounts are created in the app — not in this chat.",
+  "1. Download Omi for desktop or mobile: https://omi.me/download",
+  "2. Sign in at https://api.omi.tsc.hk/portal (Google, Apple, or phone)",
+  "3. Link this chat: Settings → Account → Link a chat, paste your code " +
+    "in the desktop chat box, or send /start here after you're signed in",
+  "4. Connect your services (calendar, email, and more) in Settings",
+  "Once linked, messages here reach your assistant with your full memory.",
   "Send /help to see everything I understand here.",
 ].join("\n\n");
+
+/** @deprecated Channel-only signup is retired; kept for tests and legacy accounts. */
+export const signupWelcomeText = signupGuideText;
 
 // The subscription offer rides along with the welcome rather than arriving as
 // a separate nag, so a new sender sees one message and one link.
@@ -146,14 +151,10 @@ const offerCheckout = async (
   return null;
 };
 
-export const signupUnavailableText =
-  "I can't set up a new account right now. Try again a little later, or send " +
-  "/start if you already have one.";
-
 export const notLinkedText =
-  "This chat isn't linked to an Omi account yet. Send /start and I'll give " +
-  "you a code to type into the app, or /signup and I'll set an account up " +
-  "for you right here.";
+  "This chat isn't linked to an Omi account yet. Send /start if you already " +
+  "have one and I'll give you a link code, or /signup for how to create an " +
+  "account and link this chat.";
 
 export const unknownCommandText =
   "I don't know that command. Send /help to see what I understand here.";
@@ -237,38 +238,14 @@ const startLink = async (
   return { reply: greetingText(issued.code), enqueue: false };
 };
 
-const startSignup = async (
-  env: Bindings,
+const signupGuide = (
   channel: Channel,
   channelUserId: string,
   channelChatId: string,
-  now: number,
-): Promise<ChannelMessageOutcome> => {
+): ChannelMessageOutcome => {
   if (isGroupChannelChat(channel, channelUserId, channelChatId))
     return { reply: groupChannelLinkError, enqueue: false };
-  const result = await signUpChannelSender(
-    env,
-    channel,
-    channelUserId,
-    channelChatId,
-    now,
-  );
-  if (result.status === "rate-limited") return { reply: null, enqueue: false };
-  if (result.status !== "created" && result.status !== "existing")
-    return { reply: signupUnavailableText, enqueue: false };
-  const offer = await offerCheckout(
-    env,
-    result.uid,
-    channel,
-    channelUserId,
-    channelChatId,
-    now,
-  );
-  return {
-    reply:
-      offer === null ? signupWelcomeText : `${signupWelcomeText}\n\n${offer}`,
-    enqueue: false,
-  };
+  return { reply: signupGuideText, enqueue: false };
 };
 
 const askFirstContact = async (
@@ -310,7 +287,7 @@ const unrecognizedSender = async (
   await markFirstContactAnswered(env.DB, channel, channelUserId, now);
   return answer === "has-account"
     ? startLink(env, channel, channelUserId, channelChatId, now)
-    : startSignup(env, channel, channelUserId, channelChatId, now);
+    : signupGuide(channel, channelUserId, channelChatId);
 };
 
 const resetConversation = async (
@@ -361,7 +338,7 @@ export const handleChannelMessage = async (
   }
   if (!binding && command.name === "/signup") {
     await markFirstContactAnswered(env.DB, channel, channelUserId, now);
-    return startSignup(env, channel, channelUserId, channelChatId, now);
+    return signupGuide(channel, channelUserId, channelChatId);
   }
   if (!binding && command.name !== "/start") {
     if (!(await unlinkedReplyAllowed(env, channel, channelUserId)))
@@ -383,10 +360,11 @@ export const handleChannelMessage = async (
   if (command.name === "/signup")
     return {
       reply: channelAccount
-        ? "This chat already is your Omi account. Sign in on your phone or " +
-          "desktop and send /start here to move it across."
-        : `This chat is already linked to ${masked}, so there's nothing to ` +
-          "sign up for.",
+        ? "This chat was set up here before accounts moved to the app. Sign " +
+          "in on your phone or desktop, then send /start here to link this " +
+          "chat to that account."
+        : `This chat is already linked to ${masked}. Send /help if you need ` +
+          "anything else.",
       enqueue: false,
     };
   if (command.name === "/start")

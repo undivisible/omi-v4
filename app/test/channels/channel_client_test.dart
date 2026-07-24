@@ -142,6 +142,27 @@ void main() {
       expect(ChannelLinkCode.tryParse('hello there'), isNull);
     });
   });
+
+  group('ChannelLinkCode.extractFrom', () {
+    test('finds a code embedded in natural language', () {
+      expect(
+        ChannelLinkCode.extractFrom('my omi telegram code is CMKCVXM'),
+        'CMKCVXM',
+      );
+      expect(
+        ChannelLinkCode.extractFrom('paste K7Q-P2RM when prompted'),
+        'K7QP2RM',
+      );
+    });
+
+    test('still prefers a bare code', () {
+      expect(ChannelLinkCode.extractFrom('K7QP2RM'), 'K7QP2RM');
+    });
+
+    test('returns null when no valid code is present', () {
+      expect(ChannelLinkCode.extractFrom('hello there'), isNull);
+    });
+  });
 }
 
 final class _Transport implements AuthenticatedChannelTransport {

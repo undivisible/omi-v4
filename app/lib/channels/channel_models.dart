@@ -28,6 +28,27 @@ abstract final class ChannelLinkCode {
     }
     return normalized;
   }
+
+  /// Finds a link code in free-form text (e.g. "my telegram code is K7QP2RM").
+  static String? extractFrom(String value) {
+    final direct = tryParse(value);
+    if (direct != null) return direct;
+    final chunks = value.toUpperCase().split(RegExp('[^$alphabet]+'));
+    for (final chunk in chunks.reversed) {
+      final parsed = tryParse(chunk);
+      if (parsed != null) return parsed;
+    }
+    final pattern = RegExp(
+      '(?<![$alphabet])(?:[$alphabet][\\s._\\-]?){$length}(?![$alphabet])',
+      caseSensitive: false,
+    );
+    String? found;
+    for (final match in pattern.allMatches(value)) {
+      final parsed = tryParse(match.group(0)!);
+      if (parsed != null) found = parsed;
+    }
+    return found;
+  }
 }
 
 enum ChannelLinkPhase {
