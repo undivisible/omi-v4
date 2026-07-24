@@ -105,9 +105,7 @@ jobs:
       - run: bun run deploy:dry-run
 
   rust:
-    # macOS host: praefectus 0.4.0's Linux backend currently fails to build
-    # against crates.io x11rb/zbus, which blocks Ubuntu clippy/check/test.
-    runs-on: macos-latest
+    runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: app/native/hub
