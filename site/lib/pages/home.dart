@@ -43,7 +43,7 @@ const _capabilities = [
   ),
   _Capability(
     '05',
-    'Computer use, approved',
+    'Clicks and typing, with your OK',
     'It asks before it clicks or types. You approve once; every action is '
         'recorded.',
   ),
@@ -76,8 +76,8 @@ const _specs = <(String, String)>[
   ('Offline recording', 'Yes — it catches up when the phone is back'),
   ('Charging', 'Dock with pogo-pin contacts'),
   ('Languages', '25+, single, multi, or translated'),
-  ('In transit', 'TLS'),
-  ('At rest', 'AES-256-GCM'),
+  ('Encrypted in transit', 'TLS'),
+  ('Encrypted on disk', 'AES-256-GCM'),
   ('Training on your data', 'No'),
   ('Compatibility', 'iOS 15+, Android 7+, macOS, any browser'),
   ('Water resistance', 'None — keep it out of the shower'),
@@ -413,8 +413,8 @@ class Home extends StatelessComponent {
         div([
           p([
             .text(
-              'A public HTTP API and an MCP server, so the tools you already '
-              'use can ask your second brain too.',
+              'Other apps can ask your second brain too — through a public '
+              'HTTP API and an MCP server.',
             ),
           ], classes: 'mid measure reveal'),
           ul([
@@ -506,7 +506,10 @@ class Home extends StatelessComponent {
         div([
           article([
             h3([.text('Omi with your own keys')], classes: 'label'),
-            p([.text('Negotiable')], classes: 'amount'),
+            p([.text('More than 60% off')], classes: 'amount'),
+            p([
+              .text('vs managed Omi AI at ~\$35/month'),
+            ], classes: 'small'),
             p([
               .text(
                 'Sign in with an xAI or ChatGPT subscription you already pay '
@@ -685,7 +688,7 @@ class _HubEmbed extends StatelessComponent {
           ),
           div([
             button(
-              [.text('Try the hub')],
+              [.text('Try Omi')],
               classes: 'btn btn-solid',
               id: 'hub-start',
               type: ButtonType.button,
@@ -710,10 +713,10 @@ class _HubEmbed extends StatelessComponent {
       ),
       figcaption([
         .text(
-          'The hub itself, running in this page against seeded sample data — '
-          'not anyone\'s account. Capture, the pendant, on-device '
-          'transcription and computer use need the desktop build and say so '
-          'here; everything else is the same UI, the same code.',
+          'Omi running in this page against seeded sample data — not '
+          'anyone\'s account. Capture, the pendant, on-device transcription '
+          'and computer use need the desktop build and say so here; '
+          'everything else is the same UI, the same code.',
         ),
       ]),
     ], classes: 'shot reveal');
