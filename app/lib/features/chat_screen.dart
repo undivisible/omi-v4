@@ -1469,10 +1469,7 @@ class ChatScreenState extends State<ChatScreen>
       if (_activeRequestId != null)
         () => _AssistantRow(
           spinning: true,
-          child: _SkeletonBubble(
-            key: const Key('chat_skeleton'),
-            label: _progress,
-          ),
+          child: const _SkeletonBubble(key: Key('chat_skeleton')),
         )
       else if (_progress != null)
         () => Text(_progress!, key: const Key('chat_progress')),
@@ -2364,12 +2361,10 @@ class _AssistantRow extends StatelessWidget {
 
 /// The placeholder shown while the assistant's reply is still streaming in —
 /// shimmering lines instead of a spinner alone, so the wait reads as content
-/// arriving rather than a stall. [label] surfaces the live status if there is
-/// one ("Thinking", "Working on it…").
+/// arriving rather than a stall. The animated mark beside it is the only
+/// "thinking" signal; the wait carries no status label of its own.
 class _SkeletonBubble extends StatefulWidget {
-  const _SkeletonBubble({this.label, super.key});
-
-  final String? label;
+  const _SkeletonBubble({super.key});
 
   @override
   State<_SkeletonBubble> createState() => _SkeletonBubbleState();
@@ -2419,8 +2414,6 @@ class _SkeletonBubbleState extends State<_SkeletonBubble>
                   highlight: colors.rowHover,
                 ),
               ),
-            if (widget.label case final label?)
-              Text(label, style: TextStyle(fontSize: 12, color: colors.muted)),
           ],
         ),
       ),

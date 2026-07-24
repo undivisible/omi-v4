@@ -231,11 +231,13 @@ class _OmiMarkPainter extends CustomPainter {
     final unit = size.shortestSide / OmiMarkGeometry.canvas;
     final centre = Offset(size.width / 2, size.height / 2);
 
-    // The whole ring orbits. Idle turns once per lap; the other states hold
-    // steadier so the per-dot motion is what reads.
+    // The whole ring orbits. Idle turns once per lap; thinking turns a full
+    // lap so it visibly rotates in a circle while each dot also wanders (see
+    // the per-dot wobble below); the others hold steadier so the per-dot
+    // motion is what reads.
     final spin = switch (state) {
       OmiOrbState.idle => turn,
-      OmiOrbState.thinking => turn * 0.25,
+      OmiOrbState.thinking => turn,
       OmiOrbState.listening => turn * 0.12,
       OmiOrbState.success => turn * 0.5,
     };
@@ -260,8 +262,18 @@ class _OmiMarkPainter extends CustomPainter {
       final angle = OmiMarkGeometry.angleOf(i) + spinAngle;
 
       // Canvas y grows downward and index 0 is due north, so north is -y.
-      final at =
+      var at =
           centre + Offset(math.sin(angle), -math.cos(angle)) * radius * unit;
+
+      // Thinking: on top of the whole ring rotating, each dot wanders around a
+      // small Lissajous path — x and y at different rates so it reads as moving
+      // on two axes rather than tracing a plain circle. Phased by the dot's
+      // resting angle so the eight are never in lockstep.
+      if (state == OmiOrbState.thinking && !still) {
+        final w = turn * 2 * math.pi;
+        final ph = OmiMarkGeometry.angleOf(i);
+        at += Offset(math.cos(w + ph), math.sin(w * 1.4 + ph)) * 5.5 * unit;
+      }
 
       final scale = 1 + phase * 0.16 + level * 0.1;
       final alpha =
