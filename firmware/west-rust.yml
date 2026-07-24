@@ -26,6 +26,8 @@ manifest:
       remote: zephyrproject-rtos
       revision: ab3e546232bfa2f4e16d6c5156b9d9500885b4e8
       path: modules/lang/rust
+# Local workspaces must apply the Parent-status patch after west update:
+#   patch -p1 -d modules/lang/rust < <repo>/firmware/omi/rust/patches/zephyr-lang-rust-parent-disabled.patch
 
   self:
     import: west.yml

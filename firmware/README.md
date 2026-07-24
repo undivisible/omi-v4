@@ -333,8 +333,9 @@ logic lives: tx ring/GATT framing, battery SoC/EMA math, IMU register packing
 and gesture classify, button tap FSM, haptic BLE→duration map, LED pulse-width
 math, feedback error-pattern tables, storage BLE sync wire format, user-event
 payload encode, RTC/IMU time math, and audio ATT chunk sizing. C keeps the
-Zephyr I/O — GPIO, I2C, BLE, PWM, threads and `k_msleep` timing — and calls
-into these helpers. `main()` runs `omi_rust_selftest()` at boot.
+Zephyr I/O — BLE, I2C, PWM, threads and `k_msleep` timing — and calls into
+these helpers; haptic motor GPIO is in Rust (`GpioPin` via the `zephyr` crate).
+`main()` runs `omi_rust_selftest()` at boot.
 
 ### Why an out-of-tree module is needed
 
@@ -351,11 +352,13 @@ cp "$FW/west-rust.yml" <workspace>/nrf/west-rust.yml
 cd <workspace>
 west config manifest.file west-rust.yml
 west update zephyr-lang-rust
+patch -p1 -d modules/lang/rust < "$FW/omi/rust/patches/zephyr-lang-rust-parent-disabled.patch"
 ```
 
 Reverse it with `west config manifest.file west.yml`. CI does not mutate a
 workspace: `.github/workflows/ci-firmware.yml` clones the same pinned revision
-into `modules/lang/rust` directly, which is the same layout.
+into `modules/lang/rust` directly and applies the same patch, which is the same
+layout.
 
 ### Building it
 
@@ -387,11 +390,15 @@ takes over `main()`, which would displace `omi/src/main.c`. It reuses the
 module's target mapping and cargo integration and links the staticlib into the
 existing `app` target instead.
 
-### Known blocker: the `zephyr` bindings crate
+### The `zephyr` bindings crate
 
-`omi/rust/Cargo.toml` has **no dependency on the `zephyr` crate**, on purpose.
-With `CONFIG_FLASH=y` — which `omi-cv1` sets — that crate's generated
-`devicetree.rs` fails to compile for this board:
+`omi/rust/Cargo.toml` depends on the `zephyr` crate for `target_os = "none"`;
+host `cargo test` stays core-only.
+
+**Root cause:** With `CONFIG_FLASH=y`, Partition Manager's disabled
+`nordic_ram_flash_controller` (`zephyr,sim-flash`) still got FlashPartition
+Parent codegen calling that parent's `get_instance_raw()`, but disabled nodes
+do not emit that accessor:
 
 ```
 error[E0425]: cannot find function `get_instance_raw` in module `super::super::super`
@@ -399,33 +406,21 @@ error[E0425]: cannot find function `get_instance_raw` in module `super::super::s
     |    let device = super::super::super::get_instance_raw();
 ```
 
-**Why:** `zephyr-lang-rust` maps flash devices by *compatible string* in
-[`dt-rust.yaml`](https://github.com/zephyrproject-rtos/zephyr-lang-rust/blob/main/dt-rust.yaml).
-When codegen emits `FlashPartition::get_instance()`, it walks to a parent flash
-controller and calls that parent's `get_instance_raw()`. If the parent's
-compatible is missing from the YAML (or the parent node is disabled / not
-augmented), the call is emitted anyway and Rust fails to compile. This is the
-same class of bug as upstream
-[zephyr-lang-rust#52](https://github.com/zephyrproject-rtos/zephyr-lang-rust/issues/52)
-("add the missing compatible to `dt-rust.yaml`"). On `omi/nrf5340/cpuapp` the
-partition chain goes through Partition Manager's RAM-flash / sim-flash path
-(`nordic_ram_flash_controller` → `flash_sim_0` → `partitions` → `partition_*`);
-the pinned module already lists `zephyr,sim-flash` and
-`nordic,nrf53-flash-controller`, but that specific parent walk still does not
-get a generated accessor. Upstream
-[PR #146](https://github.com/zephyrproject-rtos/zephyr-lang-rust/pull/146)
-hardens parent codegen for disabled ancestors; it is not in our pin yet.
+**Fix:** After cloning `zephyr-lang-rust` at the pinned revision, apply the
+Parent half of upstream
+[PR #146](https://github.com/zephyrproject-rtos/zephyr-lang-rust/pull/146):
 
-It is a **codegen / mapping gap in the module**, not a Rust-on-Zephyr ban. It
-does not appear with `CONFIG_FLASH=n` (which is why the module's own
-`hello_world` sample builds for this board).
+```sh
+patch -p1 -d modules/lang/rust < "$FW/omi/rust/patches/zephyr-lang-rust-parent-disabled.patch"
+```
 
-Nothing in `omi/rust/` needs Zephyr bindings today, so the crate builds against
-`core` with its own `#[panic_handler]` forwarding to Zephyr's `k_panic()`.
-Restoring the dependency is a one-line `Cargo.toml` change once the partition
-parent walk is fixed or mapped — until then, do not add it, because it breaks
-`omi-cv1`. Pure logic still moves to Rust via `extern "C"` FFI; only driver I/O
-stays in C.
+**Omi DT augment:** `omi/rust/dt-rust-omi.yaml` adds `nordic,gpio-pins` →
+`GpioPin` for motor, power, battery, and PDM enable pins.
+
+The `zephyr` crate's panic handler calls `rust_panic_wrap()` instead of
+`k_panic()` directly; `omi/src/main.c` provides that symbol (the module's
+`rust_cargo_application()` would have supplied it via its own `main.c`, which we
+deliberately avoid).
 
 ### Where this is going
 
@@ -435,8 +430,8 @@ calls `omi_rust_ring_header` / `omi_rust_ring_header_decode` /
 `push_to_gatt`; the Zephyr ring buffer, GATT notify, and MTU throttling stay in
 C. The crate is host-testable (`cd omi/rust && cargo test`) so it can later be
 shared with `app/native/hub` and stop the two ends of the wire format from
-drifting. Moving the ring-buffer ownership itself into Rust still waits on
-either a small C-backed buffer API or the `zephyr` crate (see blocker above).
+drifting. Moving the ring-buffer ownership itself into Rust still waits on either a small
+C-backed buffer API or further `zephyr`-crate integration beyond haptic GPIO.
 
 ## Formatting
 

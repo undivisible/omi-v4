@@ -342,22 +342,22 @@ before it ships enabled.
 defaults `y`**, so the CI and release images link it; it is no longer an opt-in
 dual path. `omi/rust/` is where the firmware's pure logic lives — framing,
 battery SoC/EMA, IMU gesture/register packing, button tap FSM, and
-haptic/LED/feedback helpers — plus a `#[panic_handler]` forwarding to Zephyr's
-`k_panic()` and CMake that links it into the existing `app` target. It does
-**not** call zephyr-lang-rust's `rust_cargo_application()`, which would inject
-the module's own `main.c` and displace `omi/src/main.c`; `omi/src/main.c` calls
-`omi_rust_selftest()` at boot. C keeps the Zephyr I/O — GPIO, I2C, BLE, PWM and
-threads — and calls into these helpers.
+haptic/LED/feedback helpers — plus haptic motor GPIO via the `zephyr` crate — and
+CMake that links it into the existing `app` target. It does **not** call
+zephyr-lang-rust's `rust_cargo_application()`, which would inject the module's
+own `main.c` and displace `omi/src/main.c`; `omi/src/main.c` calls
+`omi_rust_selftest()` at boot and provides `rust_panic_wrap()` for the crate's
+panic handler. C keeps the Zephyr I/O — BLE, I2C, PWM and threads — and calls
+into these helpers.
 
 Two facts shape it. `CONFIG_RUST` exists in Zephyr 4.4.0 only as a Kconfig stub —
 the build backing it lives in `zephyrproject-rtos/zephyr-lang-rust`, which is in
 neither the NCS nor the upstream Zephyr manifest, so [`west-rust.yml`](west-rust.yml)
 pins it and imports the NCS manifest unchanged, and that module is required in
-the workspace. And `omi/rust/Cargo.toml` deliberately has **no** dependency on
-the `zephyr` bindings crate: with `CONFIG_FLASH=y`, which `omi-cv1` sets, that
-crate's generated `devicetree.rs` fails to compile for this board. `README.md`'s
-*Known blocker* has the exact error; nothing in `omi/rust/` needs the bindings,
-so the crate builds against `core`.
+the workspace (with
+[`patches/zephyr-lang-rust-parent-disabled.patch`](omi/rust/patches/zephyr-lang-rust-parent-disabled.patch)
+applied locally — see `README.md`). `omi/rust/Cargo.toml` depends on the
+`zephyr` crate for `target_os = "none"`; host `cargo test` stays core-only.
 
 The library also proves the toolchain path before `transport.c`'s tx logic moves
 over, and gives the wire format a host-testable home that `app/native/hub` could

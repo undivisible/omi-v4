@@ -90,7 +90,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ env.NCS_WORKSPACE }}
-          key: ncs-${{ env.NCS_VERSION }}-rust-${{ env.RUST_MODULE_REV }}-v1
+          key: ncs-${{ env.NCS_VERSION }}-rust-${{ env.RUST_MODULE_REV }}-parentfix-v1
 
       - name: Resolve the NCS toolchain on PATH
         if: steps.cache.outputs.cache-hit != 'true'
@@ -125,6 +125,10 @@ jobs:
           fi
           git -C "${dest}" fetch --depth 1 origin "${RUST_MODULE_REV}"
           git -C "${dest}" checkout --detach "${RUST_MODULE_REV}"
+          # Parent-status fix for disabled nordic_ram_flash_controller (PR #146 half).
+          # Without this, CONFIG_FLASH=y breaks the zephyr crate on omi-cv1.
+          patch -p1 -d "${dest}" \
+            < "${GITHUB_WORKSPACE}/firmware/omi/rust/patches/zephyr-lang-rust-parent-disabled.patch"
           git -C "${dest}" rev-parse HEAD
 
   build:
@@ -164,7 +168,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ${{ env.NCS_WORKSPACE }}
-          key: ncs-${{ env.NCS_VERSION }}-rust-${{ env.RUST_MODULE_REV }}-v1
+          key: ncs-${{ env.NCS_VERSION }}-rust-${{ env.RUST_MODULE_REV }}-parentfix-v1
           fail-on-cache-miss: true
 
       - name: Resolve the NCS toolchain on PATH

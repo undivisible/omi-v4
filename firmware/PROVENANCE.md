@@ -151,17 +151,18 @@ haptic/LED/feedback helpers — plus a boot-time self-test; C keeps the Zephyr I
 
 | Path | Divergence |
 | --- | --- |
-| `omi/rust/` | **new**, no upstream counterpart. `omi-rust` staticlib: pure-logic modules (`framing`, `battery`, `imu_gesture`, `button`, `haptic`, `led`, `feedback`, host-tested), a `k_panic()` panic handler, and CMake that links it into the existing `app` target without zephyr-lang-rust's `rust_cargo_application()` (which would displace `omi/src/main.c`) |
+| `omi/rust/` | **new**, no upstream counterpart. `omi-rust` staticlib: pure-logic modules (`framing`, `battery`, `imu_gesture`, `button`, `haptic`, `led`, `feedback`, host-tested), haptic motor GPIO via the `zephyr` crate, and CMake that links it into the existing `app` target without zephyr-lang-rust's `rust_cargo_application()` (which would displace `omi/src/main.c`; `main.c` supplies `rust_panic_wrap()` instead) |
 | `west-rust.yml` | **new**, and required in the workspace. West manifest fragment pinning `zephyrproject-rtos/zephyr-lang-rust` at `ab3e546232bfa2f4e16d6c5156b9d9500885b4e8`, imported on top of the NCS manifest. The module is in neither the NCS nor the upstream Zephyr manifest, and `CONFIG_RUST` in Zephyr 4.4.0 is a stub without it |
 | `omi/Kconfig` | added `OMI_RUST` (defaults `y`) and `OMI_RUST_CLIPPY` |
 | `omi/CMakeLists.txt` | `add_subdirectory(rust)` under `CONFIG_OMI_RUST` |
 | `omi/src/main.c` | calls `omi_rust_selftest()` at boot |
 
-`omi/rust/Cargo.toml` still has **no** dependency on the `zephyr` bindings crate:
-with `CONFIG_FLASH=y`, which `omi-cv1` sets, that crate's generated
-`devicetree.rs` does not compile for this board, so the crate builds against
-`core`. The library is self-contained in `omi/rust/`, so a re-sync does not
-collide with upstream's C.
+`omi/rust/Cargo.toml` depends on the `zephyr` crate for `target_os = "none"`;
+the pinned `zephyr-lang-rust` module needs
+`patches/zephyr-lang-rust-parent-disabled.patch` (Parent half of upstream PR
+#146) and `dt-rust-omi.yaml` (`nordic,gpio-pins` → `GpioPin`). Host
+`cargo test` stays core-only. The library is self-contained in `omi/rust/`, so a
+re-sync does not collide with upstream's C.
 
 When re-syncing, expect step 3 of *How to re-sync with upstream* to produce a
 large diff on every file in the first table. Those hunks are deliberate; do not

@@ -10,6 +10,15 @@ if(NOT COMMAND add_cargo_target_with_zephyr_env)
         "-DEXTRA_ZEPHYR_MODULES=<path to zephyr-lang-rust>. See firmware/README.md.")
 endif()
 
+# DT_AUGMENTS is space-separated and must stay a single CMAKE string (a
+# multi-path CACHE value gets list-escaped and breaks zephyr-build). Merge
+# upstream + Omi augments into one file.
+file(READ "${RUST_MODULE_DIR}/dt-rust.yaml" _omi_dt_base)
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/dt-rust-omi.yaml" _omi_dt_extra)
+set(_omi_dt_combined "${CMAKE_CURRENT_BINARY_DIR}/dt-rust-combined.yaml")
+file(WRITE "${_omi_dt_combined}" "${_omi_dt_base}\n${_omi_dt_extra}")
+set(DT_AUGMENTS "${_omi_dt_combined}" CACHE INTERNAL "" FORCE)
+
 get_include_dirs(zephyr_interface include_dirs)
 get_property(include_defines TARGET zephyr_interface PROPERTY INTERFACE_COMPILE_DEFINITIONS)
 
@@ -27,6 +36,10 @@ endif()
 set(CARGO_TARGET_DIR "${CMAKE_CURRENT_BINARY_DIR}/rust/target")
 set(RUST_LIBRARY "${CARGO_TARGET_DIR}/${RUST_TARGET}/${RUST_BUILD_TYPE}/libomi_rust.a")
 set(DUMMY_FILE "${CMAKE_CURRENT_BINARY_DIR}/always-run-cargo-omi.dummy")
+# bindgen emits C wrappers for Zephyr static-inline helpers here; must be
+# compiled into app (rust_cargo_application does the same).
+set(WRAPPER_FILE "${CMAKE_CURRENT_BINARY_DIR}/rust/wrapper.c")
+file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/rust")
 
 set(command_paths)
 foreach(module IN ITEMS zephyr zephyr-build zephyr-sys)
@@ -38,7 +51,7 @@ endforeach()
 add_cargo_target_with_zephyr_env(libomirust
     ALL
     OUTPUT ${DUMMY_FILE}
-    BYPRODUCTS ${RUST_LIBRARY}
+    BYPRODUCTS ${RUST_LIBRARY} ${WRAPPER_FILE}
     CARGO_ARGS build
     COMMENT "Building the omi-rust staticlib"
 )
@@ -51,6 +64,9 @@ if(CONFIG_OMI_RUST_CLIPPY)
         COMMENT "Linting the omi-rust staticlib"
     )
 endif()
+
+target_sources(app PRIVATE ${WRAPPER_FILE})
+set_source_files_properties(${WRAPPER_FILE} PROPERTIES GENERATED TRUE)
 
 target_link_libraries(app PUBLIC
     $<TARGET_PROPERTY:linker,rt_library>

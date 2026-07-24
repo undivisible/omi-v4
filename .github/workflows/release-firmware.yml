@@ -171,6 +171,8 @@ jobs:
           fi
           git -C "${dest}" fetch --depth 1 origin "${RUST_MODULE_REV}"
           git -C "${dest}" checkout --detach "${RUST_MODULE_REV}"
+          patch -p1 -d "${dest}" \
+            < "${GITHUB_WORKSPACE}/firmware/omi/rust/patches/zephyr-lang-rust-parent-disabled.patch"
           git -C "${dest}" rev-parse HEAD
 
       - name: Install Rust with the nRF5340 app-core target

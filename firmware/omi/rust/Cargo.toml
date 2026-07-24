@@ -9,12 +9,11 @@ name = "omi_rust"
 crate-type = ["staticlib", "rlib"]
 path = "src/lib.rs"
 
-# No `zephyr = "0.1.0"` dependency yet, deliberately. See the "Rust in the
-# firmware" section of firmware/README.md: the zephyr crate's generated
-# devicetree module does not compile for omi/nrf5340/cpuapp when CONFIG_FLASH=y.
-# Nothing here needs Zephyr bindings, and staying off the crate keeps omi-cv1
-# buildable. Adding it back is a one-line change once that is fixed upstream.
-[dependencies]
+# Host `cargo test` stays on core-only. On the Zephyr target the `zephyr`
+# crate provides GPIO / sync / time. That crate needs the Parent-status
+# patch in patches/zephyr-lang-rust-parent-disabled.patch (see README).
+[target.'cfg(target_os = "none")'.dependencies]
+zephyr = "0.1.0"
 
 [profile.release]
 panic = "abort"

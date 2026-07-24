@@ -51,6 +51,8 @@ void omi_rust_button_reset(void);
 
 uint32_t omi_rust_haptic_duration_from_ble(uint8_t value);
 uint32_t omi_rust_haptic_clamp_duration(uint32_t duration);
+int omi_rust_haptic_motor_init(void);
+int omi_rust_haptic_motor_set(bool on);
 
 uint32_t omi_rust_led_pulse_width_ns(uint32_t period_ns, uint8_t level);
 

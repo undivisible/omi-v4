@@ -1,5 +1,5 @@
-// Pure BLE write → duration map and duration clamp. GPIO and the delayable
-// work item stay in C.
+// Pure BLE write → duration map and duration clamp. On-target motor GPIO
+// uses the zephyr crate; delayable off work and BLE GATT stay in C.
 
 pub const MAX_HAPTIC_DURATION_MS: u32 = 5000;
 
@@ -19,6 +19,61 @@ pub fn clamp_duration(duration: u32) -> u32 {
         duration
     }
 }
+
+#[cfg(target_os = "none")]
+mod motor {
+    use core::cell::UnsafeCell;
+    use core::sync::atomic::{AtomicBool, Ordering};
+
+    use zephyr::device::gpio::GpioPin;
+    use zephyr::raw::{ZR_GPIO_OUTPUT, ENODEV};
+
+    struct Slot(UnsafeCell<Option<GpioPin>>);
+    // SAFETY: access is gated by INIT and only from cooperative contexts that
+    // already serialized the C haptic API.
+    unsafe impl Sync for Slot {}
+
+    static SLOT: Slot = Slot(UnsafeCell::new(None));
+    static INIT: AtomicBool = AtomicBool::new(false);
+
+    pub fn init() -> i32 {
+        if INIT.load(Ordering::Acquire) {
+            return 0;
+        }
+        let Some(mut pin) = zephyr::devicetree::labels::motor_pin::get_instance() else {
+            return -(ENODEV as i32);
+        };
+        pin.configure(ZR_GPIO_OUTPUT);
+        // SAFETY: first init only; Unique.once() already consumed above.
+        unsafe {
+            *SLOT.0.get() = Some(pin);
+        }
+        INIT.store(true, Ordering::Release);
+        0
+    }
+
+    pub fn set(on: bool) -> i32 {
+        if !INIT.load(Ordering::Acquire) {
+            return -(ENODEV as i32);
+        }
+        // SAFETY: INIT guarantees the Option is Some and exclusive with C callers.
+        unsafe {
+            if let Some(pin) = (*SLOT.0.get()).as_mut() {
+                pin.set(on);
+                0
+            } else {
+                -(ENODEV as i32)
+            }
+        }
+    }
+
+    pub fn is_ready() -> bool {
+        INIT.load(Ordering::Acquire)
+    }
+}
+
+#[cfg(target_os = "none")]
+pub use motor::{init as motor_init, is_ready as motor_is_ready, set as motor_set};
 
 pub fn selftest() -> i32 {
     let mut failures = 0;

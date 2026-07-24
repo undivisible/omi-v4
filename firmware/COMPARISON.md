@@ -139,10 +139,10 @@ workspace. `omi/rust/` is where the firmware's pure logic lives — framing,
 battery SoC/EMA, IMU gesture/register packing, button tap FSM, haptic duration
 map, LED pulse math, feedback error patterns — plus a boot-time self-test, linked
 into a real image and verifiable with `nm … | grep omi_rust_selftest` on the
-built ELF. C keeps the Zephyr I/O (GPIO, I2C, BLE, PWM, threads). It still has
-**no** dependency on the `zephyr` bindings crate, because with `CONFIG_FLASH=y`
-that crate's generated `devicetree.rs` does not compile for this board, so it
-builds against `core`. Its purpose is to prove the toolchain path before
+built ELF. C keeps the Zephyr I/O (BLE, I2C, PWM, threads); haptic motor GPIO
+is in Rust. It depends on the `zephyr` crate for `target_os = "none"` after
+applying the Parent-status patch to the pinned `zephyr-lang-rust` module (see
+`README.md`). Its purpose is to prove the toolchain path before
 `transport.c`'s tx logic moves over, and to give the wire format a host-testable
 home that `app/native/hub` could later share.
 

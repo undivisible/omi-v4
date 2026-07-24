@@ -1,4 +1,5 @@
 #![cfg_attr(target_os = "none", no_std)]
+#![cfg_attr(target_os = "none", allow(unexpected_cfgs))]
 
 pub mod audio_dsp;
 pub mod battery;
@@ -14,17 +15,6 @@ pub mod settings_math;
 pub mod storage_proto;
 pub mod time;
 pub mod user_event;
-
-#[cfg(target_os = "none")]
-#[panic_handler]
-fn panic(_info: &core::panic::PanicInfo) -> ! {
-    extern "C" {
-        fn k_panic() -> !;
-    }
-    // SAFETY: k_panic() is Zephyr's own panic entry point. It is `FUNC_NORETURN`
-    // on the C side and is always linked into the application image.
-    unsafe { k_panic() }
-}
 
 #[no_mangle]
 pub extern "C" fn omi_rust_selftest() -> i32 {
@@ -423,6 +413,18 @@ pub extern "C" fn omi_rust_haptic_duration_from_ble(value: u8) -> u32 {
 #[no_mangle]
 pub extern "C" fn omi_rust_haptic_clamp_duration(duration: u32) -> u32 {
     haptic::clamp_duration(duration)
+}
+
+#[cfg(target_os = "none")]
+#[no_mangle]
+pub extern "C" fn omi_rust_haptic_motor_init() -> i32 {
+    haptic::motor_init()
+}
+
+#[cfg(target_os = "none")]
+#[no_mangle]
+pub extern "C" fn omi_rust_haptic_motor_set(on: bool) -> i32 {
+    haptic::motor_set(on)
 }
 
 #[no_mangle]

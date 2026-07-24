@@ -32,6 +32,15 @@
 
 LOG_MODULE_REGISTER(main, CONFIG_LOG_DEFAULT_LEVEL);
 
+/* The zephyr crate's panic handler calls this instead of k_panic() directly.
+ * rust_cargo_application() would have provided it via the module main.c; we
+ * keep omi/src/main.c and supply the same symbol here.
+ */
+void rust_panic_wrap(void)
+{
+    k_panic();
+}
+
 #ifdef CONFIG_OMI_ENABLE_BATTERY
 #define BATTERY_FULL_THRESHOLD_PERCENT 98 // 98%
 extern uint8_t battery_percentage;

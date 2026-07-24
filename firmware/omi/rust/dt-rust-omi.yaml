@@ -1,0 +1,13 @@
+# Extra DT augmentations for Omi board nodes that upstream dt-rust.yaml
+# does not cover. nordic,gpio-pins is how the Omi DTS declares motor,
+# power, battery, and PDM enable pins.
+- name: nordic-gpio-pins
+  cfg: CONFIG_GPIO
+  rules:
+    - !Compatible
+      names: ["nordic,gpio-pins"]
+      level: 0
+  actions:
+    - !Instance
+      raw: !Phandle gpios
+      device: crate::device::gpio::GpioPin
