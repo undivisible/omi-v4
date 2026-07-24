@@ -46,6 +46,8 @@ class Architecture extends StatelessComponent {
         ('path', 'Request path'),
         ('tiers', 'Model tiers'),
         ('data', 'Data plane'),
+        ('memory', 'Memory'),
+        ('approval', 'Approval gate'),
         ('pendant', 'Pendant'),
       ],
       children: [
@@ -53,6 +55,8 @@ class Architecture extends StatelessComponent {
         _requestPath(),
         _modelTiers(),
         _dataPlane(),
+        _memory(),
+        _approval(),
         _pendant(),
       ],
     );
@@ -157,6 +161,33 @@ class Architecture extends StatelessComponent {
             ]),
           ]),
         ], classes: 'table-wrap reveal'),
+        ul([
+          li([
+            b([.text('A tier says what a request is worth paying for.')]),
+            .text(
+              ' Prompt intent picks it: search and vision are detected first, '
+              'hard reasoning goes to the smart tier, everything else takes '
+              'the default.',
+            ),
+          ]),
+          li([
+            b([.text('A capability says what a model can carry.')]),
+            .text(
+              ' A request states what it needs — audio in, images, audio out — '
+              'and the first tier whose model declares all of it wins. If none '
+              'does, the request is refused rather than sent to a model that '
+              'cannot read it.',
+            ),
+          ]),
+          li([
+            b([.text('An unverified model satisfies nothing.')]),
+            .text(
+              ' An override naming a model the table has not checked is '
+              'refused at the point of use until it declares itself, so a typo '
+              'degrades to "unknown" instead of being trusted.',
+            ),
+          ]),
+        ], classes: 'notes split reveal band-gap'),
       ],
       classes: 'band wrap',
       id: 'tiers',
@@ -197,8 +228,10 @@ class Architecture extends StatelessComponent {
           li([
             b([.text('Memory')]),
             .text(
-              ' The source of truth is a local database in the hub, at a path '
-              'keyed by a hash of your account id.',
+              ' One append-only log per account is the write authority. The '
+              'read tables are a projection of it, so any of them can be '
+              'dropped and rebuilt, and every device keeps a local mirror at '
+              'the sequence it last synced.',
             ),
           ]),
         ], classes: 'notes split reveal'),
@@ -209,10 +242,104 @@ class Architecture extends StatelessComponent {
     );
   }
 
+  Component _memory() {
+    return section(
+      [
+        h2([.text('Memory')], classes: 'label', id: 't5'),
+        p([
+          .text('A log, and a view of it.'),
+        ], classes: 'big reveal measure-16'),
+        ul([
+          li([
+            b([.text('One writer.')]),
+            .text(
+              ' A record is not remembered until the Worker has appended it to '
+              'the account log and assigned it a sequence. Devices mint records '
+              'and capture evidence; they never decide ordering.',
+            ),
+          ]),
+          li([
+            b([.text('Nothing is edited.')]),
+            .text(
+              ' A correction and a deletion are new records that reference the '
+              'one they supersede, so an evidence chain is never rewritten and '
+              'a citation stays stable for the life of the claim.',
+            ),
+          ]),
+          li([
+            b([.text('The tables are derived.')]),
+            .text(
+              ' Search, profile and evidence tables are folded forward from the '
+              'log and use no wall clock, so replaying the log from zero '
+              'produces the same rows as following it.',
+            ),
+          ]),
+          li([
+            b([.text('Recall is cited.')]),
+            .text(
+              ' A claim is returned only with the evidence that supports it, '
+              'resolved to a source revision and its locator. A claim whose '
+              'source has been deleted is dropped from the answer rather than '
+              'returned uncited.',
+            ),
+          ]),
+        ], classes: 'notes split reveal'),
+      ],
+      classes: 'band wrap',
+      id: 'memory',
+      attributes: {'aria-labelledby': 't5'},
+    );
+  }
+
+  Component _approval() {
+    return section(
+      [
+        h2([.text('The approval gate')], classes: 'label', id: 't6'),
+        p([.text('Asked for is not done.')], classes: 'big reveal measure-16'),
+        ul([
+          li([
+            b([.text('Two actions, named not aimed.')]),
+            .text(
+              ' The assistant can propose invoking an interface element or '
+              'setting its value, addressed through the accessibility tree by '
+              'exact name. No pointer, no keystrokes, no coordinates.',
+            ),
+          ]),
+          li([
+            b([.text('Bound before you see it.')]),
+            .text(
+              ' The named element must match exactly one element in a live '
+              'observation. Zero matches and two matches fail the same way, and '
+              'the proposal expires with the screen it described.',
+            ),
+          ]),
+          li([
+            b([.text('Approved once, spent once.')]),
+            .text(
+              ' Approval is per action. The receipt is consumed server-side '
+              'before any effect, and the executor re-derives the request and '
+              'refuses it if a single field has moved.',
+            ),
+          ]),
+          li([
+            b([.text('Unknown is its own answer.')]),
+            .text(
+              ' An action that may or may not have taken effect is recorded as '
+              'unknown and is never retried automatically.',
+            ),
+          ]),
+        ], classes: 'notes split reveal'),
+      ],
+      classes: 'band wrap',
+      id: 'approval',
+      attributes: {'aria-labelledby': 't6'},
+    );
+  }
+
   Component _pendant() {
     return section(
       [
-        h2([.text('The pendant path')], classes: 'label', id: 't5'),
+        h2([.text('The pendant path')], classes: 'label', id: 't7'),
         div([RawText(_pendantDiagram)], classes: 'plate reveal'),
         p([
           .text(
@@ -227,7 +354,7 @@ class Architecture extends StatelessComponent {
       ],
       classes: 'band wrap',
       id: 'pendant',
-      attributes: {'aria-labelledby': 't5'},
+      attributes: {'aria-labelledby': 't7'},
     );
   }
 }

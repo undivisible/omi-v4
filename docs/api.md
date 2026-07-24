@@ -178,6 +178,32 @@ independently of these buckets and can also produce `429`. The speech routes
 sit behind the same managed-STT admission and cost reservation the live STT
 sessions use, which can also produce `429` — see §4.10 and §4.11.
 
+### 2.1 Managed-AI admission
+
+The request buckets above count requests. Managed AI is admitted on **cost**,
+which is a separate control and behaves differently enough to be worth knowing
+about.
+
+Before an upstream model call is made, the Worker estimates the request's input
+tokens and its cost in microdollars, and takes a reservation from a single
+global coordinator. The reservation is refused when any of six rolling limits
+would be exceeded: concurrent in-flight requests per account and globally, token
+budget per account and globally, cost budget per account and globally. The
+window is one hour by default and rolls continuously rather than resetting on
+the hour. A refusal is `429` with `Retry-After` set to when the oldest
+reservation in the window ages out.
+
+Two consequences for a client:
+
+- **A repeated request id returns the existing reservation** rather than taking
+  a second one, so retrying an admitted call does not consume budget twice.
+- **The estimate is replaced by the truth.** When the upstream call finishes,
+  the actual token usage is read from the response and the reservation is
+  rewritten to the real figure, so an over-estimated request returns its unused
+  budget. Every terminal path settles — completion, cancellation, timeout,
+  upstream failure — and a stuck request is swept and released by a reconciler,
+  so budget is never lost to a dropped connection.
+
 ---
 
 ## 3. Conventions
@@ -221,6 +247,22 @@ Scope: `memory:read`.
 
 Search the account's memory. Every result cites the evidence it came from;
 claims with no surviving citation are never returned.
+
+That guarantee is structural rather than best-effort, and it is worth stating
+precisely because it constrains what this endpoint can return. A claim is
+matched, then the evidence supporting it is resolved through
+`claim -> evidence -> source revision -> source`; a claim whose evidence has
+been tombstoned, or whose source has, comes back with an empty evidence list
+and is **dropped from the response** rather than returned uncited. So this
+endpoint will return fewer items — sometimes none, with a `gaps` entry saying
+so — before it returns an item it cannot show you the source of.
+
+The tables answering the query are a projection of an append-only log, rebuilt
+forward before every read. Deleting a source is an append, not an update; the
+projection propagates the tombstone to that source's evidence and retracts every
+claim left without a live citation, so a deletion reaches this endpoint by the
+same path whatever performed it. See `docs/memory-authority.md` in the
+repository for the model.
 
 | Query parameter | Type | Default | Range |
 | --- | --- | --- | --- |
@@ -277,6 +319,10 @@ Scope: `memory:read`.
 
 List the account's active profile memories — the durable view of who the user
 is and what they are currently doing — newest updated first.
+
+The same citation rule as §4.2 applies: an entry is joined through its claim to
+live evidence and a live source, so an entry whose supporting source has been
+deleted is absent rather than returned without provenance.
 
 | Query parameter | Type | Default | Range |
 | --- | --- | --- | --- |
@@ -1079,3 +1125,18 @@ subscription and are idempotent on `clientMessageId`.
 Deleting an Omi account (`DELETE /v1/account`, first-party, Firebase-only)
 removes every row this API can read, including all API keys for that account.
 Revoking a key is immediate and irreversible; there is no un-revoke.
+
+---
+
+## 7. How the rest of it works
+
+This contract covers the two programmatic surfaces. The systems behind them are
+documented separately, in the repository:
+
+| Document | Subject |
+| --- | --- |
+| `docs/memory-authority.md` | The append-only memory log, the read-table projection, cited retrieval, and device sync. |
+| `docs/agent-harnesses.md` | Capability-aware model routing, the approval gate, the evidence and reflection loops, and cost admission. |
+| `docs/computer-use.md` | What the assistant can drive on a machine, and the chain from a proposed action to an executed one. |
+| `docs/byok.md` | Pointing Omi at your own model provider, and the negotiated price that follows. |
+| `docs/ai-and-observability.md` | Model-tier choices, speech, embeddings, and the observability stack. |

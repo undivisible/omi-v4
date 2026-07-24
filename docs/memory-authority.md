@@ -143,6 +143,21 @@ authoritative sequence.
    `(record_kind, record_id)`, preserving `evidence_locators`. Without it the
    Dart mirror must be a separate read-only store and the hub's `search()` cannot
    see other replicas' memory. This is the gating upstream dependency.
+
+   **Status: built upstream, not yet consumed here.** `zkr`'s working tree
+   implements `MemoryDb::apply` (`src/store/apply.rs`) with the semantics this
+   item asked for: caller-supplied ids; idempotence keyed on `(tenant_id,
+   person_id, record_kind, record_id, payload_hash)` through a
+   `memory_applied_records` ledger, so a re-applied record is counted skipped
+   rather than duplicated; the whole apply running in one `Immediate`
+   transaction; and a fixed nine-pass order (source, evidence, claim, origin,
+   claim-evidence, profile, review, correction, deletion) that makes a commit
+   order-independent — records may arrive in any order within a commit and still
+   land with their references satisfied. Locators survive because the record is
+   applied as exported and re-validated by `validate_transcript_locator` rather
+   than rebuilt. `hub/Cargo.toml` pins `zkr = "0.3.1"`, and the 0.3.1 crate in
+   the local registry has no `store/apply.rs`, so the hub cannot call it yet:
+   until the dependency moves, the Dart mirror stays a read-only store.
 4. ~~**Retire the per-replica projection namespace.**~~ Done, ahead of (3):
    `migrations/0030_memory_log_projection.sql` backfills `zkr_memory_records`
    into the log, deletes every `zkr:`-namespaced read-table row, and drops the
@@ -169,3 +184,80 @@ Web becomes hub-independent for memory once step 1 above lands: reads come from
 log-backed endpoints, and no part of that path requires the Rust hub. As of this
 change the Worker side of that contract exists and the Dart side does not, so
 web is not yet hub-independent.
+
+## 8. The read path: projections, not sources
+
+`worker/src/memory-projection.ts` is the only writer of the D1 read tables, and
+it derives all of them from one intermediate table. `materializeRecords` folds
+new log entries into `memory_records` — the current revision of each record,
+keyed `(uid, record_kind, record_id)` — under
+`WHERE excluded.sequence >= memory_records.sequence`, so a later log sequence
+always wins and following the log incrementally lands the same rows as replaying
+it from zero. `projectMemory` then rewrites `memory_sources`,
+`memory_source_revisions`, `memory_evidence`, `memory_claims`,
+`memory_claims_fts`, `memory_claim_evidence` and `memory_profile_entries` from
+`memory_records` in a single D1 batch, and records how far it got in
+`memory_projection_state`. `ensureMemoryProjected` skips the whole batch when
+the log head has not moved past that mark, and the `/v1/memory/*` and
+`/v1/memories` middleware calls it before every read.
+
+Two properties follow, and both are the reason for the shape:
+
+* **A read table can be dropped and rebuilt.** Nothing in the projection reads
+  its own output as an input, and nothing reaches for a wall clock while
+  deriving a row: every timestamp falls back to the log entry's own
+  `recorded_at` (`COALESCE(json_extract(...), s.recorded_at)`), so a rebuild
+  from sequence zero produces the same rows rather than rows stamped with the
+  rebuild's date. The one deliberate exception is the retraction sweep, which
+  stamps `retracted_at` with the projection's `now` — a fact about when the
+  system noticed the citation was gone, not about the record.
+* **Rules that belong to the evidence model live in the projection, not in a
+  route.** Deleting a source is an append of a `deletion` record; the projection
+  propagates the tombstone to that source's evidence and then retracts every
+  claim that is left with citations but no *live* citation. A claim's retraction
+  is therefore the same whether the source was deleted from the web, from a
+  device, or by replaying an old log — because it is computed, not performed.
+
+Corrections work the same way: a claim is projected as `superseded` when a
+`correction` record naming it as `superseded_claim_id` exists, so the correction
+is a new record and the original row is never edited in place.
+
+### 8.1 Cited retrieval
+
+`retrieveCitedMemory` (`worker/src/memory-read.ts`) is the retrieval every
+first-party and public surface answers from. It is a BM25 match over
+`memory_claims_fts` — each whitespace-separated term of the query, first 16,
+quoted and joined with `AND` — filtered to claims that are `accepted`, not
+retracted, inside their valid and recorded time windows, not archived, and
+processed. Then, for each candidate, it fetches the evidence supporting it,
+joined `memory_claim_evidence -> memory_evidence -> memory_source_revisions ->
+memory_sources` with `relation = 'supports'` and both tombstone columns null.
+
+The last step is the one that matters: a candidate whose evidence list comes
+back empty is dropped from the result rather than returned uncited. A claim the
+system can no longer show you the source of is not an answer, so retrieval
+returns fewer items instead of unsupported ones, and reports
+`gaps: ["No cited memory matched the query."]` when that leaves nothing. Each
+returned item carries `evidence_ids`, and each of those resolves through the
+same chain to a source revision and its `locator` — for pendant and meeting
+audio, a `TranscriptLocator` naming device, provider, stream, segment and time
+range. A citation is traceable to the record that produced it because the record
+is still in the log at a known sequence and the projection is a pure function of
+it.
+
+`listProfileMemories` applies the same discipline: it joins through evidence and
+source with the identical liveness predicates, so an entry with no surviving
+citation cannot appear in the profile view either.
+
+## 9. The vector index
+
+Semantic recall is a second index over the same claims, never a second source.
+`worker/src/memory-vectors.ts` enqueues touched claim ids into
+`pending_embeddings` after every log append — from the cloud write paths and
+from `zkr-sync` alike — and `drainPendingEmbeddings` embeds them through Workers
+AI and upserts into Vectorize, deleting the vector instead when the claim is no
+longer eligible. Eligibility is the same predicate the read path uses, so a
+retracted or archived claim is removed from the index rather than left to be
+matched. `searchMemoryClaims` filters by `uid` at the index and then re-checks
+every hit against `memory_claims` with the liveness and time-window conditions
+before returning it, so a stale vector can cost a result but cannot produce one.

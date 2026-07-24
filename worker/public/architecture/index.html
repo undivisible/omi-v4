@@ -42,6 +42,8 @@
           <li><a href="#path">Request path</a></li>
           <li><a href="#tiers">Model tiers</a></li>
           <li><a href="#data">Data plane</a></li>
+          <li><a href="#memory">Memory</a></li>
+          <li><a href="#approval">Approval gate</a></li>
           <li><a href="#pendant">Pendant</a></li>
         </ol>
       </nav>
@@ -157,6 +159,17 @@
             </tbody>
           </table>
         </div>
+        <ul class="notes split reveal band-gap">
+          <li>
+            <b>A tier says what a request is worth paying for.</b> Prompt intent picks it: search and vision are detected first, hard reasoning goes to the smart tier, everything else takes the default.
+          </li>
+          <li>
+            <b>A capability says what a model can carry.</b> A request states what it needs — audio in, images, audio out — and the first tier whose model declares all of it wins. If none does, the request is refused rather than sent to a model that cannot read it.
+          </li>
+          <li>
+            <b>An unverified model satisfies nothing.</b> An override naming a model the table has not checked is refused at the point of use until it declares itself, so a typo degrades to "unknown" instead of being trusted.
+          </li>
+        </ul>
       </section>
       <section id="data" class="band wrap" aria-labelledby="t4">
         <h2 id="t4" class="label">Data plane</h2>
@@ -172,12 +185,48 @@
             <b>Durable Objects</b> Four coordinators: channel delivery, assistant and speech cost admission, and rate limiting.
           </li>
           <li>
-            <b>Memory</b> The source of truth is a local database in the hub, at a path keyed by a hash of your account id.
+            <b>Memory</b> One append-only log per account is the write authority. The read tables are a projection of it, so any of them can be dropped and rebuilt, and every device keeps a local mirror at the sequence it last synced.
           </li>
         </ul>
       </section>
-      <section id="pendant" class="band wrap" aria-labelledby="t5">
-        <h2 id="t5" class="label">The pendant path</h2>
+      <section id="memory" class="band wrap" aria-labelledby="t5">
+        <h2 id="t5" class="label">Memory</h2>
+        <p class="big reveal measure-16">A log, and a view of it.</p>
+        <ul class="notes split reveal">
+          <li>
+            <b>One writer.</b> A record is not remembered until the Worker has appended it to the account log and assigned it a sequence. Devices mint records and capture evidence; they never decide ordering.
+          </li>
+          <li>
+            <b>Nothing is edited.</b> A correction and a deletion are new records that reference the one they supersede, so an evidence chain is never rewritten and a citation stays stable for the life of the claim.
+          </li>
+          <li>
+            <b>The tables are derived.</b> Search, profile and evidence tables are folded forward from the log and use no wall clock, so replaying the log from zero produces the same rows as following it.
+          </li>
+          <li>
+            <b>Recall is cited.</b> A claim is returned only with the evidence that supports it, resolved to a source revision and its locator. A claim whose source has been deleted is dropped from the answer rather than returned uncited.
+          </li>
+        </ul>
+      </section>
+      <section id="approval" class="band wrap" aria-labelledby="t6">
+        <h2 id="t6" class="label">The approval gate</h2>
+        <p class="big reveal measure-16">Asked for is not done.</p>
+        <ul class="notes split reveal">
+          <li>
+            <b>Two actions, named not aimed.</b> The assistant can propose invoking an interface element or setting its value, addressed through the accessibility tree by exact name. No pointer, no keystrokes, no coordinates.
+          </li>
+          <li>
+            <b>Bound before you see it.</b> The named element must match exactly one element in a live observation. Zero matches and two matches fail the same way, and the proposal expires with the screen it described.
+          </li>
+          <li>
+            <b>Approved once, spent once.</b> Approval is per action. The receipt is consumed server-side before any effect, and the executor re-derives the request and refuses it if a single field has moved.
+          </li>
+          <li>
+            <b>Unknown is its own answer.</b> An action that may or may not have taken effect is recorded as unknown and is never retried automatically.
+          </li>
+        </ul>
+      </section>
+      <section id="pendant" class="band wrap" aria-labelledby="t7">
+        <h2 id="t7" class="label">The pendant path</h2>
         <div class="plate reveal">
           <svg viewBox="0 0 880 150" role="img" aria-labelledby="d2t d2d">
           <title id="d2t">Pendant to memory</title>

@@ -26,9 +26,7 @@ class ApiDocs extends StatelessComponent {
     // Escaping stays on: the contract is prose, and a code span like
     // `{"scope":"<scope>"}` must reach the page as text rather than as a tag
     // the browser then tries to close.
-    final document = md.Document(
-      extensionSet: md.ExtensionSet.gitHubWeb,
-    );
+    final document = md.Document(extensionSet: md.ExtensionSet.gitHubWeb);
     final body = _wrapTables(
       md.HtmlRenderer().render(
         document.parseLines(const LineSplitter().convert(source)),
