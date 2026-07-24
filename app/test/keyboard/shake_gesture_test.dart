@@ -11,7 +11,7 @@ void main() {
   });
 
   test('a small movement does not count even if reversed quickly', () {
-    expect(isShakeReversal(1, -1, 100, 4), isFalse);
+    expect(isShakeReversal(1, -1, 100, 3), isFalse);
   });
 
   test('the first movement has no prior direction to reverse from', () {
@@ -19,7 +19,8 @@ void main() {
   });
 
   test('progress accumulates and caps at 100', () {
-    expect(advanceShakeProgress(0, 30), 20);
+    expect(advanceShakeProgress(0, 30), 30);
+    expect(advanceShakeProgress(0, 40), 34);
     expect(advanceShakeProgress(90, 30), 100);
     expect(advanceShakeProgress(100, 30), 100);
   });

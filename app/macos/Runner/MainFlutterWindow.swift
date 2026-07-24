@@ -92,7 +92,8 @@ final class MouseShakeDetector {
   /// fills, then resets for the next gesture.
   func feed(x: CGFloat, atMs: Double) -> Bool {
     if let lastEventAtMs, progress > 0 {
-      progress = max(0, progress - (atMs - lastEventAtMs) * 8.0 / 120.0)
+      // ponytail: calibration — slower decay so partial shakes carry over.
+      progress = max(0, progress - (atMs - lastEventAtMs) * 5.0 / 120.0)
     }
     lastEventAtMs = atMs
     defer { lastX = x }
@@ -100,9 +101,12 @@ final class MouseShakeDetector {
     let movement = x - lastX
     let direction = movement > 0 ? 1 : (movement < 0 ? -1 : 0)
     let elapsed = atMs - lastReversalAtMs
-    if abs(movement) >= 7, lastDirection != 0, direction != 0,
-      direction != lastDirection, elapsed < 260 {
-      progress = min(100, progress + min(abs(movement), 20))
+    // ponytail: calibration — these three (min travel, reversal window, gain)
+    // set how hard the shake is; loosened because the old values needed a
+    // frantic 5–7 reversals. Keep in sync with shake_gesture.dart.
+    if abs(movement) >= 4, lastDirection != 0, direction != 0,
+      direction != lastDirection, elapsed < 320 {
+      progress = min(100, progress + min(abs(movement), 34))
       lastReversalAtMs = atMs
     } else if direction != lastDirection {
       lastReversalAtMs = atMs
