@@ -292,9 +292,7 @@ pub(crate) fn client_content_message(text: &str) -> String {
     .to_string()
 }
 
-pub(crate) fn tool_response_message(
-    responses: &[(String, String, serde_json::Value)],
-) -> String {
+pub(crate) fn tool_response_message(responses: &[(String, String, serde_json::Value)]) -> String {
     let function_responses: Vec<serde_json::Value> = responses
         .iter()
         .map(|(id, name, response)| {
@@ -749,18 +747,21 @@ async fn run(
                         return;
                     }
                     if outcome.setup_complete {
-                        if let Some(context) = session_context.as_deref().filter(|text| !text.trim().is_empty()) {
-                            if socket
+                        if let Some(context) = session_context
+                            .as_deref()
+                            .filter(|text| !text.trim().is_empty())
+                            && socket
                                 .send(Message::Text(client_content_message(context).into()))
                                 .await
                                 .is_err()
-                            {
-                                let _ = events.send(RealtimeVoiceEvent::Error {
+                        {
+                            let _ = events
+                                .send(RealtimeVoiceEvent::Error {
                                     message: "live voice provider connection was lost".to_owned(),
                                     resumption_handle: resumption_handle.clone(),
-                                }).await;
-                                return;
-                            }
+                                })
+                                .await;
+                            return;
                         }
                         for bytes in gate.open() {
                             if socket.send(Message::Text(realtime_input_message(&bytes).into())).await.is_err() {
@@ -1127,11 +1128,8 @@ mod tests {
             &calls[0].args,
         );
         assert_eq!(status["status"], "proposed_for_approval");
-        let response = tool_response_message(&[(
-            "call-1".to_owned(),
-            "computer_invoke".to_owned(),
-            status,
-        )]);
+        let response =
+            tool_response_message(&[("call-1".to_owned(), "computer_invoke".to_owned(), status)]);
         let value: serde_json::Value =
             serde_json::from_str(&response).unwrap_or_else(|error| panic!("{error}"));
         assert_eq!(
@@ -1330,9 +1328,10 @@ mod tests {
 
     #[test]
     fn client_content_message_wraps_text_for_mid_session_context() {
-        let value: serde_json::Value =
-            serde_json::from_str(&client_content_message("Updated screen context:\nApp: Mail"))
-                .unwrap_or_default();
+        let value: serde_json::Value = serde_json::from_str(&client_content_message(
+            "Updated screen context:\nApp: Mail",
+        ))
+        .unwrap_or_default();
         assert_eq!(
             value["clientContent"]["turns"][0]["role"],
             serde_json::json!("user")

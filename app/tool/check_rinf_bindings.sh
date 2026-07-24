@@ -9,6 +9,7 @@ trap 'rm -rf "$temp_dir"' EXIT
 mkdir -p "$temp_dir/native/hub"
 cp "$app_dir/pubspec.yaml" "$temp_dir/pubspec.yaml"
 cp "$app_dir/native/hub/Cargo.toml" "$app_dir/native/hub/Cargo.lock" "$temp_dir/native/hub/"
+cp "$app_dir/native/hub/rust-toolchain.toml" "$temp_dir/native/hub/"
 cp -R "$app_dir/native/hub/src" "$temp_dir/native/hub/"
 
 (

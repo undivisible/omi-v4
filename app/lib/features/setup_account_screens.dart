@@ -181,12 +181,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ] else if (!previewMode)
           DeleteLocalDataTile(services: services),
       ],
-      SettingsSection.personal => [
-        UserProfileSettingsPanel(
-          services: services,
-          previewMode: previewMode,
-        ),
-      ],
+      SettingsSection.personal => const [],
       SettingsSection.plan => [
         if (previewMode || services.billing == null)
           const _InfoTile(
@@ -421,22 +416,31 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ),
         Divider(height: 1, color: colors.hairline),
         Expanded(
-          child: ScrollEdgeFade(
-            color: colors.page,
-            child: ListView(
-              padding: const EdgeInsets.symmetric(vertical: 16),
-              children: [
-                if (_numbersRevealed) ...[
-                  OmiNumbersCard(
-                    loader: widget.numbersLoader ?? _defaultNumbersLoader,
-                    onDismiss: () => setState(() => _numbersRevealed = false),
+          child: active == SettingsSection.personal
+              ? Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  child: UserProfileSettingsPanel(
+                    services: widget.services,
+                    previewMode: widget.previewMode,
                   ),
-                  const SizedBox(height: 12),
-                ],
-                _SettingsGroup(children: _tiles(active)),
-              ],
-            ),
-          ),
+                )
+              : ScrollEdgeFade(
+                  color: colors.page,
+                  child: ListView(
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                    children: [
+                      if (_numbersRevealed) ...[
+                        OmiNumbersCard(
+                          loader: widget.numbersLoader ?? _defaultNumbersLoader,
+                          onDismiss: () =>
+                              setState(() => _numbersRevealed = false),
+                        ),
+                        const SizedBox(height: 12),
+                      ],
+                      _SettingsGroup(children: _tiles(active)),
+                    ],
+                  ),
+                ),
         ),
       ],
     );
@@ -1371,8 +1375,8 @@ class _AccessibilitySetupTileState extends State<AccessibilitySetupTile> {
             : snapshot.hasError
             ? 'Could not check Accessibility access: ${snapshot.error}'
             : value?.detail ??
-                'Accessibility lets Omi read the active window for '
-                    'overlay and voice context.',
+                  'Accessibility lets Omi read the active window for '
+                      'overlay and voice context.',
         state: state,
         onPressed:
             !widget.previewMode &&

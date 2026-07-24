@@ -48,7 +48,15 @@ jobs:
         with:
           channel: stable
           cache: true
-      - run: flutter build macos --release
+      - run: flutter build macos --release --config-only
+      - name: Build macOS without signing
+        run: |
+          set -euo pipefail
+          cd macos
+          xcodebuild -workspace Runner.xcworkspace -scheme Runner -configuration Release \
+            -destination 'platform=macOS' \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY= \
+            build
       - run: flutter build ios --release --no-codesign
 
   flutter-windows-aot:
@@ -94,7 +102,7 @@ jobs:
       - run: cargo clippy --lib --target wasm32-unknown-unknown -- -D warnings
       - run: cargo test --lib
       - run: cargo install worker-build --version 0.8.5 --locked
-      - run: npm run deploy:dry-run
+      - run: bun run deploy:dry-run
 
   rust:
     runs-on: ubuntu-latest

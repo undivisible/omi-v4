@@ -3,6 +3,7 @@
 # cross targets, so the rustup stable toolchain is the one that must be used.
 [toolchain]
 channel = "1.97.0"
+components = ["rustfmt", "clippy"]
 targets = [
   "aarch64-apple-darwin",
   "x86_64-apple-darwin",

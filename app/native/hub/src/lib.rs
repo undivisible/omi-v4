@@ -44,11 +44,10 @@ async fn main() {
 
     let (audio_sender, transcription_sender, live_tool_calls, audio_dispatcher) =
         AudioDispatcher::channel_with_live_tools();
-    let (command_sender, dispatcher) =
-        CommandDispatcher::channel_with_transcription_and_live_tools(
-            transcription_sender,
-            live_tool_calls,
-        );
+    let (command_sender, dispatcher) = CommandDispatcher::channel_with_transcription_and_live_tools(
+        transcription_sender,
+        live_tool_calls,
+    );
     let (meeting_sender, meeting_runtime) = meeting::channel(command_sender.clone());
     meeting::install(meeting_sender);
     let meeting_runtime = spawn(meeting_runtime.run());

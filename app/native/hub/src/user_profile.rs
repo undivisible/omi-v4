@@ -17,7 +17,7 @@ pub const SOUL_SECTIONS: &[&str] = &[
 ];
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct UserProfileDocument {
     #[serde(default)]
     pub name: Option<String>,
@@ -101,7 +101,9 @@ mod tests {
             ]),
             custom_prompt: None,
         };
-        let formatted = format_about_user(&document).expect("profile block");
+        let Some(formatted) = format_about_user(&document) else {
+            panic!("expected formatted profile block");
+        };
         assert!(formatted.starts_with("About the user:\n"));
         assert!(formatted.contains("The user's name is Alex."));
         assert!(formatted.contains("The user's preferred languages: English, Spanish."));

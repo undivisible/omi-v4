@@ -127,7 +127,9 @@ final class MemoryClient {
       throw const MemoryDecodingException('content must not be empty');
     }
     if (profileKind != 'stable' && profileKind != 'current') {
-      throw const MemoryDecodingException('profileKind must be stable or current');
+      throw const MemoryDecodingException(
+        'profileKind must be stable or current',
+      );
     }
     final response = await _send(
       MemoryRequest(

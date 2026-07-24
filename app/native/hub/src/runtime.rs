@@ -12,8 +12,8 @@ use crate::computer_use_tools::{
     COMPUTER_INVOKE_TOOL, COMPUTER_SET_VALUE_TOOL, computer_use_proposal,
     valid_computer_tool_identity,
 };
-use crate::live_voice::LiveFunctionCall;
 use crate::hosted_search::{SearchBackend, dispatch as dispatch_hosted_search};
+use crate::live_voice::LiveFunctionCall;
 use crate::model_tier::{Capability, ModelTier};
 use crate::signals::{
     ActionProposal, ActionRisk, ApprovalDecision, ApprovalDecisionAcknowledgement, AssistantDelta,
@@ -820,9 +820,8 @@ impl AssistantProvider for RsAiAssistantProvider {
             }
             .model(model);
             let client = base.api_key(config.credential);
-            let computer_tools_active = computer_use_enabled
-                && computer_use_available()
-                && tier != ModelTier::Speed;
+            let computer_tools_active =
+                computer_use_enabled && computer_use_available() && tier != ModelTier::Speed;
             let client = if computer_tools_active {
                 client
                     .with_tools(computer_use_tools())
@@ -1879,12 +1878,12 @@ fn framed_assistant_prompt(
     let prompt = assistant_prompt(memory_context, text);
     match origin {
         Some(MessageOrigin::Overlay) => format!("{OVERLAY_AGENT_FRAMING}\n\n{prompt}"),
-        Some(MessageOrigin::ChannelTelegram) => format!(
-            "{CHANNEL_MESSAGING_FRAMING}\n{CHANNEL_TELEGRAM_FRAMING}\n\n{prompt}"
-        ),
-        Some(MessageOrigin::ChannelImessage) => format!(
-            "{CHANNEL_MESSAGING_FRAMING}\n{CHANNEL_IMESSAGE_FRAMING}\n\n{prompt}"
-        ),
+        Some(MessageOrigin::ChannelTelegram) => {
+            format!("{CHANNEL_MESSAGING_FRAMING}\n{CHANNEL_TELEGRAM_FRAMING}\n\n{prompt}")
+        }
+        Some(MessageOrigin::ChannelImessage) => {
+            format!("{CHANNEL_MESSAGING_FRAMING}\n{CHANNEL_IMESSAGE_FRAMING}\n\n{prompt}")
+        }
         Some(MessageOrigin::Chat) | None => format!("{CREPUS_ARTIFACTS_GUIDANCE}\n\n{prompt}"),
     }
 }
@@ -2077,8 +2076,7 @@ async fn dispatch_assistant(
     // Going online: the model router picks the tier (and therefore the model
     // slug from `model_tier.rs`) for this prompt instead of a single fixed
     // model, and the choice is reported alongside the online marker.
-    let routed_tier =
-        crate::chat_router::ChatRouter::from_env().route_prompt(&text, origin);
+    let routed_tier = crate::chat_router::ChatRouter::from_env().route_prompt(&text, origin);
     let routed_model = provider.model_for_tier(routed_tier);
     progress(
         request_id,
@@ -2087,12 +2085,11 @@ async fn dispatch_assistant(
         Some(&format!("{ONLINE_CHAT_MODEL_DETAIL}:{routed_model}")),
     );
     let mut prompt = framed_assistant_prompt(origin, context.as_deref(), &text);
-    if let Some(path) = user_profile_path.as_deref() {
-        if let Some(document) = crate::user_profile::read_user_profile(path) {
-            if let Some(custom_prompt) = crate::user_profile::custom_prompt(&document) {
-                prompt = format!("{prompt}\n\n{custom_prompt}");
-            }
-        }
+    if let Some(path) = user_profile_path.as_deref()
+        && let Some(document) = crate::user_profile::read_user_profile(path)
+        && let Some(custom_prompt) = crate::user_profile::custom_prompt(&document)
+    {
+        prompt = format!("{prompt}\n\n{custom_prompt}");
     }
     let (self_improve, personality) = {
         let guard = state.lock().await;
@@ -4175,30 +4172,27 @@ async fn register_live_computer_use_tool_calls(
                 .unwrap_or(i64::MAX)
                 .min(bound.expires_at_ms),
         );
-        let prepared = match crate::computer_use::prepare(
-            bound,
-            &proposal.proposal_id,
-            &uid,
-            proposal.risk,
-        ) {
-            Ok(prepared) => {
-                proposal.operation_id = Some(prepared.operation_id.clone());
-                proposal.action_hash = Some(prepared.action_hash().to_owned());
-                proposal.target_provenance = Some(prepared.bound.provenance.clone());
-                prepared
-            }
-            Err(_) => {
-                error(
-                    Some(live_stream_id.clone()),
-                    "computer_use_binding_failed",
-                    "the semantic computer action could not be bound safely",
-                    false,
-                );
-                continue;
-            }
-        };
+        let prepared =
+            match crate::computer_use::prepare(bound, &proposal.proposal_id, &uid, proposal.risk) {
+                Ok(prepared) => {
+                    proposal.operation_id = Some(prepared.operation_id.clone());
+                    proposal.action_hash = Some(prepared.action_hash().to_owned());
+                    proposal.target_provenance = Some(prepared.bound.provenance.clone());
+                    prepared
+                }
+                Err(_) => {
+                    error(
+                        Some(live_stream_id.clone()),
+                        "computer_use_binding_failed",
+                        "the semantic computer action could not be bound safely",
+                        false,
+                    );
+                    continue;
+                }
+            };
         let mut state = state.lock().await;
-        if state.configuration_generation != generation || state.authority_uid.as_deref() != Some(&uid)
+        if state.configuration_generation != generation
+            || state.authority_uid.as_deref() != Some(&uid)
         {
             error(
                 Some(live_stream_id.clone()),
@@ -7220,8 +7214,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn assistant_dispatch_emits_terminal_delta_when_provider_closes_without_one(
-    ) {
+    async fn assistant_dispatch_emits_terminal_delta_when_provider_closes_without_one() {
         let state = Arc::new(Mutex::new(RuntimeState {
             configuration_generation: 7,
             authority_uid: Some("user-a".to_owned()),
@@ -7256,10 +7249,7 @@ mod tests {
             .collect();
         assert_eq!(
             deltas,
-            vec![
-                ("quick reply".to_owned(), false),
-                (String::new(), true),
-            ]
+            vec![("quick reply".to_owned(), false), (String::new(), true),]
         );
     }
 }
