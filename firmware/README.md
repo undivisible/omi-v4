@@ -318,9 +318,12 @@ what MCUboot's downgrade prevention compares.
 ## Rust in the firmware
 
 `omi-cv1` can build and link a Rust static library. It is **opt-in**
-(`CONFIG_OMI_RUST=n` by default) and today carries only the tx ring-buffer and
-GATT packet header codecs in `omi/rust/`, plus a self-test `main()` calls at
-boot. Nothing has been migrated off C yet.
+(`CONFIG_OMI_RUST=n` by default). `omi/rust/` holds pure-logic ports called from
+C behind `#ifdef CONFIG_OMI_RUST`: tx ring/GATT framing, battery SoC/EMA math,
+IMU register packing and gesture classify, button tap FSM, haptic BLE→duration
+map, LED pulse-width math, and feedback error-pattern tables. Drivers, BLE,
+threads, and `k_msleep` timing stay in C. `main()` runs `omi_rust_selftest()` at
+boot when Rust is enabled.
 
 ### Why an out-of-tree module is needed
 

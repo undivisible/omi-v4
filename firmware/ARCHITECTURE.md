@@ -340,12 +340,14 @@ before it ships enabled.
 
 `omi-cv1` can build and link a Rust static library, opt-in behind
 `CONFIG_OMI_RUST` (default `n`, which is what release images build). `omi/rust/`
-is an `omi-rust` staticlib carrying the tx ring-buffer and GATT packet header
-codecs (`framing.rs`, host-testable with `cargo test`), a `#[panic_handler]`
-forwarding to Zephyr's `k_panic()`, and CMake that links it into the existing
-`app` target. It does **not** call zephyr-lang-rust's `rust_cargo_application()`,
-which would inject the module's own `main.c` and displace `omi/src/main.c`;
-`omi/src/main.c` calls `omi_rust_selftest()` under `#ifdef CONFIG_OMI_RUST`.
+is an `omi-rust` staticlib of pure-logic ports (framing, battery SoC/EMA, IMU
+gesture/register packing, button tap FSM, haptic/LED/feedback helpers), a
+`#[panic_handler]` forwarding to Zephyr's `k_panic()`, and CMake that links it
+into the existing `app` target. It does **not** call zephyr-lang-rust's
+`rust_cargo_application()`, which would inject the module's own `main.c` and
+displace `omi/src/main.c`; `omi/src/main.c` calls `omi_rust_selftest()` under
+`#ifdef CONFIG_OMI_RUST`. C dual-paths call into these helpers when
+`CONFIG_OMI_RUST=y`; drivers and Zephyr I/O stay in C.
 
 Two facts shape it. `CONFIG_RUST` exists in Zephyr 4.4.0 only as a Kconfig stub —
 the build backing it lives in `zephyrproject-rtos/zephyr-lang-rust`, which is in
@@ -357,10 +359,10 @@ fails to compile for this board. `README.md`'s *Known blocker* has the exact
 error; nothing in `omi/rust/` needs the bindings, so the crate builds against
 `core`.
 
-Nothing has been migrated off C. The library exists to prove the toolchain path
-before `transport.c`'s tx logic moves over, and to give the wire format a
-host-testable home that `app/native/hub` could later share so the two ends of the
-format cannot drift.
+Pure-logic slices have moved behind `CONFIG_OMI_RUST` dual-paths; drivers stay
+in C. The library also proves the toolchain path before `transport.c`'s tx
+logic moves over, and gives the wire format a host-testable home that
+`app/native/hub` could later share so the two ends of the format cannot drift.
 
 ### 2.8 Configuration hygiene
 

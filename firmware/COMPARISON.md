@@ -133,10 +133,12 @@ compares. The DIS `0x2A26` contract is unchanged.
 `omi/rust/` builds `omi-rust` and links it into the existing `app` target under
 `CONFIG_OMI_RUST`, and `west-rust.yml` pins `zephyr-lang-rust` at a fixed
 revision because `CONFIG_RUST` in Zephyr 4.4.0 is a Kconfig stub without that
-out-of-tree module. It carries the tx ring-buffer and GATT packet header codecs
-plus a boot-time self-test, and it links into a real image — verifiable with
-`nm … | grep omi_rust_selftest` on the built ELF. Nothing has been migrated off
-C. The whole thing is inert at `CONFIG_OMI_RUST=n`, which is the default and what
+out-of-tree module. It carries host-testable pure-logic ports (framing, battery
+SoC/EMA, IMU gesture/register packing, button tap FSM, haptic duration map, LED
+pulse math, feedback error patterns) plus a boot-time self-test, linked into a
+real image — verifiable with `nm … | grep omi_rust_selftest` on the built ELF.
+C keeps drivers and I/O; Rust paths are dual-path behind `CONFIG_OMI_RUST`. The
+whole thing is inert at `CONFIG_OMI_RUST=n`, which is the default and what
 release images build, so a re-sync can drop it without touching the shipping
 configuration. Its purpose is to prove the toolchain path before
 `transport.c`'s tx logic moves over, and to give the wire format a host-testable
