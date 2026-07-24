@@ -6,6 +6,7 @@ import { deliverDueChannelMessages } from "./delivery";
 import { respondToStaleInboxItems } from "./inbox-fallback";
 import mcp from "./mcp";
 import { backfillClaimVectors, drainPendingEmbeddings } from "./memory-vectors";
+import { createSentry, pingHeartbeat, shipTailEvents } from "./observability";
 import publicApi from "./public-api";
 export { AssistantAdmission } from "./assistant-admission";
 export { SttAdmission } from "./stt-admission";
@@ -40,19 +41,17 @@ app.route("/v1", routes);
 app.route("/api/v1", publicApi);
 app.route("/mcp", mcp);
 app.notFound((context) => context.json({ error: "Not found" }, 404));
-
-// Better Stack heartbeat. Unset in development, so the ping simply does not
-// happen rather than failing.
-const pingHeartbeat = async (env: AppEnv["Bindings"]): Promise<void> => {
-  const url = env.HEARTBEAT_URL?.trim();
-  if (!url || !url.startsWith("https://")) return;
-  try {
-    await fetch(url, {
-      method: "POST",
-      signal: AbortSignal.timeout(5_000),
-    });
-  } catch {}
-};
+// Report unhandled request errors to Better Stack (Sentry-compatible) when a
+// DSN is configured, then rethrow so the runtime's default 500 behavior is
+// unchanged. With no DSN, createSentry returns null and this is a plain rethrow.
+app.onError((error, context) => {
+  createSentry(
+    context.env,
+    context.executionCtx,
+    context.req.raw,
+  )?.captureException(error);
+  throw error;
+});
 
 export default {
   fetch: app.fetch,
@@ -73,11 +72,20 @@ export default {
         backfillClaimVectors(env)
           .then(() => drainPendingEmbeddings(env))
           .catch(() => undefined),
-        // The heartbeat is what turns Better Stack's monitoring from "the API
-        // answers" into "the cron is still running". It is fire-and-forget:
-        // a monitoring outage must never fail the scheduled work it watches.
-        pingHeartbeat(env),
-      ]).then(() => undefined),
+      ])
+        // Ping the Better Stack heartbeat only when the whole cron batch
+        // resolves; a rejection skips the ping so Better Stack alerts on the
+        // missed beat. No-op when BETTERSTACK_HEARTBEAT_URL is unset.
+        .then(() => pingHeartbeat(env))
+        .catch((error) => {
+          createSentry(env, context)?.captureException(error);
+        }),
     );
+  },
+  // Tail consumer: export invocation logs to Better Stack Logs. No-op unless
+  // BETTERSTACK_LOGS_URL + BETTERSTACK_LOGS_TOKEN are set. See
+  // docs/ai-and-observability.md for the Logpush alternative (dashboard-configured).
+  tail(events: unknown, env: AppEnv["Bindings"], context: ExecutionContext) {
+    context.waitUntil(shipTailEvents(env, events));
   },
 };

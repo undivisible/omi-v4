@@ -1,3 +1,4 @@
+import { captureDurableObjectError } from "./observability";
 import { sendblueRequest } from "./sendblue";
 import type { Bindings, Channel } from "./types";
 
@@ -471,7 +472,8 @@ export class DeliveryCoordinator {
     try {
       await operation;
       return new Response(null, { status: 204 });
-    } catch {
+    } catch (error) {
+      captureDurableObjectError(this.env, this.state, request, error);
       return Response.json(
         { error: "Delivery coordination failed" },
         { status: 500 },

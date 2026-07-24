@@ -1,3 +1,4 @@
+import { captureDurableObjectError } from "./observability";
 import type { Bindings } from "./types";
 
 // Lightweight abuse-prevention primitive backed by a Durable Object per
@@ -10,10 +11,15 @@ export class RateLimiter {
   ) {}
 
   async fetch(request: Request): Promise<Response> {
-    const url = new URL(request.url);
-    if (request.method !== "POST") return new Response(null, { status: 405 });
-    if (url.pathname === "/consume") return this.consume(request);
-    return new Response(null, { status: 404 });
+    try {
+      const url = new URL(request.url);
+      if (request.method !== "POST") return new Response(null, { status: 405 });
+      if (url.pathname === "/consume") return this.consume(request);
+      return new Response(null, { status: 404 });
+    } catch (error) {
+      captureDurableObjectError(this.env, this.state, request, error);
+      throw error;
+    }
   }
 
   private async consume(request: Request): Promise<Response> {

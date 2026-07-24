@@ -75,6 +75,12 @@ export type Bindings = {
   BYOK_NEGOTIATION_CONCESSIONS?: string;
   DEV_FAKE_PRO?: string;
   CHANNEL_FALLBACK_RESPONDER?: string;
+  BETTERSTACK_SENTRY_DSN?: string;
+  SENTRY_DSN?: string;
+  SENTRY_RELEASE?: string;
+  BETTERSTACK_LOGS_TOKEN?: string;
+  BETTERSTACK_LOGS_URL?: string;
+  BETTERSTACK_HEARTBEAT_URL?: string;
   GEMINI_API_KEY?: string;
   GEMINI_LIVE_MODEL?: string;
   DEEPGRAM_API_KEY?: string;

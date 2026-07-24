@@ -1,3 +1,4 @@
+import { captureDurableObjectError } from "./observability";
 import type { Bindings } from "./types";
 
 type Limits = {
@@ -64,7 +65,10 @@ export class AssistantAdmission {
       () => undefined,
       () => undefined,
     );
-    return operation;
+    return operation.catch((error) => {
+      captureDurableObjectError(this.env, this.state, request, error);
+      throw error;
+    });
   }
 
   private async handle(request: Request): Promise<Response> {

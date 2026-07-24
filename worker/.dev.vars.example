@@ -30,3 +30,14 @@ TELEGRAM_WEBHOOK_SECRET=your-webhook-secret-here
 # use. Leave unset (or "false") everywhere except local dev/testing --
 # these routes are not meant to run in production.
 ENABLE_DEV_OAUTH_BROKER=true
+# Better Stack observability. Every var is optional — leave any unset and that
+# path no-ops (nothing installed, no overhead). See docs/ai-and-observability.md §5.
+# Error tracking (Sentry-compatible): the DSN from Better Stack → Error tracking →
+# your source. SENTRY_DSN is accepted as a fallback name.
+# BETTERSTACK_SENTRY_DSN=your-betterstack-sentry-compatible-dsn-here
+# Logs export: HTTP/OTel source URL + token from Better Stack → Logs → source.
+# BETTERSTACK_LOGS_URL=your-betterstack-logs-ingest-url-here
+# BETTERSTACK_LOGS_TOKEN=your-betterstack-logs-source-token-here
+# Uptime heartbeat: the POST URL of a Better Stack heartbeat monitor; the cron
+# pings it on a successful run so a missed beat alerts.
+# BETTERSTACK_HEARTBEAT_URL=your-betterstack-heartbeat-url-here
