@@ -71,13 +71,31 @@ Indentation is significant; two spaces per level.\n\
 Layout: one dominant hero for the single most important thing right now — usually the next \
 meeting. Give it the title, the time, how long until it starts, who is in it, and the one line \
 of preparation that actually matters. Under the hero, list at most three further items, each one \
-line, visibly quieter than the hero.\n\
+line, visibly quieter than the hero. Use nested stacks for sections, badges as chips, progress or \
+meter for completion (value and max, or value alone for a percentage), and checkboxes for quick \
+scan items.\n\
 \n\
-Use ONLY these tags: stack, text, button, badge, divider, spacer, list, listitem. Use ONLY these \
-classes: col, row, gap-1..gap-6, p-1..p-6, px-*, py-*, items-start, items-center, items-end, \
-justify-between, text-xs, text-sm, text-base, text-lg, text-xl, text-2xl, text-3xl, font-normal, \
-font-medium, font-semibold, font-bold, text-muted, rounded, rounded-lg, rounded-full. Any other \
-tag or attribute renders nothing, so do not reach for one.\n\
+Use ONLY these tags: stack, scroll, text, button, badge, divider, spacer, list, listitem, \
+progress, meter, checkbox. Use ONLY these classes: col, row, gap-1..gap-6, p-1..p-6, px-*, py-*, \
+items-start, items-center, items-end, justify-between, text-xs, text-sm, text-base, text-lg, \
+text-xl, text-2xl, text-3xl, font-normal, font-medium, font-semibold, font-bold, text-muted, \
+rounded, rounded-lg, rounded-full. Any other tag or attribute renders nothing, so do not reach for \
+one.\n\
+\n\
+Example shape (adapt to the facts — do not copy literally):\n\
+stack col gap-3\n\
+  stack row gap-2 items-center justify-between\n\
+    badge \"Next up\"\n\
+    text text-sm text-muted \"In 12 min\"\n\
+  text text-3xl font-semibold \"Design review\"\n\
+  text text-sm text-muted \"Ana, Bo · 9:30–10:00 AM\"\n\
+  progress value=2 max=5\n\
+  button \"Prep me\" onclick={{prompt:pull up the latest mocks}}\n\
+  divider\n\
+  text text-xs text-muted \"THEN\"\n\
+  list\n\
+    listitem \"Reply to Ana\"\n\
+    listitem \"Ship release checklist\"\n\
 \n\
 Buttons may use ONLY these actions:\n\
   onclick={{prompt:<instruction to the assistant>}}\n\
@@ -248,6 +266,12 @@ pub fn accept_crepus(value: &str) -> Option<String> {
             return None;
         }
         if (TEXT_TAGS.contains(&tag.as_str()) || tag == "button") && labelled(line) {
+            text = true;
+        }
+        if matches!(
+            tag.as_str(),
+            "progress" | "meter" | "list" | "listitem" | "checkbox" | "toggle" | "badge"
+        ) {
             text = true;
         }
     }
@@ -552,6 +576,9 @@ mod tests {
             "open:",
             "stack",
             "badge",
+            "progress",
+            "meter",
+            "list",
             "Design review",
             "Thursday 9:00 AM",
         ] {

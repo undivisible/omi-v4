@@ -571,14 +571,14 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
   private var rewindCaptureBridge: RewindCaptureBridge?
   private var keyboardSink: FlutterEventSink?
   private var localKeyboardMonitor: Any?
-  private var localShakeMonitor: Any?
-  /// Session-wide capture for the chord and pointer shake while another app is
-  /// frontmost — the CGEventTap that replaces the old, unreliable global
-  /// NSEvent monitors. The local NSEvent monitors still cover in-app events.
+  /// Session-wide capture for the chord while another app is frontmost —
+  /// the CGEventTap that replaces the old, unreliable global NSEvent
+  /// monitors. The local NSEvent monitor still covers in-app events.
   private let globalInputTap = GlobalInputTap()
   private var activationObservers: [NSObjectProtocol] = []
   private var pillHostChannel: FlutterMethodChannel?
-  private let shakeDetector = MouseShakeDetector()
+  private var lastLeftShiftDown = false
+  private var lastRightShiftDown = false
   let voiceOverlayController = VoiceOverlayController()
   private let permissionService = MacPermissionService()
   private var permissionOverlay: PermissionDragOverlay?
@@ -605,8 +605,12 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
     // Option+Space work solely inside omi, so tell Dart to surface a notice —
     // and always report the live diagnostics so a missing grant is visible.
     emitDiagnostics()
-    if !AXIsProcessTrusted() {
-      events(["type": "globalHotkeyUnavailable"])
+    if !globalInputTap.isInstalled {
+      events([
+        "type": "globalHotkeyUnavailable",
+        "trusted": AXIsProcessTrusted(),
+        "inputMonitoring": MacPermissionService.inputMonitoringGranted,
+      ])
     }
     return nil
   }
@@ -647,28 +651,36 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
       }
     }
     guard event.type == .flagsChanged, event.keyCode == 56 || event.keyCode == 60 else { return }
-    keyboardSink?([
-      "type": "shift",
-      "key": event.keyCode == 56 ? "left" : "right",
-      "pressed": CGEventSource.keyState(.combinedSessionState, key: event.keyCode),
-    ])
+    syncShiftKeys()
+  }
+
+  /// Emits left/right Shift transitions from the combined session key state.
+  /// A single flagsChanged can flip both modifiers at once; reading each key
+  /// independently keeps the double-chord detector aligned with reality.
+  private func syncShiftKeys() {
+    let leftDown = CGEventSource.keyState(.combinedSessionState, key: 56)
+    let rightDown = CGEventSource.keyState(.combinedSessionState, key: 60)
+    if leftDown != lastLeftShiftDown {
+      lastLeftShiftDown = leftDown
+      keyboardSink?(["type": "shift", "key": "left", "pressed": leftDown])
+    }
+    if rightDown != lastRightShiftDown {
+      lastRightShiftDown = rightDown
+      keyboardSink?(["type": "shift", "key": "right", "pressed": rightDown])
+    }
+  }
+
+  private func resetShiftTracking() {
+    lastLeftShiftDown = false
+    lastRightShiftDown = false
   }
 
   private func emitSecureInput() {
-    keyboardSink?(["type": "secureInput", "enabled": IsSecureEventInputEnabled()])
-  }
-
-  /// Feeds every pointer sample (local, and global once Accessibility is
-  /// granted) to the shake detector; a completed shake reaches Dart as its
-  /// own keyboard event, the mouse twin of the double chord.
-  private func mouseMovedEvent() {
-    if IsSecureEventInputEnabled() { return }
-    let firedShake = shakeDetector.feed(
-      x: NSEvent.mouseLocation.x,
-      atMs: ProcessInfo.processInfo.systemUptime * 1000)
-    if firedShake {
-      keyboardSink?(["type": "shake"])
+    let enabled = IsSecureEventInputEnabled()
+    if enabled {
+      resetShiftTracking()
     }
+    keyboardSink?(["type": "secureInput", "enabled": enabled])
   }
 
   override func awakeFromNib() {
@@ -789,29 +801,20 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
       self?.makeKeyAndOrderFront(nil)
       result(nil)
     }
-    // In-app events flow through the local NSEvent monitors; system-wide
-    // events (chord, pointer shake while another app is frontmost) flow
-    // through the session CGEventTap, converted back to NSEvents so they reuse
-    // the exact same dispatch. The tap only acts while omi is in the
-    // background — foreground input is the local monitors' job — so a chord or
-    // shake is never handled twice.
+    // In-app events flow through the local NSEvent monitor; system-wide
+    // chord events flow through the session CGEventTap, converted back to
+    // NSEvents so they reuse the exact same dispatch. The tap only acts while
+    // omi is in the background — foreground input is the local monitor's job
+    // — so a chord is never handled twice.
     localKeyboardMonitor = NSEvent.addLocalMonitorForEvents(
       matching: [.flagsChanged, .keyDown]
     ) { [weak self] event in
       self?.keyboardEvent(event)
       return event
     }
-    localShakeMonitor = NSEvent.addLocalMonitorForEvents(
-      matching: [.mouseMoved]
-    ) { [weak self] event in
-      self?.mouseMovedEvent()
-      return event
-    }
     globalInputTap.onEvent = { [weak self] type, event in
       guard let self, !NSApp.isActive else { return }
       switch type {
-      case .mouseMoved:
-        self.mouseMovedEvent()
       case .flagsChanged, .keyDown:
         if let nsEvent = NSEvent(cgEvent: event) {
           self.keyboardEvent(nsEvent)
@@ -971,7 +974,6 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
 
   deinit {
     if let localKeyboardMonitor { NSEvent.removeMonitor(localKeyboardMonitor) }
-    if let localShakeMonitor { NSEvent.removeMonitor(localShakeMonitor) }
     globalInputTap.stop()
     for observer in activationObservers {
       NotificationCenter.default.removeObserver(observer)

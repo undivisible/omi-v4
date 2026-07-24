@@ -78,11 +78,6 @@ void main() {
     expect(gesture.summonOverlay(), [ShiftGestureAction.openOverlay]);
   });
 
-  test('a mouse shake emits startVoice', () {
-    final gesture = machine();
-    expect(gesture.mouseShake(), [ShiftGestureAction.startVoice]);
-  });
-
   test('escape always emits the shared dismissal and clears the chord', () {
     final gesture = machine();
     chord(gesture);
@@ -98,7 +93,6 @@ void main() {
     expect(gesture.shift(PhysicalShift.left, true), isEmpty);
     expect(gesture.shift(PhysicalShift.right, true), isEmpty);
     expect(gesture.summonOverlay(), isEmpty);
-    expect(gesture.mouseShake(), isEmpty);
     expect(gesture.hasPendingChord, isFalse);
 
     expect(gesture.setSecureInput(false), isEmpty);

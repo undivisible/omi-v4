@@ -711,11 +711,10 @@ void main() {
     expect(position.pixels, 0);
     expect(onScreen(tester, find.text('hello')), isTrue);
 
-    // Past the halfway mark it commits to the home view instead.
-    await tester.drag(
-      find.byKey(const Key('chat_messages')),
-      const Offset(0, 120),
-    );
+    // Once the viewport is mostly greeter/currents, it commits to the home
+    // stop rather than stranding between exchange and home.
+    final commitDrag = Offset(0, position.maxScrollExtent * 0.65);
+    await tester.drag(find.byKey(const Key('chat_messages')), commitDrag);
     await drain(tester);
     expect(position.pixels, greaterThan(48));
     expect(onScreen(tester, find.byKey(const Key('hub_greeting'))), isTrue);
@@ -825,10 +824,10 @@ void main() {
     expect(position.pixels, 0);
     expect(onScreen(tester, find.text('echo')), isTrue);
 
-    // Past the commit point it settles on the home view above the exchange.
+    // Once the viewport is mostly greeter/currents, it settles on home.
     await tester.drag(
       find.byKey(const Key('chat_messages')),
-      const Offset(0, 120),
+      Offset(0, position.maxScrollExtent * 0.65),
     );
     await drain(tester);
     expect(position.pixels, greaterThan(48));

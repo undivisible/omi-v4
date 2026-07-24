@@ -1,8 +1,7 @@
 import Cocoa
 
-/// Session-wide capture of the keystrokes and pointer motion omi needs while
-/// another application is frontmost: the double-Shift chord, the overlay
-/// keybind, and the pointer shake.
+/// Session-wide capture of the keystrokes omi needs while another application
+/// is frontmost: the double-Shift chord and the overlay keybind.
 ///
 /// `NSEvent.addGlobalMonitorForEvents` proved unreliable here — it silently
 /// delivers nothing in several common states even with the Accessibility
@@ -27,7 +26,6 @@ final class GlobalInputTap {
   static let eventMask: CGEventMask =
     (1 << CGEventType.keyDown.rawValue)
     | (1 << CGEventType.flagsChanged.rawValue)
-    | (1 << CGEventType.mouseMoved.rawValue)
 
   /// How often a failed installation is retried, so granting Accessibility
   /// while omi runs starts global capture without a restart.

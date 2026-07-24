@@ -12,7 +12,6 @@ enum PhysicalShift { left, right }
 ///   listening immediately, or dismiss the surface that is up.
 /// - the overlay keybind (Option+Space): [openOverlay], an alias for the
 ///   single chord.
-/// - a rapid cursor shake: [startVoice] — talk, never a toggle-off.
 /// - Esc: [escape] — dismiss whatever surface is up, identical to a second
 ///   double-shift.
 /// - explicit [startVoice]/[stopVoice] drive the menu-bar controls.
@@ -101,13 +100,6 @@ class ShiftGestureMachine {
   List<ShiftGestureAction> summonOverlay() {
     _pendingChordAt = null;
     return secureInput ? const [] : const [ShiftGestureAction.openOverlay];
-  }
-
-  /// A completed mouse shake means "talk": start listening (the surface
-  /// no-ops when voice is already up).
-  List<ShiftGestureAction> mouseShake() {
-    _pendingChordAt = null;
-    return secureInput ? const [] : const [ShiftGestureAction.startVoice];
   }
 
   List<ShiftGestureAction> escape() {

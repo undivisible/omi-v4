@@ -130,14 +130,21 @@ class _OmiShellState extends State<OmiShell> {
     if (event is! DesktopGlobalHotkeyUnavailableEvent) return;
     if (_globalHotkeyNoticeShown || !mounted) return;
     _globalHotkeyNoticeShown = true;
+    final needsAccessibility = !event.trusted;
+    final needsInputMonitoring = !event.inputMonitoring;
+    final grant = needsAccessibility
+        ? 'Accessibility'
+        : needsInputMonitoring
+        ? 'Input Monitoring'
+        : 'Accessibility or Input Monitoring';
     ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-      const SnackBar(
+      SnackBar(
         content: Text(
-          'Global shortcuts (double-Shift, $summonOverlayKeybindLabel) only '
-          'work inside Omi until Accessibility access is granted in System '
-          'Settings → Privacy & Security → Accessibility.',
+          'Global double-Shift and $summonOverlayKeybindLabel only work outside '
+          'Omi once $grant is granted in System Settings → Privacy & Security. '
+          'They still work inside the hub window.',
         ),
-        duration: Duration(seconds: 8),
+        duration: const Duration(seconds: 8),
       ),
     );
   }
@@ -280,9 +287,6 @@ class _OmiShellState extends State<OmiShell> {
         previewMode: widget.previewMode,
         desktopKeyboard: _desktopKeyboard,
         onDesktopGestureReset: _desktopGesture?.reset,
-        onShakeSummon: _cursorPill == null
-            ? null
-            : () => _handleDesktopGesture(ShiftGestureAction.startVoice),
         onOpenProviderSettings: () =>
             _openSettings(section: SettingsSection.providers),
       ),
@@ -419,9 +423,9 @@ class _WarmPaperHub extends StatelessWidget {
   }
 }
 
-/// The visible truth about global input capture. Without it the chord, the
-/// overlay keybind, and the pointer shake only work while omi is frontmost,
-/// which otherwise looks like the feature is simply broken.
+/// The visible truth about global input capture. Without it the chord and the
+/// overlay keybind only work while omi is frontmost, which otherwise looks
+/// like the feature is simply broken.
 class _GlobalInputNotice extends StatelessWidget {
   const _GlobalInputNotice({required this.diagnostics, required this.onGrant});
 
@@ -448,11 +452,11 @@ class _GlobalInputNotice extends StatelessWidget {
           const SizedBox(width: 10),
           Expanded(
             child: Text(
-              'Global shortcuts are off — double-Shift, '
-              '$summonOverlayKeybindLabel, and the cursor shake only work '
-              'inside Omi. Accessibility: '
+              'Global shortcuts are off — double-Shift and '
+              '$summonOverlayKeybindLabel only work inside Omi. '
+              'Accessibility: '
               '${diagnostics.trusted ? "granted" : "not granted"} · '
-              'input monitoring: '
+              'Input Monitoring: '
               '${diagnostics.inputMonitoring ? "granted" : "not granted"} · '
               'input tap: ${diagnostics.tapInstalled ? "live" : "not running"}.',
               style: const TextStyle(fontSize: 12, color: Color(0xffffd99a)),

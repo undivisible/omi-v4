@@ -39,19 +39,24 @@ final class DesktopSummonOverlayEvent extends DesktopKeyboardEvent {
   const DesktopSummonOverlayEvent();
 }
 
-/// A completed cursor shake detected by the native global mouse monitor
-/// (rapid direction reversals filling the shake meter) — "talk to the
-/// agent", equivalent to the double chord.
+/// Ignored — cursor-shake summon was removed; kept so older native builds
+/// do not crash the decoder.
 final class DesktopShakeEvent extends DesktopKeyboardEvent {
   const DesktopShakeEvent();
 }
 
-/// Emitted once at stream start when the process lacks the Accessibility
-/// grant, meaning the global keyboard monitor cannot see keystrokes while
-/// another app is frontmost — the chord and overlay keybind only work
-/// inside omi until the grant is made.
+/// Emitted once at stream start when global capture cannot run while another
+/// app is frontmost — the chord and overlay keybind still work inside omi
+/// via the local keyboard monitor, but system-wide shortcuts need
+/// Accessibility and Input Monitoring.
 final class DesktopGlobalHotkeyUnavailableEvent extends DesktopKeyboardEvent {
-  const DesktopGlobalHotkeyUnavailableEvent();
+  const DesktopGlobalHotkeyUnavailableEvent({
+    this.trusted = false,
+    this.inputMonitoring = false,
+  });
+
+  final bool trusted;
+  final bool inputMonitoring;
 }
 
 /// Whether omi itself is the frontmost application. The chord means two
@@ -66,8 +71,8 @@ final class DesktopAppActivationEvent extends DesktopKeyboardEvent {
 /// The live state of global input capture: whether the process is
 /// Accessibility-trusted, whether it holds Input Monitoring (the separate
 /// grant a keyboard event tap needs), and whether the session event tap that
-/// watches the chord and the pointer shake is actually installed. Surfaced
-/// in-app so a missing grant or a dead tap is visible instead of silent.
+/// watches the chord is actually installed. Surfaced in-app so a missing
+/// grant or a dead tap is visible instead of silent.
 final class DesktopInputDiagnosticsEvent extends DesktopKeyboardEvent {
   const DesktopInputDiagnosticsEvent({
     required this.trusted,
@@ -130,7 +135,10 @@ final class DesktopKeyboard {
       'escape' => const DesktopEscapeEvent(),
       'summonOverlay' => const DesktopSummonOverlayEvent(),
       'shake' => const DesktopShakeEvent(),
-      'globalHotkeyUnavailable' => const DesktopGlobalHotkeyUnavailableEvent(),
+      'globalHotkeyUnavailable' => DesktopGlobalHotkeyUnavailableEvent(
+        trusted: raw['trusted'] == true,
+        inputMonitoring: raw['inputMonitoring'] == true,
+      ),
       'appActivation' => DesktopAppActivationEvent(raw['active'] == true),
       'diagnostics' => DesktopInputDiagnosticsEvent(
         trusted: raw['trusted'] == true,

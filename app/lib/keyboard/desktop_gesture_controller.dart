@@ -30,12 +30,12 @@ final class DesktopGestureController {
         pressed,
       ),
       DesktopSummonOverlayEvent() => _machine.summonOverlay(),
-      DesktopShakeEvent() => _machine.mouseShake(),
       DesktopSecureInputEvent(:final enabled) => _machine.setSecureInput(
         enabled,
       ),
       DesktopEscapeEvent() => _machine.escape(),
       DesktopGlobalHotkeyUnavailableEvent() ||
+      DesktopShakeEvent() ||
       DesktopAppActivationEvent() ||
       DesktopInputDiagnosticsEvent() => const <ShiftGestureAction>[],
     };

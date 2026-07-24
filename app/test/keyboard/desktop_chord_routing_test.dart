@@ -46,23 +46,6 @@ void main() {
     },
   );
 
-  testWidgets('the shake starts voice from the background, chord or not', (
-    tester,
-  ) async {
-    final harness = await _Harness.pump(tester, makeServices());
-
-    harness.emit(const {'type': 'appActivation', 'active': true});
-    harness.emit(const {'type': 'shake'});
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 200));
-
-    // Voice is never rerouted to the composer: it reaches the surface — and
-    // its native overlay windows — even while omi is frontmost.
-    expect(harness.voiceCalls, contains('start'));
-
-    await harness.close(tester);
-  });
-
   testWidgets('a dead global input tap is reported in the hub', (tester) async {
     final harness = await _Harness.pump(tester, makeServices());
 
@@ -71,6 +54,7 @@ void main() {
     harness.emit(const {
       'type': 'diagnostics',
       'trusted': false,
+      'inputMonitoring': false,
       'tapInstalled': false,
     });
     await tester.pump();
@@ -80,6 +64,7 @@ void main() {
     harness.emit(const {
       'type': 'diagnostics',
       'trusted': true,
+      'inputMonitoring': true,
       'tapInstalled': true,
     });
     await tester.pump();

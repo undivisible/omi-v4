@@ -2,7 +2,9 @@ import 'dart:async';
 import 'dart:math' as math;
 import 'dart:ui' show ImageFilter;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:flutter/rendering.dart'
     show RenderAbstractViewport, ScrollCacheExtent;
 import 'package:shared_preferences/shared_preferences.dart';
@@ -16,7 +18,6 @@ import '../currents/currents.dart';
 import '../demo/demo_mode.dart';
 import '../demo/demo_prompt_bus.dart';
 import '../keyboard/keyboard.dart';
-import '../keyboard/shake_gesture.dart';
 import '../native/generated/signals/signals.dart'
     show
         ActionRisk,
@@ -35,7 +36,6 @@ import '../ui/assistant_content.dart';
 import '../ui/omi_ui.dart';
 import 'composer_dictation.dart';
 import 'cursor_pill_controller.dart' show CombinedVoiceLevel;
-import 'cursor_pill_window.dart' show VoiceOverlayWindow;
 import 'hub_task_meta.dart';
 import 'in_app_voice_view.dart';
 import 'meeting_notes.dart';
@@ -76,7 +76,6 @@ class ChatScreen extends StatefulWidget {
     this.previewMode = false,
     this.desktopKeyboard,
     this.onDesktopGestureReset,
-    this.onShakeSummon,
     this.checklistStore,
     this.onOpenProviderSettings,
     this.entitlementProbe,
@@ -88,10 +87,6 @@ class ChatScreen extends StatefulWidget {
   final bool previewMode;
   final DesktopKeyboard? desktopKeyboard;
   final VoidCallback? onDesktopGestureReset;
-
-  /// When set, a completed cursor shake summons voice through this callback
-  /// (the full-screen pill overlay) instead of the in-window listening view.
-  final Future<void> Function()? onShakeSummon;
 
   final HubChecklistStore? checklistStore;
 
@@ -211,12 +206,6 @@ class ChatScreenState extends State<ChatScreen>
   bool _sending = false;
   int _conversationLoadGeneration = 0;
   int _conversationCursor = 0;
-  Timer? _shakeDecayTimer;
-  double? _lastShakeX;
-  int _lastShakeDirection = 0;
-  DateTime _lastShakeReversalAt = DateTime.fromMillisecondsSinceEpoch(0);
-  double _shakeProgress = 0;
-  bool _activatingShakeVoice = false;
   late final HubChecklistStore _checklist =
       widget.checklistStore ?? PreferencesHubChecklistStore();
   static const byokHintDismissedKey = 'hub_byok_hint_dismissed_v1';
@@ -239,6 +228,7 @@ class ChatScreenState extends State<ChatScreen>
   double _pullProgress = 0;
   final _scroll = ScrollController();
   final _exchangeKey = GlobalKey();
+  final _homeKey = GlobalKey();
   // One key per history message index, so each turn's scroll offset can be
   // measured and used as a snap boundary. Keyed by index to stay stable across
   // rebuilds; a given index is only ever built in history, never the exchange,
@@ -281,11 +271,6 @@ class ChatScreenState extends State<ChatScreen>
         () => _placeholderIndex =
             (_placeholderIndex + 1) % _kPlaceholderPrompts.length,
       );
-    });
-    _shakeDecayTimer = Timer.periodic(const Duration(milliseconds: 120), (_) {
-      if (!mounted || _shakeProgress <= 0) return;
-      _shakeProgress = (_shakeProgress - 8).clamp(0, 100);
-      if (_shakeProgress <= 0) unawaited(VoiceOverlayWindow.stop());
     });
     // The demo's guided walkthrough types its steps into this composer, so
     // they go through the same send path the keyboard does. `omiDemoMode` is
@@ -591,7 +576,6 @@ class ChatScreenState extends State<ChatScreen>
     if (omiDemoMode) DemoPromptBus.instance.detach(_sendPrompt);
     if (widget.dictation == null) _dictation?.dispose();
     _placeholderTimer?.cancel();
-    _shakeDecayTimer?.cancel();
     _chatRevealTimer?.cancel();
     _pullTimer?.cancel();
     _sendEntered.dispose();
@@ -691,19 +675,65 @@ class ChatScreenState extends State<ChatScreen>
     final boundary = render.size.height.clamp(0.0, metrics.maxScrollExtent);
     if (boundary <= 0) return false;
     final pixels = metrics.pixels;
-    if (pixels < boundary) {
-      // Leaving the exchange: a low commit point, so a nudge falls back to it
-      // but a decisive pull settles on the home view above.
-      if (pixels <= 1) return false;
-      _snapTo(pixels > 48 ? boundary : 0.0);
-      return false;
-    }
-    // Above the home view the message history scrolls: settle on the nearest
-    // turn boundary so a half-scroll doesn't strand the user mid-message.
-    final stop = _nearestHistoryStop(pixels, boundary, metrics.maxScrollExtent);
-    if (stop == null) return false;
-    _snapTo(stop);
+    if (pixels <= 1) return false;
+    final target = _majoritySnapTarget(
+      pixels,
+      metrics.viewportDimension,
+      boundary,
+      metrics.maxScrollExtent,
+    );
+    if (target == null || (target - pixels).abs() <= 1) return false;
+    _snapTo(target);
     return false;
+  }
+
+  /// Chooses a snap target from whichever region — live exchange, home
+  /// (greeter/currents), or history — occupies the majority of the viewport.
+  double? _majoritySnapTarget(
+    double pixels,
+    double viewportHeight,
+    double boundary,
+    double maxScrollExtent,
+  ) {
+    final viewTop = pixels;
+    final viewBottom = pixels + viewportHeight;
+
+    double overlap(double regionStart, double regionEnd) {
+      final start = math.max(viewTop, regionStart);
+      final end = math.min(viewBottom, regionEnd);
+      return math.max(0, end - start);
+    }
+
+    if (pixels < boundary) {
+      final exchangeVisible = overlap(0, boundary);
+      final homeVisible = overlap(boundary, viewBottom);
+      if (exchangeVisible >= homeVisible) return 0;
+      return boundary;
+    }
+
+    final homeEnd =
+        _homeScrollEnd(boundary, maxScrollExtent) ??
+        boundary + viewportHeight * 0.5;
+    final homeVisible = overlap(boundary, homeEnd);
+    final historyVisible = overlap(
+      homeEnd,
+      math.max(homeEnd, maxScrollExtent + viewportHeight),
+    );
+    if (homeVisible >= historyVisible) return boundary;
+    return _nearestHistoryStop(pixels, boundary, maxScrollExtent);
+  }
+
+  /// Scroll offset of the home slot's trailing edge — where history begins.
+  double? _homeScrollEnd(double boundary, double maxScrollExtent) {
+    final box = _homeKey.currentContext?.findRenderObject();
+    if (box is! RenderBox || !box.hasSize) return null;
+    final viewport = RenderAbstractViewport.maybeOf(box);
+    if (viewport == null) return null;
+    final offset = viewport.getOffsetToReveal(box, 1).offset;
+    if (!offset.isFinite || offset <= boundary || offset > maxScrollExtent) {
+      return null;
+    }
+    return offset;
   }
 
   /// The history turn boundary nearest [pixels], or null when there is nothing
@@ -762,48 +792,6 @@ class ChatScreenState extends State<ChatScreen>
             .whenComplete(() => _snapping = false),
       );
     });
-  }
-
-  void _trackShake(Offset position) {
-    final now = DateTime.now();
-    final lastX = _lastShakeX;
-    _lastShakeX = position.dx;
-    if (lastX == null) return;
-    final movement = position.dx - lastX;
-    if (movement.abs() < 7) return;
-    final direction = movement.isNegative ? -1 : 1;
-    final elapsedMs = now.difference(_lastShakeReversalAt).inMilliseconds;
-    if (isShakeReversal(_lastShakeDirection, direction, elapsedMs, movement)) {
-      final progress = advanceShakeProgress(_shakeProgress, movement);
-      // The glow lives in the detached screen-wide overlay window, never in
-      // this one: painted in-window it washes the hub out and stops at the
-      // window's edges.
-      if (_shakeProgress <= 0 && progress > 0) {
-        unawaited(VoiceOverlayWindow.startGlow());
-      }
-      _shakeProgress = progress;
-      if (progress >= 100) unawaited(_activateShakeVoice());
-      _lastShakeReversalAt = now;
-    } else if (direction != _lastShakeDirection) {
-      _lastShakeReversalAt = now;
-    }
-    _lastShakeDirection = direction;
-  }
-
-  Future<void> _activateShakeVoice() async {
-    if (_activatingShakeVoice) return;
-    _activatingShakeVoice = true;
-    _shakeProgress = 0;
-    await VoiceOverlayWindow.burst();
-    try {
-      if (widget.onShakeSummon case final summon?) {
-        await summon();
-      } else {
-        await handleDesktopGesture(ShiftGestureAction.startVoice);
-      }
-    } finally {
-      _activatingShakeVoice = false;
-    }
   }
 
   /// Puts the caret in the hub's own composer. The chord means "start
@@ -1211,77 +1199,76 @@ class ChatScreenState extends State<ChatScreen>
         : const <CurrentCard>[];
     final exchange = _exchangeBuilders();
     final history = _historyBuildersNewestFirst();
-    return MouseRegion(
-      onHover: ready ? (event) => _trackShake(event.localPosition) : null,
-      child: Stack(
-        children: [
-          // The scrollbar belongs to the window, not to the reading column:
-          // painted inside the 680-wide column it lands on top of the task
-          // rows. Suppress the implicit one the list would draw and hang an
-          // explicit one off the full-width edge instead.
-          Scrollbar(
-            controller: _scroll,
-            child: Center(
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 680),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Expanded(
-                      child: LayoutBuilder(
-                        builder: (context, constraints) {
-                          // The home view fills the viewport apart from a thin
-                          // strip at the top, so the tail of the newest message
-                          // stays on screen and scrolling up reads as revealing
-                          // history rather than as an empty gesture.
-                          final greeterExtent = _messages.isEmpty
-                              ? constraints.maxHeight
-                              : math.max(
-                                  0.0,
-                                  constraints.maxHeight - _historyPeekExtent,
-                                );
-                          return Stack(
-                            children: [
-                              NotificationListener<ScrollNotification>(
-                                onNotification: _handleScroll,
-                                child: ScrollConfiguration(
-                                  behavior: ScrollConfiguration.of(
-                                    context,
-                                  ).copyWith(scrollbars: false),
-                                  child: ListView.builder(
-                                    key: const Key('chat_messages'),
-                                    controller: _scroll,
-                                    // Bouncing, not clamping: the pull past
-                                    // the newest message is the go-home
-                                    // gesture, so it has to be possible to
-                                    // overscroll there.
-                                    physics:
-                                        const AlwaysScrollableScrollPhysics(
-                                          parent: BouncingScrollPhysics(),
-                                        ),
-                                    reverse: true,
-                                    // The message directly above the home view is
-                                    // the peek, so it has to be built even when the
-                                    // home view is taller than the viewport.
-                                    scrollCacheExtent:
-                                        const ScrollCacheExtent.pixels(800),
-                                    itemCount:
-                                        history.length +
-                                        1 +
-                                        (exchange.isEmpty ? 0 : 1),
-                                    itemBuilder: (context, index) {
-                                      var slot = index;
-                                      if (exchange.isNotEmpty) {
-                                        if (slot == 0) {
-                                          return _buildExchangeSlot(
-                                            exchange,
-                                            constraints.maxHeight,
-                                          );
-                                        }
-                                        slot -= 1;
-                                      }
+    return Stack(
+      children: [
+        // The scrollbar belongs to the window, not to the reading column:
+        // painted inside the 680-wide column it lands on top of the task
+        // rows. Suppress the implicit one the list would draw and hang an
+        // explicit one off the full-width edge instead.
+        Scrollbar(
+          controller: _scroll,
+          child: Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 680),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Expanded(
+                    child: LayoutBuilder(
+                      builder: (context, constraints) {
+                        // The home view fills the viewport apart from a thin
+                        // strip at the top, so the tail of the newest message
+                        // stays on screen and scrolling up reads as revealing
+                        // history rather than as an empty gesture.
+                        final greeterExtent = _messages.isEmpty
+                            ? constraints.maxHeight
+                            : math.max(
+                                0.0,
+                                constraints.maxHeight - _historyPeekExtent,
+                              );
+                        return Stack(
+                          children: [
+                            NotificationListener<ScrollNotification>(
+                              onNotification: _handleScroll,
+                              child: ScrollConfiguration(
+                                behavior: ScrollConfiguration.of(
+                                  context,
+                                ).copyWith(scrollbars: false),
+                                child: ListView.builder(
+                                  key: const Key('chat_messages'),
+                                  controller: _scroll,
+                                  // Bouncing, not clamping: the pull past
+                                  // the newest message is the go-home
+                                  // gesture, so it has to be possible to
+                                  // overscroll there.
+                                  physics: const AlwaysScrollableScrollPhysics(
+                                    parent: BouncingScrollPhysics(),
+                                  ),
+                                  reverse: true,
+                                  // The message directly above the home view is
+                                  // the peek, so it has to be built even when the
+                                  // home view is taller than the viewport.
+                                  scrollCacheExtent:
+                                      const ScrollCacheExtent.pixels(800),
+                                  itemCount:
+                                      history.length +
+                                      1 +
+                                      (exchange.isEmpty ? 0 : 1),
+                                  itemBuilder: (context, index) {
+                                    var slot = index;
+                                    if (exchange.isNotEmpty) {
                                       if (slot == 0) {
-                                        return ConstrainedBox(
+                                        return _buildExchangeSlot(
+                                          exchange,
+                                          constraints.maxHeight,
+                                        );
+                                      }
+                                      slot -= 1;
+                                    }
+                                    if (slot == 0) {
+                                      return KeyedSubtree(
+                                        key: _homeKey,
+                                        child: ConstrainedBox(
                                           constraints: BoxConstraints(
                                             minHeight: greeterExtent,
                                           ),
@@ -1319,52 +1306,50 @@ class ChatScreenState extends State<ChatScreen>
                                               ),
                                             ),
                                           ),
-                                        );
-                                      }
-                                      return history[slot - 1]();
-                                    },
-                                  ),
+                                        ),
+                                      );
+                                    }
+                                    return history[slot - 1]();
+                                  },
                                 ),
                               ),
-                              if (_messages.isNotEmpty)
-                                const Positioned(
-                                  top: 0,
-                                  left: 0,
-                                  right: 0,
-                                  height: 36,
-                                  child: IgnorePointer(
-                                    child: _HistoryTopFade(),
-                                  ),
-                                ),
-                            ],
-                          );
-                        },
-                      ),
+                            ),
+                            if (_messages.isNotEmpty)
+                              const Positioned(
+                                top: 0,
+                                left: 0,
+                                right: 0,
+                                height: 36,
+                                child: IgnorePointer(child: _HistoryTopFade()),
+                              ),
+                          ],
+                        );
+                      },
                     ),
-                    const SizedBox(height: 12),
-                    _Reveal(
-                      delayMs: 900,
-                      child: _ChatInputCard(
-                        controller: _input,
-                        focusNode: _inputFocus,
-                        enabled: ready,
-                        busy: _activeRequestId != null,
-                        hintText: ready
-                            ? _kPlaceholderPrompts[_placeholderIndex]
-                            : 'Connect an account and model to start chatting',
-                        onSend: _send,
-                        onCancel: _cancel,
-                        dictation: _dictation,
-                      ),
+                  ),
+                  const SizedBox(height: 12),
+                  _Reveal(
+                    delayMs: 900,
+                    child: _ChatInputCard(
+                      controller: _input,
+                      focusNode: _inputFocus,
+                      enabled: ready,
+                      busy: _activeRequestId != null,
+                      hintText: ready
+                          ? _kPlaceholderPrompts[_placeholderIndex]
+                          : 'Connect an account and model to start chatting',
+                      onSend: _send,
+                      onCancel: _cancel,
+                      dictation: _dictation,
                     ),
-                    _buildBottomHint(),
-                  ],
-                ),
+                  ),
+                  _buildBottomHint(),
+                ],
               ),
             ),
           ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 
@@ -2763,6 +2748,7 @@ class _ChatInputCardState extends State<_ChatInputCard> {
     widget.focusNode.addListener(_focusChanged);
     widget.controller.addListener(_focusChanged);
     widget.dictation?.addListener(_focusChanged);
+    widget.dictation?.partialTranscript.addListener(_focusChanged);
   }
 
   @override
@@ -2778,7 +2764,9 @@ class _ChatInputCardState extends State<_ChatInputCard> {
     }
     if (old.dictation != widget.dictation) {
       old.dictation?.removeListener(_focusChanged);
+      old.dictation?.partialTranscript.removeListener(_focusChanged);
       widget.dictation?.addListener(_focusChanged);
+      widget.dictation?.partialTranscript.addListener(_focusChanged);
     }
   }
 
@@ -2787,6 +2775,7 @@ class _ChatInputCardState extends State<_ChatInputCard> {
     widget.focusNode.removeListener(_focusChanged);
     widget.controller.removeListener(_focusChanged);
     widget.dictation?.removeListener(_focusChanged);
+    widget.dictation?.partialTranscript.removeListener(_focusChanged);
     super.dispose();
   }
 
@@ -2877,85 +2866,194 @@ class _ChatInputCardState extends State<_ChatInputCard> {
     child: Text(message, style: TextStyle(fontSize: 12, color: colors.muted)),
   );
 
-  Widget _buildRow(_HubColors colors) => Row(
-    children: [
-      Expanded(
-        child: Stack(
-          alignment: Alignment.centerLeft,
-          children: [
-            if (widget.controller.text.isEmpty)
-              IgnorePointer(
-                child: _AnimatedPlaceholder(
-                  text: widget.hintText,
-                  style: TextStyle(fontSize: 15, color: colors.muted),
+  Widget _buildRow(_HubColors colors) {
+    final dictation = widget.dictation;
+    final recording = dictation?.state == DictationState.recording;
+    final transcribing = dictation?.state == DictationState.transcribing;
+    final dictationBusy = recording || transcribing;
+    return Row(
+      children: [
+        Expanded(
+          child: Stack(
+            alignment: Alignment.centerLeft,
+            children: [
+              if (widget.controller.text.isEmpty && dictationBusy)
+                IgnorePointer(
+                  child: recording
+                      ? _ComposerRecordingWaveform(
+                          key: const Key('composer_dictation_waveform'),
+                          level: dictation!.level,
+                          color: colors.muted,
+                        )
+                      : ValueListenableBuilder<String>(
+                          valueListenable: dictation!.partialTranscript,
+                          builder: (context, partial, _) => Text(
+                            partial.isNotEmpty ? partial : 'Transcribing…',
+                            key: const Key('composer_dictation_caption'),
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 15,
+                              color: colors.muted,
+                              fontStyle: partial.isEmpty
+                                  ? FontStyle.italic
+                                  : FontStyle.normal,
+                            ),
+                          ),
+                        ),
+                )
+              else if (widget.controller.text.isEmpty)
+                IgnorePointer(
+                  child: _AnimatedPlaceholder(
+                    text: widget.hintText,
+                    style: TextStyle(fontSize: 15, color: colors.muted),
+                  ),
+                ),
+              TextField(
+                key: const Key('chat_input'),
+                controller: widget.controller,
+                focusNode: widget.focusNode,
+                enabled: widget.enabled,
+                readOnly: widget.busy || dictationBusy,
+                onSubmitted: (_) => widget.onSend(),
+                style: TextStyle(fontSize: 15, color: colors.ink),
+                decoration: InputDecoration(
+                  isDense: true,
+                  filled: false,
+                  border: InputBorder.none,
+                  enabledBorder: InputBorder.none,
+                  focusedBorder: InputBorder.none,
+                  disabledBorder: InputBorder.none,
+                  contentPadding: EdgeInsets.zero,
+                  hintText: widget.hintText,
+                  hintStyle: const TextStyle(
+                    fontSize: 15,
+                    color: Colors.transparent,
+                  ),
                 ),
               ),
-            TextField(
-              key: const Key('chat_input'),
-              controller: widget.controller,
-              focusNode: widget.focusNode,
-              enabled: widget.enabled,
-              readOnly: widget.busy,
-              onSubmitted: (_) => widget.onSend(),
-              style: TextStyle(fontSize: 15, color: colors.ink),
-              decoration: InputDecoration(
-                isDense: true,
-                filled: false,
-                border: InputBorder.none,
-                enabledBorder: InputBorder.none,
-                focusedBorder: InputBorder.none,
-                disabledBorder: InputBorder.none,
-                contentPadding: EdgeInsets.zero,
-                hintText: widget.hintText,
-                hintStyle: const TextStyle(
-                  fontSize: 15,
-                  color: Colors.transparent,
-                ),
-              ),
-            ),
-          ],
+            ],
+          ),
         ),
-      ),
-      if (widget.dictation != null) ...[
-        const SizedBox(width: 4),
-        _DictationButton(
-          dictation: widget.dictation!,
-          enabled: widget.enabled && !widget.busy,
-          onPressed: () => unawaited(_toggleDictation()),
-          colors: colors,
+        if (widget.dictation != null) ...[
+          const SizedBox(width: 4),
+          _DictationButton(
+            dictation: widget.dictation!,
+            enabled: widget.enabled && !widget.busy,
+            onPressed: () => unawaited(_toggleDictation()),
+            colors: colors,
+          ),
+        ],
+        const SizedBox(width: 12),
+        SizedBox(
+          width: 38,
+          height: 38,
+          child: widget.busy
+              ? IconButton(
+                  key: const Key('cancel_chat'),
+                  onPressed: widget.onCancel,
+                  padding: EdgeInsets.zero,
+                  style: IconButton.styleFrom(
+                    backgroundColor: colors.sendBg,
+                    foregroundColor: colors.sendFg,
+                    shape: const CircleBorder(),
+                  ),
+                  icon: const Icon(Icons.stop_rounded, size: 18),
+                )
+              : IconButton(
+                  key: const Key('send_chat'),
+                  onPressed: widget.enabled ? widget.onSend : null,
+                  padding: EdgeInsets.zero,
+                  style: IconButton.styleFrom(
+                    backgroundColor: colors.sendBg,
+                    foregroundColor: colors.sendFg,
+                    disabledBackgroundColor: colors.sendDisabledBg,
+                    disabledForegroundColor: colors.sendFg,
+                    shape: const CircleBorder(),
+                  ),
+                  icon: const Icon(Icons.arrow_upward_rounded, size: 18),
+                ),
         ),
       ],
-      const SizedBox(width: 12),
-      SizedBox(
-        width: 38,
-        height: 38,
-        child: widget.busy
-            ? IconButton(
-                key: const Key('cancel_chat'),
-                onPressed: widget.onCancel,
-                padding: EdgeInsets.zero,
-                style: IconButton.styleFrom(
-                  backgroundColor: colors.sendBg,
-                  foregroundColor: colors.sendFg,
-                  shape: const CircleBorder(),
-                ),
-                icon: const Icon(Icons.stop_rounded, size: 18),
-              )
-            : IconButton(
-                key: const Key('send_chat'),
-                onPressed: widget.enabled ? widget.onSend : null,
-                padding: EdgeInsets.zero,
-                style: IconButton.styleFrom(
-                  backgroundColor: colors.sendBg,
-                  foregroundColor: colors.sendFg,
-                  disabledBackgroundColor: colors.sendDisabledBg,
-                  disabledForegroundColor: colors.sendFg,
-                  shape: const CircleBorder(),
-                ),
-                icon: const Icon(Icons.arrow_upward_rounded, size: 18),
-              ),
+    );
+  }
+}
+
+/// A wide bar waveform in the composer placeholder while dictation is live.
+class _ComposerRecordingWaveform extends StatefulWidget {
+  const _ComposerRecordingWaveform({
+    required this.level,
+    required this.color,
+    super.key,
+  });
+
+  final ValueListenable<double> level;
+  final Color color;
+
+  @override
+  State<_ComposerRecordingWaveform> createState() =>
+      _ComposerRecordingWaveformState();
+}
+
+class _ComposerRecordingWaveformState extends State<_ComposerRecordingWaveform>
+    with SingleTickerProviderStateMixin {
+  Ticker? _ticker;
+  double _phase = 0;
+  double _eased = 0;
+
+  bool get _animated => !MediaQuery.disableAnimationsOf(context);
+
+  @override
+  void initState() {
+    super.initState();
+    widget.level.addListener(_levelChanged);
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_animated) {
+      _ticker ??= createTicker(_tick)..start();
+    } else {
+      _ticker?.dispose();
+      _ticker = null;
+    }
+  }
+
+  @override
+  void dispose() {
+    widget.level.removeListener(_levelChanged);
+    _ticker?.dispose();
+    super.dispose();
+  }
+
+  void _tick(Duration elapsed) {
+    setState(() {
+      _phase = elapsed.inMicroseconds / Duration.microsecondsPerSecond;
+      final target = widget.level.value.clamp(0.0, 1.0);
+      _eased = target > _eased
+          ? _eased + (target - _eased) * 0.55
+          : _eased + (target - _eased) * 0.12;
+    });
+  }
+
+  void _levelChanged() {
+    if (_ticker == null && mounted) {
+      setState(() => _eased = widget.level.value.clamp(0.0, 1.0));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => SizedBox(
+    height: 28,
+    width: double.infinity,
+    child: CustomPaint(
+      painter: InAppVoiceWaveformPainter(
+        level: _eased,
+        phase: _animated ? _phase : null,
+        color: widget.color,
       ),
-    ],
+    ),
   );
 }
 

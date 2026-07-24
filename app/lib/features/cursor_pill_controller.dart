@@ -539,7 +539,7 @@ final class CursorPillController extends ChangeNotifier {
     }
   }
 
-  /// The chord twice (or a cursor shake mapped through startVoice): talk.
+  /// The chord twice: talk.
   /// From idle it starts listening immediately (native edge glow plus the
   /// follow-cursor waveform); while any surface is up (voice or overlay) it
   /// dismisses, exactly like Esc. The 500ms debounce guards against a

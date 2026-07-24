@@ -15,7 +15,10 @@ class RunnerTests: XCTestCase {
   func testOnlyKnownPrivacyPanesOpen() {
     XCTAssertEqual(
       MacPermissionService.privacyPanes,
-      ["Privacy_Accessibility", "Privacy_Microphone", "Privacy_ScreenCapture", "Privacy_AllFiles"])
+      [
+        "Privacy_Accessibility", "Privacy_ListenEvent", "Privacy_Microphone",
+        "Privacy_ScreenCapture", "Privacy_AllFiles",
+      ])
     XCTAssertFalse(MacPermissionService().openPrivacyPane("Privacy_Unknown"))
   }
 

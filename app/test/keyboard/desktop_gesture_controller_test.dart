@@ -64,17 +64,6 @@ void main() {
     await h.events.close();
   });
 
-  test('a shake event produces startVoice', () async {
-    final h = harness();
-
-    h.events.add(const DesktopShakeEvent());
-    await Future<void>.delayed(Duration.zero);
-
-    expect(h.actions, [ShiftGestureAction.startVoice]);
-    await h.controller.dispose();
-    await h.events.close();
-  });
-
   test('the overlay keybind produces openOverlay immediately', () async {
     final h = harness();
 
@@ -97,7 +86,6 @@ void main() {
       const DesktopShiftEvent(key: PhysicalShift.right, pressed: true),
     );
     h.events.add(const DesktopSummonOverlayEvent());
-    h.events.add(const DesktopShakeEvent());
     await Future<void>.delayed(window * 3);
 
     expect(h.actions, [ShiftGestureAction.cancel]);
