@@ -94,13 +94,15 @@
   }
 })();
 
-// The hero embeds the real hub — the Flutter web build at /hub/. It starts as
-// soon as the page loads so the demo is live without a click or scroll gate.
+// The hero embeds the real hub — the Flutter web build at /hub/. It loads
+// when the frame nears the viewport or the reader interacts with it, so the
+// marketing page stays light until the demo is actually in view.
 (() => {
   const frame = document.getElementById("hub-frame");
   if (!frame) return;
 
   let status = null;
+  let armed = false;
 
   const fail = () => {
     if (frame.dataset.state === "failed") return;
@@ -116,6 +118,7 @@
   };
 
   window.addEventListener("message", (event) => {
+    if (event.origin !== window.location.origin) return;
     if (event.source !== frame.querySelector("iframe")?.contentWindow) return;
     if (event.data?.source !== "omi-hub") return;
     if (event.data.status === "ready") {
@@ -129,6 +132,7 @@
 
   const load = () => {
     if (frame.dataset.state !== "idle") return;
+    armed = true;
 
     frame.dataset.state = "loading";
     status = document.createElement("p");
@@ -151,14 +155,44 @@
     });
     frame.append(live);
 
-    setTimeout(() => {
+    window.setTimeout(() => {
+      if (frame.dataset.state === "loading") {
+        status.textContent = "Still loading the demo…";
+      }
+    }, 15000);
+
+    window.setTimeout(() => {
       if (frame.dataset.state === "loading") fail();
     }, 45000);
   };
 
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", load);
-  } else {
+  const arm = () => {
+    if (armed) return;
     load();
+  };
+
+  if ("IntersectionObserver" in window) {
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting && entry.intersectionRatio >= 0.12) {
+            arm();
+            observer.disconnect();
+            break;
+          }
+        }
+      },
+      { rootMargin: "120px 0px", threshold: [0, 0.12, 0.25] },
+    );
+    observer.observe(frame);
+  }
+
+  frame.addEventListener("pointerenter", arm, { once: true });
+  frame.addEventListener("focusin", arm, { once: true });
+
+  // Deep links that land with the hero already visible should not wait for
+  // another scroll tick before the demo starts.
+  if (frame.getBoundingClientRect().top < window.innerHeight * 0.92) {
+    arm();
   }
 })();

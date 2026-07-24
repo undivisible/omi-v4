@@ -456,7 +456,7 @@ a {
   width: 100%;
   aspect-ratio: 8 / 5;
   overflow: hidden;
-  --hub-scale: 0.82;
+  --hub-scale: 0.88;
   border: 1px solid var(--rule);
   border-right: 0;
   border-radius: 18px 0 0 18px;
@@ -1096,6 +1096,30 @@ tbody th {
   .arrow::after,
   .skip-link {
     transition: none;
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .field {
+    filter: none;
+    opacity: 0.38;
+    transition: none;
+    background: radial-gradient(
+      120% 90% at 50% 40%,
+      rgba(154, 160, 255, 0.14),
+      rgba(23, 23, 22, 0.92) 68%
+    );
+  }
+}
+
+@media (prefers-contrast: more) {
+  :root {
+    --muted-2: #c8c6bc;
+    --rule: rgba(255, 252, 236, 0.22);
+  }
+
+  .card {
+    border-color: var(--rule);
   }
 }
 

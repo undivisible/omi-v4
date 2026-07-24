@@ -151,7 +151,9 @@ class _DemoBannerState extends State<DemoBanner> {
     final dark = Theme.of(context).brightness == Brightness.dark;
     final ink = dark ? const Color(0xfff4f2ea) : const Color(0xff171716);
     final muted = dark ? const Color(0xffa6a49c) : const Color(0xff706e68);
-    final compact = MediaQuery.sizeOf(context).width < 560;
+    final compact =
+        MediaQuery.sizeOf(context).width < 560 ||
+        MediaQuery.sizeOf(context).height < 640;
     return Column(
       key: const Key('demo_banner_host'),
       children: [

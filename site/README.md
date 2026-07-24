@@ -65,7 +65,8 @@ additive: without either, every page still renders and every link still works.
 ## Why the hub is an iframe and not `jaspr_flutter_embed`
 
 The hub is embedded as an iframe onto the standalone `/hub/` build produced by
-`worker/scripts/build-hub.sh`, loaded on click. That build is compiled with
+`worker/scripts/build-hub.sh`, loaded when the hero frame nears the viewport
+(or on pointer/focus interaction). That build is compiled with
 `--dart-define=OMI_DEMO=1`, which boots the real `OmiShell` against the seeded
 in-process services in `app/lib/demo/`: seeded conversation history, currents,
 meeting notes and memory, a persistent demo banner, and no network request of
@@ -91,9 +92,9 @@ and measured first, and rejected for four reasons:
 4. **The iframe is a real fault boundary.** The app's canvas, its exceptions
    and its sign-in state stay out of this document.
 
-None of this changes what the reader downloads when they do click: the runtime
+None of this changes what the reader downloads when the embed loads: the runtime
 is ~4.5 MB over brotli either way. `jaspr_flutter_embed` changes how it is
-mounted, not how much it weighs, and the click-to-load behaviour, the reserved
+mounted, not how much it weighs, and the viewport-gated load, the reserved
 aspect ratio and the failure fallback are all preserved.
 
 ## The stylesheet

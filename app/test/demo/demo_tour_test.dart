@@ -80,6 +80,8 @@ void main() {
 
       final services = await createDemoServices();
       addTearDown(services.dispose);
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      await tester.binding.setSurfaceSize(const Size(900, 900));
       final navigator = GlobalKey<NavigatorState>();
       final tour = DemoTourOverlay(services: services, navigator: navigator);
       await tester.pumpWidget(
@@ -98,6 +100,11 @@ void main() {
       );
       await tester.pump();
       await tester.pump(const Duration(seconds: 1));
+
+      if (find.textContaining('Guided tour ·').evaluate().isNotEmpty) {
+        await tester.tap(find.byKey(const Key('demo_tour_collapse')));
+        await tester.pump();
+      }
 
       // The scripted tier answers here — there is no browser model in a test.
       expect(

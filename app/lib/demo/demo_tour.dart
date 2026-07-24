@@ -48,14 +48,16 @@ class _DemoTourPanelState extends State<DemoTourPanel> {
   DemoSurface _shown = DemoSurface.hub;
 
   /// On a phone the panel would cover most of the hub, so it starts folded
-  /// down to its one-line header there and the visitor opens it. On a desktop
-  /// it starts open, where there is room for it beside the reading column.
+  /// down to its one-line header there and the visitor opens it. In a short
+  /// embed — the marketing iframe is 8/5 — it also starts folded so the demo
+  /// home and composer stay visible.
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
     if (_sizedOnce) return;
     _sizedOnce = true;
-    _collapsed = MediaQuery.sizeOf(context).width < 560;
+    final size = MediaQuery.sizeOf(context);
+    _collapsed = size.width < 560 || size.height < 640;
   }
 
   @override

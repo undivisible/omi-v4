@@ -36,10 +36,16 @@
     builds: [{ compileTarget: "dart2js", renderer: "canvaskit", mainJsPath: "main.dart.js" }]
   };
   var reported = false;
+  function parentOrigin() {
+    try {
+      if (document.referrer) return new URL(document.referrer).origin;
+    } catch (e) {}
+    return location.origin;
+  }
   function report(kind) {
     if (reported) return;
     reported = true;
-    try { parent.postMessage({ source: "omi-hub", status: kind }, "*"); } catch (e) {}
+    try { parent.postMessage({ source: "omi-hub", status: kind }, parentOrigin()); } catch (e) {}
   }
   window.addEventListener("error", function () { report("error"); });
   setTimeout(function () { report("error"); }, 40000);
