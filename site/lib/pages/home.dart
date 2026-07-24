@@ -17,54 +17,53 @@ class _Capability {
 const _capabilities = [
   _Capability(
     '01',
-    'Memory with evidence',
-    'Every fact keeps a citation back to the moment it came from. Correct it '
-        'or delete it, and what was derived from it goes too — nothing is '
-        'edited in place.',
+    'Memory you can check',
+    'Every fact keeps a trail back to where it came from. Correct it or '
+        'delete it, and anything built on it updates with it.',
   ),
   _Capability(
     '02',
     'Live meetings',
-    'Transcription and insight while the meeting is still happening — Gemini '
-        'Live for duplex voice, MiMo batch ASR for long-form capture.',
+    'Transcription and insight while the meeting is still going — live voice '
+        'when you need a conversation, longer capture when you need the full '
+        'record.',
   ),
   _Capability(
     '03',
     'Currents & Now Brief',
-    'What matters next, ranked and cited — re-ranked by what you dismiss or '
-        'accept. Rich proposals can carry a crepus widget the hub renders as '
-        'a Now Brief infographic.',
+    'What matters next, ranked and cited — reshaped by what you dismiss or '
+        'accept. Rich updates can show up as a clear Now Brief graphic.',
   ),
   _Capability(
     '04',
     'Voice on double-Shift',
-    'Tap both Shift keys together — in the app or globally when Input '
-        'Monitoring is granted. A detached overlay handles voice, not the hub window.',
+    'Press both Shift keys — in the app, or from anywhere once you’ve '
+        'allowed it. Voice opens in a small overlay so it doesn’t take over '
+        'your screen.',
   ),
   _Capability(
     '05',
     'Computer use, approved',
-    'It proposes named accessibility actions — invoke or set value — you '
-        'approve once, and the outcome lands in an append-only ledger.',
+    'It asks before it clicks or types. You approve once; every action is '
+        'recorded.',
   ),
   _Capability(
     '06',
     'The pendant',
-    'Captures the day over Bluetooth LE. Your phone relays; your desktop '
+    'Captures the day over Bluetooth. Your phone relays; your desktop '
         'remembers.',
   ),
   _Capability(
     '07',
     'Telegram & iMessage',
-    'Link Telegram or iMessage in Settings. Inbound messages join the same '
-        'ordered conversation as desktop — replies go back through the '
-        'channel when your desktop is connected.',
+    'Link Telegram or iMessage in Settings. Messages join the same '
+        'conversation as desktop — replies go back when you’re online.',
   ),
   _Capability(
     '08',
     'FaceTime calls',
-    'The public API and MCP can ring an E.164 number through Sendblue\'s '
-        'FaceTime bridge when a FaceTime line is provisioned on the account.',
+    'Ask Omi to place a FaceTime Audio call to a phone number when calling '
+        'is set up for your account.',
   ),
 ];
 
@@ -121,28 +120,28 @@ const _reachChannels = <(String, List<String>)>[
   (
     'Telegram',
     [
-      'Link with a one-time code from Settings',
-      'Inbound messages append to your shared, ordered conversation',
-      'Replies are plain text — no crepus widgets on the channel',
-      'Can trigger the same approved computer-use flow as desktop',
+      'Link once in Settings with a short code',
+      'Messages join the same conversation as desktop',
+      'Replies stay plain text on Telegram',
+      'Can ask Omi to help on your computer — with your OK',
     ],
   ),
   (
-    'iMessage (Sendblue)',
+    'iMessage',
     [
-      'Same linking flow; Sendblue is the provider when configured',
-      'Blooio remains the fallback until Sendblue is proven in production',
-      'Outbound delivery is serialized per chat through a Durable Object',
-      'FaceTime Audio calls use a separate Sendblue bridge when provisioned',
+      'Same linking flow with a short code from the app',
+      'Messages join the same conversation as desktop',
+      'You can ask Omi to help on your computer the same way — with your OK',
+      'FaceTime Audio is available when calling is set up on your account',
     ],
   ),
   (
-    'FaceTime path',
+    'FaceTime',
     [
-      'POST /api/v1/facetime/calls and MCP start_facetime_call',
-      'Rings an E.164 number — not a join link',
-      'Requires a purchased FaceTime line on the Sendblue account',
-      'Returns facetime_unavailable when no line is provisioned',
+      'Omi can place a FaceTime Audio call to a phone number',
+      'It rings their phone — not a join link',
+      'Needs calling to be enabled for your account',
+      'Same assistant memory as chat, Telegram, and iMessage',
     ],
   ),
 ];
@@ -186,10 +185,10 @@ class Home extends StatelessComponent {
     return Page(
       title: 'Omi — your private second brain',
       description:
-          'Omi is a private, second-brain personal AI: evidenced memory with '
-          'cloud sync, live meetings, Currents and Now Brief, Telegram and '
-          'iMessage channels, approved computer use, a voice summon, a pendant, '
-          'FaceTime calls, and an MCP server. Open source.',
+          'Omi is a private second brain: memory you can trust, live meetings, '
+          'Currents and Now Brief, Telegram and iMessage, computer help with '
+          'your approval, a voice summon, a wearable pendant, and FaceTime '
+          'calls. Open source.',
       path: '/',
       rail: const [
         ('top', 'Omi'),
@@ -230,9 +229,9 @@ class Home extends StatelessComponent {
           div([
             p([
               .text(
-                'One hub across desktop, mobile and the web. It listens with '
-                'you, remembers with evidence, and meets you on Telegram, '
-                'iMessage, and FaceTime when you link them.',
+                'One place across desktop, mobile and the web. It listens with '
+                'you, remembers in a way you can check, and meets you on '
+                'Telegram, iMessage, and FaceTime when you link them.',
               ),
             ], classes: 'mid rise d3'),
             div([const PrimaryActions()], classes: 'rise d4'),
@@ -270,48 +269,44 @@ class Home extends StatelessComponent {
       [
         h2([.text('Memory')], classes: 'label', id: 't8'),
         p([
-          .text('A log, and a mirror of it.'),
+          .text('Remembered once, available everywhere you use Omi.'),
         ], classes: 'big reveal measure-16'),
         ul([
           li([
-            b([.text('zkr on device.')]),
+            b([.text('On your computer.')]),
             .text(
-              ' The Rust hub runs the zkr engine — a per-account SQLite file '
-              'that mints evidence, locators and claims. It captures from '
-              'chat, transcripts, screen observations and onboarding scans.',
+              ' Omi keeps a private copy of what it has learned from chats, '
+              'transcripts, and what it sees on screen — so recall still '
+              'works when you’re offline.',
             ),
           ]),
           li([
-            b([.text('Cloud authority.')]),
+            b([.text('Synced to your account.')]),
             .text(
-              ' The Worker owns an append-only memory log in D1. A record is '
-              'not remembered until the cloud assigns its sequence; devices '
-              'sync through ',
-            ),
-            code([.text('POST /v1/memory/zkr-sync')]),
-            .text(' and '),
-            code([.text('GET /v1/memory/log')]),
-            .text('.'),
-          ]),
-          li([
-            b([.text('Local mirror.')]),
-            .text(
-              ' Desktop keeps an offline mirror via zkr apply so recall works '
-              'at the last synced sequence — stale, never wrong. Web reads '
-              'from the cloud log directly.',
+              ' Nothing counts as remembered until it’s safely stored in your '
+              'account. Your devices catch up from there — so they stay '
+              'consistent, not invent their own version of the truth.',
             ),
           ]),
           li([
-            b([.text('Cited retrieval.')]),
+            b([.text('Offline, without guessing.')]),
             .text(
-              ' Search and chat answers return claims only with live evidence. '
-              'A claim whose source was deleted is dropped rather than returned '
-              'uncited.',
+              ' Desktop can answer from the last sync. It may be a little '
+              'behind; it won’t make things up. On the web, you always see '
+              'what’s in your account.',
+            ),
+          ]),
+          li([
+            b([.text('Cited answers.')]),
+            .text(
+              ' Search and chat only return things they can point back to. If '
+              'the source is gone, the answer is gone — not kept without a '
+              'citation.',
             ),
           ]),
         ], classes: 'notes split reveal'),
         p([
-          a([.text('How memory authority works')], classes: 'arrow', href: '/architecture#memory'),
+          a([.text('How remembering stays honest')], classes: 'arrow', href: '/architecture#memory'),
         ], classes: 'links band-gap reveal'),
       ],
       classes: 'band wrap',
@@ -338,11 +333,9 @@ class Home extends StatelessComponent {
         ], classes: 'cards'),
         p([
           .text(
-            'Channels need linking in Settings — send the bot a short-lived code '
-            'from the app. iMessage goes through Sendblue when configured, with '
-            'Blooio as the retained fallback. Stripe-managed checkout for Omi AI '
-            'may be unavailable until billing secrets are set on the Worker; BYOK '
-            'and negotiate still work.',
+            'Link Telegram or iMessage in Settings with a short code from the '
+            'app. Managed Omi AI billing rolls out when checkout is live; until '
+            'then, bring your own keys or negotiate.',
           ),
         ], classes: 'small measure band-gap reveal'),
       ],
@@ -441,7 +434,7 @@ class Home extends StatelessComponent {
             li([
               b([.text('Memory, Currents, channels, FaceTime.')]),
               .text(
-                ' Search memory, list or create Currents with optional crepus '
+                ' Search memory, list or create Currents with optional Now Brief '
                 'widgets, and place FaceTime calls — all scoped to your account.',
               ),
             ]),
@@ -477,25 +470,25 @@ class Home extends StatelessComponent {
         ], classes: 'big reveal measure-tight'),
         ul([
           li([
-            b([.text('Cloud log, local mirror.')]),
+            b([.text('Your account is the source of truth.')]),
             .text(
-              ' The authoritative memory log lives in your account at the edge. '
-              'Desktop keeps a rebuildable zkr mirror; D1 read tables and '
-              'Vectorize are projections, not sources.',
+              ' What’s remembered lives in your account. Your computer keeps a '
+              'private offline copy it can rebuild from that. Search indexes '
+              'are helpers — not a second secret memory.',
             ),
           ]),
           li([
             b([.text('On-device summaries.')]),
             .text(
-              ' The workspace scan reads metadata, and on Apple silicon it '
-              'summarises with no network call.',
+              ' When Omi scans your workspace, summaries can stay on your Mac — '
+              'no network call required on Apple silicon.',
             ),
           ]),
           li([
             b([.text('Open source.')]),
             .text(
-              ' The line between local capture, cloud authority and provider '
-              'calls is something you can read.',
+              ' You can read the code for what stays on your devices, what '
+              'syncs to your account, and what goes to AI providers.',
             ),
           ]),
         ], classes: 'notes split reveal'),
@@ -541,8 +534,8 @@ class Home extends StatelessComponent {
             ], classes: 'small'),
             p([
               .text(
-                'Stripe checkout opens when billing is configured on the Worker; '
-                'until then, use BYOK or negotiate.',
+                'Checkout opens when billing is live; until then, bring your '
+                'own keys or negotiate.',
               ),
             ], classes: 'small'),
             a([.text('Open Omi')], classes: 'btn btn-solid', href: portalUrl),

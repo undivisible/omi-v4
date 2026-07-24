@@ -3,6 +3,7 @@ import { requireAuth } from "./auth";
 import desktopAuth from "./desktop-auth";
 import { reconcileManagedAssistantRequests } from "./assistant";
 import { deliverDueChannelMessages } from "./delivery";
+import { generateDueCurrents } from "./currents";
 import { generateDueDigests } from "./digests";
 import { respondToStaleInboxItems } from "./inbox-fallback";
 import mcp from "./mcp";
@@ -66,6 +67,7 @@ export default {
         // Digests are generated before deliveries drain, so a digest that
         // enters the queue this tick can be picked up in the same batch.
         generateDueDigests(env)
+          .then(() => generateDueCurrents(env))
           .then(() => deliverDueChannelMessages(env))
           .catch(() => undefined),
         respondToStaleInboxItems(env).catch(() => undefined),

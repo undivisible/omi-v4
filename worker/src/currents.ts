@@ -6,7 +6,8 @@ import {
   sanitizeCrepus,
 } from "./crepus-safety";
 import { ensureMemoryProjected } from "./memory-projection";
-import type { AppEnv } from "./types";
+import { localClock } from "./digests";
+import type { AppEnv, Bindings } from "./types";
 
 const currents = new Hono<AppEnv>();
 const encoder = new TextEncoder();
@@ -15,6 +16,10 @@ const receiptLifetimeMs = 60 * 1000;
 const receiptVersion = "omi-current-authority-v1";
 const actionHashPattern = /^[0-9a-f]{64}$/;
 const receiptTokenPattern = /^[A-Za-z0-9_-]{43}$/;
+// Same local morning hour as digests — one wall-clock window for everyone.
+const CURRENTS_DAILY_HOUR = 7;
+const currentsUsersPerTick = 200;
+const currentsPerUserPerDay = 3;
 const unreportedOutcome = JSON.stringify({
   detail: "Execution authority was claimed, but no outcome was reported",
 });
@@ -179,22 +184,44 @@ const selectCurrent = async (
     .bind(id, uid)
     .first<Record<string, unknown>>();
 
-currents.post("/generate", async (context) => {
-  const uid = context.get("auth").uid;
-  const settings = await context.env.DB.prepare(
+type GenerateOutcome =
+  | { status: "created"; current: ReturnType<typeof rowToCurrent> }
+  | { status: "existing"; current: ReturnType<typeof rowToCurrent> }
+  | { status: "empty" }
+  | { status: "disabled" }
+  | { status: "invalid-settings" }
+  | { status: "invalid-source" };
+
+const proactiveEnabled = async (
+  env: Bindings,
+  uid: string,
+): Promise<"yes" | "no" | "invalid"> => {
+  const settings = await env.DB.prepare(
     "SELECT value FROM user_settings WHERE uid = ?1",
   )
     .bind(uid)
     .first<{ value: string }>();
-  if (settings) {
-    try {
-      if (JSON.parse(settings.value).proactiveRecommendations === false)
-        return context.json({ current: null });
-    } catch {
-      return context.json({ error: "Invalid settings" }, 500);
-    }
+  if (!settings) return "yes";
+  try {
+    return JSON.parse(settings.value).proactiveRecommendations === false
+      ? "no"
+      : "yes";
+  } catch {
+    return "invalid";
   }
-  const source = await context.env.DB.prepare(
+};
+
+// Creates at most one Current from the next unused profile claim. Shared by
+// the authenticated POST /generate route and the daily cron batch.
+export const generateOneCurrent = async (
+  env: Bindings,
+  uid: string,
+  now = Date.now(),
+): Promise<GenerateOutcome> => {
+  const enabled = await proactiveEnabled(env, uid);
+  if (enabled === "no") return { status: "disabled" };
+  if (enabled === "invalid") return { status: "invalid-settings" };
+  const source = await env.DB.prepare(
     `SELECT c.id AS claim_id, c.content, c.value, ce.evidence_id,
             ce.confidence_basis_points, e.quote
      FROM memory_profile_entries p
@@ -218,18 +245,16 @@ currents.post("/generate", async (context) => {
      ORDER BY p.updated_at DESC, ce.confidence_basis_points DESC, c.id, e.id
      LIMIT 1`,
   )
-    .bind(uid, Date.now())
+    .bind(uid, now)
     .first<Record<string, unknown>>();
-  if (!source) return context.json({ current: null });
+  if (!source) return { status: "empty" };
   const claimId = String(source.claim_id);
   const value = String(source.value ?? source.content).trim();
   const content = String(source.content).trim();
   const quote = String(source.quote).trim();
-  if (!value || !content || !quote)
-    return context.json({ error: "Current source is invalid" }, 500);
+  if (!value || !content || !quote) return { status: "invalid-source" };
   const id = crypto.randomUUID();
-  const now = Date.now();
-  const inserted = await context.env.DB.prepare(
+  const inserted = await env.DB.prepare(
     `INSERT OR IGNORE INTO currents
       (id, uid, evidence_id, title, summary, reason, confidence_basis_points,
        proposed_action, status, surface_at, generation_key, created_at, updated_at, crepus)
@@ -256,21 +281,80 @@ currents.post("/generate", async (context) => {
     )
     .run();
   if (inserted.meta.changes === 1) {
-    return context.json(
-      { current: rowToCurrent((await selectCurrent(context.env, uid, id))!) },
-      201,
-    );
+    return {
+      status: "created",
+      current: rowToCurrent((await selectCurrent(env, uid, id))!),
+    };
   }
-  const existing = await context.env.DB.prepare(
+  const existing = await env.DB.prepare(
     "SELECT id FROM currents WHERE uid = ?1 AND generation_key = ?2",
   )
     .bind(uid, `claim:${claimId}`)
     .first<{ id: string }>();
-  return context.json({
-    current: existing
-      ? rowToCurrent((await selectCurrent(context.env, uid, existing.id))!)
-      : null,
-  });
+  if (!existing) return { status: "empty" };
+  return {
+    status: "existing",
+    current: rowToCurrent((await selectCurrent(env, uid, existing.id))!),
+  };
+};
+
+// Morning cron: for every onboarded user whose local clock is in the daily
+// hour, mint up to a few Currents once per local calendar day. Batched like
+// digests so all users refresh on the same schedule without each client
+// having to call /generate.
+export const generateDueCurrents = async (
+  env: Bindings,
+  now = Date.now(),
+): Promise<void> => {
+  const users = await env.DB.prepare(
+    `SELECT uid, digest_utc_offset_minutes FROM users
+     WHERE onboarding_completed_at IS NOT NULL
+     ORDER BY uid LIMIT ?1`,
+  )
+    .bind(currentsUsersPerTick)
+    .all<{ uid: string; digest_utc_offset_minutes: number }>();
+  for (const user of users.results ?? []) {
+    const clock = localClock(now, Number(user.digest_utc_offset_minutes) || 0);
+    if (clock.hour !== CURRENTS_DAILY_HOUR) continue;
+    const already = await env.DB.prepare(
+      "SELECT 1 AS ok FROM currents_daily_batches WHERE uid = ?1 AND local_date = ?2",
+    )
+      .bind(user.uid, clock.date)
+      .first();
+    if (already) continue;
+    let created = 0;
+    try {
+      for (let i = 0; i < currentsPerUserPerDay; i += 1) {
+        const outcome = await generateOneCurrent(env, user.uid, now);
+        if (outcome.status === "created") created += 1;
+        else break;
+      }
+      await env.DB.prepare(
+        `INSERT OR IGNORE INTO currents_daily_batches
+          (uid, local_date, created_count, created_at)
+         VALUES (?1, ?2, ?3, ?4)`,
+      )
+        .bind(user.uid, clock.date, created, now)
+        .run();
+    } catch {
+      // One user must not stall the rest of the cron tick.
+    }
+  }
+};
+
+currents.post("/generate", async (context) => {
+  const uid = context.get("auth").uid;
+  const outcome = await generateOneCurrent(context.env, uid);
+  if (outcome.status === "invalid-settings")
+    return context.json({ error: "Invalid settings" }, 500);
+  if (outcome.status === "invalid-source")
+    return context.json({ error: "Current source is invalid" }, 500);
+  if (outcome.status === "disabled" || outcome.status === "empty")
+    return context.json({ current: null });
+  return context.json(
+    { current: outcome.current },
+    outcome.status === "created" ? 201 : 200,
+  );
 });
 
 export type CurrentInput = {

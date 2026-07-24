@@ -36,11 +36,10 @@ const _teal = Color(0xff2f9d8a);
 const _coral = Color(0xffd97757);
 const _inkSheet = Color(0xff1c1c1a);
 
-// Mirrors the pendant firmware LED semantics (set_led_state in the upstream
-// firmware): solid blue while connected, red while disconnected. The charging
-// LED states (solid or blinking green) cannot be mirrored because charging
-// state is not surfaced over BLE by the relay today.
-const _stateBlue = Color(0xff4a8fdd);
+// Status accents stay in the cream/ink palette — no blue ring or blue status
+// wash when connected. Disconnected stays a soft coral so it still reads as
+// attention without looking like a system error.
+const _stateConnected = Color(0xff2f9d8a);
 const _stateRed = Color(0xffd9564a);
 
 // Vertical rhythm for the mobile home. Kept deliberately tight: the phone
@@ -1035,7 +1034,7 @@ CrepusCurrentPalette _mobileCrepusPalette(BuildContext context) {
     hairline: dark ? const Color(0x1ffffcec) : _hairline,
     cardBg: dark ? const Color(0xff232320) : _surface,
     cardShadow: dark ? const Color(0x33000000) : const Color(0x0f171716),
-    accent: _stateBlue,
+    accent: _stateConnected,
     rowHover: dark ? const Color(0x14fffcec) : const Color(0x0a171716),
   );
 }
@@ -1895,7 +1894,7 @@ class _PendantHeroState extends State<_PendantHero>
                       : '${widget.deviceName} · ${widget.phaseLabel}',
                   style: TextStyle(
                     fontSize: 15,
-                    color: Color.lerp(_pageInkSoft(context), _stateBlue, .55),
+                    color: Color.lerp(_pageInkSoft(context), _stateConnected, .55),
                   ),
                 ),
               ),
@@ -1910,7 +1909,7 @@ class _PendantHeroState extends State<_PendantHero>
                 style: TextStyle(
                   fontSize: 12.5,
                   color: capturing
-                      ? Color.lerp(_pageInkSoft(context), _stateBlue, .5)
+                      ? Color.lerp(_pageInkSoft(context), _stateConnected, .5)
                       : _pageInkSoft(context),
                 ),
               ),
