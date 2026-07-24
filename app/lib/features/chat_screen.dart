@@ -2641,8 +2641,8 @@ class _ByokHintRow extends StatelessWidget {
                     const SizedBox(width: 16),
                     Expanded(
                       child: Text(
-                        'By the way, if you bring your own keys, Omi becomes '
-                        'free.',
+                        'By the way, if you bring your own keys or sign in with '
+                        "your own AI subscription, Omi's price is negotiable.",
                         style: TextStyle(
                           fontSize: 12,
                           height: 20 / 12,
