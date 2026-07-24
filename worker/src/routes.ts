@@ -218,6 +218,11 @@ routes.get("/setup-health", (context) => {
       managedAsr:
         configured(context.env.MIMO_API_KEY) &&
         configured(context.env.MIMO_CHAT_COMPLETIONS_URL),
+      // Composer dictation and pendant WAL uploads (`speech.ts` on /api/v1).
+      managedBatchSpeech:
+        configured(context.env.OPENROUTER_API_KEY) ||
+        (configured(context.env.MIMO_API_KEY) &&
+          configured(context.env.MIMO_CHAT_COMPLETIONS_URL)),
     },
     desktopAuth:
       configured(context.env.FIREBASE_SERVICE_ACCOUNT_EMAIL) &&

@@ -32,6 +32,34 @@ TELEGRAM_WEBHOOK_SECRET=your-webhook-secret-here
 # curl -X POST "https://api.telegram.org/bot<TOKEN>/setWebhook" \
 #   -H "Content-Type: application/json" \
 #   -d '{"url":"https://api.omi.tsc.hk/v1/webhooks/telegram","secret_token":"<SECRET>"}'
+#
+# Sendblue iMessage/SMS/RCS (preferred over legacy Blooio). The stored channel
+# id remains "blooio" in D1; Sendblue is selected when these vars are set.
+# Outbound: POST https://api.sendblue.com/api/send-message
+# Inbound webhook URL (register in Sendblue dashboard):
+#   https://api.omi.tsc.hk/v1/webhooks/sendblue/<SENDBLUE_WEBHOOK_PATH_TOKEN>
+# Sendblue echoes SENDBLUE_WEBHOOK_SIGNING_SECRET in the sb-signing-secret header.
+# SENDBLUE_API_KEY_ID=your-sendblue-key-id
+# SENDBLUE_API_KEY_SECRET=your-sendblue-secret-key
+# SENDBLUE_NUMBER=+1XXXXXXXXXX
+# SENDBLUE_WEBHOOK_SIGNING_SECRET=your-webhook-signing-secret
+# SENDBLUE_WEBHOOK_PATH_TOKEN=long-random-path-segment
+# Optional FaceTime bridge line (separate from iMessage SMS number):
+# SENDBLUE_FACETIME_NUMBER=+1XXXXXXXXXX
+#
+# Legacy Blooio fallback (omit when Sendblue is configured):
+# BLOOIO_API_KEY=your-blooio-api-key
+# BLOOIO_WEBHOOK_SIGNING_SECRET=your-blooio-webhook-secret
+#
+# Stripe Pro billing (web app checkout + channel /signup /subscribe links).
+# APP_URL is the public hub origin (success/cancel redirects, portal return).
+# Register the webhook at https://api.omi.tsc.hk/v1/webhooks/stripe for:
+# checkout.session.completed, checkout.session.expired,
+# customer.subscription.*, invoice.payment_failed, charge.dispute.created
+# APP_URL=https://omi.tsc.hk
+# STRIPE_SECRET_KEY=sk_test_...
+# STRIPE_PRO_PRICE_ID=price_...
+# STRIPE_WEBHOOK_SECRET=whsec_...
 # Dev/testing only: enables the ChatGPT/xAI OAuth broker + proxy routes,
 # which relay subscription-auth sign-in and traffic for personal interactive
 # use. Leave unset (or "false") everywhere except local dev/testing --

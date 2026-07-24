@@ -387,7 +387,10 @@ describe("server-side transcription", () => {
     );
     expect(outcome).toEqual({
       status: 403,
-      body: { error: "Managed Pro required" },
+      body: {
+        error:
+          "Pro subscription required for dictation. Subscribe in Settings → Billing.",
+      },
     });
   });
 
