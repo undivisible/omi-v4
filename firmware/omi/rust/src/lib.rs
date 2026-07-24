@@ -17,6 +17,7 @@ pub mod settings_math;
 pub mod storage_proto;
 pub mod time;
 pub mod user_event;
+pub mod wifi_proto;
 
 #[no_mangle]
 pub extern "C" fn omi_rust_selftest() -> i32 {
@@ -35,6 +36,7 @@ pub extern "C" fn omi_rust_selftest() -> i32 {
         + user_event::selftest()
         + features::selftest()
         + offline_packer::selftest()
+        + wifi_proto::selftest()
 }
 
 /// # Safety
@@ -890,6 +892,7 @@ pub struct OmiRustFeatureFlags {
     pub ble_sleep_cmd: bool,
     pub capture_state: bool,
     pub device_name_rw: bool,
+    pub wifi: bool,
 }
 
 /// Assemble the BLE features bitmask from compile-time `IS_ENABLED` flags.
@@ -918,7 +921,70 @@ pub unsafe extern "C" fn omi_rust_features_assemble(flags: *const OmiRustFeature
         ble_sleep_cmd: f.ble_sleep_cmd,
         capture_state: f.capture_state,
         device_name_rw: f.device_name_rw,
+        wifi: f.wifi,
     })
+}
+
+/// # Safety
+///
+/// `out` must be null or point at at least `wifi_proto::SOFTAP_HEADER_LEN` writable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn omi_rust_wifi_encode_softap_header(
+    read_seq: u64,
+    write_seq: u64,
+    packet_bytes: u16,
+    out: *mut u8,
+) -> u16 {
+    if out.is_null() {
+        return 0;
+    }
+    let mut buf = [0u8; wifi_proto::SOFTAP_HEADER_LEN];
+    let len = wifi_proto::encode_softap_header(read_seq, write_seq, packet_bytes, &mut buf);
+    unsafe {
+        core::ptr::copy_nonoverlapping(buf.as_ptr(), out, len);
+    }
+    len as u16
+}
+
+/// # Safety
+///
+/// `out` must be null or point at at least 10 writable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn omi_rust_wifi_encode_softap_done(
+    next_seq: u64,
+    status: u8,
+    out: *mut u8,
+) -> u16 {
+    if out.is_null() {
+        return 0;
+    }
+    let mut buf = [0u8; 10];
+    let len = wifi_proto::encode_softap_done(next_seq, status, &mut buf);
+    unsafe {
+        core::ptr::copy_nonoverlapping(buf.as_ptr(), out, len);
+    }
+    len as u16
+}
+
+/// Parse a WiFi BLE command byte. Returns a status code; for SETUP/HOME_SETUP /
+/// CLOUD_TOKEN the caller still walks the payload in C (credentials stay in C).
+#[no_mangle]
+pub extern "C" fn omi_rust_wifi_classify_command(cmd: u8) -> u8 {
+    match wifi_proto::classify_command(cmd) {
+        wifi_proto::WifiBleCommand::Setup => wifi_proto::WIFI_CMD_SETUP,
+        wifi_proto::WifiBleCommand::Start => wifi_proto::WIFI_CMD_START,
+        wifi_proto::WifiBleCommand::Shutdown => wifi_proto::WIFI_CMD_SHUTDOWN,
+        wifi_proto::WifiBleCommand::DeleteAll => wifi_proto::WIFI_CMD_DELETE_ALL,
+        wifi_proto::WifiBleCommand::HomeSetup => wifi_proto::WIFI_CMD_HOME_SETUP,
+        wifi_proto::WifiBleCommand::HomeClear => wifi_proto::WIFI_CMD_HOME_CLEAR,
+        wifi_proto::WifiBleCommand::CloudToken => wifi_proto::WIFI_CMD_CLOUD_TOKEN,
+        wifi_proto::WifiBleCommand::Unknown(_) => wifi_proto::WIFI_ERR_UNKNOWN_CMD,
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn omi_rust_wifi_err_hw_unavailable() -> u8 {
+    wifi_proto::WIFI_ERR_HW_UNAVAILABLE
 }
 
 #[repr(C)]

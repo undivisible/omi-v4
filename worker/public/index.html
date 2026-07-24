@@ -62,25 +62,13 @@
         <figure class="shot reveal">
           <div id="hub-frame" class="shot-frame" data-state="idle">
             <div class="shot-still" aria-hidden="true">
-              <div class="still-rail"><span></span><span></span><span></span><span></span></div>
-              <div class="still-thread">
-                <p class="still-line w70"></p>
-                <p class="still-line w45"></p>
-                <p class="still-line w60"></p>
-                <p class="still-cite"></p>
-                <p class="still-composer"></p>
-              </div>
-              <div class="still-side"><p class="still-line w80"></p><p class="still-line w55"></p><p class="still-line w65"></p></div>
-            </div>
-            <div class="shot-cta">
-              <button id="hub-start" class="btn btn-solid" type="button">Try the hub</button>
-              <p id="hub-note" class="shot-note">
-                The real app, compiled to the web, on sample data. It starts loading as this section reaches the screen, so a reader who never scrolls here never pays for it. No sign-in, and nothing you do in it leaves your browser.
-              </p>
+              <div class="still-greet"><div class="still-orb"></div><p class="still-greeting"></p></div>
+              <div class="still-rows"><p class="still-line w70"></p><p class="still-line w55"></p><p class="still-line w45"></p></div>
+              <p class="still-composer"></p>
             </div>
           </div>
           <figcaption>
-            The hub itself, running in this page against seeded sample data — not anyone's account. Capture, the pendant, on-device transcription and computer use need the desktop build and say so here; everything else is the same UI, the same code.
+            Omi running in this page against seeded sample data — not anyone's account. No sign-in, and nothing you do here leaves your browser. Capture, the pendant, on-device transcription and computer use need the desktop build.
           </figcaption>
         </figure>
       </section>
@@ -100,7 +88,7 @@
             <span class="label">04</span><h3>Voice on double-Shift</h3><p>Press both Shift keys — in the app, or from anywhere once you’ve allowed it. Voice opens in a small overlay so it doesn’t take over your screen.</p>
           </li>
           <li class="reveal">
-            <span class="label">05</span><h3>Computer use, approved</h3><p>It asks before it clicks or types. You approve once; every action is recorded.</p>
+            <span class="label">05</span><h3>Clicks and typing, with your OK</h3><p>It asks before it clicks or types. You approve once; every action is recorded.</p>
           </li>
           <li class="reveal">
             <span class="label">06</span><h3>The pendant</h3><p>Captures the day over Bluetooth. Your phone relays; your desktop remembers.</p>
@@ -184,8 +172,8 @@
             <li><b>Offline recording</b>Yes — it catches up when the phone is back</li>
             <li><b>Charging</b>Dock with pogo-pin contacts</li>
             <li><b>Languages</b>25+, single, multi, or translated</li>
-            <li><b>In transit</b>TLS</li>
-            <li><b>At rest</b>AES-256-GCM</li>
+            <li><b>Encrypted in transit</b>TLS</li>
+            <li><b>Encrypted on disk</b>AES-256-GCM</li>
             <li><b>Training on your data</b>No</li>
             <li><b>Compatibility</b>iOS 15+, Android 7+, macOS, any browser</li>
             <li><b>Water resistance</b>None — keep it out of the shower</li>
@@ -232,7 +220,7 @@
         <h2 id="t3" class="label">Open surface</h2>
         <p class="mega reveal"><sup>POST</sup>/mcp</p>
         <div class="split">
-          <p class="mid measure reveal">A public HTTP API and an MCP server, so the tools you already use can ask your second brain too.</p>
+          <p class="mid measure reveal">Other apps can ask your second brain too — through a public HTTP API and an MCP server.</p>
           <ul class="notes reveal">
             <li>
               <b>The same boundary as the app.</b> Every request carries your credential; every row is scoped to your account before it is read.
@@ -268,7 +256,8 @@
         <div class="plans">
           <article class="plan reveal">
             <h3 class="label">Omi with your own keys</h3>
-            <p class="amount">Negotiable</p>
+            <p class="amount">More than 60% off</p>
+            <p class="small">vs managed Omi AI at ~$35/month</p>
             <p class="small">
               Sign in with an xAI or ChatGPT subscription you already pay for and there is no separate inference bill, or bring an API key for OpenAI, Anthropic, Gemini or a compatible endpoint and pay that provider directly. Either way, what you settle with Omi is Omi’s own price, and that is the figure you negotiate.
             </p>

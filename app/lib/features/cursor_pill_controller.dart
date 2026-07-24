@@ -198,6 +198,9 @@ final class PillSuggestion {
   }
 }
 
+String _clampText(String text, int max) =>
+    text.length <= max ? text : '${text.substring(0, max).trimRight()}…';
+
 /// The labeled context sections shared by the submit prompt and the assist
 /// prompt: app, window, (optionally) what the user has already written, the
 /// current selection, the visible on-screen text, and the session's memory

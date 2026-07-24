@@ -16,6 +16,9 @@ pub const FEATURE_HW_VAD: u32 = 1 << 12;
 pub const FEATURE_BLE_SLEEP_CMD: u32 = 1 << 13;
 pub const FEATURE_CAPTURE_STATE: u32 = 1 << 14;
 pub const FEATURE_DEVICE_NAME_RW: u32 = 1 << 15;
+/// WiFi SoftAP / home-STA sync. Upstream BasedHardware/omi used bit 9 for WIFI;
+/// omi-v4 already uses bit 9 for FEATURE_CHARGING_STATE, so WIFI is bit 16.
+pub const FEATURE_WIFI: u32 = 1 << 16;
 
 /// Compile-time optional features passed from C (`IS_ENABLED(CONFIG_...)`).
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
@@ -33,6 +36,7 @@ pub struct FeatureFlags {
     pub ble_sleep_cmd: bool,
     pub capture_state: bool,
     pub device_name_rw: bool,
+    pub wifi: bool,
 }
 
 pub fn assemble(flags: &FeatureFlags) -> u32 {
@@ -77,6 +81,9 @@ pub fn assemble(flags: &FeatureFlags) -> u32 {
     if flags.device_name_rw {
         features |= FEATURE_DEVICE_NAME_RW;
     }
+    if flags.wifi {
+        features |= FEATURE_WIFI;
+    }
 
     // Always advertised in the settings service.
     features |= FEATURE_CHARGING_STATE;
@@ -109,11 +116,18 @@ pub fn selftest() -> i32 {
         ble_sleep_cmd: true,
         capture_state: true,
         device_name_rw: true,
+        wifi: true,
     });
     if all & FEATURE_SPEAKER == 0 || all & FEATURE_DEVICE_NAME_RW == 0 {
         failures += 1;
     }
+    if all & FEATURE_WIFI == 0 {
+        failures += 1;
+    }
     if all & always_on != always_on {
+        failures += 1;
+    }
+    if FEATURE_WIFI == FEATURE_CHARGING_STATE {
         failures += 1;
     }
 
@@ -137,11 +151,14 @@ mod tests {
         let features = assemble(&FeatureFlags {
             speaker: true,
             button: true,
+            wifi: true,
             ..FeatureFlags::default()
         });
         assert_ne!(features & FEATURE_SPEAKER, 0);
         assert_ne!(features & FEATURE_BUTTON, 0);
+        assert_ne!(features & FEATURE_WIFI, 0);
         assert_eq!(features & FEATURE_BATTERY, 0);
+        assert_ne!(FEATURE_WIFI, FEATURE_CHARGING_STATE);
     }
 
     #[test]

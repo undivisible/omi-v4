@@ -6,6 +6,7 @@ import {
   sanitizeCrepus,
 } from "./crepus-safety";
 import { scanOnboardedUsers } from "./cron-cursor";
+import { refreshCurrents } from "./currents-refresh";
 import { ensureMemoryProjected } from "./memory-projection";
 import { localClock } from "./digests";
 import type { AppEnv, Bindings } from "./types";
@@ -134,17 +135,30 @@ const risk = (value: unknown) =>
     ? value
     : null;
 
-const rowToCurrent = (row: Record<string, unknown>) => ({
+const contentKindFromAction = (action: Record<string, unknown>) => {
+  const kind = action.kind;
+  if (kind === "agent_action" || kind === "human_action" || kind === "awareness")
+    return kind;
+  return "human_action";
+};
+
+const rowToCurrent = (row: Record<string, unknown>) => {
+  const proposedAction = JSON.parse(String(row.proposed_action)) as Record<
+    string,
+    unknown
+  >;
+  return {
   id: String(row.id),
   status: String(row.status),
   title: String(row.title),
   summary: String(row.summary),
   evidence: [{ sourceId: String(row.source_id), reason: String(row.reason) }],
   sourceKind: row.source_kind == null ? null : String(row.source_kind),
+  contentKind: contentKindFromAction(proposedAction),
   reason: String(row.reason),
   confidence: Number(row.confidence_basis_points) / 10_000,
   proposedNextStep: String(row.instruction),
-  proposedAction: JSON.parse(String(row.proposed_action)),
+  proposedAction,
   timing: {
     surfaceAt: new Date(Number(row.surface_at)).toISOString(),
     expiresAt:
@@ -167,7 +181,8 @@ const rowToCurrent = (row: Record<string, unknown>) => ({
   ...(sanitizeCrepus(row.crepus) === null
     ? {}
     : { metadata: { crepus: sanitizeCrepus(row.crepus) } }),
-});
+  };
+};
 
 const selectCurrent = async (
   env: AppEnv["Bindings"],
@@ -270,7 +285,7 @@ export const generateOneCurrent = async (
       bounded(`Based on: ${quote}`, 500),
       Number(source.confidence_basis_points),
       JSON.stringify({
-        kind: "review",
+        kind: "human_action",
         instruction: bounded(
           `Review this memory and decide the smallest next action: ${value}`,
           500,
@@ -341,6 +356,14 @@ export const generateDueCurrents = async (
   }
 };
 
+currents.post("/refresh", async (context) => {
+  const uid = context.get("auth").uid;
+  const body = await object(context.req.raw);
+  const force = body?.force === true;
+  const outcome = await refreshCurrents(context.env, uid, { force });
+  return context.json(outcome);
+});
+
 currents.post("/generate", async (context) => {
   const uid = context.get("auth").uid;
   const outcome = await generateOneCurrent(context.env, uid);
@@ -366,6 +389,8 @@ export type CurrentInput = {
   surfaceAt: number;
   expiresAt: number | null;
   crepus: string | null;
+  proposedAction?: Record<string, unknown>;
+  generationKey?: string | null;
 };
 
 // A Current always cites evidence. First-party callers pass an evidence id
@@ -415,11 +440,15 @@ export const createCurrent = async (
     if (!evidence) return null;
   }
   const id = crypto.randomUUID();
+  const proposedAction = input.proposedAction ?? {
+    kind: "human_action",
+    instruction: input.instruction,
+  };
   await env.DB.prepare(
     `INSERT INTO currents
       (id, uid, evidence_id, title, summary, reason, confidence_basis_points, proposed_action,
-       status, surface_at, expires_at, created_at, updated_at, crepus)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'candidate', ?9, ?10, ?11, ?11, ?12)`,
+       status, surface_at, expires_at, created_at, updated_at, crepus, generation_key)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'candidate', ?9, ?10, ?11, ?11, ?12, ?13)`,
   )
     .bind(
       id,
@@ -429,11 +458,12 @@ export const createCurrent = async (
       input.summary,
       input.reason,
       Math.round(input.confidence * 10_000),
-      JSON.stringify({ kind: "review", instruction: input.instruction }),
+      JSON.stringify(proposedAction),
       input.surfaceAt,
       input.expiresAt,
       now,
       input.crepus,
+      input.generationKey ?? null,
     )
     .run();
   return rowToCurrent((await selectCurrent(env, uid, id))!);

@@ -263,7 +263,7 @@ final class _FakeSignedInGateway implements AuthGateway {
   Future<AuthSession?> restoreSession() async => null;
 
   @override
-  Future<AuthSession?> refreshSession() async => currentSession;
+  Future<AuthSession?> refreshSession({bool forceRefresh = false}) async => currentSession;
 
   @override
   Future<PhoneOtpChallenge> requestPhoneOtp(String phoneNumber) =>

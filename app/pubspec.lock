@@ -272,6 +272,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "1.1.1"
+  flowtoken_flutter:
+    dependency: "direct main"
+    description:
+      name: flowtoken_flutter
+      sha256: d37255fadec5a3cd5a13b11bbe41d4027f82d88d46ef0827777e94405d3632ec
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.1.1"
   flutter:
     dependency: "direct main"
     description: flutter

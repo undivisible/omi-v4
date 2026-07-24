@@ -1,21 +1,21 @@
+import 'package:flowtoken_flutter/flowtoken_flutter.dart';
 import 'package:flutter/material.dart';
-import 'package:gpt_markdown/gpt_markdown.dart';
-import 'package:url_launcher/url_launcher.dart';
 
+/// Assistant prose — static markdown when [streaming] is false, FlowToken diff
+/// fade when a reply is still arriving.
 class AssistantMarkdown extends StatelessWidget {
-  const AssistantMarkdown(this.text, {super.key});
+  const AssistantMarkdown(this.text, {this.streaming = false, super.key});
 
   final String text;
+  final bool streaming;
 
   @override
-  Widget build(BuildContext context) => GptMarkdown(
-    text,
-    onLinkTap: (url, title) {
-      final uri = Uri.tryParse(url);
-      if (uri != null && (uri.scheme == 'https' || uri.scheme == 'http')) {
-        launchUrl(uri, mode: LaunchMode.externalApplication);
-      }
-    },
+  Widget build(BuildContext context) => AnimatedMarkdown(
+    content: text,
+    separator: FlowTokenSeparator.diff,
+    animation: streaming ? FlowTokenAnimation.fadeIn : null,
+    duration: const Duration(milliseconds: 320),
+    textStyle: DefaultTextStyle.of(context).style,
   );
 }
 

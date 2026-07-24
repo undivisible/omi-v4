@@ -468,7 +468,7 @@ final class _SignedInGateway implements AuthGateway {
   Future<AuthSession?> restoreSession() async => _session;
 
   @override
-  Future<AuthSession?> refreshSession() async => _session;
+  Future<AuthSession?> refreshSession({bool forceRefresh = false}) async => _session;
 
   @override
   Future<PhoneOtpChallenge> requestPhoneOtp(String phoneNumber) =>

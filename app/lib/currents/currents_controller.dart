@@ -44,8 +44,8 @@ final class CurrentsController extends ChangeNotifier {
     briefCrepus = null;
     notifyListeners();
     try {
-      await _client.generate();
-      items = await _client.list();
+      final outcome = await _client.refresh();
+      items = outcome.items;
       _notifyItemsRefreshed();
       _composeBrief();
     } on CurrentsClientException catch (failure) {

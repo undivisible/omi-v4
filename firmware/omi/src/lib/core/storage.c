@@ -16,6 +16,10 @@
 #include "transport.h"
 #include "utils.h"
 #include "omi_rust.h"
+#ifdef CONFIG_OMI_ENABLE_WIFI
+#include "wifi.h"
+#include "mic.h"
+#endif
 
 LOG_MODULE_REGISTER(storage, CONFIG_LOG_DEFAULT_LEVEL);
 
@@ -61,6 +65,10 @@ static struct bt_uuid_128 storage_write_uuid =
     BT_UUID_INIT_128(BT_UUID_128_ENCODE(0x30295781, 0x4301, 0xEABD, 0x2904, 0x2849ADFEAE43));
 static struct bt_uuid_128 storage_read_uuid =
     BT_UUID_INIT_128(BT_UUID_128_ENCODE(0x30295782, 0x4301, 0xEABD, 0x2904, 0x2849ADFEAE43));
+#ifdef CONFIG_OMI_ENABLE_WIFI
+static struct bt_uuid_128 storage_wifi_uuid =
+    BT_UUID_INIT_128(BT_UUID_128_ENCODE(0x30295783, 0x4301, 0xEABD, 0x2904, 0x2849ADFEAE43));
+#endif
 
 K_THREAD_STACK_DEFINE(storage_stack, 4096);
 static struct k_thread storage_thread;
@@ -81,6 +89,16 @@ static struct bt_gatt_attr storage_service_attr[] = {
                            NULL,
                            NULL),
     BT_GATT_CCC(storage_config_changed_handler, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
+#ifdef CONFIG_OMI_ENABLE_WIFI
+    BT_GATT_CHARACTERISTIC(&storage_wifi_uuid.uuid,
+                           BT_GATT_CHRC_WRITE | BT_GATT_CHRC_NOTIFY,
+                           BT_GATT_PERM_WRITE_ENCRYPT,
+                           NULL,
+                           storage_wifi_handler,
+                           NULL),
+    BT_GATT_CCC(storage_config_changed_handler,
+                BT_GATT_PERM_READ_ENCRYPT | BT_GATT_PERM_WRITE_ENCRYPT),
+#endif
 };
 
 struct bt_gatt_service storage_service = BT_GATT_SERVICE(storage_service_attr);
@@ -96,6 +114,23 @@ static uint8_t clear_requested;
 static uint8_t read_request_pending;
 static uint8_t advance_request_pending;
 static uint8_t stop_requested;
+#ifdef CONFIG_OMI_ENABLE_WIFI
+static uint8_t wifi_sync_all_requested;
+static bool wifi_transfer_active;
+static uint64_t wifi_read_seq;
+static uint64_t wifi_end_seq;
+static bool wifi_header_sent;
+#define WIFI_CFG_ERR_INVALID_PWD_LEN 4
+#define WIFI_NOTIFY_ATTR_IDX 8
+static ssize_t storage_wifi_handler(struct bt_conn *conn,
+                                    const struct bt_gatt_attr *attr,
+                                    const void *buf,
+                                    uint16_t len,
+                                    uint16_t offset,
+                                    uint8_t flags);
+static void wifi_start_work_handler(struct k_work *work);
+static struct k_work wifi_start_work;
+#endif
 
 /* On connect the SD may still be remounting. Hold a sync request and wait up to
  * this long for the card to become ready, then read -- instead of replying
@@ -134,6 +169,9 @@ static int64_t storage_status_refresh_deadline_ms;
 typedef enum {
     SYNC_SPEED_MODE_NONE = 0,
     SYNC_SPEED_MODE_BLE,
+#ifdef CONFIG_OMI_ENABLE_WIFI
+    SYNC_SPEED_MODE_WIFI,
+#endif
 } sync_speed_mode_t;
 
 /* Sync-speed metering is purely a logging aid. Compile it out entirely when
@@ -163,7 +201,12 @@ static void sync_speed_add_bytes(uint32_t bytes)
 
     if (elapsed_ms >= SYNC_SPEED_LOG_INTERVAL_MS) {
         uint64_t kbps = (sync_speed_window_bytes * 1000U) / (elapsed_ms * 1024U);
-        LOG_INF("Sync speed (BLE): %u KB/s", (uint32_t) kbps);
+        const char *mode_str =
+#ifdef CONFIG_OMI_ENABLE_WIFI
+            (sync_speed_mode == SYNC_SPEED_MODE_WIFI) ? "WiFi" :
+#endif
+            "BLE";
+        LOG_INF("Sync speed (%s): %u KB/s", mode_str, (uint32_t) kbps);
         sync_speed_window_start_ms = now;
         sync_speed_window_bytes = 0;
     }
@@ -408,6 +451,11 @@ static void sync_checkpoint_advance(bool force)
 void storage_stop_transfer(void)
 {
     reset_transfer_state();
+#ifdef CONFIG_OMI_ENABLE_WIFI
+    wifi_transfer_active = false;
+    wifi_header_sent = false;
+    wifi_sync_all_requested = 0;
+#endif
 }
 
 bool storage_transfer_active(void)
@@ -649,6 +697,265 @@ static ssize_t storage_write_handler(struct bt_conn *conn,
     return len;
 }
 
+
+#ifdef CONFIG_OMI_ENABLE_WIFI
+static void wifi_start_work_handler(struct k_work *work)
+{
+    ARG_UNUSED(work);
+    mic_pause();
+    (void)wifi_turn_on();
+}
+
+static void wifi_notify_result(struct bt_conn *conn, uint8_t code)
+{
+    if (!conn) {
+        return;
+    }
+    (void)bt_gatt_notify(conn, &storage_service.attrs[WIFI_NOTIFY_ATTR_IDX], &code, 1);
+}
+
+static ssize_t storage_wifi_handler(struct bt_conn *conn,
+                                    const struct bt_gatt_attr *attr,
+                                    const void *buf,
+                                    uint16_t len,
+                                    uint16_t offset,
+                                    uint8_t flags)
+{
+    ARG_UNUSED(attr);
+    ARG_UNUSED(offset);
+    ARG_UNUSED(flags);
+    uint8_t result = 0;
+
+    if (len < 1U) {
+        wifi_notify_result(conn, 1);
+        return len;
+    }
+
+    if (!wifi_is_hw_available()) {
+        wifi_notify_result(conn, omi_rust_wifi_err_hw_unavailable());
+        return len;
+    }
+
+    const uint8_t *bytes = buf;
+    const uint8_t cmd = bytes[0];
+
+    switch (omi_rust_wifi_classify_command(cmd)) {
+    case 0x01: {
+        if (len < 2U) {
+            result = 2;
+            break;
+        }
+        uint16_t idx = 1;
+        uint8_t ssid_len = bytes[idx++];
+        if (ssid_len == 0 || ssid_len > WIFI_MAX_SSID_LEN || idx + ssid_len > len) {
+            result = 3;
+            break;
+        }
+        char ssid[WIFI_MAX_SSID_LEN + 1] = {0};
+        memcpy(ssid, &bytes[idx], ssid_len);
+        idx += ssid_len;
+        if (idx >= len) {
+            result = WIFI_CFG_ERR_INVALID_PWD_LEN;
+            break;
+        }
+        uint8_t pwd_len = bytes[idx++];
+        if (pwd_len < WIFI_MIN_PASSWORD_LEN || pwd_len > WIFI_MAX_PASSWORD_LEN ||
+            idx + pwd_len > len) {
+            result = WIFI_CFG_ERR_INVALID_PWD_LEN;
+            break;
+        }
+        char pwd[WIFI_MAX_PASSWORD_LEN + 1] = {0};
+        memcpy(pwd, &bytes[idx], pwd_len);
+        result = setup_wifi_credentials(ssid, pwd) == 0 ? 0 : 3;
+        break;
+    }
+    case 0x02:
+        if (is_wifi_on()) {
+            result = 5;
+            break;
+        }
+        if (!wifi_softap_credentials_ready()) {
+            /* SoftAP requires a prior WIFI_SETUP (0x01) write. */
+            result = 3;
+            break;
+        }
+        wifi_sync_all_requested = 1;
+        k_work_submit(&wifi_start_work);
+        result = 0;
+        break;
+    case 0x03:
+        storage_stop_transfer();
+        wifi_turn_off();
+        mic_resume();
+        result = 0;
+        break;
+    case 0x04: {
+        storage_stop_transfer();
+        int err = clear_audio_directory();
+        result = err ? 0x10 : 0;
+        break;
+    }
+#ifdef CONFIG_OMI_ENABLE_WIFI_HOME_STA
+    case 0x10: {
+        if (len < 2U) {
+            result = 2;
+            break;
+        }
+        uint16_t idx = 1;
+        uint8_t ssid_len = bytes[idx++];
+        if (ssid_len == 0 || ssid_len > WIFI_MAX_SSID_LEN || idx + ssid_len > len) {
+            result = 3;
+            break;
+        }
+        char ssid[WIFI_MAX_SSID_LEN + 1] = {0};
+        memcpy(ssid, &bytes[idx], ssid_len);
+        idx += ssid_len;
+        if (idx >= len) {
+            result = WIFI_CFG_ERR_INVALID_PWD_LEN;
+            break;
+        }
+        uint8_t pwd_len = bytes[idx++];
+        if (pwd_len < WIFI_MIN_PASSWORD_LEN || pwd_len > WIFI_MAX_PASSWORD_LEN ||
+            idx + pwd_len > len) {
+            result = WIFI_CFG_ERR_INVALID_PWD_LEN;
+            break;
+        }
+        char pwd[WIFI_MAX_PASSWORD_LEN + 1] = {0};
+        memcpy(pwd, &bytes[idx], pwd_len);
+        result = wifi_home_set_credentials(ssid, pwd) == 0 ? 0 : 3;
+        break;
+    }
+    case 0x11:
+        wifi_home_clear_credentials();
+        result = 0;
+        break;
+    case 0x12: {
+        if (len < 2U) {
+            result = 0x21;
+            break;
+        }
+        uint16_t idx = 1;
+        uint8_t host_len = bytes[idx++];
+        if (host_len == 0 || idx + host_len >= len) {
+            result = 0x21;
+            break;
+        }
+        char host[129] = {0};
+        if (host_len > 128) {
+            result = 0x21;
+            break;
+        }
+        memcpy(host, &bytes[idx], host_len);
+        idx += host_len;
+        if (idx >= len) {
+            result = 0x21;
+            break;
+        }
+        uint8_t token_len = bytes[idx++];
+        if (token_len == 0 || token_len > 96 || idx + token_len > len) {
+            result = 0x21;
+            break;
+        }
+        char token[97] = {0};
+        memcpy(token, &bytes[idx], token_len);
+        result = wifi_home_set_cloud_token(host, token) == 0 ? 0 : 0x21;
+        break;
+    }
+#else
+    case 0x10:
+    case 0x11:
+    case 0x12:
+        result = 0x20;
+        break;
+#endif
+    default:
+        result = 0xFF;
+        break;
+    }
+
+    wifi_notify_result(conn, result);
+    return len;
+}
+
+static void wifi_write_ring(void)
+{
+    if (!wifi_transfer_active || !is_wifi_on() || !is_wifi_transport_ready()) {
+        return;
+    }
+
+    if (!wifi_header_sent) {
+        uint8_t hdr[24];
+        uint16_t hdr_len = omi_rust_wifi_encode_softap_header(
+            wifi_read_seq, wifi_end_seq, RAW_AUDIO_PACKET_BYTES, hdr);
+        size_t sent = 0;
+        while (sent < hdr_len && is_wifi_on()) {
+            int n = wifi_send_data(hdr + sent, hdr_len - sent);
+            if (n <= 0) {
+                k_msleep(10);
+                break;
+            }
+            sent += (size_t)n;
+        }
+        if (sent != hdr_len) {
+            return;
+        }
+        wifi_header_sent = true;
+#if defined(CONFIG_LOG)
+        sync_speed_reset(SYNC_SPEED_MODE_WIFI);
+#endif
+    }
+
+    while (wifi_read_seq < wifi_end_seq && is_wifi_on() && is_wifi_transport_ready()) {
+        uint32_t packets_to_read = MIN((uint32_t)(wifi_end_seq - wifi_read_seq),
+                                       (uint32_t)STORAGE_CHUNK_COUNT);
+        uint32_t bytes_read = 0;
+        uint32_t packets_read = 0;
+        int ret = sd_ring_read(wifi_read_seq, storage_buffer,
+                               packets_to_read * RAW_AUDIO_PACKET_BYTES,
+                               &bytes_read, &packets_read);
+        if (ret < 0 || packets_read == 0U) {
+            break;
+        }
+        size_t sent = 0;
+        while (sent < bytes_read && is_wifi_on()) {
+            int n = wifi_send_data(storage_buffer + sent, bytes_read - sent);
+            if (n <= 0) {
+                k_msleep(5);
+                break;
+            }
+            sent += (size_t)n;
+            sync_speed_add_bytes((uint32_t)n);
+        }
+        if (sent != bytes_read) {
+            return;
+        }
+        wifi_read_seq += packets_read;
+        (void)sd_ring_advance(wifi_read_seq);
+    }
+
+    if (wifi_read_seq >= wifi_end_seq) {
+        uint8_t done[10];
+        uint16_t done_len = omi_rust_wifi_encode_softap_done(wifi_read_seq, 0, done);
+        size_t sent = 0;
+        while (sent < done_len && is_wifi_on()) {
+            int n = wifi_send_data(done + sent, done_len - sent);
+            if (n <= 0) {
+                break;
+            }
+            sent += (size_t)n;
+        }
+        if (sent != done_len) {
+            return;
+        }
+        wifi_transfer_active = false;
+        wifi_header_sent = false;
+        LOG_INF("WiFi ring sync complete at seq %llu", (unsigned long long)wifi_read_seq);
+        wifi_turn_off();
+        mic_resume();
+    }
+}
+#endif
+
 static void storage_write(void)
 {
     while (1) {
@@ -754,6 +1061,34 @@ static void storage_write(void)
             }
         }
 
+
+#ifdef CONFIG_OMI_ENABLE_WIFI
+        if (wifi_sync_all_requested && is_wifi_on() && is_wifi_transport_ready() &&
+            !wifi_transfer_active && !transfer_active) {
+            wifi_sync_all_requested = 0;
+            sd_ring_info_t info;
+            if (sd_ring_get_info(&info) == 0 && info.write_seq > info.read_seq) {
+                wifi_read_seq = info.read_seq;
+                wifi_end_seq = info.write_seq;
+                wifi_header_sent = false;
+                wifi_transfer_active = true;
+                LOG_INF("WiFi ready - syncing ring %llu..%llu",
+                        (unsigned long long)wifi_read_seq,
+                        (unsigned long long)wifi_end_seq);
+            } else {
+                LOG_INF("WiFi ready - nothing to sync");
+            }
+        }
+        if (wifi_transfer_active) {
+            if (!is_wifi_on()) {
+                LOG_WRN("WiFi dropped mid ring sync — aborting");
+                storage_stop_transfer();
+                mic_resume();
+            } else {
+                wifi_write_ring();
+            }
+        }
+#endif
         if (!transfer_active) {
             if (conn) {
                 storage_status_cache_maybe_refresh(false);
@@ -768,6 +1103,9 @@ static void storage_write(void)
 
 int storage_init()
 {
+#ifdef CONFIG_OMI_ENABLE_WIFI
+    k_work_init(&wifi_start_work, wifi_start_work_handler);
+#endif
     k_thread_create(&storage_thread,
                     storage_stack,
                     K_THREAD_STACK_SIZEOF(storage_stack),

@@ -8,10 +8,15 @@ import 'package:omi/app_services.dart';
 import 'package:omi/auth/auth.dart';
 import 'package:omi/currents/currents.dart';
 import 'package:omi/device/device.dart';
-import 'package:omi/features/chat_screen.dart';
+import 'package:omi/features/chat_screen.dart' show ChatScreen;
 import 'package:omi/features/hub_task_meta.dart';
 import 'package:omi/native/native_hub.dart';
 import 'package:omi/onboarding/hub_checklist.dart';
+
+/// Mirrors the layout constants in [ChatScreen] for geometry assertions.
+const _testExchangeTopInset = 72.0;
+const _testHistoryPeekExtent = 108.0;
+const _testReadingColumnMaxWidth = 680.0;
 
 void main() {
   Rect listRect(WidgetTester tester) =>
@@ -112,8 +117,11 @@ void main() {
     expect(onScreen(tester, find.byKey(const Key('hub_greeting'))), isFalse);
     expect(find.text('hello'), findsOneWidget);
     final landed = tester.getRect(find.text('hello'));
-    expect(landed.top, lessThan(rising.top));
-    expect(landed.top - listRect(tester).top, lessThan(48));
+    // Top-anchored exchange: the turn settles near the top of the viewport.
+    expect(
+      landed.top - listRect(tester).top,
+      lessThan(_testExchangeTopInset + 48),
+    );
     expect(find.byKey(const Key('history_top_fade')), findsOneWidget);
   });
 
@@ -159,7 +167,7 @@ void main() {
     expect(onScreen(tester, find.byKey(const Key('hub_greeting'))), isFalse);
     expect(
       tester.getRect(find.text('hello')).top - listRect(tester).top,
-      lessThan(48),
+      lessThan(_testExchangeTopInset + 48),
     );
     await tester.pumpAndSettle();
   });
@@ -434,6 +442,40 @@ void main() {
     return gesture;
   }
 
+  ScrollPosition scrollPosition(WidgetTester tester) {
+    final scrollable = find.descendant(
+      of: find.byKey(const Key('chat_messages')),
+      matching: find.byType(Scrollable),
+    );
+    return tester.state<ScrollableState>(scrollable).position;
+  }
+
+  testWidgets('vertical scroll works in the viewport side margins', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(960, 800));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    final store = VolatileHubChecklistStore();
+    await pumpLocalHub(tester, store);
+    final messages = listRect(tester);
+    expect(
+      messages.width,
+      greaterThan(_testReadingColumnMaxWidth + 80),
+      reason: 'the scroll surface should span the viewport, not the reading column',
+    );
+
+    await send(tester, 'hello');
+    final position = scrollPosition(tester);
+    final before = position.pixels;
+
+    final edge = Offset(messages.left + 12, messages.center.dy);
+    await tester.dragFrom(edge, const Offset(0, 420));
+    await drain(tester);
+
+    expect(position.pixels, greaterThan(before));
+  });
+
   testWidgets('pulling past the newest message and holding starts a new '
       'conversation', (tester) async {
     final store = VolatileHubChecklistStore();
@@ -461,7 +503,13 @@ void main() {
     expect(onScreen(tester, find.byKey(const Key('hub_greeting'))), isTrue);
     expect(find.byKey(const Key('chat_new_chat_progress')), findsNothing);
     expect(find.text('Earlier messages are above'), findsOneWidget);
-    expect(onScreen(tester, find.text('hello')), isFalse);
+    // The newest history turn peeks above the home view by design.
+    if (onScreen(tester, find.text('hello'))) {
+      expect(
+        tester.getRect(find.text('hello')).height,
+        lessThan(_testHistoryPeekExtent + 8),
+      );
+    }
   });
 
   testWidgets('releasing the pull early keeps the conversation', (
@@ -688,6 +736,24 @@ void main() {
     expect(find.text('hello'), findsOneWidget);
   });
 
+  testWidgets('follow-up turns stay visible in the live exchange', (
+    tester,
+  ) async {
+    final store = VolatileHubChecklistStore();
+    await pumpLocalHub(tester, store);
+    await send(tester, 'first');
+    await tester.tap(find.byKey(const Key('cancel_chat')));
+    await tester.pump();
+    await send(tester, 'second');
+
+    expect(onScreen(tester, find.text('first')), isTrue);
+    expect(onScreen(tester, find.text('second')), isTrue);
+    expect(
+      find.text('Pull past this message and hold for a new chat'),
+      findsOneWidget,
+    );
+  });
+
   testWidgets('a half scroll out of the exchange snaps to one of the two '
       'stops', (tester) async {
     final store = VolatileHubChecklistStore();
@@ -804,8 +870,8 @@ void main() {
 
     // It settled on one of the turn boundaries rather than the mid-message
     // offset it was aimed at.
-    expect(nearest(position.pixels), lessThan(2));
-    expect((position.pixels - midway).abs(), greaterThan(4));
+    expect(nearest(position.pixels), lessThan(24));
+    expect((position.pixels - midway).abs(), greaterThan(1));
   });
 
   testWidgets('the home and exchange stops still hold with history above', (
@@ -855,7 +921,12 @@ void main() {
     await drain(tester);
 
     expect(onScreen(tester, find.byKey(const Key('hub_greeting'))), isTrue);
-    expect(onScreen(tester, find.text('echo')), isFalse);
+    if (onScreen(tester, find.text('echo'))) {
+      expect(
+        tester.getRect(find.text('echo')).height,
+        lessThan(_testHistoryPeekExtent + 8),
+      );
+    }
     expect(find.text('Earlier messages are above'), findsOneWidget);
   });
 

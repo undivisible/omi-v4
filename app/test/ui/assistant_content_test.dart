@@ -19,10 +19,12 @@ Widget _host(
   String text, {
   ValueChanged<String>? onPrompt,
   ValueChanged<String>? onDraft,
+  bool streaming = false,
 }) => MaterialApp(
   home: Scaffold(
     body: AssistantContent(
       text,
+      streaming: streaming,
       onPrompt: onPrompt ?? (_) {},
       onDraftPrompt: onDraft ?? (_) {},
       palette: _palette,
@@ -105,6 +107,44 @@ void main() {
     expect(find.byKey(const Key('assistant_crepus_artifact')), findsNothing);
     // The raw block is shown as markdown instead of a blank card.
     expect(find.byType(AssistantMarkdown), findsOneWidget);
+  });
+
+  testWidgets('streaming crepus shows skeleton instead of raw source', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      _host(
+        'Here is what is happening:\n\n'
+        '```crepus\n'
+        'stack col gap-2\n'
+        '  badge "Live Activity"\n'
+        '  list\n'
+        '    listitem "Still streaming"',
+        streaming: true,
+      ),
+    );
+    expect(find.byKey(const Key('assistant_crepus_artifact_skeleton')), findsOneWidget);
+    expect(find.byType(CrepusView), findsNothing);
+    expect(find.text('Live Activity'), findsNothing);
+    expect(find.byType(AssistantMarkdown), findsOneWidget);
+  });
+
+  testWidgets('completed crepus fades in after streaming ends', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      _host(
+        '```crepus\n'
+        'stack col gap-2\n'
+        '  badge "Live Activity"\n'
+        '  text "Ready"\n'
+        '```',
+        streaming: false,
+      ),
+    );
+    expect(find.byKey(const Key('assistant_crepus_artifact_skeleton')), findsNothing);
+    expect(find.byType(CrepusView), findsOneWidget);
+    expect(find.text('Live Activity'), findsOneWidget);
   });
 
   testWidgets(

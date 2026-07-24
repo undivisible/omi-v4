@@ -579,7 +579,7 @@ final class _Gateway implements AuthGateway {
       const PhoneOtpChallenge(verificationId: 'test');
 
   @override
-  Future<AuthSession?> refreshSession() async => currentSession;
+  Future<AuthSession?> refreshSession({bool forceRefresh = false}) async => currentSession;
 
   @override
   Future<AuthSession?> restoreSession() async => currentSession;
@@ -858,6 +858,13 @@ final class _Hub implements NativeHub {
   void stopLiveVoice({
     required String requestId,
     required String liveStreamId,
+  }) {}
+
+  @override
+  void updateLiveVoiceContext({
+    required String requestId,
+    required String liveStreamId,
+    required String sessionContext,
   }) {}
 
   @override

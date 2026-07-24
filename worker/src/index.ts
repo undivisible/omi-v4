@@ -10,6 +10,7 @@ import mcp from "./mcp";
 import { backfillClaimVectors, drainPendingEmbeddings } from "./memory-vectors";
 import { createSentry, pingHeartbeat, shipTailEvents } from "./observability";
 import publicApi from "./public-api";
+import deviceSync from "./device-sync";
 export { AssistantAdmission } from "./assistant-admission";
 export { SttAdmission } from "./stt-admission";
 export { DeliveryCoordinator } from "./delivery";
@@ -41,6 +42,9 @@ app.route("/v1", routes);
 // middleware above cannot be widened by accident; each carries its own
 // middleware accepting an API key or a Firebase ID token.
 app.route("/api/v1", publicApi);
+// Pendant home-STA self-sync: register (Firebase) + upload (device token).
+// Mounted beside publicApi so device-token auth is not forced through API keys.
+app.route("/api/v1/devices", deviceSync);
 app.route("/mcp", mcp);
 app.notFound((context) => context.json({ error: "Not found" }, 404));
 // Report unhandled request errors to Better Stack (Sentry-compatible) when a

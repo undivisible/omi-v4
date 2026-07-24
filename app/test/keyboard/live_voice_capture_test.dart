@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:fake_async/fake_async.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -109,6 +110,99 @@ void main() {
     hub.emitState(LiveVoicePhase.ended);
     await pumpEventQueue();
     expect(await capture.stop(), 'first half second half');
+    await capture.dispose();
+  });
+
+  test('periodic sessionContext refresher pushes updates to the hub', () {
+    fakeAsync((async) {
+      final hub = _LiveHub();
+      final audio = StreamController<Uint8List>();
+      addTearDown(audio.close);
+      var refreshCount = 0;
+      final capture = LiveVoiceCapture(
+        hub: hub,
+        startAudio: () async => audio.stream,
+        stopAudio: () async {},
+        disposeAudio: () async {},
+        permissionCheck: () async => true,
+        contextRefreshInterval: const Duration(seconds: 90),
+        sessionContextRefresher: () async {
+          refreshCount += 1;
+          return 'Updated screen context:\nApp: Mail $refreshCount';
+        },
+      );
+      final started = capture.start(
+        ephemeralToken: 'auth_tokens/fake',
+        model: 'gemini-live-test',
+        authorityId: 'g1',
+        sessionContext: 'Screen context for this voice session:\nApp: Mail',
+      );
+      async.flushMicrotasks();
+      hub.emitState(LiveVoicePhase.started);
+      async.flushMicrotasks();
+      // Resolve start() without awaiting outside fakeAsync.
+      expect(capture.active, isTrue);
+      expect(hub.contextUpdates, isEmpty);
+
+      async.elapse(const Duration(seconds: 90));
+      async.flushMicrotasks();
+      expect(hub.contextUpdates, [
+        'Updated screen context:\nApp: Mail 1',
+      ]);
+
+      async.elapse(const Duration(seconds: 90));
+      async.flushMicrotasks();
+      expect(hub.contextUpdates, [
+        'Updated screen context:\nApp: Mail 1',
+        'Updated screen context:\nApp: Mail 2',
+      ]);
+
+      unawaited(capture.cancel());
+      async.flushMicrotasks();
+      async.elapse(const Duration(seconds: 90));
+      async.flushMicrotasks();
+      expect(hub.contextUpdates, hasLength(2));
+      unawaited(capture.dispose());
+      async.flushMicrotasks();
+      // Keep the start future from leaking.
+      unawaited(started);
+    });
+  });
+
+  test('resume prefers a fresh refresher context when available', () async {
+    final hub = _LiveHub();
+    addTearDown(hub.close);
+    final audio = StreamController<Uint8List>();
+    addTearDown(audio.close);
+    var refreshCount = 0;
+    final capture = LiveVoiceCapture(
+      hub: hub,
+      startAudio: () async => audio.stream,
+      stopAudio: () async {},
+      disposeAudio: () async {},
+      permissionCheck: () async => true,
+      sessionContextRefresher: () async {
+        refreshCount += 1;
+        return 'fresh context $refreshCount';
+      },
+    );
+    final started = capture.start(
+      ephemeralToken: 'auth_tokens/fake',
+      model: 'gemini-live-test',
+      authorityId: 'g1',
+      sessionContext: 'initial context',
+    );
+    await hub.startedStream();
+    hub.emitState(LiveVoicePhase.started);
+    await started;
+    expect(hub.sessionContexts, ['initial context']);
+
+    hub.emitState(LiveVoicePhase.ended, resumptionHandle: 'handle-1');
+    await pumpEventQueue();
+    expect(hub.startedStreams, hasLength(2));
+    expect(hub.sessionContexts, ['initial context', 'fresh context 1']);
+    hub.emitState(LiveVoicePhase.started);
+    await pumpEventQueue();
     await capture.dispose();
   });
 
@@ -505,6 +599,8 @@ final class _LiveHub implements NativeHub {
   final sentAudio = <Uint8List>[];
   final startedStreams = <String>[];
   final resumptionHandles = <String?>[];
+  final sessionContexts = <String?>[];
+  final contextUpdates = <String>[];
   final _started = Completer<void>();
 
   Future<void> startedStream() => _started.future;
@@ -515,6 +611,10 @@ final class _LiveHub implements NativeHub {
     String? resumptionHandle,
     String? sessionContext,
   }) {
+    // Resume starts a new stream id; point emissions at the latest start.
+    if (startedStreams.isNotEmpty) {
+      streamId = startedStreams.last;
+    }
     _events.add(
       NativeEventLiveVoiceState(
         value: LiveVoiceState(
@@ -580,6 +680,7 @@ final class _LiveHub implements NativeHub {
     streamId = liveStreamId;
     startedStreams.add(liveStreamId);
     resumptionHandles.add(resumptionHandle);
+    sessionContexts.add(sessionContext);
     if (!_started.isCompleted) _started.complete();
   }
 
@@ -588,6 +689,15 @@ final class _LiveHub implements NativeHub {
     required String requestId,
     required String liveStreamId,
   }) {}
+
+  @override
+  void updateLiveVoiceContext({
+    required String requestId,
+    required String liveStreamId,
+    required String sessionContext,
+  }) {
+    contextUpdates.add(sessionContext);
+  }
 
   @override
   void sendAudio({
@@ -649,6 +759,13 @@ final class _FakeHub implements NativeHub {
   }) {
     emitPhase(liveStreamId, LiveVoicePhase.ended);
   }
+
+  @override
+  void updateLiveVoiceContext({
+    required String requestId,
+    required String liveStreamId,
+    required String sessionContext,
+  }) {}
 
   @override
   void sendAudio({

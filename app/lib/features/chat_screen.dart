@@ -48,8 +48,12 @@ import 'tasks_screen.dart';
 const double _historyPeekExtent = 108;
 
 /// Top breathing room inside the live exchange once the send transition lands,
-/// so turns sit lower in the viewport instead of hugging the status bar.
+/// so the first turn sits below the status strip instead of hugging it.
 const double _exchangeTopInset = 72;
+
+/// Width of the reading column. The scroll surface spans the full viewport;
+/// only the content is centered inside this width.
+const double _readingColumnMaxWidth = 680;
 
 /// How long a live exchange stays in the viewport after the last turn or app
 /// background — aligned with the desktop overlay session reuse window.
@@ -568,10 +572,12 @@ class ChatScreenState extends State<ChatScreen>
           _conversationCursor = messages.last.cursor;
         }
       });
-    } catch (failure) {
+    } on WorkerAuthenticationException catch (failure) {
       if (mounted && generation == _conversationLoadGeneration) {
         setState(() => _error = _describeError(failure));
       }
+    } catch (failure) {
+      debugPrint('chat_screen conversation replay: $failure');
     } finally {
       _conversationLoads.remove(generation);
       if (mounted && generation == _conversationLoadGeneration) {
@@ -986,10 +992,8 @@ class ChatScreenState extends State<ChatScreen>
                     requestId: value.requestId,
                     text: message.text,
                   )
-                  .onError((failure, _) {
-                    if (mounted) {
-                      setState(() => _error = _describeError(failure));
-                    }
+                  .catchError((Object failure, _) {
+                    debugPrint('chat_screen assistant save: $failure');
                   }),
             );
             _activeRequestId = null;
@@ -1029,16 +1033,16 @@ class ChatScreenState extends State<ChatScreen>
             );
           }
         case NativeEventError(:final value):
-          if (value.requestId == null ||
-              value.requestId == _activeRequestId ||
-              value.requestId!.startsWith('approval-')) {
+          final requestId = value.requestId;
+          if (requestId == _activeRequestId ||
+              (requestId != null && requestId.startsWith('approval-'))) {
             _error = value.message;
-            if (value.requestId == _activeRequestId) {
+            if (requestId == _activeRequestId) {
               _activeRequestId = null;
               _progress = null;
             }
-            if (value.requestId != null) {
-              _removeProposalsForParent(value.requestId!);
+            if (requestId != null) {
+              _removeProposalsForParent(requestId);
             }
           }
         case NativeEventRuntimeStatus(:final value):
@@ -1352,151 +1356,177 @@ class ChatScreenState extends State<ChatScreen>
         // The scrollbar belongs to the window, not to the reading column:
         // painted inside the 680-wide column it lands on top of the task
         // rows. Suppress the implicit one the list would draw and hang an
-        // explicit one off the full-width edge instead.
+        // explicit one off the full-width edge instead. The list itself must
+        // span the full viewport too — otherwise the side margins are dead
+        // zones that never reach the scrollable.
         Scrollbar(
           controller: _scroll,
-          child: Center(
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 680),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Expanded(
-                    child: LayoutBuilder(
-                      builder: (context, constraints) {
-                        // The home view fills the viewport apart from a thin
-                        // strip at the top, so the tail of the newest message
-                        // stays on screen and scrolling up reads as revealing
-                        // history rather than as an empty gesture.
-                        final greeterExtent = _messages.isEmpty
-                            ? constraints.maxHeight
-                            : math.max(
-                                0.0,
-                                constraints.maxHeight - _historyPeekExtent,
-                              );
-                        return Stack(
-                          children: [
-                            NotificationListener<ScrollNotification>(
-                              onNotification: _handleScroll,
-                              child: ScrollConfiguration(
-                                behavior: ScrollConfiguration.of(
-                                  context,
-                                ).copyWith(scrollbars: false),
-                                child: ListView.builder(
-                                  key: const Key('chat_messages'),
-                                  controller: _scroll,
-                                  // Bouncing, not clamping: the pull past
-                                  // the newest message is the go-home
-                                  // gesture, so it has to be possible to
-                                  // overscroll there.
-                                  physics: const AlwaysScrollableScrollPhysics(
-                                    parent: BouncingScrollPhysics(),
-                                  ),
-                                  reverse: true,
-                                  // The message directly above the home view is
-                                  // the peek, so it has to be built even when the
-                                  // home view is taller than the viewport.
-                                  scrollCacheExtent:
-                                      const ScrollCacheExtent.pixels(800),
-                                  itemCount:
-                                      history.length +
-                                      1 +
-                                      (exchange.isEmpty ? 0 : 1),
-                                  itemBuilder: (context, index) {
-                                    var slot = index;
-                                    if (exchange.isNotEmpty) {
-                                      if (slot == 0) {
-                                        return _buildExchangeSlot(
-                                          exchange,
-                                          constraints.maxHeight,
-                                        );
-                                      }
-                                      slot -= 1;
-                                    }
-                                    if (slot == 0) {
-                                      return KeyedSubtree(
-                                        key: _homeKey,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Expanded(
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    // The home view fills the viewport apart from a thin
+                    // strip at the top, so the tail of the newest message
+                    // stays on screen and scrolling up reads as revealing
+                    // history rather than as an empty gesture.
+                    final greeterExtent = _messages.isEmpty
+                        ? constraints.maxHeight
+                        : math.max(
+                            0.0,
+                            constraints.maxHeight - _historyPeekExtent,
+                          );
+                    return Stack(
+                      children: [
+                        NotificationListener<ScrollNotification>(
+                          onNotification: _handleScroll,
+                          child: ScrollConfiguration(
+                            behavior: ScrollConfiguration.of(
+                              context,
+                            ).copyWith(scrollbars: false),
+                            child: ListView.builder(
+                              key: const Key('chat_messages'),
+                              controller: _scroll,
+                              // Bouncing, not clamping: the pull past
+                              // the newest message is the go-home
+                              // gesture, so it has to be possible to
+                              // overscroll there.
+                              physics: const AlwaysScrollableScrollPhysics(
+                                parent: BouncingScrollPhysics(),
+                              ),
+                              reverse: true,
+                              // The message directly above the home view is
+                              // the peek, so it has to be built even when the
+                              // home view is taller than the viewport.
+                              scrollCacheExtent:
+                                  const ScrollCacheExtent.pixels(800),
+                              itemCount:
+                                  history.length +
+                                  1 +
+                                  (exchange.isEmpty ? 0 : 1),
+                              itemBuilder: (context, index) {
+                                var slot = index;
+                                if (exchange.isNotEmpty) {
+                                  if (slot == 0) {
+                                    return _buildExchangeSlot(
+                                      exchange,
+                                      constraints.maxHeight,
+                                    );
+                                  }
+                                  slot -= 1;
+                                }
+                                if (slot == 0) {
+                                  return KeyedSubtree(
+                                    key: _homeKey,
+                                    child: ConstrainedBox(
+                                      constraints: BoxConstraints(
+                                        minHeight: greeterExtent,
+                                      ),
+                                      child: Center(
                                         child: ConstrainedBox(
-                                          constraints: BoxConstraints(
-                                            minHeight: greeterExtent,
+                                          constraints: const BoxConstraints(
+                                            maxWidth: _readingColumnMaxWidth,
                                           ),
-                                          child: Center(
-                                            child: _Greeter(
-                                              child: _ChatHome(
-                                                greeting: _greeting(),
-                                                setupTaskDone: _setupTaskDone,
-                                                onToggleSetupTask:
-                                                    _toggleSetupTask,
-                                                starterTasks: _starterTasks,
-                                                doneStarterTasks:
-                                                    _doneStarterTasks,
-                                                onToggleStarterTask:
-                                                    _toggleStarterTask,
-                                                tasks: tasks,
-                                                briefCrepus:
-                                                    currents?.briefCrepus,
-                                                meetingNotes: _meetingNotes,
-                                                onOpenMeetingNotes:
-                                                    _openMeetingNotes,
-                                                onComplete: currents == null
-                                                    ? null
-                                                    : (id) => unawaited(
-                                                        currents.dismiss(id),
-                                                      ),
-                                                onPrompt: _sendPrompt,
-                                                onDraftPrompt: _usePrompt,
-                                                showByokHint:
-                                                    !_byokHintDismissed &&
-                                                    _byokPlanFree,
-                                                onOpenByok: widget
-                                                    .onOpenProviderSettings,
-                                                onDismissByok: () => unawaited(
-                                                  _dismissByokHint(),
-                                                ),
+                                          child: _Greeter(
+                                            child: _ChatHome(
+                                              greeting: _greeting(),
+                                              setupTaskDone: _setupTaskDone,
+                                              onToggleSetupTask:
+                                                  _toggleSetupTask,
+                                              starterTasks: _starterTasks,
+                                              doneStarterTasks:
+                                                  _doneStarterTasks,
+                                              onToggleStarterTask:
+                                                  _toggleStarterTask,
+                                              tasks: tasks,
+                                              briefCrepus:
+                                                  currents?.briefCrepus,
+                                              meetingNotes: _meetingNotes,
+                                              onOpenMeetingNotes:
+                                                  _openMeetingNotes,
+                                              onComplete: currents == null
+                                                  ? null
+                                                  : (id) => unawaited(
+                                                      currents.dismiss(id),
+                                                    ),
+                                              onPrompt: _sendPrompt,
+                                              onDraftPrompt: _usePrompt,
+                                              showByokHint:
+                                                  !_byokHintDismissed &&
+                                                  _byokPlanFree,
+                                              onOpenByok: widget
+                                                  .onOpenProviderSettings,
+                                              onDismissByok: () => unawaited(
+                                                _dismissByokHint(),
                                               ),
                                             ),
                                           ),
                                         ),
-                                      );
-                                    }
-                                    return history[slot - 1]();
-                                  },
-                                ),
-                              ),
+                                      ),
+                                    ),
+                                  );
+                                }
+                                return _ReadingColumn(
+                                  child: history[slot - 1](),
+                                );
+                              },
                             ),
-                            if (_messages.isNotEmpty)
-                              const Positioned(
-                                top: 0,
-                                left: 0,
-                                right: 0,
-                                height: 36,
-                                child: IgnorePointer(child: _HistoryTopFade()),
-                              ),
-                          ],
-                        );
-                      },
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  _Reveal(
-                    delayMs: 900,
-                    child: _ChatInputCard(
-                      controller: _input,
-                      focusNode: _inputFocus,
-                      enabled: ready,
-                      busy: _activeRequestId != null,
-                      hintText: ready
-                          ? _kPlaceholderPrompts[_placeholderIndex]
-                          : 'Connect an account and model to start chatting',
-                      onSend: _send,
-                      onCancel: _cancel,
-                      dictation: _dictation,
-                    ),
-                  ),
-                  _buildBottomHint(),
-                ],
+                          ),
+                        ),
+                        if (_messages.isNotEmpty)
+                          const Positioned(
+                            top: 0,
+                            left: 0,
+                            right: 0,
+                            height: 36,
+                            child: IgnorePointer(child: _HistoryTopFade()),
+                          ),
+                        if (_activityMarquee case final label?)
+                          Positioned(
+                            top: 0,
+                            left: 0,
+                            right: 0,
+                            child: IgnorePointer(
+                              child: _ChatActivityMarquee(label: label),
+                            ),
+                          ),
+                      ],
+                    );
+                  },
+                ),
               ),
-            ),
+              const SizedBox(height: 12),
+              Center(
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(
+                    maxWidth: _readingColumnMaxWidth,
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      _Reveal(
+                        delayMs: 900,
+                        child: _ChatInputCard(
+                          controller: _input,
+                          focusNode: _inputFocus,
+                          enabled: ready,
+                          busy: _activeRequestId != null,
+                          hintText: ready
+                              ? _kPlaceholderPrompts[_placeholderIndex]
+                              : 'Connect an account and model to start chatting',
+                          onSend: _send,
+                          onCancel: _cancel,
+                          dictation: _dictation,
+                        ),
+                      ),
+                      _buildBottomHint(),
+                    ],
+                  ),
+                ),
+              ),
+            ],
           ),
         ),
       ],
@@ -1545,6 +1575,54 @@ class ChatScreenState extends State<ChatScreen>
   bool get _showSkeleton =>
       _activeRequestId != null &&
       !_assistantTurnStarted(_activeRequestId!);
+
+  /// Top status strip while the hub is working but not streaming plain text.
+  String? get _activityMarquee {
+    final active = _activeRequestId;
+    if (active == null) return null;
+    final progress = _progress;
+    if (progress != null) {
+      final parts = progress.split(' · ');
+      if (parts.isNotEmpty && parts.first == 'chat_model') {
+        if (_assistantTurnStarted(active)) return null;
+        final model = _modelFromChatProgress(progress);
+        return model == null ? 'Thinking…' : 'Thinking · $model';
+      }
+      if (_isToolActivityProgress(progress)) {
+        return _formatToolActivity(progress);
+      }
+    }
+    if (_assistantTurnStarted(active)) return null;
+    return 'Thinking…';
+  }
+
+  String? _modelFromChatProgress(String progress) {
+    final parts = progress.split(' · ');
+    if (parts.length < 3) return null;
+    final detail = parts.sublist(2).join(' · ');
+    final segments = detail.split(':');
+    if (segments.isEmpty) return null;
+    final model = segments.last.trim();
+    return model.isEmpty ? null : model;
+  }
+
+  bool _isToolActivityProgress(String progress) {
+    final parts = progress.split(' · ');
+    if (parts.length < 2) return false;
+    if (parts.first == 'chat_model') return false;
+    const terminal = {'complete', 'failed', 'cancelled'};
+    return !terminal.contains(parts[1]);
+  }
+
+  String _formatToolActivity(String progress) {
+    final parts = progress.split(' · ');
+    final tool = parts.first;
+    final status = parts.length > 1 ? parts[1] : 'running';
+    if (parts.length > 2) {
+      return '$tool · $status · ${parts.sublist(2).join(' · ')}';
+    }
+    return '$tool · $status';
+  }
 
   Widget _messageRow(
     _ChatMessage message, {
@@ -1687,10 +1765,9 @@ class ChatScreenState extends State<ChatScreen>
         ),
       if (_showSkeleton)
         () => _AssistantRow(
-          spinning: true,
           child: const _SkeletonBubble(key: Key('chat_skeleton')),
         )
-      else if (_progress != null)
+      else if (_progress != null && _activityMarquee == null)
         () => Text(_progress!, key: const Key('chat_progress')),
       if (_error != null)
         () => Text(
@@ -1707,10 +1784,10 @@ class ChatScreenState extends State<ChatScreen>
     ];
   }
 
-  /// The live exchange, anchored to the bottom of the reversed list. Its height
+  /// The live exchange, anchored to the top of the reversed list. Its height
   /// is the whole transition: growing to a viewport lifts the home view out of
-  /// sight, and because the slot hangs off the bottom edge its top carries the
-  /// new message up from below the fold to the top of the screen.
+  /// sight, and the send animation carries the new message up from below the
+  /// fold until it lands under the status strip.
   Widget _buildExchangeSlot(
     List<Widget Function()> exchange,
     double viewportExtent,
@@ -1724,7 +1801,7 @@ class ChatScreenState extends State<ChatScreen>
           return ConstrainedBox(
             constraints: BoxConstraints(minHeight: viewportExtent),
             child: Align(
-              alignment: Alignment.bottomCenter,
+              alignment: Alignment.topCenter,
               child: Padding(
                 padding: const EdgeInsets.only(top: _exchangeTopInset),
                 child: child,
@@ -1744,10 +1821,13 @@ class ChatScreenState extends State<ChatScreen>
           ),
         );
       },
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        mainAxisSize: MainAxisSize.min,
-        children: [for (final build in exchange) build()],
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: _readingColumnMaxWidth),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          mainAxisSize: MainAxisSize.min,
+          children: [for (final build in exchange) build()],
+        ),
       ),
     ),
   );
@@ -1808,6 +1888,23 @@ class ChatScreenState extends State<ChatScreen>
         : displayName.trim().split(RegExp(r'\s+')).first;
     return name == null ? '$salutation!' : '$salutation, $name!';
   }
+}
+
+/// Centers a row inside the hub reading column without shrinking the list
+/// item's hit target — the list spans the full viewport width so vertical
+/// scroll gestures work in the side margins too.
+class _ReadingColumn extends StatelessWidget {
+  const _ReadingColumn({required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) => Center(
+    child: ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: _readingColumnMaxWidth),
+      child: child,
+    ),
+  );
 }
 
 /// The home view's slot. It is never torn down any more — a send lifts it out
@@ -2022,6 +2119,153 @@ class _HistoryTopFade extends StatelessWidget {
           colors: [page, page.withValues(alpha: 0)],
         ),
       ),
+    );
+  }
+}
+
+/// A pill at the top of the chat viewport reporting what Omi is doing while a
+/// turn is in flight — model routing, tool work, memory — but not during plain
+/// text generation, which streams in the assistant bubble instead.
+class _ChatActivityMarquee extends StatelessWidget {
+  const _ChatActivityMarquee({required this.label});
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = _HubColors.of(context);
+    return SafeArea(
+      bottom: false,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 6, 16, 0),
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: _readingColumnMaxWidth),
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: colors.cardBg.withValues(alpha: 0.94),
+                borderRadius: BorderRadius.circular(999),
+                border: Border.all(color: colors.hairline),
+                boxShadow: [
+                  BoxShadow(
+                    color: colors.cardShadow,
+                    offset: const Offset(0, 2),
+                    blurRadius: 10,
+                  ),
+                ],
+              ),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+                child: _MarqueeLabel(
+                  key: const Key('chat_activity_marquee'),
+                  label: label,
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500,
+                    color: colors.muted,
+                    letterSpacing: 0.1,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _MarqueeLabel extends StatefulWidget {
+  const _MarqueeLabel({required this.label, required this.style, super.key});
+
+  final String label;
+  final TextStyle style;
+
+  @override
+  State<_MarqueeLabel> createState() => _MarqueeLabelState();
+}
+
+class _MarqueeLabelState extends State<_MarqueeLabel>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _scroll;
+  double _overflow = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _scroll = AnimationController(vsync: this);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _measure());
+  }
+
+  @override
+  void didUpdateWidget(covariant _MarqueeLabel oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.label != widget.label) {
+      _scroll.stop();
+      _scroll.reset();
+      _overflow = 0;
+      WidgetsBinding.instance.addPostFrameCallback((_) => _measure());
+    }
+  }
+
+  @override
+  void dispose() {
+    _scroll.dispose();
+    super.dispose();
+  }
+
+  void _measure() {
+    if (!mounted) return;
+    final box = context.findRenderObject() as RenderBox?;
+    if (box == null || !box.hasSize) return;
+    final textPainter = TextPainter(
+      text: TextSpan(text: widget.label, style: widget.style),
+      textDirection: Directionality.of(context),
+      maxLines: 1,
+    )..layout(maxWidth: double.infinity);
+    final viewport = box.size.width;
+    final overflow = math.max(0.0, textPainter.width - viewport);
+    if ((overflow - _overflow).abs() < 1) return;
+    setState(() => _overflow = overflow);
+    _scroll.stop();
+    if (overflow <= 0 ||
+        MediaQuery.maybeOf(context)?.disableAnimations == true) {
+      return;
+    }
+    _scroll.duration = Duration(
+      milliseconds: (6000 + overflow * 18).round().clamp(6000, 18000),
+    );
+    _scroll.repeat();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        WidgetsBinding.instance.addPostFrameCallback((_) => _measure());
+        final label = Text(
+          widget.label,
+          maxLines: 1,
+          softWrap: false,
+          style: widget.style,
+        );
+        if (_overflow <= 0 ||
+            MediaQuery.maybeOf(context)?.disableAnimations == true) {
+          return Align(
+            alignment: Alignment.center,
+            child: label,
+          );
+        }
+        return ClipRect(
+          child: AnimatedBuilder(
+            animation: _scroll,
+            builder: (context, _) => Transform.translate(
+              offset: Offset(-_overflow * _scroll.value, 0),
+              child: label,
+            ),
+          ),
+        );
+      },
     );
   }
 }
@@ -2530,9 +2774,9 @@ class _RichTaskRow extends StatelessWidget {
 }
 
 /// The assistant's turn: the omi mark as its profile picture, left of the
-/// bubble. [spinning] turns the mark fast to read as "thinking" while a reply
-/// is still coming. [showOrb] is false on older turns — a column of marks all
-/// turning at once reads as several things happening, when only the newest
+/// bubble. [spinning] lights the mark with the site pulse while a reply is
+/// still coming. [showOrb] is false on older turns — a column of marks all
+/// pulsing at once reads as several things happening, when only the newest
 /// turn is live.
 class _AssistantRow extends StatelessWidget {
   const _AssistantRow({
@@ -3221,7 +3465,7 @@ class _DictationButton extends StatelessWidget {
               state: recording ? OmiOrbState.listening : OmiOrbState.thinking,
               period: recording
                   ? const Duration(seconds: 8)
-                  : const Duration(milliseconds: 1100),
+                  : const Duration(milliseconds: 1700),
               amplitude: level,
               color: colors.ink,
             ),

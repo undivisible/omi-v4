@@ -405,4 +405,41 @@ config OMI_RUST_CLIPPY
     help
         "Fail the build on clippy warnings in firmware/omi/rust."
 
+config OMI_ENABLE_WIFI
+    bool "Enable WiFi SoftAP sync (nRF7002)"
+    depends on OMI_ENABLE_OFFLINE_STORAGE
+    default n
+    help
+        "Enable nRF7002 SoftAP + TCP sync of the SD audio ring. Off by default
+         because the WiFi stack exceeds the production app-slot flash budget.
+         Enable via EXTRA_CONF_FILE=omi_wifi.conf (and SB_CONFIG_WIFI_NRF70=y).
+         BLE feature bit is (1 << 16); upstream BasedHardware/omi used (1 << 9)."
+
+config OMI_ENABLE_WIFI_HOME_STA
+    bool "Enable home WiFi STA cloud self-sync"
+    depends on OMI_ENABLE_WIFI
+    default n
+    help
+        "Store home SSID/password + cloud device token (provisioned over BLE)
+         and, when charging on home WiFi, upload the SD ring backlog to the
+         worker. SoftAP phone-assisted sync remains available. STA/TLS upload
+         is stubbed until flash budget allows a full enable."
+
+config OMI_WIFI_SOFTAP_DEBUG_DEFAULTS
+    bool "Ship hardcoded SoftAP SSID/PSK defaults (debug only)"
+    depends on OMI_ENABLE_WIFI
+    default n
+    help
+        "When enabled, SoftAP starts with SSID \"Omi CV1\" / PSK \"12345678\"
+         without a prior WIFI_SETUP write. Production builds leave this off so
+         SoftAP stays disabled until the companion provisions credentials."
+
+config OMI_RUST_SELFTEST_AT_BOOT
+    bool "Run Rust selftest during boot"
+    depends on OMI_RUST
+    default y
+    help
+        "Call omi_rust_selftest() early in main. Disable to shave boot latency
+         on production images once host/CI cargo tests cover the same paths."
+
 endmenu
