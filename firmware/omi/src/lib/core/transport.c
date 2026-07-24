@@ -12,9 +12,7 @@
 #include <zephyr/bluetooth/l2cap.h>
 #include <zephyr/bluetooth/services/bas.h>
 #include <zephyr/bluetooth/uuid.h>
-#include <zephyr/drivers/gpio.h>
 #include <zephyr/drivers/sensor.h>
-#include <zephyr/dt-bindings/gpio/nordic-nrf-gpio.h>
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/settings/settings.h>
@@ -39,10 +37,6 @@
 #include "storage.h"
 #include "user_event.h"
 LOG_MODULE_REGISTER(transport, CONFIG_LOG_DEFAULT_LEVEL);
-
-#ifdef CONFIG_OMI_ENABLE_RFSW_CTRL
-static const struct gpio_dt_spec rfsw_en = GPIO_DT_SPEC_GET_OR(DT_NODELABEL(rfsw_en_pin), gpios, {0});
-#endif
 
 #ifdef CONFIG_OMI_ENABLE_OFFLINE_STORAGE
 extern struct bt_gatt_service storage_service;
@@ -1624,7 +1618,7 @@ int transport_off()
 
     // Pull the rfsw control low
 #ifdef CONFIG_OMI_ENABLE_RFSW_CTRL
-    err = gpio_pin_set_dt(&rfsw_en, 0);
+    err = omi_rust_gpio_rfsw_off();
     if (err) {
         LOG_ERR("Failed to pull the rfsw control low %d", err);
     }
@@ -1648,14 +1642,9 @@ int transport_start()
 
     // Pull the nfsw control high
 #ifdef CONFIG_OMI_ENABLE_RFSW_CTRL
-    err = gpio_pin_configure_dt(&rfsw_en, (GPIO_OUTPUT | NRF_GPIO_DRIVE_S0H1));
+    err = omi_rust_gpio_rfsw_on();
     if (err) {
         LOG_ERR("Failed to get the rfsw pin config (err %d)", err);
-    } else {
-        err = gpio_pin_set_dt(&rfsw_en, 1);
-        if (err) {
-            LOG_ERR("Failed to pull the rfsw pin control high (err %d)", err);
-        }
     }
 #endif
 

@@ -12,6 +12,8 @@
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 
+#include "omi_rust.h"
+
 LOG_MODULE_REGISTER(t5838, CONFIG_LOG_DEFAULT_LEVEL);
 
 /* ---- T5838 register map (subset) ---- */
@@ -56,7 +58,6 @@ LOG_MODULE_REGISTER(t5838, CONFIG_LOG_DEFAULT_LEVEL);
 
 static const struct device *const clk_port = DEVICE_DT_GET(PDMCLK_PORT_NODE);
 static const struct gpio_dt_spec thsel = GPIO_DT_SPEC_GET_OR(DT_NODELABEL(pdm_thsel_pin), gpios, {0});
-static const struct gpio_dt_spec pdm_en = GPIO_DT_SPEC_GET_OR(DT_NODELABEL(pdm_en_pin), gpios, {0});
 
 static inline void clk_set(int val)
 {
@@ -130,14 +131,14 @@ int t5838_aad_init(void)
     }
     /* gpio_is_ready_dt() also catches the GPIO_DT_SPEC_GET_OR {0} fallback
      * (port == NULL -> device_is_ready(NULL) is false). */
-    if (!gpio_is_ready_dt(&pdm_en) || !gpio_is_ready_dt(&thsel)) {
+    if (!gpio_is_ready_dt(&thsel)) {
         LOG_ERR("THSEL/PDM_EN gpio not ready");
         return -ENODEV;
     }
 
     /* PDM_EN high: power the 1.8V rail (mic VDD + level-shifter VCCA). Propagate
      * configure failures so callers don't treat a dead rail as ready. */
-    ret = gpio_pin_configure_dt(&pdm_en, GPIO_OUTPUT_ACTIVE);
+    ret = omi_rust_gpio_pdm_en_init();
     if (ret) {
         LOG_ERR("PDM_EN configure failed: %d", ret);
         return ret;
@@ -153,7 +154,7 @@ int t5838_aad_init(void)
 
 void t5838_aad_power(bool on)
 {
-    gpio_pin_set_dt(&pdm_en, on ? 1 : 0);
+    omi_rust_gpio_pdm_en_set(on);
 }
 
 void t5838_aad_release_clk(void)

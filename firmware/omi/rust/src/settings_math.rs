@@ -30,6 +30,22 @@ pub fn clamp_mic_gain(value: u8) -> u8 {
     }
 }
 
+/// Map clamped gain level 0..=8 to the nRF PDM hardware gain byte.
+pub fn mic_hw_gain(level: u8) -> u8 {
+    const GAIN_MAP: [u8; 9] = [
+        0x00, // Level 0: mute
+        0x14, // Level 1: -20dB
+        0x1E, // Level 2: -10dB
+        0x28, // Level 3: +0dB
+        0x2E, // Level 4: +6dB
+        0x32, // Level 5: +10dB
+        0x3C, // Level 6: +20dB (default)
+        0x46, // Level 7: +30dB
+        0x50, // Level 8: +40dB
+    ];
+    GAIN_MAP[usize::from(clamp_mic_gain(level))]
+}
+
 /// Parse a 16-byte full or 12-byte legacy `lsm6dsl_time_base` blob.
 pub fn parse_lsm6dsl_time_base(bytes: &[u8]) -> Result<Lsm6dslTimeBase, i32> {
     match bytes.len() {
@@ -63,6 +79,9 @@ pub fn selftest() -> i32 {
         failures += 1;
     }
     if clamp_mic_gain(0) != 0 || clamp_mic_gain(8) != 8 || clamp_mic_gain(9) != 8 {
+        failures += 1;
+    }
+    if mic_hw_gain(0) != 0x00 || mic_hw_gain(6) != 0x3C || mic_hw_gain(9) != 0x50 {
         failures += 1;
     }
 
@@ -101,6 +120,8 @@ mod tests {
         assert_eq!(clamp_dim_ratio(150), 100);
         assert_eq!(clamp_mic_gain(6), 6);
         assert_eq!(clamp_mic_gain(12), 8);
+        assert_eq!(mic_hw_gain(1), 0x14);
+        assert_eq!(mic_hw_gain(8), 0x50);
     }
 
     #[test]

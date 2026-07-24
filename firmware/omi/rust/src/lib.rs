@@ -7,10 +7,12 @@ pub mod button;
 pub mod features;
 pub mod feedback;
 pub mod framing;
+pub mod gpio_pins;
 pub mod haptic;
 pub mod imu_gesture;
 pub mod led;
 pub mod offline_packer;
+pub mod sd_ring;
 pub mod settings_math;
 pub mod storage_proto;
 pub mod time;
@@ -20,6 +22,7 @@ pub mod user_event;
 pub extern "C" fn omi_rust_selftest() -> i32 {
     framing::selftest()
         + audio_dsp::selftest()
+        + battery::selftest()
         + imu_gesture::selftest()
         + button::selftest()
         + haptic::selftest()
@@ -27,6 +30,7 @@ pub extern "C" fn omi_rust_selftest() -> i32 {
         + feedback::selftest()
         + settings_math::selftest()
         + storage_proto::selftest()
+        + sd_ring::selftest()
         + time::selftest()
         + user_event::selftest()
         + features::selftest()
@@ -131,6 +135,11 @@ pub extern "C" fn omi_rust_settings_clamp_mic_gain(value: u8) -> u8 {
     settings_math::clamp_mic_gain(value)
 }
 
+#[no_mangle]
+pub extern "C" fn omi_rust_mic_hw_gain(level: u8) -> u8 {
+    settings_math::mic_hw_gain(level)
+}
+
 #[repr(C)]
 pub struct OmiRustLsm6dslTimeBase {
     pub epoch_s: u64,
@@ -188,6 +197,60 @@ pub extern "C" fn omi_rust_rtc_seconds_clamped(now_ms: u64) -> u32 {
 #[no_mangle]
 pub extern "C" fn omi_rust_imu_boot_epoch_ms(base_epoch_s: u64, base_ts: u32, ts_now: u32) -> u64 {
     time::imu_boot_epoch_ms(base_epoch_s, base_ts, ts_now)
+}
+
+#[cfg(target_os = "none")]
+#[no_mangle]
+pub extern "C" fn omi_rust_rtc_clock_init() {
+    time::clock_init();
+}
+
+#[cfg(target_os = "none")]
+#[no_mangle]
+pub extern "C" fn omi_rust_rtc_is_valid() -> bool {
+    time::clock_is_valid()
+}
+
+#[cfg(target_os = "none")]
+#[no_mangle]
+pub extern "C" fn omi_rust_rtc_get_utc_ms() -> u64 {
+    time::clock_get_utc_ms()
+}
+
+#[cfg(target_os = "none")]
+#[no_mangle]
+pub extern "C" fn omi_rust_rtc_get_utc_s() -> u32 {
+    time::clock_get_utc_s()
+}
+
+#[cfg(target_os = "none")]
+#[no_mangle]
+pub extern "C" fn omi_rust_rtc_set_utc_ms(utc_epoch_ms: u64) -> i32 {
+    time::clock_set_utc_ms(utc_epoch_ms)
+}
+
+#[cfg(target_os = "none")]
+#[no_mangle]
+pub extern "C" fn omi_rust_rtc_set_pending_persist(epoch_s: u64) {
+    time::clock_set_pending(epoch_s);
+}
+
+#[cfg(target_os = "none")]
+#[no_mangle]
+pub extern "C" fn omi_rust_rtc_take_pending_persist() -> u64 {
+    time::clock_take_pending()
+}
+
+#[cfg(target_os = "none")]
+#[no_mangle]
+pub extern "C" fn omi_rust_rtc_restore_from_epoch_s(saved_epoch_s: u64) {
+    time::clock_restore_from_epoch_s(saved_epoch_s);
+}
+
+#[cfg(target_os = "none")]
+#[no_mangle]
+pub extern "C" fn omi_rust_rtc_invalidate() {
+    time::clock_invalidate();
 }
 
 /// # Safety
@@ -320,6 +383,162 @@ pub extern "C" fn omi_rust_battery_ema_step(
     is_charging: bool,
 ) -> u8 {
     battery::ema_step(current_ema, new_value, is_charging)
+}
+
+/// # Safety
+///
+/// `samples` must be null or point at `n` writable i16 values (mutated for sort).
+#[no_mangle]
+pub unsafe extern "C" fn omi_rust_battery_median_i16(samples: *mut i16, n: usize) -> i32 {
+    if samples.is_null() || n == 0 {
+        return 0;
+    }
+    // SAFETY: caller guarantees `n` writable samples.
+    unsafe {
+        let slice = core::slice::from_raw_parts_mut(samples, n);
+        battery::median_i16(slice)
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn omi_rust_battery_apply_charge_skew(adc_pin_mv: i32, is_charging: bool) -> i32 {
+    battery::apply_charge_skew(adc_pin_mv, is_charging)
+}
+
+#[no_mangle]
+pub extern "C" fn omi_rust_battery_divider_mv(adc_pin_mv: i32) -> u16 {
+    battery::divider_to_battery_mv(adc_pin_mv)
+}
+
+#[no_mangle]
+pub extern "C" fn omi_rust_battery_consume_first_measurement() -> bool {
+    battery::consume_first_measurement()
+}
+
+#[no_mangle]
+pub extern "C" fn omi_rust_battery_percentage_step(raw_percentage: u8, is_charging: bool) -> u8 {
+    battery::percentage_step(raw_percentage, is_charging)
+}
+
+#[cfg(target_os = "none")]
+#[no_mangle]
+pub extern "C" fn omi_rust_gpio_bat_read_enable_path() -> i32 {
+    gpio_pins::bat_read_enable_path()
+}
+
+#[cfg(target_os = "none")]
+#[no_mangle]
+pub extern "C" fn omi_rust_gpio_bat_read_restore_input() -> i32 {
+    gpio_pins::bat_read_restore_input()
+}
+
+#[cfg(target_os = "none")]
+#[no_mangle]
+pub extern "C" fn omi_rust_gpio_sd_en_set(on: bool) -> i32 {
+    gpio_pins::sd_en_set(on)
+}
+
+#[cfg(target_os = "none")]
+#[no_mangle]
+pub extern "C" fn omi_rust_gpio_rfsw_on() -> i32 {
+    gpio_pins::rfsw_on()
+}
+
+#[cfg(target_os = "none")]
+#[no_mangle]
+pub extern "C" fn omi_rust_gpio_rfsw_off() -> i32 {
+    gpio_pins::rfsw_off()
+}
+
+#[cfg(target_os = "none")]
+#[no_mangle]
+pub extern "C" fn omi_rust_gpio_pdm_en_init() -> i32 {
+    gpio_pins::pdm_en_init()
+}
+
+#[cfg(target_os = "none")]
+#[no_mangle]
+pub extern "C" fn omi_rust_gpio_pdm_en_set(on: bool) -> i32 {
+    gpio_pins::pdm_en_set(on)
+}
+
+#[no_mangle]
+pub extern "C" fn omi_rust_sd_ring_used_packets(
+    write_seq: u64,
+    read_seq: u64,
+    current_batch_loaded: bool,
+    current_batch_packets: u32,
+    current_batch_base_seq: u64,
+) -> u64 {
+    sd_ring::ring_used_packets(
+        write_seq,
+        read_seq,
+        current_batch_loaded,
+        current_batch_packets,
+        current_batch_base_seq,
+    )
+}
+
+#[no_mangle]
+pub extern "C" fn omi_rust_sd_ring_used_bytes(
+    write_seq: u64,
+    read_seq: u64,
+    current_batch_loaded: bool,
+    current_batch_packets: u32,
+    current_batch_base_seq: u64,
+) -> u64 {
+    sd_ring::ring_used_bytes(
+        write_seq,
+        read_seq,
+        current_batch_loaded,
+        current_batch_packets,
+        current_batch_base_seq,
+    )
+}
+
+#[no_mangle]
+pub extern "C" fn omi_rust_sd_batch_sector(base_seq: u64, data_batch_count: u32) -> u32 {
+    sd_ring::batch_sector_for_base_seq(base_seq, data_batch_count)
+}
+
+#[no_mangle]
+pub extern "C" fn omi_rust_sd_meta_valid(
+    magic: u32,
+    version: u16,
+    write_seq: u64,
+    read_seq: u64,
+    capacity_packets: u32,
+) -> bool {
+    sd_ring::meta_record_valid(magic, version, write_seq, read_seq, capacity_packets)
+}
+
+#[no_mangle]
+pub extern "C" fn omi_rust_sd_batch_header_valid(
+    magic: u32,
+    version: u16,
+    packet_count: u16,
+    start_seq: u64,
+) -> bool {
+    sd_ring::batch_header_valid(magic, version, packet_count, start_seq)
+}
+
+/// # Safety
+///
+/// `out` must be null or point at `out_len` writable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn omi_rust_sd_format_timestamp_name(
+    timestamp: u32,
+    out: *mut u8,
+    out_len: usize,
+) -> usize {
+    if out.is_null() || out_len == 0 {
+        return 0;
+    }
+    // SAFETY: caller guarantees `out_len` writable bytes.
+    unsafe {
+        let slice = core::slice::from_raw_parts_mut(out, out_len);
+        sd_ring::format_timestamp_name(timestamp, slice)
+    }
 }
 
 /// IMU wake/tap source decode. Returns 2 for a double tap, 1 for motion, 0 for

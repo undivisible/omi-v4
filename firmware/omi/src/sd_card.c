@@ -14,6 +14,7 @@
 #include <zephyr/sys/util.h>
 
 #include "rtc.h"
+#include "omi_rust.h"
 
 LOG_MODULE_REGISTER(sd_card, CONFIG_LOG_DEFAULT_LEVEL);
 
@@ -145,7 +146,6 @@ typedef struct {
 } sd_req_t;
 
 static const struct device *const sd_dev = DEVICE_DT_GET(DT_NODELABEL(sdhc0));
-static const struct gpio_dt_spec sd_en = GPIO_DT_SPEC_GET_OR(DT_NODELABEL(sdcard_en_pin), gpios, {0});
 
 K_MSGQ_DEFINE(sd_msgq, sizeof(sd_req_t), SD_REQ_QUEUE_MSGS, 4);
 K_MSGQ_DEFINE(sd_prio_msgq, sizeof(sd_req_t), SD_PRIO_QUEUE_MSGS, 4);
@@ -217,38 +217,26 @@ static bool pm_action_is_ok(int ret)
 
 static void format_timestamp_name(uint32_t timestamp, char *buf, size_t buf_size)
 {
-    if (!buf || buf_size == 0U) {
-        return;
-    }
-
-    snprintk(buf, buf_size, "%08X.txt", timestamp);
+    (void)omi_rust_sd_format_timestamp_name(timestamp, (uint8_t *)buf, buf_size);
 }
 
 static uint64_t ring_used_packets(void)
 {
-    uint64_t committed = ring_state.write_seq - ring_state.read_seq;
-
-    if (!current_batch_loaded || current_batch_packets == 0U) {
-        return committed;
-    }
-
-    if (current_batch_base_seq + current_batch_packets <= ring_state.write_seq) {
-        return committed;
-    }
-
-    return committed + (current_batch_base_seq + current_batch_packets - ring_state.write_seq);
+    return omi_rust_sd_ring_used_packets(ring_state.write_seq, ring_state.read_seq,
+                                         current_batch_loaded, current_batch_packets,
+                                         current_batch_base_seq);
 }
 
 static uint64_t ring_used_bytes(void)
 {
-    return ring_used_packets() * RAW_AUDIO_PACKET_BYTES;
+    return omi_rust_sd_ring_used_bytes(ring_state.write_seq, ring_state.read_seq,
+                                       current_batch_loaded, current_batch_packets,
+                                       current_batch_base_seq);
 }
 
 static uint32_t batch_sector_for_base_seq(uint64_t base_seq)
 {
-    uint64_t batch_index = base_seq / RAW_PACKETS_PER_BATCH;
-    uint32_t slot = (uint32_t) (batch_index % data_batch_count);
-    return RAW_META_SECTORS + (slot * RAW_BATCH_SECTORS);
+    return omi_rust_sd_batch_sector(base_seq, data_batch_count);
 }
 
 static void start_empty_batch(uint64_t base_seq)
@@ -271,19 +259,8 @@ static bool meta_record_valid(const struct raw_meta_record *record)
         return false;
     }
 
-    if (record->magic != RAW_META_MAGIC || record->version != RAW_LAYOUT_VERSION) {
-        return false;
-    }
-
-    if (record->write_seq < record->read_seq) {
-        return false;
-    }
-
-    if ((record->write_seq - record->read_seq) > ring_state.capacity_packets) {
-        return false;
-    }
-
-    return true;
+    return omi_rust_sd_meta_valid(record->magic, record->version, record->write_seq,
+                                  record->read_seq, ring_state.capacity_packets);
 }
 
 static bool batch_header_valid(const struct raw_batch_header *header)
@@ -292,19 +269,8 @@ static bool batch_header_valid(const struct raw_batch_header *header)
         return false;
     }
 
-    if (header->magic != RAW_BATCH_MAGIC || header->version != RAW_LAYOUT_VERSION) {
-        return false;
-    }
-
-    if (header->packet_count > RAW_PACKETS_PER_BATCH) {
-        return false;
-    }
-
-    if ((header->start_seq % RAW_PACKETS_PER_BATCH) != 0U) {
-        return false;
-    }
-
-    return true;
+    return omi_rust_sd_batch_header_valid(header->magic, header->version, header->packet_count,
+                                          header->start_seq);
 }
 
 static int persist_ring_metadata(void)
@@ -767,10 +733,9 @@ static void sd_set_io_low_power(bool enable)
 static int sd_enable_power(bool enable)
 {
     int ret;
-    gpio_pin_configure_dt(&sd_en, GPIO_OUTPUT);
+    ret = omi_rust_gpio_sd_en_set(enable);
 
     if (enable) {
-        ret = gpio_pin_set_dt(&sd_en, 1);
         if (atomic_get(&sd_dev_pm_supported)) {
             int ret_sd = pm_device_action_run(sd_dev, PM_DEVICE_ACTION_RESUME);
             if (pm_action_is_unsupported(ret_sd)) {
@@ -796,7 +761,6 @@ static int sd_enable_power(bool enable)
          * the SPI driver here so the card can be re-initialised after a power
          * cycle. Full shutdown (app_sd_off) disconnects it separately to kill the
          * last bit of leakage since no remount follows. */
-        ret = gpio_pin_set_dt(&sd_en, 0);
         atomic_set(&sd_io_low_power, 0);
         sd_enabled = false;
     }

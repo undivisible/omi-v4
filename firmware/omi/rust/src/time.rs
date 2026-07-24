@@ -1,5 +1,5 @@
-// RTC uptime extrapolation and IMU 24-bit timestamp delta. Zephyr uptime /
-// I2C / mutex stay in C.
+// RTC uptime extrapolation, IMU 24-bit timestamp delta, and (on-target) the
+// soft-clock state + mutex. Persist work / settings / SD notify stay in C.
 
 pub const IMU_TIMESTAMP_TICK_US: u64 = 6400;
 pub const IMU_TIMESTAMP_MASK: u32 = 0x00FF_FFFF;
@@ -33,6 +33,102 @@ pub fn imu_boot_epoch_ms(base_epoch_s: u64, base_ts: u32, ts_now: u32) -> u64 {
     let delta_ms = delta_us / 1000;
     base_epoch_s.saturating_mul(1000).saturating_add(delta_ms)
 }
+
+#[cfg(target_os = "none")]
+mod soft_clock {
+    use core::sync::atomic::{AtomicBool, Ordering};
+
+    use zephyr::sync::Mutex;
+    use zephyr::sys::uptime_get;
+
+    use super::{extrapolate_utc_ms, utc_seconds_clamped};
+
+    struct SoftClock {
+        base_epoch_ms: u64,
+        base_uptime_ms: i64,
+        utc_valid: bool,
+        pending_epoch_to_persist: u64,
+    }
+
+    impl SoftClock {
+        const fn new() -> Self {
+            Self {
+                base_epoch_ms: 0,
+                base_uptime_ms: 0,
+                utc_valid: false,
+                pending_epoch_to_persist: 0,
+            }
+        }
+    }
+
+    static CLOCK: Mutex<SoftClock> = Mutex::new(SoftClock::new());
+    static INIT: AtomicBool = AtomicBool::new(false);
+
+    pub fn init() {
+        if INIT.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        let _ = CLOCK.lock();
+    }
+
+    pub fn is_valid() -> bool {
+        CLOCK.lock().unwrap().utc_valid
+    }
+
+    pub fn get_utc_ms() -> u64 {
+        let guard = CLOCK.lock().unwrap();
+        if !guard.utc_valid {
+            return 0;
+        }
+        extrapolate_utc_ms(guard.base_epoch_ms, guard.base_uptime_ms, uptime_get())
+    }
+
+    pub fn get_utc_s() -> u32 {
+        utc_seconds_clamped(get_utc_ms())
+    }
+
+    pub fn set_utc_ms(utc_epoch_ms: u64) -> i32 {
+        if utc_epoch_ms == 0 {
+            return -22;
+        }
+        let mut guard = CLOCK.lock().unwrap();
+        guard.base_epoch_ms = utc_epoch_ms;
+        guard.base_uptime_ms = uptime_get();
+        guard.utc_valid = true;
+        0
+    }
+
+    pub fn set_pending_persist(epoch_s: u64) {
+        CLOCK.lock().unwrap().pending_epoch_to_persist = epoch_s;
+    }
+
+    pub fn take_pending_persist() -> u64 {
+        CLOCK.lock().unwrap().pending_epoch_to_persist
+    }
+
+    pub fn restore_from_epoch_s(saved_epoch_s: u64) {
+        let mut guard = CLOCK.lock().unwrap();
+        if saved_epoch_s == 0 {
+            guard.utc_valid = false;
+            return;
+        }
+        guard.base_epoch_ms = saved_epoch_s.saturating_mul(1000);
+        guard.base_uptime_ms = uptime_get();
+        guard.utc_valid = true;
+    }
+
+    pub fn invalidate() {
+        CLOCK.lock().unwrap().utc_valid = false;
+    }
+}
+
+#[cfg(target_os = "none")]
+pub use soft_clock::{
+    get_utc_ms as clock_get_utc_ms, get_utc_s as clock_get_utc_s, init as clock_init,
+    invalidate as clock_invalidate, is_valid as clock_is_valid,
+    restore_from_epoch_s as clock_restore_from_epoch_s, set_pending_persist as clock_set_pending,
+    set_utc_ms as clock_set_utc_ms, take_pending_persist as clock_take_pending,
+};
 
 pub fn selftest() -> i32 {
     let mut failures = 0;

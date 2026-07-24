@@ -525,22 +525,7 @@ void mic_on()
 
 void mic_set_gain(uint8_t gain_level)
 {
-    // Map gain level (0-8) to hardware values
-    static const uint8_t gain_map[9] = {
-        0x00, // Level 0: mute
-        0x14, // Level 1: -20dB
-        0x1E, // Level 2: -10dB
-        0x28, // Level 3: +0dB
-        0x2E, // Level 4: +6dB
-        0x32, // Level 5: +10dB
-        0x3C, // Level 6: +20dB (default)
-        0x46, // Level 7: +30dB
-        0x50  // Level 8: +40dB
-    };
-
-    gain_level = omi_rust_settings_clamp_mic_gain(gain_level);
-
-    uint8_t hw_gain = gain_map[gain_level];
+    uint8_t hw_gain = omi_rust_mic_hw_gain(gain_level);
 
     LOG_INF("Setting mic gain to level %u (0x%02x)", gain_level, hw_gain);
 

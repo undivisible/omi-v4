@@ -9,7 +9,6 @@
 #include <zephyr/devicetree.h>
 #include <zephyr/drivers/adc.h>
 #include <zephyr/drivers/gpio.h>
-#include <zephyr/dt-bindings/gpio/nordic-nrf-gpio.h>
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 
@@ -25,17 +24,8 @@ int16_t sample_buffer[ADC_TOTAL_SAMPLES + 1];
 #define ADC_ACQUISITION_TIME ADC_ACQ_TIME(ADC_ACQ_TIME_MICROSECONDS, 10)
 #define ADC_1ST_CHANNEL_ID 0
 #define ADC_1ST_CHANNEL_INPUT NRF_SAADC_INPUT_AIN0
-#define FILTER_INIT_CYCLES 5
-
-// Static variable to store previous EMA value for battery percentage
-static uint8_t battery_percentage_ema = 0;
-static bool ema_initialized = false;
-static bool is_first_measurement = true;
-static uint8_t ema_init_counter = 0;
 
 static const struct device *const adc_dev = DEVICE_DT_GET(DT_NODELABEL(adc));
-static const struct gpio_dt_spec power_pin = GPIO_DT_SPEC_GET_OR(DT_NODELABEL(power_pin), gpios, {0});
-static const struct gpio_dt_spec bat_read_pin = GPIO_DT_SPEC_GET_OR(DT_NODELABEL(bat_read_pin), gpios, {0});
 static const struct gpio_dt_spec bat_chg_pin = GPIO_DT_SPEC_GET_OR(DT_NODELABEL(bat_chg_pin), gpios, {0});
 
 static struct gpio_callback bat_chg_cb;
@@ -92,26 +82,18 @@ int battery_get_millivolt(uint16_t *battery_millivolt)
 {
     int err;
 
-    // Voltage divider circuit
-    // based on practical measurements adjusted on the omi device
-    const uint16_t R1 = 1091;
-    const uint16_t R2 = 499;
-
     k_mutex_lock(&battery_mut, K_FOREVER);
 
-    err = gpio_pin_configure_dt(&bat_read_pin, GPIO_OUTPUT | NRF_GPIO_DRIVE_S0H1);
+    err = omi_rust_gpio_bat_read_enable_path();
     if (err < 0) {
         LOG_ERR("Failed to configure bat_read_pin to output: %d", err);
         k_mutex_unlock(&battery_mut);
         return err;
     }
 
-    // Set pin low to enable battery voltage measurement path
-    gpio_pin_set(bat_read_pin.port, bat_read_pin.pin, 0);
-
     if (!device_is_ready(adc_dev)) {
         LOG_ERR("ADC device %s is not ready", adc_dev->name);
-        gpio_pin_configure_dt(&bat_read_pin, GPIO_INPUT); // Restore pin state
+        omi_rust_gpio_bat_read_restore_input(); // Restore pin state
         k_mutex_unlock(&battery_mut);
         return -ENODEV;
     }
@@ -119,7 +101,7 @@ int battery_get_millivolt(uint16_t *battery_millivolt)
     err = adc_channel_setup(adc_dev, &m_1st_channel_cfg);
     if (err) {
         LOG_ERR("ADC channel setup failed (error %d)", err);
-        gpio_pin_configure_dt(&bat_read_pin, GPIO_INPUT); // Restore pin state
+        omi_rust_gpio_bat_read_restore_input(); // Restore pin state
         k_mutex_unlock(&battery_mut);
         return err;
     }
@@ -131,7 +113,7 @@ int battery_get_millivolt(uint16_t *battery_millivolt)
     err = adc_read(adc_dev, &sequence);
     if (err) {
         LOG_WRN("ADC read failed (error %d)", err);
-        gpio_pin_configure_dt(&bat_read_pin, GPIO_INPUT); // Restore pin state
+        omi_rust_gpio_bat_read_restore_input(); // Restore pin state
         k_mutex_unlock(&battery_mut);
         return err;
     }
@@ -143,24 +125,7 @@ int battery_get_millivolt(uint16_t *battery_millivolt)
         sorted_samples[i] = sample_buffer[i + 1];
     }
 
-    // Simple bubble sort for median calculation
-    for (int i = 0; i < ADC_TOTAL_SAMPLES - 1; i++) {
-        for (int j = 0; j < ADC_TOTAL_SAMPLES - i - 1; j++) {
-            if (sorted_samples[j] > sorted_samples[j + 1]) {
-                int16_t temp = sorted_samples[j];
-                sorted_samples[j] = sorted_samples[j + 1];
-                sorted_samples[j + 1] = temp;
-            }
-        }
-    }
-
-    // Calculate median
-    int32_t adc_raw_val;
-    if (ADC_TOTAL_SAMPLES % 2 == 0) {
-        adc_raw_val = (sorted_samples[ADC_TOTAL_SAMPLES / 2 - 1] + sorted_samples[ADC_TOTAL_SAMPLES / 2]) / 2;
-    } else {
-        adc_raw_val = sorted_samples[ADC_TOTAL_SAMPLES / 2];
-    }
+    int32_t adc_raw_val = omi_rust_battery_median_i16(sorted_samples, ADC_TOTAL_SAMPLES);
 
     LOG_INF("Median ADC raw (after discarding 1st of %d total): %d", ADC_TOTAL_SAMPLES + 1, adc_raw_val);
 
@@ -169,7 +134,7 @@ int battery_get_millivolt(uint16_t *battery_millivolt)
     err = adc_raw_to_millivolts(adc_vref_mv, ADC_GAIN, ADC_RESOLUTION, &adc_raw_val);
     if (err) {
         LOG_WRN("ADC raw to millivolts conversion failed (error %d)", err);
-        gpio_pin_configure_dt(&bat_read_pin, GPIO_INPUT); // Restore pin state
+        omi_rust_gpio_bat_read_restore_input(); // Restore pin state
         k_mutex_unlock(&battery_mut);
         return err;
     }
@@ -177,25 +142,22 @@ int battery_get_millivolt(uint16_t *battery_millivolt)
 
     // Sub 16mV when charging to correct voltage skew
     // based on practical measurements adjusted on the omi device
-    if (is_charging) {
-        adc_raw_val -= 16;
-    }
+    adc_raw_val = omi_rust_battery_apply_charge_skew(adc_raw_val, is_charging);
 
     // Calculate battery voltage using the voltage divider formula
-    *battery_millivolt = (uint16_t) (adc_raw_val * ((float) (R1 + R2) / R2));
+    *battery_millivolt = omi_rust_battery_divider_mv(adc_raw_val);
     LOG_INF("Battery voltage (mV): %d", *battery_millivolt);
     
     // Restore bat_read_pin to INPUT state to save power/avoid affecting other circuits
-    err = gpio_pin_configure_dt(&bat_read_pin, GPIO_INPUT);
+    err = omi_rust_gpio_bat_read_restore_input();
     if (err < 0) {
         LOG_ERR("Failed to configure bat_read_pin to input: %d", err);
         k_mutex_unlock(&battery_mut);
         return err;
     }
     
-    if (is_first_measurement) {
+    if (omi_rust_battery_consume_first_measurement()) {
         LOG_INF("First measurement, skipping to allow voltage to stabilize");
-        is_first_measurement = false;
         k_mutex_unlock(&battery_mut);
         return -EAGAIN; // Skip first measurement to allow voltage to stabilize
     }
@@ -207,36 +169,8 @@ int battery_get_millivolt(uint16_t *battery_millivolt)
 
 int battery_get_percentage(uint8_t *battery_percentage, uint16_t battery_millivolt)
 {
-    uint8_t raw_percentage = 0;
-
-    raw_percentage = omi_rust_battery_raw_percentage(battery_millivolt, is_charging);
-
-    // Prevent sudden jumps in percentage
-    if (battery_percentage_ema != 0) {
-        if (is_charging && raw_percentage < battery_percentage_ema) {
-            raw_percentage = battery_percentage_ema;
-        } else if (!is_charging && raw_percentage > battery_percentage_ema) {
-            raw_percentage = battery_percentage_ema;
-        }
-    }
-
-    // Initialize EMA with first reading
-    if (!ema_initialized) {
-        battery_percentage_ema = raw_percentage;
-        ema_init_counter++;
-        
-        // Run filter for FILTER_INIT_CYCLES to stabilize
-        if (ema_init_counter >= FILTER_INIT_CYCLES) {
-            ema_initialized = true;
-        }
-        
-        *battery_percentage = raw_percentage;
-    } else {
-        // Apply EMA filter to smooth out percentage changes
-        battery_percentage_ema = update_ema_filter(battery_percentage_ema, raw_percentage);
-        *battery_percentage = battery_percentage_ema;
-    }
-
+    uint8_t raw_percentage = omi_rust_battery_raw_percentage(battery_millivolt, is_charging);
+    *battery_percentage = omi_rust_battery_percentage_step(raw_percentage, is_charging);
     return 0;
 }
 
@@ -275,26 +209,24 @@ int battery_enable_read()
     int err;
 
     // Perform voltage divider configs
-    err = gpio_pin_configure_dt(&bat_read_pin, GPIO_OUTPUT | NRF_GPIO_DRIVE_S0H1);
+    err = omi_rust_gpio_bat_read_enable_path();
     if (err < 0) {
         LOG_ERR("Failed to configure bat_read_pin to output: %d", err);
         return err;
     }
 
-    // Set pin low to enable battery voltage measurement path
-    gpio_pin_set(bat_read_pin.port, bat_read_pin.pin, 0);
     k_msleep(10);
 
     if (!device_is_ready(adc_dev)) {
         LOG_ERR("ADC device %s is not ready", adc_dev->name);
-        gpio_pin_configure_dt(&bat_read_pin, GPIO_INPUT); // Restore pin state
+        omi_rust_gpio_bat_read_restore_input(); // Restore pin state
         return -ENODEV;
     }
 
     err = adc_channel_setup(adc_dev, &m_1st_channel_cfg);
     if (err) {
         LOG_ERR("ADC channel setup failed (error %d)", err);
-        gpio_pin_configure_dt(&bat_read_pin, GPIO_INPUT); // Restore pin state
+        omi_rust_gpio_bat_read_restore_input(); // Restore pin state
         return err;
     }
 
@@ -306,12 +238,12 @@ int battery_enable_read()
     err = adc_read(adc_dev, &sequence);
     if (err) {
         LOG_WRN("ADC read failed (error %d)", err);
-        gpio_pin_configure_dt(&bat_read_pin, GPIO_INPUT); // Restore pin state
+        omi_rust_gpio_bat_read_restore_input(); // Restore pin state
         return err;
     }
 
     // Restore bat_read_pin
-    err = gpio_pin_configure_dt(&bat_read_pin, GPIO_INPUT);
+    err = omi_rust_gpio_bat_read_restore_input();
     if (err < 0) {
         LOG_ERR("Failed to configure bat_read_pin to input: %d", err);
         return err;
@@ -326,7 +258,7 @@ int battery_init()
 
     k_mutex_lock(&battery_mut, K_FOREVER);
 
-    err = gpio_pin_configure_dt(&bat_read_pin, GPIO_INPUT);
+    err = omi_rust_gpio_bat_read_restore_input();
     if (err < 0) {
         LOG_ERR("Failed to configure enable pin (%d)", err);
         k_mutex_unlock(&battery_mut);

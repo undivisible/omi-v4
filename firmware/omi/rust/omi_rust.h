@@ -16,6 +16,32 @@ void omi_rust_packet_header(uint16_t id, uint8_t index, uint8_t *out);
 
 uint8_t omi_rust_battery_raw_percentage(uint16_t battery_millivolt, bool is_charging);
 uint8_t omi_rust_battery_ema_step(uint32_t current_ema, uint8_t new_value, bool is_charging);
+int32_t omi_rust_battery_median_i16(int16_t *samples, size_t n);
+int32_t omi_rust_battery_apply_charge_skew(int32_t adc_pin_mv, bool is_charging);
+uint16_t omi_rust_battery_divider_mv(int32_t adc_pin_mv);
+bool omi_rust_battery_consume_first_measurement(void);
+uint8_t omi_rust_battery_percentage_step(uint8_t raw_percentage, bool is_charging);
+
+int omi_rust_gpio_bat_read_enable_path(void);
+int omi_rust_gpio_bat_read_restore_input(void);
+int omi_rust_gpio_sd_en_set(bool on);
+int omi_rust_gpio_rfsw_on(void);
+int omi_rust_gpio_rfsw_off(void);
+int omi_rust_gpio_pdm_en_init(void);
+int omi_rust_gpio_pdm_en_set(bool on);
+
+uint64_t omi_rust_sd_ring_used_packets(uint64_t write_seq, uint64_t read_seq,
+                                       bool current_batch_loaded, uint32_t current_batch_packets,
+                                       uint64_t current_batch_base_seq);
+uint64_t omi_rust_sd_ring_used_bytes(uint64_t write_seq, uint64_t read_seq,
+                                     bool current_batch_loaded, uint32_t current_batch_packets,
+                                     uint64_t current_batch_base_seq);
+uint32_t omi_rust_sd_batch_sector(uint64_t base_seq, uint32_t data_batch_count);
+bool omi_rust_sd_meta_valid(uint32_t magic, uint16_t version, uint64_t write_seq, uint64_t read_seq,
+                            uint32_t capacity_packets);
+bool omi_rust_sd_batch_header_valid(uint32_t magic, uint16_t version, uint16_t packet_count,
+                                    uint64_t start_seq);
+size_t omi_rust_sd_format_timestamp_name(uint32_t timestamp, uint8_t *out, size_t out_len);
 
 typedef enum {
     OMI_RUST_GESTURE_NONE = 0,
@@ -119,6 +145,7 @@ uint32_t omi_rust_audio_avg_abs_amplitude(const int16_t *buf, size_t n);
 
 uint8_t omi_rust_settings_clamp_dim_ratio(uint8_t value);
 uint8_t omi_rust_settings_clamp_mic_gain(uint8_t value);
+uint8_t omi_rust_mic_hw_gain(uint8_t level);
 
 typedef struct {
     uint64_t epoch_s;
@@ -133,6 +160,16 @@ uint64_t omi_rust_rtc_extrapolate_ms(uint64_t base_epoch_ms, int64_t base_uptime
                                      int64_t now_uptime_ms);
 uint32_t omi_rust_rtc_seconds_clamped(uint64_t now_ms);
 uint64_t omi_rust_imu_boot_epoch_ms(uint64_t base_epoch_s, uint32_t base_ts, uint32_t ts_now);
+
+void omi_rust_rtc_clock_init(void);
+bool omi_rust_rtc_is_valid(void);
+uint64_t omi_rust_rtc_get_utc_ms(void);
+uint32_t omi_rust_rtc_get_utc_s(void);
+int omi_rust_rtc_set_utc_ms(uint64_t utc_epoch_ms);
+void omi_rust_rtc_set_pending_persist(uint64_t epoch_s);
+uint64_t omi_rust_rtc_take_pending_persist(void);
+void omi_rust_rtc_restore_from_epoch_s(uint64_t saved_epoch_s);
+void omi_rust_rtc_invalidate(void);
 
 void omi_rust_user_event_encode(uint8_t code, uint8_t source, uint16_t seq, uint32_t epoch_s,
                                 uint8_t *out);

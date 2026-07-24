@@ -1,14 +1,17 @@
-// State-of-charge math ported verbatim from firmware/omi/src/battery.c. Only the
-// pure computations move here: the voltage->percentage lookup with linear
-// interpolation (from `battery_get_percentage`) and the EMA smoothing step (from
-// `update_ema_filter`). The ADC sampling, GPIO, mutex and static EMA state stay
-// in C; this crate has no Zephyr bindings.
+// State-of-charge math ported verbatim from firmware/omi/src/battery.c: voltage
+// lookup, EMA, ADC median/divider, and the percentage filter state machine.
+// SAADC sampling, charge GPIO ISR, and the battery mutex stay in C.
 //
 // The calibration constants — the 16-entry discharge and charging curves, the
 // 65535/(N+1) alpha, and the +32768 rounding bias — are reproduced exactly.
 // Changing any of them changes what the fuel gauge reads.
 
 pub const BATTERY_STATES_COUNT: usize = 16;
+pub const ADC_TOTAL_SAMPLES: usize = 50;
+pub const FILTER_INIT_CYCLES: u8 = 5;
+pub const DIVIDER_R1: u16 = 1091;
+pub const DIVIDER_R2: u16 = 499;
+pub const CHARGE_SKEW_MV: i32 = 16;
 
 /// One point on a LiPo discharge/charge profile: open-circuit millivolts and the
 /// percentage assigned to it. Mirrors the C `BatteryState`.
@@ -139,6 +142,123 @@ pub fn ema_step(current_ema: u32, new_value: u8, is_charging: bool) -> u8 {
     ((new_ema + 32768) >> 16) as u8
 }
 
+/// Bubble-sort median of `samples` (mutates in place). Empty → 0.
+pub fn median_i16(samples: &mut [i16]) -> i32 {
+    let n = samples.len();
+    if n == 0 {
+        return 0;
+    }
+    for i in 0..n - 1 {
+        for j in 0..n - i - 1 {
+            if samples[j] > samples[j + 1] {
+                samples.swap(j, j + 1);
+            }
+        }
+    }
+    if n.is_multiple_of(2) {
+        (i32::from(samples[n / 2 - 1]) + i32::from(samples[n / 2])) / 2
+    } else {
+        i32::from(samples[n / 2])
+    }
+}
+
+pub fn apply_charge_skew(adc_pin_mv: i32, is_charging: bool) -> i32 {
+    if is_charging {
+        adc_pin_mv - CHARGE_SKEW_MV
+    } else {
+        adc_pin_mv
+    }
+}
+
+/// Voltage-divider scale matching C's float cast to `uint16_t`.
+pub fn divider_to_battery_mv(adc_pin_mv: i32) -> u16 {
+    (adc_pin_mv as f32 * ((u32::from(DIVIDER_R1) + u32::from(DIVIDER_R2)) as f32
+        / f32::from(DIVIDER_R2))) as u16
+}
+
+/// Monotonic clamp + EMA init/step for `battery_get_percentage`.
+pub struct PercentageFilter {
+    ema: u8,
+    initialized: bool,
+    init_counter: u8,
+}
+
+impl Default for PercentageFilter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl PercentageFilter {
+    pub const fn new() -> Self {
+        Self {
+            ema: 0,
+            initialized: false,
+            init_counter: 0,
+        }
+    }
+
+    pub fn step(&mut self, mut raw_percentage: u8, is_charging: bool) -> u8 {
+        if self.ema != 0
+            && ((is_charging && raw_percentage < self.ema)
+                || (!is_charging && raw_percentage > self.ema))
+        {
+            raw_percentage = self.ema;
+        }
+
+        if !self.initialized {
+            self.ema = raw_percentage;
+            self.init_counter = self.init_counter.saturating_add(1);
+            if self.init_counter >= FILTER_INIT_CYCLES {
+                self.initialized = true;
+            }
+            raw_percentage
+        } else {
+            self.ema = ema_step(u32::from(self.ema), raw_percentage, is_charging);
+            self.ema
+        }
+    }
+}
+
+static mut PERCENTAGE_FILTER: PercentageFilter = PercentageFilter::new();
+static FIRST_MEASUREMENT: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(true);
+
+/// Returns true on the first call (C should treat as `-EAGAIN` skip).
+pub fn consume_first_measurement() -> bool {
+    FIRST_MEASUREMENT.swap(false, core::sync::atomic::Ordering::AcqRel)
+}
+
+pub fn percentage_step(raw_percentage: u8, is_charging: bool) -> u8 {
+    // SAFETY: battery mutex in C serializes callers.
+    unsafe {
+        (&raw mut PERCENTAGE_FILTER)
+            .as_mut()
+            .unwrap_unchecked()
+            .step(raw_percentage, is_charging)
+    }
+}
+
+pub fn selftest() -> i32 {
+    let mut failures = 0;
+    let mut samples = [3i16, 1, 2, 9, 5];
+    if median_i16(&mut samples) != 3 {
+        failures += 1;
+    }
+    if apply_charge_skew(100, true) != 84 || apply_charge_skew(100, false) != 100 {
+        failures += 1;
+    }
+    if divider_to_battery_mv(1000) == 0 {
+        failures += 1;
+    }
+    let mut filt = PercentageFilter::new();
+    let p0 = filt.step(50, false);
+    if p0 != 50 {
+        failures += 1;
+    }
+    failures
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -207,5 +327,25 @@ mod tests {
         // new = (10922*80 + 54613*50 + 32768) >> 16
         //     = (873760 + 2730650 + 32768) >> 16 = 3637178 >> 16 = 55.
         assert_eq!(ema_step(50, 80, false), 55);
+    }
+
+    #[test]
+    fn median_and_divider() {
+        let mut even = [4i16, 1, 3, 2];
+        assert_eq!(median_i16(&mut even), 2);
+        assert_eq!(apply_charge_skew(200, true), 184);
+        let mv = divider_to_battery_mv(1000);
+        assert!(mv > 3000 && mv < 3300);
+    }
+
+    #[test]
+    fn percentage_filter_init_then_ema() {
+        let mut f = PercentageFilter::new();
+        for _ in 0..FILTER_INIT_CYCLES {
+            assert_eq!(f.step(40, false), 40);
+        }
+        assert!(f.init_counter >= FILTER_INIT_CYCLES || f.initialized);
+        let next = f.step(80, false);
+        assert_ne!(next, 80);
     }
 }

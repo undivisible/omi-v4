@@ -11,23 +11,17 @@
 
 LOG_MODULE_REGISTER(rtc, CONFIG_LOG_DEFAULT_LEVEL);
 
-static uint64_t base_epoch_ms;
-static int64_t base_uptime_ms;
-static bool utc_valid;
 static uint64_t pending_epoch_to_persist;
 static struct k_work rtc_persist_work;
-
-static struct k_mutex rtc_lock;
 
 static void rtc_persist_work_handler(struct k_work *work)
 {
     ARG_UNUSED(work);
 
-    uint64_t epoch_s;
-
-    k_mutex_lock(&rtc_lock, K_FOREVER);
-    epoch_s = pending_epoch_to_persist;
-    k_mutex_unlock(&rtc_lock);
+    uint64_t epoch_s = omi_rust_rtc_take_pending_persist();
+    if (epoch_s == 0) {
+        epoch_s = pending_epoch_to_persist;
+    }
 
 #ifdef CONFIG_OMI_ENABLE_OFFLINE_STORAGE
     sd_notify_time_synced((uint32_t)epoch_s);
@@ -113,24 +107,12 @@ int rtc_format_now_utc_datetime(char *out, size_t out_len)
 
 bool rtc_is_valid(void)
 {
-    k_mutex_lock(&rtc_lock, K_FOREVER);
-    bool valid = utc_valid;
-    k_mutex_unlock(&rtc_lock);
-    return valid;
+    return omi_rust_rtc_is_valid();
 }
 
 uint64_t rtc_get_utc_time_ms(void)
 {
-    k_mutex_lock(&rtc_lock, K_FOREVER);
-    if (!utc_valid) {
-        k_mutex_unlock(&rtc_lock);
-        return 0;
-    }
-    int64_t now_uptime_ms = k_uptime_get();
-    uint64_t now_ms =
-        omi_rust_rtc_extrapolate_ms(base_epoch_ms, base_uptime_ms, now_uptime_ms);
-    k_mutex_unlock(&rtc_lock);
-    return now_ms;
+    return omi_rust_rtc_get_utc_ms();
 }
 
 int rtc_set_utc_time(uint64_t utc_epoch_s)
@@ -144,9 +126,8 @@ int rtc_set_utc_time(uint64_t utc_epoch_s)
         return err;
     }
 
-    k_mutex_lock(&rtc_lock, K_FOREVER);
     pending_epoch_to_persist = utc_epoch_s;
-    k_mutex_unlock(&rtc_lock);
+    omi_rust_rtc_set_pending_persist(utc_epoch_s);
 
     /*
      * Defer persistence and SD rename to system workqueue so BLE GATT callback
@@ -159,29 +140,19 @@ int rtc_set_utc_time(uint64_t utc_epoch_s)
 
 int rtc_set_utc_time_ms(uint64_t utc_epoch_ms)
 {
-    if (utc_epoch_ms == 0) {
-        return -EINVAL;
-    }
-
-    k_mutex_lock(&rtc_lock, K_FOREVER);
-    base_epoch_ms = utc_epoch_ms;
-    base_uptime_ms = k_uptime_get();
-    utc_valid = true;
-    k_mutex_unlock(&rtc_lock);
-
-    return 0;
+    return omi_rust_rtc_set_utc_ms(utc_epoch_ms);
 }
 
 uint32_t get_utc_time(void)
 {
-    return omi_rust_rtc_seconds_clamped(rtc_get_utc_time_ms());
+    return omi_rust_rtc_get_utc_s();
 }
 
 void init_rtc(void)
 {
     static bool initialized;
     if (!initialized) {
-        k_mutex_init(&rtc_lock);
+        omi_rust_rtc_clock_init();
         k_work_init(&rtc_persist_work, rtc_persist_work_handler);
         initialized = true;
     }
@@ -189,17 +160,11 @@ void init_rtc(void)
     uint64_t saved_epoch_s = app_settings_get_rtc_epoch();
     LOG_INF("RTC init: persisted rtc_epoch=%llu", saved_epoch_s);
     if (saved_epoch_s == 0) {
-        k_mutex_lock(&rtc_lock, K_FOREVER);
-        utc_valid = false;
-        k_mutex_unlock(&rtc_lock);
+        omi_rust_rtc_invalidate();
         LOG_WRN("RTC not synchronized yet (no persisted epoch)");
         return;
     }
 
-    k_mutex_lock(&rtc_lock, K_FOREVER);
-    base_epoch_ms = saved_epoch_s * 1000ULL;
-    base_uptime_ms = k_uptime_get();
-    utc_valid = true;
-    k_mutex_unlock(&rtc_lock);
+    omi_rust_rtc_restore_from_epoch_s(saved_epoch_s);
     LOG_INF("RTC restored from persisted epoch");
 }
