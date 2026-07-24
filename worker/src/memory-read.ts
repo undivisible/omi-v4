@@ -158,7 +158,7 @@ export const listDailyReviews = async (
 ): Promise<Record<string, unknown>[]> => {
   const rows = await database
     .prepare(
-      `SELECT r.id, r.local_date, r.input_revision, r.body, r.created_at, r.updated_at,
+      `SELECT r.id, r.local_date, r.input_revision, r.body, r.kind, r.created_at, r.updated_at,
             e.id AS evidence_id, e.quote, e.locator, e.source_revision_id, sr.source_id
      FROM memory_daily_reviews r
      LEFT JOIN memory_daily_review_citations rc ON rc.review_id = r.id AND rc.uid = r.uid
@@ -177,6 +177,7 @@ export const listDailyReviews = async (
       localDate: String(row.local_date),
       inputRevision: String(row.input_revision),
       body: String(row.body),
+      kind: String(row.kind),
       citations: [],
       createdAt: Number(row.created_at),
       updatedAt: Number(row.updated_at),

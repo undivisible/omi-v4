@@ -64,6 +64,61 @@ const sanitizeCrepus = (value: unknown): string | null => {
     : null;
 };
 
+// Authors the hero `.crepus` infographic for a generated current, so the hub
+// (and the mobile agent) render it as the Now-Brief card rather than a bare
+// task row. The format is the constrained subset `crepuscularity_flutter`
+// parses and `crepusRenders` accepts (mirrored by `accept_crepus` in
+// brief.rs): only allowlisted tags, and a `button` whose `accept` action runs
+// the current's own proposed next step. It is authored deterministically from
+// the current's own fields — no model call — so it is always valid and never
+// invents a fact the current does not already carry. The client keeps its
+// hand-built row when this is absent, so this only ever adds presentation.
+const crepusText = (value: string, limit: number): string =>
+  Array.from(
+    value.split(/\s+/).filter(Boolean).join(" ").replaceAll(/["\\]/g, ""),
+  )
+    .slice(0, limit)
+    .join("");
+
+// The action verbs `dispatchCrepusAction` in crepus_current.dart actually
+// honors, and nothing else: `accept` (drafts the current's proposed next step
+// into the composer), `complete` (marks it done), `prompt:<text>` (drafts an
+// arbitrary prompt), and `open:<http(s) url>` (opens after a host-named
+// confirmation). Two deliberate gaps the generator must respect:
+//   * only http/https opens are honored — `confirmCrepusOpen` rejects any other
+//     scheme, so a `mailto:`/app deeplink would render an inert button and is
+//     not authored here; and
+//   * there is no computer-use action verb in the whitelist yet, so a
+//     mail-triage current cannot start an agent session from the card — see the
+//     report's follow-up note. Emitting an unsanctioned verb would only produce
+//     a button that does nothing, so the generator stays inside the whitelist.
+// The action is chosen to fit the item: when the current's own text carries an
+// http(s) link, the hero also offers to open it; otherwise the single action is
+// `accept`, which routes the proposed next step through the chat prompt.
+const httpUrlPattern = /https?:\/\/[^\s"]+/;
+
+const heroCrepus = (
+  title: string,
+  summary: string,
+  actionLabel: string,
+): string | null => {
+  const heroTitle = crepusText(title, 60);
+  const heroSummary = crepusText(summary, 90);
+  const label = crepusText(actionLabel, 60);
+  if (!heroTitle) return null;
+  const lines = [
+    "stack col gap-2",
+    '  badge "Now"',
+    `  text text-2xl font-semibold "${heroTitle}"`,
+  ];
+  if (heroSummary) lines.push(`  text text-sm text-muted "${heroSummary}"`);
+  if (label) lines.push(`  button "${label}" onclick=accept`);
+  const link = `${title} ${summary}`.match(httpUrlPattern)?.[0];
+  if (link && link.length <= 400 && !/[\\{}"]/.test(link))
+    lines.push(`  button "Open link" onclick={open:${link}}`);
+  return lines.join("\n");
+};
+
 const sha256 = async (value: string) =>
   Array.from(
     new Uint8Array(
@@ -191,8 +246,8 @@ currents.post("/generate", async (context) => {
   const inserted = await context.env.DB.prepare(
     `INSERT OR IGNORE INTO currents
       (id, uid, evidence_id, title, summary, reason, confidence_basis_points,
-       proposed_action, status, surface_at, generation_key, created_at, updated_at)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'candidate', ?9, ?10, ?9, ?9)`,
+       proposed_action, status, surface_at, generation_key, created_at, updated_at, crepus)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'candidate', ?9, ?10, ?9, ?9, ?11)`,
   )
     .bind(
       id,
@@ -211,6 +266,7 @@ currents.post("/generate", async (context) => {
       }),
       now,
       `claim:${claimId}`,
+      heroCrepus(`Revisit: ${value}`, content, "Do this next"),
     )
     .run();
   if (inserted.meta.changes === 1) {

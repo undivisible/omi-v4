@@ -167,8 +167,10 @@ beforeAll(async () => {
     "0016_zkr_sync.sql",
     "0017_zkr_read_projection.sql",
     "0021_memory_vectors.sql",
+    "0023_currents_crepus.sql",
     "0029_memory_authority_log.sql",
     "0030_memory_log_projection.sql",
+    "0031_digests.sql",
   ]) {
     const sql = (await Bun.file(`migrations/${name}`).text()).replace(
       "PRAGMA foreign_keys = ON;",

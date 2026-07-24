@@ -103,6 +103,7 @@ beforeAll(async () => {
   await migration("migrations/0026_channel_accounts.sql");
   await migration("migrations/0029_memory_authority_log.sql");
   await migration("migrations/0030_memory_log_projection.sql");
+  await migration("migrations/0031_digests.sql");
   const now = Date.now();
   await database
     .prepare(
