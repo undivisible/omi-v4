@@ -2438,7 +2438,10 @@ void main() {
       expect(hub.liveVoiceStartRequests, isEmpty);
       expect(managedStt.requests, hasLength(1));
       expect(desktopVoice.active, isTrue);
-      expect(services.voiceNotice.value, isNull);
+      expect(
+        services.voiceNotice.value,
+        'Live voice unavailable — using transcription only',
+      );
 
       final submission = await services.stopDesktopVoice();
       expect(submission?.text, 'fallback request');

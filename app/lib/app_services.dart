@@ -906,6 +906,13 @@ final class AppServices {
         // be silent — surface a one-line note in the voice UI.
         if (error is WorkerResponseException && error.statusCode == 403) {
           voiceNotice.value = 'Live voice needs Pro — using transcription only';
+        } else if (_managedStt != null) {
+          // Any other mint failure (worker unreachable, key/model unset, 5xx)
+          // silently drops to transcription otherwise: a dead waveform with no
+          // Gemini and no explanation. Say so whenever a fallback will run; when
+          // none is configured the thrown error below carries the message.
+          voiceNotice.value =
+              'Live voice unavailable — using transcription only';
         }
       }
       if (grant != null) {
@@ -931,6 +938,14 @@ final class AppServices {
           liveStarted = true;
         } catch (_) {
           await liveVoice.cancel();
+          // The token was valid but the live session never came up (connect
+          // timed out, model rejected, network dropped mid-handshake). If a
+          // fallback will run, tell the user the waveform is transcription now,
+          // not Gemini; with no fallback the thrown error below speaks for it.
+          if (_managedStt != null) {
+            voiceNotice.value ??=
+                'Live voice couldn’t connect — using transcription only';
+          }
         }
         if (liveStarted) {
           if (_voiceAuthorityChanged(

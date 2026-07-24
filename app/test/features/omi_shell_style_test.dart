@@ -95,7 +95,10 @@ void main() {
     expect(find.byKey(const Key('hub_greeting')), findsOneWidget);
     expect(find.text('Set up Omi.'), findsOneWidget);
     expect(
-      find.text('By the way, if you bring your own keys, Omi becomes free.'),
+      find.text(
+        'By the way, if you bring your own keys or sign in with your own '
+        "AI subscription, Omi's price is negotiable.",
+      ),
       findsOneWidget,
     );
     expect(hubBackground(tester), const Color(0xfff7f6f1));

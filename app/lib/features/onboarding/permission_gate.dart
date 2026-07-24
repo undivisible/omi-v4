@@ -45,6 +45,12 @@ class _ProductionGateState extends State<ProductionGate>
   bool refreshing = false;
   bool finishing = false;
   bool finishFailed = false;
+  // Input Monitoring is not a [CoreCapability] and never blocks completion, but
+  // the shake and keybinds this onboarding teaches only fire outside Omi once
+  // it is granted, so it is surfaced here up front rather than only later in
+  // the shell notice.
+  bool inputMonitoring = false;
+  bool requestingInputMonitoring = false;
   final requesting = <CoreCapability>{};
   int checkGeneration = 0;
   Timer? permissionPoll;
@@ -99,9 +105,16 @@ class _ProductionGateState extends State<ProductionGate>
           ),
       };
     }
+    var monitoring = inputMonitoring;
+    try {
+      monitoring = await widget.capabilities.inputMonitoringGranted();
+    } catch (_) {
+      monitoring = false;
+    }
     if (!mounted || generation != checkGeneration) return;
     setState(() {
       statuses = next;
+      inputMonitoring = monitoring;
       refreshing = false;
     });
     if (ready) {
@@ -133,6 +146,21 @@ class _ProductionGateState extends State<ProductionGate>
     } finally {
       requesting.remove(capability);
       if (mounted) setState(() {});
+    }
+  }
+
+  Future<void> _requestInputMonitoring() async {
+    if (requestingInputMonitoring) return;
+    setState(() => requestingInputMonitoring = true);
+    try {
+      await widget.capabilities.requestInputMonitoring();
+      if (!mounted) return;
+      await _check();
+    } catch (_) {
+      // The grant is optional; a failed prompt just leaves the row offering it
+      // again. The shell notice remains the persistent fallback.
+    } finally {
+      if (mounted) setState(() => requestingInputMonitoring = false);
     }
   }
 
@@ -213,6 +241,12 @@ class _ProductionGateState extends State<ProductionGate>
               ? () => unawaited(_request(capability))
               : null,
         ),
+      _InputMonitoringRow(
+        granted: inputMonitoring,
+        onRequest: inputMonitoring || requestingInputMonitoring
+            ? null
+            : () => unawaited(_requestInputMonitoring()),
+      ),
       const SizedBox(height: 14),
       TextButton(
         key: const Key('open_interface_preview'),
@@ -230,6 +264,86 @@ class _ProductionGateState extends State<ProductionGate>
         ),
       ],
     ],
+  );
+}
+
+class _InputMonitoringRow extends StatelessWidget {
+  const _InputMonitoringRow({required this.granted, required this.onRequest});
+
+  final bool granted;
+  final VoidCallback? onRequest;
+
+  static const _copy =
+      'I would like Input Monitoring so double-Shift, the overlay keybind, and '
+      'the cursor shake work even when another app is in front.';
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+    button: true,
+    enabled: onRequest != null,
+    label: _copy,
+    value: granted ? 'Granted' : 'Action required',
+    onTap: onRequest,
+    child: ExcludeSemantics(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+        child: Material(
+          color: const Color(0x0dffffff),
+          borderRadius: BorderRadius.circular(16),
+          clipBehavior: Clip.antiAlias,
+          child: InkWell(
+            key: const Key('input_monitoring_row'),
+            borderRadius: BorderRadius.circular(16),
+            onTap: onRequest,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+              child: Row(
+                children: [
+                  AnimatedContainer(
+                    duration: const Duration(milliseconds: 180),
+                    width: 20,
+                    height: 20,
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(6),
+                      color: granted
+                          ? const Color(0xfffffcec)
+                          : Colors.transparent,
+                      border: Border.all(color: const Color(0x73ffffff)),
+                    ),
+                    child: granted
+                        ? const Icon(
+                            Icons.check_rounded,
+                            size: 14,
+                            color: Color(0xff171716),
+                          )
+                        : null,
+                  ),
+                  const SizedBox(width: 13),
+                  const Expanded(
+                    child: Text(
+                      _copy,
+                      style: TextStyle(
+                        color: Color(0xd1ffffff),
+                        fontSize: 15,
+                        height: 1.35,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Text(
+                    granted ? 'Granted' : 'Open',
+                    style: const TextStyle(
+                      color: Color(0x73ffffff),
+                      fontSize: 12,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    ),
   );
 }
 

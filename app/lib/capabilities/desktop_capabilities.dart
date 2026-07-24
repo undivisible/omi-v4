@@ -46,6 +46,12 @@ abstract interface class DesktopCapabilityGateway {
   /// it, once the diagnostics show that it is the missing piece.
   Future<void> requestInputMonitoring();
 
+  /// Whether macOS Input Monitoring is granted right now. Onboarding reads it
+  /// to offer the grant up front, since without it the taught shake and
+  /// keybinds never fire outside Omi — a gap the shell notice otherwise only
+  /// reveals after setup.
+  Future<bool> inputMonitoringGranted();
+
   Future<void> dismissOverlay();
 }
 
@@ -377,6 +383,17 @@ final class PlatformDesktopCapabilityGateway
       await _channel.invokeMethod<void>('promptInputMonitoring');
     } else {
       await _openSettingsPane('Privacy_ListenEvent', null);
+    }
+  }
+
+  @override
+  Future<bool> inputMonitoringGranted() async {
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.macOS) return false;
+    try {
+      final values = await _channel.invokeMapMethod<String, Object?>('check');
+      return values?['inputMonitoring'] == true;
+    } catch (_) {
+      return false;
     }
   }
 
