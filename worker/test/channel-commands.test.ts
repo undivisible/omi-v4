@@ -299,6 +299,18 @@ describe("unlinked sender", () => {
     expect(await liveChannelAccount(database, "telegram", "56")).toBeNull();
   });
 
+  test("refuses to issue a link code in a group chat", async () => {
+    const outcome = await handleChannelMessage(
+      env(),
+      "telegram",
+      "42",
+      "-999",
+      "/start",
+    );
+    expect(outcome.reply).toContain("Group chats cannot be linked");
+    expect(outcome.enqueue).toBe(false);
+  });
+
   test("rate-limits code issuance so the bot cannot relay spam", async () => {
     rateAllowed = false;
     const outcome = await handleChannelMessage(

@@ -26,6 +26,7 @@ import stt from "./stt";
 import voice from "./voice";
 import conversations, { appendConversationMessage } from "./conversations";
 import { linkConfirmationText } from "./channel-commands";
+import { groupChannelLinkError, isGroupChannelChat } from "./channel-group";
 import { normalizeLinkCode, resolveLinkCode } from "./channel-link";
 import { liveChannelAccount } from "./channel-signup";
 import {
@@ -566,6 +567,14 @@ routes.post("/channels/link", async (context) => {
   const now = Date.now();
   const pending = await resolveLinkCode(context.env.DB, code, now);
   if (!pending) return context.json({ error: "Unknown or expired code" }, 404);
+  if (
+    isGroupChannelChat(
+      pending.channel,
+      pending.channelUserId,
+      pending.channelChatId,
+    )
+  )
+    return context.json({ error: groupChannelLinkError }, 400);
   const existing = await context.env.DB.prepare(
     "SELECT uid FROM channel_bindings WHERE channel = ?1 AND channel_user_id = ?2 AND revoked_at IS NULL",
   )

@@ -5,6 +5,7 @@ import {
   expireChannelCheckout,
 } from "./channel-checkout";
 import { handleChannelMessage } from "./channel-commands";
+import { groupChannelLinkError, isGroupChannelChat } from "./channel-group";
 import { digest, hmacHex } from "./channel-link";
 import {
   fetchTelegramVoice,
@@ -81,7 +82,8 @@ const bind = async (
   channelUserId: string,
   channelChatId: string,
   token: string,
-): Promise<"linked" | "invalid" | "conflict"> => {
+): Promise<"linked" | "invalid" | "conflict" | "group"> => {
+  if (isGroupChannelChat(channel, channelUserId, channelChatId)) return "group";
   const existing = await database
     .prepare(
       "SELECT uid FROM channel_bindings WHERE channel = ?1 AND channel_user_id = ?2 AND revoked_at IS NULL",
@@ -349,6 +351,13 @@ webhooks.post("/telegram", async (context) => {
       chatId,
       token,
     );
+    if (linked === "group")
+      await sendChannelText(
+        context.env,
+        "telegram",
+        chatId,
+        groupChannelLinkError,
+      );
     return context.json({ accepted: true, linked: linked === "linked" });
   }
   const processed = await processChannelMessage(
@@ -418,6 +427,13 @@ webhooks.post("/blooio", async (context) => {
       chatId,
       token,
     );
+    if (linked === "group")
+      await sendChannelText(
+        context.env,
+        "blooio",
+        chatId,
+        groupChannelLinkError,
+      );
     return context.json({ accepted: true, linked: linked === "linked" });
   }
   const processed = await processChannelMessage(
@@ -467,6 +483,13 @@ webhooks.post("/sendblue/:token", async (context) => {
       inbound.chatId,
       token,
     );
+    if (linked === "group")
+      await sendChannelText(
+        context.env,
+        imessageChannel,
+        inbound.chatId,
+        groupChannelLinkError,
+      );
     return context.json({ accepted: true, linked: linked === "linked" });
   }
   const processed = await processChannelMessage(

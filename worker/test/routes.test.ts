@@ -1134,6 +1134,21 @@ describe("channel link redemption", () => {
     }),
   } as unknown as DurableObjectNamespace;
 
+  test("rejects redemption when the stored chat is a group thread", async () => {
+    const environment = {
+      RATE_LIMITER: allowingRateLimiter,
+      TELEGRAM_WEBHOOK_SECRET: "telegram-secret",
+      TELEGRAM_BOT_TOKEN: "bot-token",
+    };
+    const issued = await issueLinkCode(
+      testBindings(environment),
+      "blooio",
+      "+1555",
+      "group-99",
+    );
+    expect(issued).toBeNull();
+  });
+
   test("binds the chat from a texted code and confirms over the channel", async () => {
     const originalFetch = globalThis.fetch;
     const sends: string[] = [];

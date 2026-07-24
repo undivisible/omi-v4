@@ -5,6 +5,7 @@ import {
   issueChannelCheckout,
 } from "./channel-checkout";
 import { issueLinkCode, linkCodeTtlMs } from "./channel-link";
+import { groupChannelLinkError, isGroupChannelChat } from "./channel-group";
 import {
   firstContactState,
   isChannelAccount,
@@ -223,6 +224,8 @@ const startLink = async (
 ): Promise<ChannelMessageOutcome> => {
   if (!(await unlinkedReplyAllowed(env, channel, channelUserId)))
     return { reply: null, enqueue: false };
+  if (isGroupChannelChat(channel, channelUserId, channelChatId))
+    return { reply: groupChannelLinkError, enqueue: false };
   const issued = await issueLinkCode(
     env,
     channel,
