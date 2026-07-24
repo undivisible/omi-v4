@@ -48,6 +48,11 @@ typedef enum {
 uint8_t omi_rust_button_step(bool pressed);
 void omi_rust_button_reset(void);
 
+uint32_t omi_rust_haptic_duration_from_ble(uint8_t value);
+uint32_t omi_rust_haptic_clamp_duration(uint32_t duration);
+
+uint32_t omi_rust_led_pulse_width_ns(uint32_t period_ns, uint8_t level);
+
 typedef enum {
     OMI_RUST_ERROR_SETTINGS = 0,
     OMI_RUST_ERROR_LED_DRIVER = 1,

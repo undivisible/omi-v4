@@ -4,7 +4,9 @@ pub mod battery;
 pub mod button;
 pub mod feedback;
 pub mod framing;
+pub mod haptic;
 pub mod imu_gesture;
+pub mod led;
 
 #[cfg(target_os = "none")]
 #[panic_handler]
@@ -19,7 +21,12 @@ fn panic(_info: &core::panic::PanicInfo) -> ! {
 
 #[no_mangle]
 pub extern "C" fn omi_rust_selftest() -> i32 {
-    framing::selftest() + imu_gesture::selftest() + button::selftest() + feedback::selftest()
+    framing::selftest()
+        + imu_gesture::selftest()
+        + button::selftest()
+        + haptic::selftest()
+        + led::selftest()
+        + feedback::selftest()
 }
 
 /// # Safety
@@ -167,6 +174,21 @@ pub extern "C" fn omi_rust_button_reset() {
     unsafe {
         (&raw mut BUTTON_FSM).as_mut().unwrap_unchecked().reset();
     }
+}
+
+#[no_mangle]
+pub extern "C" fn omi_rust_haptic_duration_from_ble(value: u8) -> u32 {
+    haptic::duration_from_ble_value(value).unwrap_or(0)
+}
+
+#[no_mangle]
+pub extern "C" fn omi_rust_haptic_clamp_duration(duration: u32) -> u32 {
+    haptic::clamp_duration(duration)
+}
+
+#[no_mangle]
+pub extern "C" fn omi_rust_led_pulse_width_ns(period_ns: u32, level: u8) -> u32 {
+    led::pulse_width_ns(period_ns, level)
 }
 
 #[repr(C)]

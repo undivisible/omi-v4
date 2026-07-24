@@ -5,20 +5,14 @@
 
 #include "lib/core/settings.h"
 #include "lib/core/utils.h"
+#include "omi_rust.h"
 
 LOG_MODULE_REGISTER(led, CONFIG_LOG_DEFAULT_LEVEL);
 
+// Define LED PWM specs from device tree
 static const struct pwm_dt_spec led_red = PWM_DT_SPEC_GET(DT_NODELABEL(led_red));
 static const struct pwm_dt_spec led_green = PWM_DT_SPEC_GET(DT_NODELABEL(led_green));
 static const struct pwm_dt_spec led_blue = PWM_DT_SPEC_GET(DT_NODELABEL(led_blue));
-
-static uint32_t led_pulse_width_ns(uint32_t period_ns, uint8_t level)
-{
-    if (level > 100) {
-        level = 100;
-    }
-    return (period_ns * (uint32_t) level) / 100U;
-}
 
 int led_start()
 {
@@ -39,7 +33,7 @@ static void set_led_on_off(const struct pwm_dt_spec *led, bool on)
     uint32_t pulse_width_ns = 0;
     if (on) {
         uint8_t ratio = app_settings_get_dim_ratio();
-        pulse_width_ns = led_pulse_width_ns(led->period, ratio);
+        pulse_width_ns = omi_rust_led_pulse_width_ns(led->period, ratio);
     }
 
     pwm_set_pulse_dt(led, pulse_width_ns);
@@ -84,7 +78,7 @@ void set_led_pwm(led_color_t color, uint8_t level)
         return;
     }
 
-    uint32_t pulse_width_ns = led_pulse_width_ns(led->period, level);
+    uint32_t pulse_width_ns = omi_rust_led_pulse_width_ns(led->period, level);
     pwm_set_pulse_dt(led, pulse_width_ns);
 }
 
