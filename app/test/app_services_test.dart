@@ -506,6 +506,9 @@ void main() {
       ),
     );
     await tester.pump();
+    // Once text is streaming the assistant row carries the turn; the skeleton
+    // only covers the gap before the first delta.
+    expect(find.byKey(const Key('chat_skeleton')), findsNothing);
     expect(find.text('I can help.'), findsOneWidget);
 
     hub.eventsController.add(
@@ -519,11 +522,8 @@ void main() {
       ),
     );
     await tester.pump();
-    // The wait shows only the skeleton and the animated mark now — no status
-    // label — so a streamed tool-progress detail is handled without being
-    // painted as a line under the shimmer.
-    expect(find.text('planner · running · Reading tasks'), findsNothing);
-    expect(find.byKey(const Key('chat_skeleton')), findsOneWidget);
+    expect(find.text('planner · running · Reading tasks'), findsOneWidget);
+    expect(find.byKey(const Key('chat_skeleton')), findsNothing);
 
     hub.eventsController.add(
       const NativeEventRuntimeStatus(
@@ -3449,6 +3449,13 @@ final class _FakeHub implements NativeHub {
       );
     }
   }
+
+  @override
+  void updateLiveVoiceContext({
+    required String requestId,
+    required String liveStreamId,
+    required String sessionContext,
+  }) {}
 
   @override
   void stopTranscription({

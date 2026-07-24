@@ -36,8 +36,7 @@ import '../ui/assistant_content.dart';
 import '../ui/omi_ui.dart';
 import 'ax_context.dart';
 import 'composer_dictation.dart';
-import 'cursor_pill_controller.dart'
-    show CombinedVoiceLevel, buildOverlayPrompt;
+import 'cursor_pill_controller.dart' show CombinedVoiceLevel;
 import 'hub_task_meta.dart';
 import 'in_app_voice_view.dart';
 import 'meeting_notes.dart';
@@ -1393,9 +1392,27 @@ class ChatScreenState extends State<ChatScreen>
   /// The one row allowed to carry the turning mark: the assistant's newest
   /// turn. While a reply is still on its way the skeleton carries it instead,
   /// so the two never spin side by side.
-  int get _latestOrbIndex => _activeRequestId != null
-      ? -1
-      : _messages.lastIndexWhere((message) => !message.fromUser);
+  int get _latestOrbIndex {
+    final active = _activeRequestId;
+    if (active != null) {
+      final streaming = _messages.lastIndexWhere(
+        (message) => message.requestId == active && !message.fromUser,
+      );
+      if (streaming != -1) return streaming;
+      return -1;
+    }
+    return _messages.lastIndexWhere((message) => !message.fromUser);
+  }
+
+  /// True once the hub has started streaming an assistant row for [requestId].
+  bool _assistantTurnStarted(String requestId) => _messages.any(
+    (message) => message.requestId == requestId && !message.fromUser,
+  );
+
+  /// Placeholder shimmer only before the first assistant delta arrives.
+  bool get _showSkeleton =>
+      _activeRequestId != null &&
+      !_assistantTurnStarted(_activeRequestId!);
 
   Widget _messageRow(
     _ChatMessage message, {
@@ -1533,7 +1550,7 @@ class ChatScreenState extends State<ChatScreen>
             ),
           ),
         ),
-      if (_activeRequestId != null)
+      if (_showSkeleton)
         () => _AssistantRow(
           spinning: true,
           child: const _SkeletonBubble(key: Key('chat_skeleton')),
