@@ -112,6 +112,9 @@ final class PillPanelHost {
               for (final suggestion in _controller.suggestions)
                 {'label': suggestion.label, 'kind': suggestion.kind.name},
             ],
+            'sessionTurns': [
+              for (final turn in _controller.sessionTurns) turn.toMap(),
+            ],
             'status': _controller.status,
             'error': _controller.error,
             'answer': _controller.answer,
@@ -254,6 +257,11 @@ final class PillPanelClient {
                     orElse: () => PillSuggestionKind.chat,
                   ),
                 ),
+          ],
+          sessionTurns: [
+            for (final raw
+                in (arguments?['sessionTurns'] as List?) ?? const [])
+              if (OverlayTurn.fromMap(raw) case final turn?) turn,
           ],
           status: arguments?['status'] as String?,
           error: arguments?['error'] as String?,

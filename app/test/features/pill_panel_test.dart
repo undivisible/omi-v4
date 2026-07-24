@@ -27,6 +27,18 @@ void main() {
             kind: PillSuggestionKind.link,
           ),
         ],
+        sessionTurns: [
+          OverlayTurn(
+            origin: OverlayTurnOrigin.user,
+            text: 'hello',
+            at: DateTime.utc(2026, 7, 22),
+          ),
+          OverlayTurn(
+            origin: OverlayTurnOrigin.telegram,
+            text: 'from telegram',
+            at: DateTime.utc(2026, 7, 22, 0, 0, 1),
+          ),
+        ],
       );
       await tester.pump();
 
@@ -37,6 +49,10 @@ void main() {
         'Open the deck',
       ]);
       expect((pushed['suggestions'] as List).last['kind'], 'link');
+      expect(
+        (pushed['sessionTurns'] as List).map((entry) => entry['origin']),
+        ['user', 'telegram'],
+      );
     });
 
     testWidgets('a relayed submission runs on the engine that owns services', (
@@ -148,11 +164,19 @@ void main() {
           'state': 'working',
           'status': 'Working…',
           'answer': 'Here is what I found.',
+          'sessionTurns': [
+            {
+              'origin': 'user',
+              'text': 'find it',
+              'at': 0,
+            },
+          ],
         }),
       );
 
       expect(harness.client.controller.state, CursorPillState.working);
       expect(harness.client.controller.answer, 'Here is what I found.');
+      expect(harness.client.controller.sessionTurns.single.text, 'find it');
       expect(harness.calls.where((call) => call.method == 'close'), isEmpty);
     });
 

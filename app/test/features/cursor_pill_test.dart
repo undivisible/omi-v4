@@ -42,13 +42,13 @@ void main() {
     expect(controller.state, CursorPillState.listening);
     expect(harness.voiceStarts, 1);
 
-    // voice --Option+Space--> idle (dismisses whatever surface is up)
+    // voice --single chord dismiss--> idle (dismisses whatever surface is up)
     await settle();
     await controller.toggleOverlay();
     expect(controller.state, CursorPillState.hidden);
     expect(harness.voiceStops, 1);
 
-    // idle --Option+Space--> overlay (the typing surface)
+    // idle --single chord--> overlay (the typing surface)
     await settle();
     await controller.toggleOverlay();
     expect(controller.state, CursorPillState.input);
@@ -234,13 +234,14 @@ void main() {
     await harness.close();
   });
 
-  test('agent turns keep the overlay open on silent completion', () async {
+  test('agent turns return to input on silent completion', () async {
     final harness = _Harness();
     final controller = harness.controller();
 
     await controller.summon();
     await controller.submit('tidy up my desktop');
     expect(controller.state, CursorPillState.working);
+    expect(controller.sessionTurns.single.origin, OverlayTurnOrigin.user);
 
     harness.hub.add(
       const NativeEventAssistantDelta(
@@ -248,13 +249,14 @@ void main() {
       ),
     );
     await pumpEventQueue();
-    expect(controller.state, CursorPillState.working);
+    expect(controller.state, CursorPillState.input);
+    expect(controller.sessionTurns.single.text, 'tidy up my desktop');
 
     controller.dispose();
     await harness.close();
   });
 
-  test('agent text replies stream into the overlay answer bubble', () async {
+  test('agent text replies stream then land in the session transcript', () async {
     final harness = _Harness();
     final controller = harness.controller();
 
@@ -285,8 +287,113 @@ void main() {
       ),
     );
     await pumpEventQueue();
-    expect(controller.state, CursorPillState.working);
-    expect(controller.answer, 'Here is your day:meetings and mail.');
+    expect(controller.state, CursorPillState.input);
+    expect(controller.answer, isNull);
+    expect(controller.sessionTurns.map((turn) => turn.origin), [
+      OverlayTurnOrigin.user,
+      OverlayTurnOrigin.assistant,
+    ]);
+    expect(
+      controller.sessionTurns.last.text,
+      'Here is your day:meetings and mail.',
+    );
+
+    controller.dispose();
+    await harness.close();
+  });
+
+  test('dismiss within the reuse window restores the session transcript', () async {
+    final harness = _Harness();
+    final controller = harness.controller();
+
+    await controller.summon();
+    await controller.submit('remember this');
+    harness.hub.add(
+      const NativeEventAssistantDelta(
+        value: AssistantDelta(
+          requestId: 'req-1',
+          text: 'Got it.',
+          finalSegment: true,
+        ),
+      ),
+    );
+    await pumpEventQueue();
+    expect(controller.sessionTurns, hasLength(2));
+
+    await controller.dismiss();
+    harness.advance(const Duration(seconds: 20));
+    await controller.summon();
+
+    expect(controller.state, CursorPillState.input);
+    expect(controller.sessionTurns.map((turn) => turn.text), [
+      'remember this',
+      'Got it.',
+    ]);
+
+    controller.dispose();
+    await harness.close();
+  });
+
+  test('dismiss past the reuse window starts a fresh session', () async {
+    final harness = _Harness();
+    final controller = harness.controller();
+
+    await controller.summon();
+    await controller.submit('old question');
+    harness.hub.add(
+      const NativeEventAssistantDelta(
+        value: AssistantDelta(
+          requestId: 'req-1',
+          text: 'old answer',
+          finalSegment: true,
+        ),
+      ),
+    );
+    await pumpEventQueue();
+    await controller.dismiss();
+    harness.advance(CursorPillController.sessionReuseWindow);
+    harness.advance(const Duration(seconds: 1));
+    await controller.summon();
+
+    expect(controller.sessionTurns, isEmpty);
+
+    controller.dispose();
+    await harness.close();
+  });
+
+  test('channel turns append while the session is warm', () async {
+    final harness = _Harness();
+    final controller = harness.controller();
+
+    await controller.summon();
+    controller.ingestChannelTurn(
+      origin: OverlayTurnOrigin.telegram,
+      text: 'Ping from Telegram',
+    );
+    controller.ingestChannelTurn(
+      origin: OverlayTurnOrigin.imessage,
+      text: 'Ping from iMessage',
+    );
+
+    expect(controller.sessionTurns.map((turn) => turn.origin), [
+      OverlayTurnOrigin.telegram,
+      OverlayTurnOrigin.imessage,
+    ]);
+
+    await controller.dismiss();
+    harness.advance(const Duration(seconds: 10));
+    controller.ingestChannelTurn(
+      origin: OverlayTurnOrigin.telegram,
+      text: 'Still warm',
+    );
+    expect(controller.sessionTurns, hasLength(3));
+
+    harness.advance(CursorPillController.sessionReuseWindow);
+    controller.ingestChannelTurn(
+      origin: OverlayTurnOrigin.imessage,
+      text: 'Too late',
+    );
+    expect(controller.sessionTurns, hasLength(3));
 
     controller.dispose();
     await harness.close();
@@ -364,8 +471,9 @@ void main() {
       ),
     );
     await tester.pump();
-    expect(controller.state, CursorPillState.working);
+    expect(controller.state, CursorPillState.input);
     expect(find.byKey(const Key('cursor_pill')), findsOneWidget);
+    expect(find.byKey(const Key('cursor_pill_input')), findsOneWidget);
 
     await tester.pumpWidget(const SizedBox());
     controller.dispose();
@@ -569,7 +677,8 @@ void main() {
     await tester.pump();
 
     expect(harness.prompts, ['Draft a summary of today']);
-    // The overlay stays up and streams the reply into the answer bubble.
+    // The overlay stays up, streams the reply, then returns to input for
+    // follow-ups with the turn kept in the session transcript.
     expect(controller.state, CursorPillState.working);
     harness.hub.add(
       const NativeEventAssistantDelta(
@@ -581,9 +690,14 @@ void main() {
       ),
     );
     await tester.pump();
-    expect(controller.state, CursorPillState.working);
-    expect(controller.answer, 'Here you go');
-    expect(find.byKey(const Key('cursor_pill_answer')), findsOneWidget);
+    expect(controller.state, CursorPillState.input);
+    expect(controller.answer, isNull);
+    expect(controller.sessionTurns.map((turn) => turn.text), [
+      'Draft a summary of today',
+      'Here you go',
+    ]);
+    expect(find.byKey(const Key('cursor_pill_session')), findsOneWidget);
+    expect(find.text('Here you go'), findsOneWidget);
 
     await tester.pumpWidget(const SizedBox());
     controller.dispose();
@@ -692,6 +806,54 @@ void main() {
     expect(controller.state, CursorPillState.hidden);
     expect(harness.voiceStops, 1);
     expect(harness.hubOpens, 1);
+
+    controller.dispose();
+    await harness.close();
+  });
+
+  test('a live computer-use proposal surfaces while listening', () async {
+    final harness = _Harness();
+    final controller = harness.controller();
+
+    await controller.beginVoice();
+    expect(controller.state, CursorPillState.listening);
+
+    harness.hub.add(
+      const NativeEventActionProposal(
+        value: ActionProposal(
+          proposalId: 'live-1:tool:call_1',
+          requestId: 'live-1',
+          title: 'Invoke interface element',
+          summary: 'Invoke Send',
+          risk: ActionRisk.destructive,
+        ),
+      ),
+    );
+    await pumpEventQueue();
+
+    expect(controller.state, CursorPillState.working);
+    expect(controller.proposal?.proposalId, 'live-1:tool:call_1');
+    expect(controller.status, 'Needs your approval');
+    expect(harness.voiceCancels, 1);
+
+    // Ending the Live socket after cancel must not dismiss the proposal UI.
+    harness.hub.add(
+      NativeEventLiveVoiceState(
+        value: LiveVoiceState(
+          liveStreamId: 'live-1',
+          state: LiveVoicePhase.ended,
+        ),
+      ),
+    );
+    await pumpEventQueue();
+    expect(controller.state, CursorPillState.working);
+    expect(controller.proposal?.proposalId, 'live-1:tool:call_1');
+
+    await controller.decideProposal(ApprovalDecision.approveOnce);
+    expect(harness.decisions, [
+      ('live-1:tool:call_1', ApprovalDecision.approveOnce),
+    ]);
+    expect(controller.state, CursorPillState.hidden);
 
     controller.dispose();
     await harness.close();

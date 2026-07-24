@@ -65,6 +65,20 @@ final class _ActiveInboxItem {
   bool completing = false;
 }
 
+/// A Telegram / iMessage turn the desktop overlay can mirror into its session
+/// transcript while the overlay is visible or still warm after dismiss.
+final class OverlayChannelTurn {
+  const OverlayChannelTurn({
+    required this.channel,
+    required this.role,
+    required this.text,
+  });
+
+  final String channel;
+  final String role;
+  final String text;
+}
+
 final class ConversationController {
   factory ConversationController({
     required NativeHub nativeHub,
@@ -134,6 +148,8 @@ final class ConversationController {
   final void Function(Object error, StackTrace stackTrace) _addError;
   final Duration _inboxPollInterval;
   final _authorityChanges = StreamController<int>.broadcast(sync: true);
+  final _overlayChannelTurns =
+      StreamController<OverlayChannelTurn>.broadcast(sync: true);
   final String _sessionId = randomId();
   int _generation = 0;
   int _transportSequence = 0;
@@ -150,6 +166,8 @@ final class ConversationController {
 
   int get authorityGeneration => _generation;
   Stream<int> get authorityChanges => _authorityChanges.stream;
+  Stream<OverlayChannelTurn> get overlayChannelTurns =>
+      _overlayChannelTurns.stream;
 
   Future<String> send({
     required String text,
@@ -421,6 +439,15 @@ final class ConversationController {
         generation: generation,
         kind: _ChatRequestKind.message,
       );
+      if (!_overlayChannelTurns.isClosed) {
+        _overlayChannelTurns.add(
+          OverlayChannelTurn(
+            channel: item.channel,
+            role: 'user',
+            text: item.text,
+          ),
+        );
+      }
       try {
         _nativeHub.sendMessage(
           requestId: requestId,
@@ -567,6 +594,18 @@ final class ConversationController {
     }
     active.completing = false;
     if (identical(_activeInboxItem, active)) _activeInboxItem = null;
+    if (outcome == ConversationInboxOutcome.done &&
+        responseText != null &&
+        responseText.trim().isNotEmpty &&
+        !_overlayChannelTurns.isClosed) {
+      _overlayChannelTurns.add(
+        OverlayChannelTurn(
+          channel: active.item.channel,
+          role: 'assistant',
+          text: responseText,
+        ),
+      );
+    }
     scheduleInboxPoll(Duration.zero);
   }
 
@@ -790,5 +829,6 @@ final class ConversationController {
     _inboxPollTimer = null;
     _activeInboxItem = null;
     await _authorityChanges.close();
+    await _overlayChannelTurns.close();
   }
 }

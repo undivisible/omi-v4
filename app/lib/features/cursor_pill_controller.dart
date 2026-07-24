@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:url_launcher/url_launcher.dart' as launcher;
 
 import '../app_services.dart';
+import '../conversations/conversations.dart';
 import '../currents/currents.dart';
 import '../keyboard/shift_gesture.dart';
 import '../native/native_hub.dart';
@@ -197,12 +198,6 @@ final class PillSuggestion {
   }
 }
 
-String _clampText(String text, int max) =>
-    text.length <= max ? text : '${text.substring(0, max).trimRight()}…';
-
-String _collapseLine(String text, int max) =>
-    _clampText(text.replaceAll(RegExp(r'\s+'), ' ').trim(), max);
-
 /// The labeled context sections shared by the submit prompt and the assist
 /// prompt: app, window, (optionally) what the user has already written, the
 /// current selection, the visible on-screen text, and the session's memory
@@ -212,34 +207,7 @@ List<String> _contextSections(
   List<PillSuggestion> memory, {
   bool includeWritten = true,
 }) {
-  final sections = <String>[];
-  if (context.appName case final app? when app.isNotEmpty) {
-    final bundle = context.bundleId;
-    sections.add(
-      'App: $app${bundle != null && bundle.isNotEmpty ? ' ($bundle)' : ''}',
-    );
-  }
-  if (context.windowTitle case final title? when title.isNotEmpty) {
-    sections.add('Window: ${_collapseLine(title, 200)}');
-  }
-  if (includeWritten) {
-    if (context.focusedText case final written? when written.isNotEmpty) {
-      sections.add(
-        'What I have already written:\n"""\n${_clampText(written, 2000)}\n"""',
-      );
-    }
-  }
-  if (context.selectedText case final selected? when selected.isNotEmpty) {
-    sections.add(
-      'Currently selected:\n"""\n${_clampText(selected, 1000)}\n"""',
-    );
-  }
-  if (context.surrounding case final surrounding? when surrounding.isNotEmpty) {
-    final marker = context.truncated ? '\n… (truncated)' : '';
-    sections.add(
-      'On screen:\n"""\n${_clampText(surrounding, 4000)}$marker\n"""',
-    );
-  }
+  final sections = context.promptSections(includeWritten: includeWritten);
   final memoryLines = <String>[
     for (final item in memory.take(3))
       if (sanitizeEvidenceText(item.prompt, maxLength: 280) case final line
@@ -329,6 +297,45 @@ String buildAssistPrompt({
 String? _nonEmpty(String? value) =>
     value == null || value.isEmpty ? null : value;
 
+/// Who authored a turn in the desktop overlay's multi-turn session.
+enum OverlayTurnOrigin { user, assistant, telegram, imessage, system }
+
+/// One message in the overlay session transcript under the pill.
+@immutable
+final class OverlayTurn {
+  const OverlayTurn({
+    required this.origin,
+    required this.text,
+    required this.at,
+  });
+
+  final OverlayTurnOrigin origin;
+  final String text;
+  final DateTime at;
+
+  Map<String, Object?> toMap() => {
+    'origin': origin.name,
+    'text': text,
+    'at': at.millisecondsSinceEpoch,
+  };
+
+  static OverlayTurn? fromMap(Object? raw) {
+    if (raw is! Map) return null;
+    final originName = raw['origin'] as String?;
+    final text = raw['text'] as String?;
+    final atMs = raw['at'];
+    if (originName == null || text == null || text.isEmpty) return null;
+    final origin = OverlayTurnOrigin.values.firstWhere(
+      (value) => value.name == originName,
+      orElse: () => OverlayTurnOrigin.system,
+    );
+    final at = atMs is int
+        ? DateTime.fromMillisecondsSinceEpoch(atMs)
+        : DateTime.fromMillisecondsSinceEpoch(0);
+    return OverlayTurn(origin: origin, text: text, at: at);
+  }
+}
+
 final class CursorPillController extends ChangeNotifier {
   CursorPillController({
     required this._hub,
@@ -347,6 +354,7 @@ final class CursorPillController extends ChangeNotifier {
     this._voiceLevelSink,
     this._submitRelay,
     this._chooseRelay,
+    Stream<OverlayChannelTurn>? channelTurns,
     String Function()? requestId,
     DateTime Function()? now,
     this.doubleShiftDebounce = const Duration(milliseconds: 500),
@@ -366,6 +374,9 @@ final class CursorPillController extends ChangeNotifier {
        _now = now ?? DateTime.now {
     _voiceNotice?.addListener(_notify);
     if (_voiceLevelSink != null) level.addListener(_forwardVoiceLevel);
+    if (channelTurns != null) {
+      _channelTurnsSubscription = channelTurns.listen(_handleChannelTurn);
+    }
   }
 
   factory CursorPillController.forServices(
@@ -428,6 +439,7 @@ final class CursorPillController extends ChangeNotifier {
       voiceLevelSink: VoiceOverlayWindow.level,
       currents: services.currents,
       draft: services.generateDraft,
+      channelTurns: services.overlayChannelTurns,
       automate: services.currents == null
           ? null
           : (currentId) async {
@@ -439,6 +451,12 @@ final class CursorPillController extends ChangeNotifier {
   }
 
   static const suggestionQuery = 'follow up task email todo reminder next step';
+
+  /// How long a dismissed overlay session stays warm for reopen restore and
+  /// for ingesting Telegram / iMessage channel turns into the transcript.
+  static const sessionReuseWindow = Duration(seconds: 45);
+
+  static const _sessionTurnCap = 40;
 
   final NativeHub _hub;
   final Stream<NativeEvent> _events;
@@ -503,6 +521,7 @@ final class CursorPillController extends ChangeNotifier {
   String? _answer;
   Timer? _predictionTimer;
   int _predictionEpoch = 0;
+  StreamSubscription<OverlayChannelTurn>? _channelTurnsSubscription;
 
   /// The last read-only on-screen snapshot, captured once when the input
   /// surface is summoned and refreshed cheaply in the background. The assist
@@ -512,6 +531,8 @@ final class CursorPillController extends ChangeNotifier {
   int _axEpoch = 0;
 
   DateTime? _lastTransitionAt;
+  DateTime? _sessionHiddenAt;
+  List<OverlayTurn> _sessionTurns = const [];
   CursorPillState _state = CursorPillState.hidden;
   List<PillSuggestion> _suggestions = const [];
   List<PillSuggestion> _currentSuggestions = const [];
@@ -545,7 +566,24 @@ final class CursorPillController extends ChangeNotifier {
   /// The model's fuller answer for the current input, shown in the bubble
   /// under the pill while typing — the model talking. The terse inline
   /// continuation is the ghost after the caret; this is its companion.
+  /// While an agent turn is streaming this also holds the in-progress reply
+  /// before it is finalized into [sessionTurns].
   String? get answer => _answer;
+
+  /// Completed turns in the overlay multi-turn session (user, assistant, and
+  /// warm-session channel activity), newest last.
+  List<OverlayTurn> get sessionTurns => _sessionTurns;
+
+  /// True while the overlay is visible, or was dismissed within
+  /// [sessionReuseWindow] — channel turns still join the transcript.
+  bool get sessionWarm => _sessionWarm;
+
+  bool get _sessionWarm {
+    if (_state != CursorPillState.hidden) return true;
+    final hiddenAt = _sessionHiddenAt;
+    if (hiddenAt == null) return false;
+    return _now().difference(hiddenAt) < sessionReuseWindow;
+  }
 
   Future<void> handleGesture(ShiftGestureAction action) async {
     switch (action) {
@@ -581,9 +619,8 @@ final class CursorPillController extends ChangeNotifier {
     }
   }
 
-  /// The single chord, Option+Space, or the menu-bar capture control:
-  /// summon the text input next to the cursor from idle, dismiss whatever
-  /// surface is up otherwise.
+  /// The single chord or the menu-bar capture control: summon the text input
+  /// next to the cursor from idle, dismiss whatever surface is up otherwise.
   Future<void> toggleOverlay() async {
     if (!_debounced()) return;
     switch (_state) {
@@ -622,6 +659,7 @@ final class CursorPillController extends ChangeNotifier {
 
   Future<void> beginVoice() async {
     if (_state == CursorPillState.listening) return;
+    _restoreSessionIfNeeded();
     _state = CursorPillState.listening;
     _error = null;
     _answer = null;
@@ -657,6 +695,7 @@ final class CursorPillController extends ChangeNotifier {
         await _cancelVoice();
       } catch (_) {}
     }
+    _restoreSessionIfNeeded();
     _state = CursorPillState.input;
     _error = null;
     _suggestions = const [];
@@ -767,17 +806,18 @@ final class CursorPillController extends ChangeNotifier {
       return;
     }
     // Swap the native voice surfaces for the Flutter pill so the reply can
-    // stream (or land) in the overlay bubble without opening the hub.
+    // land in the overlay session without opening the hub.
     await _dismissWindow?.call();
     await _awaitAxContext();
     if (_disposed) return;
     if (assistant.isNotEmpty) {
-      _showWorking('Done');
+      _restoreSessionIfNeeded();
+      if (text.isNotEmpty) _appendTurn(OverlayTurnOrigin.user, text);
+      _appendTurn(OverlayTurnOrigin.assistant, assistant);
+      _state = CursorPillState.input;
       _status = null;
-      _answer = _clampText(
-        assistant.replaceAll(RegExp(r'\s+'), ' ').trim(),
-        800,
-      );
+      _answer = null;
+      _error = null;
       _notify();
       await _presentWindow?.call(true);
       return;
@@ -972,9 +1012,9 @@ final class CursorPillController extends ChangeNotifier {
 
   /// Routes the typed (or spoken) instruction to the assistant as the user's
   /// desktop agent. The overlay stays up in a working state streaming tool
-  /// progress and the reply into the answer bubble; it holds open for the
-  /// response (and while a proposal awaits approval) instead of collapsing
-  /// into the hub chat.
+  /// progress and the reply into the session; when the turn finishes it
+  /// returns to input so follow-ups stay in the same session instead of
+  /// collapsing into the hub chat.
   Future<void> _sendToAgent(String text) async {
     // Fold the user's question with the on-screen snapshot cached when the
     // surface opened and the memory matches surfaced this session — the same
@@ -985,6 +1025,7 @@ final class CursorPillController extends ChangeNotifier {
       context: _axSnapshot,
       memory: _memorySuggestions,
     );
+    _appendTurn(OverlayTurnOrigin.user, text);
     _showWorking('Working on it…');
     _proposal = null;
     _answer = null;
@@ -998,10 +1039,86 @@ final class CursorPillController extends ChangeNotifier {
     if (requestId == null) {
       _error = 'I couldn’t send that. Try again.';
       _status = null;
+      _agentRequestId = null;
+      _state = CursorPillState.input;
       _notify();
       return;
     }
     _agentRequestId = requestId;
+  }
+
+  /// Appends a Telegram / iMessage turn when the overlay session is warm
+  /// (visible or dismissed within [sessionReuseWindow]). Testable entry point
+  /// for channel activity that should share the overlay transcript.
+  void ingestChannelTurn({
+    required OverlayTurnOrigin origin,
+    required String text,
+  }) {
+    if (origin != OverlayTurnOrigin.telegram &&
+        origin != OverlayTurnOrigin.imessage) {
+      return;
+    }
+    if (!_sessionWarm) return;
+    _appendTurn(origin, text);
+    _notify();
+  }
+
+  void _handleChannelTurn(OverlayChannelTurn turn) {
+    final origin = switch (turn.channel) {
+      'telegram' => OverlayTurnOrigin.telegram,
+      'imessage' => OverlayTurnOrigin.imessage,
+      _ => null,
+    };
+    if (origin == null) return;
+    ingestChannelTurn(origin: origin, text: turn.text);
+  }
+
+  void _appendTurn(OverlayTurnOrigin origin, String text) {
+    final cleaned = _clampText(
+      text.replaceAll(RegExp(r'\s+'), ' ').trim(),
+      800,
+    );
+    if (cleaned.isEmpty) return;
+    final next = [
+      ..._sessionTurns,
+      OverlayTurn(origin: origin, text: cleaned, at: _now()),
+    ];
+    _sessionTurns = List.unmodifiable(
+      next.length > _sessionTurnCap
+          ? next.sublist(next.length - _sessionTurnCap)
+          : next,
+    );
+  }
+
+  /// Drops a stale session after the reuse window, or clears the hide stamp
+  /// when reopening while still warm so the transcript carries forward.
+  void _restoreSessionIfNeeded() {
+    final hiddenAt = _sessionHiddenAt;
+    _sessionHiddenAt = null;
+    if (hiddenAt == null) return;
+    if (_now().difference(hiddenAt) >= sessionReuseWindow) {
+      _sessionTurns = const [];
+    }
+  }
+
+  /// Finalizes a streamed agent reply into the session and returns to input
+  /// for follow-ups. A pending proposal keeps the working surface up until
+  /// the user decides.
+  void _finishAgentReply() {
+    if (_proposal != null) {
+      _status = null;
+      _notify();
+      return;
+    }
+    final reply = _answer?.trim();
+    if (reply != null && reply.isNotEmpty) {
+      _appendTurn(OverlayTurnOrigin.assistant, reply);
+    }
+    _answer = null;
+    _agentRequestId = null;
+    _status = null;
+    _state = CursorPillState.input;
+    _notify();
   }
 
   void _showWorking(String status) {
@@ -1044,6 +1161,29 @@ final class CursorPillController extends ChangeNotifier {
       await decide(proposal.proposalId, decision);
     } catch (_) {}
     if (!_disposed && _state == CursorPillState.working) await _hide();
+  }
+
+  /// Stops Live capture and swaps to the working overlay so a computer-use
+  /// proposal from Gemini Live can be approved with the same one-click UI
+  /// as overlay chat. Live itself does not wait mid-session for approval.
+  Future<void> _surfaceLiveProposal(ActionProposal proposal) async {
+    _proposal = proposal;
+    try {
+      await _cancelVoice();
+    } catch (_) {}
+    if (_disposed) return;
+    _clearPrediction();
+    _state = CursorPillState.working;
+    _status = 'Needs your approval';
+    _error = null;
+    _agentRequestId = null;
+    _answer = null;
+    _suggestions = const [];
+    _currentSuggestions = const [];
+    _memorySuggestions = const [];
+    _workingEpoch += 1;
+    _notify();
+    await _presentWindow?.call(true);
   }
 
   Future<void> choose(PillSuggestion suggestion) async {
@@ -1181,6 +1321,9 @@ final class CursorPillController extends ChangeNotifier {
   Future<void> _hide() async {
     _clearPrediction();
     _state = CursorPillState.hidden;
+    // Keep the session warm for a short window so a quick reopen (or channel
+    // activity) can continue the same transcript instead of starting fresh.
+    _sessionHiddenAt = _now();
     _searchRequestId = null;
     _status = null;
     _agentRequestId = null;
@@ -1201,11 +1344,13 @@ final class CursorPillController extends ChangeNotifier {
     // "Listening…" with a dead waveform: the capture layer tears the session
     // down silently. Treat it as a stop so the pill closes cleanly and any
     // transcript that was already received still routes (hub intent included).
+    // Skip teardown when a Live computer-use proposal is already surfaced —
+    // cancelling voice for approval also ends the Live session.
     if (event case NativeEventLiveVoiceState(
       value: LiveVoiceState(
         state: LiveVoicePhase.ended || LiveVoicePhase.failed,
       ),
-    ) when _state == CursorPillState.listening) {
+    ) when _state == CursorPillState.listening && _proposal == null) {
       unawaited(finishListening());
       return;
     }
@@ -1220,18 +1365,29 @@ final class CursorPillController extends ChangeNotifier {
       }
       return;
     }
+    // Live computer-use proposals use the live_stream_id as requestId and
+    // arrive while listening (not only during overlay chat working turns).
+    if (event case NativeEventActionProposal(:final value)) {
+      final forAgent =
+          _state == CursorPillState.working &&
+          _agentRequestId != null &&
+          value.requestId == _agentRequestId;
+      final forLive = _state == CursorPillState.listening;
+      if (forLive) {
+        unawaited(_surfaceLiveProposal(value));
+        return;
+      }
+      if (forAgent) {
+        _proposal = value;
+        _notify();
+        return;
+      }
+    }
     if (_state == CursorPillState.working && _agentRequestId != null) {
       if (event case NativeEventToolProgress(
         :final value,
       ) when value.requestId == _agentRequestId) {
         _status = value.detail ?? value.tool.replaceAll('_', ' ');
-        _notify();
-        return;
-      }
-      if (event case NativeEventActionProposal(
-        :final value,
-      ) when value.requestId == _agentRequestId) {
-        _proposal = value;
         _notify();
         return;
       }
@@ -1246,10 +1402,8 @@ final class CursorPillController extends ChangeNotifier {
           );
           _status = null;
           _notify();
-        } else if (value.finalSegment) {
-          _status = null;
-          _notify();
         }
+        if (value.finalSegment) _finishAgentReply();
         return;
       }
       if (event case NativeEventError(
@@ -1257,6 +1411,8 @@ final class CursorPillController extends ChangeNotifier {
       ) when value.requestId == _agentRequestId) {
         _error = value.message;
         _status = null;
+        _agentRequestId = null;
+        _state = CursorPillState.input;
         _notify();
         return;
       }
@@ -1282,6 +1438,7 @@ final class CursorPillController extends ChangeNotifier {
   void applyHostState({
     required CursorPillState state,
     List<PillSuggestion> suggestions = const [],
+    List<OverlayTurn>? sessionTurns,
     String? status,
     String? error,
     String? answer,
@@ -1297,6 +1454,11 @@ final class CursorPillController extends ChangeNotifier {
     _suggestions = List.unmodifiable(
       state == CursorPillState.input ? suggestions : const <PillSuggestion>[],
     );
+    // Null means "leave the transcript alone" so a bare show/hide from the
+    // Runner does not wipe turns before the host's full pushState arrives.
+    if (sessionTurns != null) {
+      _sessionTurns = List.unmodifiable(sessionTurns);
+    }
     _status = status;
     _error = error;
     _answer = answer;
@@ -1322,6 +1484,7 @@ final class CursorPillController extends ChangeNotifier {
     _predictionTimer?.cancel();
     if (_voiceLevelSink != null) level.removeListener(_forwardVoiceLevel);
     _voiceNotice?.removeListener(_notify);
+    unawaited(_channelTurnsSubscription?.cancel());
     unawaited(_subscription?.cancel());
     super.dispose();
   }

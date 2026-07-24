@@ -14,8 +14,12 @@ import 'pill_panel.dart';
 const _pillInk = Color(0xfffffefa);
 const _pillMuted = Color(0xb3f4f2ec);
 const _pillGreen = Color(0xff43c47e);
+const _pillCream = Color(0xfff4f2ec);
+const _telegramBlue = Color(0xff2aabee);
+const _imessageGreen = Color(0xff34c759);
 
 const pillHeight = 36.0;
+const _sessionMaxHeight = 220.0;
 
 /// The blur/material itself is rendered natively (NSGlassEffectView on
 /// macOS 26+, NSVisualEffectView otherwise) below the transparent Flutter
@@ -80,10 +84,12 @@ class _CursorPillState extends State<CursorPill> {
   final _pillKey = GlobalKey();
   final _chipKeys = <GlobalKey>[];
   String _lastGlassSignature = '';
+  CursorPillState? _lastState;
 
   @override
   void initState() {
     super.initState();
+    _lastState = widget.controller.state;
     widget.controller.addListener(_changed);
     _text.addListener(_textChanged);
     _focus.addListener(_focusChanged);
@@ -98,6 +104,15 @@ class _CursorPillState extends State<CursorPill> {
   }
 
   void _changed() {
+    final state = widget.controller.state;
+    // Clear the draft when a turn finishes (working → input) or the surface
+    // collapses, so follow-ups start from an empty field.
+    if ((_lastState == CursorPillState.working &&
+            state == CursorPillState.input) ||
+        state == CursorPillState.hidden) {
+      if (_text.text.isNotEmpty) _text.clear();
+    }
+    _lastState = state;
     if (mounted) setState(() {});
   }
 
@@ -256,12 +271,12 @@ class _CursorPillState extends State<CursorPill> {
             const SizedBox(height: 8),
           ],
           _pill(),
-          // The model's fuller answer sits in a bubble under the pill; the
-          // terse continuation lives inline as the ghost after the caret.
-          if (controller.answer case final answer?) ...[
-            const SizedBox(height: 8),
-            _AnswerBubble(text: answer),
-          ],
+          // Multi-turn session under the pill; assist preview is ephemeral and
+          // sits below the committed transcript while typing.
+          _sessionStack(
+            turns: controller.sessionTurns,
+            ephemeralAnswer: controller.answer,
+          ),
           if (controller.error case final message?) ...[
             const SizedBox(height: 6),
             Text(
@@ -272,6 +287,36 @@ class _CursorPillState extends State<CursorPill> {
           ],
         ],
       ),
+    );
+  }
+
+  /// Session transcript (newest at the bottom) plus an optional ephemeral
+  /// assist / streaming bubble that is not yet committed to [sessionTurns].
+  Widget _sessionStack({
+    required List<OverlayTurn> turns,
+    String? ephemeralAnswer,
+  }) {
+    if (turns.isEmpty && ephemeralAnswer == null) {
+      return const SizedBox.shrink();
+    }
+    return Column(
+      key: const Key('cursor_pill_session'),
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (turns.isNotEmpty) ...[
+          const SizedBox(height: 8),
+          _SessionTurns(turns: turns),
+        ],
+        if (ephemeralAnswer case final answer?) ...[
+          const SizedBox(height: 8),
+          _TurnBubble(
+            origin: OverlayTurnOrigin.assistant,
+            text: answer,
+            answerKey: true,
+          ),
+        ],
+      ],
     );
   }
 
@@ -449,10 +494,10 @@ class _CursorPillState extends State<CursorPill> {
           ),
         ),
       ),
-      if (widget.controller.answer case final answer?) ...[
-        const SizedBox(height: 8),
-        _AnswerBubble(text: answer),
-      ],
+      _sessionStack(
+        turns: widget.controller.sessionTurns,
+        ephemeralAnswer: widget.controller.answer,
+      ),
       if (widget.controller.error case final message?) ...[
         const SizedBox(height: 6),
         Text(
@@ -689,13 +734,86 @@ class _SuggestionChip extends StatelessWidget {
   );
 }
 
-/// The bubble under the pill holding the model's fuller answer while typing.
-/// Fades in on first appearance and holds still as the answer refines; honors
-/// reduce-motion by skipping the fade.
-class _AnswerBubble extends StatelessWidget {
-  const _AnswerBubble({required this.text});
+/// Scrollable stack of committed session turns under the pill. Caps height so
+/// a long follow-up thread does not push the pill off-screen; newest turns
+/// stay pinned to the bottom.
+class _SessionTurns extends StatefulWidget {
+  const _SessionTurns({required this.turns});
 
+  final List<OverlayTurn> turns;
+
+  @override
+  State<_SessionTurns> createState() => _SessionTurnsState();
+}
+
+class _SessionTurnsState extends State<_SessionTurns> {
+  final _scroll = ScrollController();
+
+  @override
+  void didUpdateWidget(covariant _SessionTurns old) {
+    super.didUpdateWidget(old);
+    if (old.turns.length != widget.turns.length ||
+        (widget.turns.isNotEmpty &&
+            old.turns.isNotEmpty &&
+            old.turns.last.text != widget.turns.last.text)) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!_scroll.hasClients) return;
+        _scroll.jumpTo(_scroll.position.maxScrollExtent);
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    _scroll.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => ConstrainedBox(
+    constraints: const BoxConstraints(
+      maxWidth: 360,
+      maxHeight: _sessionMaxHeight,
+    ),
+    child: ListView.separated(
+      key: const Key('cursor_pill_session_list'),
+      controller: _scroll,
+      shrinkWrap: true,
+      padding: EdgeInsets.zero,
+      itemCount: widget.turns.length,
+      separatorBuilder: (_, _) => const SizedBox(height: 6),
+      itemBuilder: (context, index) {
+        final turn = widget.turns[index];
+        return _TurnBubble(origin: turn.origin, text: turn.text);
+      },
+    ),
+  );
+}
+
+/// A single session (or ephemeral assist/stream) bubble, color-coded by origin.
+class _TurnBubble extends StatelessWidget {
+  const _TurnBubble({
+    required this.origin,
+    required this.text,
+    this.answerKey = false,
+  });
+
+  final OverlayTurnOrigin origin;
   final String text;
+  final bool answerKey;
+
+  Color get _accent => switch (origin) {
+    OverlayTurnOrigin.telegram => _telegramBlue,
+    OverlayTurnOrigin.imessage => _imessageGreen,
+    OverlayTurnOrigin.user => _pillCream.withValues(alpha: 0.55),
+    OverlayTurnOrigin.assistant || OverlayTurnOrigin.system => _pillInk
+        .withValues(alpha: 0.35),
+  };
+
+  Color get _textColor => switch (origin) {
+    OverlayTurnOrigin.user => _pillCream,
+    _ => _pillInk,
+  };
 
   @override
   Widget build(BuildContext context) {
@@ -711,17 +829,18 @@ class _AnswerBubble extends StatelessWidget {
         constraints: const BoxConstraints(maxWidth: 360),
         child: LiquidGlass(
           radius: 14,
-          child: Padding(
-            key: const Key('cursor_pill_answer'),
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
-            child: Text(
-              text,
-              maxLines: 6,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                color: _pillInk,
-                fontSize: 13,
-                height: 1.35,
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              border: Border(left: BorderSide(color: _accent, width: 2.5)),
+            ),
+            child: Padding(
+              key: answerKey ? const Key('cursor_pill_answer') : null,
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+              child: Text(
+                text,
+                maxLines: 6,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(color: _textColor, fontSize: 13, height: 1.35),
               ),
             ),
           ),
