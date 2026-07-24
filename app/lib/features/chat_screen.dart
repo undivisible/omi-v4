@@ -504,7 +504,7 @@ class ChatScreenState extends State<ChatScreen>
           final submission = await widget.services.stopDesktopVoice();
           if (!mounted) return;
           setState(() {
-            _progress = submission == null ? null : 'Thinking';
+            _progress = null;
             if (submission != null) {
               _beginExchange();
               _messages.add(
@@ -958,7 +958,7 @@ class ChatScreenState extends State<ChatScreen>
           _ChatMessage(requestId: requestId, text: text, fromUser: true),
         );
         _activeRequestId = requestId;
-        _progress = 'Thinking';
+        _progress = null;
         _error = null;
         _input.clear();
       });
@@ -2555,90 +2555,48 @@ class _MeetingNoteRow extends StatelessWidget {
               ),
               const SizedBox(width: 16),
               Expanded(
-                child: DecoratedBox(
-                  key: ValueKey('meeting_note_card_${note.id}'),
-                  decoration: BoxDecoration(
-                    color: colors.cardBg,
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: colors.hairline),
-                    boxShadow: [
-                      BoxShadow(
-                        color: colors.cardShadow,
-                        offset: const Offset(0, 4),
-                        blurRadius: 16,
-                      ),
-                    ],
-                  ),
-                  child: Padding(
-                    padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+                key: ValueKey('meeting_note_card_${note.id}'),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
                       children: [
-                        Container(
-                          width: 3,
-                          height: 34,
-                          margin: const EdgeInsets.only(right: 10, top: 2),
-                          decoration: BoxDecoration(
-                            color: colors.hintBlue,
-                            borderRadius: BorderRadius.circular(2),
-                          ),
-                        ),
                         Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                note.title,
-                                style: TextStyle(
-                                  fontSize: 14,
-                                  fontWeight: FontWeight.w600,
-                                  color: colors.ink,
-                                ),
-                              ),
-                              if (preview.isNotEmpty)
-                                Padding(
-                                  padding: const EdgeInsets.only(top: 2),
-                                  child: Text(
-                                    preview,
-                                    maxLines: 2,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: TextStyle(
-                                      fontSize: 12,
-                                      height: 18 / 12,
-                                      color: colors.muted,
-                                    ),
-                                  ),
-                                ),
-                            ],
+                          child: Text(
+                            note.title,
+                            style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w600,
+                              color: colors.ink,
+                            ),
                           ),
                         ),
-                        Padding(
-                          padding: const EdgeInsets.only(left: 10),
-                          child: DecoratedBox(
-                            decoration: BoxDecoration(
-                              border: Border.all(color: colors.hairline),
-                              borderRadius: BorderRadius.circular(999),
-                            ),
-                            child: Padding(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 8,
-                                vertical: 2,
-                              ),
-                              child: Text(
-                                'MEETING',
-                                style: TextStyle(
-                                  fontSize: 9,
-                                  fontWeight: FontWeight.w600,
-                                  letterSpacing: 1.17,
-                                  color: colors.muted,
-                                ),
-                              ),
-                            ),
+                        Text(
+                          'MEETING',
+                          style: TextStyle(
+                            fontSize: 9,
+                            fontWeight: FontWeight.w600,
+                            letterSpacing: 1.17,
+                            color: colors.muted,
                           ),
                         ),
                       ],
                     ),
-                  ),
+                    if (preview.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 2),
+                        child: Text(
+                          preview,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 12,
+                            height: 18 / 12,
+                            color: colors.muted,
+                          ),
+                        ),
+                      ),
+                  ],
                 ),
               ),
             ],
@@ -2846,12 +2804,6 @@ class _ChatInputCardState extends State<_ChatInputCard> {
         borderRadius: BorderRadius.circular(20),
         child: Stack(
           children: [
-            if (widget.busy && !disableAnimations)
-              const Positioned.fill(
-                child: IgnorePointer(
-                  child: _ThinkingGlow(key: Key('input_thinking_glow')),
-                ),
-              ),
             Padding(
               padding: const EdgeInsets.fromLTRB(20, 13, 13, 13),
               child: Column(
@@ -3137,44 +3089,6 @@ class _DictationButton extends StatelessWidget {
       ),
     );
   }
-}
-
-class _ThinkingGlow extends StatefulWidget {
-  const _ThinkingGlow({super.key});
-
-  @override
-  State<_ThinkingGlow> createState() => _ThinkingGlowState();
-}
-
-class _ThinkingGlowState extends State<_ThinkingGlow>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _pulse = AnimationController(
-    vsync: this,
-    duration: const Duration(milliseconds: 900),
-  )..repeat(reverse: true);
-
-  @override
-  void dispose() {
-    _pulse.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) => AnimatedBuilder(
-    animation: _pulse,
-    builder: (context, child) {
-      final glow = Curves.easeInOut.transform(_pulse.value);
-      return DecoratedBox(
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(
-            color: const Color(0xfff2c2ac).withValues(alpha: .16 + .24 * glow),
-            width: 1.5,
-          ),
-        ),
-      );
-    },
-  );
 }
 
 class _AnimatedPlaceholder extends StatefulWidget {

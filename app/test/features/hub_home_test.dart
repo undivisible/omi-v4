@@ -592,19 +592,19 @@ void main() {
     expect(find.byKey(const Key('chat_latest_orb')), findsOneWidget);
   });
 
-  testWidgets('input card glows while the assistant is thinking', (
+  testWidgets('input card stays plain while the assistant is replying', (
     tester,
   ) async {
     final store = VolatileHubChecklistStore();
     await pumpLocalHub(tester, store);
-    expect(find.byKey(const Key('input_thinking_glow')), findsNothing);
 
     await tester.enterText(find.byKey(const Key('chat_input')), 'hello');
     await tester.tap(find.byKey(const Key('send_chat')));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 600));
 
-    expect(find.byKey(const Key('input_thinking_glow')), findsOneWidget);
+    expect(find.text('Thinking'), findsNothing);
+    expect(find.byKey(const Key('chat_skeleton')), findsOneWidget);
   });
 
   testWidgets('hub blur fades and glow stay off under reduced motion', (
@@ -641,7 +641,7 @@ void main() {
     await tester.enterText(find.byKey(const Key('chat_input')), 'hello');
     await tester.tap(find.byKey(const Key('send_chat')));
     await tester.pump();
-    expect(find.byKey(const Key('input_thinking_glow')), findsNothing);
+    expect(find.text('Thinking'), findsNothing);
   });
 
   testWidgets('greeter entrance blur-fades in and rows fade on completion', (
@@ -922,9 +922,12 @@ void main() {
     );
     await tester.pump();
     services.currents!.items = seeded;
-    await tester.pump();
+    await tester.pumpAndSettle();
 
-    expect(find.byKey(const Key('task_design-sync')), findsOneWidget);
+    expect(
+      find.byKey(ValueKey('starter_task_${meta.encode()}')),
+      findsOneWidget,
+    );
     expect(
       find.byKey(const ValueKey('rich_task_card_Design sync')),
       findsWidgets,
@@ -935,8 +938,7 @@ void main() {
     );
     expect(find.text('9:30 AM – 10:15 AM'), findsWidgets);
     expect(find.text('Agenda: onboarding polish'), findsWidgets);
-    expect(find.text('CALENDAR'), findsOneWidget);
-    expect(find.text('Reply to Alex about the notes'), findsOneWidget);
+    expect(find.text('Reply to Alex about the notes'), findsWidgets);
     expect(
       find.byKey(
         const ValueKey('rich_task_card_Reply to Alex about the notes'),

@@ -64,7 +64,8 @@ void main() {
 
     await tester.tap(find.byKey(const Key('meeting_note_meeting-1')));
     await tester.pumpAndSettle();
-    expect(find.widgetWithText(AppBar, 'Meeting notes'), findsOneWidget);
+    expect(find.byKey(const Key('meeting_notes_close')), findsOneWidget);
+    expect(find.text('Meeting notes'), findsOneWidget);
   });
 
   testWidgets('Set up Omi. renders as a crossed-out completed first row', (
@@ -546,7 +547,7 @@ final class _SignedInGateway implements AuthGateway {
   Future<AuthSession?> restoreSession() async => _session;
 
   @override
-  Future<AuthSession?> refreshSession() async => _session;
+  Future<AuthSession?> refreshSession({bool forceRefresh = false}) async => _session;
 
   @override
   Future<void> signOut() async {}
