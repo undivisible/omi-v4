@@ -73,7 +73,7 @@ pub const TOOLS: &[ToolDefinition] = &[
     ToolDefinition {
         name: "create_current",
         title: "Create a Current",
-        description: "Create a new Current (a proposed next action) for the user. It is created as a candidate and surfaces to the user at surfaceAt. Omit evidenceId unless you hold a real Omi evidence id; when omitted the citation is recorded from the `reason` you supply.",
+        description: "Create a new Current (a proposed next action) for the user. It is created as a candidate and surfaces to the user at surfaceAt. Omit evidenceId unless you hold a real Omi evidence id; when omitted the citation is recorded from the `reason` you supply. Prefer a rich `.crepus` widget in the optional `crepus` field over plain title/summary alone — the hub renders it as a Now Brief infographic (hero meeting, task list, progress meters, chips).",
         scope: "currents:write",
     },
     ToolDefinition {
@@ -93,12 +93,6 @@ pub const TOOLS: &[ToolDefinition] = &[
         title: "Ask Omi",
         description: "Ask the user's Omi assistant a question. Omi answers with the user's synced memory and recent conversation in context, and the exchange is recorded in their conversation history. Requires an Omi Pro account.",
         scope: "assistant:write",
-    },
-    ToolDefinition {
-        name: "start_facetime_call",
-        title: "Start a FaceTime call",
-        description: "Place a real FaceTime Audio call. This rings the given handle on the person's actual device immediately and returns a shareable FaceTime link that auto-admits the first person to join. Side-effectful and not undoable — confirm the handle with the user before calling it. The handle must be an E.164 phone number (like +15551234567) or an email address. Note: the upstream provider currently has FaceTime calling switched off, so this usually returns a 'not yet available' error.",
-        scope: "facetime:write",
     },
 ];
 
@@ -170,6 +164,11 @@ pub fn input_schema(name: &str) -> Value {
                     "minLength": 1,
                     "maxLength": 500,
                 },
+                "crepus": {
+                    "type": "string",
+                    "description": "Optional `.crepus` infographic for this Current (≤8000 chars). Example: stack col gap-2\\n  badge \"Now\"\\n  text text-2xl \"Design review\"\\n  progress value=2 max=5\\n  button \"Prep me\" onclick={prompt:pull up the latest mocks}",
+                    "maxLength": 8000,
+                },
                 "confidence": {
                     "type": "number",
                     "description": "Confidence from 0 to 1. Defaults to 0.7.",
@@ -219,23 +218,6 @@ pub fn input_schema(name: &str) -> Value {
                 },
             }),
             &["text"],
-        ),
-        "start_facetime_call" => schema_object(
-            json!({
-                "handle": {
-                    "type": "string",
-                    "description": "Who to call: an E.164 phone number ('+' then 7-15 digits) or an email address.",
-                    "minLength": 3,
-                    "maxLength": 254,
-                },
-                "idempotencyKey": {
-                    "type": "string",
-                    "description": "Optional caller-supplied key, 8-120 characters of [A-Za-z0-9._:-], so a retry does not place a second call.",
-                    "minLength": 8,
-                    "maxLength": 120,
-                },
-            }),
-            &["handle"],
         ),
         _ => Value::Null,
     }
@@ -477,7 +459,7 @@ mod tests {
     fn lists_every_tool_with_a_precise_input_schema() {
         let listed = listed_tools();
         let tools = listed.as_array().unwrap();
-        assert_eq!(tools.len(), 8);
+        assert_eq!(tools.len(), 7);
         for tool in tools {
             let schema = &tool["inputSchema"];
             assert_eq!(schema["type"], json!("object"));
@@ -532,13 +514,13 @@ mod tests {
                 "jsonrpc": "2.0",
                 "id": 4,
                 "method": "tools/call",
-                "params": { "name": "start_facetime_call", "arguments": { "handle": "+15551234567" } },
+                "params": { "name": "ask_omi", "arguments": { "text": "hi" } },
             }),
         ));
         assert_eq!(response["error"]["code"], json!(SERVER_ERROR));
         assert_eq!(
             response["error"]["message"],
-            json!("API key is missing the facetime:write scope")
+            json!("API key is missing the assistant:write scope")
         );
         // A Firebase caller carries every scope.
         assert!(matches!(
@@ -548,7 +530,7 @@ mod tests {
                     "jsonrpc": "2.0",
                     "id": 4,
                     "method": "tools/call",
-                    "params": { "name": "start_facetime_call", "arguments": { "handle": "+15551234567" } },
+                    "params": { "name": "ask_omi", "arguments": { "text": "hi" } },
                 })
             ),
             Plan::Call { .. }

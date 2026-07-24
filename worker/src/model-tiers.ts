@@ -1,7 +1,8 @@
-// Model-tier routing config: the single source of truth for which model id
-// each workload class resolves to. The hub (app/native/hub/src/model_tier.rs)
-// and worker-rs (worker-rs/src/managed_ai.rs) mirror this table and read the
+// Model-tier routing config. Defaults and capability tables live in
+// config/model-tiers.json (the repo-wide source of truth); hub and worker-rs
+// consume the same JSON via scripts/sync-model-tiers.ts. All three read the
 // same OMI_MODEL_* variables with the same defaults.
+import tierConfig from "../../config/model-tiers.json";
 //
 // | Tier       | When                                                      | Default model         | Provider |
 // |------------|-----------------------------------------------------------|-----------------------|----------|
@@ -32,25 +33,9 @@ export type ModelTier =
   | "transcribe"
   | "speak";
 
-export const defaultTierModels: Record<ModelTier, string> = {
-  speed: "inception/mercury-2",
-  balanced: "xiaomi/mimo-v2.5",
-  smart: "xiaomi/mimo-v2.5-pro",
-  multimodal: "google/gemini-3.6-flash",
-  search: "perplexity/sonar",
-  transcribe: "google/gemini-3.5-flash-lite",
-  speak: "openai/gpt-audio-mini",
-};
+export const defaultTierModels = tierConfig.tiers as Record<ModelTier, string>;
 
-const tierEnvVar: Record<ModelTier, keyof Bindings> = {
-  speed: "OMI_MODEL_SPEED",
-  balanced: "OMI_MODEL_BALANCED",
-  smart: "OMI_MODEL_SMART",
-  multimodal: "OMI_MODEL_MULTIMODAL",
-  search: "OMI_MODEL_SEARCH",
-  transcribe: "OMI_MODEL_TRANSCRIBE",
-  speak: "OMI_MODEL_SPEAK",
-};
+const tierEnvVar = tierConfig.tierEnvVars as Record<ModelTier, keyof Bindings>;
 
 const nonEmpty = (value: string | undefined): string | undefined => {
   const trimmed = value?.trim();
@@ -83,17 +68,10 @@ export type ModelCapability =
 // Capabilities per model id, checked against the live OpenRouter model list.
 // A model that is not listed here has unknown capabilities and therefore
 // satisfies nothing: an unverified id must never be assumed able to take audio.
-export const modelCapabilities: Record<string, readonly ModelCapability[]> = {
-  // Cheapest audio-capable model on the list ($0.14/M prompt), which is why
-  // asynchronous voice notes route here rather than to the transcribe tier.
-  "xiaomi/mimo-v2.5": ["text", "audioIn"],
-  "xiaomi/mimo-v2.5-pro": ["text"],
-  "inception/mercury-2": ["text"],
-  "perplexity/sonar": ["text"],
-  "google/gemini-3.6-flash": ["text", "audioIn", "imageIn"],
-  "google/gemini-3.5-flash-lite": ["text", "audioIn"],
-  "openai/gpt-audio-mini": ["text", "audioOut"],
-};
+export const modelCapabilities = tierConfig.capabilities as Record<
+  string,
+  readonly ModelCapability[]
+>;
 
 // An env override names a model this table has never seen, so the override has
 // to be able to declare what it can do: OMI_MODEL_CAPABILITIES is a JSON object
@@ -211,8 +189,5 @@ export const selectModelFor = (
 // prefers the balanced model: it accepts audio input at $0.14/M, half the
 // transcribe tier's price, and the transcribe tier remains the fallback when an
 // override leaves balanced text-only.
-export const asyncAudioTierPreference: readonly ModelTier[] = [
-  "balanced",
-  "transcribe",
-  "multimodal",
-];
+export const asyncAudioTierPreference =
+  tierConfig.asyncAudioTierPreference as readonly ModelTier[];

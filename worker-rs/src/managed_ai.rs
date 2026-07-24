@@ -1,7 +1,6 @@
 //! Pure port of the request-shaping, pricing, and usage-accounting logic in
-//! `worker/src/assistant.ts`. The streaming proxy itself is I/O and lives in
-//! the wasm glue (`routes_ai`); everything that decides *whether* and *how* a
-//! request is forwarded, plus the cost/token math, is here and host-tested.
+//! `worker/src/assistant.ts`. Tier defaults are generated from
+//! `config/model-tiers.json` via `scripts/sync-model-tiers.ts`.
 
 use serde_json::{Map, Value};
 use url::Url;
@@ -54,9 +53,8 @@ pub fn completion_tier_for_model(
     None
 }
 
-// Model-tier routing config. Single source of truth mirrored by the hub
-// (app/native/hub/src/model_tier.rs) and worker (worker/src/model-tiers.ts):
-// the same OMI_MODEL_* variables with the same defaults.
+// Model-tier routing config. Defaults live in config/model-tiers.json; the TS
+// worker imports the same JSON. Env overrides use the same OMI_MODEL_* names.
 //
 // | Tier       | When                                                      | Default model         | Provider |
 // |------------|-----------------------------------------------------------|-----------------------|----------|
@@ -76,21 +74,6 @@ pub fn completion_tier_for_model(
 // `model_for_capability` / `select_model_for` so an incapable model — table
 // default or env override — is refused rather than silently handed the input.
 
-/// SPEED tier default: latency-sensitive live insights and answer suggestions.
-pub const DEFAULT_SPEED_MODEL: &str = "inception/mercury-2";
-/// BALANCED tier default: the everyday model for meeting notes and chat.
-pub const DEFAULT_BALANCED_MODEL: &str = "xiaomi/mimo-v2.5";
-/// SMART tier default: reserved for hard reasoning.
-pub const DEFAULT_SMART_MODEL: &str = "xiaomi/mimo-v2.5-pro";
-/// MULTIMODAL tier default: vision and visual computer-use.
-pub const DEFAULT_MULTIMODAL_MODEL: &str = "google/gemini-3.6-flash";
-/// SEARCH tier default: web-grounded answers via a live-search model.
-pub const DEFAULT_SEARCH_MODEL: &str = "perplexity/sonar";
-/// TRANSCRIBE tier default: server-side speech-to-text.
-pub const DEFAULT_TRANSCRIBE_MODEL: &str = "google/gemini-3.5-flash-lite";
-/// SPEAK tier default: server-side text-to-speech.
-pub const DEFAULT_SPEAK_MODEL: &str = "openai/gpt-audio-mini";
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ModelTier {
     Speed,
@@ -101,6 +84,10 @@ pub enum ModelTier {
     Transcribe,
     Speak,
 }
+
+#[path = "model_tier_defaults.rs"]
+mod model_tier_defaults;
+use model_tier_defaults::{MODEL_CAPABILITIES, *};
 
 impl ModelTier {
     /// The env var that overrides this tier's model id.
@@ -182,24 +169,6 @@ impl ModelCapability {
         }
     }
 }
-
-use ModelCapability::{AudioIn, AudioOut, ImageIn, Text};
-
-/// Capabilities per model id, checked against the live OpenRouter model list.
-/// A model that is not listed here has unknown capabilities and therefore
-/// satisfies nothing: an unverified id must never be assumed able to take
-/// audio.
-pub const MODEL_CAPABILITIES: &[(&str, &[ModelCapability])] = &[
-    // Cheapest audio-capable model on the list ($0.14/M prompt), which is why
-    // asynchronous voice notes route here rather than to the transcribe tier.
-    ("xiaomi/mimo-v2.5", &[Text, AudioIn]),
-    ("xiaomi/mimo-v2.5-pro", &[Text]),
-    ("inception/mercury-2", &[Text]),
-    ("perplexity/sonar", &[Text]),
-    ("google/gemini-3.6-flash", &[Text, AudioIn, ImageIn]),
-    ("google/gemini-3.5-flash-lite", &[Text, AudioIn]),
-    ("openai/gpt-audio-mini", &[Text, AudioOut]),
-];
 
 /// Asynchronous audio (voice notes on a channel, WAL uploads, API uploads)
 /// prefers the balanced model: it accepts audio input at $0.14/M, half the

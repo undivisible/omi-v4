@@ -1,15 +1,11 @@
-//! Pure parity port of `worker/src/facetime.ts`.
+//! FaceTime validation helpers ported from `worker/src/facetime.ts`.
 //!
-//! Sendblue's FaceTime bridge. Unlike the previous provider it does not hand
-//! back a `facetime.apple.com` join link — it rings the handle over FaceTime
-//! Audio and returns Agora WebRTC credentials for the call's audio channel.
-//! There is no Apple web client and no browser anywhere in this path; the audio
-//! is joined server-side by the bridge container.
-//!
-//! The container/Durable-Object bridge itself (`facetime-session.ts`,
-//! `facetime-bridge.ts`) is not ported: see `PORT_STATUS.md`. What is here is
-//! the whole API surface — handle validation, the provider call's outcome
-//! mapping, the derived session id and the session link.
+//! **Disabled in worker-rs:** the production path is the TypeScript worker
+//! (`worker/`), which runs the Sendblue dial plus the Gemini Live bridge
+//! container. This crate does not port `facetime-session.ts` or
+//! `facetime-bridge.ts`, so any route that dialed Sendblue would ring a phone
+//! with no bridge attached. The HTTP route and MCP tool are removed; these
+//! helpers remain for unit tests of handle validation and outcome mapping.
 
 use serde_json::Value;
 

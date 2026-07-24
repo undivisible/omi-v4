@@ -1,13 +1,9 @@
 # PORT_STATUS — TypeScript worker → Rust (workers-rs)
 
-> **CUTOVER-READY.** `worker-build --release` produces a deployable bundle and
-> `npx wrangler deploy --dry-run` succeeds. `wrangler dev` boots and
-> `GET /health` → 200, `GET /v1/me` (no auth) → 401, `GET /` serves the static
-> asset. All cross-group inbox-fallback placeholders are closed; Vectorize is a
-> single implementation compiled by DEFAULT with a graceful runtime fallback;
-> the scheduled handler runs every minutely-cron piece; `wrangler.toml` is at
-> full var/binding/assets parity with `worker/wrangler.jsonc` (custom domain
-> commented out). See CUTOVER.md for the runbook. Gates: 161 host tests green,
+> **Shadow deployment only.** The TS worker owns production traffic. This crate
+> builds and deploys to `workers.dev` for comparison; do not treat PORT_STATUS
+> parity claims as proof until cutover. FaceTime is intentionally absent here
+> (no bridge container). See CUTOVER.md for the runbook. Gates: host tests,
 > host + wasm clippy `-D warnings` clean. Remaining risks are listed at the
 > bottom.
 

@@ -174,7 +174,7 @@ Chat is dispatched through `RsAiAssistantProvider` (`runtime.rs`), which wraps t
 
 #### Model tiers
 
-One env-driven tier table is the single source of truth, mirrored in three places that must agree: `app/native/hub/src/model_tier.rs`, `worker/src/model-tiers.ts`, and `worker-rs/src/managed_ai.rs`. Each mirror reads the same `OMI_MODEL_*` variables with the same defaults, so a model id is corrected in one place.
+Tier defaults and capability tables live in `config/model-tiers.json`. The worker imports that JSON at runtime; the hub and worker-rs consume generated constants from `scripts/sync-model-tiers.ts`. All three read the same `OMI_MODEL_*` variables with the same defaults.
 
 | Tier | When | Default id | Env override |
 | --- | --- | --- | --- |
@@ -430,7 +430,7 @@ The per-user memory database is a file inside it: `omi-memory-<sha256(uid)>.sqli
 
 ### 5.2 Worker configuration
 
-Both Workers are configured declaratively: `worker/wrangler.jsonc` for the TypeScript worker (`omi-v4-api`, custom domain `omi.tsc.hk`) and `worker-rs/wrangler.toml` for the Rust parity port (`omi-v4-api-rs`, `workers.dev` only). They bind the *same* physical D1 database; the TypeScript worker owns migrations and the Rust worker deliberately declares no `migrations_dir`. Each declares its own Durable Object namespace. The Rust worker's custom-domain route and cron trigger are commented out on purpose during the shadow window — both workers sharing one D1 while running separate admission DOs would let one worker settle rows the other admitted, leaking in-flight slots. `worker-rs/CUTOVER.md` is the procedure.
+Both Workers are configured declaratively: `worker/wrangler.jsonc` for the TypeScript worker (`omi-v4-api`, custom domain `omi.tsc.hk`) — **the deployed source of truth** — and `worker-rs/wrangler.toml` for the Rust shadow (`omi-v4-api-rs`, `workers.dev` only). They bind the *same* physical D1 database; the TypeScript worker owns migrations and the Rust worker deliberately declares no `migrations_dir`. Each declares its own Durable Object namespace. The Rust worker's custom-domain route and cron trigger are commented out on purpose during the shadow window — both workers sharing one D1 while running separate admission DOs would let one worker settle rows the other admitted, leaking in-flight slots. Dangerous side-effect routes such as FaceTime (Sendblue dial + Gemini Live bridge) are implemented only in the TS worker; worker-rs must not expose them without the bridge container. `worker-rs/CUTOVER.md` is the procedure.
 
 Non-secret configuration lives in `vars` (model ids, budget ceilings and window sizes for both the managed-AI and STT admission paths, Firebase project id, the pinned upstream completions URL, AI Gateway ids). Secrets — provider keys, Stripe, Telegram, Blooio, Firebase service account — are set with `wrangler secret put` and are not in the tree.
 

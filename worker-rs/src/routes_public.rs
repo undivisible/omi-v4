@@ -9,10 +9,8 @@
 //! per uid.
 
 use serde_json::{json, Value};
-use worker::wasm_bindgen::JsValue;
-use worker::{Headers, Method, Request, RequestInit, Response, Result, RouteContext, Router};
+use worker::{Headers, Request, Response, Result, RouteContext, Router};
 
-use crate::facetime;
 use crate::glue::{error_json, ConvMessage};
 use crate::mcp;
 use crate::public_api::{self as api, Budget, OperationResult};
@@ -35,7 +33,6 @@ pub fn register(router: Router<'static, ()>) -> Router<'static, ()> {
         )
         .get_async("/api/v1/notes", handle_notes)
         .post_async("/api/v1/assistant/messages", handle_assistant_messages)
-        .post_async("/api/v1/facetime/calls", handle_facetime_calls)
         .post_async("/mcp", handle_mcp_post)
         .get_async("/mcp", handle_mcp_get)
         .delete_async("/mcp", handle_mcp_delete)
@@ -349,81 +346,6 @@ pub(crate) async fn ask_omi_operation(
     run.await.unwrap_or_else(internal)
 }
 
-/// Port of `startFaceTimeCall`. The handle has already been validated: the
-/// upstream call rings a real phone, so nothing unvalidated is ever forwarded.
-async fn start_facetime_call(
-    ctx: &RouteContext<()>,
-    uid: &str,
-    handle: &str,
-    token: &str,
-) -> facetime::FaceTimeOutcome {
-    if !facetime::facetime_provider_configured(|name| env_get(&ctx.env, name)) {
-        return facetime::FaceTimeOutcome::Unconfigured;
-    }
-    // Sendblue dials an E.164 number. An email handle is a valid FaceTime
-    // identity but not something this provider can ring, so it is refused
-    // before the request rather than failing opaquely upstream.
-    if !facetime::is_diallable_handle(handle) {
-        return facetime::FaceTimeOutcome::Rejected { status: 400 };
-    }
-    let (Some(key_id), Some(secret), Some(from_number)) = (
-        env_get(&ctx.env, "SENDBLUE_API_KEY_ID"),
-        env_get(&ctx.env, "SENDBLUE_API_KEY_SECRET"),
-        env_get(&ctx.env, "SENDBLUE_FACETIME_NUMBER"),
-    ) else {
-        return facetime::FaceTimeOutcome::Unconfigured;
-    };
-    let mut init = RequestInit::new();
-    init.with_method(Method::Post);
-    let headers = Headers::new();
-    if headers.set("sb-api-key-id", &key_id).is_err()
-        || headers.set("sb-api-secret-key", &secret).is_err()
-        || headers.set("content-type", "application/json").is_err()
-        || headers
-            .set("idempotency-key", &facetime::idempotency_key(uid, token))
-            .is_err()
-    {
-        return facetime::FaceTimeOutcome::Failed;
-    }
-    init.with_headers(headers);
-    init.with_body(Some(JsValue::from_str(
-        &facetime::upstream_body(handle, &from_number).to_string(),
-    )));
-    let Ok(request) = Request::new_with_init(facetime::FACETIME_ENDPOINT, &init) else {
-        return facetime::FaceTimeOutcome::Failed;
-    };
-    let Ok(mut upstream) = worker::Fetch::Request(request).send().await else {
-        return facetime::FaceTimeOutcome::Failed;
-    };
-    let status = upstream.status_code();
-    let body = upstream.json::<Value>().await.ok();
-    facetime::outcome_for(status, body.as_ref(), handle)
-}
-
-pub(crate) async fn start_facetime_operation(
-    ctx: &RouteContext<()>,
-    uid: &str,
-    input: &Value,
-) -> OperationResult {
-    let generated = uuid_v4();
-    let input = match api::validate_facetime(input, &generated) {
-        Ok(input) => input,
-        Err(result) => return result,
-    };
-    if let Some(limited) = gate(ctx, uid, &api::FACETIME_BUDGET).await {
-        return limited;
-    }
-    // The idempotency key decides the session id, so a retry lands on the same
-    // session instead of placing a second call.
-    let session_id = facetime::session_id(uid, &input.token);
-    let outcome = start_facetime_call(ctx, uid, &input.handle, &input.token).await;
-    api::facetime_result(
-        outcome,
-        &session_id,
-        env_get(&ctx.env, "APP_URL").as_deref(),
-    )
-}
-
 // ---------------------------------------------------------------------------
 // /api/v1 routes
 // ---------------------------------------------------------------------------
@@ -509,15 +431,6 @@ async fn handle_assistant_messages(mut req: Request, ctx: RouteContext<()>) -> R
     respond(ask_omi_operation(&ctx, &auth.uid, &body).await)
 }
 
-async fn handle_facetime_calls(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
-    let auth = api_auth!(req, ctx);
-    scoped!(auth, "facetime:write");
-    let body = match object_body(&mut req, "Invalid FaceTime handle").await {
-        Ok(body) => body,
-        Err(response) => return response,
-    };
-    respond(start_facetime_operation(&ctx, &auth.uid, &body).await)
-}
 
 // ---------------------------------------------------------------------------
 // /mcp — JSON-RPC 2.0 over a single POST endpoint
@@ -538,8 +451,7 @@ async fn run_tool(
         "list_meeting_notes" => list_notes_operation(ctx, uid, arguments).await,
         "list_conversation_messages" => list_conversation_operation(ctx, uid, arguments).await,
         "ask_omi" => ask_omi_operation(ctx, uid, arguments).await,
-        "start_facetime_call" => start_facetime_operation(ctx, uid, arguments).await,
-        // Unreachable: `mcp::plan` only ever names a tool from `mcp::TOOLS`.
+        // FaceTime is not exposed on worker-rs: no Gemini Live bridge container.
         _ => OperationResult::new(400, json!({ "error": "Unknown tool" })),
     }
 }

@@ -1,11 +1,6 @@
-//! omi-v4-api-rs — a parity port of the TypeScript Cloudflare Worker
-//! (`worker/`) to Rust via workers-rs.
-//!
-//! The pure modules (`auth`, `entitlement`, `setup_health`) contain all the
-//! decision logic and carry `#[cfg(test)]` suites runnable with `cargo test` on
-//! the host. The worker-specific glue (`glue`) is compiled only for
-//! `wasm32-unknown-unknown` so the host test build never pulls the `worker`
-//! crate.
+//! omi-v4-api-rs — experimental Rust shadow of the TypeScript Cloudflare Worker
+//! (`worker/`). **The TS worker is the deployed source of truth**; this crate
+//! is not cut over to production traffic. See `README.md` and `PORT_STATUS.md`.
 
 pub mod api_keys;
 pub mod auth;

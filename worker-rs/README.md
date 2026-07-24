@@ -1,7 +1,10 @@
 # omi-v4-api-rs
 
-A parity port of the TypeScript Cloudflare Worker in `worker/` to Rust via
-[`workers-rs`](https://github.com/cloudflare/workers-rs) (crate `worker` 0.8.5).
+An experimental Rust shadow of the TypeScript Cloudflare Worker in `worker/`.
+**The TS worker (`worker/`) is the deployed source of truth** — this crate is
+not on the production custom domain and must not dual-maintain dangerous routes
+such as FaceTime (which requires the Gemini Live bridge container only present
+in the TS stack).
 
 This crate is deliberately isolated from `worker/`: it has its own
 `wrangler.toml` (`name = "omi-v4-api-rs"`) and never touches the TS worker's

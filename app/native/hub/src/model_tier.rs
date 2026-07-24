@@ -1,7 +1,7 @@
-//! Model-tier routing config: the single source of truth for which model id
-//! each workload class resolves to. Both the hub and the worker read the same
-//! `OMI_MODEL_*` environment variables with the same defaults so a model id is
-//! corrected in one place.
+//! Model-tier routing config. Defaults and capability tables are generated from
+//! `config/model-tiers.json` via `scripts/sync-model-tiers.ts`; the worker
+//! imports the same JSON at runtime. All three read the same `OMI_MODEL_*`
+//! environment variables with the same defaults.
 //!
 //! | Tier         | When                                                      | Default model           | Provider |
 //! |--------------|-----------------------------------------------------------|-------------------------|----------|
@@ -23,21 +23,6 @@
 //! [`select_model_for`] so an incapable model — table default or env override —
 //! is refused rather than silently handed input it cannot read.
 
-/// SPEED tier default: latency-sensitive live insights and answer suggestions.
-pub(crate) const DEFAULT_SPEED_MODEL: &str = "inception/mercury-2";
-/// BALANCED tier default: the everyday model for meeting notes and chat.
-pub(crate) const DEFAULT_BALANCED_MODEL: &str = "xiaomi/mimo-v2.5";
-/// SMART tier default: reserved for hard reasoning.
-pub(crate) const DEFAULT_SMART_MODEL: &str = "xiaomi/mimo-v2.5-pro";
-/// MULTIMODAL tier default: vision and visual computer-use.
-pub(crate) const DEFAULT_MULTIMODAL_MODEL: &str = "google/gemini-3.6-flash";
-/// SEARCH tier default: web-grounded answers via a live-search model.
-pub(crate) const DEFAULT_SEARCH_MODEL: &str = "perplexity/sonar";
-/// TRANSCRIBE tier default: server-side speech-to-text for callers with no hub.
-pub(crate) const DEFAULT_TRANSCRIBE_MODEL: &str = "google/gemini-3.5-flash-lite";
-/// SPEAK tier default: server-side text-to-speech.
-pub(crate) const DEFAULT_SPEAK_MODEL: &str = "openai/gpt-audio-mini";
-
 // The hub resolves the SPEED tier directly (its dev Gemini fallback); the
 // BALANCED model reaches meeting notes through the configured provider rather
 // than a tier lookup here, so those variants are unconstructed in this binary.
@@ -53,6 +38,14 @@ pub(crate) enum ModelTier {
     Transcribe,
     Speak,
 }
+
+#[path = "model_tier_defaults.rs"]
+mod model_tier_defaults;
+use model_tier_defaults::MODEL_CAPABILITIES;
+pub(crate) use model_tier_defaults::{
+    DEFAULT_BALANCED_MODEL, DEFAULT_MULTIMODAL_MODEL, DEFAULT_SEARCH_MODEL, DEFAULT_SMART_MODEL,
+    DEFAULT_SPEAK_MODEL, DEFAULT_SPEED_MODEL, DEFAULT_TRANSCRIBE_MODEL,
+};
 
 impl ModelTier {
     /// The env var that overrides this tier's model id.
@@ -115,30 +108,6 @@ pub(crate) enum Capability {
     ImageIn,
     Realtime,
 }
-
-/// Capabilities per model id, checked against the live OpenRouter model list.
-/// A model absent from this table has unknown capabilities and satisfies
-/// nothing: an unverified id must never be assumed able to take audio.
-const MODEL_CAPABILITIES: &[(&str, &[Capability])] = &[
-    // Cheapest audio-capable model on the list, which is why asynchronous voice
-    // notes prefer the balanced tier over the transcribe tier.
-    ("xiaomi/mimo-v2.5", &[Capability::Text, Capability::AudioIn]),
-    ("xiaomi/mimo-v2.5-pro", &[Capability::Text]),
-    ("inception/mercury-2", &[Capability::Text]),
-    ("perplexity/sonar", &[Capability::Text]),
-    (
-        "google/gemini-3.6-flash",
-        &[Capability::Text, Capability::AudioIn, Capability::ImageIn],
-    ),
-    (
-        "google/gemini-3.5-flash-lite",
-        &[Capability::Text, Capability::AudioIn],
-    ),
-    (
-        "openai/gpt-audio-mini",
-        &[Capability::Text, Capability::AudioOut],
-    ),
-];
 
 /// A model id an env override introduced declares itself through
 /// `OMI_MODEL_CAPABILITIES`, a `model=cap+cap,model=cap` list. Anything the

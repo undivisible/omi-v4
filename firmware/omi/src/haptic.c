@@ -6,16 +6,35 @@
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 
-#include "omi_rust.h"
-
 LOG_MODULE_REGISTER(haptic, CONFIG_LOG_DEFAULT_LEVEL);
 
 #define MAX_HAPTIC_DURATION 5000
 
 static const struct gpio_dt_spec haptic_pin = GPIO_DT_SPEC_GET_OR(DT_NODELABEL(motor_pin), gpios, {0});
 
-// Haptic Off Work Item
 static struct k_work_delayable haptic_off_work;
+
+static uint32_t haptic_duration_from_ble(uint8_t value)
+{
+    switch (value) {
+    case 1:
+        return 100;
+    case 2:
+        return 300;
+    case 3:
+        return 500;
+    default:
+        return 0;
+    }
+}
+
+static uint32_t haptic_clamp_duration(uint32_t duration)
+{
+    if (duration > MAX_HAPTIC_DURATION) {
+        return MAX_HAPTIC_DURATION;
+    }
+    return duration;
+}
 
 // Work handler to turn off haptic motor
 static void haptic_off_work_handler(struct k_work *work)
@@ -68,7 +87,7 @@ static ssize_t haptic_write_handler(struct bt_conn *conn,
     uint8_t value = ((uint8_t *) buf)[0];
     LOG_INF("Haptic write received: value %d", value);
 
-    uint32_t duration = omi_rust_haptic_duration_from_ble(value);
+    uint32_t duration = haptic_duration_from_ble(value);
     if (duration == 0) {
         LOG_WRN("Haptic write: Invalid value %d", value);
         return len;
@@ -120,7 +139,7 @@ void play_haptic_milli(uint32_t duration)
 
     if (duration > MAX_HAPTIC_DURATION) {
         LOG_WRN("Requested haptic duration %u exceeds max %d, capping.", duration, MAX_HAPTIC_DURATION);
-        duration = omi_rust_haptic_clamp_duration(duration);
+        duration = haptic_clamp_duration(duration);
     }
 
     LOG_INF("Playing haptic for %u ms", duration);
