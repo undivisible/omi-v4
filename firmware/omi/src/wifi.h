@@ -23,11 +23,13 @@ void wifi_turn_off(void);
 int wifi_turn_on(void);
 bool wifi_is_hw_available(void);
 int setup_wifi_credentials(const char *ssid, const char *password);
+bool wifi_softap_credentials_ready(void);
 int wifi_send_data(const uint8_t *data, size_t len);
 bool is_wifi_transport_ready(void);
 bool is_wifi_on(void);
 
 #ifdef CONFIG_OMI_ENABLE_WIFI_HOME_STA
+int wifi_home_init(void);
 int wifi_home_set_credentials(const char *ssid, const char *password);
 void wifi_home_clear_credentials(void);
 int wifi_home_set_cloud_token(const char *host, const char *token);

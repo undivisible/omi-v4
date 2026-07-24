@@ -1,6 +1,7 @@
 import { Hono, type MiddlewareHandler } from "hono";
 import { requireAuth } from "./auth";
 import { digest, timingSafeEqual } from "./api-keys";
+import { consumeRateLimit } from "./rate-limit";
 import type { AppEnv } from "./types";
 
 const deviceSync = new Hono<AppEnv>();
@@ -9,6 +10,7 @@ export const deviceTokenPrefix = "omi_dev_";
 const tokenPattern = /^omi_dev_([0-9a-f]{8})_([A-Za-z0-9_-]{43})$/;
 const maximumUploadsPerMinute = 30;
 const maximumUploadBytes = 4 * 1024 * 1024;
+const maximumRegistersPerHour = 10;
 
 const hex = (bytes: Uint8Array) =>
   Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
@@ -31,6 +33,20 @@ export const mintDeviceToken = async (): Promise<{
   const secret = base64url(crypto.getRandomValues(new Uint8Array(32)));
   const token = `${deviceTokenPrefix}${prefix}_${secret}`;
   return { token, prefix, hash: await digest(token) };
+};
+
+/** Parse a ring startSeq that may arrive as number or decimal string (u64-safe). */
+export const parseStartSeq = (value: unknown): string | null => {
+  if (typeof value === "bigint") {
+    return value >= 0n ? value.toString() : null;
+  }
+  if (typeof value === "number") {
+    if (!Number.isFinite(value) || !Number.isInteger(value) || value < 0)
+      return null;
+    return String(value);
+  }
+  if (typeof value === "string" && /^\d+$/.test(value)) return value;
+  return null;
 };
 
 type DeviceTokenRow = {
@@ -111,9 +127,22 @@ const object = async (request: Request) => {
   }
 };
 
+/** Firebase auth, or an already-injected `auth` (test harnesses). */
+const requireRegisterAuth: MiddlewareHandler<AppEnv> = async (context, next) => {
+  try {
+    if (context.get("auth")?.uid) {
+      await next();
+      return;
+    }
+  } catch {
+    /* auth unset */
+  }
+  return requireAuth(context, next);
+};
+
 // Phone-side pairing: Firebase (or API key) authenticated user registers a
 // pendant and receives a long-lived device token to provision over BLE.
-deviceSync.post("/register", requireAuth, async (context) => {
+deviceSync.post("/register", requireRegisterAuth, async (context) => {
   const body = await object(context.req.raw);
   if (!body) return context.json({ error: "Invalid register body" }, 400);
   const deviceUid =
@@ -123,6 +152,17 @@ deviceSync.post("/register", requireAuth, async (context) => {
     return context.json({ error: "Invalid deviceUid" }, 400);
 
   const uid = context.get("auth").uid;
+  const limit = await consumeRateLimit(
+    context.env,
+    `device-register:${uid}`,
+    maximumRegistersPerHour,
+    60 * 60_000,
+  );
+  if (!limit.allowed)
+    return context.json({ error: "Too many requests" }, 429, {
+      "retry-after": String(limit.retryAfter),
+    });
+
   const now = Date.now();
   const existing = await context.env.DB.prepare(
     `SELECT id FROM devices WHERE uid = ?1 AND device_uid = ?2 AND revoked_at IS NULL`,
@@ -188,7 +228,7 @@ deviceSync.post("/:deviceId/audio", requireDeviceToken, async (context) => {
   const body = await object(context.req.raw);
   if (!body) return context.json({ error: "Invalid upload body" }, 400);
 
-  const startSeq = Number(body.startSeq);
+  const startSeq = parseStartSeq(body.startSeq);
   const packetCount = Number(body.packetCount);
   const audio =
     typeof body.audio === "string"
@@ -197,8 +237,7 @@ deviceSync.post("/:deviceId/audio", requireDeviceToken, async (context) => {
         ? body.audioBase64
         : "";
   if (
-    !Number.isFinite(startSeq) ||
-    startSeq < 0 ||
+    startSeq === null ||
     !Number.isFinite(packetCount) ||
     packetCount < 0 ||
     packetCount > 100_000 ||
@@ -252,7 +291,7 @@ export const parseHomeUploadPreamble = (
   bytes: Uint8Array,
 ): {
   deviceId: string;
-  startSeq: number;
+  startSeq: string;
   packetCount: number;
   packetBytes: number;
   headerLen: number;
@@ -264,7 +303,7 @@ export const parseHomeUploadPreamble = (
   const deviceId = new TextDecoder().decode(bytes.subarray(3, 3 + deviceLen));
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const base = 3 + deviceLen;
-  const startSeq = Number(view.getBigUint64(base));
+  const startSeq = view.getBigUint64(base).toString();
   const packetCount = view.getUint32(base + 8);
   const packetBytes = view.getUint16(base + 12);
   return {

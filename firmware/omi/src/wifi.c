@@ -54,13 +54,32 @@ struct wifi_ap_sta_node {
 };
 static struct wifi_ap_sta_node sta_list[AP_MAX_STATIONS];
 
-/* WiFi state management */
-static omi_wifi_state_t current_wifi_state = OMI_WIFI_STATE_OFF;
+/* WiFi state management — atomic so BLE/storage threads and the WiFi thread
+ * can transition without races. */
+static atomic_t current_wifi_state = ATOMIC_INIT(OMI_WIFI_STATE_OFF);
+
+#if defined(CONFIG_OMI_WIFI_SOFTAP_DEBUG_DEFAULTS)
 static char ap_ssid[WIFI_MAX_SSID_LEN + 1] = "Omi CV1";
 static char ap_password[WIFI_MAX_PASSWORD_LEN + 1] = "12345678";
+static bool ap_creds_set = true;
+#else
+static char ap_ssid[WIFI_MAX_SSID_LEN + 1];
+static char ap_password[WIFI_MAX_PASSWORD_LEN + 1];
+static bool ap_creds_set;
+#endif
 
 #define TCP_REMOTE_IP "192.168.1.2"
 #define TCP_REMOTE_PORT 12345
+
+static inline void wifi_state_set(omi_wifi_state_t state)
+{
+	atomic_set(&current_wifi_state, (atomic_val_t)state);
+}
+
+static inline omi_wifi_state_t wifi_state_get(void)
+{
+	return (omi_wifi_state_t)atomic_get(&current_wifi_state);
+}
 
 static atomic_t tcp_connected_flag;
 static K_MUTEX_DEFINE(tcp_sock_lock);
@@ -260,41 +279,51 @@ static int tcp_client_start(void)
 
 void wifi_turn_off(void)
 {
-	if (current_wifi_state == OMI_WIFI_STATE_OFF) {
+	if (wifi_state_get() == OMI_WIFI_STATE_OFF) {
 		LOG_INF("Wi-Fi already off");
 		return;
 	}
 	/* Stop new TCP sends immediately */
 	atomic_set(&stop_tcp_traffic, 1);
-	current_wifi_state = OMI_WIFI_STATE_SHUTDOWN;
+	wifi_state_set(OMI_WIFI_STATE_SHUTDOWN);
 
-	// wait for wifi to turn off (max 10s)
+	/* Wait for wifi thread to finish shutdown (max 10s). */
 	int timeout_count = 0;
-	while (current_wifi_state != OMI_WIFI_STATE_OFF && timeout_count < 100) {
+	while (wifi_state_get() != OMI_WIFI_STATE_OFF && timeout_count < 100) {
 		k_msleep(100);
 		timeout_count++;
 	}
 
-    // Ensure WiFi power is off
-    struct net_if *iface = net_if_get_first_wifi();
-    if (iface) {
-        net_if_down(iface);
-    }
+	/* Ensure WiFi power is off */
+	struct net_if *iface = net_if_get_first_wifi();
+	if (iface) {
+		net_if_down(iface);
+	}
+
+	if (wifi_state_get() != OMI_WIFI_STATE_OFF) {
+		LOG_ERR("Wi-Fi shutdown timed out; forcing OFF");
+		wifi_state_set(OMI_WIFI_STATE_OFF);
+		mic_resume();
+	}
 }
 
 int wifi_turn_on(void)
 {
-	if (current_wifi_state != OMI_WIFI_STATE_OFF) {
+	if (wifi_state_get() != OMI_WIFI_STATE_OFF) {
 		return -EALREADY;
-	} else {
-		/* Bring interface up; driver will report readiness via wifi_ready callback */
-		struct net_if *iface = net_if_get_first_wifi();
-		if (iface) {
-			net_if_up(iface);
-		}
+	}
+	if (!ap_creds_set) {
+		LOG_ERR("SoftAP credentials not set; WIFI_SETUP required");
+		return -EINVAL;
 	}
 
-	current_wifi_state = OMI_WIFI_STATE_ON;
+	/* Bring interface up; driver will report readiness via wifi_ready callback */
+	struct net_if *iface = net_if_get_first_wifi();
+	if (iface) {
+		net_if_up(iface);
+	}
+
+	wifi_state_set(OMI_WIFI_STATE_ON);
 	atomic_clear(&stop_tcp_traffic);
 
 	return 0;
@@ -320,7 +349,13 @@ int setup_wifi_credentials(const char *ssid, const char *password)
 	ap_ssid[sizeof(ap_ssid) - 1] = '\0';
 	strncpy(ap_password, password, sizeof(ap_password) - 1);
 	ap_password[sizeof(ap_password) - 1] = '\0';
+	ap_creds_set = true;
 	return 0;
+}
+
+bool wifi_softap_credentials_ready(void)
+{
+	return ap_creds_set;
 }
 
 int wifi_send_data(const uint8_t *data, size_t len)
@@ -368,7 +403,7 @@ int wifi_send_data(const uint8_t *data, size_t len)
 				LOG_ERR("TCP send failed with error: %d", err);
 				tcp_client_stop();
 				atomic_set(&stop_tcp_traffic, 1);
-				current_wifi_state = OMI_WIFI_STATE_CONNECTING;
+				wifi_state_set(OMI_WIFI_STATE_CONNECTING);
 				return -err;
 			}
 			return ret;
@@ -388,8 +423,8 @@ bool is_wifi_transport_ready(void)
 bool is_wifi_on(void)
 {
 	/* Treat SHUTDOWN as off for data-path loops so they can exit quickly. */
-	return (current_wifi_state != OMI_WIFI_STATE_OFF) &&
-	       (current_wifi_state != OMI_WIFI_STATE_SHUTDOWN);
+	omi_wifi_state_t state = wifi_state_get();
+	return (state != OMI_WIFI_STATE_OFF) && (state != OMI_WIFI_STATE_SHUTDOWN);
 }
 
 static void wifi_ap_stations_unlocked(void)
@@ -531,10 +566,10 @@ static void handle_wifi_ap_sta_disconnected(struct net_mgmt_event_callback *cb)
 	k_mutex_unlock(&wifi_ap_sta_list_lock);
 
 	/* close TCP and go back to CONNECTING state */
-	if (current_wifi_state == OMI_WIFI_STATE_CONNECT) {
+	if (wifi_state_get() == OMI_WIFI_STATE_CONNECT) {
 		LOG_INF("No stations connected, closing TCP connection");
 		tcp_client_stop();
-		current_wifi_state = OMI_WIFI_STATE_CONNECTING;
+		wifi_state_set(OMI_WIFI_STATE_CONNECTING);
 	}
 }
 
@@ -705,14 +740,15 @@ static void handle_wifi_shutdown(void)
 
 	stop_dhcp_server();
 	LOG_INF("DHCP server stopped");
-	
+
 	struct net_if *iface = net_if_get_first_wifi();
 	if (!iface) {
-		LOG_ERR("No WiFi interface - transition to OFF");
-		current_wifi_state = OMI_WIFI_STATE_OFF;
+		LOG_ERR("No WiFi interface - forcing OFF");
+		wifi_state_set(OMI_WIFI_STATE_OFF);
+		mic_resume();
 		return;
 	}
-	
+
 	/* Step: Disable AP and wait for the actual result callback. */
 	atomic_clear(&wifi_ap_disable_seen);
 	wifi_ap_disable_status = -1;
@@ -721,30 +757,37 @@ static void handle_wifi_shutdown(void)
 	LOG_INF("Requesting AP disable...");
 	int ret = net_mgmt(NET_REQUEST_WIFI_AP_DISABLE, iface, NULL, 0);
 	if (ret) {
-		LOG_ERR("AP disable request call failed: %d", ret);
-		k_sleep(K_SECONDS(2));
-		return; /* stay in SHUTDOWN */
+		LOG_ERR("AP disable request call failed: %d — forcing OFF", ret);
+		net_if_down(iface);
+		wifi_state_set(OMI_WIFI_STATE_OFF);
+		mic_resume();
+		return;
 	}
 
-	/* Wait for NET_EVENT_WIFI_AP_DISABLE_RESULT. If this times out, wpa_supp is stuck. */
+	/* Wait for NET_EVENT_WIFI_AP_DISABLE_RESULT. If this times out, force OFF. */
 	ret = k_sem_take(&wifi_ap_disable_result_sem, K_SECONDS(8));
 	if (ret) {
-		LOG_ERR("AP disable result timeout -> WPA supplicant likely stuck");
-		k_sleep(K_SECONDS(2));
-		return; /* stay in SHUTDOWN */
+		LOG_ERR("AP disable result timeout — forcing OFF");
+		net_if_down(iface);
+		wifi_state_set(OMI_WIFI_STATE_OFF);
+		mic_resume();
+		return;
 	}
 
 	if (!atomic_get(&wifi_ap_disable_seen) || wifi_ap_disable_status != 0) {
-		LOG_ERR("AP disable failed (status=%d)", wifi_ap_disable_status);
-		k_sleep(K_SECONDS(2));
-		return; /* stay in SHUTDOWN */
+		LOG_ERR("AP disable failed (status=%d) — forcing OFF",
+			wifi_ap_disable_status);
+		net_if_down(iface);
+		wifi_state_set(OMI_WIFI_STATE_OFF);
+		mic_resume();
+		return;
 	}
 
 	LOG_INF("AP disabled, bringing interface down...");
 	net_if_down(iface);
 	LOG_INF("Interface down complete");
 
-	current_wifi_state = OMI_WIFI_STATE_OFF;
+	wifi_state_set(OMI_WIFI_STATE_OFF);
 	LOG_INF("Wi-Fi shutdown complete");
 }
 
@@ -797,7 +840,7 @@ K_THREAD_DEFINE(start_wifi_thread_id, 4096,
 
 void start_wifi_thread(void)
 {
-	current_wifi_state = OMI_WIFI_STATE_OFF;
+	wifi_state_set(OMI_WIFI_STATE_OFF);
 
 	// check if Wi-Fi hardware is broken/unavailable
 	if (!wifi_check_hardware_ready()) {
@@ -808,14 +851,14 @@ void start_wifi_thread(void)
 	LOG_INF("Wi-Fi hardware is ready");
 
 	while (1) {
-		switch (current_wifi_state) {
+		switch (wifi_state_get()) {
 		case OMI_WIFI_STATE_OFF:
 			k_msleep(100);
 			break;
 
 		case OMI_WIFI_STATE_SHUTDOWN:
 			// Ensure mic is resumed
-			if(!mic_is_running()) {
+			if (!mic_is_running()) {
 				LOG_INF("Microphone resumed when Wi-Fi shuts down");
 				mic_resume();
 			}
@@ -825,6 +868,12 @@ void start_wifi_thread(void)
 
 		case OMI_WIFI_STATE_ON:
 			LOG_INF("Wi-Fi state: ON (starting AP)");
+			if (!ap_creds_set) {
+				LOG_ERR("SoftAP credentials missing; refusing AP enable");
+				wifi_state_set(OMI_WIFI_STATE_OFF);
+				mic_resume();
+				break;
+			}
 			{
 				bool ap_started = false;
 				for (int ap_attempt = 0; ap_attempt < 5; ap_attempt++) {
@@ -832,16 +881,18 @@ void start_wifi_thread(void)
 						ap_started = true;
 						break;
 					}
-					LOG_WRN("AP start failed (attempt %d/5), retrying...", ap_attempt + 1);
+					LOG_WRN("AP start failed (attempt %d/5), retrying...",
+						ap_attempt + 1);
 					k_sleep(K_SECONDS(1));
 				}
 
 				if (ap_started) {
-					current_wifi_state = OMI_WIFI_STATE_CONNECTING;
+					wifi_state_set(OMI_WIFI_STATE_CONNECTING);
 					wifi_connecting_timer_reset();
 				} else {
-					LOG_WRN("AP start retry budget exhausted, staying in ON");
-					k_sleep(K_SECONDS(1));
+					LOG_WRN("AP start failed; shutting down");
+					storage_stop_transfer();
+					wifi_state_set(OMI_WIFI_STATE_SHUTDOWN);
 				}
 			}
 			break;
@@ -857,11 +908,11 @@ void start_wifi_thread(void)
 			if (wifi_connecting_timer_expired(WIFI_CONNECTING_TIMEOUT_MS)) {
 				LOG_WRN("TCP connecting > 60s -> shutting down Wi-Fi");
 				storage_stop_transfer();
-				current_wifi_state = OMI_WIFI_STATE_SHUTDOWN;
+				wifi_state_set(OMI_WIFI_STATE_SHUTDOWN);
 				break;
 			}
 			if (tcp_client_start() == 0) {
-				current_wifi_state = OMI_WIFI_STATE_CONNECT;
+				wifi_state_set(OMI_WIFI_STATE_CONNECT);
 				wifi_connecting_timer_reset();
 			} else {
 				k_msleep(1000);
@@ -874,7 +925,7 @@ void start_wifi_thread(void)
 			if (!tcp_client_is_connected()) {
 				LOG_WRN("tcp: disconnected");
 				tcp_client_stop();
-				current_wifi_state = OMI_WIFI_STATE_CONNECTING;
+				wifi_state_set(OMI_WIFI_STATE_CONNECTING);
 				break;
 			}
 			/* Check connection status periodically */
@@ -884,7 +935,7 @@ void start_wifi_thread(void)
 		default:
 			/* Unknown state: reset state machine. */
 			tcp_client_stop();
-			current_wifi_state = OMI_WIFI_STATE_OFF;
+			wifi_state_set(OMI_WIFI_STATE_OFF);
 			break;
 		}
 	}
@@ -937,6 +988,13 @@ int wifi_init(void)
 {
 	int ret = 0;
 	net_mgmt_callback_init();
+
+#ifdef CONFIG_OMI_ENABLE_WIFI_HOME_STA
+	ret = wifi_home_init();
+	if (ret) {
+		LOG_WRN("Home WiFi settings init failed: %d", ret);
+	}
+#endif
 
 	ret = register_wifi_ready();
 	if (ret) {

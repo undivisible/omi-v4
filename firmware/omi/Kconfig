@@ -425,6 +425,15 @@ config OMI_ENABLE_WIFI_HOME_STA
          worker. SoftAP phone-assisted sync remains available. STA/TLS upload
          is stubbed until flash budget allows a full enable."
 
+config OMI_WIFI_SOFTAP_DEBUG_DEFAULTS
+    bool "Ship hardcoded SoftAP SSID/PSK defaults (debug only)"
+    depends on OMI_ENABLE_WIFI
+    default n
+    help
+        "When enabled, SoftAP starts with SSID \"Omi CV1\" / PSK \"12345678\"
+         without a prior WIFI_SETUP write. Production builds leave this off so
+         SoftAP stays disabled until the companion provisions credentials."
+
 config OMI_RUST_SELFTEST_AT_BOOT
     bool "Run Rust selftest during boot"
     depends on OMI_RUST

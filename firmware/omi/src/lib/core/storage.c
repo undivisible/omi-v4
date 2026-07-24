@@ -96,7 +96,8 @@ static struct bt_gatt_attr storage_service_attr[] = {
                            NULL,
                            storage_wifi_handler,
                            NULL),
-    BT_GATT_CCC(storage_config_changed_handler, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
+    BT_GATT_CCC(storage_config_changed_handler,
+                BT_GATT_PERM_READ_ENCRYPT | BT_GATT_PERM_WRITE_ENCRYPT),
 #endif
 };
 
@@ -773,6 +774,11 @@ static ssize_t storage_wifi_handler(struct bt_conn *conn,
             result = 5;
             break;
         }
+        if (!wifi_softap_credentials_ready()) {
+            /* SoftAP requires a prior WIFI_SETUP (0x01) write. */
+            result = 3;
+            break;
+        }
         wifi_sync_all_requested = 1;
         k_work_submit(&wifi_start_work);
         result = 0;
@@ -944,6 +950,8 @@ static void wifi_write_ring(void)
         wifi_transfer_active = false;
         wifi_header_sent = false;
         LOG_INF("WiFi ring sync complete at seq %llu", (unsigned long long)wifi_read_seq);
+        wifi_turn_off();
+        mic_resume();
     }
 }
 #endif
@@ -1072,7 +1080,13 @@ static void storage_write(void)
             }
         }
         if (wifi_transfer_active) {
-            wifi_write_ring();
+            if (!is_wifi_on()) {
+                LOG_WRN("WiFi dropped mid ring sync — aborting");
+                storage_stop_transfer();
+                mic_resume();
+            } else {
+                wifi_write_ring();
+            }
         }
 #endif
         if (!transfer_active) {
