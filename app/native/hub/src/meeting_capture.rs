@@ -1,7 +1,4 @@
-#![cfg_attr(
-    not(any(target_os = "macos", target_os = "windows")),
-    allow(dead_code)
-)]
+#![cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
 
 use crate::capture_policy::CapturePlan;
 use crate::signals::TranscriptionAuth;
