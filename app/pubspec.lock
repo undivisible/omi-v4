@@ -84,11 +84,9 @@ packages:
   crepuscularity_flutter:
     dependency: "direct main"
     description:
-      path: "plugins/crepuscularity-flutter"
-      ref: "9cf6ad45aa30c62d01bb4c86e37f430194e30b54"
-      resolved-ref: "9cf6ad45aa30c62d01bb4c86e37f430194e30b54"
-      url: "https://github.com/tschk/crepuscularity"
-    source: git
+      path: "../../crepuscularity/plugins/crepuscularity-flutter"
+      relative: true
+    source: path
     version: "0.1.0"
   cross_file:
     dependency: transitive
@@ -118,10 +116,10 @@ packages:
     dependency: transitive
     description:
       name: dbus
-      sha256: "0ce9b0a839e6dee59a37a623d2fc26a35bbbe6404213e419b0d6411023d62645"
+      sha256: "792974a4007974fbc5c1b5433eb2330a9db3e368c3f906253af4c007d0f49a91"
       url: "https://pub.dev"
     source: hosted
-    version: "0.7.14"
+    version: "0.7.13"
   fake_async:
     dependency: transitive
     description:
@@ -344,13 +342,13 @@ packages:
     source: hosted
     version: "10.3.1"
   flutter_secure_storage_darwin:
-    dependency: "direct overridden"
+    dependency: transitive
     description:
       name: flutter_secure_storage_darwin
-      sha256: ac6d76a752de0cd738334eb4b21743fc4943f449f5b6e308f18838b048c02ac0
+      sha256: "82329fa5cdf343773b1b6897dea959105a29f092454259edff92f9f6637e8149"
       url: "https://pub.dev"
     source: hosted
-    version: "0.4.0"
+    version: "0.3.2"
   flutter_secure_storage_linux:
     dependency: transitive
     description:
@@ -418,13 +416,13 @@ packages:
     source: hosted
     version: "1.1.8"
   hooks:
-    dependency: "direct overridden"
+    dependency: transitive
     description:
       name: hooks
-      sha256: "03a564c3704524ee0f7fc56fc621e8796cc2eb8c24d1f1a33b34979815b285c4"
+      sha256: "9a62a50b50b769a737bc0a8ff381f333529df3ab746b2f6b02e83760231455ba"
       url: "https://pub.dev"
     source: hosted
-    version: "2.1.0"
+    version: "2.0.2"
   http:
     dependency: "direct main"
     description:
@@ -441,14 +439,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "4.1.2"
-  intl:
-    dependency: "direct overridden"
-    description:
-      name: intl
-      sha256: "1ca20c894b1717686a2319b8548763d812bc0aabdac580420a44c5178c57a867"
-      url: "https://pub.dev"
-    source: hosted
-    version: "0.20.3"
   jni:
     dependency: transitive
     description:
@@ -506,13 +496,13 @@ packages:
     source: hosted
     version: "1.3.0"
   matcher:
-    dependency: "direct overridden"
+    dependency: transitive
     description:
       name: matcher
-      sha256: "31bd099b47c10cd1aeb55146a2d46ce0277630ecef3f7dae54ad7873f36696cd"
+      sha256: dc0b7dc7651697ea4ff3e69ef44b0407ea32c487a39fff6a4004fa585e901861
       url: "https://pub.dev"
     source: hosted
-    version: "0.12.20"
+    version: "0.12.19"
   material_color_utilities:
     dependency: transitive
     description:
@@ -530,21 +520,13 @@ packages:
     source: hosted
     version: "0.4.2"
   meta:
-    dependency: "direct overridden"
-    description:
-      name: meta
-      sha256: "307249ce4ff29d58a18e97f6345f539382eb9c9c29ecda628900f31de0443dd9"
-      url: "https://pub.dev"
-    source: hosted
-    version: "1.19.0"
-  native_toolchain_rust:
     dependency: transitive
     description:
-      name: native_toolchain_rust
-      sha256: faa57d2258a3b0fd2a634054f54e4496c9fcbd971977e7d2b7e6916d56892857
+      name: meta
+      sha256: "1741988757a65eb6b36abe716829688cf01910bbf91c34354ff7ec1c3de2b349"
       url: "https://pub.dev"
     source: hosted
-    version: "1.0.4+0"
+    version: "1.18.0"
   nested:
     dependency: transitive
     description:
@@ -562,13 +544,13 @@ packages:
     source: hosted
     version: "9.4.1"
   package_config:
-    dependency: "direct overridden"
+    dependency: transitive
     description:
       name: package_config
-      sha256: ffcf4cf3d6c0b74ac43708d9f56625506e8a68aa935abe9d267a7330f320eb5d
+      sha256: f096c55ebb7deb7e384101542bfba8c52696c1b56fca2eb62827989ef2353bbc
       url: "https://pub.dev"
     source: hosted
-    version: "3.0.0"
+    version: "2.2.0"
   package_info_plus:
     dependency: "direct main"
     description:
@@ -738,13 +720,12 @@ packages:
     source: hosted
     version: "2.1.1"
   record_macos:
-    dependency: "direct overridden"
+    dependency: transitive
     description:
-      path: record_macos
-      ref: "21ac6275ab6256de2c90980e40de7aa97e132a83"
-      resolved-ref: "21ac6275ab6256de2c90980e40de7aa97e132a83"
-      url: "https://github.com/tschk/record.git"
-    source: git
+      name: record_macos
+      sha256: ced7495abf3d683e8a7dbe8fc96df8ea5722837a26f922b7cb7c5de11661bb46
+      url: "https://pub.dev"
+    source: hosted
     version: "2.1.1"
   record_platform_interface:
     dependency: transitive
@@ -755,13 +736,13 @@ packages:
     source: hosted
     version: "2.1.0"
   record_use:
-    dependency: "direct overridden"
+    dependency: transitive
     description:
       name: record_use
-      sha256: af37186ff9ede46fa32f152526c48f46c5b3ad7d3d5a566140cb5df3dc4ed737
+      sha256: "2551bd8eecfe95d14ae75f6021ad0248be5c27f138c2ec12fcb52b500b3ba1ed"
       url: "https://pub.dev"
     source: hosted
-    version: "1.0.0"
+    version: "0.6.0"
   record_web:
     dependency: transitive
     description:
@@ -781,11 +762,10 @@ packages:
   rinf:
     dependency: "direct main"
     description:
-      path: flutter_package
-      ref: "5bef72c979af35ecd7b20e506a68ca672a63f8bc"
-      resolved-ref: "5bef72c979af35ecd7b20e506a68ca672a63f8bc"
-      url: "https://github.com/robertmsale/rinf.git"
-    source: git
+      name: rinf
+      sha256: c93a2a3b21c06f3c9f9222ee84379244232b3e388fc35f827beafaf93d5191bb
+      url: "https://pub.dev"
+    source: hosted
     version: "8.10.0"
   rxdart:
     dependency: transitive
@@ -897,13 +877,13 @@ packages:
     source: hosted
     version: "1.2.2"
   test_api:
-    dependency: "direct overridden"
+    dependency: transitive
     description:
       name: test_api
-      sha256: "475610b2aa23c19687cce2961e44b0cc57cafe220f67c2b80201231b2a07fbe7"
+      sha256: "949a932224383300f01be9221c39180316445ecb8e7547f70a41a35bf421fb9e"
       url: "https://pub.dev"
     source: hosted
-    version: "0.7.13"
+    version: "0.7.11"
   timezone:
     dependency: transitive
     description:
@@ -912,14 +892,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "0.11.1"
-  toml:
-    dependency: transitive
-    description:
-      name: toml
-      sha256: "35a35f782228656a2af31e8c73d1353cc4ef3d683fd68af1111b44631879c05e"
-      url: "https://pub.dev"
-    source: hosted
-    version: "0.18.0"
   tuple:
     dependency: "direct main"
     description:
@@ -1033,13 +1005,13 @@ packages:
     source: hosted
     version: "1.2.6"
   vector_math:
-    dependency: "direct overridden"
+    dependency: transitive
     description:
       name: vector_math
-      sha256: "1d774bbdf6b72a0b12122fc1560c9c2d2a67db5a4a4cc2bd8a5c990ab20e3188"
+      sha256: d530bd74fea330e6e364cda7a85019c434070188383e1cd8d9777ee586914c5b
       url: "https://pub.dev"
     source: hosted
-    version: "2.4.0"
+    version: "2.2.0"
   vm_service:
     dependency: transitive
     description:
@@ -1073,7 +1045,7 @@ packages:
     source: hosted
     version: "1.1.0"
   xml:
-    dependency: "direct overridden"
+    dependency: transitive
     description:
       name: xml
       sha256: "67f0aff7be013d107995e9b75bf4e7f2c3ef2dfdb2c8e68024bba0a7fd5756a4"

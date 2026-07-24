@@ -1,22 +1,156 @@
 PODS:
+  - file_selector_macos (0.0.1):
+    - FlutterMacOS
+  - Firebase/Auth (12.15.0):
+    - Firebase/CoreOnly
+    - FirebaseAuth (~> 12.15.0)
+  - Firebase/CoreOnly (12.15.0):
+    - FirebaseCore (~> 12.15.0)
+  - firebase_auth (6.5.6):
+    - Firebase/Auth (~> 12.15.0)
+    - Firebase/CoreOnly (~> 12.15.0)
+    - firebase_core
+    - FlutterMacOS
+  - firebase_core (4.12.1):
+    - Firebase/CoreOnly (~> 12.15.0)
+    - FlutterMacOS
+  - FirebaseAppCheckInterop (12.15.0)
+  - FirebaseAuth (12.15.0):
+    - FirebaseAppCheckInterop (~> 12.15.0)
+    - FirebaseAuthInterop (~> 12.15.0)
+    - FirebaseCore (~> 12.15.0)
+    - FirebaseCoreExtension (~> 12.15.0)
+    - GoogleUtilities/AppDelegateSwizzler (~> 8.1)
+    - GoogleUtilities/Environment (~> 8.1)
+    - GTMSessionFetcher/Core (< 6.0, >= 3.4)
+    - RecaptchaInterop (~> 101.0)
+  - FirebaseAuthInterop (12.15.0)
+  - FirebaseCore (12.15.0):
+    - FirebaseCoreInternal (~> 12.15.0)
+    - GoogleUtilities/Environment (~> 8.1)
+    - GoogleUtilities/Logger (~> 8.1)
+  - FirebaseCoreExtension (12.15.0):
+    - FirebaseCore (~> 12.15.0)
+  - FirebaseCoreInternal (12.15.0):
+    - "GoogleUtilities/NSData+zlib (~> 8.1)"
+  - flutter_local_notifications (0.0.1):
+    - FlutterMacOS
+  - flutter_secure_storage_darwin (10.0.0):
+    - Flutter
+    - FlutterMacOS
   - FlutterMacOS (1.0.0)
+  - GoogleUtilities/AppDelegateSwizzler (8.1.2):
+    - GoogleUtilities/Environment
+    - GoogleUtilities/Logger
+    - GoogleUtilities/Network
+    - GoogleUtilities/Privacy
+  - GoogleUtilities/Environment (8.1.2):
+    - GoogleUtilities/Privacy
+  - GoogleUtilities/Logger (8.1.2):
+    - GoogleUtilities/Environment
+    - GoogleUtilities/Privacy
+  - GoogleUtilities/Network (8.1.2):
+    - GoogleUtilities/Logger
+    - "GoogleUtilities/NSData+zlib"
+    - GoogleUtilities/Privacy
+    - GoogleUtilities/Reachability
+  - "GoogleUtilities/NSData+zlib (8.1.2)":
+    - GoogleUtilities/Privacy
+  - GoogleUtilities/Privacy (8.1.2)
+  - GoogleUtilities/Reachability (8.1.2):
+    - GoogleUtilities/Logger
+    - GoogleUtilities/Privacy
+  - GTMSessionFetcher/Core (5.3.0)
+  - package_info_plus (0.0.1):
+    - FlutterMacOS
+  - record_macos (2.0.0):
+    - FlutterMacOS
   - rinf (0.1.0):
+    - FlutterMacOS
+  - shared_preferences_foundation (0.0.1):
+    - Flutter
+    - FlutterMacOS
+  - universal_ble (0.0.1):
+    - Flutter
+    - FlutterMacOS
+  - url_launcher_macos (0.0.1):
     - FlutterMacOS
 
 DEPENDENCIES:
+  - file_selector_macos (from `Flutter/ephemeral/.symlinks/plugins/file_selector_macos/macos`)
+  - firebase_auth (from `Flutter/ephemeral/.symlinks/plugins/firebase_auth/macos`)
+  - firebase_core (from `Flutter/ephemeral/.symlinks/plugins/firebase_core/macos`)
+  - flutter_local_notifications (from `Flutter/ephemeral/.symlinks/plugins/flutter_local_notifications/macos`)
+  - flutter_secure_storage_darwin (from `Flutter/ephemeral/.symlinks/plugins/flutter_secure_storage_darwin/darwin`)
   - FlutterMacOS (from `Flutter/ephemeral`)
+  - package_info_plus (from `Flutter/ephemeral/.symlinks/plugins/package_info_plus/macos`)
+  - record_macos (from `Flutter/ephemeral/.symlinks/plugins/record_macos/macos`)
   - rinf (from `Flutter/ephemeral/.symlinks/plugins/rinf/macos`)
+  - shared_preferences_foundation (from `Flutter/ephemeral/.symlinks/plugins/shared_preferences_foundation/darwin`)
+  - universal_ble (from `Flutter/ephemeral/.symlinks/plugins/universal_ble/darwin`)
+  - url_launcher_macos (from `Flutter/ephemeral/.symlinks/plugins/url_launcher_macos/macos`)
+
+SPEC REPOS:
+  trunk:
+    - Firebase
+    - FirebaseAppCheckInterop
+    - FirebaseAuth
+    - FirebaseAuthInterop
+    - FirebaseCore
+    - FirebaseCoreExtension
+    - FirebaseCoreInternal
+    - GoogleUtilities
+    - GTMSessionFetcher
 
 EXTERNAL SOURCES:
+  file_selector_macos:
+    :path: Flutter/ephemeral/.symlinks/plugins/file_selector_macos/macos
+  firebase_auth:
+    :path: Flutter/ephemeral/.symlinks/plugins/firebase_auth/macos
+  firebase_core:
+    :path: Flutter/ephemeral/.symlinks/plugins/firebase_core/macos
+  flutter_local_notifications:
+    :path: Flutter/ephemeral/.symlinks/plugins/flutter_local_notifications/macos
+  flutter_secure_storage_darwin:
+    :path: Flutter/ephemeral/.symlinks/plugins/flutter_secure_storage_darwin/darwin
   FlutterMacOS:
     :path: Flutter/ephemeral
+  package_info_plus:
+    :path: Flutter/ephemeral/.symlinks/plugins/package_info_plus/macos
+  record_macos:
+    :path: Flutter/ephemeral/.symlinks/plugins/record_macos/macos
   rinf:
     :path: Flutter/ephemeral/.symlinks/plugins/rinf/macos
+  shared_preferences_foundation:
+    :path: Flutter/ephemeral/.symlinks/plugins/shared_preferences_foundation/darwin
+  universal_ble:
+    :path: Flutter/ephemeral/.symlinks/plugins/universal_ble/darwin
+  url_launcher_macos:
+    :path: Flutter/ephemeral/.symlinks/plugins/url_launcher_macos/macos
 
 SPEC CHECKSUMS:
+  file_selector_macos: 9e9e068e90ebee155097d00e89ae91edb2374db7
+  Firebase: a8539b633d474fbeb654c7043f9c1649e274045b
+  firebase_auth: f0277c8164b6d15ea44388f90dbbb438e9b91eed
+  firebase_core: 1c188a8384be0315478a22c1a3165871d75a95ba
+  FirebaseAppCheckInterop: 5083c9acf65f206832fe659e1c676b7bc3d55e8a
+  FirebaseAuth: 6d1d4e5875d93f82e669bee6b05a70a642025b58
+  FirebaseAuthInterop: 0778f5f24d6cccd6d67ef45832fe9c67a0b944ea
+  FirebaseCore: 2e86a4ea1684d4381707069e4a6d89ac808e901e
+  FirebaseCoreExtension: 10d2a627977b39418759ad88ada80fbbd34f1c4f
+  FirebaseCoreInternal: 6ab6a02c94446c026d2cf35cf5383842ebaa4992
+  flutter_local_notifications: 1fc7ffb10a83d6a2eeeeddb152d43f1944b0aad0
+  flutter_secure_storage_darwin: acdb3f316ed05a3e68f856e0353b133eec373a23
   FlutterMacOS: d0db08ddef1a9af05a5ec4b724367152bb0500b1
+  GoogleUtilities: 766ace00c6b10d8148408f329d10c4f051931850
+  GTMSessionFetcher: 127211aeec0b1e904fc49f4f6f895dcc535b0ecf
+  package_info_plus: f0052d280d17aa382b932f399edf32507174e870
+  record_macos: 2e43c16b84ce188b8137754ee648322a2dcdf7fa
   rinf: 262f44da111bc09a28138d438caf7b9a29e9b411
+  shared_preferences_foundation: 7036424c3d8ec98dfe75ff1667cb0cd531ec82bb
+  universal_ble: a322ebabee64f0ec27a313e89a5dd6967f37a60f
+  url_launcher_macos: f87a979182d112f911de6820aefddaf56ee9fbfd
 
-PODFILE CHECKSUM: 4a90b784deb51df48dfd00651d07e930d861400c
+PODFILE CHECKSUM: 57af9420677621c8198652a7f517cee8d7e6a5bc
 
 COCOAPODS: 1.17.0
