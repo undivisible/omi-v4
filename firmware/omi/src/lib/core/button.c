@@ -25,6 +25,9 @@
 #include "sd_card.h"
 #endif
 #include "omi_rust.h"
+#ifdef CONFIG_OMI_ENABLE_WIFI
+#include "wifi.h"
+#endif
 
 LOG_MODULE_REGISTER(button, CONFIG_LOG_DEFAULT_LEVEL);
 
@@ -317,6 +320,10 @@ void turnoff_all()
 
     // Delays for stability
     k_msleep(1000);
+
+#ifdef CONFIG_OMI_ENABLE_WIFI
+    wifi_turn_off();
+#endif
 
     // // Enter the low power mode
     transport_off();

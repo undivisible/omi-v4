@@ -202,6 +202,11 @@ delete the build directory.
 
 ### Flashing `omi-cv1`
 
+**The magnetic charging cable does not flash the device** — it is power-only
+(pogo / USB-C charge). Use BLE OTA, or a separate SWD flashing cable into a
+J-Link. Details: [`WIFI_SYNC.md`](WIFI_SYNC.md) (flash section) and
+[`BUILD_AND_OTA_FLASH.md`](BUILD_AND_OTA_FLASH.md).
+
 **OTA (no hardware tools):** copy `dfu_application.zip` to a phone, open nRF
 Connect for Mobile, connect to the pendant (advertised name `Omi`), open the DFU
 tab, select the zip, upload. Two to five minutes. MCUboot is configured
@@ -209,7 +214,7 @@ overwrite-only with downgrade prevention
 (`bootloader/mcuboot/mcuboot.conf`), so the image version derived from
 `omi/VERSION` must be greater than what is on the device.
 
-**SWD (J-Link / nRF debugger):**
+**SWD (J-Link / nRF debugger + special SWD cable):**
 
 ```sh
 west flash --build-dir "$FW/omi/build"
@@ -218,6 +223,12 @@ west flash --build-dir "$FW/omi/build"
 Images are signed with `bootloader/mcuboot/root-rsa-2048.pem`, which is the key
 shipped devices already trust. Do not substitute a different key or OTA will
 stop working on existing units.
+
+### WiFi SoftAP / home STA
+
+Off by default (`CONFIG_OMI_ENABLE_WIFI=n`) for flash budget. See
+[`WIFI_SYNC.md`](WIFI_SYNC.md) for SoftAP restore, home cloud self-sync, and
+the `omi_wifi.conf` enable fragment.
 
 ## `devkit-*` — XIAO nRF52840 Sense
 

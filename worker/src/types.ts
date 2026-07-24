@@ -113,7 +113,7 @@ export type ApiKeyContext = { id: string; scopes: ApiKeyScope[] };
 
 export type AppEnv = {
   Bindings: Bindings;
-  Variables: { auth: Auth; apiKey?: ApiKeyContext };
+  Variables: { auth: Auth; apiKey?: ApiKeyContext; deviceId?: string };
 };
 
 export type Channel = "telegram" | "imessage";

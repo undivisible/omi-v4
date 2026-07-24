@@ -23,6 +23,8 @@ typedef enum {
     OMI_FEATURE_BLE_SLEEP_CMD = (1 << 13),
     OMI_FEATURE_CAPTURE_STATE = (1 << 14),
     OMI_FEATURE_DEVICE_NAME_RW = (1 << 15),
+    /* Upstream Used (1 << 9) for WIFI; omi-v4 bit 9 is CHARGING_STATE. */
+    OMI_FEATURE_WIFI = (1 << 16),
 } omi_feature_t;
 
 #endif // FEATURES_H

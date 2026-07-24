@@ -23,6 +23,9 @@
 #include <hal/nrf_reset.h>
 
 #include "omi_rust.h"
+#ifdef CONFIG_OMI_ENABLE_WIFI
+#include "wifi.h"
+#endif
 
 #include "imu.h"
 #include "lib/core/sd_card.h"
@@ -251,6 +254,7 @@ int main(void)
     // print reset reason at startup
     print_reset_reason();
 
+#ifdef CONFIG_OMI_RUST_SELFTEST_AT_BOOT
     {
         int rust_failures = omi_rust_selftest();
         if (rust_failures) {
@@ -259,6 +263,7 @@ int main(void)
             LOG_INF("Rust framing self-test passed");
         }
     }
+#endif
 
     // Initialize watchdog first to catch any early freezes
     ret = watchdog_init();
@@ -385,6 +390,15 @@ int main(void)
     }
 #endif
 
+#ifdef CONFIG_OMI_ENABLE_WIFI
+    ret = wifi_init();
+    if (ret) {
+        LOG_WRN("WiFi init failed (err %d); SoftAP sync unavailable", ret);
+    } else {
+        LOG_INF("WiFi SoftAP sync initialized (hw probe runs async)");
+    }
+#endif
+
     // Indicate transport initialization
     LOG_PRINTK("\n");
     LOG_INF("Initializing transport...\n");
@@ -432,6 +446,11 @@ int main(void)
         set_led_state();
 #ifdef CONFIG_OMI_ENABLE_IDLE_SLEEP
         update_idle_sleep();
+#endif
+#if defined(CONFIG_OMI_ENABLE_WIFI_HOME_STA)
+        if (is_charging) {
+            (void)wifi_home_try_autosync();
+        }
 #endif
         k_msleep(1000);
     }

@@ -194,9 +194,16 @@ typedef struct {
     bool ble_sleep_cmd;
     bool capture_state;
     bool device_name_rw;
+    bool wifi;
 } omi_rust_feature_flags_t;
 
 uint32_t omi_rust_features_assemble(const omi_rust_feature_flags_t *flags);
+
+uint16_t omi_rust_wifi_encode_softap_header(uint64_t read_seq, uint64_t write_seq,
+                                           uint16_t packet_bytes, uint8_t *out);
+uint16_t omi_rust_wifi_encode_softap_done(uint64_t next_seq, uint8_t status, uint8_t *out);
+uint8_t omi_rust_wifi_classify_command(uint8_t cmd);
+uint8_t omi_rust_wifi_err_hw_unavailable(void);
 
 typedef enum {
     OMI_RUST_PACKER_APPEND = 0,

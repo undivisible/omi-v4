@@ -128,8 +128,14 @@ static struct bt_gatt_exchange_params exchange_params;
 
 #define MTU_RECHECK_DELAY_MS 800
 #define MTU_RECHECK_MAX_ATTEMPTS 6
+#define CONN_PHY_DELAY_MS 300
+#define CONN_DLE_MTU_DELAY_MS 1000
 static uint8_t mtu_recheck_attempts = 0;
 K_WORK_DELAYABLE_DEFINE(mtu_recheck_work, mtu_recheck_work_handler);
+static void conn_post_connect_phy_work_handler(struct k_work *work);
+static void conn_post_connect_dle_mtu_work_handler(struct k_work *work);
+K_WORK_DELAYABLE_DEFINE(conn_post_connect_phy_work, conn_post_connect_phy_work_handler);
+K_WORK_DELAYABLE_DEFINE(conn_post_connect_dle_mtu_work, conn_post_connect_dle_mtu_work_handler);
 
 //
 // Service and Characteristic
@@ -783,6 +789,7 @@ features_read_handler(struct bt_conn *conn, const struct bt_gatt_attr *attr, voi
         .ble_sleep_cmd = IS_ENABLED(CONFIG_OMI_ENABLE_BLE_SLEEP_CMD),
         .capture_state = IS_ENABLED(CONFIG_OMI_ENABLE_CAPTURE_LED),
         .device_name_rw = IS_ENABLED(CONFIG_OMI_ENABLE_DEVICE_NAME_RW),
+        .wifi = IS_ENABLED(CONFIG_OMI_ENABLE_WIFI),
     };
     uint32_t features = omi_rust_features_assemble(&flags);
 
@@ -903,17 +910,10 @@ static void _transport_connected(struct bt_conn *conn, uint8_t err)
     // Request aggressive connection params for higher BLE sync throughput.
     update_conn_params(current_connection);
 
-    // Delay a bit before PHY request to avoid early HCI race on some phones.
-    k_sleep(K_MSEC(300));
-
-    // Initiate PHY, Data Length, and MTU updates
-    update_phy(current_connection);
-
-    // Add a delay before data length and MTU updates as per Nordic example
-    k_sleep(K_MSEC(1000));
-    update_data_length(current_connection);
-    update_mtu(current_connection);
-    schedule_mtu_recheck();
+    // Do not sleep in the BT connected callback — that blocked the controller
+    // stack for ~1.3s and caused connect flakes / long "connecting" UX.
+    // Stagger PHY then DLE/MTU on the system workqueue instead.
+    k_work_reschedule(&conn_post_connect_phy_work, K_MSEC(CONN_PHY_DELAY_MS));
 
     is_connected = true;
 
@@ -939,9 +939,32 @@ K_SEM_DEFINE(audio_tx_sem,
              CONFIG_BT_CONN_TX_MAX - AUDIO_TX_RESERVED_SLOTS,
              CONFIG_BT_CONN_TX_MAX - AUDIO_TX_RESERVED_SLOTS);
 
+static void conn_post_connect_phy_work_handler(struct k_work *work)
+{
+    ARG_UNUSED(work);
+    if (!current_connection) {
+        return;
+    }
+    update_phy(current_connection);
+    k_work_reschedule(&conn_post_connect_dle_mtu_work, K_MSEC(CONN_DLE_MTU_DELAY_MS));
+}
+
+static void conn_post_connect_dle_mtu_work_handler(struct k_work *work)
+{
+    ARG_UNUSED(work);
+    if (!current_connection) {
+        return;
+    }
+    update_data_length(current_connection);
+    update_mtu(current_connection);
+    schedule_mtu_recheck();
+}
+
 static void _transport_disconnected(struct bt_conn *conn, uint8_t err)
 {
     k_work_cancel_delayable(&mtu_recheck_work);
+    k_work_cancel_delayable(&conn_post_connect_phy_work);
+    k_work_cancel_delayable(&conn_post_connect_dle_mtu_work);
     mtu_recheck_attempts = 0;
 #ifdef CONFIG_OMI_ENABLE_ADAPTIVE_CONN_PARAMS
     k_work_cancel_delayable(&conn_params_apply_work);

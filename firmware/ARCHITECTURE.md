@@ -46,8 +46,8 @@ Grounded in `boards/omi/omi_nrf5340_cpuapp.dts` unless noted.
   at boot). A separate Puya P25Q16 SPI NOR (2 MB) sits on the same SPI3 bus at
   CS1 and is the MCUboot secondary slot (`nordic,pm-ext-flash = &spi_flash`).
 - **nRF7002** Wi-Fi 6 companion on QSPI (`nrf7002@1`). Present in the
-  devicetree, **not used**: no `CONFIG_WIFI` anywhere in `omi/omi.conf`, and no
-  source file references it. See §4.6.
+  devicetree; SoftAP + ring sync restored behind `CONFIG_OMI_ENABLE_WIFI`
+  (default `n`). See [`WIFI_SYNC.md`](WIFI_SYNC.md).
 - **Power/UI**: three PWM LEDs on `pwm0`, a haptic motor on P0.25
   (`motor_pin`), a user button on P0.26 (`usr_btn`, pull-up, active low),
   battery sense on P0.06 via SAADC AIN0 with a divider, charge detect on P0.07
