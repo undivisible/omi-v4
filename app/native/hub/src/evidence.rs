@@ -254,6 +254,7 @@ fn dock_apps() -> Vec<String> {
     Vec::new()
 }
 
+#[cfg(any(target_os = "macos", test))]
 pub fn parse_dock_labels(plist_text: &str) -> Vec<String> {
     plist_text
         .lines()

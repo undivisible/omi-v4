@@ -594,9 +594,13 @@ fn scan_notes() -> SourceScan {
     )
 }
 
+#[cfg(any(target_os = "macos", test))]
 const MAIL_FLAG_ANSWERED: i64 = 0x4;
+#[cfg(any(target_os = "macos", test))]
 const MAIL_FLAG_FLAGGED: i64 = 0x10;
+#[cfg(any(target_os = "macos", test))]
 const MAIL_SCORE_FLOOR: i32 = -40;
+#[cfg(any(target_os = "macos", test))]
 const MAIL_PROMO_KEYWORDS: &[&str] = &[
     "% off",
     "black friday",
@@ -614,6 +618,7 @@ const MAIL_PROMO_KEYWORDS: &[&str] = &[
     "unsubscribe",
     "your order has shipped",
 ];
+#[cfg(any(target_os = "macos", test))]
 const MAIL_BULK_SENDERS: &[&str] = &[
     "bounce",
     "campaign",
@@ -633,6 +638,7 @@ const MAIL_BULK_SENDERS: &[&str] = &[
     "updates@",
 ];
 
+#[cfg(any(target_os = "macos", test))]
 pub struct MailEvidence<'a> {
     pub subject: &'a str,
     pub sender_address: &'a str,
@@ -642,6 +648,7 @@ pub struct MailEvidence<'a> {
     pub age_days: i64,
 }
 
+#[cfg(any(target_os = "macos", test))]
 pub fn score_mail(evidence: &MailEvidence<'_>) -> i32 {
     let subject = evidence.subject.to_lowercase();
     let address = evidence.sender_address.to_lowercase();
