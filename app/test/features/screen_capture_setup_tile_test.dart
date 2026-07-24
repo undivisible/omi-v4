@@ -25,26 +25,27 @@ void main() {
     expect(find.text('Granted'), findsOneWidget);
   });
 
-  testWidgets('accessibility setup requests Accessibility, not Screen Recording', (
-    tester,
-  ) async {
-    final gateway = _Gateway();
-    await tester.pumpWidget(
-      MaterialApp(
-        home: Scaffold(
-          body: AccessibilitySetupTile(gateway: gateway, previewMode: false),
+  testWidgets(
+    'accessibility setup requests Accessibility, not Screen Recording',
+    (tester) async {
+      final gateway = _Gateway();
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: AccessibilitySetupTile(gateway: gateway, previewMode: false),
+          ),
         ),
-      ),
-    );
-    await tester.pumpAndSettle();
+      );
+      await tester.pumpAndSettle();
 
-    expect(find.text('Allow screen understanding'), findsOneWidget);
-    await tester.tap(find.byTooltip('Review Accessibility access'));
-    await tester.pumpAndSettle();
+      expect(find.text('Allow screen understanding'), findsOneWidget);
+      await tester.tap(find.byTooltip('Review Accessibility access'));
+      await tester.pumpAndSettle();
 
-    expect(gateway.requests, [CoreCapability.accessibility]);
-    expect(find.text('Granted'), findsOneWidget);
-  });
+      expect(gateway.requests, [CoreCapability.accessibility]);
+      expect(find.text('Granted'), findsOneWidget);
+    },
+  );
 }
 
 final class _Gateway implements DesktopCapabilityGateway {

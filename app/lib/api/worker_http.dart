@@ -82,8 +82,8 @@ final class WorkerHttpClient {
       }
     }
     if (response.statusCode == 401) {
-      final message = decoded is Map<String, Object?> &&
-              decoded['error'] is String
+      final message =
+          decoded is Map<String, Object?> && decoded['error'] is String
           ? decoded['error']! as String
           : 'Sign in again to continue';
       throw WorkerAuthenticationException(message);

@@ -85,9 +85,7 @@ final class AxContextSnapshot {
     }
     if (surrounding case final around? when around.isNotEmpty) {
       final marker = truncated ? '\n… (truncated)' : '';
-      sections.add(
-        'On screen:\n"""\n${_clampText(around, 4000)}$marker\n"""',
-      );
+      sections.add('On screen:\n"""\n${_clampText(around, 4000)}$marker\n"""');
     }
     return sections;
   }

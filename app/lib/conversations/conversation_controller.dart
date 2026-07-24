@@ -148,8 +148,9 @@ final class ConversationController {
   final void Function(Object error, StackTrace stackTrace) _addError;
   final Duration _inboxPollInterval;
   final _authorityChanges = StreamController<int>.broadcast(sync: true);
-  final _overlayChannelTurns =
-      StreamController<OverlayChannelTurn>.broadcast(sync: true);
+  final _overlayChannelTurns = StreamController<OverlayChannelTurn>.broadcast(
+    sync: true,
+  );
   final String _sessionId = randomId();
   int _generation = 0;
   int _transportSequence = 0;

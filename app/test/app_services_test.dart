@@ -699,7 +699,9 @@ void main() {
     );
     await services.initialize();
     await tester.pumpWidget(
-      MaterialApp(home: Scaffold(body: ChatScreen(services: services))),
+      MaterialApp(
+        home: Scaffold(body: ChatScreen(services: services)),
+      ),
     );
 
     await tester.enterText(find.byKey(const Key('chat_input')), 'hi');

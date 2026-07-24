@@ -165,7 +165,9 @@ class _MobileMemoryScreenState extends State<MobileMemoryScreen> {
         Positioned(
           left: 18,
           right: 18,
-          bottom: widget.embedded ? 8 : 12 + MediaQuery.paddingOf(context).bottom,
+          bottom: widget.embedded
+              ? 8
+              : 12 + MediaQuery.paddingOf(context).bottom,
           child: _floatingComposer(context),
         ),
       ],
@@ -241,11 +243,7 @@ class _MobileMemoryScreenState extends State<MobileMemoryScreen> {
                   ),
                 ),
               ),
-              Container(
-                width: 1,
-                height: 28,
-                color: _pageHairline(context),
-              ),
+              Container(width: 1, height: 28, color: _pageHairline(context)),
               Material(
                 color: _pageInk(context),
                 shape: const CircleBorder(),

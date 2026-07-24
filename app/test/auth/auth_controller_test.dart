@@ -291,32 +291,29 @@ void main() {
     expect(controller.snapshot.session?.uid, 'firebase-uid');
   });
 
-  test(
-    'concurrent validSession calls serialize refresh',
-    () async {
-      final gateway = _FakeAuthGateway(session, initialSession: session)
-        ..refreshBarrier = Completer<void>();
-      final consent = VolatileConsentStore()
-        ..receipt = ProcessingConsentReceipt.current(
-          subjectUid: session.uid,
-          acceptedAt: DateTime.utc(2026, 7, 21),
-        );
-      final controller = AuthController(gateway, consentStore: consent);
-      await controller.restoreSession();
+  test('concurrent validSession calls serialize refresh', () async {
+    final gateway = _FakeAuthGateway(session, initialSession: session)
+      ..refreshBarrier = Completer<void>();
+    final consent = VolatileConsentStore()
+      ..receipt = ProcessingConsentReceipt.current(
+        subjectUid: session.uid,
+        acceptedAt: DateTime.utc(2026, 7, 21),
+      );
+    final controller = AuthController(gateway, consentStore: consent);
+    await controller.restoreSession();
 
-      final first = controller.validSession();
-      final second = controller.validSession();
-      await Future<void>.delayed(Duration.zero);
-      expect(gateway.refreshCalls, 1);
+    final first = controller.validSession();
+    final second = controller.validSession();
+    await Future<void>.delayed(Duration.zero);
+    expect(gateway.refreshCalls, 1);
 
-      gateway.refreshBarrier!.complete();
-      final results = await Future.wait([first, second]);
+    gateway.refreshBarrier!.complete();
+    final results = await Future.wait([first, second]);
 
-      expect(results.every((value) => value?.idToken == session.idToken), isTrue);
-      expect(controller.snapshot.phase, AuthPhase.signedIn);
-      expect(gateway.refreshCalls, 1);
-    },
-  );
+    expect(results.every((value) => value?.idToken == session.idToken), isTrue);
+    expect(controller.snapshot.phase, AuthPhase.signedIn);
+    expect(gateway.refreshCalls, 1);
+  });
 
   test(
     'transient refresh failures reuse a still-valid cached session',

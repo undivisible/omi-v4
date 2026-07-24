@@ -83,35 +83,40 @@ void main() {
     expect(find.byKey(const Key('memory_search_error')), findsOneWidget);
   });
 
-  testWidgets('the search bar floats above the list with the add control inside',
-      (tester) async {
-    await tester.pumpWidget(
-      MaterialApp(
-        home: MobileMemoryScreen(
-          memory: MemoryClient(_FakeMemoryTransport()),
-          embedded: true,
+  testWidgets(
+    'the search bar floats above the list with the add control inside',
+    (tester) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: MobileMemoryScreen(
+            memory: MemoryClient(_FakeMemoryTransport()),
+            embedded: true,
+          ),
         ),
-      ),
-    );
+      );
 
-    expect(find.byKey(const Key('memory_floating_bar')), findsOneWidget);
-    expect(find.text('Memory'), findsNothing);
-    expect(find.text('Search what Omi knows, or add something new.'), findsNothing);
-    expect(
-      find.descendant(
-        of: find.byKey(const Key('memory_floating_bar')),
-        matching: find.byKey(const Key('memory_search_field')),
-      ),
-      findsOneWidget,
-    );
-    expect(
-      find.descendant(
-        of: find.byKey(const Key('memory_floating_bar')),
-        matching: find.byKey(const Key('memory_create_submit')),
-      ),
-      findsOneWidget,
-    );
-  });
+      expect(find.byKey(const Key('memory_floating_bar')), findsOneWidget);
+      expect(find.text('Memory'), findsNothing);
+      expect(
+        find.text('Search what Omi knows, or add something new.'),
+        findsNothing,
+      );
+      expect(
+        find.descendant(
+          of: find.byKey(const Key('memory_floating_bar')),
+          matching: find.byKey(const Key('memory_search_field')),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(
+          of: find.byKey(const Key('memory_floating_bar')),
+          matching: find.byKey(const Key('memory_create_submit')),
+        ),
+        findsOneWidget,
+      );
+    },
+  );
 }
 
 const _searchDebounceDelay = Duration(milliseconds: 300);

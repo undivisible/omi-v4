@@ -120,7 +120,9 @@ final class PreferencesMobileCompanionCache implements MobileCompanionCache {
 
   @override
   Future<CompanionChatSessionSnapshot?> readChatSession() async {
-    final raw = (await SharedPreferences.getInstance()).getString(chatSessionKey);
+    final raw = (await SharedPreferences.getInstance()).getString(
+      chatSessionKey,
+    );
     if (raw == null) return null;
     try {
       final decoded = jsonDecode(raw);

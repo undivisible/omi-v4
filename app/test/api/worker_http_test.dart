@@ -244,7 +244,9 @@ void main() {
         requests += 1;
         final authorized = request.headers['authorization'];
         return http.Response(
-          authorized == 'Bearer refreshed-token' ? '{"ok":true}' : '{"error":"Authentication failed"}',
+          authorized == 'Bearer refreshed-token'
+              ? '{"ok":true}'
+              : '{"error":"Authentication failed"}',
           authorized == 'Bearer refreshed-token' ? 200 : 401,
         );
       }),

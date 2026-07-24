@@ -49,10 +49,10 @@ void main() {
         'Open the deck',
       ]);
       expect((pushed['suggestions'] as List).last['kind'], 'link');
-      expect(
-        (pushed['sessionTurns'] as List).map((entry) => entry['origin']),
-        ['user', 'telegram'],
-      );
+      expect((pushed['sessionTurns'] as List).map((entry) => entry['origin']), [
+        'user',
+        'telegram',
+      ]);
     });
 
     testWidgets('a relayed submission runs on the engine that owns services', (
@@ -165,11 +165,7 @@ void main() {
           'status': 'Working…',
           'answer': 'Here is what I found.',
           'sessionTurns': [
-            {
-              'origin': 'user',
-              'text': 'find it',
-              'at': 0,
-            },
+            {'origin': 'user', 'text': 'find it', 'at': 0},
           ],
         }),
       );

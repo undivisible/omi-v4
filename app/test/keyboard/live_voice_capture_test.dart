@@ -146,9 +146,7 @@ void main() {
 
       async.elapse(const Duration(seconds: 90));
       async.flushMicrotasks();
-      expect(hub.contextUpdates, [
-        'Updated screen context:\nApp: Mail 1',
-      ]);
+      expect(hub.contextUpdates, ['Updated screen context:\nApp: Mail 1']);
 
       async.elapse(const Duration(seconds: 90));
       async.flushMicrotasks();

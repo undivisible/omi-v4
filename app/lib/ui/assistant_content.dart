@@ -12,7 +12,8 @@ import 'markdown_text.dart';
 /// an interactive surface.
 class _Segment {
   const _Segment.markdown(this.text) : isArtifact = false, complete = true;
-  const _Segment.artifact(this.text, {this.complete = true}) : isArtifact = true;
+  const _Segment.artifact(this.text, {this.complete = true})
+    : isArtifact = true;
 
   final String text;
   final bool isArtifact;
@@ -67,16 +68,15 @@ class AssistantContent extends StatelessWidget {
         continue;
       }
       if (crepusRenders(segment.text)) {
-        children.add(
-          _ArtifactFadeIn(
-            child: _artifact(context, segment.text),
-          ),
-        );
+        children.add(_ArtifactFadeIn(child: _artifact(context, segment.text)));
       } else {
         // Not renderable → show the raw block as a fenced code segment rather
         // than a blank or half-drawn card.
         children.add(
-          AssistantMarkdown('```crepus\n${segment.text}\n```', streaming: streaming),
+          AssistantMarkdown(
+            '```crepus\n${segment.text}\n```',
+            streaming: streaming,
+          ),
         );
       }
     }
@@ -164,7 +164,9 @@ class _ArtifactSkeletonState extends State<_ArtifactSkeleton>
 
   @override
   Widget build(BuildContext context) {
-    final muted = Theme.of(context).colorScheme.onSurface.withValues(alpha: .14);
+    final muted = Theme.of(
+      context,
+    ).colorScheme.onSurface.withValues(alpha: .14);
     return DecoratedBox(
       key: const Key('assistant_crepus_artifact_skeleton'),
       decoration: BoxDecoration(
@@ -243,10 +245,8 @@ class _ArtifactFadeIn extends StatelessWidget {
       tween: Tween(begin: 0, end: 1),
       duration: const Duration(milliseconds: 360),
       curve: Curves.easeOutCubic,
-      builder: (context, value, child) => Opacity(
-        opacity: value.clamp(0.0, 1.0),
-        child: child,
-      ),
+      builder: (context, value, child) =>
+          Opacity(opacity: value.clamp(0.0, 1.0), child: child),
       child: child,
     );
   }

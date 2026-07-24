@@ -139,9 +139,7 @@ final class AuthController extends ChangeNotifier {
         );
         return null;
       }
-      final session = await _gateway.refreshSession(
-        forceRefresh: forceRefresh,
-      );
+      final session = await _gateway.refreshSession(forceRefresh: forceRefresh);
       if (session == null) {
         _set(
           AuthSnapshot(
@@ -165,8 +163,7 @@ final class AuthController extends ChangeNotifier {
       return session;
     } on AuthGatewayException catch (error) {
       final cached = _cachedSessionIfUsable();
-      if (cached != null &&
-          error.failure.code == AuthErrorCode.network) {
+      if (cached != null && error.failure.code == AuthErrorCode.network) {
         return cached;
       }
       _fail(error.failure.code, error.failure.message);

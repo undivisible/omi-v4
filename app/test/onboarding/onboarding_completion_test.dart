@@ -241,7 +241,8 @@ final class _Gateway implements AuthGateway {
       const PhoneOtpChallenge(verificationId: 'test');
 
   @override
-  Future<AuthSession?> refreshSession({bool forceRefresh = false}) async => currentSession;
+  Future<AuthSession?> refreshSession({bool forceRefresh = false}) async =>
+      currentSession;
 
   @override
   Future<AuthSession?> restoreSession() async => currentSession;

@@ -259,8 +259,7 @@ final class PillPanelClient {
                 ),
           ],
           sessionTurns: [
-            for (final raw
-                in (arguments?['sessionTurns'] as List?) ?? const [])
+            for (final raw in (arguments?['sessionTurns'] as List?) ?? const [])
               if (OverlayTurn.fromMap(raw) case final turn?) turn,
           ],
           status: arguments?['status'] as String?,

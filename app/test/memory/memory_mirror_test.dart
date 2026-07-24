@@ -460,13 +460,14 @@ void main() {
   });
 }
 
-MemoryMirrorRecord _mirrorRecord(int sequence, String replica, String value) => (
-  sequence: sequence,
-  originReplica: replica,
-  recordKind: 'claim',
-  recordId: 'claim-1',
-  payload: {'value': value},
-  recordedAt: 11,
-);
+MemoryMirrorRecord _mirrorRecord(int sequence, String replica, String value) =>
+    (
+      sequence: sequence,
+      originReplica: replica,
+      recordKind: 'claim',
+      recordId: 'claim-1',
+      payload: {'value': value},
+      recordedAt: 11,
+    );
 
 Uint64 _count(int value) => Uint64.fromBigInt(BigInt.from(value));

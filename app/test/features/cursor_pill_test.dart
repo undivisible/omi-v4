@@ -256,83 +256,89 @@ void main() {
     await harness.close();
   });
 
-  test('agent text replies stream then land in the session transcript', () async {
-    final harness = _Harness();
-    final controller = harness.controller();
+  test(
+    'agent text replies stream then land in the session transcript',
+    () async {
+      final harness = _Harness();
+      final controller = harness.controller();
 
-    await controller.summon();
-    await controller.submit('summarize my day');
-    expect(controller.state, CursorPillState.working);
+      await controller.summon();
+      await controller.submit('summarize my day');
+      expect(controller.state, CursorPillState.working);
 
-    harness.hub.add(
-      const NativeEventAssistantDelta(
-        value: AssistantDelta(
-          requestId: 'req-1',
-          text: 'Here is your day: ',
-          finalSegment: false,
+      harness.hub.add(
+        const NativeEventAssistantDelta(
+          value: AssistantDelta(
+            requestId: 'req-1',
+            text: 'Here is your day: ',
+            finalSegment: false,
+          ),
         ),
-      ),
-    );
-    await pumpEventQueue();
-    expect(controller.state, CursorPillState.working);
-    expect(controller.answer, 'Here is your day:');
+      );
+      await pumpEventQueue();
+      expect(controller.state, CursorPillState.working);
+      expect(controller.answer, 'Here is your day:');
 
-    harness.hub.add(
-      const NativeEventAssistantDelta(
-        value: AssistantDelta(
-          requestId: 'req-1',
-          text: 'meetings and mail.',
-          finalSegment: true,
+      harness.hub.add(
+        const NativeEventAssistantDelta(
+          value: AssistantDelta(
+            requestId: 'req-1',
+            text: 'meetings and mail.',
+            finalSegment: true,
+          ),
         ),
-      ),
-    );
-    await pumpEventQueue();
-    expect(controller.state, CursorPillState.input);
-    expect(controller.answer, isNull);
-    expect(controller.sessionTurns.map((turn) => turn.origin), [
-      OverlayTurnOrigin.user,
-      OverlayTurnOrigin.assistant,
-    ]);
-    expect(
-      controller.sessionTurns.last.text,
-      'Here is your day:meetings and mail.',
-    );
+      );
+      await pumpEventQueue();
+      expect(controller.state, CursorPillState.input);
+      expect(controller.answer, isNull);
+      expect(controller.sessionTurns.map((turn) => turn.origin), [
+        OverlayTurnOrigin.user,
+        OverlayTurnOrigin.assistant,
+      ]);
+      expect(
+        controller.sessionTurns.last.text,
+        'Here is your day:meetings and mail.',
+      );
 
-    controller.dispose();
-    await harness.close();
-  });
+      controller.dispose();
+      await harness.close();
+    },
+  );
 
-  test('dismiss within the reuse window restores the session transcript', () async {
-    final harness = _Harness();
-    final controller = harness.controller();
+  test(
+    'dismiss within the reuse window restores the session transcript',
+    () async {
+      final harness = _Harness();
+      final controller = harness.controller();
 
-    await controller.summon();
-    await controller.submit('remember this');
-    harness.hub.add(
-      const NativeEventAssistantDelta(
-        value: AssistantDelta(
-          requestId: 'req-1',
-          text: 'Got it.',
-          finalSegment: true,
+      await controller.summon();
+      await controller.submit('remember this');
+      harness.hub.add(
+        const NativeEventAssistantDelta(
+          value: AssistantDelta(
+            requestId: 'req-1',
+            text: 'Got it.',
+            finalSegment: true,
+          ),
         ),
-      ),
-    );
-    await pumpEventQueue();
-    expect(controller.sessionTurns, hasLength(2));
+      );
+      await pumpEventQueue();
+      expect(controller.sessionTurns, hasLength(2));
 
-    await controller.dismiss();
-    harness.advance(const Duration(seconds: 20));
-    await controller.summon();
+      await controller.dismiss();
+      harness.advance(const Duration(seconds: 20));
+      await controller.summon();
 
-    expect(controller.state, CursorPillState.input);
-    expect(controller.sessionTurns.map((turn) => turn.text), [
-      'remember this',
-      'Got it.',
-    ]);
+      expect(controller.state, CursorPillState.input);
+      expect(controller.sessionTurns.map((turn) => turn.text), [
+        'remember this',
+        'Got it.',
+      ]);
 
-    controller.dispose();
-    await harness.close();
-  });
+      controller.dispose();
+      await harness.close();
+    },
+  );
 
   test('dismiss past the reuse window starts a fresh session', () async {
     final harness = _Harness();
@@ -483,10 +489,7 @@ void main() {
   test('voice stop with a transcript keeps the reply on the overlay', () async {
     final harness = _Harness(stopTranscript: 'what is on my screen');
     final controller = harness.controller(
-      axContext: const AxContextSnapshot(
-        appName: 'Mail',
-        windowTitle: 'Inbox',
-      ),
+      axContext: const AxContextSnapshot(appName: 'Mail', windowTitle: 'Inbox'),
     );
 
     await controller.beginVoice();

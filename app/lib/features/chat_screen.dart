@@ -681,9 +681,8 @@ class ChatScreenState extends State<ChatScreen>
     _chatSessionExpiryTimer?.cancel();
     final activityAt = _chatSessionActivityAt;
     if (_exchangeStart == null || activityAt == null) return;
-    final remaining = _chatSessionReuseWindow - DateTime.now().difference(
-      activityAt,
-    );
+    final remaining =
+        _chatSessionReuseWindow - DateTime.now().difference(activityAt);
     _chatSessionExpiryTimer = Timer(
       remaining.isNegative ? Duration.zero : remaining,
       _maybeExpireChatSession,
@@ -760,7 +759,9 @@ class ChatScreenState extends State<ChatScreen>
     } catch (_) {}
   }
 
-  Future<void> _clearPersistedChatSession({SharedPreferences? preferences}) async {
+  Future<void> _clearPersistedChatSession({
+    SharedPreferences? preferences,
+  }) async {
     try {
       final prefs = preferences ?? await SharedPreferences.getInstance();
       await prefs.remove(chatSessionExchangeStartKey);
@@ -1399,8 +1400,9 @@ class ChatScreenState extends State<ChatScreen>
                               // The message directly above the home view is
                               // the peek, so it has to be built even when the
                               // home view is taller than the viewport.
-                              scrollCacheExtent:
-                                  const ScrollCacheExtent.pixels(800),
+                              scrollCacheExtent: const ScrollCacheExtent.pixels(
+                                800,
+                              ),
                               itemCount:
                                   history.length +
                                   1 +
@@ -1455,11 +1457,10 @@ class ChatScreenState extends State<ChatScreen>
                                               showByokHint:
                                                   !_byokHintDismissed &&
                                                   _byokPlanFree,
-                                              onOpenByok: widget
-                                                  .onOpenProviderSettings,
-                                              onDismissByok: () => unawaited(
-                                                _dismissByokHint(),
-                                              ),
+                                              onOpenByok:
+                                                  widget.onOpenProviderSettings,
+                                              onDismissByok: () =>
+                                                  unawaited(_dismissByokHint()),
                                             ),
                                           ),
                                         ),
@@ -1573,8 +1574,7 @@ class ChatScreenState extends State<ChatScreen>
 
   /// Placeholder shimmer only before the first assistant delta arrives.
   bool get _showSkeleton =>
-      _activeRequestId != null &&
-      !_assistantTurnStarted(_activeRequestId!);
+      _activeRequestId != null && !_assistantTurnStarted(_activeRequestId!);
 
   /// Top status strip while the hub is working but not streaming plain text.
   String? get _activityMarquee {
@@ -1653,7 +1653,8 @@ class ChatScreenState extends State<ChatScreen>
                 padding: const EdgeInsets.all(12),
                 child: AssistantContent(
                   message.text,
-                  streaming: !message.fromUser &&
+                  streaming:
+                      !message.fromUser &&
                       _activeRequestId != null &&
                       message.requestId == _activeRequestId,
                   onPrompt: _sendPrompt,
@@ -2155,7 +2156,10 @@ class _ChatActivityMarquee extends StatelessWidget {
                 ],
               ),
               child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 7,
+                ),
                 child: _MarqueeLabel(
                   key: const Key('chat_activity_marquee'),
                   label: label,
@@ -2251,10 +2255,7 @@ class _MarqueeLabelState extends State<_MarqueeLabel>
         );
         if (_overflow <= 0 ||
             MediaQuery.maybeOf(context)?.disableAnimations == true) {
-          return Align(
-            alignment: Alignment.center,
-            child: label,
-          );
+          return Align(alignment: Alignment.center, child: label);
         }
         return ClipRect(
           child: AnimatedBuilder(
@@ -2849,10 +2850,7 @@ class _SkeletonBubbleState extends State<_SkeletonBubble>
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(12),
-        child: _ThinkingDots(
-          animation: _pulse,
-          color: colors.muted,
-        ),
+        child: _ThinkingDots(animation: _pulse, color: colors.muted),
       ),
     );
   }
@@ -2903,10 +2901,10 @@ class _ThinkingDot extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final wave = (t + phase) % 1.0;
-    final scale = 0.55 +
-        0.45 * Curves.easeInOut.transform(
-          wave < 0.5 ? wave * 2 : (1 - wave) * 2,
-        );
+    final scale =
+        0.55 +
+        0.45 *
+            Curves.easeInOut.transform(wave < 0.5 ? wave * 2 : (1 - wave) * 2);
     final alpha = 0.35 + 0.65 * scale;
     return Transform.scale(
       scale: scale,

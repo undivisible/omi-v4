@@ -181,7 +181,10 @@ void main() {
     await tester.pump();
 
     expect(find.byKey(const Key('brief_hero')), findsOneWidget);
-    expect(find.byKey(const ValueKey('brief_row_meeting-follow-up')), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('brief_row_meeting-follow-up')),
+      findsOneWidget,
+    );
     expect(find.text('CONVERSATION'), findsOneWidget);
   });
 
@@ -547,7 +550,8 @@ final class _SignedInGateway implements AuthGateway {
   Future<AuthSession?> restoreSession() async => _session;
 
   @override
-  Future<AuthSession?> refreshSession({bool forceRefresh = false}) async => _session;
+  Future<AuthSession?> refreshSession({bool forceRefresh = false}) async =>
+      _session;
 
   @override
   Future<void> signOut() async {}
