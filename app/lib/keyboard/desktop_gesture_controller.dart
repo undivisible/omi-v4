@@ -29,7 +29,6 @@ final class DesktopGestureController {
         key,
         pressed,
       ),
-      DesktopSummonOverlayEvent() => _machine.summonOverlay(),
       DesktopSecureInputEvent(:final enabled) => _machine.setSecureInput(
         enabled,
       ),

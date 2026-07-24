@@ -11,6 +11,7 @@ enum CoreCapability {
   microphone,
   screenCapture,
   appData,
+  inputMonitoring,
   workspaceRoot,
 }
 
@@ -40,16 +41,11 @@ abstract interface class DesktopCapabilityGateway {
 
   Future<void> request(CoreCapability capability);
 
-  /// Input Monitoring is a separate macOS grant from Accessibility, and a
-  /// keyboard event tap needs it. It is not a [CoreCapability] because
-  /// nothing gates on it at startup — only the global-shortcut notice offers
-  /// it, once the diagnostics show that it is the missing piece.
+  /// Prefer [request] with [CoreCapability.inputMonitoring] where practical.
+  /// Kept as a named entry point for older call sites / tiles.
   Future<void> requestInputMonitoring();
 
-  /// Whether macOS Input Monitoring is granted right now. Onboarding reads it
-  /// to offer the grant up front, since without it the taught shake and
-  /// keybinds never fire outside Omi — a gap the shell notice otherwise only
-  /// reveals after setup.
+  /// Prefer [check] for [CoreCapability.inputMonitoring] where practical.
   Future<bool> inputMonitoringGranted();
 
   Future<void> dismissOverlay();
@@ -190,6 +186,10 @@ final class PlatformDesktopCapabilityGateway
                 'Windows asks for a window or display when each capture session starts.',
           ),
           CoreCapability.appData: appData,
+          CoreCapability.inputMonitoring: const CapabilityStatus(
+            state: CapabilityState.granted,
+            detail: 'Global double-Shift uses a system-wide keyboard hook.',
+          ),
           CoreCapability.workspaceRoot: workspaceRoot,
         };
       } catch (error) {
@@ -209,6 +209,10 @@ final class PlatformDesktopCapabilityGateway
                 'Windows asks for a window or display when each capture session starts.',
           ),
           CoreCapability.appData: appData,
+          CoreCapability.inputMonitoring: const CapabilityStatus(
+            state: CapabilityState.granted,
+            detail: 'Global double-Shift uses a system-wide keyboard hook.',
+          ),
           CoreCapability.workspaceRoot: workspaceRoot,
         };
       }
@@ -246,17 +250,20 @@ final class PlatformDesktopCapabilityGateway
             granted: fullDisk,
             grantedOutOfProcess: values?['fullDiskGrantedOutOfProcess'] == true,
           );
+      final inputMonitoring = values?['inputMonitoring'] == true;
       await _reconcileOverlay(
         accessibility: accessibility,
         screenCapture: screenCapture,
         restartRequired: restartRequired,
         fullDisk: fullDisk,
         fullDiskRestartRequired: fullDiskRestartRequired,
+        inputMonitoring: inputMonitoring,
       );
       return {
         CoreCapability.accessibility: _permission(
           accessibility,
-          'Accessibility lets Omi identify and act in the active app.',
+          'Accessibility lets Omi read the active window for overlay and '
+          'voice context, and act when you approve.',
         ),
         CoreCapability.microphone: _permission(
           microphone,
@@ -270,7 +277,8 @@ final class PlatformDesktopCapabilityGateway
               )
             : _permission(
                 screenCapture,
-                'Screen Recording lets Omi understand visible work.',
+                'Screen Recording lets Omi capture pixels for Rewind — '
+                'separate from Accessibility screen understanding.',
               ),
         CoreCapability.appData: fullDiskRestartRequired
             ? const CapabilityStatus(
@@ -282,6 +290,10 @@ final class PlatformDesktopCapabilityGateway
                 fullDisk,
                 'Full Disk Access lets Omi read Apple Mail and Notes for your local memory.',
               ),
+        CoreCapability.inputMonitoring: _permission(
+          inputMonitoring,
+          'Input Monitoring lets double-Shift work while other apps are in front.',
+        ),
         CoreCapability.workspaceRoot: workspaceRoot,
       };
     } catch (error) {
@@ -370,31 +382,26 @@ final class PlatformDesktopCapabilityGateway
         } else {
           await _openSettingsPane('Privacy_AllFiles', capability);
         }
+      case CoreCapability.inputMonitoring:
+        if (!_inputMonitoringPrompted) {
+          _inputMonitoringPrompted = true;
+          await _channel.invokeMethod<void>('promptInputMonitoring');
+        } else {
+          await _openSettingsPane('Privacy_ListenEvent', capability);
+        }
       case CoreCapability.workspaceRoot:
         return;
     }
   }
 
   @override
-  Future<void> requestInputMonitoring() async {
-    if (defaultTargetPlatform != TargetPlatform.macOS) return;
-    if (!_inputMonitoringPrompted) {
-      _inputMonitoringPrompted = true;
-      await _channel.invokeMethod<void>('promptInputMonitoring');
-    } else {
-      await _openSettingsPane('Privacy_ListenEvent', null);
-    }
-  }
+  Future<void> requestInputMonitoring() =>
+      request(CoreCapability.inputMonitoring);
 
   @override
   Future<bool> inputMonitoringGranted() async {
-    if (kIsWeb || defaultTargetPlatform != TargetPlatform.macOS) return false;
-    try {
-      final values = await _channel.invokeMapMethod<String, Object?>('check');
-      return values?['inputMonitoring'] == true;
-    } catch (_) {
-      return false;
-    }
+    final status = (await check())[CoreCapability.inputMonitoring];
+    return status?.acceptable == true;
   }
 
   Future<void> _openSettingsPane(
@@ -414,6 +421,7 @@ final class PlatformDesktopCapabilityGateway
     required bool restartRequired,
     required bool fullDisk,
     required bool fullDiskRestartRequired,
+    required bool inputMonitoring,
   }) async {
     final shown = _overlayShownFor;
     if (shown == null) return;
@@ -421,6 +429,7 @@ final class PlatformDesktopCapabilityGateway
       CoreCapability.accessibility => accessibility,
       CoreCapability.screenCapture => screenCapture,
       CoreCapability.appData => fullDisk || fullDiskRestartRequired,
+      CoreCapability.inputMonitoring => inputMonitoring,
       _ => false,
     };
     if (!granted) return;

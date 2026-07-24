@@ -83,7 +83,10 @@ class _OmiShellState extends State<OmiShell> {
       currents: widget.services.currents,
       isListening: () => widget.services.desktopVoice.active,
       isMeetingActive: () => widget.services.meetingActive,
-      onCapture: () => _handleDesktopGesture(ShiftGestureAction.openOverlay),
+      // Menu Capture is always overlay-first — even when the hub window is
+      // already frontmost. The keyboard chord still prefers the hub composer
+      // in that case (see `_handleDesktopGesture`); the menu item must not.
+      onCapture: _summonOverlayCapture,
       onToggleListening: () => _handleDesktopGesture(
         widget.services.desktopVoice.active
             ? ShiftGestureAction.stopVoice
@@ -108,9 +111,9 @@ class _OmiShellState extends State<OmiShell> {
     _keyboardNotices = _desktopKeyboard.events.listen(_handleKeyboardNotice);
   }
 
-  /// Without the Accessibility grant the global keyboard monitor is blind
-  /// while another app is frontmost, so the chord and Option+Space silently
-  /// stop working system-wide. Surface that once, with the fix.
+  /// Without Input Monitoring the global keyboard tap cannot install while
+  /// another app is frontmost, so double-Shift silently stops working
+  /// system-wide. Surface that once and open the system prompt.
   void _handleKeyboardNotice(DesktopKeyboardEvent event) {
     if (event is DesktopAppActivationEvent) {
       _appActive = event.active;
@@ -128,21 +131,21 @@ class _OmiShellState extends State<OmiShell> {
       return;
     }
     if (event is! DesktopGlobalHotkeyUnavailableEvent) return;
+    if (!event.inputMonitoring) {
+      unawaited(
+        widget.services.capabilities.request(CoreCapability.inputMonitoring),
+      );
+    }
     if (_globalHotkeyNoticeShown || !mounted) return;
     _globalHotkeyNoticeShown = true;
-    final needsAccessibility = !event.trusted;
-    final needsInputMonitoring = !event.inputMonitoring;
-    final grant = needsAccessibility
-        ? 'Accessibility'
-        : needsInputMonitoring
-        ? 'Input Monitoring'
-        : 'Accessibility or Input Monitoring';
     ScaffoldMessenger.maybeOf(context)?.showSnackBar(
       SnackBar(
         content: Text(
-          'Global double-Shift and $summonOverlayKeybindLabel only work outside '
-          'Omi once $grant is granted in System Settings → Privacy & Security. '
-          'They still work inside the hub window.',
+          event.inputMonitoring
+              ? 'Global double-Shift needs Input Monitoring in System Settings '
+                  '→ Privacy & Security. It still works inside the hub window.'
+              : 'Allow Input Monitoring so double-Shift works outside Omi. '
+                  'System Settings should open now.',
         ),
         duration: const Duration(seconds: 8),
       ),
@@ -241,13 +244,26 @@ class _OmiShellState extends State<OmiShell> {
     }
   }
 
+  Future<void> _summonOverlayCapture() async {
+    if (!mounted) return;
+    final pill = _cursorPill;
+    if (pill != null) {
+      await pill.handleGesture(ShiftGestureAction.openOverlay);
+      return;
+    }
+    await _chatKey.currentState?.handleDesktopGesture(
+      ShiftGestureAction.openOverlay,
+    );
+  }
+
   Future<void> _handleDesktopGesture(ShiftGestureAction action) async {
     if (!mounted) return;
     final pill = _cursorPill;
     // With the hub already frontmost the chord means "let me type here": the
     // floating panel would only cover the window it was summoned from, so the
     // caret goes to the hub's own composer instead. Any surface already up
-    // keeps its own toggle semantics.
+    // keeps its own toggle semantics. Menu Capture bypasses this via
+    // `_summonOverlayCapture`.
     if (action == ShiftGestureAction.openOverlay &&
         _appActive &&
         (pill == null || pill.state == CursorPillState.hidden)) {
@@ -312,8 +328,10 @@ class _OmiShellState extends State<OmiShell> {
               _GlobalInputNotice(
                 diagnostics: diagnostics,
                 onGrant: () => unawaited(
-                  diagnostics.trusted && !diagnostics.inputMonitoring
-                      ? widget.services.capabilities.requestInputMonitoring()
+                  !diagnostics.inputMonitoring
+                      ? widget.services.capabilities.request(
+                          CoreCapability.inputMonitoring,
+                        )
                       : widget.services.capabilities.request(
                           CoreCapability.accessibility,
                         ),
@@ -423,8 +441,8 @@ class _WarmPaperHub extends StatelessWidget {
   }
 }
 
-/// The visible truth about global input capture. Without it the chord and the
-/// overlay keybind only work while omi is frontmost, which otherwise looks
+/// The visible truth about global input capture. Without Input Monitoring the
+/// double-Shift chord only works while Omi is frontmost, which otherwise looks
 /// like the feature is simply broken.
 class _GlobalInputNotice extends StatelessWidget {
   const _GlobalInputNotice({required this.diagnostics, required this.onGrant});
@@ -452,8 +470,8 @@ class _GlobalInputNotice extends StatelessWidget {
           const SizedBox(width: 10),
           Expanded(
             child: Text(
-              'Global shortcuts are off — double-Shift and '
-              '$summonOverlayKeybindLabel only work inside Omi. '
+              'Global double-Shift only works outside Omi once Input Monitoring '
+              'is granted. '
               'Accessibility: '
               '${diagnostics.trusted ? "granted" : "not granted"} · '
               'Input Monitoring: '
@@ -466,9 +484,9 @@ class _GlobalInputNotice extends StatelessWidget {
             key: const Key('global_input_notice_grant'),
             onPressed: onGrant,
             child: Text(
-              diagnostics.trusted && !diagnostics.inputMonitoring
-                  ? 'Open Input Monitoring'
-                  : 'Open Accessibility',
+              diagnostics.inputMonitoring
+                  ? 'Open Accessibility'
+                  : 'Allow Input Monitoring',
             ),
           ),
         ],

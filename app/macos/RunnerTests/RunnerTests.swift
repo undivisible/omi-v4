@@ -323,17 +323,16 @@ class RunnerTests: XCTestCase {
     XCTAssertEqual(relaunched.frame, resized)
   }
 
-  func testGlobalInputTapWatchesTheChordAndThePointer() {
+  func testGlobalInputTapWatchesShiftKeys() {
     let mask = GlobalInputTap.eventMask
     XCTAssertNotEqual(mask & (1 << CGEventType.keyDown.rawValue), 0)
     XCTAssertNotEqual(mask & (1 << CGEventType.flagsChanged.rawValue), 0)
-    XCTAssertNotEqual(mask & (1 << CGEventType.mouseMoved.rawValue), 0)
-    // Without the Accessibility grant the tap cannot exist, and the app must
-    // report that instead of pretending global capture is live.
+    // Without Input Monitoring the tap cannot exist, and the app must report
+    // that instead of pretending global capture is live.
     let tap = GlobalInputTap()
     tap.start()
     defer { tap.stop() }
-    XCTAssertEqual(tap.isInstalled, AXIsProcessTrusted())
+    XCTAssertEqual(tap.isInstalled, MacPermissionService.inputMonitoringGranted)
   }
 
   @MainActor

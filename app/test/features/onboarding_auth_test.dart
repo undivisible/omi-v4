@@ -615,7 +615,7 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 50));
 
-    expect(find.text('Granted'), findsNWidgets(4));
+    expect(find.text('Granted'), findsNWidgets(5));
   });
 
   test('mobile marks desktop capabilities not applicable', () async {

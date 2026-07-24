@@ -1,17 +1,15 @@
 enum PhysicalShift { left, right }
 
 /// The interaction is now a thin detector: the physical chord (counted once
-/// vs twice inside [doubleChordWindow]), the overlay keybind, and the mouse
-/// shake each emit a single intent, and the surface that consumes them
-/// ([CursorPillController]) owns all real state (and the debounce).
+/// vs twice inside [doubleChordWindow]) emits a single intent, and the surface
+/// that consumes them ([CursorPillController]) owns all real state (and the
+/// debounce).
 ///
 /// - both Shift keys down once: [openOverlay] — summon the text input next
 ///   to the cursor, or dismiss whatever surface is already up. The action is
 ///   held back for [doubleChordWindow] so a second chord can upgrade it.
 /// - the chord twice within [doubleChordWindow]: [toggleVoice] — start
 ///   listening immediately, or dismiss the surface that is up.
-/// - the overlay keybind (Option+Space): [openOverlay], an alias for the
-///   single chord.
 /// - Esc: [escape] — dismiss whatever surface is up, identical to a second
 ///   double-shift.
 /// - explicit [startVoice]/[stopVoice] drive the menu-bar controls.
@@ -95,11 +93,6 @@ class ShiftGestureMachine {
     if (_pendingChordAt == null) return const [];
     _pendingChordAt = null;
     return const [ShiftGestureAction.openOverlay];
-  }
-
-  List<ShiftGestureAction> summonOverlay() {
-    _pendingChordAt = null;
-    return secureInput ? const [] : const [ShiftGestureAction.openOverlay];
   }
 
   List<ShiftGestureAction> escape() {

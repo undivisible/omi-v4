@@ -73,11 +73,6 @@ void main() {
     expect(gesture.hasPendingChord, isFalse);
   });
 
-  test('the overlay keybind emits openOverlay immediately', () {
-    final gesture = machine();
-    expect(gesture.summonOverlay(), [ShiftGestureAction.openOverlay]);
-  });
-
   test('escape always emits the shared dismissal and clears the chord', () {
     final gesture = machine();
     chord(gesture);
@@ -92,7 +87,6 @@ void main() {
     expect(gesture.setSecureInput(true), [ShiftGestureAction.cancel]);
     expect(gesture.shift(PhysicalShift.left, true), isEmpty);
     expect(gesture.shift(PhysicalShift.right, true), isEmpty);
-    expect(gesture.summonOverlay(), isEmpty);
     expect(gesture.hasPendingChord, isFalse);
 
     expect(gesture.setSecureInput(false), isEmpty);

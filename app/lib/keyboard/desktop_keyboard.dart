@@ -5,13 +5,6 @@ import 'package:flutter/services.dart';
 
 import 'shift_gesture.dart';
 
-/// Human-readable label for the global keybind that summons the centered
-/// text overlay. The actual key detection lives natively
-/// (`MainFlutterWindow.swift`, `summonOverlayKeyCode`); this constant is the
-/// single place the shortcut is named so it can be surfaced in UI/onboarding
-/// and later made configurable.
-const summonOverlayKeybindLabel = 'Option + Space';
-
 sealed class DesktopKeyboardEvent {
   const DesktopKeyboardEvent();
 }
@@ -33,12 +26,6 @@ final class DesktopEscapeEvent extends DesktopKeyboardEvent {
   const DesktopEscapeEvent();
 }
 
-/// The global overlay keybind ([summonOverlayKeybindLabel], Option+Space by
-/// default) fired system-wide from the native keyboard monitor.
-final class DesktopSummonOverlayEvent extends DesktopKeyboardEvent {
-  const DesktopSummonOverlayEvent();
-}
-
 /// Ignored — cursor-shake summon was removed; kept so older native builds
 /// do not crash the decoder.
 final class DesktopShakeEvent extends DesktopKeyboardEvent {
@@ -46,9 +33,8 @@ final class DesktopShakeEvent extends DesktopKeyboardEvent {
 }
 
 /// Emitted once at stream start when global capture cannot run while another
-/// app is frontmost — the chord and overlay keybind still work inside omi
-/// via the local keyboard monitor, but system-wide shortcuts need
-/// Accessibility and Input Monitoring.
+/// app is frontmost — the double-Shift chord still works inside Omi via the
+/// local keyboard monitor, but system-wide shortcuts need Input Monitoring.
 final class DesktopGlobalHotkeyUnavailableEvent extends DesktopKeyboardEvent {
   const DesktopGlobalHotkeyUnavailableEvent({
     this.trusted = false,
@@ -69,10 +55,10 @@ final class DesktopAppActivationEvent extends DesktopKeyboardEvent {
 }
 
 /// The live state of global input capture: whether the process is
-/// Accessibility-trusted, whether it holds Input Monitoring (the separate
-/// grant a keyboard event tap needs), and whether the session event tap that
-/// watches the chord is actually installed. Surfaced in-app so a missing
-/// grant or a dead tap is visible instead of silent.
+/// Accessibility-trusted, whether it holds Input Monitoring (required for the
+/// session keyboard event tap), and whether that tap is actually installed.
+/// Surfaced in-app so a missing grant or a dead tap is visible instead of
+/// silent.
 final class DesktopInputDiagnosticsEvent extends DesktopKeyboardEvent {
   const DesktopInputDiagnosticsEvent({
     required this.trusted,
@@ -133,7 +119,8 @@ final class DesktopKeyboard {
       ),
       'secureInput' => DesktopSecureInputEvent(raw['enabled'] == true),
       'escape' => const DesktopEscapeEvent(),
-      'summonOverlay' => const DesktopSummonOverlayEvent(),
+      // Legacy native builds may still emit this; ignore it.
+      'summonOverlay' => const DesktopShakeEvent(),
       'shake' => const DesktopShakeEvent(),
       'globalHotkeyUnavailable' => DesktopGlobalHotkeyUnavailableEvent(
         trusted: raw['trusted'] == true,

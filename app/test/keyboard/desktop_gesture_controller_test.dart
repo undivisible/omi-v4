@@ -64,17 +64,6 @@ void main() {
     await h.events.close();
   });
 
-  test('the overlay keybind produces openOverlay immediately', () async {
-    final h = harness();
-
-    h.events.add(const DesktopSummonOverlayEvent());
-    await Future<void>.delayed(Duration.zero);
-
-    expect(h.actions, [ShiftGestureAction.openOverlay]);
-    await h.controller.dispose();
-    await h.events.close();
-  });
-
   test('secure input cancels and suppresses the chord', () async {
     final h = harness();
 
@@ -85,7 +74,6 @@ void main() {
     h.events.add(
       const DesktopShiftEvent(key: PhysicalShift.right, pressed: true),
     );
-    h.events.add(const DesktopSummonOverlayEvent());
     await Future<void>.delayed(window * 3);
 
     expect(h.actions, [ShiftGestureAction.cancel]);

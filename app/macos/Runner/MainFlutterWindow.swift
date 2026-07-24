@@ -592,18 +592,14 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
   override var canBecomeKey: Bool { true }
   override var canBecomeMain: Bool { true }
 
-  /// Key code for the global overlay keybind (49 = Space, combined with a
-  /// bare Option modifier). Single source of truth on the native side.
-  static let summonOverlayKeyCode: UInt16 = 49
-
   func onListen(withArguments arguments: Any?, eventSink events: @escaping FlutterEventSink) -> FlutterError? {
     keyboardSink = events
     emitSecureInput()
     events(["type": "appActivation", "active": NSApp.isActive])
-    // The session CGEventTap only captures global input once the process holds
-    // the Accessibility grant; without it the double-shift chord and
-    // Option+Space work solely inside omi, so tell Dart to surface a notice —
-    // and always report the live diagnostics so a missing grant is visible.
+    // The session CGEventTap only captures global input once Input Monitoring
+    // is granted; without it the double-Shift chord works solely inside omi,
+    // so tell Dart to surface a notice — and always report the live
+    // diagnostics so a missing grant is visible.
     emitDiagnostics()
     if !globalInputTap.isInstalled {
       events([
@@ -639,16 +635,6 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
       permissionOverlay?.dismiss()
       keyboardSink?(["type": "escape"])
       return
-    }
-    // Global keybind for the centered text overlay (Option+Space). Changeable
-    // here and mirrored in Dart as `summonOverlayKeybindLabel`. Bare Option
-    // only — Command/Control/Shift combos are left to other apps.
-    if event.type == .keyDown && event.keyCode == Self.summonOverlayKeyCode {
-      let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-      if flags == .option {
-        keyboardSink?(["type": "summonOverlay"])
-        return
-      }
     }
     guard event.type == .flagsChanged, event.keyCode == 56 || event.keyCode == 60 else { return }
     syncShiftKeys()

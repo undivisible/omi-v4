@@ -187,7 +187,6 @@ This is the most desktop-specific part of the product, and it is split deliberat
 | --- | --- |
 | Both Shift keys down once | `openOverlay` (held back for `doubleChordWindow`, default 400 ms, so a second chord can upgrade it) |
 | The chord twice inside that window | `toggleVoice` |
-| Option+Space | `openOverlay` |
 | Rapid cursor shake | `startVoice` (never a toggle-off) |
 | Esc | `escape` |
 | Secure input engaged | `cancel` |
@@ -287,7 +286,7 @@ What is *not* platform-limited on Windows: `praefectus` computer use compiles fo
 - **Windows computer use is unproven.** `praefectus` compiles for Windows and `PLAN.md` line 119 calls it a first-class UI-Automation path, but there is no Windows-specific native code in this repository exercising it and `PLAN.md` still lists physical Windows proof as outstanding.
 - **Meeting detection and system-audio capture are macOS-only** (`meeting_detector.rs` emitter is `#[cfg(target_os = "macos")]`; `meeting_capture.rs` non-macOS `start()` returns an error unconditionally). Meetings on Windows degrade to mic-only.
 - **Apple Notes and Mail scanning are macOS-only** and depend on Full Disk Access; `MacPermissionService.swift` probes FDA heuristically (attempting to stat `TCC.db` and the Notes container), which is a heuristic, not an API.
-- **`PLAN.md`'s gesture table is stale relative to the code.** `PLAN.md` line ~190 documents a hold-both-Shift-for-a-threshold model with hands-free continuation. `app/lib/keyboard/shift_gesture.dart` as written implements chord-once → `openOverlay`, chord-twice-within-400 ms → `toggleVoice`, plus Option+Space and a mouse-shake path, with no hold threshold. The code is authoritative; the plan text has not caught up.
+- **`PLAN.md`'s gesture table is stale relative to the code.** `PLAN.md` line ~190 documents a hold-both-Shift-for-a-threshold model with hands-free continuation. `app/lib/keyboard/shift_gesture.dart` as written implements chord-once → `openOverlay`, chord-twice-within-400 ms → `toggleVoice`, plus a mouse-shake path, with no hold threshold. The code is authoritative; the plan text has not caught up.
 - **No auto-update, no signed release channel, no crash reporting.** There is no updater in `app/macos`. Shipping a fix currently means shipping a new build by hand, and there is no mechanism to learn that a build is crashing in the field.
 - **No desktop E2E or in-app automation surface.** There is no way to drive the real desktop app programmatically for verification; desktop coverage is unit/logic tests plus manual use.
 - **macOS ships unsandboxed by necessity.** `app/macos/Runner/Release.entitlements` requests only audio input, calendars, and network client — App Sandbox is deliberately absent because broad workspace discovery conflicts with sandbox scope (`PLAN.md` line 117). That is a considered decision, but it means the usual sandbox containment does not apply.

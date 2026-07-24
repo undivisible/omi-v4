@@ -1109,8 +1109,7 @@ class _OnboardingUseStepState extends State<OnboardingUseStep> {
 
   String get _prompt => switch (widget.pill.state) {
     CursorPillState.hidden when !_typeLessonDone =>
-      'Press both Shift keys once to summon the typing bar. '
-          '($summonOverlayKeybindLabel works anywhere too.)',
+      'Press both Shift keys once to summon the typing bar.',
     CursorPillState.hidden => 'Now tap the chord twice to start talking to me.',
     CursorPillState.input =>
       'This is where you type. Press Esc — or the chord — to dismiss.',

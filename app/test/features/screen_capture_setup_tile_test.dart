@@ -18,10 +18,31 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Needs access'), findsOneWidget);
-    await tester.tap(find.byTooltip('Review screen-capture access'));
+    await tester.tap(find.byTooltip('Review Screen Recording access'));
     await tester.pumpAndSettle();
 
     expect(gateway.requests, [CoreCapability.screenCapture]);
+    expect(find.text('Granted'), findsOneWidget);
+  });
+
+  testWidgets('accessibility setup requests Accessibility, not Screen Recording', (
+    tester,
+  ) async {
+    final gateway = _Gateway();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: AccessibilitySetupTile(gateway: gateway, previewMode: false),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Allow screen understanding'), findsOneWidget);
+    await tester.tap(find.byTooltip('Review Accessibility access'));
+    await tester.pumpAndSettle();
+
+    expect(gateway.requests, [CoreCapability.accessibility]);
     expect(find.text('Granted'), findsOneWidget);
   });
 }
@@ -32,10 +53,20 @@ final class _Gateway implements DesktopCapabilityGateway {
   @override
   Future<Map<CoreCapability, CapabilityStatus>> check() async => {
     CoreCapability.screenCapture: CapabilityStatus(
-      state: requests.isEmpty
-          ? CapabilityState.actionRequired
-          : CapabilityState.granted,
-      detail: requests.isEmpty ? 'Needs access' : 'Access verified',
+      state: requests.contains(CoreCapability.screenCapture)
+          ? CapabilityState.granted
+          : CapabilityState.actionRequired,
+      detail: requests.contains(CoreCapability.screenCapture)
+          ? 'Access verified'
+          : 'Needs access',
+    ),
+    CoreCapability.accessibility: CapabilityStatus(
+      state: requests.contains(CoreCapability.accessibility)
+          ? CapabilityState.granted
+          : CapabilityState.actionRequired,
+      detail: requests.contains(CoreCapability.accessibility)
+          ? 'Access verified'
+          : 'Needs access',
     ),
   };
 

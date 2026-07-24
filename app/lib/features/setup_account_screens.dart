@@ -224,6 +224,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _McpEndpointTile(origin: services.apiOriginUri),
       ],
       SettingsSection.permissions => [
+        if (_isMacDesktop)
+          InputMonitoringSetupTile(
+            gateway: services.capabilities,
+            previewMode: previewMode,
+          ),
+        if (_isMacDesktop)
+          AccessibilitySetupTile(
+            gateway: services.capabilities,
+            previewMode: previewMode,
+          ),
         ScreenCaptureSetupTile(
           gateway: services.capabilities,
           previewMode: previewMode,
@@ -1201,6 +1211,172 @@ class _ProductionHealthTileState extends State<_ProductionHealthTile> {
   );
 }
 
+class InputMonitoringSetupTile extends StatefulWidget {
+  const InputMonitoringSetupTile({
+    required this.gateway,
+    required this.previewMode,
+    super.key,
+  });
+
+  final DesktopCapabilityGateway gateway;
+  final bool previewMode;
+
+  @override
+  State<InputMonitoringSetupTile> createState() =>
+      _InputMonitoringSetupTileState();
+}
+
+class _InputMonitoringSetupTileState extends State<InputMonitoringSetupTile> {
+  late Future<CapabilityStatus> status = _check();
+  bool requesting = false;
+
+  Future<CapabilityStatus> _check() async =>
+      (await widget.gateway.check())[CoreCapability.inputMonitoring] ??
+      const CapabilityStatus(
+        state: CapabilityState.error,
+        detail: 'Input Monitoring capability status is missing.',
+      );
+
+  Future<void> request() async {
+    setState(() => requesting = true);
+    try {
+      await widget.gateway.request(CoreCapability.inputMonitoring);
+      if (mounted) status = _check();
+    } finally {
+      if (mounted) setState(() => requesting = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => FutureBuilder(
+    key: const Key('input_monitoring_setup_tile'),
+    future: status,
+    builder: (context, snapshot) {
+      final value = snapshot.data;
+      final state = snapshot.hasError
+          ? 'Check failed'
+          : switch (value?.state) {
+              CapabilityState.granted => 'Granted',
+              CapabilityState.notRequired => 'No grant required',
+              CapabilityState.notApplicable => 'Not applicable',
+              CapabilityState.actionRequired => 'Action required',
+              CapabilityState.error => 'Check failed',
+              _ => 'Checking',
+            };
+      return _StateTile(
+        icon: Icons.keyboard_alt_outlined,
+        title: 'Allow global double-Shift',
+        detail: widget.previewMode
+            ? 'Native access is disabled in the interface preview.'
+            : requesting
+            ? 'Requesting access…'
+            : snapshot.hasError
+            ? 'Could not check Input Monitoring: ${snapshot.error}'
+            : value?.detail ?? 'Checking Input Monitoring access…',
+        state: state,
+        onPressed:
+            !widget.previewMode &&
+                !requesting &&
+                value?.state == CapabilityState.actionRequired
+            ? request
+            : null,
+        actionTooltip: 'Review Input Monitoring access',
+      );
+    },
+  );
+}
+
+/// Accessibility (AX) — what overlay and voice use to read the active window.
+/// Distinct from Screen Recording, which is for pixel capture / Rewind.
+class AccessibilitySetupTile extends StatefulWidget {
+  const AccessibilitySetupTile({
+    required this.gateway,
+    required this.previewMode,
+    super.key,
+  });
+
+  final DesktopCapabilityGateway gateway;
+  final bool previewMode;
+
+  @override
+  State<AccessibilitySetupTile> createState() => _AccessibilitySetupTileState();
+}
+
+class _AccessibilitySetupTileState extends State<AccessibilitySetupTile> {
+  late Future<CapabilityStatus> status = _check();
+  bool requesting = false;
+
+  Future<CapabilityStatus> _check() async =>
+      (await widget.gateway.check())[CoreCapability.accessibility] ??
+      const CapabilityStatus(
+        state: CapabilityState.error,
+        detail: 'Accessibility capability status is missing.',
+      );
+
+  Future<void> request() async {
+    setState(() => requesting = true);
+    try {
+      await widget.gateway.request(CoreCapability.accessibility);
+      if (mounted) status = _check();
+    } catch (error) {
+      if (mounted) {
+        status = Future.value(
+          CapabilityStatus(
+            state: CapabilityState.error,
+            detail: 'Could not request Accessibility access: $error',
+          ),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          requesting = false;
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => FutureBuilder(
+    key: const Key('accessibility_setup_tile'),
+    future: status,
+    builder: (context, snapshot) {
+      final value = snapshot.data;
+      final state = snapshot.hasError
+          ? 'Check failed'
+          : switch (value?.state) {
+              CapabilityState.granted => 'Granted',
+              CapabilityState.notRequired => 'Not required',
+              CapabilityState.notApplicable => 'Not applicable',
+              CapabilityState.actionRequired => 'Action required',
+              CapabilityState.error => 'Check failed',
+              _ => 'Checking',
+            };
+      return _StateTile(
+        icon: Icons.visibility_outlined,
+        title: 'Allow screen understanding',
+        detail: widget.previewMode
+            ? 'Native access is disabled in the interface preview.'
+            : requesting
+            ? 'Requesting access…'
+            : snapshot.hasError
+            ? 'Could not check Accessibility access: ${snapshot.error}'
+            : value?.detail ??
+                'Accessibility lets Omi read the active window for '
+                    'overlay and voice context.',
+        state: state,
+        onPressed:
+            !widget.previewMode &&
+                !requesting &&
+                value?.state == CapabilityState.actionRequired
+            ? request
+            : null,
+        actionTooltip: 'Review Accessibility access',
+      );
+    },
+  );
+}
+
 class ScreenCaptureSetupTile extends StatefulWidget {
   const ScreenCaptureSetupTile({
     required this.gateway,
@@ -1223,7 +1399,7 @@ class _ScreenCaptureSetupTileState extends State<ScreenCaptureSetupTile> {
       (await widget.gateway.check())[CoreCapability.screenCapture] ??
       const CapabilityStatus(
         state: CapabilityState.error,
-        detail: 'Screen-capture capability status is missing.',
+        detail: 'Screen Recording capability status is missing.',
       );
 
   Future<void> request() async {
@@ -1236,7 +1412,7 @@ class _ScreenCaptureSetupTileState extends State<ScreenCaptureSetupTile> {
         status = Future.value(
           CapabilityStatus(
             state: CapabilityState.error,
-            detail: 'Could not request screen-capture access: $error',
+            detail: 'Could not request Screen Recording access: $error',
           ),
         );
       }
@@ -1266,14 +1442,14 @@ class _ScreenCaptureSetupTileState extends State<ScreenCaptureSetupTile> {
             };
       return _StateTile(
         icon: Icons.lock_outline_rounded,
-        title: 'Allow screen understanding',
+        title: 'Allow Screen Recording',
         detail: widget.previewMode
             ? 'Native access is disabled in the interface preview.'
             : requesting
             ? 'Requesting access…'
             : snapshot.hasError
-            ? 'Could not check screen-capture access: ${snapshot.error}'
-            : value?.detail ?? 'Checking screen-capture access…',
+            ? 'Could not check Screen Recording access: ${snapshot.error}'
+            : value?.detail ?? 'Checking Screen Recording access…',
         state: state,
         onPressed:
             !widget.previewMode &&
@@ -1281,7 +1457,7 @@ class _ScreenCaptureSetupTileState extends State<ScreenCaptureSetupTile> {
                 value?.state == CapabilityState.actionRequired
             ? request
             : null,
-        actionTooltip: 'Review screen-capture access',
+        actionTooltip: 'Review Screen Recording access',
       );
     },
   );

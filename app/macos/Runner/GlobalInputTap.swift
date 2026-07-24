@@ -65,13 +65,10 @@ final class GlobalInputTap {
   }
 
   private func install() {
-    // Accessibility alone is not enough for a keyboard tap on modern macOS —
-    // Input Monitoring is its own grant, and `tapCreate` returns nil without
-    // it. Try whenever either is present rather than gating on Accessibility
-    // and never noticing the one that actually blocks us.
-    guard tap == nil,
-      AXIsProcessTrusted() || MacPermissionService.inputMonitoringGranted
-    else { return }
+    // Input Monitoring is required for a session keyboard tap on modern
+    // macOS — Accessibility alone is not enough and `tapCreate` returns nil
+    // without this grant.
+    guard tap == nil, MacPermissionService.inputMonitoringGranted else { return }
     let callback: CGEventTapCallBack = { _, type, event, userInfo in
       guard let userInfo else { return Unmanaged.passUnretained(event) }
       let tap = Unmanaged<GlobalInputTap>.fromOpaque(userInfo)
