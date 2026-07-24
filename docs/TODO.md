@@ -40,3 +40,4 @@ your account/keys/hardware. See `docs/ai-and-observability.md` for the "why".
 ## Product (from the audit brainstorm)
 - [ ] Meeting → currents → channel closed loop (action items auto-become currents, pushed to the owner's linked channel)
 - [ ] AXContextReader bundle-ID privacy denylist (exclude sensitive apps)
+- [ ] **Speech profiles + multi-display Rewind** — plan only: [`docs/speech-profiles-and-displays.md`](speech-profiles-and-displays.md) (cross-platform Rust hub; no implementation yet)

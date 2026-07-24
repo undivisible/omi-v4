@@ -142,13 +142,12 @@ the lowest-latency option and needs no separate STT call.
 
 ### 2.1 The FaceTime audio bridge
 
-FaceTime moved from Blooio to **Sendblue**. Blooio returned a
-`facetime.apple.com` join link, which forced a headless browser; a prior
-investigation established that this cannot work on Cloudflare Browser Run
-(WebRTC candidate pairs never succeed under symmetric NAT and per-flow anycast
-egress, `enumerateDevices()` is empty, and Chrome launch flags are not
-controllable). Sendblue's `POST /facetime/start-call` returns **Agora WebRTC
-credentials** instead, so there is no browser and no Apple web client at all.
+FaceTime Audio goes through **Sendblue**. `POST /facetime/start-call` returns
+**Agora WebRTC credentials** — there is no browser and no Apple web client.
+(An earlier join-link approach that required a headless browser was abandoned:
+WebRTC candidate pairs never succeed under symmetric NAT and per-flow anycast
+egress on Cloudflare Browser Run, `enumerateDevices()` is empty, and Chrome
+launch flags are not controllable.)
 
 Agora's Web SDK is browser-only. Server participation goes through Agora's
 **Server Gateway SDK**, a native `x86_64-linux-gnu` shared object with Python,

@@ -498,7 +498,7 @@ monotonically increasing integer; page forward by passing the previous
 
 `role` is `user` or `assistant`. `source` is `app`, `web`, `desktop`,
 `telegram` or `imessage`. `imessage` is the stored identifier for the
-**iMessage channel** (Sendblue provider). Migration `0032_rename_blooio_to_imessage`
+**iMessage channel** (Sendblue provider). Migration `0033_rename_blooio_to_imessage`
 renamed the historical `blooio` wire value. See §4.9.2. `nextCursor` equals `after` when no messages were
 returned, so polling is safe. `channelMessageId` and `deliveryId` are non-null
 only for messages that travelled over a linked chat channel.
