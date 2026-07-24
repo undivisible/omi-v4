@@ -1,3 +1,7 @@
+import 'dart:async';
+
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../app_services.dart';
@@ -30,6 +34,7 @@ class _WebPortalScreenState extends State<WebPortalScreen> {
   void initState() {
     super.initState();
     widget.services.auth.addListener(_authChanged);
+    unawaited(_ensureProcessingConsent());
   }
 
   @override
@@ -39,7 +44,21 @@ class _WebPortalScreenState extends State<WebPortalScreen> {
   }
 
   void _authChanged() {
-    if (mounted) setState(() {});
+    unawaited(
+      _ensureProcessingConsent().then((_) {
+        if (mounted) setState(() {});
+      }),
+    );
+  }
+
+  Future<void> _ensureProcessingConsent() async {
+    final auth = widget.services.auth;
+    final snapshot = auth.snapshot;
+    if (snapshot.phase != AuthPhase.signedIn ||
+        snapshot.hasProcessingAuthority) {
+      return;
+    }
+    await auth.grantProcessingConsent();
   }
 
   /// `/portal#api-keys` and friends. The fragment is the only routing the
@@ -64,7 +83,7 @@ class _WebPortalScreenState extends State<WebPortalScreen> {
 
   @override
   Widget build(BuildContext context) {
-    if (widget.services.auth.snapshot.phase != AuthPhase.signedIn) {
+    if (!widget.services.productionReady) {
       return WebSignInScreen(services: widget.services);
     }
     _openDeepLink();
