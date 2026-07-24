@@ -396,7 +396,7 @@ a {
     letter-spacing: 0.2em;
     text-transform: uppercase;
     color: var(--cream);
-    opacity: calc(0.3 + 0.7 * var(--near));
+    opacity: calc(0.55 + 0.45 * var(--near));
     transition: opacity 260ms linear;
   }
 
@@ -456,6 +456,7 @@ a {
   width: 100%;
   aspect-ratio: 8 / 5;
   overflow: hidden;
+  --hub-scale: 0.92;
   border: 1px solid var(--rule);
   border-right: 0;
   border-radius: 18px 0 0 18px;
@@ -469,55 +470,76 @@ a {
 
 .shot-frame iframe {
   position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
+  top: 0;
+  left: 0;
+  width: calc(100% / var(--hub-scale));
+  height: calc(100% / var(--hub-scale));
+  transform: scale(var(--hub-scale));
+  transform-origin: top left;
   border: 0;
   display: block;
   background: var(--ink);
+  opacity: 0;
+  transition: opacity 200ms var(--ease);
+}
+
+.shot-frame[data-state="ready"] iframe {
+  opacity: 1;
 }
 
 /* A still frame drawn in CSS — no image request, and it stays as the
-   fallback if the app fails to load. */
+   fallback if the app fails to load. Matches the single-column demo
+   greeter so the swap to the live hub does not jump layout. */
 .shot-still {
   position: absolute;
   inset: 0;
-  display: grid;
-  grid-template-columns: 4rem minmax(0, 1fr) minmax(0, 15rem);
-  gap: clamp(1rem, 3vw, 2.25rem);
-  padding: clamp(1.25rem, 3.5vw, 2.5rem);
-}
-
-.still-rail {
   display: flex;
   flex-direction: column;
-  gap: 0.85rem;
+  align-items: center;
+  padding: clamp(1rem, 4vw, 1.75rem) clamp(1.25rem, 5vw, 2rem)
+    clamp(0.75rem, 2vw, 1rem);
+  background: #f7f6f1;
+  transition: opacity 200ms var(--ease);
 }
 
-.still-rail span,
+.still-greet {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.75rem;
+  width: 100%;
+  margin-bottom: clamp(0.75rem, 2vw, 1.25rem);
+}
+
+.still-orb {
+  width: 2rem;
+  height: 2rem;
+  border-radius: 999px;
+  background: rgba(23, 23, 22, 0.12);
+}
+
+.still-greeting {
+  width: min(12rem, 52%);
+  height: 0.85rem;
+  border-radius: 999px;
+  background: rgba(23, 23, 22, 0.14);
+}
+
+.still-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+  width: 100%;
+  max-width: 26rem;
+  flex: 1;
+}
+
 .still-line,
 .still-cite {
   display: block;
   height: 0.55rem;
   border-radius: 999px;
-  background: rgba(255, 252, 236, 0.16);
-}
-
-.still-rail span {
-  height: 1.6rem;
-  border-radius: 8px;
-}
-
-.still-thread,
-.still-side {
-  display: flex;
-  flex-direction: column;
-  gap: 0.85rem;
-}
-
-.still-side {
-  border-left: 1px solid var(--rule);
-  padding-left: clamp(1rem, 2.5vw, 1.75rem);
+  background: rgba(23, 23, 22, 0.1);
 }
 
 .still-line.w45 {
@@ -539,50 +561,20 @@ a {
   width: 80%;
 }
 
-.still-cite {
-  width: 30%;
-  height: 0.45rem;
-  background: rgba(154, 160, 255, 0.32);
-}
-
 .still-composer {
   margin-top: auto;
-  height: 3.2rem;
-  border: 1px solid var(--rule);
-  border-radius: 20px;
-  background: rgba(255, 252, 236, 0.04);
-}
-
-.shot-cta {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 0.9rem;
-  padding: var(--pad);
-  text-align: center;
-  background: radial-gradient(
-    120% 90% at 50% 50%,
-    rgba(23, 23, 22, 0.86),
-    rgba(23, 23, 22, 0.58)
-  );
-}
-
-.shot-note {
+  width: 100%;
   max-width: 26rem;
-  font-size: 0.82rem;
-  color: var(--muted-2);
+  height: 2.75rem;
+  border: 1px solid rgba(23, 23, 22, 0.12);
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.72);
 }
 
-.shot-frame[data-state="loading"] .shot-cta,
-.shot-frame[data-state="ready"] .shot-cta {
-  display: none;
-}
-
+.shot-frame[data-state="loading"] .shot-still,
 .shot-frame[data-state="ready"] .shot-still {
-  display: none;
+  opacity: 0;
+  pointer-events: none;
 }
 
 .shot-status {
@@ -1033,8 +1025,8 @@ tbody th {
   opacity: 0;
   transform: translateY(24px);
   transition:
-    opacity 700ms var(--ease),
-    transform 700ms var(--ease);
+    opacity 280ms var(--ease),
+    transform 280ms var(--ease);
 }
 
 .reveal.in {
@@ -1119,6 +1111,30 @@ tbody th {
   .arrow::after,
   .skip-link {
     transition: none;
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .field {
+    filter: none;
+    opacity: 0.38;
+    transition: none;
+    background: radial-gradient(
+      120% 90% at 50% 40%,
+      rgba(154, 160, 255, 0.14),
+      rgba(23, 23, 22, 0.92) 68%
+    );
+  }
+}
+
+@media (prefers-contrast: more) {
+  :root {
+    --muted-2: #c8c6bc;
+    --rule: rgba(255, 252, 236, 0.22);
+  }
+
+  .card {
+    border-color: var(--rule);
   }
 }
 

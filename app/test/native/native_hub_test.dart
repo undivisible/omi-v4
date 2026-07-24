@@ -299,6 +299,11 @@ List<void Function()> _everyCommand(NativeHub hub) => [
     model: 'live',
   ),
   () => hub.stopLiveVoice(requestId: 'request', liveStreamId: 'live-1'),
+  () => hub.updateLiveVoiceContext(
+    requestId: 'request',
+    liveStreamId: 'live-1',
+    sessionContext: 'Updated screen context:',
+  ),
   () => hub.startMeeting(requestId: 'request', title: 'standup'),
   () => hub.stopMeeting('request'),
   () => hub.jotMeetingNote(requestId: 'request', text: 'note'),

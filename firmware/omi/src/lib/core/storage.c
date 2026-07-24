@@ -92,7 +92,7 @@ static struct bt_gatt_attr storage_service_attr[] = {
 #ifdef CONFIG_OMI_ENABLE_WIFI
     BT_GATT_CHARACTERISTIC(&storage_wifi_uuid.uuid,
                            BT_GATT_CHRC_WRITE | BT_GATT_CHRC_NOTIFY,
-                           BT_GATT_PERM_WRITE,
+                           BT_GATT_PERM_WRITE_ENCRYPT,
                            NULL,
                            storage_wifi_handler,
                            NULL),
@@ -886,9 +886,12 @@ static void wifi_write_ring(void)
             int n = wifi_send_data(hdr + sent, hdr_len - sent);
             if (n <= 0) {
                 k_msleep(10);
-            } else {
-                sent += (size_t)n;
+                break;
             }
+            sent += (size_t)n;
+        }
+        if (sent != hdr_len) {
+            return;
         }
         wifi_header_sent = true;
 #if defined(CONFIG_LOG)
@@ -912,16 +915,19 @@ static void wifi_write_ring(void)
             int n = wifi_send_data(storage_buffer + sent, bytes_read - sent);
             if (n <= 0) {
                 k_msleep(5);
-            } else {
-                sent += (size_t)n;
-                sync_speed_add_bytes((uint32_t)n);
+                break;
             }
+            sent += (size_t)n;
+            sync_speed_add_bytes((uint32_t)n);
+        }
+        if (sent != bytes_read) {
+            return;
         }
         wifi_read_seq += packets_read;
         (void)sd_ring_advance(wifi_read_seq);
     }
 
-    if (wifi_read_seq >= wifi_end_seq || !is_wifi_on()) {
+    if (wifi_read_seq >= wifi_end_seq) {
         uint8_t done[10];
         uint16_t done_len = omi_rust_wifi_encode_softap_done(wifi_read_seq, 0, done);
         size_t sent = 0;
@@ -931,6 +937,9 @@ static void wifi_write_ring(void)
                 break;
             }
             sent += (size_t)n;
+        }
+        if (sent != done_len) {
+            return;
         }
         wifi_transfer_active = false;
         wifi_header_sent = false;

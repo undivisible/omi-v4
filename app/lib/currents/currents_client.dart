@@ -4,6 +4,21 @@ const _currentAuthorityReceiptVersion = 'omi-current-authority-v1';
 final _actionHashPattern = RegExp(r'^[0-9a-f]{64}$');
 final _receiptTokenPattern = RegExp(r'^[A-Za-z0-9_-]{43}$');
 
+enum CurrentContentKind { agentAction, humanAction, awareness }
+
+CurrentContentKind currentContentKindFromWire(String? value) =>
+    switch (value) {
+      'agent_action' => CurrentContentKind.agentAction,
+      'awareness' => CurrentContentKind.awareness,
+      _ => CurrentContentKind.humanAction,
+    };
+
+String currentContentKindLabel(CurrentContentKind kind) => switch (kind) {
+  CurrentContentKind.agentAction => 'Omi',
+  CurrentContentKind.humanAction => 'You',
+  CurrentContentKind.awareness => 'Know',
+};
+
 enum CurrentsHttpMethod { get, post }
 
 final class CurrentsRequest {
@@ -31,6 +46,7 @@ final class CurrentCard {
     required this.title,
     required this.summary,
     this.sourceKind,
+    this.contentKind = CurrentContentKind.humanAction,
     this.metadata,
   });
 
@@ -39,6 +55,9 @@ final class CurrentCard {
     title: _text(json, 'title'),
     summary: _text(json, 'summary'),
     sourceKind: _optionalText(json, 'sourceKind'),
+    contentKind: currentContentKindFromWire(
+      _optionalText(json, 'contentKind'),
+    ),
     metadata: json['metadata'] is Map
         ? (json['metadata'] as Map).cast<String, Object?>()
         : null,
@@ -48,7 +67,20 @@ final class CurrentCard {
   final String title;
   final String summary;
   final String? sourceKind;
+  final CurrentContentKind contentKind;
   final Map<String, Object?>? metadata;
+}
+
+final class CurrentsRefreshResult {
+  const CurrentsRefreshResult({
+    required this.refreshed,
+    required this.reason,
+    required this.items,
+  });
+
+  final bool refreshed;
+  final String reason;
+  final List<CurrentCard> items;
 }
 
 final class CurrentActionHandoff {
@@ -119,6 +151,39 @@ final class CurrentsClient {
         path: '/v1/currents/generate',
         body: {},
       ),
+    );
+  }
+
+  Future<CurrentsRefreshResult> refresh({bool force = false}) async {
+    final body = await _send(
+      CurrentsRequest(
+        method: CurrentsHttpMethod.post,
+        path: '/v1/currents/refresh',
+        body: {if (force) 'force': true},
+      ),
+    );
+    final refreshed = body['refreshed'] == true;
+    final reason = body['reason'] is String ? body['reason']! as String : '';
+    final values = body['currents'];
+    if (values is! List<Object?>) {
+      throw const CurrentsClientException('currents must be a list');
+    }
+    final items = List<CurrentCard>.unmodifiable(
+      values.map((value) {
+        if (value is! Map<String, Object?>) {
+          throw const CurrentsClientException('current must be an object');
+        }
+        try {
+          return CurrentCard.fromJson(value);
+        } on FormatException catch (error) {
+          throw CurrentsClientException(error.message);
+        }
+      }),
+    );
+    return CurrentsRefreshResult(
+      refreshed: refreshed,
+      reason: reason,
+      items: items,
     );
   }
 

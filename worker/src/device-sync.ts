@@ -49,8 +49,9 @@ export const verifyDeviceToken = async (
   if (!parsed) return null;
   const candidates = await database
     .prepare(
-      `SELECT id, device_id, uid, token_hash FROM device_tokens
-       WHERE prefix = ?1 AND revoked_at IS NULL`,
+      `SELECT t.id, t.device_id, t.uid, t.token_hash FROM device_tokens t
+       INNER JOIN devices d ON d.id = t.device_id
+       WHERE t.prefix = ?1 AND t.revoked_at IS NULL AND d.revoked_at IS NULL`,
     )
     .bind(parsed[1])
     .all<DeviceTokenRow>();
@@ -65,9 +66,7 @@ export const verifyDeviceToken = async (
     .run()
     .catch(() => undefined);
   await database
-    .prepare(
-      `UPDATE devices SET last_seen_at = ?1 WHERE id = ?2 AND revoked_at IS NULL`,
-    )
+    .prepare(`UPDATE devices SET last_seen_at = ?1 WHERE id = ?2`)
     .bind(now, matched.device_id)
     .run()
     .catch(() => undefined);
@@ -212,8 +211,6 @@ deviceSync.post("/:deviceId/audio", requireDeviceToken, async (context) => {
     return context.json({ error: "Audio too large" }, 413);
 
   const now = Date.now();
-  const minuteBucket = Math.floor(now / 60_000);
-  const rateKey = `device-upload:${authDeviceId}:${minuteBucket}`;
   const recent = await context.env.DB.prepare(
     `SELECT COUNT(*) AS n FROM device_audio_uploads
      WHERE device_id = ?1 AND created_at >= ?2`,
@@ -223,6 +220,7 @@ deviceSync.post("/:deviceId/audio", requireDeviceToken, async (context) => {
   if ((recent?.n ?? 0) >= maximumUploadsPerMinute)
     return context.json({ error: "Rate limited" }, 429);
 
+  // Metadata receipt only — audio bytes are not persisted yet (home STA stub).
   const uploadId = crypto.randomUUID();
   await context.env.DB.prepare(
     `INSERT INTO device_audio_uploads
@@ -243,10 +241,10 @@ deviceSync.post("/:deviceId/audio", requireDeviceToken, async (context) => {
   return context.json({
     uploadId,
     accepted: true,
+    persisted: false,
     startSeq,
     packetCount,
     byteCount,
-    rateKey,
   });
 });
 

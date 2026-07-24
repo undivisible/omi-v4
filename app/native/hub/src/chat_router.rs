@@ -2,6 +2,7 @@ use crate::model_tier::{
     ASYNC_AUDIO_TIER_PREFERENCE, Capability, CapabilityMismatch, ModelTier, model_for_tier,
     select_model_for,
 };
+use crate::signals::MessageOrigin;
 use rx4::model_router::{ModelRouter, RouterConfig, TaskTier};
 
 // Search and multimodal are hub-level tiers with no rx4 `TaskTier`, so the
@@ -43,6 +44,28 @@ const HEAVY_KEYWORDS: &[&str] = &[
     "think hard",
     "optimize",
 ];
+
+// Prompts that likely need computer-use tools, memory writes, or channel actions.
+const TOOL_MARKERS: &[&str] = &[
+    "click",
+    "open ",
+    "type ",
+    "press ",
+    "tap ",
+    "scroll",
+    "screenshot",
+    "on my screen",
+    "computer",
+    "browser",
+    "remember this",
+    "save to memory",
+    "add to memory",
+    "send a message",
+    "text ",
+    "email ",
+];
+
+const SHORT_SIMPLE_MAX_LEN: usize = 160;
 
 /// Bridges rx4's [`ModelRouter`] to the hub's [`ModelTier`] slug table.
 ///
@@ -87,14 +110,25 @@ impl ChatRouter {
     }
 
     /// Selects the hub [`ModelTier`] for an online prompt. Search and vision
-    /// intents are detected first; everything else defers to rx4's heuristics.
-    pub(crate) fn route_prompt(&self, prompt: &str) -> ModelTier {
+    /// intents are detected first; short simple chat turns route to Speed
+    /// (Mercury); everything else defers to rx4's heuristics.
+    pub(crate) fn route_prompt(
+        &self,
+        prompt: &str,
+        origin: Option<MessageOrigin>,
+    ) -> ModelTier {
         let lowered = prompt.to_lowercase();
         if SEARCH_MARKERS.iter().any(|marker| lowered.contains(marker)) {
             return ModelTier::Search;
         }
         if VISION_MARKERS.iter().any(|marker| lowered.contains(marker)) {
             return ModelTier::Multimodal;
+        }
+        if !likely_needs_tools(prompt, origin)
+            && is_short_simple(prompt)
+            && !HEAVY_KEYWORDS.iter().any(|keyword| lowered.contains(keyword))
+        {
+            return ModelTier::Speed;
         }
         match self.router.route_prompt(prompt).model.as_str() {
             model if model == self.tier_model(TaskTier::Heavy) => ModelTier::Smart,
@@ -110,7 +144,7 @@ impl ChatRouter {
         prompt: &str,
         value: impl Fn(&str) -> Option<String>,
     ) -> String {
-        model_for_tier(self.route_prompt(prompt), value)
+        model_for_tier(self.route_prompt(prompt, None), value)
     }
 
     /// Selects a model for a request that carries more than text. The prompt
@@ -132,7 +166,7 @@ impl ChatRouter {
             return select_model_for(required, ASYNC_AUDIO_TIER_PREFERENCE, value)
                 .map(|(_, model)| model);
         }
-        let routed = self.route_prompt(prompt);
+        let routed = self.route_prompt(prompt, None);
         let preference = [routed, ModelTier::Multimodal, ModelTier::Balanced];
         select_model_for(required, &preference, value).map(|(_, model)| model)
     }
@@ -147,6 +181,21 @@ impl ChatRouter {
     }
 }
 
+fn likely_needs_tools(prompt: &str, origin: Option<MessageOrigin>) -> bool {
+    if matches!(origin, Some(MessageOrigin::Overlay)) {
+        return true;
+    }
+    let lowered = prompt.to_lowercase();
+    TOOL_MARKERS.iter().any(|marker| lowered.contains(marker))
+}
+
+fn is_short_simple(prompt: &str) -> bool {
+    let trimmed = prompt.trim();
+    trimmed.len() <= SHORT_SIMPLE_MAX_LEN
+        && trimmed.matches('\n').count() <= 1
+        && !trimmed.contains("```")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -155,6 +204,7 @@ mod tests {
         DEFAULT_BALANCED_MODEL, DEFAULT_MULTIMODAL_MODEL, DEFAULT_SEARCH_MODEL,
         DEFAULT_SMART_MODEL, DEFAULT_SPEED_MODEL,
     };
+    use crate::signals::MessageOrigin;
 
     fn default_router() -> ChatRouter {
         ChatRouter::with_value(|_| None)
@@ -163,18 +213,39 @@ mod tests {
     #[test]
     fn route_prompt_selects_expected_tiers() {
         let router = default_router();
-        assert_eq!(router.route_prompt("hi there"), ModelTier::Balanced);
         assert_eq!(
-            router.route_prompt("prove this theorem step by step"),
+            router.route_prompt("hi there", None),
+            ModelTier::Speed
+        );
+        assert_eq!(
+            router.route_prompt("prove this theorem step by step", None),
             ModelTier::Smart
         );
         assert_eq!(
-            router.route_prompt("what is in this image?"),
+            router.route_prompt("what is in this image?", None),
             ModelTier::Multimodal
         );
         assert_eq!(
-            router.route_prompt("search the web for today's headlines"),
+            router.route_prompt("search the web for today's headlines", None),
             ModelTier::Search
+        );
+    }
+
+    #[test]
+    fn overlay_origin_skips_speed_shortcut() {
+        let router = default_router();
+        assert_eq!(
+            router.route_prompt("hi there", Some(MessageOrigin::Overlay)),
+            ModelTier::Balanced
+        );
+    }
+
+    #[test]
+    fn tool_markers_skip_speed_shortcut() {
+        let router = default_router();
+        assert_eq!(
+            router.route_prompt("click the save button", None),
+            ModelTier::Balanced
         );
     }
 
@@ -183,7 +254,7 @@ mod tests {
         let router = default_router();
         let slug = |prompt: &str| router.model_for_prompt(prompt, |_| None);
         assert_eq!(slug("prove this theorem"), DEFAULT_SMART_MODEL);
-        assert_eq!(slug("hi there"), DEFAULT_BALANCED_MODEL);
+        assert_eq!(slug("hi there"), DEFAULT_SPEED_MODEL);
         assert_eq!(slug("describe this photo"), DEFAULT_MULTIMODAL_MODEL);
         assert_eq!(slug("search the web for prices"), DEFAULT_SEARCH_MODEL);
         // The Lite tier is populated from the SPEED slug even though the online

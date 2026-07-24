@@ -15,7 +15,7 @@ enum OmiOrbState {
   /// At rest: a slow orbit and a barely-there breath.
   idle,
 
-  /// Working: a single highlight travelling around the ring.
+  /// Working: a highlight walks d1 -> d8 around the ring, one dot at a time.
   thinking,
 
   /// Hearing you: the ring swells and shrinks with [OmiActivityOrb.amplitude].
@@ -53,6 +53,45 @@ class OmiMarkGeometry {
   static double angleOf(int i) => i * math.pi / 4;
 }
 
+/// The site thinking pulse: `@keyframes omi-dot-pulse` in `site/web/styles.css`.
+/// Each dot peaks at 12% of its cycle, holds dim until 70%, then rests — staggered
+/// by one eighth so the highlight reads as a single point of light walking the ring.
+@visibleForTesting
+class OmiThinkingPulse {
+  const OmiThinkingPulse._();
+
+  static const _ease = Cubic(0.22, 1, 0.36, 1);
+  static const baseOpacity = 0.62;
+  static const peakOpacity = 1.0;
+  static const baseScale = 1.0;
+  static const peakScale = 1.14;
+  static const peakAt = 0.12;
+  static const holdUntil = 0.70;
+
+  /// Local phase for dot [i] within the current lap, 0 to 1.
+  static double localPhase(int i, double turn) =>
+      (turn + (OmiMarkGeometry.dotCount - i) / OmiMarkGeometry.dotCount) % 1;
+
+  /// Opacity and scale at [localT], matching the site keyframes.
+  static (double opacity, double scale) at(double localT) {
+    if (localT <= peakAt) {
+      final t = _ease.transform(localT / peakAt);
+      return (
+        baseOpacity + (peakOpacity - baseOpacity) * t,
+        baseScale + (peakScale - baseScale) * t,
+      );
+    }
+    if (localT <= holdUntil) {
+      final t = _ease.transform((localT - peakAt) / (holdUntil - peakAt));
+      return (
+        peakOpacity + (baseOpacity - peakOpacity) * t,
+        peakScale + (baseScale - peakScale) * t,
+      );
+    }
+    return (baseOpacity, baseScale);
+  }
+}
+
 /// The omi mark — the ring of eight dots from the brand logo, drawn dot by dot
 /// so it can breathe, think, listen and celebrate. It is the greeter avatar,
 /// the assistant's chat profile picture, and (as [OmiActivityOrb.loading]) the
@@ -67,12 +106,12 @@ class OmiActivityOrb extends StatefulWidget {
     super.key,
   });
 
-  /// The loading cadence: the same mark, its highlight travelling fast enough
-  /// to read as activity.
+  /// The loading cadence: the same mark, its highlight walking the ring at the
+  /// tighter site pulse (`.omi-mark.is-tight`, 1.7s).
   const OmiActivityOrb.loading({double size = 46, Color? color, Key? key})
     : this(
         size: size,
-        period: const Duration(milliseconds: 1100),
+        period: const Duration(milliseconds: 1700),
         state: OmiOrbState.thinking,
         color: color,
         key: key,
@@ -80,9 +119,9 @@ class OmiActivityOrb extends StatefulWidget {
 
   final double size;
 
-  /// One full turn of the ring — and one full lap of the thinking highlight —
-  /// takes this long. The idle greeter turns slowly; the loading constructor
-  /// turns it fast.
+  /// One full lap of the idle orbit, or one full walk of the thinking highlight
+  /// around the ring, takes this long. The idle greeter turns slowly; the
+  /// loading constructor tightens the pulse to match the site.
   final Duration period;
 
   /// What the mark is expressing.
@@ -231,13 +270,11 @@ class _OmiMarkPainter extends CustomPainter {
     final unit = size.shortestSide / OmiMarkGeometry.canvas;
     final centre = Offset(size.width / 2, size.height / 2);
 
-    // The whole ring orbits. Idle turns once per lap; thinking turns a full
-    // lap so it visibly rotates in a circle while each dot also wanders (see
-    // the per-dot wobble below); the others hold steadier so the per-dot
-    // motion is what reads.
+    // The whole ring orbits for idle and success; thinking keeps the ring still
+    // so only the sequential highlight reads, matching the site mark.
     final spin = switch (state) {
       OmiOrbState.idle => turn,
-      OmiOrbState.thinking => turn,
+      OmiOrbState.thinking => 0.0,
       OmiOrbState.listening => turn * 0.12,
       OmiOrbState.success => turn * 0.5,
     };
@@ -254,30 +291,29 @@ class _OmiMarkPainter extends CustomPainter {
     final body = Paint()..color = ink;
 
     for (var i = 0; i < OmiMarkGeometry.dotCount; i++) {
-      final phase = _phaseOf(i);
       final radius =
           OmiMarkGeometry.radiusOf(i) +
           scatter +
-          level * 13 * (0.55 + 0.45 * phase);
+          level * 13 * (0.55 + 0.45 * _phaseOf(i));
       final angle = OmiMarkGeometry.angleOf(i) + spinAngle;
 
       // Canvas y grows downward and index 0 is due north, so north is -y.
-      var at =
+      final at =
           centre + Offset(math.sin(angle), -math.cos(angle)) * radius * unit;
 
-      // Thinking: on top of the whole ring rotating, each dot wanders around a
-      // small Lissajous path — x and y at different rates so it reads as moving
-      // on two axes rather than tracing a plain circle. Phased by the dot's
-      // resting angle so the eight are never in lockstep.
+      late final double scale;
+      late final double alpha;
       if (state == OmiOrbState.thinking && !still) {
-        final w = turn * 2 * math.pi;
-        final ph = OmiMarkGeometry.angleOf(i);
-        at += Offset(math.cos(w + ph), math.sin(w * 1.4 + ph)) * 5.5 * unit;
+        final pulse = OmiThinkingPulse.at(OmiThinkingPulse.localPhase(i, turn));
+        scale = pulse.$2 + level * 0.1;
+        alpha = pulse.$1 * (burst >= 1 ? 1.0 : eased.clamp(0.0, 1.0));
+      } else {
+        final phase = _phaseOf(i);
+        scale = 1 + phase * 0.16 + level * 0.1;
+        alpha =
+            (0.6 + phase * 0.4) * (burst >= 1 ? 1.0 : eased.clamp(0.0, 1.0));
       }
 
-      final scale = 1 + phase * 0.16 + level * 0.1;
-      final alpha =
-          (0.6 + phase * 0.4) * (burst >= 1 ? 1.0 : eased.clamp(0.0, 1.0));
       final r = OmiMarkGeometry.dotRadius * unit * scale;
 
       canvas.drawCircle(
@@ -299,12 +335,7 @@ class _OmiMarkPainter extends CustomPainter {
         final t = (turn + i / OmiMarkGeometry.dotCount / 3) % 1;
         return 0.35 * (0.5 - 0.5 * math.cos(t * 2 * math.pi));
       case OmiOrbState.thinking:
-        // One highlight travelling the ring: distance from the moving head,
-        // measured the short way round.
-        final head = turn * OmiMarkGeometry.dotCount;
-        var d = (i - head) % OmiMarkGeometry.dotCount;
-        if (d > OmiMarkGeometry.dotCount / 2) d = OmiMarkGeometry.dotCount - d;
-        return math.max(0, 1 - d / 2.2);
+        return 0;
       case OmiOrbState.listening:
         return level;
       case OmiOrbState.success:

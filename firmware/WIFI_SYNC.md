@@ -46,8 +46,8 @@ provision (phone + BLE) → register (worker) → home STA + upload (device)
 3. **Auto-sync** — when charging and home STA is configured, firmware calls
    `wifi_home_try_autosync()` (STA + HTTPS upload is **stubbed** behind
    `CONFIG_OMI_ENABLE_WIFI_HOME_STA`, default `n`, until flash budget allows
-   TLS/STA). Worker upload endpoint is live:
-   `POST /api/v1/devices/:deviceId/audio` with `Authorization: Bearer omi_dev_…`.
+   TLS/STA). Worker `POST /api/v1/devices/:deviceId/audio` accepts auth +
+   metadata (`persisted: false`); audio bytes are not stored yet.
 
 ## Manual flash (charging cable?)
 

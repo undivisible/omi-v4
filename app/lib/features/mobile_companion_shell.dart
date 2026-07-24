@@ -14,8 +14,10 @@ import '../conversations/conversations.dart';
 import '../currents/crepus_current.dart';
 import '../currents/currents.dart';
 import '../device/device.dart';
+import 'mobile_companion_cache.dart';
 import 'mobile_digest_view.dart';
 import 'mobile_memory_screen.dart';
+import '../ui/markdown_text.dart';
 import '../memory/memory_models.dart';
 import '../features/setup_account_screens.dart' show EventKitProactiveSyncTile;
 import '../native/native_hub.dart';
@@ -109,7 +111,7 @@ class MobileCompanionShell extends StatefulWidget {
 }
 
 class _MobileCompanionShellState extends State<MobileCompanionShell> {
-  static const _maxTranscripts = 100;
+  static const _maxTranscripts = 200;
 
   late final PairedDeviceStore _pairedDevices =
       widget.pairedDevices ?? PreferencesPairedDeviceStore();
@@ -349,11 +351,15 @@ class MobilePendantPageState extends State<MobilePendantPage> {
   // scrolls normally, so the value lives outside setState to avoid rebuilding
   // the whole list on every scroll frame.
   final ValueNotifier<double> _scrollOffset = ValueNotifier<double>(0);
-  // Home is Currents; swipe right for Conversations, left for Memory.
-  final PageController _pageController = PageController();
+  // Home is Currents; swipe right for Conversations, left for Memory tab.
+  PageController? _pageController;
   int _pageIndex = 0;
   List<ConversationMessage> _conversation = const [];
   Object? _conversationError;
+  late final MobileCompanionCache _companionCache =
+      PreferencesMobileCompanionCache();
+  List<CurrentCard>? _cachedCurrents;
+  String? _cachedBriefCrepus;
 
   bool get _mobile => relay.role == DeviceRelayRole.mobileOwner;
 
@@ -388,12 +394,48 @@ class MobilePendantPageState extends State<MobilePendantPage> {
     if (!widget.previewMode && _mobile) unawaited(_restorePairing());
     unawaited(_loadDesktopNotice());
     if (!widget.previewMode) unawaited(_checkForUpdate());
+    unawaited(_restoreCompanionCache());
+  }
+
+  Future<void> _restoreCompanionCache() async {
+    final pageIndex = await _companionCache.readPageIndex();
+    final cachedConversation = await _companionCache.readConversation();
+    final cachedCurrents = await _companionCache.readCurrents();
+    if (!mounted) return;
+    setState(() {
+      _pageIndex = pageIndex;
+      _pageController = PageController(initialPage: pageIndex);
+      if (cachedConversation.isNotEmpty) {
+        _conversation = cachedConversation;
+      }
+      if (cachedCurrents != null && cachedCurrents.items.isNotEmpty) {
+        _cachedCurrents = cachedCurrents.items;
+        _cachedBriefCrepus = cachedCurrents.briefCrepus;
+      }
+    });
     if (!widget.previewMode && widget.services.productionReady) {
       final currents = widget.services.currents;
-      if (currents != null) unawaited(currents.load());
+      if (currents != null) {
+        currents.addListener(_persistCurrentsCache);
+        unawaited(currents.load());
+      }
       unawaited(_loadDigest());
       unawaited(_loadConversation());
     }
+  }
+
+  void _persistCurrentsCache() {
+    final currents = widget.services.currents;
+    if (currents == null || currents.loading || currents.error != null) return;
+    if (currents.items.isEmpty) return;
+    unawaited(
+      _companionCache
+          .saveCurrents(
+            items: currents.items,
+            briefCrepus: currents.briefCrepus,
+          )
+          .catchError((Object _) {}),
+    );
   }
 
   Future<void> _loadConversation() async {
@@ -404,6 +446,11 @@ class MobilePendantPageState extends State<MobilePendantPage> {
         _conversation = List.of(messages.reversed);
         _conversationError = null;
       });
+      unawaited(
+        _companionCache
+            .saveConversation(_conversation)
+            .catchError((Object _) {}),
+      );
     } catch (error) {
       if (!mounted) return;
       setState(() => _conversationError = error);
@@ -606,9 +653,10 @@ class MobilePendantPageState extends State<MobilePendantPage> {
     widget.services.deviceAudio.activeListenable.removeListener(
       _captureChanged,
     );
+    widget.services.currents?.removeListener(_persistCurrentsCache);
     _scrollController.dispose();
     _scrollOffset.dispose();
-    _pageController.dispose();
+    _pageController?.dispose();
     super.dispose();
   }
 
@@ -856,27 +904,42 @@ class MobilePendantPageState extends State<MobilePendantPage> {
         Column(
           children: [
             Expanded(
-              child: PageView(
-                key: const Key('companion_page_view'),
-                controller: _pageController,
-                onPageChanged: (index) {
-                  setState(() => _pageIndex = index);
-                  if (index == 1) unawaited(_loadConversation());
-                },
-                children: [
-                  _currentsPage(
-                    device: device,
-                    connected: connected,
-                    capturing: capturing,
-                    busy: busy,
-                    phase: phase,
-                    capturedMs: capturedMs,
-                    deviceTiles: deviceTiles,
-                  ),
-                  _conversationsPage(),
-                  _memoryPage(),
-                ],
-              ),
+              child: _pageController == null
+                  ? _currentsPage(
+                      device: device,
+                      connected: connected,
+                      capturing: capturing,
+                      busy: busy,
+                      phase: phase,
+                      capturedMs: capturedMs,
+                      deviceTiles: deviceTiles,
+                    )
+                  : PageView(
+                      key: const Key('companion_page_view'),
+                      controller: _pageController,
+                      onPageChanged: (index) {
+                        setState(() => _pageIndex = index);
+                        unawaited(
+                          _companionCache
+                              .savePageIndex(index)
+                              .catchError((Object _) {}),
+                        );
+                        if (index == 1) unawaited(_loadConversation());
+                      },
+                      children: [
+                        _currentsPage(
+                          device: device,
+                          connected: connected,
+                          capturing: capturing,
+                          busy: busy,
+                          phase: phase,
+                          capturedMs: capturedMs,
+                          deviceTiles: deviceTiles,
+                        ),
+                        _conversationsPage(),
+                        _memoryPage(),
+                      ],
+                    ),
             ),
             _pageTabs(),
           ],
@@ -908,7 +971,7 @@ class MobilePendantPageState extends State<MobilePendantPage> {
   }
 
   Widget _pageTabs() {
-    const labels = ['Currents', 'Chat', 'Memory'];
+    const labels = ['Home', 'Conversations', 'Memory'];
     final dark = _darkMode(context);
     final selectedBg = dark ? _cream : _ink;
     final selectedFg = dark ? _ink : _cream;
@@ -918,7 +981,7 @@ class MobilePendantPageState extends State<MobilePendantPage> {
     return SafeArea(
       top: false,
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(18, 4, 18, 10),
+        padding: const EdgeInsets.fromLTRB(18, 8, 18, 10),
         child: Row(
           children: [
             for (var index = 0; index < labels.length; index++) ...[
@@ -926,7 +989,7 @@ class MobilePendantPageState extends State<MobilePendantPage> {
               Expanded(
                 child: GestureDetector(
                   onTap: () => unawaited(
-                    _pageController.animateToPage(
+                    _pageController?.animateToPage(
                       index,
                       duration: const Duration(milliseconds: 240),
                       curve: Curves.easeOutCubic,
@@ -984,7 +1047,11 @@ class MobilePendantPageState extends State<MobilePendantPage> {
       if (!widget.previewMode &&
           widget.services.productionReady &&
           widget.services.currents != null)
-        _MobileTasksSection(currents: widget.services.currents!),
+        _MobileTasksSection(
+          currents: widget.services.currents!,
+          cachedItems: _cachedCurrents,
+          cachedBriefCrepus: _cachedBriefCrepus,
+        ),
       if (_update case final release?) ...[
         const SizedBox(height: _sectionGap),
         _UpdateCta(
@@ -1152,7 +1219,7 @@ class MobilePendantPageState extends State<MobilePendantPage> {
           onOpenMemory: () {
             Navigator.of(sheetContext).pop();
             unawaited(
-              _pageController.animateToPage(
+              _pageController?.animateToPage(
                 2,
                 duration: const Duration(milliseconds: 240),
                 curve: Curves.easeOutCubic,
@@ -1166,15 +1233,28 @@ class MobilePendantPageState extends State<MobilePendantPage> {
 }
 
 class _MobileTasksSection extends StatelessWidget {
-  const _MobileTasksSection({required this.currents});
+  const _MobileTasksSection({
+    required this.currents,
+    this.cachedItems,
+    this.cachedBriefCrepus,
+  });
 
   final CurrentsController currents;
+  final List<CurrentCard>? cachedItems;
+  final String? cachedBriefCrepus;
 
   @override
   Widget build(BuildContext context) => ListenableBuilder(
     listenable: currents,
     builder: (context, _) {
-      if (currents.error != null || currents.items.isEmpty) {
+      final items = currents.items.isNotEmpty
+          ? currents.items
+          : (cachedItems ?? const []);
+      final briefCrepus = currents.briefCrepus ?? cachedBriefCrepus;
+      if (currents.error != null && items.isEmpty) {
+        return const SizedBox.shrink();
+      }
+      if (items.isEmpty) {
         return const SizedBox.shrink();
       }
       // The same Now Brief the desktop hub renders: the most important current
@@ -1189,8 +1269,8 @@ class _MobileTasksSection extends StatelessWidget {
           const _SectionLabel('TASKS'),
           const SizedBox(height: _tileGap),
           CurrentsBrief(
-            cards: currents.items,
-            briefCrepus: currents.briefCrepus,
+            cards: items,
+            briefCrepus: briefCrepus,
             palette: _mobileCrepusPalette(context),
             onPrompt: (prompt) => _surfacePrepHint(context, prompt),
             onComplete: (id) => unawaited(currents.dismiss(id)),
@@ -2240,19 +2320,25 @@ class _LiveTranscriptStrip extends StatelessWidget {
                         'start listening.'));
     // No card, no border, no fill: the live line reads as a continuation of
     // the minutes-transcribed line right above it rather than a component.
-    return Padding(
-      key: const Key('companion_live_transcript'),
-      padding: const EdgeInsets.fromLTRB(4, 2, 4, 2),
-      child: Text(
-        text,
-        textAlign: TextAlign.center,
-        style: TextStyle(
-          color: interim ? _pageInk(context) : _pageInkSoft(context),
-          fontSize: 14,
-          height: 1.4,
-          fontStyle: interim ? FontStyle.normal : FontStyle.italic,
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        const SizedBox(height: _tileGap),
+        Padding(
+          key: const Key('companion_live_transcript'),
+          padding: const EdgeInsets.fromLTRB(4, 2, 4, 2),
+          child: Text(
+            text,
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: interim ? _pageInk(context) : _pageInkSoft(context),
+              fontSize: 14,
+              height: 1.4,
+              fontStyle: interim ? FontStyle.normal : FontStyle.italic,
+            ),
+          ),
         ),
-      ),
+      ],
     );
   }
 }
@@ -2326,7 +2412,7 @@ class _PaperTile extends StatelessWidget {
         // tappable, so the touch target always spans the full width.
         onTap: onTap,
         shape: RoundedRectangleBorder(borderRadius: radius),
-        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
         leading: Icon(icon, color: iconColor ?? _inkSoft),
         title: Text(
           title,
@@ -2608,14 +2694,24 @@ class _ConversationBubble extends StatelessWidget {
                             ),
                             const SizedBox(height: 4),
                           ],
-                          Text(
-                            message.text,
-                            style: TextStyle(
-                              fontSize: 15,
-                              height: 1.35,
-                              color: _pageInk(context),
+                          if (fromUser)
+                            Text(
+                              message.text,
+                              style: TextStyle(
+                                fontSize: 15,
+                                height: 1.35,
+                                color: _pageInk(context),
+                              ),
+                            )
+                          else
+                            DefaultTextStyle(
+                              style: TextStyle(
+                                fontSize: 15,
+                                height: 1.35,
+                                color: _pageInk(context),
+                              ),
+                              child: AssistantMarkdown(message.text),
                             ),
-                          ),
                         ],
                       ),
                     ),

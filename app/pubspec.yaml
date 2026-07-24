@@ -66,6 +66,7 @@ dependencies:
       url: https://github.com/tschk/crepuscularity
       ref: 9cf6ad45aa30c62d01bb4c86e37f430194e30b54
       path: plugins/crepuscularity-flutter
+  flowtoken_flutter: ^0.1.1
 
 dev_dependencies:
   flutter_test:

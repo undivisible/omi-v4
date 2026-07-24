@@ -20,6 +20,16 @@ final class DemoCurrentsTransport implements CurrentsTransport {
     if (path == '/v1/currents/generate') {
       return const CurrentsResponse(statusCode: 200, body: <String, Object?>{});
     }
+    if (path == '/v1/currents/refresh') {
+      return CurrentsResponse(
+        statusCode: 200,
+        body: <String, Object?>{
+          'refreshed': false,
+          'reason': 'demo',
+          'currents': List<Object?>.of(_items),
+        },
+      );
+    }
     if (path == '/v1/currents') {
       return CurrentsResponse(
         statusCode: 200,

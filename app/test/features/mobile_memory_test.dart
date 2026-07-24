@@ -16,7 +16,7 @@ void main() {
       find.byKey(const Key('memory_search_field')),
       'handoff',
     );
-    await tester.tap(find.byKey(const Key('memory_search_submit')));
+    await tester.pump(_searchDebounceDelay);
     await tester.pumpAndSettle();
 
     expect(transport.lastRetrieveQuery, 'handoff');
@@ -35,7 +35,7 @@ void main() {
       find.byKey(const Key('memory_search_field')),
       'nothing',
     );
-    await tester.tap(find.byKey(const Key('memory_search_submit')));
+    await tester.pump(_searchDebounceDelay);
     await tester.pumpAndSettle();
 
     expect(find.byKey(const Key('memory_search_empty')), findsOneWidget);
@@ -48,7 +48,7 @@ void main() {
     );
 
     await tester.enterText(
-      find.byKey(const Key('memory_create_field')),
+      find.byKey(const Key('memory_search_field')),
       'I take my coffee black.',
     );
     await tester.tap(find.byKey(const Key('memory_create_submit')));
@@ -58,7 +58,7 @@ void main() {
     expect(find.byKey(const Key('memory_create_done')), findsOneWidget);
     expect(
       tester
-          .widget<TextField>(find.byKey(const Key('memory_create_field')))
+          .widget<TextField>(find.byKey(const Key('memory_search_field')))
           .controller!
           .text,
       isEmpty,
@@ -77,12 +77,44 @@ void main() {
       find.byKey(const Key('memory_search_field')),
       'anything',
     );
-    await tester.tap(find.byKey(const Key('memory_search_submit')));
+    await tester.pump(_searchDebounceDelay);
     await tester.pumpAndSettle();
 
     expect(find.byKey(const Key('memory_search_error')), findsOneWidget);
   });
+
+  testWidgets('the search bar floats above the list with the add control inside',
+      (tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MobileMemoryScreen(
+          memory: MemoryClient(_FakeMemoryTransport()),
+          embedded: true,
+        ),
+      ),
+    );
+
+    expect(find.byKey(const Key('memory_floating_bar')), findsOneWidget);
+    expect(find.text('Memory'), findsNothing);
+    expect(find.text('Search what Omi knows, or add something new.'), findsNothing);
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('memory_floating_bar')),
+        matching: find.byKey(const Key('memory_search_field')),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('memory_floating_bar')),
+        matching: find.byKey(const Key('memory_create_submit')),
+      ),
+      findsOneWidget,
+    );
+  });
 }
+
+const _searchDebounceDelay = Duration(milliseconds: 300);
 
 final class _FakeMemoryTransport implements MemoryTransport {
   _FakeMemoryTransport({this.items = _defaultItems, this.fail = false});

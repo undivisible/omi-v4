@@ -819,7 +819,9 @@ impl AssistantProvider for RsAiAssistantProvider {
             }
             .model(model);
             let client = base.api_key(config.credential);
-            let computer_tools_active = computer_use_enabled && computer_use_available();
+            let computer_tools_active = computer_use_enabled
+                && computer_use_available()
+                && tier != ModelTier::Speed;
             let client = if computer_tools_active {
                 client
                     .with_tools(computer_use_tools())
@@ -864,6 +866,16 @@ impl AssistantProvider for RsAiAssistantProvider {
                         return;
                     }
                 }) else {
+                    // Some compatible providers (including Mercury over OpenRouter)
+                    // close the HTTP stream without a MessageEnd frame. Treat an
+                    // exhausted stream like hosted search does so the UI always
+                    // receives a terminal delta.
+                    let _ = sender
+                        .send(Ok(AssistantProviderEvent::Delta {
+                            text: String::new(),
+                            final_segment: true,
+                        }))
+                        .await;
                     return;
                 };
                 let event = match next {
@@ -2041,7 +2053,8 @@ async fn dispatch_assistant(
     // Going online: the model router picks the tier (and therefore the model
     // slug from `model_tier.rs`) for this prompt instead of a single fixed
     // model, and the choice is reported alongside the online marker.
-    let routed_tier = crate::chat_router::ChatRouter::from_env().route_prompt(&text);
+    let routed_tier =
+        crate::chat_router::ChatRouter::from_env().route_prompt(&text, origin);
     let routed_model = provider.model_for_tier(routed_tier);
     progress(
         request_id,
@@ -2065,6 +2078,7 @@ async fn dispatch_assistant(
         None => prompt,
     };
     let mut reply = String::new();
+    let mut final_sent = false;
     let mut events = provider.dispatch(
         request_id.to_owned(),
         prompt,
@@ -2076,6 +2090,14 @@ async fn dispatch_assistant(
             match receive_provider_event(&mut events, cancellation, PROVIDER_EVENT_TIMEOUT).await {
                 ProviderReceive::Event(event) => event,
                 ProviderReceive::Closed => {
+                    if !final_sent {
+                        NativeEvent::AssistantDelta(AssistantDelta {
+                            request_id: request_id.to_owned(),
+                            text: String::new(),
+                            final_segment: true,
+                        })
+                        .send();
+                    }
                     // The reflection and personality writes are fire-and-forget
                     // so they never add latency to the turn that produced them.
                     if let Some(handle) = personality {
@@ -2136,6 +2158,9 @@ async fn dispatch_assistant(
                 final_segment,
             } => {
                 reply.push_str(&delta);
+                if final_segment {
+                    final_sent = true;
+                }
                 NativeEvent::AssistantDelta(AssistantDelta {
                     request_id: request_id.to_owned(),
                     text: delta,
@@ -7157,6 +7182,50 @@ mod tests {
                 .proposals
                 .pending
                 .contains_key("proposal-old-generation")
+        );
+    }
+
+    #[tokio::test]
+    async fn assistant_dispatch_emits_terminal_delta_when_provider_closes_without_one(
+    ) {
+        let state = Arc::new(Mutex::new(RuntimeState {
+            configuration_generation: 7,
+            authority_uid: Some("user-a".to_owned()),
+            ..RuntimeState::default()
+        }));
+        let request_id = "chat-g7-close";
+        let provider: Arc<dyn AssistantProvider> = Arc::new(FakeAssistantProvider {
+            events: StdMutex::new(Some(vec![AssistantProviderEvent::Delta {
+                text: "quick reply".to_owned(),
+                final_segment: false,
+            }])),
+        });
+        dispatch_assistant(
+            request_id,
+            state.as_ref(),
+            provider,
+            "hi".to_owned(),
+            None,
+            false,
+            &CancellationToken::new(),
+            None,
+        )
+        .await;
+        let deltas: Vec<_> = crate::signals::test_events::take()
+            .into_iter()
+            .filter_map(|event| match event {
+                NativeEvent::AssistantDelta(delta) if delta.request_id == request_id => {
+                    Some((delta.text, delta.final_segment))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            deltas,
+            vec![
+                ("quick reply".to_owned(), false),
+                (String::new(), true),
+            ]
         );
     }
 }

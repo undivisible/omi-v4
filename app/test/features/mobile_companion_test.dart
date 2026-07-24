@@ -18,6 +18,7 @@ import 'package:omi/features/firmware_update_check.dart';
 import 'package:omi/features/mobile_companion_shell.dart';
 import 'package:omi/features/transcript_log_store.dart';
 import 'package:omi/main.dart';
+import 'package:omi/memory/memory.dart';
 import 'package:omi/native/native_hub.dart';
 import 'package:omi/onboarding/onboarding_completion.dart';
 import 'package:omi/ui/burst_glow.dart';
@@ -26,6 +27,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 void main() {
   final binding = TestWidgetsFlutterBinding.ensureInitialized();
   setUp(() {
+    SharedPreferences.setMockInitialValues({});
     binding.platformDispatcher.accessibilityFeaturesTestValue =
         const FakeAccessibilityFeatures(disableAnimations: true);
   });
@@ -139,6 +141,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
+    await _selectCompanionTab(tester, 'Conversations');
     expect(
       find.byKey(const Key('companion_transcripts_empty')),
       findsOneWidget,
@@ -157,9 +160,7 @@ void main() {
       );
     await tester.pumpAndSettle();
 
-    // The finalized segment shows twice: once as the live strip's latest line
-    // under the hero, once as a row in the conversations list.
-    expect(find.text('hello from the pendant'), findsNWidgets(2));
+    await _selectCompanionTab(tester, 'Home');
     expect(
       find.descendant(
         of: find.byKey(const Key('companion_live_transcript')),
@@ -168,6 +169,9 @@ void main() {
       findsOneWidget,
     );
     expect(find.text('still speaking'), findsNothing);
+
+    await _selectCompanionTab(tester, 'Conversations');
+    expect(find.text('hello from the pendant'), findsOneWidget);
     expect(find.byKey(const Key('companion_transcripts_empty')), findsNothing);
     fixture.services.dispose();
   });
@@ -215,7 +219,17 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('halfway through a word'), findsNWidgets(2));
+    await _selectCompanionTab(tester, 'Home');
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('companion_live_transcript')),
+        matching: find.text('halfway through a word'),
+      ),
+      findsOneWidget,
+    );
+
+    await _selectCompanionTab(tester, 'Conversations');
+    expect(find.text('halfway through a word'), findsOneWidget);
     fixture.services.dispose();
   });
 
@@ -243,7 +257,14 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    expect(find.text('persisted segment'), findsNWidgets(2));
+    await _selectCompanionTab(tester, 'Home');
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('companion_live_transcript')),
+        matching: find.text('persisted segment'),
+      ),
+      findsOneWidget,
+    );
 
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pumpAndSettle();
@@ -259,7 +280,16 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('persisted segment'), findsNWidgets(2));
+    await _selectCompanionTab(tester, 'Home');
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('companion_live_transcript')),
+        matching: find.text('persisted segment'),
+      ),
+      findsOneWidget,
+    );
+    await _selectCompanionTab(tester, 'Conversations');
+    expect(find.text('persisted segment'), findsOneWidget);
     expect(find.byKey(const Key('companion_transcripts_empty')), findsNothing);
     fixture.services.dispose();
   });
@@ -1549,11 +1579,17 @@ void main() {
       find.byKey(const Key('companion_delete_account_confirm')),
       findsOneWidget,
     );
-    expect(requests, isEmpty);
+    expect(
+      requests.where((request) => request.path == '/v1/account'),
+      isEmpty,
+    );
     await tester.tap(find.byKey(const Key('companion_delete_account_confirm')));
     await tester.pumpAndSettle();
 
-    expect(requests, [(method: 'DELETE', path: '/v1/account')]);
+    expect(
+      requests.where((request) => request.path == '/v1/account'),
+      [(method: 'DELETE', path: '/v1/account')],
+    );
     expect(fixture.services.auth.snapshot.session, isNull);
     fixture.services.dispose();
   });
@@ -1685,6 +1721,7 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
+    await _settle(tester);
 
     expect(find.text('TASKS'), findsOneWidget);
     expect(find.byKey(const Key('brief_hero')), findsOneWidget);
@@ -1728,6 +1765,76 @@ void main() {
     expect(find.text('TASKS'), findsNothing);
     services.dispose();
   });
+
+  testWidgets('companion tabs use Home, Conversations, and Memory labels', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(800, 1600));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final fixture = await _mobileFixture('user-a');
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MobileCompanionShell(
+          services: fixture.services,
+          pairedDevices: VolatilePairedDeviceStore(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Home'), findsOneWidget);
+    expect(find.text('Conversations'), findsOneWidget);
+    expect(find.text('Memory'), findsOneWidget);
+    expect(find.text('Currents'), findsNothing);
+    expect(find.text('Chat'), findsNothing);
+    fixture.services.dispose();
+  });
+
+  testWidgets('memory tab shows the floating search bar without page headings', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    await tester.binding.setSurfaceSize(const Size(800, 1600));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final auth = await _authorizedAuth('user-a');
+    final hub = _Hub();
+    final services = AppServices.forTesting(
+      nativeHub: hub,
+      deviceRelay: DeviceRelayService(
+        role: DeviceRelayRole.mobileOwner,
+        adapter: _Adapter(),
+      ),
+      auth: auth,
+      memory: MemoryClient(_CompanionMemoryTransport()),
+      memoryDatabasePath: (uid) => '/tmp/$uid.sqlite3',
+      managedStt: _ManagedStt(
+        ManagedSttSession(
+          websocketUrl: 'wss://api.example.test/v1/stt/sessions/s/stream',
+          session: _session('user-a'),
+        ),
+      ),
+    );
+    await services.initialize();
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MobileCompanionShell(
+          services: services,
+          pairedDevices: VolatilePairedDeviceStore(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('companion_page_view')), findsOneWidget);
+    await tester.tap(find.widgetWithText(GestureDetector, 'Memory'));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('memory_floating_bar')), findsOneWidget);
+    expect(find.text('Search what Omi knows, or add something new.'), findsNothing);
+    services.dispose();
+  });
 }
 
 // Device work hops between the fake test clock and real async (stream
@@ -1768,6 +1875,17 @@ Future<void> _settle(WidgetTester tester) async {
   }
 }
 
+Future<void> _selectCompanionTab(WidgetTester tester, String label) async {
+  await tester.tap(find.widgetWithText(GestureDetector, label));
+  await tester.pumpAndSettle();
+}
+
+final class _CompanionMemoryTransport implements MemoryTransport {
+  @override
+  Future<MemoryResponse> send(MemoryRequest request) async =>
+      const MemoryResponse(statusCode: 200, body: {'query': '', 'items': [], 'gaps': []});
+}
+
 final class _CurrentsTransport implements CurrentsTransport {
   final feedbackKinds = <String>[];
   var _dismissed = false;
@@ -1776,6 +1894,16 @@ final class _CurrentsTransport implements CurrentsTransport {
   Future<CurrentsResponse> send(CurrentsRequest request) async {
     if (request.path == '/v1/currents/generate') {
       return const CurrentsResponse(statusCode: 200, body: <String, Object?>{});
+    }
+    if (request.path == '/v1/currents/refresh') {
+      return CurrentsResponse(
+        statusCode: 200,
+        body: {
+          'refreshed': true,
+          'reason': 'test',
+          'currents': [if (!_dismissed) _card('surfaced', null)],
+        },
+      );
     }
     if (request.path == '/v1/currents') {
       return CurrentsResponse(
@@ -1923,7 +2051,7 @@ final class _Gateway implements AuthGateway {
       const PhoneOtpChallenge(verificationId: 'test');
 
   @override
-  Future<AuthSession?> refreshSession() async => currentSession;
+  Future<AuthSession?> refreshSession({bool forceRefresh = false}) async => currentSession;
 
   @override
   Future<AuthSession?> restoreSession() async => currentSession;
@@ -2355,6 +2483,13 @@ final class _Hub implements NativeHub {
   void stopLiveVoice({
     required String requestId,
     required String liveStreamId,
+  }) {}
+
+  @override
+  void updateLiveVoiceContext({
+    required String requestId,
+    required String liveStreamId,
+    required String sessionContext,
   }) {}
 
   @override

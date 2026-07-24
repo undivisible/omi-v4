@@ -56,7 +56,7 @@ static struct wifi_ap_sta_node sta_list[AP_MAX_STATIONS];
 
 /* WiFi state management */
 static omi_wifi_state_t current_wifi_state = OMI_WIFI_STATE_OFF;
-static char ap_ssid[WIFI_SSID_MAX_LEN + 1] = "Omi CV1";
+static char ap_ssid[WIFI_MAX_SSID_LEN + 1] = "Omi CV1";
 static char ap_password[WIFI_MAX_PASSWORD_LEN + 1] = "12345678";
 
 #define TCP_REMOTE_IP "192.168.1.2"
@@ -307,7 +307,7 @@ int setup_wifi_credentials(const char *ssid, const char *password)
 	}
 
 	size_t len = strlen(ssid);
-	if (len == 0 || len > WIFI_SSID_MAX_LEN) {
+	if (len == 0 || len > WIFI_MAX_SSID_LEN) {
 		return -EINVAL;
 	}
 
@@ -565,9 +565,9 @@ static int __wifi_args_to_params(struct wifi_connect_req_params *params)
 	params->channel = 1;
 	params->ssid = ap_ssid;
 	params->ssid_length = strlen(params->ssid);
-	if (params->ssid_length > WIFI_SSID_MAX_LEN) {
+	if (params->ssid_length > WIFI_MAX_SSID_LEN) {
 		LOG_ERR("SSID length is too long, expected is %d characters long",
-			WIFI_SSID_MAX_LEN);
+			WIFI_MAX_SSID_LEN);
 		return -1;
 	}
 

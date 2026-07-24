@@ -84,7 +84,7 @@ void main() {
     expect(secondCompleted, isTrue);
 
     expect(
-      transport.requests.where((request) => request.path.endsWith('/generate')),
+      transport.requests.where((request) => request.path.endsWith('/refresh')),
       hasLength(1),
     );
   });
@@ -158,6 +158,17 @@ final class _Transport implements CurrentsTransport {
     if (request.path.endsWith('/generate')) {
       await pauseGenerate?.future;
       return const CurrentsResponse(statusCode: 200, body: {'current': null});
+    }
+    if (request.path.endsWith('/refresh')) {
+      await pauseGenerate?.future;
+      return CurrentsResponse(
+        statusCode: 200,
+        body: {
+          'refreshed': false,
+          'reason': 'demo',
+          'currents': [_current('surfaced')],
+        },
+      );
     }
     if (request.path.endsWith('/accept')) {
       return CurrentsResponse(

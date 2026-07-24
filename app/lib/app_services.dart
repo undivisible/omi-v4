@@ -273,6 +273,7 @@ final class AppServices {
     LiveVoiceCapture? liveVoice,
     LiveVoiceTokenClient? liveVoiceTokens,
     MemorySyncPump? memorySync,
+    MemoryClient? memory,
     SystemAudioCaptureModeStore? captureModeStore,
     MeetingMicCapture? meetingMic,
     WorkerHttpClient? worker,
@@ -308,6 +309,7 @@ final class AppServices {
     liveVoice: liveVoice,
     liveVoiceTokens: liveVoiceTokens,
     memorySyncPump: memorySync,
+    memory: memory,
     captureModeStore: captureModeStore ?? VolatileSystemAudioCaptureModeStore(),
     meetingMic: meetingMic,
   );

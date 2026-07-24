@@ -1127,6 +1127,13 @@ final class _RecordingHub implements NativeHub {
   }) {}
 
   @override
+  void updateLiveVoiceContext({
+    required String requestId,
+    required String liveStreamId,
+    required String sessionContext,
+  }) {}
+
+  @override
   void startMeeting({required String requestId, String? title}) {}
 
   @override

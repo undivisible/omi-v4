@@ -522,6 +522,7 @@ void main() {
       ),
     );
     await tester.pump();
+    expect(find.byKey(const Key('chat_activity_marquee')), findsOneWidget);
     expect(find.text('planner · running · Reading tasks'), findsOneWidget);
     expect(find.byKey(const Key('chat_skeleton')), findsNothing);
 
@@ -673,6 +674,88 @@ void main() {
 
     services.dispose();
     await tester.pump();
+    await hub.close();
+  });
+
+  testWidgets('chat activity marquee tracks thinking, tools, and streaming', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(1000, 1600));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final auth = AuthController(
+      _FakeAuthGateway(_session('user-a')),
+      consentStore: VolatileConsentStore()..receipt = _receipt('user-a'),
+    );
+    await auth.restoreSession();
+    final hub = _FakeHub();
+    final services = AppServices.forTesting(
+      auth: auth,
+      nativeHub: hub,
+      deviceRelay: DeviceRelayService(
+        role: DeviceRelayRole.desktopObserver,
+        adapter: const UnavailableDeviceRelayAdapter(),
+      ),
+      memoryDatabasePath: (uid) => '/tmp/$uid.sqlite3',
+    );
+    await services.initialize();
+    await tester.pumpWidget(
+      MaterialApp(home: Scaffold(body: ChatScreen(services: services))),
+    );
+
+    await tester.enterText(find.byKey(const Key('chat_input')), 'hi');
+    await tester.tap(find.byKey(const Key('send_chat')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 900));
+    final requestId = hub.messages.single.$1;
+
+    expect(find.byKey(const Key('chat_activity_marquee')), findsOneWidget);
+    expect(find.text('Thinking…'), findsOneWidget);
+    expect(find.byKey(const Key('chat_skeleton')), findsOneWidget);
+
+    hub.eventsController.add(
+      NativeEventToolProgress(
+        value: ToolProgress(
+          requestId: requestId,
+          tool: 'chat_model',
+          status: ToolStatus.complete,
+          detail: 'online:configured-provider:inception/mercury-2',
+        ),
+      ),
+    );
+    await tester.pump();
+    expect(find.text('Thinking · inception/mercury-2'), findsOneWidget);
+
+    hub.eventsController.add(
+      NativeEventAssistantDelta(
+        value: AssistantDelta(
+          requestId: requestId,
+          text: 'Hello',
+          finalSegment: false,
+        ),
+      ),
+    );
+    await tester.pump();
+    expect(find.byKey(const Key('chat_activity_marquee')), findsNothing);
+    expect(find.byKey(const Key('chat_skeleton')), findsNothing);
+    expect(find.text('Hello'), findsOneWidget);
+
+    hub.eventsController.add(
+      NativeEventAssistantDelta(
+        value: AssistantDelta(
+          requestId: requestId,
+          text: '',
+          finalSegment: true,
+        ),
+      ),
+    );
+    await tester.pump();
+    expect(find.byKey(const Key('chat_skeleton')), findsNothing);
+    expect(
+      tester.widget<TextField>(find.byKey(const Key('chat_input'))).enabled,
+      isTrue,
+    );
+
+    services.dispose();
     await hub.close();
   });
 
