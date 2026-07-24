@@ -103,7 +103,8 @@ report_success() {
 
 note "checking whether the build tools are already on PATH (${PATH})"
 if command -v west >/dev/null 2>&1 && command -v cmake >/dev/null 2>&1 \
-  && command -v ninja >/dev/null 2>&1; then
+  && command -v ninja >/dev/null 2>&1 \
+  && west --version >/dev/null 2>&1; then
   # The container image puts the toolchain on PATH for THIS step, but each
   # GitHub Actions step runs in a fresh shell that does not inherit it — the
   # next step got `west: command not found` (exit 127) while this one saw west
@@ -122,12 +123,33 @@ if command -v west >/dev/null 2>&1 && command -v cmake >/dev/null 2>&1 \
       note "persisted ${tool_dir} to GITHUB_PATH (for ${tool})"
     done
   fi
+  # west is often a Python entrypoint from the nRF toolchain; later steps need
+  # the matching libpython on LD_LIBRARY_PATH or they die with exit 127.
+  if [ -z "${LD_LIBRARY_PATH:-}" ]; then
+    west_bin="$(command -v west)"
+    west_real="$(readlink -f "${west_bin}" 2>/dev/null || printf '%s' "${west_bin}")"
+    for candidate in \
+      "$(dirname "${west_real}")/../lib" \
+      "$(dirname "${west_real}")/../../lib" \
+      "$(dirname "${west_real}")/../Frameworks/Python.framework/Versions/Current/lib" \
+      "${ZEPHYR_SDK_INSTALL_DIR%/opt/zephyr-sdk}/lib" \
+      "${ZEPHYR_SDK_INSTALL_DIR%/opt/zephyr-sdk}/usr/lib"; do
+      [ -d "${candidate}" ] || continue
+      if ls "${candidate}"/libpython3*.so* >/dev/null 2>&1; then
+        persist_env LD_LIBRARY_PATH "${candidate}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+        note "persisted LD_LIBRARY_PATH=${candidate} for libpython"
+        break
+      fi
+    done
+  else
+    persist_env LD_LIBRARY_PATH "${LD_LIBRARY_PATH}"
+  fi
   export_zephyr_sdk || true
   report_success
   exit 0
 fi
 
-note "looking for an unpacked nRF Connect SDK toolchain bundle"
+note "west on PATH is missing or not runnable; searching toolchain bundles"
 export_toolchain_bundle || note "no toolchain bundle directory was found"
 
 if ! command -v west >/dev/null 2>&1 && command -v nrfutil >/dev/null 2>&1; then
