@@ -16,6 +16,9 @@ const _cream = Color(0xfffffcec);
 const _teal = Color(0xff2f9d8a);
 const _coral = Color(0xffd97757);
 
+const _floatingBarHeight = 52.0;
+const _searchDebounceDelay = Duration(milliseconds: 300);
+
 bool _dark(BuildContext context) =>
     Theme.of(context).brightness == Brightness.dark;
 
@@ -31,7 +34,7 @@ Color _pageHairline(BuildContext context) =>
     _dark(context) ? const Color(0x1ffffcec) : _hairline;
 
 /// The mobile memory surface: one page where the bottom field both searches
-/// and adds. Submit / Enter searches; the trailing + button remembers.
+/// and adds. Typing searches after a short debounce; the trailing + remembers.
 ///
 /// Both halves talk to the same [MemoryClient] the desktop uses — search hits
 /// `/v1/memory/retrieve`, remember hits `/v1/memories`.
@@ -58,20 +61,43 @@ class _MobileMemoryScreenState extends State<MobileMemoryScreen> {
   RetrievalPack? _results;
   String? _error;
   String? _done;
-  bool _busy = false;
+  bool _searchBusy = false;
+  bool _addBusy = false;
+  Timer? _searchDebounce;
+
+  @override
+  void initState() {
+    super.initState();
+    _field.addListener(_scheduleSearch);
+  }
 
   @override
   void dispose() {
+    _searchDebounce?.cancel();
+    _field.removeListener(_scheduleSearch);
     _field.dispose();
     _focus.dispose();
     super.dispose();
   }
 
+  void _scheduleSearch() {
+    _searchDebounce?.cancel();
+    _searchDebounce = Timer(_searchDebounceDelay, () => unawaited(_search()));
+  }
+
   Future<void> _search() async {
     final query = _field.text.trim();
-    if (query.isEmpty || _busy) return;
+    if (query.isEmpty) {
+      if (!mounted) return;
+      setState(() {
+        _results = null;
+        _searchBusy = false;
+      });
+      return;
+    }
+    if (_searchBusy) return;
     setState(() {
-      _busy = true;
+      _searchBusy = true;
       _error = null;
       _done = null;
     });
@@ -80,23 +106,24 @@ class _MobileMemoryScreenState extends State<MobileMemoryScreen> {
       if (!mounted) return;
       setState(() {
         _results = pack;
-        _busy = false;
+        _searchBusy = false;
       });
     } on MemoryClientException catch (error) {
       if (!mounted) return;
       setState(() {
         _error = error.message;
         _results = null;
-        _busy = false;
+        _searchBusy = false;
       });
     }
   }
 
   Future<void> _add() async {
     final content = _field.text.trim();
-    if (content.isEmpty || _busy) return;
+    if (content.isEmpty || _addBusy) return;
+    _searchDebounce?.cancel();
     setState(() {
-      _busy = true;
+      _addBusy = true;
       _error = null;
       _done = null;
     });
@@ -104,14 +131,16 @@ class _MobileMemoryScreenState extends State<MobileMemoryScreen> {
       await widget.memory.createMemory(content);
       if (!mounted) return;
       setState(() {
-        _busy = false;
+        _addBusy = false;
         _done = 'Saved. Omi will remember this.';
+        _searchDebounce?.cancel();
         _field.clear();
+        _results = null;
       });
     } on MemoryClientException catch (error) {
       if (!mounted) return;
       setState(() {
-        _busy = false;
+        _addBusy = false;
         _error = error.message;
       });
     }
@@ -120,37 +149,25 @@ class _MobileMemoryScreenState extends State<MobileMemoryScreen> {
   @override
   Widget build(BuildContext context) {
     final dark = _dark(context);
-    final body = Column(
+    final listBottomInset = _floatingBarHeight + 28;
+    final body = Stack(
       children: [
-        Expanded(
-          child: ListView(
-            key: const Key('mobile_memory_list'),
-            padding: const EdgeInsets.fromLTRB(18, 12, 18, 16),
-            children: [
-              Text(
-                'Memory',
-                style: TextStyle(
-                  fontSize: widget.embedded ? 28 : 16,
-                  fontWeight: FontWeight.w700,
-                  letterSpacing: widget.embedded ? -0.6 : 0,
-                  color: _pageInk(context),
-                ),
-              ),
-              const SizedBox(height: 6),
-              Text(
-                'Search what Omi knows, or add something new.',
-                style: TextStyle(
-                  fontSize: 14,
-                  height: 1.35,
-                  color: _pageInkSoft(context),
-                ),
-              ),
-              const SizedBox(height: 18),
-              ..._resultsSection(context),
-            ],
+        ListView(
+          key: const Key('mobile_memory_list'),
+          padding: EdgeInsets.fromLTRB(
+            18,
+            widget.embedded ? 56 : 12,
+            18,
+            listBottomInset,
           ),
+          children: _resultsSection(context),
         ),
-        _composer(context),
+        Positioned(
+          left: 18,
+          right: 18,
+          bottom: widget.embedded ? 8 : 12 + MediaQuery.paddingOf(context).bottom,
+          child: _floatingComposer(context),
+        ),
       ],
     );
     if (widget.embedded) {
@@ -168,25 +185,33 @@ class _MobileMemoryScreenState extends State<MobileMemoryScreen> {
         surfaceTintColor: Colors.transparent,
         elevation: 0,
         foregroundColor: _pageInk(context),
-        title: const Text(
-          'Memory',
-          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-        ),
       ),
       body: SafeArea(top: false, child: body),
     );
   }
 
-  Widget _composer(BuildContext context) {
-    final bottom = MediaQuery.paddingOf(context).bottom;
+  Widget _floatingComposer(BuildContext context) {
+    final dark = _dark(context);
     return Material(
-      color: _pageSurface(context),
+      color: Colors.transparent,
       child: DecoratedBox(
+        key: const Key('memory_floating_bar'),
         decoration: BoxDecoration(
-          border: Border(top: BorderSide(color: _pageHairline(context))),
+          color: _pageSurface(context),
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: _pageHairline(context)),
+          boxShadow: [
+            BoxShadow(
+              color: dark
+                  ? Colors.black.withValues(alpha: .35)
+                  : _ink.withValues(alpha: .08),
+              offset: const Offset(0, 4),
+              blurRadius: 16,
+            ),
+          ],
         ),
         child: Padding(
-          padding: EdgeInsets.fromLTRB(12, 10, 10, 10 + bottom),
+          padding: const EdgeInsets.fromLTRB(6, 6, 6, 6),
           child: Row(
             children: [
               Expanded(
@@ -196,60 +221,54 @@ class _MobileMemoryScreenState extends State<MobileMemoryScreen> {
                   focusNode: _focus,
                   textInputAction: TextInputAction.search,
                   textCapitalization: TextCapitalization.sentences,
-                  onSubmitted: (_) => unawaited(_search()),
-                  enabled: !_busy,
+                  onSubmitted: (_) {
+                    _searchDebounce?.cancel();
+                    unawaited(_search());
+                  },
+                  enabled: !_addBusy,
                   style: TextStyle(color: _pageInk(context), fontSize: 15),
-                  decoration: InputDecoration(
-                    hintText: 'search or add a memory',
-                    hintStyle: TextStyle(color: _pageInkSoft(context)),
+                  decoration: const InputDecoration(
                     filled: true,
-                    fillColor: _dark(context) ? _inkSheet : _paper,
-                    contentPadding: const EdgeInsets.symmetric(
-                      horizontal: 14,
-                      vertical: 12,
+                    fillColor: Colors.transparent,
+                    contentPadding: EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 10,
                     ),
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(999),
-                      borderSide: BorderSide(color: _pageHairline(context)),
-                    ),
-                    enabledBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(999),
-                      borderSide: BorderSide(color: _pageHairline(context)),
-                    ),
-                    focusedBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(999),
-                      borderSide: BorderSide(
-                        color: _pageInk(context).withValues(alpha: .35),
-                      ),
-                    ),
+                    border: InputBorder.none,
+                    enabledBorder: InputBorder.none,
+                    focusedBorder: InputBorder.none,
                     isDense: true,
                   ),
                 ),
               ),
-              const SizedBox(width: 8),
+              Container(
+                width: 1,
+                height: 28,
+                color: _pageHairline(context),
+              ),
               Material(
                 color: _pageInk(context),
                 shape: const CircleBorder(),
                 child: InkWell(
                   key: const Key('memory_create_submit'),
                   customBorder: const CircleBorder(),
-                  onTap: _busy ? null : () => unawaited(_add()),
+                  onTap: _addBusy ? null : () => unawaited(_add()),
                   child: SizedBox(
-                    width: 44,
-                    height: 44,
+                    width: 40,
+                    height: 40,
                     child: Center(
-                      child: _busy
+                      child: _addBusy
                           ? SizedBox(
                               width: 18,
                               height: 18,
                               child: CircularProgressIndicator(
                                 strokeWidth: 2,
-                                color: _dark(context) ? _ink : _cream,
+                                color: dark ? _ink : _cream,
                               ),
                             )
                           : Icon(
                               Icons.add_rounded,
-                              color: _dark(context) ? _ink : _cream,
+                              color: dark ? _ink : _cream,
                             ),
                     ),
                   ),
@@ -283,9 +302,12 @@ class _MobileMemoryScreenState extends State<MobileMemoryScreen> {
     }
     final pack = _results;
     if (pack == null) {
+      return const [];
+    }
+    if (pack.items.isEmpty) {
       return [
         Text(
-          'Type below and press return to search, or tap + to remember.',
+          'No memories matched "${pack.query}". Tap + to add it.',
           key: const Key('memory_search_empty'),
           style: TextStyle(
             color: _pageInkSoft(context),
@@ -295,21 +317,10 @@ class _MobileMemoryScreenState extends State<MobileMemoryScreen> {
         ),
       ];
     }
-    if (pack.items.isEmpty) {
-      return [
-        Text(
-          'No memories matched "${pack.query}". Tap + to add it.',
-          style: TextStyle(
-            color: _pageInkSoft(context),
-            fontSize: 13,
-            height: 1.4,
-          ),
-        ),
-      ];
-    }
     return [
-      for (final item in pack.items) ...[
+      for (var index = 0; index < pack.items.length; index++) ...[
         DecoratedBox(
+          key: Key('memory_result_$index'),
           decoration: BoxDecoration(
             color: _pageSurface(context),
             border: Border.all(color: _pageHairline(context)),
@@ -321,7 +332,7 @@ class _MobileMemoryScreenState extends State<MobileMemoryScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  item.excerpt,
+                  pack.items[index].excerpt,
                   style: TextStyle(
                     color: _pageInk(context),
                     fontSize: 15,
@@ -331,8 +342,8 @@ class _MobileMemoryScreenState extends State<MobileMemoryScreen> {
                 ),
                 const SizedBox(height: 6),
                 Text(
-                  '${item.memory.kind.name.toUpperCase()} · '
-                  '${(item.relevanceBasisPoints / 100).round()}% match',
+                  '${pack.items[index].memory.kind.name.toUpperCase()} · '
+                  '${(pack.items[index].relevanceBasisPoints / 100).round()}% match',
                   style: TextStyle(
                     color: _pageInkSoft(context),
                     fontSize: 12.5,
