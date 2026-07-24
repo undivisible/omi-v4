@@ -129,18 +129,20 @@ parsed before `find_package(Zephyr)` into a generated Kconfig fragment; the
 imgtool's image version, which is what MCUboot's downgrade prevention actually
 compares. The DIS `0x2A26` contract is unchanged.
 
-**An opt-in Rust static library — no upstream counterpart.** Upstream is C only.
-`omi/rust/` builds `omi-rust` and links it into the existing `app` target under
-`CONFIG_OMI_RUST`, and `west-rust.yml` pins `zephyr-lang-rust` at a fixed
-revision because `CONFIG_RUST` in Zephyr 4.4.0 is a Kconfig stub without that
-out-of-tree module. It carries host-testable pure-logic ports (framing, battery
-SoC/EMA, IMU gesture/register packing, button tap FSM, haptic duration map, LED
-pulse math, feedback error patterns) plus a boot-time self-test, linked into a
-real image — verifiable with `nm … | grep omi_rust_selftest` on the built ELF.
-C keeps drivers and I/O; Rust paths are dual-path behind `CONFIG_OMI_RUST`. The
-whole thing is inert at `CONFIG_OMI_RUST=n`, which is the default and what
-release images build, so a re-sync can drop it without touching the shipping
-configuration. Its purpose is to prove the toolchain path before
+**A required Rust static library — no upstream counterpart.** Upstream is C only.
+`omi/rust/` builds `omi-rust` and links it into the existing `app` target;
+**`CONFIG_OMI_RUST` defaults `y`**, so the `omi-cv1` CI and release images link
+it rather than treating it as an opt-in dual path. `west-rust.yml` pins
+`zephyr-lang-rust` at a fixed revision because `CONFIG_RUST` in Zephyr 4.4.0 is a
+Kconfig stub without that out-of-tree module, and that module is required in the
+workspace. `omi/rust/` is where the firmware's pure logic lives — framing,
+battery SoC/EMA, IMU gesture/register packing, button tap FSM, haptic duration
+map, LED pulse math, feedback error patterns — plus a boot-time self-test, linked
+into a real image and verifiable with `nm … | grep omi_rust_selftest` on the
+built ELF. C keeps the Zephyr I/O (GPIO, I2C, BLE, PWM, threads). It still has
+**no** dependency on the `zephyr` bindings crate, because with `CONFIG_FLASH=y`
+that crate's generated `devicetree.rs` does not compile for this board, so it
+builds against `core`. Its purpose is to prove the toolchain path before
 `transport.c`'s tx logic moves over, and to give the wire format a host-testable
 home that `app/native/hub` could later share.
 
@@ -395,10 +397,10 @@ merge mechanically. The 523 identical files are Opus and the parts nobody edits.
 That ratio is the wrong way round for cheap merges.
 
 **Three costs push the other way.** The signing key is byte-identical, so OTA to
-shipped devices still works. The Rust addition is fully inert at its default, so
-it costs nothing at re-sync time. And the DevKit is largely unported, so DevKit
-changes can still be taken nearly verbatim — a temporary benefit that ends the
-day the nrfx 3.x PDM port lands.
+shipped devices still works. The Rust library is self-contained in `omi/rust/`,
+so it does not collide with upstream's C on re-sync. And the DevKit is largely
+unported, so DevKit changes can still be taken nearly verbatim — a temporary
+benefit that ends the day the nrfx 3.x PDM port lands.
 
 **What we owe upstream.** The four fixes in §3.2 are upstream bugs found by
 reading upstream code, and none has been reported. The `RING_INFO` `-ENOMEM`

@@ -220,6 +220,38 @@ jobs:
           cp "${COPY_FROM}" "${COPY_TO}"
           echo "copied ${COPY_FROM} -> ${COPY_TO}"
 
+      # omi/omi.conf sets CONFIG_RUST=y and CONFIG_OMI_RUST=y, so the omi-cv1 leg
+      # links the omi-rust staticlib and needs the Rust toolchain on PATH. The
+      # zephyr-lang-rust module is already in the restored workspace (the
+      # workspace job clones it into modules/lang/rust). Other legs keep
+      # CONFIG_RUST=n and skip this.
+      - name: Cache the Rust toolchain and cargo registry
+        if: matrix.app_dir == 'firmware/omi'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.rustup/toolchains
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: rust-fw-${{ env.RUST_TARGET }}-${{ hashFiles('firmware/omi/rust/Cargo.toml') }}
+          restore-keys: |
+            rust-fw-${{ env.RUST_TARGET }}-
+
+      - name: Install Rust with the nRF5340 app-core target
+        if: matrix.app_dir == 'firmware/omi'
+        run: |
+          set -euo pipefail
+          if ! command -v rustup >/dev/null 2>&1; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+              | sh -s -- -y --profile minimal --default-toolchain stable --component clippy
+          fi
+          . "${HOME}/.cargo/env"
+          rustup component add clippy
+          rustup target add "${RUST_TARGET}"
+          echo "${HOME}/.cargo/bin" >> "$GITHUB_PATH"
+          rustc --version
+          cargo --version
+
       - name: Build ${{ matrix.device }}
         env:
           BOARD: ${{ matrix.board }}
@@ -253,6 +285,27 @@ jobs:
             "${sysbuild[@]}" \
             -- "${extra[@]}"
 
+      # A Rust staticlib that compiles but gets dropped by --gc-sections would
+      # look like success. Assert the self-test symbol is in the linked image so
+      # the omi-cv1 leg actually gates on Rust reaching the application.
+      - name: Assert the Rust code reached the image
+        if: matrix.app_dir == 'firmware/omi'
+        env:
+          BUILD_DIR_NAME: ${{ matrix.id }}
+        run: |
+          set -euo pipefail
+          elf="${GITHUB_WORKSPACE}/build/${BUILD_DIR_NAME}/omi/zephyr/zephyr.elf"
+          if [ ! -f "${elf}" ]; then
+            echo "::error::${elf} was not produced."
+            exit 1
+          fi
+          if ! arm-zephyr-eabi-nm "${elf}" | grep -q ' T omi_rust_selftest$'; then
+            echo "::error::omi_rust_selftest is not in the linked image, so the Rust staticlib did not actually make it in."
+            arm-zephyr-eabi-nm "${elf}" | grep -i rust || true
+            exit 1
+          fi
+          echo "omi_rust_selftest is linked into zephyr.elf"
+
       # Not a release; this exists so a failing image can be inspected and so a
       # size regression is visible without re-running the build locally.
       - name: Report image size
@@ -273,36 +326,19 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-  # Rust is opt-in (CONFIG_OMI_RUST=n by default), so the matrix above builds
-  # omi-cv1 without it. This leg proves the out-of-tree zephyr-lang-rust module
-  # still compiles and links into the real signed image, and runs the framing
-  # crate's host tests — the crate is the seed for sharing the wire format with
-  # app/native/hub, so it has to stay host-testable.
+  # omi-cv1 now builds with CONFIG_OMI_RUST=y in the matrix above (set in
+  # omi/omi.conf), which compiles the omi-rust staticlib, runs clippy via the
+  # CMake integration, links it into the real signed image and asserts the
+  # self-test symbol survived. This leg only adds the host-side coverage that
+  # the device build cannot give: the framing crate's `cargo test`, which is the
+  # seed for sharing the wire format with app/native/hub and must stay
+  # host-testable, plus a standalone host clippy pass. No Zephyr workspace is
+  # needed here, so it runs on the bare runner in seconds.
   rust:
-    name: omi-cv1 with CONFIG_OMI_RUST=y
+    name: omi-rust host tests
     runs-on: ubuntu-24.04
-    needs: workspace
-    container:
-      image: ghcr.io/nrfconnect/sdk-nrf-toolchain:v3.4.0
-      options: --user root
-    defaults:
-      run:
-        shell: bash
     steps:
-      - name: Trust the workspace inside the container
-        run: git config --global --add safe.directory '*'
-
       - uses: actions/checkout@v4
-
-      - name: Restore the west workspace
-        uses: actions/cache/restore@v4
-        with:
-          path: ${{ env.NCS_WORKSPACE }}
-          key: ncs-${{ env.NCS_VERSION }}-rust-${{ env.RUST_MODULE_REV }}-v1
-          fail-on-cache-miss: true
-
-      - name: Resolve the NCS toolchain on PATH
-        run: bash .github/scripts/setup-ncs-toolchain.sh
 
       - name: Cache the Rust toolchain and cargo registry
         uses: actions/cache@v4
@@ -311,11 +347,11 @@ jobs:
             ~/.rustup/toolchains
             ~/.cargo/registry
             ~/.cargo/git
-          key: rust-fw-${{ env.RUST_TARGET }}-${{ hashFiles('firmware/omi/rust/Cargo.toml') }}
+          key: rust-fw-host-${{ hashFiles('firmware/omi/rust/Cargo.toml') }}
           restore-keys: |
-            rust-fw-${{ env.RUST_TARGET }}-
+            rust-fw-host-
 
-      - name: Install Rust with the nRF5340 app-core target
+      - name: Install Rust with clippy
         run: |
           set -euo pipefail
           if ! command -v rustup >/dev/null 2>&1; then
@@ -324,13 +360,12 @@ jobs:
           fi
           . "${HOME}/.cargo/env"
           rustup component add clippy
-          rustup target add "${RUST_TARGET}"
           echo "${HOME}/.cargo/bin" >> "$GITHUB_PATH"
           rustc --version
           cargo --version
 
-      # Host tests first: they are seconds, they need no Zephyr, and they are
-      # what will keep the device and app/native/hub wire formats from drifting.
+      # Host tests: they are seconds, they need no Zephyr, and they are what will
+      # keep the device and app/native/hub wire formats from drifting.
       - name: Test the framing crate on the host
         working-directory: firmware/omi/rust
         run: |
@@ -338,35 +373,12 @@ jobs:
           . "${HOME}/.cargo/env"
           cargo test
 
-      - name: Build omi-cv1 with Rust linked in
+      # Mirror the flags omi/rust/CMakeLists.txt passes on the device build, so a
+      # host-only lint regression is caught here even if the container build is
+      # skipped.
+      - name: Lint the framing crate on the host
+        working-directory: firmware/omi/rust
         run: |
           set -euo pipefail
           . "${HOME}/.cargo/env"
-          cp firmware/omi/omi.conf firmware/omi/prj.conf
-          cd "${NCS_WORKSPACE}"
-          set -x
-          west build -b omi/nrf5340/cpuapp "${GITHUB_WORKSPACE}/firmware/omi" \
-            --sysbuild \
-            --build-dir "${GITHUB_WORKSPACE}/build/omi-cv1-rust" \
-            --pristine always \
-            -- \
-            -DBOARD_ROOT="${GITHUB_WORKSPACE}/firmware" \
-            -DCONFIG_RUST=y \
-            -DCONFIG_OMI_RUST=y
-
-      # A Rust staticlib that compiles but gets dropped by --gc-sections would
-      # look like success. Assert the symbol is in the linked application.
-      - name: Assert the Rust code reached the image
-        run: |
-          set -euo pipefail
-          elf="${GITHUB_WORKSPACE}/build/omi-cv1-rust/omi/zephyr/zephyr.elf"
-          if [ ! -f "${elf}" ]; then
-            echo "::error::${elf} was not produced."
-            exit 1
-          fi
-          if ! arm-zephyr-eabi-nm "${elf}" | grep -q ' T omi_rust_selftest$'; then
-            echo "::error::omi_rust_selftest is not in the linked image, so the Rust staticlib did not actually make it in."
-            arm-zephyr-eabi-nm "${elf}" | grep -i rust || true
-            exit 1
-          fi
-          echo "omi_rust_selftest is linked into zephyr.elf"
+          cargo clippy --all-targets -- -D warnings -D clippy::undocumented_unsafe_blocks

@@ -1,8 +1,6 @@
-// Pure PWM pulse-width math ported from firmware/omi/src/led.c. The PWM
-// devices and Zephyr `pwm_set_pulse_dt` calls stay in C.
+// Pure PWM pulse-width math. The PWM devices and Zephyr `pwm_set_pulse_dt`
+// calls stay in C.
 
-/// Computes the on-pulse width in nanoseconds for a given PWM period and
-/// brightness level (0–100 percent). Levels above 100 are clamped.
 pub fn pulse_width_ns(period_ns: u32, level: u8) -> u32 {
     let level = if level > 100 { 100 } else { level };
     (period_ns * u32::from(level)) / 100

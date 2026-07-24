@@ -6,9 +6,7 @@
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 
-#ifdef CONFIG_OMI_RUST
 #include "omi_rust.h"
-#endif
 
 LOG_MODULE_REGISTER(haptic, CONFIG_LOG_DEFAULT_LEVEL);
 
@@ -70,31 +68,12 @@ static ssize_t haptic_write_handler(struct bt_conn *conn,
     uint8_t value = ((uint8_t *) buf)[0];
     LOG_INF("Haptic write received: value %d", value);
 
-#ifdef CONFIG_OMI_RUST
     uint32_t duration = omi_rust_haptic_duration_from_ble(value);
     if (duration == 0) {
         LOG_WRN("Haptic write: Invalid value %d", value);
         return len;
     }
     play_haptic_milli(duration);
-#else
-    // Map received value to haptic duration
-    // 1 -> 100ms, 2 -> 300ms, 3 -> 500ms
-    switch (value) {
-    case 1:
-        play_haptic_milli(100);
-        break;
-    case 2:
-        play_haptic_milli(300);
-        break;
-    case 3:
-        play_haptic_milli(500);
-        break;
-    default:
-        LOG_WRN("Haptic write: Invalid value %d", value);
-        return len;
-    }
-#endif
 
     return len;
 }
@@ -141,11 +120,7 @@ void play_haptic_milli(uint32_t duration)
 
     if (duration > MAX_HAPTIC_DURATION) {
         LOG_WRN("Requested haptic duration %u exceeds max %d, capping.", duration, MAX_HAPTIC_DURATION);
-#ifdef CONFIG_OMI_RUST
         duration = omi_rust_haptic_clamp_duration(duration);
-#else
-        duration = MAX_HAPTIC_DURATION;
-#endif
     }
 
     LOG_INF("Playing haptic for %u ms", duration);

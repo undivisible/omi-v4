@@ -386,13 +386,17 @@ config OMI_ENABLE_DEVICE_NAME_RW
 config OMI_RUST
     bool "Build and link the Rust support library"
     depends on RUST
-    default n
+    default y
     help
         "Compile firmware/omi/rust (the omi-rust staticlib) with cargo and link
-         it into the application. Requires the out-of-tree zephyr-lang-rust
-         module in the west workspace (see firmware/README.md) and the
-         thumbv8m.main-none-eabi Rust target. Currently only carries the tx
-         ring-buffer and GATT packet header codecs plus a self-test."
+         it into the application. Pure-logic ports live here — tx ring/GATT
+         framing, battery SoC/EMA math, IMU register packing and gesture
+         classify, button tap FSM, and feedback error-pattern tables — while
+         Zephyr I/O (GPIO, PWM, BLE) stays in C. Requires the out-of-tree
+         zephyr-lang-rust module in the west workspace (see firmware/README.md)
+         and the thumbv8m.main-none-eabihf Rust target. `CONFIG_RUST` is the
+         Zephyr Kconfig gate from that module; `CONFIG_OMI_RUST` is the sole
+         application switch — do not maintain a parallel C-only logic path."
 
 config OMI_RUST_CLIPPY
     bool "Run cargo clippy on the Rust support library during the build"

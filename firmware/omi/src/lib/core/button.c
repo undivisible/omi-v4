@@ -24,9 +24,7 @@
 #ifdef CONFIG_OMI_ENABLE_OFFLINE_STORAGE
 #include "sd_card.h"
 #endif
-#ifdef CONFIG_OMI_RUST
 #include "omi_rust.h"
-#endif
 
 LOG_MODULE_REGISTER(button, CONFIG_LOG_DEFAULT_LEVEL);
 
@@ -165,19 +163,8 @@ typedef enum {
     BUTTON_EVENT_RELEASE
 } ButtonEvent;
 
-#ifndef CONFIG_OMI_RUST
-static uint32_t current_time = 0;
-static uint32_t btn_press_start_time;
-static uint32_t btn_release_time;
-static uint32_t btn_last_tap_time;
-static bool btn_is_pressed;
-
-static u_int8_t btn_last_event = BUTTON_EVENT_NONE;
-#endif
-
 void check_button_level(struct k_work *work_item)
 {
-#ifdef CONFIG_OMI_RUST
     ARG_UNUSED(work_item);
 
     uint8_t rust_event = omi_rust_button_step(was_pressed);
@@ -213,99 +200,6 @@ void check_button_level(struct k_work *work_item)
     }
 
     k_work_reschedule(&button_work, K_MSEC(BUTTON_CHECK_INTERVAL));
-#else
-    current_time = current_time + 1;
-
-    u_int8_t btn_state = was_pressed ? BUTTON_PRESSED : BUTTON_RELEASED;
-
-    ButtonEvent event = BUTTON_EVENT_NONE;
-
-    // Debouncing pressed state
-    if (btn_state == BUTTON_PRESSED && !btn_is_pressed) {
-        btn_is_pressed = true;
-        btn_press_start_time = current_time;
-    } else if (btn_state == BUTTON_RELEASED && btn_is_pressed) {
-        btn_is_pressed = false;
-        btn_release_time = current_time;
-
-        // Check for double tap
-        uint32_t press_duration = (btn_release_time - btn_press_start_time) * BUTTON_CHECK_INTERVAL;
-        if (press_duration < TAP_THRESHOLD) {
-            if (btn_last_tap_time > 0 &&
-                (current_time - btn_last_tap_time) * BUTTON_CHECK_INTERVAL < DOUBLE_TAP_WINDOW) {
-                event = BUTTON_EVENT_DOUBLE_TAP;
-                btn_last_tap_time = 0; // Reset double-tap / single-tap detection
-            } else {
-                btn_last_tap_time = current_time;
-            }
-        }
-    }
-
-    // Check for single tap
-    if (btn_state == BUTTON_RELEASED && !btn_is_pressed) {
-        uint32_t press_duration = (btn_release_time - btn_press_start_time) * BUTTON_CHECK_INTERVAL;
-        if (press_duration < TAP_THRESHOLD && btn_last_tap_time > 0 &&
-            (current_time - btn_press_start_time) * BUTTON_CHECK_INTERVAL > TAP_THRESHOLD) {
-            event = BUTTON_EVENT_SINGLE_TAP;
-            btn_last_tap_time = 0;
-        } else if ((current_time - btn_press_start_time) * BUTTON_CHECK_INTERVAL > TAP_THRESHOLD) {
-            event = BUTTON_EVENT_RELEASE;
-        }
-    }
-
-    // Check for long press
-    if (btn_is_pressed && (current_time - btn_press_start_time) * BUTTON_CHECK_INTERVAL >= LONG_PRESS_TIME) {
-        event = BUTTON_EVENT_LONG_PRESS;
-    }
-
-    // Single tap
-    if (event == BUTTON_EVENT_SINGLE_TAP) {
-        LOG_INF("single tap detected\n");
-        btn_last_event = event;
-
-        notify_tap();
-#ifdef CONFIG_OMI_ENABLE_USER_EVENTS
-        omi_note_user_activity();
-        omi_user_event_emit(OMI_USER_EVENT_BOOKMARK, OMI_USER_EVENT_SRC_BUTTON);
-#endif
-    }
-
-    // Double tap
-    if (event == BUTTON_EVENT_DOUBLE_TAP) {
-        LOG_INF("double tap detected\n");
-        btn_last_event = event;
-        notify_double_tap();
-#ifdef CONFIG_OMI_ENABLE_USER_EVENTS
-        omi_note_user_activity();
-        omi_user_event_emit(OMI_USER_EVENT_ASSISTANT, OMI_USER_EVENT_SRC_BUTTON);
-#endif
-    }
-
-    // Long press, one time event
-    if (event == BUTTON_EVENT_LONG_PRESS && btn_last_event != BUTTON_EVENT_LONG_PRESS) {
-        LOG_INF("long press detected\n");
-        btn_last_event = event;
-        turnoff_all();
-    }
-
-    // Releases, one time event
-    if (event == BUTTON_EVENT_RELEASE && btn_last_event != BUTTON_EVENT_RELEASE) {
-        LOG_PRINTK("release detected\n");
-        btn_last_event = event;
-        notify_unpress();
-
-        // Reset
-        current_time = 0;
-        btn_press_start_time = 0;
-        btn_release_time = 0;
-        btn_last_tap_time = 0;
-    }
-    if (event == BUTTON_EVENT_RELEASE) {
-        current_button_state = GRACE;
-    }
-
-    k_work_reschedule(&button_work, K_MSEC(BUTTON_CHECK_INTERVAL));
-#endif
 }
 
 static ssize_t button_data_read_characteristic(struct bt_conn *conn,

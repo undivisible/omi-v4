@@ -22,9 +22,7 @@
 #endif
 #include <hal/nrf_reset.h>
 
-#ifdef CONFIG_OMI_RUST
 #include "omi_rust.h"
-#endif
 
 #include "imu.h"
 #include "lib/core/sd_card.h"
@@ -244,7 +242,6 @@ int main(void)
     // print reset reason at startup
     print_reset_reason();
 
-#ifdef CONFIG_OMI_RUST
     {
         int rust_failures = omi_rust_selftest();
         if (rust_failures) {
@@ -253,7 +250,6 @@ int main(void)
             LOG_INF("Rust framing self-test passed");
         }
     }
-#endif
 
     // Initialize watchdog first to catch any early freezes
     ret = watchdog_init();

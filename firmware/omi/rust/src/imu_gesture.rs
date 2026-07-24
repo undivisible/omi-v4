@@ -109,8 +109,7 @@ pub fn selftest() -> i32 {
         failures += 1;
     }
     let r = program_registers(true, 32, 7, 3, 3);
-    if r.int_dur2 != 0x7F
-        || r.md1_cfg != (LSM6DS_MD1_CFG_INT1_WU | LSM6DS_MD1_CFG_INT1_DOUBLE_TAP)
+    if r.int_dur2 != 0x7F || r.md1_cfg != (LSM6DS_MD1_CFG_INT1_WU | LSM6DS_MD1_CFG_INT1_DOUBLE_TAP)
     {
         failures += 1;
     }

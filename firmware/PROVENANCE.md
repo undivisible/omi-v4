@@ -142,23 +142,26 @@ verbatim.
 
 ### Rust divergence: `omi/rust/` and `west-rust.yml` have no upstream counterpart
 
-Upstream is C only. This tree adds an **opt-in** Rust static library to the
-`omi-cv1` application. Nothing was migrated off C; the library carries the tx
-ring-buffer and GATT packet header codecs and a boot-time self-test, and exists
-to prove the toolchain path before `transport.c`'s tx logic moves over. See the
-README's *Rust in the firmware* section.
+Upstream is C only. This tree adds a **required** Rust static library to the
+`omi-cv1` application: `CONFIG_OMI_RUST` defaults `y` and the CI and release
+images link `omi-rust`. `omi/rust/` is where the firmware's pure logic lives —
+framing, battery SoC/EMA, IMU gesture/register packing, button tap FSM, and
+haptic/LED/feedback helpers — plus a boot-time self-test; C keeps the Zephyr I/O
+(GPIO/I2C/BLE/PWM/threads). See the README's *Rust in the firmware* section.
 
 | Path | Divergence |
 | --- | --- |
-| `omi/rust/` | **new**, no upstream counterpart. `omi-rust` staticlib: `framing.rs` (wire headers, host-tested), a `k_panic()` panic handler, and CMake that links it into the existing `app` target without zephyr-lang-rust's `rust_cargo_application()` (which would displace `omi/src/main.c`) |
-| `west-rust.yml` | **new**. West manifest fragment pinning `zephyrproject-rtos/zephyr-lang-rust` at `ab3e546232bfa2f4e16d6c5156b9d9500885b4e8`, imported on top of the NCS manifest. The module is in neither the NCS nor the upstream Zephyr manifest, and `CONFIG_RUST` in Zephyr 4.4.0 is a stub without it |
-| `omi/Kconfig` | added `OMI_RUST` (default `n`) and `OMI_RUST_CLIPPY` |
+| `omi/rust/` | **new**, no upstream counterpart. `omi-rust` staticlib: pure-logic modules (`framing`, `battery`, `imu_gesture`, `button`, `haptic`, `led`, `feedback`, host-tested), a `k_panic()` panic handler, and CMake that links it into the existing `app` target without zephyr-lang-rust's `rust_cargo_application()` (which would displace `omi/src/main.c`) |
+| `west-rust.yml` | **new**, and required in the workspace. West manifest fragment pinning `zephyrproject-rtos/zephyr-lang-rust` at `ab3e546232bfa2f4e16d6c5156b9d9500885b4e8`, imported on top of the NCS manifest. The module is in neither the NCS nor the upstream Zephyr manifest, and `CONFIG_RUST` in Zephyr 4.4.0 is a stub without it |
+| `omi/Kconfig` | added `OMI_RUST` (defaults `y`) and `OMI_RUST_CLIPPY` |
 | `omi/CMakeLists.txt` | `add_subdirectory(rust)` under `CONFIG_OMI_RUST` |
-| `omi/src/main.c` | calls `omi_rust_selftest()` under `#ifdef CONFIG_OMI_RUST` |
+| `omi/src/main.c` | calls `omi_rust_selftest()` at boot |
 
-All of it is inert when `CONFIG_OMI_RUST=n`, which is the default and what the
-release images build, so a re-sync can drop the whole thing without touching the
-shipping configuration. It is additive: no upstream C file changed behaviour.
+`omi/rust/Cargo.toml` still has **no** dependency on the `zephyr` bindings crate:
+with `CONFIG_FLASH=y`, which `omi-cv1` sets, that crate's generated
+`devicetree.rs` does not compile for this board, so the crate builds against
+`core`. The library is self-contained in `omi/rust/`, so a re-sync does not
+collide with upstream's C.
 
 When re-syncing, expect step 3 of *How to re-sync with upstream* to produce a
 large diff on every file in the first table. Those hunks are deliberate; do not

@@ -145,7 +145,12 @@ pub extern "C" fn omi_rust_button_step(pressed: bool) -> u8 {
     // SAFETY: the button work queue is the only caller; Zephyr runs that work
     // serially on one thread, so there is no concurrent access. `addr_of_mut!`
     // avoids forming a Rust reference to the mutable static.
-    unsafe { (&raw mut BUTTON_FSM).as_mut().unwrap_unchecked().step(pressed) as u8 }
+    unsafe {
+        (&raw mut BUTTON_FSM)
+            .as_mut()
+            .unwrap_unchecked()
+            .step(pressed) as u8
+    }
 }
 
 #[no_mangle]
@@ -156,7 +161,6 @@ pub extern "C" fn omi_rust_button_reset() {
     }
 }
 
-/// Maps haptic GATT write byte to ms. Returns 0 for unrecognized values.
 #[no_mangle]
 pub extern "C" fn omi_rust_haptic_duration_from_ble(value: u8) -> u32 {
     haptic::duration_from_ble_value(value).unwrap_or(0)

@@ -5,9 +5,7 @@
 
 #include "lib/core/settings.h"
 #include "lib/core/utils.h"
-#ifdef CONFIG_OMI_RUST
 #include "omi_rust.h"
-#endif
 
 LOG_MODULE_REGISTER(led, CONFIG_LOG_DEFAULT_LEVEL);
 
@@ -35,14 +33,7 @@ static void set_led_on_off(const struct pwm_dt_spec *led, bool on)
     uint32_t pulse_width_ns = 0;
     if (on) {
         uint8_t ratio = app_settings_get_dim_ratio();
-#ifdef CONFIG_OMI_RUST
         pulse_width_ns = omi_rust_led_pulse_width_ns(led->period, ratio);
-#else
-        if (ratio > 100) {
-            ratio = 100;
-        }
-        pulse_width_ns = (led->period * ratio) / 100;
-#endif
     }
 
     pwm_set_pulse_dt(led, pulse_width_ns);
@@ -87,15 +78,7 @@ void set_led_pwm(led_color_t color, uint8_t level)
         return;
     }
 
-#ifdef CONFIG_OMI_RUST
     uint32_t pulse_width_ns = omi_rust_led_pulse_width_ns(led->period, level);
-#else
-    if (level > 100) {
-        level = 100;
-    }
-
-    uint32_t pulse_width_ns = (led->period * level) / 100;
-#endif
     pwm_set_pulse_dt(led, pulse_width_ns);
 }
 

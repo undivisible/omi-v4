@@ -338,31 +338,30 @@ before it ships enabled.
 
 ### 2.7 Rust in the image
 
-`omi-cv1` can build and link a Rust static library, opt-in behind
-`CONFIG_OMI_RUST` (default `n`, which is what release images build). `omi/rust/`
-is an `omi-rust` staticlib of pure-logic ports (framing, battery SoC/EMA, IMU
-gesture/register packing, button tap FSM, haptic/LED/feedback helpers), a
-`#[panic_handler]` forwarding to Zephyr's `k_panic()`, and CMake that links it
-into the existing `app` target. It does **not** call zephyr-lang-rust's
-`rust_cargo_application()`, which would inject the module's own `main.c` and
-displace `omi/src/main.c`; `omi/src/main.c` calls `omi_rust_selftest()` under
-`#ifdef CONFIG_OMI_RUST`. C dual-paths call into these helpers when
-`CONFIG_OMI_RUST=y`; drivers and Zephyr I/O stay in C.
+`omi-cv1` builds and links the `omi-rust` static library. **`CONFIG_OMI_RUST`
+defaults `y`**, so the CI and release images link it; it is no longer an opt-in
+dual path. `omi/rust/` is where the firmware's pure logic lives — framing,
+battery SoC/EMA, IMU gesture/register packing, button tap FSM, and
+haptic/LED/feedback helpers — plus a `#[panic_handler]` forwarding to Zephyr's
+`k_panic()` and CMake that links it into the existing `app` target. It does
+**not** call zephyr-lang-rust's `rust_cargo_application()`, which would inject
+the module's own `main.c` and displace `omi/src/main.c`; `omi/src/main.c` calls
+`omi_rust_selftest()` at boot. C keeps the Zephyr I/O — GPIO, I2C, BLE, PWM and
+threads — and calls into these helpers.
 
 Two facts shape it. `CONFIG_RUST` exists in Zephyr 4.4.0 only as a Kconfig stub —
 the build backing it lives in `zephyrproject-rtos/zephyr-lang-rust`, which is in
 neither the NCS nor the upstream Zephyr manifest, so [`west-rust.yml`](west-rust.yml)
-pins it and imports the NCS manifest unchanged. And `omi/rust/Cargo.toml`
-deliberately has **no** dependency on the `zephyr` bindings crate: with
-`CONFIG_FLASH=y`, which `omi-cv1` sets, that crate's generated `devicetree.rs`
-fails to compile for this board. `README.md`'s *Known blocker* has the exact
-error; nothing in `omi/rust/` needs the bindings, so the crate builds against
-`core`.
+pins it and imports the NCS manifest unchanged, and that module is required in
+the workspace. And `omi/rust/Cargo.toml` deliberately has **no** dependency on
+the `zephyr` bindings crate: with `CONFIG_FLASH=y`, which `omi-cv1` sets, that
+crate's generated `devicetree.rs` fails to compile for this board. `README.md`'s
+*Known blocker* has the exact error; nothing in `omi/rust/` needs the bindings,
+so the crate builds against `core`.
 
-Pure-logic slices have moved behind `CONFIG_OMI_RUST` dual-paths; drivers stay
-in C. The library also proves the toolchain path before `transport.c`'s tx
-logic moves over, and gives the wire format a host-testable home that
-`app/native/hub` could later share so the two ends of the format cannot drift.
+The library also proves the toolchain path before `transport.c`'s tx logic moves
+over, and gives the wire format a host-testable home that `app/native/hub` could
+later share so the two ends of the format cannot drift.
 
 ### 2.8 Configuration hygiene
 
@@ -392,11 +391,11 @@ workspace and every build leg restores it with `fail-on-cache-miss`.
 Both derive their build matrix by parsing the fenced `west build` blocks in
 [`README.md`](README.md) with `.github/scripts/discover_firmware_targets.py` —
 including the `cp … prj.conf` line that precedes them, and skipping any block
-marked `discover-ignore` (which is how the `CONFIG_OMI_RUST=y` variant stays out
-of the matrix). The *Migration status* table in the same file is the gate: a
-target whose build cell says *does not build* is emitted as `required=false` and
-its leg is `continue-on-error`. Editing that cell is the whole mechanism; there
-is no second list.
+marked `discover-ignore`. The `omi-cv1` leg links `omi-rust` as part of its
+standard build, so there is no separate Rust leg. The *Migration status* table
+in the same file is the gate: a target whose build cell says *does not build* is
+emitted as `required=false` and its leg is `continue-on-error`. Editing that
+cell is the whole mechanism; there is no second list.
 
 
 ## 4. Per-device support matrix

@@ -1,10 +1,8 @@
-// Pure BLE write → duration map and duration clamp ported from
-// firmware/omi/src/haptic.c. GPIO and the delayable work item stay in C.
+// Pure BLE write → duration map and duration clamp. GPIO and the delayable
+// work item stay in C.
 
 pub const MAX_HAPTIC_DURATION_MS: u32 = 5000;
 
-/// Maps the haptic GATT write byte to a duration in milliseconds.
-/// Returns `None` for unrecognized values (C logs a warning and ignores).
 pub fn duration_from_ble_value(value: u8) -> Option<u32> {
     match value {
         1 => Some(100),
@@ -14,8 +12,6 @@ pub fn duration_from_ble_value(value: u8) -> Option<u32> {
     }
 }
 
-/// Caps a requested duration at `MAX_HAPTIC_DURATION_MS`. Duration 0 is left
-/// alone (C treats it as an explicit stop).
 pub fn clamp_duration(duration: u32) -> u32 {
     if duration > MAX_HAPTIC_DURATION_MS {
         MAX_HAPTIC_DURATION_MS

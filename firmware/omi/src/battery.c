@@ -2,9 +2,7 @@
 
 #include "lib/core/transport.h"
 
-#ifdef CONFIG_OMI_RUST
 #include "omi_rust.h"
-#endif
 
 #include <hal/nrf_saadc.h>
 #include <zephyr/device.h>
@@ -17,8 +15,6 @@
 
 LOG_MODULE_REGISTER(battery, CONFIG_LOG_DEFAULT_LEVEL);
 
-#define BATTERY_STATES_COUNT 16
-
 #define ADC_TOTAL_SAMPLES 50
 // +1 for the calibration sample
 int16_t sample_buffer[ADC_TOTAL_SAMPLES + 1];
@@ -29,9 +25,7 @@ int16_t sample_buffer[ADC_TOTAL_SAMPLES + 1];
 #define ADC_ACQUISITION_TIME ADC_ACQ_TIME(ADC_ACQ_TIME_MICROSECONDS, 10)
 #define ADC_1ST_CHANNEL_ID 0
 #define ADC_1ST_CHANNEL_INPUT NRF_SAADC_INPUT_AIN0
-#define BATTERY_FILTER_ALPHA_U16 (uint16_t)(65535/(5+1))
 #define FILTER_INIT_CYCLES 5
-#define BATTERY_STATES(is_charging) ((is_charging) ? battery_charging_states : battery_discharge_states)
 
 // Static variable to store previous EMA value for battery percentage
 static uint8_t battery_percentage_ema = 0;
@@ -47,42 +41,6 @@ static const struct gpio_dt_spec bat_chg_pin = GPIO_DT_SPEC_GET_OR(DT_NODELABEL(
 static struct gpio_callback bat_chg_cb;
 
 static K_MUTEX_DEFINE(battery_mut);
-
-// 150mAh LiPo battery discharge profile
-typedef struct {
-    uint16_t millivolts;
-    uint8_t percentage;
-} BatteryState;
-
-BatteryState battery_discharge_states[BATTERY_STATES_COUNT] = {
-    {4140, 100},
-    {4135, 99},
-    {4091, 91},
-    {4020, 78},
-    {3938, 63},
-    {3884, 53},
-    {3791, 36},
-    {3785, 35},
-    {3671, 14},
-    {3655, 11},
-    {3600, 1}, // Threshold for <1%
-    {0000, 0}  // Below safe level
-};
-
-BatteryState battery_charging_states[BATTERY_STATES_COUNT] = {
-    {4200, 100},
-    {4195, 99},
-    {4159, 91},
-    {4100, 78},
-    {4032, 63},
-    {3986, 53},
-    {3909, 36},
-    {3905, 35},
-    {3809, 14},
-    {3795, 11},
-    {3750, 1}, // Threshold for <1%
-    {0000, 0}  // Below safe level
-};
 
 extern bool is_charging;
 
@@ -114,29 +72,7 @@ struct adc_sequence sequence = {
 
 uint8_t update_ema_filter(uint32_t current_ema, uint8_t new_value)
 {
-#ifdef CONFIG_OMI_RUST
     return omi_rust_battery_ema_step(current_ema, new_value, is_charging);
-#else
-    // handle edge case transitions directly
-    if ((!is_charging && (current_ema <= 5)) || (is_charging && (current_ema >= 95))) {
-        if (is_charging) {
-            return (new_value > current_ema) ? current_ema + 1 : current_ema;
-        } else {
-            return (new_value < current_ema) ? current_ema - 1 : current_ema;
-        }
-    }
-
-    // Constant coefficient Alpha for EMA calculation, scaled to 16 bit.
-    // Alpha = 65535/(N+1) where N is the averaging window
-    const uint32_t alpha = BATTERY_FILTER_ALPHA_U16;
-    const uint32_t alpha_complement = UINT16_MAX - BATTERY_FILTER_ALPHA_U16;
-
-    // Calculate new EMA: new_ema = (alpha * new_value + alpha_complement * current_ema) / 65535
-    uint64_t new_ema = (alpha * new_value) + (alpha_complement * current_ema);
-
-    // Scale result back to 8-bit, with rounding up
-    return (uint8_t)((new_ema + 32768) >> 16);
-#endif
 }
 
 static void battery_charging_callback(const struct device *dev, struct gpio_callback *cb, uint32_t pins)
@@ -273,32 +209,7 @@ int battery_get_percentage(uint8_t *battery_percentage, uint16_t battery_millivo
 {
     uint8_t raw_percentage = 0;
 
-#ifdef CONFIG_OMI_RUST
     raw_percentage = omi_rust_battery_raw_percentage(battery_millivolt, is_charging);
-#else
-    BatteryState *battery_states = BATTERY_STATES(is_charging);
-
-    // Use the battery discharge profile to determine percentage
-    if (battery_millivolt >= battery_states[0].millivolts) {
-        raw_percentage = battery_states[0].percentage;
-    } else if (battery_millivolt <= battery_states[BATTERY_STATES_COUNT - 1].millivolts) {
-        raw_percentage = battery_states[BATTERY_STATES_COUNT - 1].percentage;
-    } else {
-        // Find the appropriate range in the battery profile
-        for (int i = 0; i < BATTERY_STATES_COUNT - 1; i++) {
-            if (battery_millivolt <= battery_states[i].millivolts && battery_millivolt > battery_states[i + 1].millivolts) {
-    
-                // Linear interpolation between the two closest points
-                uint16_t voltage_range = battery_states[i].millivolts - battery_states[i + 1].millivolts;
-                uint8_t percentage_range = battery_states[i].percentage - battery_states[i + 1].percentage;
-                uint16_t voltage_diff = battery_states[i].millivolts - battery_millivolt;
-    
-                raw_percentage = battery_states[i].percentage - (voltage_diff * percentage_range) / voltage_range;
-                break;
-            }
-        }
-    }
-#endif
 
     // Prevent sudden jumps in percentage
     if (battery_percentage_ema != 0) {

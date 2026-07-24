@@ -174,6 +174,13 @@ west build -b omi/nrf5340/cpuapp "$FW/omi" \
 `prj.conf` is generated (gitignored); Zephyr will not pick up `omi.conf`
 directly. Re-run the copy whenever `omi.conf` changes.
 
+`omi.conf` now sets `CONFIG_RUST=y` and `CONFIG_OMI_RUST=y`, so this build links
+the `omi-rust` staticlib and requires the out-of-tree `zephyr-lang-rust` module
+in the workspace and the `thumbv8m.main-none-eabihf` Rust target. See
+[Rust in the firmware](#rust-in-the-firmware) for the one-time setup; without it
+the build stops with a `CONFIG_OMI_RUST=y but the zephyr-lang-rust module is not
+in the build` error from `omi/rust/CMakeLists.txt`.
+
 `BOARD_ROOT` must point at `firmware/`, because the board definition lives in
 `firmware/boards/omi/`. Without it the build fails with
 `No board named 'omi' found`.
@@ -317,13 +324,14 @@ what MCUboot's downgrade prevention compares.
 
 ## Rust in the firmware
 
-`omi-cv1` can build and link a Rust static library. It is **opt-in**
-(`CONFIG_OMI_RUST=n` by default). `omi/rust/` holds pure-logic ports called from
-C behind `#ifdef CONFIG_OMI_RUST`: tx ring/GATT framing, battery SoC/EMA math,
-IMU register packing and gesture classify, button tap FSM, haptic BLE→duration
-map, LED pulse-width math, and feedback error-pattern tables. Drivers, BLE,
-threads, and `k_msleep` timing stay in C. `main()` runs `omi_rust_selftest()` at
-boot when Rust is enabled.
+`omi-cv1` builds and links the `omi-rust` static library. **`CONFIG_OMI_RUST`
+defaults `y`**, and the `omi-cv1` CI and release builds always link `omi-rust` —
+it is no longer an opt-in dual path. `omi/rust/` is where the firmware's pure
+logic lives: tx ring/GATT framing, battery SoC/EMA math, IMU register packing
+and gesture classify, button tap FSM, haptic BLE→duration map, LED pulse-width
+math, and feedback error-pattern tables. C keeps the Zephyr I/O — GPIO, I2C,
+BLE, PWM, threads and `k_msleep` timing — and calls into these helpers. `main()`
+runs `omi_rust_selftest()` at boot.
 
 ### Why an out-of-tree module is needed
 
@@ -348,6 +356,9 @@ into `modules/lang/rust` directly, which is the same layout.
 
 ### Building it
 
+Rust links into the standard `omi-cv1` build above — there is no separate
+Rust-enabled variant. Two prerequisites make that build succeed.
+
 The nRF5340 application core builds with `CONFIG_FP_HARDABI`, so the Rust target
 is **`thumbv8m.main-none-eabihf`**, not the `thumbv8m.main-none-eabi` a plain
 Cortex-M33 would use. The build tells you which one it wants if you get it
@@ -357,19 +368,11 @@ wrong:
 rustup target add thumbv8m.main-none-eabihf
 ```
 
-Then, with the module in the workspace:
+And the zephyr-lang-rust module must be in the workspace (above): without it
+`CONFIG_RUST` is an inert Kconfig stub and the link fails.
 
-```sh
-# discover-ignore: the same omi-cv1 target with Rust enabled, not a separate one
-cp "$FW/omi/omi.conf" "$FW/omi/prj.conf"
-
-west build -b omi/nrf5340/cpuapp "$FW/omi" \
-    --sysbuild \
-    --build-dir "$FW/omi/build" \
-    -- -DBOARD_ROOT="$FW" -DCONFIG_RUST=y -DCONFIG_OMI_RUST=y
-```
-
-Confirm the code actually reached the image rather than being garbage-collected:
+After the `omi-cv1` build, confirm `omi-rust` actually reached the image rather
+than being garbage-collected:
 
 ```sh
 arm-zephyr-eabi-nm "$FW/omi/build/omi/zephyr/zephyr.elf" | grep omi_rust_selftest
@@ -446,8 +449,10 @@ clang-format -i firmware/omi/src/**/*.c firmware/omi/src/**/*.h
   Keep each target's command a single fenced block under its own heading, and
   re-run `python3 .github/scripts/discover_firmware_targets.py --print-only`
   after editing this file — it fails if any path it derives is missing from the
-  tree. A fenced block carrying the marker `discover-ignore` is skipped; that is
-  how the `CONFIG_OMI_RUST=y` variant of `omi-cv1` stays out of the matrix.
+  tree. A fenced block carrying the marker `discover-ignore` is skipped, so
+  example or variant commands can live here without becoming CI legs. The
+  `omi-cv1` leg links `omi-rust` as part of its standard build, so there is no
+  separate Rust leg in the matrix.
 - **The [Migration status](#migration-status) table is the CI gate.** The
   discovery script reads it and emits `required=false` for any target whose
   `v3.4.0 build` cell says *does not build*; both workflows mark those legs

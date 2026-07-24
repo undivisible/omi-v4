@@ -26,6 +26,14 @@ concurrency:
 env:
   NCS_VERSION: v3.4.0
   NCS_WORKSPACE: /opt/ncs
+  # zephyr-lang-rust is in neither the NCS nor the upstream Zephyr manifest, so
+  # it is fetched separately for the omi-cv1 leg, which builds CONFIG_OMI_RUST=y.
+  # Keep this in sync with firmware/west-rust.yml and ci-firmware.yml.
+  RUST_MODULE_REV: ab3e546232bfa2f4e16d6c5156b9d9500885b4e8
+  # firmware/omi builds with CONFIG_FP_HARDABI, so the app core maps to the
+  # hard-float triple, not the thumbv8m.main-none-eabi one the plain nRF5340
+  # docs mention.
+  RUST_TARGET: thumbv8m.main-none-eabihf
 
 jobs:
   version:
@@ -146,6 +154,39 @@ jobs:
           west update --narrow -o=--depth=1
           west zephyr-export
           du -sh "${NCS_WORKSPACE}" || true
+
+      # omi/omi.conf sets CONFIG_RUST=y and CONFIG_OMI_RUST=y, so the omi-cv1
+      # release image links the omi-rust staticlib. Clone zephyr-lang-rust into
+      # the workspace at the pinned revision exactly as ci-firmware.yml does
+      # (same path west-rust.yml uses), and install the Rust toolchain. Other
+      # targets keep CONFIG_RUST=n and skip both.
+      - name: Fetch zephyr-lang-rust
+        if: matrix.app_dir == 'firmware/omi'
+        run: |
+          set -euo pipefail
+          dest="${NCS_WORKSPACE}/modules/lang/rust"
+          if [ ! -d "${dest}/.git" ]; then
+            mkdir -p "$(dirname "${dest}")"
+            git clone https://github.com/zephyrproject-rtos/zephyr-lang-rust "${dest}"
+          fi
+          git -C "${dest}" fetch --depth 1 origin "${RUST_MODULE_REV}"
+          git -C "${dest}" checkout --detach "${RUST_MODULE_REV}"
+          git -C "${dest}" rev-parse HEAD
+
+      - name: Install Rust with the nRF5340 app-core target
+        if: matrix.app_dir == 'firmware/omi'
+        run: |
+          set -euo pipefail
+          if ! command -v rustup >/dev/null 2>&1; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+              | sh -s -- -y --profile minimal --default-toolchain stable --component clippy
+          fi
+          . "${HOME}/.cargo/env"
+          rustup component add clippy
+          rustup target add "${RUST_TARGET}"
+          echo "${HOME}/.cargo/bin" >> "$GITHUB_PATH"
+          rustc --version
+          cargo --version
 
       # `prj.conf` is generated from the target's real config and is gitignored,
       # so the checkout does not carry it and Zephyr would configure an empty
