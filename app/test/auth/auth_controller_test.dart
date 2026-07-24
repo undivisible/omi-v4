@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:omi/auth/auth.dart';
 
@@ -289,6 +291,57 @@ void main() {
     expect(controller.snapshot.session?.uid, 'firebase-uid');
   });
 
+  test(
+    'concurrent validSession calls serialize refresh',
+    () async {
+      final gateway = _FakeAuthGateway(session, initialSession: session)
+        ..refreshBarrier = Completer<void>();
+      final consent = VolatileConsentStore()
+        ..receipt = ProcessingConsentReceipt.current(
+          subjectUid: session.uid,
+          acceptedAt: DateTime.utc(2026, 7, 21),
+        );
+      final controller = AuthController(gateway, consentStore: consent);
+      await controller.restoreSession();
+
+      final first = controller.validSession();
+      final second = controller.validSession();
+      await Future<void>.delayed(Duration.zero);
+      expect(gateway.refreshCalls, 1);
+
+      gateway.refreshBarrier!.complete();
+      final results = await Future.wait([first, second]);
+
+      expect(results.every((value) => value?.idToken == session.idToken), isTrue);
+      expect(controller.snapshot.phase, AuthPhase.signedIn);
+      expect(gateway.refreshCalls, 1);
+    },
+  );
+
+  test(
+    'transient refresh failures reuse a still-valid cached session',
+    () async {
+      final gateway = _FakeAuthGateway(
+        session,
+        initialSession: session,
+        failRefresh: true,
+      );
+      final consent = VolatileConsentStore()
+        ..receipt = ProcessingConsentReceipt.current(
+          subjectUid: session.uid,
+          acceptedAt: DateTime.utc(2026, 7, 21),
+        );
+      final controller = AuthController(gateway, consentStore: consent);
+      await controller.restoreSession();
+      expect(controller.snapshot.hasProcessingAuthority, isTrue);
+
+      final refreshed = await controller.validSession();
+
+      expect(refreshed?.idToken, session.idToken);
+      expect(controller.snapshot.phase, AuthPhase.signedIn);
+    },
+  );
+
   test('desktop browser handoff produces a Firebase session', () async {
     final gateway = _FakeAuthGateway(
       session,
@@ -325,15 +378,18 @@ final class _FakeAuthGateway implements AuthGateway {
     this.initialSession,
     this.supportsPhoneOtp = true,
     this.supportsDesktopBrowserHandoff = false,
+    this.failRefresh = false,
   });
 
   final AuthSession session;
   AuthSession? initialSession;
   AuthFailure? failure;
+  bool failRefresh;
   String? requestedPhone;
   String? confirmedCode;
   bool didSignOut = false;
   int refreshCalls = 0;
+  Completer<void>? refreshBarrier;
   PhoneOtpChallenge challenge = const PhoneOtpChallenge(
     verificationId: 'verification-id',
   );
@@ -360,8 +416,14 @@ final class _FakeAuthGateway implements AuthGateway {
   Future<AuthSession?> restoreSession() async => initialSession;
 
   @override
-  Future<AuthSession?> refreshSession() async {
+  Future<AuthSession?> refreshSession({bool forceRefresh = false}) async {
     refreshCalls += 1;
+    await refreshBarrier?.future;
+    if (failRefresh) {
+      throw const AuthOperationException(
+        AuthFailure(AuthErrorCode.network, 'Session refresh failed. Retry.'),
+      );
+    }
     return currentSession ?? session;
   }
 

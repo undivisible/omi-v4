@@ -1518,7 +1518,7 @@ void main() {
     final requests = <({String method, String path})>[];
     final worker = WorkerHttpClient(
       baseUri: Uri.parse('https://api.example.test'),
-      sessionProvider: () async => _session('user-a'),
+      sessionProvider: ({forceRefresh = false}) async => _session('user-a'),
       client: MockClient((request) async {
         requests.add((method: request.method, path: request.url.path));
         return http.Response('', 204);

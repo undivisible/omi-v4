@@ -2961,7 +2961,7 @@ final class _FakeAuthGateway implements AuthGateway {
   Future<AuthSession?> restoreSession() async => _session;
 
   @override
-  Future<AuthSession?> refreshSession() async {
+  Future<AuthSession?> refreshSession({bool forceRefresh = false}) async {
     if (refreshResults.isNotEmpty) _session = refreshResults.removeAt(0);
     return _session;
   }

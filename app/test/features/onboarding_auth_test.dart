@@ -1105,7 +1105,7 @@ final class _Gateway implements AuthGateway {
       const PhoneOtpChallenge(verificationId: 'challenge');
 
   @override
-  Future<AuthSession?> refreshSession() async {
+  Future<AuthSession?> refreshSession({bool forceRefresh = false}) async {
     refreshCalls += 1;
     await refreshBarrier?.future;
     if (failRefresh) {

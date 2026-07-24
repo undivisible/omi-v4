@@ -84,14 +84,16 @@ final class FirebaseAuthGateway implements AuthGateway {
   Future<AuthSession?> restoreSession() => _sessionFor(_auth.currentUser);
 
   @override
-  Future<AuthSession?> refreshSession() => _sessionFor(
-    _auth.currentUser,
-    forceRefresh:
-        _session?.expiresAt.isBefore(
-          DateTime.now().add(const Duration(minutes: 2)),
-        ) ??
-        false,
-  );
+  Future<AuthSession?> refreshSession({bool forceRefresh = false}) =>
+      _sessionFor(
+        _auth.currentUser,
+        forceRefresh:
+            forceRefresh ||
+            (_session?.expiresAt.isBefore(
+                  DateTime.now().add(const Duration(minutes: 2)),
+                ) ??
+                false),
+      );
 
   @override
   Future<PhoneOtpChallenge> requestPhoneOtp(String phoneNumber) async {

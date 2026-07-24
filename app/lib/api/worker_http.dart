@@ -7,16 +7,20 @@ import '../channels/channels.dart';
 import '../memory/memory.dart';
 import '../settings/settings.dart';
 
+typedef WorkerSessionProvider =
+    Future<AuthSession?> Function({bool forceRefresh});
+
 final class WorkerHttpClient {
   WorkerHttpClient({
     required Uri baseUri,
-    required this.sessionProvider,
+    required WorkerSessionProvider sessionProvider,
     http.Client? client,
   }) : _baseUri = _validateBaseUri(baseUri),
-       _client = client ?? http.Client();
+       _client = client ?? http.Client(),
+       _sessionProvider = sessionProvider;
 
   final Uri _baseUri;
-  final Future<AuthSession?> Function() sessionProvider;
+  final WorkerSessionProvider _sessionProvider;
   final http.Client _client;
 
   Uri get trustedOrigin {
@@ -48,23 +52,26 @@ final class WorkerHttpClient {
     Map<String, String> query = const {},
     Map<String, Object?>? body,
   }) async {
-    final session = await sessionProvider();
-    if (session == null || session.idToken.isEmpty) {
-      throw const WorkerAuthenticationException('Sign in is required');
-    }
-    if (!session.expiresAt.isAfter(DateTime.now())) {
-      throw const WorkerAuthenticationException('Session expired');
-    }
+    var session = await _requireSession(forceRefresh: false);
     final uri = _baseUri.resolve(path).replace(queryParameters: query);
-    final response = await _client.send(
-      http.Request(method, uri)
-        ..headers.addAll({
-          'accept': 'application/json',
-          'authorization': 'Bearer ${session.idToken}',
-          if (body != null) 'content-type': 'application/json',
-        })
-        ..body = body == null ? '' : jsonEncode(body),
+    var response = await _dispatch(
+      method: method,
+      uri: uri,
+      session: session,
+      body: body,
     );
+    if (response.statusCode == 401) {
+      final refreshed = await _requireSession(forceRefresh: true);
+      if (refreshed.idToken != session.idToken) {
+        session = refreshed;
+        response = await _dispatch(
+          method: method,
+          uri: uri,
+          session: session,
+          body: body,
+        );
+      }
+    }
     final text = await response.stream.bytesToString();
     Object? decoded;
     if (text.isNotEmpty) {
@@ -74,8 +81,43 @@ final class WorkerHttpClient {
         throw const WorkerResponseException('Worker returned invalid JSON');
       }
     }
+    if (response.statusCode == 401) {
+      final message = decoded is Map<String, Object?> &&
+              decoded['error'] is String
+          ? decoded['error']! as String
+          : 'Sign in again to continue';
+      throw WorkerAuthenticationException(message);
+    }
     return (session: session, statusCode: response.statusCode, body: decoded);
   }
+
+  Future<AuthSession> _requireSession({required bool forceRefresh}) async {
+    final session = await _sessionProvider(forceRefresh: forceRefresh);
+    if (session == null || session.idToken.isEmpty) {
+      throw const WorkerAuthenticationException('Sign in is required');
+    }
+    if (!session.expiresAt.isAfter(DateTime.now())) {
+      throw const WorkerAuthenticationException(
+        'Session expired. Sign in again.',
+      );
+    }
+    return session;
+  }
+
+  Future<http.StreamedResponse> _dispatch({
+    required String method,
+    required Uri uri,
+    required AuthSession session,
+    Map<String, Object?>? body,
+  }) => _client.send(
+    http.Request(method, uri)
+      ..headers.addAll({
+        'accept': 'application/json',
+        'authorization': 'Bearer ${session.idToken}',
+        if (body != null) 'content-type': 'application/json',
+      })
+      ..body = body == null ? '' : jsonEncode(body),
+  );
 
   void close() => _client.close();
 

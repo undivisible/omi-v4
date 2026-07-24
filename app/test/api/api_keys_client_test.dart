@@ -12,7 +12,7 @@ WorkerHttpClient _client(
   Future<http.Response> Function(http.Request request) respond,
 ) => WorkerHttpClient(
   baseUri: Uri.parse('https://api.example.test'),
-  sessionProvider: () async => AuthSession(
+  sessionProvider: ({forceRefresh = false}) async => AuthSession(
     uid: 'user-1',
     idToken: 'firebase-token',
     expiresAt: DateTime.now().add(const Duration(minutes: 5)),

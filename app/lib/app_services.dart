@@ -159,7 +159,8 @@ final class AppServices {
     final origin = apiOrigin();
     final worker = WorkerHttpClient(
       baseUri: Uri.parse(origin),
-      sessionProvider: auth.validSession,
+      sessionProvider: ({forceRefresh = false}) =>
+          auth.validSession(forceRefresh: forceRefresh),
     );
     return AppServices._(
       auth: auth,
@@ -206,7 +207,8 @@ final class AppServices {
     final origin = apiOrigin();
     final worker = WorkerHttpClient(
       baseUri: Uri.parse(origin),
-      sessionProvider: auth.validSession,
+      sessionProvider: ({forceRefresh = false}) =>
+          auth.validSession(forceRefresh: forceRefresh),
     );
     return AppServices._(
       auth: auth,

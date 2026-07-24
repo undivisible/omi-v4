@@ -13,7 +13,7 @@ void main() {
       var request = 0;
       final client = WorkerHttpClient(
         baseUri: Uri.parse('https://api.example.test'),
-        sessionProvider: () async => AuthSession(
+        sessionProvider: ({forceRefresh = false}) async => AuthSession(
           uid: 'user-1',
           idToken: 'firebase-token',
           expiresAt: DateTime.now().add(const Duration(minutes: 5)),
@@ -43,7 +43,7 @@ void main() {
   test('billing rejects an unsafe session URL', () async {
     final client = WorkerHttpClient(
       baseUri: Uri.parse('https://api.example.test'),
-      sessionProvider: () async => AuthSession(
+      sessionProvider: ({forceRefresh = false}) async => AuthSession(
         uid: 'user-1',
         idToken: 'firebase-token',
         expiresAt: DateTime.now().add(const Duration(minutes: 5)),
@@ -67,7 +67,7 @@ void main() {
     late http.BaseRequest captured;
     final client = WorkerHttpClient(
       baseUri: Uri.parse('https://api.example.test'),
-      sessionProvider: () async => AuthSession(
+      sessionProvider: ({forceRefresh = false}) async => AuthSession(
         uid: 'user-1',
         idToken: 'firebase-token',
         expiresAt: DateTime.now().add(const Duration(minutes: 5)),
@@ -102,7 +102,7 @@ void main() {
   test('does not send a request without an AuthSession', () async {
     final client = WorkerHttpClient(
       baseUri: Uri.parse('https://api.example.test'),
-      sessionProvider: () async => null,
+      sessionProvider: ({forceRefresh = false}) async => null,
       client: MockClient((_) async => http.Response('{}', 200)),
     );
 
@@ -118,7 +118,7 @@ void main() {
     var requests = 0;
     final client = WorkerHttpClient(
       baseUri: Uri.parse('https://api.example.test'),
-      sessionProvider: () async => consentGranted
+      sessionProvider: ({forceRefresh = false}) async => consentGranted
           ? AuthSession(
               uid: 'user-1',
               idToken: 'firebase-token',
@@ -144,7 +144,7 @@ void main() {
     expect(
       () => WorkerHttpClient(
         baseUri: Uri.parse('http://api.example.test'),
-        sessionProvider: () async => null,
+        sessionProvider: ({forceRefresh = false}) async => null,
       ),
       throwsArgumentError,
     );
@@ -153,7 +153,7 @@ void main() {
   test('allows cleartext loopback origins for local development', () {
     final client = WorkerHttpClient(
       baseUri: Uri.parse('http://127.0.0.1:8787'),
-      sessionProvider: () async => null,
+      sessionProvider: ({forceRefresh = false}) async => null,
     );
     client.close();
   });
@@ -172,7 +172,7 @@ void main() {
       );
       final client = WorkerHttpClient(
         baseUri: Uri.parse('https://api.example.test'),
-        sessionProvider: () async => session,
+        sessionProvider: ({forceRefresh = false}) async => session,
         client: MockClient((request) async {
           capturedBody = (jsonDecode(request.body) as Map)
               .cast<String, Object?>();
@@ -227,11 +227,68 @@ void main() {
     },
   );
 
+  test('retries once with a forced refresh after a 401', () async {
+    var requests = 0;
+    var forced = false;
+    final client = WorkerHttpClient(
+      baseUri: Uri.parse('https://api.example.test'),
+      sessionProvider: ({forceRefresh = false}) async {
+        if (forceRefresh) forced = true;
+        return AuthSession(
+          uid: 'user-1',
+          idToken: forceRefresh ? 'refreshed-token' : 'stale-token',
+          expiresAt: DateTime.now().add(const Duration(minutes: 5)),
+        );
+      },
+      client: MockClient((request) async {
+        requests += 1;
+        final authorized = request.headers['authorization'];
+        return http.Response(
+          authorized == 'Bearer refreshed-token' ? '{"ok":true}' : '{"error":"Authentication failed"}',
+          authorized == 'Bearer refreshed-token' ? 200 : 401,
+        );
+      }),
+    );
+
+    final response = await client.send(method: 'GET', path: '/v1/me');
+
+    expect(forced, isTrue);
+    expect(requests, 2);
+    expect(response.body, {'ok': true});
+    client.close();
+  });
+
+  test('a persistent 401 surfaces re-auth instead of looping', () async {
+    final client = WorkerHttpClient(
+      baseUri: Uri.parse('https://api.example.test'),
+      sessionProvider: ({forceRefresh = false}) async => AuthSession(
+        uid: 'user-1',
+        idToken: 'same-token',
+        expiresAt: DateTime.now().add(const Duration(minutes: 5)),
+      ),
+      client: MockClient(
+        (_) async => http.Response('{"error":"Authentication failed"}', 401),
+      ),
+    );
+
+    await expectLater(
+      client.send(method: 'GET', path: '/v1/me'),
+      throwsA(
+        isA<WorkerAuthenticationException>().having(
+          (error) => error.message,
+          'message',
+          'Authentication failed',
+        ),
+      ),
+    );
+    client.close();
+  });
+
   test('managed STT rejects malformed or expanded Worker responses', () async {
     final sessionId = List.filled(64, 'a').join();
     final client = WorkerHttpClient(
       baseUri: Uri.parse('https://api.example.test'),
-      sessionProvider: () async => AuthSession(
+      sessionProvider: ({forceRefresh = false}) async => AuthSession(
         uid: 'user-1',
         idToken: 'firebase-token',
         expiresAt: DateTime.now().add(const Duration(minutes: 5)),

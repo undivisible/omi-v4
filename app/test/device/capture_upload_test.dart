@@ -117,7 +117,7 @@ void main() {
   group('the worker transport', () {
     WorkerHttpClient worker(http.Client client) => WorkerHttpClient(
       baseUri: Uri.parse('https://api.example.test'),
-      sessionProvider: () async => AuthSession(
+      sessionProvider: ({forceRefresh = false}) async => AuthSession(
         uid: 'user-1',
         idToken: 'firebase-token',
         expiresAt: DateTime.now().add(const Duration(minutes: 5)),

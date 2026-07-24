@@ -6,7 +6,7 @@ import 'package:omi/auth/auth.dart';
 
 WorkerHttpClient _client(http.Response Function() respond) => WorkerHttpClient(
   baseUri: Uri.parse('https://api.example.test'),
-  sessionProvider: () async => AuthSession(
+  sessionProvider: ({forceRefresh = false}) async => AuthSession(
     uid: 'user-1',
     idToken: 'firebase-token',
     expiresAt: DateTime.now().add(const Duration(minutes: 5)),
@@ -19,7 +19,7 @@ void main() {
     http.Request? seen;
     final client = WorkerHttpClient(
       baseUri: Uri.parse('https://api.example.test'),
-      sessionProvider: () async => AuthSession(
+      sessionProvider: ({forceRefresh = false}) async => AuthSession(
         uid: 'user-1',
         idToken: 'firebase-token',
         expiresAt: DateTime.now().add(const Duration(minutes: 5)),

@@ -31,7 +31,7 @@ abstract interface class AuthGateway {
 
   Future<AuthSession?> restoreSession();
 
-  Future<AuthSession?> refreshSession();
+  Future<AuthSession?> refreshSession({bool forceRefresh = false});
 
   Future<PhoneOtpChallenge> requestPhoneOtp(String phoneNumber);
 
@@ -79,7 +79,8 @@ final class UnconfiguredAuthGateway implements AuthGateway {
   Future<AuthSession?> restoreSession() async => null;
 
   @override
-  Future<AuthSession?> refreshSession() async => null;
+  Future<AuthSession?> refreshSession({bool forceRefresh = false}) async =>
+      null;
 
   @override
   Future<AuthSession> confirmPhoneOtp({

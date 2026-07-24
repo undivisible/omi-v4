@@ -12,7 +12,7 @@ void main() {
     final requests = <http.Request>[];
     final client = WorkerHttpClient(
       baseUri: Uri.parse('https://api.example.test'),
-      sessionProvider: () async => AuthSession(
+      sessionProvider: ({forceRefresh = false}) async => AuthSession(
         uid: 'alpha',
         idToken: 'token',
         expiresAt: DateTime.now().add(const Duration(minutes: 5)),
@@ -65,7 +65,7 @@ void main() {
     final requestedAfter = <String?>[];
     final client = WorkerHttpClient(
       baseUri: Uri.parse('https://api.example.test'),
-      sessionProvider: () async => AuthSession(
+      sessionProvider: ({forceRefresh = false}) async => AuthSession(
         uid: 'alpha',
         idToken: 'token',
         expiresAt: DateTime.now().add(const Duration(minutes: 5)),

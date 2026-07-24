@@ -32,6 +32,8 @@ final class AuthController extends ChangeNotifier {
   AuthSnapshot _snapshot;
   StreamSubscription<AuthSession?>? _sessionSubscription;
   Future<void> _sessionSync = Future.value();
+  Future<void> _validSessionSync = Future.value();
+  Future<AuthSession?>? _sharedValidSession;
   bool _disposed = false;
   String? _desktopConfirmationCode;
 
@@ -98,7 +100,28 @@ final class AuthController extends ChangeNotifier {
     }
   }
 
-  Future<AuthSession?> validSession() async {
+  Future<AuthSession?> validSession({bool forceRefresh = false}) async {
+    if (!forceRefresh) {
+      final shared = _sharedValidSession;
+      if (shared != null) return shared;
+    }
+    final operation = _validSessionSync
+        .then<void>((_) {}, onError: (_, _) {})
+        .then((_) => _resolveValidSession(forceRefresh: forceRefresh));
+    _validSessionSync = operation.then<void>((_) {}, onError: (_, _) {});
+    if (!forceRefresh) _sharedValidSession = operation;
+    try {
+      return await operation;
+    } finally {
+      if (identical(_sharedValidSession, operation)) {
+        _sharedValidSession = null;
+      }
+    }
+  }
+
+  Future<AuthSession?> _resolveValidSession({
+    required bool forceRefresh,
+  }) async {
     if (!_gateway.isConfigured ||
         _snapshot.phase != AuthPhase.signedIn ||
         !_snapshot.hasProcessingAuthority) {
@@ -116,7 +139,9 @@ final class AuthController extends ChangeNotifier {
         );
         return null;
       }
-      final session = await _gateway.refreshSession();
+      final session = await _gateway.refreshSession(
+        forceRefresh: forceRefresh,
+      );
       if (session == null) {
         _set(
           AuthSnapshot(
@@ -139,12 +164,27 @@ final class AuthController extends ChangeNotifier {
       _authenticated(session, consentGranted: true, processingConsent: receipt);
       return session;
     } on AuthGatewayException catch (error) {
+      final cached = _cachedSessionIfUsable();
+      if (cached != null &&
+          error.failure.code == AuthErrorCode.network) {
+        return cached;
+      }
       _fail(error.failure.code, error.failure.message);
       return null;
     } catch (_) {
+      final cached = _cachedSessionIfUsable();
+      if (cached != null) return cached;
       _fail(AuthErrorCode.network, 'Could not refresh authentication');
       return null;
     }
+  }
+
+  AuthSession? _cachedSessionIfUsable() {
+    final cached = _snapshot.session;
+    if (cached == null || !cached.expiresAt.isAfter(DateTime.now())) {
+      return null;
+    }
+    return cached;
   }
 
   Future<void> setConsent(bool granted) async {
@@ -373,7 +413,7 @@ final class AuthController extends ChangeNotifier {
   Future<AuthSession?> handoffSession() async {
     final current = _snapshot.session;
     if (_snapshot.phase != AuthPhase.signedIn || current == null) return null;
-    final refreshed = await _gateway.refreshSession();
+    final refreshed = await _gateway.refreshSession(forceRefresh: true);
     return refreshed?.uid == current.uid ? refreshed : null;
   }
 
