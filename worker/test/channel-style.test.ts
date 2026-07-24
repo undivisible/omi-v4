@@ -22,7 +22,7 @@ describe("sanitizeChannelReply", () => {
 
   test("removes fenced blocks", () => {
     expect(
-      sanitizeChannelReply("imessage", 'Hello\n```crepus\nstack\n```\nThere'),
+      sanitizeChannelReply("imessage", "Hello\n```crepus\nstack\n```\nThere"),
     ).toBe("Hello\n\nThere");
   });
 });

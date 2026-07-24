@@ -105,7 +105,7 @@ beforeAll(async () => {
   await migration("migrations/0029_memory_authority_log.sql");
   await migration("migrations/0030_memory_log_projection.sql");
   await migration("migrations/0031_digests.sql");
-  await migration("migrations/0032_rename_blooio_to_imessage.sql");
+  await migration("migrations/0033_rename_blooio_to_imessage.sql");
   const now = Date.now();
   await database
     .prepare(
@@ -925,10 +925,10 @@ describe("channel routes", () => {
             body: JSON.stringify({ text: message, idempotencyKey: key }),
           },
           {
-      SENDBLUE_API_KEY_ID: "sendblue-key-id",
-      SENDBLUE_API_KEY_SECRET: "sendblue-key-secret",
-      SENDBLUE_NUMBER: "+15122164639",
-    },
+            SENDBLUE_API_KEY_ID: "sendblue-key-id",
+            SENDBLUE_API_KEY_SECRET: "sendblue-key-secret",
+            SENDBLUE_NUMBER: "+15122164639",
+          },
         );
       expect((await send("ordered:first", "first")).status).toBe(202);
       expect((await send("ordered:second", "second")).status).toBe(202);
@@ -942,10 +942,10 @@ describe("channel routes", () => {
         120_000,
       );
       const env = testBindings({
-      SENDBLUE_API_KEY_ID: "sendblue-key-id",
-      SENDBLUE_API_KEY_SECRET: "sendblue-key-secret",
-      SENDBLUE_NUMBER: "+15122164639",
-    });
+        SENDBLUE_API_KEY_ID: "sendblue-key-id",
+        SENDBLUE_API_KEY_SECRET: "sendblue-key-secret",
+        SENDBLUE_NUMBER: "+15122164639",
+      });
       await deliverDueChannelMessages(env, now + 3 * 60_000);
       expect(calls).toBe(2);
       await deliverDueChannelMessages(env, now + 3 * 60_000);
@@ -983,10 +983,10 @@ describe("channel routes", () => {
     };
     try {
       const environment = testBindings({
-      SENDBLUE_API_KEY_ID: "sendblue-key-id",
-      SENDBLUE_API_KEY_SECRET: "sendblue-key-secret",
-      SENDBLUE_NUMBER: "+15122164639",
-    });
+        SENDBLUE_API_KEY_ID: "sendblue-key-id",
+        SENDBLUE_API_KEY_SECRET: "sendblue-key-secret",
+        SENDBLUE_NUMBER: "+15122164639",
+      });
       await dispatchChannelMessage(
         environment,
         "beta-shared-newer",
@@ -1110,10 +1110,10 @@ describe("channel routes", () => {
           }),
         },
         {
-      SENDBLUE_API_KEY_ID: "sendblue-key-id",
-      SENDBLUE_API_KEY_SECRET: "sendblue-key-secret",
-      SENDBLUE_NUMBER: "+15122164639",
-    },
+          SENDBLUE_API_KEY_ID: "sendblue-key-id",
+          SENDBLUE_API_KEY_SECRET: "sendblue-key-secret",
+          SENDBLUE_NUMBER: "+15122164639",
+        },
       );
       await started;
       let unlinkResolved = false;

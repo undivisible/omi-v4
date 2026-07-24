@@ -24,7 +24,10 @@ export const channelStylePrompt = (channel: Channel): string => {
 };
 
 /** Strip common markdown so channel replies stay plain even if the model slips. */
-export const sanitizeChannelReply = (channel: Channel, text: string): string => {
+export const sanitizeChannelReply = (
+  channel: Channel,
+  text: string,
+): string => {
   let value = text.trim();
   if (value.length === 0) return value;
 

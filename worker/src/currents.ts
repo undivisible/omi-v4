@@ -5,6 +5,7 @@ import {
   findUnsafeCrepusImageUrl,
   sanitizeCrepus,
 } from "./crepus-safety";
+import { scanOnboardedUsers } from "./cron-cursor";
 import { ensureMemoryProjected } from "./memory-projection";
 import { localClock } from "./digests";
 import type { AppEnv, Bindings } from "./types";
@@ -18,7 +19,7 @@ const actionHashPattern = /^[0-9a-f]{64}$/;
 const receiptTokenPattern = /^[A-Za-z0-9_-]{43}$/;
 // Same local morning hour as digests — one wall-clock window for everyone.
 const CURRENTS_DAILY_HOUR = 7;
-const currentsUsersPerTick = 200;
+export const currentsUsersPerTick = 200;
 const currentsPerUserPerDay = 3;
 const unreportedOutcome = JSON.stringify({
   detail: "Execution authority was claimed, but no outcome was reported",
@@ -306,14 +307,12 @@ export const generateDueCurrents = async (
   env: Bindings,
   now = Date.now(),
 ): Promise<void> => {
-  const users = await env.DB.prepare(
-    `SELECT uid, digest_utc_offset_minutes FROM users
-     WHERE onboarding_completed_at IS NOT NULL
-     ORDER BY uid LIMIT ?1`,
-  )
-    .bind(currentsUsersPerTick)
-    .all<{ uid: string; digest_utc_offset_minutes: number }>();
-  for (const user of users.results ?? []) {
+  const users = await scanOnboardedUsers(env, {
+    cursorName: "currents",
+    limit: currentsUsersPerTick,
+    now,
+  });
+  for (const user of users) {
     const clock = localClock(now, Number(user.digest_utc_offset_minutes) || 0);
     if (clock.hour !== CURRENTS_DAILY_HOUR) continue;
     const already = await env.DB.prepare(

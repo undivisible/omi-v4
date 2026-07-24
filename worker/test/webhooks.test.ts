@@ -57,7 +57,7 @@ beforeAll(async () => {
     "migrations/0022_channel_link_codes.sql",
     "migrations/0026_channel_accounts.sql",
     "migrations/0028_channel_checkout.sql",
-    "migrations/0032_rename_blooio_to_imessage.sql",
+    "migrations/0033_rename_blooio_to_imessage.sql",
   ]) {
     const sql = (await Bun.file(migration).text()).replace(
       "PRAGMA foreign_keys = ON;",

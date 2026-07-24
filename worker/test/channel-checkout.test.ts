@@ -206,7 +206,7 @@ beforeAll(async () => {
     "migrations/0025_byok_price_negotiation.sql",
     "migrations/0026_channel_accounts.sql",
     "migrations/0028_channel_checkout.sql",
-    "migrations/0032_rename_blooio_to_imessage.sql",
+    "migrations/0033_rename_blooio_to_imessage.sql",
   ])
     await migrate(file);
   const now = Date.now();

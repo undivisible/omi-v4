@@ -72,8 +72,7 @@ const buildMessages = (
   return [
     {
       role: "system",
-      content:
-        memoryContext === null ? base : `${base}\n\n${memoryContext}`,
+      content: memoryContext === null ? base : `${base}\n\n${memoryContext}`,
     },
     ...history,
     { role: "user", content: inbound },

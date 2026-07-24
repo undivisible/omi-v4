@@ -543,7 +543,6 @@ routes.get("/entitlement", async (context) => {
   return context.json({ plan: pro ? "pro" : "byok", active: pro });
 });
 
-
 const parseChannelParam = (value: string): Channel | null => {
   if (value === "telegram") return "telegram";
   // Temporary dual-accept: old `/channels/blooio/*` paths map to imessage.
@@ -654,8 +653,7 @@ routes.post("/channels/link", async (context) => {
 
 routes.post("/channels/:channel/link", async (context) => {
   const channel = parseChannelParam(context.req.param("channel"));
-  if (channel === null)
-    return context.json({ error: "Unknown channel" }, 404);
+  if (channel === null) return context.json({ error: "Unknown channel" }, 404);
   const token = Array.from(crypto.getRandomValues(new Uint8Array(24)), (byte) =>
     byte.toString(16).padStart(2, "0"),
   ).join("");
@@ -677,8 +675,7 @@ routes.post("/channels/:channel/link", async (context) => {
 
 routes.post("/channels/:channel/messages", async (context) => {
   const channel = parseChannelParam(context.req.param("channel"));
-  if (channel === null)
-    return context.json({ error: "Unknown channel" }, 404);
+  if (channel === null) return context.json({ error: "Unknown channel" }, 404);
   const body = await json(context.req.raw);
   const message = text(body?.text, 4096);
   const idempotencyKey = text(body?.idempotencyKey, 128);
@@ -771,8 +768,7 @@ routes.post("/channels/:channel/messages", async (context) => {
 
 routes.delete("/channels/:channel/link", async (context) => {
   const channel = parseChannelParam(context.req.param("channel"));
-  if (channel === null)
-    return context.json({ error: "Unknown channel" }, 404);
+  if (channel === null) return context.json({ error: "Unknown channel" }, 404);
   const uid = context.get("auth").uid;
   try {
     await dispatchChannelUnlink(context.env, uid, channel);
