@@ -37,14 +37,24 @@ fi
 # local-development toggle (DEV_FAKE_PRO), a plain non-secret config value, or
 # belongs to a subsystem that no longer exists — pushing those would resurrect
 # dead configuration as live state.
+#
+# Stripe is intentionally omitted — billing stays disabled until STRIPE_* is
+# provisioned deliberately (see PLAN.md).
 PUSHABLE="
 TELEGRAM_BOT_TOKEN
 TELEGRAM_WEBHOOK_SECRET
 BLOOIO_API_KEY
 BLOOIO_WEBHOOK_SIGNING_SECRET
+SENDBLUE_API_KEY_ID
+SENDBLUE_API_KEY_SECRET
+SENDBLUE_NUMBER
+SENDBLUE_WEBHOOK_SIGNING_SECRET
+SENDBLUE_WEBHOOK_PATH_TOKEN
+SENDBLUE_FACETIME_NUMBER
 GEMINI_API_KEY
 MIMO_API_KEY
 DEEPGRAM_API_KEY
+OPENROUTER_API_KEY
 "
 
 pushable() {
@@ -72,7 +82,17 @@ while IFS= read -r line || [ -n "${line}" ]; do
     ''|*[!A-Za-z0-9_]*) continue ;;
   esac
   if ! pushable "${key}"; then
-    printf 'skip  %s (not in the pushable set)\n' "${key}"
+    case "${key}" in
+      STRIPE_*|APP_URL)
+        printf 'skip  %s (Stripe disabled — not in the pushable set)\n' "${key}"
+        ;;
+      SENDBLUE_API_KEY|SENDBLUE_SECRET_KEY)
+        printf 'skip  %s (local alias — push SENDBLUE_API_KEY_ID/_SECRET instead)\n' "${key}"
+        ;;
+      *)
+        printf 'skip  %s (not in the pushable set)\n' "${key}"
+        ;;
+    esac
     skipped=$((skipped + 1))
     continue
   fi

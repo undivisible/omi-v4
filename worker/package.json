@@ -14,7 +14,8 @@
     "format": "biome format --write .",
     "lint": "biome lint .",
     "test": "bash scripts/run-tests.sh",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "grab-sendblue": "bash scripts/grab-sendblue-secrets.sh"
   },
   "dependencies": {
     "hono": "^4.12.31",

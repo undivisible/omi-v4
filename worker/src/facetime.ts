@@ -1,3 +1,4 @@
+import { sendblueApiKeyId, sendblueApiKeySecret } from "./sendblue";
 import type { Bindings } from "./types";
 
 // Sendblue's FaceTime bridge. Unlike the previous provider it does not hand
@@ -62,8 +63,8 @@ const credentialsFrom = (value: unknown): AgoraCredentials | null => {
 
 export const faceTimeProviderConfigured = (env: Bindings): boolean =>
   Boolean(
-    env.SENDBLUE_API_KEY_ID?.trim() &&
-      env.SENDBLUE_API_KEY_SECRET?.trim() &&
+    sendblueApiKeyId(env) &&
+      sendblueApiKeySecret(env) &&
       env.SENDBLUE_FACETIME_NUMBER?.trim(),
   );
 
@@ -83,8 +84,8 @@ export const startFaceTimeCall = async (
       method: "POST",
       signal: AbortSignal.timeout(upstreamTimeoutMs),
       headers: {
-        "sb-api-key-id": env.SENDBLUE_API_KEY_ID as string,
-        "sb-api-secret-key": env.SENDBLUE_API_KEY_SECRET as string,
+        "sb-api-key-id": sendblueApiKeyId(env),
+        "sb-api-secret-key": sendblueApiKeySecret(env),
         "content-type": "application/json",
       },
       body: JSON.stringify({

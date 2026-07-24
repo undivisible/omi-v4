@@ -10,16 +10,31 @@ export const imessageChannel: Channel = "blooio";
 
 const sendMessageEndpoint = "https://api.sendblue.com/api/send-message";
 
+// `grab-sendblue-secrets.sh` writes SENDBLUE_API_KEY / SENDBLUE_SECRET_KEY from
+// the Sendblue CLI; the worker headers use the _ID / _SECRET names. Accept both.
+export const sendblueApiKeyId = (env: Bindings): string =>
+  (env.SENDBLUE_API_KEY_ID ?? env.SENDBLUE_API_KEY ?? "").trim();
+
+export const sendblueApiKeySecret = (env: Bindings): string =>
+  (env.SENDBLUE_API_KEY_SECRET ?? env.SENDBLUE_SECRET_KEY ?? "").trim();
+
 export const sendblueConfigured = (env: Bindings): boolean =>
   Boolean(
-    env.SENDBLUE_API_KEY_ID?.trim() &&
-      env.SENDBLUE_API_KEY_SECRET?.trim() &&
+    sendblueApiKeyId(env) &&
+      sendblueApiKeySecret(env) &&
       env.SENDBLUE_NUMBER?.trim(),
   );
 
+export const sendblueInboundConfigured = (env: Bindings): boolean =>
+  Boolean(
+    sendblueConfigured(env) &&
+      env.SENDBLUE_WEBHOOK_SIGNING_SECRET?.trim() &&
+      env.SENDBLUE_WEBHOOK_PATH_TOKEN?.trim(),
+  );
+
 export const sendblueHeaders = (env: Bindings): Record<string, string> => ({
-  "sb-api-key-id": (env.SENDBLUE_API_KEY_ID ?? "").trim(),
-  "sb-api-secret-key": (env.SENDBLUE_API_KEY_SECRET ?? "").trim(),
+  "sb-api-key-id": sendblueApiKeyId(env),
+  "sb-api-secret-key": sendblueApiKeySecret(env),
   "content-type": "application/json",
 });
 

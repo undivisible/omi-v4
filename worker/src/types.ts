@@ -17,6 +17,9 @@ export type Bindings = {
   // Sendblue FaceTime. All three must be set for the feature to leave its
   // graceful "not provisioned" state; the account also needs a purchased
   // FaceTime line. Secrets come from `wrangler secret put`, never the repo.
+  // Sendblue CLI / grab-sendblue-secrets.sh names (aliases for the _ID/_SECRET pair).
+  SENDBLUE_API_KEY?: string;
+  SENDBLUE_SECRET_KEY?: string;
   SENDBLUE_API_KEY_ID?: string;
   SENDBLUE_API_KEY_SECRET?: string;
   SENDBLUE_FACETIME_NUMBER?: string;

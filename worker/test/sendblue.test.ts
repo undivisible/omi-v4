@@ -2,6 +2,9 @@ import { describe, expect, test } from "bun:test";
 import {
   imessageChannel,
   parseSendblueInbound,
+  sendblueApiKeyId,
+  sendblueApiKeySecret,
+  sendblueConfigured,
   sendblueRequest,
   verifySendblueWebhook,
 } from "../src/sendblue";
@@ -59,6 +62,19 @@ describe("Sendblue outbound send", () => {
       environment[missing] = undefined;
       expect(sendblueRequest(environment, "+19998887777", "Hi")).toBeNull();
     }
+  });
+
+  test("accepts CLI alias env names from grab-sendblue-secrets.sh", () => {
+    const environment = {
+      SENDBLUE_API_KEY: "cli-key",
+      SENDBLUE_SECRET_KEY: "cli-secret",
+      SENDBLUE_NUMBER: "+15122164639",
+    } as unknown as AppEnv["Bindings"];
+    const request = sendblueRequest(environment, "+19998887777", "Hi");
+    expect(request).not.toBeNull();
+    const headers = request?.init.headers as Record<string, string>;
+    expect(headers["sb-api-key-id"]).toBe("cli-key");
+    expect(headers["sb-api-secret-key"]).toBe("cli-secret");
   });
 });
 

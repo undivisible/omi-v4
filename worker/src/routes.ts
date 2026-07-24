@@ -28,6 +28,7 @@ import conversations, { appendConversationMessage } from "./conversations";
 import { linkConfirmationText } from "./channel-commands";
 import { groupChannelLinkError, isGroupChannelChat } from "./channel-group";
 import { normalizeLinkCode, resolveLinkCode } from "./channel-link";
+import { sendblueInboundConfigured } from "./sendblue";
 import { liveChannelAccount } from "./channel-signup";
 import {
   dispatchChannelMessage,
@@ -190,11 +191,7 @@ routes.get("/setup-health", (context) => {
       // The iMessage channel, whichever provider is behind it. Sendblue wins
       // when it is configured; Blooio is the retained fallback.
       blooio:
-        (configured(context.env.SENDBLUE_API_KEY_ID) &&
-          configured(context.env.SENDBLUE_API_KEY_SECRET) &&
-          configured(context.env.SENDBLUE_NUMBER) &&
-          configured(context.env.SENDBLUE_WEBHOOK_SIGNING_SECRET) &&
-          configured(context.env.SENDBLUE_WEBHOOK_PATH_TOKEN)) ||
+        sendblueInboundConfigured(context.env) ||
         (configured(context.env.BLOOIO_WEBHOOK_SIGNING_SECRET) &&
           configured(context.env.BLOOIO_API_KEY)),
     },
