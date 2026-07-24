@@ -322,6 +322,76 @@ final class DailyReview {
   };
 }
 
+/// Which of the two daily digests a row carries. `daily` is the morning "what
+/// you need to do" brief; `nightly` is the evening "what you did" recap. Both
+/// are stored as `memory_daily_reviews` rows and told apart by their `kind`.
+enum DigestKind { daily, nightly }
+
+/// A generated digest as returned by `GET /v1/memory/daily-reviews`. The list
+/// endpoint speaks camelCase and carries the generated `body` text plus the
+/// `kind` that tells the morning brief from the nightly recap. Distinct from
+/// [DailyReview], which is the write-side payload for a single saved review.
+final class MemoryDigest {
+  const MemoryDigest({
+    required this.id,
+    required this.localDate,
+    required this.kind,
+    required this.body,
+    this.citations = const [],
+    this.updatedAt = 0,
+  });
+
+  final String id;
+  final String localDate;
+  final DigestKind kind;
+  final String body;
+  final List<String> citations;
+  final int updatedAt;
+
+  factory MemoryDigest.fromJson(JsonMap json) => MemoryDigest(
+    id: _string(json, 'id'),
+    localDate: _string(json, 'localDate'),
+    kind: _digestKind(json['kind']),
+    body: _string(json, 'body'),
+    citations: _digestCitations(json['citations']),
+    updatedAt: _optionalInteger(json, 'updatedAt') ?? 0,
+  );
+
+  /// The generated body split into presentable items: numbered or bulleted
+  /// lines become one item each, and prose with no list falls back to a single
+  /// item. Leading enumerators and bullets are stripped for display.
+  List<String> get items {
+    final lines = body
+        .split('\n')
+        .map((line) => line.trim())
+        .where((line) => line.isNotEmpty)
+        .map(_stripEnumerator)
+        .where((line) => line.isNotEmpty)
+        .toList();
+    return lines.isEmpty ? const [] : lines;
+  }
+}
+
+DigestKind _digestKind(Object? value) =>
+    value == 'nightly' ? DigestKind.nightly : DigestKind.daily;
+
+List<String> _digestCitations(Object? value) {
+  if (value is! List) return const [];
+  final quotes = <String>[];
+  for (final item in value) {
+    if (item is Map<String, Object?> && item['quote'] is String) {
+      final quote = (item['quote']! as String).trim();
+      if (quote.isNotEmpty) quotes.add(quote);
+    }
+  }
+  return quotes;
+}
+
+final _enumeratorPattern = RegExp(r'^\s*(?:\d+[.)]\s+|[-*•]\s+)');
+
+String _stripEnumerator(String line) =>
+    line.replaceFirst(_enumeratorPattern, '').trim();
+
 final class MemoryReference {
   const MemoryReference({required this.kind, required this.id});
 

@@ -13,7 +13,9 @@ import '../auth/auth.dart';
 import '../currents/crepus_current.dart';
 import '../currents/currents.dart';
 import '../device/device.dart';
+import 'mobile_digest_view.dart';
 import 'mobile_memory_screen.dart';
+import '../memory/memory_models.dart';
 import '../features/setup_account_screens.dart' show EventKitProactiveSyncTile;
 import '../native/native_hub.dart';
 import '../ui/burst_glow.dart';
@@ -334,6 +336,10 @@ class MobilePendantPageState extends State<MobilePendantPage> {
   bool _connectInFlight = false;
   MobileRelease? _update;
   FirmwareRelease? _firmwareUpdate;
+  // The daily/nightly digest surfaced as the "Your day" recap tile. Loaded once
+  // when the page comes up and left null when there is nothing to show, which
+  // keeps the tile out of the scroll entirely.
+  MemoryDigest? _digest;
   // The firmware feed is read once per connected pendant, not once per
   // snapshot: battery notifications alone would otherwise poll GitHub.
   bool _firmwareChecked = false;
@@ -380,7 +386,21 @@ class MobilePendantPageState extends State<MobilePendantPage> {
     if (!widget.previewMode && widget.services.productionReady) {
       final currents = widget.services.currents;
       if (currents != null) unawaited(currents.load());
+      unawaited(_loadDigest());
     }
+  }
+
+  // Reads the account's digests and keeps the one that fits the moment. A failed
+  // or empty read simply leaves the recap tile absent — it is an at-a-glance
+  // extra, never something the home waits on.
+  Future<void> _loadDigest() async {
+    final memory = widget.services.memory;
+    if (memory == null) return;
+    try {
+      final digests = await memory.listDailyReviews();
+      final chosen = selectDigestForMoment(digests, DateTime.now());
+      if (mounted && chosen != null) setState(() => _digest = chosen);
+    } catch (_) {}
   }
 
   // Processing consent is collected once, explicitly, during onboarding, and
@@ -820,6 +840,13 @@ class MobilePendantPageState extends State<MobilePendantPage> {
             ? null
             : widget.transcripts.first.text,
       ),
+      // The recap tile takes the slot the desktop hub gives its primary call to
+      // action: one compact card near the top of the scroll that opens the
+      // Wrapped-style paged digest. Absent until a digest has loaded.
+      if (_digest case final digest?) ...[
+        const SizedBox(height: _sectionGap),
+        MobileDigestTile(digest: digest),
+      ],
       if (!widget.previewMode &&
           widget.services.productionReady &&
           widget.services.currents != null)

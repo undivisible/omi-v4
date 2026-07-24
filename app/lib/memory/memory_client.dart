@@ -70,6 +70,37 @@ final class MemoryClient {
   Future<DailyReview> saveDailyReview(DailyReview review) =>
       _write('/v1/memory/reviews', review.toJson(), DailyReview.fromJson);
 
+  /// The account's daily and nightly digests, newest first, from
+  /// `GET /v1/memory/daily-reviews`. The endpoint wraps the rows in a
+  /// `{"reviews": [...]}` envelope; each row carries its `kind`, `body`, and
+  /// `localDate`.
+  Future<List<MemoryDigest>> listDailyReviews() async {
+    final response = await _send(
+      MemoryRequest(
+        method: MemoryHttpMethod.get,
+        path: '/v1/memory/daily-reviews',
+      ),
+    );
+    final body = response.body;
+    if (body is! Map<String, Object?>) {
+      throw const MemoryDecodingException('daily-reviews must be an object');
+    }
+    final reviews = body['reviews'];
+    if (reviews is! List) {
+      throw const MemoryDecodingException('daily-reviews must carry a list');
+    }
+    try {
+      return [
+        for (final review in reviews)
+          if (review is Map<String, Object?>) MemoryDigest.fromJson(review),
+      ];
+    } on MemoryFormatException catch (error) {
+      throw MemoryDecodingException(error.message);
+    } on TypeError catch (error) {
+      throw MemoryDecodingException(error.toString());
+    }
+  }
+
   Future<CreatedMemory> createMemory(String content) async {
     if (content.trim().isEmpty) {
       throw const MemoryDecodingException('content must not be empty');
