@@ -2,9 +2,10 @@
 # Builds the static site and copies it over the Worker's asset directory.
 #
 # The Worker serves `worker/public/` as static assets, so that directory is
-# the site's output — everything in it except `hub/` is generated. `hub/` is
-# the Flutter web build produced separately by `worker/scripts/build-hub.sh`
-# and is left untouched here.
+# the site's output — everything in it except `hub/`, `portal/` and `engine/`
+# is generated. Those three are Flutter web output produced separately
+# (`worker/scripts/build-hub.sh`, `build-portal.sh`, `build-web-engine.sh`) and
+# are left untouched here.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -38,7 +39,9 @@ rm -f "$staged/.build.manifest"
 mkdir -p "$out"
 
 # Replace every generated file, and delete the ones a previous build left
-# behind, without touching the separately built hub.
-rsync --archive --delete --exclude '/hub/' "$staged/" "$out/"
+# behind, without touching the separately built Flutter surfaces.
+rsync --archive --delete \
+  --exclude '/hub/' --exclude '/portal/' --exclude '/engine/' \
+  "$staged/" "$out/"
 
-echo "build-site: wrote $out ($(du -sh "$staged" | cut -f1) of site, hub kept)"
+echo "build-site: wrote $out ($(du -sh "$staged" | cut -f1) of site, apps kept)"

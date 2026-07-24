@@ -25,17 +25,14 @@ mkdir -p "$out"
 cp -R "$app/build/web/." "$out/"
 
 rm -f "$out/.last_build_id" "$out/flutter_service_worker.js" "$out/manifest.json"
-rm -rf "$out/canvaskit/experimental_webparagraph"
-find "$out/canvaskit" -maxdepth 2 -name '*.symbols' -delete
-find "$out/canvaskit" -maxdepth 1 \( -name 'skwasm*' -o -name 'wimp*' \) -delete
+
+# CanvasKit and the fallback face are shared with the /portal/ build and live
+# at /engine/; the two index.html files point their base URLs there.
+bash "$here/build-web-engine.sh" "$app/build/web"
+rm -rf "$out/canvaskit"
 
 cp "$here/hub-index.html" "$out/index.html"
 cp "$here/hub-llm.js" "$out/hub-llm.js"
-
-# The engine's glyph fallback, served from this origin rather than from
-# fonts.gstatic.com — see fontFallbackBaseUrl in hub-index.html. The licence
-# travels with the face.
-cp -R "$worker/assets/hub-fallback-fonts" "$out/fallback-fonts"
 
 # The optional on-device model tier. transformers.js and the ONNX runtime are
 # vendored onto this origin so the demo never loads code from a third party;

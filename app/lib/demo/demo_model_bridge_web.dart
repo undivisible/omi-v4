@@ -18,11 +18,13 @@ _Llm? get _llm {
 }
 
 extension type _Llm._(JSObject _) implements JSObject {
-  // Both of these resolve to a JS string, which is the one shape a promise
-  // value cannot be unwrapped from reliably here. They are awaited for their
-  // completion only, and the result is read back off the plain string
-  // properties below.
-  external JSPromise<JSAny?> probe();
+  // Both of these are async and resolve to a JS string, which is the one
+  // shape a promise value cannot be unwrapped from reliably under dart2js:
+  // awaiting `probe().toDart` throws in a release build and lands the probe on
+  // its defaults. So both are bound as fire-and-forget and their result is
+  // read back off the plain string properties below, which the JS side keeps
+  // current.
+  external void probe();
   external void prepare(JSString tier, JSFunction onProgress);
   external String get last;
   external String get lastPrepare;
@@ -42,28 +44,34 @@ extension type _Llm._(JSObject _) implements JSObject {
 /// lost a race with the script tag would otherwise pin the demo to the
 /// scripted tier for the whole session.
 Future<DemoModelProbe> probeDemoModels() async {
-  for (var attempt = 0; attempt < 10; attempt++) {
+  for (var attempt = 0; attempt < 25; attempt++) {
     final llm = _llm;
     if (llm != null) {
+      // Kick the probe (idempotent on the JS side) without awaiting the
+      // promise it returns — the result is read back off `last`, which the JS
+      // side sets synchronously once it has an answer. The JS bridge also
+      // probes itself on load, so `last` is usually already populated.
       try {
-        await llm.probe().toDart;
-        final raw = llm.last;
-        if (raw.isEmpty) {
-          await Future<void>.delayed(const Duration(milliseconds: 150));
-          continue;
-        }
-        final decoded = jsonDecode(raw) as Map<String, Object?>;
-        return DemoModelProbe(
-          promptApi: (decoded['promptApi'] as String?) ?? 'unsupported',
-          webgpu: decoded['webgpu'] == true,
-          model: (decoded['model'] as String?) ?? '',
-          downloadMb: (decoded['downloadMb'] as num?)?.round() ?? 0,
-        );
+        llm.probe();
       } catch (error) {
         debugPrint('demo model probe failed: $error');
       }
+      final raw = llm.last;
+      if (raw.isNotEmpty) {
+        try {
+          final decoded = jsonDecode(raw) as Map<String, Object?>;
+          return DemoModelProbe(
+            promptApi: (decoded['promptApi'] as String?) ?? 'unsupported',
+            webgpu: decoded['webgpu'] == true,
+            model: (decoded['model'] as String?) ?? '',
+            downloadMb: (decoded['downloadMb'] as num?)?.round() ?? 0,
+          );
+        } catch (error) {
+          debugPrint('demo model probe decode failed: $error');
+        }
+      }
     }
-    await Future<void>.delayed(const Duration(milliseconds: 200));
+    await Future<void>.delayed(const Duration(milliseconds: 150));
   }
   return const DemoModelProbe();
 }

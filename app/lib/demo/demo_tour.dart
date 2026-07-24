@@ -20,6 +20,12 @@ import 'demo_prompt_bus.dart';
 /// ordinary chat turn the visitor could have typed themselves. They are never
 /// held to it: the chips are optional, the steps can be taken in any order,
 /// and anything else typed into the composer is answered normally.
+///
+/// It is mounted as an overlay entry in the navigator's own overlay (see
+/// [DemoTourOverlay]), not through `MaterialApp.builder`: a widget hosted
+/// above the navigator by that builder does not repaint on its own `setState`
+/// in a release web build, so the panel would freeze on its first step. Living
+/// in the same overlay the routes and the chat live in, it repaints normally.
 class DemoTourPanel extends StatefulWidget {
   const DemoTourPanel({
     required this.services,
@@ -121,6 +127,8 @@ class _DemoTourPanelState extends State<DemoTourPanel> {
     final surface = dark ? const Color(0xff232321) : const Color(0xfffffefa);
     final hairline = dark ? const Color(0x24fffcec) : const Color(0x1a171716);
     final narrow = MediaQuery.sizeOf(context).width < 560;
+    final collapsed = _collapsed;
+    final shown = _shown;
     final step = _tour.next;
     final taken = _tour.visited.length;
     final total = DemoTour.steps.length;
@@ -161,7 +169,7 @@ class _DemoTourPanelState extends State<DemoTourPanel> {
                       children: [
                         Expanded(
                           child: Text(
-                            _collapsed
+                            collapsed
                                 ? 'Guided tour · $taken of $total'
                                 : 'Guided tour',
                             style: TextStyle(
@@ -179,20 +187,18 @@ class _DemoTourPanelState extends State<DemoTourPanel> {
                           iconSize: 18,
                           visualDensity: VisualDensity.compact,
                           color: muted,
-                          // No Tooltip: this panel is mounted above the
-                          // navigator, where there is no Overlay to host one.
                           icon: Icon(
-                            semanticLabel: _collapsed
+                            semanticLabel: collapsed
                                 ? 'Show the tour'
                                 : 'Hide the tour',
-                            _collapsed
+                            collapsed
                                 ? Icons.keyboard_arrow_up_rounded
                                 : Icons.keyboard_arrow_down_rounded,
                           ),
                         ),
                       ],
                     ),
-                    if (!_collapsed) ...[
+                    if (!collapsed) ...[
                       _TierLine(model: _model, ink: ink, muted: muted),
                       const SizedBox(height: 10),
                       if (step != null)
@@ -227,7 +233,7 @@ class _DemoTourPanelState extends State<DemoTourPanel> {
                         ),
                       if (_tour.lastStep case final last?
                           when last.surface != DemoSurface.hub &&
-                              _shown != last.surface)
+                              shown != last.surface)
                         Padding(
                           padding: const EdgeInsets.only(top: 8),
                           child: _Chip(
@@ -239,7 +245,7 @@ class _DemoTourPanelState extends State<DemoTourPanel> {
                             onTap: () => _tour.show(last.surface),
                           ),
                         ),
-                      if (_shown != DemoSurface.hub)
+                      if (shown != DemoSurface.hub)
                         Padding(
                           padding: const EdgeInsets.only(top: 8),
                           child: _Chip(
@@ -268,6 +274,63 @@ class _DemoTourPanelState extends State<DemoTourPanel> {
       ),
     );
   }
+}
+
+/// Mounts the tour panel in the navigator's own overlay and keeps it above
+/// every route.
+///
+/// The panel cannot ride `MaterialApp.builder` above the navigator: a widget
+/// hosted there does not repaint on its own `setState` in a release web build,
+/// so the tour would freeze on its first step. The navigator's overlay is the
+/// same one the routes and the chat live in, and it repaints normally — so the
+/// panel goes there, re-pinned to the top whenever the route stack changes.
+class DemoTourOverlay {
+  DemoTourOverlay({required this.services, required this.navigator});
+
+  final AppServices services;
+  final GlobalKey<NavigatorState> navigator;
+
+  OverlayEntry? _entry;
+
+  /// The observer handed to the [MaterialApp]: every route change re-pins the
+  /// panel to the top of the overlay.
+  late final NavigatorObserver observer = _DemoTourObserver(pin);
+
+  /// Inserts the panel if it is not there yet, or lifts it back above the
+  /// routes if it is. Re-inserting the same entry only reorders it, so the
+  /// panel's state survives. Deferred to after the frame so it never mutates
+  /// the overlay in the middle of a route transition's build.
+  void pin() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final overlay = navigator.currentState?.overlay;
+      if (overlay == null) return;
+      final entry = _entry ??= OverlayEntry(
+        builder: (context) =>
+            DemoTourPanel(services: services, navigator: navigator),
+      );
+      if (entry.mounted) entry.remove();
+      overlay.insert(entry);
+    });
+  }
+}
+
+class _DemoTourObserver extends NavigatorObserver {
+  _DemoTourObserver(this._pin);
+
+  final VoidCallback _pin;
+
+  @override
+  void didPush(Route<dynamic> route, Route<dynamic>? previousRoute) => _pin();
+
+  @override
+  void didPop(Route<dynamic> route, Route<dynamic>? previousRoute) => _pin();
+
+  @override
+  void didRemove(Route<dynamic> route, Route<dynamic>? previousRoute) => _pin();
+
+  @override
+  void didReplace({Route<dynamic>? newRoute, Route<dynamic>? oldRoute}) =>
+      _pin();
 }
 
 /// Says, plainly, where the answers are coming from. The one thing this

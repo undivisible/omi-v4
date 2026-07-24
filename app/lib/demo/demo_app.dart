@@ -97,7 +97,11 @@ OnboardingCompletionStore demoOnboardingCompletion() =>
 ///
 /// It is mounted through `MaterialApp.builder`, so it sits above every route —
 /// including settings and meeting notes — and cannot be navigated away from.
-/// A visitor is never shown seeded content without this on screen.
+/// A visitor is never shown seeded content without this on screen. The tour
+/// panel is *not* here: it rides the navigator's overlay instead (see
+/// [DemoTourOverlay]), because a widget hosted above the navigator by
+/// `MaterialApp.builder` does not repaint on its own `setState` in a release
+/// web build.
 class DemoBanner extends StatelessWidget {
   const DemoBanner({
     required this.services,
@@ -206,16 +210,11 @@ class DemoBanner extends StatelessWidget {
             ),
           ),
         ),
-        // The tour rides over the shell rather than inside it, so it stays
-        // reachable on every surface it sends the visitor to.
-        Expanded(
-          child: Stack(
-            children: [
-              Positioned.fill(child: child),
-              DemoTourPanel(services: services, navigator: navigator),
-            ],
-          ),
-        ),
+        // The shell. The tour panel is not stacked here — it rides the
+        // navigator's overlay (see [DemoTourOverlay]) so it repaints when the
+        // visitor takes a step, which a widget hosted above the navigator here
+        // would not do in a release web build.
+        Expanded(child: child),
       ],
     );
   }

@@ -23,9 +23,13 @@ app.get("/health", (context) =>
   context.json({ service: "omi-v4-api", status: "ok" }),
 );
 // Every "Open Omi" and "API login" link on the site points at
-// api.omi.tsc.hk/portal, which is the hub web app under a stable name. The
-// fragment (#api-keys) is preserved by the browser across the redirect.
-app.get("/portal", (context) => context.redirect("/hub/", 302));
+// api.omi.tsc.hk/portal, which is the signed-in hub web app (public/portal/,
+// built by scripts/build-portal.sh) under a stable name — not the seeded demo
+// at /hub/. Static assets are served ahead of the Worker, so in production
+// this handler is reached only when the asset layer does not canonicalise the
+// directory itself; either way the app is what answers, and the fragment
+// (#api-keys) is preserved by the browser across the redirect.
+app.get("/portal", (context) => context.redirect("/portal/", 302));
 app.route("/v1/webhooks", webhooks);
 app.route("/v1/auth/desktop", desktopAuth);
 app.use("/v1/*", requireAuth);

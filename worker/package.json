@@ -6,8 +6,9 @@
   "scripts": {
     "check": "bun run format && bun run lint && bun run typecheck && bun run test",
     "build:hub": "bash scripts/build-hub.sh",
+    "build:portal": "bash scripts/build-portal.sh",
     "build:site": "bash ../site/scripts/build.sh",
-    "deploy": "bun run build:site && bun run build:hub && WRANGLER_SEND_METRICS=false wrangler deploy",
+    "deploy": "bun run build:site && bun run build:hub && bun run build:portal && WRANGLER_SEND_METRICS=false wrangler deploy",
     "dev": "WRANGLER_SEND_METRICS=false wrangler dev",
     "dev:site": "bash ../site/scripts/serve.sh",
     "format": "biome format --write .",

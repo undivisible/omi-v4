@@ -45,21 +45,21 @@
   setTimeout(function () { report("error"); }, 40000);
   _flutter.loader.load({
     config: {
-      canvasKitBaseUrl: "canvaskit/",
+      canvasKitBaseUrl: "/engine/canvaskit/",
       useLocalCanvasKit: true,
       // The engine downloads a fallback face for glyphs the bundled fonts do
       // not carry, and its default base is fonts.gstatic.com. The demo is
       // embedded in a page that makes no third-party request, so the base
       // points at this origin; the one face this build actually asks for is
       // vendored under it, and anything else simply 404s rather than leaving.
-      fontFallbackBaseUrl: "fallback-fonts/"
+      fontFallbackBaseUrl: "/engine/fallback-fonts/"
     },
     onEntrypointLoaded: function (engineInitializer) {
       engineInitializer
         // The loader's own config does not reach the engine: canvasKitBaseUrl
         // is consumed while loading, and anything the engine reads has to be
         // handed to initializeEngine as well.
-        .initializeEngine({ fontFallbackBaseUrl: "fallback-fonts/" })
+        .initializeEngine({ fontFallbackBaseUrl: "/engine/fallback-fonts/" })
         .then(function (appRunner) { return appRunner.runApp(); })
         .then(function () {
           var boot = document.getElementById("boot");

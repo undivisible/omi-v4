@@ -363,8 +363,12 @@ class Home extends StatelessComponent {
             p([.text('Negotiable')], classes: 'amount'),
             p([
               .text(
-                'You pay your provider for the inference — about \$5 a month — '
-                'and you settle the rest with Omi.',
+                'Sign in with an xAI or ChatGPT subscription you already pay '
+                'for and there is no separate inference bill, or bring an API '
+                'key for OpenAI, Anthropic, Gemini or a compatible endpoint '
+                'and pay that provider directly. Either way, what you settle '
+                'with Omi is Omi’s own price, and that is the figure you '
+                'negotiate.',
               ),
             ], classes: 'small'),
             a(

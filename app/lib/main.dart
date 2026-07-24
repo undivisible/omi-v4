@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'app_services.dart';
 import 'demo/demo_app.dart';
 import 'demo/demo_mode.dart';
+import 'demo/demo_tour.dart';
 import 'features/desktop_auth_screen.dart';
 import 'features/mobile_companion_shell.dart';
 import 'features/mobile_onboarding_screen.dart';
@@ -15,6 +16,7 @@ import 'features/onboarding_screen.dart';
 import 'features/pill_panel.dart';
 import 'features/rewind/rewind_runtime.dart';
 import 'features/setup_account_screens.dart';
+import 'features/web_portal_screen.dart';
 import 'onboarding/hub_checklist.dart';
 import 'onboarding/onboarding_completion.dart';
 import 'ui/omi_orb.dart';
@@ -30,10 +32,16 @@ Future<void> main() async {
   if (omiDemoMode) {
     await runOmiDemo((services) {
       final navigator = GlobalKey<NavigatorState>();
+      // The tour panel rides the navigator's own overlay, pinned above every
+      // route: a widget hosted above the navigator by `MaterialApp.builder`
+      // does not repaint on its own `setState` in a release web build, so the
+      // tour would freeze on its first step there.
+      final tour = DemoTourOverlay(services: services, navigator: navigator);
       return OmiApp(
         services: services,
         onboardingCompletionStore: demoOnboardingCompletion(),
         navigatorKey: navigator,
+        navigatorObservers: [tour.observer],
         overlayBuilder: (context, child) => DemoBanner(
           services: services,
           navigator: navigator,
@@ -172,6 +180,7 @@ class OmiApp extends StatefulWidget {
     this.platformOverride,
     this.overlayBuilder,
     this.navigatorKey,
+    this.navigatorObservers = const <NavigatorObserver>[],
   });
 
   final AppServices? services;
@@ -185,6 +194,10 @@ class OmiApp extends StatefulWidget {
   /// Handed to the [MaterialApp] so an [overlayBuilder] — which sits outside
   /// the navigator and so has no route context of its own — can still push.
   final GlobalKey<NavigatorState>? navigatorKey;
+
+  /// Observers for the [MaterialApp]'s navigator. The demo uses one to keep its
+  /// tour panel pinned above every route in the navigator's overlay.
+  final List<NavigatorObserver> navigatorObservers;
 
   @override
   State<OmiApp> createState() => _OmiAppState();
@@ -213,6 +226,11 @@ class _OmiAppState extends State<OmiApp> {
     _checkedUid = null;
     _refreshCompletion(notify: true);
   }
+
+  /// The signed-in web deployment at /portal. The demo is also a web build, so
+  /// it has to be excluded explicitly: it runs its own seeded services and
+  /// must never reach a sign-in screen.
+  bool get _webPortal => kIsWeb && !omiDemoMode;
 
   bool get _mobileCompanion {
     if (kIsWeb) return false;
@@ -287,6 +305,7 @@ class _OmiAppState extends State<OmiApp> {
       title: 'Omi',
       debugShowCheckedModeBanner: false,
       navigatorKey: widget.navigatorKey,
+      navigatorObservers: widget.navigatorObservers,
       builder: widget.overlayBuilder,
       themeMode: ThemeMode.system,
       theme: ThemeData(
@@ -334,6 +353,8 @@ class _OmiAppState extends State<OmiApp> {
               services: services,
               sessionId: Uri.base.queryParameters['desktop_auth']!,
             )
+          : _webPortal
+          ? WebPortalScreen(services: services)
           : _checkingCompletion
           // The first frame the user ever sees is the mark, not a spinner.
           ? const Scaffold(

@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:omi/demo/demo_app.dart';
 import 'package:omi/demo/demo_currents_transport.dart';
 import 'package:omi/demo/demo_native_hub.dart';
+import 'package:omi/demo/demo_tour.dart';
 import 'package:omi/demo/demo_seed.dart';
 import 'package:omi/currents/currents.dart';
 import 'package:omi/features/omi_shell.dart';
@@ -97,12 +98,14 @@ void main() {
     final services = await createDemoServices();
     addTearDown(services.dispose);
     final navigator = GlobalKey<NavigatorState>();
+    final tour = DemoTourOverlay(services: services, navigator: navigator);
     await tester.pumpWidget(
       OmiApp(
         services: services,
         onboardingCompletionStore: demoOnboardingCompletion(),
         platformOverride: TargetPlatform.macOS,
         navigatorKey: navigator,
+        navigatorObservers: [tour.observer],
         overlayBuilder: (context, child) => DemoBanner(
           services: services,
           navigator: navigator,

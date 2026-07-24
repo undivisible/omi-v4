@@ -217,4 +217,9 @@
       return lastPrepare;
     },
   };
+
+  // Probe once on load so `last` is populated before the Dart side reads it.
+  // The Dart side reads the result off `last` rather than awaiting a promise
+  // that resolves to a bare string — a shape dart2js cannot unwrap reliably.
+  void probe();
 })();

@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark light">
+<meta name="robots" content="noindex">
+<base href="/portal/">
+<title>Omi</title>
+<link rel="icon" type="image/png" href="favicon.png">
+<style>
+  html, body { height: 100%; margin: 0; background: #171716; overflow: hidden; }
+  #boot {
+    position: fixed; inset: 0; display: grid; place-items: center;
+    font: 400 0.85rem/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    color: rgba(255, 252, 236, 0.46); letter-spacing: 0.02em;
+  }
+  flt-glass-pane, flutter-view { outline: none; }
+</style>
+</head>
+<body>
+<div id="boot">Loading Omi…</div>
+<script src="flutter.js"></script>
+<script>
+  window._flutter = window._flutter || {};
+  _flutter.buildConfig = {
+    builds: [{ compileTarget: "dart2js", renderer: "canvaskit", mainJsPath: "main.dart.js" }]
+  };
+  _flutter.loader.load({
+    config: {
+      // CanvasKit and the glyph fallback are shared with the /hub/ demo and
+      // published once at /engine/, so this origin carries one copy of the
+      // engine rather than one per Flutter build. Absolute, because these sit
+      // outside the base href.
+      canvasKitBaseUrl: "/engine/canvaskit/",
+      useLocalCanvasKit: true,
+      fontFallbackBaseUrl: "/engine/fallback-fonts/"
+    },
+    onEntrypointLoaded: function (engineInitializer) {
+      engineInitializer
+        // The loader's own config does not reach the engine: canvasKitBaseUrl
+        // is consumed while loading, and anything the engine reads has to be
+        // handed to initializeEngine as well.
+        .initializeEngine({ fontFallbackBaseUrl: "/engine/fallback-fonts/" })
+        .then(function (appRunner) { return appRunner.runApp(); })
+        .then(function () {
+          var boot = document.getElementById("boot");
+          if (boot) boot.remove();
+        });
+    }
+  });
+</script>
+</body>
+</html>
