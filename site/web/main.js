@@ -94,31 +94,25 @@
   }
 })();
 
-// The hero shows the real hub — the Flutter web build served from /hub/. It is
-// roughly 1.2 MB gzipped before canvaskit and its fonts, so it must not be part
-// of what the page costs on first paint. An IntersectionObserver starts it as
-// the frame approaches the viewport, which is late enough that a reader who
-// never scrolls there never pays for it, and early enough that it has arrived
-// by the time they look at it. The iframe keeps the app's errors and its canvas
-// out of this document.
+// The hero embeds the real hub — the Flutter web build at /hub/. It starts as
+// soon as the page loads so the demo is live without a click or scroll gate.
 (() => {
   const frame = document.getElementById("hub-frame");
-  const start = document.getElementById("hub-start");
-  const note = document.getElementById("hub-note");
-
-  if (!frame || !start || !note) return;
+  if (!frame) return;
 
   let status = null;
 
   const fail = () => {
     if (frame.dataset.state === "failed") return;
     frame.dataset.state = "failed";
-    const live = frame.querySelector("iframe");
-    if (live) live.remove();
-    if (status) status.remove();
-    note.textContent =
-      "The hub could not start in this browser. Open Omi to use it instead.";
-    start.textContent = "Open Omi";
+    frame.querySelector("iframe")?.remove();
+    status?.remove();
+    status = document.createElement("p");
+    status.className = "shot-status";
+    status.setAttribute("role", "status");
+    status.textContent =
+      "The demo could not start in this browser. Open Omi to use it instead.";
+    frame.append(status);
   };
 
   window.addEventListener("message", (event) => {
@@ -126,17 +120,14 @@
     if (event.data?.source !== "omi-hub") return;
     if (event.data.status === "ready") {
       frame.dataset.state = "ready";
-      if (status) status.remove();
+      status?.remove();
+      status = null;
     } else {
       fail();
     }
   });
 
   const load = () => {
-    if (frame.dataset.state === "failed") {
-      window.location.href = "/portal";
-      return;
-    }
     if (frame.dataset.state !== "idle") return;
 
     frame.dataset.state = "loading";
@@ -147,13 +138,10 @@
     frame.append(status);
 
     const live = document.createElement("iframe");
-    live.title = "The Omi hub, running on sample data";
+    live.title = "Omi, running on sample data";
     live.src = "/hub/";
-    live.loading = "lazy";
     live.allow = "clipboard-write";
     live.addEventListener("error", fail);
-    // An aborted or blocked navigation leaves the frame on about:blank and
-    // fires load all the same, so the fallback does not wait for the timeout.
     live.addEventListener("load", () => {
       try {
         if (live.contentWindow.location.href === "about:blank") fail();
@@ -168,29 +156,9 @@
     }, 45000);
   };
 
-  // The button stays as the manual path, and it is the only path when the
-  // reader has asked their browser to save data or the observer is missing.
-  start.addEventListener("click", load);
-
-  if (navigator.connection?.saveData) return;
-  if (!("IntersectionObserver" in window)) return;
-
-  // The frame sits below the first screen but well inside a generous root
-  // margin, so an observer armed at load would fire immediately and put the
-  // whole build back into the initial page weight. Arming it on the first
-  // scroll is what makes "approaching the viewport" mean what it says: a
-  // reader who never scrolls never starts it.
-  const arm = () => {
-    const approach = new IntersectionObserver(
-      (entries) => {
-        if (!entries.some((entry) => entry.isIntersecting)) return;
-        approach.disconnect();
-        load();
-      },
-      { rootMargin: "500px 0px" },
-    );
-    approach.observe(frame);
-  };
-
-  window.addEventListener("scroll", arm, { once: true, passive: true });
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", load);
+  } else {
+    load();
+  }
 })();

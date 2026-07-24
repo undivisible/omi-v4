@@ -553,34 +553,7 @@ a {
   background: rgba(255, 252, 236, 0.04);
 }
 
-.shot-cta {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 0.9rem;
-  padding: var(--pad);
-  text-align: center;
-  background: radial-gradient(
-    120% 90% at 50% 50%,
-    rgba(23, 23, 22, 0.86),
-    rgba(23, 23, 22, 0.58)
-  );
-}
-
-.shot-note {
-  max-width: 26rem;
-  font-size: 0.82rem;
-  color: var(--muted-2);
-}
-
-.shot-frame[data-state="loading"] .shot-cta,
-.shot-frame[data-state="ready"] .shot-cta {
-  display: none;
-}
-
+.shot-frame[data-state="loading"] .shot-still,
 .shot-frame[data-state="ready"] .shot-still {
   display: none;
 }

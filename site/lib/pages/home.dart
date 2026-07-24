@@ -634,26 +634,11 @@ class Home extends StatelessComponent {
 ///
 /// `/hub/` is built with `--dart-define=OMI_DEMO=1`, which boots the real
 /// `OmiShell` against the seeded in-process services in `app/lib/demo/`. It
-/// signs nobody in and makes no network request, so the frame is inert from
-/// this document's point of view as well as the reader's.
+/// signs nobody in and makes no network request.
 ///
-/// The Flutter web build is several megabytes over the wire — roughly 1.2 MB
-/// of application gzipped, before canvaskit and its fonts — so it must never
-/// be part of the initial page weight for a reader who does not scroll this
-/// far. `web/main.js` watches the frame with an IntersectionObserver and swaps
-/// the iframe in as the section approaches the viewport, so it arrives loaded
-/// rather than waiting on a click. Until then the frame holds a still drawn
-/// entirely in CSS, and it reserves its box up front so promoting the still to
-/// the live app never shifts the layout. The button remains as the manual path
-/// for browsers without an observer, and for readers who have asked for
-/// reduced data.
-///
-/// This is an iframe onto the standalone `/hub/` build rather than an inline
-/// Flutter element. See README.md for the measurements behind that: mounting
-/// the app inline costs every page of the site ~130 KB of brotli-compressed
-/// JavaScript before the reader has clicked anything, and the iframe costs
-/// nothing until they do. The iframe also keeps the app's canvas, its errors
-/// and its sign-in state out of this document.
+/// `web/main.js` mounts the iframe as soon as the page loads. Until the app
+/// is ready the frame shows a CSS still that reserves layout; the still hides
+/// once the hub posts `ready`.
 class _HubEmbed extends StatelessComponent {
   const _HubEmbed();
 
@@ -686,26 +671,6 @@ class _HubEmbed extends StatelessComponent {
             classes: 'shot-still',
             attributes: {'aria-hidden': 'true'},
           ),
-          div([
-            button(
-              [.text('Try Omi')],
-              classes: 'btn btn-solid',
-              id: 'hub-start',
-              type: ButtonType.button,
-            ),
-            p(
-              [
-                .text(
-                  'The real app, compiled to the web, on sample data. It '
-                  'starts loading as this section reaches the screen, so a '
-                  'reader who never scrolls here never pays for it. No '
-                  'sign-in, and nothing you do in it leaves your browser.',
-                ),
-              ],
-              classes: 'shot-note',
-              id: 'hub-note',
-            ),
-          ], classes: 'shot-cta'),
         ],
         classes: 'shot-frame',
         id: 'hub-frame',
@@ -714,9 +679,9 @@ class _HubEmbed extends StatelessComponent {
       figcaption([
         .text(
           'Omi running in this page against seeded sample data — not '
-          'anyone\'s account. Capture, the pendant, on-device transcription '
-          'and computer use need the desktop build and say so here; '
-          'everything else is the same UI, the same code.',
+          'anyone\'s account. No sign-in, and nothing you do here leaves '
+          'your browser. Capture, the pendant, on-device transcription and '
+          'computer use need the desktop build.',
         ),
       ]),
     ], classes: 'shot reveal');
