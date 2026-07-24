@@ -10,6 +10,7 @@ import 'package:url_launcher/url_launcher.dart' as url_launcher;
 
 import '../app_services.dart';
 import '../auth/auth.dart';
+import '../conversations/conversations.dart';
 import '../currents/crepus_current.dart';
 import '../currents/currents.dart';
 import '../device/device.dart';
@@ -348,6 +349,11 @@ class MobilePendantPageState extends State<MobilePendantPage> {
   // scrolls normally, so the value lives outside setState to avoid rebuilding
   // the whole list on every scroll frame.
   final ValueNotifier<double> _scrollOffset = ValueNotifier<double>(0);
+  // Home is Currents; swipe right for Conversations, left for Memory.
+  final PageController _pageController = PageController();
+  int _pageIndex = 0;
+  List<ConversationMessage> _conversation = const [];
+  Object? _conversationError;
 
   bool get _mobile => relay.role == DeviceRelayRole.mobileOwner;
 
@@ -386,6 +392,21 @@ class MobilePendantPageState extends State<MobilePendantPage> {
       final currents = widget.services.currents;
       if (currents != null) unawaited(currents.load());
       unawaited(_loadDigest());
+      unawaited(_loadConversation());
+    }
+  }
+
+  Future<void> _loadConversation() async {
+    try {
+      final messages = await widget.services.replayConversation();
+      if (!mounted) return;
+      setState(() {
+        _conversation = List.of(messages.reversed);
+        _conversationError = null;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _conversationError = error);
     }
   }
 
@@ -587,6 +608,7 @@ class MobilePendantPageState extends State<MobilePendantPage> {
     );
     _scrollController.dispose();
     _scrollOffset.dispose();
+    _pageController.dispose();
     super.dispose();
   }
 
@@ -828,8 +850,124 @@ class MobilePendantPageState extends State<MobilePendantPage> {
         phase == DeviceConnectionPhase.connecting ||
         phase == DeviceConnectionPhase.disconnecting;
     final deviceTiles = _deviceTiles(phase, connected, lastError);
-    // The pendant image reaches the very top edge past the notch, so the whole
-    // page is one scroll view and only the hero fades/blurs as it scrolls off.
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        Column(
+          children: [
+            Expanded(
+              child: PageView(
+                key: const Key('companion_page_view'),
+                controller: _pageController,
+                onPageChanged: (index) {
+                  setState(() => _pageIndex = index);
+                  if (index == 1) unawaited(_loadConversation());
+                },
+                children: [
+                  _currentsPage(
+                    device: device,
+                    connected: connected,
+                    capturing: capturing,
+                    busy: busy,
+                    phase: phase,
+                    capturedMs: capturedMs,
+                    deviceTiles: deviceTiles,
+                  ),
+                  _conversationsPage(),
+                  _memoryPage(),
+                ],
+              ),
+            ),
+            _pageTabs(),
+          ],
+        ),
+        Positioned(
+          top: 0,
+          right: 0,
+          child: SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.only(top: 8, right: 14),
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  color: _surface,
+                  border: Border.all(color: _hairline),
+                  shape: BoxShape.circle,
+                ),
+                child: IconButton(
+                  key: const Key('companion_settings_button'),
+                  tooltip: 'Settings',
+                  onPressed: _openSettings,
+                  icon: const Icon(Icons.settings_outlined, size: 20),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _pageTabs() {
+    const labels = ['Currents', 'Chat', 'Memory'];
+    final dark = _darkMode(context);
+    final selectedBg = dark ? _cream : _ink;
+    final selectedFg = dark ? _ink : _cream;
+    final idleBg = dark ? const Color(0xff232320) : _surface;
+    final idleFg = _pageInkSoft(context);
+    final hairline = dark ? const Color(0x1ffffcec) : _hairline;
+    return SafeArea(
+      top: false,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(18, 4, 18, 10),
+        child: Row(
+          children: [
+            for (var index = 0; index < labels.length; index++) ...[
+              if (index > 0) const SizedBox(width: 8),
+              Expanded(
+                child: GestureDetector(
+                  onTap: () => unawaited(
+                    _pageController.animateToPage(
+                      index,
+                      duration: const Duration(milliseconds: 240),
+                      curve: Curves.easeOutCubic,
+                    ),
+                  ),
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 180),
+                    padding: const EdgeInsets.symmetric(vertical: 10),
+                    decoration: BoxDecoration(
+                      color: _pageIndex == index ? selectedBg : idleBg,
+                      borderRadius: BorderRadius.circular(999),
+                      border: Border.all(color: hairline),
+                    ),
+                    child: Text(
+                      labels[index],
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        color: _pageIndex == index ? selectedFg : idleFg,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _currentsPage({
+    required RelayDevice? device,
+    required bool connected,
+    required bool capturing,
+    required bool busy,
+    required DeviceConnectionPhase phase,
+    required int capturedMs,
+    required List<Widget> deviceTiles,
+  }) {
     final content = <Widget>[
       _LiveTranscriptStrip(
         connected: connected,
@@ -839,9 +977,6 @@ class MobilePendantPageState extends State<MobilePendantPage> {
             ? null
             : widget.transcripts.first.text,
       ),
-      // The recap tile takes the slot the desktop hub gives its primary call to
-      // action: one compact card near the top of the scroll that opens the
-      // Wrapped-style paged digest. Absent until a digest has loaded.
       if (_digest case final digest?) ...[
         const SizedBox(height: _sectionGap),
         MobileDigestTile(digest: digest),
@@ -858,18 +993,11 @@ class MobilePendantPageState extends State<MobilePendantPage> {
           onDismiss: () => unawaited(_dismissUpdate(release)),
         ),
       ],
-      // A connected pendant with nothing to pair and nothing wrong leaves the
-      // DEVICE section empty, and a lone heading over blank space is what put
-      // the yawning gap above the desktop invitation.
       if (deviceTiles.isNotEmpty) ...[
         const SizedBox(height: _sectionGap),
         const _SectionLabel('DEVICE'),
         ..._withGaps(deviceTiles),
       ],
-      // The pendant notice shares the desktop notice's slot and its component:
-      // one full-row banner card, whole row tappable, dismissal persisted, and
-      // present only when there is genuinely something to do. A waiting
-      // firmware update outranks the desktop invitation.
       if (_firmwareUpdate case final release?) ...[
         const SizedBox(height: _sectionGap),
         _FirmwareCta(
@@ -888,9 +1016,6 @@ class MobilePendantPageState extends State<MobilePendantPage> {
           onDismiss: () => unawaited(_dismissDesktopNotice()),
         ),
       ],
-      const SizedBox(height: _sectionGap),
-      const _SectionLabel('CONVERSATIONS'),
-      ..._withGaps(_transcriptTiles()),
       const SizedBox(height: 4),
     ];
     final body = CustomScrollView(
@@ -927,33 +1052,75 @@ class MobilePendantPageState extends State<MobilePendantPage> {
         ),
       ],
     );
-    return Stack(
-      clipBehavior: Clip.none,
-      children: [
-        ScrollEdgeFade(child: body),
-        Positioned(
-          top: 0,
-          right: 0,
-          child: SafeArea(
-            child: Padding(
-              padding: const EdgeInsets.only(top: 8, right: 14),
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  color: _surface,
-                  border: Border.all(color: _hairline),
-                  shape: BoxShape.circle,
-                ),
-                child: IconButton(
-                  key: const Key('companion_settings_button'),
-                  tooltip: 'Settings',
-                  onPressed: _openSettings,
-                  icon: const Icon(Icons.settings_outlined, size: 20),
-                ),
-              ),
-            ),
-          ),
+    return ScrollEdgeFade(child: body);
+  }
+
+  Widget _conversationsPage() {
+    final tiles = <Widget>[
+      Text(
+        'Chat',
+        style: TextStyle(
+          fontSize: 28,
+          fontWeight: FontWeight.w700,
+          letterSpacing: -0.6,
+          color: _pageInk(context),
         ),
+      ),
+      const SizedBox(height: 6),
+      Text(
+        'Desktop, Telegram, and iMessage in one thread.',
+        style: TextStyle(fontSize: 14, height: 1.35, color: _pageInkSoft(context)),
+      ),
+      const SizedBox(height: 18),
+      if (_conversationError != null)
+        _PaperTile(
+          icon: Icons.cloud_off_outlined,
+          title: 'Could not load conversation',
+          detail: 'Pull to open Currents and try again later.',
+        )
+      else if (_conversation.isEmpty && widget.transcripts.isEmpty)
+        const _PaperTile(
+          key: Key('companion_transcripts_empty'),
+          icon: Icons.chat_bubble_outline_rounded,
+          title: 'No messages yet',
+          detail: 'Talk on desktop, Telegram, or iMessage and it shows up here.',
+        )
+      else ...[
+        for (final message in _conversation)
+          _ConversationBubble(message: message),
+        if (_conversation.isNotEmpty && widget.transcripts.isNotEmpty)
+          const SizedBox(height: _sectionGap),
+        if (widget.transcripts.isNotEmpty) ...[
+          const _SectionLabel('FROM THE PENDANT'),
+          const SizedBox(height: _tileGap),
+          ..._withGaps(_transcriptTiles()),
+        ],
       ],
+    ];
+    return RefreshIndicator(
+      onRefresh: _loadConversation,
+      child: ListView(
+        key: const Key('companion_conversations_page'),
+        padding: const EdgeInsets.fromLTRB(18, 56, 18, 16),
+        children: tiles,
+      ),
+    );
+  }
+
+  Widget _memoryPage() {
+    final memory = widget.services.memory;
+    if (memory == null) {
+      return const Center(
+        child: Padding(
+          padding: EdgeInsets.all(24),
+          child: Text('Sign in to search and add memories.'),
+        ),
+      );
+    }
+    return MobileMemoryScreen(
+      key: const Key('companion_memory_page'),
+      memory: memory,
+      embedded: true,
     );
   }
 
@@ -982,6 +1149,16 @@ class MobilePendantPageState extends State<MobilePendantPage> {
           segmentCount: () => widget.transcripts.length,
           onForget: forget,
           onDisconnect: disconnect,
+          onOpenMemory: () {
+            Navigator.of(sheetContext).pop();
+            unawaited(
+              _pageController.animateToPage(
+                2,
+                duration: const Duration(milliseconds: 240),
+                curve: Curves.easeOutCubic,
+              ),
+            );
+          },
         ),
       ),
     );
@@ -2375,6 +2552,107 @@ class _RenameDialogState extends State<_RenameDialog> {
   );
 }
 
+/// One replayed conversation turn on the Chat page. Channel sources get a
+/// small colored rail so Telegram / iMessage read differently from desktop.
+class _ConversationBubble extends StatelessWidget {
+  const _ConversationBubble({required this.message});
+
+  final ConversationMessage message;
+
+  @override
+  Widget build(BuildContext context) {
+    final fromUser = message.role == 'user';
+    final accent = _sourceAccent(message.source);
+    final label = _sourceLabel(message.source);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: _tileGap),
+      child: Align(
+        alignment: fromUser ? Alignment.centerRight : Alignment.centerLeft,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 340),
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              color: _pageSurface(context),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: _pageHairline(context)),
+            ),
+            child: IntrinsicHeight(
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  if (!fromUser && accent != null)
+                    Container(
+                      width: 3,
+                      decoration: BoxDecoration(
+                        color: accent,
+                        borderRadius: const BorderRadius.horizontal(
+                          left: Radius.circular(16),
+                        ),
+                      ),
+                    ),
+                  Expanded(
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          if (label != null) ...[
+                            Text(
+                              label,
+                              style: TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.w600,
+                                letterSpacing: 0.2,
+                                color: accent ?? _pageInkSoft(context),
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                          ],
+                          Text(
+                            message.text,
+                            style: TextStyle(
+                              fontSize: 15,
+                              height: 1.35,
+                              color: _pageInk(context),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  static Color? _sourceAccent(String source) {
+    return switch (source) {
+      'telegram' => const Color(0xff2aabee),
+      'imessage' || 'blooio' => const Color(0xff34c759),
+      _ => null,
+    };
+  }
+
+  static String? _sourceLabel(String source) {
+    return switch (source) {
+      'telegram' => 'TELEGRAM',
+      'imessage' || 'blooio' => 'IMESSAGE',
+      'desktop' || 'app' || 'web' => null,
+      _ => source.toUpperCase(),
+    };
+  }
+}
+
+Color _pageSurface(BuildContext context) =>
+    _darkMode(context) ? const Color(0xff232320) : _surface;
+
+Color _pageHairline(BuildContext context) =>
+    _darkMode(context) ? const Color(0x1ffffcec) : _hairline;
+
 class _SettingsSheet extends StatefulWidget {
   const _SettingsSheet({
     required this.services,
@@ -2389,6 +2667,7 @@ class _SettingsSheet extends StatefulWidget {
     required this.segmentCount,
     required this.onForget,
     required this.onDisconnect,
+    required this.onOpenMemory,
   });
 
   final AppServices services;
@@ -2403,6 +2682,7 @@ class _SettingsSheet extends StatefulWidget {
   final int Function() segmentCount;
   final Future<void> Function() onForget;
   final Future<void> Function() onDisconnect;
+  final VoidCallback onOpenMemory;
 
   @override
   State<_SettingsSheet> createState() => _SettingsSheetState();
@@ -2530,18 +2810,6 @@ class _SettingsSheetState extends State<_SettingsSheet> {
         downloader: widget.firmwareDownloader ?? HttpFirmwareDownloader(),
         flasher: widget.firmwareFlasher ?? McuMgrFirmwareFlasher(),
         openLink: widget.openLink,
-      ),
-    );
-  }
-
-  void _openMemory() {
-    final memory = widget.services.memory;
-    if (memory == null) return;
-    unawaited(
-      Navigator.of(context).push(
-        MaterialPageRoute<void>(
-          builder: (routeContext) => MobileMemoryScreen(memory: memory),
-        ),
       ),
     );
   }
@@ -2701,7 +2969,7 @@ class _SettingsSheetState extends State<_SettingsSheet> {
                 title: 'Memory',
                 detail: 'Search what Omi remembers, or add something new.',
                 trailing: const _RowChevron(),
-                onTap: _openMemory,
+                onTap: widget.onOpenMemory,
               ),
             ],
             const SizedBox(height: _sectionGap),
