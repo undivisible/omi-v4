@@ -30,6 +30,7 @@ jobs:
       # block, so the ref/version lives in one place):
       #   - run: crepus flutter add --version "$CREPUS_FLUTTER_VERSION"
       - run: cargo install rinf_cli --version 8.10.0 --locked
+      - run: flutter pub get
       - run: bash tool/check_rinf_bindings.sh
       - run: dart format --output=none --set-exit-if-changed lib test
       - run: bash tool/analyze.sh

@@ -25,20 +25,14 @@ use sha2::{Digest, Sha256};
 use std::path::Path;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 use std::sync::OnceLock;
-#[cfg(all(
-    test,
-    any(target_os = "macos", target_os = "windows")
-))]
+#[cfg(all(test, any(target_os = "macos", target_os = "windows")))]
 use std::sync::atomic::{AtomicUsize, Ordering};
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const MAX_COMPUTER_VALUE_BYTES: usize = 16 * 1024;
 const MAX_TARGET_NAME_BYTES: usize = 1_024;
-#[cfg(all(
-    test,
-    any(target_os = "macos", target_os = "windows")
-))]
+#[cfg(all(test, any(target_os = "macos", target_os = "windows")))]
 static AUTHORITY_MINT_ATTEMPTS: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -68,10 +62,7 @@ impl PreparedComputerUseAction {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[cfg_attr(
-    not(any(target_os = "macos", target_os = "windows")),
-    allow(dead_code)
-)]
+#[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
 pub(crate) enum ExecutionOutcome {
     Succeeded,
     Rejected,
@@ -82,10 +73,7 @@ pub(crate) enum ExecutionOutcome {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[cfg_attr(
-    not(any(target_os = "macos", target_os = "windows")),
-    allow(dead_code)
-)]
+#[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
 pub(crate) enum ComputerUseError {
     AuthorityUnavailable,
     Protocol,
@@ -450,10 +438,7 @@ pub(crate) fn execute(
         .ok_or(ComputerUseError::Protocol)
 }
 
-#[cfg(all(
-    test,
-    any(target_os = "macos", target_os = "windows")
-))]
+#[cfg(all(test, any(target_os = "macos", target_os = "windows")))]
 pub(crate) fn authority_mint_attempts() -> usize {
     AUTHORITY_MINT_ATTEMPTS.load(Ordering::SeqCst)
 }
