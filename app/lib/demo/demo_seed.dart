@@ -308,6 +308,17 @@ const demoConversation = <({String role, String text})>[
         'readiness: auth and the D1 reads are the cheap ones to move first, '
         'and billing and channel delivery carry state so they go last.',
   ),
+  // The tour's opening turn. It is the newest message, so it is what a
+  // visitor lands on, and it names the one thing they most need to know
+  // before reading anything else on the screen.
+  (
+    role: 'assistant',
+    text:
+        'Welcome — I am Omi, and this is a guided walkthrough of my own hub. '
+        'Everything here is sample data belonging to nobody, and it all runs '
+        'in your browser. Ask me anything, or take the tour from the panel in '
+        'the corner.',
+  ),
 ];
 
 /// Canned assistant replies, matched on keywords. The demo never reaches a
@@ -389,11 +400,13 @@ const demoReplies = <(List<String>, String)>[
 ];
 
 const demoFallbackReply =
-    'This is a seeded demo, so I can only answer from a fixed set of notes '
-    'about how Omi is built — the pendant firmware, the Worker and worker-rs, '
-    'zkr memory, Rewind capture, Crepuscularity, Praefectus, or Alpenglow. '
-    'Nothing you type here leaves your browser, and no model is called. Open '
-    'Omi for the real assistant.';
+    'No model is running in this browser, so I am answering from a fixed set '
+    'of notes: what Omi is, the brief, currents, memory and citations, '
+    'meetings, the pendant, and settings — plus how it is built, from the '
+    'pendant firmware and the Worker to zkr memory, Rewind capture, '
+    'Crepuscularity, Praefectus and Alpenglow. '
+    'Nothing you type here leaves your browser. Open Omi for the real '
+    'assistant.';
 
 String demoReplyFor(String prompt) {
   final text = prompt.toLowerCase();

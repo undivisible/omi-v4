@@ -4,6 +4,8 @@ import 'dart:typed_data';
 import '../native/generated/signals/signals.dart'
     show MemoryItems, NativeEventMemoryItems;
 import '../native/native_hub.dart';
+import 'demo_guide.dart';
+import 'demo_model.dart';
 import 'demo_seed.dart';
 
 /// The seeded stand-in for the Rust hub, used only by the public demo build.
@@ -153,8 +155,15 @@ final class DemoNativeHub implements NativeHub {
     ),
   );
 
-  /// One scripted turn, streamed a clause at a time so the chat behaves the
-  /// way it does against the real hub. No request leaves the page.
+  /// One assistant turn.
+  ///
+  /// Where it comes from depends on what the browser can run: the visitor's
+  /// own on-device model when there is one, and the seeded replies when there
+  /// is not. Either way nothing leaves the page — there is no endpoint in
+  /// this build to send anything to.
+  ///
+  /// Whichever answers, the message is first offered to the tour, so asking
+  /// about currents opens currents.
   @override
   void sendMessage({
     required String requestId,
@@ -163,7 +172,73 @@ final class DemoNativeHub implements NativeHub {
     String? memoryContext,
     MessageOrigin? origin,
   }) {
-    final reply = demoReplyFor(text);
+    final step = DemoTour.instance.match(text);
+    if (step != null) DemoTour.instance.enter(step);
+    final model = DemoModel.instance;
+    final stream = model.ask(
+      system: demoSystemPrompt(step?.grounding ?? demoTourGrounding),
+      history: const [],
+      prompt: text,
+    );
+    if (stream != null) {
+      unawaited(_stream(requestId, stream, step, text));
+      return;
+    }
+    _scripted(requestId, step?.reply ?? demoReplyFor(text));
+  }
+
+  /// Relays a model's tokens onto the hub's own delta events. A failure
+  /// before the first token falls back to the scripted answer rather than
+  /// stranding the visitor mid-tour; a failure after it ends the turn
+  /// honestly.
+  Future<void> _stream(
+    String requestId,
+    Stream<String> stream,
+    DemoTourStep? step,
+    String text,
+  ) async {
+    var started = false;
+    try {
+      await for (final chunk in stream) {
+        if (_events.isClosed) return;
+        if (chunk.isEmpty) continue;
+        started = true;
+        _emit(
+          NativeEventAssistantDelta(
+            value: AssistantDelta(
+              requestId: requestId,
+              text: chunk,
+              finalSegment: false,
+            ),
+          ),
+        );
+      }
+    } catch (error) {
+      DemoModel.instance.degradeToScripted(error);
+      if (!started) {
+        _scripted(requestId, step?.reply ?? demoReplyFor(text));
+        return;
+      }
+    }
+    if (_events.isClosed) return;
+    if (!started) {
+      _scripted(requestId, step?.reply ?? demoReplyFor(text));
+      return;
+    }
+    _emit(
+      NativeEventAssistantDelta(
+        value: AssistantDelta(
+          requestId: requestId,
+          text: '',
+          finalSegment: true,
+        ),
+      ),
+    );
+  }
+
+  /// The seeded answer, streamed a clause at a time so the chat behaves the
+  /// way it does against the real hub.
+  void _scripted(String requestId, String reply) {
     final chunks = _chunk(reply);
     var index = 0;
     void step() {
@@ -199,6 +274,7 @@ final class DemoNativeHub implements NativeHub {
   @override
   void cancel(String requestId) {
     _pending.remove(requestId)?.cancel();
+    DemoModel.instance.cancel();
   }
 
   @override

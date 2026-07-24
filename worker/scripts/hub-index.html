@@ -20,6 +20,15 @@
 </head>
 <body>
 <div id="boot">Starting the demo…</div>
+<script type="importmap">
+{
+  "imports": {
+    "onnxruntime-web/webgpu": "./vendor/ort.webgpu.bundle.min.mjs",
+    "onnxruntime-common": "./vendor/ort-common/index.js"
+  }
+}
+</script>
+<script src="hub-llm.js"></script>
 <script src="flutter.js"></script>
 <script>
   window._flutter = window._flutter || {};

@@ -15,8 +15,10 @@ import '../features/setup_account_screens.dart';
 import '../onboarding/onboarding_completion.dart';
 import 'demo_currents_transport.dart';
 import 'demo_mode.dart';
+import 'demo_model.dart';
 import 'demo_native_hub.dart';
 import 'demo_seed.dart';
+import 'demo_tour.dart';
 
 /// Boots the public demo: the real [AppServices] and the real shell, wired to
 /// seeded, in-process stand-ins for everything that would otherwise be a
@@ -31,6 +33,10 @@ import 'demo_seed.dart';
 Future<void> runOmiDemo(Widget Function(AppServices services) buildApp) async {
   // ignore: invalid_use_of_visible_for_testing_member
   SharedPreferences.setMockInitialValues(demoPreferences());
+  // Asks the browser what it can run before the first frame. This only reads
+  // capabilities — it downloads nothing, and the WebGPU tier stays behind its
+  // opt-in whatever the answer is.
+  unawaited(DemoModel.instance.resolve());
   final services = await createDemoServices();
   runApp(buildApp(services));
 }
@@ -151,8 +157,7 @@ class DemoBanner extends StatelessWidget {
                         compact
                             ? 'Sample data. Not your account.'
                             : 'Sample data, not your account. Nothing you '
-                                  'type here leaves your browser, and no '
-                                  'model is called.',
+                                  'type here leaves your browser.',
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
@@ -201,7 +206,16 @@ class DemoBanner extends StatelessWidget {
             ),
           ),
         ),
-        Expanded(child: child),
+        // The tour rides over the shell rather than inside it, so it stays
+        // reachable on every surface it sends the visitor to.
+        Expanded(
+          child: Stack(
+            children: [
+              Positioned.fill(child: child),
+              DemoTourPanel(services: services, navigator: navigator),
+            ],
+          ),
+        ),
       ],
     );
   }

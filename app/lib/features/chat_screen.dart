@@ -13,6 +13,7 @@ import '../channels/channels.dart';
 import '../currents/crepus_current.dart';
 import '../currents/currents.dart';
 import '../demo/demo_mode.dart';
+import '../demo/demo_prompt_bus.dart';
 import '../keyboard/keyboard.dart';
 import '../keyboard/shake_gesture.dart';
 import '../native/generated/signals/signals.dart'
@@ -275,6 +276,10 @@ class ChatScreenState extends State<ChatScreen>
       _shakeProgress = (_shakeProgress - 8).clamp(0, 100);
       if (_shakeProgress <= 0) unawaited(VoiceOverlayWindow.stop());
     });
+    // The demo's guided walkthrough types its steps into this composer, so
+    // they go through the same send path the keyboard does. `omiDemoMode` is
+    // a compile-time constant, so outside that build this is compiled away.
+    if (omiDemoMode) DemoPromptBus.instance.attach(_sendPrompt);
     if (!widget.previewMode) {
       widget.services.currents?.addListener(_currentsChanged);
       unawaited(_refreshCurrents());
@@ -572,6 +577,7 @@ class ChatScreenState extends State<ChatScreen>
       timer.cancel();
     }
     // Only the one this screen made is this screen's to dispose.
+    if (omiDemoMode) DemoPromptBus.instance.detach(_sendPrompt);
     if (widget.dictation == null) _dictation?.dispose();
     _placeholderTimer?.cancel();
     _shakeDecayTimer?.cancel();
