@@ -4,6 +4,7 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:omi/api/worker_http.dart';
 import 'package:omi/app_services.dart';
 import 'package:omi/auth/auth.dart';
 import 'package:omi/currents/currents.dart';
@@ -95,6 +96,95 @@ void main() {
     );
   });
 
+  test('a 401 from the worker reads as sign-in required', () {
+    final transcribe = workerVoiceNoteTranscriber(
+      ({required method, required path, body}) async =>
+          (statusCode: 401, body: {'error': 'Authentication failed'}),
+    );
+    expect(
+      transcribe(_tone(), const Duration(seconds: 1)),
+      throwsA(isA<WorkerAuthenticationException>()),
+    );
+  });
+
+  test('a worker auth failure is explained, not a silent failure', () async {
+    final audio = StreamController<Uint8List>();
+    final dictation = _dictation(
+      audio: audio,
+      transcribe: (_, _) async =>
+          throw const WorkerAuthenticationException('Sign in to dictate.'),
+    );
+    await dictation.start();
+    audio.add(_tone());
+    await Future<void>.delayed(Duration.zero);
+    expect(await dictation.stop(), isNull);
+    expect(dictation.state, DictationState.failed);
+    expect(dictation.message, 'Sign in to dictate.');
+  });
+
+  test('an upstream failure surfaces the server message', () async {
+    final audio = StreamController<Uint8List>();
+    final dictation = _dictation(
+      audio: audio,
+      transcribe: (_, _) async =>
+          throw StateError('Managed speech unavailable'),
+    );
+    await dictation.start();
+    audio.add(_tone());
+    await Future<void>.delayed(Duration.zero);
+    expect(await dictation.stop(), isNull);
+    expect(dictation.state, DictationState.failed);
+    expect(dictation.message, 'Managed speech unavailable');
+  });
+
+  testWidgets('recording shows a waveform in the composer placeholder', (
+    tester,
+  ) async {
+    final audio = StreamController<Uint8List>();
+    final dictation = _dictation(
+      audio: audio,
+      transcribe: (_, _) async => 'later',
+    );
+    addTearDown(dictation.dispose);
+    debugDevAssistantAccess = const DevAssistantAccess(
+      credential: 'AIzaTestDevKey',
+      liveModel: 'gemini-test-live',
+      missingKeyHint: '',
+    );
+    addTearDown(() => debugDevAssistantAccess = DevAssistantAccess.none);
+    final services = AppServices.forTesting(
+      nativeHub: _SilentHub(),
+      deviceRelay: DeviceRelayService(
+        role: DeviceRelayRole.desktopObserver,
+        adapter: const UnavailableDeviceRelayAdapter(),
+      ),
+      auth: AuthController(const UnconfiguredAuthGateway()),
+      memoryDatabasePath: (uid) => '/tmp/$uid.sqlite3',
+      currentsClient: CurrentsClient(_SilentCurrentsTransport()),
+    );
+    addTearDown(services.dispose);
+    await services.initialize();
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: ChatScreen(services: services, dictation: dictation),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    await tester.tap(find.byKey(const Key('start_dictation')));
+    await tester.pump();
+    audio.add(_tone());
+    await tester.pump();
+
+    expect(
+      find.byKey(const Key('composer_dictation_waveform')),
+      findsOneWidget,
+    );
+  });
+
   testWidgets('the composer microphone transcribes into the field', (
     tester,
   ) async {
@@ -135,10 +225,10 @@ void main() {
     await tester.pump();
 
     await tester.tap(find.byKey(const Key('start_dictation')));
-    await tester.pumpAndSettle();
+    await tester.pump();
     expect(dictation.state, DictationState.recording);
     audio.add(_tone());
-    await tester.pumpAndSettle();
+    await tester.pump();
 
     await tester.tap(find.byKey(const Key('stop_dictation')));
     // Stopping the capture stream settles off the fake clock.

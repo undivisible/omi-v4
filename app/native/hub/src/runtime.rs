@@ -13,10 +13,10 @@ use crate::model_tier::{Capability, ModelTier};
 use crate::signals::{
     ActionProposal, ActionRisk, ApprovalDecision, ApprovalDecisionAcknowledgement, AssistantDelta,
     AssistantProvider as ProviderKind, BriefComposed, CaptureSource, ClientCommand, Command,
-    ComputerUseAction, ComputerUseAuthorityReceipt, MemoryCaptured, MemoryCorrected,
-    MemoryExportCommit, MemoryExported, MemoryItem, MemoryItems, MemorySearchItem,
-    MemorySearchResults, MemorySourceDeleted, MessageOrigin, NativeError, NativeEvent,
-    OnboardingScanCompleted, OnboardingScanSource, OnboardingScanState, RuntimePhase,
+    ComputerUseAction, ComputerUseAuthorityReceipt, MemoryApplied, MemoryApplyCommit,
+    MemoryCaptured, MemoryCorrected, MemoryExportCommit, MemoryExported, MemoryItem, MemoryItems,
+    MemorySearchItem, MemorySearchResults, MemorySourceDeleted, MessageOrigin, NativeError,
+    NativeEvent, OnboardingScanCompleted, OnboardingScanSource, OnboardingScanState, RuntimePhase,
     RuntimeStatus, ToolProgress, ToolStatus, TranscriptLocator, TranscriptionStopAcknowledgement,
 };
 #[cfg(test)]
@@ -38,9 +38,10 @@ use tokio::task::{JoinError, JoinHandle, JoinSet, spawn_blocking};
 use tokio_util::sync::CancellationToken;
 use url::{Host, Url};
 use zkr::{
-    ClaimId, CorrectInput, DeleteInput, EXPORT_FORMAT_VERSION, ExportInput, MemoryDb, MemoryRef,
-    PersonId, ProfilesInput, RememberInput, ReviewsInput, SearchInput, SourceId, SourceKind,
-    TenantId, TranscriptLocator as ZkrTranscriptLocator,
+    ApplyInput, ClaimId, CorrectInput, DeleteInput, EXPORT_FORMAT_VERSION, ExportCommit,
+    ExportInput, ExportRecord, MemoryDb, MemoryRef, PersonId, ProfilesInput, RememberInput,
+    ReviewsInput, SearchInput, SourceId, SourceKind, TenantId,
+    TranscriptLocator as ZkrTranscriptLocator,
 };
 
 const COMMAND_QUEUE_CAPACITY: usize = 32;
@@ -2313,6 +2314,10 @@ async fn execute(
             .await;
             false
         }
+        Command::ApplyMemory { commits } => {
+            apply_memory(&request_id, &state, commits, &cancellation).await;
+            false
+        }
         Command::ListMemoryItems { limit } => {
             list_memory_items(&request_id, &state, limit, &cancellation).await;
             false
@@ -3308,6 +3313,79 @@ async fn search(
         ),
         BlockingOutcome::Cancelled => cancelled(request_id),
     }
+}
+
+async fn apply_memory(
+    request_id: &str,
+    state: &Mutex<RuntimeState>,
+    commits: Vec<MemoryApplyCommit>,
+    cancellation: &CancellationToken,
+) {
+    let Some(memory) = state.lock().await.memory.clone() else {
+        error(
+            Some(request_id.to_owned()),
+            "memory_unavailable",
+            "configure memory before applying cloud commits",
+            true,
+        );
+        return;
+    };
+    let request_id = request_id.to_owned();
+    let error_request_id = request_id.clone();
+    let task = spawn_blocking(move || apply_configured_memory(&memory, &request_id, commits));
+    match await_blocking(task, cancellation).await {
+        BlockingOutcome::Complete(event) => NativeEvent::MemoryApplied(event).send(),
+        BlockingOutcome::Failed(error_value) => error(
+            Some(error_request_id.clone()),
+            "memory_apply_failed",
+            &error_value,
+            false,
+        ),
+        BlockingOutcome::Cancelled => cancelled(&error_request_id),
+    }
+}
+
+fn apply_configured_memory(
+    memory: &Arc<StdMutex<MemoryContext>>,
+    request_id: &str,
+    commits: Vec<MemoryApplyCommit>,
+) -> Result<MemoryApplied, String> {
+    let mut memory = memory
+        .lock()
+        .map_err(|_| "memory database lock was poisoned".to_owned())?;
+    let export_commits = commits
+        .into_iter()
+        .map(|commit| {
+            let record: ExportRecord =
+                serde_json::from_str(&commit.record_json).map_err(|error| error.to_string())?;
+            Ok(ExportCommit {
+                sequence: commit.sequence,
+                recorded_at: commit.recorded_at_ms,
+                event_count: 1,
+                first_event_index: 0,
+                records: vec![record],
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    let tenant_id = memory.tenant_id.clone();
+    let person_id = memory.person_id.clone();
+    let applied = memory
+        .database
+        .apply(ApplyInput {
+            export_format: EXPORT_FORMAT_VERSION,
+            database_schema_version: None,
+            tenant_id,
+            person_id,
+            commits: export_commits,
+        })
+        .map_err(|error| error.to_string())?;
+    Ok(MemoryApplied {
+        request_id: request_id.to_owned(),
+        commits_applied: applied.commits_applied,
+        commits_skipped: applied.commits_skipped,
+        records_applied: applied.records_applied,
+        records_skipped: applied.records_skipped,
+    })
 }
 
 async fn export_memory(

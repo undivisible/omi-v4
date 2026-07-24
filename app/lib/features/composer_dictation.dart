@@ -10,9 +10,11 @@ import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:record/record.dart';
 
-/// Dictation for the chat composer: hold the microphone, speak, stop, and the
-/// text lands in the field for the user to edit. It never sends the message —
-/// speaking is a way of typing here, not a way of submitting.
+import '../api/worker_http.dart';
+
+/// Dictation for the chat composer: tap the microphone, speak, tap again, and
+/// the text lands in the field for the user to edit. It never sends the message
+/// — speaking is a way of typing here, not a way of submitting.
 ///
 /// The audio is one short buffer rather than a live stream, so it takes the
 /// asynchronous path: the Worker's batch transcription endpoint, which selects
@@ -57,6 +59,8 @@ final class DictationUnavailable implements Exception {
 
 const int _dictationSampleRateHz = 16000;
 const Duration _maximumDictation = Duration(minutes: 5);
+const Duration _defaultInterimTranscribeAfter = Duration(seconds: 4);
+const int _interimMinBytes = _dictationSampleRateHz * 2 * 2;
 
 /// Wraps raw 16-bit little-endian mono PCM in a WAV container, which is what
 /// the transcription endpoint accepts and what the model is handed.
@@ -99,6 +103,11 @@ double dictationLevel(Uint8List bytes) {
   return math.min(1.0, math.sqrt(sum / samples) * 4);
 }
 
+Duration _pcmDuration(Uint8List pcm) {
+  final seconds = pcm.length / (_dictationSampleRateHz * 2);
+  return Duration(milliseconds: math.max(1, (seconds * 1000).round()));
+}
+
 final class ComposerDictation extends ChangeNotifier {
   ComposerDictation({
     required VoiceNoteTranscriber transcribe,
@@ -106,25 +115,36 @@ final class ComposerDictation extends ChangeNotifier {
     Future<bool> Function()? permissionCheck,
     Future<Stream<Uint8List>> Function()? startAudio,
     Future<void> Function()? stopAudio,
+    Duration interimTranscribeAfter = _defaultInterimTranscribeAfter,
   }) : _transcribe = transcribe,
        _recorder = recorder,
        _permissionCheck = permissionCheck,
        _startAudio = startAudio,
-       _stopAudio = stopAudio;
+       _stopAudio = stopAudio,
+       _interimTranscribeAfter = interimTranscribeAfter;
 
   final VoiceNoteTranscriber _transcribe;
   final Future<bool> Function()? _permissionCheck;
   final Future<Stream<Uint8List>> Function()? _startAudio;
   final Future<void> Function()? _stopAudio;
+  final Duration _interimTranscribeAfter;
   AudioRecorder? _recorder;
 
   final _captured = BytesBuilder(copy: false);
   StreamSubscription<Uint8List>? _audio;
   DictationState _state = DictationState.idle;
   String? _message;
+  DateTime? _recordingStartedAt;
+  bool _interimRequested = false;
+  Future<void>? _interimTranscribe;
 
   /// Loudness of the most recent audio block, for the recording mark.
   final level = ValueNotifier<double>(0);
+
+  /// Best-effort partial transcript while recording or waiting on the final
+  /// pass. The batch endpoint does not stream, so this is filled from one
+  /// interim upload once enough audio has accumulated.
+  final partialTranscript = ValueNotifier<String>('');
 
   DictationState get state => _state;
 
@@ -146,6 +166,10 @@ final class ComposerDictation extends ChangeNotifier {
   Future<void> start() async {
     if (busy) return;
     _captured.clear();
+    partialTranscript.value = '';
+    _recordingStartedAt = null;
+    _interimRequested = false;
+    _interimTranscribe = null;
     final permitted = await _hasPermission();
     if (!permitted) {
       _moveTo(
@@ -174,6 +198,7 @@ final class ComposerDictation extends ChangeNotifier {
       return;
     }
     level.value = 0;
+    _recordingStartedAt = DateTime.now();
     _moveTo(DictationState.recording);
   }
 
@@ -197,6 +222,43 @@ final class ComposerDictation extends ChangeNotifier {
     }
     _captured.add(bytes);
     level.value = dictationLevel(bytes);
+    _maybeRequestInterimTranscript();
+  }
+
+  void _maybeRequestInterimTranscript() {
+    if (_interimRequested || _interimTranscribe != null) return;
+    final startedAt = _recordingStartedAt;
+    if (startedAt == null) return;
+    if (DateTime.now().difference(startedAt) < _interimTranscribeAfter) return;
+    if (_captured.length < _interimMinBytes) return;
+    _interimRequested = true;
+    _interimTranscribe = _runInterimTranscript();
+  }
+
+  Future<void> _runInterimTranscript() async {
+    if (_state != DictationState.recording) return;
+    final pcm = Uint8List.fromList(_captured.toBytes());
+    if (pcm.length < _interimMinBytes) return;
+    try {
+      final text = await _transcribe(wavFromPcm16(pcm), _pcmDuration(pcm));
+      if (_state != DictationState.recording) return;
+      final trimmed = text.trim();
+      if (trimmed.isNotEmpty) partialTranscript.value = trimmed;
+    } on DictationUnavailable catch (error) {
+      if (_state == DictationState.recording) {
+        _moveTo(DictationState.unavailable, error.message);
+        await _abandon(clearPartial: false);
+      }
+    } on WorkerAuthenticationException catch (error) {
+      if (_state == DictationState.recording) {
+        _moveTo(DictationState.failed, error.message);
+        await _abandon(clearPartial: false);
+      }
+    } catch (_) {
+      // Interim failure is non-fatal; the final pass on stop still runs.
+    } finally {
+      _interimTranscribe = null;
+    }
   }
 
   /// Stops recording and returns the transcript, or null when there is nothing
@@ -206,23 +268,48 @@ final class ComposerDictation extends ChangeNotifier {
     _moveTo(DictationState.transcribing);
     level.value = 0;
     await _stopCapture();
+    final interim = _interimTranscribe;
+    if (interim != null) {
+      try {
+        await interim;
+      } catch (_) {}
+    }
     final pcm = _captured.takeBytes();
     if (pcm.isEmpty) {
+      partialTranscript.value = '';
       _moveTo(DictationState.idle);
       return null;
     }
-    final seconds = pcm.length / (_dictationSampleRateHz * 2);
     try {
-      final text = await _transcribe(
-        wavFromPcm16(pcm),
-        Duration(milliseconds: math.max(1, (seconds * 1000).round())),
-      );
+      final text = await _transcribe(wavFromPcm16(pcm), _pcmDuration(pcm));
       _moveTo(DictationState.idle);
-      return text.trim().isEmpty ? null : text.trim();
+      final trimmed = text.trim();
+      if (trimmed.isNotEmpty) {
+        partialTranscript.value = '';
+        return trimmed;
+      }
+      final partial = partialTranscript.value.trim();
+      partialTranscript.value = '';
+      return partial.isEmpty ? null : partial;
     } on DictationUnavailable catch (error) {
+      partialTranscript.value = '';
       _moveTo(DictationState.unavailable, error.message);
       return null;
+    } on WorkerAuthenticationException catch (error) {
+      partialTranscript.value = '';
+      _moveTo(DictationState.failed, error.message);
+      return null;
+    } on StateError catch (error) {
+      partialTranscript.value = '';
+      _moveTo(DictationState.failed, error.message);
+      return null;
     } catch (_) {
+      final partial = partialTranscript.value.trim();
+      partialTranscript.value = '';
+      if (partial.isNotEmpty) {
+        _moveTo(DictationState.idle);
+        return partial;
+      }
       _moveTo(DictationState.failed, 'That did not transcribe. Try again.');
       return null;
     }
@@ -234,10 +321,14 @@ final class ComposerDictation extends ChangeNotifier {
     await _abandon();
   }
 
-  Future<void> _abandon() async {
+  Future<void> _abandon({bool clearPartial = true}) async {
     await _stopCapture();
     _captured.clear();
     level.value = 0;
+    _recordingStartedAt = null;
+    _interimRequested = false;
+    _interimTranscribe = null;
+    if (clearPartial) partialTranscript.value = '';
     _moveTo(DictationState.idle);
   }
 
@@ -252,6 +343,7 @@ final class ComposerDictation extends ChangeNotifier {
   /// Clears an explained state once the user has seen it.
   void acknowledge() {
     if (_state == DictationState.idle || busy) return;
+    partialTranscript.value = '';
     _moveTo(DictationState.idle);
   }
 
@@ -260,6 +352,7 @@ final class ComposerDictation extends ChangeNotifier {
     unawaited(_audio?.cancel());
     unawaited(_recorder?.dispose());
     level.dispose();
+    partialTranscript.dispose();
     super.dispose();
   }
 }
@@ -276,16 +369,24 @@ VoiceNoteTranscriber workerVoiceNoteTranscriber(
   String path = '/api/v1/speech/transcriptions',
 }) {
   return (Uint8List wav, Duration length) async {
-    final response = await send(
-      method: 'POST',
-      path: path,
-      body: {
-        'clientMessageId': 'dictation:${DateTime.now().microsecondsSinceEpoch}',
-        'format': 'wav',
-        'durationSeconds': math.max(1, length.inSeconds),
-        'audio': base64Encode(wav),
-      },
-    );
+    final ({int statusCode, Object? body}) response;
+    try {
+      response = await send(
+        method: 'POST',
+        path: path,
+        body: {
+          'clientMessageId':
+              'dictation:${DateTime.now().microsecondsSinceEpoch}',
+          'format': 'wav',
+          'durationSeconds': math.max(1, length.inMilliseconds / 1000).ceil(),
+          'audio': base64Encode(wav),
+        },
+      );
+    } on WorkerAuthenticationException catch (error) {
+      throw error;
+    } on WorkerResponseException catch (error) {
+      throw StateError(error.message);
+    }
     final body = response.body;
     final error = body is Map<String, Object?> && body['error'] is String
         ? body['error']! as String
@@ -300,6 +401,9 @@ VoiceNoteTranscriber workerVoiceNoteTranscriber(
       throw DictationUnavailable(
         error ?? 'Dictation is unavailable on this account.',
       );
+    }
+    if (response.statusCode == 401) {
+      throw const WorkerAuthenticationException('Sign in to dictate.');
     }
     throw StateError(error ?? 'Transcription failed (${response.statusCode})');
   };
