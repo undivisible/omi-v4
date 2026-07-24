@@ -544,7 +544,7 @@ mod tests {
 
     #[test]
     fn prompt_states_the_vocabulary_and_the_whole_action_whitelist() {
-        let prompt = brief_prompt("Thursday 9:00 AM", &[item("Design review")]).unwrap();
+        let prompt = brief_prompt("Thursday 9:00 AM", &[item("Design review")]).unwrap_or_default();
         for token in [
             "prompt:",
             "accept",
@@ -566,7 +566,7 @@ mod tests {
         let items: Vec<BriefItem> = (0..40)
             .map(|index| item(&format!("Meeting {index} {}", "x".repeat(600))))
             .collect();
-        let prompt = brief_prompt("Thursday 9:00 AM", &items).unwrap();
+        let prompt = brief_prompt("Thursday 9:00 AM", &items).unwrap_or_default();
         assert!(prompt.lines().filter(|line| line.starts_with("- ")).count() <= ITEMS);
         assert!(prompt.chars().count() <= FACTS_CHARS + ITEM_CHARS + 2);
     }

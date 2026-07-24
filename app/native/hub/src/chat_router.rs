@@ -104,6 +104,7 @@ impl ChatRouter {
     }
 
     /// The model slug the online router picks for `prompt`.
+    #[allow(dead_code)]
     pub(crate) fn model_for_prompt(
         &self,
         prompt: &str,

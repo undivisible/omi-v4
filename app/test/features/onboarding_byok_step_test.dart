@@ -2,7 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:omi/api/byok_client.dart';
 import 'package:omi/features/onboarding/byok_step.dart';
+import 'package:omi/native/generated/signals/signals.dart'
+    show AssistantProvider;
 import 'package:omi/providers/provider_credentials.dart';
+import 'package:omi/providers/provider_models.dart';
 
 // A worker stand-in. It answers with server-shaped payloads and records what
 // the step asked for, so the test can assert the step never sends a price.
@@ -208,5 +211,39 @@ void main() {
     );
 
     expect(find.byType(AnimatedSwitcher), findsNothing);
+  });
+
+  testWidgets('the model field is seeded from the selected provider', (
+    tester,
+  ) async {
+    final connected = <ProviderCredential>[];
+    await tester.pumpWidget(
+      _host(
+        OnboardingByokStep(
+          client: null,
+          onConnect: (credential) async => connected.add(credential),
+          onFinish: () {},
+        ),
+      ),
+    );
+
+    expect(
+      find.text(defaultBalancedModel[AssistantProvider.openAi]!),
+      findsOneWidget,
+    );
+
+    await tester.tap(find.byKey(const Key('byok_provider')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text(AssistantProvider.anthropic.name).last);
+    await tester.pumpAndSettle();
+
+    await tester.enterText(find.byKey(const Key('byok_key')), 'sk-test');
+    await tester.tap(find.byKey(const Key('byok_connect')));
+    await tester.pumpAndSettle();
+
+    expect(
+      connected.single.model,
+      defaultBalancedModel[AssistantProvider.anthropic],
+    );
   });
 }

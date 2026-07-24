@@ -3,10 +3,12 @@ use crate::approval::{
     PENDING_PROPOSAL_CAPACITY, ProposalRegistration, TERMINAL_PROPOSAL_CAPACITY,
 };
 use crate::approval::{ProposalDecisionError, ProposalRegistry, ProposalStatus, unix_time_ms};
+use crate::byok_tier::ByokProvider;
 use crate::computer_use::{
     BoundComputerUseAction, ComputerUseError, ExecutionOutcome, PreparedComputerUseAction,
     available as computer_use_available, capabilities as computer_use_capabilities,
 };
+use crate::model_tier::{Capability, ModelTier};
 use crate::signals::{
     ActionProposal, ActionRisk, ApprovalDecision, ApprovalDecisionAcknowledgement, AssistantDelta,
     AssistantProvider as ProviderKind, BriefComposed, CaptureSource, ClientCommand, Command,
@@ -164,8 +166,16 @@ trait AssistantProvider: Send + Sync {
         &self,
         request_id: String,
         text: String,
+        tier: ModelTier,
         cancellation: CancellationToken,
     ) -> mpsc::Receiver<Result<AssistantProviderEvent, String>>;
+
+    /// The model id this provider would dispatch `tier` to, so the tier the
+    /// router picked and the model the user is told about cannot drift apart.
+    /// Providers with no configuration of their own report the managed slug.
+    fn model_for_tier(&self, tier: ModelTier) -> String {
+        crate::model_tier::model_for_tier_env(tier)
+    }
 }
 
 struct UnavailableAssistantProvider {
@@ -177,6 +187,7 @@ impl AssistantProvider for UnavailableAssistantProvider {
         &self,
         _request_id: String,
         _text: String,
+        _tier: ModelTier,
         _cancellation: CancellationToken,
     ) -> mpsc::Receiver<Result<AssistantProviderEvent, String>> {
         let (sender, receiver) = mpsc::channel(1);
@@ -204,6 +215,35 @@ struct AssistantProviderConfig {
     model: String,
     credential: String,
     endpoint: Option<String>,
+    /// Per-tier model overrides for users who want to name every tier
+    /// themselves. Onboarding never fills this — it collects one model, which
+    /// seeds the balanced tier — so an override arrives from configuration
+    /// (`OMI_AI_MODEL_SMART` and friends) rather than from the first-run flow.
+    tier_overrides: Vec<(ModelTier, String)>,
+}
+
+/// The five chat-facing tiers a BYOK provider is expected to cover. Transcribe
+/// and speak are server-side workloads dispatched by the worker, never by a
+/// client holding the user's own key.
+const BYOK_CHAT_TIERS: &[ModelTier] = &[
+    ModelTier::Speed,
+    ModelTier::Balanced,
+    ModelTier::Smart,
+    ModelTier::Multimodal,
+    ModelTier::Search,
+];
+
+/// The per-tier override variable for a chat tier, `None` for the tiers a BYOK
+/// client never dispatches.
+fn tier_override_var(tier: ModelTier) -> Option<&'static str> {
+    match tier {
+        ModelTier::Speed => Some("OMI_AI_MODEL_SPEED"),
+        ModelTier::Balanced => Some("OMI_AI_MODEL_BALANCED"),
+        ModelTier::Smart => Some("OMI_AI_MODEL_SMART"),
+        ModelTier::Multimodal => Some("OMI_AI_MODEL_MULTIMODAL"),
+        ModelTier::Search => Some("OMI_AI_MODEL_SEARCH"),
+        ModelTier::Transcribe | ModelTier::Speak => None,
+    }
 }
 
 #[derive(Clone)]
@@ -258,6 +298,7 @@ impl AssistantProviderConfig {
             model,
             credential,
             endpoint,
+            tier_overrides: Vec::new(),
         })
     }
 
@@ -293,12 +334,86 @@ impl AssistantProviderConfig {
             }
             _ => None,
         };
+        let tier_overrides = BYOK_CHAT_TIERS
+            .iter()
+            .filter_map(|tier| {
+                let named = value(tier_override_var(*tier)?)?;
+                let named = named.trim();
+                (!named.is_empty()).then(|| (*tier, named.to_owned()))
+            })
+            .collect();
         Ok(Some(Self {
             kind,
             model,
             credential,
             endpoint,
+            tier_overrides,
         }))
+    }
+
+    /// The BYOK provider whose catalogue backs this configuration, `None` when
+    /// there is no catalogue to consult.
+    fn byok_provider(&self) -> Option<ByokProvider> {
+        match self.kind {
+            AssistantProviderKind::OpenAi => Some(ByokProvider::OpenAi),
+            AssistantProviderKind::Anthropic => Some(ByokProvider::Anthropic),
+            AssistantProviderKind::Gemini => Some(ByokProvider::Gemini),
+            AssistantProviderKind::Xai => Some(ByokProvider::Xai),
+            AssistantProviderKind::Compatible | AssistantProviderKind::Worker => None,
+        }
+    }
+
+    /// Resolves a workload tier to a model id against this provider.
+    ///
+    /// An explicit per-tier override wins; the single configured model owns the
+    /// balanced tier, because that is the one the user typed; everything else
+    /// comes from the provider's own default table. A `compatible` endpoint has
+    /// no table, so it keeps the single configured model for every tier — an
+    /// arbitrary endpoint's catalogue is unknowable from here.
+    fn model_for_tier(&self, tier: ModelTier) -> String {
+        if let Some((_, model)) = self
+            .tier_overrides
+            .iter()
+            .find(|(candidate, _)| *candidate == tier)
+        {
+            return model.clone();
+        }
+        if tier == ModelTier::Balanced {
+            return self.model.clone();
+        }
+        self.byok_provider()
+            .and_then(|provider| provider.default_model(tier))
+            .map_or_else(|| self.model.clone(), str::to_owned)
+    }
+
+    /// Resolves a tier and refuses the result when the model cannot carry what
+    /// the workload needs, so an override pointing the multimodal tier at a
+    /// text-only model fails loudly instead of answering about an image it
+    /// never received.
+    fn model_for_capability(
+        &self,
+        tier: ModelTier,
+        required: &[Capability],
+    ) -> Result<String, String> {
+        let model = self.model_for_tier(tier);
+        // A `compatible` endpoint's model is opaque: nothing has verified it,
+        // and refusing every non-text request there would break the one
+        // provider whose single-model behaviour has to keep working.
+        if self.byok_provider().is_none() {
+            return Ok(model);
+        }
+        let capabilities = crate::byok_tier::capabilities_of(&model);
+        let missing: Vec<_> = required
+            .iter()
+            .filter(|capability| !capabilities.contains(capability))
+            .collect();
+        if missing.is_empty() {
+            Ok(model)
+        } else {
+            Err(format!(
+                "model {model} (tier {tier:?}) lacks required capability: {missing:?}"
+            ))
+        }
     }
 }
 
@@ -593,15 +708,37 @@ async fn bind_computer_use_action(
 }
 
 impl AssistantProvider for RsAiAssistantProvider {
+    fn model_for_tier(&self, tier: ModelTier) -> String {
+        self.config.model_for_tier(tier)
+    }
+
     fn dispatch(
         &self,
         request_id: String,
         text: String,
+        tier: ModelTier,
         cancellation: CancellationToken,
     ) -> mpsc::Receiver<Result<AssistantProviderEvent, String>> {
         let (sender, receiver) = mpsc::channel(COMMAND_QUEUE_CAPACITY);
         let config = self.config.clone();
         let computer_use_enabled = self.computer_use_enabled;
+        // The multimodal tier exists to read pictures; a configuration that
+        // routes it to a model which cannot is a misconfiguration, not a
+        // request to answer anyway.
+        let required: &[Capability] = if tier == ModelTier::Multimodal {
+            &[Capability::Text, Capability::ImageIn]
+        } else {
+            &[Capability::Text]
+        };
+        let model = match config.model_for_capability(tier, required) {
+            Ok(model) => model,
+            Err(message) => {
+                tokio::spawn(async move {
+                    let _ = sender.send(Err(message)).await;
+                });
+                return receiver;
+            }
+        };
         tokio::spawn(async move {
             if let Some(endpoint) = config.endpoint.as_deref() {
                 let preflight = tokio::select! {
@@ -622,7 +759,7 @@ impl AssistantProvider for RsAiAssistantProvider {
                     rs_ai::compatible(config.endpoint.unwrap_or_default())
                 }
             }
-            .model(config.model);
+            .model(model);
             let client = base.api_key(config.credential);
             let computer_tools_active = computer_use_enabled && computer_use_available();
             let client = if computer_tools_active {
@@ -775,9 +912,13 @@ fn production_assistant_config() -> Result<Option<AssistantProviderConfig>, Stri
     Ok(
         crate::dev_gemini::api_key().map(|key| AssistantProviderConfig {
             kind: AssistantProviderKind::Gemini,
-            model: crate::model_tier::model_for_tier_env(crate::model_tier::ModelTier::Speed),
+            // The dev fallback talks to the Gemini API directly, so it seeds
+            // the balanced tier with a Gemini id rather than the managed
+            // table's OpenRouter slug, which that API would reject.
+            model: ByokProvider::Gemini.default_balanced_model().to_owned(),
             credential: key.0,
             endpoint: None,
+            tier_overrides: Vec::new(),
         }),
     )
 }
@@ -815,10 +956,11 @@ async fn generate_once(
     provider: &Arc<dyn AssistantProvider>,
     label: &str,
     prompt: &str,
+    tier: ModelTier,
     cancellation: &CancellationToken,
 ) -> Option<String> {
     let request_id = format!("{label}-{}", unix_time_ms());
-    let mut events = provider.dispatch(request_id, prompt.to_owned(), cancellation.clone());
+    let mut events = provider.dispatch(request_id, prompt.to_owned(), tier, cancellation.clone());
     let mut text = String::new();
     loop {
         match receive_provider_event(&mut events, cancellation, PROVIDER_EVENT_TIMEOUT).await {
@@ -847,9 +989,16 @@ async fn generate_once(
 fn note_generator(provider: Arc<dyn AssistantProvider>) -> crate::meeting::NoteGenerator {
     Arc::new(move |prompt, cancellation| {
         let provider = Arc::clone(&provider);
-        Box::pin(
-            async move { generate_once(&provider, "meeting-note", &prompt, &cancellation).await },
-        )
+        Box::pin(async move {
+            generate_once(
+                &provider,
+                "meeting-note",
+                &prompt,
+                ModelTier::Balanced,
+                &cancellation,
+            )
+            .await
+        })
     })
 }
 
@@ -862,17 +1011,21 @@ fn note_generator(provider: Arc<dyn AssistantProvider>) -> crate::meeting::NoteG
 /// Tool calls are disabled: the brief authors a document, it never acts.
 fn brief_generator(config: &AssistantProviderConfig) -> crate::brief::BriefGenerator {
     let provider: Arc<dyn AssistantProvider> = Arc::new(RsAiAssistantProvider {
-        config: AssistantProviderConfig {
-            model: crate::model_tier::model_for_tier_env(crate::model_tier::ModelTier::Speed),
-            ..config.clone()
-        },
+        config: config.clone(),
         computer_use_enabled: false,
     });
     Arc::new(move |prompt, cancellation| {
         let provider = Arc::clone(&provider);
-        Box::pin(
-            async move { generate_once(&provider, "currents-brief", &prompt, &cancellation).await },
-        )
+        Box::pin(async move {
+            generate_once(
+                &provider,
+                "currents-brief",
+                &prompt,
+                ModelTier::Speed,
+                &cancellation,
+            )
+            .await
+        })
     })
 }
 
@@ -1702,8 +1855,8 @@ async fn dispatch_assistant(
     // Going online: the model router picks the tier (and therefore the model
     // slug from `model_tier.rs`) for this prompt instead of a single fixed
     // model, and the choice is reported alongside the online marker.
-    let routed_model = crate::chat_router::ChatRouter::from_env()
-        .model_for_prompt(&text, |name| std::env::var(name).ok());
+    let routed_tier = crate::chat_router::ChatRouter::from_env().route_prompt(&text);
+    let routed_model = provider.model_for_tier(routed_tier);
     progress(
         request_id,
         CHAT_MODEL_TOOL,
@@ -1717,7 +1870,12 @@ async fn dispatch_assistant(
         None => prompt,
     };
     let mut reply = String::new();
-    let mut events = provider.dispatch(request_id.to_owned(), prompt, cancellation.clone());
+    let mut events = provider.dispatch(
+        request_id.to_owned(),
+        prompt,
+        routed_tier,
+        cancellation.clone(),
+    );
     loop {
         let next =
             match receive_provider_event(&mut events, cancellation, PROVIDER_EVENT_TIMEOUT).await {
@@ -4380,6 +4538,7 @@ mod tests {
             &self,
             _request_id: String,
             _text: String,
+            _tier: ModelTier,
             _cancellation: CancellationToken,
         ) -> mpsc::Receiver<Result<AssistantProviderEvent, String>> {
             let events = self
@@ -4409,6 +4568,7 @@ mod tests {
             &self,
             _request_id: String,
             text: String,
+            _tier: ModelTier,
             _cancellation: CancellationToken,
         ) -> mpsc::Receiver<Result<AssistantProviderEvent, String>> {
             *self
@@ -4438,6 +4598,7 @@ mod tests {
             &self,
             _request_id: String,
             _text: String,
+            _tier: ModelTier,
             _cancellation: CancellationToken,
         ) -> mpsc::Receiver<Result<AssistantProviderEvent, String>> {
             let state = Arc::clone(&self.state);
@@ -4699,6 +4860,98 @@ mod tests {
             .unwrap_or_else(|| panic!("insecure Worker endpoint is rejected"));
         assert!(!failure.contains("must-not-appear-in-errors"));
         assert!(failure.contains("HTTPS"));
+    }
+
+    fn byok_config(kind: AssistantProviderKind, model: &str) -> AssistantProviderConfig {
+        AssistantProviderConfig {
+            kind,
+            model: model.to_owned(),
+            credential: "secret".to_owned(),
+            endpoint: match kind {
+                AssistantProviderKind::Compatible | AssistantProviderKind::Worker => {
+                    Some("https://api.example.com/v1".to_owned())
+                }
+                _ => None,
+            },
+            tier_overrides: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn byok_tiers_resolve_to_the_provider_catalogue_with_the_typed_model_as_balanced() {
+        let config = byok_config(AssistantProviderKind::OpenAi, "gpt-5.6-terra");
+        assert_eq!(config.model_for_tier(ModelTier::Balanced), "gpt-5.6-terra");
+        assert_eq!(config.model_for_tier(ModelTier::Speed), "gpt-5.6-luna");
+        assert_eq!(config.model_for_tier(ModelTier::Smart), "gpt-5.6-sol");
+        // The one hosted search this client can reach: OpenAI's documented
+        // Chat-Completions search model, not a separate search provider.
+        assert_eq!(config.model_for_tier(ModelTier::Search), "gpt-5-search-api");
+        // The typed model owns balanced even when it is not the table default.
+        let custom = byok_config(AssistantProviderKind::Anthropic, "claude-opus-4-8");
+        assert_eq!(
+            custom.model_for_tier(ModelTier::Balanced),
+            "claude-opus-4-8"
+        );
+        assert_eq!(custom.model_for_tier(ModelTier::Speed), "claude-haiku-4-5");
+    }
+
+    #[test]
+    fn a_compatible_endpoint_keeps_its_single_model_for_every_tier() {
+        let config = byok_config(AssistantProviderKind::Compatible, "house-model");
+        for tier in BYOK_CHAT_TIERS {
+            assert_eq!(config.model_for_tier(*tier), "house-model");
+        }
+        // Nothing has verified an arbitrary endpoint's model, so refusing it
+        // would break the one provider whose single model must keep working.
+        assert_eq!(
+            config.model_for_capability(ModelTier::Multimodal, &[Capability::ImageIn]),
+            Ok("house-model".to_owned())
+        );
+    }
+
+    #[test]
+    fn per_tier_overrides_win_and_are_still_capability_checked() {
+        let mut config = byok_config(AssistantProviderKind::Xai, "grok-4.5");
+        config
+            .tier_overrides
+            .push((ModelTier::Smart, "grok-4.3".to_owned()));
+        assert_eq!(config.model_for_tier(ModelTier::Smart), "grok-4.3");
+        config
+            .tier_overrides
+            .push((ModelTier::Multimodal, "gpt-5-search-api".to_owned()));
+        assert!(
+            config
+                .model_for_capability(ModelTier::Multimodal, &[Capability::ImageIn])
+                .is_err()
+        );
+        // An id nothing has verified satisfies nothing, the same rule the
+        // managed table applies to its own overrides.
+        config
+            .tier_overrides
+            .push((ModelTier::Speed, "some/unknown-model".to_owned()));
+        assert!(
+            config
+                .model_for_capability(ModelTier::Speed, &[Capability::Text])
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn per_tier_overrides_are_read_from_configuration() {
+        let values = HashMap::from([
+            ("OMI_AI_PROVIDER", "openai"),
+            ("OMI_AI_MODEL", "gpt-5.6-terra"),
+            ("OMI_AI_API_KEY", "secret"),
+            ("OMI_AI_MODEL_SMART", "gpt-5.6-sol"),
+            ("OMI_AI_MODEL_SEARCH", "   "),
+        ]);
+        let config =
+            AssistantProviderConfig::from_values(|name| values.get(name).map(ToString::to_string))
+                .unwrap_or_default()
+                .unwrap_or_else(|| panic!("BYOK configuration parses"));
+        assert_eq!(config.model_for_tier(ModelTier::Smart), "gpt-5.6-sol");
+        // A blank override is no override; the table default still applies.
+        assert_eq!(config.model_for_tier(ModelTier::Search), "gpt-5-search-api");
     }
 
     #[test]

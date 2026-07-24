@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../api/byok_client.dart';
 import '../../native/generated/signals/signals.dart' show AssistantProvider;
 import '../../providers/provider_credentials.dart';
+import '../../providers/provider_models.dart';
 import '../../ui/omi_ui.dart';
 
 const _cream = Color(0xfffffcec);
@@ -79,6 +80,25 @@ class _OnboardingByokStepState extends State<OnboardingByokStep> {
   int? _priceCents;
   int _turnsRemaining = 0;
   final List<ByokNegotiationMessage> _transcript = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _model.text = defaultBalancedModel[_provider] ?? '';
+  }
+
+  /// Switching provider re-seeds the model field, but only while it still
+  /// holds a seeded value: a model the user typed themselves survives.
+  void _selectProvider(AssistantProvider? value) {
+    final next = value ?? _provider;
+    setState(() {
+      if (_model.text.trim().isEmpty ||
+          _model.text == defaultBalancedModel[_provider]) {
+        _model.text = defaultBalancedModel[next] ?? '';
+      }
+      _provider = next;
+    });
+  }
 
   @override
   void dispose() {
@@ -326,9 +346,7 @@ class _OnboardingByokStepState extends State<OnboardingByokStep> {
           if (value != AssistantProvider.worker)
             DropdownMenuItem(value: value, child: Text(value.name)),
       ],
-      onChanged: _busy
-          ? null
-          : (value) => setState(() => _provider = value ?? _provider),
+      onChanged: _busy ? null : _selectProvider,
     ),
     const SizedBox(height: 12),
     _field('Model', _model, key: const Key('byok_model')),
@@ -437,6 +455,16 @@ class _OnboardingByokStepState extends State<OnboardingByokStep> {
   }
 
   List<Widget> _settledPhase() => [
+    // Arriving here is the one moment in setup worth celebrating, so the mark
+    // scatters and re-forms once as the phase settles.
+    const Center(
+      child: OmiActivityOrb(
+        size: 40,
+        color: _cream,
+        state: OmiOrbState.success,
+      ),
+    ),
+    const SizedBox(height: 20),
     const Text('Settled.', style: _title, textAlign: TextAlign.center),
     const SizedBox(height: 16),
     _priceCard(),
@@ -458,13 +486,7 @@ class _OnboardingByokStepState extends State<OnboardingByokStep> {
         ...children,
         if (_busy) ...[
           const SizedBox(height: 16),
-          const Center(
-            child: SizedBox(
-              width: 18,
-              height: 18,
-              child: CircularProgressIndicator(strokeWidth: 2, color: _cream),
-            ),
-          ),
+          const Center(child: OmiActivityOrb.loading(size: 24, color: _cream)),
         ],
         if (_error != null) ...[
           const SizedBox(height: 16),
