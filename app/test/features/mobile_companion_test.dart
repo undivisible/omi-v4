@@ -455,7 +455,7 @@ void main() {
     await _settle(tester);
 
     expect(fixture.services.deviceAudio.active, isTrue);
-    expect(find.byKey(const Key('companion_capture_ring')), findsOneWidget);
+    expect(find.byKey(const Key('companion_capture_ring')), findsNothing);
     expect(
       tester.widget<Text>(find.byKey(const Key('companion_pendant_hint'))).data,
       'Tap to stop · Hold to disconnect',
@@ -502,9 +502,9 @@ void main() {
 
     expect(fixture.services.deviceAudio.active, isFalse);
     expect(captureEnabled.enabled, isFalse);
-    // The ring is the on-screen LED, so it stays lit while connected and only
-    // changes colour: idle blue here, recording red once capture is back.
-    expect(find.byKey(const Key('companion_capture_ring')), findsOneWidget);
+    // Nothing rings the resting pendant: the connect burst has decayed and the
+    // pendant's own light carries idle-versus-recording.
+    expect(find.byKey(const Key('companion_capture_ring')), findsNothing);
     expect(
       tester.widget<Text>(find.byKey(const Key('companion_pendant_hint'))).data,
       'Tap to start capturing · Hold to disconnect',
@@ -515,7 +515,7 @@ void main() {
 
     expect(fixture.services.deviceAudio.active, isTrue);
     expect(captureEnabled.enabled, isTrue);
-    expect(find.byKey(const Key('companion_capture_ring')), findsOneWidget);
+    expect(find.byKey(const Key('companion_capture_ring')), findsNothing);
     fixture.services.dispose();
   });
 
@@ -552,8 +552,8 @@ void main() {
     fixture.services.dispose();
   });
 
-  testWidgets('the on-screen pendant LED is red while capturing and blue '
-      'while idle', (tester) async {
+  testWidgets('the resting pendant carries no ring, only the connect burst '
+      'and the hint', (tester) async {
     await tester.binding.setSurfaceSize(const Size(800, 1600));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final fixture = await _mobileFixture('user-a');
@@ -572,22 +572,20 @@ void main() {
     await tester.tap(find.byKey(const Key('companion_pendant_tap')));
     await _settle(tester);
 
-    int ringRgb() {
-      final ring = tester.widget<Container>(
-        find.byKey(const Key('companion_capture_ring')),
-      );
-      final border = (ring.decoration! as BoxDecoration).border! as Border;
-      return border.top.color.toARGB32() & 0x00ffffff;
-    }
+    String hint() => tester
+        .widget<Text>(find.byKey(const Key('companion_pendant_hint')))
+        .data!;
 
     expect(fixture.services.deviceAudio.active, isTrue);
-    expect(ringRgb(), 0xd9564a);
+    expect(find.byKey(const Key('companion_capture_ring')), findsNothing);
+    expect(hint(), 'Tap to stop · Hold to disconnect');
 
     await tester.tap(find.byKey(const Key('companion_pendant_tap')));
     await _settle(tester);
 
     expect(fixture.services.deviceAudio.active, isFalse);
-    expect(ringRgb(), 0x4a8fdd);
+    expect(find.byKey(const Key('companion_capture_ring')), findsNothing);
+    expect(hint(), 'Tap to start capturing · Hold to disconnect');
     fixture.services.dispose();
   });
 
@@ -612,7 +610,7 @@ void main() {
     await _settle(tester);
 
     expect(fixture.services.deviceAudio.active, isFalse);
-    expect(find.byKey(const Key('companion_capture_ring')), findsOneWidget);
+    expect(find.byKey(const Key('companion_capture_ring')), findsNothing);
     fixture.services.dispose();
   });
 
@@ -639,7 +637,7 @@ void main() {
     await _settle(tester);
 
     expect(fixture.services.deviceAudio.active, isTrue);
-    expect(find.byKey(const Key('companion_capture_ring')), findsOneWidget);
+    expect(find.byKey(const Key('companion_capture_ring')), findsNothing);
     expect(
       tester.widget<Text>(find.byKey(const Key('companion_pendant_hint'))).data,
       'Tap to stop · Hold to disconnect',
@@ -703,7 +701,7 @@ void main() {
     // The LED cannot be driven, but the app-side capture state is still right.
     expect(led.ledWrites, isEmpty);
     expect(fixture.services.deviceAudio.active, isTrue);
-    expect(find.byKey(const Key('companion_capture_ring')), findsOneWidget);
+    expect(find.byKey(const Key('companion_capture_ring')), findsNothing);
     expect(
       find.byKey(const Key('companion_capture_led_unsupported')),
       findsOneWidget,

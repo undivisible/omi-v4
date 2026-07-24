@@ -1525,6 +1525,10 @@ class _FadingHero extends StatelessWidget {
   );
 }
 
+// The pendant asset is cropped to its alpha bounds (1103×1287), so its aspect
+// is the pendant's own and every hero measurement derives from it.
+const _pendantAspect = 1287 / 1103;
+
 class _PendantHero extends StatefulWidget {
   const _PendantHero({
     required this.deviceName,
@@ -1569,11 +1573,18 @@ class _PendantHeroState extends State<_PendantHero>
   // Bumped on every disconnected → connected edge so the burst glow is a new
   // widget each time; it fires exactly once per instance by design.
   int _connectEpoch = 0;
+  // Only a genuine connect edge mounts the burst, so an already-connected
+  // pendant painting for the first time stays quiet, and once the burst has
+  // decayed it unmounts and leaves nothing sitting around the pendant.
+  bool _bursting = false;
 
   @override
   void didUpdateWidget(covariant _PendantHero old) {
     super.didUpdateWidget(old);
-    if (widget.connected && !old.connected) _connectEpoch += 1;
+    if (widget.connected && !old.connected) {
+      _connectEpoch += 1;
+      _bursting = true;
+    }
   }
 
   @override
@@ -1597,13 +1608,19 @@ class _PendantHeroState extends State<_PendantHero>
   Widget build(BuildContext context) {
     final animationsDisabled = _animationsDisabled;
     final width = MediaQuery.sizeOf(context).width;
-    final pendantWidth = math.min(width * .82, 420.0);
+    // Tuned against the asset's real content bounds: the pendant fills the
+    // whole 1103×1287 image now, so the width is the pendant's width and the
+    // height follows from its aspect rather than from a square canvas that was
+    // a third empty.
+    final pendantWidth = math.min(width * .5, 250.0);
+    final pendantHeight = pendantWidth * _pendantAspect;
     final connected = widget.connected;
     final capturing = widget.capturing;
     final image = Image.asset(
       'assets/images/omi_pendant.png',
       key: const Key('companion_pendant_image'),
       width: pendantWidth,
+      height: pendantHeight,
       fit: BoxFit.fitWidth,
       excludeFromSemantics: true,
     );
@@ -1621,8 +1638,8 @@ class _PendantHeroState extends State<_PendantHero>
               child: image,
             ),
           );
-    final ledColor = capturing ? _stateRed : _stateBlue;
-    final glowSize = pendantWidth * 1.3;
+    final glowSize = pendantWidth * 2.2;
+    final glowTop = pendantHeight * .82 - glowSize / 2;
     final stateColor = connected
         ? _stateBlue
         : (widget.busy ? null : _stateRed);
@@ -1636,19 +1653,22 @@ class _PendantHeroState extends State<_PendantHero>
         // connection so a later reconnect fires a fresh one. Skipped under
         // reduced motion, where a burst that cannot animate would only leave a
         // static blob behind the pendant.
-        if (connected && !animationsDisabled)
+        if (connected && _bursting && !animationsDisabled)
           Positioned(
-            top: pendantWidth * .55 - glowSize / 2,
+            top: glowTop,
             child: OmiBurstGlow(
               key: ValueKey('companion_connect_burst_$_connectEpoch'),
-              progress: .72,
+              progress: .92,
               complete: true,
               baseDiameter: glowSize * .58,
               growth: 0,
+              onBurstDone: () {
+                if (mounted) setState(() => _bursting = false);
+              },
             ),
           ),
         Positioned(
-          top: pendantWidth * .55 - glowSize / 2,
+          top: glowTop,
           child: IgnorePointer(
             child: Container(
               key: const Key('companion_pendant_glow'),
@@ -1673,34 +1693,6 @@ class _PendantHeroState extends State<_PendantHero>
             ),
           ),
         ),
-        // The on-screen LED. With the switch gone this ring is what says
-        // whether audio is streaming, so it is loud about it: blue while the
-        // pendant sits idle, recording-red the moment capture is live.
-        if (connected)
-          Positioned(
-            top: pendantWidth * .1,
-            child: IgnorePointer(
-              child: Container(
-                key: const Key('companion_capture_ring'),
-                width: pendantWidth * .82,
-                height: pendantWidth * .82,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  border: Border.all(
-                    color: ledColor.withValues(alpha: capturing ? .7 : .38),
-                    width: capturing ? 3 : 2,
-                  ),
-                  boxShadow: [
-                    BoxShadow(
-                      color: ledColor.withValues(alpha: capturing ? .34 : .16),
-                      blurRadius: 26,
-                      spreadRadius: 2,
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
         TweenAnimationBuilder<double>(
           tween: Tween<double>(end: connected ? 1 : 0),
           duration: animationsDisabled
@@ -1752,7 +1744,7 @@ class _PendantHeroState extends State<_PendantHero>
               // all, and the pendant is now the only capture and reconnect
               // control, so its hit area must never collapse to nothing.
               child: ConstrainedBox(
-                constraints: BoxConstraints(minHeight: pendantWidth * .6),
+                constraints: BoxConstraints(minHeight: pendantHeight),
                 child: AnimatedScale(
                   scale: _pressed ? .96 : 1,
                   duration: animationsDisabled
@@ -1771,143 +1763,139 @@ class _PendantHeroState extends State<_PendantHero>
             ),
           ),
         ),
-        Transform.translate(
-          offset: Offset(0, -pendantWidth * .22),
-          child: Column(
-            children: [
-              Semantics(
-                header: true,
-                child: Text(
-                  'Omi',
-                  style: TextStyle(
-                    fontSize: 40,
-                    fontWeight: FontWeight.w700,
-                    letterSpacing: -1,
-                    color: _pageInk(context),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 3),
-              if (!connected) ...[
-                Semantics(
-                  label: 'Device status: ${widget.phaseLabel}',
-                  excludeSemantics: true,
-                  child: Text(
-                    widget.busy ? widget.phaseLabel : 'Omi disconnected',
-                    key: const Key('companion_disconnected_label'),
-                    style: TextStyle(
-                      fontSize: 15,
-                      color: widget.busy
-                          ? _pageInkSoft(context)
-                          : Color.lerp(_pageInkSoft(context), _stateRed, .6),
-                    ),
-                  ),
-                ),
-                // The busy state has to be visible somewhere now that the
-                // button that used to grey itself out is gone.
-                if (widget.busy)
-                  const Padding(
-                    padding: EdgeInsets.only(top: 8),
-                    child: SizedBox(
-                      key: Key('companion_reconnect_busy'),
-                      width: 16,
-                      height: 16,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    ),
-                  ),
-              ] else
-                Semantics(
-                  label: widget.deviceName == null
-                      ? 'Device status: ${widget.phaseLabel}'
-                      : '${widget.deviceName}: ${widget.phaseLabel}',
-                  excludeSemantics: true,
-                  child: Text(
-                    widget.deviceName == null
-                        ? widget.phaseLabel
-                        : '${widget.deviceName} · ${widget.phaseLabel}',
-                    style: TextStyle(
-                      fontSize: 15,
-                      color: Color.lerp(_pageInkSoft(context), _stateBlue, .55),
-                    ),
-                  ),
-                ),
-              const SizedBox(height: 5),
-              Text(
-                widget.hint,
-                key: const Key('companion_pendant_hint'),
-                textAlign: TextAlign.center,
+        // A translate here would leave its own height behind and open a gap
+        // under the last chip, so the copy is spaced by real layout instead.
+        SizedBox(height: pendantWidth * .06),
+        Column(
+          children: [
+            Semantics(
+              header: true,
+              child: Text(
+                'Omi',
                 style: TextStyle(
-                  fontSize: 12.5,
-                  color: capturing
-                      ? Color.lerp(_pageInkSoft(context), _stateBlue, .5)
-                      : _pageInkSoft(context),
+                  fontSize: 40,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: -1,
+                  color: _pageInk(context),
                 ),
               ),
-              if (widget.batteryLevel case final battery?)
-                Padding(
-                  padding: const EdgeInsets.only(top: 7),
-                  child: Semantics(
-                    label: 'Battery $battery percent',
-                    excludeSemantics: true,
-                    child: DecoratedBox(
-                      key: const Key('companion_battery_tile'),
-                      decoration: BoxDecoration(
-                        color: _surface,
-                        border: Border.all(color: _hairline),
-                        borderRadius: BorderRadius.circular(999),
+            ),
+            const SizedBox(height: 3),
+            if (!connected) ...[
+              Semantics(
+                label: 'Device status: ${widget.phaseLabel}',
+                excludeSemantics: true,
+                child: Text(
+                  widget.busy ? widget.phaseLabel : 'Omi disconnected',
+                  key: const Key('companion_disconnected_label'),
+                  style: TextStyle(
+                    fontSize: 15,
+                    color: widget.busy
+                        ? _pageInkSoft(context)
+                        : Color.lerp(_pageInkSoft(context), _stateRed, .6),
+                  ),
+                ),
+              ),
+              // The busy state has to be visible somewhere now that the
+              // button that used to grey itself out is gone.
+              if (widget.busy)
+                const Padding(
+                  padding: EdgeInsets.only(top: 8),
+                  child: SizedBox(
+                    key: Key('companion_reconnect_busy'),
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                ),
+            ] else
+              Semantics(
+                label: widget.deviceName == null
+                    ? 'Device status: ${widget.phaseLabel}'
+                    : '${widget.deviceName}: ${widget.phaseLabel}',
+                excludeSemantics: true,
+                child: Text(
+                  widget.deviceName == null
+                      ? widget.phaseLabel
+                      : '${widget.deviceName} · ${widget.phaseLabel}',
+                  style: TextStyle(
+                    fontSize: 15,
+                    color: Color.lerp(_pageInkSoft(context), _stateBlue, .55),
+                  ),
+                ),
+              ),
+            const SizedBox(height: 5),
+            Text(
+              widget.hint,
+              key: const Key('companion_pendant_hint'),
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 12.5,
+                color: capturing
+                    ? Color.lerp(_pageInkSoft(context), _stateBlue, .5)
+                    : _pageInkSoft(context),
+              ),
+            ),
+            if (widget.batteryLevel case final battery?)
+              Padding(
+                padding: const EdgeInsets.only(top: 7),
+                child: Semantics(
+                  label: 'Battery $battery percent',
+                  excludeSemantics: true,
+                  child: DecoratedBox(
+                    key: const Key('companion_battery_tile'),
+                    decoration: BoxDecoration(
+                      color: _surface,
+                      border: Border.all(color: _hairline),
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 6,
                       ),
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 14,
-                          vertical: 6,
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(
-                              battery > 20
-                                  ? Icons.battery_std_rounded
-                                  : Icons.battery_alert_rounded,
-                              size: 18,
-                              color: battery > 20 ? _teal : _coral,
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            battery > 20
+                                ? Icons.battery_std_rounded
+                                : Icons.battery_alert_rounded,
+                            size: 18,
+                            color: battery > 20 ? _teal : _coral,
+                          ),
+                          const SizedBox(width: 6),
+                          Text(
+                            '$battery%',
+                            style: const TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w600,
+                              color: _ink,
                             ),
-                            const SizedBox(width: 6),
-                            Text(
-                              '$battery%',
-                              style: const TextStyle(
-                                fontSize: 14,
-                                fontWeight: FontWeight.w600,
-                                color: _ink,
-                              ),
-                            ),
-                          ],
-                        ),
+                          ),
+                        ],
                       ),
                     ),
                   ),
                 ),
-              // Tight gap so the minutes chip sits directly under the battery
-              // percentage — the only stat shown on the main screen.
-              if (connected) ...[
-                const SizedBox(height: 5),
-                _MinutesChip(minutes: widget.capturedMinutes),
-              ],
-              if (connected && !widget.ledSupported) ...[
-                const SizedBox(height: 5),
-                const Text(
-                  'Your pendant light stays as it is: this firmware cannot be '
-                  'told about capture.',
-                  key: Key('companion_capture_led_unsupported'),
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontSize: 11.5,
-                    color: _inkSoft,
-                    height: 1.3,
-                  ),
-                ),
-              ],
+              ),
+            // Tight gap so the minutes chip sits directly under the battery
+            // percentage — the only stat shown on the main screen.
+            if (connected) ...[
+              const SizedBox(height: 5),
+              _MinutesChip(minutes: widget.capturedMinutes),
             ],
-          ),
+            if (connected && !widget.ledSupported) ...[
+              const SizedBox(height: 5),
+              const Text(
+                'Your pendant light stays as it is: this firmware cannot be '
+                'told about capture.',
+                key: Key('companion_capture_led_unsupported'),
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 11.5, color: _inkSoft, height: 1.3),
+              ),
+            ],
+          ],
         ),
       ],
     );
