@@ -28,6 +28,7 @@
 #include "features.h"
 #include "haptic.h"
 #include "lib/battery/battery.h"
+#include "omi_rust.h"
 #include "mic.h"
 #ifdef CONFIG_OMI_ENABLE_MONITOR
 #include "monitor.h"
@@ -1378,8 +1379,7 @@ static bool write_to_tx_queue(uint8_t *data, size_t size)
     }
 
     // Copy data (TODO: Avoid this copy)
-    tx_buffer_2[0] = size & 0xFF;
-    tx_buffer_2[1] = (size >> 8) & 0xFF;
+    omi_rust_ring_header((uint16_t) size, tx_buffer_2);
     memcpy(tx_buffer_2 + RING_BUFFER_HEADER_SIZE, data, size);
 
     // Write to ring buffer
@@ -1408,7 +1408,7 @@ static bool read_from_tx_queue()
     }
 
     // Adjust size
-    tx_buffer_size = tx_buffer[0] + (tx_buffer[1] << 8);
+    tx_buffer_size = omi_rust_ring_header_decode(tx_buffer);
 
     return true;
 }
@@ -1468,9 +1468,7 @@ static bool push_to_gatt(struct bt_conn *conn)
         k_sem_take(&audio_tx_sem, K_FOREVER);
 
         uint32_t id = packet_next_index++;
-        pusher_temp_data[0] = id & 0xFF;
-        pusher_temp_data[1] = (id >> 8) & 0xFF;
-        pusher_temp_data[2] = index;
+        omi_rust_packet_header((uint16_t) id, index, pusher_temp_data);
         memcpy(pusher_temp_data + NET_BUFFER_HEADER_SIZE, buffer + offset, packet_size);
 
         offset += packet_size;

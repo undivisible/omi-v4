@@ -10,6 +10,7 @@ extern "C" {
 
 int omi_rust_selftest(void);
 void omi_rust_ring_header(uint16_t len, uint8_t *out);
+uint16_t omi_rust_ring_header_decode(const uint8_t *bytes);
 void omi_rust_packet_header(uint16_t id, uint8_t index, uint8_t *out);
 
 uint8_t omi_rust_battery_raw_percentage(uint16_t battery_millivolt, bool is_charging);

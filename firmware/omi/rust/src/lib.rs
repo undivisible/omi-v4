@@ -19,10 +19,7 @@ fn panic(_info: &core::panic::PanicInfo) -> ! {
 
 #[no_mangle]
 pub extern "C" fn omi_rust_selftest() -> i32 {
-    framing::selftest()
-        + imu_gesture::selftest()
-        + button::selftest()
-        + feedback::selftest()
+    framing::selftest() + imu_gesture::selftest() + button::selftest() + feedback::selftest()
 }
 
 /// # Safety
@@ -38,6 +35,21 @@ pub unsafe extern "C" fn omi_rust_ring_header(len: u16, out: *mut u8) {
     // writable bytes; the null case is rejected above.
     unsafe {
         core::ptr::copy_nonoverlapping(header.as_ptr(), out, framing::RING_BUFFER_HEADER_SIZE);
+    }
+}
+
+/// # Safety
+///
+/// `bytes` must be null or point at at least `RING_BUFFER_HEADER_SIZE` readable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn omi_rust_ring_header_decode(bytes: *const u8) -> u16 {
+    if bytes.is_null() {
+        return 0;
+    }
+    // SAFETY: caller guarantees RING_BUFFER_HEADER_SIZE readable bytes.
+    unsafe {
+        let slice = core::slice::from_raw_parts(bytes, framing::RING_BUFFER_HEADER_SIZE);
+        framing::decode_ring_header(slice).unwrap_or(0)
     }
 }
 

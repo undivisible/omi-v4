@@ -396,28 +396,44 @@ error[E0425]: cannot find function `get_instance_raw` in module `super::super::s
     |    let device = super::super::super::get_instance_raw();
 ```
 
-The generated `get_instance()` for a `fixed-partitions` child assumes the
-partition's grandparent is a flash device with bindings. On the nRF5340 the
-chain is `nordic_ram_flash_controller_0` → `flash_sim_0` → `partitions` →
-`partition_0`, and the grandparent is a `zephyr,sim-flash` node with no
-generated accessor. It is a codegen bug in the module, not in this tree, and it
-does not appear with `CONFIG_FLASH=n` (which is why the module's own
-`hello_world` sample builds for `omi/nrf5340/cpuapp`).
+**Why:** `zephyr-lang-rust` maps flash devices by *compatible string* in
+[`dt-rust.yaml`](https://github.com/zephyrproject-rtos/zephyr-lang-rust/blob/main/dt-rust.yaml).
+When codegen emits `FlashPartition::get_instance()`, it walks to a parent flash
+controller and calls that parent's `get_instance_raw()`. If the parent's
+compatible is missing from the YAML (or the parent node is disabled / not
+augmented), the call is emitted anyway and Rust fails to compile. This is the
+same class of bug as upstream
+[zephyr-lang-rust#52](https://github.com/zephyrproject-rtos/zephyr-lang-rust/issues/52)
+("add the missing compatible to `dt-rust.yaml`"). On `omi/nrf5340/cpuapp` the
+partition chain goes through Partition Manager's RAM-flash / sim-flash path
+(`nordic_ram_flash_controller` → `flash_sim_0` → `partitions` → `partition_*`);
+the pinned module already lists `zephyr,sim-flash` and
+`nordic,nrf53-flash-controller`, but that specific parent walk still does not
+get a generated accessor. Upstream
+[PR #146](https://github.com/zephyrproject-rtos/zephyr-lang-rust/pull/146)
+hardens parent codegen for disabled ancestors; it is not in our pin yet.
 
-Nothing in `omi/rust/` needs Zephyr bindings, so the crate builds against `core`
-with its own `#[panic_handler]` forwarding to Zephyr's `k_panic()`. Restoring
-the dependency is a one-line change to `Cargo.toml` once the codegen is fixed
-upstream — until then, do not add it, because it breaks `omi-cv1`.
+It is a **codegen / mapping gap in the module**, not a Rust-on-Zephyr ban. It
+does not appear with `CONFIG_FLASH=n` (which is why the module's own
+`hello_world` sample builds for this board).
+
+Nothing in `omi/rust/` needs Zephyr bindings today, so the crate builds against
+`core` with its own `#[panic_handler]` forwarding to Zephyr's `k_panic()`.
+Restoring the dependency is a one-line `Cargo.toml` change once the partition
+parent walk is fixed or mapped — until then, do not add it, because it breaks
+`omi-cv1`. Pure logic still moves to Rust via `extern "C"` FFI; only driver I/O
+stays in C.
 
 ### Where this is going
 
-`omi/rust/src/framing.rs` is the seed for the tx path in
-`omi/src/lib/core/transport.c` — `write_to_tx_queue`, `read_from_tx_queue` and
-`push_to_gatt` are pure logic over a 2-byte little-endian ring-buffer length
-header and the 3-byte wire header (`id` little-endian `u16`, then `index`). The
-crate is host-testable (`cd omi/rust && cargo test`) precisely so it can later
-be shared with `app/native/hub` and stop the two ends of the wire format from
-drifting. That migration is **not** part of this change.
+`omi/rust/src/framing.rs` owns the tx wire headers. `transport.c` already
+calls `omi_rust_ring_header` / `omi_rust_ring_header_decode` /
+`omi_rust_packet_header` for `write_to_tx_queue`, `read_from_tx_queue` and
+`push_to_gatt`; the Zephyr ring buffer, GATT notify, and MTU throttling stay in
+C. The crate is host-testable (`cd omi/rust && cargo test`) so it can later be
+shared with `app/native/hub` and stop the two ends of the wire format from
+drifting. Moving the ring-buffer ownership itself into Rust still waits on
+either a small C-backed buffer API or the `zephyr` crate (see blocker above).
 
 ## Formatting
 
