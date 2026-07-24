@@ -1,5 +1,20 @@
 pub const RING_BUFFER_HEADER_SIZE: usize = 2;
 pub const NET_BUFFER_HEADER_SIZE: usize = 3;
+pub const ATT_NOTIFY_HEADER_SIZE: usize = 3;
+
+/// Max audio payload bytes that fit in one ATT notify for the given MTU.
+pub fn audio_chunk_size(mtu: u16, remaining: u32) -> u32 {
+    let overhead = (ATT_NOTIFY_HEADER_SIZE + NET_BUFFER_HEADER_SIZE) as u16;
+    if mtu <= overhead {
+        return 0;
+    }
+    let room = u32::from(mtu - overhead);
+    if room < remaining {
+        room
+    } else {
+        remaining
+    }
+}
 
 pub fn encode_ring_header(len: u16) -> [u8; RING_BUFFER_HEADER_SIZE] {
     [(len & 0xFF) as u8, (len >> 8) as u8]
@@ -54,6 +69,17 @@ pub fn selftest() -> i32 {
         failures += 1;
     }
 
+    if audio_chunk_size(23, 100) != 17 {
+        // 23 - 3 - 3 = 17
+        failures += 1;
+    }
+    if audio_chunk_size(23, 10) != 10 {
+        failures += 1;
+    }
+    if audio_chunk_size(5, 100) != 0 {
+        failures += 1;
+    }
+
     failures
 }
 
@@ -82,5 +108,12 @@ mod tests {
     #[test]
     fn selftest_passes() {
         assert_eq!(selftest(), 0);
+    }
+
+    #[test]
+    fn audio_chunk_respects_mtu_and_remaining() {
+        assert_eq!(audio_chunk_size(50, 1000), 44);
+        assert_eq!(audio_chunk_size(50, 10), 10);
+        assert_eq!(audio_chunk_size(6, 10), 0);
     }
 }

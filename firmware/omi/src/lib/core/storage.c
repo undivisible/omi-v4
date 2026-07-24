@@ -16,14 +16,10 @@
 #include "sd_card.h"
 #include "transport.h"
 #include "utils.h"
+#include "omi_rust.h"
 
 LOG_MODULE_REGISTER(storage, CONFIG_LOG_DEFAULT_LEVEL);
 
-#define CMD_STOP_SYNC 0x03
-#define CMD_RING_INFO 0x10
-#define CMD_RING_READ 0x11
-#define CMD_RING_ADVANCE 0x12
-#define CMD_RING_CLEAR 0x13
 
 #define STORAGE_DEFERRED 0xFF
 
@@ -31,10 +27,7 @@ LOG_MODULE_REGISTER(storage, CONFIG_LOG_DEFAULT_LEVEL);
 #define STORAGE_NOT_READY 9
 #define SEQ_OUT_OF_RANGE 10
 
-#define NOTIFY_ACK 0x01
-#define NOTIFY_INFO 0x02
 #define NOTIFY_DATA 0x03
-#define NOTIFY_DONE 0x04
 #define NOTIFY_READ_BEGIN 0x05
 
 #define STORAGE_IDLE_POLL_MS_OFFLINE 2000
@@ -302,50 +295,30 @@ static void storage_config_changed_handler(const struct bt_gatt_attr *attr, uint
 
 static uint8_t storage_status_from_error(int err, uint8_t fallback_status)
 {
-    switch (err) {
-    case -ERANGE:
-        return SEQ_OUT_OF_RANGE;
-    case -ETIMEDOUT:
-    case -EBUSY:
-    case -ECANCELED:
-    case -EAGAIN:
-        return STORAGE_NOT_READY;
-    default:
-        return fallback_status;
-    }
+    return omi_rust_storage_status_from_error(err, fallback_status);
 }
 
 static uint16_t get_ble_data_chunk_size(struct bt_conn *conn)
 {
-    uint16_t att_payload = 20;
+    uint16_t mtu = 0;
 
     if (conn) {
-        uint16_t mtu = bt_gatt_get_mtu(conn);
-        if (mtu > 3U) {
-            att_payload = mtu - 3U;
-        }
+        mtu = bt_gatt_get_mtu(conn);
     }
 
-    if (att_payload <= 1U) {
-        return 20;
-    }
-
-    return att_payload - 1U;
+    return omi_rust_storage_ble_chunk_size(mtu);
 }
 
 static int send_ack(struct bt_conn *conn, uint8_t status)
 {
-    control_notify_buf[0] = NOTIFY_ACK;
-    control_notify_buf[1] = status;
-    return storage_notify(conn, control_notify_buf, 2);
+    uint16_t len = omi_rust_storage_encode_ack(status, control_notify_buf);
+    return storage_notify(conn, control_notify_buf, len);
 }
 
 static int send_done(struct bt_conn *conn, uint8_t status, uint64_t next_seq)
 {
-    control_notify_buf[0] = NOTIFY_DONE;
-    control_notify_buf[1] = status;
-    sys_put_be64(next_seq, control_notify_buf + 2);
-    return storage_notify(conn, control_notify_buf, 10);
+    uint16_t len = omi_rust_storage_encode_done(status, next_seq, control_notify_buf);
+    return storage_notify(conn, control_notify_buf, len);
 }
 
 static int send_ring_info_response(struct bt_conn *conn)
@@ -358,13 +331,15 @@ static int send_ring_info_response(struct bt_conn *conn)
 
     storage_status_cache_set(&info);
 
-    control_notify_buf[0] = NOTIFY_INFO;
-    sys_put_be64(info.read_seq, control_notify_buf + 1);
-    sys_put_be64(info.write_seq, control_notify_buf + 9);
-    sys_put_be32(info.capacity_packets, control_notify_buf + 17);
-    sys_put_be64(info.dropped_packets, control_notify_buf + 21);
-    sys_put_be16(RAW_AUDIO_PACKET_BYTES, control_notify_buf + 29);
-    return storage_notify(conn, control_notify_buf, 31);
+    omi_rust_ring_info_fields_t fields = {
+        .read_seq = info.read_seq,
+        .write_seq = info.write_seq,
+        .capacity_packets = info.capacity_packets,
+        .dropped_packets = info.dropped_packets,
+        .packet_bytes = RAW_AUDIO_PACKET_BYTES,
+    };
+    uint16_t len = omi_rust_storage_encode_ring_info(&fields, control_notify_buf);
+    return storage_notify(conn, control_notify_buf, len);
 }
 
 static void reset_transfer_state(void)
@@ -622,50 +597,37 @@ static ssize_t storage_read_characteristic(struct bt_conn *conn,
 
 static uint8_t parse_storage_command(void *buf, uint16_t len)
 {
-    if (len < 1U) {
+    omi_rust_storage_parsed_t parsed;
+    uint8_t status = omi_rust_storage_parse_command(buf, len, &parsed);
+
+    if (status == INVALID_COMMAND || parsed.command == OMI_RUST_STORAGE_CMD_INVALID) {
         return INVALID_COMMAND;
     }
 
-    const uint8_t *bytes = buf;
-    const uint8_t command = bytes[0];
-
-    if (command == CMD_RING_INFO) {
+    switch (parsed.command) {
+    case OMI_RUST_STORAGE_CMD_RING_INFO:
         info_requested = 1;
-        return STORAGE_DEFERRED;
-    }
-
-    if (command == CMD_RING_READ) {
-        if (len != 9U && len != 13U) {
-            return INVALID_COMMAND;
-        }
-
-        pending_start_seq = sys_get_be64(bytes + 1);
-        pending_packet_count = (len == 13U) ? sys_get_be32(bytes + 9) : 0U;
+        break;
+    case OMI_RUST_STORAGE_CMD_RING_READ:
+        pending_start_seq = parsed.start_seq;
+        pending_packet_count = parsed.packet_count;
         read_request_pending = 1;
-        return STORAGE_DEFERRED;
-    }
-
-    if (command == CMD_RING_ADVANCE) {
-        if (len != 9U) {
-            return INVALID_COMMAND;
-        }
-
-        pending_advance_seq = sys_get_be64(bytes + 1);
+        break;
+    case OMI_RUST_STORAGE_CMD_RING_ADVANCE:
+        pending_advance_seq = parsed.advance_seq;
         advance_request_pending = 1;
-        return STORAGE_DEFERRED;
-    }
-
-    if (command == CMD_RING_CLEAR) {
+        break;
+    case OMI_RUST_STORAGE_CMD_RING_CLEAR:
         clear_requested = 1;
-        return STORAGE_DEFERRED;
-    }
-
-    if (command == CMD_STOP_SYNC) {
+        break;
+    case OMI_RUST_STORAGE_CMD_STOP_SYNC:
         stop_requested = 1;
-        return 0;
+        break;
+    default:
+        return INVALID_COMMAND;
     }
 
-    return INVALID_COMMAND;
+    return status;
 }
 
 static ssize_t storage_write_handler(struct bt_conn *conn,

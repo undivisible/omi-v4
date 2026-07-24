@@ -11,6 +11,7 @@
 #include <zephyr/sys/util.h>
 
 #include "lib/core/settings.h"
+#include "omi_rust.h"
 #include "rtc.h"
 
 LOG_MODULE_REGISTER(imu, CONFIG_LOG_DEFAULT_LEVEL);
@@ -295,14 +296,11 @@ int lsm6dsl_time_boot_adjust_rtc(void)
     }
     LOG_INF("boot adjust: ts_now=0x%06x", ts_now & 0x00FFFFFFu);
 
-    /* Unsigned subtraction handles wraparound modulo 2^32. */
-    /* Timestamp is 24-bit, so compute delta modulo 2^24 to handle wrap. */
+    uint64_t new_epoch_ms = omi_rust_imu_boot_epoch_ms(base_epoch_s, base_ts, ts_now);
     uint32_t delta_ticks = (ts_now - base_ts) & 0x00FFFFFFu;
-    uint64_t delta_us = (uint64_t) delta_ticks * LSM6DS_TIMESTAMP_TICK_US_6P4MS;
-    uint64_t delta_ms = delta_us / 1000ULL;
+    uint64_t delta_ms = new_epoch_ms - (base_epoch_s * 1000ULL);
     LOG_INF("boot adjust: delta_ticks=%u delta_ms=%llu", delta_ticks, delta_ms);
 
-    uint64_t new_epoch_ms = (base_epoch_s * 1000ULL) + delta_ms;
     if (new_epoch_ms == 0) {
         return 0;
     }

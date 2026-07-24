@@ -76,6 +76,48 @@ typedef struct {
 
 bool omi_rust_feedback_error_pattern(uint8_t kind, omi_rust_error_pattern_t *out);
 
+typedef enum {
+    OMI_RUST_STORAGE_CMD_INVALID = 0,
+    OMI_RUST_STORAGE_CMD_RING_INFO = 1,
+    OMI_RUST_STORAGE_CMD_RING_READ = 2,
+    OMI_RUST_STORAGE_CMD_RING_ADVANCE = 3,
+    OMI_RUST_STORAGE_CMD_RING_CLEAR = 4,
+    OMI_RUST_STORAGE_CMD_STOP_SYNC = 5,
+} omi_rust_storage_command_t;
+
+typedef struct {
+    omi_rust_storage_command_t command;
+    uint64_t start_seq;
+    uint32_t packet_count;
+    uint64_t advance_seq;
+} omi_rust_storage_parsed_t;
+
+typedef struct {
+    uint64_t read_seq;
+    uint64_t write_seq;
+    uint32_t capacity_packets;
+    uint64_t dropped_packets;
+    uint16_t packet_bytes;
+} omi_rust_ring_info_fields_t;
+
+uint8_t omi_rust_storage_parse_command(const uint8_t *buf, uint16_t len,
+                                       omi_rust_storage_parsed_t *out);
+uint8_t omi_rust_storage_status_from_error(int err, uint8_t fallback_status);
+uint16_t omi_rust_storage_ble_chunk_size(uint16_t mtu);
+uint16_t omi_rust_storage_encode_ack(uint8_t status, uint8_t *out);
+uint16_t omi_rust_storage_encode_done(uint8_t status, uint64_t next_seq, uint8_t *out);
+uint16_t omi_rust_storage_encode_ring_info(const omi_rust_ring_info_fields_t *info, uint8_t *out);
+
+uint32_t omi_rust_audio_chunk_size(uint16_t mtu, uint32_t remaining);
+
+uint64_t omi_rust_rtc_extrapolate_ms(uint64_t base_epoch_ms, int64_t base_uptime_ms,
+                                     int64_t now_uptime_ms);
+uint32_t omi_rust_rtc_seconds_clamped(uint64_t now_ms);
+uint64_t omi_rust_imu_boot_epoch_ms(uint64_t base_epoch_s, uint32_t base_ts, uint32_t ts_now);
+
+void omi_rust_user_event_encode(uint8_t code, uint8_t source, uint16_t seq, uint32_t epoch_s,
+                                uint8_t *out);
+
 #ifdef __cplusplus
 }
 #endif

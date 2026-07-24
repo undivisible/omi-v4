@@ -7,6 +7,9 @@ pub mod framing;
 pub mod haptic;
 pub mod imu_gesture;
 pub mod led;
+pub mod storage_proto;
+pub mod time;
+pub mod user_event;
 
 #[cfg(target_os = "none")]
 #[panic_handler]
@@ -27,6 +30,9 @@ pub extern "C" fn omi_rust_selftest() -> i32 {
         + haptic::selftest()
         + led::selftest()
         + feedback::selftest()
+        + storage_proto::selftest()
+        + time::selftest()
+        + user_event::selftest()
 }
 
 /// # Safety
@@ -73,6 +79,56 @@ pub unsafe extern "C" fn omi_rust_packet_header(id: u16, index: u8, out: *mut u8
     // writable bytes; the null case is rejected above.
     unsafe {
         core::ptr::copy_nonoverlapping(header.as_ptr(), out, framing::NET_BUFFER_HEADER_SIZE);
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn omi_rust_audio_chunk_size(mtu: u16, remaining: u32) -> u32 {
+    framing::audio_chunk_size(mtu, remaining)
+}
+
+#[no_mangle]
+pub extern "C" fn omi_rust_rtc_extrapolate_ms(
+    base_epoch_ms: u64,
+    base_uptime_ms: i64,
+    now_uptime_ms: i64,
+) -> u64 {
+    time::extrapolate_utc_ms(base_epoch_ms, base_uptime_ms, now_uptime_ms)
+}
+
+#[no_mangle]
+pub extern "C" fn omi_rust_rtc_seconds_clamped(now_ms: u64) -> u32 {
+    time::utc_seconds_clamped(now_ms)
+}
+
+#[no_mangle]
+pub extern "C" fn omi_rust_imu_boot_epoch_ms(base_epoch_s: u64, base_ts: u32, ts_now: u32) -> u64 {
+    time::imu_boot_epoch_ms(base_epoch_s, base_ts, ts_now)
+}
+
+/// # Safety
+///
+/// `out` must be null or point at `user_event::PAYLOAD_LEN` writable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn omi_rust_user_event_encode(
+    code: u8,
+    source: u8,
+    seq: u16,
+    epoch_s: u32,
+    out: *mut u8,
+) {
+    if out.is_null() {
+        return;
+    }
+    let encoded = user_event::encode(&user_event::Record {
+        code,
+        source,
+        seq,
+        epoch_s,
+    });
+    // SAFETY: caller guarantees PAYLOAD_LEN writable bytes.
+    unsafe {
+        core::ptr::copy_nonoverlapping(encoded.as_ptr(), out, user_event::PAYLOAD_LEN);
     }
 }
 
@@ -226,6 +282,145 @@ pub unsafe extern "C" fn omi_rust_feedback_error_pattern(
         };
     }
     true
+}
+
+#[repr(C)]
+pub struct OmiRustStorageParsed {
+    pub command: u8,
+    pub start_seq: u64,
+    pub packet_count: u32,
+    pub advance_seq: u64,
+}
+
+#[repr(C)]
+pub struct OmiRustRingInfoFields {
+    pub read_seq: u64,
+    pub write_seq: u64,
+    pub capacity_packets: u32,
+    pub dropped_packets: u64,
+    pub packet_bytes: u16,
+}
+
+/// Returns C-compatible status: `STORAGE_DEFERRED` (0xFF) for deferred commands,
+/// `INVALID_COMMAND` (6) for invalid input, or `0` for stop-sync.
+///
+/// # Safety
+///
+/// `buf` must be null or point at `len` readable bytes. `out` must be null or
+/// point at a writable `omi_rust_storage_parsed_t`.
+#[no_mangle]
+pub unsafe extern "C" fn omi_rust_storage_parse_command(
+    buf: *const u8,
+    len: u16,
+    out: *mut OmiRustStorageParsed,
+) -> u8 {
+    if buf.is_null() || out.is_null() || len == 0 {
+        return storage_proto::INVALID_COMMAND;
+    }
+    // SAFETY: caller guarantees `len` readable bytes at `buf`.
+    let slice = unsafe { core::slice::from_raw_parts(buf, len as usize) };
+    let (status, parsed) = storage_proto::parse_command(slice);
+    // SAFETY: caller guarantees writable `out`.
+    unsafe {
+        *out = OmiRustStorageParsed {
+            command: storage_command_to_u8(parsed.command),
+            start_seq: parsed.start_seq,
+            packet_count: parsed.packet_count,
+            advance_seq: parsed.advance_seq,
+        };
+    }
+    status
+}
+
+/// Map a negative Zephyr errno to a storage BLE status byte.
+#[no_mangle]
+pub extern "C" fn omi_rust_storage_status_from_error(err: i32, fallback_status: u8) -> u8 {
+    storage_proto::status_from_error(err, fallback_status)
+}
+
+/// ATT MTU-based bulk DATA chunk payload size, matching `get_ble_data_chunk_size()`.
+#[no_mangle]
+pub extern "C" fn omi_rust_storage_ble_chunk_size(mtu: u16) -> u16 {
+    storage_proto::ble_data_chunk_size(mtu)
+}
+
+/// # Safety
+///
+/// `out` must be null or point at at least `storage_proto::ACK_PAYLOAD_LEN` writable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn omi_rust_storage_encode_ack(status: u8, out: *mut u8) -> u16 {
+    if out.is_null() {
+        return 0;
+    }
+    let mut buf = [0u8; storage_proto::ACK_PAYLOAD_LEN];
+    let len = storage_proto::encode_ack(status, &mut buf);
+    // SAFETY: caller guarantees writable output buffer.
+    unsafe {
+        core::ptr::copy_nonoverlapping(buf.as_ptr(), out, len);
+    }
+    len as u16
+}
+
+/// # Safety
+///
+/// `out` must be null or point at at least `storage_proto::DONE_PAYLOAD_LEN` writable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn omi_rust_storage_encode_done(
+    status: u8,
+    next_seq: u64,
+    out: *mut u8,
+) -> u16 {
+    if out.is_null() {
+        return 0;
+    }
+    let mut buf = [0u8; storage_proto::DONE_PAYLOAD_LEN];
+    let len = storage_proto::encode_done(status, next_seq, &mut buf);
+    // SAFETY: caller guarantees writable output buffer.
+    unsafe {
+        core::ptr::copy_nonoverlapping(buf.as_ptr(), out, len);
+    }
+    len as u16
+}
+
+/// # Safety
+///
+/// `info` must be null or point at a readable `omi_rust_ring_info_fields_t`.
+/// `out` must be null or point at at least `storage_proto::RING_INFO_PAYLOAD_LEN` writable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn omi_rust_storage_encode_ring_info(
+    info: *const OmiRustRingInfoFields,
+    out: *mut u8,
+) -> u16 {
+    if info.is_null() || out.is_null() {
+        return 0;
+    }
+    // SAFETY: caller guarantees readable `info`.
+    let fields = unsafe { &*info };
+    let ring_info = storage_proto::RingInfoFields {
+        read_seq: fields.read_seq,
+        write_seq: fields.write_seq,
+        capacity_packets: fields.capacity_packets,
+        dropped_packets: fields.dropped_packets,
+        packet_bytes: fields.packet_bytes,
+    };
+    let mut buf = [0u8; storage_proto::RING_INFO_PAYLOAD_LEN];
+    let len = storage_proto::encode_ring_info(&ring_info, &mut buf);
+    // SAFETY: caller guarantees writable output buffer.
+    unsafe {
+        core::ptr::copy_nonoverlapping(buf.as_ptr(), out, len);
+    }
+    len as u16
+}
+
+fn storage_command_to_u8(command: storage_proto::StorageCommand) -> u8 {
+    match command {
+        storage_proto::StorageCommand::Invalid => 0,
+        storage_proto::StorageCommand::RingInfo => 1,
+        storage_proto::StorageCommand::RingRead => 2,
+        storage_proto::StorageCommand::RingAdvance => 3,
+        storage_proto::StorageCommand::RingClear => 4,
+        storage_proto::StorageCommand::StopSync => 5,
+    }
 }
 
 fn feedback_kind_from_u8(kind: u8) -> Option<feedback::ErrorKind> {

@@ -326,10 +326,7 @@ static K_MUTEX_DEFINE(user_event_lock);
 
 static void user_event_encode(const struct omi_user_event_record *rec, uint8_t *out)
 {
-    out[0] = rec->code;
-    out[1] = rec->source;
-    sys_put_le16(rec->seq, out + 2);
-    sys_put_le32(rec->epoch_s, out + 4);
+    omi_rust_user_event_encode(rec->code, rec->source, rec->seq, rec->epoch_s, out);
 }
 
 static struct bt_gatt_attr *user_event_value_attr(void);
@@ -1459,8 +1456,10 @@ static bool push_to_gatt(struct bt_conn *conn)
     const int max_retries = 3;
 
     while (offset < tx_buffer_size) {
-        uint32_t packet_size =
-            MIN(current_mtu - ATT_NOTIFY_HEADER_SIZE - NET_BUFFER_HEADER_SIZE, tx_buffer_size - offset);
+        uint32_t packet_size = omi_rust_audio_chunk_size(current_mtu, tx_buffer_size - offset);
+        if (packet_size == 0) {
+            return false;
+        }
 
         // Block until a throttle slot is available. This preserves every audio
         // packet while still guaranteeing AUDIO_TX_RESERVED_SLOTS remain free

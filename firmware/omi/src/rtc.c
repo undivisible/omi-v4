@@ -7,6 +7,7 @@
 #include "rtc.h"
 #include "lib/core/settings.h"
 #include "lib/core/sd_card.h"
+#include "omi_rust.h"
 
 LOG_MODULE_REGISTER(rtc, CONFIG_LOG_DEFAULT_LEVEL);
 
@@ -126,11 +127,8 @@ uint64_t rtc_get_utc_time_ms(void)
         return 0;
     }
     int64_t now_uptime_ms = k_uptime_get();
-    int64_t delta_ms = now_uptime_ms - base_uptime_ms;
-    if (delta_ms < 0) {
-        delta_ms = 0;
-    }
-    uint64_t now_ms = base_epoch_ms + (uint64_t)delta_ms;
+    uint64_t now_ms =
+        omi_rust_rtc_extrapolate_ms(base_epoch_ms, base_uptime_ms, now_uptime_ms);
     k_mutex_unlock(&rtc_lock);
     return now_ms;
 }
@@ -176,17 +174,7 @@ int rtc_set_utc_time_ms(uint64_t utc_epoch_ms)
 
 uint32_t get_utc_time(void)
 {
-    uint64_t now_ms = rtc_get_utc_time_ms();
-    if (now_ms == 0) {
-        return 0;
-    }
-
-    uint64_t now_s = now_ms / 1000ULL;
-    if (now_s > UINT32_MAX) {
-        return UINT32_MAX;
-    }
-
-    return (uint32_t)now_s;
+    return omi_rust_rtc_seconds_clamped(rtc_get_utc_time_ms());
 }
 
 void init_rtc(void)
