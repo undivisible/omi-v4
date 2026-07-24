@@ -12,7 +12,13 @@ command -v flutter >/dev/null 2>&1 || {
   exit 1
 }
 
-(cd "$app" && flutter build web --release --base-href=/hub/)
+# OMI_DEMO=1 builds the public demo: the same shell and the same widgets, but
+# booted against seeded in-process services (app/lib/demo/). It never signs in,
+# never reaches onboarding, and makes no network request of any kind. This is
+# the build the marketing site's "Try the hub" embed loads; the signed-in web
+# app is a different deployment and must not be built from here.
+(cd "$app" && flutter build web --release --base-href=/hub/ \
+  --dart-define=OMI_DEMO=1)
 
 rm -rf "$out"
 mkdir -p "$out"

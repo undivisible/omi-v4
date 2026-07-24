@@ -33,9 +33,16 @@ pub const XIAOMI_HOSTNAME: &str = "token-plan-sgp.xiaomimimo.com";
 // | smart      | hard reasoning                                            | xiaomi/mimo-v2.5-pro           | MiMo     |
 // | multimodal | vision / visual computer-use                              | google/gemini-3.6-flash         | Gemini   |
 // | search     | web-grounded answers (live search)                        | perplexity/sonar                | Perplexity |
+// | transcribe | server-side speech-to-text (no hub on the caller)         | google/gemini-3.5-flash-lite    | Gemini   |
+// | speak      | server-side text-to-speech                                | openai/gpt-audio-mini           | OpenAI   |
 //
 // The default ids are best-effort and may need correcting against the real
 // provider APIs; that is why they are env-overridable rather than hardcoded.
+//
+// Tiers say how much a workload is worth paying for. Capabilities say what a
+// model can carry, and a call site that needs audio or images resolves through
+// `model_for_capability` / `select_model_for` so an incapable model — table
+// default or env override — is refused rather than silently handed the input.
 
 /// SPEED tier default: latency-sensitive live insights and answer suggestions.
 pub const DEFAULT_SPEED_MODEL: &str = "inception/mercury-2";
@@ -47,6 +54,10 @@ pub const DEFAULT_SMART_MODEL: &str = "xiaomi/mimo-v2.5-pro";
 pub const DEFAULT_MULTIMODAL_MODEL: &str = "google/gemini-3.6-flash";
 /// SEARCH tier default: web-grounded answers via a live-search model.
 pub const DEFAULT_SEARCH_MODEL: &str = "perplexity/sonar";
+/// TRANSCRIBE tier default: server-side speech-to-text.
+pub const DEFAULT_TRANSCRIBE_MODEL: &str = "google/gemini-3.5-flash-lite";
+/// SPEAK tier default: server-side text-to-speech.
+pub const DEFAULT_SPEAK_MODEL: &str = "openai/gpt-audio-mini";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ModelTier {
@@ -55,6 +66,8 @@ pub enum ModelTier {
     Smart,
     Multimodal,
     Search,
+    Transcribe,
+    Speak,
 }
 
 impl ModelTier {
@@ -66,6 +79,21 @@ impl ModelTier {
             ModelTier::Smart => "OMI_MODEL_SMART",
             ModelTier::Multimodal => "OMI_MODEL_MULTIMODAL",
             ModelTier::Search => "OMI_MODEL_SEARCH",
+            ModelTier::Transcribe => "OMI_MODEL_TRANSCRIBE",
+            ModelTier::Speak => "OMI_MODEL_SPEAK",
+        }
+    }
+
+    /// The tier slug, used in the capability-error message.
+    pub fn slug(self) -> &'static str {
+        match self {
+            ModelTier::Speed => "speed",
+            ModelTier::Balanced => "balanced",
+            ModelTier::Smart => "smart",
+            ModelTier::Multimodal => "multimodal",
+            ModelTier::Search => "search",
+            ModelTier::Transcribe => "transcribe",
+            ModelTier::Speak => "speak",
         }
     }
 
@@ -77,8 +105,211 @@ impl ModelTier {
             ModelTier::Smart => DEFAULT_SMART_MODEL,
             ModelTier::Multimodal => DEFAULT_MULTIMODAL_MODEL,
             ModelTier::Search => DEFAULT_SEARCH_MODEL,
+            ModelTier::Transcribe => DEFAULT_TRANSCRIBE_MODEL,
+            ModelTier::Speak => DEFAULT_SPEAK_MODEL,
         }
     }
+}
+
+/// What a model can actually carry. A tier says how much a workload is worth
+/// paying for; a capability says whether the model can accept the request at
+/// all, which is the part a tier slug alone never encoded.
+///
+/// `Realtime` is deliberately declared by nothing in the built-in table: a
+/// bidirectional live conversation runs over Gemini Live (`voice_logic`), not
+/// over OpenRouter chat completions, so any caller asking the tier table for a
+/// realtime model is asking the wrong layer and is refused.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ModelCapability {
+    Text,
+    AudioIn,
+    AudioOut,
+    ImageIn,
+    Realtime,
+}
+
+impl ModelCapability {
+    pub fn slug(self) -> &'static str {
+        match self {
+            ModelCapability::Text => "text",
+            ModelCapability::AudioIn => "audioIn",
+            ModelCapability::AudioOut => "audioOut",
+            ModelCapability::ImageIn => "imageIn",
+            ModelCapability::Realtime => "realtime",
+        }
+    }
+
+    fn from_slug(value: &str) -> Option<Self> {
+        match value {
+            "text" => Some(ModelCapability::Text),
+            "audioIn" => Some(ModelCapability::AudioIn),
+            "audioOut" => Some(ModelCapability::AudioOut),
+            "imageIn" => Some(ModelCapability::ImageIn),
+            "realtime" => Some(ModelCapability::Realtime),
+            _ => None,
+        }
+    }
+}
+
+use ModelCapability::{AudioIn, AudioOut, ImageIn, Text};
+
+/// Capabilities per model id, checked against the live OpenRouter model list.
+/// A model that is not listed here has unknown capabilities and therefore
+/// satisfies nothing: an unverified id must never be assumed able to take
+/// audio.
+pub const MODEL_CAPABILITIES: &[(&str, &[ModelCapability])] = &[
+    // Cheapest audio-capable model on the list ($0.14/M prompt), which is why
+    // asynchronous voice notes route here rather than to the transcribe tier.
+    ("xiaomi/mimo-v2.5", &[Text, AudioIn]),
+    ("xiaomi/mimo-v2.5-pro", &[Text]),
+    ("inception/mercury-2", &[Text]),
+    ("perplexity/sonar", &[Text]),
+    ("google/gemini-3.6-flash", &[Text, AudioIn, ImageIn]),
+    ("google/gemini-3.5-flash-lite", &[Text, AudioIn]),
+    ("openai/gpt-audio-mini", &[Text, AudioOut]),
+];
+
+/// Asynchronous audio (voice notes on a channel, WAL uploads, API uploads)
+/// prefers the balanced model: it accepts audio input at $0.14/M, half the
+/// transcribe tier's price, and the transcribe tier remains the fallback when
+/// an override leaves balanced text-only.
+pub const ASYNC_AUDIO_TIER_PREFERENCE: &[ModelTier] = &[
+    ModelTier::Balanced,
+    ModelTier::Transcribe,
+    ModelTier::Multimodal,
+];
+
+/// An env override names a model the built-in table has never seen, so the
+/// override has to be able to declare what it can do: `OMI_MODEL_CAPABILITIES`
+/// is a JSON object of model id to capability list, merged over the built-in
+/// table. A malformed value declares nothing rather than throwing, so a typo
+/// degrades to "this model is unverified" and the capability check refuses it
+/// loudly at use.
+fn declared_capabilities(raw: Option<&str>) -> Option<Map<String, Value>> {
+    let raw = raw.map(str::trim).filter(|value| !value.is_empty())?;
+    let parsed: Value = serde_json::from_str(raw).ok()?;
+    parsed.as_object().cloned()
+}
+
+/// The capabilities of a model id, empty when nothing has verified it.
+pub fn capabilities_of(
+    value: impl Fn(&str) -> Option<String>,
+    model: &str,
+) -> Vec<ModelCapability> {
+    if let Some(declared) = declared_capabilities(value("OMI_MODEL_CAPABILITIES").as_deref()) {
+        // An entry present but not an array declares nothing for that model,
+        // and shadows the built-in table exactly as `?? ` does in TS.
+        if let Some(entry) = declared.get(model) {
+            return match entry.as_array() {
+                Some(list) => list
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .filter_map(ModelCapability::from_slug)
+                    .collect(),
+                None => Vec::new(),
+            };
+        }
+    }
+    MODEL_CAPABILITIES
+        .iter()
+        .find(|(id, _)| *id == model)
+        .map(|(_, caps)| caps.to_vec())
+        .unwrap_or_default()
+}
+
+pub fn model_supports(
+    value: impl Fn(&str) -> Option<String>,
+    model: &str,
+    required: &[ModelCapability],
+) -> bool {
+    let capabilities = capabilities_of(value, model);
+    required.iter().all(|need| capabilities.contains(need))
+}
+
+/// Raised when the model a tier resolves to cannot carry the request.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ModelCapabilityError {
+    pub tier: ModelTier,
+    pub model: String,
+    pub missing: Vec<ModelCapability>,
+}
+
+impl ModelCapabilityError {
+    pub fn message(&self) -> String {
+        let missing = self
+            .missing
+            .iter()
+            .map(|capability| capability.slug())
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!(
+            "Model {} (tier {}) lacks required capability: {missing}",
+            self.model,
+            self.tier.slug()
+        )
+    }
+}
+
+fn missing_capabilities(
+    value: &impl Fn(&str) -> Option<String>,
+    model: &str,
+    required: &[ModelCapability],
+) -> Vec<ModelCapability> {
+    let capabilities = capabilities_of(value, model);
+    required
+        .iter()
+        .filter(|need| !capabilities.contains(need))
+        .copied()
+        .collect()
+}
+
+/// Resolves a tier the same way `model_for_tier` does, then validates the
+/// result — override included — against the capabilities the call site needs.
+pub fn model_for_capability(
+    value: impl Fn(&str) -> Option<String>,
+    tier: ModelTier,
+    required: &[ModelCapability],
+) -> Result<String, ModelCapabilityError> {
+    let model = model_for_tier(tier, &value);
+    let missing = missing_capabilities(&value, &model, required);
+    if missing.is_empty() {
+        Ok(model)
+    } else {
+        Err(ModelCapabilityError {
+            tier,
+            model,
+            missing,
+        })
+    }
+}
+
+/// Picks the first tier in `preference` whose model can carry `required`, so a
+/// workload states what it needs and what it would rather pay, and the table
+/// decides. Errors when no preferred tier qualifies rather than falling back to
+/// a model that cannot take the input.
+pub fn select_model_for(
+    value: impl Fn(&str) -> Option<String>,
+    required: &[ModelCapability],
+    preference: &[ModelTier],
+) -> Result<(ModelTier, String), ModelCapabilityError> {
+    let mut last: Option<ModelCapabilityError> = None;
+    for tier in preference {
+        let model = model_for_tier(*tier, &value);
+        let missing = missing_capabilities(&value, &model, required);
+        if missing.is_empty() {
+            return Ok((*tier, model));
+        }
+        last = Some(ModelCapabilityError {
+            tier: *tier,
+            model,
+            missing,
+        });
+    }
+    Err(last.unwrap_or_else(|| ModelCapabilityError {
+        tier: ModelTier::Balanced,
+        model: model_for_tier(ModelTier::Balanced, &value),
+        missing: required.to_vec(),
+    }))
 }
 
 /// Resolves a tier to its model id from a value lookup, falling back to the

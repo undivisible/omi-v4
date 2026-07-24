@@ -1,8 +1,9 @@
 # Memory authority: cloud-first with a local mirror
 
-Status: partially implemented. The authoritative cloud log, its read endpoint and
-the device-side pull client have landed; the remaining work is listed in §6 in
-the order it should be done. Read this before changing anything in
+Status: partially implemented. The authoritative cloud log, its read endpoint,
+the device-side pull client, the log-backed cloud write paths and the retirement
+of the per-replica projection namespace have landed; the remaining work is listed
+in §6 in the order it should be done. Read this before changing anything in
 `worker/src/memory-*.ts`, `app/lib/memory/**`, or the hub's memory modules.
 
 ## 1. What changed and why
@@ -130,21 +131,36 @@ authoritative sequence.
    `omiDataDirectory()` on desktop/mobile and IndexedDB on web; the cursor is
    already persisted separately and deliberately rewinds when it runs ahead of
    the store.
-2. **Route the direct cloud writes through the log.** `POST /v1/memories`,
-   `POST /v1/memory/sources/:id/revisions` and `DELETE /v1/memory/sources/:id`
-   still write the read tables directly. They must append to `memory_log` and let
-   the projection do the writing, or the second authority survives.
+2. ~~**Route the direct cloud writes through the log.**~~ Done.
+   `POST /v1/memories`, `POST /v1/memory/sources/:id/revisions` and
+   `DELETE /v1/memory/sources/:id` now live in `worker/src/memory-write.ts`, mint
+   zkr-shaped records under the `cloud` origin replica, append them to
+   `memory_log` and let `projectMemory` do every read-table write. One residual
+   direct writer remains and is listed at 6 below.
 3. **A zkr import API.** The device mirror cannot become a real zkr database
    until `zkr` can apply externally-minted records with caller-supplied ids —
    roughly `MemoryDb::apply(records: &[ExportRecord])`, idempotent on
    `(record_kind, record_id)`, preserving `evidence_locators`. Without it the
    Dart mirror must be a separate read-only store and the hub's `search()` cannot
    see other replicas' memory. This is the gating upstream dependency.
-4. **Retire the per-replica projection namespace** once (3) lands, so a reinstall
-   rejoins the existing stream instead of forking one.
+4. ~~**Retire the per-replica projection namespace.**~~ Done, ahead of (3):
+   `migrations/0030_memory_log_projection.sql` backfills `zkr_memory_records`
+   into the log, deletes every `zkr:`-namespaced read-table row, and drops the
+   staging tables. Records are now keyed by their bare zkr record id, so a
+   reinstall rejoins the existing stream. Until (3) lands the device still
+   cannot *apply* another replica's records locally; convergence is cloud-side
+   only.
 5. **`worker-rs` parity.** `worker-rs/**` was not touched. It needs the same
    `memory_log` append and read paths before it can serve any memory route, or it
    will silently diverge from the TypeScript Worker.
+6. **The last direct read-table writer.** `worker/src/currents.ts` still inserts
+   `memory_sources`, `memory_source_revisions` and `memory_evidence` directly
+   when it materializes a Currents digest into a citable source, and
+   `POST /v1/memory/daily-reviews` in `routes.ts` writes `memory_daily_reviews`
+   and its citations directly. Both predate the log and neither has a
+   `daily_review` projection statement to replace it, so they are the remaining
+   drift; they are additive and never contradict the log, but they are not
+   rebuildable from it.
 
 ## 7. Web target
 

@@ -9,7 +9,7 @@ import { createCurrent, listCurrents } from "./currents";
 import { hasActivePro } from "./entitlement";
 import { normalizeHandle } from "./facetime";
 import { startFaceTimeSession } from "./facetime-session";
-import { ensureZkrMemoryProjected } from "./memory-projection";
+import { ensureMemoryProjected } from "./memory-projection";
 import {
   listDailyReviews,
   listProfileMemories,
@@ -103,7 +103,7 @@ export const searchMemoryOperation = async (
     return invalid("Invalid memory search");
   const limited = await gate(env, uid, "public-read", readLimit);
   if (limited) return limited;
-  await ensureZkrMemoryProjected(env.DB, uid);
+  await ensureMemoryProjected(env.DB, uid);
   if (mode === "semantic") {
     const items = await searchMemoryClaims(
       env,
@@ -128,7 +128,7 @@ export const listMemoriesOperation = async (
   if (limit < 1 || limit > 100) return invalid("Invalid memory list");
   const limited = await gate(env, uid, "public-read", readLimit);
   if (limited) return limited;
-  await ensureZkrMemoryProjected(env.DB, uid);
+  await ensureMemoryProjected(env.DB, uid);
   return {
     status: 200,
     body: { memories: await listProfileMemories(env.DB, uid, limit) },
@@ -141,7 +141,7 @@ export const listCurrentsOperation = async (
 ): Promise<OperationResult> => {
   const limited = await gate(env, uid, "public-read", readLimit);
   if (limited) return limited;
-  await ensureZkrMemoryProjected(env.DB, uid);
+  await ensureMemoryProjected(env.DB, uid);
   return { status: 200, body: { currents: await listCurrents(env, uid) } };
 };
 
@@ -185,7 +185,7 @@ export const createCurrentOperation = async (
     return invalid("Invalid Current");
   const limited = await gate(env, uid, "public-write", writeLimit);
   if (limited) return limited;
-  await ensureZkrMemoryProjected(env.DB, uid);
+  await ensureMemoryProjected(env.DB, uid);
   const current = await createCurrent(env, uid, {
     evidenceId,
     title,
@@ -228,7 +228,7 @@ export const listNotesOperation = async (
   if (limit < 1 || limit > 100) return invalid("Invalid note list");
   const limited = await gate(env, uid, "public-read", readLimit);
   if (limited) return limited;
-  await ensureZkrMemoryProjected(env.DB, uid);
+  await ensureMemoryProjected(env.DB, uid);
   return {
     status: 200,
     body: { notes: await listDailyReviews(env.DB, uid, limit) },

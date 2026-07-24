@@ -168,12 +168,19 @@ beforeAll(async () => {
     "0017_zkr_read_projection.sql",
     "0021_memory_vectors.sql",
     "0029_memory_authority_log.sql",
+    "0030_memory_log_projection.sql",
   ]) {
     const sql = (await Bun.file(`migrations/${name}`).text()).replace(
       "PRAGMA foreign_keys = ON;",
       "",
     );
-    for (const statement of sql.split(";").map((value) => value.trim())) {
+    // Comments are stripped before splitting: a semicolon inside a comment
+    // would otherwise cut a statement in half.
+    const code = sql
+      .split("\n")
+      .filter((line) => !line.trimStart().startsWith("--"))
+      .join("\n");
+    for (const statement of code.split(";").map((value) => value.trim())) {
       if (statement) await database.prepare(statement).run();
     }
   }
@@ -212,7 +219,7 @@ describe("zkr memory sync", () => {
       commits: [{ sequence: 2, status: "staged" }],
     });
     const before = await database
-      .prepare("SELECT COUNT(*) AS count FROM zkr_memory_records")
+      .prepare("SELECT COUNT(*) AS count FROM memory_records")
       .first<{ count: number }>();
     expect(Number(before?.count)).toBe(0);
 
@@ -226,7 +233,7 @@ describe("zkr memory sync", () => {
     });
     const applied = await database
       .prepare(
-        "SELECT record_kind, record_id FROM zkr_memory_records WHERE uid = 'alpha' ORDER BY record_kind",
+        "SELECT record_kind, record_id FROM memory_records WHERE uid = 'alpha' ORDER BY record_kind",
       )
       .all();
     expect(applied.results).toEqual([
@@ -268,7 +275,7 @@ describe("zkr memory sync", () => {
     });
     const count = await database
       .prepare(
-        "SELECT COUNT(*) AS count FROM zkr_memory_records WHERE uid = 'alpha'",
+        "SELECT COUNT(*) AS count FROM memory_records WHERE uid = 'alpha'",
       )
       .first<{ count: number }>();
     expect(Number(count?.count)).toBe(2);
@@ -315,13 +322,13 @@ describe("zkr memory sync", () => {
     });
     const oldClaim = await database
       .prepare(
-        "SELECT deleted_at FROM zkr_memory_records WHERE uid = 'alpha' AND replica_id = 'desktop' AND record_kind = 'claim' AND record_id = 'old-claim'",
+        "SELECT deleted_at FROM memory_records WHERE uid = 'alpha' AND record_kind = 'claim' AND record_id = 'old-claim'",
       )
       .first<{ deleted_at: number | null }>();
     expect(Number(oldClaim?.deleted_at)).toBe(22);
     const kinds = await database
       .prepare(
-        "SELECT record_kind FROM zkr_memory_records WHERE uid = 'alpha' AND replica_id = 'desktop' AND source_sequence = 3 ORDER BY record_kind",
+        "SELECT record_kind FROM memory_log WHERE uid = 'alpha' AND origin_replica = 'desktop' AND sequence > 2 ORDER BY record_kind",
       )
       .all();
     expect(kinds.results.map((row) => row.record_kind)).toEqual([

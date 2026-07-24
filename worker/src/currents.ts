@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { ensureZkrMemoryProjected } from "./memory-projection";
+import { ensureMemoryProjected } from "./memory-projection";
 import type { AppEnv } from "./types";
 
 const currents = new Hono<AppEnv>();
@@ -14,7 +14,7 @@ const unreportedOutcome = JSON.stringify({
 });
 
 currents.use("*", async (context, next) => {
-  await ensureZkrMemoryProjected(context.env.DB, context.get("auth").uid);
+  await ensureMemoryProjected(context.env.DB, context.get("auth").uid);
   await next();
 });
 

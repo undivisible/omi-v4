@@ -1,218 +1,173 @@
 <!DOCTYPE html>
 <html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Omi — your private second brain</title>
-<meta name="description" content="Omi is a private, second-brain personal AI: evidenced memory, live meetings, currents, a voice summon, a pendant, and an MCP server. Open source, local first.">
-<link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns=%27http://www.w3.org/2000/svg%27%20viewBox=%270%200%2032%2032%27%3E%3Crect%20width=%2732%27%20height=%2732%27%20rx=%277%27%20fill=%27%23171716%27/%3E%3Ccircle%20cx=%2216%22%20cy=%225%22%20r=%223.4%22%20fill=%22%23fffcec%22/%3E%3Ccircle%20cx=%2224.25%22%20cy=%227.75%22%20r=%223.4%22%20fill=%22%23fffcec%22/%3E%3Ccircle%20cx=%2227%22%20cy=%2216%22%20r=%223.4%22%20fill=%22%23fffcec%22/%3E%3Ccircle%20cx=%2224.25%22%20cy=%2224.25%22%20r=%223.4%22%20fill=%22%23fffcec%22/%3E%3Ccircle%20cx=%2216%22%20cy=%2227%22%20r=%223.4%22%20fill=%22%23fffcec%22/%3E%3Ccircle%20cx=%227.75%22%20cy=%2224.25%22%20r=%223.4%22%20fill=%22%23fffcec%22/%3E%3Ccircle%20cx=%225%22%20cy=%2216%22%20r=%223.4%22%20fill=%22%23fffcec%22/%3E%3Ccircle%20cx=%227.75%22%20cy=%227.75%22%20r=%223.4%22%20fill=%22%23fffcec%22/%3E%3C/svg%3E">
-<link rel="stylesheet" href="/styles.css">
-</head>
-<body>
-<a class="skip-link" href="#main">Skip to content</a>
-<div class="field" aria-hidden="true"><i></i><i></i><i></i></div>
-
-<header class="nav" id="nav">
-  <a class="brand" href="/" aria-label="Omi home"><svg class="omi-mark omi-mark--nav" viewBox="0 0 260 260" aria-hidden="true" data-omi-mark>
-      <g class="omi-mark-ring">
-        <circle cx="129.5" cy="42.79" r="17.2" style="--ux:0;--uy:-1"/>
-        <circle cx="194.5" cy="64.5" r="17.2" style="--ux:0.7071;--uy:-0.7071"/>
-        <circle cx="216.21" cy="129.5" r="17.2" style="--ux:1;--uy:0"/>
-        <circle cx="194.5" cy="194.5" r="17.2" style="--ux:0.7071;--uy:0.7071"/>
-        <circle cx="129.5" cy="216.21" r="17.2" style="--ux:0;--uy:1"/>
-        <circle cx="64.5" cy="194.5" r="17.2" style="--ux:-0.7071;--uy:0.7071"/>
-        <circle cx="42.79" cy="129.5" r="17.2" style="--ux:-1;--uy:0"/>
-        <circle cx="64.5" cy="64.5" r="17.2" style="--ux:-0.7071;--uy:-0.7071"/>
-      </g>
-    </svg> Omi</a>
-  <nav class="nav-links" id="navLinks" aria-label="Primary">
-    <a class="cta" href="/portal">Open Omi</a>
-    <a href="/architecture.html">Documentation</a>
-    <a href="/portal#api-keys">API login</a>
-  </nav>
-</header>
-
-<main id="main">
-  <nav class="rail" aria-label="Sections">
-    <ol>
-      <li><a href="#top">Omi</a></li>
-      <li><a href="#what">What it does</a></li>
-      <li><a href="#api">API</a></li>
-      <li><a href="#privacy">Privacy</a></li>
-      <li><a href="#pricing">Pricing</a></li>
-    </ol>
-  </nav>
-  <section class="hero wrap" id="top" aria-labelledby="t1">
-    <!-- The Omi mark. Geometry is the hand-authored source of truth in
-         app/assets/images/omi_mark.svg; d1 is due north, d2..d8 clockwise. -->
-    <svg class="omi-mark" viewBox="0 0 260 260" role="img" aria-label="Omi" data-omi-mark>
-      <defs>
-        <filter id="omiMarkGlow" x="-40%" y="-40%" width="180%" height="180%" color-interpolation-filters="sRGB">
-          <feGaussianBlur in="SourceGraphic" stdDeviation="9" result="soft"/>
-          <feColorMatrix in="soft" type="matrix" result="halo" values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 0.85 0"/>
-          <feMerge><feMergeNode in="halo"/><feMergeNode in="halo"/><feMergeNode in="SourceGraphic"/></feMerge>
-        </filter>
-      </defs>
-      <g class="omi-mark-ring" filter="url(#omiMarkGlow)">
-        <circle id="d1" cx="129.5" cy="42.79" r="17.2" style="--ux:0;--uy:-1"/>
-        <circle id="d2" cx="194.5" cy="64.5" r="17.2" style="--ux:0.7071;--uy:-0.7071"/>
-        <circle id="d3" cx="216.21" cy="129.5" r="17.2" style="--ux:1;--uy:0"/>
-        <circle id="d4" cx="194.5" cy="194.5" r="17.2" style="--ux:0.7071;--uy:0.7071"/>
-        <circle id="d5" cx="129.5" cy="216.21" r="17.2" style="--ux:0;--uy:1"/>
-        <circle id="d6" cx="64.5" cy="194.5" r="17.2" style="--ux:-0.7071;--uy:0.7071"/>
-        <circle id="d7" cx="42.79" cy="129.5" r="17.2" style="--ux:-1;--uy:0"/>
-        <circle id="d8" cx="64.5" cy="64.5" r="17.2" style="--ux:-0.7071;--uy:-0.7071"/>
-      </g>
-    </svg>
-    <div class="hero-grid">
-      <p class="label rise d1">Omi — 2026</p>
-      <h1 class="giant rise d2" id="t1">A second brain that actually remembers.</h1>
-      <div class="hero-foot">
-        <p class="mid rise d3">One hub across desktop, mobile and the web. It listens with you, and every answer cites where it came from.</p>
-        <div class="links rise d4">
-          <a class="btn btn-solid" href="/portal">Open Omi</a>
-          <a class="btn btn-line" href="#what">What it does</a>
+  <head>
+    <base href="/"/>
+    <meta charset="utf-8"/>
+    <script src="/main.js" defer></script>
+    <script src="/mark.js" defer></script>
+    <!--$-->
+    <title>Omi — your private second brain</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <meta name="description" content="Omi is a private, second-brain personal AI: evidenced memory, live meetings, currents, a voice summon, a pendant, and an MCP server. Open source, local first."/>
+    <link href="data:image/svg+xml,%3Csvg%20xmlns%3D'http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg'%20viewBox%3D'0%200%2032%2032'%3E%3Crect%20width%3D'32'%20height%3D'32'%20rx%3D'7'%20fill%3D'%23171716'%2F%3E%3Ccircle%20cx%3D%2215.94%22%20cy%3D%225.27%22%20r%3D%222.12%22%20fill%3D%22%23fffcec%22%2F%3E%3Ccircle%20cx%3D%2223.94%22%20cy%3D%227.94%22%20r%3D%222.12%22%20fill%3D%22%23fffcec%22%2F%3E%3Ccircle%20cx%3D%2226.61%22%20cy%3D%2215.94%22%20r%3D%222.12%22%20fill%3D%22%23fffcec%22%2F%3E%3Ccircle%20cx%3D%2223.94%22%20cy%3D%2223.94%22%20r%3D%222.12%22%20fill%3D%22%23fffcec%22%2F%3E%3Ccircle%20cx%3D%2215.94%22%20cy%3D%2226.61%22%20r%3D%222.12%22%20fill%3D%22%23fffcec%22%2F%3E%3Ccircle%20cx%3D%227.94%22%20cy%3D%2223.94%22%20r%3D%222.12%22%20fill%3D%22%23fffcec%22%2F%3E%3Ccircle%20cx%3D%225.27%22%20cy%3D%2215.94%22%20r%3D%222.12%22%20fill%3D%22%23fffcec%22%2F%3E%3Ccircle%20cx%3D%227.94%22%20cy%3D%227.94%22%20r%3D%222.12%22%20fill%3D%22%23fffcec%22%2F%3E%3C%2Fsvg%3E" rel="icon"/>
+    <link href="https://omi.tsc.hk/" rel="canonical"/>
+    <link as="font" type="font/woff2" crossorigin href="/inter-latin-variable.woff2" rel="preload"/>
+    <link as="font" type="font/woff2" crossorigin href="/geist-pixel-square.woff2" rel="preload"/>
+    <link href="/styles.css" rel="stylesheet"/>
+    <meta name="theme-color" content="#171716"/>
+    <meta property="og:title" content="Omi — your private second brain"/>
+    <meta property="og:description" content="Omi is a private, second-brain personal AI: evidenced memory, live meetings, currents, a voice summon, a pendant, and an MCP server. Open source, local first."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://omi.tsc.hk/"/>
+    <!--/-->
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <div class="field" aria-hidden="true"><i></i><i></i><i></i></div>
+    <header id="nav" class="nav">
+      <a class="brand" aria-label="Omi home" href="/">
+        <svg class="omi-mark omi-mark--nav" viewBox="0 0 260 260" aria-hidden="true" data-omi-mark><g class="omi-mark-ring"><circle id="d1" cx="129.5" cy="42.79" r="17.2" style="--ux:0.0;--uy:-1.0"/><circle id="d2" cx="194.5" cy="64.5" r="17.2" style="--ux:0.7071;--uy:-0.7071"/><circle id="d3" cx="216.21" cy="129.5" r="17.2" style="--ux:1.0;--uy:0.0"/><circle id="d4" cx="194.5" cy="194.5" r="17.2" style="--ux:0.7071;--uy:0.7071"/><circle id="d5" cx="129.5" cy="216.21" r="17.2" style="--ux:0.0;--uy:1.0"/><circle id="d6" cx="64.5" cy="194.5" r="17.2" style="--ux:-0.7071;--uy:0.7071"/><circle id="d7" cx="42.79" cy="129.5" r="17.2" style="--ux:-1.0;--uy:0.0"/><circle id="d8" cx="64.5" cy="64.5" r="17.2" style="--ux:-0.7071;--uy:-0.7071"/></g></svg>
+         Omi
+      </a>
+      <nav id="navLinks" class="nav-links" aria-label="Primary">
+        <a class="cta" href="https://api.omi.tsc.hk/portal">Open Omi</a>
+        <a href="/architecture">Documentation</a>
+        <a href="https://api.omi.tsc.hk/portal#api-keys">API login</a>
+      </nav>
+    </header>
+    <main id="main">
+      <nav class="rail" aria-label="Sections">
+        <ol>
+          <li><a href="#top">Omi</a></li>
+          <li><a href="#what">What it does</a></li>
+          <li><a href="#api">API</a></li>
+          <li><a href="#privacy">Privacy</a></li>
+          <li><a href="#pricing">Pricing</a></li>
+        </ol>
+      </nav>
+      <section id="top" class="hero wrap" aria-labelledby="t1">
+        <svg class="omi-mark" viewBox="0 0 260 260" role="img" aria-label="Omi" data-omi-mark><defs><filter id="omiMarkGlow-lead" x="-40%" y="-40%" width="180%" height="180%" color-interpolation-filters="sRGB"><feGaussianBlur in="SourceGraphic" stdDeviation="9" result="soft"/><feColorMatrix in="soft" type="matrix" result="halo" values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 0.85 0"/><feMerge><feMergeNode in="halo"/><feMergeNode in="halo"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs><g class="omi-mark-ring" filter="url(#omiMarkGlow-lead)"><circle id="d1" cx="129.5" cy="42.79" r="17.2" style="--ux:0.0;--uy:-1.0"/><circle id="d2" cx="194.5" cy="64.5" r="17.2" style="--ux:0.7071;--uy:-0.7071"/><circle id="d3" cx="216.21" cy="129.5" r="17.2" style="--ux:1.0;--uy:0.0"/><circle id="d4" cx="194.5" cy="194.5" r="17.2" style="--ux:0.7071;--uy:0.7071"/><circle id="d5" cx="129.5" cy="216.21" r="17.2" style="--ux:0.0;--uy:1.0"/><circle id="d6" cx="64.5" cy="194.5" r="17.2" style="--ux:-0.7071;--uy:0.7071"/><circle id="d7" cx="42.79" cy="129.5" r="17.2" style="--ux:-1.0;--uy:0.0"/><circle id="d8" cx="64.5" cy="64.5" r="17.2" style="--ux:-0.7071;--uy:-0.7071"/></g></svg>
+        <div class="hero-grid">
+          <p class="label rise d1">Omi — 2026</p>
+          <h1 id="t1" class="giant rise d2">A second brain that actually remembers.</h1>
+          <div class="hero-foot">
+            <p class="mid rise d3">
+              One hub across desktop, mobile and the web. It listens with you, and every answer cites where it came from.
+            </p>
+            <div class="links rise d4">
+              <a class="btn btn-solid" href="https://api.omi.tsc.hk/portal">Open Omi</a>
+              <a class="btn btn-line" href="#what">What it does</a>
+            </div>
+          </div>
         </div>
+        <figure class="shot reveal">
+          <div id="hub-frame" class="shot-frame" data-state="idle">
+            <div class="shot-still" aria-hidden="true">
+              <div class="still-rail"><span></span><span></span><span></span><span></span></div>
+              <div class="still-thread">
+                <p class="still-line w70"></p>
+                <p class="still-line w45"></p>
+                <p class="still-line w60"></p>
+                <p class="still-cite"></p>
+                <p class="still-composer"></p>
+              </div>
+              <div class="still-side"><p class="still-line w80"></p><p class="still-line w55"></p><p class="still-line w65"></p></div>
+            </div>
+            <div class="shot-cta">
+              <button id="hub-start" class="btn btn-solid" type="button">Try the hub</button>
+              <p id="hub-note" class="shot-note">
+                The real app, compiled to the web, on sample data — about 5 MB, so it loads only when you ask for it. No sign-in, and nothing you do in it leaves your browser.
+              </p>
+            </div>
+          </div>
+          <figcaption>
+            The hub itself, running in this page against seeded sample data — not anyone's account. Capture, the pendant, on-device transcription and computer use need the desktop build and say so here; everything else is the same UI, the same code.
+          </figcaption>
+        </figure>
+      </section>
+      <section id="what" class="band wrap" aria-labelledby="t2">
+        <h2 id="t2" class="label">What it does</h2>
+        <ol class="rows">
+          <li class="reveal">
+            <span class="label">01</span><h3>Memory with evidence</h3><p>Every fact keeps a citation back to the moment it came from. Correct it or delete it, and what was derived from it goes too.</p>
+          </li>
+          <li class="reveal">
+            <span class="label">02</span><h3>Live meetings</h3><p>Transcription and insight while the meeting is still happening.</p>
+          </li>
+          <li class="reveal">
+            <span class="label">03</span><h3>Currents</h3><p>What matters next, ranked and cited — re-ranked by what you dismiss or accept.</p>
+          </li>
+          <li class="reveal">
+            <span class="label">04</span><h3>Voice on a shake</h3><p>Shake the cursor, or tap both Shift keys. No window, no hotkey to remember.</p>
+          </li>
+          <li class="reveal">
+            <span class="label">05</span><h3>Computer use, approved</h3><p>It proposes, you approve, and the outcome lands in an append-only ledger.</p>
+          </li>
+          <li class="reveal">
+            <span class="label">06</span><h3>The pendant</h3><p>Captures the day over Bluetooth LE. Your phone relays; your desktop remembers.</p>
+          </li>
+        </ol>
+      </section>
+      <section id="api" class="band wrap" aria-labelledby="t3">
+        <h2 id="t3" class="label">Open surface</h2>
+        <p class="mega reveal"><sup>POST</sup>/mcp</p>
+        <div class="split">
+          <p class="mid measure reveal">A public HTTP API and an MCP server, so the tools you already use can ask your second brain too.</p>
+          <ul class="notes reveal">
+            <li>
+              <b>The same boundary as the app.</b> Every request carries your credential; every row is scoped to your account before it is read.
+            </li>
+            <li>
+              <b>OpenAI-compatible chat.</b> <code>/v1/chat/completions</code> streams in the shape your clients already speak.
+            </li>
+            <li><a class="arrow" href="/docs/api">Read the API reference</a></li>
+            <li><a class="arrow" href="/architecture">See how it is built</a></li>
+          </ul>
+        </div>
+      </section>
+      <section id="privacy" class="band wrap" aria-labelledby="t4">
+        <h2 id="t4" class="label">Privacy</h2>
+        <p class="big reveal measure-tight">Your memory lives on your machine.</p>
+        <ul class="notes split reveal">
+          <li><b>Local source of truth.</b> The cloud keeps only a rebuildable projection for recall.</li>
+          <li>
+            <b>On-device summaries.</b> The workspace scan reads metadata, and on Apple silicon it summarises with no network call.
+          </li>
+          <li><b>Open source.</b> The line between local and cloud is something you can read.</li>
+        </ul>
+      </section>
+      <section id="pricing" class="band wrap" aria-labelledby="t5">
+        <h2 id="t5" class="label">Pricing</h2>
+        <div class="plans">
+          <article class="plan reveal">
+            <h3 class="label">Omi</h3>
+            <p class="amount">Free <span>+ your own keys</span></p>
+            <p class="small">About $5 a month, paid straight to your provider.</p>
+            <a class="btn btn-line" href="https://api.omi.tsc.hk/portal">Start with your key</a>
+          </article>
+          <article class="plan reveal">
+            <h3 class="label">Omi AI</h3>
+            <p class="amount">~$35<span> / month, managed</span></p>
+            <p class="small">No keys, no provider accounts. We run them.</p>
+            <a class="btn btn-solid" href="https://api.omi.tsc.hk/portal">Open Omi</a>
+          </article>
+        </div>
+      </section>
+    </main>
+    <footer class="wrap">
+      <div class="foot">
+        <p>
+          <svg class="omi-mark omi-mark--foot" viewBox="0 0 260 260" aria-hidden="true" data-omi-mark><g class="omi-mark-ring"><circle id="d1" cx="129.5" cy="42.79" r="17.2" style="--ux:0.0;--uy:-1.0"/><circle id="d2" cx="194.5" cy="64.5" r="17.2" style="--ux:0.7071;--uy:-0.7071"/><circle id="d3" cx="216.21" cy="129.5" r="17.2" style="--ux:1.0;--uy:0.0"/><circle id="d4" cx="194.5" cy="194.5" r="17.2" style="--ux:0.7071;--uy:0.7071"/><circle id="d5" cx="129.5" cy="216.21" r="17.2" style="--ux:0.0;--uy:1.0"/><circle id="d6" cx="64.5" cy="194.5" r="17.2" style="--ux:-0.7071;--uy:0.7071"/><circle id="d7" cx="42.79" cy="129.5" r="17.2" style="--ux:-1.0;--uy:0.0"/><circle id="d8" cx="64.5" cy="64.5" r="17.2" style="--ux:-0.7071;--uy:-0.7071"/></g></svg>
+           Open source, private by design.
+        </p>
+        <nav aria-label="Footer">
+          <a href="/#what">What it does</a>
+          <a href="/#api">API</a>
+          <a href="/architecture">Architecture</a>
+          <a href="/docs/api">API reference</a>
+          <a href="https://api.omi.tsc.hk/portal">Open Omi</a>
+        </nav>
       </div>
-    </div>
-
-    <figure class="shot reveal">
-      <div class="shot-frame" id="hub-frame" data-state="idle">
-        <div class="shot-still" aria-hidden="true">
-          <div class="still-rail">
-            <span></span><span></span><span></span><span></span>
-          </div>
-          <div class="still-thread">
-            <p class="still-line w70"></p>
-            <p class="still-line w45"></p>
-            <p class="still-line w60"></p>
-            <p class="still-cite"></p>
-            <p class="still-composer"></p>
-          </div>
-          <div class="still-side">
-            <p class="still-line w80"></p>
-            <p class="still-line w55"></p>
-            <p class="still-line w65"></p>
-          </div>
-        </div>
-        <div class="shot-cta">
-          <button type="button" class="btn btn-solid" id="hub-start">
-            Try the hub
-          </button>
-          <p class="shot-note" id="hub-note">
-            The real app, compiled to the web — about 5 MB, so it loads only
-            when you ask for it.
-          </p>
-        </div>
-      </div>
-      <figcaption>The hub itself, running in this page. Capture, the pendant
-        and on-device transcription need the desktop build; everything you can
-        reach here is the same UI.</figcaption>
-    </figure>
-  </section>
-
-  <section class="band wrap" id="what" aria-labelledby="t2">
-    <h2 class="label" id="t2">What it does</h2>
-    <ol class="rows">
-      <li class="reveal">
-        <span class="label">01</span>
-        <h3>Memory with evidence</h3>
-        <p>Every fact keeps a citation back to the moment it came from. Correct it or delete it, and what was derived from it goes too.</p>
-      </li>
-      <li class="reveal">
-        <span class="label">02</span>
-        <h3>Live meetings</h3>
-        <p>Transcription and insight while the meeting is still happening.</p>
-      </li>
-      <li class="reveal">
-        <span class="label">03</span>
-        <h3>Currents</h3>
-        <p>What matters next, ranked and cited — re-ranked by what you dismiss or accept.</p>
-      </li>
-      <li class="reveal">
-        <span class="label">04</span>
-        <h3>Voice on a shake</h3>
-        <p>Shake the cursor, or tap both Shift keys. No window, no hotkey to remember.</p>
-      </li>
-      <li class="reveal">
-        <span class="label">05</span>
-        <h3>Computer use, approved</h3>
-        <p>It proposes, you approve, and the outcome lands in an append-only ledger.</p>
-      </li>
-      <li class="reveal">
-        <span class="label">06</span>
-        <h3>The pendant</h3>
-        <p>Captures the day over Bluetooth LE. Your phone relays; your desktop remembers.</p>
-      </li>
-    </ol>
-  </section>
-
-  <section class="band wrap" id="api" aria-labelledby="t3">
-    <h2 class="label" id="t3">Open surface</h2>
-    <p class="mega reveal"><sup>POST</sup>/mcp</p>
-    <div class="split">
-      <p class="mid measure reveal">A public HTTP API and an MCP server, so the tools you already use can ask your second brain too.</p>
-      <ul class="notes reveal">
-        <li><b>The same boundary as the app.</b> Every request carries your ID token; every row is scoped to your account before it is read.</li>
-        <li><b>OpenAI-compatible chat.</b> <code>/v1/chat/completions</code> streams in the shape your clients already speak.</li>
-        <li><a class="arrow" href="/architecture.html">See how it is built</a></li>
-      </ul>
-    </div>
-  </section>
-
-  <section class="band wrap" id="privacy" aria-labelledby="t4">
-    <h2 class="label" id="t4">Privacy</h2>
-    <p class="big reveal" style="max-width:18ch;margin-block:clamp(1.25rem,3vw,2rem)">Your memory lives on your machine.</p>
-    <ul class="notes split reveal">
-      <li><b>Local source of truth.</b> The cloud keeps only a rebuildable projection for recall.</li>
-      <li><b>On-device summaries.</b> The workspace scan reads metadata, and on Apple silicon it summarises with no network call.</li>
-      <li><b>Open source.</b> The line between local and cloud is something you can read.</li>
-    </ul>
-  </section>
-
-  <section class="band wrap" id="pricing" aria-labelledby="t5">
-    <h2 class="label" id="t5">Pricing</h2>
-    <div class="plans">
-      <article class="plan reveal">
-        <h3 class="label">Omi</h3>
-        <p class="amount">Free <span>+ your own keys</span></p>
-        <p class="small">About $5 a month, paid straight to your provider.</p>
-        <a class="btn btn-line" href="/portal">Start with your key</a>
-      </article>
-      <article class="plan reveal">
-        <h3 class="label">Omi AI</h3>
-        <p class="amount">~$35<span> / month, managed</span></p>
-        <p class="small">No keys, no provider accounts. We run them.</p>
-        <a class="btn btn-solid" href="/portal">Open Omi</a>
-      </article>
-    </div>
-  </section>
-</main>
-
-<footer class="wrap">
-  <div class="foot">
-    <p><svg class="omi-mark omi-mark--foot" viewBox="0 0 260 260" aria-hidden="true" data-omi-mark>
-      <g class="omi-mark-ring">
-        <circle cx="129.5" cy="42.79" r="17.2" style="--ux:0;--uy:-1"/>
-        <circle cx="194.5" cy="64.5" r="17.2" style="--ux:0.7071;--uy:-0.7071"/>
-        <circle cx="216.21" cy="129.5" r="17.2" style="--ux:1;--uy:0"/>
-        <circle cx="194.5" cy="194.5" r="17.2" style="--ux:0.7071;--uy:0.7071"/>
-        <circle cx="129.5" cy="216.21" r="17.2" style="--ux:0;--uy:1"/>
-        <circle cx="64.5" cy="194.5" r="17.2" style="--ux:-0.7071;--uy:0.7071"/>
-        <circle cx="42.79" cy="129.5" r="17.2" style="--ux:-1;--uy:0"/>
-        <circle cx="64.5" cy="64.5" r="17.2" style="--ux:-0.7071;--uy:-0.7071"/>
-      </g>
-    </svg> Open source, private by design.</p>
-    <nav aria-label="Footer">
-      <a href="#what">What it does</a>
-      <a href="#api">API</a>
-      <a href="/architecture.html">Documentation</a>
-      <a href="/portal">Open Omi</a>
-    </nav>
-  </div>
-</footer>
-
-<script src="/main.js" defer></script>
-<script src="/mark.js" defer></script>
-</body>
+    </footer>
+  </body>
 </html>

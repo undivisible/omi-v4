@@ -241,236 +241,161 @@ divergences:
 - The button is an external switch the user wires between D4 and D5; see
   `README.md`.
 
-## 2. What we skip versus upstream
+## 2. Features this tree implements
 
-Upstream `~/projects/omi` is a full product monorepo (`app`, `backend`,
-`desktop`, `sdks`, `plugins`, `web`, `mcp`, `infrastructure`, `omiGlass`, …).
-This tree vendors only the firmware subtree, and only part of it.
+The pendant firmware here is vendored from upstream `BasedHardware/omi` and then
+edited. Everything comparative — what was vendored and why that branch, which
+files are byte-identical, every local divergence and its reasoning, what upstream
+has that this tree does not, and the cost of the vendoring relationship — lives
+in [`COMPARISON.md`](COMPARISON.md). [`PROVENANCE.md`](PROVENANCE.md) has the
+file-level record and the re-sync procedure.
 
-**Vendored**: `omi/firmware/{omi,devkit,test,boards/omi,bootloader/mcuboot}`
-plus `.clang-format` and `BUILD_AND_OTA_FLASH.md`.
+What follows is a description of the resulting firmware, without reference to
+where each piece came from.
 
-**Deliberately not vendored:**
+### 2.1 User events (`19B10017`)
 
-| Upstream path | Why not |
-| --- | --- |
-| `omi/firmware/FLASH_3.0.8/` | ~40 MB of prebuilt `.hex` images and Windows `.exe` flashing tools for a 2024-era release. Superseded by building from source. |
-| `omi/firmware/bootloader/bootloader0.9.0.uf2`, `bootloader/deprecated/` | XIAO nRF52840 Adafruit bootloader images. Not built here and unrelated to the nRF5340. |
-| `omi/firmware/omi/src/lib/evt/` | An EVT-hardware bring-up variant. Not referenced by `omi/CMakeLists.txt`, so it never compiled into any image. |
-| `omi/firmware/bootloader/mcuboot/enc-rsa2048-{priv,pub}.pem` | MCUboot image **encryption** keys. Encryption is not enabled anywhere (no `SB_CONFIG_BOOT_ENCRYPTION`, no reference in any `.conf`), so the private key is not carried. |
-| `omi/firmware/AGENTS.md` | Upstream repository's own agent instructions. |
-| `omiGlass/` | Different product, different architecture — see §2.1. |
-| everything outside `omi/firmware` | Application, backend, SDKs, web — out of scope for a firmware tree. |
+A characteristic in the settings service carrying an event code, a source, a
+16-bit sequence number and a UTC timestamp from the RTC. Single tap is bookmark
+(`0x01`), double tap is assistant trigger (`0x02`), long press powers off but
+emits `POWER_OFF` (`0x03`) first so the app sees an intentional shutdown rather
+than an unexplained disconnect. AAD sleep and wake emit `0x10`/`0x11`; IMU motion
+emits `0x20` and IMU double-tap `0x21`. Events raised while disconnected are held
+in a 16-deep RAM ring and flushed in order on subscribe — so a tap survives a
+reconnect but not a reboot or a system-off cycle. Persisting the queue would
+require bumping `RAW_LAYOUT_VERSION` in `omi/src/sd_card.c` and was left out
+deliberately. The legacy button service (`23BA7925`) is still registered and
+still notifies.
 
-Note the earlier plan excluded `devkit/` and `test/` as well. That was reversed:
-both are now vendored and the DevKit carries a port of the feature work (§3).
+Implemented in `omi/src/lib/core/user_event.h`, `transport.c` and `button.c`, and
+on the DevKit in `devkit/src/omi_ext.c`.
 
-### 2.1 The glasses firmware: assessed, not vendored
+### 2.2 IMU wake and gestures (CV1 only)
 
-`omiGlass/firmware` upstream is a **Seeed XIAO ESP32-S3 Sense** application:
-`platformio.ini` targets `platform = espressif32`, `framework = arduino`, with a
-`firmware.ino`, `camera_pins.h`, `mulaw.h` and a `partitions_ota.csv`. There is
-a near-identical public sibling, `BasedHardware/OpenGlass`, same board, built
-with the Arduino IDE / arduino-cli rather than PlatformIO.
+`omi/src/imu_gesture.c` programs the LSM6DS3TR-C's embedded activity detector,
+routes it latched to INT1 (P1.13, `irq-gpios` in the board DTS), and re-arms it
+as a level interrupt before `sys_poweroff()` so the nRF5340 GPIO SENSE block
+wakes the SoC. The pendant therefore comes back from idle auto-sleep on movement
+alone. While running, motion resets the idle timer, so a worn pendant does not
+fall asleep. Double-tap needs the accelerometer at 416 Hz rather than 26 Hz and
+its register thresholds are datasheet-plausible rather than measured, which is
+why `CONFIG_OMI_ENABLE_IMU_DOUBLE_TAP` defaults to off.
 
-**Recommendation: do not vendor it here.** Reasons, in order of weight:
+The DevKit does not have this: its configurations set
+`CONFIG_LSM6DSL_TRIGGER_GLOBAL_THREAD=y`, so Zephyr's driver owns INT1 while this
+implementation needs to own it directly.
 
-1. **Nothing ports.** Every feature in this branch is Zephyr-specific — Kconfig
-   symbols, devicetree bindings, `bt_gatt_*`, `sys_poweroff()`, the nRF5340
-   sysbuild image set. An ESP32 Arduino sketch shares none of it. The BLE
-   contracts in `BLE_CONTRACTS.md` do not apply to it either; it is a camera
-   device with its own protocol.
-2. **A second toolchain.** It would put PlatformIO/Arduino-ESP32 next to nRF
-   Connect SDK in the same directory, and any CI matrix would have to install
-   both.
-3. **The upstream tree carries a build cache.** `omiGlass/firmware/.pio/libdeps/`
-   is a committed copy of NimBLE-Arduino and friends — hundreds of files of
-   vendored third-party library, not source we would maintain.
-4. **Two candidate upstreams, unresolved.** OpenGlass and omiGlass target the
-   same board and are plausibly fork and productization of each other. Vendoring
-   before establishing which is current would bake in the wrong one.
+### 2.3 VAD gating
 
-If glasses firmware is wanted in-tree later, vendor it as a clearly separate
-top-level directory (not under `firmware/`, which is Zephyr), settle the
-OpenGlass/omiGlass question first, exclude `.pio/`, and give it its own CI job.
+On CV1 the T5838's hardware Acoustic Activity Detector does the work (§1.8), and
+its mode-A bandwidth and threshold are `CONFIG_OMI_AAD_A_LPF` and
+`CONFIG_OMI_AAD_A_THRESHOLD` so wake sensitivity is retunable from `omi.conf`
+without patching the driver.
 
-`BasedHardware/Whomane` is a Raspberry Pi wearable driven by Python, not MCU
-firmware, and is out of scope entirely.
-
-## 3. What we changed over upstream
-
-Upstream branch `firmware/idle-auto-sleep` already contained, relative to
-upstream `main`: idle auto-sleep, the BLE sleep command (`19B10014`), the
-capture-state LED and characteristic (`19B10015`), the writable persisted device
-name (`19B10016`), the battery-low LED, and DIS firmware/hardware revision
-reporting. Those were vendored as-is; the list below is what this branch adds on
-top.
-
-### 3.1 Button gestures with timestamps — CV1 and DevKit
-
-*Upstream*: single and double tap notify the legacy button service
-(`23BA7925`) with an 8-byte `int[2]` carrying only an event code — no timestamp,
-no sequence number, and nothing at all if the app is not connected at that
-instant. `LONG_TAP` and `BUTTON_PRESS` codes exist but are never emitted.
-
-*Ours*: a new user-event characteristic `19B10017` in the settings service
-carrying code, source, a 16-bit sequence number and a UTC timestamp from the
-existing RTC. Single tap is defined as **bookmark / "mark this moment"** (`0x01`)
-and double tap as **assistant trigger** (`0x02`); long press still powers off
-but now emits `POWER_OFF` (`0x03`) first, so an app sees an intentional shutdown
-instead of an unexplained disconnect. Events raised while disconnected are held
-in a 16-deep ring and flushed in order on subscribe. The legacy button service
-is untouched, so existing app builds keep working.
-
-`omi/src/lib/core/user_event.h`, `omi/src/lib/core/transport.c`,
-`omi/src/lib/core/button.c`; DevKit equivalent in `devkit/src/omi_ext.c`.
-
-**Limitation, stated plainly**: the queue is RAM only. A tap made while
-disconnected survives a reconnect but not a reboot or a system-off cycle.
-Persisting it would require bumping `RAW_LAYOUT_VERSION` in `omi/src/sd_card.c`
-and was left out deliberately.
-
-### 3.2 Hardware VAD gating — CV1 only
-
-*Upstream*: `omi/src/t5838_aad.c` and the AAD thread in `omi/src/mic.c` already
-existed and already worked; the mode-A bandwidth and threshold were hard-coded
-constants (`0x02`, `0x06`).
-
-*Ours*: those two are now `CONFIG_OMI_AAD_A_LPF` and
-`CONFIG_OMI_AAD_A_THRESHOLD`, with the original values as defaults and as
-fallbacks if the symbols are absent, so wake sensitivity is retunable from
-`omi.conf` without patching the driver. Separately, the capture LED no longer
-shows blue while the mic is in AAD sleep — the app is subscribed but no audio is
-flowing, which previously read as "recording" — and the AAD transitions emit
-user events `0x10`/`0x11` so the app can distinguish "silent" from "gone".
-
-*DevKit*: **not ported, and not faked.** The XIAO Sense onboard PDM mic and the
-Adafruit PDM BFF have no acoustic activity detector. Instead
+The DevKit microphones — the XIAO Sense onboard PDM and the Adafruit PDM BFF —
+have no acoustic activity detector, and none is simulated. Instead
 `CONFIG_OMI_ENABLE_SW_VAD_GATE` (default off) adds an explicitly labelled
 software gate in `devkit/src/main.c` that suppresses the codec, the BLE stream
-and SD writes during silence but leaves the microphone and PDM peripheral
-running. Its Kconfig help says so; it is a fraction of the CV1 saving.
+and SD writes during silence but leaves the microphone and the PDM peripheral
+running. Its Kconfig help says so; it saves a fraction of what the CV1 path
+saves.
 
-### 3.3 Accelerometer wake and gestures — CV1 only
+### 2.4 Charging state (`19B10013`)
 
-*Upstream*: `omi/src/imu.c` used the LSM6DS3TR-C only as a timekeeping counter
-across system off. `omi/src/lib/core/accel.c` streams samples over BLE but is
-not listed in `omi/CMakeLists.txt`, so it has never built.
+The `bat_chg_pin` GPIO interrupt schedules an immediate, deduplicated
+notification through the system workqueue
+(`transport_notify_charging_changed()`), rather than waiting for the 5-second
+battery work item. The payload is one byte. On the DevKit the characteristic is
+exposed only when `CONFIG_OMI_ENABLE_USB=y`, because the DevKit's only charge
+signal is the VBUS detect in `devkit/src/usb.c`.
 
-*Ours*: new `omi/src/imu_gesture.c` programs the IMU's embedded activity
-detector, routes it latched to INT1 (P1.13, already declared as `irq-gpios` in
-the board DTS), and re-arms it as a level interrupt before `sys_poweroff()` so
-the nRF5340 GPIO SENSE block wakes the SoC. **The pendant can now come back from
-idle auto-sleep on movement alone.** While running, motion emits user event
-`0x20` and resets the idle timer, so a worn pendant does not fall asleep.
-Double-tap-the-pendant (`0x21`) is implemented but defaults off: it needs the
-accelerometer at 416 Hz instead of 26 Hz and its thresholds are unvalidated.
+### 2.5 Firmware version
 
-*DevKit*: **not ported.** The DevKit configs set
-`CONFIG_LSM6DSL_TRIGGER_GLOBAL_THREAD=y`, so Zephyr's driver owns INT1 while
-this implementation needs to own it directly, and the XIAO Sense board DTS
-routing of `irq-gpios` could not be checked without the SDK installed. It needs
-hardware in hand.
+Each application derives its DIS firmware-revision string (`0x2A26`) from a
+Zephyr `VERSION` file at build time. `CMakeLists.txt` parses it before
+`find_package(Zephyr)` and writes a generated Kconfig fragment appended to
+`EXTRA_CONF_FILE`, which overrides the `.conf` value; the `.conf` files keep
+`"0.0.0+unset"` as a loud sentinel, so a device reporting that string is a device
+whose fragment was not applied. On CV1 the same file feeds imgtool's image
+version, which is what MCUboot's downgrade prevention compares. See
+[`README.md`](README.md) for the current versions.
 
-### 3.4 Charging state over BLE
+### 2.6 Connection parameters
 
-*Upstream*: the characteristic `19B10013` existed with notify, but the only
-thing that ever notified it was the 5-second battery work item, so the app
-mirrored the green charging LED up to five seconds late. Worse,
-`notify_charging_status()` and `charging_status_last_notified` were compiled only
-under `CONFIG_OMI_ENABLE_BATTERY` while being called unconditionally from the
-CCC handler, and the read handler dereferenced an `is_charging` that was only
-declared in the battery build.
+Fast parameters are `CONFIG_OMI_CONN_INTERVAL_FAST_MIN/MAX` with
+`CONFIG_OMI_CONN_SUPERVISION_TIMEOUT`, and `CONFIG_BT_PERIPHERAL_PREF_TIMEOUT` is
+aligned to the value actually requested. `CONFIG_BT_CTLR_PHY_2M=y` is stated in
+`omi/sysbuild/ipc_radio.conf`, where controller symbols take effect;
+`CONFIG_BT_CTLR_PHY_CODED` is off there because nothing requests coded PHY and it
+costs network-core flash.
 
-*Ours*: the `bat_chg_pin` GPIO interrupt now schedules an immediate,
-deduplicated notification through the system workqueue
-(`transport_notify_charging_changed()`), and both symbols moved out of the
-battery-only block. The 1-byte payload is unchanged.
+`CONFIG_OMI_ENABLE_ADAPTIVE_CONN_PARAMS` relaxes the link to 30–50 ms with
+peripheral latency 4 whenever audio is unsubscribed and no sync is running. **It
+defaults to off**: an earlier attempt to force slow parameters from the AAD sleep
+path caused dropped connections on some phones, and the comment recording that is
+still in `enter_hw_aad()` in `omi/src/mic.c`. It needs per-phone validation
+before it ships enabled.
 
-*DevKit*: exposed only when `CONFIG_OMI_ENABLE_USB=y`, because the DevKit's only
-charge signal is the VBUS detect in `devkit/src/usb.c`; without it the
-characteristic would report a constant 0.
+### 2.7 Rust in the image
 
-### 3.5 Offline storage contract
+`omi-cv1` can build and link a Rust static library, opt-in behind
+`CONFIG_OMI_RUST` (default `n`, which is what release images build). `omi/rust/`
+is an `omi-rust` staticlib carrying the tx ring-buffer and GATT packet header
+codecs (`framing.rs`, host-testable with `cargo test`), a `#[panic_handler]`
+forwarding to Zephyr's `k_panic()`, and CMake that links it into the existing
+`app` target. It does **not** call zephyr-lang-rust's `rust_cargo_application()`,
+which would inject the module's own `main.c` and displace `omi/src/main.c`;
+`omi/src/main.c` calls `omi_rust_selftest()` under `#ifdef CONFIG_OMI_RUST`.
 
-*Upstream*: fully implemented — a raw sector ring with `RING_INFO` / `RING_READ`
-/ `RING_ADVANCE` / `RING_CLEAR` opcodes, incremental checkpointing of the read
-pointer as the phone confirms receipt, and a cached status characteristic. It
-was **undocumented**.
+Two facts shape it. `CONFIG_RUST` exists in Zephyr 4.4.0 only as a Kconfig stub —
+the build backing it lives in `zephyrproject-rtos/zephyr-lang-rust`, which is in
+neither the NCS nor the upstream Zephyr manifest, so [`west-rust.yml`](west-rust.yml)
+pins it and imports the NCS manifest unchanged. And `omi/rust/Cargo.toml`
+deliberately has **no** dependency on the `zephyr` bindings crate: with
+`CONFIG_FLASH=y`, which `omi-cv1` sets, that crate's generated `devicetree.rs`
+fails to compile for this board. `README.md`'s *Known blocker* has the exact
+error; nothing in `omi/rust/` needs the bindings, so the crate builds against
+`core`.
 
-*Ours*: verified against the implementation and documented completely in
-`BLE_CONTRACTS.md` §7 — every opcode, every notification layout, the
-endianness split between the control characteristic (big-endian) and the status
-characteristic (little-endian), the packet framing, ring-overwrite semantics,
-and the recommended sync flow. Two behavioural fixes:
+Nothing has been migrated off C. The library exists to prove the toolchain path
+before `transport.c`'s tx logic moves over, and to give the wire format a
+host-testable home that `app/native/hub` could later share so the two ends of the
+format cannot drift.
 
-- `send_ring_info_response()` now retries on `-ENOMEM` within the existing 5 s
-  deadline instead of silently dropping the reply. The app issues `RING_INFO`
-  once per sync, so a transient missing TX buffer used to stall the whole sync.
-- `push_to_gatt()` sized audio notifications as `ATT_MTU` bytes when the maximum
-  payload is `ATT_MTU − 3`. Harmless above MTU 163 because a codec frame is at
-  most 160 bytes, but between the MTU floor of 100 and 163 every notification
-  would be rejected and dropped after three retries.
+### 2.8 Configuration hygiene
 
-### 3.6 Build-derived firmware version
+`omi/omi.conf` carries no symbol the sources do not reference. Notably absent are
+`CONFIG_FILE_SYSTEM` and `CONFIG_FILE_SYSTEM_LITTLEFS`: `omi/src/sd_card.c` uses
+raw `disk_access_*` and there is not a single `fs_*` call anywhere under
+`omi/src/`, so the whole VFS and LittleFS stack would be dead flash and RAM. Also
+absent: `CONFIG_ADC_ASYNC` (only `adc_read()` is used), `CONFIG_POSIX_CLOCK`,
+`CONFIG_NORDIC_QSPI_NOR` (no `nordic,qspi-nor` node exists),
+`CONFIG_CBPRINTF_FP_SUPPORT` (the only two `%f` log lines were converted to
+integer arithmetic) and `CONFIG_INIT_STACKS`.
 
-*Upstream*: `CONFIG_BT_DIS_FW_REV_STR` was a hand-maintained literal — `"3.0.20"`
-on CV1, and three divergent strings (`"1.0.5"`, `"1.0.5"`, `"2.0.10"`) across the
-DevKit configs.
+Deliberately kept: `CONFIG_HEAP_MEM_POOL_SIZE=40000` (there is no way to measure
+the BT/SD demand without hardware), `CONFIG_BT_SMP`, the BLE buffer sizes, and
+`CONFIG_SERIAL`/`CONFIG_CONSOLE`, because the production line parses `BLE_ADDR`
+from UART — see `log_local_ble_addresses()`.
 
-*Ours*: a Zephyr `VERSION` file per application, parsed by `CMakeLists.txt`
-before `find_package(Zephyr)` into a generated Kconfig fragment appended to
-`EXTRA_CONF_FILE`, which overrides the `.conf` value. The DIS `0x2A26` contract
-is unchanged. The `.conf` files keep `"0.0.0+unset"` as a loud sentinel. On CV1
-the same file also feeds imgtool's image version, which is what MCUboot's
-downgrade prevention actually compares.
+### 2.9 Continuous integration
 
-### 3.7 Power and latency tuning
+This tree is excluded from the root CI workflow (`paths-ignore: firmware/**`) and
+built by its own: `.github/workflows/ci-firmware.yml` per push, path-filtered to
+`firmware/**`, and `.github/workflows/release-firmware.yml` per tag. Both run
+inside `ghcr.io/nrfconnect/sdk-nrf-toolchain:v3.4.0`, so the toolchain download
+never happens on a runner; one `workspace` job populates and caches the west
+workspace and every build leg restores it with `fail-on-cache-miss`.
 
-*Upstream*: connection parameters were the literals `{6, 12, 0, 400}` in
-`transport.c` while `omi.conf` advertised a 6 s supervision timeout; 2M PHY was
-already requested by `update_phy()`.
+Both derive their build matrix by parsing the fenced `west build` blocks in
+[`README.md`](README.md) with `.github/scripts/discover_firmware_targets.py` —
+including the `cp … prj.conf` line that precedes them, and skipping any block
+marked `discover-ignore` (which is how the `CONFIG_OMI_RUST=y` variant stays out
+of the matrix). The *Migration status* table in the same file is the gate: a
+target whose build cell says *does not build* is emitted as `required=false` and
+its leg is `continue-on-error`. Editing that cell is the whole mechanism; there
+is no second list.
 
-*Ours*: those became `CONFIG_OMI_CONN_INTERVAL_FAST_MIN/MAX` and
-`CONFIG_OMI_CONN_SUPERVISION_TIMEOUT`, and `CONFIG_BT_PERIPHERAL_PREF_TIMEOUT`
-was aligned to the value actually requested. `CONFIG_BT_CTLR_PHY_2M=y` is now
-stated in `omi/sysbuild/ipc_radio.conf`, where controller symbols take effect,
-and `CONFIG_BT_CTLR_PHY_CODED` is turned off there because nothing requests
-coded PHY and it costs network-core flash.
-
-A new `CONFIG_OMI_ENABLE_ADAPTIVE_CONN_PARAMS` relaxes the link to 30–50 ms with
-peripheral latency 4 whenever audio is unsubscribed and no sync is running.
-**It defaults to off**: an earlier attempt to force slow parameters from the AAD
-sleep path caused dropped connections on some phones — the comment recording
-that is still in `omi/src/mic.c` `enter_hw_aad()` — so it needs per-phone
-validation before shipping enabled.
-
-### 3.8 Lean configuration pass
-
-Every removal from `omi/omi.conf` was justified against the sources; the full
-list with reasoning is in the commit `perf(firmware): connection-parameter
-tuning and a lean config pass`. The largest is `CONFIG_FILE_SYSTEM` and
-`CONFIG_FILE_SYSTEM_LITTLEFS`: `omi/src/sd_card.c` uses raw `disk_access_*` and
-there is not a single `fs_*` call anywhere under `omi/src/`, so the whole VFS and
-LittleFS stack was dead flash and RAM. Also removed: `CONFIG_INIT_STACKS` (a
-debug aid), `CONFIG_CBPRINTF_FP_SUPPORT` (after converting the only two `%f` log
-lines to integer math), `CONFIG_ADC_ASYNC` (only `adc_read()` is used),
-`CONFIG_POSIX_CLOCK` (unused), `CONFIG_NORDIC_QSPI_NOR` (no `nordic,qspi-nor`
-node exists), the inert `CONFIG_BT_CTLR_*` block, a `CONFIG_I2C=n` that
-contradicted `CONFIG_I2C=y` earlier in the same file, and sixteen duplicate
-assignments.
-
-Left alone deliberately: `CONFIG_HEAP_MEM_POOL_SIZE=40000` (no way to measure
-the BT/SD demand without a build), `CONFIG_BT_SMP`, the BLE buffer sizes, and
-`CONFIG_SERIAL`/`CONFIG_CONSOLE` (the production line parses `BLE_ADDR` from
-UART, see `log_local_ble_addresses()`).
-
-### 3.9 Upstream bug fixed in the DevKit
-
-`devkit/prj_xiao_ble_sense_devkitv1-spisd.conf` set
-`CONFIG_OMI_OFFLINE_STORAGE=y`, but the symbol declared in `devkit/Kconfig` is
-`OMI_ENABLE_OFFLINE_STORAGE`. The SPI-SD build — the entire point of that
-configuration — was silently compiled with no offline storage at all.
 
 ## 4. Per-device support matrix
 

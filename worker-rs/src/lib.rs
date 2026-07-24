@@ -25,8 +25,10 @@ pub mod inbox_fallback;
 pub mod mcp;
 pub mod public_api;
 pub mod routes_memory;
+pub mod sendblue;
 pub mod settings;
 pub mod setup_health;
+pub mod speech;
 pub mod webhooks;
 
 // AI route group (managed assistant / STT / ASR / voice) pure logic. Host-

@@ -6,8 +6,10 @@
   "scripts": {
     "check": "bun run format && bun run lint && bun run typecheck && bun run test",
     "build:hub": "bash scripts/build-hub.sh",
-    "deploy": "bun run build:hub && WRANGLER_SEND_METRICS=false wrangler deploy",
+    "build:site": "bash ../site/scripts/build.sh",
+    "deploy": "bun run build:site && bun run build:hub && WRANGLER_SEND_METRICS=false wrangler deploy",
     "dev": "WRANGLER_SEND_METRICS=false wrangler dev",
+    "dev:site": "bash ../site/scripts/serve.sh",
     "format": "biome format --write .",
     "lint": "biome lint .",
     "test": "bash scripts/run-tests.sh",
@@ -18,11 +20,11 @@
     "toucan-js": "^4.1.1"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.5.4",
-    "@cloudflare/workers-types": "^5.20260721.1",
+    "@biomejs/biome": "^2.5.5",
+    "@cloudflare/workers-types": "^5.20260723.1",
     "@types/bun": "^1.3.14",
-    "miniflare": "4.20260714.0",
+    "miniflare": "4.20260722.0",
     "typescript": "^5.9.0",
-    "wrangler": "^4.112.0"
+    "wrangler": "^4.114.0"
   }
 }

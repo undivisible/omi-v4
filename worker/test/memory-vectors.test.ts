@@ -128,7 +128,13 @@ beforeAll(async () => {
       "PRAGMA foreign_keys = ON;",
       "",
     );
-    for (const statement of sql.split(";").map((value) => value.trim())) {
+    // Comments are stripped before splitting: a semicolon inside a comment
+    // would otherwise cut a statement in half.
+    const code = sql
+      .split("\n")
+      .filter((line) => !line.trimStart().startsWith("--"))
+      .join("\n");
+    for (const statement of code.split(";").map((value) => value.trim())) {
       if (statement) await database.prepare(statement).run();
     }
   }
@@ -158,7 +164,7 @@ describe("memory vector indexing", () => {
       ),
     });
     expect(response.status).toBe(200);
-    const claimId = projectedClaimId("alpha", "desktop", "claim-1");
+    const claimId = projectedClaimId("claim-1");
     const pending = await database
       .prepare(
         "SELECT COUNT(*) AS count FROM pending_embeddings WHERE uid = 'alpha'",
@@ -190,7 +196,7 @@ describe("memory vector indexing", () => {
       ),
     });
     await drainPendingEmbeddings(env);
-    const claimId = projectedClaimId("alpha", "desktop", "claim-2");
+    const claimId = projectedClaimId("claim-2");
     const row = await database
       .prepare(
         "SELECT attempts, last_error FROM pending_embeddings WHERE claim_id = ?1",
@@ -211,7 +217,7 @@ describe("memory vector indexing", () => {
   });
 
   test("zkr deletion retracts the claim and removes its vector", async () => {
-    const claimId = projectedClaimId("alpha", "desktop", "claim-1");
+    const claimId = projectedClaimId("claim-1");
     expect(fakeIndex.vectors.has(claimId)).toBe(true);
     const response = await request("alpha", "/memory/zkr-sync", {
       method: "POST",

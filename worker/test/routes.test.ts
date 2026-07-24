@@ -77,7 +77,13 @@ beforeAll(async () => {
       "PRAGMA foreign_keys = ON;",
       "",
     );
-    for (const statement of sql.split(";").map((value) => value.trim())) {
+    // Comments are stripped before splitting: a semicolon inside a comment
+    // would otherwise cut a statement in half.
+    const code = sql
+      .split("\n")
+      .filter((line) => !line.trimStart().startsWith("--"))
+      .join("\n");
+    for (const statement of code.split(";").map((value) => value.trim())) {
       if (statement) await database.prepare(statement).run();
     }
   };
@@ -95,6 +101,8 @@ beforeAll(async () => {
   await migration("migrations/0022_channel_link_codes.sql");
   await migration("migrations/0025_byok_price_negotiation.sql");
   await migration("migrations/0026_channel_accounts.sql");
+  await migration("migrations/0029_memory_authority_log.sql");
+  await migration("migrations/0030_memory_log_projection.sql");
   const now = Date.now();
   await database
     .prepare(

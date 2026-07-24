@@ -23,6 +23,14 @@ static int16_t _buffer_1[MIC_BUFFER_SAMPLES];
 static volatile uint8_t _next_buffer_index = 0;
 static volatile mix_handler _callback = NULL;
 
+static nrfx_pdm_t _pdm = NRFX_PDM_INSTANCE(NRF_PDM_BASE);
+
+ISR_DIRECT_DECLARE(pdm_isr)
+{
+    nrfx_pdm_irq_handler(&_pdm);
+    return 1;
+}
+
 static void pdm_irq_handler(nrfx_pdm_evt_t const *event)
 {
     // Ignore error (how to handle?)
@@ -35,10 +43,10 @@ static void pdm_irq_handler(nrfx_pdm_evt_t const *event)
     if (event->buffer_requested) {
         LOG_DBG("Audio buffer requested");
         if (_next_buffer_index == 0) {
-            nrfx_pdm_buffer_set(_buffer_0, MIC_BUFFER_SAMPLES);
+            nrfx_pdm_buffer_set(&_pdm, _buffer_0, MIC_BUFFER_SAMPLES);
             _next_buffer_index = 1;
         } else {
-            nrfx_pdm_buffer_set(_buffer_1, MIC_BUFFER_SAMPLES);
+            nrfx_pdm_buffer_set(&_pdm, _buffer_1, MIC_BUFFER_SAMPLES);
             _next_buffer_index = 0;
         }
     }
@@ -56,7 +64,9 @@ int mic_start()
 {
 
     // Start the high frequency clock
-    if (!nrf_clock_hf_is_running(NRF_CLOCK, NRF_CLOCK_HFCLK_HIGH_ACCURACY)) {
+    nrf_clock_hfclk_t hfclk_src = NRF_CLOCK_HFCLK_LOW_ACCURACY;
+    if (!nrf_clock_is_running(NRF_CLOCK, NRF_CLOCK_DOMAIN_HFCLK, &hfclk_src) ||
+        hfclk_src != NRF_CLOCK_HFCLK_HIGH_ACCURACY) {
         nrf_clock_task_trigger(NRF_CLOCK, NRF_CLOCK_TASK_HFCLKSTART);
     }
 
@@ -65,12 +75,12 @@ int mic_start()
     pdm_config.gain_l = MIC_GAIN;
     pdm_config.gain_r = MIC_GAIN;
     pdm_config.interrupt_priority = MIC_IRC_PRIORITY;
-    pdm_config.clock_freq = NRF_PDM_FREQ_1280K;
+    pdm_config.prescalers.clock_freq = NRF_PDM_FREQ_1280K;
     pdm_config.mode = NRF_PDM_MODE_MONO;
     pdm_config.edge = NRF_PDM_EDGE_LEFTFALLING;
-    pdm_config.ratio = NRF_PDM_RATIO_80X;
-    IRQ_DIRECT_CONNECT(PDM_IRQn, 5, nrfx_pdm_irq_handler, 0); // IMPORTANT!
-    if (nrfx_pdm_init(&pdm_config, pdm_irq_handler) != NRFX_SUCCESS) {
+    pdm_config.prescalers.ratio = NRF_PDM_RATIO_80X;
+    IRQ_DIRECT_CONNECT(PDM_IRQn, 5, pdm_isr, 0); // IMPORTANT!
+    if (nrfx_pdm_init(&_pdm, &pdm_config, pdm_irq_handler) != 0) {
         LOG_ERR("Audio unable to initialize PDM");
         return -1;
     }
@@ -80,7 +90,7 @@ int mic_start()
     nrfy_gpio_pin_set(PDM_PWR_PIN);
 
     // Start PDM
-    if (nrfx_pdm_start() != NRFX_SUCCESS) {
+    if (nrfx_pdm_start(&_pdm) != 0) {
         LOG_ERR("Audio unable to start PDM");
         return -1;
     }

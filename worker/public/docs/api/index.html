@@ -1,0 +1,1631 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <base href="/"/>
+    <meta charset="utf-8"/>
+    <script src="/main.js" defer></script>
+    <script src="/mark.js" defer></script>
+    <!--$-->
+    <title>Omi — API reference</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <meta name="description" content="The Omi public API and MCP server: authentication, scopes, rate limits, REST endpoints and MCP tools. The written contract, rendered."/>
+    <link href="data:image/svg+xml,%3Csvg%20xmlns%3D'http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg'%20viewBox%3D'0%200%2032%2032'%3E%3Crect%20width%3D'32'%20height%3D'32'%20rx%3D'7'%20fill%3D'%23171716'%2F%3E%3Ccircle%20cx%3D%2215.94%22%20cy%3D%225.27%22%20r%3D%222.12%22%20fill%3D%22%23fffcec%22%2F%3E%3Ccircle%20cx%3D%2223.94%22%20cy%3D%227.94%22%20r%3D%222.12%22%20fill%3D%22%23fffcec%22%2F%3E%3Ccircle%20cx%3D%2226.61%22%20cy%3D%2215.94%22%20r%3D%222.12%22%20fill%3D%22%23fffcec%22%2F%3E%3Ccircle%20cx%3D%2223.94%22%20cy%3D%2223.94%22%20r%3D%222.12%22%20fill%3D%22%23fffcec%22%2F%3E%3Ccircle%20cx%3D%2215.94%22%20cy%3D%2226.61%22%20r%3D%222.12%22%20fill%3D%22%23fffcec%22%2F%3E%3Ccircle%20cx%3D%227.94%22%20cy%3D%2223.94%22%20r%3D%222.12%22%20fill%3D%22%23fffcec%22%2F%3E%3Ccircle%20cx%3D%225.27%22%20cy%3D%2215.94%22%20r%3D%222.12%22%20fill%3D%22%23fffcec%22%2F%3E%3Ccircle%20cx%3D%227.94%22%20cy%3D%227.94%22%20r%3D%222.12%22%20fill%3D%22%23fffcec%22%2F%3E%3C%2Fsvg%3E" rel="icon"/>
+    <link href="https://omi.tsc.hk/docs/api" rel="canonical"/>
+    <link as="font" type="font/woff2" crossorigin href="/inter-latin-variable.woff2" rel="preload"/>
+    <link as="font" type="font/woff2" crossorigin href="/geist-pixel-square.woff2" rel="preload"/>
+    <link href="/styles.css" rel="stylesheet"/>
+    <meta name="theme-color" content="#171716"/>
+    <meta property="og:title" content="Omi — API reference"/>
+    <meta property="og:description" content="The Omi public API and MCP server: authentication, scopes, rate limits, REST endpoints and MCP tools. The written contract, rendered."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://omi.tsc.hk/docs/api"/>
+    <!--/-->
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <div class="field" aria-hidden="true"><i></i><i></i><i></i></div>
+    <header id="nav" class="nav">
+      <a class="brand" aria-label="Omi home" href="/">
+        <svg class="omi-mark omi-mark--nav" viewBox="0 0 260 260" aria-hidden="true" data-omi-mark><g class="omi-mark-ring"><circle id="d1" cx="129.5" cy="42.79" r="17.2" style="--ux:0.0;--uy:-1.0"/><circle id="d2" cx="194.5" cy="64.5" r="17.2" style="--ux:0.7071;--uy:-0.7071"/><circle id="d3" cx="216.21" cy="129.5" r="17.2" style="--ux:1.0;--uy:0.0"/><circle id="d4" cx="194.5" cy="194.5" r="17.2" style="--ux:0.7071;--uy:0.7071"/><circle id="d5" cx="129.5" cy="216.21" r="17.2" style="--ux:0.0;--uy:1.0"/><circle id="d6" cx="64.5" cy="194.5" r="17.2" style="--ux:-0.7071;--uy:0.7071"/><circle id="d7" cx="42.79" cy="129.5" r="17.2" style="--ux:-1.0;--uy:0.0"/><circle id="d8" cx="64.5" cy="64.5" r="17.2" style="--ux:-0.7071;--uy:-0.7071"/></g></svg>
+         Omi
+      </a>
+      <nav id="navLinks" class="nav-links" aria-label="Primary">
+        <a class="cta" href="https://api.omi.tsc.hk/portal">Open Omi</a>
+        <a href="/architecture">Documentation</a>
+        <a href="https://api.omi.tsc.hk/portal#api-keys">API login</a>
+      </nav>
+    </header>
+    <main id="main">
+      <section id="top" class="hero hero--doc wrap" aria-labelledby="t1">
+        <div class="hero-grid">
+          <p class="label rise d1">Reference</p>
+          <h1 id="t1" class="giant rise d2">The public API</h1>
+          <div class="hero-foot">
+            <p class="mid rise d3">
+              Two surfaces on one credential: a REST API under <code>/api/v1</code> and an MCP server at <code>/mcp</code>. Everything here is scoped to a single account.
+            </p>
+          </div>
+        </div>
+      </section>
+      <section id="contents" class="band wrap" aria-labelledby="t2">
+        <h2 id="t2" class="label">Contents</h2>
+        <ol class="toc">
+          <li><a href="#1-authentication">1. Authentication</a></li>
+          <li><a href="#2-rate-limits">2. Rate limits</a></li>
+          <li><a href="#3-conventions">3. Conventions</a></li>
+          <li><a href="#4-rest-endpoints">4. REST endpoints</a></li>
+          <li><a href="#5-mcp-server">5. MCP server</a></li>
+          <li><a href="#6-data-lifetime-and-deletion">6. Data lifetime and deletion</a></li>
+        </ol>
+      </section>
+      <section id="reference" class="band wrap" aria-label="API reference">
+        <div class="prose">
+          <p>Base URL: <code>https://omi.tsc.hk</code></p>
+          <p>Two programmatic surfaces are served by the same Cloudflare Worker:</p>
+          <div class="table-scroll" tabindex="0" role="region" aria-label="Table, scrollable"><table>
+          <thead>
+          <tr>
+          <th>Surface</th>
+          <th>Base path</th>
+          <th>Protocol</th>
+          </tr>
+          </thead>
+          <tbody>
+          <tr>
+          <td>Public REST API</td>
+          <td><code>/api/v1</code></td>
+          <td>JSON over HTTPS</td>
+          </tr>
+          <tr>
+          <td>MCP server</td>
+          <td><code>/mcp</code></td>
+          <td>MCP streamable HTTP (JSON-RPC 2.0)</td>
+          </tr>
+          </tbody>
+          </table></div>
+          <p>Both surfaces accept the same credentials, enforce the same scopes, resolve to
+          the same uid, and share one rate-limit budget per user. Everything they expose
+          is scoped to a single Omi account: there is no cross-account access and no
+          admin surface.</p>
+          <p>The first-party routes under <code>/v1/...</code> are <strong>not</strong> part of this contract. They
+          require a Firebase ID token, change with the apps, and are documented only by
+          the source. Build against <code>/api/v1</code> and <code>/mcp</code>.</p>
+          <hr />
+          <h2 id="1-authentication">1. Authentication</h2>
+          <p>Every request to <code>/api/v1/*</code> and <code>/mcp</code> must carry a credential. Two are
+          accepted.</p>
+          <h3 id="11-api-keys-recommended-for-programmatic-access">1.1 API keys (recommended for programmatic access)</h3>
+          <p>An API key is a long-lived, per-account, revocable credential. Send it as a
+          bearer token:</p>
+          <pre><code>Authorization: Bearer omi_sk_1f3c9ab2_9pQ7...43-chars
+          </code></pre>
+          <p>or, equivalently, in a dedicated header:</p>
+          <pre><code>X-API-Key: omi_sk_1f3c9ab2_9pQ7...43-chars
+          </code></pre>
+          <p><code>Authorization</code> wins when both are present.</p>
+          <p>Key format: <code>omi_sk_</code> + 8 lowercase hex characters (the public prefix) + <code>_</code> +
+          43 base64url characters (the secret). Total length is 59 characters. Match keys
+          with <code>^omi_sk_[0-9a-f]{8}_[A-Za-z0-9_-]{43}$</code>.</p>
+          <p>Storage: only the SHA-256 digest of the full key is persisted, in the D1 table
+          <code>api_keys</code>. Lookup is by public prefix and the digest comparison is
+          constant-time, so neither the database nor response timing reveals a usable
+          credential. The plaintext key is returned exactly once, at creation.</p>
+          <h3 id="12-firebase-id-tokens">1.2 Firebase ID tokens</h3>
+          <p>The apps' own credential also works on the public surface:</p>
+          <pre><code>Authorization: Bearer <Firebase ID token>
+          </code></pre>
+          <p>A Firebase-authenticated caller is the account owner in person and therefore
+          carries <strong>every</strong> scope. Tokens expire in about an hour; do not use them for
+          unattended integrations.</p>
+          <h3 id="13-scopes">1.3 Scopes</h3>
+          <div class="table-scroll" tabindex="0" role="region" aria-label="Table, scrollable"><table>
+          <thead>
+          <tr>
+          <th>Scope</th>
+          <th>Grants</th>
+          </tr>
+          </thead>
+          <tbody>
+          <tr>
+          <td><code>memory:read</code></td>
+          <td><code>GET /api/v1/memory/search</code>, <code>GET /api/v1/memories</code>; tools <code>search_memory</code>, <code>list_memories</code></td>
+          </tr>
+          <tr>
+          <td><code>currents:read</code></td>
+          <td><code>GET /api/v1/currents</code>; tool <code>list_currents</code></td>
+          </tr>
+          <tr>
+          <td><code>currents:write</code></td>
+          <td><code>POST /api/v1/currents</code>; tool <code>create_current</code></td>
+          </tr>
+          <tr>
+          <td><code>conversations:read</code></td>
+          <td><code>GET /api/v1/conversations/messages</code>, <code>GET /api/v1/notes</code>; tools <code>list_conversation_messages</code>, <code>list_meeting_notes</code></td>
+          </tr>
+          <tr>
+          <td><code>assistant:write</code></td>
+          <td><code>POST /api/v1/assistant/messages</code>; tool <code>ask_omi</code></td>
+          </tr>
+          <tr>
+          <td><code>facetime:write</code></td>
+          <td><code>POST /api/v1/facetime/calls</code>; tool <code>start_facetime_call</code></td>
+          </tr>
+          <tr>
+          <td><code>speech:write</code></td>
+          <td><code>POST /api/v1/speech/transcriptions</code>, <code>POST /api/v1/speech/synthesis</code>; tools <code>transcribe_audio</code>, <code>speak_text</code></td>
+          </tr>
+          </tbody>
+          </table></div>
+          <p><code>GET /api/v1/me</code> requires a valid credential but no scope.</p>
+          <p>A key missing the scope for a route gets <code>403</code> with
+          <code>{"error":"Missing scope","scope":"<scope>"}</code>. On MCP the same condition is a
+          JSON-RPC error with code <code>-32000</code>.</p>
+          <h3 id="14-managing-keys">1.4 Managing keys</h3>
+          <p>Key management is deliberately <strong>not</strong> available to API keys — a key cannot
+          mint or revoke keys. These three routes live on the first-party surface and
+          require a Firebase ID token.</p>
+          <h4 id="post-v1api-keys"><code>POST /v1/api-keys</code></h4>
+          <p>Create a key.</p>
+          <p>Request:</p>
+          <pre><code class="language-json">{
+            "name": "my-integration",
+            "scopes": ["memory:read", "currents:read", "currents:write"],
+            "expiresAt": 1793664000000
+          }
+          </code></pre>
+          <div class="table-scroll" tabindex="0" role="region" aria-label="Table, scrollable"><table>
+          <thead>
+          <tr>
+          <th>Field</th>
+          <th>Type</th>
+          <th>Required</th>
+          <th>Notes</th>
+          </tr>
+          </thead>
+          <tbody>
+          <tr>
+          <td><code>name</code></td>
+          <td>string</td>
+          <td>yes</td>
+          <td>1–120 characters after trimming. Label only.</td>
+          </tr>
+          <tr>
+          <td><code>scopes</code></td>
+          <td>string[]</td>
+          <td>no</td>
+          <td>Defaults to all six scopes. Must be non-empty and contain only known scopes. Duplicates are collapsed.</td>
+          </tr>
+          <tr>
+          <td><code>expiresAt</code></td>
+          <td>integer | null</td>
+          <td>no</td>
+          <td>Unix epoch <strong>milliseconds</strong>. Must be in the future. <code>null</code> or omitted means no expiry.</td>
+          </tr>
+          </tbody>
+          </table></div>
+          <p><code>201</code> response:</p>
+          <pre><code class="language-json">{
+            "key": "omi_sk_1f3c9ab2_9pQ7...",
+            "apiKey": {
+              "id": "b3f1c0e2-...",
+              "name": "my-integration",
+              "prefix": "omi_sk_1f3c9ab2",
+              "scopes": ["memory:read", "currents:read", "currents:write"],
+              "createdAt": 1761177600000,
+              "lastUsedAt": null,
+              "expiresAt": 1793664000000,
+              "revokedAt": null
+            }
+          }
+          </code></pre>
+          <p><code>key</code> is shown only here. Store it immediately.</p>
+          <p>Errors: <code>400 {"error":"Invalid API key request"}</code>,
+          <code>409 {"error":"API key limit reached"}</code> (25 live keys per account),
+          <code>429 {"error":"Too many requests"}</code> (10 creations per hour per account).</p>
+          <h4 id="get-v1api-keys"><code>GET /v1/api-keys</code></h4>
+          <p><code>200</code> → <code>{"keys":[ <apiKey object>, ... ]}</code>, newest first, up to 100. Includes
+          revoked keys. Never includes the secret.</p>
+          <h4 id="delete-v1api-keysid"><code>DELETE /v1/api-keys/{id}</code></h4>
+          <p><code>204</code> on success. <code>404 {"error":"API key not found"}</code> if the id is unknown,
+          belongs to another account, or is already revoked. Revocation is immediate: the
+          next request with that key gets <code>401</code>.</p>
+          <h3 id="15-authentication-errors">1.5 Authentication errors</h3>
+          <div class="table-scroll" tabindex="0" role="region" aria-label="Table, scrollable"><table>
+          <thead>
+          <tr>
+          <th>Status</th>
+          <th>Body</th>
+          <th>Cause</th>
+          </tr>
+          </thead>
+          <tbody>
+          <tr>
+          <td><code>401</code></td>
+          <td><code>{"error":"Authentication required"}</code></td>
+          <td>No credential presented.</td>
+          </tr>
+          <tr>
+          <td><code>401</code></td>
+          <td><code>{"error":"Authentication failed"}</code></td>
+          <td>Unknown, malformed, expired or revoked key; invalid Firebase token.</td>
+          </tr>
+          <tr>
+          <td><code>503</code></td>
+          <td><code>{"error":"Authentication unavailable"}</code></td>
+          <td>Credential store or Firebase key set unreachable. Retry.</td>
+          </tr>
+          </tbody>
+          </table></div>
+          <hr />
+          <h2 id="2-rate-limits">2. Rate limits</h2>
+          <p>Limits are fixed windows counted per account (uid), shared between the REST API
+          and MCP. Firebase-authenticated calls count against the same budget.</p>
+          <div class="table-scroll" tabindex="0" role="region" aria-label="Table, scrollable"><table>
+          <thead>
+          <tr>
+          <th>Bucket</th>
+          <th>Applies to</th>
+          <th>Limit</th>
+          </tr>
+          </thead>
+          <tbody>
+          <tr>
+          <td><code>public-read</code></td>
+          <td><code>GET /memory/search</code>, <code>GET /memories</code>, <code>GET /currents</code>, <code>GET /conversations/messages</code>, <code>GET /notes</code>; and their tools</td>
+          <td>120 requests / 60 s</td>
+          </tr>
+          <tr>
+          <td><code>public-write</code></td>
+          <td><code>POST /currents</code>; tool <code>create_current</code></td>
+          <td>60 requests / 60 s</td>
+          </tr>
+          <tr>
+          <td><code>public-assistant</code></td>
+          <td><code>POST /assistant/messages</code>; tool <code>ask_omi</code></td>
+          <td>20 requests / 60 s</td>
+          </tr>
+          <tr>
+          <td><code>public-facetime</code></td>
+          <td><code>POST /facetime/calls</code>; tool <code>start_facetime_call</code></td>
+          <td>5 requests / 60 s</td>
+          </tr>
+          <tr>
+          <td><code>public-transcribe</code></td>
+          <td><code>POST /speech/transcriptions</code>; tool <code>transcribe_audio</code></td>
+          <td>10 requests / 60 s</td>
+          </tr>
+          <tr>
+          <td><code>public-speak</code></td>
+          <td><code>POST /speech/synthesis</code>; tool <code>speak_text</code></td>
+          <td>20 requests / 60 s</td>
+          </tr>
+          <tr>
+          <td>key creation</td>
+          <td><code>POST /v1/api-keys</code></td>
+          <td>10 / 60 min</td>
+          </tr>
+          </tbody>
+          </table></div>
+          <p>Exceeding a limit returns <code>429</code> with <code>{"error":"Too many requests"}</code> and a
+          <code>Retry-After</code> header in whole seconds. On MCP the same condition arrives as a
+          tool result with <code>isError: true</code> and body <code>{"error":"Too many requests"}</code>.</p>
+          <p><code>GET /api/v1/me</code> is not rate limited.</p>
+          <p>Managed-AI capacity control applies to <code>ask_omi</code> / <code>POST /assistant/messages</code>
+          independently of these buckets and can also produce <code>429</code>. The speech routes
+          sit behind the same managed-STT admission and cost reservation the live STT
+          sessions use, which can also produce <code>429</code> — see §4.10 and §4.11.</p>
+          <hr />
+          <h2 id="3-conventions">3. Conventions</h2>
+          <ul>
+          <li>All request and response bodies are JSON; <code>Content-Type: application/json</code>.</li>
+          <li>All timestamps in request and response bodies are Unix epoch <strong>milliseconds</strong>
+          (integers), except inside a Current's <code>timing</code> block and <code>createdAt</code> /
+          <code>updatedAt</code>, which are ISO-8601 strings — see §4.4.</li>
+          <li>Errors are always <code>{"error": "<human-readable message>"}</code>, sometimes with
+          extra fields (<code>scope</code> on a scope failure).</li>
+          <li>Unknown query parameters and unknown body fields are ignored.</li>
+          <li>Malformed JSON, a non-object body, or a body that fails validation is <code>400</code>.</li>
+          <li>Unknown paths are <code>404 {"error":"Not found"}</code>.</li>
+          </ul>
+          <hr />
+          <h2 id="4-rest-endpoints">4. REST endpoints</h2>
+          <h3 id="41-get-apiv1me">4.1 <code>GET /api/v1/me</code></h3>
+          <p>Identify the credential. No scope required.</p>
+          <p><code>200</code>:</p>
+          <pre><code class="language-json">{
+            "uid": "firebase-uid",
+            "email": "person@example.com",
+            "auth": "api_key",
+            "keyId": "b3f1c0e2-...",
+            "scopes": ["memory:read", "currents:read"]
+          }
+          </code></pre>
+          <p><code>auth</code> is <code>"api_key"</code> or <code>"firebase"</code>. For a Firebase caller, <code>keyId</code> and
+          <code>scopes</code> are <code>null</code> (meaning: all scopes).</p>
+          <h3 id="42-get-apiv1memorysearch">4.2 <code>GET /api/v1/memory/search</code></h3>
+          <p>Scope: <code>memory:read</code>.</p>
+          <p>Search the account's memory. Every result cites the evidence it came from;
+          claims with no surviving citation are never returned.</p>
+          <div class="table-scroll" tabindex="0" role="region" aria-label="Table, scrollable"><table>
+          <thead>
+          <tr>
+          <th>Query parameter</th>
+          <th>Type</th>
+          <th>Default</th>
+          <th>Range</th>
+          </tr>
+          </thead>
+          <tbody>
+          <tr>
+          <td><code>q</code></td>
+          <td>string</td>
+          <td>— (required)</td>
+          <td>1–500 characters</td>
+          </tr>
+          <tr>
+          <td><code>limit</code></td>
+          <td>integer</td>
+          <td><code>12</code></td>
+          <td>1–50 (clamped to 20 in <code>semantic</code> mode)</td>
+          </tr>
+          <tr>
+          <td><code>mode</code></td>
+          <td><code>keyword</code> | <code>semantic</code></td>
+          <td><code>keyword</code></td>
+          <td>—</td>
+          </tr>
+          </tbody>
+          </table></div>
+          <p><code>keyword</code> is a BM25-ranked full-text match; every whitespace-separated term
+          (first 16) must be present. <code>semantic</code> is embedding similarity over the same
+          claims and is better for paraphrases.</p>
+          <p><code>200</code>, <code>mode=keyword</code>:</p>
+          <pre><code class="language-json">{
+            "query": "release notes",
+            "items": [
+              {
+                "memory": { "kind": "claim", "id": "claim-uuid" },
+                "excerpt": "Ship the v4 release notes before Friday",
+                "relevance_basis_points": 10000,
+                "evidence_ids": ["evidence-uuid"]
+              }
+            ],
+            "gaps": [],
+            "mode": "keyword"
+          }
+          </code></pre>
+          <p><code>relevance_basis_points</code> is a rank-derived score out of 10000, descending.
+          <code>gaps</code> contains <code>["No cited memory matched the query."]</code> when <code>items</code> is empty,
+          and is otherwise <code>[]</code>.</p>
+          <p><code>200</code>, <code>mode=semantic</code>:</p>
+          <pre><code class="language-json">{
+            "query": "release notes",
+            "mode": "semantic",
+            "items": [
+              { "id": "claim-uuid", "content": "Ship the v4 release notes before Friday", "score": 0.83 }
+            ]
+          }
+          </code></pre>
+          <p><code>score</code> is cosine similarity in <code>[0, 1]</code>. If the vector index is unavailable,
+          <code>items</code> is <code>[]</code> rather than an error.</p>
+          <p>Errors: <code>400 {"error":"Invalid memory search"}</code>, <code>403</code>, <code>429</code>.</p>
+          <h3 id="43-get-apiv1memories">4.3 <code>GET /api/v1/memories</code></h3>
+          <p>Scope: <code>memory:read</code>.</p>
+          <p>List the account's active profile memories — the durable view of who the user
+          is and what they are currently doing — newest updated first.</p>
+          <div class="table-scroll" tabindex="0" role="region" aria-label="Table, scrollable"><table>
+          <thead>
+          <tr>
+          <th>Query parameter</th>
+          <th>Type</th>
+          <th>Default</th>
+          <th>Range</th>
+          </tr>
+          </thead>
+          <tbody>
+          <tr>
+          <td><code>limit</code></td>
+          <td>integer</td>
+          <td><code>100</code></td>
+          <td>1–100</td>
+          </tr>
+          </tbody>
+          </table></div>
+          <p><code>200</code>:</p>
+          <pre><code class="language-json">{
+            "memories": [
+              {
+                "id": "profile-entry-uuid",
+                "content": "Prefers async written updates over meetings",
+                "source": "conversation",
+                "evidence": [
+                  {
+                    "id": "evidence-uuid",
+                    "sourceId": "source-uuid",
+                    "sourceRevisionId": "revision-uuid",
+                    "quote": "let's keep it in writing",
+                    "locator": null
+                  }
+                ],
+                "profileKind": "stable",
+                "status": "active",
+                "validFrom": 1761177600000,
+                "validTo": null,
+                "createdAt": 1761177600000,
+                "updatedAt": 1761181200000
+              }
+            ]
+          }
+          </code></pre>
+          <div class="table-scroll" tabindex="0" role="region" aria-label="Table, scrollable"><table>
+          <thead>
+          <tr>
+          <th>Field</th>
+          <th>Type</th>
+          <th>Notes</th>
+          </tr>
+          </thead>
+          <tbody>
+          <tr>
+          <td><code>source</code></td>
+          <td>string</td>
+          <td>Originating source kind: <code>conversation</code>, <code>screen</code>, <code>audio</code>, <code>document</code>, <code>integration</code>, <code>user_correction</code>.</td>
+          </tr>
+          <tr>
+          <td><code>evidence[].locator</code></td>
+          <td>any | null</td>
+          <td>Opaque source-specific position; may be <code>null</code>.</td>
+          </tr>
+          <tr>
+          <td><code>profileKind</code></td>
+          <td><code>stable</code> | <code>current</code></td>
+          <td>Enduring trait vs present context.</td>
+          </tr>
+          <tr>
+          <td><code>status</code></td>
+          <td><code>active</code> | <code>pinned</code></td>
+          <td>Archived entries are never returned.</td>
+          </tr>
+          <tr>
+          <td><code>validFrom</code> / <code>validTo</code></td>
+          <td>integer | null</td>
+          <td>Validity window; <code>validTo: null</code> means open-ended.</td>
+          </tr>
+          </tbody>
+          </table></div>
+          <p>Errors: <code>400 {"error":"Invalid memory list"}</code>, <code>403</code>, <code>429</code>.</p>
+          <h3 id="44-get-apiv1currents">4.4 <code>GET /api/v1/currents</code></h3>
+          <p>Scope: <code>currents:read</code>.</p>
+          <p>List open Currents — proposed next actions derived from memory — ranked by
+          confidence adjusted by the user's past feedback. Only <code>surfaced</code> and <code>accepted</code>
+          Currents are returned; candidates not yet due, snoozed, dismissed and expired
+          ones are not. Up to 100 items. Reading this endpoint promotes due candidates and
+          expires overdue ones as a side effect, exactly as the app does.</p>
+          <p><code>200</code>:</p>
+          <pre><code class="language-json">{
+            "currents": [
+              {
+                "id": "current-uuid",
+                "status": "surfaced",
+                "title": "Send the release notes",
+                "summary": "The release shipped but nobody has been told.",
+                "evidence": [{ "sourceId": "source-uuid", "reason": "Based on: let's ship Friday" }],
+                "sourceKind": "conversation",
+                "reason": "Based on: let's ship Friday",
+                "confidence": 0.9,
+                "proposedNextStep": "Draft a two-line note and send it.",
+                "proposedAction": { "kind": "review", "instruction": "Draft a two-line note and send it." },
+                "timing": {
+                  "surfaceAt": "2026-07-23T09:00:00.000Z",
+                  "expiresAt": null,
+                  "snoozedUntil": null
+                },
+                "feedbackReference": null,
+                "executionReference": null,
+                "createdAt": "2026-07-23T08:59:00.000Z",
+                "updatedAt": "2026-07-23T09:00:00.000Z",
+                "metadata": { "crepus": "<widget source>" }
+              }
+            ]
+          }
+          </code></pre>
+          <div class="table-scroll" tabindex="0" role="region" aria-label="Table, scrollable"><table>
+          <thead>
+          <tr>
+          <th>Field</th>
+          <th>Type</th>
+          <th>Notes</th>
+          </tr>
+          </thead>
+          <tbody>
+          <tr>
+          <td><code>status</code></td>
+          <td><code>surfaced</code> | <code>accepted</code></td>
+          <td>—</td>
+          </tr>
+          <tr>
+          <td><code>confidence</code></td>
+          <td>number</td>
+          <td><code>0</code>–<code>1</code>.</td>
+          </tr>
+          <tr>
+          <td><code>timing.*</code>, <code>createdAt</code>, <code>updatedAt</code></td>
+          <td>ISO-8601 string | null</td>
+          <td>Note: these are strings, not epoch milliseconds.</td>
+          </tr>
+          <tr>
+          <td><code>sourceKind</code></td>
+          <td>string | null</td>
+          <td>Kind of the cited memory source.</td>
+          </tr>
+          <tr>
+          <td><code>metadata.crepus</code></td>
+          <td>string</td>
+          <td>Present only when the Current carries an AI-authored widget description. Treat as untrusted display data.</td>
+          </tr>
+          </tbody>
+          </table></div>
+          <p>Errors: <code>403</code>, <code>429</code>.</p>
+          <h3 id="45-post-apiv1currents">4.5 <code>POST /api/v1/currents</code></h3>
+          <p>Scope: <code>currents:write</code>.</p>
+          <p>Create a Current. It is created with status <code>candidate</code> and becomes visible to
+          the user at <code>surfaceAt</code>; it will therefore usually <strong>not</strong> appear in
+          <code>GET /api/v1/currents</code> until then.</p>
+          <p>Request:</p>
+          <pre><code class="language-json">{
+            "title": "Send the release notes",
+            "summary": "The release shipped but nobody has been told.",
+            "reason": "The user said the release was ready yesterday.",
+            "proposedNextStep": "Draft a two-line note and send it.",
+            "confidence": 0.8,
+            "surfaceAt": 1761177600000,
+            "expiresAt": 1761264000000
+          }
+          </code></pre>
+          <div class="table-scroll" tabindex="0" role="region" aria-label="Table, scrollable"><table>
+          <thead>
+          <tr>
+          <th>Field</th>
+          <th>Type</th>
+          <th>Required</th>
+          <th>Default</th>
+          <th>Constraints</th>
+          </tr>
+          </thead>
+          <tbody>
+          <tr>
+          <td><code>title</code></td>
+          <td>string</td>
+          <td>yes</td>
+          <td>—</td>
+          <td>1–120 characters.</td>
+          </tr>
+          <tr>
+          <td><code>summary</code></td>
+          <td>string</td>
+          <td>yes</td>
+          <td>—</td>
+          <td>1–500 characters.</td>
+          </tr>
+          <tr>
+          <td><code>reason</code></td>
+          <td>string</td>
+          <td>yes</td>
+          <td>—</td>
+          <td>1–500 characters. Recorded as the citation quote when <code>evidenceId</code> is omitted.</td>
+          </tr>
+          <tr>
+          <td><code>proposedNextStep</code></td>
+          <td>string</td>
+          <td>yes</td>
+          <td>—</td>
+          <td>1–500 characters.</td>
+          </tr>
+          <tr>
+          <td><code>confidence</code></td>
+          <td>number</td>
+          <td>no</td>
+          <td><code>0.7</code></td>
+          <td><code>0</code>–<code>1</code> inclusive.</td>
+          </tr>
+          <tr>
+          <td><code>surfaceAt</code></td>
+          <td>integer</td>
+          <td>no</td>
+          <td>now</td>
+          <td>Epoch ms, positive.</td>
+          </tr>
+          <tr>
+          <td><code>expiresAt</code></td>
+          <td>integer | null</td>
+          <td>no</td>
+          <td><code>null</code></td>
+          <td>Epoch ms, strictly greater than <code>surfaceAt</code>.</td>
+          </tr>
+          <tr>
+          <td><code>evidenceId</code></td>
+          <td>string | null</td>
+          <td>no</td>
+          <td><code>null</code></td>
+          <td>An existing Omi evidence id. Omit unless you hold one.</td>
+          </tr>
+          </tbody>
+          </table></div>
+          <p>Every Current must cite evidence. When <code>evidenceId</code> is omitted, a memory source
+          of kind <code>integration</code> is created for the account with <code>reason</code> as its quote, and
+          the new Current cites it. When <code>evidenceId</code> is supplied it must be a live,
+          non-tombstoned evidence id belonging to the caller's account.</p>
+          <p><code>201</code> → <code>{"current": <Current object as in §4.4>}</code>.</p>
+          <p>Errors: <code>400 {"error":"Invalid Current"}</code>,
+          <code>404 {"error":"Cited evidence not found"}</code>, <code>403</code>, <code>429</code>.</p>
+          <h3 id="46-get-apiv1conversationsmessages">4.6 <code>GET /api/v1/conversations/messages</code></h3>
+          <p>Scope: <code>conversations:read</code>.</p>
+          <p>Read the account's single assistant conversation in cursor order. <code>cursor</code> is a
+          monotonically increasing integer; page forward by passing the previous
+          <code>nextCursor</code> as <code>after</code>.</p>
+          <div class="table-scroll" tabindex="0" role="region" aria-label="Table, scrollable"><table>
+          <thead>
+          <tr>
+          <th>Query parameter</th>
+          <th>Type</th>
+          <th>Default</th>
+          <th>Range</th>
+          </tr>
+          </thead>
+          <tbody>
+          <tr>
+          <td><code>after</code></td>
+          <td>integer</td>
+          <td><code>0</code></td>
+          <td>≥ 0</td>
+          </tr>
+          <tr>
+          <td><code>limit</code></td>
+          <td>integer</td>
+          <td><code>100</code></td>
+          <td>1–200</td>
+          </tr>
+          </tbody>
+          </table></div>
+          <p><code>200</code>:</p>
+          <pre><code class="language-json">{
+            "conversationId": "default",
+            "messages": [
+              {
+                "cursor": 42,
+                "id": "message-uuid",
+                "clientMessageId": "api:9f0c...",
+                "role": "user",
+                "source": "web",
+                "text": "what did I say about the release?",
+                "channelMessageId": null,
+                "deliveryId": null,
+                "createdAt": 1761177600000
+              }
+            ],
+            "nextCursor": 42
+          }
+          </code></pre>
+          <p><code>role</code> is <code>user</code> or <code>assistant</code>. <code>source</code> is <code>app</code>, <code>web</code>, <code>desktop</code>,
+          <code>telegram</code> or <code>blooio</code>. <code>blooio</code> is the stored identifier for the <strong>iMessage
+          channel</strong>; the provider behind it is now Sendblue. The identifier is
+          deliberately unchanged — it appears in three D1 <code>CHECK</code> constraints and in
+          <code>worker-rs</code>, and rewriting it would rebuild those tables and require both
+          binaries to ship at once, for no functional gain. Existing bindings therefore
+          keep working untouched. See §4.9.2. <code>nextCursor</code> equals <code>after</code> when no messages were
+          returned, so polling is safe. <code>channelMessageId</code> and <code>deliveryId</code> are non-null
+          only for messages that travelled over a linked chat channel.</p>
+          <p>Errors: <code>400 {"error":"Invalid replay range"}</code>, <code>403</code>, <code>429</code>.</p>
+          <h3 id="47-get-apiv1notes">4.7 <code>GET /api/v1/notes</code></h3>
+          <p>Scope: <code>conversations:read</code>.</p>
+          <p>List generated notes — one per local day, written from that day's conversation
+          and meeting evidence — newest day first. This is the same corpus the MCP tool
+          <code>list_meeting_notes</code> reads.</p>
+          <div class="table-scroll" tabindex="0" role="region" aria-label="Table, scrollable"><table>
+          <thead>
+          <tr>
+          <th>Query parameter</th>
+          <th>Type</th>
+          <th>Default</th>
+          <th>Range</th>
+          </tr>
+          </thead>
+          <tbody>
+          <tr>
+          <td><code>limit</code></td>
+          <td>integer</td>
+          <td><code>50</code></td>
+          <td>1–100</td>
+          </tr>
+          </tbody>
+          </table></div>
+          <p><code>200</code>:</p>
+          <pre><code class="language-json">{
+            "notes": [
+              {
+                "id": "review-uuid",
+                "localDate": "2026-07-22",
+                "inputRevision": "revision-fingerprint",
+                "body": "Standup: the release is cut...",
+                "citations": [
+                  {
+                    "id": "evidence-uuid",
+                    "sourceId": "source-uuid",
+                    "sourceRevisionId": "revision-uuid",
+                    "quote": "the release is cut",
+                    "locator": null
+                  }
+                ],
+                "createdAt": 1761177600000,
+                "updatedAt": 1761181200000
+              }
+            ]
+          }
+          </code></pre>
+          <p><code>localDate</code> is <code>YYYY-MM-DD</code> in the user's local timezone. <code>inputRevision</code>
+          identifies the input the note was generated from; a day can have more than one
+          note if its input changed. Retracted notes are never returned.</p>
+          <p>Errors: <code>400 {"error":"Invalid note list"}</code>, <code>403</code>, <code>429</code>.</p>
+          <h3 id="48-post-apiv1assistantmessages">4.8 <code>POST /api/v1/assistant/messages</code></h3>
+          <p>Scope: <code>assistant:write</code>. <strong>Requires an active Omi Pro subscription on the
+          account.</strong></p>
+          <p>Send a message to the user's assistant and get the reply. The assistant answers
+          with the account's synced memory and the last 12 conversation messages in
+          context. Both the question and the reply are appended to the conversation read
+          by <code>GET /api/v1/conversations/messages</code>, recorded with source <code>web</code>.</p>
+          <p>Request:</p>
+          <pre><code class="language-json">{
+            "text": "summarise what I decided about the release",
+            "clientMessageId": "my-app:2026-07-23:001"
+          }
+          </code></pre>
+          <div class="table-scroll" tabindex="0" role="region" aria-label="Table, scrollable"><table>
+          <thead>
+          <tr>
+          <th>Field</th>
+          <th>Type</th>
+          <th>Required</th>
+          <th>Notes</th>
+          </tr>
+          </thead>
+          <tbody>
+          <tr>
+          <td><code>text</code></td>
+          <td>string</td>
+          <td>yes</td>
+          <td>1–20000 characters after trimming.</td>
+          </tr>
+          <tr>
+          <td><code>clientMessageId</code></td>
+          <td>string</td>
+          <td>no</td>
+          <td>Idempotency key. 8–120 characters matching <code>[A-Za-z0-9._:-]</code>. Defaults to a generated <code>api:<uuid></code>. The reply is stored under <code><clientMessageId>:reply</code>.</td>
+          </tr>
+          </tbody>
+          </table></div>
+          <p><code>200</code>:</p>
+          <pre><code class="language-json">{
+            "reply": "You decided to cut the release Friday and send notes after.",
+            "message": {
+              "cursor": 42,
+              "id": "message-uuid",
+              "clientMessageId": "my-app:2026-07-23:001",
+              "role": "user",
+              "source": "web",
+              "text": "summarise what I decided about the release",
+              "channelMessageId": null,
+              "deliveryId": null,
+              "createdAt": 1761177600000,
+              "replayed": false
+            },
+            "answer": { "...": "same shape, role: assistant" }
+          }
+          </code></pre>
+          <p><code>reply</code> is trimmed and truncated to 4096 characters. <code>message.replayed</code> is
+          <code>true</code> when the <code>clientMessageId</code> had already been stored with identical
+          content.</p>
+          <p>Reusing a <code>clientMessageId</code> with <em>different</em> text is a conflict, not a replay.</p>
+          <p>Errors:</p>
+          <div class="table-scroll" tabindex="0" role="region" aria-label="Table, scrollable"><table>
+          <thead>
+          <tr>
+          <th>Status</th>
+          <th>Body</th>
+          <th>Cause</th>
+          </tr>
+          </thead>
+          <tbody>
+          <tr>
+          <td><code>400</code></td>
+          <td><code>{"error":"Invalid assistant message"}</code></td>
+          <td>Missing/oversized <code>text</code>, or malformed <code>clientMessageId</code>.</td>
+          </tr>
+          <tr>
+          <td><code>403</code></td>
+          <td><code>{"error":"Managed Pro required"}</code></td>
+          <td>Account has no active Pro entitlement.</td>
+          </tr>
+          <tr>
+          <td><code>403</code></td>
+          <td><code>{"error":"Missing scope","scope":"assistant:write"}</code></td>
+          <td>Key lacks the scope.</td>
+          </tr>
+          <tr>
+          <td><code>409</code></td>
+          <td><code>{"error":"Client message ID conflict"}</code></td>
+          <td><code>clientMessageId</code> reused with different content.</td>
+          </tr>
+          <tr>
+          <td><code>429</code></td>
+          <td><code>{"error":"Too many requests"}</code></td>
+          <td>Rate limit or managed-AI capacity.</td>
+          </tr>
+          <tr>
+          <td><code>502</code></td>
+          <td><code>{"error":"Managed AI unavailable"}</code></td>
+          <td>Upstream model failed or is unconfigured.</td>
+          </tr>
+          </tbody>
+          </table></div>
+          <p>This endpoint is synchronous and can take tens of seconds. Allow at least a
+          60-second client timeout. It does not stream; for token streaming, use the
+          first-party <code>/v1/chat/completions</code> route with a Firebase token.</p>
+          <h3 id="49-post-apiv1facetimecalls">4.9 <code>POST /api/v1/facetime/calls</code></h3>
+          <p>Scope: <code>facetime:write</code>.</p>
+          <blockquote>
+          <p><strong>Status: live on accounts with a Sendblue FaceTime line.</strong> The provider is
+          Sendblue (<code>POST https://api.sendblue.com/facetime/start-call</code>), which requires
+          a purchased FaceTime number. On an account without one the route keeps its
+          graceful state and returns <code>503</code> with <code>code: "facetime_unavailable"</code>.</p>
+          </blockquote>
+          <p>Place a FaceTime Audio call. The provider rings the handle on the recipient's
+          real device and returns Agora WebRTC credentials for the call's audio channel;
+          Omi joins that channel server-side and bridges the audio to Gemini Live, so the
+          recipient simply talks to Omi. There is no join link and no browser anywhere in
+          the path — see §4.9.1.</p>
+          <p>This is <strong>side-effectful and not undoable</strong>: it rings a real person's phone.
+          Confirm the handle with the user before calling it.</p>
+          <p>Request:</p>
+          <pre><code class="language-json">{
+            "handle": "+15551234567",
+            "idempotencyKey": "my-app:call:001"
+          }
+          </code></pre>
+          <div class="table-scroll" tabindex="0" role="region" aria-label="Table, scrollable"><table>
+          <thead>
+          <tr>
+          <th>Field</th>
+          <th>Type</th>
+          <th>Required</th>
+          <th>Notes</th>
+          </tr>
+          </thead>
+          <tbody>
+          <tr>
+          <td><code>handle</code></td>
+          <td>string</td>
+          <td>yes</td>
+          <td>Who to call. Must be an E.164 phone number — <code>+</code> then 7–15 digits, first digit non-zero. An email address parses but is refused with <code>400</code> before anything is sent upstream: Sendblue dials numbers, not FaceTime email identities.</td>
+          </tr>
+          <tr>
+          <td><code>idempotencyKey</code></td>
+          <td>string</td>
+          <td>no</td>
+          <td>8–120 characters matching <code>[A-Za-z0-9._:-]</code>. Hashed with the uid to derive the session id, so a retry lands on the same admission reservation instead of placing a second call. Defaults to a fresh UUID, which makes each call distinct.</td>
+          </tr>
+          </tbody>
+          </table></div>
+          <p>A handle that is neither an E.164 number nor a plausible email address is
+          rejected locally with <code>400</code>; nothing is sent upstream.</p>
+          <p><code>201</code>:</p>
+          <pre><code class="language-json">{
+            "call": {
+              "handle": "+15551234567",
+              "sessionId": "9f8e7d6c5b4a32100123456789abcdef",
+              "link": "https://omi.tsc.hk/facetime/sessions/9f8e7d6c5b4a32100123456789abcdef"
+            }
+          }
+          </code></pre>
+          <p><code>link</code> is retained for compatibility with existing clients, which validate that
+          it is an <code>https</code> URL. It now addresses the bridge session rather than an Apple
+          join page; nothing joins the call by opening it.</p>
+          <p>Errors:</p>
+          <div class="table-scroll" tabindex="0" role="region" aria-label="Table, scrollable"><table>
+          <thead>
+          <tr>
+          <th>Status</th>
+          <th>Body</th>
+          <th>Cause</th>
+          </tr>
+          </thead>
+          <tbody>
+          <tr>
+          <td><code>400</code></td>
+          <td><code>{"error":"Invalid FaceTime handle"}</code></td>
+          <td>Handle failed local validation, or <code>idempotencyKey</code> is malformed. No upstream call was made.</td>
+          </tr>
+          <tr>
+          <td><code>400</code></td>
+          <td><code>{"error":"Handle rejected by provider"}</code></td>
+          <td>Handle passed local validation but the provider refused it (upstream <code>400</code>/<code>422</code>) — for example a number with no FaceTime account.</td>
+          </tr>
+          <tr>
+          <td><code>403</code></td>
+          <td><code>{"error":"Missing scope","scope":"facetime:write"}</code></td>
+          <td>Key lacks the scope.</td>
+          </tr>
+          <tr>
+          <td><code>429</code></td>
+          <td><code>{"error":"Too many requests"}</code></td>
+          <td>Rate limit; see §2.</td>
+          </tr>
+          <tr>
+          <td><code>502</code></td>
+          <td><code>{"error":"FaceTime calling unavailable"}</code></td>
+          <td>Provider error, timeout, or an unusable response body. Safe to retry with the same <code>idempotencyKey</code>.</td>
+          </tr>
+          <tr>
+          <td><code>429</code></td>
+          <td><code>{"error":"FaceTime capacity exceeded"}</code></td>
+          <td>The realtime admission controller refused the session — the uid or the deployment is at its concurrent-session, seconds, or cost budget. <code>Retry-After</code> is set.</td>
+          </tr>
+          <tr>
+          <td><code>503</code></td>
+          <td><code>{"error":"FaceTime calling is not provisioned on this account","code":"facetime_unavailable"}</code></td>
+          <td>No FaceTime line on the Sendblue account (upstream <code>402</code>/<code>403</code>/<code>404</code>/<code>501</code>), or no <code>GEMINI_API_KEY</code> for the bridge. <strong>Do not retry</strong> — this is a product state, not a transient fault. Distinguish it by <code>code</code>, not by the status. When the bridge key is missing the phone is never rung.</td>
+          </tr>
+          <tr>
+          <td><code>503</code></td>
+          <td><code>{"error":"FaceTime calling unavailable"}</code></td>
+          <td>Credentials are unset or rejected (<code>SENDBLUE_*</code>, upstream <code>401</code>).</td>
+          </tr>
+          </tbody>
+          </table></div>
+          <h4 id="491-how-the-audio-is-bridged">4.9.1 How the audio is bridged</h4>
+          <p><code>POST /facetime/start-call</code> returns <code>{appId, channelName, token, uid}</code> for an
+          Agora channel rather than a link. Joining that channel needs Agora's native
+          Server Gateway SDK (x86_64 Linux), which cannot run in the Workers runtime, so
+          the bridge is a <strong>Cloudflare Container</strong> (<code>worker/container/facetime-bridge</code>)
+          driven by the <code>FaceTimeBridge</code> Durable Object:</p>
+          <ol>
+          <li><code>startFaceTimeSession</code> takes an admission reservation from <code>STT_ADMISSION</code>
+          (the same bounded seconds/cost controller the realtime STT path uses),
+          records the session in <code>managed_ai_requests</code>, then places the call.</li>
+          <li>The Durable Object starts one container per call and passes the Agora
+          credentials, the Gemini key and the session deadline as process environment.
+          Nothing secret is baked into the image.</li>
+          <li>The container joins the channel, streams caller audio to Gemini Live at
+          16 kHz mono, and pushes Gemini's 24 kHz audio back into the channel. Both
+          directions use bounded queues that drop the oldest frames under
+          backpressure, and every decoded chunk is size-capped.</li>
+          <li>The reservation is released on <strong>every</strong> exit path: the container's
+          <code>monitor()</code> promise, an explicit stop, the Durable Object alarm, the
+          container's own deadline, and the admission controller's claim alarm.</li>
+          </ol>
+          <p>Audio only — no video track is published or subscribed.</p>
+          <p>Required environment (secrets via <code>wrangler secret put</code>, never committed):</p>
+          <div class="table-scroll" tabindex="0" role="region" aria-label="Table, scrollable"><table>
+          <thead>
+          <tr>
+          <th>Variable</th>
+          <th>Purpose</th>
+          </tr>
+          </thead>
+          <tbody>
+          <tr>
+          <td><code>SENDBLUE_API_KEY_ID</code> / <code>SENDBLUE_API_KEY_SECRET</code></td>
+          <td>Sendblue API credentials, sent as <code>sb-api-key-id</code> / <code>sb-api-secret-key</code>.</td>
+          </tr>
+          <tr>
+          <td><code>SENDBLUE_FACETIME_NUMBER</code></td>
+          <td>The FaceTime-enabled Sendblue number to call from.</td>
+          </tr>
+          <tr>
+          <td><code>GEMINI_API_KEY</code></td>
+          <td>Gemini Live. OpenRouter cannot carry realtime, so this is its own key.</td>
+          </tr>
+          <tr>
+          <td><code>GEMINI_LIVE_MODEL</code></td>
+          <td>Live model id (var, already set).</td>
+          </tr>
+          <tr>
+          <td><code>FACETIME_MAX_SESSION_SECONDS</code></td>
+          <td>Session cap, default 600, hard-capped at 3600.</td>
+          </tr>
+          <tr>
+          <td><code>FACETIME_COST_MICROUSD_PER_MINUTE</code></td>
+          <td>Reservation cost estimate, default 30000.</td>
+          </tr>
+          <tr>
+          <td><code>FACETIME_SYSTEM_PROMPT</code></td>
+          <td>Optional system instruction for the call.</td>
+          </tr>
+          <tr>
+          <td><code>AGORA_CLOUD_PROXY</code></td>
+          <td><code>tcp</code> (default) pins media to TLS 443 via Agora Cloud Proxy; <code>udp</code> or anything else uses direct mode.</td>
+          </tr>
+          </tbody>
+          </table></div>
+          <h4 id="492-imessage-channel-sendblue">4.9.2 iMessage channel: Sendblue</h4>
+          <p>The iMessage/SMS/RCS channel moved from Blooio to Sendblue. Exactly one
+          provider is live per deployment: <code>delivery.ts</code> uses Sendblue when the Sendblue
+          variables are set, and falls back to Blooio otherwise. Telegram is untouched.</p>
+          <p><strong>Outbound</strong> — <code>POST https://api.sendblue.com/api/send-message</code> with
+          <code>{number, from_number, content}</code> and the <code>sb-api-key-id</code> / <code>sb-api-secret-key</code>
+          headers. Sendblue has <strong>no idempotency key</strong>, so the delivery queue's lease and
+          status machinery is the only duplicate-send guard; do not retry outside it.</p>
+          <p><strong>Inbound</strong> — <code>POST /webhooks/sendblue/<SENDBLUE_WEBHOOK_PATH_TOKEN></code>.</p>
+          <blockquote>
+          <p><strong>Security caveat, stated plainly.</strong> Sendblue does not sign webhook bodies.
+          It echoes the shared secret configured for the endpoint back in an
+          <code>sb-signing-secret</code> header. There is no HMAC, no timestamp, and therefore no
+          binding between the secret and the payload — anyone who observes that header
+          once can forge inbound messages until it is rotated. This is materially
+          weaker than the Blooio and Stripe paths, and cannot be fixed from our side.</p>
+          <p>Compensating controls, all implemented in <code>worker/src/sendblue.ts</code>:</p>
+          <ol>
+          <li>The header is compared in <strong>constant time</strong>, so it cannot be recovered by
+          timing the endpoint.</li>
+          <li>The route carries a <strong>second high-entropy path segment</strong>
+          (<code>SENDBLUE_WEBHOOK_PATH_TOKEN</code>), also compared in constant time. Both the
+          header and the path must leak together for a forgery to land.</li>
+          <li>Replay is bounded by <code>webhook_events</code>, keyed on <code>message_handle</code>, so a
+          captured request cannot be replayed into a second inbound message.</li>
+          <li>Rotate the secret through Sendblue's webhooks API on any suspicion of
+          exposure.</li>
+          </ol>
+          </blockquote>
+          <p>The <code>receive</code> payload is mapped as: <code>from_number</code> → channel user id,
+          <code>group_id</code> (when non-empty) → chat id so group threads stay one conversation,
+          <code>content</code> → text, <code>media_url</code> → carried through for voice-note transcription.
+          Outbound echoes (<code>is_outbound: true</code>) are dropped.</p>
+          <p>Sendblue also exposes a <code>call_log</code> webhook carrying <code>disposition</code>
+          (<code>connected</code> / <code>not_answered</code> / <code>voicemail</code>) and <code>transcript</code>. It fires only
+          for outbound calls placed from the Sendblue <strong>dashboard</strong> — not for API-placed
+          FaceTime calls — so it is not wired up.</p>
+          <p>Environment:</p>
+          <div class="table-scroll" tabindex="0" role="region" aria-label="Table, scrollable"><table>
+          <thead>
+          <tr>
+          <th>Variable</th>
+          <th>Purpose</th>
+          </tr>
+          </thead>
+          <tbody>
+          <tr>
+          <td><code>SENDBLUE_NUMBER</code></td>
+          <td>The line messages are sent from.</td>
+          </tr>
+          <tr>
+          <td><code>SENDBLUE_WEBHOOK_SIGNING_SECRET</code></td>
+          <td>Value expected in <code>sb-signing-secret</code>.</td>
+          </tr>
+          <tr>
+          <td><code>SENDBLUE_WEBHOOK_PATH_TOKEN</code></td>
+          <td>Secret path segment on the inbound route.</td>
+          </tr>
+          </tbody>
+          </table></div>
+          <p>Migrating the channel also gains SMS and RCS fallback, group messaging,
+          typing indicators, read receipts, expressive send styles and voice notes
+          (<code>.caf</code> media renders as a voice memo). It loses Blooio's body-signed webhook
+          and its idempotency key.</p>
+          <h3 id="410-post-apiv1speechtranscriptions">4.10 <code>POST /api/v1/speech/transcriptions</code></h3>
+          <p>Scope: <code>speech:write</code>. <strong>Requires an active Omi Pro subscription on the
+          account.</strong></p>
+          <p>Transcribe a recording server-side. This is the path for callers that have no
+          in-process Omi hub — the FaceTime / Gemini Live bridge, a phone flushing a
+          write-ahead log of buffered audio after a dropout, and third-party
+          integrations. The live capture path in the desktop and mobile apps does not use
+          this route; it transcribes in the hub.</p>
+          <p>The call runs as an OpenRouter chat completion against the first tier whose
+          model declares audio input: balanced (<code>OMI_MODEL_BALANCED</code>, default
+          <code>xiaomi/mimo-v2.5</code>), then transcribe (<code>OMI_MODEL_TRANSCRIBE</code>), then multimodal
+          — through the Cloudflare AI Gateway when one is configured. When no configured
+          model can accept audio the request is refused with <code>503</code> rather than sent to a
+          text-only model.</p>
+          <p>Request:</p>
+          <pre><code class="language-json">{
+            "audio": "<base64>",
+            "format": "mp3",
+            "clientMessageId": "phone:wal:2026-07-23:0007",
+            "language": "en",
+            "durationSeconds": 42
+          }
+          </code></pre>
+          <div class="table-scroll" tabindex="0" role="region" aria-label="Table, scrollable"><table>
+          <thead>
+          <tr>
+          <th>Field</th>
+          <th>Type</th>
+          <th>Required</th>
+          <th>Notes</th>
+          </tr>
+          </thead>
+          <tbody>
+          <tr>
+          <td><code>audio</code></td>
+          <td>string</td>
+          <td>yes</td>
+          <td>Base64 of the raw audio bytes; no <code>data:</code> prefix. Maximum 10 MiB decoded (about 14 MiB of base64).</td>
+          </tr>
+          <tr>
+          <td><code>format</code></td>
+          <td>string</td>
+          <td>yes</td>
+          <td><code>wav</code> or <code>mp3</code>.</td>
+          </tr>
+          <tr>
+          <td><code>clientMessageId</code></td>
+          <td>string</td>
+          <td>yes</td>
+          <td>Idempotency key. 8–120 characters matching <code>[A-Za-z0-9._:-]</code>. Required, not defaulted: a retry that generated a fresh id would be charged twice.</td>
+          </tr>
+          <tr>
+          <td><code>language</code></td>
+          <td>string</td>
+          <td>no</td>
+          <td><code>auto</code> (default) or a BCP-47 tag such as <code>en</code> or <code>en-US</code>. A hint only.</td>
+          </tr>
+          <tr>
+          <td><code>durationSeconds</code></td>
+          <td>integer</td>
+          <td>no</td>
+          <td>Known duration. When omitted it is estimated from the upload size, conservatively (<code>wav</code> at 32 kB/s, <code>mp3</code> at 4 kB/s), and the estimate is what gets reserved against the budget.</td>
+          </tr>
+          </tbody>
+          </table></div>
+          <p>The whole request body is capped at roughly 14 MiB; a larger body is rejected
+          before it is buffered. Audio longer than <code>SPEECH_MAX_AUDIO_SECONDS</code> (default
+          900 s) is rejected before any upstream call.</p>
+          <p><code>200</code>:</p>
+          <pre><code class="language-json">{
+            "requestId": "sha256-of-uid-and-clientMessageId",
+            "clientMessageId": "phone:wal:2026-07-23:0007",
+            "model": "xiaomi/mimo-v2.5",
+            "language": "en",
+            "durationSeconds": 42,
+            "text": "hello there second line",
+            "segments": [
+              { "index": 0, "start": 0, "end": 1.5, "text": "hello there" },
+              { "index": 1, "start": 1.5, "end": 3, "text": "second line" }
+            ]
+          }
+          </code></pre>
+          <p><code>start</code> and <code>end</code> are seconds from the beginning of the audio, <strong>as reported by
+          the model</strong> — treat them as approximate, and expect <code>null</code> on both when the
+          model returns an untimed transcript. In that case the whole transcript is
+          returned as a single segment.</p>
+          <p><strong>Idempotency.</strong> The <code>clientMessageId</code> decides identity. Retrying a completed
+          request with the same id and the same payload replays the stored transcript
+          verbatim with <code>"idempotentReplay": true</code> added — no second upstream call, no
+          second charge, no duplicated segments. Reusing the id with a <em>different</em>
+          payload is <code>409</code>. A retry that arrives while the first attempt is still running
+          is also <code>409</code>; retry once it settles.</p>
+          <p>Errors:</p>
+          <div class="table-scroll" tabindex="0" role="region" aria-label="Table, scrollable"><table>
+          <thead>
+          <tr>
+          <th>Status</th>
+          <th>Body</th>
+          <th>Cause</th>
+          </tr>
+          </thead>
+          <tbody>
+          <tr>
+          <td><code>400</code></td>
+          <td><code>{"error":"Invalid transcription request"}</code></td>
+          <td>Missing or malformed <code>audio</code>, <code>format</code>, <code>clientMessageId</code>, <code>language</code>, or <code>durationSeconds</code>.</td>
+          </tr>
+          <tr>
+          <td><code>403</code></td>
+          <td><code>{"error":"Managed Pro required"}</code></td>
+          <td>Account has no active Pro entitlement.</td>
+          </tr>
+          <tr>
+          <td><code>403</code></td>
+          <td><code>{"error":"Missing scope","scope":"speech:write"}</code></td>
+          <td>Key lacks the scope.</td>
+          </tr>
+          <tr>
+          <td><code>409</code></td>
+          <td><code>{"error":"Client message ID conflict"}</code></td>
+          <td><code>clientMessageId</code> reused with a different payload.</td>
+          </tr>
+          <tr>
+          <td><code>409</code></td>
+          <td><code>{"error":"Speech request in progress"}</code></td>
+          <td>An earlier attempt under this id is still running.</td>
+          </tr>
+          <tr>
+          <td><code>413</code></td>
+          <td><code>{"error":"Audio too large"}</code></td>
+          <td>Body or <code>audio</code> beyond the size ceiling. Nothing was buffered upstream.</td>
+          </tr>
+          <tr>
+          <td><code>413</code></td>
+          <td><code>{"error":"Audio too long"}</code></td>
+          <td>Audio beyond <code>SPEECH_MAX_AUDIO_SECONDS</code>.</td>
+          </tr>
+          <tr>
+          <td><code>429</code></td>
+          <td><code>{"error":"Too many requests"}</code></td>
+          <td>Rate limit; see §2.</td>
+          </tr>
+          <tr>
+          <td><code>429</code></td>
+          <td><code>{"error":"Managed speech capacity exceeded"}</code></td>
+          <td>Admission/cost budget exhausted. <code>Retry-After</code> in whole seconds.</td>
+          </tr>
+          <tr>
+          <td><code>502</code></td>
+          <td><code>{"error":"Managed speech unavailable"}</code></td>
+          <td>Provider error, timeout, or an unusable response body. The reservation is settled and released; safe to retry with the same <code>clientMessageId</code>.</td>
+          </tr>
+          <tr>
+          <td><code>503</code></td>
+          <td><code>{"error":"Managed speech unavailable"}</code></td>
+          <td>Speech is unconfigured on the deployment.</td>
+          </tr>
+          </tbody>
+          </table></div>
+          <p>Synchronous, and long audio takes a while: allow at least a 120-second client
+          timeout.</p>
+          <h3 id="411-post-apiv1speechsynthesis">4.11 <code>POST /api/v1/speech/synthesis</code></h3>
+          <p>Scope: <code>speech:write</code>. <strong>Requires an active Omi Pro subscription on the
+          account.</strong></p>
+          <p>Read text aloud and return the audio. Runs as an OpenRouter chat completion
+          with the audio output modality against the <code>speak</code> model tier
+          (<code>OMI_MODEL_SPEAK</code>, default <code>openai/gpt-audio-mini</code>), through the Cloudflare AI
+          Gateway when one is configured.</p>
+          <p>Request:</p>
+          <pre><code class="language-json">{
+            "text": "Your car is booked for Friday at nine.",
+            "clientMessageId": "assistant:tts:0007",
+            "voice": "alloy",
+            "format": "mp3"
+          }
+          </code></pre>
+          <div class="table-scroll" tabindex="0" role="region" aria-label="Table, scrollable"><table>
+          <thead>
+          <tr>
+          <th>Field</th>
+          <th>Type</th>
+          <th>Required</th>
+          <th>Notes</th>
+          </tr>
+          </thead>
+          <tbody>
+          <tr>
+          <td><code>text</code></td>
+          <td>string</td>
+          <td>yes</td>
+          <td>1–1000 characters, spoken verbatim.</td>
+          </tr>
+          <tr>
+          <td><code>clientMessageId</code></td>
+          <td>string</td>
+          <td>yes</td>
+          <td>Idempotency key. 8–120 characters matching <code>[A-Za-z0-9._:-]</code>.</td>
+          </tr>
+          <tr>
+          <td><code>voice</code></td>
+          <td>string</td>
+          <td>no</td>
+          <td>One of <code>alloy</code>, <code>ash</code>, <code>ballad</code>, <code>coral</code>, <code>echo</code>, <code>sage</code>, <code>shimmer</code>, <code>verse</code>. Defaults to <code>alloy</code>.</td>
+          </tr>
+          <tr>
+          <td><code>format</code></td>
+          <td>string</td>
+          <td>no</td>
+          <td><code>mp3</code> (default) or <code>opus</code>. Uncompressed formats are not offered: the audio is retained for idempotent replay and has to fit in one row.</td>
+          </tr>
+          </tbody>
+          </table></div>
+          <p><code>200</code>:</p>
+          <pre><code class="language-json">{
+            "requestId": "sha256-of-uid-and-clientMessageId",
+            "clientMessageId": "assistant:tts:0007",
+            "model": "openai/gpt-audio-mini",
+            "voice": "alloy",
+            "format": "mp3",
+            "characters": 38,
+            "estimatedSeconds": 3,
+            "audio": "<base64>"
+          }
+          </code></pre>
+          <p><code>estimatedSeconds</code> is the reservation estimate (about 14 characters per second
+          of speech), not a measurement of the returned audio.</p>
+          <p><strong>Idempotency.</strong> Same rules as §4.10: a retry with the same id and same text,
+          voice and format replays the stored audio with <code>"idempotentReplay": true</code> and
+          is not charged again.</p>
+          <p>Errors:</p>
+          <div class="table-scroll" tabindex="0" role="region" aria-label="Table, scrollable"><table>
+          <thead>
+          <tr>
+          <th>Status</th>
+          <th>Body</th>
+          <th>Cause</th>
+          </tr>
+          </thead>
+          <tbody>
+          <tr>
+          <td><code>400</code></td>
+          <td><code>{"error":"Invalid speech request"}</code></td>
+          <td>Missing or blank <code>text</code>, malformed <code>clientMessageId</code>, unknown <code>voice</code> or <code>format</code>.</td>
+          </tr>
+          <tr>
+          <td><code>403</code></td>
+          <td><code>{"error":"Managed Pro required"}</code></td>
+          <td>Account has no active Pro entitlement.</td>
+          </tr>
+          <tr>
+          <td><code>403</code></td>
+          <td><code>{"error":"Missing scope","scope":"speech:write"}</code></td>
+          <td>Key lacks the scope.</td>
+          </tr>
+          <tr>
+          <td><code>409</code></td>
+          <td><code>{"error":"Client message ID conflict"}</code></td>
+          <td><code>clientMessageId</code> reused with different text, voice or format.</td>
+          </tr>
+          <tr>
+          <td><code>409</code></td>
+          <td><code>{"error":"Speech request in progress"}</code></td>
+          <td>An earlier attempt under this id is still running.</td>
+          </tr>
+          <tr>
+          <td><code>413</code></td>
+          <td><code>{"error":"Text too long"}</code></td>
+          <td><code>text</code> beyond 1000 characters. Nothing was sent upstream.</td>
+          </tr>
+          <tr>
+          <td><code>429</code></td>
+          <td><code>{"error":"Too many requests"}</code></td>
+          <td>Rate limit; see §2.</td>
+          </tr>
+          <tr>
+          <td><code>429</code></td>
+          <td><code>{"error":"Managed speech capacity exceeded"}</code></td>
+          <td>Admission/cost budget exhausted. <code>Retry-After</code> in whole seconds.</td>
+          </tr>
+          <tr>
+          <td><code>502</code></td>
+          <td><code>{"error":"Managed speech unavailable"}</code></td>
+          <td>Provider error, timeout, or no audio in the response.</td>
+          </tr>
+          <tr>
+          <td><code>502</code></td>
+          <td><code>{"error":"Synthesized audio too large"}</code></td>
+          <td>The provider returned audio too large to retain for replay. Shorten the text.</td>
+          </tr>
+          <tr>
+          <td><code>503</code></td>
+          <td><code>{"error":"Managed speech unavailable"}</code></td>
+          <td>Speech is unconfigured on the deployment.</td>
+          </tr>
+          </tbody>
+          </table></div>
+          <hr />
+          <h2 id="5-mcp-server">5. MCP server</h2>
+          <p>Endpoint: <code>POST https://omi.tsc.hk/mcp</code></p>
+          <p>Transport: MCP <strong>streamable HTTP</strong>, protocol version <code>2025-06-18</code>. The
+          implementation is JSON-RPC 2.0 over a single POST endpoint and is stateless:
+          there are no session ids, no <code>Mcp-Session-Id</code> header, and no server-initiated
+          messages. Every request carries its own credential.</p>
+          <ul>
+          <li><code>GET /mcp</code> → <code>405</code> (the optional SSE stream is not offered).</li>
+          <li><code>DELETE /mcp</code> → <code>405</code> (there is no session to terminate).</li>
+          <li>Request bodies larger than 256 KiB → <code>413</code>.</li>
+          </ul>
+          <p>Responses are <code>application/json</code>; the server never replies with
+          <code>text/event-stream</code>. Successful responses carry
+          <code>MCP-Protocol-Version: 2025-06-18</code>.</p>
+          <h3 id="51-authentication">5.1 Authentication</h3>
+          <p>Identical to §1: an <code>omi_sk_</code> API key or a Firebase ID token in
+          <code>Authorization: Bearer ...</code> (or the key in <code>X-API-Key</code>). A request with no valid
+          credential is rejected with HTTP <code>401</code> before any JSON-RPC parsing.</p>
+          <p>Client configuration example:</p>
+          <pre><code class="language-json">{
+            "mcpServers": {
+              "omi": {
+                "type": "http",
+                "url": "https://omi.tsc.hk/mcp",
+                "headers": { "Authorization": "Bearer omi_sk_..." }
+              }
+            }
+          }
+          </code></pre>
+          <h3 id="52-supported-methods">5.2 Supported methods</h3>
+          <div class="table-scroll" tabindex="0" role="region" aria-label="Table, scrollable"><table>
+          <thead>
+          <tr>
+          <th>Method</th>
+          <th>Behaviour</th>
+          </tr>
+          </thead>
+          <tbody>
+          <tr>
+          <td><code>initialize</code></td>
+          <td>Returns <code>protocolVersion</code>, <code>capabilities: {"tools":{"listChanged":false}}</code>, <code>serverInfo: {"name":"omi","version":"1.0.0"}</code>, and <code>instructions</code>.</td>
+          </tr>
+          <tr>
+          <td><code>ping</code></td>
+          <td>Returns <code>{}</code>.</td>
+          </tr>
+          <tr>
+          <td><code>tools/list</code></td>
+          <td>Returns <code>{"tools":[...]}</code>. No pagination; the full list is always returned and never changes at runtime.</td>
+          </tr>
+          <tr>
+          <td><code>tools/call</code></td>
+          <td>Runs a tool. See §5.3.</td>
+          </tr>
+          <tr>
+          <td><code>notifications/*</code></td>
+          <td>Accepted and ignored; the server replies HTTP <code>202</code> with an empty body.</td>
+          </tr>
+          </tbody>
+          </table></div>
+          <p>Any other method returns JSON-RPC error <code>-32601</code>.</p>
+          <p>A JSON array of messages (a batch) is answered with an array of the responses
+          that have ids, in request order. A batch containing only notifications returns
+          HTTP <code>202</code> with an empty body.</p>
+          <p>Error codes: <code>-32700</code> malformed JSON, <code>-32600</code> invalid JSON-RPC envelope,
+          <code>-32601</code> unknown method, <code>-32602</code> unknown tool or malformed <code>params</code>, <code>-32000</code>
+          missing scope or tool execution failure.</p>
+          <h3 id="53-toolscall-result-shape">5.3 <code>tools/call</code> result shape</h3>
+          <pre><code class="language-json">{
+            "jsonrpc": "2.0",
+            "id": 4,
+            "result": {
+              "content": [{ "type": "text", "text": "{\"currents\":[]}" }],
+              "structuredContent": { "currents": [] },
+              "isError": false
+            }
+          }
+          </code></pre>
+          <p><code>structuredContent</code> is the exact JSON body the corresponding REST endpoint
+          returns; <code>content[0].text</code> is that same object serialized. Application-level
+          failures (validation, rate limits, missing Pro, not found) come back as a
+          <strong>successful</strong> JSON-RPC response with <code>isError: true</code> and
+          <code>structuredContent: {"error": "..."}</code> — matching the REST error bodies in §4.
+          Protocol-level failures (unknown tool, missing scope) come back as JSON-RPC
+          errors.</p>
+          <h3 id="54-tools">5.4 Tools</h3>
+          <div class="table-scroll" tabindex="0" role="region" aria-label="Table, scrollable"><table>
+          <thead>
+          <tr>
+          <th>Tool</th>
+          <th>Scope</th>
+          <th>REST equivalent</th>
+          </tr>
+          </thead>
+          <tbody>
+          <tr>
+          <td><code>search_memory</code></td>
+          <td><code>memory:read</code></td>
+          <td><code>GET /api/v1/memory/search</code></td>
+          </tr>
+          <tr>
+          <td><code>list_memories</code></td>
+          <td><code>memory:read</code></td>
+          <td><code>GET /api/v1/memories</code></td>
+          </tr>
+          <tr>
+          <td><code>list_currents</code></td>
+          <td><code>currents:read</code></td>
+          <td><code>GET /api/v1/currents</code></td>
+          </tr>
+          <tr>
+          <td><code>create_current</code></td>
+          <td><code>currents:write</code></td>
+          <td><code>POST /api/v1/currents</code></td>
+          </tr>
+          <tr>
+          <td><code>list_meeting_notes</code></td>
+          <td><code>conversations:read</code></td>
+          <td><code>GET /api/v1/notes</code></td>
+          </tr>
+          <tr>
+          <td><code>list_conversation_messages</code></td>
+          <td><code>conversations:read</code></td>
+          <td><code>GET /api/v1/conversations/messages</code></td>
+          </tr>
+          <tr>
+          <td><code>ask_omi</code></td>
+          <td><code>assistant:write</code></td>
+          <td><code>POST /api/v1/assistant/messages</code></td>
+          </tr>
+          <tr>
+          <td><code>start_facetime_call</code></td>
+          <td><code>facetime:write</code></td>
+          <td><code>POST /api/v1/facetime/calls</code></td>
+          </tr>
+          </tbody>
+          </table></div>
+          <p>Every input schema is a JSON Schema object with <code>additionalProperties: false</code>.</p>
+          <h4 id="search_memory"><code>search_memory</code></h4>
+          <pre><code>query    string   required, 1–500
+          limit    integer  optional, 1–50, default 12
+          mode     enum     optional, "keyword" | "semantic", default "keyword"
+          </code></pre>
+          <h4 id="list_memories"><code>list_memories</code></h4>
+          <pre><code>limit    integer  optional, 1–100, default 100
+          </code></pre>
+          <h4 id="list_currents"><code>list_currents</code></h4>
+          <p>No arguments.</p>
+          <h4 id="create_current"><code>create_current</code></h4>
+          <pre><code>title             string   required, 1–120
+          summary           string   required, 1–500
+          reason            string   required, 1–500
+          proposedNextStep  string   required, 1–500
+          confidence        number   optional, 0–1, default 0.7
+          surfaceAt         integer  optional, epoch ms, default now
+          expiresAt         integer  optional, epoch ms, > surfaceAt
+          evidenceId        string   optional, ≤ 200
+          </code></pre>
+          <h4 id="list_meeting_notes"><code>list_meeting_notes</code></h4>
+          <pre><code>limit    integer  optional, 1–100, default 50
+          </code></pre>
+          <h4 id="list_conversation_messages"><code>list_conversation_messages</code></h4>
+          <pre><code>after    integer  optional, ≥ 0, default 0
+          limit    integer  optional, 1–200, default 100
+          </code></pre>
+          <h4 id="ask_omi"><code>ask_omi</code></h4>
+          <pre><code>text     string   required, 1–20000
+          </code></pre>
+          <p>Requires an active Omi Pro subscription; without one the result is
+          <code>isError: true</code> with <code>{"error":"Managed Pro required"}</code>.</p>
+          <h4 id="start_facetime_call"><code>start_facetime_call</code></h4>
+          <pre><code>handle          string   required, 3-254, E.164 phone number
+          idempotencyKey  string   optional, 8-120 chars of [A-Za-z0-9._:-]
+          </code></pre>
+          <p>Side-effectful: it rings a real person's device, and Omi then joins the call's
+          audio. See §4.9 for the full semantics. On an account with no FaceTime line the
+          tool returns <code>isError: true</code> with
+          <code>{"error":"FaceTime calling is not provisioned on this account","code":"facetime_unavailable"}</code>.</p>
+          <h4 id="transcribe_audio"><code>transcribe_audio</code></h4>
+          <pre><code>audio            string   required, base64 audio bytes
+          format           string   required, 'wav' or 'mp3'
+          clientMessageId  string   required, 8-120 chars of [A-Za-z0-9._:-]
+          language         string   optional, BCP-47 hint, defaults to 'auto'
+          durationSeconds  integer  optional, 1-3600
+          </code></pre>
+          <p>Server-side transcription; see §4.10 for the full semantics. The audio travels
+          inline in the JSON-RPC request, so the <strong>256 KiB body cap applies</strong>: that is
+          roughly 180 KiB of audio, about 45 seconds of mp3. Anything longer must go to
+          <code>POST /api/v1/speech/transcriptions</code>.</p>
+          <h4 id="speak_text"><code>speak_text</code></h4>
+          <pre><code>text             string   required, 1-1000
+          clientMessageId  string   required, 8-120 chars of [A-Za-z0-9._:-]
+          voice            string   optional, one of alloy|ash|ballad|coral|echo|sage|shimmer|verse
+          format           string   optional, 'mp3' (default) or 'opus'
+          </code></pre>
+          <p>Returns base64 audio; see §4.11. Both tools require an active Omi Pro
+          subscription and are idempotent on <code>clientMessageId</code>.</p>
+          <hr />
+          <h2 id="6-data-lifetime-and-deletion">6. Data lifetime and deletion</h2>
+          <p>Deleting an Omi account (<code>DELETE /v1/account</code>, first-party, Firebase-only)
+          removes every row this API can read, including all API keys for that account.
+          Revoking a key is immediate and irreversible; there is no un-revoke.</p>
+        </div>
+      </section>
+    </main>
+    <footer class="wrap">
+      <div class="foot">
+        <p>
+          <svg class="omi-mark omi-mark--foot" viewBox="0 0 260 260" aria-hidden="true" data-omi-mark><g class="omi-mark-ring"><circle id="d1" cx="129.5" cy="42.79" r="17.2" style="--ux:0.0;--uy:-1.0"/><circle id="d2" cx="194.5" cy="64.5" r="17.2" style="--ux:0.7071;--uy:-0.7071"/><circle id="d3" cx="216.21" cy="129.5" r="17.2" style="--ux:1.0;--uy:0.0"/><circle id="d4" cx="194.5" cy="194.5" r="17.2" style="--ux:0.7071;--uy:0.7071"/><circle id="d5" cx="129.5" cy="216.21" r="17.2" style="--ux:0.0;--uy:1.0"/><circle id="d6" cx="64.5" cy="194.5" r="17.2" style="--ux:-0.7071;--uy:0.7071"/><circle id="d7" cx="42.79" cy="129.5" r="17.2" style="--ux:-1.0;--uy:0.0"/><circle id="d8" cx="64.5" cy="64.5" r="17.2" style="--ux:-0.7071;--uy:-0.7071"/></g></svg>
+           Open source, private by design.
+        </p>
+        <nav aria-label="Footer">
+          <a href="/#what">What it does</a>
+          <a href="/#api">API</a>
+          <a href="/architecture">Architecture</a>
+          <a href="/docs/api">API reference</a>
+          <a href="https://api.omi.tsc.hk/portal">Open Omi</a>
+        </nav>
+      </div>
+    </footer>
+  </body>
+</html>

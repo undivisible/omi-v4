@@ -258,16 +258,34 @@ pub fn validate_facetime(input: &Value, generated: &str) -> Result<FaceTimeInput
 }
 
 /// Maps a [`crate::facetime::FaceTimeOutcome`] to the operation result.
-pub fn facetime_result(outcome: crate::facetime::FaceTimeOutcome) -> OperationResult {
+///
+/// `session_id` is derived from the caller's idempotency key by
+/// `faceTimeSessionId`, not from anything the provider returns, and `app_url`
+/// is `APP_URL` — both are supplied by the caller so this stays pure.
+pub fn facetime_result(
+    outcome: crate::facetime::FaceTimeOutcome,
+    session_id: &str,
+    app_url: Option<&str>,
+) -> OperationResult {
     use crate::facetime::FaceTimeOutcome as Outcome;
     match outcome {
-        Outcome::Ok { link, handle } => {
-            OperationResult::new(201, json!({ "call": { "handle": handle, "link": link } }))
-        }
+        // The client keeps reading `call.link`, so the session URL is returned
+        // under that name; the Agora credentials belong to the bridge, not to
+        // the caller, and are deliberately not exposed here.
+        Outcome::Ok { handle, .. } => OperationResult::new(
+            201,
+            json!({
+                "call": {
+                    "handle": handle,
+                    "sessionId": session_id,
+                    "link": crate::facetime::session_link(app_url, session_id),
+                },
+            }),
+        ),
         Outcome::Unavailable => OperationResult::new(
             503,
             json!({
-                "error": "FaceTime calling is not yet available from Blooio",
+                "error": "FaceTime calling is not provisioned on this account",
                 "code": "facetime_unavailable",
             }),
         ),
@@ -438,23 +456,59 @@ mod tests {
 
     #[test]
     fn facetime_outcomes_map_to_the_documented_statuses() {
-        assert_eq!(
-            facetime_result(FaceTimeOutcome::Ok {
-                link: "l".into(),
-                handle: "h".into()
-            })
-            .status,
-            201
+        let placed = facetime_result(
+            FaceTimeOutcome::Ok {
+                handle: "+15551234567".into(),
+                agora: crate::facetime::AgoraCredentials {
+                    app_id: "app".into(),
+                    channel_name: "chan".into(),
+                    token: "tok".into(),
+                    uid: 1,
+                },
+            },
+            "0123456789abcdef",
+            None,
         );
-        let unavailable = facetime_result(FaceTimeOutcome::Unavailable);
+        assert_eq!(placed.status, 201);
+        assert_eq!(placed.body["call"]["sessionId"], json!("0123456789abcdef"));
+        assert_eq!(
+            placed.body["call"]["link"],
+            json!("https://omi.tsc.hk/facetime/sessions/0123456789abcdef")
+        );
+        // The bridge's Agora credentials never reach the caller.
+        assert!(!placed.body.to_string().contains("tok"));
+        assert_eq!(
+            facetime_result(
+                FaceTimeOutcome::Ok {
+                    handle: "+15551234567".into(),
+                    agora: crate::facetime::AgoraCredentials {
+                        app_id: "app".into(),
+                        channel_name: "chan".into(),
+                        token: "tok".into(),
+                        uid: 1,
+                    },
+                },
+                "abc",
+                Some("https://app.example.com"),
+            )
+            .body["call"]["link"],
+            json!("https://app.example.com/facetime/sessions/abc")
+        );
+        let unavailable = facetime_result(FaceTimeOutcome::Unavailable, "abc", None);
         assert_eq!(unavailable.status, 503);
         assert_eq!(unavailable.body["code"], json!("facetime_unavailable"));
-        assert_eq!(facetime_result(FaceTimeOutcome::Unconfigured).status, 503);
         assert_eq!(
-            facetime_result(FaceTimeOutcome::Rejected { status: 422 }).status,
+            facetime_result(FaceTimeOutcome::Unconfigured, "abc", None).status,
+            503
+        );
+        assert_eq!(
+            facetime_result(FaceTimeOutcome::Rejected { status: 422 }, "abc", None).status,
             400
         );
-        assert_eq!(facetime_result(FaceTimeOutcome::Failed).status, 502);
+        assert_eq!(
+            facetime_result(FaceTimeOutcome::Failed, "abc", None).status,
+            502
+        );
     }
 
     #[test]

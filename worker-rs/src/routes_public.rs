@@ -357,15 +357,27 @@ async fn start_facetime_call(
     handle: &str,
     token: &str,
 ) -> facetime::FaceTimeOutcome {
-    let Some(secret) = env_get(&ctx.env, "BLOOIO_API_KEY").filter(|key| !key.is_empty()) else {
+    if !facetime::facetime_provider_configured(|name| env_get(&ctx.env, name)) {
+        return facetime::FaceTimeOutcome::Unconfigured;
+    }
+    // Sendblue dials an E.164 number. An email handle is a valid FaceTime
+    // identity but not something this provider can ring, so it is refused
+    // before the request rather than failing opaquely upstream.
+    if !facetime::is_diallable_handle(handle) {
+        return facetime::FaceTimeOutcome::Rejected { status: 400 };
+    }
+    let (Some(key_id), Some(secret), Some(from_number)) = (
+        env_get(&ctx.env, "SENDBLUE_API_KEY_ID"),
+        env_get(&ctx.env, "SENDBLUE_API_KEY_SECRET"),
+        env_get(&ctx.env, "SENDBLUE_FACETIME_NUMBER"),
+    ) else {
         return facetime::FaceTimeOutcome::Unconfigured;
     };
     let mut init = RequestInit::new();
     init.with_method(Method::Post);
     let headers = Headers::new();
-    if headers
-        .set("authorization", &format!("Bearer {secret}"))
-        .is_err()
+    if headers.set("sb-api-key-id", &key_id).is_err()
+        || headers.set("sb-api-secret-key", &secret).is_err()
         || headers.set("content-type", "application/json").is_err()
         || headers
             .set("idempotency-key", &facetime::idempotency_key(uid, token))
@@ -375,7 +387,7 @@ async fn start_facetime_call(
     }
     init.with_headers(headers);
     init.with_body(Some(JsValue::from_str(
-        &json!({ "handle": handle }).to_string(),
+        &facetime::upstream_body(handle, &from_number).to_string(),
     )));
     let Ok(request) = Request::new_with_init(facetime::FACETIME_ENDPOINT, &init) else {
         return facetime::FaceTimeOutcome::Failed;
@@ -401,7 +413,15 @@ pub(crate) async fn start_facetime_operation(
     if let Some(limited) = gate(ctx, uid, &api::FACETIME_BUDGET).await {
         return limited;
     }
-    api::facetime_result(start_facetime_call(ctx, uid, &input.handle, &input.token).await)
+    // The idempotency key decides the session id, so a retry lands on the same
+    // session instead of placing a second call.
+    let session_id = facetime::session_id(uid, &input.token);
+    let outcome = start_facetime_call(ctx, uid, &input.handle, &input.token).await;
+    api::facetime_result(
+        outcome,
+        &session_id,
+        env_get(&ctx.env, "APP_URL").as_deref(),
+    )
 }
 
 // ---------------------------------------------------------------------------

@@ -5,6 +5,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'app_services.dart';
+import 'demo/demo_app.dart';
+import 'demo/demo_mode.dart';
 import 'features/desktop_auth_screen.dart';
 import 'features/mobile_companion_shell.dart';
 import 'features/mobile_onboarding_screen.dart';
@@ -19,6 +21,22 @@ import 'ui/omi_typography.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // The public demo build (`--dart-define=OMI_DEMO=1`) runs the same shell
+  // against seeded, in-process services and never touches the network — no
+  // Firebase, no worker, no model. It also never reaches onboarding or the
+  // sign-in screen. Outside that build this constant is false and the whole
+  // branch is compiled away.
+  if (omiDemoMode) {
+    await runOmiDemo(
+      (services) => OmiApp(
+        services: services,
+        onboardingCompletionStore: demoOnboardingCompletion(),
+        overlayBuilder: (context, child) =>
+            DemoBanner(child: child ?? const SizedBox.shrink()),
+      ),
+    );
+    return;
+  }
   final services = await AppServices.initializeFromEnvironment();
   await services.initialize();
   // Rewind's capture loop belongs to the primary engine, and only to it: the
@@ -146,11 +164,16 @@ class OmiApp extends StatefulWidget {
     this.services,
     this.onboardingCompletionStore,
     this.platformOverride,
+    this.overlayBuilder,
   });
 
   final AppServices? services;
   final OnboardingCompletionStore? onboardingCompletionStore;
   final TargetPlatform? platformOverride;
+
+  /// Wraps every route, including pushed ones. The demo build uses it to keep
+  /// its banner on screen wherever the visitor navigates.
+  final TransitionBuilder? overlayBuilder;
 
   @override
   State<OmiApp> createState() => _OmiAppState();
@@ -252,6 +275,7 @@ class _OmiAppState extends State<OmiApp> {
     return MaterialApp(
       title: 'Omi',
       debugShowCheckedModeBanner: false,
+      builder: widget.overlayBuilder,
       themeMode: ThemeMode.system,
       theme: ThemeData(
         brightness: Brightness.light,

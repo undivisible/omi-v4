@@ -86,12 +86,14 @@ final googleOAuthConnector = OAuthConnector(
   scopes: const [
     OAuthScope(
       value: 'https://www.googleapis.com/auth/gmail.readonly',
-      summary: 'Read your Gmail messages and labels. Omi cannot send, '
+      summary:
+          'Read your Gmail messages and labels. Omi cannot send, '
           'delete, or change mail.',
     ),
     OAuthScope(
       value: 'https://www.googleapis.com/auth/calendar.readonly',
-      summary: 'Read your Google Calendar events. Omi cannot create, edit, '
+      summary:
+          'Read your Google Calendar events. Omi cannot create, edit, '
           'or cancel anything.',
     ),
     OAuthScope(

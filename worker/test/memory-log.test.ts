@@ -41,12 +41,19 @@ beforeAll(async () => {
     "0017_zkr_read_projection.sql",
     "0021_memory_vectors.sql",
     "0029_memory_authority_log.sql",
+    "0030_memory_log_projection.sql",
   ]) {
     const sql = (await Bun.file(`migrations/${name}`).text()).replace(
       "PRAGMA foreign_keys = ON;",
       "",
     );
-    for (const statement of sql.split(";").map((value) => value.trim())) {
+    // Comments are stripped before splitting: a semicolon inside a comment
+    // would otherwise cut a statement in half.
+    const code = sql
+      .split("\n")
+      .filter((line) => !line.trimStart().startsWith("--"))
+      .join("\n");
+    for (const statement of code.split(";").map((value) => value.trim())) {
       if (statement) await database.prepare(statement).run();
     }
   }

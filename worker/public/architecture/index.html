@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <base href="/"/>
+    <meta charset="utf-8"/>
+    <script src="/main.js" defer></script>
+    <script src="/mark.js" defer></script>
+    <!--$-->
+    <title>Omi — architecture</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <meta name="description" content="How Omi is built: one Flutter app, an embedded Rust hub, a Cloudflare Worker, an AI Gateway in front of OpenRouter model tiers, D1, Vectorize, Durable Objects, and the BLE pendant path."/>
+    <link href="data:image/svg+xml,%3Csvg%20xmlns%3D'http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg'%20viewBox%3D'0%200%2032%2032'%3E%3Crect%20width%3D'32'%20height%3D'32'%20rx%3D'7'%20fill%3D'%23171716'%2F%3E%3Ccircle%20cx%3D%2215.94%22%20cy%3D%225.27%22%20r%3D%222.12%22%20fill%3D%22%23fffcec%22%2F%3E%3Ccircle%20cx%3D%2223.94%22%20cy%3D%227.94%22%20r%3D%222.12%22%20fill%3D%22%23fffcec%22%2F%3E%3Ccircle%20cx%3D%2226.61%22%20cy%3D%2215.94%22%20r%3D%222.12%22%20fill%3D%22%23fffcec%22%2F%3E%3Ccircle%20cx%3D%2223.94%22%20cy%3D%2223.94%22%20r%3D%222.12%22%20fill%3D%22%23fffcec%22%2F%3E%3Ccircle%20cx%3D%2215.94%22%20cy%3D%2226.61%22%20r%3D%222.12%22%20fill%3D%22%23fffcec%22%2F%3E%3Ccircle%20cx%3D%227.94%22%20cy%3D%2223.94%22%20r%3D%222.12%22%20fill%3D%22%23fffcec%22%2F%3E%3Ccircle%20cx%3D%225.27%22%20cy%3D%2215.94%22%20r%3D%222.12%22%20fill%3D%22%23fffcec%22%2F%3E%3Ccircle%20cx%3D%227.94%22%20cy%3D%227.94%22%20r%3D%222.12%22%20fill%3D%22%23fffcec%22%2F%3E%3C%2Fsvg%3E" rel="icon"/>
+    <link href="https://omi.tsc.hk/architecture" rel="canonical"/>
+    <link as="font" type="font/woff2" crossorigin href="/inter-latin-variable.woff2" rel="preload"/>
+    <link as="font" type="font/woff2" crossorigin href="/geist-pixel-square.woff2" rel="preload"/>
+    <link href="/styles.css" rel="stylesheet"/>
+    <meta name="theme-color" content="#171716"/>
+    <meta property="og:title" content="Omi — architecture"/>
+    <meta property="og:description" content="How Omi is built: one Flutter app, an embedded Rust hub, a Cloudflare Worker, an AI Gateway in front of OpenRouter model tiers, D1, Vectorize, Durable Objects, and the BLE pendant path."/>
+    <meta property="og:type" content="website"/>
+    <meta property="og:url" content="https://omi.tsc.hk/architecture"/>
+    <!--/-->
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <div class="field" aria-hidden="true"><i></i><i></i><i></i></div>
+    <header id="nav" class="nav">
+      <a class="brand" aria-label="Omi home" href="/">
+        <svg class="omi-mark omi-mark--nav" viewBox="0 0 260 260" aria-hidden="true" data-omi-mark><g class="omi-mark-ring"><circle id="d1" cx="129.5" cy="42.79" r="17.2" style="--ux:0.0;--uy:-1.0"/><circle id="d2" cx="194.5" cy="64.5" r="17.2" style="--ux:0.7071;--uy:-0.7071"/><circle id="d3" cx="216.21" cy="129.5" r="17.2" style="--ux:1.0;--uy:0.0"/><circle id="d4" cx="194.5" cy="194.5" r="17.2" style="--ux:0.7071;--uy:0.7071"/><circle id="d5" cx="129.5" cy="216.21" r="17.2" style="--ux:0.0;--uy:1.0"/><circle id="d6" cx="64.5" cy="194.5" r="17.2" style="--ux:-0.7071;--uy:0.7071"/><circle id="d7" cx="42.79" cy="129.5" r="17.2" style="--ux:-1.0;--uy:0.0"/><circle id="d8" cx="64.5" cy="64.5" r="17.2" style="--ux:-0.7071;--uy:-0.7071"/></g></svg>
+         Omi
+      </a>
+      <nav id="navLinks" class="nav-links" aria-label="Primary">
+        <a class="cta" href="https://api.omi.tsc.hk/portal">Open Omi</a>
+        <a aria-current="page" href="/architecture">Documentation</a>
+        <a href="https://api.omi.tsc.hk/portal#api-keys">API login</a>
+      </nav>
+    </header>
+    <main id="main">
+      <nav class="rail" aria-label="Sections">
+        <ol>
+          <li><a href="#top">Architecture</a></li>
+          <li><a href="#path">Request path</a></li>
+          <li><a href="#tiers">Model tiers</a></li>
+          <li><a href="#data">Data plane</a></li>
+          <li><a href="#pendant">Pendant</a></li>
+        </ol>
+      </nav>
+      <section id="top" class="hero wrap" aria-labelledby="t1">
+        <svg class="omi-mark omi-mark--sm" viewBox="0 0 260 260" role="img" aria-label="Omi" data-omi-mark><defs><filter id="omiMarkGlow-omi-mark--sm" x="-40%" y="-40%" width="180%" height="180%" color-interpolation-filters="sRGB"><feGaussianBlur in="SourceGraphic" stdDeviation="9" result="soft"/><feColorMatrix in="soft" type="matrix" result="halo" values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 0.85 0"/><feMerge><feMergeNode in="halo"/><feMergeNode in="halo"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs><g class="omi-mark-ring" filter="url(#omiMarkGlow-omi-mark--sm)"><circle id="d1" cx="129.5" cy="42.79" r="17.2" style="--ux:0.0;--uy:-1.0"/><circle id="d2" cx="194.5" cy="64.5" r="17.2" style="--ux:0.7071;--uy:-0.7071"/><circle id="d3" cx="216.21" cy="129.5" r="17.2" style="--ux:1.0;--uy:0.0"/><circle id="d4" cx="194.5" cy="194.5" r="17.2" style="--ux:0.7071;--uy:0.7071"/><circle id="d5" cx="129.5" cy="216.21" r="17.2" style="--ux:0.0;--uy:1.0"/><circle id="d6" cx="64.5" cy="194.5" r="17.2" style="--ux:-0.7071;--uy:0.7071"/><circle id="d7" cx="42.79" cy="129.5" r="17.2" style="--ux:-1.0;--uy:0.0"/><circle id="d8" cx="64.5" cy="64.5" r="17.2" style="--ux:-0.7071;--uy:-0.7071"/></g></svg>
+        <div class="hero-grid">
+          <p class="label rise d1">Architecture</p>
+          <h1 id="t1" class="giant rise d2">Few moving parts, on purpose.</h1>
+          <div class="hero-foot">
+            <p class="mid rise d3">
+              One app, one embedded runtime, one edge worker, one model gateway. Every box below exists in the repository today.
+            </p>
+          </div>
+        </div>
+      </section>
+      <section id="path" class="band wrap" aria-labelledby="t2">
+        <h2 id="t2" class="label">The request path</h2>
+        <div class="plate reveal">
+          <svg viewBox="0 0 880 380" role="img" aria-labelledby="d1t d1d">
+          <title id="d1t">Omi request path</title>
+          <desc id="d1d">The Flutter app connects to the embedded Rust hub, which connects to the Cloudflare Worker, which connects to a Cloudflare AI Gateway fronting OpenRouter and its five model tiers: speed, balanced, smart, multimodal and search. The hub also opens a separate direct connection to the Gemini Live realtime voice API.</desc>
+          <text class="dg-cap" x="30" y="42">CLIENT</text>
+          <text class="dg-cap" x="470" y="42">EDGE</text>
+          <rect class="dg-box" x="30" y="70" width="180" height="84" rx="16"/>
+          <text class="dg-label" x="50" y="103">Flutter app</text>
+          <text class="dg-sub" x="50" y="122">macOS · Windows · web</text>
+          <text class="dg-sub" x="50" y="138">iOS · Android</text>
+          <rect class="dg-box dg-box-accent" x="250" y="70" width="180" height="84" rx="16"/>
+          <text class="dg-label" x="270" y="103">Rust hub · rinf</text>
+          <text class="dg-sub" x="270" y="122">chat · memory · voice</text>
+          <text class="dg-sub" x="270" y="138">computer use · scan</text>
+          <rect class="dg-box dg-box-ink" x="470" y="70" width="180" height="84" rx="16"/>
+          <text class="dg-label dg-label-cream" x="490" y="103">Cloudflare Worker</text>
+          <text class="dg-sub dg-sub-cream" x="490" y="122">auth · conversations</text>
+          <text class="dg-sub dg-sub-cream" x="490" y="138">currents · billing</text>
+          <rect class="dg-box" x="690" y="70" width="160" height="84" rx="16"/>
+          <text class="dg-label" x="710" y="103">AI Gateway</text>
+          <text class="dg-sub" x="710" y="122">caching · retries</text>
+          <text class="dg-sub" x="710" y="138">cost + latency</text>
+          <path class="dg-flow" d="M212 112h36"/>
+          <path class="dg-flow" d="M432 112h36"/>
+          <path class="dg-flow" d="M652 112h36"/>
+          <text class="dg-sub" x="196" y="170">rinf signals</text>
+          <text class="dg-sub" x="404" y="170">HTTPS + ID token</text>
+          <rect class="dg-box" x="250" y="200" width="180" height="64" rx="14"/>
+          <text class="dg-label" x="270" y="228">Gemini Live</text>
+          <text class="dg-sub" x="270" y="247">realtime duplex voice</text>
+          <path class="dg-flow dg-flow-alt" d="M340 156v42"/>
+          <rect class="dg-box dg-box-accent" x="470" y="200" width="380" height="64" rx="14"/>
+          <text class="dg-label" x="490" y="228">OpenRouter</text>
+          <text class="dg-sub" x="490" y="247">one endpoint · five tiers, each overridable by env</text>
+          <path class="dg-flow" d="M770 156v42"/>
+          <path class="dg-line" d="M660 266v10"/>
+          <path class="dg-line" d="M116 276h648"/>
+          <path class="dg-line" d="M116 276v12M278 276v12M440 276v12M602 276v12M764 276v12"/>
+          <rect class="dg-box" x="41" y="288" width="150" height="62" rx="14"/>
+          <text class="dg-label" x="57" y="314">speed</text>
+          <text class="dg-sub" x="57" y="333">inception/mercury-2</text>
+          <rect class="dg-box" x="203" y="288" width="150" height="62" rx="14"/>
+          <text class="dg-label" x="219" y="314">balanced</text>
+          <text class="dg-sub" x="219" y="333">xiaomi/mimo-v2.5</text>
+          <rect class="dg-box" x="365" y="288" width="150" height="62" rx="14"/>
+          <text class="dg-label" x="381" y="314">smart</text>
+          <text class="dg-sub" x="381" y="333">xiaomi/mimo-v2.5-pro</text>
+          <rect class="dg-box" x="527" y="288" width="150" height="62" rx="14"/>
+          <text class="dg-label" x="543" y="314">multimodal</text>
+          <text class="dg-sub" x="543" y="333">google/gemini-3.6-flash</text>
+          <rect class="dg-box" x="689" y="288" width="150" height="62" rx="14"/>
+          <text class="dg-label" x="705" y="314">search</text>
+          <text class="dg-sub" x="705" y="333">perplexity/sonar</text>
+          </svg>
+        </div>
+        <p class="plate-note">Drag the diagram sideways on a narrow screen.</p>
+        <ul class="notes split reveal band-gap">
+          <li>
+            <b>The hub is linked into the app.</b> Chat, memory, speech, the workspace scan and computer use share one process and one memory authority — no separate agent daemon.
+          </li>
+          <li>
+            <b>The Worker owns the account.</b> It verifies the Firebase ID token at the edge, then owns persistence, currents, billing and channel delivery.
+          </li>
+          <li>
+            <b>Realtime voice is its own path.</b> OpenRouter is request/response only, so Gemini Live keeps a separate credential and transport.
+          </li>
+        </ul>
+      </section>
+      <section id="tiers" class="band wrap" aria-labelledby="t3">
+        <h2 id="t3" class="label">Model tiers</h2>
+        <p class="big reveal measure-20">One table, three implementations.</p>
+        <div class="table-wrap reveal">
+          <table>
+            <caption class="plate-note table-caption">
+              Defaults; every tier is overridable by environment variable, and mirrored in the hub, the Worker and its Rust parity port.
+            </caption>
+            <thead><tr><th scope="col">Tier</th><th scope="col">When</th><th scope="col">Default</th></tr></thead>
+            <tbody>
+              <tr>
+                <th scope="row">speed</th>
+                <td>Live meeting insights, classification, quick answers</td>
+                <td><code>inception/mercury-2</code></td>
+              </tr>
+              <tr>
+                <th scope="row">balanced</th>
+                <td>The default — roughly 80% of traffic</td>
+                <td><code>xiaomi/mimo-v2.5</code></td>
+              </tr>
+              <tr><th scope="row">smart</th><td>Hard reasoning</td><td><code>xiaomi/mimo-v2.5-pro</code></td></tr>
+              <tr>
+                <th scope="row">multimodal</th>
+                <td>Vision and visual computer use</td>
+                <td><code>google/gemini-3.6-flash</code></td>
+              </tr>
+              <tr><th scope="row">search</th><td>Web-grounded answers</td><td><code>perplexity/sonar</code></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+      <section id="data" class="band wrap" aria-labelledby="t4">
+        <h2 id="t4" class="label">Data plane</h2>
+        <p class="big reveal measure-16">One tenant key. Yours.</p>
+        <ul class="notes split reveal">
+          <li>
+            <b>D1</b> Users, entitlements, ordered conversations, channel bindings, currents and their approval receipts — every table scoped by account.
+          </li>
+          <li>
+            <b>Vectorize</b> The <code>omi-memory-claims</code> index, embedded by Workers AI, with a per-account metadata filter on every query.
+          </li>
+          <li>
+            <b>Durable Objects</b> Four coordinators: channel delivery, assistant and speech cost admission, and rate limiting.
+          </li>
+          <li>
+            <b>Memory</b> The source of truth is a local database in the hub, at a path keyed by a hash of your account id.
+          </li>
+        </ul>
+      </section>
+      <section id="pendant" class="band wrap" aria-labelledby="t5">
+        <h2 id="t5" class="label">The pendant path</h2>
+        <div class="plate reveal">
+          <svg viewBox="0 0 880 150" role="img" aria-labelledby="d2t d2d">
+          <title id="d2t">Pendant to memory</title>
+          <desc id="d2d">The pendant streams audio over Bluetooth LE to the mobile app, which relays bounded audio chunks to the Rust hub, which captures final transcript segments into evidence-backed memory.</desc>
+          <circle cx="70" cy="70" r="34" fill="#0d0d0c"/>
+          <circle cx="70" cy="70" r="12" fill="#fffcec"/>
+          <text class="dg-sub" x="34" y="128">Omi pendant</text>
+          <path class="dg-flow" d="M120 70h60"/>
+          <text class="dg-sub" x="128" y="58">BLE</text>
+          <rect class="dg-box" x="196" y="38" width="170" height="64" rx="14"/>
+          <text class="dg-label" x="214" y="66">Mobile app</text>
+          <text class="dg-sub" x="214" y="85">pairing · relay · health</text>
+          <path class="dg-flow" d="M370 70h50"/>
+          <text class="dg-sub" x="366" y="58">audio chunks</text>
+          <rect class="dg-box dg-box-accent" x="436" y="38" width="170" height="64" rx="14"/>
+          <text class="dg-label" x="454" y="66">Rust hub</text>
+          <text class="dg-sub" x="454" y="85">transcription · capture</text>
+          <path class="dg-flow" d="M610 70h50"/>
+          <text class="dg-sub" x="600" y="58">final segments</text>
+          <rect class="dg-box dg-box-ink" x="676" y="38" width="174" height="64" rx="14"/>
+          <text class="dg-label dg-label-cream" x="694" y="66">Evidenced memory</text>
+          <text class="dg-sub dg-sub-cream" x="694" y="85">claims + citations</text>
+          </svg>
+        </div>
+        <p class="plate-note">
+          The firmware is the production nRF5340 tree. Live provider credentials and physical-device runs are still outstanding.
+        </p>
+        <p class="links band-gap">
+          <a class="btn btn-solid" href="https://api.omi.tsc.hk/portal">Open Omi</a><a class="btn btn-line" href="/">Back to Omi</a>
+        </p>
+      </section>
+    </main>
+    <footer class="wrap">
+      <div class="foot">
+        <p>
+          <svg class="omi-mark omi-mark--foot" viewBox="0 0 260 260" aria-hidden="true" data-omi-mark><g class="omi-mark-ring"><circle id="d1" cx="129.5" cy="42.79" r="17.2" style="--ux:0.0;--uy:-1.0"/><circle id="d2" cx="194.5" cy="64.5" r="17.2" style="--ux:0.7071;--uy:-0.7071"/><circle id="d3" cx="216.21" cy="129.5" r="17.2" style="--ux:1.0;--uy:0.0"/><circle id="d4" cx="194.5" cy="194.5" r="17.2" style="--ux:0.7071;--uy:0.7071"/><circle id="d5" cx="129.5" cy="216.21" r="17.2" style="--ux:0.0;--uy:1.0"/><circle id="d6" cx="64.5" cy="194.5" r="17.2" style="--ux:-0.7071;--uy:0.7071"/><circle id="d7" cx="42.79" cy="129.5" r="17.2" style="--ux:-1.0;--uy:0.0"/><circle id="d8" cx="64.5" cy="64.5" r="17.2" style="--ux:-0.7071;--uy:-0.7071"/></g></svg>
+           Open source, private by design.
+        </p>
+        <nav aria-label="Footer">
+          <a href="/#what">What it does</a>
+          <a href="/#api">API</a>
+          <a href="/architecture">Architecture</a>
+          <a href="/docs/api">API reference</a>
+          <a href="https://api.omi.tsc.hk/portal">Open Omi</a>
+        </nav>
+      </div>
+    </footer>
+  </body>
+</html>

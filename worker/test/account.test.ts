@@ -38,7 +38,13 @@ beforeAll(async () => {
       "PRAGMA foreign_keys = ON;",
       "",
     );
-    for (const statement of sql.split(";").map((value) => value.trim())) {
+    // Comments are stripped before splitting: a semicolon inside a comment
+    // would otherwise cut a statement in half.
+    const code = sql
+      .split("\n")
+      .filter((line) => !line.trimStart().startsWith("--"))
+      .join("\n");
+    for (const statement of code.split(";").map((value) => value.trim())) {
       if (statement) await database.prepare(statement).run();
     }
   }

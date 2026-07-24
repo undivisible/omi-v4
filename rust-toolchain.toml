@@ -1,0 +1,15 @@
+# Pins the toolchain and the targets every component in this repository needs:
+# wasm32-unknown-unknown for worker-rs (the Cloudflare deploy target) and both
+# darwin architectures for the universal macOS app build.
+#
+# Caveat on the primary development machine: this file is only honoured by
+# rustup's cargo shim. Homebrew's cargo is first on PATH there and is a real
+# binary rather than a shim, so it ignores this file and resolves to a rustc
+# that ships neither of those standard libraries — which surfaces as
+# "can't find crate for core", and as E0514 when artifacts from the two
+# toolchains mix. Until rustup's shims precede Homebrew's on PATH, prefix
+# cargo and flutter build invocations with:
+#   PATH="$HOME/.rustup/toolchains/stable-aarch64-apple-darwin/bin:$PATH"
+[toolchain]
+channel = "stable"
+targets = ["wasm32-unknown-unknown", "x86_64-apple-darwin", "aarch64-apple-darwin"]

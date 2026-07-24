@@ -6,7 +6,7 @@
 <meta name="color-scheme" content="dark">
 <meta name="robots" content="noindex">
 <base href="/hub/">
-<title>Omi hub</title>
+<title>Omi hub — demo</title>
 <link rel="icon" type="image/png" href="favicon.png">
 <style>
   html, body { height: 100%; margin: 0; background: #171716; overflow: hidden; }
@@ -19,21 +19,13 @@
 </style>
 </head>
 <body>
-<div id="boot">Starting the hub…</div>
+<div id="boot">Starting the demo…</div>
 <script src="flutter.js"></script>
 <script>
   window._flutter = window._flutter || {};
   _flutter.buildConfig = {
     builds: [{ compileTarget: "dart2js", renderer: "canvaskit", mainJsPath: "main.dart.js" }]
   };
-  // The web build has no native hub, so onboarding's private scan cannot run
-  // and would greet a visitor with an error. Onboarding is gated on the
-  // shared_preferences flag below, which the demo seeds so the page opens on
-  // the shell itself. Signing in still runs the real onboarding.
-  try {
-    localStorage.setItem("flutter.onboarding_complete_v1_local", "true");
-  } catch (e) {}
-
   var reported = false;
   function report(kind) {
     if (reported) return;

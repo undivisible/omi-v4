@@ -15,6 +15,7 @@ import '../conversations/conversations.dart';
 import '../integrations/apple_eventkit.dart';
 import '../integrations/apple_eventkit_import.dart';
 import '../integrations/eventkit_task_sync.dart';
+import '../integrations/oauth/oauth.dart';
 import '../native/generated/signals/signals.dart'
     show
         AssistantProvider,
@@ -38,6 +39,7 @@ enum SettingsSection {
   developer('API & MCP', Icons.terminal_rounded),
   calls('FaceTime', Icons.videocam_outlined),
   calendar('Calendar', Icons.calendar_today_outlined),
+  connections('Connections', Icons.hub_outlined),
   rewind('Rewind', Icons.history_toggle_off_rounded),
   advanced('Advanced', Icons.tune_rounded);
 
@@ -150,6 +152,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     SettingsSection.calls,
     if (_isMacDesktop || _isWindowsStyle) SettingsSection.permissions,
     if (_isMacDesktop) SettingsSection.calendar,
+    SettingsSection.connections,
     if (_isMacDesktop) SettingsSection.rewind,
     SettingsSection.advanced,
   ];
@@ -256,6 +259,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
             previewMode: previewMode,
           ),
         EventKitProactiveSyncTile(previewMode: previewMode),
+      ],
+      SettingsSection.connections => [
+        for (final connector in oauthConnectors)
+          OAuthConnectorTile(
+            connector: connector,
+            uid: services.auth.snapshot.session?.uid,
+            previewMode: previewMode || kIsWeb,
+          ),
+        const _InfoTile(
+          icon: Icons.lock_outline_rounded,
+          title: 'How connections are stored',
+          detail:
+              'Omi asks for read-only access, keeps the tokens in the system '
+              'keychain, and revokes them at the provider when you '
+              'disconnect. No client secret ships in the app.',
+        ),
       ],
       SettingsSection.rewind => [RewindSettingsTile(previewMode: previewMode)],
       SettingsSection.advanced => [

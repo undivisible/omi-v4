@@ -10,16 +10,11 @@ const contextCharacterCap = 2_000;
 
 export type MemoryVectorMatch = { id: string; content: string; score: number };
 
-const hex = (value: string): string =>
-  Array.from(new TextEncoder().encode(value), (byte) =>
-    byte.toString(16).padStart(2, "0").toUpperCase(),
-  ).join("");
-
-export const projectedClaimId = (
-  uid: string,
-  replicaId: string,
-  recordId: string,
-): string => `zkr:${hex(uid)}:${hex(replicaId)}:claim:${hex(recordId)}`;
+/// A claim's projected id is its bare log record id. The `zkr:<uid>:<replica>:`
+/// namespace this used to build was retired in migration 0030: zkr record ids
+/// are already unique, and namespacing them by replica forked a duplicate
+/// memory on every reinstall.
+export const projectedClaimId = (recordId: string): string => recordId;
 
 export const enqueueClaimEmbeddings = (
   db: D1Database,

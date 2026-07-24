@@ -1,6 +1,6 @@
 {
-  "$schema": "https://biomejs.dev/schemas/2.5.4/schema.json",
-  "files": { "includes": ["**", "!bun.lock", "!public/hub"] },
+  "$schema": "https://biomejs.dev/schemas/2.5.5/schema.json",
+  "files": { "includes": ["**", "!bun.lock", "!public"] },
   "formatter": { "enabled": true, "indentStyle": "space" },
   "linter": { "enabled": true, "rules": { "preset": "none" } }
 }

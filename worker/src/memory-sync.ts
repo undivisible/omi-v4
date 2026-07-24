@@ -1,6 +1,9 @@
 import { Hono } from "hono";
 import { appendMemoryLog, canonicalJson } from "./memory-log";
-import { projectZkrMemory } from "./memory-projection";
+import {
+  deletionTarget as logDeletionTarget,
+  projectMemory,
+} from "./memory-projection";
 import {
   deferVectorWork,
   drainPendingEmbeddings,
@@ -152,25 +155,11 @@ const deletionTarget = (
   record: SyncRecord,
 ): { kind: string; id: string; deletedAt: number } | null => {
   if (record.kind !== "deletion") return null;
-  const target = object(record.record.target);
-  const taggedKind = text(target?.kind, 100);
-  const taggedId = text(target?.id, 500);
-  const entry = target ? Object.entries(target)[0] : undefined;
-  const id = taggedId ?? text(entry?.[1], 500);
-  const deletedAt = integer(record.record.deleted_at, 0);
-  if (!id || deletedAt === null) return null;
-  const kind = (taggedKind ?? entry?.[0] ?? "")
-    .replaceAll(/([a-z])([A-Z])/g, "$1_$2")
-    .toLowerCase()
-    .replace("profile_entry", "profile");
-  return recordKinds.has(kind) ? { kind, id, deletedAt } : null;
+  const target = logDeletionTarget(record.record);
+  return target && recordKinds.has(target.kind) ? target : null;
 };
 
-const touchedClaimIds = (
-  uid: string,
-  replicaId: string,
-  records: SyncRecord[],
-): string[] => {
+const touchedClaimIds = (records: SyncRecord[]): string[] => {
   const rawIds = new Set<string>();
   for (const record of records) {
     if (record.kind === "claim") {
@@ -186,7 +175,7 @@ const touchedClaimIds = (
     const target = deletionTarget(record);
     if (target?.kind === "claim") rawIds.add(target.id);
   }
-  return [...rawIds].map((id) => projectedClaimId(uid, replicaId, id));
+  return [...rawIds].map((id) => projectedClaimId(id));
 };
 
 const applyCommit = async (
@@ -202,7 +191,7 @@ const applyCommit = async (
     .bind(uid, replicaId, commit.sequence)
     .first<{ applied_at: number | null }>();
   if (existing?.applied_at !== null && existing?.applied_at !== undefined) {
-    await projectZkrMemory(db, uid, replicaId);
+    await projectMemory(db, uid);
     return { status: "replayed", claimIds: [] };
   }
   const rows = await db
@@ -223,52 +212,9 @@ const applyCommit = async (
   if (identities.some((identity) => identity === null))
     throw new Error("Invalid staged zkr record");
   const now = Date.now();
-  const statements: D1PreparedStatement[] = records.map((record, index) => {
-    const identity = identities[index]!;
-    return db
-      .prepare(
-        `INSERT INTO zkr_memory_records
-           (uid, replica_id, record_kind, record_id, payload, source_sequence, deleted_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
-         ON CONFLICT(uid, replica_id, record_kind, record_id) DO UPDATE SET
-           payload = excluded.payload,
-           source_sequence = excluded.source_sequence,
-           deleted_at = excluded.deleted_at
-         WHERE excluded.source_sequence >= zkr_memory_records.source_sequence`,
-      )
-      .bind(
-        uid,
-        replicaId,
-        identity.kind,
-        identity.id,
-        canonicalJson(record.record),
-        commit.sequence,
-        identity.deletedAt,
-      );
-  });
-  for (const record of records) {
-    const target = deletionTarget(record);
-    if (target)
-      statements.push(
-        db
-          .prepare(
-            `UPDATE zkr_memory_records SET deleted_at = ?1, source_sequence = ?2
-             WHERE uid = ?3 AND replica_id = ?4 AND record_kind = ?5 AND record_id = ?6
-               AND source_sequence <= ?2`,
-          )
-          .bind(
-            target.deletedAt,
-            commit.sequence,
-            uid,
-            replicaId,
-            target.kind,
-            target.id,
-          ),
-      );
-  }
-  await db.batch(statements);
-  // The log is appended before the projection is refreshed: the projection is
-  // derived, so it may never describe a record the authority has not accepted.
+  // The staged commit reaches the read tables only through the log: append
+  // first, then let the projection fold the log forward. Writing a second
+  // representation here is what let the cloud and the device drift apart.
   await appendMemoryLog(
     db,
     uid,
@@ -281,7 +227,7 @@ const applyCommit = async (
     })),
     now,
   );
-  await projectZkrMemory(db, uid, replicaId);
+  await projectMemory(db, uid);
   await db
     .prepare(
       "UPDATE zkr_sync_commits SET applied_at = ?1 WHERE uid = ?2 AND replica_id = ?3 AND sequence = ?4 AND applied_at IS NULL",
@@ -290,7 +236,7 @@ const applyCommit = async (
     .run();
   return {
     status: "applied",
-    claimIds: touchedClaimIds(uid, replicaId, records),
+    claimIds: touchedClaimIds(records),
   };
 };
 

@@ -34,7 +34,10 @@ final class PkcePair {
       }
     }
     final digest = sha256.convert(ascii.encode(verifier));
-    return PkcePair._(verifier, base64UrlEncode(digest.bytes).replaceAll('=', ''));
+    return PkcePair._(
+      verifier,
+      base64UrlEncode(digest.bytes).replaceAll('=', ''),
+    );
   }
 
   /// Generates a fresh pair from a cryptographic random source.

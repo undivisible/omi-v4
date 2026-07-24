@@ -12,6 +12,7 @@ import '../app_services.dart';
 import '../channels/channels.dart';
 import '../currents/crepus_current.dart';
 import '../currents/currents.dart';
+import '../demo/demo_mode.dart';
 import '../keyboard/keyboard.dart';
 import '../keyboard/shake_gesture.dart';
 import '../native/generated/signals/signals.dart'
@@ -439,7 +440,11 @@ class ChatScreenState extends State<ChatScreen>
 
   Future<void> _refreshCurrents() async {
     final currents = widget.services.currents;
-    if (currents == null || !widget.services.chatReady) return;
+    // Currents come from the worker, so signed out there is nothing to ask
+    // for. The demo build is the exception: its currents client is a seeded
+    // in-process transport, and `omiDemoMode` is a compile-time constant, so
+    // outside that build this reads exactly as it did.
+    if (currents == null || !(widget.services.chatReady || omiDemoMode)) return;
     await currents.load();
   }
 

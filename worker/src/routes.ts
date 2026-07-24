@@ -7,8 +7,9 @@ import billing from "./billing";
 import byok from "./byok-negotiation";
 import currents from "./currents";
 import memorySync from "./memory-sync";
+import memoryWrite from "./memory-write";
 import { readMemoryLog, recordMirrorCursor } from "./memory-log";
-import { ensureZkrMemoryProjected } from "./memory-projection";
+import { ensureMemoryProjected } from "./memory-projection";
 import {
   listDailyReviews,
   listProfileMemories,
@@ -38,11 +39,11 @@ import type { AppEnv, Channel, SettingsDuration, UserSettings } from "./types";
 const routes = new Hono<AppEnv>();
 
 routes.use("/memory/*", async (context, next) => {
-  await ensureZkrMemoryProjected(context.env.DB, context.get("auth").uid);
+  await ensureMemoryProjected(context.env.DB, context.get("auth").uid);
   await next();
 });
 routes.use("/memories", async (context, next) => {
-  await ensureZkrMemoryProjected(context.env.DB, context.get("auth").uid);
+  await ensureMemoryProjected(context.env.DB, context.get("auth").uid);
   await next();
 });
 
@@ -55,6 +56,7 @@ routes.route("/stt", stt);
 routes.route("/voice", voice);
 routes.route("/currents", currents);
 routes.route("/memory/zkr-sync", memorySync);
+routes.route("/", memoryWrite);
 routes.route("/", conversations);
 
 const text = (value: unknown, limit: number): string | null =>
@@ -229,198 +231,6 @@ routes.get("/memories", async (context) => {
     context.get("auth").uid,
   );
   return context.json({ memories });
-});
-
-routes.post("/memories", async (context) => {
-  const body = await json(context.req.raw);
-  const content = text(body?.content, 20_000);
-  const source = text(body?.source, 100);
-  const subject = text(body?.subject, 200) ?? "person";
-  const predicate = text(body?.predicate, 200) ?? "remembers";
-  const profileKey = text(body?.profileKey, 200) ?? predicate;
-  const profileKind = body?.profileKind ?? "current";
-  const validFrom =
-    body?.validFrom === undefined ? Date.now() : Number(body.validFrom);
-  const validTo =
-    body?.validTo === undefined || body.validTo === null
-      ? null
-      : Number(body.validTo);
-  if (
-    !content ||
-    !source ||
-    !sourceKinds.has(source) ||
-    (body?.evidence !== undefined && !Array.isArray(body.evidence)) ||
-    (profileKind !== "stable" && profileKind !== "current") ||
-    !Number.isSafeInteger(validFrom) ||
-    validFrom <= 0 ||
-    (validTo !== null && !Number.isFinite(validTo)) ||
-    (validTo !== null && validTo < validFrom)
-  )
-    return context.json({ error: "Invalid memory" }, 400);
-  const id = crypto.randomUUID();
-  const sourceId = crypto.randomUUID();
-  const revisionId = crypto.randomUUID();
-  const evidenceId = crypto.randomUUID();
-  const claimId = crypto.randomUUID();
-  const now = Date.now();
-  const uid = context.get("auth").uid;
-  const hash = await crypto.subtle.digest(
-    "SHA-256",
-    new TextEncoder().encode(content),
-  );
-  const contentHash = Array.from(new Uint8Array(hash), (byte) =>
-    byte.toString(16).padStart(2, "0"),
-  ).join("");
-  await context.env.DB.batch([
-    context.env.DB.prepare(
-      "INSERT INTO memory_sources (id, uid, kind, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?4)",
-    ).bind(sourceId, uid, source, now),
-    context.env.DB.prepare(
-      "INSERT INTO memory_source_revisions (id, source_id, uid, revision, content_hash, payload, observed_at, created_at) VALUES (?1, ?2, ?3, 1, ?4, ?5, ?6, ?6)",
-    ).bind(
-      revisionId,
-      sourceId,
-      uid,
-      contentHash,
-      JSON.stringify({ content }),
-      now,
-    ),
-    context.env.DB.prepare(
-      "INSERT INTO memory_evidence (id, uid, source_revision_id, quote, locator, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-    ).bind(
-      evidenceId,
-      uid,
-      revisionId,
-      content,
-      JSON.stringify(body?.evidence ?? []),
-      now,
-    ),
-    context.env.DB.prepare(
-      `INSERT INTO memory_claims
-         (id, uid, content, subject, predicate, value, valid_from, valid_to, recorded_at)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?3, ?6, ?7, ?8)`,
-    ).bind(claimId, uid, content, subject, predicate, validFrom, validTo, now),
-    context.env.DB.prepare(
-      `INSERT INTO memory_claims_fts (id, uid, content, subject, predicate, value)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?3)`,
-    ).bind(claimId, uid, content, subject, predicate),
-    context.env.DB.prepare(
-      "INSERT INTO memory_claim_evidence (uid, claim_id, evidence_id, relation, confidence_basis_points) VALUES (?1, ?2, ?3, 'supports', 10000)",
-    ).bind(uid, claimId, evidenceId),
-    context.env.DB.prepare(
-      `INSERT INTO memory_profile_entries
-         (id, uid, claim_id, profile_kind, profile_key, profile_value, created_at, updated_at)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)`,
-    ).bind(id, uid, claimId, profileKind, profileKey, content, now),
-    ...enqueueClaimEmbeddings(context.env.DB, uid, [claimId], now),
-  ]);
-  deferVectorWork(
-    () => drainPendingEmbeddings(context.env),
-    (promise) => context.executionCtx.waitUntil(promise),
-  );
-  return context.json({ id, sourceId, claimId }, 201);
-});
-
-routes.post("/memory/sources/:sourceId/revisions", async (context) => {
-  const body = await json(context.req.raw);
-  const payload =
-    body?.payload !== null &&
-    typeof body?.payload === "object" &&
-    !Array.isArray(body.payload)
-      ? body.payload
-      : null;
-  const observedAt = Number(body?.observedAt ?? Date.now());
-  if (!payload || !Number.isSafeInteger(observedAt) || observedAt <= 0)
-    return context.json({ error: "Invalid source revision" }, 400);
-  const uid = context.get("auth").uid;
-  const sourceId = context.req.param("sourceId");
-  const source = await context.env.DB.prepare(
-    `SELECT s.id, COALESCE(MAX(r.revision), 0) AS revision
-     FROM memory_sources s LEFT JOIN memory_source_revisions r ON r.source_id = s.id AND r.uid = s.uid
-     WHERE s.id = ?1 AND s.uid = ?2 AND s.tombstoned_at IS NULL GROUP BY s.id`,
-  )
-    .bind(sourceId, uid)
-    .first();
-  if (!source) return context.json({ error: "Source not found" }, 404);
-  const serialized = JSON.stringify(payload);
-  const hash = await crypto.subtle.digest(
-    "SHA-256",
-    new TextEncoder().encode(serialized),
-  );
-  const contentHash = Array.from(new Uint8Array(hash), (byte) =>
-    byte.toString(16).padStart(2, "0"),
-  ).join("");
-  const id = crypto.randomUUID();
-  const revision = Number(source.revision) + 1;
-  const now = Date.now();
-  const inserted = await context.env.DB.prepare(
-    `INSERT OR IGNORE INTO memory_source_revisions
-       (id, source_id, uid, revision, content_hash, payload, observed_at, created_at)
-     SELECT ?1, id, uid, ?2, ?3, ?4, ?5, ?6 FROM memory_sources
-     WHERE id = ?7 AND uid = ?8 AND tombstoned_at IS NULL`,
-  )
-    .bind(id, revision, contentHash, serialized, observedAt, now, sourceId, uid)
-    .run();
-  if (inserted.meta.changes !== 1)
-    return context.json({ error: "Source revision conflict" }, 409);
-  return context.json({ id, sourceId, revision, contentHash }, 201);
-});
-
-routes.delete("/memory/sources/:sourceId", async (context) => {
-  const uid = context.get("auth").uid;
-  const sourceId = context.req.param("sourceId");
-  const now = Date.now();
-  const source = await context.env.DB.prepare(
-    "UPDATE memory_sources SET tombstoned_at = ?1, updated_at = ?1 WHERE id = ?2 AND uid = ?3 AND tombstoned_at IS NULL",
-  )
-    .bind(now, sourceId, uid)
-    .run();
-  if (source.meta.changes !== 1)
-    return context.json({ error: "Source not found" }, 404);
-  await context.env.DB.batch([
-    context.env.DB.prepare(
-      `UPDATE memory_claims SET retracted_at = ?1, recorded_until = ?1, status = 'superseded'
-       WHERE uid = ?2 AND retracted_at IS NULL
-         AND EXISTS (
-           SELECT 1 FROM memory_claim_evidence ce
-           JOIN memory_evidence e ON e.id = ce.evidence_id
-           JOIN memory_source_revisions r ON r.id = e.source_revision_id
-           WHERE ce.claim_id = memory_claims.id AND ce.uid = ?2
-         )
-         AND NOT EXISTS (
-           SELECT 1 FROM memory_claim_evidence ce
-           JOIN memory_evidence e ON e.id = ce.evidence_id
-           JOIN memory_source_revisions r ON r.id = e.source_revision_id
-           JOIN memory_sources s ON s.id = r.source_id
-           WHERE ce.claim_id = memory_claims.id AND ce.uid = ?2 AND s.tombstoned_at IS NULL
-         )`,
-    ).bind(now, uid),
-    context.env.DB.prepare(
-      `UPDATE memory_daily_reviews SET retracted_at = ?1
-       WHERE uid = ?2 AND retracted_at IS NULL AND EXISTS (
-         SELECT 1 FROM memory_daily_review_citations rc
-         JOIN memory_evidence e ON e.id = rc.evidence_id
-         JOIN memory_source_revisions r ON r.id = e.source_revision_id
-         WHERE rc.review_id = memory_daily_reviews.id AND rc.uid = ?2 AND r.source_id = ?3
-       )`,
-    ).bind(now, uid, sourceId),
-  ]);
-  const retracted = await context.env.DB.prepare(
-    "SELECT id FROM memory_claims WHERE uid = ?1 AND retracted_at = ?2",
-  )
-    .bind(uid, now)
-    .all<{ id: string }>();
-  const retractedIds = (retracted.results ?? []).map((row) => String(row.id));
-  if (retractedIds.length > 0) {
-    await context.env.DB.batch(
-      enqueueClaimEmbeddings(context.env.DB, uid, retractedIds, now),
-    );
-    deferVectorWork(
-      () => drainPendingEmbeddings(context.env),
-      (promise) => context.executionCtx.waitUntil(promise),
-    );
-  }
-  return context.body(null, 204);
 });
 
 routes.get("/memory/daily-reviews", async (context) => {
@@ -684,8 +494,6 @@ const uidScopedTables = [
   "memory_sources",
   "zkr_sync_events",
   "zkr_sync_commits",
-  "zkr_memory_records",
-  "zkr_memory_projection_state",
   "conversation_replay_cursors",
   "conversation_messages",
   "conversations",

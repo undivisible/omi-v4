@@ -169,7 +169,8 @@ final class SecureOAuthConnectionStore implements OAuthConnectionStore {
         value: jsonEncode([for (final value in values) value.toJson()]),
       );
 
-  String _key(String uid) => 'omi.oauth.${Uri.encodeComponent(uid)}.connections';
+  String _key(String uid) =>
+      'omi.oauth.${Uri.encodeComponent(uid)}.connections';
 }
 
 /// In-memory store for tests and previews.
