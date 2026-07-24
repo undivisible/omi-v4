@@ -19,18 +19,21 @@ const _capabilities = [
     '01',
     'Memory with evidence',
     'Every fact keeps a citation back to the moment it came from. Correct it '
-        'or delete it, and what was derived from it goes too.',
+        'or delete it, and what was derived from it goes too — nothing is '
+        'edited in place.',
   ),
   _Capability(
     '02',
     'Live meetings',
-    'Transcription and insight while the meeting is still happening.',
+    'Transcription and insight while the meeting is still happening — Gemini '
+        'Live for duplex voice, MiMo batch ASR for long-form capture.',
   ),
   _Capability(
     '03',
-    'Currents',
+    'Currents & Now Brief',
     'What matters next, ranked and cited — re-ranked by what you dismiss or '
-        'accept.',
+        'accept. Rich proposals can carry a crepus widget the hub renders as '
+        'a Now Brief infographic.',
   ),
   _Capability(
     '04',
@@ -41,13 +44,27 @@ const _capabilities = [
   _Capability(
     '05',
     'Computer use, approved',
-    'It proposes, you approve, and the outcome lands in an append-only ledger.',
+    'It proposes named accessibility actions — invoke or set value — you '
+        'approve once, and the outcome lands in an append-only ledger.',
   ),
   _Capability(
     '06',
     'The pendant',
     'Captures the day over Bluetooth LE. Your phone relays; your desktop '
         'remembers.',
+  ),
+  _Capability(
+    '07',
+    'Telegram & iMessage',
+    'Link Telegram or iMessage in Settings. Inbound messages join the same '
+        'ordered conversation as desktop — replies go back through the '
+        'channel when your desktop is connected.',
+  ),
+  _Capability(
+    '08',
+    'FaceTime calls',
+    'The public API and MCP can ring an E.164 number through Sendblue\'s '
+        'FaceTime bridge when a FaceTime line is provisioned on the account.',
   ),
 ];
 
@@ -99,6 +116,37 @@ const _hardwareCapabilities = <(String, List<String>)>[
   ),
 ];
 
+/// Channel surfaces and how they connect back to the same conversation.
+const _reachChannels = <(String, List<String>)>[
+  (
+    'Telegram',
+    [
+      'Link with a one-time code from Settings',
+      'Inbound messages append to your shared, ordered conversation',
+      'Replies are plain text — no crepus widgets on the channel',
+      'Can trigger the same approved computer-use flow as desktop',
+    ],
+  ),
+  (
+    'iMessage (Sendblue)',
+    [
+      'Same linking flow; Sendblue is the provider when configured',
+      'Blooio remains the fallback until Sendblue is proven in production',
+      'Outbound delivery is serialized per chat through a Durable Object',
+      'FaceTime Audio calls use a separate Sendblue bridge when provisioned',
+    ],
+  ),
+  (
+    'FaceTime path',
+    [
+      'POST /api/v1/facetime/calls and MCP start_facetime_call',
+      'Rings an E.164 number — not a join link',
+      'Requires a purchased FaceTime line on the Sendblue account',
+      'Returns facetime_unavailable when no line is provisioned',
+    ],
+  ),
+];
+
 /// One photograph from omi.me, vendored beside the stylesheet so the page
 /// stays same-origin. Two widths, so a phone does not fetch the desktop file.
 class _Shot extends StatelessComponent {
@@ -138,13 +186,16 @@ class Home extends StatelessComponent {
     return Page(
       title: 'Omi — your private second brain',
       description:
-          'Omi is a private, second-brain personal AI: evidenced memory, live '
-          'meetings, currents, a voice summon, a pendant, and an MCP server. '
-          'Open source, local first.',
+          'Omi is a private, second-brain personal AI: evidenced memory with '
+          'cloud sync, live meetings, Currents and Now Brief, Telegram and '
+          'iMessage channels, approved computer use, a voice summon, a pendant, '
+          'FaceTime calls, and an MCP server. Open source.',
       path: '/',
       rail: const [
         ('top', 'Omi'),
         ('what', 'What it does'),
+        ('memory', 'Memory'),
+        ('reach', 'Reach'),
         ('hardware', 'Hardware'),
         ('api', 'API'),
         ('privacy', 'Privacy'),
@@ -154,6 +205,8 @@ class Home extends StatelessComponent {
       children: [
         _hero(),
         _whatItDoes(),
+        _memory(),
+        _reach(),
         _hardware(),
         _openSurface(),
         _privacy(),
@@ -178,7 +231,8 @@ class Home extends StatelessComponent {
             p([
               .text(
                 'One hub across desktop, mobile and the web. It listens with '
-                'you, and every answer cites where it came from.',
+                'you, remembers with evidence, and meets you on Telegram, '
+                'iMessage, and FaceTime when you link them.',
               ),
             ], classes: 'mid rise d3'),
             div([const PrimaryActions()], classes: 'rise d4'),
@@ -208,6 +262,93 @@ class Home extends StatelessComponent {
       classes: 'band wrap',
       id: 'what',
       attributes: {'aria-labelledby': 't2'},
+    );
+  }
+
+  Component _memory() {
+    return section(
+      [
+        h2([.text('Memory')], classes: 'label', id: 't8'),
+        p([
+          .text('A log, and a mirror of it.'),
+        ], classes: 'big reveal measure-16'),
+        ul([
+          li([
+            b([.text('zkr on device.')]),
+            .text(
+              ' The Rust hub runs the zkr engine — a per-account SQLite file '
+              'that mints evidence, locators and claims. It captures from '
+              'chat, transcripts, screen observations and onboarding scans.',
+            ),
+          ]),
+          li([
+            b([.text('Cloud authority.')]),
+            .text(
+              ' The Worker owns an append-only memory log in D1. A record is '
+              'not remembered until the cloud assigns its sequence; devices '
+              'sync through ',
+            ),
+            code([.text('POST /v1/memory/zkr-sync')]),
+            .text(' and '),
+            code([.text('GET /v1/memory/log')]),
+            .text('.'),
+          ]),
+          li([
+            b([.text('Local mirror.')]),
+            .text(
+              ' Desktop keeps an offline mirror via zkr apply so recall works '
+              'at the last synced sequence — stale, never wrong. Web reads '
+              'from the cloud log directly.',
+            ),
+          ]),
+          li([
+            b([.text('Cited retrieval.')]),
+            .text(
+              ' Search and chat answers return claims only with live evidence. '
+              'A claim whose source was deleted is dropped rather than returned '
+              'uncited.',
+            ),
+          ]),
+        ], classes: 'notes split reveal'),
+        p([
+          a([.text('How memory authority works')], classes: 'arrow', href: '/architecture#memory'),
+        ], classes: 'links band-gap reveal'),
+      ],
+      classes: 'band wrap',
+      id: 'memory',
+      attributes: {'aria-labelledby': 't8'},
+    );
+  }
+
+  Component _reach() {
+    return section(
+      [
+        h2([.text('Reach')], classes: 'label', id: 't9'),
+        p([
+          .text('Same brain, other inboxes.'),
+        ], classes: 'big reveal measure-16'),
+        div([
+          for (final (title, lines) in _reachChannels)
+            article([
+              h3([.text(title)], classes: 'label'),
+              ul([
+                for (final line in lines) li([.text(line)]),
+              ]),
+            ], classes: 'card reveal'),
+        ], classes: 'cards'),
+        p([
+          .text(
+            'Channels need linking in Settings — send the bot a short-lived code '
+            'from the app. iMessage goes through Sendblue when configured, with '
+            'Blooio as the retained fallback. Stripe-managed checkout for Omi AI '
+            'may be unavailable until billing secrets are set on the Worker; BYOK '
+            'and negotiate still work.',
+          ),
+        ], classes: 'small measure band-gap reveal'),
+      ],
+      classes: 'band wrap',
+      id: 'reach',
+      attributes: {'aria-labelledby': 't9'},
     );
   }
 
@@ -298,6 +439,13 @@ class Home extends StatelessComponent {
               .text(' streams in the shape your clients already speak.'),
             ]),
             li([
+              b([.text('Memory, Currents, channels, FaceTime.')]),
+              .text(
+                ' Search memory, list or create Currents with optional crepus '
+                'widgets, and place FaceTime calls — all scoped to your account.',
+              ),
+            ]),
+            li([
               a(
                 [.text('Read the API reference')],
                 classes: 'arrow',
@@ -325,12 +473,16 @@ class Home extends StatelessComponent {
       [
         h2([.text('Privacy')], classes: 'label', id: 't4'),
         p([
-          .text('Your memory lives on your machine.'),
+          .text('Your memory is yours — and you can read the boundary.'),
         ], classes: 'big reveal measure-tight'),
         ul([
           li([
-            b([.text('Local source of truth.')]),
-            .text(' The cloud keeps only a rebuildable projection for recall.'),
+            b([.text('Cloud log, local mirror.')]),
+            .text(
+              ' The authoritative memory log lives in your account at the edge. '
+              'Desktop keeps a rebuildable zkr mirror; D1 read tables and '
+              'Vectorize are projections, not sources.',
+            ),
           ]),
           li([
             b([.text('On-device summaries.')]),
@@ -342,7 +494,8 @@ class Home extends StatelessComponent {
           li([
             b([.text('Open source.')]),
             .text(
-              ' The line between local and cloud is something you can read.',
+              ' The line between local capture, cloud authority and provider '
+              'calls is something you can read.',
             ),
           ]),
         ], classes: 'notes split reveal'),
@@ -385,6 +538,12 @@ class Home extends StatelessComponent {
             ], classes: 'amount'),
             p([
               .text('No keys, no provider accounts. We run them.'),
+            ], classes: 'small'),
+            p([
+              .text(
+                'Stripe checkout opens when billing is configured on the Worker; '
+                'until then, use BYOK or negotiate.',
+              ),
             ], classes: 'small'),
             a([.text('Open Omi')], classes: 'btn btn-solid', href: portalUrl),
           ], classes: 'plan reveal'),

@@ -37,9 +37,10 @@ class Architecture extends StatelessComponent {
     return Page(
       title: 'Omi — architecture',
       description:
-          'How Omi is built: one Flutter app, an embedded Rust hub, a '
-          'Cloudflare Worker, an AI Gateway in front of OpenRouter model '
-          'tiers, D1, Vectorize, Durable Objects, and the BLE pendant path.',
+          'How Omi is built: one Flutter app, an embedded Rust hub with zkr '
+          'memory, a Cloudflare Worker, Telegram and Sendblue channels, '
+          'FaceTime via Sendblue, model tiers, D1 memory authority, and the '
+          'BLE pendant path.',
       path: '/architecture',
       rail: const [
         ('top', 'Architecture'),
@@ -47,7 +48,9 @@ class Architecture extends StatelessComponent {
         ('tiers', 'Model tiers'),
         ('data', 'Data plane'),
         ('memory', 'Memory'),
+        ('channels', 'Channels'),
         ('approval', 'Approval gate'),
+        ('facetime', 'FaceTime'),
         ('pendant', 'Pendant'),
       ],
       children: [
@@ -56,7 +59,9 @@ class Architecture extends StatelessComponent {
         _modelTiers(),
         _dataPlane(),
         _memory(),
+        _channels(),
         _approval(),
+        _facetime(),
         _pendant(),
       ],
     );
@@ -110,7 +115,15 @@ class Architecture extends StatelessComponent {
             b([.text('The Worker owns the account.')]),
             .text(
               ' It verifies the Firebase ID token at the edge, then owns '
-              'persistence, currents, billing and channel delivery.',
+              'persistence, the memory log, currents, billing and channel '
+              'delivery.',
+            ),
+          ]),
+          li([
+            b([.text('Channels share the conversation.')]),
+            .text(
+              ' Telegram and iMessage (Sendblue, Blooio fallback) append into '
+              'the same UID-scoped ordered transport the desktop agent reads.',
             ),
           ]),
           li([
@@ -229,10 +242,14 @@ class Architecture extends StatelessComponent {
           li([
             b([.text('Memory')]),
             .text(
-              ' One append-only log per account is the write authority. The '
-              'read tables are a projection of it, so any of them can be '
-              'dropped and rebuilt, and every device keeps a local mirror at '
-              'the sequence it last synced.',
+              ' One append-only ',
+            ),
+            code([.text('memory_log')]),
+            .text(
+              ' per account is the write authority. The read tables and '
+              'Vectorize index are projections of it, so any of them can be '
+              'dropped and rebuilt, and every device keeps a local zkr mirror '
+              'at the sequence it last synced.',
             ),
           ]),
         ], classes: 'notes split reveal'),
@@ -255,9 +272,29 @@ class Architecture extends StatelessComponent {
             b([.text('One writer.')]),
             .text(
               ' A record is not remembered until the Worker has appended it to '
-              'the account log and assigned it a sequence. Devices mint records '
+              'the account ',
+            ),
+            code([.text('memory_log')]),
+            .text(
+              ' and assigned it a sequence. Devices mint records through zkr '
               'and capture evidence; they never decide ordering.',
             ),
+          ]),
+          li([
+            b([.text('zkr on device.')]),
+            .text(
+              ' The hub opens a per-UID SQLite ',
+            ),
+            code([.text('MemoryDb')]),
+            .text(
+              ' keyed by Firebase UID. Pending commits sync with ',
+            ),
+            code([.text('POST /v1/memory/zkr-sync')]),
+            .text('; the mirror advances with '),
+            code([.text('GET /v1/memory/log')]),
+            .text(' and '),
+            code([.text('MemoryDb::apply')]),
+            .text(' on desktop.'),
           ]),
           li([
             b([.text('Nothing is edited.')]),
@@ -289,6 +326,55 @@ class Architecture extends StatelessComponent {
       classes: 'band wrap',
       id: 'memory',
       attributes: {'aria-labelledby': 't5'},
+    );
+  }
+
+  Component _channels() {
+    return section(
+      [
+        h2([.text('Channels')], classes: 'label', id: 't8'),
+        p([.text('Other inboxes, one conversation.')], classes: 'big reveal measure-16'),
+        ul([
+          li([
+            b([.text('Telegram.')]),
+            .text(
+              ' Webhook-verified inbound updates link through a short-lived code '
+              'in Settings. Messages append to the shared ordered conversation; '
+              'outbound replies are plain text with crepus blocks stripped.',
+            ),
+          ]),
+          li([
+            b([.text('iMessage (Sendblue).')]),
+            .text(
+              ' Sendblue is the provider when configured; Blooio remains the '
+              'fallback. The stored channel id is ',
+            ),
+            code([.text('blooio')]),
+            .text(
+              ' either way. DeliveryCoordinator serializes outbound sends per '
+              'chat with lease-based retries.',
+            ),
+          ]),
+          li([
+            b([.text('Desktop picks up the thread.')]),
+            .text(
+              ' A channel message is an ordinary turn — the assistant can plan, '
+              'propose computer use under the same approval gate, and append a '
+              'reply that routes back through the channel.',
+            ),
+          ]),
+          li([
+            b([.text('Linking is required.')]),
+            .text(
+              ' Neither channel works until the user sends the bot a code from '
+              'the app. Credentials live server-side only.',
+            ),
+          ]),
+        ], classes: 'notes split reveal'),
+      ],
+      classes: 'band wrap',
+      id: 'channels',
+      attributes: {'aria-labelledby': 't8'},
     );
   }
 
@@ -334,6 +420,63 @@ class Architecture extends StatelessComponent {
       classes: 'band wrap',
       id: 'approval',
       attributes: {'aria-labelledby': 't6'},
+    );
+  }
+
+  Component _facetime() {
+    return section(
+      [
+        h2([.text('FaceTime')], classes: 'label', id: 't9'),
+        p([
+          .text('Ring a number, not a link.'),
+        ], classes: 'big reveal measure-16'),
+        ul([
+          li([
+            b([.text('Sendblue bridge.')]),
+            .text(
+              ' ',
+            ),
+            code([.text('POST /api/v1/facetime/calls')]),
+            .text(
+              ' and MCP ',
+            ),
+            code([.text('start_facetime_call')]),
+            .text(
+              ' call Sendblue\'s FaceTime start endpoint. The provider rings the '
+              'handle on the recipient\'s device — there is no ',
+            ),
+            code([.text('facetime.apple.com')]),
+            .text(' join URL.'),
+          ]),
+          li([
+            b([.text('E.164 only.')]),
+            .text(
+              ' Handles must be phone numbers in E.164 form. Email FaceTime '
+              'identities are refused before anything is sent upstream.',
+            ),
+          ]),
+          li([
+            b([.text('Provisioned line required.')]),
+            .text(
+              ' A purchased FaceTime number on the Sendblue account is required. '
+              'Without one the route returns ',
+            ),
+            code([.text('facetime_unavailable')]),
+            .text(' — a product state, not a transient fault.'),
+          ]),
+          li([
+            b([.text('Admission and bridge.')]),
+            .text(
+              ' Concurrent sessions are cost-gated like managed speech. When '
+              'configured, a Cloudflare Container bridge carries the realtime '
+              'audio leg.',
+            ),
+          ]),
+        ], classes: 'notes split reveal'),
+      ],
+      classes: 'band wrap',
+      id: 'facetime',
+      attributes: {'aria-labelledby': 't9'},
     );
   }
 

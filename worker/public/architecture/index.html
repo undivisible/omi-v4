@@ -8,7 +8,7 @@
     <!--$-->
     <title>Omi — architecture</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-    <meta name="description" content="How Omi is built: one Flutter app, an embedded Rust hub, a Cloudflare Worker, an AI Gateway in front of OpenRouter model tiers, D1, Vectorize, Durable Objects, and the BLE pendant path."/>
+    <meta name="description" content="How Omi is built: one Flutter app, an embedded Rust hub with zkr memory, a Cloudflare Worker, Telegram and Sendblue channels, FaceTime via Sendblue, model tiers, D1 memory authority, and the BLE pendant path."/>
     <link href="data:image/svg+xml,%3Csvg%20xmlns%3D'http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg'%20viewBox%3D'0%200%2032%2032'%3E%3Crect%20width%3D'32'%20height%3D'32'%20rx%3D'7'%20fill%3D'%23171716'%2F%3E%3Ccircle%20cx%3D%2215.94%22%20cy%3D%225.27%22%20r%3D%222.12%22%20fill%3D%22%23fffcec%22%2F%3E%3Ccircle%20cx%3D%2223.94%22%20cy%3D%227.94%22%20r%3D%222.12%22%20fill%3D%22%23fffcec%22%2F%3E%3Ccircle%20cx%3D%2226.61%22%20cy%3D%2215.94%22%20r%3D%222.12%22%20fill%3D%22%23fffcec%22%2F%3E%3Ccircle%20cx%3D%2223.94%22%20cy%3D%2223.94%22%20r%3D%222.12%22%20fill%3D%22%23fffcec%22%2F%3E%3Ccircle%20cx%3D%2215.94%22%20cy%3D%2226.61%22%20r%3D%222.12%22%20fill%3D%22%23fffcec%22%2F%3E%3Ccircle%20cx%3D%227.94%22%20cy%3D%2223.94%22%20r%3D%222.12%22%20fill%3D%22%23fffcec%22%2F%3E%3Ccircle%20cx%3D%225.27%22%20cy%3D%2215.94%22%20r%3D%222.12%22%20fill%3D%22%23fffcec%22%2F%3E%3Ccircle%20cx%3D%227.94%22%20cy%3D%227.94%22%20r%3D%222.12%22%20fill%3D%22%23fffcec%22%2F%3E%3C%2Fsvg%3E" rel="icon"/>
     <link href="https://omi.tsc.hk/architecture" rel="canonical"/>
     <link as="font" type="font/woff2" crossorigin href="/inter-latin-variable.woff2" rel="preload"/>
@@ -16,7 +16,7 @@
     <link href="/styles.css" rel="stylesheet"/>
     <meta name="theme-color" content="#171716"/>
     <meta property="og:title" content="Omi — architecture"/>
-    <meta property="og:description" content="How Omi is built: one Flutter app, an embedded Rust hub, a Cloudflare Worker, an AI Gateway in front of OpenRouter model tiers, D1, Vectorize, Durable Objects, and the BLE pendant path."/>
+    <meta property="og:description" content="How Omi is built: one Flutter app, an embedded Rust hub with zkr memory, a Cloudflare Worker, Telegram and Sendblue channels, FaceTime via Sendblue, model tiers, D1 memory authority, and the BLE pendant path."/>
     <meta property="og:type" content="website"/>
     <meta property="og:url" content="https://omi.tsc.hk/architecture"/>
     <!--/-->
@@ -35,7 +35,9 @@
           <li><a href="#tiers">Model tiers</a></li>
           <li><a href="#data">Data plane</a></li>
           <li><a href="#memory">Memory</a></li>
+          <li><a href="#channels">Channels</a></li>
           <li><a href="#approval">Approval gate</a></li>
+          <li><a href="#facetime">FaceTime</a></li>
           <li><a href="#pendant">Pendant</a></li>
         </ol>
       </nav>
@@ -121,7 +123,10 @@
             <b>The hub is linked into the app.</b> Chat, memory, speech, the workspace scan and computer use share one process and one memory authority — no separate agent daemon.
           </li>
           <li>
-            <b>The Worker owns the account.</b> It verifies the Firebase ID token at the edge, then owns persistence, currents, billing and channel delivery.
+            <b>The Worker owns the account.</b> It verifies the Firebase ID token at the edge, then owns persistence, the memory log, currents, billing and channel delivery.
+          </li>
+          <li>
+            <b>Channels share the conversation.</b> Telegram and iMessage (Sendblue, Blooio fallback) append into the same UID-scoped ordered transport the desktop agent reads.
           </li>
           <li>
             <b>Realtime voice is its own path.</b> OpenRouter is request/response only, so Gemini Live keeps a separate credential and transport.
@@ -184,7 +189,7 @@
             <b>Durable Objects</b> Four coordinators: channel delivery, assistant and speech cost admission, and rate limiting.
           </li>
           <li>
-            <b>Memory</b> One append-only log per account is the write authority. The read tables are a projection of it, so any of them can be dropped and rebuilt, and every device keeps a local mirror at the sequence it last synced.
+            <b>Memory</b> One append-only <code>memory_log</code> per account is the write authority. The read tables and Vectorize index are projections of it, so any of them can be dropped and rebuilt, and every device keeps a local zkr mirror at the sequence it last synced.
           </li>
         </ul>
       </section>
@@ -193,7 +198,13 @@
         <p class="big reveal measure-16">A log, and a view of it.</p>
         <ul class="notes split reveal">
           <li>
-            <b>One writer.</b> A record is not remembered until the Worker has appended it to the account log and assigned it a sequence. Devices mint records and capture evidence; they never decide ordering.
+            <b>One writer.</b> A record is not remembered until the Worker has appended it to the account <code>memory_log</code>
+             and assigned it a sequence. Devices mint records through zkr and capture evidence; they never decide ordering.
+          </li>
+          <li>
+            <b>zkr on device.</b> The hub opens a per-UID SQLite <code>MemoryDb</code> keyed by Firebase UID. Pending commits sync with 
+            <code>POST /v1/memory/zkr-sync</code>; the mirror advances with <code>GET /v1/memory/log</code> and <code>MemoryDb::apply</code>
+             on desktop.
           </li>
           <li>
             <b>Nothing is edited.</b> A correction and a deletion are new records that reference the one they supersede, so an evidence chain is never rewritten and a citation stays stable for the life of the claim.
@@ -203,6 +214,25 @@
           </li>
           <li>
             <b>Recall is cited.</b> A claim is returned only with the evidence that supports it, resolved to a source revision and its locator. A claim whose source has been deleted is dropped from the answer rather than returned uncited.
+          </li>
+        </ul>
+      </section>
+      <section id="channels" class="band wrap" aria-labelledby="t8">
+        <h2 id="t8" class="label">Channels</h2>
+        <p class="big reveal measure-16">Other inboxes, one conversation.</p>
+        <ul class="notes split reveal">
+          <li>
+            <b>Telegram.</b> Webhook-verified inbound updates link through a short-lived code in Settings. Messages append to the shared ordered conversation; outbound replies are plain text with crepus blocks stripped.
+          </li>
+          <li>
+            <b>iMessage (Sendblue).</b> Sendblue is the provider when configured; Blooio remains the fallback. The stored channel id is 
+            <code>blooio</code> either way. DeliveryCoordinator serializes outbound sends per chat with lease-based retries.
+          </li>
+          <li>
+            <b>Desktop picks up the thread.</b> A channel message is an ordinary turn — the assistant can plan, propose computer use under the same approval gate, and append a reply that routes back through the channel.
+          </li>
+          <li>
+            <b>Linking is required.</b> Neither channel works until the user sends the bot a code from the app. Credentials live server-side only.
           </li>
         </ul>
       </section>
@@ -221,6 +251,27 @@
           </li>
           <li>
             <b>Unknown is its own answer.</b> An action that may or may not have taken effect is recorded as unknown and is never retried automatically.
+          </li>
+        </ul>
+      </section>
+      <section id="facetime" class="band wrap" aria-labelledby="t9">
+        <h2 id="t9" class="label">FaceTime</h2>
+        <p class="big reveal measure-16">Ring a number, not a link.</p>
+        <ul class="notes split reveal">
+          <li>
+            <b>Sendblue bridge.</b> <code>POST /api/v1/facetime/calls</code> and MCP <code>start_facetime_call</code>
+             call Sendblue's FaceTime start endpoint. The provider rings the handle on the recipient's device — there is no 
+            <code>facetime.apple.com</code> join URL.
+          </li>
+          <li>
+            <b>E.164 only.</b> Handles must be phone numbers in E.164 form. Email FaceTime identities are refused before anything is sent upstream.
+          </li>
+          <li>
+            <b>Provisioned line required.</b> A purchased FaceTime number on the Sendblue account is required. Without one the route returns 
+            <code>facetime_unavailable</code> — a product state, not a transient fault.
+          </li>
+          <li>
+            <b>Admission and bridge.</b> Concurrent sessions are cost-gated like managed speech. When configured, a Cloudflare Container bridge carries the realtime audio leg.
           </li>
         </ul>
       </section>
