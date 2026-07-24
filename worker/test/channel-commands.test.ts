@@ -311,6 +311,33 @@ describe("unlinked sender", () => {
     expect(outcome.enqueue).toBe(false);
   });
 
+  test("refuses signup in a group chat", async () => {
+    const outcome = await handleChannelMessage(
+      env(),
+      "telegram",
+      "43",
+      "-1001",
+      "/signup",
+    );
+    expect(outcome.reply).toContain("Group chats cannot be linked");
+    expect(outcome.enqueue).toBe(false);
+    expect(await liveChannelAccount(database, "telegram", "43")).toBeNull();
+  });
+
+  test("issues iMessage link codes when Sendblue is configured", async () => {
+    const issued = await issueLinkCode(
+      {
+        ...env(),
+        SENDBLUE_WEBHOOK_SIGNING_SECRET: "sendblue-secret",
+        BLOOIO_WEBHOOK_SIGNING_SECRET: "legacy-blooio-secret",
+      },
+      "blooio",
+      "+1555",
+      "+1555",
+    );
+    expect(issued?.code).toHaveLength(7);
+  });
+
   test("rate-limits code issuance so the bot cannot relay spam", async () => {
     rateAllowed = false;
     const outcome = await handleChannelMessage(

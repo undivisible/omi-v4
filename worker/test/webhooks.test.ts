@@ -465,6 +465,95 @@ describe("channel webhooks", () => {
         .first(),
     ).toMatchObject({ count: 0 });
   });
+
+  test("accepts a Sendblue inbound message when path token and secret match", async () => {
+    const now = Date.now();
+    await database
+      .prepare(
+        `INSERT INTO channel_bindings
+           (channel, channel_user_id, uid, verified_at, channel_chat_id)
+         VALUES ('blooio', '+19998887777', 'alpha', ?1, '+19998887777')`,
+      )
+      .bind(now)
+      .run();
+    const body = JSON.stringify({
+      content: "Remember this",
+      is_outbound: false,
+      status: "RECEIVED",
+      message_handle: "sb-msg-001",
+      from_number: "+19998887777",
+      number: "+19998887777",
+      to_number: "+15122164639",
+      media_url: "",
+      group_id: "",
+      service: "iMessage",
+    });
+    const send = async () =>
+      app.request(
+        "/v1/webhooks/sendblue/path-token-value",
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "sb-signing-secret": "webhook-secret-value",
+          },
+          body,
+        },
+        {
+          DB: database,
+          FIREBASE_PROJECT_ID: "test",
+          SENDBLUE_WEBHOOK_SIGNING_SECRET: "webhook-secret-value",
+          SENDBLUE_WEBHOOK_PATH_TOKEN: "path-token-value",
+        },
+      );
+    const first = await send();
+    expect(await first.json()).toEqual({
+      accepted: true,
+      queued: true,
+      replied: false,
+    });
+    const duplicate = await send();
+    expect(await duplicate.json()).toEqual({ accepted: true, duplicate: true });
+  });
+
+  test("rejects Sendblue group link tokens with an explanation", async () => {
+    const body = JSON.stringify({
+      content: "0".repeat(48),
+      is_outbound: false,
+      status: "RECEIVED",
+      message_handle: "sb-msg-group-link",
+      from_number: "+19998887777",
+      number: "+19998887777",
+      to_number: "+15122164639",
+      media_url: "",
+      group_id: "group-99",
+      service: "iMessage",
+    });
+    const response = await app.request(
+      "/v1/webhooks/sendblue/path-token-value",
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "sb-signing-secret": "webhook-secret-value",
+        },
+        body,
+      },
+      {
+        DB: database,
+        FIREBASE_PROJECT_ID: "test",
+        SENDBLUE_WEBHOOK_SIGNING_SECRET: "webhook-secret-value",
+        SENDBLUE_WEBHOOK_PATH_TOKEN: "path-token-value",
+        SENDBLUE_API_KEY_ID: "key-id",
+        SENDBLUE_API_KEY_SECRET: "key-secret",
+        SENDBLUE_NUMBER: "+15122164639",
+      },
+    );
+    expect(await response.json()).toMatchObject({
+      accepted: true,
+      linked: false,
+    });
+  });
 });
 
 describe("Stripe webhook", () => {

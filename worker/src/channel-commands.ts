@@ -244,6 +244,8 @@ const startSignup = async (
   channelChatId: string,
   now: number,
 ): Promise<ChannelMessageOutcome> => {
+  if (isGroupChannelChat(channel, channelUserId, channelChatId))
+    return { reply: groupChannelLinkError, enqueue: false };
   const result = await signUpChannelSender(
     env,
     channel,
@@ -278,6 +280,8 @@ const askFirstContact = async (
 ): Promise<ChannelMessageOutcome> => {
   if (!(await unlinkedReplyAllowed(env, channel, channelUserId)))
     return { reply: null, enqueue: false };
+  if (isGroupChannelChat(channel, channelUserId, channelChatId))
+    return { reply: groupChannelLinkError, enqueue: false };
   await recordFirstContact(env.DB, channel, channelUserId, channelChatId, now);
   return { reply: firstContactText, enqueue: false };
 };
