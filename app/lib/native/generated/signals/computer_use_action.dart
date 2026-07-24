@@ -1,7 +1,6 @@
 // ignore_for_file: type=lint, type=warning
 part of 'signals.dart';
 
-
 abstract class ComputerUseAction {
   const ComputerUseAction();
 
@@ -10,16 +9,21 @@ abstract class ComputerUseAction {
   static ComputerUseAction deserialize(BinaryDeserializer deserializer) {
     int index = deserializer.deserializeVariantIndex();
     switch (index) {
-      case 0: return ComputerUseActionInvoke.load(deserializer);
-      case 1: return ComputerUseActionSetValue.load(deserializer);
-      default: throw Exception('Unknown variant index for ComputerUseAction: ' + index.toString());
+      case 0:
+        return ComputerUseActionInvoke.load(deserializer);
+      case 1:
+        return ComputerUseActionSetValue.load(deserializer);
+      default:
+        throw Exception(
+          'Unknown variant index for ComputerUseAction: ' + index.toString(),
+        );
     }
   }
 
   Uint8List bincodeSerialize() {
-      final serializer = BincodeSerializer();
-      serialize(serializer);
-      return serializer.bytes;
+    final serializer = BincodeSerializer();
+    serialize(serializer);
+    return serializer.bytes;
   }
 
   static ComputerUseAction bincodeDeserialize(Uint8List input) {
@@ -31,7 +35,6 @@ abstract class ComputerUseAction {
     return value;
   }
 }
-
 
 @immutable
 class ComputerUseActionInvoke extends ComputerUseAction {
@@ -53,10 +56,7 @@ class ComputerUseActionInvoke extends ComputerUseAction {
   final String targetName;
   final bool backgroundOnly;
 
-  ComputerUseActionInvoke copyWith({
-    String? targetName,
-    bool? backgroundOnly,
-  }) {
+  ComputerUseActionInvoke copyWith({String? targetName, bool? backgroundOnly}) {
     return ComputerUseActionInvoke(
       targetName: targetName ?? this.targetName,
       backgroundOnly: backgroundOnly ?? this.backgroundOnly,
@@ -76,26 +76,24 @@ class ComputerUseActionInvoke extends ComputerUseAction {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is ComputerUseActionInvoke
-      && targetName == other.targetName
-      && backgroundOnly == other.backgroundOnly;
+    return other is ComputerUseActionInvoke &&
+        targetName == other.targetName &&
+        backgroundOnly == other.backgroundOnly;
   }
 
   @override
-  int get hashCode => Object.hash(
-        targetName,
-        backgroundOnly,
-      );
+  int get hashCode => Object.hash(targetName, backgroundOnly);
 
   @override
   String toString() {
     String? fullString;
 
     assert(() {
-      fullString = '$runtimeType('
-        'targetName: $targetName, '
-        'backgroundOnly: $backgroundOnly'
-        ')';
+      fullString =
+          '$runtimeType('
+          'targetName: [REDACTED], '
+          'backgroundOnly: $backgroundOnly'
+          ')';
       return true;
     }());
 
@@ -152,29 +150,26 @@ class ComputerUseActionSetValue extends ComputerUseAction {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is ComputerUseActionSetValue
-      && targetName == other.targetName
-      && value == other.value
-      && backgroundOnly == other.backgroundOnly;
+    return other is ComputerUseActionSetValue &&
+        targetName == other.targetName &&
+        value == other.value &&
+        backgroundOnly == other.backgroundOnly;
   }
 
   @override
-  int get hashCode => Object.hash(
-        targetName,
-        value,
-        backgroundOnly,
-      );
+  int get hashCode => Object.hash(targetName, value, backgroundOnly);
 
   @override
   String toString() {
     String? fullString;
 
     assert(() {
-      fullString = '$runtimeType('
-        'targetName: $targetName, '
-        'value: $value, '
-        'backgroundOnly: $backgroundOnly'
-        ')';
+      fullString =
+          '$runtimeType('
+          'targetName: [REDACTED], '
+          'value: [REDACTED], '
+          'backgroundOnly: $backgroundOnly'
+          ')';
       return true;
     }());
 

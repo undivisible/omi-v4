@@ -1,7 +1,6 @@
 // ignore_for_file: type=lint, type=warning
 part of 'signals.dart';
 
-
 @immutable
 class OnboardingScanCompleted {
   const OnboardingScanCompleted({
@@ -67,9 +66,9 @@ class OnboardingScanCompleted {
   }
 
   Uint8List bincodeSerialize() {
-      final serializer = BincodeSerializer();
-      serialize(serializer);
-      return serializer.bytes;
+    final serializer = BincodeSerializer();
+    serialize(serializer);
+    return serializer.bytes;
   }
 
   @override
@@ -77,35 +76,31 @@ class OnboardingScanCompleted {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is OnboardingScanCompleted
-      && requestId == other.requestId
-      && listEquals(sources, other.sources)
-      && summary == other.summary
-      && detectedName == other.detectedName
-      && listEquals(detectedLanguages, other.detectedLanguages);
+    return other is OnboardingScanCompleted &&
+        requestId == other.requestId &&
+        listEquals(sources, other.sources) &&
+        summary == other.summary &&
+        detectedName == other.detectedName &&
+        listEquals(detectedLanguages, other.detectedLanguages);
   }
 
   @override
-  int get hashCode => Object.hash(
-        requestId,
-        sources,
-        summary,
-        detectedName,
-        detectedLanguages,
-      );
+  int get hashCode =>
+      Object.hash(requestId, sources, summary, detectedName, detectedLanguages);
 
   @override
   String toString() {
     String? fullString;
 
     assert(() {
-      fullString = '$runtimeType('
-        'requestId: $requestId, '
-        'sources: $sources, '
-        'summary: $summary, '
-        'detectedName: $detectedName, '
-        'detectedLanguages: $detectedLanguages'
-        ')';
+      fullString =
+          '$runtimeType('
+          'requestId: $requestId, '
+          'sources: $sources, '
+          'summary: [REDACTED], '
+          'detectedName: [REDACTED], '
+          'detectedLanguages: $detectedLanguages'
+          ')';
       return true;
     }());
 

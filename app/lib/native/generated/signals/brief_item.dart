@@ -62,9 +62,9 @@ class BriefItem {
   }
 
   Uint8List bincodeSerialize() {
-      final serializer = BincodeSerializer();
-      serialize(serializer);
-      return serializer.bytes;
+    final serializer = BincodeSerializer();
+    serialize(serializer);
+    return serializer.bytes;
   }
 
   @override
@@ -72,32 +72,28 @@ class BriefItem {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is BriefItem
-      && title == other.title
-      && when == other.when
-      && detail == other.detail
-      && nextStep == other.nextStep;
+    return other is BriefItem &&
+        title == other.title &&
+        when == other.when &&
+        detail == other.detail &&
+        nextStep == other.nextStep;
   }
 
   @override
-  int get hashCode => Object.hash(
-        title,
-        when,
-        detail,
-        nextStep,
-      );
+  int get hashCode => Object.hash(title, when, detail, nextStep);
 
   @override
   String toString() {
     String? fullString;
 
     assert(() {
-      fullString = '$runtimeType('
-        'title: $title, '
-        'when: $when, '
-        'detail: $detail, '
-        'nextStep: $nextStep'
-        ')';
+      fullString =
+          '$runtimeType('
+          'title: $title, '
+          'when: $when, '
+          'detail: $detail, '
+          'nextStep: $nextStep'
+          ')';
       return true;
     }());
 

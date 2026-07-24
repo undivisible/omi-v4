@@ -1,7 +1,6 @@
 // ignore_for_file: type=lint, type=warning
 part of 'signals.dart';
 
-
 @immutable
 class TranscriptLocator {
   const TranscriptLocator({
@@ -73,9 +72,9 @@ class TranscriptLocator {
   }
 
   Uint8List bincodeSerialize() {
-      final serializer = BincodeSerializer();
-      serialize(serializer);
-      return serializer.bytes;
+    final serializer = BincodeSerializer();
+    serialize(serializer);
+    return serializer.bytes;
   }
 
   @override
@@ -83,38 +82,33 @@ class TranscriptLocator {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is TranscriptLocator
-      && deviceId == other.deviceId
-      && provider == other.provider
-      && streamId == other.streamId
-      && segmentId == other.segmentId
-      && startMs == other.startMs
-      && endMs == other.endMs;
+    return other is TranscriptLocator &&
+        deviceId == other.deviceId &&
+        provider == other.provider &&
+        streamId == other.streamId &&
+        segmentId == other.segmentId &&
+        startMs == other.startMs &&
+        endMs == other.endMs;
   }
 
   @override
-  int get hashCode => Object.hash(
-        deviceId,
-        provider,
-        streamId,
-        segmentId,
-        startMs,
-        endMs,
-      );
+  int get hashCode =>
+      Object.hash(deviceId, provider, streamId, segmentId, startMs, endMs);
 
   @override
   String toString() {
     String? fullString;
 
     assert(() {
-      fullString = '$runtimeType('
-        'deviceId: $deviceId, '
-        'provider: $provider, '
-        'streamId: $streamId, '
-        'segmentId: $segmentId, '
-        'startMs: $startMs, '
-        'endMs: $endMs'
-        ')';
+      fullString =
+          '$runtimeType('
+          'deviceId: $deviceId, '
+          'provider: $provider, '
+          'streamId: $streamId, '
+          'segmentId: $segmentId, '
+          'startMs: $startMs, '
+          'endMs: $endMs'
+          ')';
       return true;
     }());
 

@@ -1,286 +1,381 @@
 // ignore_for_file: type=lint, type=warning
 part of 'signals.dart';
+
 class TraitHelpers {
-  static void serializeOptionComputerUseAction(ComputerUseAction? value, BinarySerializer serializer) {
+  static void serializeOptionComputerUseAction(
+    ComputerUseAction? value,
+    BinarySerializer serializer,
+  ) {
     if (value == null) {
-        serializer.serializeOptionTag(false);
+      serializer.serializeOptionTag(false);
     } else {
-        serializer.serializeOptionTag(true);
-        value.serialize(serializer);
+      serializer.serializeOptionTag(true);
+      value.serialize(serializer);
     }
   }
 
-  static ComputerUseAction? deserializeOptionComputerUseAction(BinaryDeserializer deserializer) {
+  static ComputerUseAction? deserializeOptionComputerUseAction(
+    BinaryDeserializer deserializer,
+  ) {
     final tag = deserializer.deserializeOptionTag();
     if (tag) {
-        return ComputerUseAction.deserialize(deserializer);
+      return ComputerUseAction.deserialize(deserializer);
     } else {
-        return null;
+      return null;
     }
   }
 
-  static void serializeOptionComputerUseAuthorityReceipt(ComputerUseAuthorityReceipt? value, BinarySerializer serializer) {
+  static void serializeOptionComputerUseAuthorityReceipt(
+    ComputerUseAuthorityReceipt? value,
+    BinarySerializer serializer,
+  ) {
     if (value == null) {
-        serializer.serializeOptionTag(false);
+      serializer.serializeOptionTag(false);
     } else {
-        serializer.serializeOptionTag(true);
-        value.serialize(serializer);
+      serializer.serializeOptionTag(true);
+      value.serialize(serializer);
     }
   }
 
-  static ComputerUseAuthorityReceipt? deserializeOptionComputerUseAuthorityReceipt(BinaryDeserializer deserializer) {
+  static ComputerUseAuthorityReceipt?
+  deserializeOptionComputerUseAuthorityReceipt(
+    BinaryDeserializer deserializer,
+  ) {
     final tag = deserializer.deserializeOptionTag();
     if (tag) {
-        return ComputerUseAuthorityReceipt.deserialize(deserializer);
+      return ComputerUseAuthorityReceipt.deserialize(deserializer);
     } else {
-        return null;
+      return null;
     }
   }
 
-  static void serializeOptionComputerUseCapabilities(ComputerUseCapabilities? value, BinarySerializer serializer) {
+  static void serializeOptionComputerUseCapabilities(
+    ComputerUseCapabilities? value,
+    BinarySerializer serializer,
+  ) {
     if (value == null) {
-        serializer.serializeOptionTag(false);
+      serializer.serializeOptionTag(false);
     } else {
-        serializer.serializeOptionTag(true);
-        value.serialize(serializer);
+      serializer.serializeOptionTag(true);
+      value.serialize(serializer);
     }
   }
 
-  static ComputerUseCapabilities? deserializeOptionComputerUseCapabilities(BinaryDeserializer deserializer) {
+  static ComputerUseCapabilities? deserializeOptionComputerUseCapabilities(
+    BinaryDeserializer deserializer,
+  ) {
     final tag = deserializer.deserializeOptionTag();
     if (tag) {
-        return ComputerUseCapabilities.deserialize(deserializer);
+      return ComputerUseCapabilities.deserialize(deserializer);
     } else {
-        return null;
+      return null;
     }
   }
 
-  static void serializeOptionComputerUseTargetProvenance(ComputerUseTargetProvenance? value, BinarySerializer serializer) {
+  static void serializeOptionComputerUseTargetProvenance(
+    ComputerUseTargetProvenance? value,
+    BinarySerializer serializer,
+  ) {
     if (value == null) {
-        serializer.serializeOptionTag(false);
+      serializer.serializeOptionTag(false);
     } else {
-        serializer.serializeOptionTag(true);
-        value.serialize(serializer);
+      serializer.serializeOptionTag(true);
+      value.serialize(serializer);
     }
   }
 
-  static ComputerUseTargetProvenance? deserializeOptionComputerUseTargetProvenance(BinaryDeserializer deserializer) {
+  static ComputerUseTargetProvenance?
+  deserializeOptionComputerUseTargetProvenance(
+    BinaryDeserializer deserializer,
+  ) {
     final tag = deserializer.deserializeOptionTag();
     if (tag) {
-        return ComputerUseTargetProvenance.deserialize(deserializer);
+      return ComputerUseTargetProvenance.deserialize(deserializer);
     } else {
-        return null;
+      return null;
     }
   }
 
-  static void serializeOptionMessageOrigin(MessageOrigin? value, BinarySerializer serializer) {
+  static void serializeOptionMessageOrigin(
+    MessageOrigin? value,
+    BinarySerializer serializer,
+  ) {
     if (value == null) {
-        serializer.serializeOptionTag(false);
+      serializer.serializeOptionTag(false);
     } else {
-        serializer.serializeOptionTag(true);
-        value.serialize(serializer);
+      serializer.serializeOptionTag(true);
+      value.serialize(serializer);
     }
   }
 
-  static MessageOrigin? deserializeOptionMessageOrigin(BinaryDeserializer deserializer) {
+  static MessageOrigin? deserializeOptionMessageOrigin(
+    BinaryDeserializer deserializer,
+  ) {
     final tag = deserializer.deserializeOptionTag();
     if (tag) {
-        return MessageOriginExtension.deserialize(deserializer);
+      return MessageOriginExtension.deserialize(deserializer);
     } else {
-        return null;
+      return null;
     }
   }
 
-  static void serializeOptionTranscriptLocator(TranscriptLocator? value, BinarySerializer serializer) {
+  static void serializeOptionTranscriptLocator(
+    TranscriptLocator? value,
+    BinarySerializer serializer,
+  ) {
     if (value == null) {
-        serializer.serializeOptionTag(false);
+      serializer.serializeOptionTag(false);
     } else {
-        serializer.serializeOptionTag(true);
-        value.serialize(serializer);
+      serializer.serializeOptionTag(true);
+      value.serialize(serializer);
     }
   }
 
-  static TranscriptLocator? deserializeOptionTranscriptLocator(BinaryDeserializer deserializer) {
+  static TranscriptLocator? deserializeOptionTranscriptLocator(
+    BinaryDeserializer deserializer,
+  ) {
     final tag = deserializer.deserializeOptionTag();
     if (tag) {
-        return TranscriptLocator.deserialize(deserializer);
+      return TranscriptLocator.deserialize(deserializer);
     } else {
-        return null;
+      return null;
     }
   }
 
   static void serializeOptionI64(int? value, BinarySerializer serializer) {
     if (value == null) {
-        serializer.serializeOptionTag(false);
+      serializer.serializeOptionTag(false);
     } else {
-        serializer.serializeOptionTag(true);
-        serializer.serializeInt64(value);
+      serializer.serializeOptionTag(true);
+      serializer.serializeInt64(value);
     }
   }
 
   static int? deserializeOptionI64(BinaryDeserializer deserializer) {
     final tag = deserializer.deserializeOptionTag();
     if (tag) {
-        return deserializer.deserializeInt64();
+      return deserializer.deserializeInt64();
     } else {
-        return null;
+      return null;
     }
   }
 
   static void serializeOptionStr(String? value, BinarySerializer serializer) {
     if (value == null) {
-        serializer.serializeOptionTag(false);
+      serializer.serializeOptionTag(false);
     } else {
-        serializer.serializeOptionTag(true);
-        serializer.serializeString(value);
+      serializer.serializeOptionTag(true);
+      serializer.serializeString(value);
     }
   }
 
   static String? deserializeOptionStr(BinaryDeserializer deserializer) {
     final tag = deserializer.deserializeOptionTag();
     if (tag) {
-        return deserializer.deserializeString();
+      return deserializer.deserializeString();
     } else {
-        return null;
+      return null;
     }
   }
 
   static void serializeOptionU32(int? value, BinarySerializer serializer) {
     if (value == null) {
-        serializer.serializeOptionTag(false);
+      serializer.serializeOptionTag(false);
     } else {
-        serializer.serializeOptionTag(true);
-        serializer.serializeUint32(value);
+      serializer.serializeOptionTag(true);
+      serializer.serializeUint32(value);
     }
   }
 
   static int? deserializeOptionU32(BinaryDeserializer deserializer) {
     final tag = deserializer.deserializeOptionTag();
     if (tag) {
-        return deserializer.deserializeUint32();
+      return deserializer.deserializeUint32();
     } else {
-        return null;
+      return null;
     }
   }
 
   static void serializeOptionU8(int? value, BinarySerializer serializer) {
     if (value == null) {
-        serializer.serializeOptionTag(false);
+      serializer.serializeOptionTag(false);
     } else {
-        serializer.serializeOptionTag(true);
-        serializer.serializeUint8(value);
+      serializer.serializeOptionTag(true);
+      serializer.serializeUint8(value);
     }
   }
 
   static int? deserializeOptionU8(BinaryDeserializer deserializer) {
     final tag = deserializer.deserializeOptionTag();
     if (tag) {
-        return deserializer.deserializeUint8();
+      return deserializer.deserializeUint8();
     } else {
-        return null;
+      return null;
     }
   }
 
-  static void serializeVectorBriefItem(List<BriefItem> value, BinarySerializer serializer) {
+  static void serializeVectorBriefItem(
+    List<BriefItem> value,
+    BinarySerializer serializer,
+  ) {
     serializer.serializeLength(value.length);
     for (final item in value) {
-        item.serialize(serializer);
+      item.serialize(serializer);
     }
   }
 
-  static List<BriefItem> deserializeVectorBriefItem(BinaryDeserializer deserializer) {
+  static List<BriefItem> deserializeVectorBriefItem(
+    BinaryDeserializer deserializer,
+  ) {
     final length = deserializer.deserializeLength();
     return List.generate(length, (_) => BriefItem.deserialize(deserializer));
   }
 
-  static void serializeVectorComputerUseActionCapability(List<ComputerUseActionCapability> value, BinarySerializer serializer) {
+  static void serializeVectorComputerUseActionCapability(
+    List<ComputerUseActionCapability> value,
+    BinarySerializer serializer,
+  ) {
     serializer.serializeLength(value.length);
     for (final item in value) {
-        item.serialize(serializer);
+      item.serialize(serializer);
     }
   }
 
-  static List<ComputerUseActionCapability> deserializeVectorComputerUseActionCapability(BinaryDeserializer deserializer) {
+  static List<ComputerUseActionCapability>
+  deserializeVectorComputerUseActionCapability(
+    BinaryDeserializer deserializer,
+  ) {
     final length = deserializer.deserializeLength();
-    return List.generate(length, (_) => ComputerUseActionCapability.deserialize(deserializer));
+    return List.generate(
+      length,
+      (_) => ComputerUseActionCapability.deserialize(deserializer),
+    );
   }
 
-  static void serializeVectorComputerUsePermission(List<ComputerUsePermission> value, BinarySerializer serializer) {
+  static void serializeVectorComputerUsePermission(
+    List<ComputerUsePermission> value,
+    BinarySerializer serializer,
+  ) {
     serializer.serializeLength(value.length);
     for (final item in value) {
-        item.serialize(serializer);
+      item.serialize(serializer);
     }
   }
 
-  static List<ComputerUsePermission> deserializeVectorComputerUsePermission(BinaryDeserializer deserializer) {
+  static List<ComputerUsePermission> deserializeVectorComputerUsePermission(
+    BinaryDeserializer deserializer,
+  ) {
     final length = deserializer.deserializeLength();
-    return List.generate(length, (_) => ComputerUsePermission.deserialize(deserializer));
+    return List.generate(
+      length,
+      (_) => ComputerUsePermission.deserialize(deserializer),
+    );
   }
 
-  static void serializeVectorMemoryApplyCommit(List<MemoryApplyCommit> value, BinarySerializer serializer) {
+  static void serializeVectorMemoryApplyCommit(
+    List<MemoryApplyCommit> value,
+    BinarySerializer serializer,
+  ) {
     serializer.serializeLength(value.length);
     for (final item in value) {
-        item.serialize(serializer);
+      item.serialize(serializer);
     }
   }
 
-  static List<MemoryApplyCommit> deserializeVectorMemoryApplyCommit(BinaryDeserializer deserializer) {
+  static List<MemoryApplyCommit> deserializeVectorMemoryApplyCommit(
+    BinaryDeserializer deserializer,
+  ) {
     final length = deserializer.deserializeLength();
-    return List.generate(length, (_) => MemoryApplyCommit.deserialize(deserializer));
+    return List.generate(
+      length,
+      (_) => MemoryApplyCommit.deserialize(deserializer),
+    );
   }
 
-  static void serializeVectorMemoryExportCommit(List<MemoryExportCommit> value, BinarySerializer serializer) {
+  static void serializeVectorMemoryExportCommit(
+    List<MemoryExportCommit> value,
+    BinarySerializer serializer,
+  ) {
     serializer.serializeLength(value.length);
     for (final item in value) {
-        item.serialize(serializer);
+      item.serialize(serializer);
     }
   }
 
-  static List<MemoryExportCommit> deserializeVectorMemoryExportCommit(BinaryDeserializer deserializer) {
+  static List<MemoryExportCommit> deserializeVectorMemoryExportCommit(
+    BinaryDeserializer deserializer,
+  ) {
     final length = deserializer.deserializeLength();
-    return List.generate(length, (_) => MemoryExportCommit.deserialize(deserializer));
+    return List.generate(
+      length,
+      (_) => MemoryExportCommit.deserialize(deserializer),
+    );
   }
 
-  static void serializeVectorMemoryItem(List<MemoryItem> value, BinarySerializer serializer) {
+  static void serializeVectorMemoryItem(
+    List<MemoryItem> value,
+    BinarySerializer serializer,
+  ) {
     serializer.serializeLength(value.length);
     for (final item in value) {
-        item.serialize(serializer);
+      item.serialize(serializer);
     }
   }
 
-  static List<MemoryItem> deserializeVectorMemoryItem(BinaryDeserializer deserializer) {
+  static List<MemoryItem> deserializeVectorMemoryItem(
+    BinaryDeserializer deserializer,
+  ) {
     final length = deserializer.deserializeLength();
     return List.generate(length, (_) => MemoryItem.deserialize(deserializer));
   }
 
-  static void serializeVectorMemorySearchItem(List<MemorySearchItem> value, BinarySerializer serializer) {
+  static void serializeVectorMemorySearchItem(
+    List<MemorySearchItem> value,
+    BinarySerializer serializer,
+  ) {
     serializer.serializeLength(value.length);
     for (final item in value) {
-        item.serialize(serializer);
+      item.serialize(serializer);
     }
   }
 
-  static List<MemorySearchItem> deserializeVectorMemorySearchItem(BinaryDeserializer deserializer) {
+  static List<MemorySearchItem> deserializeVectorMemorySearchItem(
+    BinaryDeserializer deserializer,
+  ) {
     final length = deserializer.deserializeLength();
-    return List.generate(length, (_) => MemorySearchItem.deserialize(deserializer));
+    return List.generate(
+      length,
+      (_) => MemorySearchItem.deserialize(deserializer),
+    );
   }
 
-  static void serializeVectorOnboardingScanSource(List<OnboardingScanSource> value, BinarySerializer serializer) {
+  static void serializeVectorOnboardingScanSource(
+    List<OnboardingScanSource> value,
+    BinarySerializer serializer,
+  ) {
     serializer.serializeLength(value.length);
     for (final item in value) {
-        item.serialize(serializer);
+      item.serialize(serializer);
     }
   }
 
-  static List<OnboardingScanSource> deserializeVectorOnboardingScanSource(BinaryDeserializer deserializer) {
+  static List<OnboardingScanSource> deserializeVectorOnboardingScanSource(
+    BinaryDeserializer deserializer,
+  ) {
     final length = deserializer.deserializeLength();
-    return List.generate(length, (_) => OnboardingScanSource.deserialize(deserializer));
+    return List.generate(
+      length,
+      (_) => OnboardingScanSource.deserialize(deserializer),
+    );
   }
 
-  static void serializeVectorStr(List<String> value, BinarySerializer serializer) {
+  static void serializeVectorStr(
+    List<String> value,
+    BinarySerializer serializer,
+  ) {
     serializer.serializeLength(value.length);
     for (final item in value) {
-        serializer.serializeString(item);
+      serializer.serializeString(item);
     }
   }
 
@@ -292,7 +387,7 @@ class TraitHelpers {
   static void serializeVectorU8(List<int> value, BinarySerializer serializer) {
     serializer.serializeLength(value.length);
     for (final item in value) {
-        serializer.serializeUint8(item);
+      serializer.serializeUint8(item);
     }
   }
 
@@ -300,6 +395,4 @@ class TraitHelpers {
     final length = deserializer.deserializeLength();
     return List.generate(length, (_) => deserializer.deserializeUint8());
   }
-
 }
-

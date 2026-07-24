@@ -1,7 +1,6 @@
 // ignore_for_file: type=lint, type=warning
 part of 'signals.dart';
 
-
 @immutable
 class ToolProgress {
   const ToolProgress({
@@ -61,9 +60,9 @@ class ToolProgress {
   }
 
   Uint8List bincodeSerialize() {
-      final serializer = BincodeSerializer();
-      serialize(serializer);
-      return serializer.bytes;
+    final serializer = BincodeSerializer();
+    serialize(serializer);
+    return serializer.bytes;
   }
 
   @override
@@ -71,32 +70,28 @@ class ToolProgress {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is ToolProgress
-      && requestId == other.requestId
-      && tool == other.tool
-      && status == other.status
-      && detail == other.detail;
+    return other is ToolProgress &&
+        requestId == other.requestId &&
+        tool == other.tool &&
+        status == other.status &&
+        detail == other.detail;
   }
 
   @override
-  int get hashCode => Object.hash(
-        requestId,
-        tool,
-        status,
-        detail,
-      );
+  int get hashCode => Object.hash(requestId, tool, status, detail);
 
   @override
   String toString() {
     String? fullString;
 
     assert(() {
-      fullString = '$runtimeType('
-        'requestId: $requestId, '
-        'tool: $tool, '
-        'status: $status, '
-        'detail: $detail'
-        ')';
+      fullString =
+          '$runtimeType('
+          'requestId: $requestId, '
+          'tool: $tool, '
+          'status: $status, '
+          'detail: $detail'
+          ')';
       return true;
     }());
 

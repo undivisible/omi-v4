@@ -1,7 +1,6 @@
 // ignore_for_file: type=lint, type=warning
 part of 'signals.dart';
 
-
 @immutable
 class TranscriptDelta {
   const TranscriptDelta({
@@ -127,9 +126,9 @@ class TranscriptDelta {
   }
 
   Uint8List bincodeSerialize() {
-      final serializer = BincodeSerializer();
-      serialize(serializer);
-      return serializer.bytes;
+    final serializer = BincodeSerializer();
+    serialize(serializer);
+    return serializer.bytes;
   }
 
   @override
@@ -137,65 +136,66 @@ class TranscriptDelta {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is TranscriptDelta
-      && requestId == other.requestId
-      && audioStreamId == other.audioStreamId
-      && segmentId == other.segmentId
-      && segmentSequence == other.segmentSequence
-      && sttEpoch == other.sttEpoch
-      && deviceId == other.deviceId
-      && provider == other.provider
-      && startMs == other.startMs
-      && endMs == other.endMs
-      && occurredAtMs == other.occurredAtMs
-      && text == other.text
-      && finalSegment == other.finalSegment
-      && speaker == other.speaker
-      && channelIndex == other.channelIndex
-      && language == other.language;
+    return other is TranscriptDelta &&
+        requestId == other.requestId &&
+        audioStreamId == other.audioStreamId &&
+        segmentId == other.segmentId &&
+        segmentSequence == other.segmentSequence &&
+        sttEpoch == other.sttEpoch &&
+        deviceId == other.deviceId &&
+        provider == other.provider &&
+        startMs == other.startMs &&
+        endMs == other.endMs &&
+        occurredAtMs == other.occurredAtMs &&
+        text == other.text &&
+        finalSegment == other.finalSegment &&
+        speaker == other.speaker &&
+        channelIndex == other.channelIndex &&
+        language == other.language;
   }
 
   @override
   int get hashCode => Object.hash(
-        requestId,
-        audioStreamId,
-        segmentId,
-        segmentSequence,
-        sttEpoch,
-        deviceId,
-        provider,
-        startMs,
-        endMs,
-        occurredAtMs,
-        text,
-        finalSegment,
-        speaker,
-        channelIndex,
-        language,
-      );
+    requestId,
+    audioStreamId,
+    segmentId,
+    segmentSequence,
+    sttEpoch,
+    deviceId,
+    provider,
+    startMs,
+    endMs,
+    occurredAtMs,
+    text,
+    finalSegment,
+    speaker,
+    channelIndex,
+    language,
+  );
 
   @override
   String toString() {
     String? fullString;
 
     assert(() {
-      fullString = '$runtimeType('
-        'requestId: $requestId, '
-        'audioStreamId: $audioStreamId, '
-        'segmentId: $segmentId, '
-        'segmentSequence: $segmentSequence, '
-        'sttEpoch: $sttEpoch, '
-        'deviceId: $deviceId, '
-        'provider: $provider, '
-        'startMs: $startMs, '
-        'endMs: $endMs, '
-        'occurredAtMs: $occurredAtMs, '
-        'text: $text, '
-        'finalSegment: $finalSegment, '
-        'speaker: $speaker, '
-        'channelIndex: $channelIndex, '
-        'language: $language'
-        ')';
+      fullString =
+          '$runtimeType('
+          'requestId: $requestId, '
+          'audioStreamId: $audioStreamId, '
+          'segmentId: $segmentId, '
+          'segmentSequence: $segmentSequence, '
+          'sttEpoch: $sttEpoch, '
+          'deviceId: $deviceId, '
+          'provider: $provider, '
+          'startMs: $startMs, '
+          'endMs: $endMs, '
+          'occurredAtMs: $occurredAtMs, '
+          'text: [REDACTED], '
+          'finalSegment: $finalSegment, '
+          'speaker: $speaker, '
+          'channelIndex: $channelIndex, '
+          'language: $language'
+          ')';
       return true;
     }());
 

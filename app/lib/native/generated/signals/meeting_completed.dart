@@ -1,7 +1,6 @@
 // ignore_for_file: type=lint, type=warning
 part of 'signals.dart';
 
-
 @immutable
 class MeetingCompleted {
   const MeetingCompleted({
@@ -97,9 +96,9 @@ class MeetingCompleted {
   }
 
   Uint8List bincodeSerialize() {
-      final serializer = BincodeSerializer();
-      serialize(serializer);
-      return serializer.bytes;
+    final serializer = BincodeSerializer();
+    serialize(serializer);
+    return serializer.bytes;
   }
 
   @override
@@ -107,50 +106,51 @@ class MeetingCompleted {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is MeetingCompleted
-      && title == other.title
-      && summary == other.summary
-      && listEquals(actions, other.actions)
-      && startedAtMs == other.startedAtMs
-      && endedAtMs == other.endedAtMs
-      && listEquals(participants, other.participants)
-      && listEquals(keyPoints, other.keyPoints)
-      && listEquals(decisions, other.decisions)
-      && noteMarkdown == other.noteMarkdown
-      && metadataJson == other.metadataJson;
+    return other is MeetingCompleted &&
+        title == other.title &&
+        summary == other.summary &&
+        listEquals(actions, other.actions) &&
+        startedAtMs == other.startedAtMs &&
+        endedAtMs == other.endedAtMs &&
+        listEquals(participants, other.participants) &&
+        listEquals(keyPoints, other.keyPoints) &&
+        listEquals(decisions, other.decisions) &&
+        noteMarkdown == other.noteMarkdown &&
+        metadataJson == other.metadataJson;
   }
 
   @override
   int get hashCode => Object.hash(
-        title,
-        summary,
-        actions,
-        startedAtMs,
-        endedAtMs,
-        participants,
-        keyPoints,
-        decisions,
-        noteMarkdown,
-        metadataJson,
-      );
+    title,
+    summary,
+    actions,
+    startedAtMs,
+    endedAtMs,
+    participants,
+    keyPoints,
+    decisions,
+    noteMarkdown,
+    metadataJson,
+  );
 
   @override
   String toString() {
     String? fullString;
 
     assert(() {
-      fullString = '$runtimeType('
-        'title: $title, '
-        'summary: $summary, '
-        'actions: $actions, '
-        'startedAtMs: $startedAtMs, '
-        'endedAtMs: $endedAtMs, '
-        'participants: $participants, '
-        'keyPoints: $keyPoints, '
-        'decisions: $decisions, '
-        'noteMarkdown: $noteMarkdown, '
-        'metadataJson: $metadataJson'
-        ')';
+      fullString =
+          '$runtimeType('
+          'title: $title, '
+          'summary: $summary, '
+          'actions: $actions, '
+          'startedAtMs: $startedAtMs, '
+          'endedAtMs: $endedAtMs, '
+          'participants: $participants, '
+          'keyPoints: $keyPoints, '
+          'decisions: $decisions, '
+          'noteMarkdown: $noteMarkdown, '
+          'metadataJson: $metadataJson'
+          ')';
       return true;
     }());
 

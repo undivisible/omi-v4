@@ -1,6 +1,6 @@
 use crate::live_voice::{
-    GeminiLiveProvider, RealtimeVoiceEvent, RealtimeVoiceHandle, RealtimeVoiceProvider,
-    RealtimeVoiceSession, validate_session,
+    GeminiLiveProvider, LiveFunctionCall, RealtimeVoiceEvent, RealtimeVoiceHandle,
+    RealtimeVoiceProvider, RealtimeVoiceSession, validate_session,
 };
 use crate::signals::{
     AudioChunk, AudioEncoding, LiveVoiceAudio, LiveVoicePhase, LiveVoiceState, LiveVoiceTranscript,
@@ -62,6 +62,13 @@ pub(crate) struct StartLiveVoice {
     pub(crate) session_context: Option<String>,
 }
 
+/// Computer-use tool calls from a Live session, forwarded to the command
+/// runtime so they register as real ActionProposals.
+pub(crate) struct LiveToolCalls {
+    pub(crate) live_stream_id: String,
+    pub(crate) calls: Vec<LiveFunctionCall>,
+}
+
 pub(crate) enum TranscriptionControl {
     Start(StartTranscription),
     Stop {
@@ -72,6 +79,11 @@ pub(crate) enum TranscriptionControl {
     StopLive {
         request_id: String,
         stream_id: String,
+    },
+    UpdateLiveContext {
+        request_id: String,
+        stream_id: String,
+        session_context: String,
     },
     Fence,
 }
@@ -96,10 +108,28 @@ struct LiveSession {
     next_sequence: u64,
 }
 
-#[derive(Default)]
-pub(crate) struct LiveSessions(Arc<Mutex<HashMap<String, LiveSession>>>);
+pub(crate) struct LiveSessions {
+    sessions: Arc<Mutex<HashMap<String, LiveSession>>>,
+    live_tools: Option<mpsc::Sender<LiveToolCalls>>,
+}
+
+impl Default for LiveSessions {
+    fn default() -> Self {
+        Self {
+            sessions: Arc::new(Mutex::new(HashMap::new())),
+            live_tools: None,
+        }
+    }
+}
 
 impl LiveSessions {
+    fn with_live_tools(live_tools: mpsc::Sender<LiveToolCalls>) -> Self {
+        Self {
+            sessions: Arc::new(Mutex::new(HashMap::new())),
+            live_tools: Some(live_tools),
+        }
+    }
+
     pub(crate) fn start(
         &mut self,
         provider: &dyn RealtimeVoiceProvider,
@@ -119,7 +149,10 @@ impl LiveSessions {
                 message,
             });
         }
-        let mut sessions = self.0.lock().unwrap_or_else(|poison| poison.into_inner());
+        let mut sessions = self
+            .sessions
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
         if sessions.contains_key(&start.live_stream_id) {
             return Err(AudioAcceptError {
                 request_id: start.request_id,
@@ -143,7 +176,8 @@ impl LiveSessions {
             tokio::spawn(forward_live_events(
                 start.live_stream_id.clone(),
                 events,
-                Arc::clone(&self.0),
+                Arc::clone(&self.sessions),
+                self.live_tools.clone(),
             ));
         }
         sessions.insert(
@@ -157,7 +191,10 @@ impl LiveSessions {
     }
 
     pub(crate) fn stop(&mut self, stream_id: &str) -> bool {
-        let mut sessions = self.0.lock().unwrap_or_else(|poison| poison.into_inner());
+        let mut sessions = self
+            .sessions
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
         match sessions.remove(stream_id) {
             Some(session) => {
                 session.handle.cancel();
@@ -167,9 +204,26 @@ impl LiveSessions {
         }
     }
 
+    pub(crate) fn update_context(&self, stream_id: &str, session_context: &str) -> bool {
+        if session_context.trim().is_empty() {
+            return false;
+        }
+        let sessions = self
+            .sessions
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        match sessions.get(stream_id) {
+            Some(session) => {
+                session.handle.update_context(session_context);
+                true
+            }
+            None => false,
+        }
+    }
+
     pub(crate) fn cancel_all(&mut self) {
         let drained: Vec<_> = self
-            .0
+            .sessions
             .lock()
             .unwrap_or_else(|poison| poison.into_inner())
             .drain()
@@ -187,14 +241,17 @@ impl LiveSessions {
     }
 
     pub(crate) fn contains(&self, stream_id: &str) -> bool {
-        self.0
+        self.sessions
             .lock()
             .unwrap_or_else(|poison| poison.into_inner())
             .contains_key(stream_id)
     }
 
     pub(crate) fn accept(&mut self, chunk: AudioChunk) -> Result<(), AudioAcceptError> {
-        let mut sessions = self.0.lock().unwrap_or_else(|poison| poison.into_inner());
+        let mut sessions = self
+            .sessions
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
         let session = sessions
             .get_mut(&chunk.request_id)
             .ok_or_else(|| AudioAcceptError {
@@ -315,19 +372,19 @@ impl LiveEventTranslator {
                 }),
                 false,
             ),
-            // Tool calls are acknowledged on the Live socket; surfacing them as
-            // transcript detail keeps the overlay informed until proposal
-            // registration is wired through the chat approval registry.
+            // Tool calls register as ActionProposals via the live-tools
+            // channel. A short transcript note keeps the listening UI aware
+            // until the proposal event arrives.
             RealtimeVoiceEvent::ToolCall { calls } => {
                 let detail = calls
                     .iter()
-                    .map(|call| format!("{}({})", call.name, call.args))
+                    .map(|call| call.name.as_str())
                     .collect::<Vec<_>>()
-                    .join("; ");
+                    .join(", ");
                 (
                     NativeEvent::LiveVoiceTranscript(LiveVoiceTranscript {
                         live_stream_id: self.live_stream_id.clone(),
-                        text: format!("[tool] {detail}"),
+                        text: format!("Proposing: {detail}"),
                         final_segment: false,
                         assistant: true,
                     }),
@@ -372,6 +429,7 @@ async fn forward_live_events(
     live_stream_id: String,
     mut events: mpsc::Receiver<RealtimeVoiceEvent>,
     sessions: Arc<Mutex<HashMap<String, LiveSession>>>,
+    live_tools: Option<mpsc::Sender<LiveToolCalls>>,
 ) {
     let remove_session = |live_stream_id: &str| {
         sessions
@@ -381,6 +439,16 @@ async fn forward_live_events(
     };
     let mut translator = LiveEventTranslator::new(live_stream_id.clone());
     while let Some(event) = events.recv().await {
+        if let RealtimeVoiceEvent::ToolCall { calls } = &event
+            && let Some(sender) = &live_tools
+        {
+            let _ = sender
+                .send(LiveToolCalls {
+                    live_stream_id: live_stream_id.clone(),
+                    calls: calls.clone(),
+                })
+                .await;
+        }
         let (signal, terminal) = translator.translate(event);
         if terminal {
             remove_session(&live_stream_id);
@@ -403,6 +471,7 @@ pub struct AudioDispatcher {
 }
 
 impl AudioDispatcher {
+    #[allow(dead_code)]
     pub fn channel() -> (
         mpsc::Sender<AudioChunk>,
         mpsc::Sender<TranscriptionControl>,
@@ -418,6 +487,29 @@ impl AudioDispatcher {
                 controls,
                 sessions: AudioSessions::default(),
                 live: LiveSessions::default(),
+                live_provider: Arc::new(GeminiLiveProvider),
+            },
+        )
+    }
+
+    pub fn channel_with_live_tools() -> (
+        mpsc::Sender<AudioChunk>,
+        mpsc::Sender<TranscriptionControl>,
+        mpsc::Receiver<LiveToolCalls>,
+        Self,
+    ) {
+        let (sender, receiver) = mpsc::channel(AUDIO_QUEUE_CAPACITY);
+        let (control_sender, controls) = mpsc::channel(COMMAND_QUEUE_CAPACITY);
+        let (live_tools_sender, live_tools_receiver) = mpsc::channel(COMMAND_QUEUE_CAPACITY);
+        (
+            sender,
+            control_sender,
+            live_tools_receiver,
+            Self {
+                receiver,
+                controls,
+                sessions: AudioSessions::default(),
+                live: LiveSessions::with_live_tools(live_tools_sender),
                 live_provider: Arc::new(GeminiLiveProvider),
             },
         )
@@ -459,6 +551,21 @@ impl AudioDispatcher {
                     }
                     Some(TranscriptionControl::StopLive { request_id, stream_id }) => {
                         if !self.live.stop(&stream_id) {
+                            NativeEvent::Error(NativeError {
+                                request_id: Some(request_id),
+                                code: "live_voice_not_started".to_owned(),
+                                message: "live voice stream is not active".to_owned(),
+                                retryable: false,
+                            })
+                            .send();
+                        }
+                    }
+                    Some(TranscriptionControl::UpdateLiveContext {
+                        request_id,
+                        stream_id,
+                        session_context,
+                    }) => {
+                        if !self.live.update_context(&stream_id, &session_context) {
                             NativeEvent::Error(NativeError {
                                 request_id: Some(request_id),
                                 code: "live_voice_not_started".to_owned(),

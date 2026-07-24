@@ -150,6 +150,11 @@ pub enum Command {
     /// Resolve the dev-only Gemini access the client falls back to when no
     /// account is configured. Answered by exactly one [`DevAssistant`].
     ResolveDevAssistant,
+    /// Mid-session screen/AX context refresh for an active Live voice stream.
+    UpdateLiveVoiceContext {
+        live_stream_id: String,
+        session_context: String,
+    },
 }
 
 /// One current, flattened to the few facts the brief may state. Mirrors

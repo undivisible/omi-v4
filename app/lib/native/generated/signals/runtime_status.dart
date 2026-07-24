@@ -1,7 +1,6 @@
 // ignore_for_file: type=lint, type=warning
 part of 'signals.dart';
 
-
 @immutable
 class RuntimeStatus {
   const RuntimeStatus({
@@ -20,7 +19,8 @@ class RuntimeStatus {
       phase: RuntimePhaseExtension.deserialize(deserializer),
       detail: TraitHelpers.deserializeOptionStr(deserializer),
       computerUseAvailable: deserializer.deserializeBool(),
-      computerUseCapabilities: TraitHelpers.deserializeOptionComputerUseCapabilities(deserializer),
+      computerUseCapabilities:
+          TraitHelpers.deserializeOptionComputerUseCapabilities(deserializer),
       localAiAvailable: deserializer.deserializeBool(),
       memoryAvailable: deserializer.deserializeBool(),
       agentHarnessAvailable: deserializer.deserializeBool(),
@@ -59,10 +59,13 @@ class RuntimeStatus {
       phase: phase ?? this.phase,
       detail: detail == null ? this.detail : detail(),
       computerUseAvailable: computerUseAvailable ?? this.computerUseAvailable,
-      computerUseCapabilities: computerUseCapabilities == null ? this.computerUseCapabilities : computerUseCapabilities(),
+      computerUseCapabilities: computerUseCapabilities == null
+          ? this.computerUseCapabilities
+          : computerUseCapabilities(),
       localAiAvailable: localAiAvailable ?? this.localAiAvailable,
       memoryAvailable: memoryAvailable ?? this.memoryAvailable,
-      agentHarnessAvailable: agentHarnessAvailable ?? this.agentHarnessAvailable,
+      agentHarnessAvailable:
+          agentHarnessAvailable ?? this.agentHarnessAvailable,
     );
   }
 
@@ -71,7 +74,10 @@ class RuntimeStatus {
     phase.serialize(serializer);
     TraitHelpers.serializeOptionStr(detail, serializer);
     serializer.serializeBool(computerUseAvailable);
-    TraitHelpers.serializeOptionComputerUseCapabilities(computerUseCapabilities, serializer);
+    TraitHelpers.serializeOptionComputerUseCapabilities(
+      computerUseCapabilities,
+      serializer,
+    );
     serializer.serializeBool(localAiAvailable);
     serializer.serializeBool(memoryAvailable);
     serializer.serializeBool(agentHarnessAvailable);
@@ -79,9 +85,9 @@ class RuntimeStatus {
   }
 
   Uint8List bincodeSerialize() {
-      final serializer = BincodeSerializer();
-      serialize(serializer);
-      return serializer.bytes;
+    final serializer = BincodeSerializer();
+    serialize(serializer);
+    return serializer.bytes;
   }
 
   @override
@@ -89,41 +95,42 @@ class RuntimeStatus {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is RuntimeStatus
-      && phase == other.phase
-      && detail == other.detail
-      && computerUseAvailable == other.computerUseAvailable
-      && computerUseCapabilities == other.computerUseCapabilities
-      && localAiAvailable == other.localAiAvailable
-      && memoryAvailable == other.memoryAvailable
-      && agentHarnessAvailable == other.agentHarnessAvailable;
+    return other is RuntimeStatus &&
+        phase == other.phase &&
+        detail == other.detail &&
+        computerUseAvailable == other.computerUseAvailable &&
+        computerUseCapabilities == other.computerUseCapabilities &&
+        localAiAvailable == other.localAiAvailable &&
+        memoryAvailable == other.memoryAvailable &&
+        agentHarnessAvailable == other.agentHarnessAvailable;
   }
 
   @override
   int get hashCode => Object.hash(
-        phase,
-        detail,
-        computerUseAvailable,
-        computerUseCapabilities,
-        localAiAvailable,
-        memoryAvailable,
-        agentHarnessAvailable,
-      );
+    phase,
+    detail,
+    computerUseAvailable,
+    computerUseCapabilities,
+    localAiAvailable,
+    memoryAvailable,
+    agentHarnessAvailable,
+  );
 
   @override
   String toString() {
     String? fullString;
 
     assert(() {
-      fullString = '$runtimeType('
-        'phase: $phase, '
-        'detail: $detail, '
-        'computerUseAvailable: $computerUseAvailable, '
-        'computerUseCapabilities: $computerUseCapabilities, '
-        'localAiAvailable: $localAiAvailable, '
-        'memoryAvailable: $memoryAvailable, '
-        'agentHarnessAvailable: $agentHarnessAvailable'
-        ')';
+      fullString =
+          '$runtimeType('
+          'phase: $phase, '
+          'detail: $detail, '
+          'computerUseAvailable: $computerUseAvailable, '
+          'computerUseCapabilities: $computerUseCapabilities, '
+          'localAiAvailable: $localAiAvailable, '
+          'memoryAvailable: $memoryAvailable, '
+          'agentHarnessAvailable: $agentHarnessAvailable'
+          ')';
       return true;
     }());
 

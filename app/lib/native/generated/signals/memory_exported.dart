@@ -1,7 +1,6 @@
 // ignore_for_file: type=lint, type=warning
 part of 'signals.dart';
 
-
 @immutable
 class MemoryExported {
   const MemoryExported({
@@ -62,7 +61,8 @@ class MemoryExported {
     return MemoryExported(
       requestId: requestId ?? this.requestId,
       exportFormat: exportFormat ?? this.exportFormat,
-      databaseSchemaVersion: databaseSchemaVersion ?? this.databaseSchemaVersion,
+      databaseSchemaVersion:
+          databaseSchemaVersion ?? this.databaseSchemaVersion,
       highWaterMark: highWaterMark ?? this.highWaterMark,
       nextAfterCommit: nextAfterCommit ?? this.nextAfterCommit,
       nextAfterEventIndex: nextAfterEventIndex ?? this.nextAfterEventIndex,
@@ -85,9 +85,9 @@ class MemoryExported {
   }
 
   Uint8List bincodeSerialize() {
-      final serializer = BincodeSerializer();
-      serialize(serializer);
-      return serializer.bytes;
+    final serializer = BincodeSerializer();
+    serialize(serializer);
+    return serializer.bytes;
   }
 
   @override
@@ -95,44 +95,45 @@ class MemoryExported {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is MemoryExported
-      && requestId == other.requestId
-      && exportFormat == other.exportFormat
-      && databaseSchemaVersion == other.databaseSchemaVersion
-      && highWaterMark == other.highWaterMark
-      && nextAfterCommit == other.nextAfterCommit
-      && nextAfterEventIndex == other.nextAfterEventIndex
-      && complete == other.complete
-      && listEquals(commits, other.commits);
+    return other is MemoryExported &&
+        requestId == other.requestId &&
+        exportFormat == other.exportFormat &&
+        databaseSchemaVersion == other.databaseSchemaVersion &&
+        highWaterMark == other.highWaterMark &&
+        nextAfterCommit == other.nextAfterCommit &&
+        nextAfterEventIndex == other.nextAfterEventIndex &&
+        complete == other.complete &&
+        listEquals(commits, other.commits);
   }
 
   @override
   int get hashCode => Object.hash(
-        requestId,
-        exportFormat,
-        databaseSchemaVersion,
-        highWaterMark,
-        nextAfterCommit,
-        nextAfterEventIndex,
-        complete,
-        commits,
-      );
+    requestId,
+    exportFormat,
+    databaseSchemaVersion,
+    highWaterMark,
+    nextAfterCommit,
+    nextAfterEventIndex,
+    complete,
+    commits,
+  );
 
   @override
   String toString() {
     String? fullString;
 
     assert(() {
-      fullString = '$runtimeType('
-        'requestId: $requestId, '
-        'exportFormat: $exportFormat, '
-        'databaseSchemaVersion: $databaseSchemaVersion, '
-        'highWaterMark: $highWaterMark, '
-        'nextAfterCommit: $nextAfterCommit, '
-        'nextAfterEventIndex: $nextAfterEventIndex, '
-        'complete: $complete, '
-        'commits: $commits'
-        ')';
+      fullString =
+          '$runtimeType('
+          'requestId: $requestId, '
+          'exportFormat: $exportFormat, '
+          'databaseSchemaVersion: $databaseSchemaVersion, '
+          'highWaterMark: $highWaterMark, '
+          'nextAfterCommit: $nextAfterCommit, '
+          'nextAfterEventIndex: $nextAfterEventIndex, '
+          'complete: $complete, '
+          'commits: $commits'
+          ')';
       return true;
     }());
 

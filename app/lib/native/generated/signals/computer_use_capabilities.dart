@@ -1,7 +1,6 @@
 // ignore_for_file: type=lint, type=warning
 part of 'signals.dart';
 
-
 @immutable
 class ComputerUseCapabilities {
   const ComputerUseCapabilities({
@@ -17,9 +16,15 @@ class ComputerUseCapabilities {
     final instance = ComputerUseCapabilities(
       platform: deserializer.deserializeString(),
       backend: deserializer.deserializeString(),
-      sessionIsolation: ComputerUseSessionIsolationExtension.deserialize(deserializer),
-      permissions: TraitHelpers.deserializeVectorComputerUsePermission(deserializer),
-      actions: TraitHelpers.deserializeVectorComputerUseActionCapability(deserializer),
+      sessionIsolation: ComputerUseSessionIsolationExtension.deserialize(
+        deserializer,
+      ),
+      permissions: TraitHelpers.deserializeVectorComputerUsePermission(
+        deserializer,
+      ),
+      actions: TraitHelpers.deserializeVectorComputerUseActionCapability(
+        deserializer,
+      ),
     );
     deserializer.decreaseContainerDepth();
     return instance;
@@ -62,14 +67,17 @@ class ComputerUseCapabilities {
     serializer.serializeString(backend);
     sessionIsolation.serialize(serializer);
     TraitHelpers.serializeVectorComputerUsePermission(permissions, serializer);
-    TraitHelpers.serializeVectorComputerUseActionCapability(actions, serializer);
+    TraitHelpers.serializeVectorComputerUseActionCapability(
+      actions,
+      serializer,
+    );
     serializer.decreaseContainerDepth();
   }
 
   Uint8List bincodeSerialize() {
-      final serializer = BincodeSerializer();
-      serialize(serializer);
-      return serializer.bytes;
+    final serializer = BincodeSerializer();
+    serialize(serializer);
+    return serializer.bytes;
   }
 
   @override
@@ -77,35 +85,31 @@ class ComputerUseCapabilities {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is ComputerUseCapabilities
-      && platform == other.platform
-      && backend == other.backend
-      && sessionIsolation == other.sessionIsolation
-      && listEquals(permissions, other.permissions)
-      && listEquals(actions, other.actions);
+    return other is ComputerUseCapabilities &&
+        platform == other.platform &&
+        backend == other.backend &&
+        sessionIsolation == other.sessionIsolation &&
+        listEquals(permissions, other.permissions) &&
+        listEquals(actions, other.actions);
   }
 
   @override
-  int get hashCode => Object.hash(
-        platform,
-        backend,
-        sessionIsolation,
-        permissions,
-        actions,
-      );
+  int get hashCode =>
+      Object.hash(platform, backend, sessionIsolation, permissions, actions);
 
   @override
   String toString() {
     String? fullString;
 
     assert(() {
-      fullString = '$runtimeType('
-        'platform: $platform, '
-        'backend: $backend, '
-        'sessionIsolation: $sessionIsolation, '
-        'permissions: $permissions, '
-        'actions: $actions'
-        ')';
+      fullString =
+          '$runtimeType('
+          'platform: $platform, '
+          'backend: $backend, '
+          'sessionIsolation: $sessionIsolation, '
+          'permissions: $permissions, '
+          'actions: $actions'
+          ')';
       return true;
     }());
 

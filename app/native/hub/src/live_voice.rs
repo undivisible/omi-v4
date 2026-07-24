@@ -80,6 +80,8 @@ pub(crate) trait RealtimeVoiceProvider: Send + Sync {
 pub(crate) enum LiveControl {
     Finish,
     Cancel,
+    /// Mid-session screen/AX context refresh, sent as clientContent.
+    UpdateContext(String),
 }
 
 pub(crate) struct RealtimeVoiceHandle {
@@ -129,6 +131,15 @@ impl RealtimeVoiceHandle {
     pub(crate) fn cancel(&self) {
         if let Some(sender) = &self.control_sender {
             let _ = sender.send(LiveControl::Cancel);
+        }
+    }
+
+    pub(crate) fn update_context(&self, text: &str) {
+        if text.trim().is_empty() {
+            return;
+        }
+        if let Some(sender) = &self.control_sender {
+            let _ = sender.send(LiveControl::UpdateContext(text.to_owned()));
         }
     }
 
@@ -619,26 +630,30 @@ async fn run(
         Ok::<_, String>(socket)
     };
     tokio::pin!(connection);
-    let mut socket = tokio::select! {
-        biased;
-        control = control_receiver.recv() => {
-            match control {
-                Some(LiveControl::Finish) | Some(LiveControl::Cancel) | None => {
-                    let _ = events.send(RealtimeVoiceEvent::SessionEnded {
-                        resumption_handle: None,
-                    }).await;
+    let mut socket = loop {
+        tokio::select! {
+            biased;
+            control = control_receiver.recv() => {
+                match control {
+                    Some(LiveControl::Finish) | Some(LiveControl::Cancel) | None => {
+                        let _ = events.send(RealtimeVoiceEvent::SessionEnded {
+                            resumption_handle: None,
+                        }).await;
+                        return;
+                    }
+                    // Not connected yet — drop; a later refresh will retry.
+                    Some(LiveControl::UpdateContext(_)) => {}
                 }
             }
-            return;
-        }
-        result = &mut connection => match result {
-            Ok(socket) => socket,
-            Err(message) => {
-                let _ = events.send(RealtimeVoiceEvent::Error {
-                    message,
-                    resumption_handle: None,
-                }).await;
-                return;
+            result = &mut connection => match result {
+                Ok(socket) => break socket,
+                Err(message) => {
+                    let _ = events.send(RealtimeVoiceEvent::Error {
+                        message,
+                        resumption_handle: None,
+                    }).await;
+                    return;
+                }
             }
         }
     };
@@ -687,6 +702,22 @@ async fn run(
                     }
                     draining = true;
                     draining_flag.store(true, Ordering::Release);
+                }
+                Some(LiveControl::UpdateContext(text)) => {
+                    if draining || text.trim().is_empty() {
+                        continue;
+                    }
+                    if socket
+                        .send(Message::Text(client_content_message(&text).into()))
+                        .await
+                        .is_err()
+                    {
+                        let _ = events.send(RealtimeVoiceEvent::Error {
+                            message: "live voice provider connection was lost".to_owned(),
+                            resumption_handle: resumption_handle.clone(),
+                        }).await;
+                        return;
+                    }
                 }
                 Some(LiveControl::Cancel) | None => {
                     let _ = socket.close(None).await;
@@ -742,16 +773,21 @@ async fn run(
                         }
                     }
                     if let Some(calls) = outcome.tool_calls {
+                        // Honest status from local parse only — Live does not
+                        // await user approval inside the websocket loop.
+                        // Valid calls are registered as ActionProposals by the
+                        // runtime after RealtimeVoiceEvent::ToolCall is forwarded.
                         let responses: Vec<(String, String, serde_json::Value)> = calls
                             .iter()
                             .map(|call| {
                                 (
                                     call.id.clone(),
                                     call.name.clone(),
-                                    serde_json::json!({
-                                        "status": "proposed_for_approval",
-                                        "detail": "Action proposed to the user; wait for approval before assuming it ran.",
-                                    }),
+                                    crate::computer_use_tools::live_tool_call_status(
+                                        &call.id,
+                                        &call.name,
+                                        &call.args,
+                                    ),
                                 )
                             })
                             .collect();
@@ -1085,10 +1121,16 @@ mod tests {
         let args: serde_json::Value = serde_json::from_str(&calls[0].args).unwrap_or_default();
         assert_eq!(args["target_name"], serde_json::json!("Send"));
         assert_eq!(args["background_only"], serde_json::json!(false));
+        let status = crate::computer_use_tools::live_tool_call_status(
+            &calls[0].id,
+            &calls[0].name,
+            &calls[0].args,
+        );
+        assert_eq!(status["status"], "proposed_for_approval");
         let response = tool_response_message(&[(
             "call-1".to_owned(),
             "computer_invoke".to_owned(),
-            serde_json::json!({"status": "proposed_for_approval"}),
+            status,
         )]);
         let value: serde_json::Value =
             serde_json::from_str(&response).unwrap_or_else(|error| panic!("{error}"));
@@ -1096,6 +1138,16 @@ mod tests {
             value["toolResponse"]["functionResponses"][0]["id"],
             serde_json::json!("call-1")
         );
+        assert_eq!(
+            value["toolResponse"]["functionResponses"][0]["response"]["status"],
+            serde_json::json!("proposed_for_approval")
+        );
+        let rejected = crate::computer_use_tools::live_tool_call_status(
+            "call-2",
+            "computer_invoke",
+            r#"{"target_name":"","background_only":false}"#,
+        );
+        assert_eq!(rejected["status"], "rejected");
     }
 
     #[test]
@@ -1274,6 +1326,51 @@ mod tests {
         assert_eq!(pcm_sample_rate("audio/pcm;rate=16000"), 16_000);
         assert_eq!(pcm_sample_rate("audio/pcm"), 24_000);
         assert_eq!(pcm_sample_rate("audio/pcm;rate=999999"), 24_000);
+    }
+
+    #[test]
+    fn client_content_message_wraps_text_for_mid_session_context() {
+        let value: serde_json::Value =
+            serde_json::from_str(&client_content_message("Updated screen context:\nApp: Mail"))
+                .unwrap_or_default();
+        assert_eq!(
+            value["clientContent"]["turns"][0]["role"],
+            serde_json::json!("user")
+        );
+        assert_eq!(
+            value["clientContent"]["turns"][0]["parts"][0]["text"],
+            serde_json::json!("Updated screen context:\nApp: Mail")
+        );
+        assert_eq!(
+            value["clientContent"]["turnComplete"],
+            serde_json::json!(false)
+        );
+    }
+
+    #[tokio::test]
+    async fn update_context_sends_live_control_with_client_content_text() {
+        let (audio_tx, _audio_rx) = mpsc::unbounded_channel();
+        let (control_tx, mut control_rx) = mpsc::unbounded_channel();
+        let (_events_tx, events_rx) = mpsc::channel(4);
+        let handle = RealtimeVoiceHandle::from_parts(audio_tx, control_tx, events_rx);
+        handle.update_context("   ");
+        assert!(control_rx.try_recv().is_err());
+        handle.update_context("Updated screen context:\nApp: Mail");
+        assert_eq!(
+            control_rx.recv().await,
+            Some(LiveControl::UpdateContext(
+                "Updated screen context:\nApp: Mail".to_owned()
+            ))
+        );
+        let framed = match control_rx.try_recv() {
+            Err(_) => client_content_message("Updated screen context:\nApp: Mail"),
+            Ok(other) => panic!("unexpected control: {other:?}"),
+        };
+        let value: serde_json::Value = serde_json::from_str(&framed).unwrap_or_default();
+        assert_eq!(
+            value["clientContent"]["turns"][0]["parts"][0]["text"],
+            serde_json::json!("Updated screen context:\nApp: Mail")
+        );
     }
 
     #[test]

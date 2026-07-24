@@ -1,7 +1,6 @@
 // ignore_for_file: type=lint, type=warning
 part of 'signals.dart';
 
-
 @immutable
 class MemoryApplied {
   const MemoryApplied({
@@ -67,9 +66,9 @@ class MemoryApplied {
   }
 
   Uint8List bincodeSerialize() {
-      final serializer = BincodeSerializer();
-      serialize(serializer);
-      return serializer.bytes;
+    final serializer = BincodeSerializer();
+    serialize(serializer);
+    return serializer.bytes;
   }
 
   @override
@@ -77,35 +76,36 @@ class MemoryApplied {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is MemoryApplied
-      && requestId == other.requestId
-      && commitsApplied == other.commitsApplied
-      && commitsSkipped == other.commitsSkipped
-      && recordsApplied == other.recordsApplied
-      && recordsSkipped == other.recordsSkipped;
+    return other is MemoryApplied &&
+        requestId == other.requestId &&
+        commitsApplied == other.commitsApplied &&
+        commitsSkipped == other.commitsSkipped &&
+        recordsApplied == other.recordsApplied &&
+        recordsSkipped == other.recordsSkipped;
   }
 
   @override
   int get hashCode => Object.hash(
-        requestId,
-        commitsApplied,
-        commitsSkipped,
-        recordsApplied,
-        recordsSkipped,
-      );
+    requestId,
+    commitsApplied,
+    commitsSkipped,
+    recordsApplied,
+    recordsSkipped,
+  );
 
   @override
   String toString() {
     String? fullString;
 
     assert(() {
-      fullString = '$runtimeType('
-        'requestId: $requestId, '
-        'commitsApplied: $commitsApplied, '
-        'commitsSkipped: $commitsSkipped, '
-        'recordsApplied: $recordsApplied, '
-        'recordsSkipped: $recordsSkipped'
-        ')';
+      fullString =
+          '$runtimeType('
+          'requestId: $requestId, '
+          'commitsApplied: $commitsApplied, '
+          'commitsSkipped: $commitsSkipped, '
+          'recordsApplied: $recordsApplied, '
+          'recordsSkipped: $recordsSkipped'
+          ')';
       return true;
     }());
 

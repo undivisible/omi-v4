@@ -1,7 +1,6 @@
 // ignore_for_file: type=lint, type=warning
 part of 'signals.dart';
 
-
 @immutable
 class ComputerUseTargetProvenance {
   const ComputerUseTargetProvenance({
@@ -12,7 +11,9 @@ class ComputerUseTargetProvenance {
     required this.observationGeneration,
   });
 
-  static ComputerUseTargetProvenance deserialize(BinaryDeserializer deserializer) {
+  static ComputerUseTargetProvenance deserialize(
+    BinaryDeserializer deserializer,
+  ) {
     deserializer.increaseContainerDepth();
     final instance = ComputerUseTargetProvenance(
       processId: deserializer.deserializeUint32(),
@@ -52,7 +53,8 @@ class ComputerUseTargetProvenance {
       processGeneration: processGeneration ?? this.processGeneration,
       windowId: windowId ?? this.windowId,
       role: role ?? this.role,
-      observationGeneration: observationGeneration ?? this.observationGeneration,
+      observationGeneration:
+          observationGeneration ?? this.observationGeneration,
     );
   }
 
@@ -67,9 +69,9 @@ class ComputerUseTargetProvenance {
   }
 
   Uint8List bincodeSerialize() {
-      final serializer = BincodeSerializer();
-      serialize(serializer);
-      return serializer.bytes;
+    final serializer = BincodeSerializer();
+    serialize(serializer);
+    return serializer.bytes;
   }
 
   @override
@@ -77,35 +79,36 @@ class ComputerUseTargetProvenance {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is ComputerUseTargetProvenance
-      && processId == other.processId
-      && processGeneration == other.processGeneration
-      && windowId == other.windowId
-      && role == other.role
-      && observationGeneration == other.observationGeneration;
+    return other is ComputerUseTargetProvenance &&
+        processId == other.processId &&
+        processGeneration == other.processGeneration &&
+        windowId == other.windowId &&
+        role == other.role &&
+        observationGeneration == other.observationGeneration;
   }
 
   @override
   int get hashCode => Object.hash(
-        processId,
-        processGeneration,
-        windowId,
-        role,
-        observationGeneration,
-      );
+    processId,
+    processGeneration,
+    windowId,
+    role,
+    observationGeneration,
+  );
 
   @override
   String toString() {
     String? fullString;
 
     assert(() {
-      fullString = '$runtimeType('
-        'processId: $processId, '
-        'processGeneration: $processGeneration, '
-        'windowId: $windowId, '
-        'role: $role, '
-        'observationGeneration: $observationGeneration'
-        ')';
+      fullString =
+          '$runtimeType('
+          'processId: [REDACTED], '
+          'processGeneration: [REDACTED], '
+          'windowId: [REDACTED], '
+          'role: $role, '
+          'observationGeneration: $observationGeneration'
+          ')';
       return true;
     }());
 

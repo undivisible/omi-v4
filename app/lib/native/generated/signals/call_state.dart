@@ -5,11 +5,7 @@ part of 'signals.dart';
 /// (`Ended` or `Failed`) is sent per call.
 @immutable
 class CallState {
-  const CallState({
-    required this.requestId,
-    required this.state,
-    this.detail,
-  });
+  const CallState({required this.requestId, required this.state, this.detail});
 
   static CallState deserialize(BinaryDeserializer deserializer) {
     deserializer.increaseContainerDepth();
@@ -56,9 +52,9 @@ class CallState {
   }
 
   Uint8List bincodeSerialize() {
-      final serializer = BincodeSerializer();
-      serialize(serializer);
-      return serializer.bytes;
+    final serializer = BincodeSerializer();
+    serialize(serializer);
+    return serializer.bytes;
   }
 
   @override
@@ -66,29 +62,26 @@ class CallState {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is CallState
-      && requestId == other.requestId
-      && state == other.state
-      && detail == other.detail;
+    return other is CallState &&
+        requestId == other.requestId &&
+        state == other.state &&
+        detail == other.detail;
   }
 
   @override
-  int get hashCode => Object.hash(
-        requestId,
-        state,
-        detail,
-      );
+  int get hashCode => Object.hash(requestId, state, detail);
 
   @override
   String toString() {
     String? fullString;
 
     assert(() {
-      fullString = '$runtimeType('
-        'requestId: $requestId, '
-        'state: $state, '
-        'detail: $detail'
-        ')';
+      fullString =
+          '$runtimeType('
+          'requestId: $requestId, '
+          'state: $state, '
+          'detail: $detail'
+          ')';
       return true;
     }());
 

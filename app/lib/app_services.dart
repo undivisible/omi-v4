@@ -20,6 +20,7 @@ import 'channels/channels.dart';
 import 'conversations/conversations.dart';
 import 'currents/currents.dart';
 import 'device/device.dart';
+import 'features/ax_context.dart';
 import 'features/composer_dictation.dart';
 import 'features/meeting_notes.dart';
 import 'integrations/eventkit_task_sync.dart';
@@ -114,7 +115,12 @@ final class AppServices {
        ),
        _now = now ?? DateTime.now {
     this.desktopVoice = desktopVoice ?? DesktopVoiceCapture(hub: nativeHub);
-    this.liveVoice = liveVoice ?? LiveVoiceCapture(hub: nativeHub);
+    this.liveVoice =
+        liveVoice ??
+        LiveVoiceCapture(
+          hub: nativeHub,
+          sessionContextRefresher: refreshLiveVoiceSessionContext,
+        );
     _transcriptMemoryIngestor = TranscriptMemoryIngestor(
       nativeHub,
       _now,
@@ -1200,6 +1206,11 @@ final class AppServices {
 
   Future<List<ConversationMessage>> replayConversation({int after = 0}) =>
       _conversationController.replay(after: after);
+
+  /// Telegram / iMessage turns claimed by the inbox poller, mirrored into the
+  /// desktop overlay session while that session is warm.
+  Stream<OverlayChannelTurn> get overlayChannelTurns =>
+      _conversationController.overlayChannelTurns;
 
   Future<String> handoffCurrentAction(CurrentActionHandoff handoff) =>
       _conversationController.handoff(handoff);

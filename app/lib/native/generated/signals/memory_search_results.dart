@@ -1,7 +1,6 @@
 // ignore_for_file: type=lint, type=warning
 part of 'signals.dart';
 
-
 @immutable
 class MemorySearchResults {
   const MemorySearchResults({
@@ -61,9 +60,9 @@ class MemorySearchResults {
   }
 
   Uint8List bincodeSerialize() {
-      final serializer = BincodeSerializer();
-      serialize(serializer);
-      return serializer.bytes;
+    final serializer = BincodeSerializer();
+    serialize(serializer);
+    return serializer.bytes;
   }
 
   @override
@@ -71,32 +70,28 @@ class MemorySearchResults {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is MemorySearchResults
-      && requestId == other.requestId
-      && query == other.query
-      && listEquals(items, other.items)
-      && listEquals(gaps, other.gaps);
+    return other is MemorySearchResults &&
+        requestId == other.requestId &&
+        query == other.query &&
+        listEquals(items, other.items) &&
+        listEquals(gaps, other.gaps);
   }
 
   @override
-  int get hashCode => Object.hash(
-        requestId,
-        query,
-        items,
-        gaps,
-      );
+  int get hashCode => Object.hash(requestId, query, items, gaps);
 
   @override
   String toString() {
     String? fullString;
 
     assert(() {
-      fullString = '$runtimeType('
-        'requestId: $requestId, '
-        'query: $query, '
-        'items: $items, '
-        'gaps: $gaps'
-        ')';
+      fullString =
+          '$runtimeType('
+          'requestId: $requestId, '
+          'query: $query, '
+          'items: $items, '
+          'gaps: $gaps'
+          ')';
       return true;
     }());
 

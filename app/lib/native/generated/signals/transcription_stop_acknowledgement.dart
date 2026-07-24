@@ -1,7 +1,6 @@
 // ignore_for_file: type=lint, type=warning
 part of 'signals.dart';
 
-
 @immutable
 class TranscriptionStopAcknowledgement {
   const TranscriptionStopAcknowledgement({
@@ -10,7 +9,9 @@ class TranscriptionStopAcknowledgement {
     required this.accepted,
   });
 
-  static TranscriptionStopAcknowledgement deserialize(BinaryDeserializer deserializer) {
+  static TranscriptionStopAcknowledgement deserialize(
+    BinaryDeserializer deserializer,
+  ) {
     deserializer.increaseContainerDepth();
     final instance = TranscriptionStopAcknowledgement(
       requestId: deserializer.deserializeString(),
@@ -55,9 +56,9 @@ class TranscriptionStopAcknowledgement {
   }
 
   Uint8List bincodeSerialize() {
-      final serializer = BincodeSerializer();
-      serialize(serializer);
-      return serializer.bytes;
+    final serializer = BincodeSerializer();
+    serialize(serializer);
+    return serializer.bytes;
   }
 
   @override
@@ -65,29 +66,26 @@ class TranscriptionStopAcknowledgement {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is TranscriptionStopAcknowledgement
-      && requestId == other.requestId
-      && audioStreamId == other.audioStreamId
-      && accepted == other.accepted;
+    return other is TranscriptionStopAcknowledgement &&
+        requestId == other.requestId &&
+        audioStreamId == other.audioStreamId &&
+        accepted == other.accepted;
   }
 
   @override
-  int get hashCode => Object.hash(
-        requestId,
-        audioStreamId,
-        accepted,
-      );
+  int get hashCode => Object.hash(requestId, audioStreamId, accepted);
 
   @override
   String toString() {
     String? fullString;
 
     assert(() {
-      fullString = '$runtimeType('
-        'requestId: $requestId, '
-        'audioStreamId: $audioStreamId, '
-        'accepted: $accepted'
-        ')';
+      fullString =
+          '$runtimeType('
+          'requestId: $requestId, '
+          'audioStreamId: $audioStreamId, '
+          'accepted: $accepted'
+          ')';
       return true;
     }());
 

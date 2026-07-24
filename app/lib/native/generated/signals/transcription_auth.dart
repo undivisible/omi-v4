@@ -1,7 +1,6 @@
 // ignore_for_file: type=lint, type=warning
 part of 'signals.dart';
 
-
 abstract class TranscriptionAuth {
   const TranscriptionAuth();
 
@@ -10,17 +9,23 @@ abstract class TranscriptionAuth {
   static TranscriptionAuth deserialize(BinaryDeserializer deserializer) {
     int index = deserializer.deserializeVariantIndex();
     switch (index) {
-      case 0: return TranscriptionAuthManaged.load(deserializer);
-      case 1: return TranscriptionAuthByok.load(deserializer);
-      case 2: return TranscriptionAuthLocal.load(deserializer);
-      default: throw Exception('Unknown variant index for TranscriptionAuth: ' + index.toString());
+      case 0:
+        return TranscriptionAuthManaged.load(deserializer);
+      case 1:
+        return TranscriptionAuthByok.load(deserializer);
+      case 2:
+        return TranscriptionAuthLocal.load(deserializer);
+      default:
+        throw Exception(
+          'Unknown variant index for TranscriptionAuth: ' + index.toString(),
+        );
     }
   }
 
   Uint8List bincodeSerialize() {
-      final serializer = BincodeSerializer();
-      serialize(serializer);
-      return serializer.bytes;
+    final serializer = BincodeSerializer();
+    serialize(serializer);
+    return serializer.bytes;
   }
 
   static TranscriptionAuth bincodeDeserialize(Uint8List input) {
@@ -32,7 +37,6 @@ abstract class TranscriptionAuth {
     return value;
   }
 }
-
 
 @immutable
 class TranscriptionAuthManaged extends TranscriptionAuth {
@@ -54,10 +58,7 @@ class TranscriptionAuthManaged extends TranscriptionAuth {
   final String endpoint;
   final String firebaseToken;
 
-  TranscriptionAuthManaged copyWith({
-    String? endpoint,
-    String? firebaseToken,
-  }) {
+  TranscriptionAuthManaged copyWith({String? endpoint, String? firebaseToken}) {
     return TranscriptionAuthManaged(
       endpoint: endpoint ?? this.endpoint,
       firebaseToken: firebaseToken ?? this.firebaseToken,
@@ -77,26 +78,24 @@ class TranscriptionAuthManaged extends TranscriptionAuth {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is TranscriptionAuthManaged
-      && endpoint == other.endpoint
-      && firebaseToken == other.firebaseToken;
+    return other is TranscriptionAuthManaged &&
+        endpoint == other.endpoint &&
+        firebaseToken == other.firebaseToken;
   }
 
   @override
-  int get hashCode => Object.hash(
-        endpoint,
-        firebaseToken,
-      );
+  int get hashCode => Object.hash(endpoint, firebaseToken);
 
   @override
   String toString() {
     String? fullString;
 
     assert(() {
-      fullString = '$runtimeType('
-        'endpoint: $endpoint, '
-        'firebaseToken: $firebaseToken'
-        ')';
+      fullString =
+          '$runtimeType('
+          'endpoint: $endpoint, '
+          'firebaseToken: [REDACTED]'
+          ')';
       return true;
     }());
 
@@ -106,10 +105,8 @@ class TranscriptionAuthManaged extends TranscriptionAuth {
 
 @immutable
 class TranscriptionAuthByok extends TranscriptionAuth {
-  const TranscriptionAuthByok({
-    required this.endpoint,
-    required this.apiKey,
-  }) : super();
+  const TranscriptionAuthByok({required this.endpoint, required this.apiKey})
+    : super();
 
   static TranscriptionAuthByok load(BinaryDeserializer deserializer) {
     deserializer.increaseContainerDepth();
@@ -124,10 +121,7 @@ class TranscriptionAuthByok extends TranscriptionAuth {
   final String endpoint;
   final String apiKey;
 
-  TranscriptionAuthByok copyWith({
-    String? endpoint,
-    String? apiKey,
-  }) {
+  TranscriptionAuthByok copyWith({String? endpoint, String? apiKey}) {
     return TranscriptionAuthByok(
       endpoint: endpoint ?? this.endpoint,
       apiKey: apiKey ?? this.apiKey,
@@ -147,26 +141,24 @@ class TranscriptionAuthByok extends TranscriptionAuth {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is TranscriptionAuthByok
-      && endpoint == other.endpoint
-      && apiKey == other.apiKey;
+    return other is TranscriptionAuthByok &&
+        endpoint == other.endpoint &&
+        apiKey == other.apiKey;
   }
 
   @override
-  int get hashCode => Object.hash(
-        endpoint,
-        apiKey,
-      );
+  int get hashCode => Object.hash(endpoint, apiKey);
 
   @override
   String toString() {
     String? fullString;
 
     assert(() {
-      fullString = '$runtimeType('
-        'endpoint: $endpoint, '
-        'apiKey: $apiKey'
-        ')';
+      fullString =
+          '$runtimeType('
+          'endpoint: $endpoint, '
+          'apiKey: [REDACTED]'
+          ')';
       return true;
     }());
 
@@ -176,13 +168,11 @@ class TranscriptionAuthByok extends TranscriptionAuth {
 
 @immutable
 class TranscriptionAuthLocal extends TranscriptionAuth {
-  const TranscriptionAuthLocal(
-  ) : super();
+  const TranscriptionAuthLocal() : super();
 
   static TranscriptionAuthLocal load(BinaryDeserializer deserializer) {
     deserializer.increaseContainerDepth();
-    final instance = TranscriptionAuthLocal(
-    );
+    final instance = TranscriptionAuthLocal();
     deserializer.decreaseContainerDepth();
     return instance;
   }
@@ -209,8 +199,9 @@ class TranscriptionAuthLocal extends TranscriptionAuth {
     String? fullString;
 
     assert(() {
-      fullString = '$runtimeType('
-        ')';
+      fullString =
+          '$runtimeType('
+          ')';
       return true;
     }());
 

@@ -1,7 +1,6 @@
 // ignore_for_file: type=lint, type=warning
 part of 'signals.dart';
 
-
 @immutable
 class LiveVoiceAudio {
   const LiveVoiceAudio({
@@ -61,9 +60,9 @@ class LiveVoiceAudio {
   }
 
   Uint8List bincodeSerialize() {
-      final serializer = BincodeSerializer();
-      serialize(serializer);
-      return serializer.bytes;
+    final serializer = BincodeSerializer();
+    serialize(serializer);
+    return serializer.bytes;
   }
 
   @override
@@ -71,32 +70,28 @@ class LiveVoiceAudio {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is LiveVoiceAudio
-      && liveStreamId == other.liveStreamId
-      && sequence == other.sequence
-      && sampleRateHz == other.sampleRateHz
-      && listEquals(bytes, other.bytes);
+    return other is LiveVoiceAudio &&
+        liveStreamId == other.liveStreamId &&
+        sequence == other.sequence &&
+        sampleRateHz == other.sampleRateHz &&
+        listEquals(bytes, other.bytes);
   }
 
   @override
-  int get hashCode => Object.hash(
-        liveStreamId,
-        sequence,
-        sampleRateHz,
-        bytes,
-      );
+  int get hashCode => Object.hash(liveStreamId, sequence, sampleRateHz, bytes);
 
   @override
   String toString() {
     String? fullString;
 
     assert(() {
-      fullString = '$runtimeType('
-        'liveStreamId: $liveStreamId, '
-        'sequence: $sequence, '
-        'sampleRateHz: $sampleRateHz, '
-        'bytes: $bytes'
-        ')';
+      fullString =
+          '$runtimeType('
+          'liveStreamId: $liveStreamId, '
+          'sequence: $sequence, '
+          'sampleRateHz: $sampleRateHz, '
+          'bytes: $bytes'
+          ')';
       return true;
     }());
 

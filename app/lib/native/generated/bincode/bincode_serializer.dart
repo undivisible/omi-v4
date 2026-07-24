@@ -5,10 +5,7 @@
 part of 'bincode.dart';
 
 class BincodeSerializer extends BinarySerializer {
-  BincodeSerializer()
-      : super(
-          containerDepthBudget: maxContainerDepth,
-        );
+  BincodeSerializer() : super(containerDepthBudget: maxContainerDepth);
 
   @override
   void serializeLength(int value) {

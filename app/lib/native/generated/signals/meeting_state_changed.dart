@@ -1,13 +1,9 @@
 // ignore_for_file: type=lint, type=warning
 part of 'signals.dart';
 
-
 @immutable
 class MeetingStateChanged {
-  const MeetingStateChanged({
-    required this.active,
-    this.suggestedTitle,
-  });
+  const MeetingStateChanged({required this.active, this.suggestedTitle});
 
   static MeetingStateChanged deserialize(BinaryDeserializer deserializer) {
     deserializer.increaseContainerDepth();
@@ -37,7 +33,9 @@ class MeetingStateChanged {
   }) {
     return MeetingStateChanged(
       active: active ?? this.active,
-      suggestedTitle: suggestedTitle == null ? this.suggestedTitle : suggestedTitle(),
+      suggestedTitle: suggestedTitle == null
+          ? this.suggestedTitle
+          : suggestedTitle(),
     );
   }
 
@@ -49,9 +47,9 @@ class MeetingStateChanged {
   }
 
   Uint8List bincodeSerialize() {
-      final serializer = BincodeSerializer();
-      serialize(serializer);
-      return serializer.bytes;
+    final serializer = BincodeSerializer();
+    serialize(serializer);
+    return serializer.bytes;
   }
 
   @override
@@ -59,26 +57,24 @@ class MeetingStateChanged {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is MeetingStateChanged
-      && active == other.active
-      && suggestedTitle == other.suggestedTitle;
+    return other is MeetingStateChanged &&
+        active == other.active &&
+        suggestedTitle == other.suggestedTitle;
   }
 
   @override
-  int get hashCode => Object.hash(
-        active,
-        suggestedTitle,
-      );
+  int get hashCode => Object.hash(active, suggestedTitle);
 
   @override
   String toString() {
     String? fullString;
 
     assert(() {
-      fullString = '$runtimeType('
-        'active: $active, '
-        'suggestedTitle: $suggestedTitle'
-        ')';
+      fullString =
+          '$runtimeType('
+          'active: $active, '
+          'suggestedTitle: $suggestedTitle'
+          ')';
       return true;
     }());
 

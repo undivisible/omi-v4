@@ -1,15 +1,14 @@
 // ignore_for_file: type=lint, type=warning
 part of 'signals.dart';
 
-
 abstract class NativeEvent {
   /// An async broadcast stream that listens for signals from Rust.
   /// It supports multiple subscriptions.
   /// Make sure to cancel the subscription when it's no longer needed,
   /// such as when a widget is disposed.
-  static final rustSignalStream =
-      _nativeEventStreamController.stream.asBroadcastStream();
-        
+  static final rustSignalStream = _nativeEventStreamController.stream
+      .asBroadcastStream();
+
   /// The latest signal value received from Rust.
   /// This is updated every time a new signal is received.
   /// It can be null if no signals have been received yet.
@@ -22,42 +21,73 @@ abstract class NativeEvent {
   static NativeEvent deserialize(BinaryDeserializer deserializer) {
     int index = deserializer.deserializeVariantIndex();
     switch (index) {
-      case 0: return NativeEventTranscriptDelta.load(deserializer);
-      case 1: return NativeEventTranscriptionStatus.load(deserializer);
-      case 2: return NativeEventTranscriptionStopAcknowledged.load(deserializer);
-      case 3: return NativeEventTranscriptGap.load(deserializer);
-      case 4: return NativeEventAssistantDelta.load(deserializer);
-      case 5: return NativeEventActionProposal.load(deserializer);
-      case 6: return NativeEventApprovalDecisionAcknowledged.load(deserializer);
-      case 7: return NativeEventToolProgress.load(deserializer);
-      case 8: return NativeEventError.load(deserializer);
-      case 9: return NativeEventRuntimeStatus.load(deserializer);
-      case 10: return NativeEventMemoryCaptured.load(deserializer);
-      case 11: return NativeEventMemorySearchResults.load(deserializer);
-      case 12: return NativeEventMemoryCorrected.load(deserializer);
-      case 13: return NativeEventMemorySourceDeleted.load(deserializer);
-      case 14: return NativeEventMemoryExported.load(deserializer);
-      case 15: return NativeEventMemoryApplied.load(deserializer);
-      case 16: return NativeEventMemoryItems.load(deserializer);
-      case 17: return NativeEventOnboardingScanCompleted.load(deserializer);
-      case 18: return NativeEventLiveVoiceState.load(deserializer);
-      case 19: return NativeEventLiveVoiceTranscript.load(deserializer);
-      case 20: return NativeEventLiveVoiceAudio.load(deserializer);
-      case 21: return NativeEventMeetingStateChanged.load(deserializer);
-      case 22: return NativeEventMeetingInsight.load(deserializer);
-      case 23: return NativeEventMeetingTranscriptTurn.load(deserializer);
-      case 24: return NativeEventMeetingCompleted.load(deserializer);
-      case 25: return NativeEventBriefComposed.load(deserializer);
-      case 26: return NativeEventCallState.load(deserializer);
-      case 27: return NativeEventDevAssistantResolved.load(deserializer);
-      default: throw Exception('Unknown variant index for NativeEvent: ' + index.toString());
+      case 0:
+        return NativeEventTranscriptDelta.load(deserializer);
+      case 1:
+        return NativeEventTranscriptionStatus.load(deserializer);
+      case 2:
+        return NativeEventTranscriptionStopAcknowledged.load(deserializer);
+      case 3:
+        return NativeEventTranscriptGap.load(deserializer);
+      case 4:
+        return NativeEventAssistantDelta.load(deserializer);
+      case 5:
+        return NativeEventActionProposal.load(deserializer);
+      case 6:
+        return NativeEventApprovalDecisionAcknowledged.load(deserializer);
+      case 7:
+        return NativeEventToolProgress.load(deserializer);
+      case 8:
+        return NativeEventError.load(deserializer);
+      case 9:
+        return NativeEventRuntimeStatus.load(deserializer);
+      case 10:
+        return NativeEventMemoryCaptured.load(deserializer);
+      case 11:
+        return NativeEventMemorySearchResults.load(deserializer);
+      case 12:
+        return NativeEventMemoryCorrected.load(deserializer);
+      case 13:
+        return NativeEventMemorySourceDeleted.load(deserializer);
+      case 14:
+        return NativeEventMemoryExported.load(deserializer);
+      case 15:
+        return NativeEventMemoryApplied.load(deserializer);
+      case 16:
+        return NativeEventMemoryItems.load(deserializer);
+      case 17:
+        return NativeEventOnboardingScanCompleted.load(deserializer);
+      case 18:
+        return NativeEventLiveVoiceState.load(deserializer);
+      case 19:
+        return NativeEventLiveVoiceTranscript.load(deserializer);
+      case 20:
+        return NativeEventLiveVoiceAudio.load(deserializer);
+      case 21:
+        return NativeEventMeetingStateChanged.load(deserializer);
+      case 22:
+        return NativeEventMeetingInsight.load(deserializer);
+      case 23:
+        return NativeEventMeetingTranscriptTurn.load(deserializer);
+      case 24:
+        return NativeEventMeetingCompleted.load(deserializer);
+      case 25:
+        return NativeEventBriefComposed.load(deserializer);
+      case 26:
+        return NativeEventCallState.load(deserializer);
+      case 27:
+        return NativeEventDevAssistantResolved.load(deserializer);
+      default:
+        throw Exception(
+          'Unknown variant index for NativeEvent: ' + index.toString(),
+        );
     }
   }
 
   Uint8List bincodeSerialize() {
-      final serializer = BincodeSerializer();
-      serialize(serializer);
-      return serializer.bytes;
+    final serializer = BincodeSerializer();
+    serialize(serializer);
+    return serializer.bytes;
   }
 
   static NativeEvent bincodeDeserialize(Uint8List input) {
@@ -70,12 +100,9 @@ abstract class NativeEvent {
   }
 }
 
-
 @immutable
 class NativeEventTranscriptDelta extends NativeEvent {
-  const NativeEventTranscriptDelta({
-    required this.value,
-  }) : super();
+  const NativeEventTranscriptDelta({required this.value}) : super();
 
   static NativeEventTranscriptDelta load(BinaryDeserializer deserializer) {
     deserializer.increaseContainerDepth();
@@ -88,12 +115,8 @@ class NativeEventTranscriptDelta extends NativeEvent {
 
   final TranscriptDelta value;
 
-  NativeEventTranscriptDelta copyWith({
-    TranscriptDelta? value,
-  }) {
-    return NativeEventTranscriptDelta(
-      value: value ?? this.value,
-    );
+  NativeEventTranscriptDelta copyWith({TranscriptDelta? value}) {
+    return NativeEventTranscriptDelta(value: value ?? this.value);
   }
 
   void serialize(BinarySerializer serializer) {
@@ -108,8 +131,7 @@ class NativeEventTranscriptDelta extends NativeEvent {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is NativeEventTranscriptDelta
-      && value == other.value;
+    return other is NativeEventTranscriptDelta && value == other.value;
   }
 
   @override
@@ -120,9 +142,10 @@ class NativeEventTranscriptDelta extends NativeEvent {
     String? fullString;
 
     assert(() {
-      fullString = '$runtimeType('
-        'value: $value'
-        ')';
+      fullString =
+          '$runtimeType('
+          'value: $value'
+          ')';
       return true;
     }());
 
@@ -132,9 +155,7 @@ class NativeEventTranscriptDelta extends NativeEvent {
 
 @immutable
 class NativeEventTranscriptionStatus extends NativeEvent {
-  const NativeEventTranscriptionStatus({
-    required this.value,
-  }) : super();
+  const NativeEventTranscriptionStatus({required this.value}) : super();
 
   static NativeEventTranscriptionStatus load(BinaryDeserializer deserializer) {
     deserializer.increaseContainerDepth();
@@ -147,12 +168,8 @@ class NativeEventTranscriptionStatus extends NativeEvent {
 
   final TranscriptionStatus value;
 
-  NativeEventTranscriptionStatus copyWith({
-    TranscriptionStatus? value,
-  }) {
-    return NativeEventTranscriptionStatus(
-      value: value ?? this.value,
-    );
+  NativeEventTranscriptionStatus copyWith({TranscriptionStatus? value}) {
+    return NativeEventTranscriptionStatus(value: value ?? this.value);
   }
 
   void serialize(BinarySerializer serializer) {
@@ -167,8 +184,7 @@ class NativeEventTranscriptionStatus extends NativeEvent {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is NativeEventTranscriptionStatus
-      && value == other.value;
+    return other is NativeEventTranscriptionStatus && value == other.value;
   }
 
   @override
@@ -179,9 +195,10 @@ class NativeEventTranscriptionStatus extends NativeEvent {
     String? fullString;
 
     assert(() {
-      fullString = '$runtimeType('
-        'value: $value'
-        ')';
+      fullString =
+          '$runtimeType('
+          'value: $value'
+          ')';
       return true;
     }());
 
@@ -191,11 +208,12 @@ class NativeEventTranscriptionStatus extends NativeEvent {
 
 @immutable
 class NativeEventTranscriptionStopAcknowledged extends NativeEvent {
-  const NativeEventTranscriptionStopAcknowledged({
-    required this.value,
-  }) : super();
+  const NativeEventTranscriptionStopAcknowledged({required this.value})
+    : super();
 
-  static NativeEventTranscriptionStopAcknowledged load(BinaryDeserializer deserializer) {
+  static NativeEventTranscriptionStopAcknowledged load(
+    BinaryDeserializer deserializer,
+  ) {
     deserializer.increaseContainerDepth();
     final instance = NativeEventTranscriptionStopAcknowledged(
       value: TranscriptionStopAcknowledgement.deserialize(deserializer),
@@ -209,9 +227,7 @@ class NativeEventTranscriptionStopAcknowledged extends NativeEvent {
   NativeEventTranscriptionStopAcknowledged copyWith({
     TranscriptionStopAcknowledgement? value,
   }) {
-    return NativeEventTranscriptionStopAcknowledged(
-      value: value ?? this.value,
-    );
+    return NativeEventTranscriptionStopAcknowledged(value: value ?? this.value);
   }
 
   void serialize(BinarySerializer serializer) {
@@ -226,8 +242,8 @@ class NativeEventTranscriptionStopAcknowledged extends NativeEvent {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is NativeEventTranscriptionStopAcknowledged
-      && value == other.value;
+    return other is NativeEventTranscriptionStopAcknowledged &&
+        value == other.value;
   }
 
   @override
@@ -238,9 +254,10 @@ class NativeEventTranscriptionStopAcknowledged extends NativeEvent {
     String? fullString;
 
     assert(() {
-      fullString = '$runtimeType('
-        'value: $value'
-        ')';
+      fullString =
+          '$runtimeType('
+          'value: $value'
+          ')';
       return true;
     }());
 
@@ -250,9 +267,7 @@ class NativeEventTranscriptionStopAcknowledged extends NativeEvent {
 
 @immutable
 class NativeEventTranscriptGap extends NativeEvent {
-  const NativeEventTranscriptGap({
-    required this.value,
-  }) : super();
+  const NativeEventTranscriptGap({required this.value}) : super();
 
   static NativeEventTranscriptGap load(BinaryDeserializer deserializer) {
     deserializer.increaseContainerDepth();
@@ -265,12 +280,8 @@ class NativeEventTranscriptGap extends NativeEvent {
 
   final TranscriptGap value;
 
-  NativeEventTranscriptGap copyWith({
-    TranscriptGap? value,
-  }) {
-    return NativeEventTranscriptGap(
-      value: value ?? this.value,
-    );
+  NativeEventTranscriptGap copyWith({TranscriptGap? value}) {
+    return NativeEventTranscriptGap(value: value ?? this.value);
   }
 
   void serialize(BinarySerializer serializer) {
@@ -285,8 +296,7 @@ class NativeEventTranscriptGap extends NativeEvent {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is NativeEventTranscriptGap
-      && value == other.value;
+    return other is NativeEventTranscriptGap && value == other.value;
   }
 
   @override
@@ -297,9 +307,10 @@ class NativeEventTranscriptGap extends NativeEvent {
     String? fullString;
 
     assert(() {
-      fullString = '$runtimeType('
-        'value: $value'
-        ')';
+      fullString =
+          '$runtimeType('
+          'value: $value'
+          ')';
       return true;
     }());
 
@@ -309,9 +320,7 @@ class NativeEventTranscriptGap extends NativeEvent {
 
 @immutable
 class NativeEventAssistantDelta extends NativeEvent {
-  const NativeEventAssistantDelta({
-    required this.value,
-  }) : super();
+  const NativeEventAssistantDelta({required this.value}) : super();
 
   static NativeEventAssistantDelta load(BinaryDeserializer deserializer) {
     deserializer.increaseContainerDepth();
@@ -324,12 +333,8 @@ class NativeEventAssistantDelta extends NativeEvent {
 
   final AssistantDelta value;
 
-  NativeEventAssistantDelta copyWith({
-    AssistantDelta? value,
-  }) {
-    return NativeEventAssistantDelta(
-      value: value ?? this.value,
-    );
+  NativeEventAssistantDelta copyWith({AssistantDelta? value}) {
+    return NativeEventAssistantDelta(value: value ?? this.value);
   }
 
   void serialize(BinarySerializer serializer) {
@@ -344,8 +349,7 @@ class NativeEventAssistantDelta extends NativeEvent {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is NativeEventAssistantDelta
-      && value == other.value;
+    return other is NativeEventAssistantDelta && value == other.value;
   }
 
   @override
@@ -356,9 +360,10 @@ class NativeEventAssistantDelta extends NativeEvent {
     String? fullString;
 
     assert(() {
-      fullString = '$runtimeType('
-        'value: $value'
-        ')';
+      fullString =
+          '$runtimeType('
+          'value: $value'
+          ')';
       return true;
     }());
 
@@ -368,9 +373,7 @@ class NativeEventAssistantDelta extends NativeEvent {
 
 @immutable
 class NativeEventActionProposal extends NativeEvent {
-  const NativeEventActionProposal({
-    required this.value,
-  }) : super();
+  const NativeEventActionProposal({required this.value}) : super();
 
   static NativeEventActionProposal load(BinaryDeserializer deserializer) {
     deserializer.increaseContainerDepth();
@@ -383,12 +386,8 @@ class NativeEventActionProposal extends NativeEvent {
 
   final ActionProposal value;
 
-  NativeEventActionProposal copyWith({
-    ActionProposal? value,
-  }) {
-    return NativeEventActionProposal(
-      value: value ?? this.value,
-    );
+  NativeEventActionProposal copyWith({ActionProposal? value}) {
+    return NativeEventActionProposal(value: value ?? this.value);
   }
 
   void serialize(BinarySerializer serializer) {
@@ -403,8 +402,7 @@ class NativeEventActionProposal extends NativeEvent {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is NativeEventActionProposal
-      && value == other.value;
+    return other is NativeEventActionProposal && value == other.value;
   }
 
   @override
@@ -415,9 +413,10 @@ class NativeEventActionProposal extends NativeEvent {
     String? fullString;
 
     assert(() {
-      fullString = '$runtimeType('
-        'value: $value'
-        ')';
+      fullString =
+          '$runtimeType('
+          'value: $value'
+          ')';
       return true;
     }());
 
@@ -427,11 +426,12 @@ class NativeEventActionProposal extends NativeEvent {
 
 @immutable
 class NativeEventApprovalDecisionAcknowledged extends NativeEvent {
-  const NativeEventApprovalDecisionAcknowledged({
-    required this.value,
-  }) : super();
+  const NativeEventApprovalDecisionAcknowledged({required this.value})
+    : super();
 
-  static NativeEventApprovalDecisionAcknowledged load(BinaryDeserializer deserializer) {
+  static NativeEventApprovalDecisionAcknowledged load(
+    BinaryDeserializer deserializer,
+  ) {
     deserializer.increaseContainerDepth();
     final instance = NativeEventApprovalDecisionAcknowledged(
       value: ApprovalDecisionAcknowledgement.deserialize(deserializer),
@@ -445,9 +445,7 @@ class NativeEventApprovalDecisionAcknowledged extends NativeEvent {
   NativeEventApprovalDecisionAcknowledged copyWith({
     ApprovalDecisionAcknowledgement? value,
   }) {
-    return NativeEventApprovalDecisionAcknowledged(
-      value: value ?? this.value,
-    );
+    return NativeEventApprovalDecisionAcknowledged(value: value ?? this.value);
   }
 
   void serialize(BinarySerializer serializer) {
@@ -462,8 +460,8 @@ class NativeEventApprovalDecisionAcknowledged extends NativeEvent {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is NativeEventApprovalDecisionAcknowledged
-      && value == other.value;
+    return other is NativeEventApprovalDecisionAcknowledged &&
+        value == other.value;
   }
 
   @override
@@ -474,9 +472,10 @@ class NativeEventApprovalDecisionAcknowledged extends NativeEvent {
     String? fullString;
 
     assert(() {
-      fullString = '$runtimeType('
-        'value: $value'
-        ')';
+      fullString =
+          '$runtimeType('
+          'value: $value'
+          ')';
       return true;
     }());
 
@@ -486,9 +485,7 @@ class NativeEventApprovalDecisionAcknowledged extends NativeEvent {
 
 @immutable
 class NativeEventToolProgress extends NativeEvent {
-  const NativeEventToolProgress({
-    required this.value,
-  }) : super();
+  const NativeEventToolProgress({required this.value}) : super();
 
   static NativeEventToolProgress load(BinaryDeserializer deserializer) {
     deserializer.increaseContainerDepth();
@@ -501,12 +498,8 @@ class NativeEventToolProgress extends NativeEvent {
 
   final ToolProgress value;
 
-  NativeEventToolProgress copyWith({
-    ToolProgress? value,
-  }) {
-    return NativeEventToolProgress(
-      value: value ?? this.value,
-    );
+  NativeEventToolProgress copyWith({ToolProgress? value}) {
+    return NativeEventToolProgress(value: value ?? this.value);
   }
 
   void serialize(BinarySerializer serializer) {
@@ -521,8 +514,7 @@ class NativeEventToolProgress extends NativeEvent {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is NativeEventToolProgress
-      && value == other.value;
+    return other is NativeEventToolProgress && value == other.value;
   }
 
   @override
@@ -533,9 +525,10 @@ class NativeEventToolProgress extends NativeEvent {
     String? fullString;
 
     assert(() {
-      fullString = '$runtimeType('
-        'value: $value'
-        ')';
+      fullString =
+          '$runtimeType('
+          'value: $value'
+          ')';
       return true;
     }());
 
@@ -545,9 +538,7 @@ class NativeEventToolProgress extends NativeEvent {
 
 @immutable
 class NativeEventError extends NativeEvent {
-  const NativeEventError({
-    required this.value,
-  }) : super();
+  const NativeEventError({required this.value}) : super();
 
   static NativeEventError load(BinaryDeserializer deserializer) {
     deserializer.increaseContainerDepth();
@@ -560,12 +551,8 @@ class NativeEventError extends NativeEvent {
 
   final NativeError value;
 
-  NativeEventError copyWith({
-    NativeError? value,
-  }) {
-    return NativeEventError(
-      value: value ?? this.value,
-    );
+  NativeEventError copyWith({NativeError? value}) {
+    return NativeEventError(value: value ?? this.value);
   }
 
   void serialize(BinarySerializer serializer) {
@@ -580,8 +567,7 @@ class NativeEventError extends NativeEvent {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is NativeEventError
-      && value == other.value;
+    return other is NativeEventError && value == other.value;
   }
 
   @override
@@ -592,9 +578,10 @@ class NativeEventError extends NativeEvent {
     String? fullString;
 
     assert(() {
-      fullString = '$runtimeType('
-        'value: $value'
-        ')';
+      fullString =
+          '$runtimeType('
+          'value: $value'
+          ')';
       return true;
     }());
 
@@ -604,9 +591,7 @@ class NativeEventError extends NativeEvent {
 
 @immutable
 class NativeEventRuntimeStatus extends NativeEvent {
-  const NativeEventRuntimeStatus({
-    required this.value,
-  }) : super();
+  const NativeEventRuntimeStatus({required this.value}) : super();
 
   static NativeEventRuntimeStatus load(BinaryDeserializer deserializer) {
     deserializer.increaseContainerDepth();
@@ -619,12 +604,8 @@ class NativeEventRuntimeStatus extends NativeEvent {
 
   final RuntimeStatus value;
 
-  NativeEventRuntimeStatus copyWith({
-    RuntimeStatus? value,
-  }) {
-    return NativeEventRuntimeStatus(
-      value: value ?? this.value,
-    );
+  NativeEventRuntimeStatus copyWith({RuntimeStatus? value}) {
+    return NativeEventRuntimeStatus(value: value ?? this.value);
   }
 
   void serialize(BinarySerializer serializer) {
@@ -639,8 +620,7 @@ class NativeEventRuntimeStatus extends NativeEvent {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is NativeEventRuntimeStatus
-      && value == other.value;
+    return other is NativeEventRuntimeStatus && value == other.value;
   }
 
   @override
@@ -651,9 +631,10 @@ class NativeEventRuntimeStatus extends NativeEvent {
     String? fullString;
 
     assert(() {
-      fullString = '$runtimeType('
-        'value: $value'
-        ')';
+      fullString =
+          '$runtimeType('
+          'value: $value'
+          ')';
       return true;
     }());
 
@@ -663,9 +644,7 @@ class NativeEventRuntimeStatus extends NativeEvent {
 
 @immutable
 class NativeEventMemoryCaptured extends NativeEvent {
-  const NativeEventMemoryCaptured({
-    required this.value,
-  }) : super();
+  const NativeEventMemoryCaptured({required this.value}) : super();
 
   static NativeEventMemoryCaptured load(BinaryDeserializer deserializer) {
     deserializer.increaseContainerDepth();
@@ -678,12 +657,8 @@ class NativeEventMemoryCaptured extends NativeEvent {
 
   final MemoryCaptured value;
 
-  NativeEventMemoryCaptured copyWith({
-    MemoryCaptured? value,
-  }) {
-    return NativeEventMemoryCaptured(
-      value: value ?? this.value,
-    );
+  NativeEventMemoryCaptured copyWith({MemoryCaptured? value}) {
+    return NativeEventMemoryCaptured(value: value ?? this.value);
   }
 
   void serialize(BinarySerializer serializer) {
@@ -698,8 +673,7 @@ class NativeEventMemoryCaptured extends NativeEvent {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is NativeEventMemoryCaptured
-      && value == other.value;
+    return other is NativeEventMemoryCaptured && value == other.value;
   }
 
   @override
@@ -710,9 +684,10 @@ class NativeEventMemoryCaptured extends NativeEvent {
     String? fullString;
 
     assert(() {
-      fullString = '$runtimeType('
-        'value: $value'
-        ')';
+      fullString =
+          '$runtimeType('
+          'value: $value'
+          ')';
       return true;
     }());
 
@@ -722,9 +697,7 @@ class NativeEventMemoryCaptured extends NativeEvent {
 
 @immutable
 class NativeEventMemorySearchResults extends NativeEvent {
-  const NativeEventMemorySearchResults({
-    required this.value,
-  }) : super();
+  const NativeEventMemorySearchResults({required this.value}) : super();
 
   static NativeEventMemorySearchResults load(BinaryDeserializer deserializer) {
     deserializer.increaseContainerDepth();
@@ -737,12 +710,8 @@ class NativeEventMemorySearchResults extends NativeEvent {
 
   final MemorySearchResults value;
 
-  NativeEventMemorySearchResults copyWith({
-    MemorySearchResults? value,
-  }) {
-    return NativeEventMemorySearchResults(
-      value: value ?? this.value,
-    );
+  NativeEventMemorySearchResults copyWith({MemorySearchResults? value}) {
+    return NativeEventMemorySearchResults(value: value ?? this.value);
   }
 
   void serialize(BinarySerializer serializer) {
@@ -757,8 +726,7 @@ class NativeEventMemorySearchResults extends NativeEvent {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is NativeEventMemorySearchResults
-      && value == other.value;
+    return other is NativeEventMemorySearchResults && value == other.value;
   }
 
   @override
@@ -769,9 +737,10 @@ class NativeEventMemorySearchResults extends NativeEvent {
     String? fullString;
 
     assert(() {
-      fullString = '$runtimeType('
-        'value: $value'
-        ')';
+      fullString =
+          '$runtimeType('
+          'value: $value'
+          ')';
       return true;
     }());
 
@@ -781,9 +750,7 @@ class NativeEventMemorySearchResults extends NativeEvent {
 
 @immutable
 class NativeEventMemoryCorrected extends NativeEvent {
-  const NativeEventMemoryCorrected({
-    required this.value,
-  }) : super();
+  const NativeEventMemoryCorrected({required this.value}) : super();
 
   static NativeEventMemoryCorrected load(BinaryDeserializer deserializer) {
     deserializer.increaseContainerDepth();
@@ -796,12 +763,8 @@ class NativeEventMemoryCorrected extends NativeEvent {
 
   final MemoryCorrected value;
 
-  NativeEventMemoryCorrected copyWith({
-    MemoryCorrected? value,
-  }) {
-    return NativeEventMemoryCorrected(
-      value: value ?? this.value,
-    );
+  NativeEventMemoryCorrected copyWith({MemoryCorrected? value}) {
+    return NativeEventMemoryCorrected(value: value ?? this.value);
   }
 
   void serialize(BinarySerializer serializer) {
@@ -816,8 +779,7 @@ class NativeEventMemoryCorrected extends NativeEvent {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is NativeEventMemoryCorrected
-      && value == other.value;
+    return other is NativeEventMemoryCorrected && value == other.value;
   }
 
   @override
@@ -828,9 +790,10 @@ class NativeEventMemoryCorrected extends NativeEvent {
     String? fullString;
 
     assert(() {
-      fullString = '$runtimeType('
-        'value: $value'
-        ')';
+      fullString =
+          '$runtimeType('
+          'value: $value'
+          ')';
       return true;
     }());
 
@@ -840,9 +803,7 @@ class NativeEventMemoryCorrected extends NativeEvent {
 
 @immutable
 class NativeEventMemorySourceDeleted extends NativeEvent {
-  const NativeEventMemorySourceDeleted({
-    required this.value,
-  }) : super();
+  const NativeEventMemorySourceDeleted({required this.value}) : super();
 
   static NativeEventMemorySourceDeleted load(BinaryDeserializer deserializer) {
     deserializer.increaseContainerDepth();
@@ -855,12 +816,8 @@ class NativeEventMemorySourceDeleted extends NativeEvent {
 
   final MemorySourceDeleted value;
 
-  NativeEventMemorySourceDeleted copyWith({
-    MemorySourceDeleted? value,
-  }) {
-    return NativeEventMemorySourceDeleted(
-      value: value ?? this.value,
-    );
+  NativeEventMemorySourceDeleted copyWith({MemorySourceDeleted? value}) {
+    return NativeEventMemorySourceDeleted(value: value ?? this.value);
   }
 
   void serialize(BinarySerializer serializer) {
@@ -875,8 +832,7 @@ class NativeEventMemorySourceDeleted extends NativeEvent {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is NativeEventMemorySourceDeleted
-      && value == other.value;
+    return other is NativeEventMemorySourceDeleted && value == other.value;
   }
 
   @override
@@ -887,9 +843,10 @@ class NativeEventMemorySourceDeleted extends NativeEvent {
     String? fullString;
 
     assert(() {
-      fullString = '$runtimeType('
-        'value: $value'
-        ')';
+      fullString =
+          '$runtimeType('
+          'value: $value'
+          ')';
       return true;
     }());
 
@@ -899,9 +856,7 @@ class NativeEventMemorySourceDeleted extends NativeEvent {
 
 @immutable
 class NativeEventMemoryExported extends NativeEvent {
-  const NativeEventMemoryExported({
-    required this.value,
-  }) : super();
+  const NativeEventMemoryExported({required this.value}) : super();
 
   static NativeEventMemoryExported load(BinaryDeserializer deserializer) {
     deserializer.increaseContainerDepth();
@@ -914,12 +869,8 @@ class NativeEventMemoryExported extends NativeEvent {
 
   final MemoryExported value;
 
-  NativeEventMemoryExported copyWith({
-    MemoryExported? value,
-  }) {
-    return NativeEventMemoryExported(
-      value: value ?? this.value,
-    );
+  NativeEventMemoryExported copyWith({MemoryExported? value}) {
+    return NativeEventMemoryExported(value: value ?? this.value);
   }
 
   void serialize(BinarySerializer serializer) {
@@ -934,8 +885,7 @@ class NativeEventMemoryExported extends NativeEvent {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is NativeEventMemoryExported
-      && value == other.value;
+    return other is NativeEventMemoryExported && value == other.value;
   }
 
   @override
@@ -946,9 +896,10 @@ class NativeEventMemoryExported extends NativeEvent {
     String? fullString;
 
     assert(() {
-      fullString = '$runtimeType('
-        'value: $value'
-        ')';
+      fullString =
+          '$runtimeType('
+          'value: $value'
+          ')';
       return true;
     }());
 
@@ -958,9 +909,7 @@ class NativeEventMemoryExported extends NativeEvent {
 
 @immutable
 class NativeEventMemoryApplied extends NativeEvent {
-  const NativeEventMemoryApplied({
-    required this.value,
-  }) : super();
+  const NativeEventMemoryApplied({required this.value}) : super();
 
   static NativeEventMemoryApplied load(BinaryDeserializer deserializer) {
     deserializer.increaseContainerDepth();
@@ -973,12 +922,8 @@ class NativeEventMemoryApplied extends NativeEvent {
 
   final MemoryApplied value;
 
-  NativeEventMemoryApplied copyWith({
-    MemoryApplied? value,
-  }) {
-    return NativeEventMemoryApplied(
-      value: value ?? this.value,
-    );
+  NativeEventMemoryApplied copyWith({MemoryApplied? value}) {
+    return NativeEventMemoryApplied(value: value ?? this.value);
   }
 
   void serialize(BinarySerializer serializer) {
@@ -993,8 +938,7 @@ class NativeEventMemoryApplied extends NativeEvent {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is NativeEventMemoryApplied
-      && value == other.value;
+    return other is NativeEventMemoryApplied && value == other.value;
   }
 
   @override
@@ -1005,9 +949,10 @@ class NativeEventMemoryApplied extends NativeEvent {
     String? fullString;
 
     assert(() {
-      fullString = '$runtimeType('
-        'value: $value'
-        ')';
+      fullString =
+          '$runtimeType('
+          'value: $value'
+          ')';
       return true;
     }());
 
@@ -1017,9 +962,7 @@ class NativeEventMemoryApplied extends NativeEvent {
 
 @immutable
 class NativeEventMemoryItems extends NativeEvent {
-  const NativeEventMemoryItems({
-    required this.value,
-  }) : super();
+  const NativeEventMemoryItems({required this.value}) : super();
 
   static NativeEventMemoryItems load(BinaryDeserializer deserializer) {
     deserializer.increaseContainerDepth();
@@ -1032,12 +975,8 @@ class NativeEventMemoryItems extends NativeEvent {
 
   final MemoryItems value;
 
-  NativeEventMemoryItems copyWith({
-    MemoryItems? value,
-  }) {
-    return NativeEventMemoryItems(
-      value: value ?? this.value,
-    );
+  NativeEventMemoryItems copyWith({MemoryItems? value}) {
+    return NativeEventMemoryItems(value: value ?? this.value);
   }
 
   void serialize(BinarySerializer serializer) {
@@ -1052,8 +991,7 @@ class NativeEventMemoryItems extends NativeEvent {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is NativeEventMemoryItems
-      && value == other.value;
+    return other is NativeEventMemoryItems && value == other.value;
   }
 
   @override
@@ -1064,9 +1002,10 @@ class NativeEventMemoryItems extends NativeEvent {
     String? fullString;
 
     assert(() {
-      fullString = '$runtimeType('
-        'value: $value'
-        ')';
+      fullString =
+          '$runtimeType('
+          'value: $value'
+          ')';
       return true;
     }());
 
@@ -1076,11 +1015,11 @@ class NativeEventMemoryItems extends NativeEvent {
 
 @immutable
 class NativeEventOnboardingScanCompleted extends NativeEvent {
-  const NativeEventOnboardingScanCompleted({
-    required this.value,
-  }) : super();
+  const NativeEventOnboardingScanCompleted({required this.value}) : super();
 
-  static NativeEventOnboardingScanCompleted load(BinaryDeserializer deserializer) {
+  static NativeEventOnboardingScanCompleted load(
+    BinaryDeserializer deserializer,
+  ) {
     deserializer.increaseContainerDepth();
     final instance = NativeEventOnboardingScanCompleted(
       value: OnboardingScanCompleted.deserialize(deserializer),
@@ -1094,9 +1033,7 @@ class NativeEventOnboardingScanCompleted extends NativeEvent {
   NativeEventOnboardingScanCompleted copyWith({
     OnboardingScanCompleted? value,
   }) {
-    return NativeEventOnboardingScanCompleted(
-      value: value ?? this.value,
-    );
+    return NativeEventOnboardingScanCompleted(value: value ?? this.value);
   }
 
   void serialize(BinarySerializer serializer) {
@@ -1111,8 +1048,7 @@ class NativeEventOnboardingScanCompleted extends NativeEvent {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is NativeEventOnboardingScanCompleted
-      && value == other.value;
+    return other is NativeEventOnboardingScanCompleted && value == other.value;
   }
 
   @override
@@ -1123,9 +1059,10 @@ class NativeEventOnboardingScanCompleted extends NativeEvent {
     String? fullString;
 
     assert(() {
-      fullString = '$runtimeType('
-        'value: $value'
-        ')';
+      fullString =
+          '$runtimeType('
+          'value: $value'
+          ')';
       return true;
     }());
 
@@ -1135,9 +1072,7 @@ class NativeEventOnboardingScanCompleted extends NativeEvent {
 
 @immutable
 class NativeEventLiveVoiceState extends NativeEvent {
-  const NativeEventLiveVoiceState({
-    required this.value,
-  }) : super();
+  const NativeEventLiveVoiceState({required this.value}) : super();
 
   static NativeEventLiveVoiceState load(BinaryDeserializer deserializer) {
     deserializer.increaseContainerDepth();
@@ -1150,12 +1085,8 @@ class NativeEventLiveVoiceState extends NativeEvent {
 
   final LiveVoiceState value;
 
-  NativeEventLiveVoiceState copyWith({
-    LiveVoiceState? value,
-  }) {
-    return NativeEventLiveVoiceState(
-      value: value ?? this.value,
-    );
+  NativeEventLiveVoiceState copyWith({LiveVoiceState? value}) {
+    return NativeEventLiveVoiceState(value: value ?? this.value);
   }
 
   void serialize(BinarySerializer serializer) {
@@ -1170,8 +1101,7 @@ class NativeEventLiveVoiceState extends NativeEvent {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is NativeEventLiveVoiceState
-      && value == other.value;
+    return other is NativeEventLiveVoiceState && value == other.value;
   }
 
   @override
@@ -1182,9 +1112,10 @@ class NativeEventLiveVoiceState extends NativeEvent {
     String? fullString;
 
     assert(() {
-      fullString = '$runtimeType('
-        'value: $value'
-        ')';
+      fullString =
+          '$runtimeType('
+          'value: $value'
+          ')';
       return true;
     }());
 
@@ -1194,9 +1125,7 @@ class NativeEventLiveVoiceState extends NativeEvent {
 
 @immutable
 class NativeEventLiveVoiceTranscript extends NativeEvent {
-  const NativeEventLiveVoiceTranscript({
-    required this.value,
-  }) : super();
+  const NativeEventLiveVoiceTranscript({required this.value}) : super();
 
   static NativeEventLiveVoiceTranscript load(BinaryDeserializer deserializer) {
     deserializer.increaseContainerDepth();
@@ -1209,12 +1138,8 @@ class NativeEventLiveVoiceTranscript extends NativeEvent {
 
   final LiveVoiceTranscript value;
 
-  NativeEventLiveVoiceTranscript copyWith({
-    LiveVoiceTranscript? value,
-  }) {
-    return NativeEventLiveVoiceTranscript(
-      value: value ?? this.value,
-    );
+  NativeEventLiveVoiceTranscript copyWith({LiveVoiceTranscript? value}) {
+    return NativeEventLiveVoiceTranscript(value: value ?? this.value);
   }
 
   void serialize(BinarySerializer serializer) {
@@ -1229,8 +1154,7 @@ class NativeEventLiveVoiceTranscript extends NativeEvent {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is NativeEventLiveVoiceTranscript
-      && value == other.value;
+    return other is NativeEventLiveVoiceTranscript && value == other.value;
   }
 
   @override
@@ -1241,9 +1165,10 @@ class NativeEventLiveVoiceTranscript extends NativeEvent {
     String? fullString;
 
     assert(() {
-      fullString = '$runtimeType('
-        'value: $value'
-        ')';
+      fullString =
+          '$runtimeType('
+          'value: $value'
+          ')';
       return true;
     }());
 
@@ -1253,9 +1178,7 @@ class NativeEventLiveVoiceTranscript extends NativeEvent {
 
 @immutable
 class NativeEventLiveVoiceAudio extends NativeEvent {
-  const NativeEventLiveVoiceAudio({
-    required this.value,
-  }) : super();
+  const NativeEventLiveVoiceAudio({required this.value}) : super();
 
   static NativeEventLiveVoiceAudio load(BinaryDeserializer deserializer) {
     deserializer.increaseContainerDepth();
@@ -1268,12 +1191,8 @@ class NativeEventLiveVoiceAudio extends NativeEvent {
 
   final LiveVoiceAudio value;
 
-  NativeEventLiveVoiceAudio copyWith({
-    LiveVoiceAudio? value,
-  }) {
-    return NativeEventLiveVoiceAudio(
-      value: value ?? this.value,
-    );
+  NativeEventLiveVoiceAudio copyWith({LiveVoiceAudio? value}) {
+    return NativeEventLiveVoiceAudio(value: value ?? this.value);
   }
 
   void serialize(BinarySerializer serializer) {
@@ -1288,8 +1207,7 @@ class NativeEventLiveVoiceAudio extends NativeEvent {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is NativeEventLiveVoiceAudio
-      && value == other.value;
+    return other is NativeEventLiveVoiceAudio && value == other.value;
   }
 
   @override
@@ -1300,9 +1218,10 @@ class NativeEventLiveVoiceAudio extends NativeEvent {
     String? fullString;
 
     assert(() {
-      fullString = '$runtimeType('
-        'value: $value'
-        ')';
+      fullString =
+          '$runtimeType('
+          'value: $value'
+          ')';
       return true;
     }());
 
@@ -1312,9 +1231,7 @@ class NativeEventLiveVoiceAudio extends NativeEvent {
 
 @immutable
 class NativeEventMeetingStateChanged extends NativeEvent {
-  const NativeEventMeetingStateChanged({
-    required this.value,
-  }) : super();
+  const NativeEventMeetingStateChanged({required this.value}) : super();
 
   static NativeEventMeetingStateChanged load(BinaryDeserializer deserializer) {
     deserializer.increaseContainerDepth();
@@ -1327,12 +1244,8 @@ class NativeEventMeetingStateChanged extends NativeEvent {
 
   final MeetingStateChanged value;
 
-  NativeEventMeetingStateChanged copyWith({
-    MeetingStateChanged? value,
-  }) {
-    return NativeEventMeetingStateChanged(
-      value: value ?? this.value,
-    );
+  NativeEventMeetingStateChanged copyWith({MeetingStateChanged? value}) {
+    return NativeEventMeetingStateChanged(value: value ?? this.value);
   }
 
   void serialize(BinarySerializer serializer) {
@@ -1347,8 +1260,7 @@ class NativeEventMeetingStateChanged extends NativeEvent {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is NativeEventMeetingStateChanged
-      && value == other.value;
+    return other is NativeEventMeetingStateChanged && value == other.value;
   }
 
   @override
@@ -1359,9 +1271,10 @@ class NativeEventMeetingStateChanged extends NativeEvent {
     String? fullString;
 
     assert(() {
-      fullString = '$runtimeType('
-        'value: $value'
-        ')';
+      fullString =
+          '$runtimeType('
+          'value: $value'
+          ')';
       return true;
     }());
 
@@ -1371,9 +1284,7 @@ class NativeEventMeetingStateChanged extends NativeEvent {
 
 @immutable
 class NativeEventMeetingInsight extends NativeEvent {
-  const NativeEventMeetingInsight({
-    required this.value,
-  }) : super();
+  const NativeEventMeetingInsight({required this.value}) : super();
 
   static NativeEventMeetingInsight load(BinaryDeserializer deserializer) {
     deserializer.increaseContainerDepth();
@@ -1386,12 +1297,8 @@ class NativeEventMeetingInsight extends NativeEvent {
 
   final MeetingInsight value;
 
-  NativeEventMeetingInsight copyWith({
-    MeetingInsight? value,
-  }) {
-    return NativeEventMeetingInsight(
-      value: value ?? this.value,
-    );
+  NativeEventMeetingInsight copyWith({MeetingInsight? value}) {
+    return NativeEventMeetingInsight(value: value ?? this.value);
   }
 
   void serialize(BinarySerializer serializer) {
@@ -1406,8 +1313,7 @@ class NativeEventMeetingInsight extends NativeEvent {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is NativeEventMeetingInsight
-      && value == other.value;
+    return other is NativeEventMeetingInsight && value == other.value;
   }
 
   @override
@@ -1418,9 +1324,10 @@ class NativeEventMeetingInsight extends NativeEvent {
     String? fullString;
 
     assert(() {
-      fullString = '$runtimeType('
-        'value: $value'
-        ')';
+      fullString =
+          '$runtimeType('
+          'value: $value'
+          ')';
       return true;
     }());
 
@@ -1430,11 +1337,11 @@ class NativeEventMeetingInsight extends NativeEvent {
 
 @immutable
 class NativeEventMeetingTranscriptTurn extends NativeEvent {
-  const NativeEventMeetingTranscriptTurn({
-    required this.value,
-  }) : super();
+  const NativeEventMeetingTranscriptTurn({required this.value}) : super();
 
-  static NativeEventMeetingTranscriptTurn load(BinaryDeserializer deserializer) {
+  static NativeEventMeetingTranscriptTurn load(
+    BinaryDeserializer deserializer,
+  ) {
     deserializer.increaseContainerDepth();
     final instance = NativeEventMeetingTranscriptTurn(
       value: MeetingTranscriptTurn.deserialize(deserializer),
@@ -1445,12 +1352,8 @@ class NativeEventMeetingTranscriptTurn extends NativeEvent {
 
   final MeetingTranscriptTurn value;
 
-  NativeEventMeetingTranscriptTurn copyWith({
-    MeetingTranscriptTurn? value,
-  }) {
-    return NativeEventMeetingTranscriptTurn(
-      value: value ?? this.value,
-    );
+  NativeEventMeetingTranscriptTurn copyWith({MeetingTranscriptTurn? value}) {
+    return NativeEventMeetingTranscriptTurn(value: value ?? this.value);
   }
 
   void serialize(BinarySerializer serializer) {
@@ -1465,8 +1368,7 @@ class NativeEventMeetingTranscriptTurn extends NativeEvent {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is NativeEventMeetingTranscriptTurn
-      && value == other.value;
+    return other is NativeEventMeetingTranscriptTurn && value == other.value;
   }
 
   @override
@@ -1477,9 +1379,10 @@ class NativeEventMeetingTranscriptTurn extends NativeEvent {
     String? fullString;
 
     assert(() {
-      fullString = '$runtimeType('
-        'value: $value'
-        ')';
+      fullString =
+          '$runtimeType('
+          'value: $value'
+          ')';
       return true;
     }());
 
@@ -1489,9 +1392,7 @@ class NativeEventMeetingTranscriptTurn extends NativeEvent {
 
 @immutable
 class NativeEventMeetingCompleted extends NativeEvent {
-  const NativeEventMeetingCompleted({
-    required this.value,
-  }) : super();
+  const NativeEventMeetingCompleted({required this.value}) : super();
 
   static NativeEventMeetingCompleted load(BinaryDeserializer deserializer) {
     deserializer.increaseContainerDepth();
@@ -1504,12 +1405,8 @@ class NativeEventMeetingCompleted extends NativeEvent {
 
   final MeetingCompleted value;
 
-  NativeEventMeetingCompleted copyWith({
-    MeetingCompleted? value,
-  }) {
-    return NativeEventMeetingCompleted(
-      value: value ?? this.value,
-    );
+  NativeEventMeetingCompleted copyWith({MeetingCompleted? value}) {
+    return NativeEventMeetingCompleted(value: value ?? this.value);
   }
 
   void serialize(BinarySerializer serializer) {
@@ -1524,8 +1421,7 @@ class NativeEventMeetingCompleted extends NativeEvent {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is NativeEventMeetingCompleted
-      && value == other.value;
+    return other is NativeEventMeetingCompleted && value == other.value;
   }
 
   @override
@@ -1536,9 +1432,10 @@ class NativeEventMeetingCompleted extends NativeEvent {
     String? fullString;
 
     assert(() {
-      fullString = '$runtimeType('
-        'value: $value'
-        ')';
+      fullString =
+          '$runtimeType('
+          'value: $value'
+          ')';
       return true;
     }());
 
@@ -1548,9 +1445,7 @@ class NativeEventMeetingCompleted extends NativeEvent {
 
 @immutable
 class NativeEventBriefComposed extends NativeEvent {
-  const NativeEventBriefComposed({
-    required this.value,
-  }) : super();
+  const NativeEventBriefComposed({required this.value}) : super();
 
   static NativeEventBriefComposed load(BinaryDeserializer deserializer) {
     deserializer.increaseContainerDepth();
@@ -1563,12 +1458,8 @@ class NativeEventBriefComposed extends NativeEvent {
 
   final BriefComposed value;
 
-  NativeEventBriefComposed copyWith({
-    BriefComposed? value,
-  }) {
-    return NativeEventBriefComposed(
-      value: value ?? this.value,
-    );
+  NativeEventBriefComposed copyWith({BriefComposed? value}) {
+    return NativeEventBriefComposed(value: value ?? this.value);
   }
 
   void serialize(BinarySerializer serializer) {
@@ -1583,8 +1474,7 @@ class NativeEventBriefComposed extends NativeEvent {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is NativeEventBriefComposed
-      && value == other.value;
+    return other is NativeEventBriefComposed && value == other.value;
   }
 
   @override
@@ -1595,9 +1485,10 @@ class NativeEventBriefComposed extends NativeEvent {
     String? fullString;
 
     assert(() {
-      fullString = '$runtimeType('
-        'value: $value'
-        ')';
+      fullString =
+          '$runtimeType('
+          'value: $value'
+          ')';
       return true;
     }());
 
@@ -1607,9 +1498,7 @@ class NativeEventBriefComposed extends NativeEvent {
 
 @immutable
 class NativeEventCallState extends NativeEvent {
-  const NativeEventCallState({
-    required this.value,
-  }) : super();
+  const NativeEventCallState({required this.value}) : super();
 
   static NativeEventCallState load(BinaryDeserializer deserializer) {
     deserializer.increaseContainerDepth();
@@ -1622,12 +1511,8 @@ class NativeEventCallState extends NativeEvent {
 
   final CallState value;
 
-  NativeEventCallState copyWith({
-    CallState? value,
-  }) {
-    return NativeEventCallState(
-      value: value ?? this.value,
-    );
+  NativeEventCallState copyWith({CallState? value}) {
+    return NativeEventCallState(value: value ?? this.value);
   }
 
   void serialize(BinarySerializer serializer) {
@@ -1642,8 +1527,7 @@ class NativeEventCallState extends NativeEvent {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is NativeEventCallState
-      && value == other.value;
+    return other is NativeEventCallState && value == other.value;
   }
 
   @override
@@ -1654,9 +1538,10 @@ class NativeEventCallState extends NativeEvent {
     String? fullString;
 
     assert(() {
-      fullString = '$runtimeType('
-        'value: $value'
-        ')';
+      fullString =
+          '$runtimeType('
+          'value: $value'
+          ')';
       return true;
     }());
 
@@ -1666,9 +1551,7 @@ class NativeEventCallState extends NativeEvent {
 
 @immutable
 class NativeEventDevAssistantResolved extends NativeEvent {
-  const NativeEventDevAssistantResolved({
-    required this.value,
-  }) : super();
+  const NativeEventDevAssistantResolved({required this.value}) : super();
 
   static NativeEventDevAssistantResolved load(BinaryDeserializer deserializer) {
     deserializer.increaseContainerDepth();
@@ -1681,12 +1564,8 @@ class NativeEventDevAssistantResolved extends NativeEvent {
 
   final DevAssistant value;
 
-  NativeEventDevAssistantResolved copyWith({
-    DevAssistant? value,
-  }) {
-    return NativeEventDevAssistantResolved(
-      value: value ?? this.value,
-    );
+  NativeEventDevAssistantResolved copyWith({DevAssistant? value}) {
+    return NativeEventDevAssistantResolved(value: value ?? this.value);
   }
 
   void serialize(BinarySerializer serializer) {
@@ -1701,8 +1580,7 @@ class NativeEventDevAssistantResolved extends NativeEvent {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is NativeEventDevAssistantResolved
-      && value == other.value;
+    return other is NativeEventDevAssistantResolved && value == other.value;
   }
 
   @override
@@ -1713,9 +1591,10 @@ class NativeEventDevAssistantResolved extends NativeEvent {
     String? fullString;
 
     assert(() {
-      fullString = '$runtimeType('
-        'value: $value'
-        ')';
+      fullString =
+          '$runtimeType('
+          'value: $value'
+          ')';
       return true;
     }());
 

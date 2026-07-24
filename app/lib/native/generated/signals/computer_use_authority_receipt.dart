@@ -1,7 +1,6 @@
 // ignore_for_file: type=lint, type=warning
 part of 'signals.dart';
 
-
 @immutable
 class ComputerUseAuthorityReceipt {
   const ComputerUseAuthorityReceipt({
@@ -20,7 +19,9 @@ class ComputerUseAuthorityReceipt {
     required this.expiresAtMs,
   });
 
-  static ComputerUseAuthorityReceipt deserialize(BinaryDeserializer deserializer) {
+  static ComputerUseAuthorityReceipt deserialize(
+    BinaryDeserializer deserializer,
+  ) {
     deserializer.increaseContainerDepth();
     final instance = ComputerUseAuthorityReceipt(
       version: deserializer.deserializeString(),
@@ -115,9 +116,9 @@ class ComputerUseAuthorityReceipt {
   }
 
   Uint8List bincodeSerialize() {
-      final serializer = BincodeSerializer();
-      serialize(serializer);
-      return serializer.bytes;
+    final serializer = BincodeSerializer();
+    serialize(serializer);
+    return serializer.bytes;
   }
 
   @override
@@ -125,59 +126,60 @@ class ComputerUseAuthorityReceipt {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is ComputerUseAuthorityReceipt
-      && version == other.version
-      && executionId == other.executionId
-      && receiptId == other.receiptId
-      && receiptToken == other.receiptToken
-      && firebaseToken == other.firebaseToken
-      && subject == other.subject
-      && policyGeneration == other.policyGeneration
-      && operationId == other.operationId
-      && proposalId == other.proposalId
-      && actionHash == other.actionHash
-      && risk == other.risk
-      && issuedAtMs == other.issuedAtMs
-      && expiresAtMs == other.expiresAtMs;
+    return other is ComputerUseAuthorityReceipt &&
+        version == other.version &&
+        executionId == other.executionId &&
+        receiptId == other.receiptId &&
+        receiptToken == other.receiptToken &&
+        firebaseToken == other.firebaseToken &&
+        subject == other.subject &&
+        policyGeneration == other.policyGeneration &&
+        operationId == other.operationId &&
+        proposalId == other.proposalId &&
+        actionHash == other.actionHash &&
+        risk == other.risk &&
+        issuedAtMs == other.issuedAtMs &&
+        expiresAtMs == other.expiresAtMs;
   }
 
   @override
   int get hashCode => Object.hash(
-        version,
-        executionId,
-        receiptId,
-        receiptToken,
-        firebaseToken,
-        subject,
-        policyGeneration,
-        operationId,
-        proposalId,
-        actionHash,
-        risk,
-        issuedAtMs,
-        expiresAtMs,
-      );
+    version,
+    executionId,
+    receiptId,
+    receiptToken,
+    firebaseToken,
+    subject,
+    policyGeneration,
+    operationId,
+    proposalId,
+    actionHash,
+    risk,
+    issuedAtMs,
+    expiresAtMs,
+  );
 
   @override
   String toString() {
     String? fullString;
 
     assert(() {
-      fullString = '$runtimeType('
-        'version: $version, '
-        'executionId: $executionId, '
-        'receiptId: $receiptId, '
-        'receiptToken: $receiptToken, '
-        'firebaseToken: $firebaseToken, '
-        'subject: $subject, '
-        'policyGeneration: $policyGeneration, '
-        'operationId: $operationId, '
-        'proposalId: $proposalId, '
-        'actionHash: $actionHash, '
-        'risk: $risk, '
-        'issuedAtMs: $issuedAtMs, '
-        'expiresAtMs: $expiresAtMs'
-        ')';
+      fullString =
+          '$runtimeType('
+          'version: $version, '
+          'executionId: $executionId, '
+          'receiptId: $receiptId, '
+          'receiptToken: [REDACTED], '
+          'firebaseToken: [REDACTED], '
+          'subject: [REDACTED], '
+          'policyGeneration: $policyGeneration, '
+          'operationId: $operationId, '
+          'proposalId: $proposalId, '
+          'actionHash: $actionHash, '
+          'risk: $risk, '
+          'issuedAtMs: $issuedAtMs, '
+          'expiresAtMs: $expiresAtMs'
+          ')';
       return true;
     }());
 

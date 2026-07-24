@@ -1,7 +1,6 @@
 // ignore_for_file: type=lint, type=warning
 part of 'signals.dart';
 
-
 @immutable
 class MemoryCaptured {
   const MemoryCaptured({
@@ -55,9 +54,9 @@ class MemoryCaptured {
   }
 
   Uint8List bincodeSerialize() {
-      final serializer = BincodeSerializer();
-      serialize(serializer);
-      return serializer.bytes;
+    final serializer = BincodeSerializer();
+    serialize(serializer);
+    return serializer.bytes;
   }
 
   @override
@@ -65,29 +64,26 @@ class MemoryCaptured {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is MemoryCaptured
-      && requestId == other.requestId
-      && sourceId == other.sourceId
-      && evidenceId == other.evidenceId;
+    return other is MemoryCaptured &&
+        requestId == other.requestId &&
+        sourceId == other.sourceId &&
+        evidenceId == other.evidenceId;
   }
 
   @override
-  int get hashCode => Object.hash(
-        requestId,
-        sourceId,
-        evidenceId,
-      );
+  int get hashCode => Object.hash(requestId, sourceId, evidenceId);
 
   @override
   String toString() {
     String? fullString;
 
     assert(() {
-      fullString = '$runtimeType('
-        'requestId: $requestId, '
-        'sourceId: $sourceId, '
-        'evidenceId: $evidenceId'
-        ')';
+      fullString =
+          '$runtimeType('
+          'requestId: $requestId, '
+          'sourceId: $sourceId, '
+          'evidenceId: $evidenceId'
+          ')';
       return true;
     }());
 

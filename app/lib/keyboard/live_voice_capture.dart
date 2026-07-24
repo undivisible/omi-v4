@@ -14,6 +14,8 @@ final class LiveVoiceCapture {
     this._stopAudio,
     this._disposeAudio,
     this.permissionCheck,
+    this.sessionContextRefresher,
+    this.contextRefreshInterval = const Duration(seconds: 90),
     this.startTimeout = const Duration(seconds: 12),
     this.stopTimeout = const Duration(seconds: 5),
     this.playbackHangover = const Duration(milliseconds: 320),
@@ -26,6 +28,11 @@ final class LiveVoiceCapture {
   final NativeHub hub;
   final Duration startTimeout;
   final Duration stopTimeout;
+  final Duration contextRefreshInterval;
+
+  /// Optional mid-session / resume AX refresher injected from AppServices so
+  /// this keyboard layer never imports features/.
+  final Future<String?> Function()? sessionContextRefresher;
 
   /// How long after the assistant's playback drains the microphone stays
   /// muted, covering the utterance tail and room reverb the mic would
@@ -56,6 +63,8 @@ final class LiveVoiceCapture {
   bool _echoCancelled = false;
   String? _ephemeralToken;
   String? _model;
+  String? _sessionContext;
+  Timer? _contextRefreshTimer;
   final level = ValueNotifier<double>(0);
 
   /// Running transcript of what the assistant said aloud, surfaced so the
@@ -95,6 +104,7 @@ final class LiveVoiceCapture {
     final generation = ++_generation;
     _ephemeralToken = ephemeralToken;
     _model = model;
+    _sessionContext = sessionContext;
     assistantTranscript.value = '';
     userTranscript.value = '';
     final streamId =
@@ -117,6 +127,7 @@ final class LiveVoiceCapture {
         ),
       ]).timeout(startTimeout);
       if (_session != session || generation != _generation) return;
+      _startContextRefresh(session.streamId);
       final audio = await _startMicrophone();
       if (_session != session || generation != _generation) {
         await (_stopAudio?.call() ?? _recorder!.stop().then((_) {}));
@@ -343,12 +354,15 @@ final class LiveVoiceCapture {
     _session = session;
     session.events = hub.events.listen((event) => _handleEvent(session, event));
     try {
+      final context = await _freshSessionContext() ?? _sessionContext;
+      _sessionContext = context;
       live.startLiveVoice(
         requestId: session.startRequestId,
         liveStreamId: session.streamId,
         ephemeralToken: token,
         model: model,
         resumptionHandle: handle,
+        sessionContext: context,
       );
       await Future.any<void>([
         session.started.future,
@@ -356,9 +370,50 @@ final class LiveVoiceCapture {
           (_) => throw StateError('Live voice resume was cancelled.'),
         ),
       ]).timeout(startTimeout);
+      if (_session == session && generation == _generation) {
+        _startContextRefresh(session.streamId);
+      }
     } catch (_) {
       await _abort(session);
     }
+  }
+
+  Future<String?> _freshSessionContext() async {
+    final refresher = sessionContextRefresher;
+    if (refresher == null) return null;
+    try {
+      final text = await refresher();
+      if (text == null || text.trim().isEmpty) return null;
+      return text;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  void _startContextRefresh(String streamId) {
+    _contextRefreshTimer?.cancel();
+    if (sessionContextRefresher == null) return;
+    _contextRefreshTimer = Timer.periodic(contextRefreshInterval, (_) {
+      unawaited(_refreshSessionContext(streamId));
+    });
+  }
+
+  Future<void> _refreshSessionContext(String streamId) async {
+    final session = _session;
+    if (session == null ||
+        session.streamId != streamId ||
+        session.stopping) {
+      return;
+    }
+    final text = await _freshSessionContext();
+    if (text == null) return;
+    if (_session?.streamId != streamId) return;
+    _sessionContext = text;
+    hub.updateLiveVoiceContext(
+      requestId: 'ctx-$streamId-${_now().microsecondsSinceEpoch}',
+      liveStreamId: streamId,
+      sessionContext: text,
+    );
   }
 
   void _playOutput(_LiveVoiceSession session, LiveVoiceAudio chunk) {
@@ -419,6 +474,10 @@ final class LiveVoiceCapture {
 
   Future<void> _release(_LiveVoiceSession session) async {
     if (!session.cancelled.isCompleted) session.cancelled.complete();
+    if (_session == session) {
+      _contextRefreshTimer?.cancel();
+      _contextRefreshTimer = null;
+    }
     await (session.playoutOps = session.playoutOps.then(
       (_) => session.playout.stop(),
     ));

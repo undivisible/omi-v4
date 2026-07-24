@@ -1,7 +1,6 @@
 // ignore_for_file: type=lint, type=warning
 part of 'signals.dart';
 
-
 @immutable
 class AudioChunk {
   const AudioChunk({
@@ -73,9 +72,9 @@ class AudioChunk {
   }
 
   Uint8List bincodeSerialize() {
-      final serializer = BincodeSerializer();
-      serialize(serializer);
-      return serializer.bytes;
+    final serializer = BincodeSerializer();
+    serialize(serializer);
+    return serializer.bytes;
   }
 
   @override
@@ -83,38 +82,39 @@ class AudioChunk {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is AudioChunk
-      && requestId == other.requestId
-      && sequence == other.sequence
-      && sampleRateHz == other.sampleRateHz
-      && channels == other.channels
-      && encoding == other.encoding
-      && endOfStream == other.endOfStream;
+    return other is AudioChunk &&
+        requestId == other.requestId &&
+        sequence == other.sequence &&
+        sampleRateHz == other.sampleRateHz &&
+        channels == other.channels &&
+        encoding == other.encoding &&
+        endOfStream == other.endOfStream;
   }
 
   @override
   int get hashCode => Object.hash(
-        requestId,
-        sequence,
-        sampleRateHz,
-        channels,
-        encoding,
-        endOfStream,
-      );
+    requestId,
+    sequence,
+    sampleRateHz,
+    channels,
+    encoding,
+    endOfStream,
+  );
 
   @override
   String toString() {
     String? fullString;
 
     assert(() {
-      fullString = '$runtimeType('
-        'requestId: $requestId, '
-        'sequence: $sequence, '
-        'sampleRateHz: $sampleRateHz, '
-        'channels: $channels, '
-        'encoding: $encoding, '
-        'endOfStream: $endOfStream'
-        ')';
+      fullString =
+          '$runtimeType('
+          'requestId: $requestId, '
+          'sequence: $sequence, '
+          'sampleRateHz: $sampleRateHz, '
+          'channels: $channels, '
+          'encoding: $encoding, '
+          'endOfStream: $endOfStream'
+          ')';
       return true;
     }());
 
@@ -128,10 +128,6 @@ extension AudioChunkDartSignalExt on AudioChunk {
   /// because Rust cannot own data managed by Dart's garbage collector.
   void sendSignalToRust(Uint8List binary) {
     final messageBytes = bincodeSerialize();
-    sendDartSignal(
-      'rinf_send_dart_signal_audio_chunk',
-      messageBytes,
-      binary,
-    );
+    sendDartSignal('rinf_send_dart_signal_audio_chunk', messageBytes, binary);
   }
 }

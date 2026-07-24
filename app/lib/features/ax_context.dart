@@ -52,6 +52,57 @@ final class AxContextSnapshot {
 
   static bool _blank(String? value) => value == null || value.isEmpty;
 
+  static String _clampText(String text, int max) =>
+      text.length <= max ? text : '${text.substring(0, max).trimRight()}…';
+
+  static String _collapseLine(String text, int max) =>
+      _clampText(text.replaceAll(RegExp(r'\s+'), ' ').trim(), max);
+
+  /// Labeled AX sections shared by overlay chat and Live voice context
+  /// injection. Omitted when empty; secure fields contribute no written text.
+  List<String> promptSections({bool includeWritten = true}) {
+    final sections = <String>[];
+    if (appName case final app? when app.isNotEmpty) {
+      final bundle = bundleId;
+      sections.add(
+        'App: $app${bundle != null && bundle.isNotEmpty ? ' ($bundle)' : ''}',
+      );
+    }
+    if (windowTitle case final title? when title.isNotEmpty) {
+      sections.add('Window: ${_collapseLine(title, 200)}');
+    }
+    if (includeWritten) {
+      if (focusedText case final written? when written.isNotEmpty) {
+        sections.add(
+          'What I have already written:\n"""\n${_clampText(written, 2000)}\n"""',
+        );
+      }
+    }
+    if (selectedText case final selected? when selected.isNotEmpty) {
+      sections.add(
+        'Currently selected:\n"""\n${_clampText(selected, 1000)}\n"""',
+      );
+    }
+    if (surrounding case final around? when around.isNotEmpty) {
+      final marker = truncated ? '\n… (truncated)' : '';
+      sections.add(
+        'On screen:\n"""\n${_clampText(around, 4000)}$marker\n"""',
+      );
+    }
+    return sections;
+  }
+
+  /// Frames this snapshot for Live/overlay injection under [question].
+  /// Returns null when there is nothing on hand worth sending.
+  String? asSessionContextPrompt(String question) {
+    final sections = promptSections();
+    if (sections.isEmpty) return null;
+    return '$question\n\n'
+        '--- Context (a read-only snapshot of what I am looking at right now; '
+        'use it to answer, do not repeat it back verbatim) ---\n'
+        '${sections.join('\n\n')}';
+  }
+
   /// Serializes back to the native map shape, so the primary engine can relay
   /// a snapshot it read to the pill panel's own engine (which cannot reach the
   /// `omi/ax_context` channel directly). Round-trips through [fromMap].
@@ -111,4 +162,11 @@ abstract final class AxContext {
       return const AxContextSnapshot(reason: 'channel_error');
     }
   }
+}
+
+/// Mid-session Live AX refresh: fresh snapshot framed like overlay voice start.
+Future<String?> refreshLiveVoiceSessionContext() async {
+  final ax = await AxContext.snapshot();
+  if (ax.isEmpty) return null;
+  return ax.asSessionContextPrompt('Updated screen context:');
 }

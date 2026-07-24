@@ -1,13 +1,9 @@
 // ignore_for_file: type=lint, type=warning
 part of 'signals.dart';
 
-
 @immutable
 class ComputerUsePermission {
-  const ComputerUsePermission({
-    required this.name,
-    required this.granted,
-  });
+  const ComputerUsePermission({required this.name, required this.granted});
 
   static ComputerUsePermission deserialize(BinaryDeserializer deserializer) {
     deserializer.increaseContainerDepth();
@@ -31,10 +27,7 @@ class ComputerUsePermission {
   final String name;
   final bool granted;
 
-  ComputerUsePermission copyWith({
-    String? name,
-    bool? granted,
-  }) {
+  ComputerUsePermission copyWith({String? name, bool? granted}) {
     return ComputerUsePermission(
       name: name ?? this.name,
       granted: granted ?? this.granted,
@@ -49,9 +42,9 @@ class ComputerUsePermission {
   }
 
   Uint8List bincodeSerialize() {
-      final serializer = BincodeSerializer();
-      serialize(serializer);
-      return serializer.bytes;
+    final serializer = BincodeSerializer();
+    serialize(serializer);
+    return serializer.bytes;
   }
 
   @override
@@ -59,26 +52,24 @@ class ComputerUsePermission {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is ComputerUsePermission
-      && name == other.name
-      && granted == other.granted;
+    return other is ComputerUsePermission &&
+        name == other.name &&
+        granted == other.granted;
   }
 
   @override
-  int get hashCode => Object.hash(
-        name,
-        granted,
-      );
+  int get hashCode => Object.hash(name, granted);
 
   @override
   String toString() {
     String? fullString;
 
     assert(() {
-      fullString = '$runtimeType('
-        'name: $name, '
-        'granted: $granted'
-        ')';
+      fullString =
+          '$runtimeType('
+          'name: $name, '
+          'granted: $granted'
+          ')';
       return true;
     }());
 

@@ -8,6 +8,11 @@ use crate::computer_use::{
     BoundComputerUseAction, ComputerUseError, ExecutionOutcome, PreparedComputerUseAction,
     available as computer_use_available, capabilities as computer_use_capabilities,
 };
+use crate::computer_use_tools::{
+    COMPUTER_INVOKE_TOOL, COMPUTER_SET_VALUE_TOOL, computer_use_proposal,
+    valid_computer_tool_identity,
+};
+use crate::live_voice::LiveFunctionCall;
 use crate::hosted_search::{SearchBackend, dispatch as dispatch_hosted_search};
 use crate::model_tier::{Capability, ModelTier};
 use crate::signals::{
@@ -49,9 +54,6 @@ const MAX_ACTIVE_COMMANDS: usize = 32;
 const COMPLETED_CAPTURE_CAPACITY: usize = 256;
 const PROVIDER_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const PROVIDER_EVENT_TIMEOUT: Duration = Duration::from_secs(45);
-const COMPUTER_USE_PROPOSAL_TTL_MS: i64 = 5 * 60 * 1_000;
-const COMPUTER_INVOKE_TOOL: &str = "computer_invoke";
-const COMPUTER_SET_VALUE_TOOL: &str = "computer_set_value";
 const COMPUTER_USE_RECEIPT_VERSION: &str = "omi-current-authority-v1";
 const MAX_APPROVAL_RESPONSE_BYTES: usize = 32 * 1024;
 #[cfg(test)]
@@ -626,21 +628,6 @@ struct RsAiAssistantProvider {
     computer_use_enabled: bool,
 }
 
-#[derive(serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ComputerInvokeArgs {
-    target_name: String,
-    background_only: bool,
-}
-
-#[derive(serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ComputerSetValueArgs {
-    target_name: String,
-    value: String,
-    background_only: bool,
-}
-
 fn computer_use_tools() -> Vec<ToolDefinition> {
     vec![
         ToolDefinition {
@@ -671,93 +658,6 @@ fn computer_use_tools() -> Vec<ToolDefinition> {
             examples: None,
         },
     ]
-}
-
-fn valid_computer_tool_identity(call_id: &str, tool_name: &str) -> bool {
-    !call_id.is_empty()
-        && call_id.len() <= 256
-        && call_id
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
-        && matches!(tool_name, COMPUTER_INVOKE_TOOL | COMPUTER_SET_VALUE_TOOL)
-}
-
-fn computer_use_proposal(
-    request_id: &str,
-    call_id: &str,
-    tool_name: &str,
-    arguments: serde_json::Value,
-) -> Result<ActionProposal, String> {
-    if !valid_computer_tool_identity(call_id, tool_name) {
-        return Err("assistant provider returned an invalid computer-use tool call".to_owned());
-    }
-    let (title, summary, action) = match tool_name {
-        COMPUTER_INVOKE_TOOL => {
-            let args: ComputerInvokeArgs = serde_json::from_value(arguments).map_err(|_| {
-                "assistant provider returned an invalid computer-use tool call".to_owned()
-            })?;
-            let summary = format!(
-                "Invoke {}{}",
-                args.target_name,
-                if args.background_only {
-                    " in the background"
-                } else {
-                    ""
-                }
-            );
-            let action = ComputerUseAction::Invoke {
-                target_name: args.target_name,
-                background_only: args.background_only,
-            };
-            if !crate::computer_use::valid_action(&action) {
-                return Err(
-                    "assistant provider returned an invalid computer-use tool call".to_owned(),
-                );
-            }
-            ("Invoke interface element".to_owned(), summary, action)
-        }
-        COMPUTER_SET_VALUE_TOOL => {
-            let args: ComputerSetValueArgs = serde_json::from_value(arguments).map_err(|_| {
-                "assistant provider returned an invalid computer-use tool call".to_owned()
-            })?;
-            let summary = format!(
-                "Set {} to {} bytes{}",
-                args.target_name,
-                args.value.len(),
-                if args.background_only {
-                    " in the background"
-                } else {
-                    ""
-                }
-            );
-            let action = ComputerUseAction::SetValue {
-                target_name: args.target_name,
-                value: args.value,
-                background_only: args.background_only,
-            };
-            if !crate::computer_use::valid_action(&action) {
-                return Err(
-                    "assistant provider returned an invalid computer-use tool call".to_owned(),
-                );
-            }
-            ("Set interface value".to_owned(), summary, action)
-        }
-        _ => {
-            return Err("assistant provider returned an invalid computer-use tool call".to_owned());
-        }
-    };
-    Ok(ActionProposal {
-        proposal_id: format!("{request_id}:tool:{call_id}"),
-        request_id: request_id.to_owned(),
-        title,
-        summary,
-        risk: ActionRisk::Destructive,
-        computer_action: Some(action),
-        operation_id: None,
-        action_hash: None,
-        target_provenance: None,
-        expires_at_ms: Some(unix_time_ms().saturating_add(COMPUTER_USE_PROPOSAL_TTL_MS)),
-    })
 }
 
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
@@ -1254,22 +1154,32 @@ pub struct CommandDispatcher {
     active: Arc<Mutex<HashMap<String, ActiveCommand>>>,
     assistant_provider: Arc<StdMutex<Arc<dyn AssistantProvider>>>,
     transcription: Option<mpsc::Sender<TranscriptionControl>>,
+    live_tool_calls: Option<mpsc::Receiver<crate::transcription::LiveToolCalls>>,
 }
 
 impl CommandDispatcher {
     #[cfg_attr(not(test), allow(dead_code))]
     pub fn channel() -> (mpsc::Sender<ClientCommand>, Self) {
-        Self::channel_inner(None)
+        Self::channel_inner(None, None)
     }
 
+    #[allow(dead_code)]
     pub fn channel_with_transcription(
         transcription: mpsc::Sender<TranscriptionControl>,
     ) -> (mpsc::Sender<ClientCommand>, Self) {
-        Self::channel_inner(Some(transcription))
+        Self::channel_inner(Some(transcription), None)
+    }
+
+    pub fn channel_with_transcription_and_live_tools(
+        transcription: mpsc::Sender<TranscriptionControl>,
+        live_tool_calls: mpsc::Receiver<crate::transcription::LiveToolCalls>,
+    ) -> (mpsc::Sender<ClientCommand>, Self) {
+        Self::channel_inner(Some(transcription), Some(live_tool_calls))
     }
 
     fn channel_inner(
         transcription: Option<mpsc::Sender<TranscriptionControl>>,
+        live_tool_calls: Option<mpsc::Receiver<crate::transcription::LiveToolCalls>>,
     ) -> (mpsc::Sender<ClientCommand>, Self) {
         let (sender, receiver) = mpsc::channel(COMMAND_QUEUE_CAPACITY);
         (
@@ -1280,6 +1190,7 @@ impl CommandDispatcher {
                 active: Arc::new(Mutex::new(HashMap::new())),
                 assistant_provider: Arc::new(StdMutex::new(production_assistant_provider())),
                 transcription,
+                live_tool_calls,
             },
         )
     }
@@ -1288,6 +1199,7 @@ impl CommandDispatcher {
         let mut tasks = JoinSet::new();
         let mut completed = CompletedCaptures::default();
         let mut authority_generation = 0_u64;
+        let mut live_tool_calls = self.live_tool_calls.take();
         publish_note_provider(&self.assistant_provider);
         publish_brief_provider(production_assistant_config().ok().flatten().as_ref());
         loop {
@@ -1307,6 +1219,27 @@ impl CommandDispatcher {
                         &mut completed,
                         authority_generation,
                     ).await;
+                    continue;
+                }
+                live_tools = async {
+                    match live_tool_calls.as_mut() {
+                        Some(receiver) => receiver.recv().await,
+                        None => std::future::pending().await,
+                    }
+                } => {
+                    match live_tools {
+                        Some(live_tools) => {
+                            register_live_computer_use_tool_calls(
+                                &self.state,
+                                live_tools.live_stream_id,
+                                live_tools.calls,
+                            )
+                            .await;
+                        }
+                        None => {
+                            live_tool_calls = None;
+                        }
+                    }
                     continue;
                 }
                 command = self.receiver.recv() => match command {
@@ -1455,6 +1388,38 @@ impl CommandDispatcher {
                     .send(TranscriptionControl::StopLive {
                         request_id,
                         stream_id: live_stream_id.clone(),
+                    })
+                    .await
+                    .is_err()
+                {
+                    error(
+                        None,
+                        "live_voice_unavailable",
+                        "live voice runtime stopped",
+                        false,
+                    );
+                }
+                continue;
+            }
+            if let Command::UpdateLiveVoiceContext {
+                live_stream_id,
+                session_context,
+            } = &command.command
+            {
+                let Some(transcription) = &self.transcription else {
+                    error(
+                        Some(request_id),
+                        "live_voice_unavailable",
+                        "live voice runtime is unavailable",
+                        false,
+                    );
+                    continue;
+                };
+                if transcription
+                    .send(TranscriptionControl::UpdateLiveContext {
+                        request_id,
+                        stream_id: live_stream_id.clone(),
+                        session_context: session_context.clone(),
                     })
                     .await
                     .is_err()
@@ -2433,7 +2398,8 @@ async fn execute(
         | Command::StartTranscription { .. }
         | Command::StopTranscription { .. }
         | Command::StartLiveVoice { .. }
-        | Command::StopLiveVoice { .. } => false,
+        | Command::StopLiveVoice { .. }
+        | Command::UpdateLiveVoiceContext { .. } => false,
         Command::DeviceState { .. } => {
             progress(
                 &request_id,
@@ -4071,6 +4037,142 @@ async fn claim_computer_use_receipt(
     Ok(())
 }
 
+/// Bind and register Live computer-use tool calls into the same approval
+/// registry chat uses. Gemini already received a `proposed_for_approval` /
+/// `rejected` / `unavailable` tool response on the Live socket; this path
+/// surfaces real `ActionProposal` events so Flutter can approve later.
+/// Live does not wait mid-session for that approval.
+async fn register_live_computer_use_tool_calls(
+    state: &Mutex<RuntimeState>,
+    live_stream_id: String,
+    calls: Vec<LiveFunctionCall>,
+) {
+    let cancellation = CancellationToken::new();
+    let (uid, generation) = {
+        let state = state.lock().await;
+        match state.authority_uid.clone() {
+            Some(uid) => (uid, state.configuration_generation),
+            None => {
+                error(
+                    Some(live_stream_id),
+                    "assistant_unavailable",
+                    "no assistant authority is configured",
+                    false,
+                );
+                return;
+            }
+        }
+    };
+    for call in calls {
+        let arguments: serde_json::Value = match serde_json::from_str(&call.args) {
+            Ok(value) => value,
+            Err(_) => {
+                error(
+                    Some(live_stream_id.clone()),
+                    "computer_use_tool_invalid",
+                    "live voice returned an invalid computer-use tool call",
+                    false,
+                );
+                continue;
+            }
+        };
+        let mut proposal =
+            match computer_use_proposal(&live_stream_id, &call.id, &call.name, arguments) {
+                Ok(proposal) => proposal,
+                Err(_) => {
+                    error(
+                        Some(live_stream_id.clone()),
+                        "computer_use_tool_invalid",
+                        "live voice returned an invalid computer-use tool call",
+                        false,
+                    );
+                    continue;
+                }
+            };
+        let Some(action) = proposal.computer_action.clone() else {
+            error(
+                Some(live_stream_id.clone()),
+                "computer_use_tool_invalid",
+                "live voice returned an invalid computer-use tool call",
+                false,
+            );
+            continue;
+        };
+        let bound = match bind_computer_use_action(action, &cancellation).await {
+            Ok(bound) => bound,
+            Err(_) => {
+                error(
+                    Some(live_stream_id.clone()),
+                    "computer_use_binding_failed",
+                    "the semantic computer action could not be bound safely",
+                    false,
+                );
+                continue;
+            }
+        };
+        proposal.expires_at_ms = Some(
+            proposal
+                .expires_at_ms
+                .unwrap_or(i64::MAX)
+                .min(bound.expires_at_ms),
+        );
+        let prepared = match crate::computer_use::prepare(
+            bound,
+            &proposal.proposal_id,
+            &uid,
+            proposal.risk,
+        ) {
+            Ok(prepared) => {
+                proposal.operation_id = Some(prepared.operation_id.clone());
+                proposal.action_hash = Some(prepared.action_hash().to_owned());
+                proposal.target_provenance = Some(prepared.bound.provenance.clone());
+                prepared
+            }
+            Err(_) => {
+                error(
+                    Some(live_stream_id.clone()),
+                    "computer_use_binding_failed",
+                    "the semantic computer action could not be bound safely",
+                    false,
+                );
+                continue;
+            }
+        };
+        let mut state = state.lock().await;
+        if state.configuration_generation != generation || state.authority_uid.as_deref() != Some(&uid)
+        {
+            error(
+                Some(live_stream_id.clone()),
+                "proposal_authority_changed",
+                "the proposal belongs to a different authority",
+                false,
+            );
+            continue;
+        }
+        if let Err(failure) =
+            state
+                .proposals
+                .register_bound(&uid, generation, proposal, Some(prepared))
+        {
+            let (code, message) = match failure {
+                ProposalDecisionError::Capacity => (
+                    "proposal_capacity_exceeded",
+                    "too many action proposals are pending",
+                ),
+                ProposalDecisionError::Conflict => (
+                    "proposal_id_conflict",
+                    "proposal_id was reused with a different payload",
+                ),
+                _ => (
+                    "proposal_registration_failed",
+                    "action proposal could not be registered",
+                ),
+            };
+            error(Some(live_stream_id.clone()), code, message, false);
+        }
+    }
+}
+
 async fn decide_approval(
     request_id: &str,
     state: &Mutex<RuntimeState>,
@@ -5667,6 +5769,7 @@ mod tests {
                 reason: "test provider unavailable".to_owned(),
             }))),
             transcription: None,
+            live_tool_calls: None,
         };
         let running = tokio::spawn(dispatcher.run());
         let capture = |request_id: &str, text: &str, occurred_at_ms| ClientCommand {

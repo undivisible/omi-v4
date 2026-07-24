@@ -1,7 +1,6 @@
 // ignore_for_file: type=lint, type=warning
 part of 'signals.dart';
 
-
 @immutable
 class TranscriptionStatus {
   const TranscriptionStatus({
@@ -61,9 +60,9 @@ class TranscriptionStatus {
   }
 
   Uint8List bincodeSerialize() {
-      final serializer = BincodeSerializer();
-      serialize(serializer);
-      return serializer.bytes;
+    final serializer = BincodeSerializer();
+    serialize(serializer);
+    return serializer.bytes;
   }
 
   @override
@@ -71,32 +70,28 @@ class TranscriptionStatus {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is TranscriptionStatus
-      && requestId == other.requestId
-      && audioStreamId == other.audioStreamId
-      && state == other.state
-      && sttEpoch == other.sttEpoch;
+    return other is TranscriptionStatus &&
+        requestId == other.requestId &&
+        audioStreamId == other.audioStreamId &&
+        state == other.state &&
+        sttEpoch == other.sttEpoch;
   }
 
   @override
-  int get hashCode => Object.hash(
-        requestId,
-        audioStreamId,
-        state,
-        sttEpoch,
-      );
+  int get hashCode => Object.hash(requestId, audioStreamId, state, sttEpoch);
 
   @override
   String toString() {
     String? fullString;
 
     assert(() {
-      fullString = '$runtimeType('
-        'requestId: $requestId, '
-        'audioStreamId: $audioStreamId, '
-        'state: $state, '
-        'sttEpoch: $sttEpoch'
-        ')';
+      fullString =
+          '$runtimeType('
+          'requestId: $requestId, '
+          'audioStreamId: $audioStreamId, '
+          'state: $state, '
+          'sttEpoch: $sttEpoch'
+          ')';
       return true;
     }());
 

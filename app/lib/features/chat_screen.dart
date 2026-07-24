@@ -34,8 +34,10 @@ import '../native/native_hub.dart';
 import '../onboarding/hub_checklist.dart';
 import '../ui/assistant_content.dart';
 import '../ui/omi_ui.dart';
+import 'ax_context.dart';
 import 'composer_dictation.dart';
-import 'cursor_pill_controller.dart' show CombinedVoiceLevel;
+import 'cursor_pill_controller.dart'
+    show CombinedVoiceLevel, buildOverlayPrompt;
 import 'hub_task_meta.dart';
 import 'in_app_voice_view.dart';
 import 'meeting_notes.dart';
@@ -482,7 +484,13 @@ class ChatScreenState extends State<ChatScreen>
           return;
         }
         try {
-          await widget.services.startDesktopVoice();
+          final ax = await AxContext.snapshot();
+          final sessionContext = ax.asSessionContextPrompt(
+            'Screen context for this voice session:',
+          );
+          await widget.services.startDesktopVoice(
+            sessionContext: sessionContext,
+          );
           if (!mounted) {
             await widget.services.cancelDesktopVoice();
             return;

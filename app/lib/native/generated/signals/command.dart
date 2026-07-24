@@ -65,6 +65,8 @@ abstract class Command {
         return CommandJoinCall.load(deserializer);
       case 27:
         return CommandResolveDevAssistant.load(deserializer);
+      case 28:
+        return CommandUpdateLiveVoiceContext.load(deserializer);
       default:
         throw Exception(
           'Unknown variant index for Command: ' + index.toString(),
@@ -2110,5 +2112,73 @@ class CommandResolveDevAssistant extends Command {
     }());
 
     return fullString ?? 'CommandResolveDevAssistant';
+  }
+}
+
+@immutable
+class CommandUpdateLiveVoiceContext extends Command {
+  const CommandUpdateLiveVoiceContext({
+    required this.liveStreamId,
+    required this.sessionContext,
+  }) : super();
+
+  static CommandUpdateLiveVoiceContext load(BinaryDeserializer deserializer) {
+    deserializer.increaseContainerDepth();
+    final instance = CommandUpdateLiveVoiceContext(
+      liveStreamId: deserializer.deserializeString(),
+      sessionContext: deserializer.deserializeString(),
+    );
+    deserializer.decreaseContainerDepth();
+    return instance;
+  }
+
+  final String liveStreamId;
+  final String sessionContext;
+
+  CommandUpdateLiveVoiceContext copyWith({
+    String? liveStreamId,
+    String? sessionContext,
+  }) {
+    return CommandUpdateLiveVoiceContext(
+      liveStreamId: liveStreamId ?? this.liveStreamId,
+      sessionContext: sessionContext ?? this.sessionContext,
+    );
+  }
+
+  void serialize(BinarySerializer serializer) {
+    serializer.increaseContainerDepth();
+    serializer.serializeVariantIndex(28);
+    serializer.serializeString(liveStreamId);
+    serializer.serializeString(sessionContext);
+    serializer.decreaseContainerDepth();
+  }
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    if (other.runtimeType != runtimeType) return false;
+
+    return other is CommandUpdateLiveVoiceContext &&
+        liveStreamId == other.liveStreamId &&
+        sessionContext == other.sessionContext;
+  }
+
+  @override
+  int get hashCode => Object.hash(liveStreamId, sessionContext);
+
+  @override
+  String toString() {
+    String? fullString;
+
+    assert(() {
+      fullString =
+          '$runtimeType('
+          'liveStreamId: $liveStreamId, '
+          'sessionContext: $sessionContext'
+          ')';
+      return true;
+    }());
+
+    return fullString ?? 'CommandUpdateLiveVoiceContext';
   }
 }

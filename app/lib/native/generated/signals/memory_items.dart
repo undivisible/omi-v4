@@ -1,13 +1,9 @@
 // ignore_for_file: type=lint, type=warning
 part of 'signals.dart';
 
-
 @immutable
 class MemoryItems {
-  const MemoryItems({
-    required this.requestId,
-    required this.items,
-  });
+  const MemoryItems({required this.requestId, required this.items});
 
   static MemoryItems deserialize(BinaryDeserializer deserializer) {
     deserializer.increaseContainerDepth();
@@ -31,10 +27,7 @@ class MemoryItems {
   final String requestId;
   final List<MemoryItem> items;
 
-  MemoryItems copyWith({
-    String? requestId,
-    List<MemoryItem>? items,
-  }) {
+  MemoryItems copyWith({String? requestId, List<MemoryItem>? items}) {
     return MemoryItems(
       requestId: requestId ?? this.requestId,
       items: items ?? this.items,
@@ -49,9 +42,9 @@ class MemoryItems {
   }
 
   Uint8List bincodeSerialize() {
-      final serializer = BincodeSerializer();
-      serialize(serializer);
-      return serializer.bytes;
+    final serializer = BincodeSerializer();
+    serialize(serializer);
+    return serializer.bytes;
   }
 
   @override
@@ -59,26 +52,24 @@ class MemoryItems {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is MemoryItems
-      && requestId == other.requestId
-      && listEquals(items, other.items);
+    return other is MemoryItems &&
+        requestId == other.requestId &&
+        listEquals(items, other.items);
   }
 
   @override
-  int get hashCode => Object.hash(
-        requestId,
-        items,
-      );
+  int get hashCode => Object.hash(requestId, items);
 
   @override
   String toString() {
     String? fullString;
 
     assert(() {
-      fullString = '$runtimeType('
-        'requestId: $requestId, '
-        'items: $items'
-        ')';
+      fullString =
+          '$runtimeType('
+          'requestId: $requestId, '
+          'items: $items'
+          ')';
       return true;
     }());
 

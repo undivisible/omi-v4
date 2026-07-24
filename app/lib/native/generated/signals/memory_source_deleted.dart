@@ -1,7 +1,6 @@
 // ignore_for_file: type=lint, type=warning
 part of 'signals.dart';
 
-
 @immutable
 class MemorySourceDeleted {
   const MemorySourceDeleted({
@@ -61,9 +60,9 @@ class MemorySourceDeleted {
   }
 
   Uint8List bincodeSerialize() {
-      final serializer = BincodeSerializer();
-      serialize(serializer);
-      return serializer.bytes;
+    final serializer = BincodeSerializer();
+    serialize(serializer);
+    return serializer.bytes;
   }
 
   @override
@@ -71,32 +70,29 @@ class MemorySourceDeleted {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is MemorySourceDeleted
-      && requestId == other.requestId
-      && sourceId == other.sourceId
-      && evidenceCount == other.evidenceCount
-      && claimCount == other.claimCount;
+    return other is MemorySourceDeleted &&
+        requestId == other.requestId &&
+        sourceId == other.sourceId &&
+        evidenceCount == other.evidenceCount &&
+        claimCount == other.claimCount;
   }
 
   @override
-  int get hashCode => Object.hash(
-        requestId,
-        sourceId,
-        evidenceCount,
-        claimCount,
-      );
+  int get hashCode =>
+      Object.hash(requestId, sourceId, evidenceCount, claimCount);
 
   @override
   String toString() {
     String? fullString;
 
     assert(() {
-      fullString = '$runtimeType('
-        'requestId: $requestId, '
-        'sourceId: $sourceId, '
-        'evidenceCount: $evidenceCount, '
-        'claimCount: $claimCount'
-        ')';
+      fullString =
+          '$runtimeType('
+          'requestId: $requestId, '
+          'sourceId: $sourceId, '
+          'evidenceCount: $evidenceCount, '
+          'claimCount: $claimCount'
+          ')';
       return true;
     }());
 
