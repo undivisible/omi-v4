@@ -246,15 +246,24 @@ final class FirmwareUpdateChecker {
       ));
     }
     if (target != null) {
-      final hint = target.toLowerCase();
-      for (final candidate in candidates) {
-        if (candidate.name.toLowerCase().contains(hint)) return candidate;
+      // The DIS model number the pendant reports (`Omi CV 1`) and the artifact
+      // id the release names it by (`omi-cv1-production-nrf5340-pendant`) spell
+      // the same target with different separators and spacing, so normalise both
+      // to alphanumerics before matching — a literal substring check misses.
+      final hint = _normalizeTarget(target);
+      if (hint.isNotEmpty) {
+        for (final candidate in candidates) {
+          if (_normalizeTarget(candidate.name).contains(hint)) return candidate;
+        }
       }
     }
     // A release that publishes one package per target and gave no usable hint
     // is ambiguous, and picking the wrong image is how a pendant gets bricked.
     return candidates.length == 1 ? candidates.single : null;
   }
+
+  static String _normalizeTarget(String value) =>
+      value.toLowerCase().replaceAll(RegExp('[^a-z0-9]'), '');
 }
 
 /// Fetches a firmware artifact. Kept separate from the flash itself: a download

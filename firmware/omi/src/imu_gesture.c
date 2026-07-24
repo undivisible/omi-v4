@@ -8,6 +8,10 @@
 #include "imu.h"
 #include "lib/core/user_event.h"
 
+#ifdef CONFIG_OMI_RUST
+#include "omi_rust.h"
+#endif
+
 LOG_MODULE_REGISTER(imu_gesture, CONFIG_LOG_DEFAULT_LEVEL);
 
 /* LSM6DS3TR-C embedded-function registers used for wake-up (activity) and tap
@@ -79,6 +83,21 @@ static void imu_gesture_work_handler(struct k_work *work)
         LOG_WRN("Failed to read TAP_SRC");
     }
 
+#ifdef CONFIG_OMI_RUST
+    uint8_t gesture =
+        omi_rust_imu_classify(wake_src, tap_src, IS_ENABLED(CONFIG_OMI_ENABLE_IMU_DOUBLE_TAP));
+    if (gesture == OMI_RUST_GESTURE_DOUBLE_TAP) {
+        LOG_INF("IMU double tap (TAP_SRC 0x%02x)", tap_src);
+        omi_note_user_activity();
+        omi_user_event_emit(OMI_USER_EVENT_IMU_DOUBLE_TAP, OMI_USER_EVENT_SRC_IMU);
+        return;
+    }
+    if (gesture == OMI_RUST_GESTURE_MOTION) {
+        LOG_DBG("IMU motion (WAKE_UP_SRC 0x%02x)", wake_src);
+        omi_note_user_activity();
+        omi_user_event_emit(OMI_USER_EVENT_IMU_MOTION, OMI_USER_EVENT_SRC_IMU);
+    }
+#else
     if (IS_ENABLED(CONFIG_OMI_ENABLE_IMU_DOUBLE_TAP) && (tap_src & LSM6DS_TAP_SRC_DOUBLE_TAP)) {
         LOG_INF("IMU double tap (TAP_SRC 0x%02x)", tap_src);
         omi_note_user_activity();
@@ -91,6 +110,7 @@ static void imu_gesture_work_handler(struct k_work *work)
         omi_note_user_activity();
         omi_user_event_emit(OMI_USER_EVENT_IMU_MOTION, OMI_USER_EVENT_SRC_IMU);
     }
+#endif
 }
 
 static void imu_int1_isr(const struct device *dev, struct gpio_callback *cb, uint32_t pins)

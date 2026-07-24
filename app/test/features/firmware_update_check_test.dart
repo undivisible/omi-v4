@@ -65,6 +65,23 @@ void main() {
     expect(release?.assetName, 'omi-cv1-dfu_application.zip');
   });
 
+  test('matches the DIS model number against the release artifact id', () async {
+    final release = await _checker([
+      _release(
+        'firmware-v3.2.0',
+        assets: const [
+          'omi-cv1-production-nrf5340-pendant-3.2.0-dfu_application.zip',
+          'evt-test-nrf5340-bring-up-and-ble-throughput-harness-3.2.0-dfu_application.zip',
+        ],
+      ),
+    ]).check(installedRevision: '3.1.0', target: 'Omi CV 1');
+
+    expect(
+      release?.assetName,
+      'omi-cv1-production-nrf5340-pendant-3.2.0-dfu_application.zip',
+    );
+  });
+
   test('refuses to guess between several packages', () async {
     final release = await _checker([
       _release(

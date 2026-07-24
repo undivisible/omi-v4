@@ -2,6 +2,10 @@
 
 #include "lib/core/transport.h"
 
+#ifdef CONFIG_OMI_RUST
+#include "omi_rust.h"
+#endif
+
 #include <hal/nrf_saadc.h>
 #include <zephyr/device.h>
 #include <zephyr/devicetree.h>
@@ -110,6 +114,9 @@ struct adc_sequence sequence = {
 
 uint8_t update_ema_filter(uint32_t current_ema, uint8_t new_value)
 {
+#ifdef CONFIG_OMI_RUST
+    return omi_rust_battery_ema_step(current_ema, new_value, is_charging);
+#else
     // handle edge case transitions directly
     if ((!is_charging && (current_ema <= 5)) || (is_charging && (current_ema >= 95))) {
         if (is_charging) {
@@ -129,6 +136,7 @@ uint8_t update_ema_filter(uint32_t current_ema, uint8_t new_value)
 
     // Scale result back to 8-bit, with rounding up
     return (uint8_t)((new_ema + 32768) >> 16);
+#endif
 }
 
 static void battery_charging_callback(const struct device *dev, struct gpio_callback *cb, uint32_t pins)
@@ -264,6 +272,10 @@ int battery_get_millivolt(uint16_t *battery_millivolt)
 int battery_get_percentage(uint8_t *battery_percentage, uint16_t battery_millivolt)
 {
     uint8_t raw_percentage = 0;
+
+#ifdef CONFIG_OMI_RUST
+    raw_percentage = omi_rust_battery_raw_percentage(battery_millivolt, is_charging);
+#else
     BatteryState *battery_states = BATTERY_STATES(is_charging);
 
     // Use the battery discharge profile to determine percentage
@@ -286,6 +298,7 @@ int battery_get_percentage(uint8_t *battery_percentage, uint16_t battery_millivo
             }
         }
     }
+#endif
 
     // Prevent sudden jumps in percentage
     if (battery_percentage_ema != 0) {

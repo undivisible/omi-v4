@@ -5,15 +5,3 @@ version = 4
 [[package]]
 name = "omi-rust"
 version = "0.1.0"
-
-[[patch.unused]]
-name = "zephyr"
-version = "0.1.0"
-
-[[patch.unused]]
-name = "zephyr-build"
-version = "0.1.0"
-
-[[patch.unused]]
-name = "zephyr-sys"
-version = "0.1.0"

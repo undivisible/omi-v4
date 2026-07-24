@@ -1,6 +1,8 @@
 #![cfg_attr(target_os = "none", no_std)]
 
+pub mod battery;
 pub mod framing;
+pub mod imu_gesture;
 
 #[cfg(target_os = "none")]
 #[panic_handler]
@@ -47,5 +49,33 @@ pub unsafe extern "C" fn omi_rust_packet_header(id: u16, index: u8, out: *mut u8
     // writable bytes; the null case is rejected above.
     unsafe {
         core::ptr::copy_nonoverlapping(header.as_ptr(), out, framing::NET_BUFFER_HEADER_SIZE);
+    }
+}
+
+/// Battery voltage-to-percentage lookup with interpolation. `is_charging` is
+/// non-zero when charging, matching the C `is_charging` global.
+#[no_mangle]
+pub extern "C" fn omi_rust_battery_raw_percentage(battery_millivolt: u16, is_charging: bool) -> u8 {
+    battery::raw_percentage(battery_millivolt, is_charging)
+}
+
+/// One EMA smoothing step over the battery percentage.
+#[no_mangle]
+pub extern "C" fn omi_rust_battery_ema_step(
+    current_ema: u32,
+    new_value: u8,
+    is_charging: bool,
+) -> u8 {
+    battery::ema_step(current_ema, new_value, is_charging)
+}
+
+/// IMU wake/tap source decode. Returns 2 for a double tap, 1 for motion, 0 for
+/// neither — matching `omi_rust_gesture_t` in omi_rust.h.
+#[no_mangle]
+pub extern "C" fn omi_rust_imu_classify(wake_src: u8, tap_src: u8, double_tap_enabled: bool) -> u8 {
+    match imu_gesture::classify(wake_src, tap_src, double_tap_enabled) {
+        imu_gesture::Gesture::None => 0,
+        imu_gesture::Gesture::Motion => 1,
+        imu_gesture::Gesture::DoubleTap => 2,
     }
 }
