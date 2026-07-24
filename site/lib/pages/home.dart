@@ -51,6 +51,85 @@ const _capabilities = [
   ),
 ];
 
+/// The device's published specification, as omi.me lists it.
+const _specs = <(String, String)>[
+  ('Size', '2.5cm diameter, 1.5cm deep'),
+  ('Battery', '150 mAh, 10–14 hours'),
+  ('Radio', 'Bluetooth 5.1; Wi-Fi 2.4/5 GHz'),
+  ('Latency', '500–2000 ms live; 10–20 s offline'),
+  ('Offline recording', 'Yes — it catches up when the phone is back'),
+  ('Charging', 'Dock with pogo-pin contacts'),
+  ('Languages', '25+, single, multi, or translated'),
+  ('In transit', 'TLS'),
+  ('At rest', 'AES-256-GCM'),
+  ('Training on your data', 'No'),
+  ('Compatibility', 'iOS 15+, Android 7+, macOS, any browser'),
+  ('Water resistance', 'None — keep it out of the shower'),
+];
+
+/// What the device does once it is on, grouped the way the product page groups
+/// it. The wording is Omi's own.
+const _hardwareCapabilities = <(String, List<String>)>[
+  (
+    'Capture everything',
+    [
+      'Transcribes everything you say and hear',
+      'Automatic summaries, tasks and memories',
+      'Speech profiles, so it knows who said what',
+      'Live streaming or offline recording',
+    ],
+  ),
+  (
+    'Recall instantly',
+    [
+      'Search summaries, tasks and memories',
+      'Ask Omi: it knows you, and it can search the web',
+      'A daily recap in the evening',
+      'Tap and talk — Omi answers on the spot',
+    ],
+  ),
+  (
+    'Automate your work',
+    [
+      'Sync tasks to the task manager you already use',
+      'Custom summary templates per meeting type',
+      'Folders and stars, so a week of capture stays navigable',
+      'Share a transcript or a summary in one action',
+    ],
+  ),
+];
+
+/// One photograph from omi.me, vendored beside the stylesheet so the page
+/// stays same-origin. Two widths, so a phone does not fetch the desktop file.
+class _Shot extends StatelessComponent {
+  const _Shot(this.name, this.alt, {this.wide = false});
+
+  final String name;
+  final String alt;
+
+  /// A full-width plate rather than one of a pair.
+  final bool wide;
+
+  @override
+  Component build(BuildContext context) {
+    return img(
+      src: '/$name-1200.webp',
+      alt: alt,
+      width: 1200,
+      height: 670,
+      classes: wide ? 'photo photo--wide reveal' : 'photo reveal',
+      attributes: {
+        'srcset': '/$name-640.webp 640w, /$name-1200.webp 1200w',
+        'sizes': wide
+            ? '(min-width: 60rem) 76rem, 100vw'
+            : '(min-width: 60rem) 38rem, 100vw',
+        'loading': 'lazy',
+        'decoding': 'async',
+      },
+    );
+  }
+}
+
 class Home extends StatelessComponent {
   const Home({super.key});
 
@@ -66,16 +145,20 @@ class Home extends StatelessComponent {
       rail: const [
         ('top', 'Omi'),
         ('what', 'What it does'),
+        ('hardware', 'Hardware'),
         ('api', 'API'),
         ('privacy', 'Privacy'),
         ('pricing', 'Pricing'),
+        ('negotiate', 'Negotiate'),
       ],
       children: [
         _hero(),
         _whatItDoes(),
+        _hardware(),
         _openSurface(),
         _privacy(),
         _pricing(),
+        _negotiate(),
       ],
     );
   }
@@ -98,14 +181,7 @@ class Home extends StatelessComponent {
                 'you, and every answer cites where it came from.',
               ),
             ], classes: 'mid rise d3'),
-            div([
-              a([.text('Open Omi')], classes: 'btn btn-solid', href: portalUrl),
-              a(
-                [.text('What it does')],
-                classes: 'btn btn-line',
-                href: '#what',
-              ),
-            ], classes: 'links rise d4'),
+            div([const PrimaryActions()], classes: 'rise d4'),
           ], classes: 'hero-foot'),
         ], classes: 'hero-grid'),
         const _HubEmbed(),
@@ -132,6 +208,62 @@ class Home extends StatelessComponent {
       classes: 'band wrap',
       id: 'what',
       attributes: {'aria-labelledby': 't2'},
+    );
+  }
+
+  Component _hardware() {
+    return section(
+      [
+        h2([.text('The hardware')], classes: 'label', id: 't6'),
+        p([
+          .text('Two and a half centimetres of listening.'),
+        ], classes: 'big reveal measure-20'),
+        _Shot(
+          'omi-pendant',
+          'The Omi pendant, 2.5cm across, on a display plinth.',
+          wide: true,
+        ),
+        div([
+          p([
+            .text(
+              'Omi is a 2.5cm disc, 1.5cm deep, on a lanyard or a wrist band. '
+              'It records what you say and hear, streams it to your phone over '
+              'Bluetooth LE 5.1, and keeps recording when the phone is out of '
+              'range — the audio catches up when it comes back.',
+            ),
+          ], classes: 'mid measure reveal'),
+          ul([
+            for (final (term, value) in _specs)
+              li([
+                b([.text(term)]),
+                .text(value),
+              ]),
+          ], classes: 'notes specs reveal'),
+        ], classes: 'split band-gap'),
+        div([
+          _Shot('omi-worn', 'Omi worn on a lanyard in an open-plan office.'),
+          _Shot('omi-desk', 'Omi on a meeting-room table beside two laptops.'),
+        ], classes: 'shot-pair band-gap'),
+        div([
+          for (final (title, lines) in _hardwareCapabilities)
+            article([
+              h3([.text(title)], classes: 'label'),
+              ul([
+                for (final line in lines) li([.text(line)]),
+              ]),
+            ], classes: 'card reveal'),
+        ], classes: 'cards'),
+        p([
+          .text(
+            'Omi is open hardware as well as open software: the enclosure, the '
+            'board and the firmware are published, and this build talks to the '
+            'same device.',
+          ),
+        ], classes: 'small measure band-gap reveal'),
+      ],
+      classes: 'band wrap',
+      id: 'hardware',
+      attributes: {'aria-labelledby': 't6'},
     );
   }
 
@@ -227,18 +359,18 @@ class Home extends StatelessComponent {
         h2([.text('Pricing')], classes: 'label', id: 't5'),
         div([
           article([
-            h3([.text('Omi')], classes: 'label'),
+            h3([.text('Omi with your own keys')], classes: 'label'),
+            p([.text('Negotiable')], classes: 'amount'),
             p([
-              .text('Free '),
-              span([.text('+ your own keys')]),
-            ], classes: 'amount'),
-            p([
-              .text('About \$5 a month, paid straight to your provider.'),
+              .text(
+                'You pay your provider for the inference — about \$5 a month — '
+                'and you settle the rest with Omi.',
+              ),
             ], classes: 'small'),
             a(
-              [.text('Start with your key')],
+              [.text('Negotiate')],
               classes: 'btn btn-line',
-              href: portalUrl,
+              href: '#negotiate',
             ),
           ], classes: 'plan reveal'),
           article([
@@ -259,6 +391,84 @@ class Home extends StatelessComponent {
       attributes: {'aria-labelledby': 't5'},
     );
   }
+
+  /// The joke is that the button does what it says. `worker/src/byok-pricing.ts`
+  /// holds the band and `worker/src/byok-negotiation.ts` runs the conversation;
+  /// `docs/byok.md` is the written version of both.
+  Component _negotiate() {
+    return section(
+      [
+        h2([.text('Negotiate')], classes: 'label', id: 't7'),
+        p([
+          .text('Haggle with Omi. It is not a metaphor.'),
+        ], classes: 'big reveal measure-tight'),
+        div([
+          p([
+            .text(
+              'Bring your own key and the price is not a plan you pick, it is '
+              'a conversation you have. Omi opens a session, you argue your '
+              'case, and what you agree is what you are charged — because the '
+              'agreement is enforced on the server, not in the app.',
+            ),
+          ], classes: 'mid measure reveal'),
+          ul([
+            li([
+              b([.text('The model never sets the price.')]),
+              .text(
+                ' It may suggest at most one concession per reply, from a '
+                'closed list the server sent it. The server turns codes into '
+                'money.',
+              ),
+            ]),
+            li([
+              b([.text('There is a floor.')]),
+              .text(
+                ' Grants are de-duplicated, subtracted from the standard '
+                'price, and clamped. No combination — forged or replayed — '
+                'lands below it.',
+              ),
+            ]),
+            li([
+              b([.text('The prose cannot lie.')]),
+              .text(
+                ' Any figure in a reply is rewritten to the figure the server '
+                'computed before you ever see it.',
+              ),
+            ]),
+            li([
+              b([.text('Accepting recomputes.')]),
+              .text(
+                ' Checkout reads the agreed price server-side; no caller '
+                'passes one in. The transcript is kept with the outcome.',
+              ),
+            ]),
+            li([
+              b([.text('Skipping is a real path.')]),
+              .text(
+                ' Take the standard price and it is recorded like any '
+                'other outcome.',
+              ),
+            ]),
+          ], classes: 'notes reveal'),
+        ], classes: 'split'),
+        div([
+          a(
+            [.text('Download Omi and negotiate')],
+            classes: 'btn btn-solid',
+            href: downloadUrl,
+          ),
+          a(
+            [.text('How the band works')],
+            classes: 'arrow',
+            href: '/architecture',
+          ),
+        ], classes: 'links band-gap reveal'),
+      ],
+      classes: 'band wrap',
+      id: 'negotiate',
+      attributes: {'aria-labelledby': 't7'},
+    );
+  }
 }
 
 /// The real hub, running in the page, in demo mode.
@@ -268,11 +478,16 @@ class Home extends StatelessComponent {
 /// signs nobody in and makes no network request, so the frame is inert from
 /// this document's point of view as well as the reader's.
 ///
-/// The Flutter web build is several megabytes over the wire, so nothing is
-/// fetched until the reader asks for it: until then the frame holds a still
-/// drawn entirely in CSS, and the frame reserves its box up front so promoting
-/// the still to the live app never shifts the layout. `web/main.js` swaps in
-/// the iframe on click and falls back to a link if it cannot start.
+/// The Flutter web build is several megabytes over the wire — roughly 1.2 MB
+/// of application gzipped, before canvaskit and its fonts — so it must never
+/// be part of the initial page weight for a reader who does not scroll this
+/// far. `web/main.js` watches the frame with an IntersectionObserver and swaps
+/// the iframe in as the section approaches the viewport, so it arrives loaded
+/// rather than waiting on a click. Until then the frame holds a still drawn
+/// entirely in CSS, and it reserves its box up front so promoting the still to
+/// the live app never shifts the layout. The button remains as the manual path
+/// for browsers without an observer, and for readers who have asked for
+/// reduced data.
 ///
 /// This is an iframe onto the standalone `/hub/` build rather than an inline
 /// Flutter element. See README.md for the measurements behind that: mounting
@@ -322,9 +537,10 @@ class _HubEmbed extends StatelessComponent {
             p(
               [
                 .text(
-                  'The real app, compiled to the web, on sample data — about '
-                  '5 MB, so it loads only when you ask for it. No sign-in, and '
-                  'nothing you do in it leaves your browser.',
+                  'The real app, compiled to the web, on sample data. It '
+                  'starts loading as this section reaches the screen, so a '
+                  'reader who never scrolls here never pays for it. No '
+                  'sign-in, and nothing you do in it leaves your browser.',
                 ),
               ],
               classes: 'shot-note',

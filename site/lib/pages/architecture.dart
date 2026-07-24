@@ -80,6 +80,7 @@ class Architecture extends StatelessComponent {
                 'gateway. Every box below exists in the repository today.',
               ),
             ], classes: 'mid rise d3'),
+            div([const PrimaryActions()], classes: 'rise d4'),
           ], classes: 'hero-foot'),
         ], classes: 'hero-grid'),
       ],

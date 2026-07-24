@@ -23,26 +23,20 @@
   </head>
   <body>
     <a class="skip-link" href="#main">Skip to content</a>
-    <div class="field" aria-hidden="true"><i></i><i></i><i></i></div>
-    <header id="nav" class="nav">
-      <a class="brand" aria-label="Omi home" href="/">
-        <svg class="omi-mark omi-mark--nav" viewBox="0 0 260 260" aria-hidden="true" data-omi-mark><g class="omi-mark-ring"><circle id="d1" cx="129.5" cy="42.79" r="17.2" style="--ux:0.0;--uy:-1.0"/><circle id="d2" cx="194.5" cy="64.5" r="17.2" style="--ux:0.7071;--uy:-0.7071"/><circle id="d3" cx="216.21" cy="129.5" r="17.2" style="--ux:1.0;--uy:0.0"/><circle id="d4" cx="194.5" cy="194.5" r="17.2" style="--ux:0.7071;--uy:0.7071"/><circle id="d5" cx="129.5" cy="216.21" r="17.2" style="--ux:0.0;--uy:1.0"/><circle id="d6" cx="64.5" cy="194.5" r="17.2" style="--ux:-0.7071;--uy:0.7071"/><circle id="d7" cx="42.79" cy="129.5" r="17.2" style="--ux:-1.0;--uy:0.0"/><circle id="d8" cx="64.5" cy="64.5" r="17.2" style="--ux:-0.7071;--uy:-0.7071"/></g></svg>
-         Omi
-      </a>
-      <nav id="navLinks" class="nav-links" aria-label="Primary">
-        <a class="cta" href="https://api.omi.tsc.hk/portal">Open Omi</a>
-        <a href="/architecture">Documentation</a>
-        <a href="https://api.omi.tsc.hk/portal#api-keys">API login</a>
-      </nav>
-    </header>
+    <div class="field" aria-hidden="true"><i style="--x:-1.25;--y:-1.2;--i:0"><b style="--c:#f25e6b"></b></i><i style="--x:-0.25;--y:-1.25;--i:1"><b style="--c:#f2c2ac"></b></i><i style="--x:0.35;--y:-1.25;--i:2"><b style="--c:#ffd0b8"></b></i><i style="--x:1.2;--y:-1.05;--i:3"><b style="--c:#96c4ff"></b></i><i style="--x:1.25;--y:0.05;--i:4"><b style="--c:#b9d6ff"></b></i><i style="--x:1.2;--y:1.15;--i:5"><b style="--c:#d3e081"></b></i><i style="--x:0.05;--y:1.25;--i:6"><b style="--c:#f4d69f"></b></i><i style="--x:-0.75;--y:1.2;--i:7"><b style="--c:#f2c2ac"></b></i><i style="--x:-1.25;--y:0.45;--i:8"><b style="--c:#ff9a91"></b></i></div>
     <main id="main">
       <nav class="rail" aria-label="Sections">
+        <a class="rail-mark" aria-label="Omi home" href="/">
+          <svg class="omi-mark omi-mark--rail" viewBox="0 0 260 260" role="img" aria-label="Omi" data-omi-mark><g class="omi-mark-ring"><circle id="d1" cx="129.5" cy="42.79" r="17.2" style="--ux:0.0;--uy:-1.0"/><circle id="d2" cx="194.5" cy="64.5" r="17.2" style="--ux:0.7071;--uy:-0.7071"/><circle id="d3" cx="216.21" cy="129.5" r="17.2" style="--ux:1.0;--uy:0.0"/><circle id="d4" cx="194.5" cy="194.5" r="17.2" style="--ux:0.7071;--uy:0.7071"/><circle id="d5" cx="129.5" cy="216.21" r="17.2" style="--ux:0.0;--uy:1.0"/><circle id="d6" cx="64.5" cy="194.5" r="17.2" style="--ux:-0.7071;--uy:0.7071"/><circle id="d7" cx="42.79" cy="129.5" r="17.2" style="--ux:-1.0;--uy:0.0"/><circle id="d8" cx="64.5" cy="64.5" r="17.2" style="--ux:-0.7071;--uy:-0.7071"/></g></svg>
+        </a>
         <ol>
           <li><a href="#top">Omi</a></li>
           <li><a href="#what">What it does</a></li>
+          <li><a href="#hardware">Hardware</a></li>
           <li><a href="#api">API</a></li>
           <li><a href="#privacy">Privacy</a></li>
           <li><a href="#pricing">Pricing</a></li>
+          <li><a href="#negotiate">Negotiate</a></li>
         </ol>
       </nav>
       <section id="top" class="hero wrap" aria-labelledby="t1">
@@ -54,9 +48,12 @@
             <p class="mid rise d3">
               One hub across desktop, mobile and the web. It listens with you, and every answer cites where it came from.
             </p>
-            <div class="links rise d4">
-              <a class="btn btn-solid" href="https://api.omi.tsc.hk/portal">Open Omi</a>
-              <a class="btn btn-line" href="#what">What it does</a>
+            <div class="rise d4">
+              <div class="links">
+                <a class="btn btn-solid" href="https://api.omi.tsc.hk/portal">Open Omi</a>
+                <a class="btn btn-line" href="https://api.omi.tsc.hk/docs/api">Documentation</a>
+                <a class="btn btn-line" href="https://api.omi.tsc.hk/portal#api-keys">API login</a>
+              </div>
             </div>
           </div>
         </div>
@@ -76,7 +73,7 @@
             <div class="shot-cta">
               <button id="hub-start" class="btn btn-solid" type="button">Try the hub</button>
               <p id="hub-note" class="shot-note">
-                The real app, compiled to the web, on sample data — about 5 MB, so it loads only when you ask for it. No sign-in, and nothing you do in it leaves your browser.
+                The real app, compiled to the web, on sample data. It starts loading as this section reaches the screen, so a reader who never scrolls here never pays for it. No sign-in, and nothing you do in it leaves your browser.
               </p>
             </div>
           </div>
@@ -107,6 +104,66 @@
             <span class="label">06</span><h3>The pendant</h3><p>Captures the day over Bluetooth LE. Your phone relays; your desktop remembers.</p>
           </li>
         </ol>
+      </section>
+      <section id="hardware" class="band wrap" aria-labelledby="t6">
+        <h2 id="t6" class="label">The hardware</h2>
+        <p class="big reveal measure-20">Two and a half centimetres of listening.</p>
+        <img class="photo photo--wide reveal" srcset="/omi-pendant-640.webp 640w, /omi-pendant-1200.webp 1200w" sizes="(min-width: 60rem) 76rem, 100vw" loading="lazy" decoding="async" alt="The Omi pendant, 2.5cm across, on a display plinth." width="1200" height="670" src="/omi-pendant-1200.webp"/>
+        <div class="split band-gap">
+          <p class="mid measure reveal">
+            Omi is a 2.5cm disc, 1.5cm deep, on a lanyard or a wrist band. It records what you say and hear, streams it to your phone over Bluetooth LE 5.1, and keeps recording when the phone is out of range — the audio catches up when it comes back.
+          </p>
+          <ul class="notes specs reveal">
+            <li><b>Size</b>2.5cm diameter, 1.5cm deep</li>
+            <li><b>Battery</b>150 mAh, 10–14 hours</li>
+            <li><b>Radio</b>Bluetooth 5.1; Wi-Fi 2.4/5 GHz</li>
+            <li><b>Latency</b>500–2000 ms live; 10–20 s offline</li>
+            <li><b>Offline recording</b>Yes — it catches up when the phone is back</li>
+            <li><b>Charging</b>Dock with pogo-pin contacts</li>
+            <li><b>Languages</b>25+, single, multi, or translated</li>
+            <li><b>In transit</b>TLS</li>
+            <li><b>At rest</b>AES-256-GCM</li>
+            <li><b>Training on your data</b>No</li>
+            <li><b>Compatibility</b>iOS 15+, Android 7+, macOS, any browser</li>
+            <li><b>Water resistance</b>None — keep it out of the shower</li>
+          </ul>
+        </div>
+        <div class="shot-pair band-gap">
+          <img class="photo reveal" srcset="/omi-worn-640.webp 640w, /omi-worn-1200.webp 1200w" sizes="(min-width: 60rem) 38rem, 100vw" loading="lazy" decoding="async" alt="Omi worn on a lanyard in an open-plan office." width="1200" height="670" src="/omi-worn-1200.webp"/>
+          <img class="photo reveal" srcset="/omi-desk-640.webp 640w, /omi-desk-1200.webp 1200w" sizes="(min-width: 60rem) 38rem, 100vw" loading="lazy" decoding="async" alt="Omi on a meeting-room table beside two laptops." width="1200" height="670" src="/omi-desk-1200.webp"/>
+        </div>
+        <div class="cards">
+          <article class="card reveal">
+            <h3 class="label">Capture everything</h3>
+            <ul>
+              <li>Transcribes everything you say and hear</li>
+              <li>Automatic summaries, tasks and memories</li>
+              <li>Speech profiles, so it knows who said what</li>
+              <li>Live streaming or offline recording</li>
+            </ul>
+          </article>
+          <article class="card reveal">
+            <h3 class="label">Recall instantly</h3>
+            <ul>
+              <li>Search summaries, tasks and memories</li>
+              <li>Ask Omi: it knows you, and it can search the web</li>
+              <li>A daily recap in the evening</li>
+              <li>Tap and talk — Omi answers on the spot</li>
+            </ul>
+          </article>
+          <article class="card reveal">
+            <h3 class="label">Automate your work</h3>
+            <ul>
+              <li>Sync tasks to the task manager you already use</li>
+              <li>Custom summary templates per meeting type</li>
+              <li>Folders and stars, so a week of capture stays navigable</li>
+              <li>Share a transcript or a summary in one action</li>
+            </ul>
+          </article>
+        </div>
+        <p class="small measure band-gap reveal">
+          Omi is open hardware as well as open software: the enclosure, the board and the firmware are published, and this build talks to the same device.
+        </p>
       </section>
       <section id="api" class="band wrap" aria-labelledby="t3">
         <h2 id="t3" class="label">Open surface</h2>
@@ -140,10 +197,10 @@
         <h2 id="t5" class="label">Pricing</h2>
         <div class="plans">
           <article class="plan reveal">
-            <h3 class="label">Omi</h3>
-            <p class="amount">Free <span>+ your own keys</span></p>
-            <p class="small">About $5 a month, paid straight to your provider.</p>
-            <a class="btn btn-line" href="https://api.omi.tsc.hk/portal">Start with your key</a>
+            <h3 class="label">Omi with your own keys</h3>
+            <p class="amount">Negotiable</p>
+            <p class="small">You pay your provider for the inference — about $5 a month — and you settle the rest with Omi.</p>
+            <a class="btn btn-line" href="#negotiate">Negotiate</a>
           </article>
           <article class="plan reveal">
             <h3 class="label">Omi AI</h3>
@@ -153,21 +210,82 @@
           </article>
         </div>
       </section>
+      <section id="negotiate" class="band wrap" aria-labelledby="t7">
+        <h2 id="t7" class="label">Negotiate</h2>
+        <p class="big reveal measure-tight">Haggle with Omi. It is not a metaphor.</p>
+        <div class="split">
+          <p class="mid measure reveal">
+            Bring your own key and the price is not a plan you pick, it is a conversation you have. Omi opens a session, you argue your case, and what you agree is what you are charged — because the agreement is enforced on the server, not in the app.
+          </p>
+          <ul class="notes reveal">
+            <li>
+              <b>The model never sets the price.</b> It may suggest at most one concession per reply, from a closed list the server sent it. The server turns codes into money.
+            </li>
+            <li>
+              <b>There is a floor.</b> Grants are de-duplicated, subtracted from the standard price, and clamped. No combination — forged or replayed — lands below it.
+            </li>
+            <li>
+              <b>The prose cannot lie.</b> Any figure in a reply is rewritten to the figure the server computed before you ever see it.
+            </li>
+            <li>
+              <b>Accepting recomputes.</b> Checkout reads the agreed price server-side; no caller passes one in. The transcript is kept with the outcome.
+            </li>
+            <li><b>Skipping is a real path.</b> Take the standard price and it is recorded like any other outcome.</li>
+          </ul>
+        </div>
+        <div class="links band-gap reveal">
+          <a class="btn btn-solid" href="https://omi.me/download">Download Omi and negotiate</a>
+          <a class="arrow" href="/architecture">How the band works</a>
+        </div>
+      </section>
     </main>
     <footer class="wrap">
       <div class="foot">
-        <p>
-          <svg class="omi-mark omi-mark--foot" viewBox="0 0 260 260" aria-hidden="true" data-omi-mark><g class="omi-mark-ring"><circle id="d1" cx="129.5" cy="42.79" r="17.2" style="--ux:0.0;--uy:-1.0"/><circle id="d2" cx="194.5" cy="64.5" r="17.2" style="--ux:0.7071;--uy:-0.7071"/><circle id="d3" cx="216.21" cy="129.5" r="17.2" style="--ux:1.0;--uy:0.0"/><circle id="d4" cx="194.5" cy="194.5" r="17.2" style="--ux:0.7071;--uy:0.7071"/><circle id="d5" cx="129.5" cy="216.21" r="17.2" style="--ux:0.0;--uy:1.0"/><circle id="d6" cx="64.5" cy="194.5" r="17.2" style="--ux:-0.7071;--uy:0.7071"/><circle id="d7" cx="42.79" cy="129.5" r="17.2" style="--ux:-1.0;--uy:0.0"/><circle id="d8" cx="64.5" cy="64.5" r="17.2" style="--ux:-0.7071;--uy:-0.7071"/></g></svg>
-           Open source, private by design.
-        </p>
-        <nav aria-label="Footer">
-          <a href="/#what">What it does</a>
-          <a href="/#api">API</a>
-          <a href="/architecture">Architecture</a>
-          <a href="/docs/api">API reference</a>
-          <a href="https://api.omi.tsc.hk/portal">Open Omi</a>
+        <div class="foot-id">
+          <p>
+            <svg class="omi-mark omi-mark--foot" viewBox="0 0 260 260" aria-hidden="true" data-omi-mark><g class="omi-mark-ring"><circle id="d1" cx="129.5" cy="42.79" r="17.2" style="--ux:0.0;--uy:-1.0"/><circle id="d2" cx="194.5" cy="64.5" r="17.2" style="--ux:0.7071;--uy:-0.7071"/><circle id="d3" cx="216.21" cy="129.5" r="17.2" style="--ux:1.0;--uy:0.0"/><circle id="d4" cx="194.5" cy="194.5" r="17.2" style="--ux:0.7071;--uy:0.7071"/><circle id="d5" cx="129.5" cy="216.21" r="17.2" style="--ux:0.0;--uy:1.0"/><circle id="d6" cx="64.5" cy="194.5" r="17.2" style="--ux:-0.7071;--uy:0.7071"/><circle id="d7" cx="42.79" cy="129.5" r="17.2" style="--ux:-1.0;--uy:0.0"/><circle id="d8" cx="64.5" cy="64.5" r="17.2" style="--ux:-0.7071;--uy:-0.7071"/></g></svg>
+             thought to action.
+          </p>
+          <p class="small">Based Hardware Inc.<br/>San Francisco<br/><a href="mailto:help@omi.me">help@omi.me</a></p>
+        </div>
+        <nav class="foot-col" aria-label="Company">
+          <h2 class="label">Company</h2>
+          <ul>
+            <li><a href="https://www.omi.me/pages/careers">Careers</a></li>
+            <li><a href="https://omi.me/invest">Invest</a></li>
+            <li><a href="https://www.omi.me/pages/privacy">Privacy</a></li>
+            <li><a href="https://www.omi.me/blogs/events/">Events</a></li>
+            <li><a href="https://omi.me/manifesto">Manifesto</a></li>
+            <li><a href="https://omi.me/trust">Compliance</a></li>
+          </ul>
+        </nav>
+        <nav class="foot-col" aria-label="Products">
+          <h2 class="label">Products</h2>
+          <ul>
+            <li><a href="https://www.omi.me/pages/product">Omi</a></li>
+            <li><a href="https://omi.me/glass">Omi Glass</a></li>
+            <li><a href="https://omi.me/enterprise">Omi Enterprise</a></li>
+            <li><a href="https://www.omi.me/products/omi-watch-band">Wrist Band</a></li>
+            <li><a href="https://www.omi.me/products/omi-wireless-charger">Omi Charger</a></li>
+            <li><a href="https://omi.me/download">Download</a></li>
+          </ul>
+        </nav>
+        <nav class="foot-col" aria-label="Resources">
+          <h2 class="label">Resources</h2>
+          <ul>
+            <li><a href="/architecture">Architecture</a></li>
+            <li><a href="/docs/api">API reference</a></li>
+            <li><a href="https://api.omi.tsc.hk/portal">Open Omi</a></li>
+            <li><a href="https://api.omi.tsc.hk/portal#api-keys">API login</a></li>
+            <li><a href="https://help.omi.me">Help Center</a></li>
+            <li><a href="https://status.omi.me">Status</a></li>
+            <li><a href="https://h.omi.me/apps">App Store</a></li>
+            <li><a href="https://github.com/BasedHardware/omi">GitHub</a></li>
+            <li><a href="https://discord.omi.me/">Community</a></li>
+          </ul>
         </nav>
       </div>
+      <p class="foot-rule small">© 2026 Based Hardware. All rights reserved.</p>
     </footer>
   </body>
 </html>

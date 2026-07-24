@@ -32,6 +32,11 @@ find "$out/canvaskit" -maxdepth 1 \( -name 'skwasm*' -o -name 'wimp*' \) -delete
 cp "$here/hub-index.html" "$out/index.html"
 cp "$here/hub-llm.js" "$out/hub-llm.js"
 
+# The engine's glyph fallback, served from this origin rather than from
+# fonts.gstatic.com — see fontFallbackBaseUrl in hub-index.html. The licence
+# travels with the face.
+cp -R "$worker/assets/hub-fallback-fonts" "$out/fallback-fonts"
+
 # The optional on-device model tier. transformers.js and the ONNX runtime are
 # vendored onto this origin so the demo never loads code from a third party;
 # only the model weights are fetched, and only after the visitor has clicked

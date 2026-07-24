@@ -6,7 +6,11 @@
    animation and transition, and this module returns before starting
    anything, so nothing schedules frames either. */
 (() => {
-  const marks = document.querySelectorAll("[data-omi-mark]");
+  // The rail's mark is turned by scroll progress alone, in main.js, so it is
+  // left out of the ambient drift below — two writers on one --omi-rot would
+  // fight. It still takes the scatter and the pulse with everything else.
+  const marks = [...document.querySelectorAll("[data-omi-mark]")];
+  const drifting = marks.filter((mark) => !mark.matches(".omi-mark--rail"));
   if (!marks.length) return;
 
   const quiet = window.matchMedia("(prefers-reduced-motion: reduce)");
@@ -42,13 +46,13 @@
     target = drift + window.scrollY * 0.05;
     rot += (target - rot) * (1 - Math.pow(0.004, dt)); // critically damped follow
     const value = `${rot.toFixed(2)}deg`;
-    for (const mark of marks) mark.style.setProperty("--omi-rot", value);
+    for (const mark of drifting) mark.style.setProperty("--omi-rot", value);
     if (running && visible) requestAnimationFrame(frame);
     else running = false;
   };
 
   const start = () => {
-    if (running || !visible) return;
+    if (running || !visible || !drifting.length) return;
     running = true;
     last = performance.now();
     requestAnimationFrame(frame);
@@ -59,7 +63,7 @@
       visible = entries.some((entry) => entry.isIntersecting);
       if (visible) start();
     });
-    for (const mark of marks) watcher.observe(mark);
+    for (const mark of drifting) watcher.observe(mark);
   } else {
     start();
   }
@@ -70,7 +74,7 @@
     for (const mark of marks) mark.classList.toggle("is-tight", on);
   };
 
-  for (const cta of document.querySelectorAll(".btn-solid, .nav-links .cta")) {
+  for (const cta of document.querySelectorAll(".btn-solid")) {
     cta.addEventListener("pointerenter", () => tighten(true));
     cta.addEventListener("pointerleave", () => tighten(false));
     cta.addEventListener("focus", () => tighten(true));

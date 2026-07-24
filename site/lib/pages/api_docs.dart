@@ -54,6 +54,7 @@ class ApiDocs extends StatelessComponent {
                   code([.text('/mcp')]),
                   .text('. Everything here is scoped to a single account.'),
                 ], classes: 'mid rise d3'),
+                div([const PrimaryActions()], classes: 'rise d4'),
               ], classes: 'hero-foot'),
             ], classes: 'hero-grid'),
           ],

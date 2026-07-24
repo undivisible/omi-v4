@@ -29,6 +29,12 @@ class OmiMark extends StatelessComponent {
   const OmiMark.heroSmall({Key? key})
     : this(variant: 'omi-mark--sm', glow: true, decorative: false, key: key);
 
+  /// The mark at the head of the section rail. It is turned by how far down
+  /// the page the reader is, so it doubles as a scroll indicator; `web/mark.js`
+  /// drives it separately from the ambient drift the other marks carry.
+  const OmiMark.rail({Key? key})
+    : this(variant: 'omi-mark--rail', decorative: false, key: key);
+
   const OmiMark.nav({Key? key}) : this(variant: 'omi-mark--nav', key: key);
 
   const OmiMark.footer({Key? key}) : this(variant: 'omi-mark--foot', key: key);
