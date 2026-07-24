@@ -22,6 +22,10 @@ export const app = new Hono<AppEnv>();
 app.get("/health", (context) =>
   context.json({ service: "omi-v4-api", status: "ok" }),
 );
+// Every "Open Omi" and "API login" link on the site points at
+// api.omi.tsc.hk/portal, which is the hub web app under a stable name. The
+// fragment (#api-keys) is preserved by the browser across the redirect.
+app.get("/portal", (context) => context.redirect("/hub/", 302));
 app.route("/v1/webhooks", webhooks);
 app.route("/v1/auth/desktop", desktopAuth);
 app.use("/v1/*", requireAuth);
