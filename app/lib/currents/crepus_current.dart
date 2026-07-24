@@ -56,6 +56,9 @@ bool crepusRenders(String source) {
 //     launches only if the user agrees.
 //   * `prompt:` only drafts into the composer. It never sends, so the exact
 //     text is on screen before the user chooses to submit it.
+//   * `compute:` sends the instruction as a prompt to start a task (a
+//     computer-use turn acts on it). The instruction is visible in the card
+//     before the tap, and the tap is the user's deliberate act.
 // Keep this allowlist exhaustive and small.
 Future<void> dispatchCrepusAction(
   String action, {
@@ -80,6 +83,17 @@ Future<void> dispatchCrepusAction(
     // No draft sink means no way to show the text first, so the action is
     // dropped rather than sent behind the user's back.
     if (text.isNotEmpty) onDraftPrompt?.call(text);
+    return;
+  }
+  const computePrefix = 'compute:';
+  if (action.startsWith(computePrefix)) {
+    // Launch a task: the instruction is sent as a prompt, which a
+    // computer-use-capable assistant turn picks up and drives. Like `accept`
+    // it goes through `onPrompt` (sent, not drafted) because starting the
+    // session is the point — but the instruction is visible in the card
+    // before the tap, and the tap is the user's deliberate act.
+    final text = action.substring(computePrefix.length).trim();
+    if (text.isNotEmpty) onPrompt(text);
     return;
   }
   const openPrefix = 'open:';
