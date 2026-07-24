@@ -14,8 +14,11 @@ pub struct SetupHealthInputs<'a> {
     pub firebase_project_id: Option<&'a str>,
     pub telegram_webhook_secret: Option<&'a str>,
     pub telegram_bot_token: Option<&'a str>,
-    pub blooio_webhook_signing_secret: Option<&'a str>,
-    pub blooio_api_key: Option<&'a str>,
+    pub sendblue_api_key_id: Option<&'a str>,
+    pub sendblue_api_key_secret: Option<&'a str>,
+    pub sendblue_number: Option<&'a str>,
+    pub sendblue_webhook_signing_secret: Option<&'a str>,
+    pub sendblue_webhook_path_token: Option<&'a str>,
     pub stripe_secret_key: Option<&'a str>,
     pub stripe_pro_price_id: Option<&'a str>,
     pub stripe_webhook_secret: Option<&'a str>,
@@ -30,6 +33,11 @@ pub struct SetupHealthInputs<'a> {
 }
 
 pub fn setup_health_body(input: &SetupHealthInputs<'_>) -> Value {
+    let sendblue_inbound = configured(input.sendblue_api_key_id)
+        && configured(input.sendblue_api_key_secret)
+        && configured(input.sendblue_number)
+        && configured(input.sendblue_webhook_signing_secret)
+        && configured(input.sendblue_webhook_path_token);
     json!({
         "worker": true,
         "firebase": configured(input.firebase_project_id),
@@ -37,8 +45,7 @@ pub fn setup_health_body(input: &SetupHealthInputs<'_>) -> Value {
         "channels": {
             "telegram": configured(input.telegram_webhook_secret)
                 && configured(input.telegram_bot_token),
-            "blooio": configured(input.blooio_webhook_signing_secret)
-                && configured(input.blooio_api_key),
+            "imessage": sendblue_inbound,
         },
         "billing": configured(input.stripe_secret_key)
             && configured(input.stripe_pro_price_id)
@@ -67,8 +74,11 @@ mod tests {
             firebase_project_id: None,
             telegram_webhook_secret: None,
             telegram_bot_token: None,
-            blooio_webhook_signing_secret: None,
-            blooio_api_key: None,
+            sendblue_api_key_id: None,
+            sendblue_api_key_secret: None,
+            sendblue_number: None,
+            sendblue_webhook_signing_secret: None,
+            sendblue_webhook_path_token: None,
             stripe_secret_key: None,
             stripe_pro_price_id: None,
             stripe_webhook_secret: None,
@@ -98,6 +108,7 @@ mod tests {
         assert_eq!(body["memory"], json!(true));
         assert_eq!(body["firebase"], json!(false));
         assert_eq!(body["channels"]["telegram"], json!(false));
+        assert_eq!(body["channels"]["imessage"], json!(false));
         assert_eq!(body["billing"], json!(false));
         assert_eq!(body["models"]["managedChat"], json!(false));
         assert_eq!(body["desktopAuth"], json!(false));

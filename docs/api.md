@@ -497,12 +497,9 @@ monotonically increasing integer; page forward by passing the previous
 ```
 
 `role` is `user` or `assistant`. `source` is `app`, `web`, `desktop`,
-`telegram` or `blooio`. `blooio` is the stored identifier for the **iMessage
-channel**; the provider behind it is now Sendblue. The identifier is
-deliberately unchanged — it appears in three D1 `CHECK` constraints and in
-`worker-rs`, and rewriting it would rebuild those tables and require both
-binaries to ship at once, for no functional gain. Existing bindings therefore
-keep working untouched. See §4.9.2. `nextCursor` equals `after` when no messages were
+`telegram` or `imessage`. `imessage` is the stored identifier for the
+**iMessage channel** (Sendblue provider). Migration `0032_rename_blooio_to_imessage`
+renamed the historical `blooio` wire value. See §4.9.2. `nextCursor` equals `after` when no messages were
 returned, so polling is safe. `channelMessageId` and `deliveryId` are non-null
 only for messages that travelled over a linked chat channel.
 
@@ -721,9 +718,8 @@ Required environment (secrets via `wrangler secret put`, never committed):
 
 #### 4.9.2 iMessage channel: Sendblue
 
-The iMessage/SMS/RCS channel moved from Blooio to Sendblue. Exactly one
-provider is live per deployment: `delivery.ts` uses Sendblue when the Sendblue
-variables are set, and falls back to Blooio otherwise. Telegram is untouched.
+The iMessage/SMS/RCS channel uses Sendblue. The stored channel id is
+`imessage`. Telegram is untouched.
 
 **Outbound** — `POST https://api.sendblue.com/api/send-message` with
 `{number, from_number, content}` and the `sb-api-key-id` / `sb-api-secret-key`
@@ -737,7 +733,7 @@ status machinery is the only duplicate-send guard; do not retry outside it.
 > `sb-signing-secret` header. There is no HMAC, no timestamp, and therefore no
 > binding between the secret and the payload — anyone who observes that header
 > once can forge inbound messages until it is rotated. This is materially
-> weaker than the Blooio and Stripe paths, and cannot be fixed from our side.
+> weaker than HMAC-signed Stripe webhooks, and cannot be fixed from our side.
 >
 > Compensating controls, all implemented in `worker/src/sendblue.ts`:
 >
@@ -769,10 +765,9 @@ Environment:
 | `SENDBLUE_WEBHOOK_SIGNING_SECRET` | Value expected in `sb-signing-secret`. |
 | `SENDBLUE_WEBHOOK_PATH_TOKEN` | Secret path segment on the inbound route. |
 
-Migrating the channel also gains SMS and RCS fallback, group messaging,
-typing indicators, read receipts, expressive send styles and voice notes
-(`.caf` media renders as a voice memo). It loses Blooio's body-signed webhook
-and its idempotency key.
+The channel also gains SMS and RCS fallback, group messaging, typing
+indicators, read receipts, expressive send styles and voice notes
+(`.caf` media renders as a voice memo).
 
 ### 4.10 `POST /api/v1/speech/transcriptions`
 

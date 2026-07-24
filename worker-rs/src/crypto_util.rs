@@ -80,7 +80,7 @@ mod tests {
 
     #[test]
     fn hmac_stripe_style_payload() {
-        // t.body form used by Stripe/Blooio timestamped signatures.
+        // t.body form used by Stripe timestamped signatures.
         let sig = hmac_sha256_hex("whsec_test", "1700000000.{}");
         assert_eq!(sig.len(), 64);
         assert!(sig

@@ -1,11 +1,7 @@
 //! Pure parity port of `worker/src/sendblue.ts`.
 //!
-//! Sendblue is the iMessage/SMS/RCS provider that replaces Blooio. The stored
-//! channel identifier is deliberately left alone: `"blooio"` is baked into
-//! three D1 CHECK constraints and into this crate, and rewriting it would
-//! require rebuilding those tables and shipping both binaries at once. It is
-//! now just an opaque identifier for "the iMessage channel"; the provider
-//! behind it is chosen by configuration.
+//! Sendblue is the iMessage/SMS/RCS provider. The stored channel identifier is
+//! `"imessage"` (renamed from the historical `"blooio"` wire value).
 
 use serde_json::{json, Value};
 
@@ -15,7 +11,7 @@ pub const SEND_MESSAGE_ENDPOINT: &str = "https://api.sendblue.com/api/send-messa
 pub const UPSTREAM_TIMEOUT_MS: i64 = 15_000;
 
 /// The channel literal every stored row still uses.
-pub const IMESSAGE_CHANNEL: &str = "blooio";
+pub const IMESSAGE_CHANNEL: &str = "imessage";
 
 fn setting(env: &impl Fn(&str) -> Option<String>, name: &str) -> Option<String> {
     env(name)
@@ -64,8 +60,8 @@ pub fn sendblue_payload(
 /// Sendblue does not sign webhook bodies. It echoes the shared secret that was
 /// configured for the endpoint back in an `sb-signing-secret` header — there is
 /// no HMAC, no timestamp, and therefore no binding between the secret and the
-/// payload and no replay window. This is materially weaker than the Blooio and
-/// Stripe paths and cannot be fixed from our side, so it is compensated for:
+/// payload and no replay window. This is materially weaker than HMAC-signed
+/// Stripe webhooks and cannot be fixed from our side, so it is compensated for:
 ///
 ///   1. The comparison below is constant-time, so the secret cannot be
 ///      recovered by timing the endpoint.

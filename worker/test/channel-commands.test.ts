@@ -79,7 +79,7 @@ const env = (): Bindings =>
     RATE_LIMITER: rateLimiter,
     DELIVERY_COORDINATOR: deliveryCoordinator,
     TELEGRAM_WEBHOOK_SECRET: "telegram-secret",
-    BLOOIO_WEBHOOK_SIGNING_SECRET: "blooio-secret",
+    SENDBLUE_WEBHOOK_SIGNING_SECRET: "sendblue-secret",
   }) as Bindings;
 
 const migrate = async (path: string) => {
@@ -122,6 +122,8 @@ beforeAll(async () => {
     "migrations/0014_channel_inbox_dispatch.sql",
     "migrations/0022_channel_link_codes.sql",
     "migrations/0026_channel_accounts.sql",
+    "migrations/0028_channel_checkout.sql",
+    "migrations/0032_rename_blooio_to_imessage.sql",
   ])
     await migrate(file);
   const now = Date.now();
@@ -166,7 +168,7 @@ describe("link codes", () => {
   });
 
   test("never stores the plaintext code", async () => {
-    const issued = await issueLinkCode(env(), "blooio", "+1555", "+1555");
+    const issued = await issueLinkCode(env(), "imessage", "+1555", "+1555");
     const stored = await database
       .prepare("SELECT code_hash FROM channel_link_codes LIMIT 1")
       .first<{ code_hash: string }>();
@@ -307,12 +309,8 @@ describe("unlinked sender", () => {
 
   test("issues iMessage link codes when Sendblue is configured", async () => {
     const issued = await issueLinkCode(
-      {
-        ...env(),
-        SENDBLUE_WEBHOOK_SIGNING_SECRET: "sendblue-secret",
-        BLOOIO_WEBHOOK_SIGNING_SECRET: "legacy-blooio-secret",
-      },
-      "blooio",
+      env(),
+      "imessage",
       "+1555",
       "+1555",
     );
@@ -477,8 +475,8 @@ describe("channel-created accounts", () => {
   });
 
   test("a replayed signup returns the same account and one user row", async () => {
-    const first = await signUpChannelSender(env(), "blooio", "+1555", "+1555");
-    const second = await signUpChannelSender(env(), "blooio", "+1555", "+1555");
+    const first = await signUpChannelSender(env(), "imessage", "+1555", "+1555");
+    const second = await signUpChannelSender(env(), "imessage", "+1555", "+1555");
     expect(first.status).toBe("created");
     expect(second).toEqual({
       status: "existing",

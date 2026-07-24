@@ -2,11 +2,12 @@ typedef ChannelJson = Map<String, Object?>;
 
 enum ChannelProvider {
   telegram,
-  blooio;
+  imessage;
 
   static ChannelProvider fromJson(Object? value) => switch (value) {
     'telegram' => ChannelProvider.telegram,
-    'blooio' => ChannelProvider.blooio,
+    // Temporary dual-accept of the pre-rename wire value.
+    'imessage' || 'blooio' => ChannelProvider.imessage,
     _ => throw ChannelFormatException('unknown channel: $value'),
   };
 }

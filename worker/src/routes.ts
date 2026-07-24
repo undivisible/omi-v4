@@ -188,12 +188,7 @@ routes.get("/setup-health", (context) => {
       telegram:
         configured(context.env.TELEGRAM_WEBHOOK_SECRET) &&
         configured(context.env.TELEGRAM_BOT_TOKEN),
-      // The iMessage channel, whichever provider is behind it. Sendblue wins
-      // when it is configured; Blooio is the retained fallback.
-      blooio:
-        sendblueInboundConfigured(context.env) ||
-        (configured(context.env.BLOOIO_WEBHOOK_SIGNING_SECRET) &&
-          configured(context.env.BLOOIO_API_KEY)),
+      imessage: sendblueInboundConfigured(context.env),
     },
     billing:
       configured(context.env.STRIPE_SECRET_KEY) &&
@@ -548,6 +543,14 @@ routes.get("/entitlement", async (context) => {
   return context.json({ plan: pro ? "pro" : "byok", active: pro });
 });
 
+
+const parseChannelParam = (value: string): Channel | null => {
+  if (value === "telegram") return "telegram";
+  // Temporary dual-accept: old `/channels/blooio/*` paths map to imessage.
+  if (value === "imessage" || value === "blooio") return "imessage";
+  return null;
+};
+
 // Reverse linking: the user texts the bot, the bot answers with a short code,
 // and the app redeems it here. The chat identity comes from the stored code
 // row, never from the request body.
@@ -650,8 +653,8 @@ routes.post("/channels/link", async (context) => {
 });
 
 routes.post("/channels/:channel/link", async (context) => {
-  const channel = context.req.param("channel") as Channel;
-  if (channel !== "telegram" && channel !== "blooio")
+  const channel = parseChannelParam(context.req.param("channel"));
+  if (channel === null)
     return context.json({ error: "Unknown channel" }, 404);
   const token = Array.from(crypto.getRandomValues(new Uint8Array(24)), (byte) =>
     byte.toString(16).padStart(2, "0"),
@@ -673,8 +676,8 @@ routes.post("/channels/:channel/link", async (context) => {
 });
 
 routes.post("/channels/:channel/messages", async (context) => {
-  const channel = context.req.param("channel") as Channel;
-  if (channel !== "telegram" && channel !== "blooio")
+  const channel = parseChannelParam(context.req.param("channel"));
+  if (channel === null)
     return context.json({ error: "Unknown channel" }, 404);
   const body = await json(context.req.raw);
   const message = text(body?.text, 4096);
@@ -767,8 +770,8 @@ routes.post("/channels/:channel/messages", async (context) => {
 });
 
 routes.delete("/channels/:channel/link", async (context) => {
-  const channel = context.req.param("channel") as Channel;
-  if (channel !== "telegram" && channel !== "blooio")
+  const channel = parseChannelParam(context.req.param("channel"));
+  if (channel === null)
     return context.json({ error: "Unknown channel" }, 404);
   const uid = context.get("auth").uid;
   try {

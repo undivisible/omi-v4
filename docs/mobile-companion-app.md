@@ -1,6 +1,6 @@
 # Mobile Pendant Companion App
 
-*Research pass and design proposal, 2026-07-22. Grounded in the upstream BasedHardware/omi open-source architecture (fetched as untrusted reference data on this date) and in the existing omi-v4 mobile code (`app/lib/device/`, `app/lib/features/device_screen.dart`, `worker/src/`). Nothing here is implemented beyond what is cited; this document defines the target: the mobile app becomes a pure pendant companion — pairing, relay, and light review — while every other surface (desktop app, web portal, Telegram, Blooio/linq) consumes the captured data through the shared Worker.*
+*Research pass and design proposal, 2026-07-22. Grounded in the upstream BasedHardware/omi open-source architecture (fetched as untrusted reference data on this date) and in the existing omi-v4 mobile code (`app/lib/device/`, `app/lib/features/device_screen.dart`, `worker/src/`). Nothing here is implemented beyond what is cited; this document defines the target: the mobile app becomes a pure pendant companion — pairing, relay, and light review — while every other surface (desktop app, web portal, Telegram, iMessage) consumes the captured data through the shared Worker.*
 
 ## 1. Upstream vs. omi-v4 today
 
@@ -38,7 +38,7 @@ Upstream (BasedHardware/omi) is an nRF5340/Zephyr pendant plus a Flutter phone a
 
 ## 2. Target architecture: companion only
 
-Principle: the phone is the pendant's modem and status panel. All intelligence, memory, chat, and delivery live behind the Worker; desktop, web, Telegram, and Blooio read the same data via existing routes (`worker/src/conversations.ts` `/v1/conversations/default/*`, `worker/src/memory-sync.ts` `/v1/memory/zkr-sync`, `worker/src/routes.ts` `/v1/memories` + `/v1/memory/retrieve`, `worker/src/delivery.ts` for channel outbound). This matches PLAN.md's locked decision: "Mobile owns BLE, background hardware relay, firmware, pairing, and device management; desktop owns primary assistant interaction."
+Principle: the phone is the pendant's modem and status panel. All intelligence, memory, chat, and delivery live behind the Worker; desktop, web, Telegram, and iMessage read the same data via existing routes (`worker/src/conversations.ts` `/v1/conversations/default/*`, `worker/src/memory-sync.ts` `/v1/memory/zkr-sync`, `worker/src/routes.ts` `/v1/memories` + `/v1/memory/retrieve`, `worker/src/delivery.ts` for channel outbound). This matches PLAN.md's locked decision: "Mobile owns BLE, background hardware relay, firmware, pairing, and device management; desktop owns primary assistant interaction."
 
 ### 2.1 Mobile screen list (complete)
 
@@ -71,7 +71,7 @@ pendant (Opus/PCM8/PCM16, 3-byte header)
   → DeviceAudioForwarder → Rinf hub (NativeHub.startTranscription / sendAudio)
   → live route: managed/BYOK Deepgram stream (Worker STT admission: POST /v1/stt/sessions, GET /v1/stt/sessions/:id/stream)
   → final segments → zkr capture → /v1/memory/zkr-sync → D1
-  → consumed by desktop / web / Telegram / Blooio via /v1/conversations + /v1/memory routes
+  → consumed by desktop / web / Telegram / iMessage via /v1/conversations + /v1/memory routes
 ```
 
 Decisions:

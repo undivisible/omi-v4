@@ -10,7 +10,7 @@ final class SetupHealth {
     required this.firebase,
     required this.memory,
     required this.telegram,
-    required this.blooio,
+    required this.imessage,
     required this.billing,
     required this.managedChat,
     required this.managedStt,
@@ -21,7 +21,7 @@ final class SetupHealth {
   final bool firebase;
   final bool memory;
   final bool telegram;
-  final bool blooio;
+  final bool imessage;
   final bool billing;
   final bool managedChat;
   final bool managedStt;
@@ -39,14 +39,16 @@ final class SetupHealth {
     });
     final channels = _map(json, 'channels');
     final models = _map(json, 'models');
-    _onlyKeys(channels, const {'telegram', 'blooio'});
+    _onlyKeys(channels, const {'telegram', 'imessage', 'blooio'});
     _onlyKeys(models, const {'managedChat', 'managedStt'});
     return SetupHealth(
       worker: _boolean(json, 'worker'),
       firebase: _boolean(json, 'firebase'),
       memory: _boolean(json, 'memory'),
       telegram: _boolean(channels, 'telegram'),
-      blooio: _boolean(channels, 'blooio'),
+      imessage: channels.containsKey('imessage')
+          ? _boolean(channels, 'imessage')
+          : _boolean(channels, 'blooio'),
       billing: _boolean(json, 'billing'),
       managedChat: _boolean(models, 'managedChat'),
       managedStt: _boolean(models, 'managedStt'),
@@ -59,7 +61,7 @@ final class SetupHealth {
     'Firebase': firebase,
     'Memory': memory,
     'Telegram': telegram,
-    'Blooio': blooio,
+    'iMessage': imessage,
     'Billing': billing,
     'Managed chat': managedChat,
     'Managed transcription': managedStt,

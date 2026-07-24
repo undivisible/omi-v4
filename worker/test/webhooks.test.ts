@@ -57,6 +57,7 @@ beforeAll(async () => {
     "migrations/0022_channel_link_codes.sql",
     "migrations/0026_channel_accounts.sql",
     "migrations/0028_channel_checkout.sql",
+    "migrations/0032_rename_blooio_to_imessage.sql",
   ]) {
     const sql = (await Bun.file(migration).text()).replace(
       "PRAGMA foreign_keys = ON;",
@@ -129,31 +130,18 @@ describe("channel webhooks", () => {
       queued: false,
       replied: true,
     });
-    const account = await database
-      .prepare(
-        "SELECT uid FROM channel_accounts WHERE channel = 'telegram' AND channel_user_id = '909'",
-      )
-      .first<{ uid: string }>();
-    expect(account?.uid).toMatch(/^chan_/);
-    const replay = await send(102, "nope");
-    expect(await replay.json()).toEqual({ accepted: true, duplicate: true });
+    // Channel-only signup is retired — "no" gets app guidance, not a chan_ row.
     expect(
       await database
         .prepare(
           "SELECT COUNT(*) AS count FROM channel_accounts WHERE channel_user_id = '909'",
         )
         .first(),
-    ).toMatchObject({ count: 1 });
-    expect(
-      await database
-        .prepare("SELECT COUNT(*) AS count FROM users WHERE uid LIKE 'chan_%'")
-        .first(),
-    ).toMatchObject({ count: 1 });
+    ).toMatchObject({ count: 0 });
+    const replay = await send(102, "nope");
+    expect(await replay.json()).toEqual({ accepted: true, duplicate: true });
     await database
       .prepare("DELETE FROM channel_inbox WHERE channel_user_id = '909'")
-      .run();
-    await database
-      .prepare("DELETE FROM conversation_messages WHERE uid LIKE 'chan_%'")
       .run();
   });
 
@@ -245,127 +233,6 @@ describe("channel webhooks", () => {
     ).toMatchObject({ count: 1 });
   });
 
-  test("normalizes a signed Blooio message and deduplicates its provider id", async () => {
-    const now = Date.now();
-    await database
-      .prepare(
-        `INSERT INTO channel_bindings
-           (channel, channel_user_id, uid, verified_at, channel_chat_id)
-         VALUES ('blooio', '+15551234567', 'alpha', ?1, '+15551234567')`,
-      )
-      .bind(now)
-      .run();
-    const body = JSON.stringify({
-      event: "message.received",
-      message_id: "msg_abc123",
-      external_id: "+15551234567",
-      sender: "+15551234567",
-      status: "received",
-      protocol: "imessage",
-      timestamp: now,
-      text: "Remember this",
-      is_group: false,
-    });
-    const send = async () =>
-      app.request(
-        "/v1/webhooks/blooio",
-        {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            "x-blooio-signature": await sign(body),
-          },
-          body,
-        },
-        {
-          DB: database,
-          FIREBASE_PROJECT_ID: "test",
-          BLOOIO_WEBHOOK_SIGNING_SECRET: secret,
-        },
-      );
-    const first = await send();
-    expect(await first.json()).toEqual({
-      accepted: true,
-      queued: true,
-      replied: false,
-    });
-    const duplicate = await send();
-    expect(await duplicate.json()).toEqual({ accepted: true, duplicate: true });
-    expect(
-      await database
-        .prepare(
-          "SELECT COUNT(*) AS count FROM channel_inbox WHERE event_id = 'message.received:msg_abc123'",
-        )
-        .first(),
-    ).toEqual({ count: 1 });
-  });
-
-  test("repairs a recorded webhook whose durable enqueue was interrupted", async () => {
-    const now = Date.now();
-    const messageId = "opaque/msg/雪";
-    const eventId = `message.received:${messageId}`;
-    await database
-      .prepare(
-        "INSERT INTO webhook_events (channel, event_id, received_at) VALUES ('blooio', ?1, ?2)",
-      )
-      .bind(eventId, now)
-      .run();
-    const body = JSON.stringify({
-      event: "message.received",
-      message_id: messageId,
-      external_id: "+15551234567",
-      sender: "+15551234567",
-      text: "Recover me",
-      is_group: false,
-    });
-    const response = await app.request(
-      "/v1/webhooks/blooio",
-      {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "x-blooio-signature": await sign(body),
-        },
-        body,
-      },
-      {
-        DB: database,
-        FIREBASE_PROJECT_ID: "test",
-        BLOOIO_WEBHOOK_SIGNING_SECRET: secret,
-      },
-    );
-
-    expect(await response.json()).toEqual({ accepted: true, duplicate: true });
-    expect(
-      await database
-        .prepare(
-          `SELECT i.id AS inbox_id, i.text, m.text AS conversation_text
-           FROM channel_inbox i
-           JOIN conversation_messages m ON m.uid = i.uid AND m.channel_message_id = i.message_id
-           WHERE i.event_id = ?1`,
-        )
-        .bind(eventId)
-        .first(),
-    ).toEqual({
-      inbox_id: expect.stringMatching(/^channel-inbox:[a-f0-9]{64}$/),
-      text: "Recover me",
-      conversation_text: "Recover me",
-    });
-  });
-
-  test("fails closed on unsigned Blooio input", async () => {
-    const response = await app.request(
-      "/v1/webhooks/blooio",
-      { method: "POST", body: "{}" },
-      {
-        DB: database,
-        FIREBASE_PROJECT_ID: "test",
-        BLOOIO_WEBHOOK_SIGNING_SECRET: secret,
-      },
-    );
-    expect(response.status).toBe(401);
-  });
-
   test("does not enqueue blank provider messages", async () => {
     const telegram = await app.request(
       "/v1/webhooks/telegram",
@@ -391,67 +258,76 @@ describe("channel webhooks", () => {
         TELEGRAM_WEBHOOK_SECRET: "telegram-secret",
       },
     );
-    const blooioBody = JSON.stringify({
-      event: "message.received",
-      message_id: "msg_blank",
-      external_id: "+15551234567",
-      sender: "+15551234567",
-      text: "\n\t",
-      is_group: false,
+    const sendblueBody = JSON.stringify({
+      content: "\n\t",
+      is_outbound: false,
+      status: "RECEIVED",
+      message_handle: "sb-msg-blank",
+      from_number: "+15551234567",
+      number: "+15551234567",
+      to_number: "+15122164639",
+      media_url: "",
+      group_id: "",
+      service: "iMessage",
     });
-    const blooio = await app.request(
-      "/v1/webhooks/blooio",
+    const sendblue = await app.request(
+      "/v1/webhooks/sendblue/path-token-value",
       {
         method: "POST",
         headers: {
           "content-type": "application/json",
-          "x-blooio-signature": await sign(blooioBody),
+          "sb-signing-secret": "webhook-secret-value",
         },
-        body: blooioBody,
+        body: sendblueBody,
       },
       {
         DB: database,
         FIREBASE_PROJECT_ID: "test",
-        BLOOIO_WEBHOOK_SIGNING_SECRET: secret,
+        SENDBLUE_WEBHOOK_SIGNING_SECRET: "webhook-secret-value",
+        SENDBLUE_WEBHOOK_PATH_TOKEN: "path-token-value",
       },
     );
 
     expect(await telegram.json()).toEqual({ accepted: true, queued: false });
-    expect(await blooio.json()).toEqual({ accepted: true, queued: false });
+    expect(await sendblue.json()).toEqual({ accepted: true, queued: false });
     expect(
       await database
         .prepare(
-          "SELECT COUNT(*) AS count FROM channel_inbox WHERE event_id IN ('40', 'message.received:msg_blank')",
+          "SELECT COUNT(*) AS count FROM channel_inbox WHERE event_id IN ('40', 'message.received:sb-msg-blank')",
         )
         .first(),
     ).toEqual({ count: 0 });
   });
 
-  test("rejects oversized signed Blooio text before storage", async () => {
-    const messageId = "msg_oversized";
-    const sender = "+15551234567";
+  test("rejects oversized Sendblue text before storage", async () => {
+    const messageHandle = "sb-msg-oversized";
     const body = JSON.stringify({
-      event: "message.received",
-      message_id: messageId,
-      external_id: sender,
-      sender,
-      text: "x".repeat(20_001),
-      is_group: false,
+      content: "x".repeat(20_001),
+      is_outbound: false,
+      status: "RECEIVED",
+      message_handle: messageHandle,
+      from_number: "+15551234567",
+      number: "+15551234567",
+      to_number: "+15122164639",
+      media_url: "",
+      group_id: "",
+      service: "iMessage",
     });
     const response = await app.request(
-      "/v1/webhooks/blooio",
+      "/v1/webhooks/sendblue/path-token-value",
       {
         method: "POST",
         headers: {
           "content-type": "application/json",
-          "x-blooio-signature": await sign(body),
+          "sb-signing-secret": "webhook-secret-value",
         },
         body,
       },
       {
         DB: database,
         FIREBASE_PROJECT_ID: "test",
-        BLOOIO_WEBHOOK_SIGNING_SECRET: secret,
+        SENDBLUE_WEBHOOK_SIGNING_SECRET: "webhook-secret-value",
+        SENDBLUE_WEBHOOK_PATH_TOKEN: "path-token-value",
       },
     );
 
@@ -461,7 +337,7 @@ describe("channel webhooks", () => {
         .prepare(
           "SELECT COUNT(*) AS count FROM conversation_messages WHERE channel_message_id = ?1",
         )
-        .bind(messageId)
+        .bind(messageHandle)
         .first(),
     ).toMatchObject({ count: 0 });
   });
@@ -472,7 +348,7 @@ describe("channel webhooks", () => {
       .prepare(
         `INSERT INTO channel_bindings
            (channel, channel_user_id, uid, verified_at, channel_chat_id)
-         VALUES ('blooio', '+19998887777', 'alpha', ?1, '+19998887777')`,
+         VALUES ('imessage', '+19998887777', 'alpha', ?1, '+19998887777')`,
       )
       .bind(now)
       .run();

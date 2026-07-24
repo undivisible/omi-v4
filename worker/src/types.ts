@@ -12,8 +12,6 @@ export type Bindings = {
   ENVIRONMENT?: string;
   TELEGRAM_WEBHOOK_SECRET?: string;
   TELEGRAM_BOT_TOKEN?: string;
-  BLOOIO_WEBHOOK_SIGNING_SECRET?: string;
-  BLOOIO_API_KEY?: string;
   // Sendblue FaceTime. All three must be set for the feature to leave its
   // graceful "not provisioned" state; the account also needs a purchased
   // FaceTime line. Secrets come from `wrangler secret put`, never the repo.
@@ -118,7 +116,7 @@ export type AppEnv = {
   Variables: { auth: Auth; apiKey?: ApiKeyContext };
 };
 
-export type Channel = "telegram" | "blooio";
+export type Channel = "telegram" | "imessage";
 
 export type PersonalMemory = {
   id: string;

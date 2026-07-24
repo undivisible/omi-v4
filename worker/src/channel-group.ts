@@ -1,7 +1,7 @@
 import type { Channel } from "./types";
 
 // A linked channel must be a one-to-one chat. Telegram groups use negative chat
-// ids; Blooio and Sendblue/iMessage group threads use a `group_id` distinct from
+// ids; Sendblue/iMessage group threads use a `group_id` distinct from
 // the sender, which becomes the stored `channel_chat_id`.
 export const isGroupChannelChat = (
   channel: Channel,

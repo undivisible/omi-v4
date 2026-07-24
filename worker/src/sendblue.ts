@@ -1,12 +1,8 @@
 import type { Bindings, Channel } from "./types";
 
-// Sendblue is the iMessage/SMS/RCS provider that replaces Blooio. The stored
-// channel identifier is deliberately left alone: `"blooio"` is baked into
-// three D1 CHECK constraints and into `worker-rs`, and rewriting it would
-// require rebuilding those tables and shipping both binaries at once. It is
-// now just an opaque identifier for "the iMessage channel"; the provider
-// behind it is chosen by configuration.
-export const imessageChannel: Channel = "blooio";
+// Sendblue is the iMessage/SMS/RCS provider. The stored channel identifier is
+// `"imessage"` (renamed from the historical `"blooio"` wire value).
+export const imessageChannel: Channel = "imessage";
 
 const sendMessageEndpoint = "https://api.sendblue.com/api/send-message";
 
@@ -72,8 +68,8 @@ export const sendblueRequest = (
 // Sendblue does not sign webhook bodies. It echoes the shared secret that was
 // configured for the endpoint back in an `sb-signing-secret` header — there is
 // no HMAC, no timestamp, and therefore no binding between the secret and the
-// payload and no replay window. This is materially weaker than the Blooio and
-// Stripe paths and cannot be fixed from our side, so it is compensated for:
+// payload and no replay window. This is materially weaker than HMAC-signed
+// Stripe webhooks and cannot be fixed from our side, so it is compensated for:
 //
 //   1. The comparison below is constant-time, so the secret cannot be
 //      recovered by timing the endpoint.

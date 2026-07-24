@@ -11,7 +11,7 @@ use crate::crypto_util::{constant_time_eq, hmac_sha256_hex};
 pub const TOLERANCE_SECONDS: i64 = 300;
 pub const MAX_TEXT_LEN: usize = 20_000;
 
-/// Verify a Stripe/Blooio `t=…,v1=…` timestamped HMAC signature.
+/// Verify a Stripe `t=…,v1=…` timestamped HMAC signature.
 ///
 /// Parity with `verifyTimestampedSignature`: split on commas, find `t=`,
 /// collect lowercased `v1=` values, require an all-digit safe-integer
@@ -152,44 +152,6 @@ pub fn parse_telegram(body: &Value) -> Result<(String, Option<TelegramMessage>),
             text: trimmed.to_string(),
         }),
     ))
-}
-
-/// A validated inbound Blooio message.
-#[derive(Debug, PartialEq, Eq)]
-pub struct BlooioMessage {
-    pub event_id: String,
-    pub message_id: String,
-    pub sender: String,
-    pub chat_id: String,
-    pub text: String,
-}
-
-/// Validate a parsed Blooio event body. `None` → not actionable (queued:false).
-pub fn parse_blooio(body: &Value) -> Option<BlooioMessage> {
-    if body.get("event").and_then(Value::as_str) != Some("message.received") {
-        return None;
-    }
-    let message_id = body.get("message_id").and_then(Value::as_str)?;
-    let external_id = body.get("external_id").and_then(Value::as_str)?;
-    let sender = body.get("sender").and_then(Value::as_str)?;
-    let text = body.get("text").and_then(Value::as_str)?;
-    let trimmed = text.trim();
-    if trimmed.is_empty() || text.len() > MAX_TEXT_LEN {
-        return None;
-    }
-    let is_group = body.get("is_group").and_then(Value::as_bool) == Some(true);
-    let group_id = body.get("group_id").and_then(Value::as_str);
-    let chat_id = match (is_group, group_id) {
-        (true, Some(group_id)) => group_id,
-        _ => external_id,
-    };
-    Some(BlooioMessage {
-        event_id: format!("message.received:{message_id}"),
-        message_id: message_id.to_string(),
-        sender: sender.to_string(),
-        chat_id: chat_id.to_string(),
-        text: trimmed.to_string(),
-    })
 }
 
 /// Outcome classes for a validated Stripe event, mirroring the branch order of
@@ -454,7 +416,7 @@ mod tests {
     }
 
     #[test]
-    fn blooio_link_token_patterns() {
+    fn imessage_link_token_patterns() {
         let tok = "f".repeat(48);
         assert_eq!(link_token(&tok, false), Some(tok.clone()));
         assert_eq!(link_token(&format!("/start {tok}"), false), None);
@@ -492,38 +454,9 @@ mod tests {
         assert!(parse_telegram(&json!({})).is_err());
     }
 
-    #[test]
-    fn blooio_parse_group_and_direct() {
-        let direct = json!({
-            "event": "message.received", "message_id": "m1",
-            "external_id": "+1555", "sender": "+1555", "text": "Remember this", "is_group": false
-        });
-        let parsed = parse_blooio(&direct).unwrap();
-        assert_eq!(parsed.event_id, "message.received:m1");
-        assert_eq!(parsed.chat_id, "+1555");
-        let group = json!({
-            "event": "message.received", "message_id": "m2",
-            "external_id": "+1555", "sender": "+1555", "text": "hi",
-            "is_group": true, "group_id": "g99"
-        });
-        assert_eq!(parse_blooio(&group).unwrap().chat_id, "g99");
-    }
+    
 
-    #[test]
-    fn blooio_parse_rejects_blank_and_oversized() {
-        let blank = json!({
-            "event": "message.received", "message_id": "m", "external_id": "e",
-            "sender": "s", "text": "\n\t", "is_group": false
-        });
-        assert!(parse_blooio(&blank).is_none());
-        let oversized = json!({
-            "event": "message.received", "message_id": "m", "external_id": "e",
-            "sender": "s", "text": "x".repeat(20_001), "is_group": false
-        });
-        assert!(parse_blooio(&oversized).is_none());
-        let wrong_event = json!({"event": "message.sent", "message_id": "m"});
-        assert!(parse_blooio(&wrong_event).is_none());
-    }
+    
 
     #[test]
     fn stripe_subscription_extraction() {

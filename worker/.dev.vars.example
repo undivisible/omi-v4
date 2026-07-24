@@ -33,7 +33,7 @@ TELEGRAM_WEBHOOK_SECRET=your-webhook-secret-here
 #   -H "Content-Type: application/json" \
 #   -d '{"url":"https://api.omi.tsc.hk/v1/webhooks/telegram","secret_token":"<SECRET>"}'
 #
-# Sendblue iMessage/SMS/RCS (preferred over legacy Blooio). Grab credentials:
+# Sendblue iMessage/SMS/RCS. Grab credentials:
 #   ./scripts/grab-sendblue-secrets.sh
 # That reads ~/.sendblue/credentials.json or `npx @sendblue/cli show-keys` and
 # writes SENDBLUE_API_KEY + SENDBLUE_SECRET_KEY (CLI names) plus the worker
@@ -51,10 +51,6 @@ TELEGRAM_WEBHOOK_SECRET=your-webhook-secret-here
 # SENDBLUE_WEBHOOK_PATH_TOKEN=long-random-path-segment
 # Optional FaceTime bridge line (separate from iMessage SMS number):
 # SENDBLUE_FACETIME_NUMBER=+1XXXXXXXXXX
-#
-# Legacy Blooio fallback (omit when Sendblue is configured):
-# BLOOIO_API_KEY=your-blooio-api-key
-# BLOOIO_WEBHOOK_SIGNING_SECRET=your-blooio-webhook-secret
 #
 # Stripe Pro billing — intentionally disabled for now. Do not set STRIPE_* or
 # APP_URL until billing is ready to go live. Channel /signup falls back to

@@ -39,14 +39,14 @@ void main() {
           body: {
             'uid': 'firebase-user',
             'channels': [
-              {'channel': 'blooio', 'channel_user_id': '+15555550100'},
+              {'channel': 'imessage', 'channel_user_id': '+15555550100'},
             ],
           },
         ),
       ),
     );
 
-    expect(await client.isLinked(ChannelProvider.blooio), isTrue);
+    expect(await client.isLinked(ChannelProvider.imessage), isTrue);
     expect(await client.isLinked(ChannelProvider.telegram), isFalse);
   });
 
@@ -63,7 +63,7 @@ void main() {
       _Transport(
         const ChannelResponse(
           statusCode: 201,
-          body: {'channel': 'blooio', 'token': 'token', 'expiresAt': 2000},
+          body: {'channel': 'imessage', 'token': 'token', 'expiresAt': 2000},
         ),
       ),
     );
@@ -81,10 +81,10 @@ void main() {
   test('unlink uses the authenticated provider route', () async {
     final transport = _Transport(const ChannelResponse(statusCode: 204));
 
-    await ChannelClient(transport).unlink(ChannelProvider.blooio);
+    await ChannelClient(transport).unlink(ChannelProvider.imessage);
 
     expect(transport.lastRequest?.method, ChannelHttpMethod.delete);
-    expect(transport.lastRequest?.path, '/v1/channels/blooio/link');
+    expect(transport.lastRequest?.path, '/v1/channels/imessage/link');
   });
 
   test('failure state can retry without pretending the channel linked', () {

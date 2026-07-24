@@ -18,7 +18,7 @@
 //! participant's. We are a participant, not an eavesdropper — no encryption is
 //! circumvented.
 //!
-//! The usual gate is the host admitting you from the waiting room. Blooio
+//! The usual gate is the host admitting you from the waiting room. Sendblue
 //! creates the link and auto-admits the first joiner, so for links minted
 //! through `worker/src/facetime.ts` that gate is not in the way. For any other
 //! link, admission can simply never arrive, and [`JoinFailure::NotAdmitted`]

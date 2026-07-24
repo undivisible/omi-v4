@@ -108,7 +108,7 @@ void main() {
   test('the FaceTime provider switch is its own state, not an error', () async {
     final client = _client(
       (_) async => http.Response(
-        '{"error":"FaceTime calling is not yet available from Blooio",'
+        '{"error":"FaceTime calling is not provisioned on this account",'
         '"code":"facetime_unavailable"}',
         503,
       ),

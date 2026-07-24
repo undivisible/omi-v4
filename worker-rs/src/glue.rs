@@ -80,7 +80,6 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         // Phase 2: unauthenticated inbound webhooks (own auth: secret header /
         // HMAC). Mounted before the `/v1/*` auth guard in the TS worker.
         .post_async("/v1/webhooks/telegram", handle_webhook_telegram)
-        .post_async("/v1/webhooks/blooio", handle_webhook_blooio)
         .post_async("/v1/webhooks/stripe", handle_webhook_stripe)
         // Phase 2: desktop auth handoff (no `/v1/*` middleware; /complete does
         // its own Firebase verification internally).
@@ -745,8 +744,11 @@ async fn handle_setup_health(req: Request, ctx: RouteContext<()>) -> Result<Resp
     let firebase_project_id = any("FIREBASE_PROJECT_ID");
     let telegram_webhook_secret = any("TELEGRAM_WEBHOOK_SECRET");
     let telegram_bot_token = any("TELEGRAM_BOT_TOKEN");
-    let blooio_webhook_signing_secret = any("BLOOIO_WEBHOOK_SIGNING_SECRET");
-    let blooio_api_key = any("BLOOIO_API_KEY");
+    let sendblue_api_key_id = any("SENDBLUE_API_KEY_ID").or_else(|| any("SENDBLUE_API_KEY"));
+    let sendblue_api_key_secret = any("SENDBLUE_API_KEY_SECRET").or_else(|| any("SENDBLUE_SECRET_KEY"));
+    let sendblue_number = any("SENDBLUE_NUMBER");
+    let sendblue_webhook_signing_secret = any("SENDBLUE_WEBHOOK_SIGNING_SECRET");
+    let sendblue_webhook_path_token = any("SENDBLUE_WEBHOOK_PATH_TOKEN");
     let stripe_secret_key = any("STRIPE_SECRET_KEY");
     let stripe_pro_price_id = any("STRIPE_PRO_PRICE_ID");
     let stripe_webhook_secret = any("STRIPE_WEBHOOK_SECRET");
@@ -763,8 +765,11 @@ async fn handle_setup_health(req: Request, ctx: RouteContext<()>) -> Result<Resp
         firebase_project_id: firebase_project_id.as_deref(),
         telegram_webhook_secret: telegram_webhook_secret.as_deref(),
         telegram_bot_token: telegram_bot_token.as_deref(),
-        blooio_webhook_signing_secret: blooio_webhook_signing_secret.as_deref(),
-        blooio_api_key: blooio_api_key.as_deref(),
+        sendblue_api_key_id: sendblue_api_key_id.as_deref(),
+        sendblue_api_key_secret: sendblue_api_key_secret.as_deref(),
+        sendblue_number: sendblue_number.as_deref(),
+        sendblue_webhook_signing_secret: sendblue_webhook_signing_secret.as_deref(),
+        sendblue_webhook_path_token: sendblue_webhook_path_token.as_deref(),
         stripe_secret_key: stripe_secret_key.as_deref(),
         stripe_pro_price_id: stripe_pro_price_id.as_deref(),
         stripe_webhook_secret: stripe_webhook_secret.as_deref(),
@@ -1350,53 +1355,6 @@ async fn process_channel_message(
         queued,
         replied: false,
     })
-}
-
-async fn handle_webhook_blooio(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
-    let secret = secret_or_var(&ctx.env, "BLOOIO_WEBHOOK_SIGNING_SECRET").unwrap_or_default();
-    let signature = header(&req, "x-blooio-signature");
-    let raw_body = req.text().await?;
-    if secret.is_empty()
-        || !wh::verify_timestamped_signature(&raw_body, &signature, &secret, now_seconds())
-    {
-        return error_json("Unauthorized", 401);
-    }
-    let Ok(body) = serde_json::from_str::<Value>(&raw_body) else {
-        return error_json("Invalid body", 400);
-    };
-    let Some(message) = wh::parse_blooio(&body) else {
-        return Response::from_json(&json!({ "accepted": true, "queued": false }));
-    };
-    let db = ctx.env.d1("DB")?;
-    let fresh = record_webhook(&db, "blooio", &message.event_id).await?;
-    if let Some(token) = wh::link_token(&message.text, false) {
-        if !fresh {
-            return Response::from_json(&json!({ "accepted": true, "duplicate": true }));
-        }
-        let linked = bind_channel(&db, "blooio", &message.sender, &message.chat_id, &token).await?
-            == LinkOutcome::Linked;
-        return Response::from_json(&json!({ "accepted": true, "linked": linked }));
-    }
-    let processed = process_channel_message(
-        &ctx.env,
-        Channel::Blooio,
-        fresh,
-        &message.event_id,
-        &message.message_id,
-        &message.sender,
-        &message.chat_id,
-        &message.text,
-        &body,
-    )
-    .await?;
-    if !fresh {
-        return Response::from_json(&json!({ "accepted": true, "duplicate": true }));
-    }
-    Response::from_json(&json!({
-        "accepted": true,
-        "queued": processed.queued,
-        "replied": processed.replied,
-    }))
 }
 
 async fn handle_webhook_stripe(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {

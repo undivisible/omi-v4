@@ -862,7 +862,7 @@ class _ChannelLinkTileState extends State<_ChannelLinkTile> {
 
   String _label(ChannelProvider channel) => switch (channel) {
     ChannelProvider.telegram => 'Telegram',
-    ChannelProvider.blooio => 'iMessage',
+    ChannelProvider.imessage => 'iMessage',
   };
 
   Future<void> _openSheet(Set<ChannelProvider> linked) async {

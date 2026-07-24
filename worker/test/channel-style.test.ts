@@ -5,8 +5,8 @@ describe("channel style prompts", () => {
   test("telegram and imessage each get plain-text rules", () => {
     expect(channelStylePrompt("telegram")).toContain("Telegram");
     expect(channelStylePrompt("telegram")).toContain("no markdown");
-    expect(channelStylePrompt("blooio")).toContain("iMessage");
-    expect(channelStylePrompt("blooio")).toContain("no markdown");
+    expect(channelStylePrompt("imessage")).toContain("iMessage");
+    expect(channelStylePrompt("imessage")).toContain("no markdown");
   });
 });
 
@@ -22,7 +22,7 @@ describe("sanitizeChannelReply", () => {
 
   test("removes fenced blocks", () => {
     expect(
-      sanitizeChannelReply("blooio", 'Hello\n```crepus\nstack\n```\nThere'),
+      sanitizeChannelReply("imessage", 'Hello\n```crepus\nstack\n```\nThere'),
     ).toBe("Hello\n\nThere");
   });
 });

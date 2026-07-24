@@ -744,7 +744,7 @@
           }
           </code></pre>
           <p><code>role</code> is <code>user</code> or <code>assistant</code>. <code>source</code> is <code>app</code>, <code>web</code>, <code>desktop</code>,
-          <code>telegram</code> or <code>blooio</code>. <code>blooio</code> is the stored identifier for the <strong>iMessage
+          <code>telegram</code> or <code>imessage</code>. <code>imessage</code> is the stored identifier for the <strong>iMessage
           channel</strong>; the provider behind it is now Sendblue. The identifier is
           deliberately unchanged — it appears in three D1 <code>CHECK</code> constraints and in
           <code>worker-rs</code>, and rewriting it would rebuild those tables and require both
@@ -1084,9 +1084,9 @@
           </tbody>
           </table></div>
           <h4 id="492-imessage-channel-sendblue">4.9.2 iMessage channel: Sendblue</h4>
-          <p>The iMessage/SMS/RCS channel moved from Blooio to Sendblue. Exactly one
+          <p>The iMessage/SMS/RCS channel uses Sendblue. The stored channel id is <code>imessage</code>. Exactly one
           provider is live per deployment: <code>delivery.ts</code> uses Sendblue when the Sendblue
-          variables are set, and falls back to Blooio otherwise. Telegram is untouched.</p>
+          variables are set, and uses Sendblue. Telegram is untouched.</p>
           <p><strong>Outbound</strong> — <code>POST https://api.sendblue.com/api/send-message</code> with
           <code>{number, from_number, content}</code> and the <code>sb-api-key-id</code> / <code>sb-api-secret-key</code>
           headers. Sendblue has <strong>no idempotency key</strong>, so the delivery queue's lease and
@@ -1098,7 +1098,7 @@
           <code>sb-signing-secret</code> header. There is no HMAC, no timestamp, and therefore no
           binding between the secret and the payload — anyone who observes that header
           once can forge inbound messages until it is rotated. This is materially
-          weaker than the Blooio and Stripe paths, and cannot be fixed from our side.</p>
+          weaker than HMAC-signed Stripe webhooks, and cannot be fixed from our side.</p>
           <p>Compensating controls, all implemented in <code>worker/src/sendblue.ts</code>:</p>
           <ol>
           <li>The header is compared in <strong>constant time</strong>, so it cannot be recovered by
@@ -1145,7 +1145,7 @@
           </table></div>
           <p>Migrating the channel also gains SMS and RCS fallback, group messaging,
           typing indicators, read receipts, expressive send styles and voice notes
-          (<code>.caf</code> media renders as a voice memo). It loses Blooio's body-signed webhook
+          (<code>.caf</code> media renders as a voice memo).
           and its idempotency key.</p>
           <h3 id="410-post-apiv1speechtranscriptions">4.10 <code>POST /api/v1/speech/transcriptions</code></h3>
           <p>Scope: <code>speech:write</code>. <strong>Requires an active Omi Pro subscription on the

@@ -126,7 +126,7 @@
             <b>The Worker owns the account.</b> It verifies the Firebase ID token at the edge, then owns persistence, the memory log, currents, billing and channel delivery.
           </li>
           <li>
-            <b>Channels share the conversation.</b> Telegram and iMessage (Sendblue, Blooio fallback) append into the same UID-scoped ordered transport the desktop agent reads.
+            <b>Channels share the conversation.</b> Telegram and iMessage (Sendblue) append into the same UID-scoped ordered transport the desktop agent reads.
           </li>
           <li>
             <b>Realtime voice is its own path.</b> OpenRouter is request/response only, so Gemini Live keeps a separate credential and transport.
@@ -225,8 +225,8 @@
             <b>Telegram.</b> Webhook-verified inbound updates link through a short-lived code in Settings. Messages append to the shared ordered conversation; outbound replies are plain text with crepus blocks stripped.
           </li>
           <li>
-            <b>iMessage (Sendblue).</b> Sendblue is the provider when configured; Blooio remains the fallback. The stored channel id is 
-            <code>blooio</code> either way. DeliveryCoordinator serializes outbound sends per chat with lease-based retries.
+            <b>iMessage (Sendblue).</b> Sendblue is the provider when configured; The stored channel id is 
+            <code>imessage</code> . DeliveryCoordinator serializes outbound sends per chat with lease-based retries.
           </li>
           <li>
             <b>Desktop picks up the thread.</b> A channel message is an ordinary turn — the assistant can plan, propose computer use under the same approval gate, and append a reply that routes back through the channel.

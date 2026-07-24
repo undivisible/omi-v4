@@ -12,7 +12,7 @@ This document covers the system as a whole and describes only how it is built �
 
 ## 1. Product summary
 
-Omi v4 is a cross-platform personal assistant ("second brain") built as a single Flutter application (macOS, Windows, iOS, Android, web) backed by two service layers: an embedded Rust runtime (`app/native/hub`, a Rinf-bridged crate nicknamed "the hub") that owns the assistant chat session, live speech-to-text, personal memory, and desktop computer-use; and a Cloudflare Worker (`worker/`, Bun/Hono/TypeScript) that owns authentication verification, D1-backed persistence, Stripe billing, and channel delivery (Telegram/Blooio). The user's Firebase UID is the single tenant key threaded through both the Rust hub's `zkr` memory engine and the Worker's D1 schema. The product's core loop is: capture (voice, screen, workspace scan, messages) → store as evidenced memory in `zkr` → converse with an LLM-backed assistant that can cite that memory and, on desktop, request approved computer-use actions → surface proactive "Currents" recommendations back into the same chat surface.
+Omi v4 is a cross-platform personal assistant ("second brain") built as a single Flutter application (macOS, Windows, iOS, Android, web) backed by two service layers: an embedded Rust runtime (`app/native/hub`, a Rinf-bridged crate nicknamed "the hub") that owns the assistant chat session, live speech-to-text, personal memory, and desktop computer-use; and a Cloudflare Worker (`worker/`, Bun/Hono/TypeScript) that owns authentication verification, D1-backed persistence, Stripe billing, and channel delivery (Telegram/iMessage). The user's Firebase UID is the single tenant key threaded through both the Rust hub's `zkr` memory engine and the Worker's D1 schema. The product's core loop is: capture (voice, screen, workspace scan, messages) → store as evidenced memory in `zkr` → converse with an LLM-backed assistant that can cite that memory and, on desktop, request approved computer-use actions → surface proactive "Currents" recommendations back into the same chat surface.
 
 ## 2. Top-level system diagram
 
@@ -40,8 +40,8 @@ flowchart TD
         STTW["stt.ts / voice.ts / asr.ts<br/>legacy STT sessions, Gemini Live tokens,<br/>mimo-v2.5-asr batch transcription"]
         CURR["currents.ts<br/>candidate/rank/feedback/execution"]
         BILL["billing.ts<br/>Stripe checkout/portal"]
-        DELIV["delivery.ts (Durable Object)<br/>Telegram/Blooio outbound"]
-        HOOK["webhooks.ts<br/>Telegram/Blooio inbound"]
+        DELIV["delivery.ts (Durable Object)<br/>Telegram/iMessage outbound"]
+        HOOK["webhooks.ts<br/>Telegram/iMessage inbound"]
         D1[("D1 database")]
     end
 
@@ -52,7 +52,7 @@ flowchart TD
         LLM["Claude / GPT / Gemini / xAI / MiMo"]
         STRIPE["Stripe"]
         TG["Telegram Bot API"]
-        BLOO["Blooio API"]
+        SB["Sendblue API"]
     end
 
     UI <--> SVC
@@ -296,17 +296,17 @@ sequenceDiagram
     Hub-->>App: OnboardingScanCompleted (per-source state: Complete/Denied/Unavailable/Failed)
     App-->>U: Editable "what I understand about you" evidence
     U->>App: "What are my tasks?" voice teaching moment
-    App->>App: Continue into single-chat hub,<br/>Calendar/Reminders/Contacts/Telegram/Blooio<br/>become post-onboarding Settings tasks
+    App->>App: Continue into single-chat hub,<br/>Calendar/Reminders/Contacts/Telegram/iMessage<br/>become post-onboarding Settings tasks
 ```
 
 Onboarding scanning is native and read-only (`scan.rs`): workspace scanning walks only explicitly-approved absolute roots (rejecting relative paths or `..` components), skips VCS/build/dependency directories, and only records file counts and detected project names via known manifest markers (`Cargo.toml`, `package.json`, `pubspec.yaml`, etc.) — file contents are never read or transmitted, verified by an inline test (`workspace_keeps_metadata_not_contents`). On macOS only, `scan_notes()` and `scan_mail()` open the platform's Notes/Mail SQLite databases read-only (`SQLITE_OPEN_READ_ONLY`), detect Full-Disk-Access denial vs. absence, and filter out attachment/scan artifacts using upstream-derived heuristics. All scan results feed a strictly bounded prompt (`summary_prompt`: max 6,000 chars, 24 items, 400 chars/item) that is metadata-only and never invents facts. Where available (Apple Silicon macOS, gated by `#[cfg(all(target_os = "macos", target_arch = "aarch64"))]`), a local Apple FoundationModels model (`rs_ai_local` dependency) can turn that into a private on-device one-sentence summary with no network call at all; everywhere else `local_ai::summarize` returns `None`. `AppServices.scanOnboardingSources` (`app/lib/app_services.dart`) requires native initialization and reads the approved workspace root from `PlatformDesktopCapabilityGateway` before invoking the scan. Onboarding is gated by platform capability states (`unsupported/notApplicable/unknown/notDetermined/denied/requiresSettings/requiresSelection/limited/granted`, `app/lib/capabilities/desktop_capabilities.dart`) rather than plain booleans. **Status**: scan logic and local summarization are implemented and unit-tested; end-to-end onboarding flow rendering/accessibility across platforms is still flagged unverified in `PLAN.md`.
 
-### 3.8 Channels (Telegram / Blooio)
+### 3.8 Channels (Telegram / iMessage)
 
 ```mermaid
 sequenceDiagram
-    participant TGU as Telegram/Blooio user
-    participant Provider as Telegram Bot API / Blooio API
+    participant TGU as Telegram/iMessage user
+    participant Provider as Telegram Bot API / Sendblue API
     participant Hook as Worker webhooks.ts
     participant D1 as D1
     participant Desktop as Desktop agent (same conversation)
@@ -332,7 +332,7 @@ sequenceDiagram
     Coord->>D1: mark sent / retry with backoff / failed
 ```
 
-Both channels are server-side-only integrations for this pass (`PLAN.md`): the app never holds Telegram/Blooio credentials. `worker/src/webhooks.ts` verifies inbound authenticity via timestamped HMAC signatures with a 300-second tolerance window and constant-time comparison, deduplicates by `(channel, event_id)` (`webhook_events` table), and links a channel identity to a Firebase UID only via a short-lived, hashed, single-use link token consumed atomically alongside an audit-event insert (`bind()`). Inbound messages are appended into the same UID-scoped ordered conversation transport used by the app/web/desktop clients (`appendConversationMessage`, shared with `worker/src/conversations.ts`), so a Telegram or iMessage/Blooio message becomes an ordinary turn the desktop agent picks up — including the ability to trigger an audited computer-use action under the same approval policy (section 3.5). Outbound delivery is serialized per `(uid, channel)` through a Durable Object (`DeliveryCoordinator`), which claims one delivery row at a time per `channel_chat_id` (FIFO via a "no older pending/delivering row" guard), computes a stable idempotency key for Blooio, respects provider `retry-after`, and marks Telegram failures as a genuinely ambiguous `"unknown"` state on network errors (since the message may have actually sent) rather than blindly retrying. A scheduled Worker cron (`worker/src/index.ts` → `deliverDueChannelMessages`) sweeps due/retryable deliveries and cancels orphaned deliveries against revoked bindings. **Status**: linking, ingestion, ordered leases, and delivery retry logic are implemented and unit-level correct; `PLAN.md` states real provider credentials and a continuously connected desktop client for a live round trip are still unproven.
+Both channels are server-side-only integrations for this pass (`PLAN.md`): the app never holds Telegram/Sendblue credentials. `worker/src/webhooks.ts` verifies inbound authenticity via timestamped HMAC signatures with a 300-second tolerance window and constant-time comparison, deduplicates by `(channel, event_id)` (`webhook_events` table), and links a channel identity to a Firebase UID only via a short-lived, hashed, single-use link token consumed atomically alongside an audit-event insert (`bind()`). Inbound messages are appended into the same UID-scoped ordered conversation transport used by the app/web/desktop clients (`appendConversationMessage`, shared with `worker/src/conversations.ts`), so a Telegram or iMessage message becomes an ordinary turn the desktop agent picks up — including the ability to trigger an audited computer-use action under the same approval policy (section 3.5). Outbound delivery is serialized per `(uid, channel)` through a Durable Object (`DeliveryCoordinator`), which claims one delivery row at a time per `channel_chat_id` (FIFO via a "no older pending/delivering row" guard), computes a stable idempotency key for iMessage deliveries, respects provider `retry-after`, and marks Telegram failures as a genuinely ambiguous `"unknown"` state on network errors (since the message may have actually sent) rather than blindly retrying. A scheduled Worker cron (`worker/src/index.ts` → `deliverDueChannelMessages`) sweeps due/retryable deliveries and cancels orphaned deliveries against revoked bindings. **Status**: linking, ingestion, ordered leases, and delivery retry logic are implemented and unit-level correct; `PLAN.md` states real provider credentials and a continuously connected desktop client for a live round trip are still unproven.
 
 ### 3.9 Billing
 
@@ -410,7 +410,7 @@ flowchart TD
     UID --> ZKR["zkr MemoryDb<br/>tenant_id = person_id = UID<br/>local SQLite file, hashed path per UID"]
 
     TG["Telegram user/chat id"] -.->|"channel_link_tokens<br/>(short-lived, hashed, single-use)"| D1CH
-    BLOO["Blooio E.164 number / chat id"] -.->|"same link-token flow"| D1CH
+    SB["iMessage E.164 number / chat id"] -.->|"same link-token flow"| D1CH
     D1CH -->|"binds identity to"| UID
 
     D1C <-->|"same conversation, any origin"| App["App / Web / Desktop client"]
@@ -418,7 +418,7 @@ flowchart TD
     D1C <-->|"channel-origin messages via webhooks.ts"| BLOO
 ```
 
-The Firebase UID is the sole tenant key on both sides of the system. On the Worker/D1 side, every table that stores user data is scoped by `uid` (`users`, `entitlements`, conversations, `channel_bindings`, `currents`/`current_executions`, memory projection tables) and nearly every query in `worker/src/*.ts` includes an explicit `uid = ?` predicate. On the Rust hub side, `zkr`'s `TenantId` and `PersonId` are both required to equal the same Firebase UID (`firebase_memory_scope` in `runtime.rs`) — there is intentionally no separate tenant/person split in v0. Channel identity (Telegram user/chat id, Blooio E.164/chat id) is mapped to a UID only through a consumed, hashed, single-use link token (`channel_link_tokens` → `channel_bindings`), never by trusting a channel-supplied identity claim directly. This is also how "same account links mobile, desktop, web, Telegram, and Blooio to one Firebase UID and assistant session" (`PLAN.md` v0 acceptance §1) is enforced structurally rather than just by convention.
+The Firebase UID is the sole tenant key on both sides of the system. On the Worker/D1 side, every table that stores user data is scoped by `uid` (`users`, `entitlements`, conversations, `channel_bindings`, `currents`/`current_executions`, memory projection tables) and nearly every query in `worker/src/*.ts` includes an explicit `uid = ?` predicate. On the Rust hub side, `zkr`'s `TenantId` and `PersonId` are both required to equal the same Firebase UID (`firebase_memory_scope` in `runtime.rs`) — there is intentionally no separate tenant/person split in v0. Channel identity (Telegram user/chat id, iMessage E.164/chat id) is mapped to a UID only through a consumed, hashed, single-use link token (`channel_link_tokens` → `channel_bindings`), never by trusting a channel-supplied identity claim directly. This is also how "same account links mobile, desktop, web, Telegram, and iMessage to one Firebase UID and assistant session" (`PLAN.md` v0 acceptance §1) is enforced structurally rather than just by convention.
 
 ## 5. Storage, configuration, and observability
 
@@ -432,7 +432,7 @@ The per-user memory database is a file inside it: `omi-memory-<sha256(uid)>.sqli
 
 Both Workers are configured declaratively: `worker/wrangler.jsonc` for the TypeScript worker (`omi-v4-api`, custom domain `omi.tsc.hk`) — **the deployed source of truth** — and `worker-rs/wrangler.toml` for the Rust shadow (`omi-v4-api-rs`, `workers.dev` only). They bind the *same* physical D1 database; the TypeScript worker owns migrations and the Rust worker deliberately declares no `migrations_dir`. Each declares its own Durable Object namespace. The Rust worker's custom-domain route and cron trigger are commented out on purpose during the shadow window — both workers sharing one D1 while running separate admission DOs would let one worker settle rows the other admitted, leaking in-flight slots. Dangerous side-effect routes such as FaceTime (Sendblue dial + Gemini Live bridge) are implemented only in the TS worker; worker-rs must not expose them without the bridge container. `worker-rs/CUTOVER.md` is the procedure.
 
-Non-secret configuration lives in `vars` (model ids, budget ceilings and window sizes for both the managed-AI and STT admission paths, Firebase project id, the pinned upstream completions URL, AI Gateway ids). Secrets — provider keys, Stripe, Telegram, Blooio, Firebase service account — are set with `wrangler secret put` and are not in the tree.
+Non-secret configuration lives in `vars` (model ids, budget ceilings and window sizes for both the managed-AI and STT admission paths, Firebase project id, the pinned upstream completions URL, AI Gateway ids). Secrets — provider keys, Stripe, Telegram, Sendblue, Firebase service account — are set with `wrangler secret put` and are not in the tree.
 
 ### 5.3 Observability
 
@@ -457,7 +457,7 @@ flowchart LR
 
 Directly from `PLAN.md`'s "Active build checklist," "Current release train," and "Known constraints," corroborated by the code read in this pass:
 
-- **No credentialed live-provider proof yet.** Gemini Live, MiMo (chat and ASR), Deepgram (legacy), Firebase, Stripe, Telegram, Blooio, and the model routes are all implemented against real protocols but have not been exercised against live provider credentials in this repository state.
+- **No credentialed live-provider proof yet.** Gemini Live, MiMo (chat and ASR), Deepgram (legacy), Firebase, Stripe, Telegram, Sendblue, and the model routes are all implemented against real protocols but have not been exercised against live provider credentials in this repository state.
 - **No physical-device proof.** Omi BLE hardware capture, iOS/Android transcription lifecycle, and macOS/Windows both-Shift gesture timing are implemented but only unit/logic-tested, not run against real hardware or OS input.
 - **`rotary` is not a dependency.** `rx4` (`0.3.25`, `zkr-memory` feature) is genuinely load-bearing across three modules — `extraction.rs` derives claims from model output, `chat_router.rs` uses `rx4::model_router`, and `self_improve.rs` uses `rx4::self_improve` — but `rotary` appears nowhere in `app/native/hub`, neither in `Cargo.toml` nor in any source file. Planning documents that describe it as pending integration are describing something that has not been started.
 - **Local STT does not exist.** `TranscriptionAuth::Local` and `SttError::Unavailable` are deliberate fail-closed stand-ins until a real local STT provider (`rs_ai_local` or similar) is integrated; MiMo remains batch-only ASR. `docs/ai-and-observability.md` records an intended move off Deepgram onto a dedicated STT model, and flags that whether that model supports streaming is unverified — that migration has not started in code.
@@ -465,6 +465,6 @@ Directly from `PLAN.md`'s "Active build checklist," "Current release train," and
 - **Observability is partly external and partly unwired.** Workers Observability is enabled in both wrangler configs. Better Stack monitors exist only outside the repository, and no code posts to the cron heartbeat, so that heartbeat has never fired. Error/APM reporting (Sentry) is decided in `docs/ai-and-observability.md` but is not present in either the Worker or the client.
 - **Nightly Daily Review orchestration is unwired.** Currents currently only supports a single idempotent cited recommendation generated on demand when the surface loads — no scheduled nightly reflection cycle exists yet.
 - **Windows computer-use and cross-platform release-build proof are outstanding**, per `PLAN.md`'s test-day checklist; this review did not inspect any Windows-specific native code. Desktop computer-use is provided by the `praefectus` crate (`app/native/hub/src/computer_use.rs`, behind the `computer-use` feature), which supersedes the `rs_peekaboo` naming used in older planning documents.
-- **Secrets are unprovisioned in this tree.** Non-secret `vars` are committed in both wrangler configs and the D1 database and AI Gateway ids are real, but every provider secret is set out of band; deployment proof with real Stripe/Telegram/Blooio credentials has not happened.
+- **Secrets are unprovisioned in this tree.** Non-secret `vars` are committed in both wrangler configs and the D1 database and AI Gateway ids are real, but every provider secret is set out of band; deployment proof with real Stripe/Telegram/Sendblue credentials has not happened.
 - **The Rust worker has not cut over.** `worker-rs` is deployed only as a shadow on `workers.dev`, with its custom-domain route and cron trigger commented out for the reasons given in §5.2. Parity is claimed by `worker-rs/PORT_STATUS.md`, not proven by production traffic.
 - **Concurrency caveat.** `app/lib/`, `app/native/hub/`, `worker/` and `docs/` were being edited by other sessions while this document was written. File-level and behavioural claims were read from source, but any exact line reference should be re-checked before being relied on.

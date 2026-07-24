@@ -33,8 +33,8 @@ const inboundPayload = {
 };
 
 describe("Sendblue channel identity", () => {
-  test("keeps the stored channel identifier so existing bindings survive", () => {
-    expect(imessageChannel).toBe("blooio");
+  test("uses the imessage channel identifier", () => {
+    expect(imessageChannel).toBe("imessage");
   });
 });
 

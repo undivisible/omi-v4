@@ -37,7 +37,7 @@ void main() {
           'worker': true,
           'firebase': true,
           'memory': true,
-          'channels': {'telegram': true, 'blooio': false},
+          'channels': {'telegram': true, 'imessage': false},
           'billing': false,
           'models': {'managedChat': true, 'managedStt': false},
           'desktopAuth': false,
@@ -48,7 +48,7 @@ void main() {
     final health = await SettingsClient(transport).getSetupHealth();
 
     expect(health.services.values.where((ready) => ready), hasLength(5));
-    expect(health.blooio, isFalse);
+    expect(health.imessage, isFalse);
     expect(transport.requests.single.path, '/v1/setup-health');
   });
 

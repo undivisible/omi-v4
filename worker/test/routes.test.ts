@@ -101,9 +101,11 @@ beforeAll(async () => {
   await migration("migrations/0022_channel_link_codes.sql");
   await migration("migrations/0025_byok_price_negotiation.sql");
   await migration("migrations/0026_channel_accounts.sql");
+  await migration("migrations/0028_channel_checkout.sql");
   await migration("migrations/0029_memory_authority_log.sql");
   await migration("migrations/0030_memory_log_projection.sql");
   await migration("migrations/0031_digests.sql");
+  await migration("migrations/0032_rename_blooio_to_imessage.sql");
   const now = Date.now();
   await database
     .prepare(
@@ -130,13 +132,14 @@ describe("setup health", () => {
       worker: true,
       firebase: true,
       memory: true,
-      channels: { telegram: true, blooio: false },
+      channels: { telegram: true, imessage: false },
       billing: false,
       models: {
         managedChat: true,
         managedStt: false,
         managedLiveVoice: false,
         managedAsr: false,
+        managedBatchSpeech: false,
       },
       desktopAuth: false,
     });
@@ -158,6 +161,7 @@ describe("setup health", () => {
       managedStt: false,
       managedLiveVoice: true,
       managedAsr: true,
+      managedBatchSpeech: true,
     });
     expect(JSON.stringify(body)).not.toContain("secret");
   });
@@ -219,21 +223,21 @@ describe("shared conversation routes", () => {
         .prepare(
           `INSERT INTO channel_bindings
              (channel, channel_user_id, uid, verified_at, channel_chat_id)
-           VALUES ('blooio', 'dispatch-alpha', 'alpha', ?1, 'dispatch-alpha')`,
+           VALUES ('imessage', 'dispatch-alpha', 'alpha', ?1, 'dispatch-alpha')`,
         )
         .bind(now),
       database
         .prepare(
           `INSERT INTO channel_inbox
              (id, uid, channel, event_id, message_id, channel_user_id, channel_chat_id, text, payload, received_at)
-           VALUES ('inbox-alpha-1', 'alpha', 'blooio', 'dispatch-alpha-1', 'message-alpha-1', 'dispatch-alpha', 'dispatch-alpha', 'first prompt', '{}', ?1)`,
+           VALUES ('inbox-alpha-1', 'alpha', 'imessage', 'dispatch-alpha-1', 'message-alpha-1', 'dispatch-alpha', 'dispatch-alpha', 'first prompt', '{}', ?1)`,
         )
         .bind(now - 20),
       database
         .prepare(
           `INSERT INTO channel_inbox
              (id, uid, channel, event_id, message_id, channel_user_id, channel_chat_id, text, payload, received_at)
-           VALUES ('inbox-alpha-2', 'alpha', 'blooio', 'dispatch-alpha-2', 'message-alpha-2', 'dispatch-alpha', 'dispatch-alpha', 'second prompt', '{}', ?1)`,
+           VALUES ('inbox-alpha-2', 'alpha', 'imessage', 'dispatch-alpha-2', 'message-alpha-2', 'dispatch-alpha', 'dispatch-alpha', 'second prompt', '{}', ?1)`,
         )
         .bind(now - 10),
       database
@@ -724,12 +728,12 @@ describe("channel routes", () => {
     ]);
   });
 
-  test("delivers Blooio messages once with provider authentication", async () => {
+  test("delivers iMessage messages once with Sendblue authentication", async () => {
     const now = Date.now();
     await database
       .prepare(
         `INSERT INTO channel_bindings (channel, channel_user_id, uid, verified_at, channel_chat_id)
-       VALUES ('blooio', '+15551234567', 'alpha', ?1, '+15551234567')
+       VALUES ('imessage', '+15551234567', 'alpha', ?1, '+15551234567')
        ON CONFLICT(channel, channel_user_id) DO UPDATE SET revoked_at = NULL, channel_chat_id = excluded.channel_chat_id`,
       )
       .bind(now)
@@ -737,23 +741,28 @@ describe("channel routes", () => {
     const originalFetch = globalThis.fetch;
     const calls: Array<{
       url: string;
-      authorization: string | null;
-      key: string | null;
+      keyId: string | null;
+      body: unknown;
     }> = [];
     globalThis.fetch = async (input, init) => {
       const headers = new Headers(init?.headers);
       calls.push({
         url: String(input),
-        authorization: headers.get("authorization"),
-        key: headers.get("idempotency-key"),
+        keyId: headers.get("sb-api-key-id"),
+        body: JSON.parse(String(init?.body ?? "{}")),
       });
-      return Response.json({ message_id: "blooio-message-1" });
+      return Response.json({ status: "QUEUED" });
+    };
+    const sendblueEnv = {
+      SENDBLUE_API_KEY_ID: "sendblue-key-id",
+      SENDBLUE_API_KEY_SECRET: "sendblue-key-secret",
+      SENDBLUE_NUMBER: "+15122164639",
     };
     try {
       const send = (textValue = "Remember the meeting") =>
         request(
           "alpha",
-          "/channels/blooio/messages",
+          "/channels/imessage/messages",
           {
             method: "POST",
             headers: { "content-type": "application/json" },
@@ -762,21 +771,20 @@ describe("channel routes", () => {
               idempotencyKey: "task:meeting:1",
             }),
           },
-          { BLOOIO_API_KEY: "blooio-test-key" },
+          sendblueEnv,
         );
       expect((await send()).status).toBe(200);
       expect((await send()).status).toBe(200);
       expect((await send("Different text")).status).toBe(409);
-      const digest = await crypto.subtle.digest(
-        "SHA-256",
-        new TextEncoder().encode("alpha\u0000blooio\u0000task:meeting:1"),
-      );
-      const providerKey = Buffer.from(digest).toString("hex");
       expect(calls).toEqual([
         {
-          url: "https://api.blooio.com/v2/api/chats/%2B15551234567/messages",
-          authorization: "Bearer blooio-test-key",
-          key: providerKey,
+          url: "https://api.sendblue.com/api/send-message",
+          keyId: "sendblue-key-id",
+          body: {
+            number: "+15551234567",
+            from_number: "+15122164639",
+            content: "Remember the meeting",
+          },
         },
       ]);
     } finally {
@@ -910,13 +918,17 @@ describe("channel routes", () => {
       const send = (key: string, message: string) =>
         request(
           "alpha",
-          "/channels/blooio/messages",
+          "/channels/imessage/messages",
           {
             method: "POST",
             headers: { "content-type": "application/json" },
             body: JSON.stringify({ text: message, idempotencyKey: key }),
           },
-          { BLOOIO_API_KEY: "blooio-test-key" },
+          {
+      SENDBLUE_API_KEY_ID: "sendblue-key-id",
+      SENDBLUE_API_KEY_SECRET: "sendblue-key-secret",
+      SENDBLUE_NUMBER: "+15122164639",
+    },
         );
       expect((await send("ordered:first", "first")).status).toBe(202);
       expect((await send("ordered:second", "second")).status).toBe(202);
@@ -930,8 +942,10 @@ describe("channel routes", () => {
         120_000,
       );
       const env = testBindings({
-        BLOOIO_API_KEY: "blooio-test-key",
-      });
+      SENDBLUE_API_KEY_ID: "sendblue-key-id",
+      SENDBLUE_API_KEY_SECRET: "sendblue-key-secret",
+      SENDBLUE_NUMBER: "+15122164639",
+    });
       await deliverDueChannelMessages(env, now + 3 * 60_000);
       expect(calls).toBe(2);
       await deliverDueChannelMessages(env, now + 3 * 60_000);
@@ -946,7 +960,7 @@ describe("channel routes", () => {
     await database
       .prepare(
         `INSERT INTO channel_bindings (channel, channel_user_id, uid, verified_at, revoked_at, channel_chat_id)
-         VALUES ('blooio', 'beta-shared-user', 'beta', ?1, NULL, '+15551234567')
+         VALUES ('imessage', 'beta-shared-user', 'beta', ?1, NULL, '+15551234567')
          ON CONFLICT(channel, channel_user_id) DO UPDATE SET uid = excluded.uid, revoked_at = NULL, channel_chat_id = excluded.channel_chat_id`,
       )
       .bind(now)
@@ -956,8 +970,8 @@ describe("channel routes", () => {
         `INSERT INTO channel_deliveries
            (id, uid, channel, idempotency_key, channel_chat_id, text, state, next_attempt_at, created_at, updated_at)
          VALUES
-           ('alpha-shared-older', 'alpha', 'blooio', 'shared:alpha', '+15551234567', 'alpha waits', 'retry', ?1, ?1, ?1),
-           ('beta-shared-newer', 'beta', 'blooio', 'shared:beta', '+15551234567', 'beta sends', 'pending', ?1, ?1, ?1)`,
+           ('alpha-shared-older', 'alpha', 'imessage', 'shared:alpha', '+15551234567', 'alpha waits', 'retry', ?1, ?1, ?1),
+           ('beta-shared-newer', 'beta', 'imessage', 'shared:beta', '+15551234567', 'beta sends', 'pending', ?1, ?1, ?1)`,
       )
       .bind(now)
       .run();
@@ -968,12 +982,16 @@ describe("channel routes", () => {
       return Response.json({ message_id: "beta-shared-sent" });
     };
     try {
-      const environment = testBindings({ BLOOIO_API_KEY: "blooio-test-key" });
+      const environment = testBindings({
+      SENDBLUE_API_KEY_ID: "sendblue-key-id",
+      SENDBLUE_API_KEY_SECRET: "sendblue-key-secret",
+      SENDBLUE_NUMBER: "+15122164639",
+    });
       await dispatchChannelMessage(
         environment,
         "beta-shared-newer",
         "alpha",
-        "blooio",
+        "imessage",
         now,
       );
       expect(calls).toBe(0);
@@ -981,7 +999,7 @@ describe("channel routes", () => {
         environment,
         "beta-shared-newer",
         "beta",
-        "blooio",
+        "imessage",
         now,
       );
       expect(calls).toBe(1);
@@ -1008,7 +1026,7 @@ describe("channel routes", () => {
       .prepare(
         `INSERT INTO channel_deliveries
            (id, uid, channel, idempotency_key, channel_chat_id, text, next_attempt_at, created_at, updated_at)
-         VALUES ('lease-fence', 'alpha', 'blooio', 'lease:fence', '+15551234567', 'fenced', ?1, ?1, ?1)`,
+         VALUES ('lease-fence', 'alpha', 'imessage', 'lease:fence', '+15551234567', 'fenced', ?1, ?1, ?1)`,
       )
       .bind(now)
       .run();
@@ -1026,13 +1044,15 @@ describe("channel routes", () => {
       return provider;
     };
     const environment = testBindings({
-      BLOOIO_API_KEY: "blooio-test-key",
+      SENDBLUE_API_KEY_ID: "sendblue-key-id",
+      SENDBLUE_API_KEY_SECRET: "sendblue-key-secret",
+      SENDBLUE_NUMBER: "+15122164639",
     });
     const delivery = dispatchChannelMessage(
       environment,
       "lease-fence",
       "alpha",
-      "blooio",
+      "imessage",
       now,
     );
     await waiting;
@@ -1080,7 +1100,7 @@ describe("channel routes", () => {
     try {
       const send = request(
         "alpha",
-        "/channels/blooio/messages",
+        "/channels/imessage/messages",
         {
           method: "POST",
           headers: { "content-type": "application/json" },
@@ -1089,11 +1109,15 @@ describe("channel routes", () => {
             idempotencyKey: "race:send-unlink",
           }),
         },
-        { BLOOIO_API_KEY: "blooio-test-key" },
+        {
+      SENDBLUE_API_KEY_ID: "sendblue-key-id",
+      SENDBLUE_API_KEY_SECRET: "sendblue-key-secret",
+      SENDBLUE_NUMBER: "+15122164639",
+    },
       );
       await started;
       let unlinkResolved = false;
-      const unlink = request("alpha", "/channels/blooio/link", {
+      const unlink = request("alpha", "/channels/imessage/link", {
         method: "DELETE",
       }).then((response) => {
         unlinkResolved = true;
@@ -1114,7 +1138,7 @@ describe("channel routes", () => {
       expect(
         await database
           .prepare(
-            "SELECT revoked_at FROM channel_bindings WHERE uid = 'alpha' AND channel = 'blooio' AND channel_user_id = '+15551234567'",
+            "SELECT revoked_at FROM channel_bindings WHERE uid = 'alpha' AND channel = 'imessage' AND channel_user_id = '+15551234567'",
           )
           .first(),
       ).toMatchObject({ revoked_at: expect.any(Number) });
@@ -1139,10 +1163,11 @@ describe("channel link redemption", () => {
       RATE_LIMITER: allowingRateLimiter,
       TELEGRAM_WEBHOOK_SECRET: "telegram-secret",
       TELEGRAM_BOT_TOKEN: "bot-token",
+      SENDBLUE_WEBHOOK_SIGNING_SECRET: "sendblue-secret",
     };
     const issued = await issueLinkCode(
       testBindings(environment),
-      "blooio",
+      "imessage",
       "+1555",
       "group-99",
     );

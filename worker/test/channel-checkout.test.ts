@@ -14,6 +14,7 @@ import {
 } from "../src/channel-checkout";
 import { handleChannelMessage } from "../src/channel-commands";
 import { app } from "../src/index";
+import { signUpChannelSender } from "../src/channel-signup";
 import type { Bindings } from "../src/types";
 
 const webhookSecret = "whsec_channel";
@@ -123,7 +124,7 @@ const env = (): Bindings =>
     RATE_LIMITER: rateLimiter,
     TELEGRAM_WEBHOOK_SECRET: "telegram-secret",
     TELEGRAM_BOT_TOKEN: "bot-token",
-    BLOOIO_WEBHOOK_SIGNING_SECRET: "blooio-secret",
+    SENDBLUE_WEBHOOK_SIGNING_SECRET: "sendblue-secret",
     STRIPE_SECRET_KEY: "sk_test",
     STRIPE_PRO_PRICE_ID: "price_pro",
     STRIPE_WEBHOOK_SECRET: webhookSecret,
@@ -139,28 +140,24 @@ const migrate = async (path: string) => {
     if (statement) await database.prepare(statement).run();
 };
 
+// Chat "no → create chan_ account" signup is retired. Checkout tests still
+// cover /subscribe for legacy channel accounts created via the helper below.
 const signUp = async (channelUserId: string) => {
-  await handleChannelMessage(
+  const created = await signUpChannelSender(
     env(),
     "telegram",
     channelUserId,
     channelUserId,
-    "hi",
   );
+  expect(created.status).toBe("created");
   const outcome = await handleChannelMessage(
     env(),
     "telegram",
     channelUserId,
     channelUserId,
-    "no",
+    "/subscribe",
   );
-  const account = await database
-    .prepare(
-      "SELECT uid FROM channel_accounts WHERE channel = 'telegram' AND channel_user_id = ?1",
-    )
-    .bind(channelUserId)
-    .first<{ uid: string }>();
-  return { uid: String(account?.uid), reply: outcome.reply ?? "" };
+  return { uid: created.uid, reply: outcome.reply ?? "" };
 };
 
 const checkoutEvent = (
@@ -209,6 +206,7 @@ beforeAll(async () => {
     "migrations/0025_byok_price_negotiation.sql",
     "migrations/0026_channel_accounts.sql",
     "migrations/0028_channel_checkout.sql",
+    "migrations/0032_rename_blooio_to_imessage.sql",
   ])
     await migrate(file);
   const now = Date.now();
@@ -251,9 +249,9 @@ afterEach(() => {
 });
 
 describe("checkout links in chat", () => {
-  test("signup hands back a Stripe-hosted link bound to that account, and nothing else", async () => {
+  test("/subscribe hands back a Stripe-hosted link bound to that account, and nothing else", async () => {
     const { uid, reply } = await signUp("500");
-    expect(reply).toContain("this chat is your Omi account");
+    expect(reply).toContain("Tap here to subscribe");
     expect(reply).toContain("https://checkout.stripe.com/c/pay/cs_test_");
     // Never a card field, never a price the chat could argue with.
     expect(reply).toContain("never ask you for card details");

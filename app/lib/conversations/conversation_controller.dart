@@ -29,7 +29,7 @@ MessageOrigin? _messageOriginForChannel(String channel) {
   switch (channel) {
     case 'telegram':
       return MessageOrigin.channelTelegram;
-    case 'blooio':
+    case 'imessage':
       return MessageOrigin.channelImessage;
     default:
       return null;

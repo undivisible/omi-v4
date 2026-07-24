@@ -30,20 +30,6 @@ fn random_jitter() -> f64 {
     (u64::from_le_bytes(bytes) as f64) / (u64::MAX as f64 + 1.0)
 }
 
-fn percent_encode(value: &str) -> String {
-    let mut out = String::with_capacity(value.len());
-    for byte in value.bytes() {
-        match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                out.push(byte as char)
-            }
-            b' ' => out.push('+'),
-            other => out.push_str(&format!("%{other:02X}")),
-        }
-    }
-    out
-}
-
 fn json_str(value: &Value, key: &str) -> Option<String> {
     value.get(key).and_then(Value::as_str).map(String::from)
 }
@@ -140,33 +126,56 @@ fn provider_send_request(
             init.with_body(Some(JsValue::from_str(&body.to_string())));
             Ok(Some(Request::new_with_init(&url, &init)?))
         }
-        Channel::Blooio => {
-            let key = env
-                .secret("BLOOIO_API_KEY")
+        Channel::IMessage => {
+            // Sendblue only — mirrors worker/src/delivery.ts providerRequest.
+            let key_id = env
+                .secret("SENDBLUE_API_KEY_ID")
                 .ok()
                 .map(|v| v.to_string())
-                .or_else(|| env.var("BLOOIO_API_KEY").ok().map(|v| v.to_string()))
+                .or_else(|| env.var("SENDBLUE_API_KEY_ID").ok().map(|v| v.to_string()))
+                .or_else(|| env.secret("SENDBLUE_API_KEY").ok().map(|v| v.to_string()))
+                .or_else(|| env.var("SENDBLUE_API_KEY").ok().map(|v| v.to_string()))
                 .filter(|v| !v.is_empty());
-            let Some(key) = key else {
+            let key_secret = env
+                .secret("SENDBLUE_API_KEY_SECRET")
+                .ok()
+                .map(|v| v.to_string())
+                .or_else(|| env.var("SENDBLUE_API_KEY_SECRET").ok().map(|v| v.to_string()))
+                .or_else(|| env.secret("SENDBLUE_SECRET_KEY").ok().map(|v| v.to_string()))
+                .or_else(|| env.var("SENDBLUE_SECRET_KEY").ok().map(|v| v.to_string()))
+                .filter(|v| !v.is_empty());
+            let from_number = env
+                .secret("SENDBLUE_NUMBER")
+                .ok()
+                .map(|v| v.to_string())
+                .or_else(|| env.var("SENDBLUE_NUMBER").ok().map(|v| v.to_string()))
+                .map(|v| v.trim().to_string())
+                .filter(|v| !v.is_empty());
+            let (Some(key_id), Some(key_secret), Some(from_number)) =
+                (key_id, key_secret, from_number)
+            else {
                 return Ok(None);
             };
-            let url = format!(
-                "https://api.blooio.com/v2/api/chats/{}/messages",
-                percent_encode(chat_id)
-            );
             let mut init = RequestInit::new();
             init.with_method(Method::Post);
             let headers = Headers::new();
-            headers.set("authorization", &format!("Bearer {key}"))?;
+            headers.set("sb-api-key-id", &key_id)?;
+            headers.set("sb-api-secret-key", &key_secret)?;
             headers.set("content-type", "application/json")?;
-            if let Some(key) = idempotency_key {
-                headers.set("idempotency-key", key)?;
-            }
+            let _ = idempotency_key; // Sendblue has no idempotency-key header.
             init.with_headers(headers);
             init.with_body(Some(JsValue::from_str(
-                &json!({ "text": text }).to_string(),
+                &json!({
+                    "number": chat_id,
+                    "from_number": from_number,
+                    "content": text,
+                })
+                .to_string(),
             )));
-            Ok(Some(Request::new_with_init(&url, &init)?))
+            Ok(Some(Request::new_with_init(
+                crate::sendblue::SEND_MESSAGE_ENDPOINT,
+                &init,
+            )?))
         }
     }
 }
@@ -179,7 +188,7 @@ fn provider_send_request(
 fn channel_webhook_secret(env: &Env, channel: Channel) -> Option<String> {
     let name = match channel {
         Channel::Telegram => "TELEGRAM_WEBHOOK_SECRET",
-        Channel::Blooio => "BLOOIO_WEBHOOK_SIGNING_SECRET",
+        Channel::IMessage => "SENDBLUE_WEBHOOK_SIGNING_SECRET",
     };
     env.secret(name)
         .ok()
@@ -262,7 +271,7 @@ pub async fn resolve_link_code(env: &Env, code: &str, now: i64) -> Result<Option
     };
     let channel = match json_str(&row, "channel").as_deref() {
         Some("telegram") => Channel::Telegram,
-        Some("blooio") => Channel::Blooio,
+        Some("imessage") | Some("blooio") => Channel::IMessage,
         _ => return Ok(None),
     };
     Ok(Some(PendingLinkCode {
@@ -469,7 +478,7 @@ async fn reset_conversation(
 fn request_for(delivery: &DeliveryRow, env: &Env) -> Result<Option<Request>> {
     let idempotency = match delivery.channel {
         Channel::Telegram => None,
-        Channel::Blooio => Some(stable_idempotency_key(
+        Channel::IMessage => Some(stable_idempotency_key(
             &delivery.uid,
             delivery.channel,
             &delivery.idempotency_key,

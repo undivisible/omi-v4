@@ -82,7 +82,7 @@ final class ConversationInboxItem {
     final memoryContext = json['memoryContext'];
     if (id is! String ||
         !RegExp(r'^[A-Za-z0-9._:-]{8,128}$').hasMatch(id) ||
-        (channel != 'telegram' && channel != 'blooio') ||
+        (channel != 'telegram' && channel != 'imessage') ||
         text is! String ||
         text.trim().isEmpty ||
         text.length > 20000 ||

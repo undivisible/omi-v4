@@ -242,27 +242,8 @@ const providerRequest = (
       },
     };
   }
-  // The iMessage channel. Sendblue is the provider when it is configured;
-  // Blooio stays as the fallback until Sendblue is proven in production, and
-  // exactly one of them is ever live for a given deployment.
-  const sendblue = sendblueRequest(env, channelChatId, text);
-  if (sendblue) return sendblue;
-  if (!env.BLOOIO_API_KEY) return null;
-  return {
-    url: `https://api.blooio.com/v2/api/chats/${encodeURIComponent(channelChatId)}/messages`,
-    init: {
-      method: "POST",
-      signal: AbortSignal.timeout(15_000),
-      headers: {
-        authorization: `Bearer ${env.BLOOIO_API_KEY}`,
-        "content-type": "application/json",
-        ...(idempotencyKey === null
-          ? {}
-          : { "idempotency-key": idempotencyKey }),
-      },
-      body: JSON.stringify({ text }),
-    },
-  };
+  // The iMessage channel — Sendblue only.
+  return sendblueRequest(env, channelChatId, text);
 };
 
 // Control-plane replies (link codes, command output, unlink confirmations)
@@ -428,7 +409,7 @@ export class DeliveryCoordinator {
       const path = new URL(request.url).pathname;
       const uid = typeof body.uid === "string" ? body.uid : null;
       const channel =
-        body.channel === "telegram" || body.channel === "blooio"
+        body.channel === "telegram" || body.channel === "imessage"
           ? body.channel
           : null;
       const now =

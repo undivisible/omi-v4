@@ -31,7 +31,7 @@ Omi v4 is an ultrasimple thinking partner and second brain that works across eve
 | Desktop | A single continuous-chat home surface: no multi-destination navigation. Currents surfaces directly in chat home as "What matters next" task rows; screen context, local computer use, and the both-Shift voice/input gesture remain desktop-owned; Settings (reached via the macOS app menu, ⌘,, or the menu-bar item, not a nav destination) consolidates account/setup content |
 | Web | Signed portal for memory, Currents, account, connections, and billing |
 | Public site | Product explanation, pricing, download/sign-in; initially a public route in the Flutter web build |
-| Channels | Telegram and Blooio/iMessage are primary conversational portals into the same desktop chat and agent session; linking is server-side only for this pass (see Channels and identity) |
+| Channels | Telegram and iMessage (Sendblue) are primary conversational portals into the same desktop chat and agent session; linking is server-side only for this pass (see Channels and identity) |
 
 ## Minimal repository
 
@@ -209,7 +209,7 @@ Flutter owns the shared state machine. Small native keyboard adapters report phy
 | Telegram | Bot sends a short-lived link code; Worker binds Telegram user/chat IDs to Firebase UID |
 | Blooio | E.164 number and Blooio chat identity bind to Firebase UID after an authenticated link flow |
 
-This pass runs Telegram and Blooio as server-side-only SaaS channels: bot/channel credentials are Worker environment variables (`TELEGRAM_BOT_TOKEN`, `BLOOIO_API_KEY`, already implemented), and there is no per-user in-app linking UI surfaced in desktop Settings for now. The linking widget and its tests (`ChannelConnectionTile`) remain in the codebase; they are simply not shown in the current Settings surface.
+This pass runs Telegram and Blooio as server-side-only SaaS channels: bot/channel credentials are Worker environment variables (`TELEGRAM_BOT_TOKEN`, `SENDBLUE_*`, already implemented), and there is no per-user in-app linking UI surfaced in desktop Settings for now. The linking widget and its tests (`ChannelConnectionTile`) remain in the codebase; they are simply not shown in the current Settings surface.
 
 Both adapters normalize inbound messages into the same desktop conversation and agent session. A user can ask from iMessage or Telegram for a computer-use action; the desktop agent plans and executes it under the remote-action approval policy. Webhooks verify provider authenticity, deduplicate event IDs, reject unlinked senders, and store delivery state. Blooio initially uses its unified HTTP API for iMessage/SMS/RCS/WhatsApp; advanced number management is not required for v0.
 

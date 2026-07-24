@@ -122,7 +122,7 @@ class Architecture extends StatelessComponent {
           li([
             b([.text('Channels share the conversation.')]),
             .text(
-              ' Telegram and iMessage (Sendblue, Blooio fallback) append into '
+              ' Telegram and iMessage (Sendblue) append into '
               'the same UID-scoped ordered transport the desktop agent reads.',
             ),
           ]),
@@ -346,12 +346,11 @@ class Architecture extends StatelessComponent {
           li([
             b([.text('iMessage (Sendblue).')]),
             .text(
-              ' Sendblue is the provider when configured; Blooio remains the '
-              'fallback. The stored channel id is ',
+              ' Sendblue is the provider. The stored channel id is ',
             ),
-            code([.text('blooio')]),
+            code([.text('imessage')]),
             .text(
-              ' either way. DeliveryCoordinator serializes outbound sends per '
+              '. DeliveryCoordinator serializes outbound sends per '
               'chat with lease-based retries.',
             ),
           ]),

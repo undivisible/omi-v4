@@ -16,7 +16,6 @@ export const channelStylePrompt = (channel: Channel): string => {
       "Telegram allows a little structure, but still avoid markdown — use line breaks sparingly instead of bullets.",
     ].join(" ");
   }
-  // Stored channel id `blooio` is the iMessage/SMS path (Sendblue provider).
   return [
     "Delivery channel: iMessage/SMS.",
     sharedMessagingRules,

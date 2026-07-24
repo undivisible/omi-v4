@@ -47,9 +47,9 @@ describe("public boundaries", () => {
     expect(response.status).toBe(401);
   });
 
-  test("Blooio webhook fails closed without configuration", async () => {
+  test("Sendblue webhook fails closed without configuration", async () => {
     const response = await app.request(
-      "/v1/webhooks/blooio",
+      "/v1/webhooks/sendblue/path-token-value",
       { method: "POST" },
       {},
     );

@@ -75,7 +75,7 @@ mod tests {
 
     #[test]
     fn hash_is_not_the_plaintext() {
-        let code = derive_link_code("secret", "blooio", "+1555", "n");
+        let code = derive_link_code("secret", "imessage", "+1555", "n");
         let hash = code_hash(&code);
         assert_ne!(hash, code);
         assert_eq!(hash.len(), 64);

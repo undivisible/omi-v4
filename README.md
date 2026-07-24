@@ -1,6 +1,6 @@
 # Omi v4
 
-A proactive second brain that listens, remembers with evidence, and acts — across the Omi pendant, mobile, desktop, web, Telegram, and Blooio.
+A proactive second brain that listens, remembers with evidence, and acts — across the Omi pendant, mobile, desktop, web, Telegram, and iMessage.
 
 Omi v4 captures what happens around you (pendant audio, meetings, your workspace), turns it into cited, evidence-backed memory, and exposes it through one continuous assistant conversation that reaches you wherever you are. On desktop it can also act on your behalf, behind an explicit approval step.
 

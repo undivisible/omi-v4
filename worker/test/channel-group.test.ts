@@ -7,8 +7,8 @@ describe("channel group detection", () => {
     expect(isGroupChannelChat("telegram", "42", "-999")).toBe(true);
   });
 
-  test("detects blooio and sendblue groups by chat id", () => {
-    expect(isGroupChannelChat("blooio", "+1555", "+1555")).toBe(false);
-    expect(isGroupChannelChat("blooio", "+1555", "group-1")).toBe(true);
+  test("detects imessage groups by chat id", () => {
+    expect(isGroupChannelChat("imessage", "+1555", "+1555")).toBe(false);
+    expect(isGroupChannelChat("imessage", "+1555", "group-1")).toBe(true);
   });
 });

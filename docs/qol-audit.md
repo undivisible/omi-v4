@@ -7,7 +7,7 @@ Living list from the ongoing pass. P0s get fixed in this effort; the rest are tr
 | Item | Status |
 |---|---|
 | Home marketing jargon (zkr / D1 / local mirror / Blooio) | In progress — consumer rewrite in `site/lib/pages/home.dart` |
-| Blooio provider still live as Sendblue fallback | In progress — full rename to `imessage` + remove Blooio transport |
+| Blooio provider still live as Sendblue fallback | Done — wire id is `imessage`; Blooio transport removed |
 | Overlay submit dismisses pill; reply only in hub | In progress — keep bubble on overlay |
 | Gemini Live has no tools / no AX | In progress — tool bridge + screen context |
 | Currents only generated on client `/generate` | Done — daily cron batch at local 07:00 (`generateDueCurrents`) |
@@ -18,8 +18,7 @@ Living list from the ongoing pass. P0s get fixed in this effort; the rest are tr
 
 - Menu bar Capture still calls `showApp()` (forces hub) — covered by overlay agent
 - Settings “Allow screen understanding” vs Accessibility AX — clarify copy
-- `channels.blooio` health key rename → `channels.imessage` with client update
-- Architecture page still mentions Blooio fallback — update after rename lands
+- `channels.imessage` health key (clients briefly accept legacy `channels.blooio`)
 - Digests + Currents both scan users with `LIMIT 200` unordered beyond `uid` — fairer cursor/pagination if user count grows
 - FaceTime hub docs still say Blooio in a few Rust comments
 
