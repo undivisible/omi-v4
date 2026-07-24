@@ -396,6 +396,13 @@ final class DemoNativeHub implements NativeHub {
   }) => _unavailable();
 
   @override
+  void updateLiveVoiceContext({
+    required String requestId,
+    required String liveStreamId,
+    required String sessionContext,
+  }) => _unavailable();
+
+  @override
   void startMeeting({required String requestId, String? title}) =>
       _unavailable();
 

@@ -191,6 +191,11 @@ abstract interface class NativeHub {
     String? sessionContext,
   });
   void stopLiveVoice({required String requestId, required String liveStreamId});
+  void updateLiveVoiceContext({
+    required String requestId,
+    required String liveStreamId,
+    required String sessionContext,
+  });
   void startMeeting({required String requestId, String? title});
   void stopMeeting(String requestId);
   void jotMeetingNote({required String requestId, required String text});
@@ -355,6 +360,13 @@ final class UnavailableNativeHub implements NativeHub {
   void stopLiveVoice({
     required String requestId,
     required String liveStreamId,
+  }) => _unavailable();
+
+  @override
+  void updateLiveVoiceContext({
+    required String requestId,
+    required String liveStreamId,
+    required String sessionContext,
   }) => _unavailable();
 
   @override
@@ -742,6 +754,19 @@ final class RinfNativeHub implements NativeHub {
     required String requestId,
     required String liveStreamId,
   }) => _send(requestId, CommandStopLiveVoice(liveStreamId: liveStreamId));
+
+  @override
+  void updateLiveVoiceContext({
+    required String requestId,
+    required String liveStreamId,
+    required String sessionContext,
+  }) => _send(
+    requestId,
+    CommandUpdateLiveVoiceContext(
+      liveStreamId: liveStreamId,
+      sessionContext: sessionContext,
+    ),
+  );
 
   @override
   void startMeeting({required String requestId, String? title}) =>

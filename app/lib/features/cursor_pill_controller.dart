@@ -399,12 +399,9 @@ final class CursorPillController extends ChangeNotifier {
       events: services.nativeEvents,
       startVoice: () async {
         final ax = await AxContext.snapshot();
-        final sessionContext = ax.isEmpty
-            ? null
-            : buildOverlayPrompt(
-                question: 'Screen context for this voice session:',
-                context: ax,
-              );
+        final sessionContext = ax.asSessionContextPrompt(
+          'Screen context for this voice session:',
+        );
         await services.startDesktopVoice(sessionContext: sessionContext);
       },
       stopVoice: () async => (await services.stopDesktopVoice())?.text ?? '',
