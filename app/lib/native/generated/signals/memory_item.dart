@@ -1,6 +1,7 @@
 // ignore_for_file: type=lint, type=warning
 part of 'signals.dart';
 
+
 @immutable
 class MemoryItem {
   const MemoryItem({
@@ -72,9 +73,9 @@ class MemoryItem {
   }
 
   Uint8List bincodeSerialize() {
-    final serializer = BincodeSerializer();
-    serialize(serializer);
-    return serializer.bytes;
+      final serializer = BincodeSerializer();
+      serialize(serializer);
+      return serializer.bytes;
   }
 
   @override
@@ -82,33 +83,38 @@ class MemoryItem {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is MemoryItem &&
-        kind == other.kind &&
-        id == other.id &&
-        title == other.title &&
-        body == other.body &&
-        recordedAtMs == other.recordedAtMs &&
-        listEquals(evidenceIds, other.evidenceIds);
+    return other is MemoryItem
+      && kind == other.kind
+      && id == other.id
+      && title == other.title
+      && body == other.body
+      && recordedAtMs == other.recordedAtMs
+      && listEquals(evidenceIds, other.evidenceIds);
   }
 
   @override
-  int get hashCode =>
-      Object.hash(kind, id, title, body, recordedAtMs, evidenceIds);
+  int get hashCode => Object.hash(
+        kind,
+        id,
+        title,
+        body,
+        recordedAtMs,
+        evidenceIds,
+      );
 
   @override
   String toString() {
     String? fullString;
 
     assert(() {
-      fullString =
-          '$runtimeType('
-          'kind: $kind, '
-          'id: $id, '
-          'title: [REDACTED], '
-          'body: [REDACTED], '
-          'recordedAtMs: $recordedAtMs, '
-          'evidenceIds: $evidenceIds'
-          ')';
+      fullString = '$runtimeType('
+        'kind: $kind, '
+        'id: $id, '
+        'title: $title, '
+        'body: $body, '
+        'recordedAtMs: $recordedAtMs, '
+        'evidenceIds: $evidenceIds'
+        ')';
       return true;
     }());
 

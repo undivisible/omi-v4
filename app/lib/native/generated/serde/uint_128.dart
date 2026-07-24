@@ -32,7 +32,10 @@ class Uint128 {
   }
 
   @override
-  int get hashCode => Object.hash(high, low);
+  int get hashCode => Object.hash(
+        high,
+        low,
+      );
 
   @override
   String toString() {

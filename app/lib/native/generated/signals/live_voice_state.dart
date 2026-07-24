@@ -1,6 +1,7 @@
 // ignore_for_file: type=lint, type=warning
 part of 'signals.dart';
 
+
 @immutable
 class LiveVoiceState {
   const LiveVoiceState({
@@ -46,9 +47,7 @@ class LiveVoiceState {
       liveStreamId: liveStreamId ?? this.liveStreamId,
       state: state ?? this.state,
       detail: detail == null ? this.detail : detail(),
-      resumptionHandle: resumptionHandle == null
-          ? this.resumptionHandle
-          : resumptionHandle(),
+      resumptionHandle: resumptionHandle == null ? this.resumptionHandle : resumptionHandle(),
     );
   }
 
@@ -62,9 +61,9 @@ class LiveVoiceState {
   }
 
   Uint8List bincodeSerialize() {
-    final serializer = BincodeSerializer();
-    serialize(serializer);
-    return serializer.bytes;
+      final serializer = BincodeSerializer();
+      serialize(serializer);
+      return serializer.bytes;
   }
 
   @override
@@ -72,29 +71,32 @@ class LiveVoiceState {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is LiveVoiceState &&
-        liveStreamId == other.liveStreamId &&
-        state == other.state &&
-        detail == other.detail &&
-        resumptionHandle == other.resumptionHandle;
+    return other is LiveVoiceState
+      && liveStreamId == other.liveStreamId
+      && state == other.state
+      && detail == other.detail
+      && resumptionHandle == other.resumptionHandle;
   }
 
   @override
-  int get hashCode =>
-      Object.hash(liveStreamId, state, detail, resumptionHandle);
+  int get hashCode => Object.hash(
+        liveStreamId,
+        state,
+        detail,
+        resumptionHandle,
+      );
 
   @override
   String toString() {
     String? fullString;
 
     assert(() {
-      fullString =
-          '$runtimeType('
-          'liveStreamId: $liveStreamId, '
-          'state: $state, '
-          'detail: $detail, '
-          'resumptionHandle: $resumptionHandle'
-          ')';
+      fullString = '$runtimeType('
+        'liveStreamId: $liveStreamId, '
+        'state: $state, '
+        'detail: $detail, '
+        'resumptionHandle: $resumptionHandle'
+        ')';
       return true;
     }());
 

@@ -1,6 +1,7 @@
 // ignore_for_file: type=lint, type=warning
 part of 'signals.dart';
 
+
 @immutable
 class AssistantDelta {
   const AssistantDelta({
@@ -54,9 +55,9 @@ class AssistantDelta {
   }
 
   Uint8List bincodeSerialize() {
-    final serializer = BincodeSerializer();
-    serialize(serializer);
-    return serializer.bytes;
+      final serializer = BincodeSerializer();
+      serialize(serializer);
+      return serializer.bytes;
   }
 
   @override
@@ -64,26 +65,29 @@ class AssistantDelta {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is AssistantDelta &&
-        requestId == other.requestId &&
-        text == other.text &&
-        finalSegment == other.finalSegment;
+    return other is AssistantDelta
+      && requestId == other.requestId
+      && text == other.text
+      && finalSegment == other.finalSegment;
   }
 
   @override
-  int get hashCode => Object.hash(requestId, text, finalSegment);
+  int get hashCode => Object.hash(
+        requestId,
+        text,
+        finalSegment,
+      );
 
   @override
   String toString() {
     String? fullString;
 
     assert(() {
-      fullString =
-          '$runtimeType('
-          'requestId: $requestId, '
-          'text: [REDACTED], '
-          'finalSegment: $finalSegment'
-          ')';
+      fullString = '$runtimeType('
+        'requestId: $requestId, '
+        'text: $text, '
+        'finalSegment: $finalSegment'
+        ')';
       return true;
     }());
 

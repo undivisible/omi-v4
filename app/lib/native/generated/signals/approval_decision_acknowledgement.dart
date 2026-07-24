@@ -1,6 +1,7 @@
 // ignore_for_file: type=lint, type=warning
 part of 'signals.dart';
 
+
 @immutable
 class ApprovalDecisionAcknowledgement {
   const ApprovalDecisionAcknowledgement({
@@ -11,9 +12,7 @@ class ApprovalDecisionAcknowledgement {
     required this.executionPending,
   });
 
-  static ApprovalDecisionAcknowledgement deserialize(
-    BinaryDeserializer deserializer,
-  ) {
+  static ApprovalDecisionAcknowledgement deserialize(BinaryDeserializer deserializer) {
     deserializer.increaseContainerDepth();
     final instance = ApprovalDecisionAcknowledgement(
       requestId: deserializer.deserializeString(),
@@ -68,9 +67,9 @@ class ApprovalDecisionAcknowledgement {
   }
 
   Uint8List bincodeSerialize() {
-    final serializer = BincodeSerializer();
-    serialize(serializer);
-    return serializer.bytes;
+      final serializer = BincodeSerializer();
+      serialize(serializer);
+      return serializer.bytes;
   }
 
   @override
@@ -78,31 +77,35 @@ class ApprovalDecisionAcknowledgement {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is ApprovalDecisionAcknowledgement &&
-        requestId == other.requestId &&
-        proposalId == other.proposalId &&
-        decision == other.decision &&
-        accepted == other.accepted &&
-        executionPending == other.executionPending;
+    return other is ApprovalDecisionAcknowledgement
+      && requestId == other.requestId
+      && proposalId == other.proposalId
+      && decision == other.decision
+      && accepted == other.accepted
+      && executionPending == other.executionPending;
   }
 
   @override
-  int get hashCode =>
-      Object.hash(requestId, proposalId, decision, accepted, executionPending);
+  int get hashCode => Object.hash(
+        requestId,
+        proposalId,
+        decision,
+        accepted,
+        executionPending,
+      );
 
   @override
   String toString() {
     String? fullString;
 
     assert(() {
-      fullString =
-          '$runtimeType('
-          'requestId: $requestId, '
-          'proposalId: $proposalId, '
-          'decision: $decision, '
-          'accepted: $accepted, '
-          'executionPending: $executionPending'
-          ')';
+      fullString = '$runtimeType('
+        'requestId: $requestId, '
+        'proposalId: $proposalId, '
+        'decision: $decision, '
+        'accepted: $accepted, '
+        'executionPending: $executionPending'
+        ')';
       return true;
     }());
 

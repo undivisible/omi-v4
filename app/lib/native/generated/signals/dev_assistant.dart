@@ -64,9 +64,9 @@ class DevAssistant {
   }
 
   Uint8List bincodeSerialize() {
-    final serializer = BincodeSerializer();
-    serialize(serializer);
-    return serializer.bytes;
+      final serializer = BincodeSerializer();
+      serialize(serializer);
+      return serializer.bytes;
   }
 
   @override
@@ -74,29 +74,32 @@ class DevAssistant {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is DevAssistant &&
-        requestId == other.requestId &&
-        credential == other.credential &&
-        liveModel == other.liveModel &&
-        missingKeyHint == other.missingKeyHint;
+    return other is DevAssistant
+      && requestId == other.requestId
+      && credential == other.credential
+      && liveModel == other.liveModel
+      && missingKeyHint == other.missingKeyHint;
   }
 
   @override
-  int get hashCode =>
-      Object.hash(requestId, credential, liveModel, missingKeyHint);
+  int get hashCode => Object.hash(
+        requestId,
+        credential,
+        liveModel,
+        missingKeyHint,
+      );
 
   @override
   String toString() {
     String? fullString;
 
     assert(() {
-      fullString =
-          '$runtimeType('
-          'requestId: $requestId, '
-          'credential: $credential, '
-          'liveModel: $liveModel, '
-          'missingKeyHint: $missingKeyHint'
-          ')';
+      fullString = '$runtimeType('
+        'requestId: $requestId, '
+        'credential: $credential, '
+        'liveModel: $liveModel, '
+        'missingKeyHint: $missingKeyHint'
+        ')';
       return true;
     }());
 

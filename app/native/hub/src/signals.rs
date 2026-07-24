@@ -164,6 +164,10 @@ pub struct BriefItem {
 pub enum MessageOrigin {
     Chat,
     Overlay,
+    /// Telegram DM or group thread routed through the channel inbox.
+    ChannelTelegram,
+    /// iMessage/SMS (stored channel id `blooio`, Sendblue provider).
+    ChannelImessage,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, SignalPiece)]

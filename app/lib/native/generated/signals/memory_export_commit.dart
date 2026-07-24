@@ -1,6 +1,7 @@
 // ignore_for_file: type=lint, type=warning
 part of 'signals.dart';
 
+
 @immutable
 class MemoryExportCommit {
   const MemoryExportCommit({
@@ -66,9 +67,9 @@ class MemoryExportCommit {
   }
 
   Uint8List bincodeSerialize() {
-    final serializer = BincodeSerializer();
-    serialize(serializer);
-    return serializer.bytes;
+      final serializer = BincodeSerializer();
+      serialize(serializer);
+      return serializer.bytes;
   }
 
   @override
@@ -76,36 +77,35 @@ class MemoryExportCommit {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is MemoryExportCommit &&
-        sequence == other.sequence &&
-        recordedAtMs == other.recordedAtMs &&
-        eventCount == other.eventCount &&
-        firstEventIndex == other.firstEventIndex &&
-        listEquals(recordsJson, other.recordsJson);
+    return other is MemoryExportCommit
+      && sequence == other.sequence
+      && recordedAtMs == other.recordedAtMs
+      && eventCount == other.eventCount
+      && firstEventIndex == other.firstEventIndex
+      && listEquals(recordsJson, other.recordsJson);
   }
 
   @override
   int get hashCode => Object.hash(
-    sequence,
-    recordedAtMs,
-    eventCount,
-    firstEventIndex,
-    recordsJson,
-  );
+        sequence,
+        recordedAtMs,
+        eventCount,
+        firstEventIndex,
+        recordsJson,
+      );
 
   @override
   String toString() {
     String? fullString;
 
     assert(() {
-      fullString =
-          '$runtimeType('
-          'sequence: $sequence, '
-          'recordedAtMs: $recordedAtMs, '
-          'eventCount: $eventCount, '
-          'firstEventIndex: $firstEventIndex, '
-          'recordsJson: [REDACTED]'
-          ')';
+      fullString = '$runtimeType('
+        'sequence: $sequence, '
+        'recordedAtMs: $recordedAtMs, '
+        'eventCount: $eventCount, '
+        'firstEventIndex: $firstEventIndex, '
+        'recordsJson: $recordsJson'
+        ')';
       return true;
     }());
 

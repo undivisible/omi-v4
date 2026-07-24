@@ -8,7 +8,10 @@ part of 'signals.dart';
 /// raises one: the client's hand-built brief is the answer then.
 @immutable
 class BriefComposed {
-  const BriefComposed({required this.requestId, this.crepus});
+  const BriefComposed({
+    required this.requestId,
+    this.crepus,
+  });
 
   static BriefComposed deserialize(BinaryDeserializer deserializer) {
     deserializer.increaseContainerDepth();
@@ -32,7 +35,10 @@ class BriefComposed {
   final String requestId;
   final String? crepus;
 
-  BriefComposed copyWith({String? requestId, String? Function()? crepus}) {
+  BriefComposed copyWith({
+    String? requestId,
+    String? Function()? crepus,
+  }) {
     return BriefComposed(
       requestId: requestId ?? this.requestId,
       crepus: crepus == null ? this.crepus : crepus(),
@@ -47,9 +53,9 @@ class BriefComposed {
   }
 
   Uint8List bincodeSerialize() {
-    final serializer = BincodeSerializer();
-    serialize(serializer);
-    return serializer.bytes;
+      final serializer = BincodeSerializer();
+      serialize(serializer);
+      return serializer.bytes;
   }
 
   @override
@@ -57,24 +63,26 @@ class BriefComposed {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is BriefComposed &&
-        requestId == other.requestId &&
-        crepus == other.crepus;
+    return other is BriefComposed
+      && requestId == other.requestId
+      && crepus == other.crepus;
   }
 
   @override
-  int get hashCode => Object.hash(requestId, crepus);
+  int get hashCode => Object.hash(
+        requestId,
+        crepus,
+      );
 
   @override
   String toString() {
     String? fullString;
 
     assert(() {
-      fullString =
-          '$runtimeType('
-          'requestId: $requestId, '
-          'crepus: $crepus'
-          ')';
+      fullString = '$runtimeType('
+        'requestId: $requestId, '
+        'crepus: $crepus'
+        ')';
       return true;
     }());
 

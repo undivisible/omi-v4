@@ -1,6 +1,7 @@
 // ignore_for_file: type=lint, type=warning
 part of 'signals.dart';
 
+
 @immutable
 class MeetingInsight {
   const MeetingInsight({
@@ -60,9 +61,9 @@ class MeetingInsight {
   }
 
   Uint8List bincodeSerialize() {
-    final serializer = BincodeSerializer();
-    serialize(serializer);
-    return serializer.bytes;
+      final serializer = BincodeSerializer();
+      serialize(serializer);
+      return serializer.bytes;
   }
 
   @override
@@ -70,28 +71,32 @@ class MeetingInsight {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is MeetingInsight &&
-        kind == other.kind &&
-        text == other.text &&
-        sourceText == other.sourceText &&
-        speaker == other.speaker;
+    return other is MeetingInsight
+      && kind == other.kind
+      && text == other.text
+      && sourceText == other.sourceText
+      && speaker == other.speaker;
   }
 
   @override
-  int get hashCode => Object.hash(kind, text, sourceText, speaker);
+  int get hashCode => Object.hash(
+        kind,
+        text,
+        sourceText,
+        speaker,
+      );
 
   @override
   String toString() {
     String? fullString;
 
     assert(() {
-      fullString =
-          '$runtimeType('
-          'kind: $kind, '
-          'text: $text, '
-          'sourceText: $sourceText, '
-          'speaker: $speaker'
-          ')';
+      fullString = '$runtimeType('
+        'kind: $kind, '
+        'text: $text, '
+        'sourceText: $sourceText, '
+        'speaker: $speaker'
+        ')';
       return true;
     }());
 

@@ -1831,6 +1831,19 @@ const PROFILE_CONTEXT_ITEMS: u32 = 12;
 const CHAT_MODEL_TOOL: &str = "chat_model";
 const ONLINE_CHAT_MODEL_DETAIL: &str = "online:configured-provider";
 
+const CHANNEL_MESSAGING_FRAMING: &str = "You are replying in a personal messaging app, not writing a \
+document. Write like a normal person texting: short sentences, warm and direct. Plain text only — no \
+markdown, no headings, no bullet lists, no numbered lists, no code fences, no backticks, no bold or \
+italic markers, no links formatted as markdown. Keep replies compact (usually 1–4 short sentences). \
+Do not mention being an AI unless the user asks. Do not use crepus artifacts or interactive widgets — \
+the channel UI cannot render them.";
+
+const CHANNEL_TELEGRAM_FRAMING: &str = "Delivery channel: Telegram. Telegram allows a little \
+structure, but still avoid markdown — use line breaks sparingly instead of bullets.";
+
+const CHANNEL_IMESSAGE_FRAMING: &str = "Delivery channel: iMessage/SMS. iMessage reads best as casual \
+texts — no lists, no tables, no emoji spam unless the user uses them first.";
+
 const OVERLAY_AGENT_FRAMING: &str = "You are the user's desktop agent, summoned from the quick \
 overlay on their Mac. Treat the message below as an instruction to act on this computer, not \
 casual chat: when a step can be carried out here, propose the concrete action or tool call for \
@@ -1886,6 +1899,12 @@ fn framed_assistant_prompt(
     let prompt = assistant_prompt(memory_context, text);
     match origin {
         Some(MessageOrigin::Overlay) => format!("{OVERLAY_AGENT_FRAMING}\n\n{prompt}"),
+        Some(MessageOrigin::ChannelTelegram) => format!(
+            "{CHANNEL_MESSAGING_FRAMING}\n{CHANNEL_TELEGRAM_FRAMING}\n\n{prompt}"
+        ),
+        Some(MessageOrigin::ChannelImessage) => format!(
+            "{CHANNEL_MESSAGING_FRAMING}\n{CHANNEL_IMESSAGE_FRAMING}\n\n{prompt}"
+        ),
         Some(MessageOrigin::Chat) | None => format!("{CREPUS_ARTIFACTS_GUIDANCE}\n\n{prompt}"),
     }
 }

@@ -1,6 +1,7 @@
 // ignore_for_file: type=lint, type=warning
 part of 'signals.dart';
 
+
 @immutable
 class TranscriptGap {
   const TranscriptGap({
@@ -72,9 +73,9 @@ class TranscriptGap {
   }
 
   Uint8List bincodeSerialize() {
-    final serializer = BincodeSerializer();
-    serialize(serializer);
-    return serializer.bytes;
+      final serializer = BincodeSerializer();
+      serialize(serializer);
+      return serializer.bytes;
   }
 
   @override
@@ -82,33 +83,38 @@ class TranscriptGap {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is TranscriptGap &&
-        requestId == other.requestId &&
-        audioStreamId == other.audioStreamId &&
-        sttEpoch == other.sttEpoch &&
-        startMs == other.startMs &&
-        endMs == other.endMs &&
-        reason == other.reason;
+    return other is TranscriptGap
+      && requestId == other.requestId
+      && audioStreamId == other.audioStreamId
+      && sttEpoch == other.sttEpoch
+      && startMs == other.startMs
+      && endMs == other.endMs
+      && reason == other.reason;
   }
 
   @override
-  int get hashCode =>
-      Object.hash(requestId, audioStreamId, sttEpoch, startMs, endMs, reason);
+  int get hashCode => Object.hash(
+        requestId,
+        audioStreamId,
+        sttEpoch,
+        startMs,
+        endMs,
+        reason,
+      );
 
   @override
   String toString() {
     String? fullString;
 
     assert(() {
-      fullString =
-          '$runtimeType('
-          'requestId: $requestId, '
-          'audioStreamId: $audioStreamId, '
-          'sttEpoch: $sttEpoch, '
-          'startMs: $startMs, '
-          'endMs: $endMs, '
-          'reason: $reason'
-          ')';
+      fullString = '$runtimeType('
+        'requestId: $requestId, '
+        'audioStreamId: $audioStreamId, '
+        'sttEpoch: $sttEpoch, '
+        'startMs: $startMs, '
+        'endMs: $endMs, '
+        'reason: $reason'
+        ')';
       return true;
     }());
 

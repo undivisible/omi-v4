@@ -1,4 +1,5 @@
 import { type ManagedMessage, runManagedInboxCompletion } from "./assistant";
+import { channelStylePrompt, sanitizeChannelReply } from "./channel-style";
 import { channelCommandPrompt } from "./channel-commands";
 import { completeInboxItemDone } from "./conversations";
 import { hasActivePro } from "./entitlement";
@@ -15,6 +16,12 @@ const maxAttempts = 5;
 const historyLimit = 12;
 const maxReplyCharacters = 4_096;
 
+export const systemPromptForChannel = (channel: string): string =>
+  "You are Omi, the user's personal assistant, replying over a messaging " +
+  "channel while their desktop is offline. Answer the user's latest message " +
+  `directly and concisely in plain text.\n\n${channelStylePrompt(channel as import("./types").Channel)}\n\n${channelCommandPrompt}`;
+
+/** @deprecated use systemPromptForChannel */
 export const systemPrompt =
   "You are Omi, the user's personal assistant, replying over a messaging " +
   "channel while their desktop is offline. Answer the user's latest message " +
@@ -56,20 +63,22 @@ const recentHistory = async (
 };
 
 const buildMessages = (
+  channel: string,
   memoryContext: string | null,
   history: ManagedMessage[],
   inbound: string,
-): ManagedMessage[] => [
-  {
-    role: "system",
-    content:
-      memoryContext === null
-        ? systemPrompt
-        : `${systemPrompt}\n\n${memoryContext}`,
-  },
-  ...history,
-  { role: "user", content: inbound },
-];
+): ManagedMessage[] => {
+  const base = systemPromptForChannel(channel);
+  return [
+    {
+      role: "system",
+      content:
+        memoryContext === null ? base : `${base}\n\n${memoryContext}`,
+    },
+    ...history,
+    { role: "user", content: inbound },
+  ];
+};
 
 const releaseForRetry = async (
   env: Bindings,
@@ -125,7 +134,12 @@ const respondToItem = async (
     const completion = await runManagedInboxCompletion(
       env,
       row.uid,
-      buildMessages(memoryContext, history, String(item.text)),
+      buildMessages(
+        String(item.channel),
+        memoryContext,
+        history,
+        String(item.text),
+      ),
       fetcher,
     );
     if (completion === null) {
@@ -141,7 +155,10 @@ const respondToItem = async (
       }
       reply = offlineAcknowledgement;
     } else {
-      reply = completion;
+      reply = sanitizeChannelReply(
+        item.channel as import("./types").Channel,
+        completion,
+      );
     }
   } else {
     reply = offlineAcknowledgement;

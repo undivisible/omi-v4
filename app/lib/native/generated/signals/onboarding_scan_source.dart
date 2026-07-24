@@ -1,6 +1,7 @@
 // ignore_for_file: type=lint, type=warning
 part of 'signals.dart';
 
+
 @immutable
 class OnboardingScanSource {
   const OnboardingScanSource({
@@ -51,9 +52,7 @@ class OnboardingScanSource {
       state: state ?? this.state,
       itemsFound: itemsFound ?? this.itemsFound,
       detail: detail ?? this.detail,
-      memorySourceId: memorySourceId == null
-          ? this.memorySourceId
-          : memorySourceId(),
+      memorySourceId: memorySourceId == null ? this.memorySourceId : memorySourceId(),
     );
   }
 
@@ -68,9 +67,9 @@ class OnboardingScanSource {
   }
 
   Uint8List bincodeSerialize() {
-    final serializer = BincodeSerializer();
-    serialize(serializer);
-    return serializer.bytes;
+      final serializer = BincodeSerializer();
+      serialize(serializer);
+      return serializer.bytes;
   }
 
   @override
@@ -78,31 +77,35 @@ class OnboardingScanSource {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is OnboardingScanSource &&
-        source == other.source &&
-        state == other.state &&
-        itemsFound == other.itemsFound &&
-        detail == other.detail &&
-        memorySourceId == other.memorySourceId;
+    return other is OnboardingScanSource
+      && source == other.source
+      && state == other.state
+      && itemsFound == other.itemsFound
+      && detail == other.detail
+      && memorySourceId == other.memorySourceId;
   }
 
   @override
-  int get hashCode =>
-      Object.hash(source, state, itemsFound, detail, memorySourceId);
+  int get hashCode => Object.hash(
+        source,
+        state,
+        itemsFound,
+        detail,
+        memorySourceId,
+      );
 
   @override
   String toString() {
     String? fullString;
 
     assert(() {
-      fullString =
-          '$runtimeType('
-          'source: $source, '
-          'state: $state, '
-          'itemsFound: $itemsFound, '
-          'detail: $detail, '
-          'memorySourceId: $memorySourceId'
-          ')';
+      fullString = '$runtimeType('
+        'source: $source, '
+        'state: $state, '
+        'itemsFound: $itemsFound, '
+        'detail: $detail, '
+        'memorySourceId: $memorySourceId'
+        ')';
       return true;
     }());
 

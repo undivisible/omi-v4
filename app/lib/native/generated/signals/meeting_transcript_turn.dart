@@ -58,9 +58,9 @@ class MeetingTranscriptTurn {
   }
 
   Uint8List bincodeSerialize() {
-    final serializer = BincodeSerializer();
-    serialize(serializer);
-    return serializer.bytes;
+      final serializer = BincodeSerializer();
+      serialize(serializer);
+      return serializer.bytes;
   }
 
   @override
@@ -68,26 +68,29 @@ class MeetingTranscriptTurn {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is MeetingTranscriptTurn &&
-        speaker == other.speaker &&
-        text == other.text &&
-        occurredAtMs == other.occurredAtMs;
+    return other is MeetingTranscriptTurn
+      && speaker == other.speaker
+      && text == other.text
+      && occurredAtMs == other.occurredAtMs;
   }
 
   @override
-  int get hashCode => Object.hash(speaker, text, occurredAtMs);
+  int get hashCode => Object.hash(
+        speaker,
+        text,
+        occurredAtMs,
+      );
 
   @override
   String toString() {
     String? fullString;
 
     assert(() {
-      fullString =
-          '$runtimeType('
-          'speaker: $speaker, '
-          'text: $text, '
-          'occurredAtMs: $occurredAtMs'
-          ')';
+      fullString = '$runtimeType('
+        'speaker: $speaker, '
+        'text: $text, '
+        'occurredAtMs: $occurredAtMs'
+        ')';
       return true;
     }());
 

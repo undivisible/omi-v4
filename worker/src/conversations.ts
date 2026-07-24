@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { dispatchChannelMessage } from "./delivery";
+import { sanitizeChannelReply } from "./channel-style";
 import { memoryContextFor } from "./memory-vectors";
 import type { AppEnv, Bindings, Channel } from "./types";
 
@@ -195,6 +196,8 @@ export const completeInboxItemDone = async (
       delivery_text: string | null;
     }>();
   if (!inbox) return { ok: false, error: "Inbox lease conflict" };
+  reply = sanitizeChannelReply(inbox.channel, reply);
+  if (reply.length === 0) return { ok: false, error: "Empty reply" };
   if (inbox.status === "done") {
     if (!inbox.delivery_id || inbox.delivery_text !== reply)
       return { ok: false, error: "Inbox completion conflict" };

@@ -1,6 +1,7 @@
 // ignore_for_file: type=lint, type=warning
 part of 'signals.dart';
 
+
 @immutable
 class MemoryCorrected {
   const MemoryCorrected({
@@ -66,9 +67,9 @@ class MemoryCorrected {
   }
 
   Uint8List bincodeSerialize() {
-    final serializer = BincodeSerializer();
-    serialize(serializer);
-    return serializer.bytes;
+      final serializer = BincodeSerializer();
+      serialize(serializer);
+      return serializer.bytes;
   }
 
   @override
@@ -76,31 +77,35 @@ class MemoryCorrected {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is MemoryCorrected &&
-        requestId == other.requestId &&
-        sourceId == other.sourceId &&
-        evidenceId == other.evidenceId &&
-        claimId == other.claimId &&
-        supersededClaimId == other.supersededClaimId;
+    return other is MemoryCorrected
+      && requestId == other.requestId
+      && sourceId == other.sourceId
+      && evidenceId == other.evidenceId
+      && claimId == other.claimId
+      && supersededClaimId == other.supersededClaimId;
   }
 
   @override
-  int get hashCode =>
-      Object.hash(requestId, sourceId, evidenceId, claimId, supersededClaimId);
+  int get hashCode => Object.hash(
+        requestId,
+        sourceId,
+        evidenceId,
+        claimId,
+        supersededClaimId,
+      );
 
   @override
   String toString() {
     String? fullString;
 
     assert(() {
-      fullString =
-          '$runtimeType('
-          'requestId: $requestId, '
-          'sourceId: $sourceId, '
-          'evidenceId: $evidenceId, '
-          'claimId: $claimId, '
-          'supersededClaimId: $supersededClaimId'
-          ')';
+      fullString = '$runtimeType('
+        'requestId: $requestId, '
+        'sourceId: $sourceId, '
+        'evidenceId: $evidenceId, '
+        'claimId: $claimId, '
+        'supersededClaimId: $supersededClaimId'
+        ')';
       return true;
     }());
 

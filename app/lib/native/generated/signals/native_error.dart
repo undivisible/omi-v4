@@ -1,6 +1,7 @@
 // ignore_for_file: type=lint, type=warning
 part of 'signals.dart';
 
+
 @immutable
 class NativeError {
   const NativeError({
@@ -60,9 +61,9 @@ class NativeError {
   }
 
   Uint8List bincodeSerialize() {
-    final serializer = BincodeSerializer();
-    serialize(serializer);
-    return serializer.bytes;
+      final serializer = BincodeSerializer();
+      serialize(serializer);
+      return serializer.bytes;
   }
 
   @override
@@ -70,28 +71,32 @@ class NativeError {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is NativeError &&
-        requestId == other.requestId &&
-        code == other.code &&
-        message == other.message &&
-        retryable == other.retryable;
+    return other is NativeError
+      && requestId == other.requestId
+      && code == other.code
+      && message == other.message
+      && retryable == other.retryable;
   }
 
   @override
-  int get hashCode => Object.hash(requestId, code, message, retryable);
+  int get hashCode => Object.hash(
+        requestId,
+        code,
+        message,
+        retryable,
+      );
 
   @override
   String toString() {
     String? fullString;
 
     assert(() {
-      fullString =
-          '$runtimeType('
-          'requestId: $requestId, '
-          'code: $code, '
-          'message: $message, '
-          'retryable: $retryable'
-          ')';
+      fullString = '$runtimeType('
+        'requestId: $requestId, '
+        'code: $code, '
+        'message: $message, '
+        'retryable: $retryable'
+        ')';
       return true;
     }());
 

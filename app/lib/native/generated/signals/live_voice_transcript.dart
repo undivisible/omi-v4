@@ -1,6 +1,7 @@
 // ignore_for_file: type=lint, type=warning
 part of 'signals.dart';
 
+
 @immutable
 class LiveVoiceTranscript {
   const LiveVoiceTranscript({
@@ -60,9 +61,9 @@ class LiveVoiceTranscript {
   }
 
   Uint8List bincodeSerialize() {
-    final serializer = BincodeSerializer();
-    serialize(serializer);
-    return serializer.bytes;
+      final serializer = BincodeSerializer();
+      serialize(serializer);
+      return serializer.bytes;
   }
 
   @override
@@ -70,28 +71,32 @@ class LiveVoiceTranscript {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is LiveVoiceTranscript &&
-        liveStreamId == other.liveStreamId &&
-        text == other.text &&
-        finalSegment == other.finalSegment &&
-        assistant == other.assistant;
+    return other is LiveVoiceTranscript
+      && liveStreamId == other.liveStreamId
+      && text == other.text
+      && finalSegment == other.finalSegment
+      && assistant == other.assistant;
   }
 
   @override
-  int get hashCode => Object.hash(liveStreamId, text, finalSegment, assistant);
+  int get hashCode => Object.hash(
+        liveStreamId,
+        text,
+        finalSegment,
+        assistant,
+      );
 
   @override
   String toString() {
     String? fullString;
 
     assert(() {
-      fullString =
-          '$runtimeType('
-          'liveStreamId: $liveStreamId, '
-          'text: [REDACTED], '
-          'finalSegment: $finalSegment, '
-          'assistant: $assistant'
-          ')';
+      fullString = '$runtimeType('
+        'liveStreamId: $liveStreamId, '
+        'text: $text, '
+        'finalSegment: $finalSegment, '
+        'assistant: $assistant'
+        ')';
       return true;
     }());
 

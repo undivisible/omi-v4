@@ -61,9 +61,9 @@ class MemoryApplyCommit {
   }
 
   Uint8List bincodeSerialize() {
-    final serializer = BincodeSerializer();
-    serialize(serializer);
-    return serializer.bytes;
+      final serializer = BincodeSerializer();
+      serialize(serializer);
+      return serializer.bytes;
   }
 
   @override
@@ -71,29 +71,32 @@ class MemoryApplyCommit {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is MemoryApplyCommit &&
-        sequence == other.sequence &&
-        recordedAtMs == other.recordedAtMs &&
-        recordKind == other.recordKind &&
-        recordJson == other.recordJson;
+    return other is MemoryApplyCommit
+      && sequence == other.sequence
+      && recordedAtMs == other.recordedAtMs
+      && recordKind == other.recordKind
+      && recordJson == other.recordJson;
   }
 
   @override
-  int get hashCode =>
-      Object.hash(sequence, recordedAtMs, recordKind, recordJson);
+  int get hashCode => Object.hash(
+        sequence,
+        recordedAtMs,
+        recordKind,
+        recordJson,
+      );
 
   @override
   String toString() {
     String? fullString;
 
     assert(() {
-      fullString =
-          '$runtimeType('
-          'sequence: $sequence, '
-          'recordedAtMs: $recordedAtMs, '
-          'recordKind: $recordKind, '
-          'recordJson: $recordJson'
-          ')';
+      fullString = '$runtimeType('
+        'sequence: $sequence, '
+        'recordedAtMs: $recordedAtMs, '
+        'recordKind: $recordKind, '
+        'recordJson: $recordJson'
+        ')';
       return true;
     }());
 

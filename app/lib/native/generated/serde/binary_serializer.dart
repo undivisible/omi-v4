@@ -5,7 +5,9 @@
 part of 'serde.dart';
 
 abstract class BinarySerializer {
-  BinarySerializer({required this.containerDepthBudget});
+  BinarySerializer({
+    required this.containerDepthBudget,
+  });
 
   int containerDepthBudget;
   final List<int> output = List<int>.empty(growable: true);
@@ -35,8 +37,7 @@ abstract class BinarySerializer {
   void serializeUint8(int val) {
     if (val.bitLength > 8) {
       throw Exception(
-        'The integer literal $val can\'t be represented in 8 bits.',
-      );
+          'The integer literal $val can\'t be represented in 8 bits.');
     }
     output.addAll(Uint8List.fromList([val]));
   }
@@ -44,8 +45,7 @@ abstract class BinarySerializer {
   void serializeUint16(int val) {
     if (val.bitLength > 16) {
       throw Exception(
-        'The integer literal $val can\'t be represented in 16 bits.',
-      );
+          'The integer literal $val can\'t be represented in 16 bits.');
     }
     final bdata = ByteData(2)..setUint16(0, val, Endian.little);
     output.addAll(bdata.buffer.asUint8List());
@@ -54,8 +54,7 @@ abstract class BinarySerializer {
   void serializeUint32(int val) {
     if (val.bitLength > 32) {
       throw Exception(
-        'The integer literal $val can\'t be represented in 32 bits.',
-      );
+          'The integer literal $val can\'t be represented in 32 bits.');
     }
     final bdata = ByteData(4)..setUint32(0, val, Endian.little);
     output.addAll(bdata.buffer.asUint8List());
@@ -78,8 +77,7 @@ abstract class BinarySerializer {
   void serializeInt8(int value) {
     if (value.bitLength > 7) {
       throw Exception(
-        'The integer literal $value can\'t be represented in 8 bits.',
-      );
+          'The integer literal $value can\'t be represented in 8 bits.');
     }
     final bdata = ByteData(1)..setInt8(0, value);
     output.addAll(bdata.buffer.asUint8List());
@@ -88,8 +86,7 @@ abstract class BinarySerializer {
   void serializeInt16(int value) {
     if (value.bitLength > 15) {
       throw Exception(
-        'The integer literal $value can\'t be represented in 16 bits.',
-      );
+          'The integer literal $value can\'t be represented in 16 bits.');
     }
     final bdata = ByteData(2)..setInt16(0, value, Endian.little);
     output.addAll(bdata.buffer.asUint8List());
@@ -98,8 +95,7 @@ abstract class BinarySerializer {
   void serializeInt32(int value) {
     if (value.bitLength > 31) {
       throw Exception(
-        'The integer literal $value can\'t be represented in 32 bits.',
-      );
+          'The integer literal $value can\'t be represented in 32 bits.');
     }
     final bdata = ByteData(4)..setInt32(0, value, Endian.little);
     output.addAll(bdata.buffer.asUint8List());

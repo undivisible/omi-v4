@@ -1,6 +1,7 @@
 // ignore_for_file: type=lint, type=warning
 part of 'signals.dart';
 
+
 @immutable
 class ActionProposal {
   const ActionProposal({
@@ -24,15 +25,10 @@ class ActionProposal {
       title: deserializer.deserializeString(),
       summary: deserializer.deserializeString(),
       risk: ActionRiskExtension.deserialize(deserializer),
-      computerAction: TraitHelpers.deserializeOptionComputerUseAction(
-        deserializer,
-      ),
+      computerAction: TraitHelpers.deserializeOptionComputerUseAction(deserializer),
       operationId: TraitHelpers.deserializeOptionStr(deserializer),
       actionHash: TraitHelpers.deserializeOptionStr(deserializer),
-      targetProvenance:
-          TraitHelpers.deserializeOptionComputerUseTargetProvenance(
-            deserializer,
-          ),
+      targetProvenance: TraitHelpers.deserializeOptionComputerUseTargetProvenance(deserializer),
       expiresAtMs: TraitHelpers.deserializeOptionI64(deserializer),
     );
     deserializer.decreaseContainerDepth();
@@ -77,14 +73,10 @@ class ActionProposal {
       title: title ?? this.title,
       summary: summary ?? this.summary,
       risk: risk ?? this.risk,
-      computerAction: computerAction == null
-          ? this.computerAction
-          : computerAction(),
+      computerAction: computerAction == null ? this.computerAction : computerAction(),
       operationId: operationId == null ? this.operationId : operationId(),
       actionHash: actionHash == null ? this.actionHash : actionHash(),
-      targetProvenance: targetProvenance == null
-          ? this.targetProvenance
-          : targetProvenance(),
+      targetProvenance: targetProvenance == null ? this.targetProvenance : targetProvenance(),
       expiresAtMs: expiresAtMs == null ? this.expiresAtMs : expiresAtMs(),
     );
   }
@@ -99,18 +91,15 @@ class ActionProposal {
     TraitHelpers.serializeOptionComputerUseAction(computerAction, serializer);
     TraitHelpers.serializeOptionStr(operationId, serializer);
     TraitHelpers.serializeOptionStr(actionHash, serializer);
-    TraitHelpers.serializeOptionComputerUseTargetProvenance(
-      targetProvenance,
-      serializer,
-    );
+    TraitHelpers.serializeOptionComputerUseTargetProvenance(targetProvenance, serializer);
     TraitHelpers.serializeOptionI64(expiresAtMs, serializer);
     serializer.decreaseContainerDepth();
   }
 
   Uint8List bincodeSerialize() {
-    final serializer = BincodeSerializer();
-    serialize(serializer);
-    return serializer.bytes;
+      final serializer = BincodeSerializer();
+      serialize(serializer);
+      return serializer.bytes;
   }
 
   @override
@@ -118,51 +107,50 @@ class ActionProposal {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is ActionProposal &&
-        proposalId == other.proposalId &&
-        requestId == other.requestId &&
-        title == other.title &&
-        summary == other.summary &&
-        risk == other.risk &&
-        computerAction == other.computerAction &&
-        operationId == other.operationId &&
-        actionHash == other.actionHash &&
-        targetProvenance == other.targetProvenance &&
-        expiresAtMs == other.expiresAtMs;
+    return other is ActionProposal
+      && proposalId == other.proposalId
+      && requestId == other.requestId
+      && title == other.title
+      && summary == other.summary
+      && risk == other.risk
+      && computerAction == other.computerAction
+      && operationId == other.operationId
+      && actionHash == other.actionHash
+      && targetProvenance == other.targetProvenance
+      && expiresAtMs == other.expiresAtMs;
   }
 
   @override
   int get hashCode => Object.hash(
-    proposalId,
-    requestId,
-    title,
-    summary,
-    risk,
-    computerAction,
-    operationId,
-    actionHash,
-    targetProvenance,
-    expiresAtMs,
-  );
+        proposalId,
+        requestId,
+        title,
+        summary,
+        risk,
+        computerAction,
+        operationId,
+        actionHash,
+        targetProvenance,
+        expiresAtMs,
+      );
 
   @override
   String toString() {
     String? fullString;
 
     assert(() {
-      fullString =
-          '$runtimeType('
-          'proposalId: $proposalId, '
-          'requestId: $requestId, '
-          'title: $title, '
-          'summary: [REDACTED], '
-          'risk: $risk, '
-          'computerAction: $computerAction, '
-          'operationId: $operationId, '
-          'actionHash: $actionHash, '
-          'targetProvenance: $targetProvenance, '
-          'expiresAtMs: $expiresAtMs'
-          ')';
+      fullString = '$runtimeType('
+        'proposalId: $proposalId, '
+        'requestId: $requestId, '
+        'title: $title, '
+        'summary: $summary, '
+        'risk: $risk, '
+        'computerAction: $computerAction, '
+        'operationId: $operationId, '
+        'actionHash: $actionHash, '
+        'targetProvenance: $targetProvenance, '
+        'expiresAtMs: $expiresAtMs'
+        ')';
       return true;
     }());
 

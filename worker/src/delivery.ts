@@ -1,5 +1,6 @@
 import { captureDurableObjectError } from "./observability";
 import { sendblueRequest } from "./sendblue";
+import { sanitizeChannelReply } from "./channel-style";
 import type { Bindings, Channel } from "./types";
 
 type Delivery = {
@@ -274,7 +275,9 @@ export const sendChannelText = async (
   text: string,
   fetcher: typeof fetch = fetch,
 ): Promise<boolean> => {
-  const request = providerRequest(env, channel, channelChatId, text, null);
+  const plain = sanitizeChannelReply(channel, text);
+  if (plain.length === 0) return false;
+  const request = providerRequest(env, channel, channelChatId, plain, null);
   if (!request) return false;
   try {
     const response = await fetcher(request.url, request.init);

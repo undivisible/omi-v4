@@ -1,6 +1,7 @@
 // ignore_for_file: type=lint, type=warning
 part of 'signals.dart';
 
+
 @immutable
 class ComputerUseActionCapability {
   const ComputerUseActionCapability({
@@ -10,19 +11,13 @@ class ComputerUseActionCapability {
     required this.backgroundSupport,
   });
 
-  static ComputerUseActionCapability deserialize(
-    BinaryDeserializer deserializer,
-  ) {
+  static ComputerUseActionCapability deserialize(BinaryDeserializer deserializer) {
     deserializer.increaseContainerDepth();
     final instance = ComputerUseActionCapability(
       name: deserializer.deserializeString(),
       available: deserializer.deserializeBool(),
-      deliveryRoute: ComputerUseDeliveryRouteExtension.deserialize(
-        deserializer,
-      ),
-      backgroundSupport: ComputerUseBackgroundSupportExtension.deserialize(
-        deserializer,
-      ),
+      deliveryRoute: ComputerUseDeliveryRouteExtension.deserialize(deserializer),
+      backgroundSupport: ComputerUseBackgroundSupportExtension.deserialize(deserializer),
     );
     deserializer.decreaseContainerDepth();
     return instance;
@@ -66,9 +61,9 @@ class ComputerUseActionCapability {
   }
 
   Uint8List bincodeSerialize() {
-    final serializer = BincodeSerializer();
-    serialize(serializer);
-    return serializer.bytes;
+      final serializer = BincodeSerializer();
+      serialize(serializer);
+      return serializer.bytes;
   }
 
   @override
@@ -76,29 +71,32 @@ class ComputerUseActionCapability {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is ComputerUseActionCapability &&
-        name == other.name &&
-        available == other.available &&
-        deliveryRoute == other.deliveryRoute &&
-        backgroundSupport == other.backgroundSupport;
+    return other is ComputerUseActionCapability
+      && name == other.name
+      && available == other.available
+      && deliveryRoute == other.deliveryRoute
+      && backgroundSupport == other.backgroundSupport;
   }
 
   @override
-  int get hashCode =>
-      Object.hash(name, available, deliveryRoute, backgroundSupport);
+  int get hashCode => Object.hash(
+        name,
+        available,
+        deliveryRoute,
+        backgroundSupport,
+      );
 
   @override
   String toString() {
     String? fullString;
 
     assert(() {
-      fullString =
-          '$runtimeType('
-          'name: $name, '
-          'available: $available, '
-          'deliveryRoute: $deliveryRoute, '
-          'backgroundSupport: $backgroundSupport'
-          ')';
+      fullString = '$runtimeType('
+        'name: $name, '
+        'available: $available, '
+        'deliveryRoute: $deliveryRoute, '
+        'backgroundSupport: $backgroundSupport'
+        ')';
       return true;
     }());
 

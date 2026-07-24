@@ -1,9 +1,13 @@
 // ignore_for_file: type=lint, type=warning
 part of 'signals.dart';
 
+
 @immutable
 class ClientCommand {
-  const ClientCommand({required this.requestId, required this.command});
+  const ClientCommand({
+    required this.requestId,
+    required this.command,
+  });
 
   static ClientCommand deserialize(BinaryDeserializer deserializer) {
     deserializer.increaseContainerDepth();
@@ -27,7 +31,10 @@ class ClientCommand {
   final String requestId;
   final Command command;
 
-  ClientCommand copyWith({String? requestId, Command? command}) {
+  ClientCommand copyWith({
+    String? requestId,
+    Command? command,
+  }) {
     return ClientCommand(
       requestId: requestId ?? this.requestId,
       command: command ?? this.command,
@@ -42,9 +49,9 @@ class ClientCommand {
   }
 
   Uint8List bincodeSerialize() {
-    final serializer = BincodeSerializer();
-    serialize(serializer);
-    return serializer.bytes;
+      final serializer = BincodeSerializer();
+      serialize(serializer);
+      return serializer.bytes;
   }
 
   @override
@@ -52,24 +59,26 @@ class ClientCommand {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is ClientCommand &&
-        requestId == other.requestId &&
-        command == other.command;
+    return other is ClientCommand
+      && requestId == other.requestId
+      && command == other.command;
   }
 
   @override
-  int get hashCode => Object.hash(requestId, command);
+  int get hashCode => Object.hash(
+        requestId,
+        command,
+      );
 
   @override
   String toString() {
     String? fullString;
 
     assert(() {
-      fullString =
-          '$runtimeType('
-          'requestId: $requestId, '
-          'command: $command'
-          ')';
+      fullString = '$runtimeType('
+        'requestId: $requestId, '
+        'command: $command'
+        ')';
       return true;
     }());
 

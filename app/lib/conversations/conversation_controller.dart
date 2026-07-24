@@ -25,6 +25,17 @@ typedef _PendingApproval = ({
 
 const _completedRequestCapacity = 256;
 
+MessageOrigin? _messageOriginForChannel(String channel) {
+  switch (channel) {
+    case 'telegram':
+      return MessageOrigin.channelTelegram;
+    case 'blooio':
+      return MessageOrigin.channelImessage;
+    default:
+      return null;
+  }
+}
+
 String _boundedText(String value, int maxLength) {
   if (value.length <= maxLength) return value;
   var end = maxLength;
@@ -415,6 +426,7 @@ final class ConversationController {
           requestId: requestId,
           text: item.text,
           memoryContext: item.memoryContext,
+          origin: _messageOriginForChannel(item.channel),
         );
       } catch (error) {
         _requests.remove(requestId);
