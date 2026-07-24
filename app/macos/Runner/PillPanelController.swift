@@ -205,14 +205,10 @@ final class PillPanelController {
     if frame != panel.frame { panel.setFrame(frame, display: true) }
     // A non-activating panel takes keyboard input without pulling the rest of
     // omi in front of whatever the user was working in — the hub stays exactly
-    // where it was. Typing is non-negotiable though, so if the panel could not
-    // take key focus on its own, fall back to activating the app.
+    // where it was. Do not fall back to NSApp.activate: that brings the hub
+    // forward and defeats the overlay.
     panel.orderFrontRegardless()
     panel.makeKey()
-    if !panel.isKeyWindow {
-      NSApp.activate(ignoringOtherApps: true)
-      panel.makeKeyAndOrderFront(nil)
-    }
     channel.invokeMethod("show", arguments: nil)
   }
 

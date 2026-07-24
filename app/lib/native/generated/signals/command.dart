@@ -1,7 +1,6 @@
 // ignore_for_file: type=lint, type=warning
 part of 'signals.dart';
 
-
 abstract class Command {
   const Command();
 
@@ -10,42 +9,73 @@ abstract class Command {
   static Command deserialize(BinaryDeserializer deserializer) {
     int index = deserializer.deserializeVariantIndex();
     switch (index) {
-      case 0: return CommandConfigureMemory.load(deserializer);
-      case 1: return CommandSendMessage.load(deserializer);
-      case 2: return CommandConfigureAssistant.load(deserializer);
-      case 3: return CommandConfigureTrustedAssistant.load(deserializer);
-      case 4: return CommandClearAssistant.load(deserializer);
-      case 5: return CommandStartTranscription.load(deserializer);
-      case 6: return CommandStopTranscription.load(deserializer);
-      case 7: return CommandStartLiveVoice.load(deserializer);
-      case 8: return CommandStopLiveVoice.load(deserializer);
-      case 9: return CommandCaptureEvent.load(deserializer);
-      case 10: return CommandSearchMemory.load(deserializer);
-      case 11: return CommandExportMemory.load(deserializer);
-      case 12: return CommandApplyMemory.load(deserializer);
-      case 13: return CommandListMemoryItems.load(deserializer);
-      case 14: return CommandCorrectMemory.load(deserializer);
-      case 15: return CommandDeleteMemorySource.load(deserializer);
-      case 16: return CommandScanOnboarding.load(deserializer);
-      case 17: return CommandApprovalDecision.load(deserializer);
-      case 18: return CommandDeviceState.load(deserializer);
-      case 19: return CommandCancel.load(deserializer);
-      case 20: return CommandStartMeeting.load(deserializer);
-      case 21: return CommandStopMeeting.load(deserializer);
-      case 22: return CommandJotMeetingNote.load(deserializer);
-      case 23: return CommandProvideMeetingAuth.load(deserializer);
-      case 24: return CommandSetSystemAudioCaptureMode.load(deserializer);
-      case 25: return CommandComposeBrief.load(deserializer);
-      case 26: return CommandJoinCall.load(deserializer);
-      case 27: return CommandResolveDevAssistant.load(deserializer);
-      default: throw Exception('Unknown variant index for Command: ' + index.toString());
+      case 0:
+        return CommandConfigureMemory.load(deserializer);
+      case 1:
+        return CommandSendMessage.load(deserializer);
+      case 2:
+        return CommandConfigureAssistant.load(deserializer);
+      case 3:
+        return CommandConfigureTrustedAssistant.load(deserializer);
+      case 4:
+        return CommandClearAssistant.load(deserializer);
+      case 5:
+        return CommandStartTranscription.load(deserializer);
+      case 6:
+        return CommandStopTranscription.load(deserializer);
+      case 7:
+        return CommandStartLiveVoice.load(deserializer);
+      case 8:
+        return CommandStopLiveVoice.load(deserializer);
+      case 9:
+        return CommandCaptureEvent.load(deserializer);
+      case 10:
+        return CommandSearchMemory.load(deserializer);
+      case 11:
+        return CommandExportMemory.load(deserializer);
+      case 12:
+        return CommandApplyMemory.load(deserializer);
+      case 13:
+        return CommandListMemoryItems.load(deserializer);
+      case 14:
+        return CommandCorrectMemory.load(deserializer);
+      case 15:
+        return CommandDeleteMemorySource.load(deserializer);
+      case 16:
+        return CommandScanOnboarding.load(deserializer);
+      case 17:
+        return CommandApprovalDecision.load(deserializer);
+      case 18:
+        return CommandDeviceState.load(deserializer);
+      case 19:
+        return CommandCancel.load(deserializer);
+      case 20:
+        return CommandStartMeeting.load(deserializer);
+      case 21:
+        return CommandStopMeeting.load(deserializer);
+      case 22:
+        return CommandJotMeetingNote.load(deserializer);
+      case 23:
+        return CommandProvideMeetingAuth.load(deserializer);
+      case 24:
+        return CommandSetSystemAudioCaptureMode.load(deserializer);
+      case 25:
+        return CommandComposeBrief.load(deserializer);
+      case 26:
+        return CommandJoinCall.load(deserializer);
+      case 27:
+        return CommandResolveDevAssistant.load(deserializer);
+      default:
+        throw Exception(
+          'Unknown variant index for Command: ' + index.toString(),
+        );
     }
   }
 
   Uint8List bincodeSerialize() {
-      final serializer = BincodeSerializer();
-      serialize(serializer);
-      return serializer.bytes;
+    final serializer = BincodeSerializer();
+    serialize(serializer);
+    return serializer.bytes;
   }
 
   static Command bincodeDeserialize(Uint8List input) {
@@ -57,7 +87,6 @@ abstract class Command {
     return value;
   }
 }
-
 
 @immutable
 class CommandConfigureMemory extends Command {
@@ -108,29 +137,26 @@ class CommandConfigureMemory extends Command {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is CommandConfigureMemory
-      && databasePath == other.databasePath
-      && tenantId == other.tenantId
-      && personId == other.personId;
+    return other is CommandConfigureMemory &&
+        databasePath == other.databasePath &&
+        tenantId == other.tenantId &&
+        personId == other.personId;
   }
 
   @override
-  int get hashCode => Object.hash(
-        databasePath,
-        tenantId,
-        personId,
-      );
+  int get hashCode => Object.hash(databasePath, tenantId, personId);
 
   @override
   String toString() {
     String? fullString;
 
     assert(() {
-      fullString = '$runtimeType('
-        'databasePath: $databasePath, '
-        'tenantId: $tenantId, '
-        'personId: $personId'
-        ')';
+      fullString =
+          '$runtimeType('
+          'databasePath: $databasePath, '
+          'tenantId: $tenantId, '
+          'personId: $personId'
+          ')';
       return true;
     }());
 
@@ -172,8 +198,12 @@ class CommandSendMessage extends Command {
   }) {
     return CommandSendMessage(
       text: text ?? this.text,
-      conversationId: conversationId == null ? this.conversationId : conversationId(),
-      memoryContext: memoryContext == null ? this.memoryContext : memoryContext(),
+      conversationId: conversationId == null
+          ? this.conversationId
+          : conversationId(),
+      memoryContext: memoryContext == null
+          ? this.memoryContext
+          : memoryContext(),
       origin: origin == null ? this.origin : origin(),
     );
   }
@@ -193,32 +223,28 @@ class CommandSendMessage extends Command {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is CommandSendMessage
-      && text == other.text
-      && conversationId == other.conversationId
-      && memoryContext == other.memoryContext
-      && origin == other.origin;
+    return other is CommandSendMessage &&
+        text == other.text &&
+        conversationId == other.conversationId &&
+        memoryContext == other.memoryContext &&
+        origin == other.origin;
   }
 
   @override
-  int get hashCode => Object.hash(
-        text,
-        conversationId,
-        memoryContext,
-        origin,
-      );
+  int get hashCode => Object.hash(text, conversationId, memoryContext, origin);
 
   @override
   String toString() {
     String? fullString;
 
     assert(() {
-      fullString = '$runtimeType('
-        'text: $text, '
-        'conversationId: $conversationId, '
-        'memoryContext: $memoryContext, '
-        'origin: $origin'
-        ')';
+      fullString =
+          '$runtimeType('
+          'text: [REDACTED], '
+          'conversationId: $conversationId, '
+          'memoryContext: [REDACTED], '
+          'origin: $origin'
+          ')';
       return true;
     }());
 
@@ -281,32 +307,28 @@ class CommandConfigureAssistant extends Command {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is CommandConfigureAssistant
-      && provider == other.provider
-      && model == other.model
-      && endpoint == other.endpoint
-      && credential == other.credential;
+    return other is CommandConfigureAssistant &&
+        provider == other.provider &&
+        model == other.model &&
+        endpoint == other.endpoint &&
+        credential == other.credential;
   }
 
   @override
-  int get hashCode => Object.hash(
-        provider,
-        model,
-        endpoint,
-        credential,
-      );
+  int get hashCode => Object.hash(provider, model, endpoint, credential);
 
   @override
   String toString() {
     String? fullString;
 
     assert(() {
-      fullString = '$runtimeType('
-        'provider: $provider, '
-        'model: $model, '
-        'endpoint: $endpoint, '
-        'credential: $credential'
-        ')';
+      fullString =
+          '$runtimeType('
+          'provider: $provider, '
+          'model: $model, '
+          'endpoint: $endpoint, '
+          'credential: [REDACTED]'
+          ')';
       return true;
     }());
 
@@ -316,11 +338,12 @@ class CommandConfigureAssistant extends Command {
 
 @immutable
 class CommandConfigureTrustedAssistant extends Command {
-  const CommandConfigureTrustedAssistant({
-    required this.managedWorkerOrigin,
-  }) : super();
+  const CommandConfigureTrustedAssistant({required this.managedWorkerOrigin})
+    : super();
 
-  static CommandConfigureTrustedAssistant load(BinaryDeserializer deserializer) {
+  static CommandConfigureTrustedAssistant load(
+    BinaryDeserializer deserializer,
+  ) {
     deserializer.increaseContainerDepth();
     final instance = CommandConfigureTrustedAssistant(
       managedWorkerOrigin: deserializer.deserializeString(),
@@ -331,9 +354,7 @@ class CommandConfigureTrustedAssistant extends Command {
 
   final String managedWorkerOrigin;
 
-  CommandConfigureTrustedAssistant copyWith({
-    String? managedWorkerOrigin,
-  }) {
+  CommandConfigureTrustedAssistant copyWith({String? managedWorkerOrigin}) {
     return CommandConfigureTrustedAssistant(
       managedWorkerOrigin: managedWorkerOrigin ?? this.managedWorkerOrigin,
     );
@@ -351,8 +372,8 @@ class CommandConfigureTrustedAssistant extends Command {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is CommandConfigureTrustedAssistant
-      && managedWorkerOrigin == other.managedWorkerOrigin;
+    return other is CommandConfigureTrustedAssistant &&
+        managedWorkerOrigin == other.managedWorkerOrigin;
   }
 
   @override
@@ -363,9 +384,10 @@ class CommandConfigureTrustedAssistant extends Command {
     String? fullString;
 
     assert(() {
-      fullString = '$runtimeType('
-        'managedWorkerOrigin: $managedWorkerOrigin'
-        ')';
+      fullString =
+          '$runtimeType('
+          'managedWorkerOrigin: $managedWorkerOrigin'
+          ')';
       return true;
     }());
 
@@ -375,13 +397,11 @@ class CommandConfigureTrustedAssistant extends Command {
 
 @immutable
 class CommandClearAssistant extends Command {
-  const CommandClearAssistant(
-  ) : super();
+  const CommandClearAssistant() : super();
 
   static CommandClearAssistant load(BinaryDeserializer deserializer) {
     deserializer.increaseContainerDepth();
-    final instance = CommandClearAssistant(
-    );
+    final instance = CommandClearAssistant();
     deserializer.decreaseContainerDepth();
     return instance;
   }
@@ -408,8 +428,9 @@ class CommandClearAssistant extends Command {
     String? fullString;
 
     assert(() {
-      fullString = '$runtimeType('
-        ')';
+      fullString =
+          '$runtimeType('
+          ')';
       return true;
     }());
 
@@ -490,41 +511,42 @@ class CommandStartTranscription extends Command {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is CommandStartTranscription
-      && audioStreamId == other.audioStreamId
-      && deviceId == other.deviceId
-      && auth == other.auth
-      && language == other.language
-      && sampleRateHz == other.sampleRateHz
-      && channels == other.channels
-      && encoding == other.encoding;
+    return other is CommandStartTranscription &&
+        audioStreamId == other.audioStreamId &&
+        deviceId == other.deviceId &&
+        auth == other.auth &&
+        language == other.language &&
+        sampleRateHz == other.sampleRateHz &&
+        channels == other.channels &&
+        encoding == other.encoding;
   }
 
   @override
   int get hashCode => Object.hash(
-        audioStreamId,
-        deviceId,
-        auth,
-        language,
-        sampleRateHz,
-        channels,
-        encoding,
-      );
+    audioStreamId,
+    deviceId,
+    auth,
+    language,
+    sampleRateHz,
+    channels,
+    encoding,
+  );
 
   @override
   String toString() {
     String? fullString;
 
     assert(() {
-      fullString = '$runtimeType('
-        'audioStreamId: $audioStreamId, '
-        'deviceId: $deviceId, '
-        'auth: $auth, '
-        'language: $language, '
-        'sampleRateHz: $sampleRateHz, '
-        'channels: $channels, '
-        'encoding: $encoding'
-        ')';
+      fullString =
+          '$runtimeType('
+          'audioStreamId: $audioStreamId, '
+          'deviceId: $deviceId, '
+          'auth: $auth, '
+          'language: $language, '
+          'sampleRateHz: $sampleRateHz, '
+          'channels: $channels, '
+          'encoding: $encoding'
+          ')';
       return true;
     }());
 
@@ -534,9 +556,7 @@ class CommandStartTranscription extends Command {
 
 @immutable
 class CommandStopTranscription extends Command {
-  const CommandStopTranscription({
-    required this.audioStreamId,
-  }) : super();
+  const CommandStopTranscription({required this.audioStreamId}) : super();
 
   static CommandStopTranscription load(BinaryDeserializer deserializer) {
     deserializer.increaseContainerDepth();
@@ -549,9 +569,7 @@ class CommandStopTranscription extends Command {
 
   final String audioStreamId;
 
-  CommandStopTranscription copyWith({
-    String? audioStreamId,
-  }) {
+  CommandStopTranscription copyWith({String? audioStreamId}) {
     return CommandStopTranscription(
       audioStreamId: audioStreamId ?? this.audioStreamId,
     );
@@ -569,8 +587,8 @@ class CommandStopTranscription extends Command {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is CommandStopTranscription
-      && audioStreamId == other.audioStreamId;
+    return other is CommandStopTranscription &&
+        audioStreamId == other.audioStreamId;
   }
 
   @override
@@ -581,9 +599,10 @@ class CommandStopTranscription extends Command {
     String? fullString;
 
     assert(() {
-      fullString = '$runtimeType('
-        'audioStreamId: $audioStreamId'
-        ')';
+      fullString =
+          '$runtimeType('
+          'audioStreamId: $audioStreamId'
+          ')';
       return true;
     }());
 
@@ -598,6 +617,7 @@ class CommandStartLiveVoice extends Command {
     required this.ephemeralToken,
     required this.model,
     this.resumptionHandle,
+    this.sessionContext,
   }) : super();
 
   static CommandStartLiveVoice load(BinaryDeserializer deserializer) {
@@ -607,6 +627,7 @@ class CommandStartLiveVoice extends Command {
       ephemeralToken: deserializer.deserializeString(),
       model: deserializer.deserializeString(),
       resumptionHandle: TraitHelpers.deserializeOptionStr(deserializer),
+      sessionContext: TraitHelpers.deserializeOptionStr(deserializer),
     );
     deserializer.decreaseContainerDepth();
     return instance;
@@ -616,18 +637,25 @@ class CommandStartLiveVoice extends Command {
   final String ephemeralToken;
   final String model;
   final String? resumptionHandle;
+  final String? sessionContext;
 
   CommandStartLiveVoice copyWith({
     String? liveStreamId,
     String? ephemeralToken,
     String? model,
     String? Function()? resumptionHandle,
+    String? Function()? sessionContext,
   }) {
     return CommandStartLiveVoice(
       liveStreamId: liveStreamId ?? this.liveStreamId,
       ephemeralToken: ephemeralToken ?? this.ephemeralToken,
       model: model ?? this.model,
-      resumptionHandle: resumptionHandle == null ? this.resumptionHandle : resumptionHandle(),
+      resumptionHandle: resumptionHandle == null
+          ? this.resumptionHandle
+          : resumptionHandle(),
+      sessionContext: sessionContext == null
+          ? this.sessionContext
+          : sessionContext(),
     );
   }
 
@@ -638,6 +666,7 @@ class CommandStartLiveVoice extends Command {
     serializer.serializeString(ephemeralToken);
     serializer.serializeString(model);
     TraitHelpers.serializeOptionStr(resumptionHandle, serializer);
+    TraitHelpers.serializeOptionStr(sessionContext, serializer);
     serializer.decreaseContainerDepth();
   }
 
@@ -646,32 +675,36 @@ class CommandStartLiveVoice extends Command {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is CommandStartLiveVoice
-      && liveStreamId == other.liveStreamId
-      && ephemeralToken == other.ephemeralToken
-      && model == other.model
-      && resumptionHandle == other.resumptionHandle;
+    return other is CommandStartLiveVoice &&
+        liveStreamId == other.liveStreamId &&
+        ephemeralToken == other.ephemeralToken &&
+        model == other.model &&
+        resumptionHandle == other.resumptionHandle &&
+        sessionContext == other.sessionContext;
   }
 
   @override
   int get hashCode => Object.hash(
-        liveStreamId,
-        ephemeralToken,
-        model,
-        resumptionHandle,
-      );
+    liveStreamId,
+    ephemeralToken,
+    model,
+    resumptionHandle,
+    sessionContext,
+  );
 
   @override
   String toString() {
     String? fullString;
 
     assert(() {
-      fullString = '$runtimeType('
-        'liveStreamId: $liveStreamId, '
-        'ephemeralToken: $ephemeralToken, '
-        'model: $model, '
-        'resumptionHandle: $resumptionHandle'
-        ')';
+      fullString =
+          '$runtimeType('
+          'liveStreamId: $liveStreamId, '
+          'ephemeralToken: [REDACTED], '
+          'model: $model, '
+          'resumptionHandle: $resumptionHandle, '
+          'sessionContext: $sessionContext'
+          ')';
       return true;
     }());
 
@@ -681,9 +714,7 @@ class CommandStartLiveVoice extends Command {
 
 @immutable
 class CommandStopLiveVoice extends Command {
-  const CommandStopLiveVoice({
-    required this.liveStreamId,
-  }) : super();
+  const CommandStopLiveVoice({required this.liveStreamId}) : super();
 
   static CommandStopLiveVoice load(BinaryDeserializer deserializer) {
     deserializer.increaseContainerDepth();
@@ -696,9 +727,7 @@ class CommandStopLiveVoice extends Command {
 
   final String liveStreamId;
 
-  CommandStopLiveVoice copyWith({
-    String? liveStreamId,
-  }) {
+  CommandStopLiveVoice copyWith({String? liveStreamId}) {
     return CommandStopLiveVoice(
       liveStreamId: liveStreamId ?? this.liveStreamId,
     );
@@ -716,8 +745,7 @@ class CommandStopLiveVoice extends Command {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is CommandStopLiveVoice
-      && liveStreamId == other.liveStreamId;
+    return other is CommandStopLiveVoice && liveStreamId == other.liveStreamId;
   }
 
   @override
@@ -728,9 +756,10 @@ class CommandStopLiveVoice extends Command {
     String? fullString;
 
     assert(() {
-      fullString = '$runtimeType('
-        'liveStreamId: $liveStreamId'
-        ')';
+      fullString =
+          '$runtimeType('
+          'liveStreamId: $liveStreamId'
+          ')';
       return true;
     }());
 
@@ -761,7 +790,9 @@ class CommandCaptureEvent extends Command {
       text: TraitHelpers.deserializeOptionStr(deserializer),
       application: TraitHelpers.deserializeOptionStr(deserializer),
       windowTitle: TraitHelpers.deserializeOptionStr(deserializer),
-      transcriptLocator: TraitHelpers.deserializeOptionTranscriptLocator(deserializer),
+      transcriptLocator: TraitHelpers.deserializeOptionTranscriptLocator(
+        deserializer,
+      ),
     );
     deserializer.decreaseContainerDepth();
     return instance;
@@ -794,7 +825,9 @@ class CommandCaptureEvent extends Command {
       text: text == null ? this.text : text(),
       application: application == null ? this.application : application(),
       windowTitle: windowTitle == null ? this.windowTitle : windowTitle(),
-      transcriptLocator: transcriptLocator == null ? this.transcriptLocator : transcriptLocator(),
+      transcriptLocator: transcriptLocator == null
+          ? this.transcriptLocator
+          : transcriptLocator(),
     );
   }
 
@@ -808,7 +841,10 @@ class CommandCaptureEvent extends Command {
     TraitHelpers.serializeOptionStr(text, serializer);
     TraitHelpers.serializeOptionStr(application, serializer);
     TraitHelpers.serializeOptionStr(windowTitle, serializer);
-    TraitHelpers.serializeOptionTranscriptLocator(transcriptLocator, serializer);
+    TraitHelpers.serializeOptionTranscriptLocator(
+      transcriptLocator,
+      serializer,
+    );
     serializer.decreaseContainerDepth();
   }
 
@@ -817,44 +853,45 @@ class CommandCaptureEvent extends Command {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is CommandCaptureEvent
-      && ingestionKey == other.ingestionKey
-      && source == other.source
-      && occurredAtMs == other.occurredAtMs
-      && recordedAtMs == other.recordedAtMs
-      && text == other.text
-      && application == other.application
-      && windowTitle == other.windowTitle
-      && transcriptLocator == other.transcriptLocator;
+    return other is CommandCaptureEvent &&
+        ingestionKey == other.ingestionKey &&
+        source == other.source &&
+        occurredAtMs == other.occurredAtMs &&
+        recordedAtMs == other.recordedAtMs &&
+        text == other.text &&
+        application == other.application &&
+        windowTitle == other.windowTitle &&
+        transcriptLocator == other.transcriptLocator;
   }
 
   @override
   int get hashCode => Object.hash(
-        ingestionKey,
-        source,
-        occurredAtMs,
-        recordedAtMs,
-        text,
-        application,
-        windowTitle,
-        transcriptLocator,
-      );
+    ingestionKey,
+    source,
+    occurredAtMs,
+    recordedAtMs,
+    text,
+    application,
+    windowTitle,
+    transcriptLocator,
+  );
 
   @override
   String toString() {
     String? fullString;
 
     assert(() {
-      fullString = '$runtimeType('
-        'ingestionKey: $ingestionKey, '
-        'source: $source, '
-        'occurredAtMs: $occurredAtMs, '
-        'recordedAtMs: $recordedAtMs, '
-        'text: $text, '
-        'application: $application, '
-        'windowTitle: $windowTitle, '
-        'transcriptLocator: $transcriptLocator'
-        ')';
+      fullString =
+          '$runtimeType('
+          'ingestionKey: $ingestionKey, '
+          'source: $source, '
+          'occurredAtMs: $occurredAtMs, '
+          'recordedAtMs: $recordedAtMs, '
+          'text: [REDACTED], '
+          'application: [REDACTED], '
+          'windowTitle: [REDACTED], '
+          'transcriptLocator: $transcriptLocator'
+          ')';
       return true;
     }());
 
@@ -897,8 +934,12 @@ class CommandSearchMemory extends Command {
     return CommandSearchMemory(
       query: query ?? this.query,
       limit: limit ?? this.limit,
-      asOfValidAtMs: asOfValidAtMs == null ? this.asOfValidAtMs : asOfValidAtMs(),
-      asOfRecordedAtMs: asOfRecordedAtMs == null ? this.asOfRecordedAtMs : asOfRecordedAtMs(),
+      asOfValidAtMs: asOfValidAtMs == null
+          ? this.asOfValidAtMs
+          : asOfValidAtMs(),
+      asOfRecordedAtMs: asOfRecordedAtMs == null
+          ? this.asOfRecordedAtMs
+          : asOfRecordedAtMs(),
     );
   }
 
@@ -917,32 +958,29 @@ class CommandSearchMemory extends Command {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is CommandSearchMemory
-      && query == other.query
-      && limit == other.limit
-      && asOfValidAtMs == other.asOfValidAtMs
-      && asOfRecordedAtMs == other.asOfRecordedAtMs;
+    return other is CommandSearchMemory &&
+        query == other.query &&
+        limit == other.limit &&
+        asOfValidAtMs == other.asOfValidAtMs &&
+        asOfRecordedAtMs == other.asOfRecordedAtMs;
   }
 
   @override
-  int get hashCode => Object.hash(
-        query,
-        limit,
-        asOfValidAtMs,
-        asOfRecordedAtMs,
-      );
+  int get hashCode =>
+      Object.hash(query, limit, asOfValidAtMs, asOfRecordedAtMs);
 
   @override
   String toString() {
     String? fullString;
 
     assert(() {
-      fullString = '$runtimeType('
-        'query: $query, '
-        'limit: $limit, '
-        'asOfValidAtMs: $asOfValidAtMs, '
-        'asOfRecordedAtMs: $asOfRecordedAtMs'
-        ')';
+      fullString =
+          '$runtimeType('
+          'query: $query, '
+          'limit: $limit, '
+          'asOfValidAtMs: $asOfValidAtMs, '
+          'asOfRecordedAtMs: $asOfRecordedAtMs'
+          ')';
       return true;
     }());
 
@@ -985,7 +1023,9 @@ class CommandExportMemory extends Command {
     return CommandExportMemory(
       afterCommit: afterCommit ?? this.afterCommit,
       afterEventIndex: afterEventIndex ?? this.afterEventIndex,
-      highWaterMark: highWaterMark == null ? this.highWaterMark : highWaterMark(),
+      highWaterMark: highWaterMark == null
+          ? this.highWaterMark
+          : highWaterMark(),
       limit: limit ?? this.limit,
     );
   }
@@ -1005,32 +1045,29 @@ class CommandExportMemory extends Command {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is CommandExportMemory
-      && afterCommit == other.afterCommit
-      && afterEventIndex == other.afterEventIndex
-      && highWaterMark == other.highWaterMark
-      && limit == other.limit;
+    return other is CommandExportMemory &&
+        afterCommit == other.afterCommit &&
+        afterEventIndex == other.afterEventIndex &&
+        highWaterMark == other.highWaterMark &&
+        limit == other.limit;
   }
 
   @override
-  int get hashCode => Object.hash(
-        afterCommit,
-        afterEventIndex,
-        highWaterMark,
-        limit,
-      );
+  int get hashCode =>
+      Object.hash(afterCommit, afterEventIndex, highWaterMark, limit);
 
   @override
   String toString() {
     String? fullString;
 
     assert(() {
-      fullString = '$runtimeType('
-        'afterCommit: $afterCommit, '
-        'afterEventIndex: $afterEventIndex, '
-        'highWaterMark: $highWaterMark, '
-        'limit: $limit'
-        ')';
+      fullString =
+          '$runtimeType('
+          'afterCommit: $afterCommit, '
+          'afterEventIndex: $afterEventIndex, '
+          'highWaterMark: $highWaterMark, '
+          'limit: $limit'
+          ')';
       return true;
     }());
 
@@ -1040,9 +1077,7 @@ class CommandExportMemory extends Command {
 
 @immutable
 class CommandApplyMemory extends Command {
-  const CommandApplyMemory({
-    required this.commits,
-  }) : super();
+  const CommandApplyMemory({required this.commits}) : super();
 
   static CommandApplyMemory load(BinaryDeserializer deserializer) {
     deserializer.increaseContainerDepth();
@@ -1055,12 +1090,8 @@ class CommandApplyMemory extends Command {
 
   final List<MemoryApplyCommit> commits;
 
-  CommandApplyMemory copyWith({
-    List<MemoryApplyCommit>? commits,
-  }) {
-    return CommandApplyMemory(
-      commits: commits ?? this.commits,
-    );
+  CommandApplyMemory copyWith({List<MemoryApplyCommit>? commits}) {
+    return CommandApplyMemory(commits: commits ?? this.commits);
   }
 
   void serialize(BinarySerializer serializer) {
@@ -1075,8 +1106,7 @@ class CommandApplyMemory extends Command {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is CommandApplyMemory
-      && listEquals(commits, other.commits);
+    return other is CommandApplyMemory && listEquals(commits, other.commits);
   }
 
   @override
@@ -1087,9 +1117,10 @@ class CommandApplyMemory extends Command {
     String? fullString;
 
     assert(() {
-      fullString = '$runtimeType('
-        'commits: $commits'
-        ')';
+      fullString =
+          '$runtimeType('
+          'commits: $commits'
+          ')';
       return true;
     }());
 
@@ -1099,9 +1130,7 @@ class CommandApplyMemory extends Command {
 
 @immutable
 class CommandListMemoryItems extends Command {
-  const CommandListMemoryItems({
-    required this.limit,
-  }) : super();
+  const CommandListMemoryItems({required this.limit}) : super();
 
   static CommandListMemoryItems load(BinaryDeserializer deserializer) {
     deserializer.increaseContainerDepth();
@@ -1114,12 +1143,8 @@ class CommandListMemoryItems extends Command {
 
   final int limit;
 
-  CommandListMemoryItems copyWith({
-    int? limit,
-  }) {
-    return CommandListMemoryItems(
-      limit: limit ?? this.limit,
-    );
+  CommandListMemoryItems copyWith({int? limit}) {
+    return CommandListMemoryItems(limit: limit ?? this.limit);
   }
 
   void serialize(BinarySerializer serializer) {
@@ -1134,8 +1159,7 @@ class CommandListMemoryItems extends Command {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is CommandListMemoryItems
-      && limit == other.limit;
+    return other is CommandListMemoryItems && limit == other.limit;
   }
 
   @override
@@ -1146,9 +1170,10 @@ class CommandListMemoryItems extends Command {
     String? fullString;
 
     assert(() {
-      fullString = '$runtimeType('
-        'limit: $limit'
-        ')';
+      fullString =
+          '$runtimeType('
+          'limit: $limit'
+          ')';
       return true;
     }());
 
@@ -1217,35 +1242,31 @@ class CommandCorrectMemory extends Command {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is CommandCorrectMemory
-      && claimId == other.claimId
-      && text == other.text
-      && value == other.value
-      && occurredAtMs == other.occurredAtMs
-      && recordedAtMs == other.recordedAtMs;
+    return other is CommandCorrectMemory &&
+        claimId == other.claimId &&
+        text == other.text &&
+        value == other.value &&
+        occurredAtMs == other.occurredAtMs &&
+        recordedAtMs == other.recordedAtMs;
   }
 
   @override
-  int get hashCode => Object.hash(
-        claimId,
-        text,
-        value,
-        occurredAtMs,
-        recordedAtMs,
-      );
+  int get hashCode =>
+      Object.hash(claimId, text, value, occurredAtMs, recordedAtMs);
 
   @override
   String toString() {
     String? fullString;
 
     assert(() {
-      fullString = '$runtimeType('
-        'claimId: $claimId, '
-        'text: $text, '
-        'value: $value, '
-        'occurredAtMs: $occurredAtMs, '
-        'recordedAtMs: $recordedAtMs'
-        ')';
+      fullString =
+          '$runtimeType('
+          'claimId: $claimId, '
+          'text: [REDACTED], '
+          'value: [REDACTED], '
+          'occurredAtMs: $occurredAtMs, '
+          'recordedAtMs: $recordedAtMs'
+          ')';
       return true;
     }());
 
@@ -1273,10 +1294,7 @@ class CommandDeleteMemorySource extends Command {
   final String sourceId;
   final int deletedAtMs;
 
-  CommandDeleteMemorySource copyWith({
-    String? sourceId,
-    int? deletedAtMs,
-  }) {
+  CommandDeleteMemorySource copyWith({String? sourceId, int? deletedAtMs}) {
     return CommandDeleteMemorySource(
       sourceId: sourceId ?? this.sourceId,
       deletedAtMs: deletedAtMs ?? this.deletedAtMs,
@@ -1296,26 +1314,24 @@ class CommandDeleteMemorySource extends Command {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is CommandDeleteMemorySource
-      && sourceId == other.sourceId
-      && deletedAtMs == other.deletedAtMs;
+    return other is CommandDeleteMemorySource &&
+        sourceId == other.sourceId &&
+        deletedAtMs == other.deletedAtMs;
   }
 
   @override
-  int get hashCode => Object.hash(
-        sourceId,
-        deletedAtMs,
-      );
+  int get hashCode => Object.hash(sourceId, deletedAtMs);
 
   @override
   String toString() {
     String? fullString;
 
     assert(() {
-      fullString = '$runtimeType('
-        'sourceId: $sourceId, '
-        'deletedAtMs: $deletedAtMs'
-        ')';
+      fullString =
+          '$runtimeType('
+          'sourceId: $sourceId, '
+          'deletedAtMs: $deletedAtMs'
+          ')';
       return true;
     }());
 
@@ -1378,32 +1394,29 @@ class CommandScanOnboarding extends Command {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is CommandScanOnboarding
-      && listEquals(roots, other.roots)
-      && includeAppleNotes == other.includeAppleNotes
-      && includeAppleMail == other.includeAppleMail
-      && recordedAtMs == other.recordedAtMs;
+    return other is CommandScanOnboarding &&
+        listEquals(roots, other.roots) &&
+        includeAppleNotes == other.includeAppleNotes &&
+        includeAppleMail == other.includeAppleMail &&
+        recordedAtMs == other.recordedAtMs;
   }
 
   @override
-  int get hashCode => Object.hash(
-        roots,
-        includeAppleNotes,
-        includeAppleMail,
-        recordedAtMs,
-      );
+  int get hashCode =>
+      Object.hash(roots, includeAppleNotes, includeAppleMail, recordedAtMs);
 
   @override
   String toString() {
     String? fullString;
 
     assert(() {
-      fullString = '$runtimeType('
-        'roots: $roots, '
-        'includeAppleNotes: $includeAppleNotes, '
-        'includeAppleMail: $includeAppleMail, '
-        'recordedAtMs: $recordedAtMs'
-        ')';
+      fullString =
+          '$runtimeType('
+          'roots: $roots, '
+          'includeAppleNotes: $includeAppleNotes, '
+          'includeAppleMail: $includeAppleMail, '
+          'recordedAtMs: $recordedAtMs'
+          ')';
       return true;
     }());
 
@@ -1424,7 +1437,10 @@ class CommandApprovalDecision extends Command {
     final instance = CommandApprovalDecision(
       proposalId: deserializer.deserializeString(),
       decision: ApprovalDecisionExtension.deserialize(deserializer),
-      authorityReceipt: TraitHelpers.deserializeOptionComputerUseAuthorityReceipt(deserializer),
+      authorityReceipt:
+          TraitHelpers.deserializeOptionComputerUseAuthorityReceipt(
+            deserializer,
+          ),
     );
     deserializer.decreaseContainerDepth();
     return instance;
@@ -1442,7 +1458,9 @@ class CommandApprovalDecision extends Command {
     return CommandApprovalDecision(
       proposalId: proposalId ?? this.proposalId,
       decision: decision ?? this.decision,
-      authorityReceipt: authorityReceipt == null ? this.authorityReceipt : authorityReceipt(),
+      authorityReceipt: authorityReceipt == null
+          ? this.authorityReceipt
+          : authorityReceipt(),
     );
   }
 
@@ -1451,7 +1469,10 @@ class CommandApprovalDecision extends Command {
     serializer.serializeVariantIndex(17);
     serializer.serializeString(proposalId);
     decision.serialize(serializer);
-    TraitHelpers.serializeOptionComputerUseAuthorityReceipt(authorityReceipt, serializer);
+    TraitHelpers.serializeOptionComputerUseAuthorityReceipt(
+      authorityReceipt,
+      serializer,
+    );
     serializer.decreaseContainerDepth();
   }
 
@@ -1460,29 +1481,26 @@ class CommandApprovalDecision extends Command {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is CommandApprovalDecision
-      && proposalId == other.proposalId
-      && decision == other.decision
-      && authorityReceipt == other.authorityReceipt;
+    return other is CommandApprovalDecision &&
+        proposalId == other.proposalId &&
+        decision == other.decision &&
+        authorityReceipt == other.authorityReceipt;
   }
 
   @override
-  int get hashCode => Object.hash(
-        proposalId,
-        decision,
-        authorityReceipt,
-      );
+  int get hashCode => Object.hash(proposalId, decision, authorityReceipt);
 
   @override
   String toString() {
     String? fullString;
 
     assert(() {
-      fullString = '$runtimeType('
-        'proposalId: $proposalId, '
-        'decision: $decision, '
-        'authorityReceipt: $authorityReceipt'
-        ')';
+      fullString =
+          '$runtimeType('
+          'proposalId: $proposalId, '
+          'decision: $decision, '
+          'authorityReceipt: $authorityReceipt'
+          ')';
       return true;
     }());
 
@@ -1525,8 +1543,12 @@ class CommandDeviceState extends Command {
     return CommandDeviceState(
       deviceId: deviceId ?? this.deviceId,
       connected: connected ?? this.connected,
-      batteryPercent: batteryPercent == null ? this.batteryPercent : batteryPercent(),
-      firmwareVersion: firmwareVersion == null ? this.firmwareVersion : firmwareVersion(),
+      batteryPercent: batteryPercent == null
+          ? this.batteryPercent
+          : batteryPercent(),
+      firmwareVersion: firmwareVersion == null
+          ? this.firmwareVersion
+          : firmwareVersion(),
     );
   }
 
@@ -1545,32 +1567,29 @@ class CommandDeviceState extends Command {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is CommandDeviceState
-      && deviceId == other.deviceId
-      && connected == other.connected
-      && batteryPercent == other.batteryPercent
-      && firmwareVersion == other.firmwareVersion;
+    return other is CommandDeviceState &&
+        deviceId == other.deviceId &&
+        connected == other.connected &&
+        batteryPercent == other.batteryPercent &&
+        firmwareVersion == other.firmwareVersion;
   }
 
   @override
-  int get hashCode => Object.hash(
-        deviceId,
-        connected,
-        batteryPercent,
-        firmwareVersion,
-      );
+  int get hashCode =>
+      Object.hash(deviceId, connected, batteryPercent, firmwareVersion);
 
   @override
   String toString() {
     String? fullString;
 
     assert(() {
-      fullString = '$runtimeType('
-        'deviceId: $deviceId, '
-        'connected: $connected, '
-        'batteryPercent: $batteryPercent, '
-        'firmwareVersion: $firmwareVersion'
-        ')';
+      fullString =
+          '$runtimeType('
+          'deviceId: $deviceId, '
+          'connected: $connected, '
+          'batteryPercent: $batteryPercent, '
+          'firmwareVersion: $firmwareVersion'
+          ')';
       return true;
     }());
 
@@ -1580,13 +1599,11 @@ class CommandDeviceState extends Command {
 
 @immutable
 class CommandCancel extends Command {
-  const CommandCancel(
-  ) : super();
+  const CommandCancel() : super();
 
   static CommandCancel load(BinaryDeserializer deserializer) {
     deserializer.increaseContainerDepth();
-    final instance = CommandCancel(
-    );
+    final instance = CommandCancel();
     deserializer.decreaseContainerDepth();
     return instance;
   }
@@ -1613,8 +1630,9 @@ class CommandCancel extends Command {
     String? fullString;
 
     assert(() {
-      fullString = '$runtimeType('
-        ')';
+      fullString =
+          '$runtimeType('
+          ')';
       return true;
     }());
 
@@ -1624,9 +1642,7 @@ class CommandCancel extends Command {
 
 @immutable
 class CommandStartMeeting extends Command {
-  const CommandStartMeeting({
-    this.title,
-  }) : super();
+  const CommandStartMeeting({this.title}) : super();
 
   static CommandStartMeeting load(BinaryDeserializer deserializer) {
     deserializer.increaseContainerDepth();
@@ -1639,12 +1655,8 @@ class CommandStartMeeting extends Command {
 
   final String? title;
 
-  CommandStartMeeting copyWith({
-    String? Function()? title,
-  }) {
-    return CommandStartMeeting(
-      title: title == null ? this.title : title(),
-    );
+  CommandStartMeeting copyWith({String? Function()? title}) {
+    return CommandStartMeeting(title: title == null ? this.title : title());
   }
 
   void serialize(BinarySerializer serializer) {
@@ -1659,8 +1671,7 @@ class CommandStartMeeting extends Command {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is CommandStartMeeting
-      && title == other.title;
+    return other is CommandStartMeeting && title == other.title;
   }
 
   @override
@@ -1671,9 +1682,10 @@ class CommandStartMeeting extends Command {
     String? fullString;
 
     assert(() {
-      fullString = '$runtimeType('
-        'title: $title'
-        ')';
+      fullString =
+          '$runtimeType('
+          'title: $title'
+          ')';
       return true;
     }());
 
@@ -1683,13 +1695,11 @@ class CommandStartMeeting extends Command {
 
 @immutable
 class CommandStopMeeting extends Command {
-  const CommandStopMeeting(
-  ) : super();
+  const CommandStopMeeting() : super();
 
   static CommandStopMeeting load(BinaryDeserializer deserializer) {
     deserializer.increaseContainerDepth();
-    final instance = CommandStopMeeting(
-    );
+    final instance = CommandStopMeeting();
     deserializer.decreaseContainerDepth();
     return instance;
   }
@@ -1716,8 +1726,9 @@ class CommandStopMeeting extends Command {
     String? fullString;
 
     assert(() {
-      fullString = '$runtimeType('
-        ')';
+      fullString =
+          '$runtimeType('
+          ')';
       return true;
     }());
 
@@ -1727,9 +1738,7 @@ class CommandStopMeeting extends Command {
 
 @immutable
 class CommandJotMeetingNote extends Command {
-  const CommandJotMeetingNote({
-    required this.text,
-  }) : super();
+  const CommandJotMeetingNote({required this.text}) : super();
 
   static CommandJotMeetingNote load(BinaryDeserializer deserializer) {
     deserializer.increaseContainerDepth();
@@ -1742,12 +1751,8 @@ class CommandJotMeetingNote extends Command {
 
   final String text;
 
-  CommandJotMeetingNote copyWith({
-    String? text,
-  }) {
-    return CommandJotMeetingNote(
-      text: text ?? this.text,
-    );
+  CommandJotMeetingNote copyWith({String? text}) {
+    return CommandJotMeetingNote(text: text ?? this.text);
   }
 
   void serialize(BinarySerializer serializer) {
@@ -1762,8 +1767,7 @@ class CommandJotMeetingNote extends Command {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is CommandJotMeetingNote
-      && text == other.text;
+    return other is CommandJotMeetingNote && text == other.text;
   }
 
   @override
@@ -1774,9 +1778,10 @@ class CommandJotMeetingNote extends Command {
     String? fullString;
 
     assert(() {
-      fullString = '$runtimeType('
-        'text: $text'
-        ')';
+      fullString =
+          '$runtimeType('
+          'text: $text'
+          ')';
       return true;
     }());
 
@@ -1810,7 +1815,9 @@ class CommandProvideMeetingAuth extends Command {
   }) {
     return CommandProvideMeetingAuth(
       auth: auth ?? this.auth,
-      trustedWorkerOrigin: trustedWorkerOrigin == null ? this.trustedWorkerOrigin : trustedWorkerOrigin(),
+      trustedWorkerOrigin: trustedWorkerOrigin == null
+          ? this.trustedWorkerOrigin
+          : trustedWorkerOrigin(),
     );
   }
 
@@ -1827,26 +1834,24 @@ class CommandProvideMeetingAuth extends Command {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is CommandProvideMeetingAuth
-      && auth == other.auth
-      && trustedWorkerOrigin == other.trustedWorkerOrigin;
+    return other is CommandProvideMeetingAuth &&
+        auth == other.auth &&
+        trustedWorkerOrigin == other.trustedWorkerOrigin;
   }
 
   @override
-  int get hashCode => Object.hash(
-        auth,
-        trustedWorkerOrigin,
-      );
+  int get hashCode => Object.hash(auth, trustedWorkerOrigin);
 
   @override
   String toString() {
     String? fullString;
 
     assert(() {
-      fullString = '$runtimeType('
-        'auth: $auth, '
-        'trustedWorkerOrigin: $trustedWorkerOrigin'
-        ')';
+      fullString =
+          '$runtimeType('
+          'auth: $auth, '
+          'trustedWorkerOrigin: $trustedWorkerOrigin'
+          ')';
       return true;
     }());
 
@@ -1856,11 +1861,11 @@ class CommandProvideMeetingAuth extends Command {
 
 @immutable
 class CommandSetSystemAudioCaptureMode extends Command {
-  const CommandSetSystemAudioCaptureMode({
-    required this.mode,
-  }) : super();
+  const CommandSetSystemAudioCaptureMode({required this.mode}) : super();
 
-  static CommandSetSystemAudioCaptureMode load(BinaryDeserializer deserializer) {
+  static CommandSetSystemAudioCaptureMode load(
+    BinaryDeserializer deserializer,
+  ) {
     deserializer.increaseContainerDepth();
     final instance = CommandSetSystemAudioCaptureMode(
       mode: SystemAudioCaptureModeExtension.deserialize(deserializer),
@@ -1871,12 +1876,8 @@ class CommandSetSystemAudioCaptureMode extends Command {
 
   final SystemAudioCaptureMode mode;
 
-  CommandSetSystemAudioCaptureMode copyWith({
-    SystemAudioCaptureMode? mode,
-  }) {
-    return CommandSetSystemAudioCaptureMode(
-      mode: mode ?? this.mode,
-    );
+  CommandSetSystemAudioCaptureMode copyWith({SystemAudioCaptureMode? mode}) {
+    return CommandSetSystemAudioCaptureMode(mode: mode ?? this.mode);
   }
 
   void serialize(BinarySerializer serializer) {
@@ -1891,8 +1892,7 @@ class CommandSetSystemAudioCaptureMode extends Command {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is CommandSetSystemAudioCaptureMode
-      && mode == other.mode;
+    return other is CommandSetSystemAudioCaptureMode && mode == other.mode;
   }
 
   @override
@@ -1903,9 +1903,10 @@ class CommandSetSystemAudioCaptureMode extends Command {
     String? fullString;
 
     assert(() {
-      fullString = '$runtimeType('
-        'mode: $mode'
-        ')';
+      fullString =
+          '$runtimeType('
+          'mode: $mode'
+          ')';
       return true;
     }());
 
@@ -1915,10 +1916,8 @@ class CommandSetSystemAudioCaptureMode extends Command {
 
 @immutable
 class CommandComposeBrief extends Command {
-  const CommandComposeBrief({
-    required this.nowLocal,
-    required this.items,
-  }) : super();
+  const CommandComposeBrief({required this.nowLocal, required this.items})
+    : super();
 
   static CommandComposeBrief load(BinaryDeserializer deserializer) {
     deserializer.increaseContainerDepth();
@@ -1933,10 +1932,7 @@ class CommandComposeBrief extends Command {
   final String nowLocal;
   final List<BriefItem> items;
 
-  CommandComposeBrief copyWith({
-    String? nowLocal,
-    List<BriefItem>? items,
-  }) {
+  CommandComposeBrief copyWith({String? nowLocal, List<BriefItem>? items}) {
     return CommandComposeBrief(
       nowLocal: nowLocal ?? this.nowLocal,
       items: items ?? this.items,
@@ -1956,26 +1952,24 @@ class CommandComposeBrief extends Command {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is CommandComposeBrief
-      && nowLocal == other.nowLocal
-      && listEquals(items, other.items);
+    return other is CommandComposeBrief &&
+        nowLocal == other.nowLocal &&
+        listEquals(items, other.items);
   }
 
   @override
-  int get hashCode => Object.hash(
-        nowLocal,
-        items,
-      );
+  int get hashCode => Object.hash(nowLocal, items);
 
   @override
   String toString() {
     String? fullString;
 
     assert(() {
-      fullString = '$runtimeType('
-        'nowLocal: $nowLocal, '
-        'items: $items'
-        ')';
+      fullString =
+          '$runtimeType('
+          'nowLocal: $nowLocal, '
+          'items: $items'
+          ')';
       return true;
     }());
 
@@ -2044,35 +2038,31 @@ class CommandJoinCall extends Command {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is CommandJoinCall
-      && link == other.link
-      && displayName == other.displayName
-      && video == other.video
-      && ephemeralToken == other.ephemeralToken
-      && model == other.model;
+    return other is CommandJoinCall &&
+        link == other.link &&
+        displayName == other.displayName &&
+        video == other.video &&
+        ephemeralToken == other.ephemeralToken &&
+        model == other.model;
   }
 
   @override
-  int get hashCode => Object.hash(
-        link,
-        displayName,
-        video,
-        ephemeralToken,
-        model,
-      );
+  int get hashCode =>
+      Object.hash(link, displayName, video, ephemeralToken, model);
 
   @override
   String toString() {
     String? fullString;
 
     assert(() {
-      fullString = '$runtimeType('
-        'link: $link, '
-        'displayName: $displayName, '
-        'video: $video, '
-        'ephemeralToken: $ephemeralToken, '
-        'model: $model'
-        ')';
+      fullString =
+          '$runtimeType('
+          'link: $link, '
+          'displayName: $displayName, '
+          'video: $video, '
+          'ephemeralToken: $ephemeralToken, '
+          'model: $model'
+          ')';
       return true;
     }());
 
@@ -2082,13 +2072,11 @@ class CommandJoinCall extends Command {
 
 @immutable
 class CommandResolveDevAssistant extends Command {
-  const CommandResolveDevAssistant(
-  ) : super();
+  const CommandResolveDevAssistant() : super();
 
   static CommandResolveDevAssistant load(BinaryDeserializer deserializer) {
     deserializer.increaseContainerDepth();
-    final instance = CommandResolveDevAssistant(
-    );
+    final instance = CommandResolveDevAssistant();
     deserializer.decreaseContainerDepth();
     return instance;
   }
@@ -2115,8 +2103,9 @@ class CommandResolveDevAssistant extends Command {
     String? fullString;
 
     assert(() {
-      fullString = '$runtimeType('
-        ')';
+      fullString =
+          '$runtimeType('
+          ')';
       return true;
     }());
 

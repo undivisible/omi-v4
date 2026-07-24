@@ -82,7 +82,7 @@ final class MenuBarBridge: NSObject {
   }
 
   @objc private func capture() {
-    showApp()
+    // Summon the floating pill only — never activate the hub window.
     channel.invokeMethod("capture", arguments: nil)
   }
 

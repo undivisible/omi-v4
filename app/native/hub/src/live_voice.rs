@@ -36,6 +36,9 @@ pub(crate) enum RealtimeVoiceEvent {
         sample_rate_hz: u32,
         bytes: Vec<u8>,
     },
+    ToolCall {
+        calls: Vec<LiveFunctionCall>,
+    },
     Interrupted,
     SessionEnded {
         resumption_handle: Option<String>,
@@ -52,6 +55,10 @@ pub(crate) struct RealtimeVoiceSession {
     pub(crate) ephemeral_token: String,
     pub(crate) model: String,
     pub(crate) resumption_handle: Option<String>,
+    /// Optional read-only screen/AX context injected as clientContent after
+    /// setup completes, so Live has the same on-screen understanding as
+    /// overlay chat.
+    pub(crate) session_context: Option<String>,
 }
 
 impl std::fmt::Debug for RealtimeVoiceSession {
@@ -197,6 +204,43 @@ pub(crate) fn live_endpoint(ephemeral_token: &str) -> Result<Url, String> {
     Ok(endpoint)
 }
 
+/// Computer-use tools mirrored from the chat agent so Live can propose the
+/// same UI actions. Schemas stay within Gemini's functionDeclarations subset
+/// (no additionalProperties / minLength / maxLength).
+pub(crate) fn live_computer_use_tools() -> serde_json::Value {
+    serde_json::json!([
+        {
+            "functionDeclarations": [
+                {
+                    "name": "computer_invoke",
+                    "description": "Propose invoking the unique accessible element with this exact name after user approval",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "target_name": {"type": "string"},
+                            "background_only": {"type": "boolean"}
+                        },
+                        "required": ["target_name", "background_only"]
+                    }
+                },
+                {
+                    "name": "computer_set_value",
+                    "description": "Propose setting the value of the unique editable accessible element with this exact name after user approval",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "target_name": {"type": "string"},
+                            "value": {"type": "string"},
+                            "background_only": {"type": "boolean"}
+                        },
+                        "required": ["target_name", "value", "background_only"]
+                    }
+                }
+            ]
+        }
+    ])
+}
+
 pub(crate) fn setup_message(model: &str, resumption_handle: Option<&str>) -> String {
     let model = if model.starts_with("models/") {
         model.to_owned()
@@ -208,6 +252,12 @@ pub(crate) fn setup_message(model: &str, resumption_handle: Option<&str>) -> Str
         "generationConfig": {
             "responseModalities": ["AUDIO"],
         },
+        "systemInstruction": {
+            "parts": [{
+                "text": "You are Omi, the user's desktop voice agent. Use the optional screen context the client sends. When the user asks you to click, type, or change something on screen, call computer_invoke or computer_set_value — those proposals require explicit user approval before anything runs. Prefer short spoken answers."
+            }]
+        },
+        "tools": live_computer_use_tools(),
         "realtimeInputConfig": {},
         "inputAudioTranscription": {},
         "outputAudioTranscription": {},
@@ -216,6 +266,40 @@ pub(crate) fn setup_message(model: &str, resumption_handle: Option<&str>) -> Str
         setup["sessionResumption"] = serde_json::json!({ "handle": handle });
     }
     serde_json::json!({ "setup": setup }).to_string()
+}
+
+pub(crate) fn client_content_message(text: &str) -> String {
+    serde_json::json!({
+        "clientContent": {
+            "turns": [{
+                "role": "user",
+                "parts": [{"text": text}]
+            }],
+            "turnComplete": false
+        }
+    })
+    .to_string()
+}
+
+pub(crate) fn tool_response_message(
+    responses: &[(String, String, serde_json::Value)],
+) -> String {
+    let function_responses: Vec<serde_json::Value> = responses
+        .iter()
+        .map(|(id, name, response)| {
+            serde_json::json!({
+                "id": id,
+                "name": name,
+                "response": response,
+            })
+        })
+        .collect();
+    serde_json::json!({
+        "toolResponse": {
+            "functionResponses": function_responses
+        }
+    })
+    .to_string()
 }
 
 pub(crate) fn realtime_input_message(bytes: &[u8]) -> String {
@@ -275,8 +359,26 @@ impl OutboundAudioGate {
 struct ServerFrame {
     setup_complete: Option<serde_json::Value>,
     server_content: Option<ServerContent>,
+    tool_call: Option<ToolCallFrame>,
     go_away: Option<serde_json::Value>,
     session_resumption_update: Option<SessionResumptionUpdate>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ToolCallFrame {
+    #[serde(default)]
+    function_calls: Vec<FunctionCallFrame>,
+}
+
+#[derive(Deserialize)]
+struct FunctionCallFrame {
+    #[serde(default)]
+    id: String,
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    args: serde_json::Value,
 }
 
 #[derive(Deserialize)]
@@ -338,12 +440,22 @@ pub(crate) enum ServerMessage {
         interrupted: bool,
         turn_complete: bool,
     },
+    ToolCall {
+        calls: Vec<LiveFunctionCall>,
+    },
     GoAway,
     SessionResumptionUpdate {
         handle: String,
         resumable: bool,
     },
     Unknown,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct LiveFunctionCall {
+    pub(crate) id: String,
+    pub(crate) name: String,
+    pub(crate) args: String,
 }
 
 fn pcm_sample_rate(mime_type: &str) -> u32 {
@@ -372,6 +484,25 @@ pub(crate) fn parse_server_message(payload: &[u8]) -> Result<ServerMessage, Stri
             },
             None => ServerMessage::Unknown,
         });
+    }
+    if let Some(tool_call) = frame.tool_call {
+        let calls = tool_call
+            .function_calls
+            .into_iter()
+            .filter(|call| !call.id.is_empty() && !call.name.is_empty())
+            .map(|call| LiveFunctionCall {
+                id: call.id,
+                name: call.name,
+                args: match call.args {
+                    serde_json::Value::Null => "{}".to_owned(),
+                    other => other.to_string(),
+                },
+            })
+            .collect::<Vec<_>>();
+        if !calls.is_empty() {
+            return Ok(ServerMessage::ToolCall { calls });
+        }
+        return Ok(ServerMessage::Unknown);
     }
     let Some(content) = frame.server_content else {
         return Ok(ServerMessage::Unknown);
@@ -478,6 +609,7 @@ async fn run(
 ) {
     let model = session.model;
     let initial_resumption_handle = session.resumption_handle;
+    let session_context = session.session_context;
     let mut resumption_handle: Option<String> = None;
     let connection = async {
         let (socket, _) = tokio::time::timeout(CONNECT_TIMEOUT, connect_async(endpoint.as_str()))
@@ -586,6 +718,19 @@ async fn run(
                         return;
                     }
                     if outcome.setup_complete {
+                        if let Some(context) = session_context.as_deref().filter(|text| !text.trim().is_empty()) {
+                            if socket
+                                .send(Message::Text(client_content_message(context).into()))
+                                .await
+                                .is_err()
+                            {
+                                let _ = events.send(RealtimeVoiceEvent::Error {
+                                    message: "live voice provider connection was lost".to_owned(),
+                                    resumption_handle: resumption_handle.clone(),
+                                }).await;
+                                return;
+                            }
+                        }
                         for bytes in gate.open() {
                             if socket.send(Message::Text(realtime_input_message(&bytes).into())).await.is_err() {
                                 let _ = events.send(RealtimeVoiceEvent::Error {
@@ -594,6 +739,32 @@ async fn run(
                                 }).await;
                                 return;
                             }
+                        }
+                    }
+                    if let Some(calls) = outcome.tool_calls {
+                        let responses: Vec<(String, String, serde_json::Value)> = calls
+                            .iter()
+                            .map(|call| {
+                                (
+                                    call.id.clone(),
+                                    call.name.clone(),
+                                    serde_json::json!({
+                                        "status": "proposed_for_approval",
+                                        "detail": "Action proposed to the user; wait for approval before assuming it ran.",
+                                    }),
+                                )
+                            })
+                            .collect();
+                        if socket
+                            .send(Message::Text(tool_response_message(&responses).into()))
+                            .await
+                            .is_err()
+                        {
+                            let _ = events.send(RealtimeVoiceEvent::Error {
+                                message: "live voice provider connection was lost".to_owned(),
+                                resumption_handle: resumption_handle.clone(),
+                            }).await;
+                            return;
                         }
                     }
                     if outcome.go_away {
@@ -655,6 +826,7 @@ pub(crate) struct DispatchOutcome {
     keep_running: bool,
     setup_complete: bool,
     go_away: bool,
+    tool_calls: Option<Vec<LiveFunctionCall>>,
 }
 
 impl DispatchOutcome {
@@ -663,6 +835,7 @@ impl DispatchOutcome {
             keep_running: true,
             setup_complete: false,
             go_away: false,
+            tool_calls: None,
         }
     }
 
@@ -671,6 +844,7 @@ impl DispatchOutcome {
             keep_running: false,
             setup_complete: false,
             go_away: false,
+            tool_calls: None,
         }
     }
 }
@@ -702,6 +876,7 @@ async fn dispatch_server_payload(
                 keep_running: true,
                 setup_complete: true,
                 go_away: false,
+                tool_calls: None,
             }
         }
         ServerMessage::Unknown => DispatchOutcome::running(),
@@ -710,6 +885,23 @@ async fn dispatch_server_payload(
                 *resumption_handle = Some(handle);
             }
             DispatchOutcome::running()
+        }
+        ServerMessage::ToolCall { calls } => {
+            if events
+                .send(RealtimeVoiceEvent::ToolCall {
+                    calls: calls.clone(),
+                })
+                .await
+                .is_err()
+            {
+                return DispatchOutcome::stopped();
+            }
+            DispatchOutcome {
+                keep_running: true,
+                setup_complete: false,
+                go_away: false,
+                tool_calls: Some(calls),
+            }
         }
         // goAway only announces that the server will close the connection
         // soon. Tearing the session down here used to cut the in-flight reply
@@ -721,6 +913,7 @@ async fn dispatch_server_payload(
             keep_running: true,
             setup_complete: false,
             go_away: true,
+            tool_calls: None,
         },
         ServerMessage::Content {
             audio,
@@ -783,6 +976,7 @@ mod tests {
             ephemeral_token: "auth_tokens/abc123".to_owned(),
             model: "gemini-2.5-flash-native-audio-preview".to_owned(),
             resumption_handle: None,
+            session_context: None,
         }
     }
 
@@ -848,11 +1042,59 @@ mod tests {
             serde_json::json!({})
         );
         assert!(value["setup"]["sessionResumption"].is_null());
+        assert_eq!(
+            value["setup"]["tools"][0]["functionDeclarations"][0]["name"],
+            serde_json::json!("computer_invoke")
+        );
+        assert_eq!(
+            value["setup"]["tools"][0]["functionDeclarations"][1]["name"],
+            serde_json::json!("computer_set_value")
+        );
+        assert!(
+            value["setup"]["systemInstruction"]["parts"][0]["text"]
+                .as_str()
+                .is_some_and(|text| text.contains("computer_invoke"))
+        );
         let prefixed: serde_json::Value =
             serde_json::from_str(&setup_message("models/gemini-live", None)).unwrap_or_default();
         assert_eq!(
             prefixed["setup"]["model"],
             serde_json::json!("models/gemini-live")
+        );
+    }
+
+    #[test]
+    fn tool_call_frames_parse_and_tool_responses_round_trip() {
+        let payload = serde_json::json!({
+            "toolCall": {
+                "functionCalls": [{
+                    "id": "call-1",
+                    "name": "computer_invoke",
+                    "args": {"target_name": "Send", "background_only": false}
+                }]
+            }
+        });
+        let message = parse_server_message(payload.to_string().as_bytes())
+            .unwrap_or_else(|error| panic!("tool call parses: {error}"));
+        let ServerMessage::ToolCall { calls } = message else {
+            panic!("expected tool call");
+        };
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].id, "call-1");
+        assert_eq!(calls[0].name, "computer_invoke");
+        let args: serde_json::Value = serde_json::from_str(&calls[0].args).unwrap_or_default();
+        assert_eq!(args["target_name"], serde_json::json!("Send"));
+        assert_eq!(args["background_only"], serde_json::json!(false));
+        let response = tool_response_message(&[(
+            "call-1".to_owned(),
+            "computer_invoke".to_owned(),
+            serde_json::json!({"status": "proposed_for_approval"}),
+        )]);
+        let value: serde_json::Value =
+            serde_json::from_str(&response).unwrap_or_else(|error| panic!("{error}"));
+        assert_eq!(
+            value["toolResponse"]["functionResponses"][0]["id"],
+            serde_json::json!("call-1")
         );
     }
 
@@ -1086,6 +1328,7 @@ mod tests {
                     keep_running: true,
                     setup_complete: true,
                     go_away: false,
+                    tool_calls: None,
                 }
             );
             assert_eq!(receiver.try_recv(), Ok(RealtimeVoiceEvent::Started));
@@ -1109,6 +1352,7 @@ mod tests {
                     keep_running: true,
                     setup_complete: false,
                     go_away: true,
+                    tool_calls: None,
                 }
             );
             assert!(receiver.try_recv().is_err());

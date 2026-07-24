@@ -88,6 +88,7 @@ final class LiveVoiceCapture {
     required String ephemeralToken,
     required String model,
     required String authorityId,
+    String? sessionContext,
   }) async {
     final live = hub;
     await cancel();
@@ -107,6 +108,7 @@ final class LiveVoiceCapture {
         liveStreamId: streamId,
         ephemeralToken: ephemeralToken,
         model: model,
+        sessionContext: sessionContext,
       );
       await Future.any<void>([
         session.started.future,

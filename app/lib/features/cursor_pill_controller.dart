@@ -339,6 +339,7 @@ final class CursorPillController extends ChangeNotifier {
     required this._sendPrompt,
     required this.level,
     this._voiceNotice,
+    this._assistantTranscript,
     this._openHub,
     Future<bool> Function(Uri link)? launchLink,
     this._presentWindow,
@@ -371,11 +372,30 @@ final class CursorPillController extends ChangeNotifier {
     AppServices services, {
     VoidCallback? openHub,
   }) {
-    services.desktopVoiceIntentInterceptor = matchesShowHubIntent;
-    return CursorPillController(
+    late final CursorPillController controller;
+    // When the overlay owns the voice session it sends the prompt itself
+    // (with AX + MessageOrigin.overlay). Show-hub intents still short-circuit
+    // so stopDesktopVoice does not also open a chat turn.
+    services.desktopVoiceIntentInterceptor = (text) {
+      if (matchesShowHubIntent(text)) return true;
+      return switch (controller.state) {
+        CursorPillState.listening || CursorPillState.working => true,
+        CursorPillState.hidden || CursorPillState.input => false,
+      };
+    };
+    controller = CursorPillController(
       hub: services.nativeHub,
       events: services.nativeEvents,
-      startVoice: services.startDesktopVoice,
+      startVoice: () async {
+        final ax = await AxContext.snapshot();
+        final sessionContext = ax.isEmpty
+            ? null
+            : buildOverlayPrompt(
+                question: 'Screen context for this voice session:',
+                context: ax,
+              );
+        await services.startDesktopVoice(sessionContext: sessionContext);
+      },
       stopVoice: () async => (await services.stopDesktopVoice())?.text ?? '',
       cancelVoice: services.cancelDesktopVoice,
       // Overlay submissions are agent instructions, not plain chat: the hub
@@ -397,6 +417,7 @@ final class CursorPillController extends ChangeNotifier {
         services.liveVoice.level,
       ]),
       voiceNotice: services.voiceNotice,
+      assistantTranscript: services.liveVoice.assistantTranscript,
       openHub: openHub,
       presentWindow: (centered) =>
           centered ? CursorPillWindow.summon() : VoiceOverlayWindow.start(),
@@ -414,6 +435,7 @@ final class CursorPillController extends ChangeNotifier {
               await services.handoffCurrentAction(handoff);
             },
     );
+    return controller;
   }
 
   static const suggestionQuery = 'follow up task email todo reminder next step';
@@ -442,6 +464,10 @@ final class CursorPillController extends ChangeNotifier {
   final Duration doubleShiftDebounce;
   final ValueListenable<double> level;
   final ValueListenable<String?>? _voiceNotice;
+
+  /// Live assistant transcript from Gemini Live, shown in the overlay bubble
+  /// when a voice session ends so the reply never forces the hub open.
+  final ValueListenable<String>? _assistantTranscript;
   final CurrentsController? _currents;
   final Future<String?> Function(String prompt, Duration timeout)? _draft;
   final Future<void> Function(String currentId)? _automate;
@@ -496,7 +522,6 @@ final class CursorPillController extends ChangeNotifier {
   bool _disposed = false;
   String? _status;
   String? _agentRequestId;
-  bool _sawAgentReply = false;
   ActionProposal? _proposal;
   int _workingEpoch = 0;
 
@@ -599,9 +624,13 @@ final class CursorPillController extends ChangeNotifier {
     if (_state == CursorPillState.listening) return;
     _state = CursorPillState.listening;
     _error = null;
+    _answer = null;
     _suggestions = const [];
     _currentSuggestions = const [];
     _memorySuggestions = const [];
+    // Capture on-screen context while the voice surface opens so a stop can
+    // fold AX into the overlay prompt (STT) or Live session context.
+    _refreshAxContext();
     _notify();
     // Voice never touches the main window: the edge glow lives in its own
     // click-through overlay window and the waveform in a small panel that
@@ -726,8 +755,35 @@ final class CursorPillController extends ChangeNotifier {
     } catch (_) {
       text = '';
     }
-    await _hide();
-    if (text.isNotEmpty && matchesShowHubIntent(text)) _openHub?.call();
+    if (_disposed) return;
+    final assistant = _assistantTranscript?.value.trim() ?? '';
+    if (text.isNotEmpty && matchesShowHubIntent(text)) {
+      await _hide();
+      _openHub?.call();
+      return;
+    }
+    if (text.isEmpty && assistant.isEmpty) {
+      await _hide();
+      return;
+    }
+    // Swap the native voice surfaces for the Flutter pill so the reply can
+    // stream (or land) in the overlay bubble without opening the hub.
+    await _dismissWindow?.call();
+    await _awaitAxContext();
+    if (_disposed) return;
+    if (assistant.isNotEmpty) {
+      _showWorking('Done');
+      _status = null;
+      _answer = _clampText(
+        assistant.replaceAll(RegExp(r'\s+'), ' ').trim(),
+        800,
+      );
+      _notify();
+      await _presentWindow?.call(true);
+      return;
+    }
+    await _presentWindow?.call(true);
+    await _sendToAgent(text);
   }
 
   /// Called by the overlay on every edit of the in-progress input. Debounces
@@ -841,6 +897,22 @@ final class CursorPillController extends ChangeNotifier {
     }());
   }
 
+  /// Awaits a fresh accessibility snapshot before an overlay send so voice
+  /// stops carry the same AX context as typed submits.
+  Future<void> _awaitAxContext() async {
+    final fetch = _fetchAxContext;
+    if (fetch == null) return;
+    final epoch = ++_axEpoch;
+    AxContextSnapshot snapshot;
+    try {
+      snapshot = await fetch();
+    } catch (_) {
+      return;
+    }
+    if (_disposed || epoch != _axEpoch) return;
+    _axSnapshot = snapshot;
+  }
+
   void _clearPrediction() {
     _predictionTimer?.cancel();
     _predictionTimer = null;
@@ -898,13 +970,14 @@ final class CursorPillController extends ChangeNotifier {
     return true;
   }
 
-  /// Routes the typed instruction to the assistant as the user's desktop
-  /// agent. The overlay stays up in a working state streaming tool progress;
-  /// it collapses when the reply starts streaming in chat (or when the turn
-  /// completes silently), and holds open while a proposal awaits approval.
+  /// Routes the typed (or spoken) instruction to the assistant as the user's
+  /// desktop agent. The overlay stays up in a working state streaming tool
+  /// progress and the reply into the answer bubble; it holds open for the
+  /// response (and while a proposal awaits approval) instead of collapsing
+  /// into the hub chat.
   Future<void> _sendToAgent(String text) async {
     // Fold the user's question with the on-screen snapshot cached when the
-    // pill opened and the memory matches surfaced this session — the same
+    // surface opened and the memory matches surfaced this session — the same
     // snapshot the inline assist and bubble used, captured before _showWorking
     // clears the suggestion state.
     final prompt = buildOverlayPrompt(
@@ -913,8 +986,8 @@ final class CursorPillController extends ChangeNotifier {
       memory: _memorySuggestions,
     );
     _showWorking('Working on it…');
-    _sawAgentReply = false;
     _proposal = null;
+    _answer = null;
     String? requestId;
     try {
       requestId = await _sendPrompt(prompt);
@@ -923,7 +996,9 @@ final class CursorPillController extends ChangeNotifier {
     }
     if (_disposed || _state != CursorPillState.working) return;
     if (requestId == null) {
-      await _hide();
+      _error = 'I couldn’t send that. Try again.';
+      _status = null;
+      _notify();
       return;
     }
     _agentRequestId = requestId;
@@ -1109,8 +1184,8 @@ final class CursorPillController extends ChangeNotifier {
     _searchRequestId = null;
     _status = null;
     _agentRequestId = null;
-    _sawAgentReply = false;
     _proposal = null;
+    _answer = null;
     _workingEpoch += 1;
     _suggestions = const [];
     _currentSuggestions = const [];
@@ -1163,19 +1238,26 @@ final class CursorPillController extends ChangeNotifier {
       if (event case NativeEventAssistantDelta(
         :final value,
       ) when value.requestId == _agentRequestId) {
-        if (value.text.isNotEmpty) _sawAgentReply = true;
-        // A streaming text reply lives in chat, exactly as before; the
-        // overlay's job is done the moment text starts (or when the turn
-        // ends silently with nothing to approve).
-        if (_sawAgentReply || (value.finalSegment && _proposal == null)) {
-          unawaited(_hide());
+        if (value.text.isNotEmpty) {
+          final next = '${_answer ?? ''}${value.text}';
+          _answer = _clampText(
+            next.replaceAll(RegExp(r'[ \t]+\n'), '\n').trim(),
+            800,
+          );
+          _status = null;
+          _notify();
+        } else if (value.finalSegment) {
+          _status = null;
+          _notify();
         }
         return;
       }
       if (event case NativeEventError(
         :final value,
       ) when value.requestId == _agentRequestId) {
-        unawaited(_hide());
+        _error = value.message;
+        _status = null;
+        _notify();
         return;
       }
     }
@@ -1202,6 +1284,8 @@ final class CursorPillController extends ChangeNotifier {
     List<PillSuggestion> suggestions = const [],
     String? status,
     String? error,
+    String? answer,
+    ActionProposal? proposal,
   }) {
     if (state == CursorPillState.hidden) _clearPrediction();
     // Entering the typing surface in the panel engine: refresh the on-screen
@@ -1215,6 +1299,8 @@ final class CursorPillController extends ChangeNotifier {
     );
     _status = status;
     _error = error;
+    _answer = answer;
+    _proposal = proposal;
     if (entering) _refreshAxContext();
     _notify();
   }

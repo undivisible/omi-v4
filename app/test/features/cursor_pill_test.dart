@@ -1,9 +1,11 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:omi/app_services.dart';
 import 'package:omi/currents/currents.dart';
+import 'package:omi/features/ax_context.dart';
 import 'package:omi/features/cursor_pill.dart';
 import 'package:omi/features/cursor_pill_controller.dart';
 import 'package:omi/features/voice_intents.dart';
@@ -232,7 +234,7 @@ void main() {
     await harness.close();
   });
 
-  test('agent turns collapse the overlay on silent completion', () async {
+  test('agent turns keep the overlay open on silent completion', () async {
     final harness = _Harness();
     final controller = harness.controller();
 
@@ -246,13 +248,13 @@ void main() {
       ),
     );
     await pumpEventQueue();
-    expect(controller.state, CursorPillState.hidden);
+    expect(controller.state, CursorPillState.working);
 
     controller.dispose();
     await harness.close();
   });
 
-  test('agent text replies stream in chat and hide the overlay', () async {
+  test('agent text replies stream into the overlay answer bubble', () async {
     final harness = _Harness();
     final controller = harness.controller();
 
@@ -270,7 +272,21 @@ void main() {
       ),
     );
     await pumpEventQueue();
-    expect(controller.state, CursorPillState.hidden);
+    expect(controller.state, CursorPillState.working);
+    expect(controller.answer, 'Here is your day:');
+
+    harness.hub.add(
+      const NativeEventAssistantDelta(
+        value: AssistantDelta(
+          requestId: 'req-1',
+          text: 'meetings and mail.',
+          finalSegment: true,
+        ),
+      ),
+    );
+    await pumpEventQueue();
+    expect(controller.state, CursorPillState.working);
+    expect(controller.answer, 'Here is your day:meetings and mail.');
 
     controller.dispose();
     await harness.close();
@@ -348,10 +364,33 @@ void main() {
       ),
     );
     await tester.pump();
-    expect(controller.state, CursorPillState.hidden);
-    expect(find.byKey(const Key('cursor_pill')), findsNothing);
+    expect(controller.state, CursorPillState.working);
+    expect(find.byKey(const Key('cursor_pill')), findsOneWidget);
 
     await tester.pumpWidget(const SizedBox());
+    controller.dispose();
+    await harness.close();
+  });
+
+  test('voice stop with a transcript keeps the reply on the overlay', () async {
+    final harness = _Harness(stopTranscript: 'what is on my screen');
+    final controller = harness.controller(
+      axContext: const AxContextSnapshot(
+        appName: 'Mail',
+        windowTitle: 'Inbox',
+      ),
+    );
+
+    await controller.beginVoice();
+    harness.advance(const Duration(seconds: 1));
+    await controller.finishListening();
+
+    expect(harness.hubOpens, 0);
+    expect(controller.state, CursorPillState.working);
+    expect(harness.prompts.single, contains('what is on my screen'));
+    expect(harness.prompts.single, contains('App: Mail'));
+    expect(harness.prompts.single, contains('Window: Inbox'));
+
     controller.dispose();
     await harness.close();
   });
@@ -530,7 +569,7 @@ void main() {
     await tester.pump();
 
     expect(harness.prompts, ['Draft a summary of today']);
-    // The overlay stays up in a working state until the reply streams.
+    // The overlay stays up and streams the reply into the answer bubble.
     expect(controller.state, CursorPillState.working);
     harness.hub.add(
       const NativeEventAssistantDelta(
@@ -542,7 +581,9 @@ void main() {
       ),
     );
     await tester.pump();
-    expect(controller.state, CursorPillState.hidden);
+    expect(controller.state, CursorPillState.working);
+    expect(controller.answer, 'Here you go');
+    expect(find.byKey(const Key('cursor_pill_answer')), findsOneWidget);
 
     await tester.pumpWidget(const SizedBox());
     controller.dispose();
@@ -1106,6 +1147,8 @@ final class _Harness {
   CursorPillController controller({
     String? draftBody,
     CurrentsController? currents,
+    AxContextSnapshot axContext = AxContextSnapshot.empty,
+    ValueListenable<String>? assistantTranscript,
   }) => CursorPillController(
     hub: hub,
     currents: currents,
@@ -1136,6 +1179,8 @@ final class _Harness {
     decideProposal: (proposalId, decision) async {
       decisions.add((proposalId, decision));
     },
+    fetchAxContext: () async => axContext,
+    assistantTranscript: assistantTranscript,
     openFlashDuration: Duration.zero,
     level: level,
     openHub: () => hubOpens += 1,

@@ -1117,6 +1117,7 @@ final class _RecordingHub implements NativeHub {
     required String ephemeralToken,
     required String model,
     String? resumptionHandle,
+    String? sessionContext,
   }) {}
 
   @override

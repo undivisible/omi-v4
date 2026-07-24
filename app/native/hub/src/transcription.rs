@@ -59,6 +59,7 @@ pub(crate) struct StartLiveVoice {
     pub(crate) ephemeral_token: String,
     pub(crate) model: String,
     pub(crate) resumption_handle: Option<String>,
+    pub(crate) session_context: Option<String>,
 }
 
 pub(crate) enum TranscriptionControl {
@@ -109,6 +110,7 @@ impl LiveSessions {
             ephemeral_token: start.ephemeral_token,
             model: start.model,
             resumption_handle: start.resumption_handle,
+            session_context: start.session_context,
         };
         if let Err(message) = validate_session(&session) {
             return Err(AudioAcceptError {
@@ -313,6 +315,25 @@ impl LiveEventTranslator {
                 }),
                 false,
             ),
+            // Tool calls are acknowledged on the Live socket; surfacing them as
+            // transcript detail keeps the overlay informed until proposal
+            // registration is wired through the chat approval registry.
+            RealtimeVoiceEvent::ToolCall { calls } => {
+                let detail = calls
+                    .iter()
+                    .map(|call| format!("{}({})", call.name, call.args))
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                (
+                    NativeEvent::LiveVoiceTranscript(LiveVoiceTranscript {
+                        live_stream_id: self.live_stream_id.clone(),
+                        text: format!("[tool] {detail}"),
+                        final_segment: false,
+                        assistant: true,
+                    }),
+                    false,
+                )
+            }
             RealtimeVoiceEvent::SessionEnded { resumption_handle } => (
                 NativeEvent::LiveVoiceState(LiveVoiceState {
                     live_stream_id: self.live_stream_id.clone(),
@@ -759,6 +780,7 @@ mod tests {
             ephemeral_token: "auth_tokens/abc123".to_owned(),
             model: "gemini-live".to_owned(),
             resumption_handle,
+            session_context: None,
         }
     }
 

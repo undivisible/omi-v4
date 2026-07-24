@@ -378,6 +378,7 @@ final class _ScanHub implements NativeHub {
     required String ephemeralToken,
     required String model,
     String? resumptionHandle,
+    String? sessionContext,
   }) {}
 
   @override

@@ -188,6 +188,7 @@ abstract interface class NativeHub {
     required String ephemeralToken,
     required String model,
     String? resumptionHandle,
+    String? sessionContext,
   });
   void stopLiveVoice({required String requestId, required String liveStreamId});
   void startMeeting({required String requestId, String? title});
@@ -347,6 +348,7 @@ final class UnavailableNativeHub implements NativeHub {
     required String ephemeralToken,
     required String model,
     String? resumptionHandle,
+    String? sessionContext,
   }) => _unavailable();
 
   @override
@@ -723,6 +725,7 @@ final class RinfNativeHub implements NativeHub {
     required String ephemeralToken,
     required String model,
     String? resumptionHandle,
+    String? sessionContext,
   }) => _send(
     requestId,
     CommandStartLiveVoice(
@@ -730,6 +733,7 @@ final class RinfNativeHub implements NativeHub {
       ephemeralToken: ephemeralToken,
       model: model,
       resumptionHandle: resumptionHandle,
+      sessionContext: sessionContext,
     ),
   );
 

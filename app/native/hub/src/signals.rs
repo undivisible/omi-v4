@@ -50,6 +50,8 @@ pub enum Command {
         ephemeral_token: String,
         model: String,
         resumption_handle: Option<String>,
+        /// Optional read-only screen/AX context for the Live session.
+        session_context: Option<String>,
     },
     StopLiveVoice {
         live_stream_id: String,
@@ -166,7 +168,7 @@ pub enum MessageOrigin {
     Overlay,
     /// Telegram DM or group thread routed through the channel inbox.
     ChannelTelegram,
-    /// iMessage/SMS (stored channel id `blooio`, Sendblue provider).
+    /// iMessage/SMS (stored channel id `imessage`, Sendblue provider).
     ChannelImessage,
 }
 

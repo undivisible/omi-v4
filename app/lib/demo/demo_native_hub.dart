@@ -386,6 +386,7 @@ final class DemoNativeHub implements NativeHub {
     required String ephemeralToken,
     required String model,
     String? resumptionHandle,
+    String? sessionContext,
   }) => _unavailable();
 
   @override

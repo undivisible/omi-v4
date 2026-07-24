@@ -1407,6 +1407,7 @@ impl CommandDispatcher {
                 ephemeral_token,
                 model,
                 resumption_handle,
+                session_context,
             } = &command.command
             {
                 let Some(transcription) = &self.transcription else {
@@ -1424,6 +1425,7 @@ impl CommandDispatcher {
                     ephemeral_token: ephemeral_token.clone(),
                     model: model.clone(),
                     resumption_handle: resumption_handle.clone(),
+                    session_context: session_context.clone(),
                 };
                 if transcription
                     .send(TranscriptionControl::StartLive(start))

@@ -426,12 +426,18 @@ class _CursorPillState extends State<CursorPill> {
                 // Working is not listening, so the waveform gives way to the
                 // mark thinking: the overlay carries the same identity as the
                 // hub while the agent runs.
-                const OmiActivityOrb.loading(size: 20, color: _pillInk),
+                if (widget.controller.answer == null)
+                  const OmiActivityOrb.loading(size: 20, color: _pillInk)
+                else
+                  const OmiActivityOrb(size: 20, color: _pillInk),
                 const SizedBox(width: 8),
                 ConstrainedBox(
                   constraints: const BoxConstraints(maxWidth: 340),
                   child: Text(
-                    widget.controller.status ?? 'Working on it…',
+                    widget.controller.status ??
+                        (widget.controller.answer == null
+                            ? 'Working on it…'
+                            : 'Done'),
                     key: const Key('cursor_pill_status'),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
@@ -443,6 +449,18 @@ class _CursorPillState extends State<CursorPill> {
           ),
         ),
       ),
+      if (widget.controller.answer case final answer?) ...[
+        const SizedBox(height: 8),
+        _AnswerBubble(text: answer),
+      ],
+      if (widget.controller.error case final message?) ...[
+        const SizedBox(height: 6),
+        Text(
+          message,
+          key: const Key('cursor_pill_error'),
+          style: const TextStyle(fontSize: 12, color: Color(0xffb3261e)),
+        ),
+      ],
     ],
   );
 

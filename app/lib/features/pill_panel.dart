@@ -103,6 +103,7 @@ final class PillPanelHost {
   /// plain labels plus their index: acting on one is relayed back by index so
   /// the primary engine dispatches the real thing.
   void push() {
+    final proposal = _controller.proposal;
     unawaited(
       _channel
           .invokeMethod<void>('pushState', {
@@ -113,6 +114,15 @@ final class PillPanelHost {
             ],
             'status': _controller.status,
             'error': _controller.error,
+            'answer': _controller.answer,
+            if (proposal != null)
+              'proposal': {
+                'proposalId': proposal.proposalId,
+                'requestId': proposal.requestId,
+                'title': proposal.title,
+                'summary': proposal.summary,
+                'risk': proposal.risk.name,
+              },
           })
           .catchError((_) {}),
     );
@@ -217,6 +227,20 @@ final class PillPanelClient {
       case 'state':
         final arguments = call.arguments as Map?;
         final state = _stateFrom(arguments?['state']);
+        final proposalRaw = arguments?['proposal'];
+        ActionProposal? proposal;
+        if (proposalRaw is Map) {
+          proposal = ActionProposal(
+            proposalId: proposalRaw['proposalId'] as String? ?? '',
+            requestId: proposalRaw['requestId'] as String? ?? '',
+            title: proposalRaw['title'] as String? ?? '',
+            summary: proposalRaw['summary'] as String? ?? '',
+            risk: ActionRisk.values.firstWhere(
+              (risk) => risk.name == proposalRaw['risk'],
+              orElse: () => ActionRisk.reversible,
+            ),
+          );
+        }
         controller.applyHostState(
           state: state,
           suggestions: [
@@ -233,10 +257,15 @@ final class PillPanelClient {
           ],
           status: arguments?['status'] as String?,
           error: arguments?['error'] as String?,
+          answer: arguments?['answer'] as String?,
+          proposal: proposal,
         );
-        // Anything but the typing surface belongs to the hub or the native
-        // voice windows; the panel closes rather than mirroring it.
-        if (state != CursorPillState.input) await _invoke('close');
+        // Listening uses the native voice surfaces; typing and working stay
+        // on this panel so the answer bubble can stream here.
+        if (state == CursorPillState.listening ||
+            state == CursorPillState.hidden) {
+          await _invoke('close');
+        }
       default:
         throw MissingPluginException(call.method);
     }

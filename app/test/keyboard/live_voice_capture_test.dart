@@ -513,6 +513,7 @@ final class _LiveHub implements NativeHub {
     LiveVoicePhase state, {
     String? detail,
     String? resumptionHandle,
+    String? sessionContext,
   }) {
     _events.add(
       NativeEventLiveVoiceState(
@@ -574,6 +575,7 @@ final class _LiveHub implements NativeHub {
     required String ephemeralToken,
     required String model,
     String? resumptionHandle,
+    String? sessionContext,
   }) {
     streamId = liveStreamId;
     startedStreams.add(liveStreamId);
@@ -634,6 +636,7 @@ final class _FakeHub implements NativeHub {
     required String ephemeralToken,
     required String model,
     String? resumptionHandle,
+    String? sessionContext,
   }) {
     startedStreams.add(liveStreamId);
     emitPhase(liveStreamId, LiveVoicePhase.started);

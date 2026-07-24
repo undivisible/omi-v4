@@ -140,12 +140,30 @@ void main() {
       expect(harness.calls.where((call) => call.method == 'close'), isEmpty);
     });
 
-    testWidgets('anything but typing closes the panel window', (tester) async {
+    testWidgets('working keeps the panel open for the answer bubble', (
+      tester,
+    ) async {
       await harness.client.handle(
-        const MethodCall('state', {'state': 'working', 'status': 'Working…'}),
+        const MethodCall('state', {
+          'state': 'working',
+          'status': 'Working…',
+          'answer': 'Here is what I found.',
+        }),
       );
 
       expect(harness.client.controller.state, CursorPillState.working);
+      expect(harness.client.controller.answer, 'Here is what I found.');
+      expect(harness.calls.where((call) => call.method == 'close'), isEmpty);
+    });
+
+    testWidgets('listening still closes the panel for native voice surfaces', (
+      tester,
+    ) async {
+      await harness.client.handle(
+        const MethodCall('state', {'state': 'listening'}),
+      );
+
+      expect(harness.client.controller.state, CursorPillState.listening);
       expect(harness.calls.map((call) => call.method), contains('close'));
     });
 

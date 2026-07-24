@@ -859,9 +859,11 @@ final class AppServices {
     MessageOrigin origin = MessageOrigin.chat,
   }) => _sendChatMessage(text: text, origin: origin);
 
-  Future<void> startDesktopVoice() {
+  Future<void> startDesktopVoice({String? sessionContext}) {
     final voiceGeneration = ++_desktopVoiceGeneration;
-    return _queueDesktopVoice(() => _startDesktopVoice(voiceGeneration));
+    return _queueDesktopVoice(
+      () => _startDesktopVoice(voiceGeneration, sessionContext: sessionContext),
+    );
   }
 
   bool _voiceAuthorityChanged({
@@ -874,7 +876,10 @@ final class AppServices {
       voiceGeneration != currentVoiceGeneration ||
       auth.snapshot.session?.uid != uid;
 
-  Future<void> _startDesktopVoice(int voiceGeneration) async {
+  Future<void> _startDesktopVoice(
+    int voiceGeneration, {
+    String? sessionContext,
+  }) async {
     if (kIsWeb ||
         (defaultTargetPlatform != TargetPlatform.macOS &&
             defaultTargetPlatform != TargetPlatform.windows)) {
@@ -887,7 +892,10 @@ final class AppServices {
     final generation = _authorityGeneration;
     if (!chatReady || session == null) {
       if (localMode) {
-        await _startDesktopVoiceLocal(voiceGeneration);
+        await _startDesktopVoiceLocal(
+          voiceGeneration,
+          sessionContext: sessionContext,
+        );
         return;
       }
       throw VoiceStartException(
@@ -947,6 +955,7 @@ final class AppServices {
             ephemeralToken: grant.token,
             model: grant.model,
             authorityId: 'g$generation',
+            sessionContext: sessionContext,
           );
           liveStarted = true;
         } catch (_) {
@@ -1023,7 +1032,10 @@ final class AppServices {
 
   /// Dev/no-account live voice: connect straight to the Gemini Live API
   /// with the developer key instead of a Worker-minted ephemeral token.
-  Future<void> _startDesktopVoiceLocal(int voiceGeneration) async {
+  Future<void> _startDesktopVoiceLocal(
+    int voiceGeneration, {
+    String? sessionContext,
+  }) async {
     final key = _devAssistant.credential;
     if (key == null) {
       throw VoiceStartException(
@@ -1043,6 +1055,7 @@ final class AppServices {
       ephemeralToken: key,
       model: _devAssistant.liveModel,
       authorityId: 'g$_authorityGeneration',
+      sessionContext: sessionContext,
     );
     if (voiceGeneration != _desktopVoiceGeneration) {
       await liveVoice.cancel();

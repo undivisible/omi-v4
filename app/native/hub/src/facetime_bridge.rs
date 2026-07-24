@@ -643,6 +643,7 @@ pub(crate) async fn place_call(
         ephemeral_token: request.ephemeral_token,
         model: request.model,
         resumption_handle: None,
+        session_context: None,
     };
     if let Err(message) = validate_session(&session) {
         report(request_id, CallPhase::Failed, Some(message));

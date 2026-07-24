@@ -315,9 +315,9 @@ void main() {
       ..items.add(
         const ConversationInboxItem(
           id: 'inbox-message-2',
-          channel: 'blooio',
+          channel: 'imessage',
           text: 'Summarize today',
-          channelMessageId: 'blooio-message-1',
+          channelMessageId: 'imessage-message-1',
           receivedAt: 1,
           attempt: 1,
           leaseToken: 'lease-token-2',
@@ -3402,6 +3402,7 @@ final class _FakeHub implements NativeHub {
     required String ephemeralToken,
     required String model,
     String? resumptionHandle,
+    String? sessionContext,
   }) {
     liveVoiceModels.add(model);
     liveVoiceTokens.add(ephemeralToken);

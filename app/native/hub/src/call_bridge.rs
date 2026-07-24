@@ -2,7 +2,7 @@
 //!
 //! # Where the call's media comes from
 //!
-//! Blooio (`worker/src/facetime.ts`) places the call and mints the link, and
+//! Sendblue (`worker/src/facetime.ts`) places the call and mints the link, and
 //! that is *all* it does: `POST /v2/api/facetime/calls` is its entire call
 //! surface. Its v2 and v4 references expose no call, media, stream, track or
 //! recording resource, and its webhook catalogue carries only message, group,
@@ -10,7 +10,7 @@
 //! no way to receive or inject call audio. That endpoint is also switched off
 //! upstream today and answers 501.
 //!
-//! The media therefore comes from joining the link, not from Blooio. A
+//! The media therefore comes from joining the link, not from the provider link mint. A
 //! headless browser joins as an announced participant and *is* the media leg;
 //! see [`crate::facetime_bridge`]. `CallTransport` is the seam between that
 //! and everything here, so the bridge does not care which leg it is driving:
@@ -223,7 +223,11 @@ pub(crate) async fn run_call(
                 Some(RealtimeVoiceEvent::SessionEnded { .. }) | None => {
                     break CallOutcome::Completed;
                 }
-                Some(RealtimeVoiceEvent::Started | RealtimeVoiceEvent::TranscriptDelta { .. }) => {}
+                Some(
+                    RealtimeVoiceEvent::Started
+                    | RealtimeVoiceEvent::TranscriptDelta { .. }
+                    | RealtimeVoiceEvent::ToolCall { .. },
+                ) => {}
             },
             now = frames.tick(), if transport.wants_video() => {
                 let dt = now.saturating_duration_since(last_frame).as_secs_f32();
