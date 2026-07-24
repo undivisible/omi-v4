@@ -11,6 +11,7 @@ import 'package:omi/device/device.dart';
 import 'package:omi/features/onboarding_screen.dart';
 import 'package:omi/native/native_hub.dart';
 import 'package:omi/onboarding/hub_checklist.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 final class _AllGrantedCapabilities implements DesktopCapabilityGateway {
   @override
@@ -89,6 +90,10 @@ final class _HangingCurrentsTransport implements CurrentsTransport {
 }
 
 void main() {
+  setUp(() {
+    SharedPreferences.setMockInitialValues({});
+  });
+
   Future<void> reachProfileStep(
     WidgetTester tester,
     _ScanHub hub,
