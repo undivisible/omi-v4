@@ -102,7 +102,7 @@ OnboardingCompletionStore demoOnboardingCompletion() =>
 /// [DemoTourOverlay]), because a widget hosted above the navigator by
 /// `MaterialApp.builder` does not repaint on its own `setState` in a release
 /// web build.
-class DemoBanner extends StatelessWidget {
+class DemoBanner extends StatefulWidget {
   const DemoBanner({
     required this.services,
     required this.navigator,
@@ -113,6 +113,38 @@ class DemoBanner extends StatelessWidget {
   final AppServices services;
   final GlobalKey<NavigatorState> navigator;
   final Widget child;
+
+  @override
+  State<DemoBanner> createState() => _DemoBannerState();
+}
+
+class _DemoBannerState extends State<DemoBanner> {
+  bool _settingsOpen = false;
+
+  Future<void> _toggleSettings() async {
+    if (_settingsOpen) {
+      widget.navigator.currentState?.pop();
+      return;
+    }
+    setState(() => _settingsOpen = true);
+    await widget.navigator.currentState?.push<void>(
+      MaterialPageRoute<void>(
+        builder: (context) => SettingsScreen(services: widget.services),
+      ),
+    );
+    if (mounted) setState(() => _settingsOpen = false);
+  }
+
+  /// The demo runs inside an iframe on the marketing site, so the real app has
+  /// to open in the top-level document rather than inside the frame.
+  void _openOmi() {
+    unawaited(
+      launchUrl(
+        Uri.base.resolve(demoSignInUrl),
+        webOnlyWindowName: '_top',
+      ).then((_) {}, onError: (Object _) {}),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -171,25 +203,6 @@ class DemoBanner extends StatelessWidget {
                         ),
                       ),
                     ),
-                    const SizedBox(width: 4),
-                    // Settings live in a native window on macOS and have no
-                    // entry point at all on the web target, so the demo opens
-                    // the real settings route from here.
-                    TextButton(
-                      key: const Key('demo_open_settings'),
-                      onPressed: _openSettings,
-                      style: TextButton.styleFrom(
-                        foregroundColor: muted,
-                        padding: const EdgeInsets.symmetric(horizontal: 10),
-                        minimumSize: const Size(0, 32),
-                        textStyle: const TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                      child: const Text('Settings'),
-                    ),
-                    const SizedBox(width: 4),
                     TextButton(
                       key: const Key('demo_open_omi'),
                       onPressed: _openOmi,
@@ -202,7 +215,38 @@ class DemoBanner extends StatelessWidget {
                           fontWeight: FontWeight.w600,
                         ),
                       ),
-                      child: const Text('Open Omi'),
+                      child: Text(compact ? 'Open' : 'Open Omi'),
+                    ),
+                    const SizedBox(width: 2),
+                    DecoratedBox(
+                      decoration: BoxDecoration(
+                        color: _settingsOpen
+                            ? ink.withValues(alpha: .12)
+                            : Colors.transparent,
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(
+                          color: _settingsOpen
+                              ? ink.withValues(alpha: .22)
+                              : Colors.transparent,
+                        ),
+                      ),
+                      child: Semantics(
+                        button: true,
+                        label: _settingsOpen ? 'Close settings' : 'Settings',
+                        child: InkWell(
+                          key: const Key('demo_open_settings'),
+                          onTap: _toggleSettings,
+                          borderRadius: BorderRadius.circular(8),
+                          child: Padding(
+                            padding: const EdgeInsets.all(8),
+                            child: Icon(
+                              Icons.tune_rounded,
+                              size: 18,
+                              color: _settingsOpen ? ink : muted,
+                            ),
+                          ),
+                        ),
+                      ),
                     ),
                   ],
                 ),
@@ -214,27 +258,8 @@ class DemoBanner extends StatelessWidget {
         // navigator's overlay (see [DemoTourOverlay]) so it repaints when the
         // visitor takes a step, which a widget hosted above the navigator here
         // would not do in a release web build.
-        Expanded(child: child),
+        Expanded(child: widget.child),
       ],
-    );
-  }
-
-  void _openSettings() {
-    navigator.currentState?.push(
-      MaterialPageRoute<void>(
-        builder: (context) => SettingsScreen(services: services),
-      ),
-    );
-  }
-
-  /// The demo runs inside an iframe on the marketing site, so the real app has
-  /// to open in the top-level document rather than inside the frame.
-  void _openOmi() {
-    unawaited(
-      launchUrl(
-        Uri.base.resolve(demoSignInUrl),
-        webOnlyWindowName: '_top',
-      ).then((_) {}, onError: (Object _) {}),
     );
   }
 }

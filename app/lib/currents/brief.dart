@@ -121,6 +121,7 @@ class CurrentsBrief extends StatefulWidget {
     this.onDraftPrompt,
     this.onComplete,
     this.now,
+    this.compact = false,
     super.key,
   });
 
@@ -141,6 +142,9 @@ class CurrentsBrief extends StatefulWidget {
   /// Fixed clock for tests; production reads the wall clock and re-reads it on
   /// a slow tick so the countdown stays honest.
   final DateTime? now;
+
+  /// Tighter typography and fewer rows for the marketing embed.
+  final bool compact;
 
   @override
   State<CurrentsBrief> createState() => _CurrentsBriefState();
@@ -169,7 +173,12 @@ class _CurrentsBriefState extends State<CurrentsBrief> {
   @override
   Widget build(BuildContext context) {
     final now = widget.now ?? DateTime.now();
-    final plan = planBrief(widget.cards, now: now);
+    final compact = widget.compact;
+    final plan = planBrief(
+      widget.cards,
+      now: now,
+      maxRest: compact ? 2 : 3,
+    );
     final palette = widget.palette;
     final composed = widget.briefCrepus;
     if (composed != null && crepusRenders(composed)) {
@@ -178,6 +187,7 @@ class _CurrentsBriefState extends State<CurrentsBrief> {
         key: const Key('brief_infographic'),
         source: composed,
         palette: palette,
+        compact: compact,
         proposedNextStep: hero?.card.item.proposedNextStep ?? '',
         onPrompt: widget.onPrompt,
         onDraftPrompt: widget.onDraftPrompt,
@@ -193,6 +203,7 @@ class _CurrentsBriefState extends State<CurrentsBrief> {
         if (hero == null)
           _BriefShell(
             palette: palette,
+            compact: compact,
             child: _BriefEyebrow(
               palette: palette,
               label: 'Clear',
@@ -205,18 +216,19 @@ class _CurrentsBriefState extends State<CurrentsBrief> {
             entry: hero,
             palette: palette,
             now: now,
+            compact: compact,
             onPrompt: widget.onPrompt,
             onDraftPrompt: widget.onDraftPrompt,
             onComplete: widget.onComplete,
           ),
         if (plan.rest.isNotEmpty) ...[
-          const SizedBox(height: 20),
+          SizedBox(height: compact ? 10 : 20),
           Padding(
-            padding: const EdgeInsets.only(left: 2, bottom: 4),
+            padding: EdgeInsets.only(left: 2, bottom: compact ? 0 : 4),
             child: Text(
               'THEN',
               style: TextStyle(
-                fontSize: 9,
+                fontSize: compact ? 8 : 9,
                 fontWeight: FontWeight.w600,
                 letterSpacing: 1.17,
                 color: palette.muted,
@@ -229,6 +241,7 @@ class _CurrentsBriefState extends State<CurrentsBrief> {
               entry: entry,
               palette: palette,
               now: now,
+              compact: compact,
               onPrompt: widget.onPrompt,
               onDraftPrompt: widget.onDraftPrompt,
               onComplete: widget.onComplete,
@@ -242,26 +255,34 @@ class _CurrentsBriefState extends State<CurrentsBrief> {
 /// The hero card's chrome, shared by the AI-composed and hand-built versions so
 /// a fallback is a different interior, never a different surface.
 class _BriefShell extends StatelessWidget {
-  const _BriefShell({required this.palette, required this.child});
+  const _BriefShell({
+    required this.palette,
+    required this.child,
+    this.compact = false,
+  });
 
   final CrepusCurrentPalette palette;
   final Widget child;
+  final bool compact;
 
   @override
   Widget build(BuildContext context) => DecoratedBox(
     decoration: BoxDecoration(
       color: palette.cardBg,
-      borderRadius: BorderRadius.circular(20),
+      borderRadius: BorderRadius.circular(compact ? 14 : 20),
       border: Border.all(color: palette.hairline),
       boxShadow: [
         BoxShadow(
           color: palette.cardShadow,
-          offset: const Offset(0, 8),
-          blurRadius: 28,
+          offset: Offset(0, compact ? 4 : 8),
+          blurRadius: compact ? 16 : 28,
         ),
       ],
     ),
-    child: Padding(padding: const EdgeInsets.all(20), child: child),
+    child: Padding(
+      padding: EdgeInsets.all(compact ? 12 : 20),
+      child: child,
+    ),
   );
 }
 
@@ -274,6 +295,7 @@ class _BriefInfographic extends StatelessWidget {
     required this.onPrompt,
     this.onDraftPrompt,
     this.onComplete,
+    this.compact = false,
     super.key,
   });
 
@@ -283,11 +305,13 @@ class _BriefInfographic extends StatelessWidget {
   final ValueChanged<String> onPrompt;
   final ValueChanged<String>? onDraftPrompt;
   final VoidCallback? onComplete;
+  final bool compact;
 
   @override
   Widget build(BuildContext context) {
     final shell = _BriefShell(
       palette: palette,
+      compact: compact,
       child: CrepusView.fromSource(
         source,
         theme: crepusThemeFor(palette),
@@ -360,6 +384,7 @@ class _BriefHero extends StatelessWidget {
     required this.onPrompt,
     this.onDraftPrompt,
     this.onComplete,
+    this.compact = false,
     super.key,
   });
 
@@ -372,6 +397,7 @@ class _BriefHero extends StatelessWidget {
   /// `prompt:` actions land here, never on [onPrompt].
   final ValueChanged<String>? onDraftPrompt;
   final ValueChanged<String>? onComplete;
+  final bool compact;
 
   @override
   Widget build(BuildContext context) {
@@ -379,6 +405,7 @@ class _BriefHero extends StatelessWidget {
     final composed = crepus != null && crepusRenders(crepus);
     final shell = _BriefShell(
       palette: palette,
+      compact: compact,
       child: composed
           ? CrepusView.fromSource(
               crepus,
@@ -424,26 +451,28 @@ class _BriefHero extends StatelessWidget {
           label: start == null ? 'Now' : 'Next up',
           trailing: start == null ? null : briefCountdown(start, now),
         ),
-        const SizedBox(height: 10),
+        SizedBox(height: compact ? 6 : 10),
         Text(
           entry.title,
           key: const Key('brief_hero_title'),
+          maxLines: compact ? 2 : null,
+          overflow: compact ? TextOverflow.ellipsis : null,
           style: TextStyle(
-            fontSize: 28,
+            fontSize: compact ? 18 : 28,
             fontWeight: FontWeight.w500,
-            letterSpacing: -1.1,
+            letterSpacing: compact ? -0.6 : -1.1,
             height: 1.15,
             color: palette.ink,
           ),
         ),
-        if (range != null || entry.detail != null) ...[
+        if (!compact && (range != null || entry.detail != null)) ...[
           const SizedBox(height: 8),
           Text(
             [range, entry.detail].whereType<String>().join('  ·  '),
             style: TextStyle(fontSize: 13, color: palette.muted),
           ),
         ],
-        if (entry.summary.trim().isNotEmpty) ...[
+        if (!compact && entry.summary.trim().isNotEmpty) ...[
           const SizedBox(height: 14),
           DecoratedBox(
             decoration: BoxDecoration(
@@ -458,27 +487,29 @@ class _BriefHero extends StatelessWidget {
             ),
           ),
         ],
-        const SizedBox(height: 16),
-        Row(
-          children: [
-            _BriefAction(
-              key: const Key('brief_hero_prep'),
-              palette: palette,
-              label: 'Prep me →',
-              emphasis: true,
-              onTap: () => onPrompt(prep),
-            ),
-            if (onComplete != null) ...[
-              const SizedBox(width: 16),
+        if (!compact) ...[
+          const SizedBox(height: 16),
+          Row(
+            children: [
               _BriefAction(
-                key: const Key('brief_hero_done'),
+                key: const Key('brief_hero_prep'),
                 palette: palette,
-                label: 'Done',
-                onTap: () => onComplete!(entry.card.item.id),
+                label: 'Prep me →',
+                emphasis: true,
+                onTap: () => onPrompt(prep),
               ),
+              if (onComplete != null) ...[
+                const SizedBox(width: 16),
+                _BriefAction(
+                  key: const Key('brief_hero_done'),
+                  palette: palette,
+                  label: 'Done',
+                  onTap: () => onComplete!(entry.card.item.id),
+                ),
+              ],
             ],
-          ],
-        ),
+          ),
+        ],
       ],
     );
   }
@@ -529,6 +560,7 @@ class _BriefRow extends StatelessWidget {
     required this.onPrompt,
     this.onDraftPrompt,
     this.onComplete,
+    this.compact = false,
     super.key,
   });
 
@@ -541,6 +573,7 @@ class _BriefRow extends StatelessWidget {
   /// `prompt:` actions land here, never on [onPrompt].
   final ValueChanged<String>? onDraftPrompt;
   final ValueChanged<String>? onComplete;
+  final bool compact;
 
   @override
   Widget build(BuildContext context) {
@@ -571,16 +604,18 @@ class _BriefRow extends StatelessWidget {
         splashColor: Colors.transparent,
         highlightColor: Colors.transparent,
         child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 12),
+          padding: EdgeInsets.symmetric(vertical: compact ? 7 : 12),
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               SizedBox(
-                width: 96,
+                width: compact ? 68 : 96,
                 child: Text(
                   lead ?? '',
+                  maxLines: compact ? 2 : null,
+                  overflow: compact ? TextOverflow.ellipsis : null,
                   style: TextStyle(
-                    fontSize: 9,
+                    fontSize: compact ? 8 : 9,
                     fontWeight: FontWeight.w600,
                     letterSpacing: 1.17,
                     color: palette.muted,
@@ -593,14 +628,16 @@ class _BriefRow extends StatelessWidget {
                   children: [
                     Text(
                       entry.title,
+                      maxLines: compact ? 1 : null,
+                      overflow: compact ? TextOverflow.ellipsis : null,
                       style: TextStyle(
-                        fontSize: 15,
+                        fontSize: compact ? 13 : 15,
                         fontWeight: FontWeight.w500,
-                        letterSpacing: -0.3,
+                        letterSpacing: compact ? -0.2 : -0.3,
                         color: palette.ink,
                       ),
                     ),
-                    if (entry.summary.trim().isNotEmpty)
+                    if (!compact && entry.summary.trim().isNotEmpty)
                       Padding(
                         padding: const EdgeInsets.only(top: 2),
                         child: Text(

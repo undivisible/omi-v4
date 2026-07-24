@@ -45,7 +45,15 @@ import 'tasks_screen.dart';
 
 /// Height of the sliver of conversation left visible above the home view, so
 /// the newest message peeks in and scrolling up is discoverable.
-const double _historyPeekExtent = 44;
+const double _historyPeekExtent = 108;
+
+/// Top breathing room inside the live exchange once the send transition lands,
+/// so turns sit lower in the viewport instead of hugging the status bar.
+const double _exchangeTopInset = 72;
+
+/// How long a live exchange stays in the viewport after the last turn or app
+/// background — aligned with the desktop overlay session reuse window.
+const Duration _chatSessionReuseWindow = Duration(seconds: 45);
 
 // ponytail: 120px is roughly one turn's worth of slack. A scroll that ends
 // within this of a message boundary settles onto it; a clean flick that lands
@@ -177,7 +185,7 @@ const _kPlaceholderPrompts = [
 ];
 
 class ChatScreenState extends State<ChatScreen>
-    with SingleTickerProviderStateMixin {
+    with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   final _input = TextEditingController();
   final _inputFocus = FocusNode();
 
@@ -211,6 +219,8 @@ class ChatScreenState extends State<ChatScreen>
   late final HubChecklistStore _checklist =
       widget.checklistStore ?? PreferencesHubChecklistStore();
   static const byokHintDismissedKey = 'hub_byok_hint_dismissed_v1';
+  static const chatSessionExchangeStartKey = 'hub_chat_exchange_start_v1';
+  static const chatSessionActivityKey = 'hub_chat_session_activity_v1';
   late final EntitlementProbe _entitlementProbe =
       widget.entitlementProbe ??
       () async => widget.previewMode
@@ -240,6 +250,8 @@ class ChatScreenState extends State<ChatScreen>
   bool _snapping = false;
   bool _pendingChatReveal = false;
   Timer? _chatRevealTimer;
+  Timer? _chatSessionExpiryTimer;
+  DateTime? _chatSessionActivityAt;
   List<String> _starterTasks = const [];
   final _doneStarterTasks = <String>{};
   List<MeetingNote> _meetingNotes = const [];
@@ -251,6 +263,7 @@ class ChatScreenState extends State<ChatScreen>
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _sendEnter = AnimationController(vsync: this, duration: _sendEnterDuration);
     _sendEntered = CurvedAnimation(
       parent: _sendEnter,
@@ -281,7 +294,7 @@ class ChatScreenState extends State<ChatScreen>
     if (!widget.previewMode) {
       widget.services.currents?.addListener(_currentsChanged);
       unawaited(_refreshCurrents());
-      unawaited(_loadConversation());
+      unawaited(_loadConversation().then((_) => _restoreChatSession()));
       _events = widget.services.nativeEvents.listen(_handleEvent);
       widget.services.memorySyncNotice.addListener(_memorySyncNoticeChanged);
       _memorySyncNotice = widget.services.memorySyncNotice.value;
@@ -576,7 +589,25 @@ class ChatScreenState extends State<ChatScreen>
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (widget.previewMode) return;
+    switch (state) {
+      case AppLifecycleState.paused:
+      case AppLifecycleState.detached:
+      case AppLifecycleState.hidden:
+        unawaited(_persistChatSession());
+      case AppLifecycleState.resumed:
+        _maybeExpireChatSession();
+      case AppLifecycleState.inactive:
+        break;
+    }
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    unawaited(_persistChatSession());
+    _chatSessionExpiryTimer?.cancel();
     _conversationLoadGeneration += 1;
     _conversationRefreshTimer?.cancel();
     widget.services.currents?.removeListener(_currentsChanged);
@@ -603,20 +634,29 @@ class ChatScreenState extends State<ChatScreen>
     super.dispose();
   }
 
-  /// Opens a fresh exchange around the message about to be added: what came
-  /// before becomes history, and the send transition starts from zero.
+  /// Opens or extends the live exchange around the message about to be added.
+  /// The first turn in a session lifts the home view away; follow-ups stay in
+  /// the same exchange viewport so the full back-and-forth remains visible.
   void _beginExchange() {
-    _exchangeStart = _messages.length;
+    final openingSession = _exchangeStart == null;
+    if (openingSession) {
+      _exchangeStart = _messages.length;
+    }
+    _touchChatSessionActivity();
     _pendingChatReveal = true;
     _chatRevealTimer?.cancel();
     _chatRevealTimer = Timer(const Duration(milliseconds: 450), () {
       _pendingChatReveal = false;
     });
     _cancelNewChatPull();
-    if (MediaQuery.disableAnimationsOf(context)) {
-      _sendEnter.value = 1;
-    } else {
-      _sendEnter.forward(from: 0);
+    if (openingSession) {
+      if (MediaQuery.disableAnimationsOf(context)) {
+        _sendEnter.value = 1;
+      } else {
+        _sendEnter.forward(from: 0);
+      }
+    } else if (_sendEnter.value < 1) {
+      _sendEnter.forward(from: _sendEnter.value);
     }
     // The new exchange is the bottom of the reversed list; whatever the user
     // had scrolled to is no longer what they are looking at.
@@ -625,17 +665,108 @@ class ChatScreenState extends State<ChatScreen>
     });
   }
 
-  /// Puts the transcript behind the home view again: the pull-and-hold past
-  /// the newest message is the "new chat" gesture.
-  void _startNewConversation() {
-    _cancelNewChatPull();
+  void _touchChatSessionActivity() {
+    _chatSessionActivityAt = DateTime.now();
+    _scheduleChatSessionExpiry();
+    unawaited(_persistChatSession());
+  }
+
+  void _scheduleChatSessionExpiry() {
+    _chatSessionExpiryTimer?.cancel();
+    final activityAt = _chatSessionActivityAt;
+    if (_exchangeStart == null || activityAt == null) return;
+    final remaining = _chatSessionReuseWindow - DateTime.now().difference(
+      activityAt,
+    );
+    _chatSessionExpiryTimer = Timer(
+      remaining.isNegative ? Duration.zero : remaining,
+      _maybeExpireChatSession,
+    );
+  }
+
+  void _maybeExpireChatSession() {
+    if (!mounted || _exchangeStart == null) return;
+    final activityAt = _chatSessionActivityAt;
+    if (activityAt == null ||
+        DateTime.now().difference(activityAt) >= _chatSessionReuseWindow) {
+      _collapseChatSessionToHistory();
+    }
+  }
+
+  void _collapseChatSessionToHistory() {
+    if (!mounted || _exchangeStart == null) return;
+    _chatSessionExpiryTimer?.cancel();
     _sendEnter.value = 0;
     setState(() => _exchangeStart = null);
+    unawaited(_clearPersistedChatSession());
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted && _scroll.hasClients && _scroll.offset > 0) {
         _scroll.jumpTo(0);
       }
     });
+  }
+
+  Future<void> _restoreChatSession() async {
+    if (widget.previewMode || !mounted) return;
+    SharedPreferences preferences;
+    try {
+      preferences = await SharedPreferences.getInstance();
+    } catch (_) {
+      return;
+    }
+    if (!mounted) return;
+    final activityMs = preferences.getInt(chatSessionActivityKey);
+    final exchangeStart = preferences.getInt(chatSessionExchangeStartKey);
+    if (activityMs == null || exchangeStart == null) return;
+    final activityAt = DateTime.fromMillisecondsSinceEpoch(activityMs);
+    if (DateTime.now().difference(activityAt) >= _chatSessionReuseWindow) {
+      await _clearPersistedChatSession(preferences: preferences);
+      return;
+    }
+    if (exchangeStart < 0 || exchangeStart > _messages.length) {
+      await _clearPersistedChatSession(preferences: preferences);
+      return;
+    }
+    if (!mounted) return;
+    setState(() {
+      _exchangeStart = exchangeStart;
+      _chatSessionActivityAt = activityAt;
+      _sendEnter.value = 1;
+    });
+    _scheduleChatSessionExpiry();
+  }
+
+  Future<void> _persistChatSession({SharedPreferences? preferences}) async {
+    if (widget.previewMode) return;
+    try {
+      final prefs = preferences ?? await SharedPreferences.getInstance();
+      final start = _exchangeStart;
+      final activityAt = _chatSessionActivityAt;
+      if (start == null || activityAt == null) {
+        await _clearPersistedChatSession(preferences: prefs);
+        return;
+      }
+      await prefs.setInt(chatSessionExchangeStartKey, start);
+      await prefs.setInt(
+        chatSessionActivityKey,
+        activityAt.millisecondsSinceEpoch,
+      );
+    } catch (_) {}
+  }
+
+  Future<void> _clearPersistedChatSession({SharedPreferences? preferences}) async {
+    try {
+      final prefs = preferences ?? await SharedPreferences.getInstance();
+      await prefs.remove(chatSessionExchangeStartKey);
+      await prefs.remove(chatSessionActivityKey);
+    } catch (_) {}
+  }
+
+  /// Puts the transcript behind the home view again: the pull-and-hold past
+  /// the newest message is the "new chat" gesture.
+  void _startNewConversation() {
+    _cancelNewChatPull();
+    _collapseChatSessionToHistory();
   }
 
   void _beginNewChatPull() {
@@ -802,8 +933,8 @@ class ChatScreenState extends State<ChatScreen>
         _scroll
             .animateTo(
               target,
-              duration: const Duration(milliseconds: 280),
-              curve: Curves.easeOutCubic,
+              duration: const Duration(milliseconds: 340),
+              curve: Curves.easeInOutCubic,
             )
             .whenComplete(() => _snapping = false),
       );
@@ -863,6 +994,7 @@ class ChatScreenState extends State<ChatScreen>
             );
             _activeRequestId = null;
             _progress = null;
+            _touchChatSessionActivity();
           }
         case NativeEventToolProgress(:final value):
           if (value.requestId != _activeRequestId &&
@@ -1443,6 +1575,9 @@ class ChatScreenState extends State<ChatScreen>
                 padding: const EdgeInsets.all(12),
                 child: AssistantContent(
                   message.text,
+                  streaming: !message.fromUser &&
+                      _activeRequestId != null &&
+                      message.requestId == _activeRequestId,
                   onPrompt: _sendPrompt,
                   onDraftPrompt: _usePrompt,
                   palette: _crepusPalette(_HubColors.of(context)),
@@ -1588,7 +1723,13 @@ class ChatScreenState extends State<ChatScreen>
         if (t >= 1) {
           return ConstrainedBox(
             constraints: BoxConstraints(minHeight: viewportExtent),
-            child: child,
+            child: Align(
+              alignment: Alignment.bottomCenter,
+              child: Padding(
+                padding: const EdgeInsets.only(top: _exchangeTopInset),
+                child: child,
+              ),
+            ),
           );
         }
         return SizedBox(
@@ -1975,8 +2116,9 @@ class _ChatHome extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = _HubColors.of(context);
+    final compact = omiDemoMode;
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 28),
+      padding: EdgeInsets.symmetric(vertical: compact ? 10 : 28),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -1984,23 +2126,25 @@ class _ChatHome extends StatelessWidget {
             delayMs: 0,
             child: Column(
               children: [
-                const OmiActivityOrb(size: 48),
-                const SizedBox(height: 16),
+                OmiActivityOrb(size: compact ? 32 : 48),
+                SizedBox(height: compact ? 8 : 16),
                 Text(
                   greeting,
                   key: const Key('hub_greeting'),
                   textAlign: TextAlign.center,
+                  maxLines: compact ? 2 : null,
+                  overflow: compact ? TextOverflow.ellipsis : null,
                   style: TextStyle(
-                    fontSize: 44,
+                    fontSize: compact ? 26 : 44,
                     fontWeight: FontWeight.w500,
-                    letterSpacing: -1.98,
+                    letterSpacing: compact ? -0.8 : -1.98,
                     color: colors.ink,
                   ),
                 ),
               ],
             ),
           ),
-          const SizedBox(height: 36),
+          SizedBox(height: compact ? 14 : 36),
           // No "what matters next" heading and no "all tasks" link: this
           // section already IS what matters next, and anyone who wants the
           // full list can just ask the agent for it.
@@ -2009,14 +2153,15 @@ class _ChatHome extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                _TaskRow(
-                  key: const Key('task_setup_omi'),
-                  title: 'Set up Omi.',
-                  done: setupTaskDone,
-                  completeKey: const Key('complete_setup_omi'),
-                  onComplete: onToggleSetupTask,
-                  onTap: onToggleSetupTask,
-                ),
+                if (!(compact && setupTaskDone))
+                  _TaskRow(
+                    key: const Key('task_setup_omi'),
+                    title: 'Set up Omi.',
+                    done: setupTaskDone,
+                    completeKey: const Key('complete_setup_omi'),
+                    onComplete: onToggleSetupTask,
+                    onTap: onToggleSetupTask,
+                  ),
                 for (final title in starterTasks)
                   if (HubTaskMeta.tryDecode(title) case final meta?)
                     _RichTaskRow(
@@ -2041,17 +2186,18 @@ class _ChatHome extends StatelessWidget {
                     cards: tasks,
                     briefCrepus: briefCrepus,
                     palette: _crepusPalette(colors),
+                    compact: compact,
                     onPrompt: onPrompt,
                     onDraftPrompt: onDraftPrompt,
                     onComplete: onComplete,
                   ),
-                for (final note in meetingNotes.take(3))
+                for (final note in meetingNotes.take(compact ? 1 : 3))
                   _MeetingNoteRow(
                     key: ValueKey('meeting_note_${note.id}'),
                     note: note,
                     onTap: onOpenMeetingNotes,
                   ),
-                if (meetingNotes.length > 3)
+                if (meetingNotes.length > (compact ? 1 : 3))
                   DecoratedBox(
                     decoration: BoxDecoration(
                       border: Border(top: BorderSide(color: colors.hairline)),
@@ -2420,9 +2566,8 @@ class _AssistantRow extends StatelessWidget {
 }
 
 /// The placeholder shown while the assistant's reply is still streaming in —
-/// shimmering lines instead of a spinner alone, so the wait reads as content
-/// arriving rather than a stall. The animated mark beside it is the only
-/// "thinking" signal; the wait carries no status label of its own.
+/// three pulsing dots so the wait reads as thinking rather than a stall. The
+/// animated mark beside it carries the brand identity; the dots are the rhythm.
 class _SkeletonBubble extends StatefulWidget {
   const _SkeletonBubble({super.key});
 
@@ -2432,7 +2577,7 @@ class _SkeletonBubble extends StatefulWidget {
 
 class _SkeletonBubbleState extends State<_SkeletonBubble>
     with SingleTickerProviderStateMixin {
-  late final AnimationController _shimmer = AnimationController(
+  late final AnimationController _pulse = AnimationController(
     vsync: this,
     duration: const Duration(milliseconds: 1200),
   );
@@ -2442,15 +2587,15 @@ class _SkeletonBubbleState extends State<_SkeletonBubble>
     super.didChangeDependencies();
     if (debugOmiOrbStatic ||
         (MediaQuery.maybeOf(context)?.disableAnimations ?? false)) {
-      _shimmer.stop();
-    } else if (!_shimmer.isAnimating) {
-      _shimmer.repeat();
+      _pulse.stop();
+    } else if (!_pulse.isAnimating) {
+      _pulse.repeat();
     }
   }
 
   @override
   void dispose() {
-    _shimmer.dispose();
+    _pulse.dispose();
     super.dispose();
   }
 
@@ -2460,60 +2605,77 @@ class _SkeletonBubbleState extends State<_SkeletonBubble>
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            for (final width in const [220.0, 260.0, 160.0])
-              Padding(
-                padding: const EdgeInsets.only(bottom: 8),
-                child: _SkeletonLine(
-                  width: width,
-                  shimmer: _shimmer,
-                  base: colors.hairline,
-                  highlight: colors.rowHover,
-                ),
-              ),
-          ],
+        child: _ThinkingDots(
+          animation: _pulse,
+          color: colors.muted,
         ),
       ),
     );
   }
 }
 
-class _SkeletonLine extends StatelessWidget {
-  const _SkeletonLine({
-    required this.width,
-    required this.shimmer,
-    required this.base,
-    required this.highlight,
-  });
+/// Three staggered dots that breathe in and out — the classic typing rhythm.
+class _ThinkingDots extends StatelessWidget {
+  const _ThinkingDots({required this.animation, required this.color});
 
-  final double width;
-  final Animation<double> shimmer;
-  final Color base;
-  final Color highlight;
+  final Animation<double> animation;
+  final Color color;
+
+  static const _dotSize = 7.0;
+  static const _gap = 6.0;
+  static const _stagger = 0.22;
 
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
-    animation: shimmer,
-    builder: (context, _) {
-      final t = shimmer.value;
-      return Container(
-        width: width,
-        height: 10,
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(5),
-          gradient: LinearGradient(
-            begin: Alignment(-1 - 2 * (1 - t), 0),
-            end: Alignment(1 - 2 * (1 - t), 0),
-            colors: [base, highlight, base],
-            stops: const [0.35, 0.5, 0.65],
+    animation: animation,
+    builder: (context, _) => Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        for (var i = 0; i < 3; i++)
+          Padding(
+            padding: EdgeInsets.only(left: i == 0 ? 0 : _gap),
+            child: _ThinkingDot(
+              t: animation.value,
+              phase: i * _stagger,
+              color: color,
+            ),
           ),
-        ),
-      );
-    },
+      ],
+    ),
   );
+}
+
+class _ThinkingDot extends StatelessWidget {
+  const _ThinkingDot({
+    required this.t,
+    required this.phase,
+    required this.color,
+  });
+
+  final double t;
+  final double phase;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    final wave = (t + phase) % 1.0;
+    final scale = 0.55 +
+        0.45 * Curves.easeInOut.transform(
+          wave < 0.5 ? wave * 2 : (1 - wave) * 2,
+        );
+    final alpha = 0.35 + 0.65 * scale;
+    return Transform.scale(
+      scale: scale,
+      child: Container(
+        width: _ThinkingDots._dotSize,
+        height: _ThinkingDots._dotSize,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: color.withValues(alpha: alpha),
+        ),
+      ),
+    );
+  }
 }
 
 /// A completed meeting, rendered as a current so the notes Omi wrote sit

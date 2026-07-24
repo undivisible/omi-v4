@@ -311,7 +311,7 @@ class _OmiShellState extends State<OmiShell> {
     final topPadding = widget.previewMode
         ? 20.0
         : omiDemoMode
-        ? 16.0
+        ? 10.0
         : 48.0;
     final sidePadding = wide
         ? (omiDemoMode ? 20.0 : 32.0)
