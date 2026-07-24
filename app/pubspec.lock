@@ -85,8 +85,8 @@ packages:
     dependency: "direct main"
     description:
       path: "plugins/crepuscularity-flutter"
-      ref: "41c3b2c1b775fccabf9bb397dfb011d1a45f94ca"
-      resolved-ref: "41c3b2c1b775fccabf9bb397dfb011d1a45f94ca"
+      ref: "9cf6ad45aa30c62d01bb4c86e37f430194e30b54"
+      resolved-ref: "9cf6ad45aa30c62d01bb4c86e37f430194e30b54"
       url: "https://github.com/tschk/crepuscularity"
     source: git
     version: "0.1.0"
