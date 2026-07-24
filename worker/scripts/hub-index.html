@@ -48,7 +48,7 @@
     try { parent.postMessage({ source: "omi-hub", status: kind }, parentOrigin()); } catch (e) {}
   }
   window.addEventListener("error", function () { report("error"); });
-  setTimeout(function () { report("error"); }, 40000);
+  setTimeout(function () { report("error"); }, 42000);
   _flutter.loader.load({
     config: {
       canvasKitBaseUrl: "/engine/canvaskit/",

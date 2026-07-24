@@ -650,23 +650,15 @@ class _HubEmbed extends StatelessComponent {
           div(
             [
               div([
-                span([]),
-                span([]),
-                span([]),
-                span([]),
-              ], classes: 'still-rail'),
+                div([], classes: 'still-orb'),
+                p([], classes: 'still-greeting'),
+              ], classes: 'still-greet'),
               div([
                 p([], classes: 'still-line w70'),
-                p([], classes: 'still-line w45'),
-                p([], classes: 'still-line w60'),
-                p([], classes: 'still-cite'),
-                p([], classes: 'still-composer'),
-              ], classes: 'still-thread'),
-              div([
-                p([], classes: 'still-line w80'),
                 p([], classes: 'still-line w55'),
-                p([], classes: 'still-line w65'),
-              ], classes: 'still-side'),
+                p([], classes: 'still-line w45'),
+              ], classes: 'still-rows'),
+              p([], classes: 'still-composer'),
             ],
             classes: 'shot-still',
             attributes: {'aria-hidden': 'true'},

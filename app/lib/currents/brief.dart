@@ -228,7 +228,7 @@ class _CurrentsBriefState extends State<CurrentsBrief> {
             child: Text(
               'THEN',
               style: TextStyle(
-                fontSize: compact ? 8 : 9,
+                fontSize: compact ? 9 : 9,
                 fontWeight: FontWeight.w600,
                 letterSpacing: 1.17,
                 color: palette.muted,
@@ -344,15 +344,20 @@ class _BriefEyebrow extends StatelessWidget {
     required this.palette,
     required this.label,
     this.trailing,
+    this.contentKind,
   });
 
   final CrepusCurrentPalette palette;
   final String label;
   final String? trailing;
+  final CurrentContentKind? contentKind;
 
   @override
   Widget build(BuildContext context) => Row(
     children: [
+      if (contentKind case final kind?)
+        _ContentKindBadge(kind: kind, palette: palette),
+      if (contentKind != null) const SizedBox(width: 8),
       Text(
         label.toUpperCase(),
         style: TextStyle(
@@ -450,6 +455,7 @@ class _BriefHero extends StatelessWidget {
           palette: palette,
           label: start == null ? 'Now' : 'Next up',
           trailing: start == null ? null : briefCountdown(start, now),
+          contentKind: entry.card.contentKind,
         ),
         SizedBox(height: compact ? 6 : 10),
         Text(
@@ -592,7 +598,8 @@ class _BriefRow extends StatelessWidget {
     }
     final start = entry.startsAt;
     final lead = start == null
-        ? entry.card.sourceKind?.toUpperCase()
+        ? (entry.card.sourceKind ?? currentContentKindLabel(entry.card.contentKind))
+            .toUpperCase()
         : briefCountdown(start, now).toUpperCase();
     return DecoratedBox(
       decoration: BoxDecoration(
@@ -610,16 +617,29 @@ class _BriefRow extends StatelessWidget {
             children: [
               SizedBox(
                 width: compact ? 68 : 96,
-                child: Text(
-                  lead ?? '',
-                  maxLines: compact ? 2 : null,
-                  overflow: compact ? TextOverflow.ellipsis : null,
-                  style: TextStyle(
-                    fontSize: compact ? 8 : 9,
-                    fontWeight: FontWeight.w600,
-                    letterSpacing: 1.17,
-                    color: palette.muted,
-                  ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _ContentKindBadge(
+                      kind: entry.card.contentKind,
+                      palette: palette,
+                      compact: compact,
+                    ),
+                    if (lead.isNotEmpty) ...[
+                      SizedBox(height: compact ? 4 : 6),
+                      Text(
+                        lead,
+                        maxLines: compact ? 2 : null,
+                        overflow: compact ? TextOverflow.ellipsis : null,
+                        style: TextStyle(
+                          fontSize: compact ? 9 : 9,
+                          fontWeight: FontWeight.w600,
+                          letterSpacing: 1.17,
+                          color: palette.muted,
+                        ),
+                      ),
+                    ],
+                  ],
                 ),
               ),
               Expanded(
@@ -651,6 +671,48 @@ class _BriefRow extends StatelessWidget {
                 ),
               ),
             ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ContentKindBadge extends StatelessWidget {
+  const _ContentKindBadge({
+    required this.kind,
+    required this.palette,
+    this.compact = false,
+  });
+
+  final CurrentContentKind kind;
+  final CrepusCurrentPalette palette;
+  final bool compact;
+
+  @override
+  Widget build(BuildContext context) {
+    final (label, color) = switch (kind) {
+      CurrentContentKind.agentAction => ('Omi', palette.accent),
+      CurrentContentKind.humanAction => ('You', palette.ink),
+      CurrentContentKind.awareness => ('Know', palette.muted),
+    };
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        border: Border.all(color: palette.hairline),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Padding(
+        padding: EdgeInsets.symmetric(
+          horizontal: compact ? 4 : 6,
+          vertical: compact ? 1 : 2,
+        ),
+        child: Text(
+          label.toUpperCase(),
+          style: TextStyle(
+            fontSize: compact ? 7 : 8,
+            fontWeight: FontWeight.w700,
+            letterSpacing: 0.8,
+            color: color,
           ),
         ),
       ),

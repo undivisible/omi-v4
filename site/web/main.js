@@ -49,7 +49,11 @@
       railLinks.forEach((link, index) => {
         const near = Math.max(0, 1 - Math.abs(index - here));
         link.style.setProperty("--near", near.toFixed(3));
-        link.setAttribute("aria-current", near > 0.5 ? "true" : "false");
+        if (near > 0.5) {
+          link.setAttribute("aria-current", "location");
+        } else {
+          link.removeAttribute("aria-current");
+        }
       });
     }
   };
@@ -163,7 +167,7 @@
 
     window.setTimeout(() => {
       if (frame.dataset.state === "loading") fail();
-    }, 45000);
+    }, 42000);
   };
 
   const arm = () => {
