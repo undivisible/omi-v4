@@ -10,8 +10,10 @@ import 'package:url_launcher/url_launcher.dart' as url_launcher;
 
 import '../app_services.dart';
 import '../auth/auth.dart';
+import '../currents/crepus_current.dart';
 import '../currents/currents.dart';
 import '../device/device.dart';
+import 'mobile_memory_screen.dart';
 import '../features/setup_account_screens.dart' show EventKitProactiveSyncTile;
 import '../native/native_hub.dart';
 import '../ui/burst_glow.dart';
@@ -972,31 +974,59 @@ class _MobileTasksSection extends StatelessWidget {
       if (currents.error != null || currents.items.isEmpty) {
         return const SizedBox.shrink();
       }
-      final tasks = currents.items.take(2).toList();
+      // The same Now Brief the desktop hub renders: the most important current
+      // as a hero, the rest as a short task list under it. Completing a card
+      // dismisses it — the only feedback the phone has room for — and "Prep me"
+      // surfaces the proposed next step, since the companion has no composer to
+      // send it into.
       return Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           const SizedBox(height: _sectionGap),
           const _SectionLabel('TASKS'),
-          ..._withGaps([
-            for (final task in tasks)
-              _PaperTile(
-                key: ValueKey('companion_task_${task.item.id}'),
-                icon: Icons.radio_button_unchecked_rounded,
-                title: task.title,
-                detail: task.sourceKind == null
-                    ? task.summary
-                    : '${task.summary} · ${task.sourceKind!.toUpperCase()}',
-                trailing: const _RowChevron(
-                  icon: Icons.check_circle_outline_rounded,
-                ),
-                onTap: () => unawaited(currents.dismiss(task.item.id)),
-              ),
-          ]),
+          const SizedBox(height: _tileGap),
+          CurrentsBrief(
+            cards: currents.items,
+            palette: _mobileCrepusPalette(context),
+            onPrompt: (prompt) => _surfacePrepHint(context, prompt),
+            onComplete: (id) => unawaited(currents.dismiss(id)),
+          ),
         ],
       );
     },
   );
+}
+
+/// The crepus palette in the phone's paper voice, dark-aware, so the brief and
+/// any AI-composed hero resolve colours the same way the desktop hub does.
+CrepusCurrentPalette _mobileCrepusPalette(BuildContext context) {
+  final dark = _darkMode(context);
+  return CrepusCurrentPalette(
+    ink: _pageInk(context),
+    muted: _pageInkSoft(context),
+    hairline: dark ? const Color(0x1ffffcec) : _hairline,
+    cardBg: dark ? const Color(0xff232320) : _surface,
+    cardShadow: dark ? const Color(0x33000000) : const Color(0x0f171716),
+    accent: _stateBlue,
+    rowHover: dark ? const Color(0x14fffcec) : const Color(0x0a171716),
+  );
+}
+
+/// A current's proposed next step, shown as a transient hint. On desktop this
+/// text drafts into the composer; the companion has no composer, so it is read
+/// back to the user instead of vanishing.
+void _surfacePrepHint(BuildContext context, String prompt) {
+  final messenger = ScaffoldMessenger.maybeOf(context);
+  if (messenger == null) return;
+  messenger
+    ..clearSnackBars()
+    ..showSnackBar(
+      SnackBar(
+        key: const Key('companion_prep_hint'),
+        content: Text(prompt),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
 }
 
 List<Widget> _withGaps(List<Widget> tiles) => [
@@ -2477,6 +2507,18 @@ class _SettingsSheetState extends State<_SettingsSheet> {
     );
   }
 
+  void _openMemory() {
+    final memory = widget.services.memory;
+    if (memory == null) return;
+    unawaited(
+      Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (routeContext) => MobileMemoryScreen(memory: memory),
+        ),
+      ),
+    );
+  }
+
   void _openDeveloperOptions() {
     unawaited(
       Navigator.of(context).push(
@@ -2621,6 +2663,19 @@ class _SettingsSheetState extends State<_SettingsSheet> {
                     onTap: () => unawaited(_resetPendant()),
                   ),
               ]),
+            ],
+            if (!widget.previewMode && widget.services.memory != null) ...[
+              const SizedBox(height: _sectionGap),
+              const _SectionLabel('MEMORY'),
+              const SizedBox(height: _tileGap),
+              _PaperTile(
+                key: const Key('companion_memory_tile'),
+                icon: Icons.auto_awesome_outlined,
+                title: 'Memory',
+                detail: 'Search what Omi remembers, or add something new.',
+                trailing: const _RowChevron(),
+                onTap: _openMemory,
+              ),
             ],
             const SizedBox(height: _sectionGap),
             const _SectionLabel('CALENDAR & REMINDERS'),

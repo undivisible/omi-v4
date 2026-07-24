@@ -70,6 +70,20 @@ final class MemoryClient {
   Future<DailyReview> saveDailyReview(DailyReview review) =>
       _write('/v1/memory/reviews', review.toJson(), DailyReview.fromJson);
 
+  Future<CreatedMemory> createMemory(String content) async {
+    if (content.trim().isEmpty) {
+      throw const MemoryDecodingException('content must not be empty');
+    }
+    final response = await _send(
+      MemoryRequest(
+        method: MemoryHttpMethod.post,
+        path: '/v1/memories',
+        body: {'content': content},
+      ),
+    );
+    return _decode(response.body, CreatedMemory.fromJson);
+  }
+
   Future<RetrievalPack> retrieve({
     required String query,
     int limit = 12,

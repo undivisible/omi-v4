@@ -1687,10 +1687,11 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('TASKS'), findsOneWidget);
-    expect(find.byKey(const Key('companion_task_current-1')), findsOneWidget);
+    expect(find.byKey(const Key('brief_hero')), findsOneWidget);
+    expect(find.byKey(const Key('brief_hero_title')), findsOneWidget);
     expect(find.text('Reply to Sam'), findsOneWidget);
 
-    await tester.tap(find.byKey(const Key('companion_task_current-1')));
+    await tester.tap(find.byKey(const Key('brief_hero_done')));
     await tester.pumpAndSettle();
 
     expect(transport.feedbackKinds, ['dismissed']);

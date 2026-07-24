@@ -364,6 +364,26 @@ final class RetrievalItem {
   };
 }
 
+final class CreatedMemory {
+  const CreatedMemory({
+    required this.id,
+    required this.sourceId,
+    required this.claimId,
+  });
+
+  final String id;
+  final String sourceId;
+  final String claimId;
+
+  factory CreatedMemory.fromJson(JsonMap json) => CreatedMemory(
+    id: _string(json, 'id'),
+    sourceId: _string(json, 'sourceId'),
+    claimId: _string(json, 'claimId'),
+  );
+
+  JsonMap toJson() => {'id': id, 'sourceId': sourceId, 'claimId': claimId};
+}
+
 final class RetrievalPack {
   const RetrievalPack({
     required this.query,
