@@ -72,8 +72,19 @@ final class _HangingCurrentsTransport implements CurrentsTransport {
   const _HangingCurrentsTransport();
 
   @override
-  Future<CurrentsResponse> send(CurrentsRequest request) =>
-      Completer<CurrentsResponse>().future;
+  Future<CurrentsResponse> send(CurrentsRequest request) {
+    // Only the generate cycle should hang — refresh/list must still answer so
+    // production sync and the scan path can proceed to the profile step.
+    if (request.path == '/v1/currents/generate') {
+      return Completer<CurrentsResponse>().future;
+    }
+    return Future.value(
+      const CurrentsResponse(
+        statusCode: 200,
+        body: {'currents': <Object?>[], 'refreshed': false, 'reason': 'idle'},
+      ),
+    );
+  }
 }
 
 void main() {
@@ -99,7 +110,7 @@ void main() {
     );
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('continue_preview_intro')));
-    for (var i = 0; i < 10; i++) {
+    for (var i = 0; i < 50 && hub.scanRequests.isEmpty; i++) {
       await tester.pump(const Duration(milliseconds: 100));
     }
     expect(hub.scanRequests, hasLength(1));

@@ -89,8 +89,12 @@ final class _Transport implements CurrentsTransport {
     if (request.path == '/v1/currents/generate') {
       return const CurrentsResponse(statusCode: 200, body: <String, Object?>{});
     }
-    if (request.path == '/v1/currents') {
-      return CurrentsResponse(statusCode: 200, body: {'currents': cards});
+    if (request.path == '/v1/currents' ||
+        request.path == '/v1/currents/refresh') {
+      return CurrentsResponse(
+        statusCode: 200,
+        body: {'currents': cards, 'refreshed': true, 'reason': 'test'},
+      );
     }
     final match = RegExp(
       r'^/v1/currents/([^/]+)/feedback$',
