@@ -37,9 +37,9 @@ const _capabilities = [
   ),
   _Capability(
     '04',
-    'Voice on a shake',
-    'Shake the cursor, or tap both Shift keys. No window, no hotkey to '
-        'remember.',
+    'Voice on double-Shift',
+    'Tap both Shift keys together — in the app or globally when Input '
+        'Monitoring is granted. A detached overlay handles voice, not the hub window.',
   ),
   _Capability(
     '05',
