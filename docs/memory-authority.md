@@ -43,19 +43,19 @@ stream per UID (`worker/migrations/0029_memory_authority_log.sql`,
 * **The device's zkr database is a capture engine and an offline mirror, not the
   record of truth.** It still produces records (that is where evidence and
   locators are minted) but a record that has not been acknowledged by the Worker
-  is *pending*, not *remembered*.
+  is *pending*, not *remembered*. Cloud and peer-replica records reach the local
+  database through `MemoryDb::apply` after `GET /v1/memory/log`.
 * **The D1 read tables** (`memory_claims`, `memory_evidence`, …) remain a
   derived projection. They are rebuildable from `memory_log` and nothing else
   should be treated as a source.
 
 ### Why the device still mints records
 
-`zkr` 0.3.1 exposes `remember`, `correct`, `delete_source`, `search` and
-`export` — but **no import**. `remember` allocates its own row ids inside its own
-transaction (`store/lifecycle.rs`); there is no API to apply a foreign replica's
-records into a local `MemoryDb`. So the cloud cannot mint zkr-shaped records and
-push them down, and the device cannot materialize another device's records into
-zkr. This is a hard dependency limit, not a design choice — see §6.
+`zkr` 0.4.0 exposes `remember`, `correct`, `delete_source`, `search`, `export`
+and **`apply`**. `remember` still allocates row ids locally; `apply` is the
+inverse of `export` and materializes foreign replica records (including cloud
+writes under the `cloud` origin) into the local database with caller-supplied
+ids, idempotent on `(record_kind, record_id, payload_hash)`.
 
 ## 3. Conflict resolution
 
@@ -123,41 +123,23 @@ authoritative sequence.
 
 ## 6. What remains, in order
 
-1. **A durable mirror store.** `MemoryMirrorPump`
-   (`app/lib/memory/memory_mirror.dart`) drains `GET /v1/memory/log` against a
-   `MemoryMirrorStore`, but the only implementation shipped is in-memory, and
-   nothing wires the pump into `AppServices` yet. A mirror that does not survive
-   a restart is not an offline mirror. The store wants a file under
-   `omiDataDirectory()` on desktop/mobile and IndexedDB on web; the cursor is
-   already persisted separately and deliberately rewinds when it runs ahead of
-   the store.
+1. ~~**A durable mirror store.**~~ Partially done: `MemoryMirrorPump` now applies
+   cloud log records into the hub's zkr database via `MemoryDb::apply` on desktop
+   (`HubMemoryMirrorStore`, `Command::ApplyMemory`). Web still uses the in-memory
+   store until a wasm hub or IndexedDB apply path exists. The pull cursor remains
+   in preferences.
 2. ~~**Route the direct cloud writes through the log.**~~ Done.
    `POST /v1/memories`, `POST /v1/memory/sources/:id/revisions` and
    `DELETE /v1/memory/sources/:id` now live in `worker/src/memory-write.ts`, mint
    zkr-shaped records under the `cloud` origin replica, append them to
    `memory_log` and let `projectMemory` do every read-table write. One residual
    direct writer remains and is listed at 6 below.
-3. **A zkr import API.** The device mirror cannot become a real zkr database
-   until `zkr` can apply externally-minted records with caller-supplied ids —
-   roughly `MemoryDb::apply(records: &[ExportRecord])`, idempotent on
-   `(record_kind, record_id)`, preserving `evidence_locators`. Without it the
-   Dart mirror must be a separate read-only store and the hub's `search()` cannot
-   see other replicas' memory. This is the gating upstream dependency.
-
-   **Status: built upstream, not yet consumed here.** `zkr`'s working tree
-   implements `MemoryDb::apply` (`src/store/apply.rs`) with the semantics this
-   item asked for: caller-supplied ids; idempotence keyed on `(tenant_id,
-   person_id, record_kind, record_id, payload_hash)` through a
-   `memory_applied_records` ledger, so a re-applied record is counted skipped
-   rather than duplicated; the whole apply running in one `Immediate`
-   transaction; and a fixed nine-pass order (source, evidence, claim, origin,
-   claim-evidence, profile, review, correction, deletion) that makes a commit
-   order-independent — records may arrive in any order within a commit and still
-   land with their references satisfied. Locators survive because the record is
-   applied as exported and re-validated by `validate_transcript_locator` rather
-   than rebuilt. `hub/Cargo.toml` pins `zkr = "0.3.1"`, and the 0.3.1 crate in
-   the local registry has no `store/apply.rs`, so the hub cannot call it yet:
-   until the dependency moves, the Dart mirror stays a read-only store.
+3. ~~**A zkr import API.**~~ Done upstream and consumed on desktop. `zkr` 0.4.0
+   ships `MemoryDb::apply` (`src/store/apply.rs`); the hub exposes
+   `Command::ApplyMemory`, and `HubMemoryMirrorStore` maps `GET /v1/memory/log`
+   entries into single-record export commits (cloud `sequence` as commit
+   sequence, `first_event_index = 0`). The hub pins `zkr = "0.4.0"`. Web still
+   mirrors into an in-memory store only.
 4. ~~**Retire the per-replica projection namespace.**~~ Done, ahead of (3):
    `migrations/0030_memory_log_projection.sql` backfills `zkr_memory_records`
    into the log, deletes every `zkr:`-namespaced read-table row, and drops the

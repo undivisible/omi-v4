@@ -76,6 +76,10 @@ pub enum Command {
         high_water_mark: Option<i64>,
         limit: u32,
     },
+    /// Apply authoritative cloud memory-log commits into the local zkr database.
+    ApplyMemory {
+        commits: Vec<MemoryApplyCommit>,
+    },
     ListMemoryItems {
         limit: u32,
     },
@@ -331,6 +335,7 @@ pub enum NativeEvent {
     MemoryCorrected(MemoryCorrected),
     MemorySourceDeleted(MemorySourceDeleted),
     MemoryExported(MemoryExported),
+    MemoryApplied(MemoryApplied),
     MemoryItems(MemoryItems),
     OnboardingScanCompleted(OnboardingScanCompleted),
     LiveVoiceState(LiveVoiceState),
@@ -834,6 +839,24 @@ pub struct MemoryExportCommit {
     pub event_count: i64,
     pub first_event_index: i64,
     pub records_json: Vec<String>,
+}
+
+/// One cloud memory-log entry packaged as a single-record zkr export commit.
+#[derive(Clone, Debug, Deserialize, SignalPiece)]
+pub struct MemoryApplyCommit {
+    pub sequence: i64,
+    pub recorded_at_ms: i64,
+    pub record_kind: String,
+    pub record_json: String,
+}
+
+#[derive(Debug, Serialize, SignalPiece)]
+pub struct MemoryApplied {
+    pub request_id: String,
+    pub commits_applied: u64,
+    pub commits_skipped: u64,
+    pub records_applied: u64,
+    pub records_skipped: u64,
 }
 
 #[derive(Debug, Serialize, SignalPiece)]

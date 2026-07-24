@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../api/worker_http.dart';
+import '../native/native_hub.dart';
 
 /// The device-side mirror of the authoritative cloud memory log.
 ///
@@ -111,6 +112,66 @@ final class InMemoryMemoryMirrorStore implements MemoryMirrorStore {
           ? record.sequence
           : _sequences[uid]!;
     }
+  }
+}
+
+/// Applies mirrored cloud log records into the Rust hub's zkr database so local
+/// search sees memory from other replicas and cloud writes.
+final class HubMemoryMirrorStore implements MemoryMirrorStore {
+  HubMemoryMirrorStore({
+    required this.hub,
+    required this.events,
+    required this.replicaId,
+    this.timeout = const Duration(seconds: 30),
+  });
+
+  final NativeHub hub;
+  final Stream<NativeEvent> events;
+  final String replicaId;
+  final Duration timeout;
+  int _mirroredSequence = 0;
+
+  @override
+  Future<int> mirroredSequence(String uid) async => _mirroredSequence;
+
+  @override
+  Future<void> apply(String uid, List<MemoryMirrorRecord> records) async {
+    if (records.isEmpty) return;
+    var high = _mirroredSequence;
+    for (final record in records) {
+      if (record.sequence > high) high = record.sequence;
+    }
+    final foreign = records
+        .where((record) => record.originReplica != replicaId)
+        .toList();
+    if (foreign.isNotEmpty && hub.available) {
+      final requestId = 'memory-apply-${DateTime.now().microsecondsSinceEpoch}';
+      final response = events
+          .where(
+            (event) =>
+                event is NativeEventMemoryApplied &&
+                event.value.requestId == requestId,
+          )
+          .cast<NativeEventMemoryApplied>()
+          .map((event) => event.value)
+          .first
+          .timeout(timeout);
+      hub.applyMemory(
+        requestId: requestId,
+        commits: foreign
+            .map(
+              (record) => MemoryApplyCommit(
+                sequence: record.sequence,
+                recordedAtMs: record.recordedAt,
+                recordKind: record.recordKind,
+                recordJson: jsonEncode(record.payload),
+              ),
+            )
+            .toList(),
+      );
+      await response;
+    }
+    _mirroredSequence = high;
   }
 }
 

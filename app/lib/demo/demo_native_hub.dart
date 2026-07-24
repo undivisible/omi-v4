@@ -311,6 +311,12 @@ final class DemoNativeHub implements NativeHub {
   }) => _unavailable();
 
   @override
+  void applyMemory({
+    required String requestId,
+    required List<MemoryApplyCommit> commits,
+  }) => _unavailable();
+
+  @override
   void correctMemory({
     required String requestId,
     required String claimId,

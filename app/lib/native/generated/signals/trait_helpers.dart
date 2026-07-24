@@ -272,6 +272,26 @@ class TraitHelpers {
     );
   }
 
+  static void serializeVectorMemoryApplyCommit(
+    List<MemoryApplyCommit> value,
+    BinarySerializer serializer,
+  ) {
+    serializer.serializeLength(value.length);
+    for (final item in value) {
+      item.serialize(serializer);
+    }
+  }
+
+  static List<MemoryApplyCommit> deserializeVectorMemoryApplyCommit(
+    BinaryDeserializer deserializer,
+  ) {
+    final length = deserializer.deserializeLength();
+    return List.generate(
+      length,
+      (_) => MemoryApplyCommit.deserialize(deserializer),
+    );
+  }
+
   static void serializeVectorMemoryExportCommit(
     List<MemoryExportCommit> value,
     BinarySerializer serializer,

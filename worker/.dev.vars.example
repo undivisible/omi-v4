@@ -24,7 +24,14 @@ OPENAI_OAUTH_CLIENT_ID=app_EMoamEEZ73f0CkXaXp7hrann
 XAI_OAUTH_CLIENT_ID=your-xai-oauth-client-id-here
 OAUTH_TOKEN_KEY=base64-encoded-32-byte-key-here
 DEV_FAKE_PRO=true
+# From @BotFather. Required for outbound sendMessage (link codes, replies).
+TELEGRAM_BOT_TOKEN=your-bot-token-here
+# Shared secret Telegram sends as x-telegram-bot-api-secret-token. Also keys link-code HMAC.
 TELEGRAM_WEBHOOK_SECRET=your-webhook-secret-here
+# One-time webhook registration (swap TOKEN and SECRET):
+# curl -X POST "https://api.telegram.org/bot<TOKEN>/setWebhook" \
+#   -H "Content-Type: application/json" \
+#   -d '{"url":"https://api.omi.tsc.hk/v1/webhooks/telegram","secret_token":"<SECRET>"}'
 # Dev/testing only: enables the ChatGPT/xAI OAuth broker + proxy routes,
 # which relay subscription-auth sign-in and traffic for personal interactive
 # use. Leave unset (or "false") everywhere except local dev/testing --

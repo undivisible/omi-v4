@@ -34,34 +34,36 @@ abstract class Command {
       case 11:
         return CommandExportMemory.load(deserializer);
       case 12:
-        return CommandListMemoryItems.load(deserializer);
+        return CommandApplyMemory.load(deserializer);
       case 13:
-        return CommandCorrectMemory.load(deserializer);
+        return CommandListMemoryItems.load(deserializer);
       case 14:
-        return CommandDeleteMemorySource.load(deserializer);
+        return CommandCorrectMemory.load(deserializer);
       case 15:
-        return CommandScanOnboarding.load(deserializer);
+        return CommandDeleteMemorySource.load(deserializer);
       case 16:
-        return CommandApprovalDecision.load(deserializer);
+        return CommandScanOnboarding.load(deserializer);
       case 17:
-        return CommandDeviceState.load(deserializer);
+        return CommandApprovalDecision.load(deserializer);
       case 18:
-        return CommandCancel.load(deserializer);
+        return CommandDeviceState.load(deserializer);
       case 19:
-        return CommandStartMeeting.load(deserializer);
+        return CommandCancel.load(deserializer);
       case 20:
-        return CommandStopMeeting.load(deserializer);
+        return CommandStartMeeting.load(deserializer);
       case 21:
-        return CommandJotMeetingNote.load(deserializer);
+        return CommandStopMeeting.load(deserializer);
       case 22:
-        return CommandProvideMeetingAuth.load(deserializer);
+        return CommandJotMeetingNote.load(deserializer);
       case 23:
-        return CommandSetSystemAudioCaptureMode.load(deserializer);
+        return CommandProvideMeetingAuth.load(deserializer);
       case 24:
-        return CommandComposeBrief.load(deserializer);
+        return CommandSetSystemAudioCaptureMode.load(deserializer);
       case 25:
-        return CommandJoinCall.load(deserializer);
+        return CommandComposeBrief.load(deserializer);
       case 26:
+        return CommandJoinCall.load(deserializer);
+      case 27:
         return CommandResolveDevAssistant.load(deserializer);
       default:
         throw Exception(
@@ -1059,6 +1061,59 @@ class CommandExportMemory extends Command {
 }
 
 @immutable
+class CommandApplyMemory extends Command {
+  const CommandApplyMemory({required this.commits}) : super();
+
+  static CommandApplyMemory load(BinaryDeserializer deserializer) {
+    deserializer.increaseContainerDepth();
+    final instance = CommandApplyMemory(
+      commits: TraitHelpers.deserializeVectorMemoryApplyCommit(deserializer),
+    );
+    deserializer.decreaseContainerDepth();
+    return instance;
+  }
+
+  final List<MemoryApplyCommit> commits;
+
+  CommandApplyMemory copyWith({List<MemoryApplyCommit>? commits}) {
+    return CommandApplyMemory(commits: commits ?? this.commits);
+  }
+
+  void serialize(BinarySerializer serializer) {
+    serializer.increaseContainerDepth();
+    serializer.serializeVariantIndex(12);
+    TraitHelpers.serializeVectorMemoryApplyCommit(commits, serializer);
+    serializer.decreaseContainerDepth();
+  }
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    if (other.runtimeType != runtimeType) return false;
+
+    return other is CommandApplyMemory && listEquals(commits, other.commits);
+  }
+
+  @override
+  int get hashCode => commits.hashCode;
+
+  @override
+  String toString() {
+    String? fullString;
+
+    assert(() {
+      fullString =
+          '$runtimeType('
+          'commits: $commits'
+          ')';
+      return true;
+    }());
+
+    return fullString ?? 'CommandApplyMemory';
+  }
+}
+
+@immutable
 class CommandListMemoryItems extends Command {
   const CommandListMemoryItems({required this.limit}) : super();
 
@@ -1079,7 +1134,7 @@ class CommandListMemoryItems extends Command {
 
   void serialize(BinarySerializer serializer) {
     serializer.increaseContainerDepth();
-    serializer.serializeVariantIndex(12);
+    serializer.serializeVariantIndex(13);
     serializer.serializeUint32(limit);
     serializer.decreaseContainerDepth();
   }
@@ -1158,7 +1213,7 @@ class CommandCorrectMemory extends Command {
 
   void serialize(BinarySerializer serializer) {
     serializer.increaseContainerDepth();
-    serializer.serializeVariantIndex(13);
+    serializer.serializeVariantIndex(14);
     serializer.serializeString(claimId);
     serializer.serializeString(text);
     serializer.serializeString(value);
@@ -1233,7 +1288,7 @@ class CommandDeleteMemorySource extends Command {
 
   void serialize(BinarySerializer serializer) {
     serializer.increaseContainerDepth();
-    serializer.serializeVariantIndex(14);
+    serializer.serializeVariantIndex(15);
     serializer.serializeString(sourceId);
     serializer.serializeInt64(deletedAtMs);
     serializer.decreaseContainerDepth();
@@ -1311,7 +1366,7 @@ class CommandScanOnboarding extends Command {
 
   void serialize(BinarySerializer serializer) {
     serializer.increaseContainerDepth();
-    serializer.serializeVariantIndex(15);
+    serializer.serializeVariantIndex(16);
     TraitHelpers.serializeVectorStr(roots, serializer);
     serializer.serializeBool(includeAppleNotes);
     serializer.serializeBool(includeAppleMail);
@@ -1396,7 +1451,7 @@ class CommandApprovalDecision extends Command {
 
   void serialize(BinarySerializer serializer) {
     serializer.increaseContainerDepth();
-    serializer.serializeVariantIndex(16);
+    serializer.serializeVariantIndex(17);
     serializer.serializeString(proposalId);
     decision.serialize(serializer);
     TraitHelpers.serializeOptionComputerUseAuthorityReceipt(
@@ -1484,7 +1539,7 @@ class CommandDeviceState extends Command {
 
   void serialize(BinarySerializer serializer) {
     serializer.increaseContainerDepth();
-    serializer.serializeVariantIndex(17);
+    serializer.serializeVariantIndex(18);
     serializer.serializeString(deviceId);
     serializer.serializeBool(connected);
     TraitHelpers.serializeOptionU8(batteryPercent, serializer);
@@ -1540,7 +1595,7 @@ class CommandCancel extends Command {
 
   void serialize(BinarySerializer serializer) {
     serializer.increaseContainerDepth();
-    serializer.serializeVariantIndex(18);
+    serializer.serializeVariantIndex(19);
     serializer.decreaseContainerDepth();
   }
 
@@ -1591,7 +1646,7 @@ class CommandStartMeeting extends Command {
 
   void serialize(BinarySerializer serializer) {
     serializer.increaseContainerDepth();
-    serializer.serializeVariantIndex(19);
+    serializer.serializeVariantIndex(20);
     TraitHelpers.serializeOptionStr(title, serializer);
     serializer.decreaseContainerDepth();
   }
@@ -1636,7 +1691,7 @@ class CommandStopMeeting extends Command {
 
   void serialize(BinarySerializer serializer) {
     serializer.increaseContainerDepth();
-    serializer.serializeVariantIndex(20);
+    serializer.serializeVariantIndex(21);
     serializer.decreaseContainerDepth();
   }
 
@@ -1687,7 +1742,7 @@ class CommandJotMeetingNote extends Command {
 
   void serialize(BinarySerializer serializer) {
     serializer.increaseContainerDepth();
-    serializer.serializeVariantIndex(21);
+    serializer.serializeVariantIndex(22);
     serializer.serializeString(text);
     serializer.decreaseContainerDepth();
   }
@@ -1753,7 +1808,7 @@ class CommandProvideMeetingAuth extends Command {
 
   void serialize(BinarySerializer serializer) {
     serializer.increaseContainerDepth();
-    serializer.serializeVariantIndex(22);
+    serializer.serializeVariantIndex(23);
     auth.serialize(serializer);
     TraitHelpers.serializeOptionStr(trustedWorkerOrigin, serializer);
     serializer.decreaseContainerDepth();
@@ -1812,7 +1867,7 @@ class CommandSetSystemAudioCaptureMode extends Command {
 
   void serialize(BinarySerializer serializer) {
     serializer.increaseContainerDepth();
-    serializer.serializeVariantIndex(23);
+    serializer.serializeVariantIndex(24);
     mode.serialize(serializer);
     serializer.decreaseContainerDepth();
   }
@@ -1871,7 +1926,7 @@ class CommandComposeBrief extends Command {
 
   void serialize(BinarySerializer serializer) {
     serializer.increaseContainerDepth();
-    serializer.serializeVariantIndex(24);
+    serializer.serializeVariantIndex(25);
     serializer.serializeString(nowLocal);
     TraitHelpers.serializeVectorBriefItem(items, serializer);
     serializer.decreaseContainerDepth();
@@ -1954,7 +2009,7 @@ class CommandJoinCall extends Command {
 
   void serialize(BinarySerializer serializer) {
     serializer.increaseContainerDepth();
-    serializer.serializeVariantIndex(25);
+    serializer.serializeVariantIndex(26);
     serializer.serializeString(link);
     TraitHelpers.serializeOptionStr(displayName, serializer);
     serializer.serializeBool(video);
@@ -2013,7 +2068,7 @@ class CommandResolveDevAssistant extends Command {
 
   void serialize(BinarySerializer serializer) {
     serializer.increaseContainerDepth();
-    serializer.serializeVariantIndex(26);
+    serializer.serializeVariantIndex(27);
     serializer.decreaseContainerDepth();
   }
 

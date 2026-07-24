@@ -47,6 +47,8 @@ part 'meeting_completed.dart';
 part 'meeting_insight.dart';
 part 'meeting_state_changed.dart';
 part 'meeting_transcript_turn.dart';
+part 'memory_applied.dart';
+part 'memory_apply_commit.dart';
 part 'memory_captured.dart';
 part 'memory_corrected.dart';
 part 'memory_export_commit.dart';

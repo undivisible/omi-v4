@@ -390,6 +390,8 @@ final class AppServices {
   final dataWipes = ValueNotifier<int>(0);
 
   final MemorySyncPump? memorySyncPump;
+  MemoryMirrorPump? _memoryMirrorPump;
+  PreferencesMemorySyncCursorStore? _memoryCursorStore;
   final ManagedSttClient? _managedStt;
   final Uri? _workerOrigin;
   final DateTime Function() _now;
@@ -1225,6 +1227,8 @@ final class AppServices {
     // instead of skipping memory configuration outright.
     if (_localFallbackEligible) {
       memorySyncPump?.stop();
+      _memoryMirrorPump?.stop();
+      _memoryMirrorPump = null;
       if (_configuredPersonId == _localOfflinePersonId && _nativeInitialized) {
         _conversationController.scheduleInboxPoll();
         return;
@@ -1251,12 +1255,15 @@ final class AppServices {
     final session = productionReady ? auth.snapshot.session : null;
     if (session == null) {
       memorySyncPump?.stop();
+      _memoryMirrorPump?.stop();
+      _memoryMirrorPump = null;
       await _stopCapture();
       await _shutdownNative();
       return;
     }
     if (_configuredPersonId == session.uid && _nativeInitialized) {
       memorySyncPump?.start(session.uid);
+      await _startMemoryMirrorPump(session.uid);
       if (_workerOrigin != null && _assistantRefreshTimer == null) {
         await _configureSelectedAssistant(session.uid);
       }
@@ -1283,6 +1290,7 @@ final class AppServices {
       authorityGeneration: _authorityGeneration,
     );
     memorySyncPump?.start(session.uid);
+    await _startMemoryMirrorPump(session.uid);
     if (_workerOrigin != null) await _configureSelectedAssistant(session.uid);
     _conversationController.scheduleInboxPoll(Duration.zero);
   }
@@ -1290,6 +1298,31 @@ final class AppServices {
   /// Asks the hub once for the dev-only assistant credential. Only the
   /// no-account paths can use it, so a signed-in start never pays for the
   /// lookup, and a hub that is unavailable (web) resolves to no access.
+  Future<void> _startMemoryMirrorPump(String uid) async {
+    final worker = _worker;
+    if (worker == null ||
+        kIsWeb ||
+        !nativeHub.available ||
+        _disposed ||
+        !productionReady) {
+      return;
+    }
+    _memoryCursorStore ??= PreferencesMemorySyncCursorStore();
+    final replicaId = await _memoryCursorStore!.replicaId();
+    if (_disposed || auth.snapshot.session?.uid != uid) return;
+    _memoryMirrorPump ??= MemoryMirrorPump(
+      transport: WorkerMemoryMirrorTransport(worker),
+      store: HubMemoryMirrorStore(
+        hub: nativeHub,
+        events: nativeHub.events,
+        replicaId: replicaId,
+      ),
+      cursor: PreferencesMemoryMirrorCursor(),
+      replicaId: replicaId,
+    );
+    _memoryMirrorPump!.start(uid);
+  }
+
   Future<void> _resolveDevAssistant() async {
     if (_devAssistantResolved || _disposed) return;
     if (debugDevAssistantAccess case final override?) {
@@ -1657,6 +1690,7 @@ final class AppServices {
     _disposed = true;
     unawaited(capture?.dispose());
     memorySyncPump?.dispose();
+    _memoryMirrorPump?.dispose();
     auth.removeListener(_authChanged);
     _clearAssistant();
     _lifecycle = _lifecycle

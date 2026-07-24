@@ -35,6 +35,9 @@ export 'generated/signals/signals.dart'
         NativeEventMemorySearchResults,
         MemorySearchResults,
         MemorySearchItem,
+        NativeEventMemoryApplied,
+        MemoryApplied,
+        MemoryApplyCommit,
         NativeEventOnboardingScanCompleted,
         NativeEventRuntimeStatus,
         OnboardingScanCompleted,
@@ -111,6 +114,10 @@ abstract interface class NativeHub {
     int afterEventIndex = -1,
     int? highWaterMark,
     int limit = 100,
+  });
+  void applyMemory({
+    required String requestId,
+    required List<MemoryApplyCommit> commits,
   });
   void listMemoryItems({required String requestId, int limit = 50});
   void correctMemory({
@@ -295,6 +302,12 @@ final class UnavailableNativeHub implements NativeHub {
     int afterEventIndex = -1,
     int? highWaterMark,
     int limit = 100,
+  }) => _unavailable();
+
+  @override
+  void applyMemory({
+    required String requestId,
+    required List<MemoryApplyCommit> commits,
   }) => _unavailable();
 
   @override
@@ -571,6 +584,12 @@ final class RinfNativeHub implements NativeHub {
       limit: limit,
     ),
   );
+
+  @override
+  void applyMemory({
+    required String requestId,
+    required List<MemoryApplyCommit> commits,
+  }) => _send(requestId, CommandApplyMemory(commits: commits));
 
   @override
   void listMemoryItems({required String requestId, int limit = 50}) =>

@@ -728,6 +728,12 @@ final class _Hub implements NativeHub {
   }) {}
 
   @override
+  void applyMemory({
+    required String requestId,
+    required List<MemoryApplyCommit> commits,
+  }) {}
+
+  @override
   void listMemoryItems({required String requestId, int limit = 50}) {}
 
   @override

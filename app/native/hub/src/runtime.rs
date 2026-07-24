@@ -1874,7 +1874,9 @@ Data bindings: `text bind=fieldName` or `text \"{item.title}\"` inside `foreach 
 Actions: `onclick={prompt:...}`, `onclick={open:https://...}`, or `onclick={compute:...}` on \
 `button` or `listitem`. ONE verb per action, nothing else.\n\n\
 Do NOT invent other node kinds or verbs. When an artifact would not help, answer in normal \
-markdown.";
+markdown. When you create a Current with create_current, put a matching crepus infographic in \
+the crepus field (hero + supporting lines, progress/meter/chips) instead of relying on plain \
+title/summary alone.";
 
 fn framed_assistant_prompt(
     origin: Option<MessageOrigin>,
@@ -3356,8 +3358,7 @@ fn apply_configured_memory(
     let export_commits = commits
         .into_iter()
         .map(|commit| {
-            let record: ExportRecord =
-                serde_json::from_str(&commit.record_json).map_err(|error| error.to_string())?;
+            let record = log_record_to_export(&commit.record_kind, &commit.record_json)?;
             Ok(ExportCommit {
                 sequence: commit.sequence,
                 recorded_at: commit.recorded_at_ms,
@@ -3386,6 +3387,38 @@ fn apply_configured_memory(
         records_applied: applied.records_applied,
         records_skipped: applied.records_skipped,
     })
+}
+
+fn log_record_to_export(record_kind: &str, payload_json: &str) -> Result<ExportRecord, String> {
+    let payload: serde_json::Value =
+        serde_json::from_str(payload_json).map_err(|error| error.to_string())?;
+    match record_kind {
+        "source" => serde_json::from_value(payload)
+            .map(ExportRecord::Source)
+            .map_err(|error| error.to_string()),
+        "evidence" => serde_json::from_value(payload)
+            .map(ExportRecord::Evidence)
+            .map_err(|error| error.to_string()),
+        "claim" => serde_json::from_value(payload)
+            .map(ExportRecord::Claim)
+            .map_err(|error| error.to_string()),
+        "claim_evidence" => serde_json::from_value(payload)
+            .map(ExportRecord::ClaimEvidence)
+            .map_err(|error| error.to_string()),
+        "correction" => serde_json::from_value(payload)
+            .map(ExportRecord::Correction)
+            .map_err(|error| error.to_string()),
+        "profile" => serde_json::from_value(payload)
+            .map(ExportRecord::Profile)
+            .map_err(|error| error.to_string()),
+        "daily_review" => serde_json::from_value(payload)
+            .map(ExportRecord::DailyReview)
+            .map_err(|error| error.to_string()),
+        "deletion" => serde_json::from_value(payload)
+            .map(ExportRecord::Deletion)
+            .map_err(|error| error.to_string()),
+        _ => Err(format!("unsupported memory log record kind {record_kind}")),
+    }
 }
 
 async fn export_memory(
