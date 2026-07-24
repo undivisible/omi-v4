@@ -11,6 +11,7 @@ import '../conversations/conversations.dart';
 import '../currents/currents.dart';
 import '../device/device.dart';
 import '../features/meeting_notes.dart';
+import '../features/setup_account_screens.dart';
 import '../onboarding/onboarding_completion.dart';
 import 'demo_currents_transport.dart';
 import 'demo_mode.dart';
@@ -65,6 +66,8 @@ Future<AppServices> createDemoServices() async {
     memoryDatabasePath: (uid) => 'demo-memory-$uid',
     localConversations: conversation,
     currentsClient: CurrentsClient(DemoCurrentsTransport()),
+    configurationMessage:
+        'Demo mode — no account is connected. Open Omi to sign in.',
   );
   final notes = VolatileMeetingNotesStore();
   for (final note in demoMeetingNotes().reversed) {
@@ -90,8 +93,15 @@ OnboardingCompletionStore demoOnboardingCompletion() =>
 /// including settings and meeting notes — and cannot be navigated away from.
 /// A visitor is never shown seeded content without this on screen.
 class DemoBanner extends StatelessWidget {
-  const DemoBanner({required this.child, super.key});
+  const DemoBanner({
+    required this.services,
+    required this.navigator,
+    required this.child,
+    super.key,
+  });
 
+  final AppServices services;
+  final GlobalKey<NavigatorState> navigator;
   final Widget child;
 
   @override
@@ -152,7 +162,25 @@ class DemoBanner extends StatelessWidget {
                         ),
                       ),
                     ),
-                    const SizedBox(width: 8),
+                    const SizedBox(width: 4),
+                    // Settings live in a native window on macOS and have no
+                    // entry point at all on the web target, so the demo opens
+                    // the real settings route from here.
+                    TextButton(
+                      key: const Key('demo_open_settings'),
+                      onPressed: _openSettings,
+                      style: TextButton.styleFrom(
+                        foregroundColor: muted,
+                        padding: const EdgeInsets.symmetric(horizontal: 10),
+                        minimumSize: const Size(0, 32),
+                        textStyle: const TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      child: const Text('Settings'),
+                    ),
+                    const SizedBox(width: 4),
                     TextButton(
                       key: const Key('demo_open_omi'),
                       onPressed: _openOmi,
@@ -178,9 +206,17 @@ class DemoBanner extends StatelessWidget {
     );
   }
 
+  void _openSettings() {
+    navigator.currentState?.push(
+      MaterialPageRoute<void>(
+        builder: (context) => SettingsScreen(services: services),
+      ),
+    );
+  }
+
   /// The demo runs inside an iframe on the marketing site, so the real app has
   /// to open in the top-level document rather than inside the frame.
-  static void _openOmi() {
+  void _openOmi() {
     unawaited(
       launchUrl(
         Uri.base.resolve(demoSignInUrl),

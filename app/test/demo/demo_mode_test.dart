@@ -6,6 +6,7 @@ import 'package:omi/demo/demo_native_hub.dart';
 import 'package:omi/demo/demo_seed.dart';
 import 'package:omi/currents/currents.dart';
 import 'package:omi/features/omi_shell.dart';
+import 'package:omi/features/setup_account_screens.dart';
 import 'package:omi/main.dart';
 import 'package:omi/native/native_hub.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -95,13 +96,18 @@ void main() {
   ) async {
     final services = await createDemoServices();
     addTearDown(services.dispose);
+    final navigator = GlobalKey<NavigatorState>();
     await tester.pumpWidget(
       OmiApp(
         services: services,
         onboardingCompletionStore: demoOnboardingCompletion(),
         platformOverride: TargetPlatform.macOS,
-        overlayBuilder: (context, child) =>
-            DemoBanner(child: child ?? const SizedBox.shrink()),
+        navigatorKey: navigator,
+        overlayBuilder: (context, child) => DemoBanner(
+          services: services,
+          navigator: navigator,
+          child: child ?? const SizedBox.shrink(),
+        ),
       ),
     );
     await tester.pump();
@@ -111,5 +117,11 @@ void main() {
     expect(find.byKey(const Key('demo_banner_host')), findsOneWidget);
     expect(find.text('DEMO'), findsOneWidget);
     expect(find.byKey(const Key('demo_open_omi')), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('demo_open_settings')));
+    await tester.pumpAndSettle();
+    expect(find.byType(SettingsScreen), findsOneWidget);
+    // The banner survives the route change: it is mounted above the navigator.
+    expect(find.text('DEMO'), findsOneWidget);
   });
 }

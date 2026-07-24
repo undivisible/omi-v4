@@ -265,6 +265,7 @@ final class AppServices {
     WorkerHttpClient? worker,
     ApiKeysClient? apiKeys,
     FaceTimeClient? facetime,
+    String configurationMessage = 'Test services are not connected.',
   }) => AppServices._(
     auth: auth,
     worker: worker,
@@ -276,7 +277,7 @@ final class AppServices {
     workspaceRoots: workspaceRoots ?? VolatileWorkspaceRootStore(),
     providerCredentials:
         providerCredentials ?? VolatileProviderCredentialStore(),
-    configurationMessage: 'Test services are not connected.',
+    configurationMessage: configurationMessage,
     managedStt: managedStt,
     conversations: conversations,
     conversationInbox: conversationInbox,

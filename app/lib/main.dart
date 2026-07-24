@@ -27,14 +27,19 @@ Future<void> main() async {
   // sign-in screen. Outside that build this constant is false and the whole
   // branch is compiled away.
   if (omiDemoMode) {
-    await runOmiDemo(
-      (services) => OmiApp(
+    await runOmiDemo((services) {
+      final navigator = GlobalKey<NavigatorState>();
+      return OmiApp(
         services: services,
         onboardingCompletionStore: demoOnboardingCompletion(),
-        overlayBuilder: (context, child) =>
-            DemoBanner(child: child ?? const SizedBox.shrink()),
-      ),
-    );
+        navigatorKey: navigator,
+        overlayBuilder: (context, child) => DemoBanner(
+          services: services,
+          navigator: navigator,
+          child: child ?? const SizedBox.shrink(),
+        ),
+      );
+    });
     return;
   }
   final services = await AppServices.initializeFromEnvironment();
@@ -165,6 +170,7 @@ class OmiApp extends StatefulWidget {
     this.onboardingCompletionStore,
     this.platformOverride,
     this.overlayBuilder,
+    this.navigatorKey,
   });
 
   final AppServices? services;
@@ -174,6 +180,10 @@ class OmiApp extends StatefulWidget {
   /// Wraps every route, including pushed ones. The demo build uses it to keep
   /// its banner on screen wherever the visitor navigates.
   final TransitionBuilder? overlayBuilder;
+
+  /// Handed to the [MaterialApp] so an [overlayBuilder] — which sits outside
+  /// the navigator and so has no route context of its own — can still push.
+  final GlobalKey<NavigatorState>? navigatorKey;
 
   @override
   State<OmiApp> createState() => _OmiAppState();
@@ -275,6 +285,7 @@ class _OmiAppState extends State<OmiApp> {
     return MaterialApp(
       title: 'Omi',
       debugShowCheckedModeBanner: false,
+      navigatorKey: widget.navigatorKey,
       builder: widget.overlayBuilder,
       themeMode: ThemeMode.system,
       theme: ThemeData(

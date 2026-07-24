@@ -65,7 +65,13 @@ additive: without either, every page still renders and every link still works.
 ## Why the hub is an iframe and not `jaspr_flutter_embed`
 
 The hub is embedded as an iframe onto the standalone `/hub/` build produced by
-`worker/scripts/build-hub.sh`, loaded on click. `jaspr_flutter_embed` was built
+`worker/scripts/build-hub.sh`, loaded on click. That build is compiled with
+`--dart-define=OMI_DEMO=1`, which boots the real `OmiShell` against the seeded
+in-process services in `app/lib/demo/`: seeded conversation history, currents,
+meeting notes and memory, a persistent demo banner, and no network request of
+any kind — no auth, no worker, no model. Surfaces that need the native hub
+(capture, the pendant, transcription, computer use) show their real unavailable
+state, because the demo hub refuses them exactly as the web target does. `jaspr_flutter_embed` was built
 and measured first, and rejected for four reasons:
 
 1. **It costs every page 131 KB of brotli-compressed JavaScript** — the table
@@ -83,8 +89,7 @@ and measured first, and rejected for four reasons:
    git-pinned `crepuscularity_flutter`. The marketing site should not stop
    building because a plugin or a private ref moved.
 4. **The iframe is a real fault boundary.** The app's canvas, its exceptions
-   and its sign-in state stay out of this document — which matters more now
-   that the web target opens on a login prompt.
+   and its sign-in state stay out of this document.
 
 None of this changes what the reader downloads when they do click: the runtime
 is ~4.5 MB over brotli either way. `jaspr_flutter_embed` changes how it is
