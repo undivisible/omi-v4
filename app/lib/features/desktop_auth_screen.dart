@@ -7,6 +7,7 @@ import 'package:http/http.dart' as http;
 
 import '../app_services.dart';
 import '../auth/auth.dart';
+import '../ui/omi_orb.dart';
 import 'onboarding/authentication_gate.dart';
 
 class DesktopAuthScreen extends StatefulWidget {
@@ -194,7 +195,9 @@ class _DesktopAuthScreenState extends State<DesktopAuthScreen> {
                               Semantics(
                                 liveRegion: true,
                                 label: 'Completing desktop sign-in',
-                                child: LinearProgressIndicator(),
+                                child: Center(
+                                  child: OmiActivityOrb.loading(size: 32),
+                                ),
                               ),
                             ],
                             if (error != null) ...[

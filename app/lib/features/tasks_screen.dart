@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../currents/currents.dart';
 import '../onboarding/hub_checklist.dart';
+import '../ui/omi_orb.dart';
 import '../ui/omi_typography.dart';
 import '../ui/scroll_edge_fade.dart';
 
@@ -107,10 +108,23 @@ class _TasksScreenState extends State<TasksScreen> {
                       if (controller.loading && controller.items.isEmpty)
                         Padding(
                           padding: const EdgeInsets.symmetric(vertical: 24),
-                          child: Text(
-                            'Loading tasks…',
+                          child: Row(
                             key: const Key('tasks_loading'),
-                            style: TextStyle(fontSize: 13, color: colors.muted),
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              OmiActivityOrb.loading(
+                                size: 20,
+                                color: colors.muted,
+                              ),
+                              const SizedBox(width: 10),
+                              Text(
+                                'Loading tasks…',
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  color: colors.muted,
+                                ),
+                              ),
+                            ],
                           ),
                         )
                       else if (controller.error != null)
@@ -125,10 +139,24 @@ class _TasksScreenState extends State<TasksScreen> {
                       else if (controller.items.isEmpty)
                         Padding(
                           padding: const EdgeInsets.symmetric(vertical: 24),
-                          child: Text(
-                            'Nothing else needs your attention right now.',
+                          // An empty list is a good outcome, not a void: the
+                          // mark rests here instead of blank space.
+                          child: Column(
                             key: const Key('tasks_empty'),
-                            style: TextStyle(fontSize: 13, color: colors.muted),
+                            children: [
+                              OmiActivityOrb(
+                                size: 30,
+                                color: colors.muted.withValues(alpha: 0.75),
+                              ),
+                              const SizedBox(height: 12),
+                              Text(
+                                'Nothing else needs your attention right now.',
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  color: colors.muted,
+                                ),
+                              ),
+                            ],
                           ),
                         )
                       else

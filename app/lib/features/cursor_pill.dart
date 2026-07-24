@@ -7,6 +7,7 @@ import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 
 import '../native/native_hub.dart' show ApprovalDecision;
+import '../ui/omi_orb.dart';
 import 'cursor_pill_controller.dart';
 import 'pill_panel.dart';
 
@@ -422,11 +423,10 @@ class _CursorPillState extends State<CursorPill> {
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                SizedBox(
-                  width: 26,
-                  height: 20,
-                  child: PillWaveform(level: widget.controller.level),
-                ),
+                // Working is not listening, so the waveform gives way to the
+                // mark thinking: the overlay carries the same identity as the
+                // hub while the agent runs.
+                const OmiActivityOrb.loading(size: 20, color: _pillInk),
                 const SizedBox(width: 8),
                 ConstrainedBox(
                   constraints: const BoxConstraints(maxWidth: 340),

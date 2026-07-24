@@ -69,11 +69,12 @@ class OmiActivityOrb extends StatefulWidget {
 
   /// The loading cadence: the same mark, its highlight travelling fast enough
   /// to read as activity.
-  const OmiActivityOrb.loading({double size = 46, Key? key})
+  const OmiActivityOrb.loading({double size = 46, Color? color, Key? key})
     : this(
         size: size,
         period: const Duration(milliseconds: 1100),
         state: OmiOrbState.thinking,
+        color: color,
         key: key,
       );
 

@@ -17,6 +17,7 @@ import 'features/rewind/rewind_runtime.dart';
 import 'features/setup_account_screens.dart';
 import 'onboarding/hub_checklist.dart';
 import 'onboarding/onboarding_completion.dart';
+import 'ui/omi_orb.dart';
 import 'ui/omi_typography.dart';
 
 Future<void> main() async {
@@ -334,7 +335,10 @@ class _OmiAppState extends State<OmiApp> {
               sessionId: Uri.base.queryParameters['desktop_auth']!,
             )
           : _checkingCompletion
-          ? const Scaffold(body: Center(child: CircularProgressIndicator()))
+          // The first frame the user ever sees is the mark, not a spinner.
+          ? const Scaffold(
+              body: Center(child: OmiActivityOrb.loading(size: 64)),
+            )
           : _onboardingComplete
           ? _mobileCompanion
                 ? MobileCompanionShell(services: services)

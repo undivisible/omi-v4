@@ -805,13 +805,7 @@ class _OnboardingProfileStepState extends State<OnboardingProfileStep> {
               key: const Key('preparing_tasks'),
               mainAxisSize: MainAxisSize.min,
               children: const [
-                SizedBox.square(
-                  dimension: 16,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2,
-                    color: _cream,
-                  ),
-                ),
+                OmiActivityOrb.loading(size: 22, color: _cream),
                 SizedBox(width: 12),
                 Text(
                   'Preparing your tasks…',

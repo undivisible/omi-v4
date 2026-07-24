@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../app_services.dart';
+import '../ui/omi_orb.dart';
 import '../ui/scroll_edge_fade.dart';
 import 'meeting_notes.dart';
 
@@ -47,7 +48,7 @@ class _MeetingNotesScreenState extends State<MeetingNotesScreen> {
       appBar: AppBar(title: const Text('Meeting notes')),
       body: switch ((notes, _error)) {
         (_, final String error) => Center(child: Text(error)),
-        (null, _) => const Center(child: CircularProgressIndicator()),
+        (null, _) => const Center(child: OmiActivityOrb.loading(size: 44)),
         (final List<MeetingNote> loaded, _) when loaded.isEmpty => const Center(
           child: Text('No meeting notes yet.'),
         ),
