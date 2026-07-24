@@ -2,49 +2,49 @@ use crate::signals::{
     ActionRisk, ComputerUseAction, ComputerUseCapabilities, ComputerUseTargetProvenance,
 };
 
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 use crate::signals::{
     ComputerUseActionCapability, ComputerUseBackgroundSupport, ComputerUseDeliveryRoute,
     ComputerUsePermission, ComputerUseSessionIsolation,
 };
 
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 use ed25519_dalek::{Signer, SigningKey};
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 use praefectus::semantic::{self, SemanticTargetRef};
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 use praefectus::{
     AckState, Action, ActionRequest, AuthorityGrant, BackgroundSupport, CancellationToken,
     DeliveryRoute, Ed25519AuthorityVerifier, Engine, Executor, InteractionMode, NativeExecutor,
     PROTOCOL_VERSION, SafetyClass, SessionIsolation, SignedAuthority, TargetRef, Terminal,
     VerificationPolicy, canonical_authority_bytes, normalized_action_hash,
 };
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 use sha2::{Digest, Sha256};
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 use std::path::Path;
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 use std::sync::OnceLock;
 #[cfg(all(
     test,
-    any(target_os = "macos", target_os = "windows", target_os = "linux")
+    any(target_os = "macos", target_os = "windows")
 ))]
 use std::sync::atomic::{AtomicUsize, Ordering};
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const MAX_COMPUTER_VALUE_BYTES: usize = 16 * 1024;
 const MAX_TARGET_NAME_BYTES: usize = 1_024;
 #[cfg(all(
     test,
-    any(target_os = "macos", target_os = "windows", target_os = "linux")
+    any(target_os = "macos", target_os = "windows")
 ))]
 static AUTHORITY_MINT_ATTEMPTS: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct BoundComputerUseAction {
     pub(crate) display: ComputerUseAction,
-    #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     target: SemanticTargetRef,
     pub(crate) provenance: ComputerUseTargetProvenance,
     pub(crate) expires_at_ms: i64,
@@ -57,7 +57,7 @@ pub(crate) struct PreparedComputerUseAction {
     subject: String,
     session_id: String,
     action_hash: String,
-    #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     safety: SafetyClass,
 }
 
@@ -69,7 +69,7 @@ impl PreparedComputerUseAction {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[cfg_attr(
-    not(any(target_os = "macos", target_os = "windows", target_os = "linux")),
+    not(any(target_os = "macos", target_os = "windows")),
     allow(dead_code)
 )]
 pub(crate) enum ExecutionOutcome {
@@ -83,7 +83,7 @@ pub(crate) enum ExecutionOutcome {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[cfg_attr(
-    not(any(target_os = "macos", target_os = "windows", target_os = "linux")),
+    not(any(target_os = "macos", target_os = "windows")),
     allow(dead_code)
 )]
 pub(crate) enum ComputerUseError {
@@ -110,13 +110,13 @@ fn valid_target_name(target_name: &str) -> bool {
     !target_name.trim().is_empty() && target_name.len() <= MAX_TARGET_NAME_BYTES
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 pub(crate) fn available() -> bool {
     capabilities()
         .is_some_and(|capabilities| capabilities.actions.iter().any(|action| action.available))
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 pub(crate) fn capabilities() -> Option<ComputerUseCapabilities> {
     let native = NativeExecutor::default().capabilities().ok()?;
     let supported_actions = &native.supported_actions;
@@ -158,17 +158,17 @@ pub(crate) fn capabilities() -> Option<ComputerUseCapabilities> {
     })
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 pub(crate) fn available() -> bool {
     false
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 pub(crate) fn capabilities() -> Option<ComputerUseCapabilities> {
     None
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 pub(crate) fn bind(
     display: ComputerUseAction,
     cancellation: &CancellationToken,
@@ -255,17 +255,17 @@ pub(crate) fn bind(
     })
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 pub(crate) fn cancellation_token() -> CancellationToken {
     CancellationToken::default()
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 pub(crate) fn cancel(token: &CancellationToken) {
     token.cancel();
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 pub(crate) fn prepare(
     bound: BoundComputerUseAction,
     operation_source: &str,
@@ -296,7 +296,7 @@ pub(crate) fn prepare(
     })
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 pub(crate) fn prepare(
     _bound: BoundComputerUseAction,
     _operation_source: &str,
@@ -306,7 +306,7 @@ pub(crate) fn prepare(
     Err(ComputerUseError::TargetUnavailable)
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 fn safety_class(risk: ActionRisk) -> SafetyClass {
     match risk {
         ActionRisk::Reversible => SafetyClass::Reversible,
@@ -315,7 +315,7 @@ fn safety_class(risk: ActionRisk) -> SafetyClass {
     }
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 fn unsigned_request(
     bound: &BoundComputerUseAction,
     operation_id: &str,
@@ -380,7 +380,7 @@ fn unsigned_request(
     }
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 pub(crate) fn execute(
     prepared: PreparedComputerUseAction,
     policy_generation: u64,
@@ -452,18 +452,18 @@ pub(crate) fn execute(
 
 #[cfg(all(
     test,
-    any(target_os = "macos", target_os = "windows", target_os = "linux")
+    any(target_os = "macos", target_os = "windows")
 ))]
 pub(crate) fn authority_mint_attempts() -> usize {
     AUTHORITY_MINT_ATTEMPTS.load(Ordering::SeqCst)
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 struct HostAuthority {
     signing_key: SigningKey,
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 fn host_authority() -> Result<&'static HostAuthority, ComputerUseError> {
     static HOST_AUTHORITY: OnceLock<HostAuthority> = OnceLock::new();
     if let Some(authority) = HOST_AUTHORITY.get() {
@@ -479,7 +479,7 @@ fn host_authority() -> Result<&'static HostAuthority, ComputerUseError> {
         .ok_or(ComputerUseError::AuthorityUnavailable)
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 fn host_session_id() -> Result<&'static str, ComputerUseError> {
     static HOST_SESSION_ID: OnceLock<String> = OnceLock::new();
     if let Some(session_id) = HOST_SESSION_ID.get() {
@@ -494,17 +494,17 @@ fn host_session_id() -> Result<&'static str, ComputerUseError> {
         .ok_or(ComputerUseError::AuthorityUnavailable)
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 fn hashed_identifier(prefix: &str, value: &str) -> String {
     format!("{prefix}:{}", lower_hex(&Sha256::digest(value.as_bytes())))
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 fn lower_hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -518,12 +518,12 @@ pub(crate) fn test_bound(
     display: ComputerUseAction,
     risk: ActionRisk,
 ) -> PreparedComputerUseAction {
-    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     let _ = risk;
     PreparedComputerUseAction {
         bound: BoundComputerUseAction {
             display,
-            #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+            #[cfg(any(target_os = "macos", target_os = "windows"))]
             target: SemanticTargetRef {
                 observation_id: "1".repeat(64),
                 generation: 1,
@@ -544,7 +544,7 @@ pub(crate) fn test_bound(
         subject: "omi-user:test".to_owned(),
         session_id: "omi-session:test".to_owned(),
         action_hash: "5".repeat(64),
-        #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
         safety: safety_class(risk),
     }
 }
