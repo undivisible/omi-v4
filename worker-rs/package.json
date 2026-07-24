@@ -1,0 +1,9 @@
+{
+  "name": "omi-v4-api-rs",
+  "private": true,
+  "scripts": {
+    "build": "worker-build --release",
+    "deploy": "worker-build --release && wrangler deploy",
+    "deploy:dry-run": "worker-build --release && wrangler deploy --dry-run"
+  }
+}

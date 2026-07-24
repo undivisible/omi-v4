@@ -16,9 +16,15 @@ use worker::{js_sys, Env, Request, Response, Result, RouteContext, Router};
 use worker::{D1Database, D1PreparedStatement, D1Result};
 
 use crate::auth::Auth;
+use crate::channel_commands;
 use crate::crypto_util::sha256_hex;
+use crate::currents_refresh::{
+    self, GeneratedDraft, MemoryLine, RefreshContext, RefreshState, REFRESH_BATCH_SIZE,
+};
 use crate::glue::{authenticate, error_json, json_to_i64, AuthOutcome};
-use crate::worker_util::{changes, now_ms, uuid_v4};
+use crate::managed_ai;
+use crate::worker_util::{changes, now_ms, secret_or_var as env_get, uuid_v4};
+use worker::{Headers, Method, RequestInit};
 
 use super::*;
 
@@ -49,6 +55,7 @@ pub fn register(router: Router<'_, ()>) -> Router<'_, ()> {
         .post_async("/v1/currents/generate", handle_current_generate)
         .post_async("/v1/currents/candidates", handle_current_candidates)
         .get_async("/v1/currents", handle_currents_list)
+        .post_async("/v1/currents/refresh", handle_current_refresh)
         .post_async("/v1/currents/:id/feedback", handle_current_feedback)
         .post_async("/v1/currents/:id/accept", handle_current_accept)
         .post_async(
@@ -1497,6 +1504,571 @@ async fn handle_currents_list(req: Request, ctx: RouteContext<()>) -> Result<Res
     let db = ctx.env.d1("DB")?;
     ensure_projected(&db, &auth.uid).await?;
     Response::from_json(&json!({ "currents": list_currents(&db, &auth.uid).await? }))
+}
+
+async fn handle_current_refresh(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let auth = authed!(req, ctx);
+    let db = ctx.env.d1("DB")?;
+    ensure_projected(&db, &auth.uid).await?;
+    let body = json_object(&mut req).await;
+    let force = body
+        .as_ref()
+        .and_then(|b| b.get("force"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let outcome = refresh_currents(&ctx.env, &db, &auth.uid, force, now_ms()).await?;
+    Response::from_json(&outcome)
+}
+
+// ---------------------------------------------------------------------------
+// currents-refresh.ts pipeline
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GenerateOutcomeKind {
+    Created,
+    Existing,
+    Empty,
+    Disabled,
+    InvalidSettings,
+    InvalidSource,
+}
+
+async fn read_refresh_state(db: &D1Database, uid: &str) -> Result<RefreshState> {
+    let row = d1_first(
+        db,
+        "SELECT last_checked_at, last_regenerated_at, memory_watermark FROM currents_refresh_state WHERE uid = ?1",
+        &[s(uid)],
+    )
+    .await?;
+    Ok(match row {
+        Some(row) => RefreshState {
+            last_checked_at: row
+                .get("last_checked_at")
+                .and_then(json_to_i64)
+                .unwrap_or(0),
+            last_regenerated_at: row
+                .get("last_regenerated_at")
+                .and_then(json_to_i64)
+                .unwrap_or(0),
+            memory_watermark: row
+                .get("memory_watermark")
+                .and_then(json_to_i64)
+                .unwrap_or(0),
+        },
+        None => RefreshState {
+            last_checked_at: 0,
+            last_regenerated_at: 0,
+            memory_watermark: 0,
+        },
+    })
+}
+
+async fn write_refresh_state(
+    db: &D1Database,
+    uid: &str,
+    last_checked_at: i64,
+    last_regenerated_at: i64,
+    memory_watermark: i64,
+) -> Result<()> {
+    d1_run(
+        db,
+        "INSERT INTO currents_refresh_state
+      (uid, last_checked_at, last_regenerated_at, memory_watermark)
+     VALUES (?1, ?2, ?3, ?4)
+     ON CONFLICT(uid) DO UPDATE SET
+       last_checked_at = excluded.last_checked_at,
+       last_regenerated_at = excluded.last_regenerated_at,
+       memory_watermark = excluded.memory_watermark",
+        &[
+            s(uid),
+            n(last_checked_at),
+            n(last_regenerated_at),
+            n(memory_watermark),
+        ],
+    )
+    .await?;
+    Ok(())
+}
+
+async fn gather_refresh_context(db: &D1Database, uid: &str) -> Result<RefreshContext> {
+    let surfaced = d1_all(
+        db,
+        "SELECT title, updated_at FROM currents
+     WHERE uid = ?1 AND status IN ('surfaced', 'accepted')
+     ORDER BY updated_at DESC LIMIT 20",
+        &[s(uid)],
+    )
+    .await?;
+    let memory = d1_all(
+        db,
+        "SELECT e.id AS evidence_id, s.kind AS source_kind, e.quote, c.content, c.recorded_at
+     FROM memory_claims c
+     JOIN memory_claim_evidence ce ON ce.claim_id = c.id AND ce.uid = c.uid
+       AND ce.relation = 'supports'
+     JOIN memory_evidence e ON e.id = ce.evidence_id AND e.uid = ce.uid
+     JOIN memory_source_revisions r ON r.id = e.source_revision_id AND r.uid = e.uid
+     JOIN memory_sources s ON s.id = r.source_id AND s.uid = r.uid
+     WHERE c.uid = ?1 AND c.status = 'accepted' AND c.retracted_at IS NULL
+       AND (c.zkr_tier IS NULL OR c.zkr_tier != 'archive')
+       AND (c.zkr_processing_state IS NULL OR c.zkr_processing_state = 'processed')
+       AND e.tombstoned_at IS NULL AND s.tombstoned_at IS NULL
+     ORDER BY c.recorded_at DESC, c.id ASC
+     LIMIT 24",
+        &[s(uid)],
+    )
+    .await?;
+    let memory_lines: Vec<MemoryLine> = memory
+        .iter()
+        .map(|row| MemoryLine {
+            evidence_id: str_field(row, "evidence_id"),
+            source_kind: opt_str_field(row, "source_kind"),
+            quote: str_field(row, "quote"),
+            content: str_field(row, "content"),
+            recorded_at: row.get("recorded_at").and_then(json_to_i64).unwrap_or(0),
+        })
+        .collect();
+    let memory_watermark = memory_lines
+        .iter()
+        .map(|line| line.recorded_at)
+        .max()
+        .unwrap_or(0);
+    let existing_titles: Vec<String> = surfaced.iter().map(|row| str_field(row, "title")).collect();
+    let newest_updated_at = if surfaced.is_empty() {
+        None
+    } else {
+        surfaced
+            .iter()
+            .filter_map(|row| row.get("updated_at").and_then(json_to_i64))
+            .max()
+    };
+    Ok(RefreshContext {
+        surfaced_count: surfaced.len(),
+        newest_updated_at,
+        memory_watermark,
+        existing_titles,
+        memory_lines,
+    })
+}
+
+async fn speed_completion(env: &Env, prompt: &str) -> Option<String> {
+    let secret = env_get(env, "OPENROUTER_API_KEY")?.trim().to_string();
+    if secret.is_empty() {
+        return None;
+    }
+    let model = managed_ai::model_for_tier(managed_ai::ModelTier::Speed, |name| env_get(env, name));
+    let endpoint = env_get(env, "OPENROUTER_CHAT_COMPLETIONS_URL")
+        .unwrap_or_else(|| managed_ai::OPENROUTER_COMPLETION_ENDPOINT.to_owned());
+    let endpoint_url = managed_ai::validate_pinned_endpoint(
+        &endpoint,
+        managed_ai::OPENROUTER_COMPLETION_ENDPOINT,
+        managed_ai::OPENROUTER_HOSTNAME,
+    )?;
+    let body = json!({
+        "model": model,
+        "messages": [{ "role": "user", "content": prompt }],
+        "stream": false,
+        "max_tokens": 256,
+        "temperature": 0,
+    });
+    let mut init = RequestInit::new();
+    init.with_method(Method::Post);
+    let headers = Headers::new();
+    let _ = headers.set("authorization", &format!("Bearer {secret}"));
+    let _ = headers.set("content-type", "application/json");
+    init.with_headers(headers);
+    init.with_body(Some(JsValue::from_str(&body.to_string())));
+    let request = Request::new_with_init(endpoint_url.as_str(), &init).ok()?;
+    let mut upstream = worker::Fetch::Request(request).send().await.ok()?;
+    if upstream.status_code() >= 300 {
+        return None;
+    }
+    let value = upstream.json::<Value>().await.ok()?;
+    let content = value
+        .get("choices")?
+        .get(0)?
+        .get("message")?
+        .get("content")?
+        .as_str()?;
+    let trimmed = content.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
+async fn ai_needs_refresh(
+    env: &Env,
+    context: &RefreshContext,
+    state: &RefreshState,
+) -> Option<bool> {
+    if context.memory_lines.is_empty() {
+        return None;
+    }
+    let mut prompt = vec![
+        "Decide whether proactive task suggestions should refresh.".to_string(),
+        "Reply ONLY with JSON: {\"refresh\":true|false,\"reason\":\"...\"}".to_string(),
+        String::new(),
+        format!("Existing currents ({}):", context.existing_titles.len()),
+    ];
+    prompt.extend(
+        context
+            .existing_titles
+            .iter()
+            .take(8)
+            .map(|title| format!("- {title}")),
+    );
+    prompt.push(String::new());
+    prompt.push(format!(
+        "Last regenerated ms: {}",
+        state.last_regenerated_at
+    ));
+    prompt.push(format!(
+        "Memory watermark ms: {}; latest memory ms: {}",
+        state.memory_watermark, context.memory_watermark
+    ));
+    prompt.push(String::new());
+    prompt.push("Recent memory excerpts:".to_string());
+    prompt.extend(context.memory_lines.iter().take(6).map(|line| {
+        let source = line.source_kind.as_deref().unwrap_or("memory");
+        format!(
+            "- [{source}] {}",
+            currents_refresh::collapse(&line.content)
+                .chars()
+                .take(160)
+                .collect::<String>()
+        )
+    }));
+    let content = speed_completion(env, &prompt.join("\n")).await?;
+    let parsed = currents_refresh::parse_json_object(&content)?;
+    match parsed.get("refresh") {
+        Some(Value::Bool(true)) => Some(true),
+        Some(Value::Bool(false)) => Some(false),
+        _ => None,
+    }
+}
+
+async fn ai_drafts(env: &Env, context: &RefreshContext) -> Vec<GeneratedDraft> {
+    if context.memory_lines.is_empty() {
+        return Vec::new();
+    }
+    let allowed: std::collections::HashSet<String> = context
+        .memory_lines
+        .iter()
+        .map(|line| line.evidence_id.clone())
+        .collect();
+    let mut prompt = vec![
+        "Generate refreshed proactive suggestions ('currents') for the user.".to_string(),
+        "Return ONLY JSON:".to_string(),
+        "{\"items\":[{\"contentKind\":\"agent_action|human_action|awareness\",\"title\":\"...\",\"summary\":\"...\",\"reason\":\"...\",\"instruction\":\"...\",\"evidenceId\":\"...\",\"tool\":\"optional for agent_action\"}]}"
+            .to_string(),
+        String::new(),
+        "Mix all three kinds:".to_string(),
+        "- agent_action: Omi/automation can execute (include tool when obvious)".to_string(),
+        "- human_action: the user should do".to_string(),
+        "- awareness: meetings, events, deadlines to know about".to_string(),
+        String::new(),
+        "Use evidenceId values from this list only:".to_string(),
+    ];
+    prompt.extend(context.memory_lines.iter().take(12).map(|line| {
+        let source = line.source_kind.as_deref().unwrap_or("memory");
+        format!(
+            "- {} [{source}] {}",
+            line.evidence_id,
+            currents_refresh::collapse(&line.content)
+                .chars()
+                .take(140)
+                .collect::<String>()
+        )
+    }));
+    prompt.push(String::new());
+    prompt.push("Avoid repeating these existing titles:".to_string());
+    prompt.extend(
+        context
+            .existing_titles
+            .iter()
+            .take(8)
+            .map(|title| format!("- {title}")),
+    );
+    let content = match speed_completion(env, &prompt.join("\n")).await {
+        Some(content) => content,
+        None => return Vec::new(),
+    };
+    currents_refresh::parse_drafts(&content, &allowed)
+}
+
+async fn proactive_enabled(db: &D1Database, uid: &str) -> Result<&'static str> {
+    let settings = d1_first(
+        db,
+        "SELECT value FROM user_settings WHERE uid = ?1",
+        &[s(uid)],
+    )
+    .await?;
+    let Some(settings) = settings else {
+        return Ok("yes");
+    };
+    let value = settings.get("value").and_then(Value::as_str).unwrap_or("");
+    match serde_json::from_str::<Value>(value) {
+        Ok(parsed) => {
+            if parsed.get("proactiveRecommendations") == Some(&Value::Bool(false)) {
+                Ok("no")
+            } else {
+                Ok("yes")
+            }
+        }
+        Err(_) => Ok("invalid"),
+    }
+}
+
+async fn generate_one_current(db: &D1Database, uid: &str, now: i64) -> Result<GenerateOutcomeKind> {
+    match proactive_enabled(db, uid).await? {
+        "no" => return Ok(GenerateOutcomeKind::Disabled),
+        "invalid" => return Ok(GenerateOutcomeKind::InvalidSettings),
+        _ => {}
+    }
+    let source = d1_first(
+        db,
+        "SELECT c.id AS claim_id, c.content, c.value, ce.evidence_id,\n            ce.confidence_basis_points, e.quote\n     FROM memory_profile_entries p\n     JOIN memory_claims c ON c.id = p.claim_id AND c.uid = p.uid\n     JOIN memory_claim_evidence ce ON ce.claim_id = c.id AND ce.uid = c.uid\n       AND ce.relation = 'supports'\n     JOIN memory_evidence e ON e.id = ce.evidence_id AND e.uid = ce.uid\n     JOIN memory_source_revisions r ON r.id = e.source_revision_id AND r.uid = e.uid\n     JOIN memory_sources s ON s.id = r.source_id AND s.uid = r.uid\n     LEFT JOIN currents existing ON existing.uid = p.uid\n       AND existing.generation_key = 'claim:' || c.id\n     WHERE p.uid = ?1 AND p.profile_kind = 'current' AND p.status != 'archived'\n       AND c.status = 'accepted' AND c.retracted_at IS NULL\n       AND (c.valid_from IS NULL OR c.valid_from <= ?2)\n       AND (c.valid_to IS NULL OR c.valid_to > ?2)\n       AND (c.recorded_until IS NULL OR c.recorded_until > ?2)\n       AND (c.zkr_tier IS NULL OR c.zkr_tier != 'archive')\n       AND (c.zkr_processing_state IS NULL OR c.zkr_processing_state = 'processed')\n       AND ce.relation = 'supports' AND e.tombstoned_at IS NULL\n       AND s.tombstoned_at IS NULL AND existing.id IS NULL\n     ORDER BY p.updated_at DESC, ce.confidence_basis_points DESC, c.id, e.id\n     LIMIT 1",
+        &[s(uid), n(now)],
+    )
+    .await?;
+    let Some(source) = source else {
+        return Ok(GenerateOutcomeKind::Empty);
+    };
+    let claim_id = str_field(&source, "claim_id");
+    let value = match source.get("value") {
+        Some(Value::Null) | None => str_field(&source, "content"),
+        Some(v) => v.as_str().map(str::to_string).unwrap_or_default(),
+    };
+    let value = value.trim().to_string();
+    let content = str_field(&source, "content").trim().to_string();
+    let quote = str_field(&source, "quote").trim().to_string();
+    if value.is_empty() || content.is_empty() || quote.is_empty() {
+        return Ok(GenerateOutcomeKind::InvalidSource);
+    }
+    let id = uuid_v4();
+    let confidence_bps = source
+        .get("confidence_basis_points")
+        .and_then(json_to_i64)
+        .unwrap_or(0);
+    let proposed_action = json!({
+        "kind": "human_action",
+        "instruction": bounded(&format!("Review this memory and decide the smallest next action: {value}"), 500),
+    })
+    .to_string();
+    let inserted = d1_run(
+        db,
+        "INSERT OR IGNORE INTO currents\n      (id, uid, evidence_id, title, summary, reason, confidence_basis_points,\n       proposed_action, status, surface_at, generation_key, created_at, updated_at)\n     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'candidate', ?9, ?10, ?9, ?9)",
+        &[
+            s(&id),
+            s(uid),
+            nullable_s(source.get("evidence_id").and_then(Value::as_str)),
+            s(&bounded(&format!("Revisit: {value}"), 120)),
+            s(&bounded(&content, 500)),
+            s(&bounded(&format!("Based on: {quote}"), 500)),
+            n(confidence_bps),
+            s(&proposed_action),
+            n(now),
+            s(&format!("claim:{claim_id}")),
+        ],
+    )
+    .await?;
+    if changes(&inserted) == 1 {
+        return Ok(GenerateOutcomeKind::Created);
+    }
+    let existing = d1_first(
+        db,
+        "SELECT 1 AS ok FROM currents WHERE uid = ?1 AND generation_key = ?2",
+        &[s(uid), s(&format!("claim:{claim_id}"))],
+    )
+    .await?;
+    if existing.is_some() {
+        Ok(GenerateOutcomeKind::Existing)
+    } else {
+        Ok(GenerateOutcomeKind::Empty)
+    }
+}
+
+async fn expire_refresh_batch(db: &D1Database, uid: &str, now: i64) -> Result<()> {
+    d1_run(
+        db,
+        "UPDATE currents SET status = 'expired', updated_at = ?1
+     WHERE uid = ?2 AND status IN ('candidate', 'surfaced', 'snoozed')
+       AND generation_key LIKE 'refresh:%'",
+        &[n(now), s(uid)],
+    )
+    .await?;
+    Ok(())
+}
+
+async fn insert_refresh_draft(
+    db: &D1Database,
+    uid: &str,
+    draft: &GeneratedDraft,
+    generation_key: &str,
+    now: i64,
+) -> Result<()> {
+    let evidence = d1_first(
+        db,
+        "SELECT e.id FROM memory_evidence e
+     JOIN memory_source_revisions r ON r.id = e.source_revision_id AND r.uid = e.uid
+     JOIN memory_sources s ON s.id = r.source_id AND s.uid = r.uid
+     WHERE e.id = ?1 AND e.uid = ?2 AND e.tombstoned_at IS NULL AND s.tombstoned_at IS NULL",
+        &[s(&draft.evidence_id), s(uid)],
+    )
+    .await?;
+    if evidence.is_none() {
+        return Ok(());
+    }
+    let mut proposed = json!({
+        "kind": draft.content_kind.as_str(),
+        "instruction": draft.instruction,
+    });
+    if let Some(tool) = &draft.tool {
+        if let Some(map) = proposed.as_object_mut() {
+            map.insert("tool".into(), json!(tool));
+        }
+    }
+    let id = uuid_v4();
+    d1_run(
+        db,
+        "INSERT INTO currents
+      (id, uid, evidence_id, title, summary, reason, confidence_basis_points, proposed_action,
+       status, surface_at, expires_at, created_at, updated_at, crepus, generation_key)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'candidate', ?9, NULL, ?10, ?10, NULL, ?11)",
+        &[
+            s(&id),
+            s(uid),
+            s(&draft.evidence_id),
+            s(&draft.title),
+            s(&draft.summary),
+            s(&draft.reason),
+            n(7_200),
+            s(&proposed.to_string()),
+            n(now),
+            n(now),
+            s(generation_key),
+        ],
+    )
+    .await?;
+    Ok(())
+}
+
+async fn regenerate_currents(
+    env: &Env,
+    db: &D1Database,
+    uid: &str,
+    context: &RefreshContext,
+    now: i64,
+) -> Result<i64> {
+    expire_refresh_batch(db, uid, now).await?;
+    let mut created = 0i64;
+    for _ in 0..3 {
+        match generate_one_current(db, uid, now).await? {
+            GenerateOutcomeKind::Created => created += 1,
+            _ => break,
+        }
+    }
+    let ai = ai_drafts(env, context).await;
+    let drafts = if ai.is_empty() {
+        currents_refresh::heuristic_drafts(context)
+    } else {
+        ai
+    };
+    let local_date = channel_commands::iso_date(now);
+    for (index, draft) in drafts.iter().enumerate() {
+        if created >= REFRESH_BATCH_SIZE as i64 {
+            break;
+        }
+        let generation_key = format!("refresh:{local_date}:{index}");
+        let existing = d1_first(
+            db,
+            "SELECT 1 AS ok FROM currents WHERE uid = ?1 AND generation_key = ?2",
+            &[s(uid), s(&generation_key)],
+        )
+        .await?;
+        if existing.is_some() {
+            continue;
+        }
+        if insert_refresh_draft(db, uid, draft, &generation_key, now)
+            .await
+            .is_ok()
+        {
+            created += 1;
+        }
+    }
+    Ok(created)
+}
+
+async fn refresh_currents(
+    env: &Env,
+    db: &D1Database,
+    uid: &str,
+    force: bool,
+    now: i64,
+) -> Result<Value> {
+    let state = read_refresh_state(db, uid).await?;
+    let context = gather_refresh_context(db, uid).await?;
+    if currents_refresh::within_check_ttl(&state, now, force) {
+        return Ok(json!({
+            "refreshed": false,
+            "reason": "check_ttl",
+            "checkedAt": state.last_checked_at,
+            "regeneratedAt": if state.last_regenerated_at > 0 { Value::from(state.last_regenerated_at) } else { Value::Null },
+            "currents": list_currents(db, uid).await?,
+        }));
+    }
+    let heuristic = currents_refresh::heuristic_needs_refresh(&context, &state, now, force);
+    let mut should_refresh = heuristic.refresh;
+    let mut reason = heuristic.reason;
+    if should_refresh
+        && !force
+        && heuristic.reason != "no_surfaced_currents"
+        && heuristic.reason != "currents_stale"
+    {
+        match ai_needs_refresh(env, &context, &state).await {
+            Some(false) => {
+                should_refresh = false;
+                reason = "ai_fresh";
+            }
+            Some(true) => reason = "ai_stale",
+            None => {}
+        }
+    }
+    if should_refresh
+        && !force
+        && state.last_regenerated_at > 0
+        && now - state.last_regenerated_at < currents_refresh::MIN_REGENERATE_INTERVAL_MS
+        && heuristic.reason != "no_surfaced_currents"
+        && heuristic.reason != "currents_stale"
+        && heuristic.reason != "new_memory"
+    {
+        should_refresh = false;
+        reason = "regenerate_ttl";
+    }
+    let mut regenerated_at = if state.last_regenerated_at > 0 {
+        Some(state.last_regenerated_at)
+    } else {
+        None
+    };
+    if should_refresh {
+        regenerate_currents(env, db, uid, &context, now).await?;
+        regenerated_at = Some(now);
+        write_refresh_state(db, uid, now, now, context.memory_watermark).await?;
+    } else {
+        write_refresh_state(
+            db,
+            uid,
+            now,
+            state.last_regenerated_at,
+            state.memory_watermark.max(context.memory_watermark),
+        )
+        .await?;
+    }
+    Ok(json!({
+        "refreshed": should_refresh,
+        "reason": reason,
+        "checkedAt": now,
+        "regeneratedAt": regenerated_at.map(Value::from).unwrap_or(Value::Null),
+        "currents": list_currents(db, uid).await?,
+    }))
 }
 
 /// Port of `listCurrents` (currents.ts): rolls expiry/snooze/surface forward,

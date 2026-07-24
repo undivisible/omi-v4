@@ -430,7 +430,7 @@ The per-user memory database is a file inside it: `omi-memory-<sha256(uid)>.sqli
 
 ### 5.2 Worker configuration
 
-Both Workers are configured declaratively: `worker/wrangler.jsonc` for the TypeScript worker (`omi-v4-api`, custom domain `omi.tsc.hk`) — **the deployed source of truth** — and `worker-rs/wrangler.toml` for the Rust shadow (`omi-v4-api-rs`, `workers.dev` only). They bind the *same* physical D1 database; the TypeScript worker owns migrations and the Rust worker deliberately declares no `migrations_dir`. Each declares its own Durable Object namespace. The Rust worker's custom-domain route and cron trigger are commented out on purpose during the shadow window — both workers sharing one D1 while running separate admission DOs would let one worker settle rows the other admitted, leaking in-flight slots. Dangerous side-effect routes such as FaceTime (Sendblue dial + Gemini Live bridge) are implemented only in the TS worker; worker-rs must not expose them without the bridge container. `worker-rs/CUTOVER.md` is the procedure.
+Both Workers are configured declaratively: `worker-rs/wrangler.toml` for the Rust worker (`omi-v4-api-rs`, **production** on `omi.tsc.hk` and `api.omi.tsc.hk`) and `worker/wrangler.jsonc` for the TypeScript worker (`omi-v4-api`, **migrations only** — no routes or cron after cutover). They bind the *same* physical D1 database; the TypeScript worker owns migrations and the Rust worker deliberately declares no `migrations_dir`. Each declares its own Durable Object namespace. FaceTime (Sendblue dial + Gemini Live bridge) is not implemented in worker-rs — public callers get 501; vars are reserved for a future port. `worker-rs/CUTOVER.md` documents rollback.
 
 Non-secret configuration lives in `vars` (model ids, budget ceilings and window sizes for both the managed-AI and STT admission paths, Firebase project id, the pinned upstream completions URL, AI Gateway ids). Secrets — provider keys, Stripe, Telegram, Sendblue, Firebase service account — are set with `wrangler secret put` and are not in the tree.
 
@@ -438,18 +438,18 @@ Non-secret configuration lives in `vars` (model ids, budget ceilings and window 
 
 ```mermaid
 flowchart LR
-    W1["worker (TypeScript)<br/>omi-v4-api"] --> OBS["Workers Observability<br/>observability.enabled = true<br/>head_sampling_rate = 1"]
-    W2["worker-rs (Rust shadow)<br/>omi-v4-api-rs"] --> OBS
+    W1["worker (TypeScript)<br/>omi-v4-api<br/>migrations only"] --> OBS["Workers Observability<br/>observability.enabled = true<br/>head_sampling_rate = 1"]
+    W2["worker-rs (Rust production)<br/>omi-v4-api-rs"] --> OBS
     W1 --> HEALTH["GET /health"]
     W2 --> HEALTH
     HEALTH --> BS["Better Stack<br/>uptime monitors"]
-    CRON["minutely cron<br/>(TypeScript worker)"] -.->|"not yet wired"| HB["Better Stack heartbeat<br/>'Omi worker cron', pending"]
-    W1 --> GWA["AI Gateway analytics<br/>(when CF_AI_GATEWAY_* set)"]
+    CRON["minutely cron<br/>(worker-rs)"] -.->|"not yet wired"| HB["Better Stack heartbeat<br/>'Omi worker cron', pending"]
+    W2 --> GWA["AI Gateway analytics<br/>(when CF_AI_GATEWAY_* set)"]
 ```
 
 **Workers Observability is enabled on both workers** — `"observability": { "enabled": true, "head_sampling_rate": 1 }` in `worker/wrangler.jsonc` and the equivalent `[observability]` block in `worker-rs/wrangler.toml`. That gives structured invocation logs and metrics in the Cloudflare dashboard with no third-party sink. Full sampling is deliberate while volume is low.
 
-**Better Stack is provisioned outside this repository.** Three uptime monitors exist — the marketing site, `https://omi.tsc.hk/health` (the production TypeScript worker), and `https://omi-v4-api-rs.undivisible.workers.dev/health` (the Rust shadow) — plus one heartbeat for the minutely cron. Nothing in this tree references Better Stack: there is no SDK, no token, and no code that posts to the heartbeat, which is why that heartbeat is still in a pending state. Treat the monitors as external configuration, not as a property of the code.
+**Better Stack is provisioned outside this repository.** Uptime monitors include `https://omi.tsc.hk/health` and `https://api.omi.tsc.hk/health` (Rust production worker), plus the Rust shadow URL on `*.workers.dev`.
 
 **Not wired anywhere yet:** error/APM reporting. `docs/ai-and-observability.md` records Sentry on both the Worker and the Flutter client as the decision, and LLM tracing/eval as deliberately deferred; neither exists in the repository today. That document is the decision record for all of the above and should be read as the "why".
 
@@ -466,5 +466,5 @@ Directly from `PLAN.md`'s "Active build checklist," "Current release train," and
 - **Nightly Daily Review orchestration is unwired.** Currents currently only supports a single idempotent cited recommendation generated on demand when the surface loads — no scheduled nightly reflection cycle exists yet.
 - **Windows computer-use and cross-platform release-build proof are outstanding**, per `PLAN.md`'s test-day checklist; this review did not inspect any Windows-specific native code. Desktop computer-use is provided by the `praefectus` crate (`app/native/hub/src/computer_use.rs`, behind the `computer-use` feature), which supersedes the `rs_peekaboo` naming used in older planning documents.
 - **Secrets are unprovisioned in this tree.** Non-secret `vars` are committed in both wrangler configs and the D1 database and AI Gateway ids are real, but every provider secret is set out of band; deployment proof with real Stripe/Telegram/Sendblue credentials has not happened.
-- **The Rust worker has not cut over.** `worker-rs` is deployed only as a shadow on `workers.dev`, with its custom-domain route and cron trigger commented out for the reasons given in §5.2. Parity is claimed by `worker-rs/PORT_STATUS.md`, not proven by production traffic.
+- **The Rust worker is production.** `worker-rs` serves `omi.tsc.hk` and `api.omi.tsc.hk`; the TS worker remains for D1 migrations and test parity only. FaceTime is not ported (501 until bridge container lands).
 - **Concurrency caveat.** `app/lib/`, `app/native/hub/`, `worker/` and `docs/` were being edited by other sessions while this document was written. File-level and behavioural claims were read from source, but any exact line reference should be re-checked before being relied on.

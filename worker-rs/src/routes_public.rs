@@ -33,6 +33,7 @@ pub fn register(router: Router<'static, ()>) -> Router<'static, ()> {
         )
         .get_async("/api/v1/notes", handle_notes)
         .post_async("/api/v1/assistant/messages", handle_assistant_messages)
+        .post_async("/api/v1/facetime/calls", handle_facetime_calls)
         .post_async("/mcp", handle_mcp_post)
         .get_async("/mcp", handle_mcp_get)
         .delete_async("/mcp", handle_mcp_delete)
@@ -429,6 +430,18 @@ async fn handle_assistant_messages(mut req: Request, ctx: RouteContext<()>) -> R
         Err(response) => return response,
     };
     respond(ask_omi_operation(&ctx, &auth.uid, &body).await)
+}
+
+/// FaceTime requires the Gemini Live bridge container (TS-only). Fail closed
+/// with 501 so API clients get an explicit signal rather than a missing route.
+async fn handle_facetime_calls(req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let auth = api_auth!(req, ctx);
+    scoped!(auth, "facetime:write");
+    Ok(Response::from_json(&json!({
+        "error": "FaceTime calling is not available on this deployment",
+        "code": "facetime_not_ported",
+    }))?
+    .with_status(501))
 }
 
 // ---------------------------------------------------------------------------

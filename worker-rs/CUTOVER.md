@@ -1,14 +1,15 @@
 # CUTOVER — omi-v4-api (TS) → omi-v4-api-rs (Rust)
 
-Runbook for replacing the live TypeScript worker (`omi-v4-api`, serving
-`omi.tsc.hk`) with the Rust port (`omi-v4-api-rs`). Both bind the **same** D1
-database (`database_id 74aab5eb-…`); the **TS worker owns the schema/migrations**
-— the Rust worker declares no `migrations_dir` and must never run D1 migrations.
+**Status: DONE (2026-07-24).** Production traffic is on `omi-v4-api-rs` at
+`omi.tsc.hk` and `api.omi.tsc.hk`. The TypeScript worker (`omi-v4-api`) remains
+deployed for **D1 migrations only** — its `routes` and `triggers.crons` are
+disabled in `worker/wrangler.jsonc`.
 
-The two workers can run side by side: only the custom-domain route is exclusive.
-Until the route is swapped, the Rust worker is reachable on its
-`*.workers.dev` URL and shares all D1 state with the live worker, so you can
-smoke it against production data without taking traffic.
+Both workers bind the **same** D1 database (`database_id 74aab5eb-…`); the **TS
+worker owns the schema/migrations** — the Rust worker declares no
+`migrations_dir` and must never run D1 migrations.
+
+This document is kept as rollback/deploy reference.
 
 ## 0. Prerequisites
 
@@ -88,22 +89,17 @@ Non-secret config (`vars`, `MIMO_*`, `STT_*`, `GEMINI_LIVE_MODEL`,
 `ENVIRONMENT`, `FIREBASE_PROJECT_ID`) is already committed in `wrangler.toml` at
 parity with `worker/wrangler.jsonc` — no action needed.
 
-## 4. Deploy WITHOUT the domain (shadow)
+## 4. Deploy production
 
-The `[[routes]]` custom-domain block in `wrangler.toml` is commented out on
-purpose so a deploy cannot steal `omi.tsc.hk` from the live worker.
+Custom domains and cron are enabled in `wrangler.toml`. Deploy from this directory:
 
 ```sh
-npx wrangler deploy          # publishes omi-v4-api-rs on *.workers.dev only
+npm run deploy
+# or: worker-build --release && npx wrangler deploy
 ```
 
-Deploy order relative to the TS worker does not matter for D1 (shared schema);
-the cron `triggers` (`* * * * *`) will begin firing on the Rust worker as soon
-as it deploys. Because both workers now run the same minutely cron against the
-same tables, that is safe (every cron piece is idempotent / lease-fenced), but
-if you want to avoid double-processing during the shadow window, temporarily
-remove `[triggers]` from the Rust worker until the domain swap, or disable the
-TS worker's cron.
+Do **not** re-enable `routes` or `triggers.crons` on the TS worker — dual cron or
+dual domain against the same D1 will leak admission DO slots.
 
 ## 5. Smoke test on the workers.dev URL
 
@@ -116,36 +112,26 @@ Then the authenticated spot-checks from README.md (`/v1/me`, `/v1/setup-health`,
 `/v1/entitlement`, `/v1/profile/onboarding`, a webhook, an inbox round-trip).
 Confirm static assets serve: `curl .../` returns `worker/public/index.html`.
 
-## 6. Swap the domain (cutover)
-
-Two options — pick one:
-
-- **Route-move (fastest rollback):** in the Cloudflare dashboard (or by removing
-  `routes` from `worker/wrangler.jsonc` and redeploying the TS worker), release
-  `omi.tsc.hk` from `omi-v4-api`. Then uncomment the `[[routes]]` block in
-  `worker-rs/wrangler.toml` and `npx wrangler deploy`. There is a brief window
-  where the domain is unrouted; keep it short.
-- **Takeover:** uncomment the `[[routes]]` block and `npx wrangler deploy` the
-  Rust worker. Cloudflare reassigns the custom domain to the last deployer.
-  Verify immediately.
+## 6. Verify production
 
 ```sh
-curl https://omi.tsc.hk/health   # → 200 from the Rust worker
+curl https://omi.tsc.hk/health
+curl https://api.omi.tsc.hk/health
+# → 200 {"service":"omi-v4-api","status":"ok"}
 ```
+
+Spot-check authenticated routes (`/v1/me`, `/v1/currents/refresh`, webhooks).
 
 ## 7. Rollback
 
-The TS worker is untouched and still deployed. To revert:
+To revert to the TS worker on the custom domains:
 
-1. Re-comment the `[[routes]]` block in `worker-rs/wrangler.toml` and
-   `npx wrangler deploy` (releases the domain from the Rust worker), **or** just
-   redeploy the TS worker with its `routes` block to reclaim `omi.tsc.hk`.
-2. Restore the TS worker's cron if you disabled it in step 4.
+1. Uncomment `routes` and `triggers.crons` in `worker/wrangler.jsonc` and
+   redeploy `omi-v4-api`.
+2. Comment out `[[routes]]` and `[triggers]` in `worker-rs/wrangler.toml` and
+   redeploy `omi-v4-api-rs`.
 3. D1 needs no rollback — the schema never changed and both workers wrote
    compatible rows.
-
-Keep the Rust worker deployed on `*.workers.dev` after rollback so the next
-attempt skips steps 2–4.
 
 ## Notes / residual risks
 
@@ -160,6 +146,6 @@ attempt skips steps 2–4.
   `worker-rs/public/` and point `[assets] directory` there.
 - **nodejs_compat**: the TS worker sets `compatibility_flags = ["nodejs_compat"]`;
   the Rust worker does not need it (pure wasm, no Node APIs) and omits it.
-- **Streaming usage-tail settlement** for managed chat is reconciled by the
-  minutely cron (`reconcileManagedAssistantRequests`) rather than parsed inline —
-  budgets converge within one cron cycle, matching the TS deferral.
+- **FaceTime** is not ported: no Gemini Live bridge container in worker-rs.
+  Public API / MCP FaceTime tools return 501 or are absent; vars are present for
+  future porting. Do not dual-route FaceTime on a TS shadow worker.

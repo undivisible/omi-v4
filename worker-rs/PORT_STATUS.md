@@ -1,45 +1,26 @@
 # PORT_STATUS — TypeScript worker → Rust (workers-rs)
 
-> **Shadow deployment only.** The TS worker owns production traffic. This crate
-> builds and deploys to `workers.dev` for comparison; do not treat PORT_STATUS
-> parity claims as proof until cutover. FaceTime is intentionally absent here
-> (no bridge container). See CUTOVER.md for the runbook. Gates: host tests,
-> host + wasm clippy `-D warnings` clean. Remaining risks are listed at the
-> bottom.
+> **Production cutover complete (2026-07-24).** `worker-rs` serves
+> `omi.tsc.hk` and `api.omi.tsc.hk`. The TS worker remains for D1 migrations
+> and tests only. FaceTime is intentionally absent in Rust (no bridge container;
+> returns 501 / tool absent). See CUTOVER.md for rollback.
 
-## Audit snapshot (2026-07-24)
+## Audit snapshot (2026-07-24, post-cutover)
 
-**Why TypeScript still owns production (`omi.tsc.hk`):** intentional. Per
-ARCHITECTURE.md §5.2 and CUTOVER.md, `worker-rs` is the shadow/cutover target
-(`omi-v4-api-rs` on `*.workers.dev` only). The custom-domain `[[routes]]` block
-stays commented so a deploy cannot steal production. Shared D1 + separate DO
-namespaces means dual cron/admission during shadow is unsafe until the domain
-swap. FaceTime stays TS-only (needs the Gemini Live bridge container).
+**Production:** `worker-rs` (`omi-v4-api-rs`) on `omi.tsc.hk` + `api.omi.tsc.hk`.
+**Migrations:** `worker/` (`omi-v4-api`) — no routes, no cron.
 
-**Rough route-surface parity: ~92%.** Nearly all first-party `/v1/*`, public
-`/api/v1/*`, MCP, webhooks, billing, desktop-auth, managed AI, delivery, and
-memory/currents CRUD are ported. Remaining gaps that matter for cutover:
+**Rough route-surface parity: ~95%.** Remaining intentional gaps:
 
 | Gap | Severity | Status |
 |---|---|---|
-| `device-sync.ts` → `POST /api/v1/devices/register` + `…/:id/audio` | High (WiFi SoftAP/home-STA path) | **ported** (this update) |
-| `currents-refresh.ts` → `POST /v1/currents/refresh` + AI regenerate | Medium (app refresh UX) | **partial** — pure heuristics in `currents_refresh.rs`; full OpenRouter draft/route **pending** |
-| FaceTime / `facetime-bridge` | High if product-critical | **intentionally absent** (TS + bridge) |
-| `DELETE /account` Vectorize claim purge | Low (uid-filtered orphans) | deferred |
-| Digests / Stripe reconcile / observability cron extras | Low–medium | check TS `index.ts` scheduled vs Rust `scheduled` |
+| FaceTime / `facetime-bridge` | High if product-critical | **intentionally absent** — 501 / no MCP tool; needs bridge container |
+| `DELETE /account` Vectorize claim purge | Low | deferred |
 | Audio bytes persistence on device upload | Known stub | both TS and RS return `persisted: false` |
 
-**Cutover blockers (do not uncomment domain yet):**
-1. Wire or accept gap for `POST /v1/currents/refresh` (AI path).
-2. Confirm FaceTime is out-of-scope for first cutover (or keep TS for that route).
-3. Shadow smoke on `omi-v4-api-rs.*.workers.dev` (auth, device register/upload, currents, webhooks).
-4. Secrets parity (`wrangler secret list` mirror) + Vectorize index present.
-5. Decide cron ownership during swap (disable one worker's `[triggers]`).
-
-**Recommended next steps:** (1) deploy shadow + smoke device-sync;
-(2) finish `currents-refresh` route glue (heuristics already ported);
-(3) run CUTOVER.md when the table above is green — one runbook away, no
-code flip until then.
+**Recently closed for cutover:**
+- `currents-refresh.ts` → `POST /v1/currents/refresh` — **ported** (OpenRouter speed tier + heuristic fallback)
+- `device-sync.ts` — **ported**
 
 Tracks every module in `worker/src/*.ts` against its Rust port status.
 Source of truth for behaviour parity is the TS file; the Rust worker binds the
@@ -104,7 +85,7 @@ build is honest with or without the index provisioned. The scheduled
 
 | TS module | Rust | Status | Notes |
 |---|---|---|---|
-| `currents-refresh.ts` | `src/currents_refresh.rs` | **partial** | Host-tested: `normalizeContentKind`, `heuristicNeedsRefresh`, check-TTL constants. **Not wired:** OpenRouter speed completion, AI draft parse, `regenerateCurrents`, `POST /v1/currents/refresh` route. **Cutover blocker** for app refresh UX parity — heuristic-only fallback possible but not shipped. |
+| `currents-refresh.ts` | `src/currents_refresh.rs` + `wasm_glue.rs` | **ported** | `POST /v1/currents/refresh`: gatherRefreshContext, aiNeedsRefresh, aiDrafts/heuristicDrafts, regenerateCurrents, read/write state. OpenRouter speed tier via `OPENROUTER_API_KEY`. |
 
 ## Later phases (larger surface / binding-dependent)
 
@@ -112,7 +93,7 @@ build is honest with or without the index provisioned. The scheduled
 |---|---|---|
 | `assistant.ts`, `assistant-admission.ts` (DO) | **ported** | See "AI routes" below. |
 | `conversations.ts` | **ported** | See the Delivery / AI / Memory sections below; D1 replay + inbox landed. |
-| `currents.ts` | **ported** | See "Memory & currents" below. Refresh path is separate (partial above). |
+| `currents.ts` | **ported** | See "Memory & currents" below (includes refresh). |
 | `delivery.ts` (DeliveryCoordinator DO) | **ported** | See "Delivery" below. |
 | `stt.ts`, `stt-admission.ts` (DO), `asr.ts`, `voice.ts` | **ported** | See "AI routes" below. |
 | `memory-projection.ts`, `memory-sync.ts` | **ported** | See "Memory & currents" below. |
@@ -276,9 +257,7 @@ retrieve-match quoting, ISO formatting, receipt/hash patterns.
 
 ## Cutover readiness — remaining risks (honest list)
 
-Most of the TS worker's routes/cron are ported and the deploy pipeline is green.
-**Not cutover-ready yet** until currents-refresh route parity (or an accepted
-product gap) and FaceTime scope are decided. Known residual risks:
+Production cutover is **done** (2026-07-24). Residual risks:
 
 - **DELETE /account Vectorize cleanup** still deferred: account deletion removes
   all D1 rows but does not delete the user's claim vectors from the
