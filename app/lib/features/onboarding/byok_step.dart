@@ -1,12 +1,9 @@
 import 'package:flutter/material.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../../api/byok_client.dart';
 import '../../native/generated/signals/signals.dart' show AssistantProvider;
-import '../../providers/openai_oauth.dart';
 import '../../providers/provider_credentials.dart';
 import '../../providers/provider_models.dart';
-import '../../providers/xai_oauth.dart';
 import '../../ui/omi_ui.dart';
 
 const _cream = Color(0xfffffcec);
@@ -49,19 +46,10 @@ class OnboardingByokStep extends StatefulWidget {
     required this.client,
     required this.onConnect,
     required this.onFinish,
-    this.xaiOAuth,
-    this.openAiOAuth,
-    this.launch = launchUrl,
     super.key,
   });
 
   final ByokClient? client;
-
-  /// Injected in tests so the sign-in flows can be driven without real network
-  /// or a browser. Null falls back to the real clients.
-  final XaiOAuthClient? xaiOAuth;
-  final OpenAiOAuthClient? openAiOAuth;
-  final Future<bool> Function(Uri, {LaunchMode mode}) launch;
 
   /// Stores the key and points inference at the user's provider. Throwing
   /// keeps the step on the connect phase with the failure shown.
@@ -86,7 +74,6 @@ class _OnboardingByokStepState extends State<OnboardingByokStep> {
   _Phase _phase = _Phase.connect;
   bool _busy = false;
   String? _error;
-  String? _xaiUserCode;
 
   ByokPlan? _plan;
   String? _sessionId;
@@ -152,8 +139,9 @@ class _OnboardingByokStepState extends State<OnboardingByokStep> {
     );
   });
 
-  /// Stores [credential] and advances into the price phase, shared by the
-  /// API-key and OAuth sign-in paths.
+  /// Stores [credential] and advances into the price phase. Onboarding only
+  /// takes an API key; signing in with a ChatGPT or xAI subscription is
+  /// offered later, in Settings.
   Future<void> _afterConnected(ProviderCredential credential) async {
     await widget.onConnect(credential);
     final client = widget.client;
@@ -168,67 +156,6 @@ class _OnboardingByokStepState extends State<OnboardingByokStep> {
       _priceCents = plan.priceCents;
       _phase = plan.settled ? _Phase.settled : _Phase.negotiate;
     });
-  }
-
-  Future<void> _signInWithXai() => _run(() async {
-    final oauth = widget.xaiOAuth ?? XaiOAuthClient();
-    try {
-      final (authorization, pkce) = await oauth.requestDeviceCode();
-      if (!mounted) return;
-      setState(() => _xaiUserCode = authorization.userCode);
-      final target = authorization.verificationUriComplete.isNotEmpty
-          ? authorization.verificationUriComplete
-          : authorization.verificationUri;
-      if (target.isNotEmpty) {
-        await widget.launch(
-          Uri.parse(target),
-          mode: LaunchMode.externalApplication,
-        );
-      }
-      final tokens = await oauth.pollForTokens(authorization, pkce);
-      await _afterConnected(
-        ProviderCredential(
-          provider: AssistantProvider.xai,
-          model: _oauthModelFor(AssistantProvider.xai),
-          credential: tokens.accessToken,
-          refreshToken: tokens.refreshToken,
-          expiresAt: tokens.expiresAt,
-        ),
-      );
-    } finally {
-      if (mounted) setState(() => _xaiUserCode = null);
-    }
-  });
-
-  Future<void> _signInWithOpenAi() => _run(() async {
-    final oauth = widget.openAiOAuth ?? OpenAiOAuthClient();
-    final pending = await oauth.beginSignIn();
-    await widget.launch(
-      pending.authorizeUrl,
-      mode: LaunchMode.externalApplication,
-    );
-    final tokens = await pending.tokens;
-    await _afterConnected(
-      ProviderCredential(
-        provider: AssistantProvider.openAi,
-        model: _oauthModelFor(AssistantProvider.openAi),
-        credential: tokens.accessToken,
-        refreshToken: tokens.refreshToken,
-        expiresAt: tokens.expiresAt,
-        endpoint: openAiCodexBaseUrl,
-      ),
-    );
-  });
-
-  /// The model an OAuth session seeds: whatever the user typed if they changed
-  /// it, otherwise the provider's balanced default (a model both the OAuth and
-  /// API-key surfaces serve).
-  String _oauthModelFor(AssistantProvider provider) {
-    final typed = _model.text.trim();
-    if (typed.isNotEmpty && typed != defaultBalancedModel[_provider]) {
-      return typed;
-    }
-    return defaultBalancedModel[provider] ?? typed;
   }
 
   Future<void> _startNegotiation() => _run(() async {
@@ -401,43 +328,21 @@ class _OnboardingByokStepState extends State<OnboardingByokStep> {
     ),
   );
 
-  /// The "Sign in with…" affordance, shown only for the two providers that
-  /// ship a sanctioned subscription OAuth flow. Every provider keeps the API
-  /// key field below as the always-available path.
-  List<Widget> _oauthAffordance() {
-    final (label, onPressed, key) = switch (_provider) {
-      AssistantProvider.xai => (
-        'Sign in with xAI',
-        _signInWithXai,
-        const Key('byok_signin_xai'),
-      ),
-      AssistantProvider.openAi => (
-        'Sign in with ChatGPT',
-        _signInWithOpenAi,
-        const Key('byok_signin_openai'),
-      ),
-      _ => (null, null, null),
-    };
-    if (label == null) return const [];
+  /// Pointer to the subscription sign-in, which lives in the hub's Settings
+  /// rather than onboarding: xAI and OpenAI users can sign in with the plan
+  /// they already pay for there, while onboarding stays a single key field.
+  List<Widget> _subscriptionHint() {
+    if (_provider != AssistantProvider.xai &&
+        _provider != AssistantProvider.openAi) {
+      return const [];
+    }
     return [
-      const SizedBox(height: 8),
-      _primary(key!, label, onPressed),
-      if (_xaiUserCode != null) ...[
-        const SizedBox(height: 8),
-        Text(
-          'Enter code $_xaiUserCode in your browser to finish.',
-          key: const Key('byok_xai_code'),
-          style: _quiet,
-          textAlign: TextAlign.center,
-        ),
-      ],
       const SizedBox(height: 8),
       Text(
         _provider == AssistantProvider.xai
-            ? 'Uses your SuperGrok or X Premium+ subscription. Or paste an '
-                  'API key below.'
-            : 'Uses your ChatGPT Plus or Pro subscription. Or paste an API '
-                  'key below.',
+            ? 'Have SuperGrok or X Premium+? Sign in with it later in Settings.'
+            : 'Have ChatGPT Plus or Pro? Sign in with it later in Settings.',
+        key: const Key('byok_subscription_hint'),
         style: _quiet,
         textAlign: TextAlign.center,
       ),
@@ -474,7 +379,7 @@ class _OnboardingByokStepState extends State<OnboardingByokStep> {
     ),
     const SizedBox(height: 12),
     _field('Model', _model, key: const Key('byok_model')),
-    ..._oauthAffordance(),
+    ..._subscriptionHint(),
     _field('API key', _secret, obscure: true, key: const Key('byok_key')),
     if (_provider == AssistantProvider.compatible)
       _field('HTTPS endpoint', _endpoint, key: const Key('byok_endpoint')),

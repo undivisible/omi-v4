@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -1192,7 +1191,7 @@ class _OnboardingUseStepState extends State<OnboardingUseStep> {
     mainAxisSize: MainAxisSize.min,
     crossAxisAlignment: CrossAxisAlignment.center,
     children: [
-      _CursorCue(active: !widget.shakeComplete),
+      const _CursorCue(),
       const SizedBox(height: 20),
       RandomizedText(
         segments: widget.shakeComplete
@@ -1243,67 +1242,14 @@ class _OnboardingUseStepState extends State<OnboardingUseStep> {
   );
 }
 
-/// The ↔ nudge that oscillates while the user is asked to shake the cursor,
-/// mirroring the reference `cursor-cue` animation.
-class _CursorCue extends StatefulWidget {
-  const _CursorCue({required this.active});
-
-  final bool active;
+/// The ↔ hint shown while the user is asked to shake the cursor. It used to
+/// oscillate; the motion was distracting, so it is a static glyph now.
+class _CursorCue extends StatelessWidget {
+  const _CursorCue();
 
   @override
-  State<_CursorCue> createState() => _CursorCueState();
-}
-
-class _CursorCueState extends State<_CursorCue>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _controller = AnimationController(
-    vsync: this,
-    duration: const Duration(milliseconds: 700),
-  );
-
-  bool get _animated =>
-      widget.active && !MediaQuery.disableAnimationsOf(context);
-
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    if (_animated) {
-      if (!_controller.isAnimating) _controller.repeat();
-    } else {
-      _controller.stop();
-      _controller.value = 0;
-    }
-  }
-
-  @override
-  void didUpdateWidget(covariant _CursorCue old) {
-    super.didUpdateWidget(old);
-    if (_animated) {
-      if (!_controller.isAnimating) _controller.repeat();
-    } else {
-      _controller.stop();
-      _controller.value = 0;
-    }
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) => AnimatedBuilder(
-    animation: _controller,
-    builder: (context, child) {
-      final dx = math.sin(_controller.value * 2 * math.pi) * 4;
-      return Transform.translate(offset: Offset(dx, 0), child: child);
-    },
-    child: const Text(
-      '↔',
-      style: TextStyle(fontSize: 34, color: Color(0xff96c4ff)),
-    ),
-  );
+  Widget build(BuildContext context) =>
+      const Text('↔', style: TextStyle(fontSize: 34, color: Color(0xff96c4ff)));
 }
 
 class KeycapShimmer extends StatefulWidget {
