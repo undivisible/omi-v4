@@ -211,6 +211,9 @@ final class _AllGrantedCapabilities implements DesktopCapabilityGateway {
 
 final class _ScanHub implements NativeHub {
   @override
+  void rewind({required String requestId, required RewindRequest request}) {}
+
+  @override
   void resolveDevAssistant(String requestId) {}
   final eventsController = StreamController<NativeEvent>.broadcast();
   final scanRequests = <({String requestId, List<String> roots})>[];

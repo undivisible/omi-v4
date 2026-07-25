@@ -22,6 +22,12 @@ pub mod meeting_detector;
 mod model_tier;
 mod personality;
 mod proactive_binds;
+// Rewind is continuous screen history, which only exists on a desktop with a
+// framebuffer to read. Gating the module out keeps its policy, its store and
+// its retention arithmetic from linking into the iOS and Android builds at
+// all, rather than shipping code those platforms can never reach.
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+pub mod rewind;
 mod runtime;
 mod scan;
 mod self_improve;

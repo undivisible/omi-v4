@@ -677,6 +677,9 @@ final class _Adapter implements DeviceRelayAdapter, DeviceRelayHaptics {
 
 final class _Hub implements NativeHub {
   @override
+  void rewind({required String requestId, required RewindRequest request}) {}
+
+  @override
   void resolveDevAssistant(String requestId) {}
   final events0 = StreamController<NativeEvent>.broadcast();
 

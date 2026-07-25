@@ -872,6 +872,9 @@ final class _SentAudio {
 
 final class _RecordingHub implements NativeHub {
   @override
+  void rewind({required String requestId, required RewindRequest request}) {}
+
+  @override
   void resolveDevAssistant(String requestId) {}
   _RecordingHub({
     this.available = true,

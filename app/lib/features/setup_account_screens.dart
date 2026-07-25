@@ -273,7 +273,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
               'disconnect. No client secret ships in the app.',
         ),
       ],
-      SettingsSection.rewind => [RewindSettingsTile(previewMode: previewMode)],
+      SettingsSection.rewind => [
+        RewindSettingsTile(
+          previewMode: previewMode,
+          hub: previewMode ? null : services.nativeHub,
+        ),
+      ],
       SettingsSection.advanced => [
         if (previewMode || !services.canUseApi)
           const _InfoTile(

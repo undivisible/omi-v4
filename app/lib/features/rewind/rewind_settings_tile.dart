@@ -2,11 +2,10 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../../native/native_hub.dart';
 import '../../ui/omi_typography.dart';
-import 'rewind_models.dart';
-import 'rewind_privacy.dart';
-import 'rewind_runtime.dart';
-import 'rewind_service.dart';
+import 'rewind_client.dart';
+import 'rewind_platform.dart';
 import 'rewind_timeline_screen.dart';
 
 /// The warm-paper palette, pinned to the same values the rest of settings
@@ -58,39 +57,50 @@ class RewindColors {
 /// retention bound, the exclusion list, and the delete controls. Every claim
 /// it makes about what is being recorded is read from the live service.
 class RewindSettingsTile extends StatefulWidget {
-  const RewindSettingsTile({this.previewMode = false, this.service, super.key});
+  const RewindSettingsTile({
+    this.previewMode = false,
+    this.client,
+    this.hub,
+    super.key,
+  });
 
   final bool previewMode;
 
   /// Injected in tests; otherwise resolved from [RewindRuntime].
-  final RewindService? service;
+  final RewindClient? client;
+
+  /// The hub the runtime resolves its client over, when one is not injected.
+  final NativeHub? hub;
 
   @override
   State<RewindSettingsTile> createState() => _RewindSettingsTileState();
 }
 
 class _RewindSettingsTileState extends State<RewindSettingsTile> {
-  RewindService? _service;
+  RewindClient? _client;
   final _excludeController = TextEditingController();
 
   @override
   void initState() {
     super.initState();
-    final injected = widget.service;
+    final injected = widget.client;
+    final hub = widget.hub;
     if (injected != null) {
       _attach(injected);
-    } else if (!widget.previewMode && rewindSupported) {
+    } else if (!widget.previewMode && rewindSupported && hub != null) {
       unawaited(
-        RewindRuntime.instance.resolve(captures: false).then((service) {
-          if (mounted) _attach(service);
+        RewindRuntime.instance.resolve(hub: hub, captures: false).then((
+          client,
+        ) {
+          if (mounted) _attach(client);
         }),
       );
     }
   }
 
-  void _attach(RewindService service) {
-    setState(() => _service = service);
-    service.addListener(_onChanged);
+  void _attach(RewindClient client) {
+    setState(() => _client = client);
+    client.addListener(_onChanged);
   }
 
   void _onChanged() {
@@ -99,12 +109,12 @@ class _RewindSettingsTileState extends State<RewindSettingsTile> {
 
   @override
   void dispose() {
-    _service?.removeListener(_onChanged);
+    _client?.removeListener(_onChanged);
     _excludeController.dispose();
     super.dispose();
   }
 
-  Future<void> _confirmDeleteAll(RewindService service) async {
+  Future<void> _confirmDeleteAll(RewindClient client) async {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
@@ -126,28 +136,28 @@ class _RewindSettingsTileState extends State<RewindSettingsTile> {
         ],
       ),
     );
-    if (confirmed ?? false) await service.deleteAll();
+    if (confirmed ?? false) await client.deleteAll();
   }
 
   @override
   Widget build(BuildContext context) {
     final colors = RewindColors.of(context);
-    final service = _service;
-    if (service == null) {
+    final client = _client;
+    final status = client?.status;
+    if (client == null || status == null) {
       return _Row(
         colors: colors,
         icon: Icons.history_toggle_off_rounded,
         title: 'Rewind',
         detail: widget.previewMode || !rewindSupported
             ? 'Continuous screen history is available on macOS only.'
-            : 'Loading…',
+            : client?.unavailableReason ?? 'Loading\u2026',
       );
     }
 
-    final settings = service.settings;
-    final frames = service.frames;
-    final megabytes = service.totalBytes / (1024 * 1024);
-    final oldest = frames.isEmpty ? null : frames.first.capturedAt;
+    final megabytes = status.totalBytes.toInt() / (1024 * 1024);
+    final oldest = status.oldestCaptureAtMs;
+    final options = status.retentionOptions;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -156,29 +166,29 @@ class _RewindSettingsTileState extends State<RewindSettingsTile> {
           colors: colors,
           icon: Icons.history_toggle_off_rounded,
           title: 'Record my screen',
-          detail: settings.enabled
+          detail: status.enabled
               ? 'A red dot sits in the menu bar the whole time Rewind is on. '
                     'Pause it there or here.'
               : 'Off. Rewind captures nothing until you turn this on.',
           trailing: Switch(
             key: const Key('rewind_enabled'),
-            value: settings.enabled,
-            onChanged: (value) => unawaited(service.setEnabled(value)),
+            value: status.enabled,
+            onChanged: (value) => unawaited(client.setEnabled(value)),
           ),
         ),
-        if (settings.enabled) ...[
+        if (status.enabled) ...[
           _Divider(colors: colors),
           _Row(
             colors: colors,
-            icon: settings.paused
+            icon: status.paused
                 ? Icons.play_arrow_rounded
                 : Icons.pause_rounded,
-            title: settings.paused ? 'Paused' : _statusTitle(service),
-            detail: _statusDetail(service),
+            title: status.paused ? 'Paused' : _statusTitle(status),
+            detail: _statusDetail(status),
             trailing: TextButton(
               key: const Key('rewind_pause'),
-              onPressed: () => unawaited(service.setPaused(!settings.paused)),
-              child: Text(settings.paused ? 'Resume' : 'Pause'),
+              onPressed: () => unawaited(client.setPaused(!status.paused)),
+              child: Text(status.paused ? 'Resume' : 'Pause'),
             ),
           ),
           _Divider(colors: colors),
@@ -189,18 +199,25 @@ class _RewindSettingsTileState extends State<RewindSettingsTile> {
             detail:
                 'Oldest frames are deleted first once either bound is hit. '
                 'Deleting means the file is removed, not hidden.',
-            trailing: DropdownButton<RewindRetention>(
+            trailing: DropdownButton<String>(
               key: const Key('rewind_retention'),
-              value: RewindRetention.options.contains(settings.retention)
-                  ? settings.retention
-                  : RewindRetention.options[2],
+              value: _selectedRetention(status),
               underline: const SizedBox.shrink(),
               items: [
-                for (final option in RewindRetention.options)
-                  DropdownMenuItem(value: option, child: Text(option.label)),
+                for (final option in options)
+                  DropdownMenuItem(
+                    value: option.label,
+                    child: Text(option.label),
+                  ),
               ],
-              onChanged: (value) =>
-                  value == null ? null : unawaited(service.setRetention(value)),
+              onChanged: (label) {
+                for (final option in options) {
+                  if (option.label == label) {
+                    unawaited(client.setRetention(option));
+                    return;
+                  }
+                }
+              },
             ),
           ),
           _Divider(colors: colors),
@@ -209,7 +226,7 @@ class _RewindSettingsTileState extends State<RewindSettingsTile> {
             icon: Icons.password_rounded,
             title: 'Never record these apps',
             detail:
-                '${settings.privacy.deniedBundleIds.length} apps excluded, '
+                '${status.deniedBundleIds.length} apps excluded, '
                 'including every password manager Omi knows about. Add a '
                 'bundle id to exclude another.',
             trailing: SizedBox(
@@ -222,7 +239,7 @@ class _RewindSettingsTileState extends State<RewindSettingsTile> {
                   hintText: 'com.example.app',
                 ),
                 onSubmitted: (value) {
-                  unawaited(service.denyBundleId(value));
+                  unawaited(client.denyBundleId(value));
                   _excludeController.clear();
                 },
               ),
@@ -237,12 +254,9 @@ class _RewindSettingsTileState extends State<RewindSettingsTile> {
             detail:
                 'Windows whose title says private, incognito or inPrivate are '
                 'never photographed.',
-            value: settings.privacy.skipPrivateBrowsing,
-            onChanged: (value) => unawaited(
-              service.setPrivacy(
-                settings.privacy.copyWith(skipPrivateBrowsing: value),
-              ),
-            ),
+            value: status.skipPrivateBrowsing,
+            onChanged: (value) =>
+                unawaited(client.setPrivacyFlags(skipPrivateBrowsing: value)),
           ),
           _Divider(colors: colors),
           _Toggle(
@@ -251,14 +265,11 @@ class _RewindSettingsTileState extends State<RewindSettingsTile> {
             icon: Icons.text_fields_rounded,
             title: 'Read text off frames on this device',
             detail:
-                'Apple’s Vision framework transcribes each frame locally '
+                'Apple\u2019s Vision framework transcribes each frame locally '
                 'so the timeline is searchable. Nothing is uploaded.',
-            value: settings.privacy.readOnScreenText,
-            onChanged: (value) => unawaited(
-              service.setPrivacy(
-                settings.privacy.copyWith(readOnScreenText: value),
-              ),
-            ),
+            value: status.readOnScreenText,
+            onChanged: (value) =>
+                unawaited(client.setPrivacyFlags(readOnScreenText: value)),
           ),
           _Divider(colors: colors),
           _Toggle(
@@ -269,12 +280,9 @@ class _RewindSettingsTileState extends State<RewindSettingsTile> {
             detail:
                 'Titles make the timeline readable and are also the most '
                 'revealing part of it. Off keeps app names only.',
-            value: settings.privacy.recordWindowTitles,
-            onChanged: (value) => unawaited(
-              service.setPrivacy(
-                settings.privacy.copyWith(recordWindowTitles: value),
-              ),
-            ),
+            value: status.recordWindowTitles,
+            onChanged: (value) =>
+                unawaited(client.setPrivacyFlags(recordWindowTitles: value)),
           ),
         ],
         _Divider(colors: colors),
@@ -282,15 +290,16 @@ class _RewindSettingsTileState extends State<RewindSettingsTile> {
           colors: colors,
           icon: Icons.sd_storage_outlined,
           title: 'On this Mac',
-          detail: frames.isEmpty
+          detail: oldest == null
               ? 'No frames stored.'
-              : '${frames.length} frames, ${megabytes.toStringAsFixed(1)} MB, '
-                    'oldest ${_ago(oldest!)}. Stored under ~/.omi/rewind.',
+              : '${status.frameCount} frames, '
+                    '${megabytes.toStringAsFixed(1)} MB, '
+                    'oldest ${_ago(oldest)}. Stored under ~/.omi/rewind.',
           trailing: TextButton(
             key: const Key('rewind_open_timeline'),
             onPressed: () => Navigator.of(context).push(
               MaterialPageRoute<void>(
-                builder: (_) => RewindTimelineScreen(service: service),
+                builder: (_) => RewindTimelineScreen(client: client),
               ),
             ),
             child: const Text('Timeline'),
@@ -310,13 +319,13 @@ class _RewindSettingsTileState extends State<RewindSettingsTile> {
               TextButton(
                 key: const Key('rewind_delete_hour'),
                 onPressed: () =>
-                    unawaited(service.deleteLast(const Duration(hours: 1))),
+                    unawaited(client.deleteLast(const Duration(hours: 1))),
                 child: const Text('Last hour'),
               ),
               const SizedBox(width: 4),
               TextButton(
                 key: const Key('rewind_delete_all'),
-                onPressed: () => unawaited(_confirmDeleteAll(service)),
+                onPressed: () => unawaited(_confirmDeleteAll(client)),
                 child: const Text('Everything'),
               ),
             ],
@@ -326,15 +335,29 @@ class _RewindSettingsTileState extends State<RewindSettingsTile> {
     );
   }
 
-  static String _statusTitle(RewindService service) =>
-      service.recording ? 'Recording' : 'Waiting';
+  /// The dropdown is keyed on the label rather than on the option itself: the
+  /// engine restates the option list with every status, and two structurally
+  /// equal options from two different messages are not the same object.
+  static String? _selectedRetention(RewindStatus status) {
+    for (final option in status.retentionOptions) {
+      if (option.maxAgeDays == status.retentionMaxAgeDays &&
+          option.maxBytes == status.retentionMaxBytes) {
+        return option.label;
+      }
+    }
+    return status.retentionOptions.length > 2
+        ? status.retentionOptions[2].label
+        : null;
+  }
 
-  static String _statusDetail(RewindService service) {
-    final reason = service.lastSkipReason;
-    if (service.settings.paused) {
+  static String _statusTitle(RewindStatus status) =>
+      status.recording ? 'Recording' : 'Waiting';
+
+  static String _statusDetail(RewindStatus status) {
+    if (status.paused) {
       return 'No frames are being captured while paused.';
     }
-    return switch (reason) {
+    return switch (status.lastSkipReason) {
       null => 'Capturing on window changes and on a per-app heartbeat.',
       RewindSkipReason.deniedApp =>
         'The app in front is on the exclusion list, so nothing is captured.',
@@ -354,8 +377,10 @@ class _RewindSettingsTileState extends State<RewindSettingsTile> {
     };
   }
 
-  static String _ago(DateTime at) {
-    final delta = DateTime.now().difference(at);
+  static String _ago(int atMs) {
+    final delta = DateTime.now().difference(
+      DateTime.fromMillisecondsSinceEpoch(atMs),
+    );
     if (delta.inDays >= 1) {
       return '${delta.inDays}d ago';
     }

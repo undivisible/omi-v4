@@ -3,9 +3,9 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 
+import '../../native/native_hub.dart';
 import '../../ui/omi_typography.dart';
-import 'rewind_models.dart';
-import 'rewind_service.dart';
+import 'rewind_client.dart';
 import 'rewind_settings_tile.dart' show RewindColors;
 
 /// A deliberately plain timeline: newest first, searchable over the text that
@@ -13,9 +13,9 @@ import 'rewind_settings_tile.dart' show RewindColors;
 /// the privacy controls are the substance of Rewind; this is the window onto
 /// what they produced.
 class RewindTimelineScreen extends StatefulWidget {
-  const RewindTimelineScreen({required this.service, super.key});
+  const RewindTimelineScreen({required this.client, super.key});
 
-  final RewindService service;
+  final RewindClient client;
 
   @override
   State<RewindTimelineScreen> createState() => _RewindTimelineScreenState();
@@ -24,12 +24,15 @@ class RewindTimelineScreen extends StatefulWidget {
 class _RewindTimelineScreenState extends State<RewindTimelineScreen> {
   final _query = TextEditingController();
   String _search = '';
-  RewindFrame? _selected;
+  RewindFrameRecord? _selected;
 
   @override
   void initState() {
     super.initState();
-    widget.service.addListener(_onChanged);
+    widget.client.addListener(_onChanged);
+    // The engine already holds the newest page; asking again keeps the screen
+    // honest if it was opened long after the settings tile last looked.
+    unawaited(widget.client.refreshFrames());
   }
 
   void _onChanged() {
@@ -38,22 +41,17 @@ class _RewindTimelineScreenState extends State<RewindTimelineScreen> {
 
   @override
   void dispose() {
-    widget.service.removeListener(_onChanged);
+    widget.client.removeListener(_onChanged);
     _query.dispose();
     super.dispose();
-  }
-
-  List<RewindFrame> get _visible {
-    if (_search.trim().isEmpty) {
-      return widget.service.frames.reversed.toList(growable: false);
-    }
-    return widget.service.search(_search);
   }
 
   @override
   Widget build(BuildContext context) {
     final colors = RewindColors.of(context);
-    final frames = _visible;
+    // Searching and listing are both answered by the engine, newest first, so
+    // the list is whatever it last sent.
+    final frames = widget.client.frames;
     final selected = _selected;
     return Scaffold(
       backgroundColor: colors.page,
@@ -82,7 +80,10 @@ class _RewindTimelineScreenState extends State<RewindTimelineScreen> {
                 prefixIcon: Icon(Icons.search_rounded, size: 18),
                 hintText: 'Search what was on screen',
               ),
-              onChanged: (value) => setState(() => _search = value),
+              onChanged: (value) {
+                setState(() => _search = value);
+                unawaited(widget.client.search(value));
+              },
             ),
           ),
           Expanded(
@@ -134,9 +135,11 @@ class _RewindTimelineScreenState extends State<RewindTimelineScreen> {
                             : _FrameDetail(
                                 colors: colors,
                                 frame: selected,
-                                file: widget.service.store.fileFor(selected),
+                                file: File(selected.absolutePath),
                                 onDelete: () {
-                                  unawaited(widget.service.delete(selected));
+                                  unawaited(
+                                    widget.client.deleteFrame(selected),
+                                  );
                                   setState(() => _selected = null);
                                 },
                               ),
@@ -159,13 +162,13 @@ class _FrameRow extends StatelessWidget {
   });
 
   final RewindColors colors;
-  final RewindFrame frame;
+  final RewindFrameRecord frame;
   final bool selected;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    final at = frame.capturedAt;
+    final at = DateTime.fromMillisecondsSinceEpoch(frame.capturedAtMs);
     final time =
         '${at.hour.toString().padLeft(2, '0')}:'
         '${at.minute.toString().padLeft(2, '0')}';
@@ -216,7 +219,7 @@ class _FrameDetail extends StatelessWidget {
   });
 
   final RewindColors colors;
-  final RewindFrame frame;
+  final RewindFrameRecord frame;
   final File file;
   final VoidCallback onDelete;
 
@@ -231,7 +234,7 @@ class _FrameDetail extends StatelessWidget {
             Expanded(
               child: Text(
                 '${frame.appName ?? 'Screen'} · '
-                '${frame.capturedAt.toLocal()}',
+                '${DateTime.fromMillisecondsSinceEpoch(frame.capturedAtMs)}',
                 style: TextStyle(
                   fontFamily: OmiFonts.sans,
                   fontSize: 12,

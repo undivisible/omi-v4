@@ -14,7 +14,8 @@ import 'features/mobile_onboarding_screen.dart';
 import 'features/omi_shell.dart';
 import 'features/onboarding_screen.dart';
 import 'features/pill_panel.dart';
-import 'features/rewind/rewind_runtime.dart';
+import 'features/rewind/rewind_client.dart';
+import 'features/rewind/rewind_platform.dart';
 import 'features/setup_account_screens.dart';
 import 'features/web_portal_screen.dart';
 import 'onboarding/hub_checklist.dart';
@@ -57,7 +58,9 @@ Future<void> main() async {
   // settings window is a second engine and gets a non-capturing instance. It
   // starts idle — recording stays off until the user turns it on.
   if (rewindSupported) {
-    unawaited(RewindRuntime.instance.resolve(captures: true));
+    unawaited(
+      RewindRuntime.instance.resolve(hub: services.nativeHub, captures: true),
+    );
   }
   runApp(OmiApp(services: services));
 }

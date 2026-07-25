@@ -174,6 +174,172 @@ pub enum Command {
         live_stream_id: String,
         session_context: String,
     },
+    /// One step of the Rewind capture handshake, or one thing the user asked
+    /// the screen-history engine to do. Answered by exactly one
+    /// [`NativeEvent::Rewind`].
+    Rewind {
+        request: RewindRequest,
+    },
+}
+
+/// The Rewind engine's request surface.
+///
+/// The three capture variants are a strict sequence, and the sequence is the
+/// frame-economy invariant: `Tick` carries only what can be sampled without
+/// reading a pixel, `PreviewTaken` carries 72 bytes of luminance while the
+/// full frame is still held unencoded on the native side, and `FrameEncoded`
+/// is only ever sent in answer to [`RewindDirective::Encode`], which the
+/// engine only issues once the similarity gate has said keep. Each carries the
+/// `step_id` the engine handed out, so a frame can never skip the gate.
+#[derive(Clone, Deserialize, SignalPiece)]
+pub enum RewindRequest {
+    /// Opens (or reopens) the timeline under `root`, which the client resolves
+    /// from the same `~/.omi` convention every other local store uses. The
+    /// hub never invents this path.
+    Open {
+        root: String,
+    },
+    /// A scheduled policy evaluation. Sampled before any pixels are read.
+    Tick {
+        context: RewindWindowContext,
+        idle_ms: i64,
+        locked: bool,
+        permitted: bool,
+    },
+    /// The luminance preview for `step_id`. Empty means the capture failed.
+    PreviewTaken {
+        step_id: u64,
+        luma: Vec<u8>,
+    },
+    /// The encoded frame for `step_id`. Empty bytes mean the held frame was
+    /// gone by the time the encoder ran. This is the only variant that carries
+    /// pixels, and the client may only send it in answer to
+    /// [`RewindDirective::Encode`].
+    FrameEncoded {
+        step_id: u64,
+        jpeg: Vec<u8>,
+        /// Text read off this frame on-device, when recognition was asked for.
+        ocr_text: Option<String>,
+    },
+    SetEnabled {
+        enabled: bool,
+    },
+    SetPaused {
+        paused: bool,
+    },
+    SetRetention {
+        max_age_days: i64,
+        max_bytes: u64,
+    },
+    /// The three privacy switches. The exclusion list is deliberately not
+    /// settable wholesale — it is only ever added to or removed from one id at
+    /// a time, so no single message can wipe the default denials.
+    SetPrivacyFlags {
+        skip_private_browsing: bool,
+        record_window_titles: bool,
+        read_on_screen_text: bool,
+    },
+    DenyBundleId {
+        bundle_id: String,
+    },
+    AllowBundleId {
+        bundle_id: String,
+    },
+    ListFrames {
+        limit: u32,
+    },
+    Search {
+        query: String,
+        limit: u32,
+    },
+    DeleteAll,
+    /// "Forget the last hour": everything captured within `window_ms` of now.
+    DeleteLast {
+        window_ms: i64,
+    },
+    DeleteFrame {
+        relative_path: String,
+    },
+    Status,
+}
+
+/// A window title names documents, tabs and correspondents, so it is the one
+/// field that never reaches a log.
+impl std::fmt::Debug for RewindRequest {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Open { .. } => formatter.write_str("Open"),
+            Self::Tick { context, .. } => formatter
+                .debug_struct("Tick")
+                .field("context", context)
+                .finish(),
+            Self::PreviewTaken { step_id, luma } => formatter
+                .debug_struct("PreviewTaken")
+                .field("step_id", step_id)
+                .field("luma", &luma.len())
+                .finish(),
+            Self::FrameEncoded {
+                step_id,
+                jpeg,
+                ocr_text,
+            } => formatter
+                .debug_struct("FrameEncoded")
+                .field("step_id", step_id)
+                .field("jpeg", &jpeg.len())
+                .field("ocr_text", &ocr_text.as_ref().map(|_| "[redacted]"))
+                .finish(),
+            Self::SetEnabled { enabled } => formatter
+                .debug_struct("SetEnabled")
+                .field("enabled", enabled)
+                .finish(),
+            Self::SetPaused { paused } => formatter
+                .debug_struct("SetPaused")
+                .field("paused", paused)
+                .finish(),
+            Self::SetRetention { .. } => formatter.write_str("SetRetention"),
+            Self::SetPrivacyFlags { .. } => formatter.write_str("SetPrivacyFlags"),
+            Self::DenyBundleId { bundle_id } | Self::AllowBundleId { bundle_id } => formatter
+                .debug_struct("BundleIdRule")
+                .field("bundle_id", bundle_id)
+                .finish(),
+            Self::ListFrames { limit } => formatter
+                .debug_struct("ListFrames")
+                .field("limit", limit)
+                .finish(),
+            Self::Search { .. } => formatter.write_str("Search"),
+            Self::DeleteAll => formatter.write_str("DeleteAll"),
+            Self::DeleteLast { window_ms } => formatter
+                .debug_struct("DeleteLast")
+                .field("window_ms", window_ms)
+                .finish(),
+            Self::DeleteFrame { .. } => formatter.write_str("DeleteFrame"),
+            Self::Status => formatter.write_str("Status"),
+        }
+    }
+}
+
+/// What Omi knows about the screen at the instant the policy is asked whether
+/// to capture. Deliberately tiny: the frontmost app, its bundle id, and the
+/// window title. Nothing here is stored unless a frame is stored.
+#[derive(Clone, Deserialize, SignalPiece)]
+pub struct RewindWindowContext {
+    pub bundle_id: Option<String>,
+    pub app_name: Option<String>,
+    pub window_title: Option<String>,
+}
+
+impl std::fmt::Debug for RewindWindowContext {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("RewindWindowContext")
+            .field("bundle_id", &self.bundle_id)
+            .field("app_name", &self.app_name)
+            .field(
+                "window_title",
+                &self.window_title.as_ref().map(|_| "[redacted]"),
+            )
+            .finish()
+    }
 }
 
 /// One current, flattened to the few facts the brief may state. Mirrors
@@ -379,6 +545,7 @@ pub enum NativeEvent {
     CallState(CallState),
     DevAssistantResolved(DevAssistant),
     AudioGateStats(AudioGateStats),
+    Rewind(RewindUpdate),
 }
 
 /// What the voice-activity gate kept off the metered transcription socket for
@@ -398,6 +565,136 @@ pub struct AudioGateStats {
     pub suppressed_bytes: u64,
     pub forwarded_ms: u64,
     pub suppressed_ms: u64,
+}
+
+/// The answer to exactly one [`RewindRequest`].
+#[derive(Debug, Serialize, SignalPiece)]
+pub struct RewindUpdate {
+    pub request_id: String,
+    pub payload: RewindPayload,
+}
+
+#[derive(Debug, Serialize, SignalPiece)]
+pub enum RewindPayload {
+    /// The one thing the client may do next for `step_id`.
+    Directive {
+        step_id: u64,
+        directive: RewindDirective,
+    },
+    /// The engine's published state, after whatever the request changed.
+    Status(RewindStatus),
+    /// The answer to a listing or a search, newest first.
+    Frames { frames: Vec<RewindFrameRecord> },
+    /// Rewind is not built into this platform's hub, or the timeline has not
+    /// been opened yet. Never an error: the client simply has nothing to show.
+    Unavailable { detail: String },
+}
+
+/// The single instruction the capture surface is allowed to carry out.
+///
+/// `Preview` is the only one that reads pixels, and it is never issued for a
+/// screen the privacy rules refused. `Encode` is never issued for a frame the
+/// similarity gate rejected. Between them, no frame is ever encoded and then
+/// thrown away.
+#[derive(Debug, Serialize, SignalPiece)]
+pub enum RewindDirective {
+    /// Capture a preview and hold the frame natively.
+    Preview,
+    /// Nothing is held; do nothing.
+    Idle { reason: RewindSkipReason },
+    /// Encode the held frame, recognizing text in the same pass when asked.
+    Encode { recognize_text: bool },
+    /// Drop the held frame without encoding it.
+    Discard { reason: RewindSkipReason },
+    /// The frame is on disk.
+    Stored,
+}
+
+/// Why a frame was not taken. Carried into the UI so a user who wonders "is it
+/// recording right now?" gets a truthful answer instead of a spinner.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, SignalPiece)]
+pub enum RewindSkipReason {
+    DeniedApp,
+    PrivateWindow,
+    ScreenLocked,
+    Paused,
+    Idle,
+    Heartbeat,
+    MinimumInterval,
+    Busy,
+    Unchanged,
+    NoPermission,
+}
+
+#[derive(Debug, Serialize, SignalPiece)]
+pub struct RewindStatus {
+    pub enabled: bool,
+    pub paused: bool,
+    /// True only when a frame could actually be taken right now: enabled, not
+    /// paused, permission granted, screen unlocked.
+    pub recording: bool,
+    pub retention_max_age_days: i64,
+    pub retention_max_bytes: u64,
+    /// The bounds the settings dropdown offers, already labelled. Which bounds
+    /// a user may pick is a policy decision about how much screen history
+    /// exists at all, so the list is the engine's to state.
+    pub retention_options: Vec<RewindRetentionOption>,
+    pub denied_bundle_ids: Vec<String>,
+    pub skip_private_browsing: bool,
+    pub record_window_titles: bool,
+    pub read_on_screen_text: bool,
+    pub last_skip_reason: Option<RewindSkipReason>,
+    pub last_capture_at_ms: Option<i64>,
+    pub captured_this_session: u64,
+    pub frame_count: u64,
+    pub total_bytes: u64,
+    pub oldest_capture_at_ms: Option<i64>,
+    pub permitted: bool,
+    pub locked: bool,
+}
+
+#[derive(Debug, Serialize, SignalPiece)]
+pub struct RewindRetentionOption {
+    pub max_age_days: i64,
+    pub max_bytes: u64,
+    pub label: String,
+}
+
+/// One stored screenshot, as the timeline renders it.
+#[derive(Serialize, SignalPiece)]
+pub struct RewindFrameRecord {
+    pub captured_at_ms: i64,
+    pub relative_path: String,
+    /// The absolute path on this machine, so the timeline can draw the image
+    /// without re-deriving the store's layout.
+    pub absolute_path: String,
+    pub bytes: u64,
+    pub hash: String,
+    pub app_name: Option<String>,
+    pub bundle_id: Option<String>,
+    pub window_title: Option<String>,
+    pub ocr_text: Option<String>,
+}
+
+/// A frame row is a description of what was on someone's screen, so the two
+/// fields that quote it are never printed.
+impl std::fmt::Debug for RewindFrameRecord {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("RewindFrameRecord")
+            .field("captured_at_ms", &self.captured_at_ms)
+            .field("relative_path", &self.relative_path)
+            .field("bytes", &self.bytes)
+            .field("hash", &self.hash)
+            .field("app_name", &self.app_name)
+            .field("bundle_id", &self.bundle_id)
+            .field(
+                "window_title",
+                &self.window_title.as_ref().map(|_| "[redacted]"),
+            )
+            .field("ocr_text", &self.ocr_text.as_ref().map(|_| "[redacted]"))
+            .finish()
+    }
 }
 
 /// The answer to a [`Command::ResolveDevAssistant`]. `credential` is the
