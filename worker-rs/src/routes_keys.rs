@@ -449,18 +449,23 @@ async fn handle_negotiation_start(req: Request, ctx: RouteContext<()>) -> Result
     let id = uuid_v4();
     let opening = byok::opening_entry(&band);
     let db = ctx.env.d1("DB")?;
-    d1_run(
-        &db,
-        "INSERT INTO byok_negotiation_sessions\n       (id, uid, status, turns, standard_price_cents, floor_price_cents, price_cents,\n        grants, transcript, created_at, updated_at)\n     VALUES (?1, ?2, 'open', 0, ?3, ?4, ?3, '[]', ?5, ?6, ?6)",
-        &[
+    db.batch(vec![
+        db.prepare(
+            "UPDATE byok_negotiation_sessions SET status = 'closed', updated_at = ?1 WHERE uid = ?2 AND status = 'open'",
+        )
+        .bind(&[n(now), s(&auth.uid)])?,
+        db.prepare(
+            "INSERT INTO byok_negotiation_sessions\n       (id, uid, status, turns, standard_price_cents, floor_price_cents, price_cents,\n        grants, transcript, created_at, updated_at)\n     VALUES (?1, ?2, 'open', 0, ?3, ?4, ?3, '[]', ?5, ?6, ?6)",
+        )
+        .bind(&[
             s(&id),
             s(&auth.uid),
             n(band.standard_cents),
             n(band.floor_cents),
             s(&Value::Array(vec![opening.to_value()]).to_string()),
             n(now),
-        ],
-    )
+        ])?,
+    ])
     .await?;
     json_status(
         &json!({
@@ -480,6 +485,7 @@ struct SessionRow {
     turns: i64,
     grants: Value,
     transcript: Value,
+    created_at: i64,
 }
 
 /// A session is only ever loaded scoped to the calling uid, so another user's
@@ -488,7 +494,7 @@ async fn load_session(ctx: &RouteContext<()>, uid: &str, id: &str) -> Result<Opt
     let db = ctx.env.d1("DB")?;
     let row = d1_first(
         &db,
-        "SELECT id, uid, status, turns, grants, transcript FROM byok_negotiation_sessions WHERE id = ?1 AND uid = ?2",
+        "SELECT id, uid, status, turns, grants, transcript, created_at FROM byok_negotiation_sessions WHERE id = ?1 AND uid = ?2",
         &[s(id), s(uid)],
     )
     .await?;
@@ -498,6 +504,7 @@ async fn load_session(ctx: &RouteContext<()>, uid: &str, id: &str) -> Result<Opt
         turns: row.get("turns").and_then(json_to_i64).unwrap_or(0),
         grants: row.get("grants").cloned().unwrap_or(Value::Null),
         transcript: row.get("transcript").cloned().unwrap_or(Value::Null),
+        created_at: row.get("created_at").and_then(json_to_i64).unwrap_or(0),
     }))
 }
 
@@ -660,10 +667,34 @@ async fn handle_negotiation_accept(req: Request, ctx: RouteContext<()>) -> Resul
     if session.status != "open" {
         return error_json("Negotiation closed", 409);
     }
+    let db = ctx.env.d1("DB")?;
+    let settled = d1_first(
+        &db,
+        "SELECT session_id, agreed_at FROM byok_price_agreements WHERE uid = ?1",
+        &[s(&auth.uid)],
+    )
+    .await?;
+    if settled.as_ref().is_some_and(|row| {
+        byok::accept_is_superseded(
+            &session.id,
+            session.created_at,
+            row.get("session_id").and_then(Value::as_str),
+            row.get("agreed_at").and_then(json_to_i64).unwrap_or(0),
+        )
+    }) {
+        let agreement = agreed_price(&ctx, &band, &auth.uid).await?;
+        let mut body = byok::plan_payload(&band, agreement.as_ref(), now);
+        let mut merged = json!({ "error": "Price already agreed" });
+        if let (Some(target), Some(source)) = (merged.as_object_mut(), body.as_object_mut()) {
+            for (key, value) in source.iter() {
+                target.insert(key.clone(), value.clone());
+            }
+        }
+        return json_status(&merged, 409);
+    }
     let grants =
         byok_pricing::normalize_grants(&band, &byok::parse_json_array(Some(&session.grants)));
     let price_cents = byok_pricing::price_for_grants(&band, &grants);
-    let db = ctx.env.d1("DB")?;
     d1_run(
         &db,
         "UPDATE byok_negotiation_sessions SET status = 'agreed', price_cents = ?1, updated_at = ?2 WHERE id = ?3 AND uid = ?4",

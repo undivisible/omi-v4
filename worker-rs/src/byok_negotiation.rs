@@ -271,6 +271,15 @@ pub fn validate_message(body: Option<&Value>) -> Option<String> {
         .then(|| message.to_string())
 }
 
+pub fn accept_is_superseded(
+    session_id: &str,
+    created_at: i64,
+    agreement_session_id: Option<&str>,
+    agreed_at: i64,
+) -> bool {
+    agreement_session_id.unwrap_or_default() != session_id && agreed_at >= created_at
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -311,6 +320,14 @@ mod tests {
             1_200
         );
         assert_eq!(clamp_agreement(&band, 900, "weird", 0).outcome, "standard");
+    }
+
+    #[test]
+    fn a_later_agreement_blocks_a_superseded_session() {
+        assert!(accept_is_superseded("open", 10, Some("newer"), 10));
+        assert!(accept_is_superseded("open", 10, None, 11));
+        assert!(!accept_is_superseded("open", 10, Some("open"), 11));
+        assert!(!accept_is_superseded("open", 10, Some("newer"), 9));
     }
 
     #[test]

@@ -548,6 +548,24 @@ pub fn usage_from(text: &str) -> (Option<i64>, Option<i64>) {
     (input_tokens, output_tokens)
 }
 
+#[derive(Default)]
+pub struct UsageTail {
+    bytes: Vec<u8>,
+}
+
+impl UsageTail {
+    pub fn push(&mut self, chunk: &[u8]) {
+        self.bytes.extend_from_slice(chunk);
+        if self.bytes.len() > 16_384 {
+            self.bytes.drain(..self.bytes.len() - 16_384);
+        }
+    }
+
+    pub fn usage(&self) -> (Option<i64>, Option<i64>) {
+        usage_from(&String::from_utf8_lossy(&self.bytes))
+    }
+}
+
 /// Port of the non-streaming inbox completion's response parse: the trimmed
 /// first-choice content plus bounded usage.
 pub fn parse_completion(value: &Value) -> (Option<String>, Option<i64>, Option<i64>) {
@@ -780,6 +798,15 @@ mod tests {
         // 64 + 16 + 4 + 21 = 105.
         assert_eq!(est_input, 105);
         assert_eq!(cost_for(est_input, 256, 1_000_000, 1_000_000), 361);
+    }
+
+    #[test]
+    fn usage_tail_keeps_split_usage_at_the_end_of_a_long_stream() {
+        let mut tail = UsageTail::default();
+        tail.push(&vec![b'x'; 16_000]);
+        tail.push(b"\ndata: {\"usage\":{\"prompt_tokens\":7,");
+        tail.push(b"\"completion_tokens\":2}}\n");
+        assert_eq!(tail.usage(), (Some(7), Some(2)));
     }
 
     #[test]

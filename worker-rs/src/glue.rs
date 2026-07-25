@@ -14,11 +14,14 @@ use crate::auth::{self, Auth, FirebaseJwks};
 use crate::channel_commands as cmd;
 use crate::delivery::Channel;
 use crate::entitlement::{self, DevFakePro, EntitlementRow};
+use crate::observability::sentry_envelope;
 use crate::settings;
 use crate::setup_health::{setup_health_body, SetupHealthInputs};
 use crate::worker_util::now_ms_f64 as now_ms;
 use crate::worker_util::{changes, secret_or_var, uuid_v4};
-use crate::{billing, channel_checkout, conversations as conv, crypto_util, desktop_auth, webhooks as wh};
+use crate::{
+    billing, channel_checkout, conversations as conv, crypto_util, desktop_auth, webhooks as wh,
+};
 
 const JWKS_URL: &str =
     "https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com";
@@ -45,7 +48,7 @@ fn start() {
 // TS `waitUntil` deferral is awaited inline here; each slice fails independently
 // (errors ignored, matching the TS `.catch(() => undefined)` on each branch).
 #[event(scheduled)]
-async fn scheduled(_event: worker::ScheduledEvent, env: Env, _ctx: worker::ScheduleContext) {
+async fn scheduled(_event: worker::ScheduledEvent, env: Env, ctx: worker::ScheduleContext) {
     // --- Digests → Currents → Delivery group ---
     // Digests are generated before deliveries drain, so a digest that enters the
     // queue this tick can be picked up in the same batch. The TS expresses this
@@ -63,9 +66,11 @@ async fn scheduled(_event: worker::ScheduledEvent, env: Env, _ctx: worker::Sched
     // The one branch the TS does not wrap in `.catch(() => undefined)`, so it is
     // the only one whose failure rejects the batch and suppresses the heartbeat
     // below. Preserved as-is: that asymmetry is what the monitor is watching.
-    let batch_resolved = crate::routes_ai::reconcile_managed_assistant_requests(&env)
-        .await
-        .is_ok();
+    let batch = crate::routes_ai::reconcile_managed_assistant_requests(&env).await;
+    let batch_resolved = batch.is_ok();
+    if let Err(error) = batch {
+        ctx.wait_until(capture_exception(env.clone(), error.to_string()));
+    }
     // --- Stripe: reconcile subscriptions a webhook never arrived for ---
     // A Stripe webhook that never arrives would otherwise leave a paying
     // customer with nothing, silently and permanently. This re-reads a bounded
@@ -104,8 +109,37 @@ async fn ping_heartbeat(env: &Env) {
     let _ = Fetch::Request(request).send().await;
 }
 
+async fn capture_exception(env: Env, error: String) {
+    let Some(dsn) =
+        secret_or_var(&env, "BETTERSTACK_SENTRY_DSN").or_else(|| secret_or_var(&env, "SENTRY_DSN"))
+    else {
+        return;
+    };
+    let environment = secret_or_var(&env, "ENVIRONMENT").unwrap_or_else(|| "development".into());
+    let release = secret_or_var(&env, "SENTRY_RELEASE");
+    let Some(envelope) = sentry_envelope(&dsn, &environment, release.as_deref(), &error) else {
+        return;
+    };
+    let mut init = worker::RequestInit::new();
+    init.with_method(worker::Method::Post);
+    let headers = worker::Headers::new();
+    if headers
+        .set("content-type", "application/x-sentry-envelope")
+        .is_err()
+    {
+        return;
+    }
+    init.with_headers(headers);
+    init.with_body(Some(JsValue::from_str(&envelope.body)));
+    let Ok(request) = Request::new_with_init(&envelope.endpoint, &init) else {
+        return;
+    };
+    let _ = Fetch::Request(request).send().await;
+}
+
 #[event(fetch)]
-async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
+async fn fetch(req: Request, env: Env, ctx: Context) -> Result<Response> {
+    let report_env = env.clone();
     let router = Router::new()
         .get("/health", |_req, _ctx| {
             Response::from_json(&json!({ "service": "omi-v4-api", "status": "ok" }))
@@ -166,10 +200,14 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
     // Pendant home-STA self-sync: register (Firebase) + upload (device token).
     // Mounted beside publicApi so device-token auth is not forced through API keys.
     let router = crate::routes_device::register(router);
-    router
+    let response = router
         .or_else_any_method("/*catchall", |_req, _ctx| error_json("Not found", 404))
         .run(req, env)
-        .await
+        .await;
+    if let Err(error) = &response {
+        ctx.wait_until(capture_exception(report_env, error.to_string()));
+    }
+    response
 }
 
 pub(crate) fn error_json(message: &str, status: u16) -> Result<Response> {
