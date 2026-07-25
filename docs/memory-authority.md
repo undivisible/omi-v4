@@ -109,7 +109,7 @@ local STT path in `stt.rs` is a deliberate fail-closed
 
 | Capability | Offline behaviour |
 | --- | --- |
-| Audio capture | Works. Buffered by the write-ahead log (`app/lib/device/capture_wal.dart`), which already uploads idempotently on reconnect. |
+| Audio capture | Works. Buffered by the write-ahead log (`app/native/hub/src/capture_wal.rs`), which already uploads idempotently on reconnect. |
 | Transcription | Does **not** work offline. Audio waits in the WAL; segments are produced when the device reconnects. |
 | Text capture (notes, corrections, scans) | Works. Written to local zkr, queued as pending log appends. |
 | Recall | Works, from the local mirror of the authoritative log, at the last synced sequence. Stale, never wrong: the mirror only ever contains records the cloud already accepted. |

@@ -3077,7 +3077,7 @@ final class _FakeAuthGateway implements AuthGateway {
   }) async => _session!;
 }
 
-final class _FakeHub implements NativeHub {
+final class _FakeHub with NativeHubWithoutCapture implements NativeHub {
   @override
   void resolveDevAssistant(String requestId) {}
   final eventsController = StreamController<NativeEvent>.broadcast();

@@ -675,7 +675,7 @@ final class _Adapter implements DeviceRelayAdapter, DeviceRelayHaptics {
   Stream<bool> connectionState(String deviceId) => _connections.stream;
 }
 
-final class _Hub implements NativeHub {
+final class _Hub with NativeHubWithoutCapture implements NativeHub {
   @override
   void resolveDevAssistant(String requestId) {}
   final events0 = StreamController<NativeEvent>.broadcast();

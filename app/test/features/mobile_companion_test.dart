@@ -2303,7 +2303,7 @@ final class _RecordingCaptureNotifier implements CaptureNotifier {
   Future<void> captureStopped() async => stopped += 1;
 }
 
-final class _Hub implements NativeHub {
+final class _Hub with NativeHubWithoutCapture implements NativeHub {
   @override
   void resolveDevAssistant(String requestId) {}
   final events0 = StreamController<NativeEvent>.broadcast();

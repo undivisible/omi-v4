@@ -17,7 +17,7 @@ import 'demo_seed.dart';
 /// computer-use approvals and the workspace scan all throw
 /// [NativeHubUnavailable] exactly as [UnavailableNativeHub] does on the web
 /// target, so those surfaces show their real unavailable state.
-final class DemoNativeHub implements NativeHub {
+final class DemoNativeHub with NativeHubWithoutCapture implements NativeHub {
   DemoNativeHub();
 
   static const _reason =

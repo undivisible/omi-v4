@@ -5,9 +5,8 @@ import 'package:flutter/foundation.dart';
 
 import '../native/generated/signals/signals.dart' show NativeError;
 import '../native/native_hub.dart';
-import 'capture_gap_log.dart';
-import 'capture_wal.dart';
 import 'device_audio_frame.dart';
+import 'hub_capture.dart';
 import 'device_models.dart';
 import 'device_relay.dart';
 
@@ -89,8 +88,7 @@ final class DeviceAudioForwarder {
     this.startTimeout = const Duration(seconds: 5),
     this.stopTimeout = const Duration(seconds: 5),
     this.reconnectGrace = const Duration(seconds: 20),
-    this.wal,
-    this.gapRecorder,
+    this.capture,
     this.autoRestart = false,
     this.restartDelay = const Duration(seconds: 2),
     this.maxConsecutiveRestarts = 5,
@@ -109,13 +107,12 @@ final class DeviceAudioForwarder {
   final Duration stopTimeout;
   final Duration reconnectGrace;
 
-  /// Every frame handed to the hub is written here first, so a dropped socket,
-  /// a dropped packet or a killed process leaves the audio on disk instead of
-  /// losing it. Null disables durability entirely (tests, desktop observers).
-  CaptureWal? wal;
-
-  /// Where a discontinuity is recorded before capture restarts across it.
-  CaptureGapRecorder? gapRecorder;
+  /// Every frame handed to the hub is written to the hub's write-ahead log
+  /// first, so a dropped socket, a dropped packet or a killed process leaves
+  /// the audio on disk instead of losing it. The same seam records the
+  /// discontinuity before capture restarts across it. Null disables durability
+  /// entirely (tests, desktop observers).
+  HubCapture? capture;
 
   /// Whether a session that failed for a transient reason is restarted.
   ///
@@ -142,7 +139,7 @@ final class DeviceAudioForwarder {
   /// The most recent recorded discontinuity, for anything that renders capture
   /// health. A gap the user cannot see is a gap they will read as continuous
   /// audio.
-  final lastGapRecord = ValueNotifier<CaptureGapRecord?>(null);
+  final lastGapRecord = ValueNotifier<CaptureGap?>(null);
 
   RelayDevice? _restartDevice;
   TranscriptionAuth? _restartAuth;
@@ -222,10 +219,10 @@ final class DeviceAudioForwarder {
     session.started = true;
     final gapBefore = _gapBeforeNextSegment;
     _gapBeforeNextSegment = false;
-    await wal?.beginSegment(
+    await capture?.beginSegment(
       deviceId: session.deviceId,
       audioStreamId: session.requestId,
-      encoding: session.encoding.name,
+      encoding: session.encoding,
       sampleRateHz: session.sampleRateHz,
       channels: 1,
       gapBefore: gapBefore,
@@ -233,7 +230,7 @@ final class DeviceAudioForwarder {
     if (gapBefore) {
       // The resume side of the recorded gap. It names the NEW stream id, which
       // is what makes it impossible to read the two sides as one recording.
-      await gapRecorder?.recordResume(
+      await capture?.recordResume(
         deviceId: session.deviceId,
         at: _now(),
         streamId: session.requestId,
@@ -428,7 +425,7 @@ final class DeviceAudioForwarder {
       // Disk first. If the hub throws, the socket dies or the process is
       // killed on the next line, the audio is already durable.
       try {
-        await wal?.append(bytes);
+        await capture?.append(bytes);
       } catch (error) {
         lastError = error;
       }
@@ -515,7 +512,7 @@ final class DeviceAudioForwarder {
     // Sealing makes whatever this session captured uploadable. A segment left
     // open would be skipped by the uploader forever.
     try {
-      await wal?.seal();
+      await capture?.seal();
     } catch (error) {
       lastError = error;
     }
@@ -538,13 +535,19 @@ final class DeviceAudioForwarder {
       final DeviceAudioGap gap => gap.reason.name,
       _ => 'sessionFailed',
     };
-    final record = CaptureGapRecord(
+    final endedAt = _now();
+    final record = CaptureGap(
       deviceId: session.deviceId,
       reason: reason,
-      endedAt: _now(),
+      endedAtMs: endedAt.toUtc().millisecondsSinceEpoch,
       endedStreamId: session.requestId,
     );
-    await gapRecorder?.record(record);
+    await capture?.recordGap(
+      deviceId: session.deviceId,
+      reason: reason,
+      endedAt: endedAt,
+      endedStreamId: session.requestId,
+    );
     lastGapRecord.value = record;
     // Only a packet-level gap on a still-connected link is transient enough to
     // restart from here. A dropped link is already handled by the reconnect

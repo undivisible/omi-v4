@@ -67,6 +67,28 @@ abstract class Command {
         return CommandResolveDevAssistant.load(deserializer);
       case 28:
         return CommandUpdateLiveVoiceContext.load(deserializer);
+      case 29:
+        return CommandOpenCaptureWal.load(deserializer);
+      case 30:
+        return CommandConfigureCaptureUpload.load(deserializer);
+      case 31:
+        return CommandBeginCaptureSegment.load(deserializer);
+      case 32:
+        return CommandAppendCaptureAudio.load(deserializer);
+      case 33:
+        return CommandSealCaptureSegment.load(deserializer);
+      case 34:
+        return CommandDrainCaptureWal.load(deserializer);
+      case 35:
+        return CommandReadCaptureWalState.load(deserializer);
+      case 36:
+        return CommandCloseCaptureWal.load(deserializer);
+      case 37:
+        return CommandRecordCaptureGap.load(deserializer);
+      case 38:
+        return CommandRecordCaptureResume.load(deserializer);
+      case 39:
+        return CommandReadCaptureGaps.load(deserializer);
       default:
         throw Exception(
           'Unknown variant index for Command: ' + index.toString(),
@@ -2180,5 +2202,695 @@ class CommandUpdateLiveVoiceContext extends Command {
     }());
 
     return fullString ?? 'CommandUpdateLiveVoiceContext';
+  }
+}
+
+@immutable
+class CommandOpenCaptureWal extends Command {
+  const CommandOpenCaptureWal({
+    required this.directory,
+    this.maxBytes,
+    this.maxAgeMs,
+    this.maxSegmentBytes,
+  }) : super();
+
+  static CommandOpenCaptureWal load(BinaryDeserializer deserializer) {
+    deserializer.increaseContainerDepth();
+    final instance = CommandOpenCaptureWal(
+      directory: deserializer.deserializeString(),
+      maxBytes: TraitHelpers.deserializeOptionU64(deserializer),
+      maxAgeMs: TraitHelpers.deserializeOptionI64(deserializer),
+      maxSegmentBytes: TraitHelpers.deserializeOptionU64(deserializer),
+    );
+    deserializer.decreaseContainerDepth();
+    return instance;
+  }
+
+  final String directory;
+  final Uint64? maxBytes;
+  final int? maxAgeMs;
+  final Uint64? maxSegmentBytes;
+
+  CommandOpenCaptureWal copyWith({
+    String? directory,
+    Uint64? Function()? maxBytes,
+    int? Function()? maxAgeMs,
+    Uint64? Function()? maxSegmentBytes,
+  }) {
+    return CommandOpenCaptureWal(
+      directory: directory ?? this.directory,
+      maxBytes: maxBytes == null ? this.maxBytes : maxBytes(),
+      maxAgeMs: maxAgeMs == null ? this.maxAgeMs : maxAgeMs(),
+      maxSegmentBytes: maxSegmentBytes == null
+          ? this.maxSegmentBytes
+          : maxSegmentBytes(),
+    );
+  }
+
+  void serialize(BinarySerializer serializer) {
+    serializer.increaseContainerDepth();
+    serializer.serializeVariantIndex(29);
+    serializer.serializeString(directory);
+    TraitHelpers.serializeOptionU64(maxBytes, serializer);
+    TraitHelpers.serializeOptionI64(maxAgeMs, serializer);
+    TraitHelpers.serializeOptionU64(maxSegmentBytes, serializer);
+    serializer.decreaseContainerDepth();
+  }
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    if (other.runtimeType != runtimeType) return false;
+
+    return other is CommandOpenCaptureWal &&
+        directory == other.directory &&
+        maxBytes == other.maxBytes &&
+        maxAgeMs == other.maxAgeMs &&
+        maxSegmentBytes == other.maxSegmentBytes;
+  }
+
+  @override
+  int get hashCode =>
+      Object.hash(directory, maxBytes, maxAgeMs, maxSegmentBytes);
+
+  @override
+  String toString() {
+    String? fullString;
+
+    assert(() {
+      fullString =
+          '$runtimeType('
+          'directory: $directory, '
+          'maxBytes: $maxBytes, '
+          'maxAgeMs: $maxAgeMs, '
+          'maxSegmentBytes: $maxSegmentBytes'
+          ')';
+      return true;
+    }());
+
+    return fullString ?? 'CommandOpenCaptureWal';
+  }
+}
+
+@immutable
+class CommandConfigureCaptureUpload extends Command {
+  const CommandConfigureCaptureUpload({this.endpoint, this.firebaseToken})
+    : super();
+
+  static CommandConfigureCaptureUpload load(BinaryDeserializer deserializer) {
+    deserializer.increaseContainerDepth();
+    final instance = CommandConfigureCaptureUpload(
+      endpoint: TraitHelpers.deserializeOptionStr(deserializer),
+      firebaseToken: TraitHelpers.deserializeOptionStr(deserializer),
+    );
+    deserializer.decreaseContainerDepth();
+    return instance;
+  }
+
+  final String? endpoint;
+  final String? firebaseToken;
+
+  CommandConfigureCaptureUpload copyWith({
+    String? Function()? endpoint,
+    String? Function()? firebaseToken,
+  }) {
+    return CommandConfigureCaptureUpload(
+      endpoint: endpoint == null ? this.endpoint : endpoint(),
+      firebaseToken: firebaseToken == null
+          ? this.firebaseToken
+          : firebaseToken(),
+    );
+  }
+
+  void serialize(BinarySerializer serializer) {
+    serializer.increaseContainerDepth();
+    serializer.serializeVariantIndex(30);
+    TraitHelpers.serializeOptionStr(endpoint, serializer);
+    TraitHelpers.serializeOptionStr(firebaseToken, serializer);
+    serializer.decreaseContainerDepth();
+  }
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    if (other.runtimeType != runtimeType) return false;
+
+    return other is CommandConfigureCaptureUpload &&
+        endpoint == other.endpoint &&
+        firebaseToken == other.firebaseToken;
+  }
+
+  @override
+  int get hashCode => Object.hash(endpoint, firebaseToken);
+
+  @override
+  String toString() {
+    String? fullString;
+
+    assert(() {
+      fullString =
+          '$runtimeType('
+          'endpoint: $endpoint, '
+          'firebaseToken: [REDACTED]'
+          ')';
+      return true;
+    }());
+
+    return fullString ?? 'CommandConfigureCaptureUpload';
+  }
+}
+
+@immutable
+class CommandBeginCaptureSegment extends Command {
+  const CommandBeginCaptureSegment({
+    required this.deviceId,
+    required this.audioStreamId,
+    required this.encoding,
+    required this.sampleRateHz,
+    required this.channels,
+    required this.gapBefore,
+  }) : super();
+
+  static CommandBeginCaptureSegment load(BinaryDeserializer deserializer) {
+    deserializer.increaseContainerDepth();
+    final instance = CommandBeginCaptureSegment(
+      deviceId: deserializer.deserializeString(),
+      audioStreamId: deserializer.deserializeString(),
+      encoding: AudioEncodingExtension.deserialize(deserializer),
+      sampleRateHz: deserializer.deserializeUint32(),
+      channels: deserializer.deserializeUint8(),
+      gapBefore: deserializer.deserializeBool(),
+    );
+    deserializer.decreaseContainerDepth();
+    return instance;
+  }
+
+  final String deviceId;
+  final String audioStreamId;
+  final AudioEncoding encoding;
+  final int sampleRateHz;
+  final int channels;
+  final bool gapBefore;
+
+  CommandBeginCaptureSegment copyWith({
+    String? deviceId,
+    String? audioStreamId,
+    AudioEncoding? encoding,
+    int? sampleRateHz,
+    int? channels,
+    bool? gapBefore,
+  }) {
+    return CommandBeginCaptureSegment(
+      deviceId: deviceId ?? this.deviceId,
+      audioStreamId: audioStreamId ?? this.audioStreamId,
+      encoding: encoding ?? this.encoding,
+      sampleRateHz: sampleRateHz ?? this.sampleRateHz,
+      channels: channels ?? this.channels,
+      gapBefore: gapBefore ?? this.gapBefore,
+    );
+  }
+
+  void serialize(BinarySerializer serializer) {
+    serializer.increaseContainerDepth();
+    serializer.serializeVariantIndex(31);
+    serializer.serializeString(deviceId);
+    serializer.serializeString(audioStreamId);
+    encoding.serialize(serializer);
+    serializer.serializeUint32(sampleRateHz);
+    serializer.serializeUint8(channels);
+    serializer.serializeBool(gapBefore);
+    serializer.decreaseContainerDepth();
+  }
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    if (other.runtimeType != runtimeType) return false;
+
+    return other is CommandBeginCaptureSegment &&
+        deviceId == other.deviceId &&
+        audioStreamId == other.audioStreamId &&
+        encoding == other.encoding &&
+        sampleRateHz == other.sampleRateHz &&
+        channels == other.channels &&
+        gapBefore == other.gapBefore;
+  }
+
+  @override
+  int get hashCode => Object.hash(
+    deviceId,
+    audioStreamId,
+    encoding,
+    sampleRateHz,
+    channels,
+    gapBefore,
+  );
+
+  @override
+  String toString() {
+    String? fullString;
+
+    assert(() {
+      fullString =
+          '$runtimeType('
+          'deviceId: $deviceId, '
+          'audioStreamId: $audioStreamId, '
+          'encoding: $encoding, '
+          'sampleRateHz: $sampleRateHz, '
+          'channels: $channels, '
+          'gapBefore: $gapBefore'
+          ')';
+      return true;
+    }());
+
+    return fullString ?? 'CommandBeginCaptureSegment';
+  }
+}
+
+@immutable
+class CommandAppendCaptureAudio extends Command {
+  const CommandAppendCaptureAudio({required this.bytes}) : super();
+
+  static CommandAppendCaptureAudio load(BinaryDeserializer deserializer) {
+    deserializer.increaseContainerDepth();
+    final instance = CommandAppendCaptureAudio(
+      bytes: TraitHelpers.deserializeVectorU8(deserializer),
+    );
+    deserializer.decreaseContainerDepth();
+    return instance;
+  }
+
+  final List<int> bytes;
+
+  CommandAppendCaptureAudio copyWith({List<int>? bytes}) {
+    return CommandAppendCaptureAudio(bytes: bytes ?? this.bytes);
+  }
+
+  void serialize(BinarySerializer serializer) {
+    serializer.increaseContainerDepth();
+    serializer.serializeVariantIndex(32);
+    TraitHelpers.serializeVectorU8(bytes, serializer);
+    serializer.decreaseContainerDepth();
+  }
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    if (other.runtimeType != runtimeType) return false;
+
+    return other is CommandAppendCaptureAudio && listEquals(bytes, other.bytes);
+  }
+
+  @override
+  int get hashCode => bytes.hashCode;
+
+  @override
+  String toString() {
+    String? fullString;
+
+    assert(() {
+      fullString =
+          '$runtimeType('
+          'bytes: [REDACTED]'
+          ')';
+      return true;
+    }());
+
+    return fullString ?? 'CommandAppendCaptureAudio';
+  }
+}
+
+@immutable
+class CommandSealCaptureSegment extends Command {
+  const CommandSealCaptureSegment() : super();
+
+  static CommandSealCaptureSegment load(BinaryDeserializer deserializer) {
+    deserializer.increaseContainerDepth();
+    final instance = CommandSealCaptureSegment();
+    deserializer.decreaseContainerDepth();
+    return instance;
+  }
+
+  void serialize(BinarySerializer serializer) {
+    serializer.increaseContainerDepth();
+    serializer.serializeVariantIndex(33);
+    serializer.decreaseContainerDepth();
+  }
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    if (other.runtimeType != runtimeType) return false;
+
+    return other is CommandSealCaptureSegment;
+  }
+
+  @override
+  int get hashCode => runtimeType.hashCode;
+
+  @override
+  String toString() {
+    String? fullString;
+
+    assert(() {
+      fullString =
+          '$runtimeType('
+          ')';
+      return true;
+    }());
+
+    return fullString ?? 'CommandSealCaptureSegment';
+  }
+}
+
+@immutable
+class CommandDrainCaptureWal extends Command {
+  const CommandDrainCaptureWal() : super();
+
+  static CommandDrainCaptureWal load(BinaryDeserializer deserializer) {
+    deserializer.increaseContainerDepth();
+    final instance = CommandDrainCaptureWal();
+    deserializer.decreaseContainerDepth();
+    return instance;
+  }
+
+  void serialize(BinarySerializer serializer) {
+    serializer.increaseContainerDepth();
+    serializer.serializeVariantIndex(34);
+    serializer.decreaseContainerDepth();
+  }
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    if (other.runtimeType != runtimeType) return false;
+
+    return other is CommandDrainCaptureWal;
+  }
+
+  @override
+  int get hashCode => runtimeType.hashCode;
+
+  @override
+  String toString() {
+    String? fullString;
+
+    assert(() {
+      fullString =
+          '$runtimeType('
+          ')';
+      return true;
+    }());
+
+    return fullString ?? 'CommandDrainCaptureWal';
+  }
+}
+
+@immutable
+class CommandReadCaptureWalState extends Command {
+  const CommandReadCaptureWalState() : super();
+
+  static CommandReadCaptureWalState load(BinaryDeserializer deserializer) {
+    deserializer.increaseContainerDepth();
+    final instance = CommandReadCaptureWalState();
+    deserializer.decreaseContainerDepth();
+    return instance;
+  }
+
+  void serialize(BinarySerializer serializer) {
+    serializer.increaseContainerDepth();
+    serializer.serializeVariantIndex(35);
+    serializer.decreaseContainerDepth();
+  }
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    if (other.runtimeType != runtimeType) return false;
+
+    return other is CommandReadCaptureWalState;
+  }
+
+  @override
+  int get hashCode => runtimeType.hashCode;
+
+  @override
+  String toString() {
+    String? fullString;
+
+    assert(() {
+      fullString =
+          '$runtimeType('
+          ')';
+      return true;
+    }());
+
+    return fullString ?? 'CommandReadCaptureWalState';
+  }
+}
+
+@immutable
+class CommandCloseCaptureWal extends Command {
+  const CommandCloseCaptureWal() : super();
+
+  static CommandCloseCaptureWal load(BinaryDeserializer deserializer) {
+    deserializer.increaseContainerDepth();
+    final instance = CommandCloseCaptureWal();
+    deserializer.decreaseContainerDepth();
+    return instance;
+  }
+
+  void serialize(BinarySerializer serializer) {
+    serializer.increaseContainerDepth();
+    serializer.serializeVariantIndex(36);
+    serializer.decreaseContainerDepth();
+  }
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    if (other.runtimeType != runtimeType) return false;
+
+    return other is CommandCloseCaptureWal;
+  }
+
+  @override
+  int get hashCode => runtimeType.hashCode;
+
+  @override
+  String toString() {
+    String? fullString;
+
+    assert(() {
+      fullString =
+          '$runtimeType('
+          ')';
+      return true;
+    }());
+
+    return fullString ?? 'CommandCloseCaptureWal';
+  }
+}
+
+@immutable
+class CommandRecordCaptureGap extends Command {
+  const CommandRecordCaptureGap({
+    required this.deviceId,
+    required this.reason,
+    required this.endedAtMs,
+    required this.endedStreamId,
+  }) : super();
+
+  static CommandRecordCaptureGap load(BinaryDeserializer deserializer) {
+    deserializer.increaseContainerDepth();
+    final instance = CommandRecordCaptureGap(
+      deviceId: deserializer.deserializeString(),
+      reason: deserializer.deserializeString(),
+      endedAtMs: deserializer.deserializeInt64(),
+      endedStreamId: deserializer.deserializeString(),
+    );
+    deserializer.decreaseContainerDepth();
+    return instance;
+  }
+
+  final String deviceId;
+  final String reason;
+  final int endedAtMs;
+  final String endedStreamId;
+
+  CommandRecordCaptureGap copyWith({
+    String? deviceId,
+    String? reason,
+    int? endedAtMs,
+    String? endedStreamId,
+  }) {
+    return CommandRecordCaptureGap(
+      deviceId: deviceId ?? this.deviceId,
+      reason: reason ?? this.reason,
+      endedAtMs: endedAtMs ?? this.endedAtMs,
+      endedStreamId: endedStreamId ?? this.endedStreamId,
+    );
+  }
+
+  void serialize(BinarySerializer serializer) {
+    serializer.increaseContainerDepth();
+    serializer.serializeVariantIndex(37);
+    serializer.serializeString(deviceId);
+    serializer.serializeString(reason);
+    serializer.serializeInt64(endedAtMs);
+    serializer.serializeString(endedStreamId);
+    serializer.decreaseContainerDepth();
+  }
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    if (other.runtimeType != runtimeType) return false;
+
+    return other is CommandRecordCaptureGap &&
+        deviceId == other.deviceId &&
+        reason == other.reason &&
+        endedAtMs == other.endedAtMs &&
+        endedStreamId == other.endedStreamId;
+  }
+
+  @override
+  int get hashCode => Object.hash(deviceId, reason, endedAtMs, endedStreamId);
+
+  @override
+  String toString() {
+    String? fullString;
+
+    assert(() {
+      fullString =
+          '$runtimeType('
+          'deviceId: $deviceId, '
+          'reason: $reason, '
+          'endedAtMs: $endedAtMs, '
+          'endedStreamId: $endedStreamId'
+          ')';
+      return true;
+    }());
+
+    return fullString ?? 'CommandRecordCaptureGap';
+  }
+}
+
+@immutable
+class CommandRecordCaptureResume extends Command {
+  const CommandRecordCaptureResume({
+    required this.deviceId,
+    required this.atMs,
+    required this.streamId,
+  }) : super();
+
+  static CommandRecordCaptureResume load(BinaryDeserializer deserializer) {
+    deserializer.increaseContainerDepth();
+    final instance = CommandRecordCaptureResume(
+      deviceId: deserializer.deserializeString(),
+      atMs: deserializer.deserializeInt64(),
+      streamId: deserializer.deserializeString(),
+    );
+    deserializer.decreaseContainerDepth();
+    return instance;
+  }
+
+  final String deviceId;
+  final int atMs;
+  final String streamId;
+
+  CommandRecordCaptureResume copyWith({
+    String? deviceId,
+    int? atMs,
+    String? streamId,
+  }) {
+    return CommandRecordCaptureResume(
+      deviceId: deviceId ?? this.deviceId,
+      atMs: atMs ?? this.atMs,
+      streamId: streamId ?? this.streamId,
+    );
+  }
+
+  void serialize(BinarySerializer serializer) {
+    serializer.increaseContainerDepth();
+    serializer.serializeVariantIndex(38);
+    serializer.serializeString(deviceId);
+    serializer.serializeInt64(atMs);
+    serializer.serializeString(streamId);
+    serializer.decreaseContainerDepth();
+  }
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    if (other.runtimeType != runtimeType) return false;
+
+    return other is CommandRecordCaptureResume &&
+        deviceId == other.deviceId &&
+        atMs == other.atMs &&
+        streamId == other.streamId;
+  }
+
+  @override
+  int get hashCode => Object.hash(deviceId, atMs, streamId);
+
+  @override
+  String toString() {
+    String? fullString;
+
+    assert(() {
+      fullString =
+          '$runtimeType('
+          'deviceId: $deviceId, '
+          'atMs: $atMs, '
+          'streamId: $streamId'
+          ')';
+      return true;
+    }());
+
+    return fullString ?? 'CommandRecordCaptureResume';
+  }
+}
+
+@immutable
+class CommandReadCaptureGaps extends Command {
+  const CommandReadCaptureGaps() : super();
+
+  static CommandReadCaptureGaps load(BinaryDeserializer deserializer) {
+    deserializer.increaseContainerDepth();
+    final instance = CommandReadCaptureGaps();
+    deserializer.decreaseContainerDepth();
+    return instance;
+  }
+
+  void serialize(BinarySerializer serializer) {
+    serializer.increaseContainerDepth();
+    serializer.serializeVariantIndex(39);
+    serializer.decreaseContainerDepth();
+  }
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    if (other.runtimeType != runtimeType) return false;
+
+    return other is CommandReadCaptureGaps;
+  }
+
+  @override
+  int get hashCode => runtimeType.hashCode;
+
+  @override
+  String toString() {
+    String? fullString;
+
+    assert(() {
+      fullString =
+          '$runtimeType('
+          ')';
+      return true;
+    }());
+
+    return fullString ?? 'CommandReadCaptureGaps';
   }
 }

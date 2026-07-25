@@ -196,6 +196,24 @@ class TraitHelpers {
     }
   }
 
+  static void serializeOptionU64(Uint64? value, BinarySerializer serializer) {
+    if (value == null) {
+      serializer.serializeOptionTag(false);
+    } else {
+      serializer.serializeOptionTag(true);
+      serializer.serializeUint64(value);
+    }
+  }
+
+  static Uint64? deserializeOptionU64(BinaryDeserializer deserializer) {
+    final tag = deserializer.deserializeOptionTag();
+    if (tag) {
+      return deserializer.deserializeUint64();
+    } else {
+      return null;
+    }
+  }
+
   static void serializeOptionU8(int? value, BinarySerializer serializer) {
     if (value == null) {
       serializer.serializeOptionTag(false);
@@ -229,6 +247,23 @@ class TraitHelpers {
   ) {
     final length = deserializer.deserializeLength();
     return List.generate(length, (_) => BriefItem.deserialize(deserializer));
+  }
+
+  static void serializeVectorCaptureGap(
+    List<CaptureGap> value,
+    BinarySerializer serializer,
+  ) {
+    serializer.serializeLength(value.length);
+    for (final item in value) {
+      item.serialize(serializer);
+    }
+  }
+
+  static List<CaptureGap> deserializeVectorCaptureGap(
+    BinaryDeserializer deserializer,
+  ) {
+    final length = deserializer.deserializeLength();
+    return List.generate(length, (_) => CaptureGap.deserialize(deserializer));
   }
 
   static void serializeVectorComputerUseActionCapability(

@@ -1,15 +1,12 @@
 export 'background_capture.dart';
 export 'capture_coordinator.dart';
 export 'capture_enabled_store.dart';
-export 'capture_gap_log.dart';
 export 'capture_notifications.dart';
-export 'capture_upload.dart';
-export 'capture_wal.dart';
-export 'capture_wal_uploader.dart';
 export 'device_audio_frame.dart';
 export 'device_audio_forwarder.dart';
 export 'device_models.dart';
 export 'device_relay.dart';
 export 'firmware_dfu.dart';
+export 'hub_capture.dart';
 export 'paired_device_store.dart';
 export 'universal_ble_device_relay.dart';
