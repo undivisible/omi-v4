@@ -223,4 +223,58 @@ mod tests {
         assert!(greeting.contains("desktop"));
         assert!(greeting.contains("K7QP2RM"));
     }
+
+    #[test]
+    fn the_help_text_lists_every_command_with_its_aliases() {
+        let help = channel_help_text();
+        assert!(help.starts_with("Here is what I understand in this chat:"));
+        for command in CHANNEL_COMMANDS {
+            assert!(help.contains(command.name), "missing {}", command.name);
+            assert!(
+                help.contains(command.summary),
+                "missing {}",
+                command.summary
+            );
+            for alias in command.aliases {
+                assert!(help.contains(alias), "missing {alias}");
+            }
+        }
+        assert!(help.contains("/help — list what I understand here"));
+        assert!(help.contains("/reset (or /clear) — start a fresh conversation"));
+        assert!(help.contains("/logout (or /unlink) — disconnect this chat from your account"));
+        assert!(help.ends_with("Anything else you send goes straight to your assistant."));
+        assert_eq!(help.lines().count(), CHANNEL_COMMANDS.len() + 2);
+    }
+
+    #[test]
+    fn link_confirmation_names_the_masked_account_and_points_at_help() {
+        assert_eq!(
+            link_confirmation_text(Some("sam@example.test")),
+            "Linked — this chat now answers as s***@example.test. Send /help to see what I understand here."
+        );
+        assert_eq!(
+            link_confirmation_text(None),
+            "Linked — this chat now answers as your Omi account. Send /help to see what I understand here."
+        );
+        assert_eq!(
+            link_confirmation_text(Some("@example.test")),
+            "Linked — this chat now answers as your Omi account. Send /help to see what I understand here."
+        );
+    }
+
+    #[test]
+    fn iso_date_renders_the_utc_calendar_date() {
+        assert_eq!(iso_date(0), "1970-01-01");
+        // Leap day, and the instant before and after a year rollover.
+        assert_eq!(iso_date(1_709_164_800_000), "2024-02-29");
+        assert_eq!(iso_date(1_704_067_199_999), "2023-12-31");
+        assert_eq!(iso_date(1_704_067_200_000), "2024-01-01");
+        // Month-boundary rollover away from a leap day.
+        assert_eq!(iso_date(1_709_251_199_999), "2024-02-29");
+        assert_eq!(iso_date(1_709_251_200_000), "2024-03-01");
+        // Pre-epoch timestamps floor to the previous day.
+        assert_eq!(iso_date(-1), "1969-12-31");
+        assert_eq!(iso_date(-86_400_000), "1969-12-31");
+        assert_eq!(iso_date(-86_400_001), "1969-12-30");
+    }
 }

@@ -476,4 +476,43 @@ mod tests {
         assert_eq!(drafts[0].evidence_id, "ev-2");
         assert_eq!(drafts[0].content_kind, CurrentContentKind::AgentAction);
     }
+
+    #[test]
+    fn parses_bare_and_fenced_json_objects_only() {
+        let bare = parse_json_object("  {\"title\":\"One\"}  ").expect("bare object");
+        assert_eq!(
+            bare.get("title").and_then(serde_json::Value::as_str),
+            Some("One")
+        );
+        let fenced = parse_json_object("```json\n{\"title\":\"Two\"}\n```").expect("json fence");
+        assert_eq!(
+            fenced.get("title").and_then(serde_json::Value::as_str),
+            Some("Two")
+        );
+        let plain = parse_json_object("```\n{\"title\":\"Three\"}\n```").expect("bare fence");
+        assert_eq!(
+            plain.get("title").and_then(serde_json::Value::as_str),
+            Some("Three")
+        );
+        assert!(parse_json_object("{}").expect("empty object").is_empty());
+        // Arrays, scalars, null and unparseable text are all refused.
+        assert!(parse_json_object("[{\"title\":\"One\"}]").is_none());
+        assert!(parse_json_object("```json\n[1,2]\n```").is_none());
+        assert!(parse_json_object("null").is_none());
+        assert!(parse_json_object("7").is_none());
+        assert!(parse_json_object("\"One\"").is_none());
+        assert!(parse_json_object("{\"title\":}").is_none());
+        assert!(parse_json_object("Sorry, I cannot help.").is_none());
+        assert!(parse_json_object("").is_none());
+    }
+
+    #[test]
+    fn collapse_normalises_every_run_of_whitespace() {
+        assert_eq!(collapse("  a\t\tb\n\nc  "), "a b c");
+        assert_eq!(collapse("\n\ttrailing \t\n"), "trailing");
+        assert_eq!(collapse("already one line"), "already one line");
+        assert_eq!(collapse("   "), "");
+        assert_eq!(collapse(""), "");
+        assert_eq!(collapse("a\r\nb"), "a b");
+    }
 }

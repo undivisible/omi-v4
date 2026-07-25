@@ -8,8 +8,11 @@ pub mod billing;
 pub mod byok_negotiation;
 pub mod byok_pricing;
 pub mod channel_commands;
+pub mod channel_group;
 pub mod channel_link;
+pub mod channel_style;
 pub mod conversations;
+pub mod crepus_safety;
 pub mod crypto_util;
 pub mod currents;
 pub mod currents_refresh;
@@ -20,12 +23,14 @@ pub mod entitlement;
 pub mod facetime;
 pub mod inbox_fallback;
 pub mod mcp;
+pub mod memory_log;
 pub mod public_api;
 pub mod routes_memory;
 pub mod sendblue;
 pub mod settings;
 pub mod setup_health;
 pub mod speech;
+pub mod user_profile;
 pub mod webhooks;
 
 // AI route group (managed assistant / STT / ASR / voice) pure logic. Host-

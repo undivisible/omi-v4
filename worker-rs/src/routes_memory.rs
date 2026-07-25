@@ -1047,6 +1047,42 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "TS memory-vectors.ts projectedClaimId is the identity since migration 0030 retired the zkr:<uid>:<replica>: namespace; the Rust projection SQL still writes zkr ids and changing it would orphan existing rows"]
+    fn projected_claim_id_should_be_the_identity_after_migration_0030() {
+        assert_eq!(projected_claim_id("a", "b", "c"), "c");
+    }
+
+    #[test]
+    fn embedding_inputs_truncate_by_code_points() {
+        let long = "a".repeat(EMBEDDING_INPUT_CHARS + 50);
+        let inputs = embedding_inputs(&[long, "short".into()]);
+        assert_eq!(inputs.len(), 2);
+        assert_eq!(inputs[0].chars().count(), EMBEDDING_INPUT_CHARS);
+        assert_eq!(inputs[1], "short");
+        // Multibyte text is cut at a code point, not a byte, so the slice is
+        // still valid UTF-8 of the expected length.
+        let multibyte: String = "日".repeat(EMBEDDING_INPUT_CHARS + 10);
+        let sliced = embedding_inputs(&[multibyte]).remove(0);
+        assert_eq!(sliced.chars().count(), EMBEDDING_INPUT_CHARS);
+        assert_eq!(sliced.len(), EMBEDDING_INPUT_CHARS * 3);
+        assert!(sliced.chars().all(|c| c == '日'));
+        assert!(embedding_inputs(&[]).is_empty());
+    }
+
+    #[test]
+    fn bounded_caps_by_code_points() {
+        assert_eq!(bounded("hello", 3), "hel");
+        assert_eq!(bounded("hello", 5), "hello");
+        assert_eq!(bounded("hello", 50), "hello");
+        assert_eq!(bounded("", 5), "");
+        assert_eq!(bounded("hello", 0), "");
+        // Three-byte code points count as one each.
+        assert_eq!(bounded("日本語です", 2), "日本");
+        assert_eq!(bounded("日本語です", 2).len(), 6);
+        assert_eq!(bounded("日本語です", 99), "日本語です");
+    }
+
+    #[test]
     fn claim_text_filters_empty_parts() {
         assert_eq!(
             claim_text(Some("Sam"), Some("employer"), "Acme"),

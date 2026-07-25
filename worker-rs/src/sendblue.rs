@@ -19,25 +19,34 @@ fn setting(env: &impl Fn(&str) -> Option<String>, name: &str) -> Option<String> 
         .filter(|value| !value.is_empty())
 }
 
+/// `grab-sendblue-secrets.sh` writes SENDBLUE_API_KEY / SENDBLUE_SECRET_KEY from
+/// the Sendblue CLI; the worker headers use the _ID / _SECRET names. Accept both.
+pub fn sendblue_api_key_id(env: &impl Fn(&str) -> Option<String>) -> String {
+    env("SENDBLUE_API_KEY_ID")
+        .or_else(|| env("SENDBLUE_API_KEY"))
+        .unwrap_or_default()
+        .trim()
+        .to_string()
+}
+
+pub fn sendblue_api_key_secret(env: &impl Fn(&str) -> Option<String>) -> String {
+    env("SENDBLUE_API_KEY_SECRET")
+        .or_else(|| env("SENDBLUE_SECRET_KEY"))
+        .unwrap_or_default()
+        .trim()
+        .to_string()
+}
+
 pub fn sendblue_configured(env: impl Fn(&str) -> Option<String>) -> bool {
-    setting(&env, "SENDBLUE_API_KEY_ID").is_some()
-        && setting(&env, "SENDBLUE_API_KEY_SECRET").is_some()
+    !sendblue_api_key_id(&env).is_empty()
+        && !sendblue_api_key_secret(&env).is_empty()
         && setting(&env, "SENDBLUE_NUMBER").is_some()
 }
 
 pub fn sendblue_headers(env: impl Fn(&str) -> Option<String>) -> Vec<(String, String)> {
     vec![
-        (
-            "sb-api-key-id".into(),
-            env("SENDBLUE_API_KEY_ID").unwrap_or_default().trim().into(),
-        ),
-        (
-            "sb-api-secret-key".into(),
-            env("SENDBLUE_API_KEY_SECRET")
-                .unwrap_or_default()
-                .trim()
-                .into(),
-        ),
+        ("sb-api-key-id".into(), sendblue_api_key_id(&env)),
+        ("sb-api-secret-key".into(), sendblue_api_key_secret(&env)),
         ("content-type".into(), "application/json".into()),
     ]
 }
@@ -290,5 +299,58 @@ mod tests {
                 "content": "hi",
             })
         );
+    }
+
+    fn headers(id: &str, secret: &str) -> Vec<(String, String)> {
+        vec![
+            ("sb-api-key-id".to_string(), id.to_string()),
+            ("sb-api-secret-key".to_string(), secret.to_string()),
+            ("content-type".to_string(), "application/json".to_string()),
+        ]
+    }
+
+    #[test]
+    fn the_send_request_targets_the_documented_endpoint_with_trimmed_credentials() {
+        assert_eq!(
+            SEND_MESSAGE_ENDPOINT,
+            "https://api.sendblue.com/api/send-message"
+        );
+        assert_eq!(
+            sendblue_headers(env(&[
+                ("SENDBLUE_API_KEY_ID", "  key-id  "),
+                ("SENDBLUE_API_KEY_SECRET", "\tkey-secret\n"),
+            ])),
+            headers("key-id", "key-secret")
+        );
+        // An unconfigured deployment still yields the three headers, empty.
+        assert_eq!(sendblue_headers(env(&[])), headers("", ""));
+    }
+
+    #[test]
+    fn the_cli_alias_env_names_configure_the_provider() {
+        let alias = [
+            ("SENDBLUE_API_KEY", " cli-key "),
+            ("SENDBLUE_SECRET_KEY", " cli-secret "),
+            ("SENDBLUE_NUMBER", "+15122164639"),
+        ];
+        assert!(sendblue_configured(env(&alias)));
+        assert_eq!(
+            sendblue_headers(env(&alias)),
+            headers("cli-key", "cli-secret")
+        );
+        // The canonical names win wherever both are present.
+        assert_eq!(
+            sendblue_headers(env(&[
+                ("SENDBLUE_API_KEY_ID", "key-id"),
+                ("SENDBLUE_API_KEY", "cli-key"),
+                ("SENDBLUE_SECRET_KEY", "cli-secret"),
+            ])),
+            headers("key-id", "cli-secret")
+        );
+        // An alias alone never substitutes for the line the messages come from.
+        assert!(!sendblue_configured(env(&[
+            ("SENDBLUE_API_KEY", "cli-key"),
+            ("SENDBLUE_SECRET_KEY", "cli-secret"),
+        ])));
     }
 }

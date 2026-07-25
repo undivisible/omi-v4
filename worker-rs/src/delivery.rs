@@ -223,6 +223,29 @@ mod tests {
     }
 
     #[test]
+    fn provider_json_retry_after_is_honoured_exactly() {
+        // The 429 body `{"parameters":{"retry_after":120}}` must schedule the
+        // next attempt exactly 120_000 ms out.
+        let hints = RetryAfterHints {
+            json_retry_after_seconds: Some(120.0),
+            ..Default::default()
+        };
+        assert_eq!(retry_delay(1, &hints, 0.0, 0.0), 120_000);
+        assert_eq!(retry_delay(4, &hints, 0.0, 0.99999), 120_000);
+    }
+
+    #[test]
+    fn a_past_http_date_falls_back_to_exponential_backoff() {
+        let hints = RetryAfterHints {
+            header_date_ms: Some(1_000.0),
+            ..Default::default()
+        };
+        // headerDelay = 1000 - 5000 = -4000, so the backoff wins: base 8000.
+        assert_eq!(retry_delay(3, &hints, 5_000.0, 0.0), 6_400);
+        assert_eq!(retry_delay(3, &hints, 5_000.0, 0.99999), 9_599);
+    }
+
+    #[test]
     fn provider_delay_capped_at_one_hour() {
         let hints = RetryAfterHints {
             header_seconds: Some(10_000.0),

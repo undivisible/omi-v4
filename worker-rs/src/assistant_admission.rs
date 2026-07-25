@@ -433,6 +433,41 @@ mod tests {
     }
 
     #[test]
+    fn a_refused_admit_carries_retry_after_guidance() {
+        let l = Limits {
+            uid_in_flight: 1,
+            ..limits()
+        };
+        let mut a = AssistantAdmission::new();
+        let admitted = a.dispatch(
+            l,
+            1000,
+            "POST",
+            "/admit",
+            &json!({ "requestId": "first", "uid": "user", "tokenBudget": 1, "costBudgetMicrousd": 1 }),
+        );
+        assert_eq!(admitted.status, 200);
+        assert_eq!(admitted.retry_after, None);
+        assert_eq!(admitted.body["retryAfter"], json!(0));
+
+        let refused = a.dispatch(
+            l,
+            1000,
+            "POST",
+            "/admit",
+            &json!({ "requestId": "second", "uid": "user", "tokenBudget": 1, "costBudgetMicrousd": 1 }),
+        );
+        assert_eq!(refused.status, 429);
+        let header = refused
+            .retry_after
+            .as_deref()
+            .expect("a refusal must tell the caller when to come back");
+        let seconds: i64 = header.parse().expect("retry-after is an integer");
+        assert!(seconds >= 1);
+        assert_eq!(refused.body["retryAfter"], json!(seconds));
+    }
+
+    #[test]
     fn window_helper() {
         assert_eq!(window_ms_from_seconds(Some("1")), 1000);
         assert_eq!(window_ms_from_seconds(None), 3_600_000);

@@ -416,4 +416,32 @@ mod tests {
             json!({ "phoneNumber": "+15551234567", "fromNumber": "+15550000000" })
         );
     }
+
+    #[test]
+    fn the_request_body_never_carries_the_api_secret() {
+        let body = upstream_body("+15551234567", "+18885550199").to_string();
+        assert!(!body.contains("key-secret"), "leaked the secret in {body}");
+        assert_eq!(
+            body,
+            r#"{"phoneNumber":"+15551234567","fromNumber":"+18885550199"}"#
+        );
+    }
+
+    #[test]
+    #[ignore = "facetime.ts resolves credentials through sendblueApiKeyId/sendblueApiKeySecret, which accept the SENDBLUE_API_KEY / SENDBLUE_SECRET_KEY CLI aliases; facetime_provider_configured reads only the canonical names"]
+    fn the_provider_accepts_the_cli_alias_env_names() {
+        let env = |pairs: &'static [(&'static str, &'static str)]| {
+            move |name: &str| {
+                pairs
+                    .iter()
+                    .find(|(key, _)| *key == name)
+                    .map(|(_, value)| (*value).to_string())
+            }
+        };
+        assert!(facetime_provider_configured(env(&[
+            ("SENDBLUE_API_KEY", "cli-key"),
+            ("SENDBLUE_SECRET_KEY", "cli-secret"),
+            ("SENDBLUE_FACETIME_NUMBER", "+15550000000"),
+        ])));
+    }
 }

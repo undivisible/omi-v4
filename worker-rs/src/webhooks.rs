@@ -448,6 +448,26 @@ mod tests {
     }
 
     #[test]
+    fn telegram_parse_drops_oversized_text() {
+        let update = |update_id: i64, text: String| {
+            json!({
+                "update_id": update_id,
+                "message": {"message_id": 1, "text": text, "from": {"id": 42}, "chat": {"id": 43}}
+            })
+        };
+        let oversized = update(7, "a".repeat(MAX_TEXT_LEN + 1));
+        let (event_id, msg) = parse_telegram(&oversized).unwrap();
+        // Still recorded for dedupe, just not actionable.
+        assert_eq!(event_id, "7");
+        assert_eq!(msg, None);
+        let at_cap = update(8, "a".repeat(MAX_TEXT_LEN));
+        assert_eq!(
+            parse_telegram(&at_cap).unwrap().1.map(|m| m.text.len()),
+            Some(MAX_TEXT_LEN)
+        );
+    }
+
+    #[test]
     fn telegram_parse_rejects_bad_update_id() {
         assert!(parse_telegram(&json!({"update_id": 1.5})).is_err());
         assert!(parse_telegram(&json!({"update_id": "x"})).is_err());

@@ -790,6 +790,42 @@ mod tests {
     }
 
     #[test]
+    fn the_transcription_body_carries_the_normalised_container() {
+        let plan = plan_transcription(
+            env(&[]),
+            "uid-1",
+            &transcribe_input(),
+            ASYNC_AUDIO_TIER_PREFERENCE,
+        )
+        .unwrap();
+        let body = plan.upstream_body();
+        assert_eq!(body["model"], json!("xiaomi/mimo-v2.5"));
+        assert_eq!(body["stream"], json!(false));
+        assert_eq!(body["messages"][0]["role"], json!("user"));
+        assert_eq!(
+            body["messages"][0]["content"][1],
+            json!({
+                "type": "input_audio",
+                "input_audio": { "data": "AAAA", "format": "ogg" },
+            })
+        );
+        // `auto` declares nothing, so the instruction is sent unqualified.
+        assert_eq!(
+            body["messages"][0]["content"][0],
+            json!({ "type": "text", "text": TRANSCRIPTION_INSTRUCTION })
+        );
+
+        let mut input = transcribe_input();
+        input["language"] = json!("fr-CA");
+        let declared =
+            plan_transcription(env(&[]), "uid-1", &input, ASYNC_AUDIO_TIER_PREFERENCE).unwrap();
+        assert_eq!(
+            declared.upstream_body()["messages"][0]["content"][0]["text"],
+            json!(format!("{TRANSCRIPTION_INSTRUCTION} The audio is in fr-CA."))
+        );
+    }
+
+    #[test]
     fn refuses_every_malformed_transcription_shape() {
         for input in [
             json!({ "format": "wav", "audio": "AAAA" }),
@@ -887,6 +923,38 @@ mod tests {
     }
 
     #[test]
+    fn a_multi_second_upload_reserves_from_the_container_bitrate() {
+        let mut input = transcribe_input();
+        input["format"] = json!("ogg");
+        // 10 664 base64 characters decode to 7 998 bytes, which at 4 000 bytes
+        // per second of Opus is two seconds of pendant audio.
+        input["audio"] = json!("A".repeat(10_664));
+        let plan =
+            plan_transcription(env(&[]), "uid-1", &input, ASYNC_AUDIO_TIER_PREFERENCE).unwrap();
+        assert_eq!(plan.declared_duration, None);
+        assert_eq!(plan.reserved_seconds, 2);
+        assert_eq!(plan.estimated_cost, 67);
+    }
+
+    #[test]
+    fn a_text_only_preferred_tier_is_skipped_for_the_next_audio_capable_one() {
+        let plan = plan_transcription(
+            env(&[
+                ("OMI_MODEL_BALANCED", "some/text-only-model"),
+                (
+                    "OMI_MODEL_CAPABILITIES",
+                    r#"{"some/text-only-model":["text"]}"#,
+                ),
+            ]),
+            "uid-1",
+            &transcribe_input(),
+            ASYNC_AUDIO_TIER_PREFERENCE,
+        )
+        .unwrap();
+        assert_eq!(plan.model, "google/gemini-3.5-flash-lite");
+    }
+
+    #[test]
     fn a_declared_override_can_restore_the_audio_capable_tier() {
         let plan = plan_transcription(
             env(&[
@@ -948,6 +1016,51 @@ mod tests {
     }
 
     #[test]
+    fn the_synthesis_body_asks_for_the_audio_modality() {
+        let plan = plan_speech(
+            env(&[]),
+            "uid-1",
+            &json!({ "clientMessageId": "cm-000001", "text": "hello there" }),
+        )
+        .unwrap();
+        let body = plan.upstream_body();
+        assert_eq!(body["model"], json!("openai/gpt-audio-mini"));
+        assert_eq!(body["stream"], json!(false));
+        assert_eq!(body["modalities"], json!(["text", "audio"]));
+        assert_eq!(body["audio"], json!({ "voice": "alloy", "format": "mp3" }));
+        assert_eq!(
+            body["messages"],
+            json!([
+                { "role": "system", "content": SPEAK_INSTRUCTION },
+                { "role": "user", "content": "hello there" },
+            ])
+        );
+    }
+
+    #[test]
+    fn the_stored_synthesis_result_replays_the_audio_and_its_shape() {
+        let plan = plan_speech(
+            env(&[]),
+            "uid-1",
+            &json!({ "clientMessageId": "cm-000001", "text": "  hello there  ", "format": "opus", "voice": "verse" }),
+        )
+        .unwrap();
+        assert_eq!(
+            plan.result("QUJD"),
+            json!({
+                "requestId": request_id_for("uid-1", SpeechKind::Speak, "cm-000001"),
+                "clientMessageId": "cm-000001",
+                "model": "openai/gpt-audio-mini",
+                "voice": "verse",
+                "format": "opus",
+                "characters": 11,
+                "estimatedSeconds": 1,
+                "audio": "QUJD",
+            })
+        );
+    }
+
+    #[test]
     fn a_speak_tier_without_audio_out_is_503() {
         assert_eq!(
             plan_speech(
@@ -985,6 +1098,43 @@ mod tests {
         // A well-formed envelope with no usable segments falls back to prose.
         let empty = parse_segments(r#"{"segments":[]}"#, None);
         assert_eq!(empty.len(), 1);
+    }
+
+    #[test]
+    fn an_unfenced_json_reply_parses_and_trims_its_segment_text() {
+        let parsed = parse_segments(r#"{"segments":[{"start":0,"end":2,"text":" hi "}]}"#, None);
+        assert_eq!(
+            parsed,
+            vec![TranscriptSegment {
+                index: 0,
+                start: Some(0.0),
+                end: Some(2.0),
+                text: "hi".into(),
+            }]
+        );
+    }
+
+    #[test]
+    fn the_upstream_message_is_read_from_the_first_choice() {
+        assert_eq!(
+            message_of(&json!({
+                "choices": [
+                    { "message": { "content": "first" } },
+                    { "message": { "content": "second" } },
+                ],
+            }))
+            .and_then(|message| message.get("content")),
+            Some(&json!("first"))
+        );
+        for body in [
+            json!({}),
+            json!({ "choices": [] }),
+            json!({ "choices": "no" }),
+            json!({ "choices": [{}] }),
+            json!({ "choices": [{ "message": "no" }] }),
+        ] {
+            assert!(message_of(&body).is_none(), "should refuse {body}");
+        }
     }
 
     #[test]

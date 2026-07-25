@@ -151,6 +151,38 @@ mod tests {
     }
 
     #[test]
+    fn byok_negotiation_limits_are_pinned_to_the_limiter() {
+        use crate::byok_negotiation::{
+            MESSAGE_LIMIT, MESSAGE_WINDOW_MS, SESSION_START_LIMIT, SESSION_START_WINDOW_MS,
+        };
+        let mut starts = RateLimiter::new();
+        for i in 1..=SESSION_START_LIMIT {
+            let res = starts.consume(1000, SESSION_START_LIMIT, SESSION_START_WINDOW_MS);
+            assert!(res.allowed, "session start {i} should be allowed");
+        }
+        let over = starts.consume(1000, SESSION_START_LIMIT, SESSION_START_WINDOW_MS);
+        assert!(!over.allowed);
+        assert!(over.retry_after >= 1);
+        let rolled = starts.consume(
+            1000 + SESSION_START_WINDOW_MS,
+            SESSION_START_LIMIT,
+            SESSION_START_WINDOW_MS,
+        );
+        assert!(rolled.allowed);
+
+        let mut messages = RateLimiter::new();
+        for i in 1..=MESSAGE_LIMIT {
+            let res = messages.consume(1000, MESSAGE_LIMIT, MESSAGE_WINDOW_MS);
+            assert!(res.allowed, "message {i} should be allowed");
+        }
+        let over = messages.consume(1000, MESSAGE_LIMIT, MESSAGE_WINDOW_MS);
+        assert!(!over.allowed);
+        assert!(over.retry_after >= 1);
+        let rolled = messages.consume(1000 + MESSAGE_WINDOW_MS, MESSAGE_LIMIT, MESSAGE_WINDOW_MS);
+        assert!(rolled.allowed);
+    }
+
+    #[test]
     fn lock_is_exclusive_until_ttl() {
         let mut r = RateLimiter::new();
         assert!(r.acquire_lock(1000, 15_000));

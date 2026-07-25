@@ -621,4 +621,68 @@ mod tests {
             .unwrap();
         assert!(batch.batched);
     }
+
+    #[test]
+    fn answers_a_batch_in_submission_order() {
+        let batch = parse_batch(&json!([
+            { "jsonrpc": "2.0", "id": "c", "method": "ping" },
+            { "jsonrpc": "2.0", "id": 1, "method": "initialize" },
+            { "jsonrpc": "2.0", "id": "a", "method": "tools/list" },
+            { "jsonrpc": "2.0", "id": 2, "method": "ping" },
+        ]))
+        .ok()
+        .unwrap();
+        assert!(batch.batched);
+        assert_eq!(
+            batch
+                .messages
+                .iter()
+                .map(|message| message["id"].clone())
+                .collect::<Vec<_>>(),
+            vec![json!("c"), json!(1), json!("a"), json!(2)]
+        );
+        let answers: Vec<Value> = batch
+            .messages
+            .iter()
+            .map(|message| reply(plan(None, message)))
+            .collect();
+        assert_eq!(
+            answers
+                .iter()
+                .map(|answer| answer["id"].clone())
+                .collect::<Vec<_>>(),
+            vec![json!("c"), json!(1), json!("a"), json!(2)]
+        );
+        assert_eq!(answers[0]["result"], json!({}));
+        assert_eq!(
+            answers[1]["result"]["protocolVersion"],
+            json!(PROTOCOL_VERSION)
+        );
+        assert_eq!(
+            answers[2]["result"]["tools"].as_array().unwrap().len(),
+            TOOLS.len()
+        );
+        assert_eq!(answers[3]["result"], json!({}));
+    }
+
+    #[test]
+    fn every_tool_in_the_table_has_a_closed_object_schema() {
+        for tool in TOOLS {
+            let schema = input_schema(tool.name);
+            assert_eq!(schema["type"], json!("object"), "for {}", tool.name);
+            assert_eq!(
+                schema["additionalProperties"],
+                json!(false),
+                "for {}",
+                tool.name
+            );
+            assert!(schema["properties"].is_object(), "for {}", tool.name);
+            assert!(!tool.title.is_empty(), "for {}", tool.name);
+            assert!(!tool.scope.is_empty(), "for {}", tool.name);
+            assert!(tool.description.len() > 40, "for {}", tool.name);
+            assert_eq!(tool_for(tool.name).unwrap().scope, tool.scope);
+        }
+        assert_eq!(input_schema("not_a_tool"), Value::Null);
+        assert!(tool_for("not_a_tool").is_none());
+    }
 }

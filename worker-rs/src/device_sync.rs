@@ -341,6 +341,16 @@ mod tests {
     }
 
     #[test]
+    fn parse_start_seq_refuses_anything_that_is_not_a_whole_counter() {
+        assert!(parse_start_seq(Some(&json!("1.5"))).is_none());
+        assert!(parse_start_seq(Some(&json!("not-a-number"))).is_none());
+        assert!(parse_start_seq(Some(&json!(""))).is_none());
+        assert!(parse_start_seq(Some(&json!(1.5))).is_none());
+        assert!(parse_start_seq(Some(&Value::Null)).is_none());
+        assert!(parse_start_seq(None).is_none());
+    }
+
+    #[test]
     fn parses_home_upload_preamble() {
         let device_id = b"dev-1";
         let mut buf = vec![0u8; 3 + device_id.len() + 14];

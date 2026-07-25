@@ -823,6 +823,197 @@ mod tests {
     }
 
     #[test]
+    fn the_audio_tiers_declare_audio_and_the_text_tiers_do_not() {
+        let env = |_: &str| None;
+        assert!(
+            capabilities_of(env, &model_for_tier(ModelTier::Balanced, env))
+                .contains(&ModelCapability::AudioIn)
+        );
+        assert!(
+            capabilities_of(env, &model_for_tier(ModelTier::Transcribe, env))
+                .contains(&ModelCapability::AudioIn)
+        );
+        assert!(
+            capabilities_of(env, &model_for_tier(ModelTier::Multimodal, env))
+                .contains(&ModelCapability::ImageIn)
+        );
+        assert!(capabilities_of(env, &model_for_tier(ModelTier::Speak, env))
+            .contains(&ModelCapability::AudioOut));
+        for tier in [ModelTier::Speed, ModelTier::Smart, ModelTier::Search] {
+            assert!(
+                !model_supports(env, &model_for_tier(tier, env), &[ModelCapability::AudioIn]),
+                "tier {} should not declare audioIn",
+                tier.slug()
+            );
+        }
+    }
+
+    #[test]
+    fn no_model_claims_realtime_which_belongs_to_gemini_live() {
+        let env = |_: &str| None;
+        assert!(select_model_for(
+            env,
+            &[ModelCapability::Realtime],
+            &[ModelTier::Balanced, ModelTier::Speed]
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn asynchronous_audio_picks_the_balanced_model() {
+        let env = |_: &str| None;
+        assert_eq!(
+            select_model_for(
+                env,
+                &[ModelCapability::AudioIn],
+                ASYNC_AUDIO_TIER_PREFERENCE
+            ),
+            Ok((ModelTier::Balanced, DEFAULT_BALANCED_MODEL.to_string()))
+        );
+    }
+
+    #[test]
+    fn selection_walks_past_a_tier_that_lost_the_capability() {
+        let value = |name: &str| match name {
+            "OMI_MODEL_BALANCED" => Some(DEFAULT_SPEED_MODEL.to_string()),
+            _ => None,
+        };
+        assert_eq!(
+            select_model_for(
+                value,
+                &[ModelCapability::AudioIn],
+                ASYNC_AUDIO_TIER_PREFERENCE
+            ),
+            Ok((ModelTier::Transcribe, DEFAULT_TRANSCRIBE_MODEL.to_string()))
+        );
+    }
+
+    #[test]
+    fn selection_fails_loudly_when_no_preferred_tier_qualifies() {
+        let value = |name: &str| match name {
+            "OMI_MODEL_BALANCED" | "OMI_MODEL_TRANSCRIBE" | "OMI_MODEL_MULTIMODAL" => {
+                Some(DEFAULT_SPEED_MODEL.to_string())
+            }
+            _ => None,
+        };
+        let error = select_model_for(
+            value,
+            &[ModelCapability::AudioIn],
+            ASYNC_AUDIO_TIER_PREFERENCE,
+        )
+        .unwrap_err();
+        assert_eq!(error.missing, vec![ModelCapability::AudioIn]);
+        assert_eq!(error.tier, ModelTier::Multimodal);
+        assert_eq!(
+            error.message(),
+            format!(
+                "Model {DEFAULT_SPEED_MODEL} (tier multimodal) lacks required capability: audioIn"
+            )
+        );
+    }
+
+    #[test]
+    fn an_unverified_model_satisfies_nothing_until_it_declares_itself() {
+        let unverified = |name: &str| match name {
+            "OMI_MODEL_TRANSCRIBE" => Some("some/unknown-model".to_string()),
+            _ => None,
+        };
+        let error = model_for_capability(
+            unverified,
+            ModelTier::Transcribe,
+            &[ModelCapability::AudioIn],
+        )
+        .unwrap_err();
+        assert_eq!(error.model, "some/unknown-model");
+        assert_eq!(error.missing, vec![ModelCapability::AudioIn]);
+
+        let declared = |name: &str| match name {
+            "OMI_MODEL_TRANSCRIBE" => Some("some/unknown-model".to_string()),
+            "OMI_MODEL_CAPABILITIES" => {
+                Some(r#"{"some/unknown-model":["text","audioIn"]}"#.to_string())
+            }
+            _ => None,
+        };
+        assert_eq!(
+            model_for_capability(declared, ModelTier::Transcribe, &[ModelCapability::AudioIn]),
+            Ok("some/unknown-model".to_string())
+        );
+    }
+
+    #[test]
+    fn a_malformed_capability_declaration_declares_nothing() {
+        let malformed = |name: &str| match name {
+            "OMI_MODEL_TRANSCRIBE" => Some("some/unknown-model".to_string()),
+            "OMI_MODEL_CAPABILITIES" => Some("{not json".to_string()),
+            _ => None,
+        };
+        assert!(model_for_capability(
+            malformed,
+            ModelTier::Transcribe,
+            &[ModelCapability::AudioIn]
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn validates_and_rejects_non_canonical_openrouter_endpoints() {
+        assert!(validate_pinned_endpoint(
+            OPENROUTER_COMPLETION_ENDPOINT,
+            OPENROUTER_COMPLETION_ENDPOINT,
+            OPENROUTER_HOSTNAME
+        )
+        .is_some());
+        for endpoint in [
+            "https://openrouter.ai/api/v1/chat/completions?debug=1",
+            "https://user@openrouter.ai/api/v1/chat/completions",
+            "https://127.0.0.1/api/v1/chat/completions",
+            "https://openrouter.ai.evil.test/api/v1/chat/completions",
+        ] {
+            assert!(
+                validate_pinned_endpoint(
+                    endpoint,
+                    OPENROUTER_COMPLETION_ENDPOINT,
+                    OPENROUTER_HOSTNAME
+                )
+                .is_none(),
+                "should reject {endpoint}"
+            );
+        }
+    }
+
+    #[test]
+    fn parses_the_non_streaming_completion_and_its_bounded_usage() {
+        assert_eq!(
+            parse_completion(&json!({
+                "choices": [{ "message": { "content": "  answered.  " } }],
+                "usage": { "prompt_tokens": 7, "completion_tokens": 2 }
+            })),
+            (Some("answered.".to_string()), Some(7), Some(2))
+        );
+        assert_eq!(
+            parse_completion(&json!({
+                "choices": [{ "message": { "content": "answered." } }]
+            })),
+            (Some("answered.".to_string()), None, None)
+        );
+        assert_eq!(
+            parse_completion(&json!({
+                "choices": [{ "message": { "content": "answered." } }],
+                "usage": { "prompt_tokens": -1, "completion_tokens": 1.5 }
+            })),
+            (Some("answered.".to_string()), None, None)
+        );
+        for malformed in [
+            json!({}),
+            json!({ "choices": [] }),
+            json!({ "choices": [{ "message": { "content": "   " } }] }),
+            json!({ "choices": [{ "message": {} }] }),
+        ] {
+            assert_eq!(parse_completion(&malformed), (None, None, None));
+        }
+    }
+
+    #[test]
     fn bounded_json_enforces_limits() {
         assert_eq!(
             bounded_json(Some("2"), Some(b"{}"), MAXIMUM_BODY_BYTES),

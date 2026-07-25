@@ -147,4 +147,127 @@ mod tests {
             json!(true)
         );
     }
+
+    #[test]
+    fn managed_live_voice_needs_both_key_and_model() {
+        let mut input = empty();
+        input.gemini_api_key = Some("k");
+        assert_eq!(
+            setup_health_body(&input)["models"]["managedLiveVoice"],
+            json!(false)
+        );
+        input.gemini_live_model = Some("gemini-live-2.5");
+        assert_eq!(
+            setup_health_body(&input)["models"]["managedLiveVoice"],
+            json!(true)
+        );
+        input.gemini_api_key = Some("  ");
+        assert_eq!(
+            setup_health_body(&input)["models"]["managedLiveVoice"],
+            json!(false)
+        );
+        input.gemini_api_key = None;
+        assert_eq!(
+            setup_health_body(&input)["models"]["managedLiveVoice"],
+            json!(false)
+        );
+    }
+
+    #[test]
+    fn billing_needs_every_stripe_key_and_the_app_url() {
+        let mut input = empty();
+        input.stripe_secret_key = Some("sk");
+        assert_eq!(setup_health_body(&input)["billing"], json!(false));
+        input.stripe_pro_price_id = Some("price_pro");
+        assert_eq!(setup_health_body(&input)["billing"], json!(false));
+        input.stripe_webhook_secret = Some("whsec");
+        assert_eq!(setup_health_body(&input)["billing"], json!(false));
+        input.app_url = Some("https://app.test");
+        assert_eq!(setup_health_body(&input)["billing"], json!(true));
+        // Every conjunct is load-bearing: blanking any one flips it back.
+        input.stripe_secret_key = Some(" ");
+        assert_eq!(setup_health_body(&input)["billing"], json!(false));
+        input.stripe_secret_key = Some("sk");
+        input.stripe_pro_price_id = None;
+        assert_eq!(setup_health_body(&input)["billing"], json!(false));
+        input.stripe_pro_price_id = Some("price_pro");
+        input.stripe_webhook_secret = None;
+        assert_eq!(setup_health_body(&input)["billing"], json!(false));
+        input.stripe_webhook_secret = Some("whsec");
+        input.app_url = None;
+        assert_eq!(setup_health_body(&input)["billing"], json!(false));
+    }
+
+    #[test]
+    fn desktop_auth_needs_the_service_account_and_the_app_url() {
+        let mut input = empty();
+        input.firebase_service_account_email = Some("svc@project.iam");
+        assert_eq!(setup_health_body(&input)["desktopAuth"], json!(false));
+        input.firebase_service_account_private_key = Some("-----BEGIN");
+        assert_eq!(setup_health_body(&input)["desktopAuth"], json!(false));
+        input.app_url = Some("https://app.test");
+        assert_eq!(setup_health_body(&input)["desktopAuth"], json!(true));
+    }
+
+    #[test]
+    fn the_body_reports_presence_without_echoing_any_credential() {
+        let secrets = [
+            "leak-firebase-project",
+            "leak-telegram-webhook-secret",
+            "leak-telegram-bot-token",
+            "leak-sendblue-key-id",
+            "leak-sendblue-key-secret",
+            "leak-sendblue-number",
+            "leak-sendblue-signing-secret",
+            "leak-sendblue-path-token",
+            "leak-stripe-secret-key",
+            "leak-stripe-price-id",
+            "leak-stripe-webhook-secret",
+            "leak-app-url",
+            "leak-mimo-api-key",
+            "leak-deepgram-api-key",
+            "leak-gemini-api-key",
+            "leak-gemini-live-model",
+            "leak-mimo-completions-url",
+            "leak-service-account-email",
+            "leak-service-account-private-key",
+        ];
+        let input = SetupHealthInputs {
+            firebase_project_id: Some(secrets[0]),
+            telegram_webhook_secret: Some(secrets[1]),
+            telegram_bot_token: Some(secrets[2]),
+            sendblue_api_key_id: Some(secrets[3]),
+            sendblue_api_key_secret: Some(secrets[4]),
+            sendblue_number: Some(secrets[5]),
+            sendblue_webhook_signing_secret: Some(secrets[6]),
+            sendblue_webhook_path_token: Some(secrets[7]),
+            stripe_secret_key: Some(secrets[8]),
+            stripe_pro_price_id: Some(secrets[9]),
+            stripe_webhook_secret: Some(secrets[10]),
+            app_url: Some(secrets[11]),
+            mimo_api_key: Some(secrets[12]),
+            deepgram_api_key: Some(secrets[13]),
+            gemini_api_key: Some(secrets[14]),
+            gemini_live_model: Some(secrets[15]),
+            mimo_chat_completions_url: Some(secrets[16]),
+            firebase_service_account_email: Some(secrets[17]),
+            firebase_service_account_private_key: Some(secrets[18]),
+        };
+        let body = setup_health_body(&input);
+        // Fully configured: every flag is true.
+        assert_eq!(body["firebase"], json!(true));
+        assert_eq!(body["channels"]["telegram"], json!(true));
+        assert_eq!(body["channels"]["imessage"], json!(true));
+        assert_eq!(body["billing"], json!(true));
+        assert_eq!(body["models"]["managedChat"], json!(true));
+        assert_eq!(body["models"]["managedStt"], json!(true));
+        assert_eq!(body["models"]["managedLiveVoice"], json!(true));
+        assert_eq!(body["models"]["managedAsr"], json!(true));
+        assert_eq!(body["desktopAuth"], json!(true));
+        let serialized = body.to_string();
+        for secret in secrets {
+            assert!(!serialized.contains(secret), "{secret} leaked");
+        }
+        assert!(!serialized.contains("leak-"));
+    }
 }
