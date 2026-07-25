@@ -166,7 +166,7 @@ class _MobileMemoryScreenState extends State<MobileMemoryScreen> {
           left: 18,
           right: 18,
           bottom: widget.embedded
-              ? 8
+              ? 0
               : 12 + MediaQuery.paddingOf(context).bottom,
           child: _floatingComposer(context),
         ),

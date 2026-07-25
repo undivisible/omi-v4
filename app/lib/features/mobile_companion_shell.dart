@@ -5,6 +5,7 @@ import 'dart:ui' as ui;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:share_plus/share_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart' as url_launcher;
 
@@ -26,8 +27,10 @@ import '../ui/scroll_edge_fade.dart';
 import 'capture_notifier.dart';
 import 'firmware_install.dart';
 import 'firmware_update_check.dart';
+import 'meeting_notes.dart';
 import 'mobile_update_check.dart';
 import 'transcript_log_store.dart';
+import 'wifi_debug_panel.dart';
 
 const _paper = Color(0xfff7f6f1);
 const _surface = Color(0xfffffefa);
@@ -355,6 +358,7 @@ class MobilePendantPageState extends State<MobilePendantPage> {
   PageController? _pageController;
   int _pageIndex = 0;
   List<ConversationMessage> _conversation = const [];
+  List<MeetingNote> _meetingNotes = const [];
   Object? _conversationError;
   late final MobileCompanionCache _companionCache =
       PreferencesMobileCompanionCache();
@@ -421,6 +425,7 @@ class MobilePendantPageState extends State<MobilePendantPage> {
       }
       unawaited(_loadDigest());
       unawaited(_loadConversation());
+      unawaited(_loadMeetingNotes());
     }
   }
 
@@ -455,6 +460,13 @@ class MobilePendantPageState extends State<MobilePendantPage> {
       if (!mounted) return;
       setState(() => _conversationError = error);
     }
+  }
+
+  Future<void> _loadMeetingNotes() async {
+    try {
+      final notes = await widget.services.meetingNotes.list();
+      if (mounted) setState(() => _meetingNotes = notes);
+    } catch (_) {}
   }
 
   // Reads the account's digests and keeps the one that fits the moment. A failed
@@ -972,22 +984,28 @@ class MobilePendantPageState extends State<MobilePendantPage> {
 
   Widget _pageTabs() {
     const labels = ['Home', 'Conversations', 'Memory'];
+    const icons = [
+      Icons.home_rounded,
+      Icons.forum_rounded,
+      Icons.auto_awesome_rounded,
+    ];
     final dark = _darkMode(context);
-    final selectedBg = dark ? _cream : _ink;
-    final selectedFg = dark ? _ink : _cream;
-    final idleBg = dark ? const Color(0xff232320) : _surface;
+    final selectedFg = dark ? _cream : _ink;
     final idleFg = _pageInkSoft(context);
     final hairline = dark ? const Color(0x1ffffcec) : _hairline;
     return SafeArea(
       top: false,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(18, 8, 18, 10),
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: dark ? _inkSheet : _surface,
+          border: Border(top: BorderSide(color: hairline)),
+        ),
         child: Row(
           children: [
-            for (var index = 0; index < labels.length; index++) ...[
-              if (index > 0) const SizedBox(width: 8),
+            for (var index = 0; index < labels.length; index++)
               Expanded(
-                child: GestureDetector(
+                child: InkWell(
+                  key: Key('companion_tab_$index'),
                   onTap: () => unawaited(
                     _pageController?.animateToPage(
                       index,
@@ -995,27 +1013,33 @@ class MobilePendantPageState extends State<MobilePendantPage> {
                       curve: Curves.easeOutCubic,
                     ),
                   ),
-                  child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 180),
-                    padding: const EdgeInsets.symmetric(vertical: 10),
-                    decoration: BoxDecoration(
-                      color: _pageIndex == index ? selectedBg : idleBg,
-                      borderRadius: BorderRadius.circular(999),
-                      border: Border.all(color: hairline),
-                    ),
-                    child: Text(
-                      labels[index],
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
-                        color: _pageIndex == index ? selectedFg : idleFg,
-                      ),
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(8, 9, 8, 7),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          icons[index],
+                          size: 22,
+                          color: _pageIndex == index ? selectedFg : idleFg,
+                        ),
+                        const SizedBox(height: 3),
+                        Text(
+                          labels[index],
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: _pageIndex == index
+                                ? FontWeight.w700
+                                : FontWeight.w500,
+                            color: _pageIndex == index ? selectedFg : idleFg,
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                 ),
               ),
-            ],
           ],
         ),
       ),
@@ -1125,7 +1149,7 @@ class MobilePendantPageState extends State<MobilePendantPage> {
   Widget _conversationsPage() {
     final tiles = <Widget>[
       Text(
-        'Chat',
+        'Conversations',
         style: TextStyle(
           fontSize: 28,
           fontWeight: FontWeight.w700,
@@ -1135,7 +1159,7 @@ class MobilePendantPageState extends State<MobilePendantPage> {
       ),
       const SizedBox(height: 6),
       Text(
-        'Desktop, Telegram, and iMessage in one thread.',
+        'Chats, meetings, and captured audio in one place.',
         style: TextStyle(
           fontSize: 14,
           height: 1.35,
@@ -1149,21 +1173,39 @@ class MobilePendantPageState extends State<MobilePendantPage> {
           title: 'Could not load conversation',
           detail: 'Pull to open Currents and try again later.',
         )
-      else if (_conversation.isEmpty && widget.transcripts.isEmpty)
+      else if (_conversation.isEmpty &&
+          _meetingNotes.isEmpty &&
+          widget.transcripts.isEmpty)
         const _PaperTile(
           key: Key('companion_transcripts_empty'),
           icon: Icons.chat_bubble_outline_rounded,
-          title: 'No messages yet',
-          detail:
-              'Talk on desktop, Telegram, or iMessage and it shows up here.',
+          title: 'No conversations yet',
+          detail: 'Chats, meetings, and captured audio will show up here.',
         )
       else ...[
-        for (final message in _conversation)
-          _ConversationBubble(message: message),
-        if (_conversation.isNotEmpty && widget.transcripts.isNotEmpty)
+        if (_meetingNotes.isNotEmpty) ...[
+          const _SectionLabel('MEETINGS'),
+          const SizedBox(height: _tileGap),
+          for (final note in _meetingNotes)
+            _ConversationSummaryTile(
+              icon: Icons.groups_2_outlined,
+              title: note.title,
+              detail: note.summary.isEmpty
+                  ? note.meetingTypeLabel
+                  : note.summary,
+              timestamp: note.endedAt,
+            ),
           const SizedBox(height: _sectionGap),
+        ],
+        if (_conversation.isNotEmpty) ...[
+          const _SectionLabel('CHATS'),
+          const SizedBox(height: _tileGap),
+          for (final message in _conversation)
+            _ConversationBubble(message: message),
+          const SizedBox(height: _sectionGap),
+        ],
         if (widget.transcripts.isNotEmpty) ...[
-          const _SectionLabel('FROM THE PENDANT'),
+          const _SectionLabel('AUDIO CONVERSATIONS'),
           const SizedBox(height: _tileGap),
           ..._withGaps(_transcriptTiles()),
         ],
@@ -1218,7 +1260,7 @@ class MobilePendantPageState extends State<MobilePendantPage> {
           rememberedDeviceId: () => rememberedDeviceId,
           connectedDevice: () => _connectedDevice,
           capturing: () => widget.services.deviceAudio.active,
-          segmentCount: () => widget.transcripts.length,
+          transcripts: () => widget.transcripts,
           onForget: forget,
           onDisconnect: disconnect,
           onOpenMemory: () {
@@ -1337,14 +1379,59 @@ class _DeveloperOptionsPage extends StatelessWidget {
   const _DeveloperOptionsPage({
     required this.device,
     required this.capturing,
-    required this.segmentCount,
+    required this.transcripts,
     required this.dfuSupported,
+    required this.relay,
+    required this.onOpenFirmwareUpdate,
   });
 
   final RelayDevice? device;
   final bool capturing;
-  final int segmentCount;
+  final List<TranscriptDelta> transcripts;
   final bool dfuSupported;
+  final DeviceRelayService relay;
+  final VoidCallback onOpenFirmwareUpdate;
+
+  String get _diagnosticReport {
+    final device = this.device;
+    return [
+      'Omi diagnostic report',
+      'Device: ${device?.name ?? 'Not connected'}',
+      'Device ID: ${device?.id ?? 'Not connected'}',
+      'Bluetooth signal: ${device?.signalStrength?.toString() ?? 'Not reported'}',
+      'Battery: ${device?.batteryLevel?.toString() ?? 'Not reported'}',
+      'Firmware: ${device?.firmwareRevision ?? 'Not reported'}',
+      'Hardware: ${device?.hardwareRevision ?? 'Not reported'}',
+      'Model: ${device?.modelNumber ?? 'Not reported'}',
+      'Audio codec: ${device == null ? 'Not reported' : _codecLabel(device.audioCodec)}',
+      'Capture: ${capturing ? 'Live' : 'Idle'}',
+      'Segments: ${transcripts.length}',
+      if (transcripts.isNotEmpty) '',
+      if (transcripts.isNotEmpty) 'Recent transcript log',
+      for (final transcript in transcripts.reversed)
+        '${DateTime.fromMillisecondsSinceEpoch(transcript.occurredAtMs).toIso8601String()} ${transcript.text}',
+    ].join('\n');
+  }
+
+  Future<void> _export(BuildContext context) async {
+    final box = context.findRenderObject();
+    try {
+      await SharePlus.instance.share(
+        ShareParams(
+          subject: 'Omi diagnostic report',
+          text: _diagnosticReport,
+          sharePositionOrigin: box is RenderBox
+              ? box.localToGlobal(Offset.zero) & box.size
+              : null,
+        ),
+      );
+    } on Object {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not export diagnostics.')),
+      );
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -1357,7 +1444,7 @@ class _DeveloperOptionsPage extends StatelessWidget {
         backgroundColor: dark ? _inkSheet : _paper,
         foregroundColor: _pageInk(context),
         elevation: 0,
-        title: const Text('Developer options'),
+        title: const Text('Developer mode'),
       ),
       body: SafeArea(
         top: false,
@@ -1418,13 +1505,15 @@ class _DeveloperOptionsPage extends StatelessWidget {
                             'MCUboot OTA (SMP) service, so updates have to go '
                             'over USB (nRF Connect Programmer or a J-Link) '
                             'once. After that, updating from the app works.',
+                  trailing: dfuSupported ? const _RowChevron() : null,
+                  onTap: dfuSupported ? onOpenFirmwareUpdate : null,
                 ),
               ],
               _PaperTile(
                 key: const Key('companion_dev_segments_tile'),
                 icon: Icons.format_list_numbered_rounded,
                 title: 'Segments captured',
-                detail: '$segmentCount',
+                detail: '${transcripts.length}',
               ),
               _PaperTile(
                 key: const Key('companion_dev_capture_tile'),
@@ -1436,6 +1525,36 @@ class _DeveloperOptionsPage extends StatelessWidget {
                 detail: capturing ? 'Live' : 'Idle',
               ),
             ]),
+            const SizedBox(height: _sectionGap),
+            const _SectionLabel('TOOLS'),
+            const SizedBox(height: _tileGap),
+            Builder(
+              builder: (tileContext) => _PaperTile(
+                key: const Key('companion_dev_export_tile'),
+                icon: Icons.ios_share_rounded,
+                title: 'Export diagnostics',
+                detail:
+                    'Share device details, capture state, and the recent '
+                    'transcript log.',
+                trailing: const _RowChevron(),
+                onTap: () => unawaited(_export(tileContext)),
+              ),
+            ),
+            const SizedBox(height: _sectionGap),
+            const _SectionLabel('WI-FI'),
+            const SizedBox(height: _tileGap),
+            DecoratedBox(
+              key: const Key('companion_dev_wifi_panel'),
+              decoration: BoxDecoration(
+                color: _surface,
+                border: Border.all(color: _hairline),
+                borderRadius: _PaperTile.radius,
+              ),
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: WifiDebugPanel(relay: relay),
+              ),
+            ),
           ],
         ),
       ),
@@ -2752,6 +2871,32 @@ class _ConversationBubble extends StatelessWidget {
   }
 }
 
+class _ConversationSummaryTile extends StatelessWidget {
+  const _ConversationSummaryTile({
+    required this.icon,
+    required this.title,
+    required this.detail,
+    required this.timestamp,
+  });
+
+  final IconData icon;
+  final String title;
+  final String detail;
+  final DateTime timestamp;
+
+  @override
+  Widget build(BuildContext context) {
+    final local = timestamp.toLocal();
+    final time =
+        '${local.hour.toString().padLeft(2, '0')}:'
+        '${local.minute.toString().padLeft(2, '0')}';
+    return Padding(
+      padding: const EdgeInsets.only(bottom: _tileGap),
+      child: _PaperTile(icon: icon, title: title, detail: '$detail · $time'),
+    );
+  }
+}
+
 Color _pageSurface(BuildContext context) =>
     _darkMode(context) ? const Color(0xff232320) : _surface;
 
@@ -2769,7 +2914,7 @@ class _SettingsSheet extends StatefulWidget {
     required this.rememberedDeviceId,
     required this.connectedDevice,
     required this.capturing,
-    required this.segmentCount,
+    required this.transcripts,
     required this.onForget,
     required this.onDisconnect,
     required this.onOpenMemory,
@@ -2784,7 +2929,7 @@ class _SettingsSheet extends StatefulWidget {
   final String? Function() rememberedDeviceId;
   final RelayDevice? Function() connectedDevice;
   final bool Function() capturing;
-  final int Function() segmentCount;
+  final List<TranscriptDelta> Function() transcripts;
   final Future<void> Function() onForget;
   final Future<void> Function() onDisconnect;
   final VoidCallback onOpenMemory;
@@ -2926,8 +3071,10 @@ class _SettingsSheetState extends State<_SettingsSheet> {
           builder: (routeContext) => _DeveloperOptionsPage(
             device: widget.connectedDevice(),
             capturing: widget.capturing(),
-            segmentCount: widget.segmentCount(),
+            transcripts: widget.transcripts(),
             dfuSupported: widget.services.deviceRelay.dfuSupported,
+            relay: widget.services.deviceRelay,
+            onOpenFirmwareUpdate: _openFirmwareUpdate,
           ),
         ),
       ),
@@ -3047,8 +3194,8 @@ class _SettingsSheetState extends State<_SettingsSheet> {
                 _PaperTile(
                   key: const Key('companion_developer_options'),
                   icon: Icons.code_rounded,
-                  title: 'Developer options',
-                  detail: 'Firmware, hardware, codec, and capture diagnostics.',
+                  title: 'Developer mode',
+                  detail: 'Device diagnostics, firmware tools, and log export.',
                   trailing: const _RowChevron(),
                   onTap: _openDeveloperOptions,
                 ),

@@ -15,6 +15,7 @@ import 'package:omi/currents/currents.dart';
 import 'package:omi/device/device.dart';
 import 'package:omi/features/capture_notifier.dart';
 import 'package:omi/features/firmware_update_check.dart';
+import 'package:omi/features/meeting_notes.dart';
 import 'package:omi/features/mobile_companion_shell.dart';
 import 'package:omi/features/transcript_log_store.dart';
 import 'package:omi/main.dart';
@@ -1168,6 +1169,9 @@ void main() {
       findsOneWidget,
     );
     expect(find.byKey(const Key('companion_dev_capture_tile')), findsOneWidget);
+    expect(find.byKey(const Key('companion_dev_export_tile')), findsOneWidget);
+    expect(find.byKey(const Key('companion_dev_wifi_panel')), findsOneWidget);
+    expect(find.text('TOOLS'), findsOneWidget);
     // The update row is hidden for this pendant (no SMP service), so developer
     // options is where that stops being a silent absence.
     expect(
@@ -1787,6 +1791,52 @@ void main() {
     fixture.services.dispose();
   });
 
+  testWidgets('conversations presents meetings, chats, and captured audio', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(800, 2400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final fixture = await _mobileFixture('user-a');
+    final transcriptLog = VolatileTranscriptLogStore();
+    await transcriptLog.save([_delta('Audio catch-up', finalSegment: true)]);
+    fixture.services.meetingNotes = VolatileMeetingNotesStore()
+      ..notes.add(
+        MeetingNote(
+          id: 'meeting-1',
+          title: 'Product review',
+          summary: 'Agreed on the next release.',
+          meetingType: 'project-planning',
+          rawTranscript: 'Transcript',
+          startedAt: DateTime.utc(2026, 7, 25, 12),
+          endedAt: DateTime.utc(2026, 7, 25, 13),
+          participants: const ['Alex'],
+          keyPoints: const [],
+          decisions: const [],
+          actions: const [],
+          markdown: '',
+          metadataJson: '{}',
+        ),
+      );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MobileCompanionShell(
+          services: fixture.services,
+          pairedDevices: VolatilePairedDeviceStore(),
+          transcriptLog: transcriptLog,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await _selectCompanionTab(tester, 'Conversations');
+
+    expect(find.text('MEETINGS'), findsOneWidget);
+    expect(find.text('Product review'), findsOneWidget);
+    expect(find.text('AUDIO CONVERSATIONS'), findsOneWidget);
+    expect(find.text('Audio catch-up'), findsOneWidget);
+    fixture.services.dispose();
+  });
+
   testWidgets(
     'memory tab shows the floating search bar without page headings',
     (tester) async {
@@ -2363,6 +2413,7 @@ final class _Hub with NativeHubWithoutCapture implements NativeHub {
   void applyMemory({
     required String requestId,
     required List<MemoryApplyCommit> commits,
+    bool applyDeletions = false,
   }) {}
 
   @override
