@@ -684,7 +684,7 @@ Errors:
 `POST /facetime/start-call` returns `{appId, channelName, token, uid}` for an
 Agora channel rather than a link. Joining that channel needs Agora's native
 Server Gateway SDK (x86_64 Linux), which cannot run in the Workers runtime, so
-the bridge is a **Cloudflare Container** (`worker/container/facetime-bridge`)
+the bridge is a **Cloudflare Container** (`worker-rs/container/facetime-bridge`)
 driven by the `FaceTimeBridge` Durable Object:
 
 1. `startFaceTimeSession` takes an admission reservation from `STT_ADMISSION`

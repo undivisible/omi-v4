@@ -430,7 +430,7 @@ The per-user memory database is a file inside it: `omi-memory-<sha256(uid)>.sqli
 
 ### 5.2 Worker configuration
 
-Both Workers are configured declaratively: `worker-rs/wrangler.toml` for the Rust worker (`omi-v4-api-rs`, **production** on `omi.tsc.hk` and `api.omi.tsc.hk`) and `worker/wrangler.jsonc` for the dormant TypeScript rollback worker (`omi-v4-api`, no routes or cron after cutover). They bind the *same* physical D1 database; language-neutral `cloud/migrations/` is the schema source of truth and the Rust worker declares its `migrations_dir`. Each declares its own Durable Object namespace. FaceTime (Sendblue dial + Gemini Live bridge) is not implemented in worker-rs — public callers get 501; vars are reserved for a future port. `worker-rs/CUTOVER.md` documents rollback.
+The Rust Worker is configured declaratively in `worker-rs/wrangler.toml` (`omi-v4-api-rs`, **production** on `omi.tsc.hk` and `api.omi.tsc.hk`). Language-neutral `cloud/migrations/` is the schema source of truth and the Rust worker declares its `migrations_dir`. FaceTime uses Sendblue to start the call, then joins its Agora channel through the Gemini Live bridge container. `worker-rs/CUTOVER.md` documents rollback.
 
 Non-secret configuration lives in `vars` (model ids, budget ceilings and window sizes for both the managed-AI and STT admission paths, Firebase project id, the pinned upstream completions URL, AI Gateway ids). Secrets — provider keys, Stripe, Telegram, Sendblue, Firebase service account — are set with `wrangler secret put` and are not in the tree.
 
@@ -438,16 +438,14 @@ Non-secret configuration lives in `vars` (model ids, budget ceilings and window 
 
 ```mermaid
 flowchart LR
-    W1["worker (TypeScript)<br/>omi-v4-api<br/>migrations only"] --> OBS["Workers Observability<br/>observability.enabled = true<br/>head_sampling_rate = 1"]
-    W2["worker-rs (Rust production)<br/>omi-v4-api-rs"] --> OBS
-    W1 --> HEALTH["GET /health"]
+    W2["worker-rs (Rust production)<br/>omi-v4-api-rs"] --> OBS["Workers Observability<br/>observability.enabled = true<br/>head_sampling_rate = 1"]
     W2 --> HEALTH
     HEALTH --> BS["Better Stack<br/>uptime monitors"]
-    CRON["minutely cron<br/>(worker-rs)"] -.->|"not yet wired"| HB["Better Stack heartbeat<br/>'Omi worker cron', pending"]
+    CRON["minutely cron<br/>(worker-rs)"] --> HB["Better Stack heartbeat<br/>'Omi worker cron'"]
     W2 --> GWA["AI Gateway analytics<br/>(when CF_AI_GATEWAY_* set)"]
 ```
 
-**Workers Observability is enabled on both workers** — `"observability": { "enabled": true, "head_sampling_rate": 1 }` in `worker/wrangler.jsonc` and the equivalent `[observability]` block in `worker-rs/wrangler.toml`. That gives structured invocation logs and metrics in the Cloudflare dashboard with no third-party sink. Full sampling is deliberate while volume is low.
+**Workers Observability is enabled on the Rust Worker** through the `[observability]` block in `worker-rs/wrangler.toml`. That gives structured invocation logs and metrics in the Cloudflare dashboard with no third-party sink. Full sampling is deliberate while volume is low.
 
 **Better Stack is provisioned outside this repository.** Uptime monitors include `https://omi.tsc.hk/health` and `https://api.omi.tsc.hk/health` (Rust production worker), plus the Rust shadow URL on `*.workers.dev`.
 

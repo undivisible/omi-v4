@@ -1,13 +1,11 @@
-# CUTOVER — omi-v4-api (TS) → omi-v4-api-rs (Rust)
+# CUTOVER — omi-v4-api-rs (Rust)
 
 **Status: DONE (2026-07-24).** Production traffic is on `omi-v4-api-rs` at
-`omi.tsc.hk` and `api.omi.tsc.hk`. The TypeScript worker (`omi-v4-api`) is a
-dormant rollback configuration — its `routes` and `triggers.crons` are disabled
-in `worker/wrangler.jsonc`.
+`omi.tsc.hk` and `api.omi.tsc.hk`. The retired TypeScript Worker was removed
+after the Rust scenario-level parity checks passed.
 
-Both workers bind the **same** D1 database (`database_id 74aab5eb-…`); the
-language-neutral `cloud/migrations/` directory is the schema source of truth,
-and the Rust worker declares it as `migrations_dir`.
+The language-neutral `cloud/migrations/` directory is the schema source of
+truth, and the Rust worker declares it as `migrations_dir`.
 
 This document is kept as rollback/deploy reference.
 
@@ -26,11 +24,11 @@ This document is kept as rollback/deploy reference.
 ```sh
 cd worker-rs
 export PATH="$HOME/.rustup/toolchains/stable-aarch64-apple-darwin/bin:$PATH"
-cargo test --lib                                   # 161 host tests
+cargo test --lib
 cargo clippy --all-targets -- -D warnings          # host lint
 cargo clippy --target wasm32-unknown-unknown -- -D warnings
 worker-build --release                             # produces build/worker/shim.mjs (+ index_bg.wasm)
-npx wrangler deploy --dry-run --outdir /tmp/wrs-dry # must succeed
+bunx wrangler deploy --dry-run --outdir /tmp/wrs-dry # must succeed
 ```
 
 > Build note: `[profile.release]` must NOT set `strip = true`. Cargo's strip
@@ -52,14 +50,12 @@ wrangler vectorize create-metadata-index omi-memory-claims --property-name=uid -
 ```
 
 Dimensions (768) match Workers AI `@cf/baai/bge-base-en-v1.5`. The `AI` binding
-requires no provisioning. If the TS worker already created this index, skip —
-the Rust worker binds the same `index_name`.
+requires no provisioning.
 
 ## 3. Copy secrets
 
-The Rust worker reads the **same** secret names as the TS worker. Set each with
-`wrangler secret put <NAME>` (targets `omi-v4-api-rs` from this directory). Full
-list:
+Set each secret with `wrangler secret put <NAME>` (targets `omi-v4-api-rs` from
+this directory). Full list:
 
 ```
 TELEGRAM_WEBHOOK_SECRET
@@ -84,15 +80,12 @@ FIREBASE_SERVICE_ACCOUNT_PRIVATE_KEY
 `FACETIME_SYSTEM_PROMPT` is optional; when it is unset, the bridge uses its
 built-in audio-only Omi prompt.
 
-List what the live TS worker has with `wrangler secret list --name omi-v4-api`
-and mirror every entry. Any secret left unset degrades gracefully (the relevant
-route returns 503 / fails closed), so a missing secret is a silent feature
-outage — verify the list matches exactly.
+Any secret left unset degrades gracefully (the relevant route returns 503 /
+fails closed), so a missing secret is a silent feature outage.
 
 Non-secret config (`vars`, `MIMO_*`, `STT_*`, `GEMINI_LIVE_MODEL`,
 `FACETIME_*`, `AGORA_CLOUD_PROXY`, `ENVIRONMENT`, `FIREBASE_PROJECT_ID`) is
-already committed in `wrangler.toml` at parity with `worker/wrangler.jsonc` —
-no action needed.
+already committed in `wrangler.toml`.
 
 ## 4. Deploy production
 
@@ -103,8 +96,6 @@ bun run deploy
 # or: worker-build --release && bunx wrangler deploy
 ```
 
-Do **not** re-enable `routes` or `triggers.crons` on the TS worker — dual cron or
-dual domain against the same D1 will leak admission DO slots.
 
 ## 5. Smoke test on the workers.dev URL
 
@@ -129,30 +120,20 @@ Spot-check authenticated routes (`/v1/me`, `/v1/currents/refresh`, webhooks).
 
 ## 7. Rollback
 
-To revert to the TS worker on the custom domains:
-
-1. Uncomment `routes` and `triggers.crons` in `worker/wrangler.jsonc` and
-   redeploy `omi-v4-api`.
-2. Comment out `[[routes]]` and `[triggers]` in `worker-rs/wrangler.toml` and
-   redeploy `omi-v4-api-rs`.
-3. D1 needs no rollback — the schema never changed and both workers wrote
-   compatible rows.
+Rollback uses a previously verified Rust Worker deployment. D1 migrations are
+forward-only and require no runtime-owner change.
 
 ## Notes / residual risks
 
 - **DO class names** in `wrangler.toml` are the Rust struct names
   (`AssistantAdmissionDo`, `SttAdmissionDo`, `RateLimiterDo`,
-  `DeliveryCoordinator`) — a **separate** DO namespace from the TS worker. In-
-  flight DO state (admission ledgers, rate-limit counters) does NOT carry over
-  at cutover; both are in-memory/short-TTL and self-heal within a cron cycle.
+  `DeliveryCoordinator`). In-flight DO state (admission ledgers, rate-limit
+  counters) is in-memory/short-TTL and self-heals within a cron cycle.
 - **Assets path** `../cloud/public` is outside the project dir. wrangler 4.x
   accepts it (verified: "Read 3 files from the assets directory …"). If a future
   wrangler rejects it, add a `[build]` step that copies the files into
   `worker-rs/public/` and point `[assets] directory` there.
-- **nodejs_compat**: the TS worker sets `compatibility_flags = ["nodejs_compat"]`;
-  the Rust worker does not need it (pure wasm, no Node APIs) and omits it.
 - **FaceTime** uses Sendblue only to start the call; the returned Agora channel
   is joined by a Gemini Live bridge in a Cloudflare-managed container. Docker
   is required locally only when Wrangler builds that image for deploy or a
-  container-inclusive dry-run; it is not a runtime dependency. Do not
-  dual-route FaceTime on a TS shadow worker.
+  container-inclusive dry-run; it is not a runtime dependency.

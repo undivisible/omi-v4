@@ -1,17 +1,17 @@
 # Telegram channel — test checklist
 
-Production webhook base: `https://api.omi.tsc.hk/v1/webhooks/telegram` (see `worker/wrangler.jsonc` — API host is `api.omi.tsc.hk`).
+Production webhook base: `https://api.omi.tsc.hk/v1/webhooks/telegram` (see `worker-rs/wrangler.toml`).
 
 ## Prerequisites
 
 | Secret / config | Where | Purpose |
 |---|---|---|
-| `TELEGRAM_BOT_TOKEN` | Worker secret + `worker/.dev.vars` | Outbound `sendMessage`, webhook registration |
-| `TELEGRAM_WEBHOOK_SECRET` | Worker secret + `worker/.dev.vars` | Webhook auth header + link-code HMAC |
+| `TELEGRAM_BOT_TOKEN` | Worker secret + `worker-rs/.dev.vars` | Outbound `sendMessage`, webhook registration |
+| `TELEGRAM_WEBHOOK_SECRET` | Worker secret + `worker-rs/.dev.vars` | Webhook auth header + link-code HMAC |
 | `MIMO_API_KEY` + `MIMO_CHAT_COMPLETIONS_URL` | Worker secret | Server fallback replies (~2 min) |
 | Active Pro entitlement | User account | Fallback assistant (non-Pro gets offline ack only) |
 
-Copy `worker/.dev.vars.example` → `worker/.dev.vars` and fill placeholders. Never commit real values.
+Create `worker-rs/.dev.vars` with the required local secrets. Never commit real values.
 
 ## 1. Register / verify webhook
 
@@ -74,7 +74,7 @@ After linking:
 
 1. Send a normal message (not a command) in Telegram.
 2. **Desktop online:** desktop polls `GET /v1/conversations/default/inbox`, claims the item, completes with assistant reply → outbound via `channel_deliveries` → Telegram `sendMessage`.
-3. **Desktop offline ~2+ min:** cron runs `respondToStaleInboxItems` (`worker/src/inbox-fallback.ts`). Pro users get a managed completion; others get *"Got it — I'll answer when your desktop is back online."*
+3. **Desktop offline ~2+ min:** the Rust Worker cron runs `respondToStaleInboxItems`. Pro users get a managed completion; others get *"Got it — I'll answer when your desktop is back online."*
 
 Immediate command replies (`/help`, link codes, unlink confirm) bypass the inbox queue via `sendChannelText`.
 
@@ -90,9 +90,8 @@ Linking in Telegram groups/supergroups (negative `chat.id`) is rejected at `/sta
 ## 7. Local tests
 
 ```bash
-cd worker
-bun test test/webhooks.test.ts test/channel-group.test.ts test/inbox-fallback.test.ts
-bun test test/routes.test.ts test/channel-commands.test.ts
+cd worker-rs
+cargo test --lib
 ```
 
 ## Troubleshooting

@@ -39,7 +39,8 @@ Omi v4 is an ultrasimple thinking partner and second brain that works across eve
 omi-v4/
   app/                 Flutter application and web portal
   app/native/hub/      Rinf Rust hub
-  worker/              Bun/Hono Cloudflare API
+  worker-rs/           Rust Cloudflare API
+  cloud/               D1 migrations and static assets
   PLAN.md              this living plan
 ```
 
@@ -74,7 +75,7 @@ The reusable memory engine lives in the public [`tschk/zkr`](https://github.com/
 | `app/lib/currents/` and `app/lib/features/currents_screen.dart` | Recommendation state, ranking display, feedback | `omi-v3/app/src/lib/home-cards.ts` behavior |
 | `app/lib/device/` and `app/lib/features/device_screen.dart` | Omi pairing, BLE/audio status, phone capture | upstream Flutter device and capture services |
 | `app/native/hub/src/lib.rs` | Rinf signals, `rx4`, `rs_ai`, computer-use orchestration | `praefectus` crate; no fork |
-| `worker/src/index.ts` | Authenticated API, D1 memory, channels, plans, managed inference | `omi-v3/desktop/cloud-api` |
+| `worker-rs/src/glue.rs` | Authenticated API, D1 memory, channels, plans, managed inference | `omi-v3/desktop/cloud-api` |
 
 ## Rinf boundary
 

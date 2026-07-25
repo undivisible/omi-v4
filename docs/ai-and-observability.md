@@ -156,7 +156,7 @@ around Agora's proprietary binary, which the installer downloads at build
 time). Nothing about that can be loaded into an isolate, so the deployment
 target is decided by the SDK, not by preference.
 
-**Chosen deployment: a Cloudflare Container** (`worker/container/facetime-bridge`),
+**Chosen deployment: a Cloudflare Container** (`worker-rs/container/facetime-bridge`),
 one per call, driven by the `FaceTimeBridge` Durable Object. Containers run
 arbitrary `linux/amd64` images next to the Worker, which keeps the control
 plane, the admission controller and the D1 records in one place and gives

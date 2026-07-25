@@ -2,35 +2,24 @@
 
 > **Production cutover complete (2026-07-24).** `worker-rs` serves
 > `omi.tsc.hk` and `api.omi.tsc.hk`. Language-neutral `cloud/` owns D1
-> migrations, static assets, and static builds; `worker-rs` declares and
-> serves them. `worker/` is a dormant rollback configuration with routes and
-> cron disabled. FaceTime is implemented in Rust with a required container
-> binding; it has not been deployed from this migration work.
->
-> **`worker/src` and `worker/test` are retained deliberately.** A scenario-level
-> audit on 2026-07-25 found that the port is **not** at parity: the features in
-> the "absent" table below were never ported at all. Until each is either ported
-> or written off as dead product surface, the TypeScript is the only complete
-> specification of what they did, and the TS tests are the only precise record of
-> their behaviour. Treat that directory as a frozen reference, not as live code.
+> migrations, static assets, static builds, and the FaceTime container image.
+> The retired TypeScript runtime and test suite were removed after the
+> scenario-level Rust checks recorded here passed.
 
 ## Audit snapshot (2026-07-24, post-cutover)
 
 **Production:** `worker-rs` (`omi-v4-api-rs`) on `omi.tsc.hk` + `api.omi.tsc.hk`.
 **Migrations/assets:** `cloud/` — `worker-rs` declares `migrations_dir` and
-serves `cloud/public`; `worker/` has no routes or cron.
+serves `cloud/public`.
 
-`worker-rs` is the authoritative behavioural implementation: it is what serves
-production. The TypeScript remains the authoritative *specification* for the
-behaviour that was never ported. The tables below record what was ported and,
-more importantly, **what was not**. Treat the "absent" list as the live defect
-backlog, not as historical notes.
+`worker-rs` is the authoritative behavioural implementation and the sole
+deployed Worker runtime. The tables below are the completed migration record.
 
 ### Route-surface parity (re-audited 2026-07-25, against code)
 
 The previously recorded "~95% parity" was optimistic. A scenario-level audit of
-the retired TS test suite against the Rust sources found the following gaps.
-Anything marked **absent** is behaviour the production worker does not have.
+the retired TS test suite against the Rust sources found the gaps below; each
+was ported and covered by Rust host tests before TypeScript removal.
 
 | Gap | Severity | Status |
 |---|---|---|

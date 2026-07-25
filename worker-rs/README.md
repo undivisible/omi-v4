@@ -1,14 +1,11 @@
 # omi-v4-api-rs
 
 Production Cloudflare Worker for the Omi v4 API — serves `omi.tsc.hk` and
-`api.omi.tsc.hk`. Parity port of the TypeScript worker in `worker/`.
+`api.omi.tsc.hk`. It owns the deployed API, D1 migration runner, static assets,
+and the Sendblue-to-Gemini-Live FaceTime bridge container.
 
-The TypeScript worker (`worker/`, name `omi-v4-api`) is a dormant rollback
-configuration. Its custom-domain routes and cron are disabled after cutover;
-run `wrangler d1 migrations apply` from `worker-rs/` against `cloud/migrations/`.
-
-FaceTime is intentionally absent here (no Gemini Live bridge container). Public
-API / MCP FaceTime paths return 501 or are not exposed — see `src/facetime.rs`.
+Run `wrangler d1 migrations apply` from `worker-rs/` against
+`cloud/migrations/`.
 
 This crate has its own `wrangler.toml` (`name = "omi-v4-api-rs"`) and binds the
 **same** D1 database (`database_id = 74aab5eb-...`) with its `migrations_dir`
@@ -34,12 +31,12 @@ Miniflare-equivalent harness, so all logic lives in pure functions with
 ## Deploy
 
 ```sh
-npm run deploy          # worker-build --release && wrangler deploy
-npm run deploy:dry-run  # build + wrangler deploy --dry-run
+bun run deploy          # worker-build --release && wrangler deploy
+bun run deploy:dry-run  # build + wrangler deploy --dry-run
 ```
 
 See [`CUTOVER.md`](CUTOVER.md) for rollback and [`PORT_STATUS.md`](PORT_STATUS.md)
-for TS→Rust module parity.
+for the completed migration record.
 
 ## Quality gates
 
@@ -55,7 +52,7 @@ export PATH="$HOME/.rustup/toolchains/stable-aarch64-apple-darwin/bin:$PATH"
 - Host lint:     `cargo clippy --all-targets -- -D warnings`
 - Wasm lint:     `cargo clippy --target wasm32-unknown-unknown -- -D warnings`
 - Wasm build:    `worker-build --release`
-- Deploy check:  `npm run deploy:dry-run`
+- Deploy check:  `bun run deploy:dry-run`
 
 ### worker-build note (RESOLVED)
 

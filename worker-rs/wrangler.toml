@@ -137,7 +137,7 @@ class_name = "FaceTimeBridge"
 
 [[containers]]
 class_name = "FaceTimeBridge"
-image = "../worker/container/facetime-bridge/Dockerfile"
+image = "container/facetime-bridge/Dockerfile"
 instance_type = "basic"
 max_instances = 10
 

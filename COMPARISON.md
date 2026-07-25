@@ -25,7 +25,7 @@ flowchart TB
     subgraph V4["Omi v4 (this repo)"]
         A["One Flutter codebase<br/>iOS / Android / macOS / Windows / web"]
         H["app/native/hub (Rust, in-process)<br/>assistant, memory, voice, computer-use"]
-        W["Cloudflare Worker<br/>worker/ (TS) + worker-rs/ (Rust shadow)<br/>D1 + Durable Objects + Vectorize"]
+        W["Cloudflare Worker<br/>worker-rs/ (Rust)<br/>D1 + Durable Objects + Vectorize"]
         A <--> H
         A --> W
     end
@@ -37,8 +37,8 @@ flowchart TB
 | Area | Upstream | Omi v4 (this repo) |
 | --- | --- | --- |
 | Client apps | Flutter app (~593 Dart files under `app/lib`) plus a separate native desktop product (`desktop/macos`: a SwiftPM package, a `Backend-Rust` service, `agent/`, `agent-cloud/`, `acp-bridge/`; `desktop/windows`: an Electron/React app) | One Flutter codebase (173 Dart files under `app/lib`, 100 excluding generated Rinf/serde codecs) serving iOS, Android, macOS, Windows, and web, plus an embedded Rust hub (`app/native/hub/src`, 21 modules) and a macOS Runner (`app/macos/Runner`, 10 Swift files) |
-| Backend | Python/FastAPI on GCP — Firestore, Cloud Storage, Cloud Tasks, Redis, Pinecone *and* Qdrant for vectors, Typesense for search, SQLAlchemy, Modal jobs; provisioned with OpenTofu (`backend/`, `infrastructure/`) | Cloudflare Workers — `worker/` (TypeScript/Hono/Bun) with `worker-rs/` (a Rust/workers-rs parity port, shadow-deployed); D1 for relational data, Durable Objects for coordination, Vectorize for embeddings, Workers AI for embedding generation |
-| Auth | Firebase Auth | Firebase Auth, verified at the edge by hand-rolled JWT/JWKS checks (`worker/src/auth.ts`) |
+| Backend | Python/FastAPI on GCP — Firestore, Cloud Storage, Cloud Tasks, Redis, Pinecone *and* Qdrant for vectors, Typesense for search, SQLAlchemy, Modal jobs; provisioned with OpenTofu (`backend/`, `infrastructure/`) | Cloudflare Workers — `worker-rs/` (Rust); D1 for relational data, Durable Objects for coordination, Vectorize for embeddings, Workers AI for embedding generation |
+| Auth | Firebase Auth | Firebase Auth, verified at the edge by hand-rolled JWT/JWKS checks (`worker-rs/src/auth.rs`) |
 | Memory | Vector stores (Pinecone/Qdrant) behind backend services | `zkr` evidence-backed temporal memory in-process on the client, projected to D1/Vectorize for cloud recall |
 | Firmware | `omi/firmware` — production `omi/` plus legacy `devkit/` and `test/` variants | `firmware/` — the production tree vendored, with `devkit/` and `test/` included; see [`firmware/COMPARISON.md`](firmware/COMPARISON.md) |
 | Also in tree | `omiGlass`, a plugins/apps ecosystem, MCP servers, SDKs, contract tests | none of these |

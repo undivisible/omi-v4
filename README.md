@@ -11,7 +11,6 @@ Omi v4 captures what happens around you (pendant audio, meetings, your workspace
 | `app` | Flutter client for iOS, Android, macOS, Windows, and web — one codebase, mobile and desktop surfaces |
 | `app/native/hub` | The Rust "hub" (Rinf-bridged): assistant dispatch and model-tier routing, Gemini Live voice, workspace scan, meetings, memory, computer-use |
 | `app/macos/Runner` | macOS native layer — window chrome, summoned input overlay, voice waveform/glow overlays, global input, menu bar, EventKit |
-| `worker` | Cloudflare Worker reference implementation (Bun, Hono, TypeScript); routes/cron disabled after cutover |
 | `worker-rs` | **Production API** on `omi.tsc.hk` + `api.omi.tsc.hk` (`omi-v4-api-rs`) and D1 migration runner — see [`worker-rs/CUTOVER.md`](worker-rs/CUTOVER.md) and [`worker-rs/PORT_STATUS.md`](worker-rs/PORT_STATUS.md) |
 | `cloud` | Language-neutral D1 migrations and static assets/build scripts |
 | `firmware` | Pendant firmware (nRF5340 CV1 and nRF52840 DevKits). Built with nRF Connect SDK; host Rust tests + west CI in [`.github/workflows/ci-firmware.yml`](.github/workflows/ci-firmware.yml) — see [`firmware/README.md`](firmware/README.md) |
@@ -22,7 +21,7 @@ External engines: [`tschk/zkr`](https://github.com/tschk/zkr) for evidence-backe
 
 The pendant streams Opus audio over BLE to the phone; the desktop hub captures voice, meetings, and workspace context directly. Everything becomes evidenced memory in `zkr`, stored under `~/.omi` and projected to Cloudflare D1 and Vectorize so the messaging channels stay memory-aware. One assistant conversation spans every surface, keyed by a single Firebase UID.
 
-Chat always goes to the configured cloud provider — managed through the Worker, or direct with your own key. A per-prompt router picks one of five model tiers (speed, balanced, smart, multimodal, search) from one env-driven table shared by the hub and both workers. Apple Foundation Models runs on-device for the small jobs only: summaries, onboarding scan summaries, meeting extraction, and the daily review.
+Chat always goes to the configured cloud provider — managed through the Rust Worker, or direct with your own key. A per-prompt router picks one of five model tiers (speed, balanced, smart, multimodal, search) from one env-driven table shared by the hub and Worker. Apple Foundation Models runs on-device for the small jobs only: summaries, onboarding scan summaries, meeting extraction, and the daily review.
 
 ## Documentation
 
@@ -66,16 +65,11 @@ cargo fmt --check
 cargo clippy --all-targets --all-features -- -D warnings
 cargo test --all-features
 
-cd ../../../worker
-bun install --frozen-lockfile
-bun run check
-bunx wrangler deploy --dry-run
-
-cd ../worker-rs
+cd ../../../worker-rs
 cargo test --lib
 cargo clippy --all-targets -- -D warnings
 cargo clippy --target wasm32-unknown-unknown -- -D warnings
-npm run deploy:dry-run
+bun run deploy:dry-run
 ```
 
 Live computer-use on macOS: grant **Accessibility** to Terminal or Cursor, then:
