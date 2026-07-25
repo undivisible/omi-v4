@@ -4,6 +4,7 @@
   "scripts": {
     "build": "worker-build --release",
     "deploy": "worker-build --release && bunx wrangler deploy",
-    "deploy:dry-run": "worker-build --release && bunx wrangler deploy --dry-run"
+    "deploy:dry-run": "worker-build --release && bunx wrangler deploy --dry-run",
+    "test:tail": "bun test test/tail-export.test.mjs"
   }
 }

@@ -39,7 +39,7 @@ Anything marked **absent** is behaviour the production worker does not have.
 | Cloudflare AI Gateway (`aiGatewayRoute`) incl. the account/gateway id path-smuggling validation | Medium | **ported 2026-07-25** — canonical account/gateway validation and authenticated routing |
 | Managed speech routes (`/api/v1/speech/*`) and the `speak_text` / `transcribe_audio` MCP tools | Medium | **ported 2026-07-25** — routes, MCP dispatch, D1 idempotency, admission and settlement wired |
 | Authoritative memory log — append-on-sync, `GET /memory/log`, `memory_log_cursors` | Medium | **ported 2026-07-25** — sync append/projection and authenticated route wired |
-| `observability.ts` — Sentry error capture + Better Stack log shipping | Medium | **partial** — heartbeat and Sentry envelope capture are wired; Tail export is unsupported by workers-rs 0.8.5 |
+| `observability.ts` — Sentry error capture + Better Stack log shipping | Medium | **ported 2026-07-25** — heartbeat and Sentry envelope capture are Rust; a JS entrypoint adds the missing Tail handler without restoring TypeScript route or cron ownership |
 | Streaming usage-tail settlement writes no `status='complete'` row for a streamed turn | Medium | **ported 2026-07-25** — SSE tail finalizes the ledger and admission |
 | STT "idempotency key reused with different configuration" 409 | Medium | **ported 2026-07-25** |
 | BYOK negotiation: closing the prior open session on start, and the superseded-session accept guard | Medium | **ported 2026-07-25** |
@@ -166,7 +166,7 @@ build is honest with or without the index provisioned. The scheduled
 | `facetime.ts` / bridge | **implemented** | Sendblue call/session flow, MCP tool and required Rust container/DO binding are wired. |
 | `digests.ts`, `cron-cursor.ts` | **ported** | See "Cron jobs" below. |
 | `stripe-sync.ts` | **ported** | `src/stripe_sync.rs`, ported separately; `reconcileStripeSubscriptions` is wired into `glue.rs::scheduled` in its TS position. |
-| `observability.ts` | **partial** | Heartbeat and Sentry capture are wired; Tail log shipping is unavailable in workers-rs 0.8.5. |
+| `observability.ts` | **ported** | Heartbeat and Sentry capture are Rust; the Rust Worker build's JS entrypoint forwards Tail batches to Better Stack without owning routes or cron. |
 | `channel-checkout.ts` | **ported** | `src/channel_checkout.rs` + `routes_channels` + webhook/`stripe_sync` reconcile; `/subscribe` in `CHANNEL_COMMANDS`. |
 | `channel-signup.ts` | **ported** | Signup, first-contact, `/subscribe`, and placeholder claim/retire on link redemption are wired. |
 
@@ -375,9 +375,6 @@ table above are the backlog that number concealed. Residual risks:
   and AI "always remote"; semantic-search paths return null/empty locally. This
   is a Miniflare limitation, not a port gap — both work against the deployed
   worker (or `wrangler dev --remote`).
-- **Better Stack Tail export remains absent.** `worker-macros` 0.8.5 exposes no
-  Tail event handler; native Workers Observability and the new Sentry capture
-  remain active.
 
 ## Build pipeline (RESOLVED)
 
