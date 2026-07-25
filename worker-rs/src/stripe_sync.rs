@@ -251,6 +251,8 @@ pub const APPLY_SUBSCRIPTION_STATE_SQL: &str = "INSERT INTO entitlements\n      
 /// Binds, in order: `?1` customer, `?2` now, `?3` uid.
 pub const CLAIM_STRIPE_CUSTOMER_SQL: &str = "INSERT INTO entitlements (uid, plan, status, stripe_customer_id, updated_at)\n     SELECT uid, 'byok', 'inactive',\n       CASE WHEN EXISTS (SELECT 1 FROM entitlements other\n                         WHERE other.stripe_customer_id = ?1 AND other.uid <> ?3)\n         THEN NULL ELSE ?1 END,\n       ?2\n     FROM users WHERE uid = ?3\n     ON CONFLICT(uid) DO UPDATE SET\n       stripe_customer_id = COALESCE(excluded.stripe_customer_id, entitlements.stripe_customer_id),\n       updated_at = excluded.updated_at";
 
+pub const DEACTIVATE_FOR_CUSTOMER_SQL: &str = "UPDATE entitlements\n     SET status = 'inactive', stripe_event_created = ?1, updated_at = ?2\n     WHERE stripe_customer_id = ?3 AND stripe_event_created <= ?1";
+
 /// The `status` literal bound as `?1`: the column is constrained to
 /// `('active', 'inactive')`.
 pub fn status_literal(active: bool) -> &'static str {
@@ -291,29 +293,13 @@ pub fn encode_path_segment(value: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// Channel checkout half — awaiting the channel-checkout port
+// Channel checkout half
 // ---------------------------------------------------------------------------
 
-/// The second half of the TS sweep, kept separate because the feature it
-/// serves does not exist in this crate yet.
-///
-/// `worker/src/channel-checkout.ts` — subscriptions bought from inside a
-/// messaging channel — has not been ported. Its completion path
-/// (`completeChannelCheckout`) writes `channel_checkout_sessions`,
-/// `channel_accounts`, an audit event and a single-shot confirmation message,
-/// and is a project of its own. Only the classification of a re-read session is
-/// ported here, so the specification is captured and tested; nothing in this
-/// submodule touches D1, and the sweep driver never calls into it.
-///
-/// Sequencing matters when it does land. The TS runs both halves from a single
-/// function that awaits both `SELECT`s before either can act, so a fault on the
-/// checkout side — a missing table, most obviously — aborts the whole job and
-/// takes the entitlement safety net down with it. The driver in this module
-/// runs the entitlement sweep to completion first and independently; the
-/// checkout sweep is added after it with its own error isolation, so it can
-/// never have that effect.
 pub mod checkout {
     use serde_json::Value;
+
+    use crate::channel_checkout::CheckoutCompletion;
 
     /// A checkout that has had time to settle but shows no completion. The
     /// lower bound exists because Stripe expires an unpaid session within a
@@ -334,18 +320,6 @@ pub mod checkout {
             now_ms - CHECKOUT_WINDOW_MS,
             CHECKOUT_BATCH,
         ]
-    }
-
-    /// The fields the completion path needs from a re-read session.
-    #[derive(Debug, Clone, PartialEq, Eq)]
-    pub struct CheckoutCompletion {
-        pub session_id: String,
-        pub uid: Option<String>,
-        pub customer: Option<String>,
-        pub subscription: Option<String>,
-        pub paid: bool,
-        pub email: Option<String>,
-        pub event_created: i64,
     }
 
     /// What a re-read `checkout/sessions/{id}` response means.
@@ -378,7 +352,7 @@ pub mod checkout {
         let string = |key: &str| session.get(key).and_then(Value::as_str).map(String::from);
         let payment_status = session.get("payment_status").and_then(Value::as_str);
         CheckoutOutcome::Complete(Box::new(CheckoutCompletion {
-            session_id: session_id.to_string(),
+            session_id: Some(session_id.to_string()),
             uid: string("client_reference_id"),
             customer: string("customer"),
             subscription: string("subscription"),
@@ -404,7 +378,7 @@ mod wasm_glue {
     use worker::{D1Database, Env, Fetch, Request, Response, Result, Url};
 
     use super::{
-        encode_path_segment, reconcile_outcome, stale_entitlements_binds, stale_row,
+        checkout, encode_path_segment, reconcile_outcome, stale_entitlements_binds, stale_row,
         status_literal, ReconcileOutcome, StaleEntitlementRow, APPLY_SUBSCRIPTION_STATE_SQL,
         STALE_ENTITLEMENTS_SQL, STRIPE_VERSION,
     };
@@ -499,24 +473,62 @@ mod wasm_glue {
         Ok(())
     }
 
+    async fn reconcile_channel_checkout(
+        env: &Env,
+        secret: &str,
+        session_id: &str,
+        now: i64,
+    ) -> Result<()> {
+        let path = format!("checkout/sessions/{}", encode_path_segment(session_id));
+        let session = stripe_get(secret, &path).await;
+        match checkout::checkout_outcome(session_id, session.as_ref(), now) {
+            checkout::CheckoutOutcome::LeaveUntouched => {}
+            checkout::CheckoutOutcome::MarkExpired => {
+                let _ = crate::routes_channels::expire_channel_checkout(env, session_id, now).await;
+            }
+            checkout::CheckoutOutcome::Complete(completion) => {
+                let _ =
+                    crate::routes_channels::complete_channel_checkout(env, *completion, now).await;
+            }
+        }
+        Ok(())
+    }
+
+    async fn sweep_pending_checkouts(env: &Env, secret: &str, now: i64) -> Result<()> {
+        let db = env.d1("DB")?;
+        let binds = checkout::pending_checkouts_binds(now);
+        let pending = db
+            .prepare(checkout::PENDING_CHECKOUTS_SQL)
+            .bind(&[
+                (binds[0] as f64).into(),
+                (binds[1] as f64).into(),
+                (binds[2] as f64).into(),
+            ])?
+            .all()
+            .await?;
+        for row in pending.results::<Value>()? {
+            let Some(session_id) = row
+                .get("session_id")
+                .and_then(Value::as_str)
+                .map(String::from)
+            else {
+                continue;
+            };
+            let _ = reconcile_channel_checkout(env, secret, &session_id, now).await;
+        }
+        Ok(())
+    }
+
     /// The scheduled Stripe reconciliation pass — `reconcileStripeSubscriptions`.
-    ///
-    /// Returns immediately when `STRIPE_SECRET_KEY` is unset or empty: with no
-    /// credential there is no answer to be had, and the correct behaviour is to
-    /// leave every entitlement exactly as it is rather than to act on silence.
-    ///
-    /// Only the entitlement half runs today. The channel-checkout half is
-    /// described in [`super::checkout`] and awaits that feature's port; when it
-    /// lands it belongs after the call below, driven with its own `let _ =` so
-    /// that a fault on that side — a missing table above all — cannot abort the
-    /// entitlement sweep that protects paying customers.
     pub async fn reconcile_stripe_subscriptions(env: &Env) -> Result<()> {
         let Some(secret) = secret_or_var(env, "STRIPE_SECRET_KEY").filter(|s| !s.is_empty()) else {
             return Ok(());
         };
         let now = now_ms();
         let db = env.d1("DB")?;
-        sweep_stale_entitlements(&db, &secret, now).await
+        sweep_stale_entitlements(&db, &secret, now).await?;
+        let _ = sweep_pending_checkouts(env, &secret, now).await;
+        Ok(())
     }
 }
 
@@ -941,7 +953,7 @@ mod tests {
         });
         match checkout_outcome("cs_1", Some(&session), NOW) {
             CheckoutOutcome::Complete(completion) => {
-                assert_eq!(completion.session_id, "cs_1");
+                assert_eq!(completion.session_id.as_deref(), Some("cs_1"));
                 assert_eq!(completion.uid.as_deref(), Some("uid-1"));
                 assert_eq!(completion.customer.as_deref(), Some("cus_1"));
                 assert_eq!(completion.subscription.as_deref(), Some("sub_123"));

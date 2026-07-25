@@ -18,7 +18,7 @@ use crate::settings;
 use crate::setup_health::{setup_health_body, SetupHealthInputs};
 use crate::worker_util::now_ms_f64 as now_ms;
 use crate::worker_util::{changes, secret_or_var, uuid_v4};
-use crate::{billing, conversations as conv, crypto_util, desktop_auth, webhooks as wh};
+use crate::{billing, channel_checkout, conversations as conv, crypto_util, desktop_auth, webhooks as wh};
 
 const JWKS_URL: &str =
     "https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com";
@@ -1529,6 +1529,7 @@ async fn handle_webhook_stripe(mut req: Request, ctx: RouteContext<()>) -> Resul
         return error_json("Invalid event", 400);
     };
     let db = ctx.env.d1("DB")?;
+    let now = now_ms();
     let receipt = || {
         db.prepare(
             "INSERT OR IGNORE INTO stripe_events (event_id, event_type, received_at) VALUES (?1, ?2, ?3)",
@@ -1536,9 +1537,47 @@ async fn handle_webhook_stripe(mut req: Request, ctx: RouteContext<()>) -> Resul
         .bind(&[
             js_str(&envelope.id),
             js_str(&envelope.event_type),
-            now_ms().into(),
+            now.into(),
         ])
     };
+    let object = event.get("data").and_then(|d| d.get("object"));
+    if envelope.event_type == "checkout.session.expired" {
+        let inserted = receipt()?.run().await?;
+        let duplicate = changes(&inserted) == 0;
+        if let Some(session_id) = object.and_then(|o| o.get("id")).and_then(Value::as_str) {
+            let _ = crate::routes_channels::expire_channel_checkout(
+                &ctx.env,
+                session_id,
+                now as i64,
+            )
+            .await;
+        }
+        return Response::from_json(&json!({ "received": true, "duplicate": duplicate, "updated": false }));
+    }
+    if envelope.event_type == "invoice.payment_failed" {
+        let inserted = receipt()?.run().await?;
+        let duplicate = changes(&inserted) == 0;
+        if let Some(customer) = object
+            .and_then(|o| o.get("customer"))
+            .and_then(Value::as_str)
+        {
+            let revoked = db
+                .prepare(crate::stripe_sync::DEACTIVATE_FOR_CUSTOMER_SQL)
+                .bind(&[
+                    (envelope.created as f64).into(),
+                    now.into(),
+                    customer.into(),
+                ])?
+                .run()
+                .await?;
+            return Response::from_json(&json!({
+                "received": true,
+                "duplicate": duplicate,
+                "updated": changes(&revoked) > 0,
+            }));
+        }
+        return Response::from_json(&json!({ "received": true, "duplicate": duplicate, "updated": false }));
+    }
     match &envelope.plan {
         wh::StripePlan::ReceiptOnly { has_object } => {
             let inserted = receipt()?.run().await?;
@@ -1554,17 +1593,35 @@ async fn handle_webhook_stripe(mut req: Request, ctx: RouteContext<()>) -> Resul
             }
         }
         wh::StripePlan::Checkout { uid, customer } => {
+            let completion = object
+                .map(|obj| channel_checkout::checkout_completion_from_object(obj, envelope.created))
+                .unwrap_or(channel_checkout::CheckoutCompletion {
+                    session_id: None,
+                    uid: Some(uid.clone()),
+                    customer: Some(customer.clone()),
+                    subscription: None,
+                    paid: false,
+                    email: None,
+                    event_created: envelope.created,
+                });
             let results = db
                 .batch(vec![
                     receipt()?,
                     db.prepare(crate::stripe_sync::CLAIM_STRIPE_CUSTOMER_SQL)
-                        .bind(&[js_str(customer), now_ms().into(), js_str(uid)])?,
+                        .bind(&[js_str(customer), now.into(), js_str(uid)])?,
                 ])
                 .await?;
+            let channel = crate::routes_channels::complete_channel_checkout(
+                &ctx.env,
+                completion,
+                now as i64,
+            )
+            .await?;
             Response::from_json(&json!({
                 "received": true,
                 "duplicate": changes(&results[0]) == 0,
                 "updated": changes(&results[1]) == 1,
+                "channel": channel.provisioned,
             }))
         }
         wh::StripePlan::Subscription(sub) => {
@@ -1579,7 +1636,7 @@ async fn handle_webhook_stripe(mut req: Request, ctx: RouteContext<()>) -> Resul
                                 None => JsValue::NULL,
                             },
                             js_str(&sub.customer),
-                            now_ms().into(),
+                            now.into(),
                             js_opt(sub.subscription.as_deref()),
                             js_opt(sub.price_id.as_deref()),
                             (sub.event_created as f64).into(),

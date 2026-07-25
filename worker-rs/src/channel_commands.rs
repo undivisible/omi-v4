@@ -26,6 +26,16 @@ pub const CHANNEL_COMMANDS: &[ChannelCommand] = &[
         summary: "link this chat to your Omi account",
     },
     ChannelCommand {
+        name: "/signup",
+        aliases: &["/new"],
+        summary: "how to create an Omi account and link this chat",
+    },
+    ChannelCommand {
+        name: "/subscribe",
+        aliases: &["/upgrade"],
+        summary: "get a payment link for your subscription",
+    },
+    ChannelCommand {
         name: "/status",
         aliases: &[],
         summary: "show whether this chat is linked",
@@ -112,8 +122,8 @@ chat, or by typing it straight into the chat box on Omi for desktop. It expires 
 
 /// `notLinkedText`.
 pub const NOT_LINKED_TEXT: &str =
-    "This chat isn't linked to an Omi account yet. Send /start and I'll give you a \
-code to type into the app.";
+    "This chat isn't linked to an Omi account yet. Send /start if you already have one \
+and I'll give you a link code, or /signup for how to create an account and link this chat.";
 
 /// `unknownCommandText`.
 pub const UNKNOWN_COMMAND_TEXT: &str =

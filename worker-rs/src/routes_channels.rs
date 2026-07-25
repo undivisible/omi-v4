@@ -9,13 +9,25 @@ use serde_json::{json, Value};
 use worker::wasm_bindgen::JsValue;
 use worker::*;
 
+use crate::channel_checkout::{
+    self, checkout_idempotency_key, checkout_reply, ChannelCheckout, CheckoutCompletion,
+    EXPIRE_CHANNEL_CHECKOUT_SQL,
+};
 use crate::channel_commands as cmd;
 use crate::channel_link;
+use crate::channel_signup::{
+    self, parse_signup_answer, FirstContact, SignupAnswer, SignupResult, CLARIFY_ANSWER_TEXT,
+    FIRST_CONTACT_TEXT, SIGNUP_GUIDE_TEXT,
+};
 use crate::delivery::{
     self, coordinator_name, http_outcome, network_error_message, network_outcome, retry_delay,
     stable_idempotency_key, Channel, RetryAfterHints, MAX_ATTEMPTS,
 };
+use crate::billing;
+use crate::byok_pricing::{self, format_price};
+use crate::channel_group::{self, GROUP_CHANNEL_LINK_ERROR};
 use crate::glue::error_json;
+use crate::stripe_sync::APPLY_SUBSCRIPTION_STATE_SQL;
 use crate::inbox_fallback as fallback;
 use crate::worker_util::{now_ms, uuid_v4 as random_uuid};
 
@@ -336,6 +348,763 @@ async fn unlinked_reply_allowed(env: &Env, channel: Channel, channel_user_id: &s
     allowed
 }
 
+async fn checkout_allowed(env: &Env, channel: Channel, channel_user_id: &str) -> bool {
+    let (per_sender, _) = crate::routes_ai::consume_rate_limit(
+        env,
+        &channel_checkout::checkout_rate_limit_key(channel.as_str(), channel_user_id),
+        channel_checkout::CHECKOUT_PER_SENDER_LIMIT,
+        channel_checkout::CHECKOUT_PER_SENDER_WINDOW_MS,
+    )
+    .await;
+    if !per_sender {
+        return false;
+    }
+    let (global, _) = crate::routes_ai::consume_rate_limit(
+        env,
+        channel_checkout::CHECKOUT_GLOBAL_RATE_LIMIT_KEY,
+        channel_checkout::CHECKOUT_GLOBAL_LIMIT,
+        channel_checkout::CHECKOUT_GLOBAL_WINDOW_MS,
+    )
+    .await;
+    global
+}
+
+async fn signup_allowed(env: &Env, channel: Channel, channel_user_id: &str) -> bool {
+    let (per_sender, _) = crate::routes_ai::consume_rate_limit(
+        env,
+        &channel_signup::signup_rate_limit_key(channel.as_str(), channel_user_id),
+        channel_signup::SIGNUP_PER_SENDER_LIMIT,
+        channel_signup::SIGNUP_PER_SENDER_WINDOW_MS,
+    )
+    .await;
+    if !per_sender {
+        return false;
+    }
+    let (global, _) = crate::routes_ai::consume_rate_limit(
+        env,
+        channel_signup::SIGNUP_GLOBAL_RATE_LIMIT_KEY,
+        channel_signup::SIGNUP_GLOBAL_LIMIT,
+        channel_signup::SIGNUP_GLOBAL_WINDOW_MS,
+    )
+    .await;
+    global
+}
+
+fn env_var(env: &Env, name: &str) -> Option<String> {
+    crate::worker_util::secret_or_var(env, name).filter(|v| !v.is_empty())
+}
+
+async fn byok_price_cents(env: &Env, uid: &str) -> Result<(i64, bool)> {
+    let band = byok_pricing::price_band(|key| env_var(env, key));
+    let db = env.d1("DB")?;
+    let row = db
+        .prepare("SELECT price_cents, outcome FROM byok_price_agreements WHERE uid = ?1")
+        .bind(&[uid.into()])?
+        .first::<Value>(None)
+        .await?;
+    let Some(row) = row else {
+        return Ok((band.standard_cents, false));
+    };
+    let price_cents = json_i64(&row, "price_cents").unwrap_or(band.standard_cents);
+    let outcome = json_str(&row, "outcome").unwrap_or_default();
+    let price = band.standard_cents.min(band.floor_cents.max(price_cents));
+    Ok((price, outcome == "negotiated"))
+}
+
+async fn stripe_post(
+    secret: &str,
+    path: &str,
+    params: &[(String, String)],
+    idempotency_key: Option<&str>,
+) -> Result<Option<(String, String)>> {
+    let url = Url::parse(&format!("https://api.stripe.com/v1/{path}"))
+        .map_err(|e| worker::Error::RustError(e.to_string()))?;
+    let headers = Headers::new();
+    headers.set("authorization", &format!("Bearer {secret}"))?;
+    headers.set("content-type", "application/x-www-form-urlencoded")?;
+    headers.set("stripe-version", crate::stripe_sync::STRIPE_VERSION)?;
+    if let Some(key) = idempotency_key {
+        headers.set("idempotency-key", key)?;
+    }
+    let mut init = RequestInit::new();
+    init.with_method(Method::Post)
+        .with_headers(headers)
+        .with_body(Some(JsValue::from_str(&billing::encode_form(params))));
+    let request = Request::new_with_init(url.as_str(), &init)?;
+    let mut response = Fetch::Request(request).send().await?;
+    let ok = (200..300).contains(&response.status_code());
+    let body: Value = response.json().await.unwrap_or(Value::Null);
+    Ok(billing::parse_session(ok, &body))
+}
+
+async fn stripe_price(secret: &str, price_id: &str) -> Option<(String, String, i64, String, i64)> {
+    let url = format!(
+        "https://api.stripe.com/v1/prices/{}",
+        crate::stripe_sync::encode_path_segment(price_id)
+    );
+    let headers = Headers::new();
+    headers.set("authorization", &format!("Bearer {secret}")).ok()?;
+    headers.set("stripe-version", crate::stripe_sync::STRIPE_VERSION).ok()?;
+    let mut init = RequestInit::new();
+    init.with_method(Method::Get).with_headers(headers);
+    let request = Request::new_with_init(&url, &init).ok()?;
+    let mut response = Fetch::Request(request).send().await.ok()?;
+    if !(200..300).contains(&response.status_code()) {
+        return None;
+    }
+    let body: Value = response.json().await.ok()?;
+    let currency = body.get("currency").and_then(Value::as_str)?;
+    let product = body.get("product").and_then(Value::as_str)?;
+    let interval = body
+        .get("recurring")
+        .and_then(|r| r.get("interval"))
+        .and_then(Value::as_str)?;
+    let interval_count = body
+        .get("recurring")
+        .and_then(|r| r.get("interval_count"))
+        .and_then(|v| v.as_i64().or_else(|| v.as_f64().map(|f| f as i64)))
+        .unwrap_or(1)
+        .max(1);
+    let unit_amount = body.get("unit_amount").and_then(json_i64);
+    Some((
+        currency.to_string(),
+        product.to_string(),
+        unit_amount.unwrap_or(0),
+        interval.to_string(),
+        interval_count,
+    ))
+}
+
+async fn create_checkout_session(
+    env: &Env,
+    uid: &str,
+    channel: Channel,
+    channel_user_id: &str,
+    channel_chat_id: &str,
+    success_url: &str,
+    cancel_url: &str,
+    expires_at: i64,
+    idempotency_key: &str,
+) -> Result<Option<(String, String, i64)>> {
+    let Some(secret) = env_var(env, "STRIPE_SECRET_KEY") else {
+        return Ok(None);
+    };
+    let Some(price_id) = env_var(env, "STRIPE_PRO_PRICE_ID") else {
+        return Ok(None);
+    };
+    let db = env.d1("DB")?;
+    let entitlement = db
+        .prepare("SELECT stripe_customer_id FROM entitlements WHERE uid = ?1")
+        .bind(&[uid.into()])?
+        .first::<Value>(None)
+        .await?;
+    let customer_id = entitlement
+        .as_ref()
+        .and_then(|row| json_str(row, "stripe_customer_id"));
+    let (price_cents, negotiated) = byok_price_cents(env, uid).await?;
+    let mut params = vec![
+        ("mode".into(), "subscription".into()),
+        ("line_items[0][quantity]".into(), "1".into()),
+        ("client_reference_id".into(), uid.into()),
+        ("metadata[firebase_uid]".into(), uid.into()),
+        (
+            "subscription_data[metadata][firebase_uid]".into(),
+            uid.into(),
+        ),
+        ("metadata[channel]".into(), channel.as_str().into()),
+        ("metadata[channel_user_id]".into(), channel_user_id.into()),
+        ("metadata[channel_chat_id]".into(), channel_chat_id.into()),
+        ("success_url".into(), success_url.into()),
+        ("cancel_url".into(), cancel_url.into()),
+        (
+            "expires_at".into(),
+            (expires_at.div_euclid(1_000)).to_string(),
+        ),
+        ("automatic_tax[enabled]".into(), "true".into()),
+    ];
+    if negotiated {
+        if let Some((currency, product, unit_amount, interval, interval_count)) =
+            stripe_price(&secret, &price_id).await
+        {
+            if unit_amount == price_cents {
+                params.push(("line_items[0][price]".into(), price_id));
+            } else {
+                params.extend([
+                    ("line_items[0][price_data][currency]".into(), currency),
+                    ("line_items[0][price_data][product]".into(), product),
+                    (
+                        "line_items[0][price_data][unit_amount]".into(),
+                        price_cents.to_string(),
+                    ),
+                    (
+                        "line_items[0][price_data][recurring][interval]".into(),
+                        interval,
+                    ),
+                    (
+                        "line_items[0][price_data][recurring][interval_count]".into(),
+                        interval_count.to_string(),
+                    ),
+                ]);
+            }
+        } else {
+            return Ok(None);
+        }
+    } else {
+        params.push(("line_items[0][price]".into(), price_id));
+    }
+    if let Some(customer_id) = customer_id {
+        params.push(("customer".into(), customer_id));
+        params.push(("customer_update[address]".into(), "auto".into()));
+        params.push(("customer_update[name]".into(), "auto".into()));
+    }
+    let session = stripe_post(
+        &secret,
+        "checkout/sessions",
+        &params,
+        Some(idempotency_key),
+    )
+    .await?;
+    Ok(session.map(|(id, url)| (id, url, price_cents)))
+}
+
+/// `issueChannelCheckout`.
+pub async fn issue_channel_checkout(
+    env: &Env,
+    uid: &str,
+    channel: Channel,
+    channel_user_id: &str,
+    channel_chat_id: &str,
+    now: i64,
+) -> Result<ChannelCheckout> {
+    let app_url = env_var(env, "APP_URL");
+    let stripe_secret = env_var(env, "STRIPE_SECRET_KEY");
+    let price_id = env_var(env, "STRIPE_PRO_PRICE_ID");
+    if app_url.is_none() || stripe_secret.is_none() || price_id.is_none() {
+        return Ok(ChannelCheckout::Unconfigured);
+    }
+    if env_has_active_pro(env, uid).await {
+        return Ok(ChannelCheckout::Subscribed);
+    }
+    let db = env.d1("DB")?;
+    let live = db
+        .prepare(
+            "SELECT url, price_cents FROM channel_checkout_sessions\n     WHERE uid = ?1 AND completed_at IS NULL AND expires_at > ?2\n     ORDER BY created_at DESC LIMIT 1",
+        )
+        .bind(&[uid.into(), (now as f64).into()])?
+        .first::<Value>(None)
+        .await?;
+    if let Some(live) = live {
+        return Ok(ChannelCheckout::Reused {
+            url: json_str(&live, "url").unwrap_or_default(),
+            price_cents: json_i64(&live, "price_cents").unwrap_or(0),
+        });
+    }
+    if !checkout_allowed(env, channel, channel_user_id).await {
+        return Ok(ChannelCheckout::RateLimited);
+    }
+    let expires_at = now + channel_checkout::CHECKOUT_TTL_MS;
+    let app_url = app_url.unwrap_or_default();
+    let idempotency_key = checkout_idempotency_key(channel.as_str(), channel_user_id, now);
+    let Some((session_id, url, price_cents)) = create_checkout_session(
+        env,
+        uid,
+        channel,
+        channel_user_id,
+        channel_chat_id,
+        &format!("{app_url}/billing/success?session_id={{CHECKOUT_SESSION_ID}}"),
+        &format!("{app_url}/billing"),
+        expires_at,
+        &idempotency_key,
+    )
+    .await?
+    else {
+        return Ok(ChannelCheckout::Unavailable);
+    };
+    db.prepare(
+        "INSERT INTO channel_checkout_sessions\n       (session_id, uid, channel, channel_user_id, channel_chat_id,\n        price_cents, url, created_at, expires_at)\n     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)\n     ON CONFLICT DO NOTHING",
+    )
+    .bind(&[
+        session_id.into(),
+        uid.into(),
+        channel.as_str().into(),
+        channel_user_id.into(),
+        channel_chat_id.into(),
+        (price_cents as f64).into(),
+        url.clone().into(),
+        (now as f64).into(),
+        (expires_at as f64).into(),
+    ])?
+    .run()
+    .await?;
+    Ok(ChannelCheckout::Issued { url, price_cents })
+}
+
+/// `expireChannelCheckout`.
+pub async fn expire_channel_checkout(env: &Env, session_id: &str, now: i64) -> Result<()> {
+    let db = env.d1("DB")?;
+    db.prepare(EXPIRE_CHANNEL_CHECKOUT_SQL)
+        .bind(&[(now as f64).into(), session_id.into()])?
+        .run()
+        .await?;
+    Ok(())
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct CompleteChannelCheckoutResult {
+    pub provisioned: bool,
+    pub uid: Option<String>,
+}
+
+/// `completeChannelCheckout`.
+pub async fn complete_channel_checkout(
+    env: &Env,
+    event: CheckoutCompletion,
+    now: i64,
+) -> Result<CompleteChannelCheckoutResult> {
+    if !channel_checkout::checkout_prerequisites_met(&event) {
+        return Ok(CompleteChannelCheckoutResult {
+            provisioned: false,
+            uid: None,
+        });
+    }
+    let session_id = event.session_id.clone().unwrap_or_default();
+    let event_uid = event.uid.clone().unwrap_or_default();
+    let customer = event.customer.clone().unwrap_or_default();
+    let db = env.d1("DB")?;
+    let row = db
+        .prepare(
+            "SELECT uid, channel, channel_chat_id, price_cents\n     FROM channel_checkout_sessions\n     WHERE session_id = ?1 AND completed_at IS NULL",
+        )
+        .bind(&[session_id.clone().into()])?
+        .first::<Value>(None)
+        .await?;
+    let Some(row) = row else {
+        return Ok(CompleteChannelCheckoutResult {
+            provisioned: false,
+            uid: None,
+        });
+    };
+    let row_uid = json_str(&row, "uid").unwrap_or_default();
+    if !channel_checkout::session_uid_matches(&row_uid, &event_uid) {
+        return Ok(CompleteChannelCheckoutResult {
+            provisioned: false,
+            uid: None,
+        });
+    }
+    let account = db
+        .prepare("SELECT claimed_by_uid, retired_at FROM channel_accounts WHERE uid = ?1")
+        .bind(&[row_uid.clone().into()])?
+        .first::<Value>(None)
+        .await?;
+    let claimed_by = account
+        .as_ref()
+        .and_then(|row| json_str(row, "claimed_by_uid"));
+    let retired = account
+        .as_ref()
+        .and_then(|row| json_i64(row, "retired_at"))
+        .is_some();
+    let target = channel_checkout::completion_target_uid(&row_uid, claimed_by.as_deref());
+    let channel = json_str(&row, "channel").unwrap_or_default();
+    let channel_chat_id = json_str(&row, "channel_chat_id").unwrap_or_default();
+    let price_cents = json_i64(&row, "price_cents").unwrap_or(0);
+    let confirmation = channel_checkout::subscription_confirmation_message(
+        price_cents,
+        claimed_by.as_deref(),
+        retired,
+    );
+    let audit_id = random_uuid();
+    let audit_details = json!({
+        "sessionId": session_id,
+        "placeholderUid": row_uid,
+        "priceCents": price_cents,
+    })
+    .to_string();
+    let results = db
+        .batch(vec![
+            db.prepare(
+                "UPDATE channel_checkout_sessions SET completed_at = ?1\n       WHERE session_id = ?2 AND completed_at IS NULL",
+            )
+            .bind(&[(now as f64).into(), session_id.clone().into()])?,
+            db.prepare(APPLY_SUBSCRIPTION_STATE_SQL).bind(&[
+                "active".into(),
+                JsValue::NULL,
+                customer.clone().into(),
+                (now as f64).into(),
+                js_opt(event.subscription.as_deref()),
+                JsValue::NULL,
+                (event.event_created as f64).into(),
+                target.clone().into(),
+            ])?,
+            db.prepare(
+                "UPDATE channel_accounts SET billing_email = ?1 WHERE uid = ?2 AND billing_email IS NULL",
+            )
+            .bind(&[js_opt(event.email.as_deref()), row_uid.clone().into()])?,
+            db.prepare(
+                "INSERT INTO audit_events\n         (id, uid, actor_type, action, target_type, target_id, details, created_at)\n       VALUES (?1, ?2, 'system', 'channel.subscription_activated', 'channel', ?3, ?4, ?5)",
+            )
+            .bind(&[
+                audit_id.into(),
+                target.clone().into(),
+                channel.clone().into(),
+                audit_details.into(),
+                (now as f64).into(),
+            ])?,
+        ])
+        .await?;
+    let changes = results
+        .first()
+        .map(|r| r.meta().ok().flatten().and_then(|m| m.changes).unwrap_or(0))
+        .unwrap_or(0);
+    if changes != 1 {
+        return Ok(CompleteChannelCheckoutResult {
+            provisioned: false,
+            uid: None,
+        });
+    }
+    if let Some(channel) = Channel::parse(&channel) {
+        let _ = send_channel_text(env, channel, &channel_chat_id, &confirmation).await;
+    }
+    Ok(CompleteChannelCheckoutResult {
+        provisioned: true,
+        uid: Some(target),
+    })
+}
+
+fn js_opt(value: Option<&str>) -> JsValue {
+    value.map(JsValue::from).unwrap_or(JsValue::NULL)
+}
+
+async fn is_channel_account(env: &Env, uid: &str) -> Result<bool> {
+    let db = env.d1("DB")?;
+    let row = db
+        .prepare("SELECT uid FROM channel_accounts WHERE uid = ?1")
+        .bind(&[uid.into()])?
+        .first::<Value>(None)
+        .await?;
+    Ok(row.is_some())
+}
+
+/// `liveChannelAccount`.
+pub async fn live_channel_account(
+    env: &Env,
+    channel: Channel,
+    channel_user_id: &str,
+) -> Result<Option<channel_signup::ChannelAccount>> {
+    let db = env.d1("DB")?;
+    let row = db
+        .prepare(
+            "SELECT uid, created_at, claimed_at FROM channel_accounts\n       WHERE channel = ?1 AND channel_user_id = ?2\n         AND claimed_at IS NULL AND retired_at IS NULL",
+        )
+        .bind(&[channel.as_str().into(), channel_user_id.into()])?
+        .first::<Value>(None)
+        .await?;
+    Ok(row.map(|row| channel_signup::ChannelAccount {
+        uid: json_str(&row, "uid").unwrap_or_default(),
+        created_at: json_i64(&row, "created_at").unwrap_or(0),
+        claimed_at: json_i64(&row, "claimed_at"),
+    }))
+}
+
+fn channel_uid() -> String {
+    let mut bytes = [0u8; 16];
+    getrandom::getrandom(&mut bytes).expect("getrandom");
+    format!(
+        "chan_{}",
+        bytes
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    )
+}
+
+/// `signUpChannelSender`.
+pub async fn sign_up_channel_sender(
+    env: &Env,
+    channel: Channel,
+    channel_user_id: &str,
+    channel_chat_id: &str,
+    now: i64,
+) -> Result<SignupResult> {
+    let existing_account = live_channel_account(env, channel, channel_user_id).await?;
+    let db = env.d1("DB")?;
+    let binding = db
+        .prepare(
+            "SELECT uid FROM channel_bindings\n     WHERE channel = ?1 AND channel_user_id = ?2 AND revoked_at IS NULL",
+        )
+        .bind(&[channel.as_str().into(), channel_user_id.into()])?
+        .first::<Value>(None)
+        .await?;
+    if let Some(binding) = binding {
+        let binding_uid = json_str(&binding, "uid").unwrap_or_default();
+        return if existing_account.as_ref().is_some_and(|a| a.uid == binding_uid) {
+            Ok(SignupResult::Existing { uid: binding_uid })
+        } else {
+            Ok(SignupResult::Conflict)
+        };
+    }
+    if let Some(existing_account) = existing_account {
+        return Ok(SignupResult::Existing {
+            uid: existing_account.uid,
+        });
+    }
+    if !signup_allowed(env, channel, channel_user_id).await {
+        return Ok(SignupResult::RateLimited);
+    }
+    let uid = channel_uid();
+    let audit_id = random_uuid();
+    let audit_details = json!({ "channelUserId": channel_user_id, "channelChatId": channel_chat_id })
+        .to_string();
+    let results = db
+        .batch(vec![
+            db.prepare(
+                "INSERT INTO users (uid, email, created_at, updated_at) VALUES (?1, NULL, ?2, ?2)",
+            )
+            .bind(&[uid.clone().into(), (now as f64).into()])?,
+            db.prepare(
+                "INSERT INTO channel_accounts\n         (uid, channel, channel_user_id, channel_chat_id, created_at)\n       VALUES (?1, ?2, ?3, ?4, ?5)\n       ON CONFLICT DO NOTHING",
+            )
+            .bind(&[
+                uid.clone().into(),
+                channel.as_str().into(),
+                channel_user_id.into(),
+                channel_chat_id.into(),
+                (now as f64).into(),
+            ])?,
+            db.prepare(
+                "INSERT INTO channel_bindings\n         (channel, channel_user_id, uid, verified_at, revoked_at, channel_chat_id)\n       VALUES (?1, ?2, ?3, ?4, NULL, ?5)\n       ON CONFLICT(channel, channel_user_id) DO UPDATE SET\n         uid = excluded.uid, verified_at = excluded.verified_at,\n         revoked_at = NULL, channel_chat_id = excluded.channel_chat_id\n       WHERE channel_bindings.revoked_at IS NOT NULL",
+            )
+            .bind(&[
+                channel.as_str().into(),
+                channel_user_id.into(),
+                uid.clone().into(),
+                (now as f64).into(),
+                channel_chat_id.into(),
+            ])?,
+            db.prepare(
+                "INSERT INTO audit_events\n         (id, uid, actor_type, action, target_type, target_id, details, created_at)\n       VALUES (?1, ?2, 'channel', 'channel.account_created', 'channel', ?3, ?4, ?5)",
+            )
+            .bind(&[
+                audit_id.into(),
+                uid.clone().into(),
+                channel.as_str().into(),
+                audit_details.into(),
+                (now as f64).into(),
+            ])?,
+        ])
+        .await?;
+    let account_changes = results
+        .get(1)
+        .map(|r| r.meta().ok().flatten().and_then(|m| m.changes).unwrap_or(0))
+        .unwrap_or(0);
+    let binding_changes = results
+        .get(2)
+        .map(|r| r.meta().ok().flatten().and_then(|m| m.changes).unwrap_or(0))
+        .unwrap_or(0);
+    if account_changes != 1 || binding_changes != 1 {
+        db.prepare("DELETE FROM users WHERE uid = ?1")
+            .bind(&[uid.into()])?
+            .run()
+            .await?;
+        let settled = live_channel_account(env, channel, channel_user_id).await?;
+        return Ok(if let Some(settled) = settled {
+            SignupResult::Existing { uid: settled.uid }
+        } else {
+            SignupResult::Conflict
+        });
+    }
+    Ok(SignupResult::Created { uid })
+}
+
+/// `claimChannelAccount`.
+pub async fn claim_channel_account(
+    env: &Env,
+    channel: Channel,
+    channel_user_id: &str,
+    claimed_by_uid: &str,
+    now: i64,
+) -> Result<Option<String>> {
+    let account = live_channel_account(env, channel, channel_user_id).await?;
+    let Some(account) = account else {
+        return Ok(None);
+    };
+    let db = env.d1("DB")?;
+    let result = db
+        .prepare(
+            "UPDATE channel_accounts SET claimed_at = ?1, claimed_by_uid = ?2\n       WHERE uid = ?3 AND claimed_at IS NULL AND retired_at IS NULL",
+        )
+        .bind(&[
+            (now as f64).into(),
+            claimed_by_uid.into(),
+            account.uid.clone().into(),
+        ])?
+        .run()
+        .await?;
+    let changes = result.meta().ok().flatten().and_then(|m| m.changes).unwrap_or(0);
+    Ok((changes == 1).then_some(account.uid))
+}
+
+async fn first_contact_state(
+    env: &Env,
+    channel: Channel,
+    channel_user_id: &str,
+) -> Result<Option<FirstContact>> {
+    let db = env.d1("DB")?;
+    let row = db
+        .prepare(
+            "SELECT asked_at, answered_at FROM channel_first_contact\n       WHERE channel = ?1 AND channel_user_id = ?2",
+        )
+        .bind(&[channel.as_str().into(), channel_user_id.into()])?
+        .first::<Value>(None)
+        .await?;
+    Ok(row.map(|row| FirstContact {
+        asked_at: json_i64(&row, "asked_at").unwrap_or(0),
+        answered_at: json_i64(&row, "answered_at"),
+    }))
+}
+
+async fn record_first_contact(
+    env: &Env,
+    channel: Channel,
+    channel_user_id: &str,
+    channel_chat_id: &str,
+    now: i64,
+) -> Result<()> {
+    let db = env.d1("DB")?;
+    db.prepare(
+        "INSERT INTO channel_first_contact\n         (channel, channel_user_id, channel_chat_id, asked_at)\n       VALUES (?1, ?2, ?3, ?4)\n       ON CONFLICT(channel, channel_user_id) DO UPDATE SET\n         channel_chat_id = excluded.channel_chat_id, asked_at = excluded.asked_at",
+    )
+    .bind(&[
+        channel.as_str().into(),
+        channel_user_id.into(),
+        channel_chat_id.into(),
+        (now as f64).into(),
+    ])?
+    .run()
+    .await?;
+    Ok(())
+}
+
+async fn mark_first_contact_answered(
+    env: &Env,
+    channel: Channel,
+    channel_user_id: &str,
+    now: i64,
+) -> Result<()> {
+    let db = env.d1("DB")?;
+    db.prepare(
+        "UPDATE channel_first_contact SET answered_at = ?1\n       WHERE channel = ?2 AND channel_user_id = ?3 AND answered_at IS NULL",
+    )
+    .bind(&[
+        (now as f64).into(),
+        channel.as_str().into(),
+        channel_user_id.into(),
+    ])?
+    .run()
+    .await?;
+    Ok(())
+}
+
+async fn retire_channel_account(env: &Env, uid: &str, now: i64) -> Result<()> {
+    let db = env.d1("DB")?;
+    db.prepare(
+        "UPDATE channel_accounts SET retired_at = ?1 WHERE uid = ?2 AND retired_at IS NULL",
+    )
+    .bind(&[(now as f64).into(), uid.into()])?
+    .run()
+    .await?;
+    Ok(())
+}
+
+async fn offer_checkout(
+    env: &Env,
+    uid: &str,
+    channel: Channel,
+    channel_user_id: &str,
+    channel_chat_id: &str,
+    now: i64,
+) -> Result<Option<String>> {
+    let checkout = issue_channel_checkout(env, uid, channel, channel_user_id, channel_chat_id, now).await?;
+    Ok(checkout_reply(&checkout))
+}
+
+fn signup_guide(channel: Channel, channel_user_id: &str, channel_chat_id: &str) -> ChannelOutcome {
+    if channel_group::is_group_channel_chat(channel.as_str(), channel_user_id, channel_chat_id) {
+        return ChannelOutcome {
+            reply: Some(GROUP_CHANNEL_LINK_ERROR.to_string()),
+            enqueue: false,
+        };
+    }
+    ChannelOutcome {
+        reply: Some(SIGNUP_GUIDE_TEXT.to_string()),
+        enqueue: false,
+    }
+}
+
+async fn ask_first_contact(
+    env: &Env,
+    channel: Channel,
+    channel_user_id: &str,
+    channel_chat_id: &str,
+    now: i64,
+) -> Result<ChannelOutcome> {
+    if !unlinked_reply_allowed(env, channel, channel_user_id).await {
+        return Ok(ChannelOutcome {
+            reply: None,
+            enqueue: false,
+        });
+    }
+    if channel_group::is_group_channel_chat(channel.as_str(), channel_user_id, channel_chat_id) {
+        return Ok(ChannelOutcome {
+            reply: Some(GROUP_CHANNEL_LINK_ERROR.to_string()),
+            enqueue: false,
+        });
+    }
+    record_first_contact(env, channel, channel_user_id, channel_chat_id, now).await?;
+    Ok(ChannelOutcome {
+        reply: Some(FIRST_CONTACT_TEXT.to_string()),
+        enqueue: false,
+    })
+}
+
+async fn unrecognized_sender(
+    env: &Env,
+    channel: Channel,
+    channel_user_id: &str,
+    channel_chat_id: &str,
+    text: &str,
+    now: i64,
+) -> Result<ChannelOutcome> {
+    let state = first_contact_state(env, channel, channel_user_id).await?;
+    if state.is_none() {
+        return ask_first_contact(env, channel, channel_user_id, channel_chat_id, now).await;
+    }
+    if state.and_then(|s| s.answered_at).is_some() {
+        return start_link(env, channel, channel_user_id, channel_chat_id, now).await;
+    }
+    let answer = parse_signup_answer(text);
+    if answer.is_none() {
+        if !unlinked_reply_allowed(env, channel, channel_user_id).await {
+            return Ok(ChannelOutcome {
+                reply: None,
+                enqueue: false,
+            });
+        }
+        return Ok(ChannelOutcome {
+            reply: Some(CLARIFY_ANSWER_TEXT.to_string()),
+            enqueue: false,
+        });
+    }
+    mark_first_contact_answered(env, channel, channel_user_id, now).await?;
+    match answer {
+        Some(SignupAnswer::HasAccount) => {
+            start_link(env, channel, channel_user_id, channel_chat_id, now).await
+        }
+        Some(SignupAnswer::NeedsAccount) | None => {
+            Ok(signup_guide(channel, channel_user_id, channel_chat_id))
+        }
+    }
+}
+
 /// The outcome of dispatching an inbound message: an optional immediate reply
 /// and whether the message should reach the assistant inbox.
 pub struct ChannelOutcome {
@@ -385,7 +1154,7 @@ pub async fn handle_channel_message(
                 enqueue: true,
             })
         } else {
-            start_link(env, channel, channel_user_id, channel_chat_id, now).await
+            unrecognized_sender(env, channel, channel_user_id, channel_chat_id, text, now).await
         };
     };
     let Some(command) = cmd::resolve_command(&parsed.command) else {
@@ -401,6 +1170,10 @@ pub async fn handle_channel_message(
         });
     };
     let Some(binding) = binding else {
+        if command.name == "/signup" {
+            mark_first_contact_answered(env, channel, channel_user_id, now).await?;
+            return Ok(signup_guide(channel, channel_user_id, channel_chat_id));
+        }
         if command.name != "/start" {
             if !unlinked_reply_allowed(env, channel, channel_user_id).await {
                 return Ok(ChannelOutcome {
@@ -421,18 +1194,57 @@ pub async fn handle_channel_message(
         return start_link(env, channel, channel_user_id, channel_chat_id, now).await;
     };
     let masked = cmd::mask_email(binding.email.as_deref());
+    let channel_account =
+        binding.email.is_none() && is_channel_account(env, &binding.uid).await?;
     let reply = match command.name {
         "/help" => cmd::channel_help_text(),
+        "/signup" => {
+            if channel_account {
+                "This chat was set up here before accounts moved to the app. Sign in on your phone or desktop, then send /start here to link this chat to that account.".to_string()
+            } else {
+                format!(
+                    "This chat is already linked to {masked}. Send /help if you need anything else."
+                )
+            }
+        }
         "/start" => format!(
             "This chat is already linked to {masked}. Just send me a message and I'll \
 answer. /help lists what else I understand here."
         ),
+        "/subscribe" => match offer_checkout(
+            env,
+            &binding.uid,
+            channel,
+            channel_user_id,
+            channel_chat_id,
+            now,
+        )
+        .await?
+        {
+            Some(text) => text,
+            None => {
+                return Ok(ChannelOutcome {
+                    reply: None,
+                    enqueue: false,
+                });
+            }
+        },
         "/status" => {
             let day = cmd::iso_date(binding.verified_at);
-            format!("Linked to {masked} since {day}. Send /logout to disconnect this chat.")
+            if channel_account {
+                format!(
+                    "This chat is your Omi account, set up here on {day}. Sign in on your phone or desktop and send /start to move it across."
+                )
+            } else {
+                format!("Linked to {masked} since {day}. Send /logout to disconnect this chat.")
+            }
         }
         "/whoami" => {
-            format!("I'm answering as {masked} — the Omi account this chat is linked to.")
+            if channel_account {
+                "I'm answering as the account that lives in this chat — it was created here and has no email yet.".to_string()
+            } else {
+                format!("I'm answering as {masked} — the Omi account this chat is linked to.")
+            }
         }
         "/reset" => {
             reset_conversation(env, channel, channel_user_id, &binding.uid).await?;
@@ -441,12 +1253,14 @@ Your account stays linked."
                 .to_string()
         }
         _ => {
-            // /logout (or /unlink).
             if !parsed.argument.eq_ignore_ascii_case("confirm") {
-                format!(
-                    "Unlinking disconnects this chat from {masked}: I'll stop answering here \
-until you link again. Send /logout confirm to go ahead."
-                )
+                if channel_account {
+                    "This chat is the account, so there's no separate login to sign out of. To keep what I know, sign in on your phone or desktop and send /start here first. Send /logout confirm to close it instead — I'll stop answering here and this account won't be handed to anyone else.".to_string()
+                } else {
+                    format!(
+                        "Unlinking disconnects this chat from {masked}: I'll stop answering here until you link again. Send /logout confirm to go ahead."
+                    )
+                }
             } else {
                 match dispatch_to_coordinator(
                     env,
@@ -457,12 +1271,15 @@ until you link again. Send /logout confirm to go ahead."
                 )
                 .await
                 {
-                    Ok(()) => "Unlinked. This chat is no longer connected to your Omi account — \
-send /start whenever you want to link it again."
-                        .to_string(),
-                    Err(_) => "I couldn't unlink this chat just now. Try again in a moment, or \
-unlink it from Omi's settings."
-                        .to_string(),
+                    Ok(()) => {
+                        if channel_account {
+                            retire_channel_account(env, &binding.uid, now).await?;
+                            "Closed. This chat no longer has an Omi account — send /signup if you ever want a fresh one, or /start to link an account you sign in to.".to_string()
+                        } else {
+                            "Unlinked. This chat is no longer connected to your Omi account — send /start whenever you want to link it again.".to_string()
+                        }
+                    }
+                    Err(_) => "I couldn't unlink this chat just now. Try again in a moment, or unlink it from Omi's settings.".to_string(),
                 }
             }
         }
