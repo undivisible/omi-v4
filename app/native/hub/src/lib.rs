@@ -21,7 +21,7 @@ mod meeting_capture;
 pub mod meeting_detector;
 mod model_tier;
 mod personality;
-pub mod proactive_binds;
+mod proactive_binds;
 mod runtime;
 mod scan;
 mod self_improve;

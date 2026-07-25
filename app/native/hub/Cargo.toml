@@ -56,4 +56,4 @@ expect_used = "deny"
 wildcard_imports = "deny"
 
 [profile.release]
-strip = "none"
+strip = "symbols"

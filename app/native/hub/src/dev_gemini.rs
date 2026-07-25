@@ -92,8 +92,24 @@ fn persist_key(key: &DevGeminiKey, home: Option<&std::ffi::OsStr>) {
     }
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
+        #[cfg(unix)]
+        restrict_private_dir(parent);
     }
     let _ = std::fs::write(&path, format!("GEMINI_API_KEY={}\n", key.0));
+    #[cfg(unix)]
+    restrict_private_file(&path);
+}
+
+#[cfg(unix)]
+fn restrict_private_dir(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700));
+}
+
+#[cfg(unix)]
+fn restrict_private_file(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
 }
 
 /// Where a key may be placed, for actionable error messages. Never includes

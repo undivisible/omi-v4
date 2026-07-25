@@ -162,6 +162,8 @@ pub(crate) fn chromium_arguments(debug_port: u16, profile_dir: &str) -> Vec<Stri
     vec![
         "--headless=new".to_owned(),
         format!("--remote-debugging-port={debug_port}"),
+        "--remote-debugging-address=127.0.0.1".to_owned(),
+        "--remote-allow-origins=http://127.0.0.1".to_owned(),
         format!("--user-data-dir={profile_dir}"),
         "--no-first-run".to_owned(),
         "--no-default-browser-check".to_owned(),

@@ -312,15 +312,15 @@ pub(crate) fn tool_response_message(responses: &[(String, String, serde_json::Va
 }
 
 pub(crate) fn realtime_input_message(bytes: &[u8]) -> String {
-    serde_json::json!({
-        "realtimeInput": {
-            "audio": {
-                "mimeType": format!("audio/pcm;rate={INPUT_SAMPLE_RATE_HZ}"),
-                "data": BASE64.encode(bytes),
-            }
-        }
-    })
-    .to_string()
+    let prefix = format!(
+        r#"{{"realtimeInput":{{"audio":{{"mimeType":"audio/pcm;rate={INPUT_SAMPLE_RATE_HZ}","data":""#
+    );
+    const SUFFIX: &str = r#""}}}"#;
+    let mut out = String::with_capacity(prefix.len() + bytes.len().div_ceil(3) * 4 + SUFFIX.len());
+    out.push_str(&prefix);
+    BASE64.encode_string(bytes, &mut out);
+    out.push_str(SUFFIX);
+    out
 }
 
 pub(crate) fn audio_stream_end_message() -> &'static str {

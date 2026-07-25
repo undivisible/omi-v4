@@ -406,7 +406,7 @@ async fn run(
                 Some(Ok(Message::Text(text))) => {
                     if let Some(delta) = state.parse(text.as_ref(), unix_time_ms()) {
                         if delta.final_segment {
-                            crate::meeting::observe_final_segment(&delta.text, diarization_key(&delta)).await;
+                            crate::meeting::observe_final_segment(&delta.text, diarization_key(&delta));
                         }
                         NativeEvent::TranscriptDelta(delta).send();
                     }
@@ -453,8 +453,7 @@ async fn drain_final_results(
                             crate::meeting::observe_final_segment(
                                 &delta.text,
                                 diarization_key(&delta),
-                            )
-                            .await;
+                            );
                         }
                         NativeEvent::TranscriptDelta(delta).send();
                     }

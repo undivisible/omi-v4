@@ -1023,9 +1023,9 @@ pub fn configure_note_provider(generator: NoteGenerator) {
 
 /// Delivers a final transcript segment to the meeting runtime.
 ///
-/// Unlike `notify`, this must not silently drop the segment when the control
-/// queue is momentarily full: losing final transcript text is worse than a
-/// bit of latency, so a full queue falls back to a blocking send.
+/// Unlike `notify`, this must not block the STT websocket loop when the control
+/// queue is momentarily full: losing a final transcript segment is preferable to
+/// stalling Deepgram read/write.
 ///
 /// The speaker is sampled here rather than inside the runtime because the two
 /// capture tracks only describe the moment the segment was spoken.
@@ -1033,7 +1033,7 @@ pub fn configure_note_provider(generator: NoteGenerator) {
 /// `diarized` is the transcription provider's own speaker index for the
 /// segment, when the provider returned one; it takes precedence over the
 /// capture-track heuristic inside the session's roster.
-pub async fn observe_final_segment(text: &str, diarized: Option<u64>) {
+pub fn observe_final_segment(text: &str, diarized: Option<u64>) {
     if text.trim().is_empty() {
         return;
     }
@@ -1047,13 +1047,10 @@ pub async fn observe_final_segment(text: &str, diarized: Option<u64>) {
     };
     match sender.try_send(control) {
         Ok(()) => {}
-        Err(mpsc::error::TrySendError::Full(control)) => {
+        Err(mpsc::error::TrySendError::Full(_)) => {
             eprintln!(
-                "omi meeting control queue is full ({CONTROL_QUEUE_CAPACITY} slots); blocking to deliver a final transcript segment"
+                "omi meeting control queue is full ({CONTROL_QUEUE_CAPACITY} slots); dropping final transcript segment"
             );
-            if sender.send(control).await.is_err() {
-                eprintln!("omi meeting control queue closed; final transcript segment lost");
-            }
         }
         Err(mpsc::error::TrySendError::Closed(_)) => {
             eprintln!("omi meeting control queue closed; final transcript segment lost");
