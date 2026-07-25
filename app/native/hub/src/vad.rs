@@ -38,10 +38,49 @@
 //! ## What can and cannot be gated
 //!
 //! Energy is a property of the waveform, so the gate reads the linear-PCM
-//! encodings and nothing else. Opus arrives as compressed packets whose bytes
-//! say nothing about loudness without a decoder, and this pass adds no decoder;
-//! an Opus stream is therefore passed through untouched and reports itself as
-//! un-gateable rather than pretending to a saving it is not making.
+//! encodings and nothing else. An Opus stream is passed through untouched and
+//! reports itself as un-gateable rather than pretending to a saving it is not
+//! making.
+//!
+//! Encoded packet size is the obvious way to gate Opus without a decoder — the
+//! pendant encodes with unconstrained VBR, so quiet frames could in principle
+//! be smaller — and it was measured against libopus configured exactly as
+//! `codec_start()` configures it (16 kHz mono, 20 ms, `RESTRICTED_LOWDELAY`,
+//! 32 kbps, VBR unconstrained, complexity 3, `OPUS_SIGNAL_VOICE`, DTX off).
+//! The separation is far too weak to gate on:
+//!
+//! * Room tone encodes to a near-constant 72 bytes per frame whatever its
+//!   level, from -70 dBFS to -30 dBFS. Size tracks entropy, not loudness, and
+//!   broadband noise is expensive to code however quiet it is.
+//! * Speech spans 62 to 160 bytes, and its tenth percentile (64 to 68 bytes)
+//!   sits *below* the median silence frame. More than a tenth of speech frames
+//!   are smaller than the typical silent one.
+//! * Driving the machinery below from an adaptive noise floor and a ratio
+//!   trigger, the best suppression available at no worse than 1% speech loss
+//!   is 64% in a -50 dBFS room, 29% at -45 dBFS, and nothing at all at -40 dBFS
+//!   or above. No single ratio serves a wearer who walks between rooms: the
+//!   ratio that is optimal in a quiet room drops 40% of the same speaker's
+//!   words once they reach a cafe.
+//!
+//! Dropping packets is *not* what rules it out — a gated stream decodes to
+//! 60 dB SNR against an ungated one, so the codec's inter-frame state survives
+//! the gaps. It is the classification that fails, and it fails towards
+//! discarding speech, which is the expensive direction.
+//!
+//! Gating Opus therefore needs a real decoder, which would mean linking libopus
+//! into the iOS and Android binaries. That is a size and dependency decision,
+//! not a signal-processing one.
+//!
+//! ## What the device already does
+//!
+//! The pendant runs its own gate below this one: with
+//! `CONFIG_OMI_ENABLE_T5838_AAD`, `aad_track_silence()` sleeps the microphone
+//! in hardware after `CONFIG_OMI_VAD_HOLD_MS` (10 s in the shipped build) below
+//! `CONFIG_OMI_VAD_ABS_THRESHOLD` (250, about -42 dBFS — within a whisker of
+//! the default below), and audio stops flowing entirely until sound wakes it.
+//! Silence longer than ten seconds therefore costs nothing already. What
+//! reaches this gate is the first ten seconds of each silent run plus every
+//! shorter one, which is what bounds the saving actually available here.
 //!
 //! ## What gating costs
 //!
@@ -82,6 +121,15 @@ const ANALYSIS_WINDOW_MS: u32 = 20;
 /// of 0.008, roughly -42 dBFS. Conversational speech reaching a worn pendant
 /// sits far above that, while room tone sits below it, so the default errs
 /// towards sending audio that might be speech.
+///
+/// The level it errs at is worth stating plainly: a room whose own tone
+/// exceeds -42 dBFS never falls below the threshold, so the gate simply stays
+/// open and saves nothing there. Measured against 20 ms frames of pink room
+/// tone, 126 frames in 1357 fall below it at -40 dBFS and none at all at
+/// -35 dBFS. The saving is therefore large in a quiet room and approaches zero
+/// in a loud one — and the failure is always towards transmitting, never
+/// towards discarding speech, which is why a fixed threshold is safe to ship
+/// even though it is not always useful.
 pub(crate) const DEFAULT_THRESHOLD_BASIS_POINTS: u32 = 80;
 
 /// How much audio is retained ahead of a detected onset. Three hundred
