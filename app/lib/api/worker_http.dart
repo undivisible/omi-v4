@@ -13,14 +13,13 @@ typedef WorkerSessionProvider =
 final class WorkerHttpClient {
   WorkerHttpClient({
     required Uri baseUri,
-    required WorkerSessionProvider sessionProvider,
+    required this.sessionProvider,
     http.Client? client,
   }) : _baseUri = _validateBaseUri(baseUri),
-       _client = client ?? http.Client(),
-       _sessionProvider = sessionProvider;
+       _client = client ?? http.Client();
 
   final Uri _baseUri;
-  final WorkerSessionProvider _sessionProvider;
+  final WorkerSessionProvider sessionProvider;
   final http.Client _client;
 
   Uri get trustedOrigin {
@@ -92,7 +91,7 @@ final class WorkerHttpClient {
   }
 
   Future<AuthSession> _requireSession({required bool forceRefresh}) async {
-    final session = await _sessionProvider(forceRefresh: forceRefresh);
+    final session = await sessionProvider(forceRefresh: forceRefresh);
     if (session == null || session.idToken.isEmpty) {
       throw const WorkerAuthenticationException('Sign in is required');
     }
