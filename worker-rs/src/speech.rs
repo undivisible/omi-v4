@@ -821,7 +821,9 @@ mod tests {
             plan_transcription(env(&[]), "uid-1", &input, ASYNC_AUDIO_TIER_PREFERENCE).unwrap();
         assert_eq!(
             declared.upstream_body()["messages"][0]["content"][0]["text"],
-            json!(format!("{TRANSCRIPTION_INSTRUCTION} The audio is in fr-CA."))
+            json!(format!(
+                "{TRANSCRIPTION_INSTRUCTION} The audio is in fr-CA."
+            ))
         );
     }
 

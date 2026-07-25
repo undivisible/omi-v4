@@ -14,13 +14,8 @@ pub const SOUL_SECTIONS: &[&str] = &[
     "Context",
 ];
 
-const STABLE_SOUL_SECTIONS: &[&str] = &[
-    "Identity",
-    "Goals",
-    "Preferences",
-    "Beliefs",
-    "Constraints",
-];
+const STABLE_SOUL_SECTIONS: &[&str] =
+    &["Identity", "Goals", "Preferences", "Beliefs", "Constraints"];
 
 pub fn is_soul_section_key(key: &str) -> bool {
     let key = key.trim();
@@ -90,8 +85,12 @@ mod tests {
     #[test]
     fn formats_beliefs_and_goals_into_an_about_the_user_block() {
         let entries = [("Goals", "  Ship v4.  "), ("Beliefs", "Evidence first.")];
-        let block = format_about_user(Some("  Ada  "), &["en".into(), "  ".into()], &soul(&entries))
-            .expect("a block");
+        let block = format_about_user(
+            Some("  Ada  "),
+            &["en".into(), "  ".into()],
+            &soul(&entries),
+        )
+        .expect("a block");
         assert!(block.starts_with("About the user:\n"));
         assert!(block.contains("The user's name is Ada."));
         assert!(block.contains("The user's preferred languages: en."));

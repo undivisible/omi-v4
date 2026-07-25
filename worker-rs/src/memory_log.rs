@@ -218,7 +218,8 @@ mod tests {
     fn the_worker_assigns_the_sequence_not_the_caller() {
         // The contract this test guards: nothing in the append path takes a
         // caller-supplied sequence, and the statement derives it from MAX+1.
-        assert!(APPEND_SQL.contains("COALESCE((SELECT MAX(sequence) FROM memory_log WHERE uid = ?1), 0) + 1"));
+        assert!(APPEND_SQL
+            .contains("COALESCE((SELECT MAX(sequence) FROM memory_log WHERE uid = ?1), 0) + 1"));
         assert!(!APPEND_SQL.contains("VALUES"));
     }
 
@@ -276,9 +277,6 @@ mod tests {
             json!({ "records": [], "next_after": 3, "head": 9, "complete": false })
         );
         let records = vec![json!({ "sequence": 4 }), json!({ "sequence": 5 })];
-        assert_eq!(
-            page_envelope(records, 3, 9)["next_after"],
-            json!(5)
-        );
+        assert_eq!(page_envelope(records, 3, 9)["next_after"], json!(5));
     }
 }

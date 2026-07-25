@@ -1,30 +1,71 @@
 # PORT_STATUS — TypeScript worker → Rust (workers-rs)
 
 > **Production cutover complete (2026-07-24).** `worker-rs` serves
-> `omi.tsc.hk` and `api.omi.tsc.hk`. The TS worker remains for D1 migrations
-> and tests only. FaceTime is intentionally absent in Rust (no bridge container;
-> returns 501 / tool absent). See CUTOVER.md for rollback.
+> `omi.tsc.hk` and `api.omi.tsc.hk`. `worker/` owns the D1 migrations, the
+> static `public/` assets that `worker-rs` serves, and the build scripts; its
+> routes and cron are disabled. FaceTime is intentionally absent in Rust (no
+> bridge container; returns 501 / tool absent).
+>
+> **`worker/src` and `worker/test` are retained deliberately.** A scenario-level
+> audit on 2026-07-25 found that the port is **not** at parity: the features in
+> the "absent" table below were never ported at all. Until each is either ported
+> or written off as dead product surface, the TypeScript is the only complete
+> specification of what they did, and the TS tests are the only precise record of
+> their behaviour. Treat that directory as a frozen reference, not as live code.
 
 ## Audit snapshot (2026-07-24, post-cutover)
 
 **Production:** `worker-rs` (`omi-v4-api-rs`) on `omi.tsc.hk` + `api.omi.tsc.hk`.
 **Migrations:** `worker/` (`omi-v4-api`) — no routes, no cron.
 
-**Rough route-surface parity: ~95%.** Remaining intentional gaps:
+`worker-rs` is the authoritative behavioural implementation: it is what serves
+production. The TypeScript remains the authoritative *specification* for the
+behaviour that was never ported. The tables below record what was ported and,
+more importantly, **what was not**. Treat the "absent" list as the live defect
+backlog, not as historical notes.
+
+### Route-surface parity (re-audited 2026-07-25, against code)
+
+The previously recorded "~95% parity" was optimistic. A scenario-level audit of
+the retired TS test suite against the Rust sources found the following gaps.
+Anything marked **absent** is behaviour the production worker does not have.
 
 | Gap | Severity | Status |
 |---|---|---|
+| `channel-checkout.ts` — `/subscribe` in chat, Stripe link issuance, webhook provisioning, `invoice.payment_failed` / `checkout.session.expired` | High | **absent** — no Rust module; `/subscribe` is not in `CHANNEL_COMMANDS` |
+| `channel-signup.ts` — first-contact question, `parseSignupAnswer`, chat-native accounts, claim/retire | High | **absent** — no Rust module |
+| `digests.ts` — nightly recap, daily brief, digest deliveries, local-clock windows | High | **absent** — no Rust module, not in `scheduled` |
+| `cron-cursor.ts` — `scanOnboardedUsers` page/wrap rotation over `cron_cursors` | High | **absent** — the Rust cron has no per-user rotation |
+| Cloudflare AI Gateway (`aiGatewayRoute`) incl. the account/gateway id path-smuggling validation | Medium | **absent** — `CF_AI_GATEWAY_*` vars in `wrangler.toml` are read by nothing |
+| Managed speech routes (`/api/v1/speech/*`) and the `speak_text` / `transcribe_audio` MCP tools | Medium | **absent** — `speech.rs` is a fully tested pure island with no caller |
+| Authoritative memory log — append-on-sync, `GET /memory/log`, `memory_log_cursors` | Medium | **absent** — `memory_log.rs` is now compiled and tested but still has no route |
+| `observability.ts` — Sentry/Better Stack heartbeat + log shipping | Medium | **absent** — native Workers Observability only |
+| Streaming usage-tail settlement writes no `status='complete'` row for a streamed turn | Medium | reconciled by cron only |
+| STT "idempotency key reused with different configuration" 409 | Medium | **absent** — the row is re-read but not compared |
+| BYOK negotiation: closing the prior open session on start, and the superseded-session accept guard | Medium | **absent** |
+| `user-profile.ts` `formatAboutUser` in memory context | Low | ported 2026-07-25 (`user_profile.rs`), not yet wired into `wasm_glue` |
 | FaceTime / `facetime-bridge` | High if product-critical | **intentionally absent** — 501 / no MCP tool; needs bridge container |
 | `DELETE /account` Vectorize claim purge | Low | deferred |
-| Audio bytes persistence on device upload | Known stub | both TS and RS return `persisted: false` |
+| Audio bytes persistence on device upload | Known stub | both TS and RS returned `persisted: false` |
 
-**Recently closed for cutover:**
-- `currents-refresh.ts` → `POST /v1/currents/refresh` — **ported** (OpenRouter speed tier + heuristic fallback)
-- `device-sync.ts` — **ported**
+**Closed 2026-07-25** (were absent, now ported with host tests):
 
-Tracks every module in `worker/src/*.ts` against its Rust port status.
-Source of truth for behaviour parity is the TS file; the Rust worker binds the
-same D1 database and does not own migrations.
+- `POST /v1/webhooks/sendblue/:token` — the parser was ported but **no route was
+  registered**, so iMessage inbound was dead in production. Registered in
+  `glue.rs`.
+- `crepus-safety.ts` → `src/crepus_safety.rs` — the closed action-verb set and
+  the image-`src` SSRF guard (private/link-local/`.local`/`.internal` hosts,
+  userinfo, 2000-char cap). `currents::sanitize_crepus` previously applied only
+  a length cap.
+- `channel-group.ts` → `src/channel_group.rs` — group chats could be linked as a
+  personal channel. Now guarded in `glue::bind_channel` and
+  `routes_channels::issue_link_code`.
+- `channel-style.ts` → `src/channel_style.rs` — markdown was reaching Telegram
+  and iMessage unsanitized and replies were not capped per channel. Wired into
+  `inbox_fallback` and `routes_channels::send_channel_text`.
+- `user-profile.ts` → `src/user_profile.rs` (pure logic; wiring pending).
+- `memory_log.rs` was never declared in `lib.rs` — dead code whose five tests
+  never ran. Now compiled.
 
 Legend: **ported** (parity, tested) · **partial** (some routes) ·
 **pending** (not started) · **blocked** (needs a workers-rs binding gap
@@ -57,7 +98,7 @@ host-testable modules (`cargo test`), thin wasm glue for D1/fetch/JS interop.
 | `desktop-auth.ts` | `src/desktop_auth.rs` + `glue.rs::handle_desktop_*` | **ported** | 3-step handoff (start/complete/exchange): PKCE-style SHA-256 verifier challenge, single-use consumption (`consumed_at` change guard), 6-digit confirmation with atomic 5-attempt lockout (`bind_desktop_session`), per-IP 10/10min rate limit, public-origin validation, service-account RS256 custom-token signing (RustCrypto `rsa` PKCS#8). 8 pure tests incl. sign→verify round-trip and escaped-newline PEM. |
 | `conversations.ts` | `src/conversations.rs` + `glue.rs::handle_inbox_*`/`handle_messages_*`/`handle_cursor_put` | **ported** | Inbox claim/complete lease mechanics, atomic completion batch with the `Channel is not linked` re-read fallback, retry state machine + completion idempotency, replay messages/cursors with optimistic-revision conflict (409). Payload-hash idempotency shared with webhooks. 8 pure tests. `memoryContext` returns `null` unless the `vectorize` feature is on (see below) — parity-safe because TS also returns null when `MEMORY_VECTORS`/`AI` are unbound. `dispatchChannelMessage` (DeliveryCoordinator DO) is a best-effort call the TS wraps in try/catch-ignore; skipped here (DO is a later phase; the scheduled drain still delivers). |
 | `embeddings.ts` + `memory-vectors.ts` (search path) | `routes_memory/wasm_glue.rs` | **ported (default)** | Single hand-written `js_sys` FFI to the JS `VectorizeIndex` object (`query`/`upsert`/`deleteByIds` with metadata filters) plus `embed_texts` via the native `Ai` binding, compiled by DEFAULT. `MEMORY_VECTORS`/`AI` declared in `wrangler.toml`; when unbound at runtime the FFI returns `None` and memory context is `null` (TS parity). The old feature-gated duplicate `src/vectorize_ffi.rs` and the `vectorize` cargo feature were REMOVED. See "Vectorize FFI outcome" below. |
-| `rate-limit.ts` (RateLimiter DO) | — | **pending** | Durable Objects natively supported in workers-rs via `#[durable_object]`; mechanical, deferred. |
+| `rate-limit.ts` (RateLimiter DO) | `src/rate_limit.rs` + `routes_ai.rs::RateLimiterDo` | **ported** | Fixed-window counter + refresh-lock mutex. The `#[durable_object] RateLimiterDo` lives in `routes_ai.rs`; the `RATE_LIMITER` binding and the `v1` migration class are declared in `wrangler.toml`. See "AI routes" below. |
 
 ### Vectorize FFI outcome (unified, default-on)
 
@@ -99,7 +140,8 @@ build is honest with or without the index provisioned. The scheduled
 | `memory-projection.ts`, `memory-sync.ts` | **ported** | See "Memory & currents" below. |
 | `memory-vectors.ts`, `embeddings.ts` | **ported (default)** | Vectorize via `js_sys` FFI; see Vectorize section. |
 | `facetime.ts` / bridge | **intentionally absent** | Needs Gemini Live bridge container; keep on TS until that stack exists for RS. |
-| `digests.ts`, `stripe-sync.ts`, observability cron | pending / partial | Compare `worker/src/index.ts` `scheduled` vs `glue.rs::scheduled`. |
+| `digests.ts`, `cron-cursor.ts`, `stripe-sync.ts`, `observability.ts` | **absent** | Never ported. `glue.rs::scheduled` runs delivery, inbox fallback, assistant reconcile and the vector cron slice only — no digest generation and no per-user cursor rotation. |
+| `channel-checkout.ts`, `channel-signup.ts` | **absent** | Never ported; see the audit table above. |
 
 ## workers-rs 0.8.5 binding support (findings)
 
@@ -108,15 +150,15 @@ build is honest with or without the index provisioned. The scheduled
 | **D1** | Yes (`d1` feature; `env.d1()`, `prepare/bind/run/first/all/batch`) | Used directly in Phase 1. |
 | **Secrets / vars** | Yes (`env.secret()`, `env.var()`) | Used directly. |
 | **Fetch / outbound HTTP** | Yes (`worker::Fetch`) | JWKS fetch. |
-| **Scheduled / cron** | Yes (`#[event(scheduled)]`, `ScheduledEvent`) | Not yet wired (Phase 1 has no cron). |
-| **Durable Objects** | Yes (`#[durable_object]`, SQLite storage) | Deferred to later phases; mechanical. |
-| **Workers AI** | Yes (`Ai` binding struct) | Needed by `embeddings.ts`; not yet wired. Model I/O is dynamic JSON. |
+| **Scheduled / cron** | Yes (`#[event(scheduled)]`, `ScheduledEvent`) | Wired: `[triggers] crons = ["* * * * *"]` drives `glue.rs::scheduled`. |
+| **Durable Objects** | Yes (`#[durable_object]`, SQLite storage) | Wired: `DeliveryCoordinator`, `AssistantAdmissionDo`, `SttAdmissionDo`, `RateLimiterDo`. |
+| **Workers AI** | Yes (`Ai` binding struct) | Wired: `embed_texts` in `routes_memory/wasm_glue.rs` via the `AI` binding. |
 | **Vectorize** | **No native binding** | Requires raw JS interop via `js_sys`/`wasm_bindgen` against the bound `VectorizeIndex` JS object (query/insert/upsert/deleteByIds). This is the main interop gap; `memory-vectors.ts` and the `DELETE /account` vector cleanup depend on it. |
 | **Crypto (RS256 etc.)** | via RustCrypto crates (no `crypto.subtle` needed) | `rsa` + `sha2` compile clean to wasm. HMAC/constant-time for webhooks will use `hmac` + `subtle`. |
 
-Net: everything Phase 1 touches is natively supported. The only hard interop
-gap is **Vectorize**, which will need hand-written `wasm_bindgen` bindings to the
-JS `VectorizeIndex` object. Workers AI is native but unused so far.
+Net: everything is natively supported except **Vectorize**, which is bound by
+hand-written `wasm_bindgen`/`js_sys` interop against the JS `VectorizeIndex`
+object (see the Vectorize section above).
 
 ## zkr / rx4 wasm32 compatibility (probe results)
 
@@ -257,8 +299,14 @@ retrieve-match quoting, ISO formatting, receipt/hash patterns.
 
 ## Cutover readiness — remaining risks (honest list)
 
-Production cutover is **done** (2026-07-24). Residual risks:
+Production cutover is **done** (2026-07-24). The 2026-07-25 audit found the
+earlier "~95% parity" figure was optimistic; the absent-behaviour rows in the
+table above are the backlog that number concealed. Residual risks:
 
+- **The absent features are absent in production, not merely untested.** Chat
+  `/subscribe` checkout, chat-native signup, digests, and cron cursor rotation
+  do not exist in the deployed worker. Anything that depended on them has been
+  silently inert since cutover.
 - **DELETE /account Vectorize cleanup** still deferred: account deletion removes
   all D1 rows but does not delete the user's claim vectors from the
   `omi-memory-claims` index. Orphaned vectors are uid-filtered and never

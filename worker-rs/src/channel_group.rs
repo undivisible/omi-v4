@@ -35,7 +35,11 @@ mod tests {
 
     #[test]
     fn detects_imessage_groups_by_chat_id() {
-        assert!(is_group_channel_chat("imessage", "+15551234567", "group-abc"));
+        assert!(is_group_channel_chat(
+            "imessage",
+            "+15551234567",
+            "group-abc"
+        ));
         assert!(!is_group_channel_chat(
             "imessage",
             "+15551234567",

@@ -389,7 +389,10 @@ mod tests {
             "open:https://example.com/a",
             "open:http://example.com",
         ] {
-            assert!(is_allowed_crepus_action(action), "{action} should be allowed");
+            assert!(
+                is_allowed_crepus_action(action),
+                "{action} should be allowed"
+            );
         }
         for action in [
             "exec:rm -rf /",
@@ -470,14 +473,18 @@ mod tests {
         assert!(is_safe_crepus_image_url("https://cdn.example.com/a.png"));
         assert!(is_safe_crepus_image_url("http://203.0.113.7/a.png"));
 
-        let overlong = format!("https://example.com/{}", "a".repeat(CREPUS_IMAGE_URL_MAX_LEN));
+        let overlong = format!(
+            "https://example.com/{}",
+            "a".repeat(CREPUS_IMAGE_URL_MAX_LEN)
+        );
         assert!(!is_safe_crepus_image_url(&overlong));
     }
 
     #[test]
     fn finds_the_unsafe_image_source_in_a_document() {
         assert_eq!(
-            find_unsafe_crepus_image_url("stack col\n  image src=http://127.0.0.1/a.png").as_deref(),
+            find_unsafe_crepus_image_url("stack col\n  image src=http://127.0.0.1/a.png")
+                .as_deref(),
             Some("Invalid crepus image URL: http://127.0.0.1/a.png")
         );
         assert_eq!(
@@ -516,7 +523,10 @@ mod tests {
 
     #[test]
     fn sanitize_drops_every_rejected_source() {
-        assert_eq!(sanitize_crepus("text \"ok\""), Some("text \"ok\"".to_string()));
+        assert_eq!(
+            sanitize_crepus("text \"ok\""),
+            Some("text \"ok\"".to_string())
+        );
         assert_eq!(sanitize_crepus("button onclick={exec:boom}"), None);
         assert_eq!(sanitize_crepus("image src=http://127.0.0.1/a.png"), None);
         assert_eq!(sanitize_crepus("  "), None);

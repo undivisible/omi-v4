@@ -71,8 +71,9 @@ fn unwrap_markdown_links(value: &str) -> String {
         if bytes[index] == b'[' {
             if let Some(label_end) = value[index + 1..].find(']').map(|at| index + 1 + at) {
                 if label_end + 1 < bytes.len() && bytes[label_end + 1] == b'(' {
-                    if let Some(url_end) =
-                        value[label_end + 2..].find(')').map(|at| label_end + 2 + at)
+                    if let Some(url_end) = value[label_end + 2..]
+                        .find(')')
+                        .map(|at| label_end + 2 + at)
                     {
                         let label = &value[index + 1..label_end];
                         let url = &value[label_end + 2..url_end];
@@ -241,6 +242,9 @@ mod tests {
     #[test]
     fn an_empty_or_blank_reply_stays_empty() {
         assert_eq!(sanitize_channel_reply("telegram", "   \n  "), "");
-        assert_eq!(sanitize_channel_reply("telegram", "```\nonly code\n```"), "");
+        assert_eq!(
+            sanitize_channel_reply("telegram", "```\nonly code\n```"),
+            ""
+        );
     }
 }

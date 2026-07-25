@@ -131,17 +131,11 @@ pub enum FaceTimeOutcome {
 }
 
 pub fn facetime_provider_configured(env: impl Fn(&str) -> Option<String>) -> bool {
-    [
-        "SENDBLUE_API_KEY_ID",
-        "SENDBLUE_API_KEY_SECRET",
-        "SENDBLUE_FACETIME_NUMBER",
-    ]
-    .iter()
-    .all(|name| {
-        env(name)
+    !crate::sendblue::sendblue_api_key_id(&env).is_empty()
+        && !crate::sendblue::sendblue_api_key_secret(&env).is_empty()
+        && env("SENDBLUE_FACETIME_NUMBER")
             .map(|value| !value.trim().is_empty())
             .unwrap_or(false)
-    })
 }
 
 fn credentials_from(value: Option<&Value>) -> Option<AgoraCredentials> {
@@ -428,7 +422,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "facetime.ts resolves credentials through sendblueApiKeyId/sendblueApiKeySecret, which accept the SENDBLUE_API_KEY / SENDBLUE_SECRET_KEY CLI aliases; facetime_provider_configured reads only the canonical names"]
     fn the_provider_accepts_the_cli_alias_env_names() {
         let env = |pairs: &'static [(&'static str, &'static str)]| {
             move |name: &str| {
