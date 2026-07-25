@@ -8,7 +8,12 @@
 //! router so the route group can be maintained without touching the rest of
 //! `glue.rs`.
 
-use futures_util::StreamExt;
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+};
+
+use futures_util::{stream, StreamExt};
 use serde_json::{json, Value};
 use worker::wasm_bindgen;
 use worker::wasm_bindgen::JsValue;
@@ -675,7 +680,42 @@ async fn handle_chat_completions(mut req: Request, ctx: RouteContext<()>) -> Res
 
     mark_streaming(&ctx, &request_id, upstream_status as i64).await;
 
-    let stream = upstream.stream()?;
+    let upstream_stream = upstream.stream()?;
+    let usage_tail = Rc::new(RefCell::new(managed_ai::UsageTail::default()));
+    let stream_tail = Rc::clone(&usage_tail);
+    let failed = Rc::new(Cell::new(false));
+    let stream_failed = Rc::clone(&failed);
+    let final_env = ctx.env.clone();
+    let final_request_id = request_id.clone();
+    let stream = worker::ByteStream::from(upstream_stream)
+        .map(move |chunk| match chunk {
+            Ok(chunk) => {
+                stream_tail.borrow_mut().push(&chunk);
+                Ok(chunk)
+            }
+            Err(_) => {
+                stream_failed.set(true);
+                Ok(Vec::new())
+            }
+        })
+        .chain(stream::once(async move {
+            let (input_tokens, output_tokens) = usage_tail.borrow().usage();
+            if let Ok(stub) = assistant_admission_stub(&final_env) {
+                settle_managed_inbox(
+                    &final_env,
+                    &stub,
+                    &final_request_id,
+                    if failed.get() { "failed" } else { "complete" },
+                    input_tokens,
+                    output_tokens,
+                    Some(upstream_status as i64),
+                    input_price,
+                    output_price,
+                )
+                .await;
+            }
+            Ok::<Vec<u8>, worker::Error>(Vec::new())
+        }));
     let mut response = Response::from_stream(stream)?.with_status(200);
     let headers = response.headers_mut();
     headers.set("cache-control", "no-store")?;
@@ -1036,6 +1076,12 @@ async fn handle_stt_create(mut req: Request, ctx: RouteContext<()>) -> Result<Re
         }
         return error_json("Managed STT unavailable", 503);
     };
+    if !stt_logic::idempotency_matches(&session_id, &parsed, &row, max_session_seconds) {
+        if owns_admission {
+            release_stt(&stub, &session_id, &auth.uid, &acquisition_token).await;
+        }
+        return error_json("Idempotency conflict", 409);
+    }
 
     let status = row
         .get("status")
