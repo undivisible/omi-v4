@@ -1,6 +1,7 @@
-//! omi-v4-api-rs — experimental Rust shadow of the TypeScript Cloudflare Worker
-//! (`worker/`). **The TS worker is the deployed source of truth**; this crate
-//! is not cut over to production traffic. See `README.md` and `PORT_STATUS.md`.
+//! omi-v4-api-rs — Rust Cloudflare Worker.
+//!
+//! `worker/` remains a frozen TypeScript behavioural reference until every
+//! retained surface has scenario-level Rust parity. See `PORT_STATUS.md`.
 
 pub mod api_keys;
 pub mod auth;

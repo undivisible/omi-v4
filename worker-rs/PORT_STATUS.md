@@ -44,7 +44,7 @@ Anything marked **absent** is behaviour the production worker does not have.
 | STT "idempotency key reused with different configuration" 409 | Medium | **ported 2026-07-25** |
 | BYOK negotiation: closing the prior open session on start, and the superseded-session accept guard | Medium | **ported 2026-07-25** |
 | `user-profile.ts` `formatAboutUser` in memory context | Low | **ported 2026-07-25** — wired before relevant claims |
-| FaceTime / `facetime-bridge` | High if product-critical | **implemented 2026-07-25** — Sendblue, session state, MCP and Rust container binding; deploy requires container build |
+| FaceTime / `facetime-bridge` | High if product-critical | **implemented 2026-07-25** — Sendblue rings the call; the Rust container binding joins Sendblue's Agora channel through Gemini Live. Docker is build-only, not a runtime dependency. |
 | `DELETE /account` Vectorize claim purge | Low | **ported 2026-07-25** |
 | Audio bytes persistence on device upload | Known stub | both TS and RS returned `persisted: false` |
 

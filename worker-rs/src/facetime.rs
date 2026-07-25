@@ -1,11 +1,7 @@
-//! FaceTime validation helpers ported from `worker/src/facetime.ts`.
+//! FaceTime validation and Sendblue session helpers.
 //!
-//! **Disabled in worker-rs:** the production path is the TypeScript worker
-//! (`worker/`), which runs the Sendblue dial plus the Gemini Live bridge
-//! container. This crate does not port `facetime-session.ts` or
-//! `facetime-bridge.ts`, so any route that dialed Sendblue would ring a phone
-//! with no bridge attached. The HTTP route and MCP tool are removed; these
-//! helpers remain for unit tests of handle validation and outcome mapping.
+//! The Rust route starts the Sendblue call, then gives its Agora credentials
+//! to the Gemini Live bridge container in `routes_facetime`.
 
 use serde_json::Value;
 

@@ -67,6 +67,7 @@ TELEGRAM_BOT_TOKEN
 SENDBLUE_API_KEY_ID
 SENDBLUE_API_KEY_SECRET
 SENDBLUE_NUMBER
+SENDBLUE_FACETIME_NUMBER
 SENDBLUE_WEBHOOK_SIGNING_SECRET
 SENDBLUE_WEBHOOK_PATH_TOKEN
 STRIPE_SECRET_KEY
@@ -80,14 +81,18 @@ FIREBASE_SERVICE_ACCOUNT_EMAIL
 FIREBASE_SERVICE_ACCOUNT_PRIVATE_KEY
 ```
 
+`FACETIME_SYSTEM_PROMPT` is optional; when it is unset, the bridge uses its
+built-in audio-only Omi prompt.
+
 List what the live TS worker has with `wrangler secret list --name omi-v4-api`
 and mirror every entry. Any secret left unset degrades gracefully (the relevant
 route returns 503 / fails closed), so a missing secret is a silent feature
 outage — verify the list matches exactly.
 
 Non-secret config (`vars`, `MIMO_*`, `STT_*`, `GEMINI_LIVE_MODEL`,
-`ENVIRONMENT`, `FIREBASE_PROJECT_ID`) is already committed in `wrangler.toml` at
-parity with `worker/wrangler.jsonc` — no action needed.
+`FACETIME_*`, `AGORA_CLOUD_PROXY`, `ENVIRONMENT`, `FIREBASE_PROJECT_ID`) is
+already committed in `wrangler.toml` at parity with `worker/wrangler.jsonc` —
+no action needed.
 
 ## 4. Deploy production
 
@@ -146,6 +151,8 @@ To revert to the TS worker on the custom domains:
   `worker-rs/public/` and point `[assets] directory` there.
 - **nodejs_compat**: the TS worker sets `compatibility_flags = ["nodejs_compat"]`;
   the Rust worker does not need it (pure wasm, no Node APIs) and omits it.
-- **FaceTime** is implemented in worker-rs with a Sendblue session flow and a
-  required Gemini Live bridge container. A local dry-run needs Docker to build
-  that image. Do not dual-route FaceTime on a TS shadow worker.
+- **FaceTime** uses Sendblue only to start the call; the returned Agora channel
+  is joined by a Gemini Live bridge in a Cloudflare-managed container. Docker
+  is required locally only when Wrangler builds that image for deploy or a
+  container-inclusive dry-run; it is not a runtime dependency. Do not
+  dual-route FaceTime on a TS shadow worker.
