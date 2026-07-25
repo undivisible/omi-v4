@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 1.0.0+1
+version: 4.0.0+1
 
 environment:
   sdk: ^3.12.2
@@ -64,7 +64,7 @@ dependencies:
   crepuscularity_flutter:
     git:
       url: https://github.com/tschk/crepuscularity
-      ref: 9cf6ad45aa30c62d01bb4c86e37f430194e30b54
+      ref: v0.11.0
       path: plugins/crepuscularity-flutter
   flowtoken_flutter: ^0.1.1
 
