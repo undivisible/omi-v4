@@ -267,6 +267,7 @@ pub extern "C" fn omi_rust_rtc_seconds_clamped(now_ms: u64) -> u32 {
 
 #[no_mangle]
 #[allow(clippy::missing_safety_doc)]
+#[allow(clippy::undocumented_unsafe_blocks)]
 pub unsafe extern "C" fn omi_rust_rtc_format_utc_datetime(
     utc_epoch_s: u64,
     out: *mut u8,
@@ -1157,6 +1158,7 @@ pub struct OmiRustWifiParsed {
 /// CLOUD_TOKEN the caller still walks the payload in C (credentials stay in C).
 #[no_mangle]
 #[allow(clippy::missing_safety_doc)]
+#[allow(clippy::undocumented_unsafe_blocks)]
 pub unsafe extern "C" fn omi_rust_wifi_parse_command(
     buf: *const u8,
     len: u16,
