@@ -32,8 +32,8 @@ Anything marked **absent** is behaviour the production worker does not have.
 
 | Gap | Severity | Status |
 |---|---|---|
-| `channel-checkout.ts` — `/subscribe` in chat, Stripe link issuance, webhook provisioning, `invoice.payment_failed` / `checkout.session.expired` | High | **absent** — no Rust module; `/subscribe` is not in `CHANNEL_COMMANDS` |
-| `channel-signup.ts` — first-contact question, `parseSignupAnswer`, chat-native accounts, claim/retire | High | **absent** — no Rust module |
+| `channel-checkout.ts` — `/subscribe` in chat, Stripe link issuance, webhook provisioning, `invoice.payment_failed` / `checkout.session.expired` | High | **ported 2026-07-25** — `channel_checkout.rs` + `routes_channels` + Stripe webhook/`stripe_sync` reconcile |
+| `channel-signup.ts` — first-contact question, `parseSignupAnswer`, chat-native accounts, claim/retire helpers | High | **partial** — signup/first-contact/`/subscribe` ported (`channel_signup.rs`); **claim-on-link still missing** (see below) |
 | Cloudflare AI Gateway (`aiGatewayRoute`) incl. the account/gateway id path-smuggling validation | Medium | **absent** — `CF_AI_GATEWAY_*` vars in `wrangler.toml` are read by nothing |
 | Managed speech routes (`/api/v1/speech/*`) and the `speak_text` / `transcribe_audio` MCP tools | Medium | **absent** — `speech.rs` is a fully tested pure island with no caller |
 | Authoritative memory log — append-on-sync, `GET /memory/log`, `memory_log_cursors` | Medium | **absent** — `memory_log.rs` is now compiled and tested but still has no route |
@@ -162,11 +162,12 @@ build is honest with or without the index provisioned. The scheduled
 | `stt.ts`, `stt-admission.ts` (DO), `asr.ts`, `voice.ts` | **ported** | See "AI routes" below. |
 | `memory-projection.ts`, `memory-sync.ts` | **ported** | See "Memory & currents" below. |
 | `memory-vectors.ts`, `embeddings.ts` | **ported (default)** | Vectorize via `js_sys` FFI; see Vectorize section. |
-| `facetime.ts` / bridge | **intentionally absent** | Needs Gemini Live bridge container; keep on TS until that stack exists for RS. |
+| `facetime.ts` / bridge | **intentionally absent** | Needs Gemini Live bridge container; keep on TS until that stack exists for RS. Hub FaceTime join is behind `facetime` Cargo feature (default off). |
 | `digests.ts`, `cron-cursor.ts` | **ported** | See "Cron jobs" below. |
 | `stripe-sync.ts` | **ported** | `src/stripe_sync.rs`, ported separately; `reconcileStripeSubscriptions` is wired into `glue.rs::scheduled` in its TS position. |
 | `observability.ts` | **partial** | Heartbeat only; Sentry capture and tail log shipping remain absent. See the audit table above. |
-| `channel-checkout.ts`, `channel-signup.ts` | **absent** | Never ported; see the audit table above. |
+| `channel-checkout.ts` | **ported** | `src/channel_checkout.rs` + `routes_channels` + webhook/`stripe_sync` reconcile; `/subscribe` in `CHANNEL_COMMANDS`. |
+| `channel-signup.ts` | **partial** | Pure signup + first-contact in `channel_signup.rs` / `routes_channels`; **claim-on-link on `POST /v1/channels/link` still missing** — TS retires/claims the chat-native placeholder (`claimChannelAccount`) when redeeming a link code; Rust `handle_channel_link_redeem` binds only and does not claim the placeholder, and rejects an existing binding owned by that placeholder with 409. |
 
 ## Cron jobs
 
@@ -356,8 +357,13 @@ earlier "~95% parity" figure was optimistic; the absent-behaviour rows in the
 table above are the backlog that number concealed. Residual risks:
 
 - **The absent features are absent in production, not merely untested.** Chat
-  `/subscribe` checkout and chat-native signup do not exist in the deployed
-  worker. Anything that depended on them has been silently inert since cutover.
+  `/subscribe` checkout and chat-native signup **were ported 2026-07-25**
+  (`channel_checkout` / `channel_signup` / `routes_channels`). Remaining channel
+  gap: **claim-on-link** — `POST /v1/channels/link` does not claim/retire the
+  chat-native placeholder account the way TS `routes.post("/channels/link")`
+  does, so redeeming a code against a signup-created placeholder can 409 or
+  leave an unclaimed `channel_accounts` row. `claim_channel_account` exists but
+  is not called from the redeem path.
 - **Digests, daily Currents and cursor rotation were inert from the 2026-07-24
   cutover until they were ported on 2026-07-25.** No user received a
   cron-minted Current or a digest in that window. The three jobs are now in
