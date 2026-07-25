@@ -11,10 +11,12 @@ LOG_MODULE_REGISTER(wifi_home, LOG_LEVEL_INF);
 
 #define WIFI_CLOUD_HOST_MAX 128
 #define WIFI_TOKEN_MAX 96
+#define WIFI_DEVICE_ID_MAX 64
 
 static char home_ssid[WIFI_MAX_SSID_LEN + 1];
 static char home_password[WIFI_MAX_PASSWORD_LEN + 1];
 static char cloud_host[WIFI_CLOUD_HOST_MAX + 1];
+static char cloud_device_id[WIFI_DEVICE_ID_MAX + 1];
 static char cloud_token[WIFI_TOKEN_MAX + 1];
 static bool home_creds_set;
 static bool cloud_token_set;
@@ -71,11 +73,24 @@ static int wifi_home_settings_set(const char *name, size_t len,
 			return rc;
 		}
 		cloud_token[len] = '\0';
-		cloud_token_set = (cloud_host[0] != '\0');
-		return 0;
-	}
+        cloud_token_set = (cloud_host[0] != '\0' && cloud_device_id[0] != '\0');
+        return 0;
+    }
 
-	return -ENOENT;
+    if (settings_name_steq(name, "device_id", &next) && !next) {
+        if (len == 0 || len > WIFI_DEVICE_ID_MAX) {
+            return -EINVAL;
+        }
+        rc = read_cb(cb_arg, cloud_device_id, len);
+        if (rc < 0) {
+            return rc;
+        }
+        cloud_device_id[len] = '\0';
+        cloud_token_set = (cloud_host[0] != '\0' && cloud_token[0] != '\0');
+        return 0;
+    }
+
+    return -ENOENT;
 }
 
 SETTINGS_STATIC_HANDLER_DEFINE(wifi_home_settings, "omi_wifi", NULL,
@@ -144,24 +159,30 @@ void wifi_home_clear_credentials(void)
 	(void)settings_delete("omi_wifi/password");
 }
 
-int wifi_home_set_cloud_token(const char *host, const char *token)
+int wifi_home_set_cloud_token(const char *host, const char *device_id, const char *token)
 {
-	if (!host || !token) {
-		return -EINVAL;
-	}
+    if (!host || !device_id || !token) {
+        return -EINVAL;
+    }
 
-	size_t host_len = strlen(host);
-	size_t token_len = strlen(token);
+    size_t host_len = strlen(host);
+    size_t device_id_len = strlen(device_id);
+    size_t token_len = strlen(token);
 	if (host_len == 0 || host_len > WIFI_CLOUD_HOST_MAX) {
 		return -EINVAL;
 	}
 	if (token_len == 0 || token_len > WIFI_TOKEN_MAX) {
 		return -EINVAL;
 	}
+    if (device_id_len == 0 || device_id_len > WIFI_DEVICE_ID_MAX) {
+        return -EINVAL;
+    }
 
-	memcpy(cloud_host, host, host_len);
+    memcpy(cloud_host, host, host_len);
 	cloud_host[host_len] = '\0';
-	memcpy(cloud_token, token, token_len);
+    memcpy(cloud_device_id, device_id, device_id_len);
+    cloud_device_id[device_id_len] = '\0';
+    memcpy(cloud_token, token, token_len);
 	cloud_token[token_len] = '\0';
 	cloud_token_set = true;
 
@@ -175,8 +196,13 @@ int wifi_home_set_cloud_token(const char *host, const char *token)
 		LOG_ERR("Failed to persist cloud token (err %d)", err);
 		return err;
 	}
+    err = settings_save_one("omi_wifi/device_id", cloud_device_id, device_id_len);
+    if (err) {
+        LOG_ERR("Failed to persist cloud device ID (err %d)", err);
+        return err;
+    }
 
-	LOG_INF("Cloud device token stored (host len=%u)", (unsigned)host_len);
+    LOG_INF("Cloud device token stored (host len=%u)", (unsigned)host_len);
 	return 0;
 }
 

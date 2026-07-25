@@ -27,6 +27,7 @@ pub const WIFI_PASSWORD_MIN: usize = 8;
 pub const WIFI_PASSWORD_MAX: usize = 64;
 pub const WIFI_TOKEN_MAX: usize = 96;
 pub const WIFI_CLOUD_HOST_MAX: usize = 128;
+pub const WIFI_DEVICE_ID_MAX: usize = 64;
 
 pub const SOFTAP_STREAM_MAGIC: u8 = 0xA5;
 pub const SOFTAP_STREAM_VERSION: u8 = 1;
@@ -64,6 +65,7 @@ pub enum ParsedWifiCommand<'a> {
     HomeClear,
     CloudToken {
         host: &'a [u8],
+        device_id: &'a [u8],
         token: &'a [u8],
     },
     Error(u8),
@@ -105,7 +107,7 @@ fn parse_credentials(buf: &[u8]) -> Result<WifiCredentials<'_>, u8> {
     })
 }
 
-fn parse_host_token(buf: &[u8]) -> Result<(&[u8], &[u8]), u8> {
+fn parse_host_token(buf: &[u8]) -> Result<ParsedWifiCommand<'_>, u8> {
     if buf.len() < 2 {
         return Err(WIFI_ERR_TOKEN_INVALID);
     }
@@ -114,13 +116,24 @@ fn parse_host_token(buf: &[u8]) -> Result<(&[u8], &[u8]), u8> {
         return Err(WIFI_ERR_TOKEN_INVALID);
     }
     let host = &buf[1..1 + host_len];
-    let token_len_idx = 1 + host_len;
+    let device_len_idx = 1 + host_len;
+    let device_len = buf[device_len_idx] as usize;
+    let device_start = device_len_idx + 1;
+    if device_len == 0 || device_len > WIFI_DEVICE_ID_MAX || device_start + device_len >= buf.len()
+    {
+        return Err(WIFI_ERR_TOKEN_INVALID);
+    }
+    let token_len_idx = device_start + device_len;
     let token_len = buf[token_len_idx] as usize;
     let token_start = token_len_idx + 1;
     if token_len == 0 || token_len > WIFI_TOKEN_MAX || token_start + token_len > buf.len() {
         return Err(WIFI_ERR_TOKEN_INVALID);
     }
-    Ok((host, &buf[token_start..token_start + token_len]))
+    Ok(ParsedWifiCommand::CloudToken {
+        host,
+        device_id: &buf[device_start..device_start + device_len],
+        token: &buf[token_start..token_start + token_len],
+    })
 }
 
 pub fn parse_ble_command(buf: &[u8]) -> ParsedWifiCommand<'_> {
@@ -141,7 +154,7 @@ pub fn parse_ble_command(buf: &[u8]) -> ParsedWifiCommand<'_> {
         },
         WifiBleCommand::HomeClear => ParsedWifiCommand::HomeClear,
         WifiBleCommand::CloudToken => match parse_host_token(&buf[1..]) {
-            Ok((host, token)) => ParsedWifiCommand::CloudToken { host, token },
+            Ok(command) => command,
             Err(code) => ParsedWifiCommand::Error(code),
         },
         WifiBleCommand::Unknown(_) => ParsedWifiCommand::Error(WIFI_ERR_UNKNOWN_CMD),
@@ -209,8 +222,21 @@ pub fn selftest() -> i32 {
     let mut failures = 0;
 
     let setup = [
-        WIFI_CMD_SETUP, 4, b'h', b'o', b'm', b'e', 8, b'p', b'a', b's', b's', b'w', b'o',
-        b'r', b'd',
+        WIFI_CMD_SETUP,
+        4,
+        b'h',
+        b'o',
+        b'm',
+        b'e',
+        8,
+        b'p',
+        b'a',
+        b's',
+        b's',
+        b'w',
+        b'o',
+        b'r',
+        b'd',
     ];
     match parse_ble_command(&setup) {
         ParsedWifiCommand::Setup(c) if c.ssid == b"home" && c.password == b"password" => {}
@@ -257,7 +283,19 @@ mod tests {
     #[test]
     fn parses_softap_setup() {
         let buf = [
-            WIFI_CMD_SETUP, 3, b'a', b'b', b'c', 8, b'1', b'2', b'3', b'4', b'5', b'6', b'7',
+            WIFI_CMD_SETUP,
+            3,
+            b'a',
+            b'b',
+            b'c',
+            8,
+            b'1',
+            b'2',
+            b'3',
+            b'4',
+            b'5',
+            b'6',
+            b'7',
             b'8',
         ];
         match parse_ble_command(&buf) {
@@ -275,9 +313,30 @@ mod tests {
     }
 
     #[test]
+    fn cloud_provisioning_carries_device_identity() {
+        let mut command = vec![WIFI_CMD_CLOUD_TOKEN, 12];
+        command.extend_from_slice(b"example.test");
+        command.push(5);
+        command.extend_from_slice(b"dev-1");
+        command.push(5);
+        command.extend_from_slice(b"token");
+        assert!(matches!(
+            parse_ble_command(&command),
+            ParsedWifiCommand::CloudToken {
+                host: b"example.test",
+                device_id: b"dev-1",
+                token: b"token"
+            }
+        ));
+    }
+
+    #[test]
     fn softap_header_counts_packets() {
         let mut out = [0u8; SOFTAP_HEADER_LEN];
-        assert_eq!(encode_softap_header(100, 110, 444, &mut out), SOFTAP_HEADER_LEN);
+        assert_eq!(
+            encode_softap_header(100, 110, 444, &mut out),
+            SOFTAP_HEADER_LEN
+        );
         assert_eq!(&out[20..24], &10u32.to_be_bytes());
     }
 

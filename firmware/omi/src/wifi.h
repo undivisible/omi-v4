@@ -32,7 +32,7 @@ bool is_wifi_on(void);
 int wifi_home_init(void);
 int wifi_home_set_credentials(const char *ssid, const char *password);
 void wifi_home_clear_credentials(void);
-int wifi_home_set_cloud_token(const char *host, const char *token);
+int wifi_home_set_cloud_token(const char *host, const char *device_id, const char *token);
 int wifi_home_try_autosync(void);
 bool wifi_home_configured(void);
 #endif

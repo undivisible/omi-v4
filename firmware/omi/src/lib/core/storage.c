@@ -780,6 +780,14 @@ static ssize_t storage_wifi_handler(struct bt_conn *conn,
             result = 0x21;
             break;
         }
+        uint8_t device_id_len = bytes[idx++];
+        if (device_id_len == 0 || device_id_len > 64 || idx + device_id_len >= len) {
+            result = 0x21;
+            break;
+        }
+        char device_id[65] = {0};
+        memcpy(device_id, &bytes[idx], device_id_len);
+        idx += device_id_len;
         uint8_t token_len = bytes[idx++];
         if (token_len == 0 || token_len > 96 || idx + token_len > len) {
             result = 0x21;
@@ -787,7 +795,7 @@ static ssize_t storage_wifi_handler(struct bt_conn *conn,
         }
         char token[97] = {0};
         memcpy(token, &bytes[idx], token_len);
-        result = wifi_home_set_cloud_token(host, token) == 0 ? 0 : 0x21;
+        result = wifi_home_set_cloud_token(host, device_id, token) == 0 ? 0 : 0x21;
         break;
     }
 #else

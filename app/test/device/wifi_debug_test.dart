@@ -34,4 +34,16 @@ void main() {
       throwsFormatException,
     );
   });
+
+  test('encodes cloud identity for firmware uploads', () {
+    expect(wifiCloudCommand('omi.test', 'dev-1', 'token'), [
+      0x12,
+      8,
+      ...'omi.test'.codeUnits,
+      5,
+      ...'dev-1'.codeUnits,
+      5,
+      ...'token'.codeUnits,
+    ]);
+  });
 }
