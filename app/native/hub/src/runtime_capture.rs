@@ -42,6 +42,18 @@ pub(crate) fn capture_control(request_id: &str, command: &Command) -> Option<Cap
             request_id: request_id.to_owned(),
             bytes: bytes.clone(),
         }),
+        Command::ImportRingRange {
+            source_id,
+            device_id,
+            started_at_ms,
+            frames,
+        } => Some(CaptureControl::ImportRingRange {
+            request_id: request_id.to_owned(),
+            source_id: source_id.clone(),
+            device_id: device_id.clone(),
+            started_at_ms: *started_at_ms,
+            frames: frames.clone(),
+        }),
         Command::SealCaptureSegment => Some(CaptureControl::Seal {
             request_id: request_id.to_owned(),
         }),

@@ -18,6 +18,8 @@ const _sleep = '19b10014-e8f2-537e-4f6c-d104768a1214';
 const _captureLed = '19b10015-e8f2-537e-4f6c-d104768a1214';
 const _rename = '19b10016-e8f2-537e-4f6c-d104768a1214';
 const _smpService = '8d53dc1d-1db7-4cd3-868b-8a527460aa84';
+const _storageService = '30295780-4301-eabd-2904-2849adfeae43';
+const _wifi = '30295783-4301-eabd-2904-2849adfeae43';
 
 final _systemOmi = [
   BleDevice(
@@ -312,6 +314,28 @@ void main() {
     );
   });
 
+  test('Wi-Fi controls encode commands and return firmware status', () async {
+    platform.systemDevices = _systemOmi;
+    await adapter.connect('omi-system');
+
+    expect(adapter.wifiSupported, isTrue);
+    expect(await adapter.configureWifi('home', 'password'), wifiSuccess);
+    expect(
+      await adapter.configureWifi('home', 'password', home: true),
+      wifiSuccess,
+    );
+    expect(await adapter.startWifiSync(), wifiSuccess);
+    expect(await adapter.stopWifiSync(), wifiSuccess);
+    expect(await adapter.clearHomeWifi(), wifiSuccess);
+
+    expect(
+      platform.writes
+          .where((write) => write.characteristic == _wifi)
+          .map((write) => write.value.first),
+      [0x01, 0x10, 0x02, 0x03, 0x11],
+    );
+  });
+
   test('rename writes UTF-8 to 19b10016 and republishes the name', () async {
     platform.systemDevices = _systemOmi;
     await adapter.connect('omi-system');
@@ -444,6 +468,7 @@ final class _FakeBlePlatform extends UniversalBlePlatform {
   Map<String, List<String>> gatt = {
     _omiService: [_audioCodec],
     _settingsService: [_sleep, _captureLed, _rename],
+    _storageService: [_wifi],
   };
 
   @override
@@ -497,6 +522,9 @@ final class _FakeBlePlatform extends UniversalBlePlatform {
       throw StateError('characteristic $characteristic not found');
     }
     writes.add((characteristic: characteristic, value: value.toList()));
+    if (characteristic == _wifi) {
+      pushNotification(deviceId, characteristic, [wifiSuccess]);
+    }
   }
 
   void pushNotification(String deviceId, String characteristic, List<int> v) =>

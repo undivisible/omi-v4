@@ -80,18 +80,20 @@ abstract class Command {
       case 34:
         return CommandAppendCaptureAudio.load(deserializer);
       case 35:
-        return CommandSealCaptureSegment.load(deserializer);
+        return CommandImportRingRange.load(deserializer);
       case 36:
-        return CommandDrainCaptureWal.load(deserializer);
+        return CommandSealCaptureSegment.load(deserializer);
       case 37:
-        return CommandReadCaptureWalState.load(deserializer);
+        return CommandDrainCaptureWal.load(deserializer);
       case 38:
-        return CommandCloseCaptureWal.load(deserializer);
+        return CommandReadCaptureWalState.load(deserializer);
       case 39:
-        return CommandRecordCaptureGap.load(deserializer);
+        return CommandCloseCaptureWal.load(deserializer);
       case 40:
-        return CommandRecordCaptureResume.load(deserializer);
+        return CommandRecordCaptureGap.load(deserializer);
       case 41:
+        return CommandRecordCaptureResume.load(deserializer);
+      case 42:
         return CommandReadCaptureGaps.load(deserializer);
       default:
         throw Exception(
@@ -2680,6 +2682,90 @@ class CommandAppendCaptureAudio extends Command {
 }
 
 @immutable
+class CommandImportRingRange extends Command {
+  const CommandImportRingRange({
+    required this.sourceId,
+    required this.deviceId,
+    required this.startedAtMs,
+    required this.frames,
+  }) : super();
+
+  static CommandImportRingRange load(BinaryDeserializer deserializer) {
+    deserializer.increaseContainerDepth();
+    final instance = CommandImportRingRange(
+      sourceId: deserializer.deserializeString(),
+      deviceId: deserializer.deserializeString(),
+      startedAtMs: deserializer.deserializeInt64(),
+      frames: TraitHelpers.deserializeVectorVectorU8(deserializer),
+    );
+    deserializer.decreaseContainerDepth();
+    return instance;
+  }
+
+  final String sourceId;
+  final String deviceId;
+  final int startedAtMs;
+  final List<List<int>> frames;
+
+  CommandImportRingRange copyWith({
+    String? sourceId,
+    String? deviceId,
+    int? startedAtMs,
+    List<List<int>>? frames,
+  }) {
+    return CommandImportRingRange(
+      sourceId: sourceId ?? this.sourceId,
+      deviceId: deviceId ?? this.deviceId,
+      startedAtMs: startedAtMs ?? this.startedAtMs,
+      frames: frames ?? this.frames,
+    );
+  }
+
+  void serialize(BinarySerializer serializer) {
+    serializer.increaseContainerDepth();
+    serializer.serializeVariantIndex(35);
+    serializer.serializeString(sourceId);
+    serializer.serializeString(deviceId);
+    serializer.serializeInt64(startedAtMs);
+    TraitHelpers.serializeVectorVectorU8(frames, serializer);
+    serializer.decreaseContainerDepth();
+  }
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    if (other.runtimeType != runtimeType) return false;
+
+    return other is CommandImportRingRange &&
+        sourceId == other.sourceId &&
+        deviceId == other.deviceId &&
+        startedAtMs == other.startedAtMs &&
+        listEquals(frames, other.frames);
+  }
+
+  @override
+  int get hashCode => Object.hash(sourceId, deviceId, startedAtMs, frames);
+
+  @override
+  String toString() {
+    String? fullString;
+
+    assert(() {
+      fullString =
+          '$runtimeType('
+          'sourceId: $sourceId, '
+          'deviceId: $deviceId, '
+          'startedAtMs: $startedAtMs, '
+          'frames: $frames'
+          ')';
+      return true;
+    }());
+
+    return fullString ?? 'CommandImportRingRange';
+  }
+}
+
+@immutable
 class CommandSealCaptureSegment extends Command {
   const CommandSealCaptureSegment() : super();
 
@@ -2692,7 +2778,7 @@ class CommandSealCaptureSegment extends Command {
 
   void serialize(BinarySerializer serializer) {
     serializer.increaseContainerDepth();
-    serializer.serializeVariantIndex(35);
+    serializer.serializeVariantIndex(36);
     serializer.decreaseContainerDepth();
   }
 
@@ -2735,7 +2821,7 @@ class CommandDrainCaptureWal extends Command {
 
   void serialize(BinarySerializer serializer) {
     serializer.increaseContainerDepth();
-    serializer.serializeVariantIndex(36);
+    serializer.serializeVariantIndex(37);
     serializer.decreaseContainerDepth();
   }
 
@@ -2778,7 +2864,7 @@ class CommandReadCaptureWalState extends Command {
 
   void serialize(BinarySerializer serializer) {
     serializer.increaseContainerDepth();
-    serializer.serializeVariantIndex(37);
+    serializer.serializeVariantIndex(38);
     serializer.decreaseContainerDepth();
   }
 
@@ -2821,7 +2907,7 @@ class CommandCloseCaptureWal extends Command {
 
   void serialize(BinarySerializer serializer) {
     serializer.increaseContainerDepth();
-    serializer.serializeVariantIndex(38);
+    serializer.serializeVariantIndex(39);
     serializer.decreaseContainerDepth();
   }
 
@@ -2893,7 +2979,7 @@ class CommandRecordCaptureGap extends Command {
 
   void serialize(BinarySerializer serializer) {
     serializer.increaseContainerDepth();
-    serializer.serializeVariantIndex(39);
+    serializer.serializeVariantIndex(40);
     serializer.serializeString(deviceId);
     serializer.serializeString(reason);
     serializer.serializeInt64(endedAtMs);
@@ -2972,7 +3058,7 @@ class CommandRecordCaptureResume extends Command {
 
   void serialize(BinarySerializer serializer) {
     serializer.increaseContainerDepth();
-    serializer.serializeVariantIndex(40);
+    serializer.serializeVariantIndex(41);
     serializer.serializeString(deviceId);
     serializer.serializeInt64(atMs);
     serializer.serializeString(streamId);
@@ -3024,7 +3110,7 @@ class CommandReadCaptureGaps extends Command {
 
   void serialize(BinarySerializer serializer) {
     serializer.increaseContainerDepth();
-    serializer.serializeVariantIndex(41);
+    serializer.serializeVariantIndex(42);
     serializer.decreaseContainerDepth();
   }
 

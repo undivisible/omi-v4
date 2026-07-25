@@ -9,4 +9,8 @@ export 'device_relay.dart';
 export 'firmware_dfu.dart';
 export 'hub_capture.dart';
 export 'paired_device_store.dart';
+export 'ring_backlog.dart';
+export 'ring_native_sink.dart';
 export 'universal_ble_device_relay.dart';
+export 'universal_ring_storage_ble.dart';
+export 'wifi_debug.dart';

@@ -239,6 +239,12 @@ pub enum Command {
     AppendCaptureAudio {
         bytes: Vec<u8>,
     },
+    ImportRingRange {
+        source_id: String,
+        device_id: String,
+        started_at_ms: i64,
+        frames: Vec<Vec<u8>>,
+    },
     /// Seal the open segment so it becomes uploadable, then re-apply the
     /// bounds. Answered by exactly one [`CaptureWalState`].
     SealCaptureSegment,

@@ -6,6 +6,7 @@ import 'package:universal_ble/universal_ble.dart';
 
 import 'device_relay.dart';
 import 'device_models.dart';
+import 'wifi_debug.dart';
 
 final class UniversalBleDeviceRelayAdapter
     implements
@@ -14,7 +15,8 @@ final class UniversalBleDeviceRelayAdapter
         DeviceRelayLed,
         DeviceRelaySleep,
         DeviceRelayRename,
-        DeviceRelayDfu {
+        DeviceRelayDfu,
+        DeviceRelayWifi {
   UniversalBleDeviceRelayAdapter({
     this.scanSettle = const Duration(seconds: 5),
   });
@@ -51,6 +53,8 @@ final class UniversalBleDeviceRelayAdapter
   // SMP (mcumgr) service. Its presence is what says the running firmware was
   // built with MCUboot OTA and can take a `dfu_application.zip` over BLE.
   static const _smpService = '8d53dc1d-1db7-4cd3-868b-8a527460aa84';
+  static const _storageService = '30295780-4301-eabd-2904-2849adfeae43';
+  static const _wifiCharacteristic = '30295783-4301-eabd-2904-2849adfeae43';
 
   final Duration scanSettle;
   final _snapshots = StreamController<DeviceRelaySnapshot>.broadcast();
@@ -68,6 +72,7 @@ final class UniversalBleDeviceRelayAdapter
   // not announce "no LED" on firmware that has one.
   bool? _captureLedPresent;
   bool _smpPresent = false;
+  bool _wifiPresent = false;
   bool _restoringNotifications = false;
   Timer? _restoreRetryTimer;
   int _restoreAttempts = 0;
@@ -196,6 +201,7 @@ final class UniversalBleDeviceRelayAdapter
     _restoreAttempts = 0;
     _captureLedPresent = null;
     _smpPresent = false;
+    _wifiPresent = false;
     var device = _devices[deviceId];
     if (device == null) {
       // The remembered pendant may already be connected at the system level
@@ -453,6 +459,14 @@ final class UniversalBleDeviceRelayAdapter
     _smpPresent = services.any(
       (service) => service.uuid.toLowerCase() == _smpService,
     );
+    _wifiPresent = services.any(
+      (service) =>
+          service.uuid.toLowerCase() == _storageService &&
+          service.characteristics.any(
+            (characteristic) =>
+                characteristic.uuid.toLowerCase() == _wifiCharacteristic,
+          ),
+    );
     for (final service in services) {
       if (service.characteristics.isNotEmpty) sawCharacteristics = true;
       if (service.uuid.toLowerCase() != _settingsService) continue;
@@ -464,6 +478,52 @@ final class UniversalBleDeviceRelayAdapter
       }
     }
     if (sawCharacteristics) _captureLedPresent = false;
+  }
+
+  @override
+  bool get wifiSupported => _connected && _wifiPresent;
+
+  @override
+  Future<int> configureWifi(
+    String ssid,
+    String password, {
+    bool home = false,
+  }) => _sendWifi(wifiCredentialsCommand(ssid, password, home: home));
+
+  @override
+  Future<int> startWifiSync() => _sendWifi(Uint8List.fromList([0x02]));
+
+  @override
+  Future<int> stopWifiSync() => _sendWifi(Uint8List.fromList([0x03]));
+
+  @override
+  Future<int> clearHomeWifi() => _sendWifi(Uint8List.fromList([0x11]));
+
+  Future<int> _sendWifi(Uint8List payload) async {
+    final deviceId = _connectedId;
+    if (deviceId == null || !_connected || !_wifiPresent) {
+      return wifiHardwareUnavailable;
+    }
+    final response =
+        UniversalBle.characteristicValueStream(deviceId, _wifiCharacteristic)
+            .firstWhere((value) => value.isNotEmpty)
+            .timeout(const Duration(seconds: 5));
+    try {
+      await UniversalBle.subscribeNotifications(
+        deviceId,
+        _storageService,
+        _wifiCharacteristic,
+      );
+      await UniversalBle.write(
+        deviceId,
+        _storageService,
+        _wifiCharacteristic,
+        payload,
+      );
+      return (await response).first;
+    } catch (_) {
+      return wifiHardwareUnavailable;
+    }
   }
 
   @override
@@ -585,6 +645,7 @@ final class UniversalBleDeviceRelayAdapter
     _connected = false;
     _captureLedPresent = null;
     _smpPresent = false;
+    _wifiPresent = false;
     _restoreRetryTimer?.cancel();
     _restoreRetryTimer = null;
     _restoreAttempts = 0;

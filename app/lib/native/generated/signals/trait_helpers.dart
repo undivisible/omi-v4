@@ -511,4 +511,24 @@ class TraitHelpers {
     final length = deserializer.deserializeLength();
     return List.generate(length, (_) => deserializer.deserializeUint8());
   }
+
+  static void serializeVectorVectorU8(
+    List<List<int>> value,
+    BinarySerializer serializer,
+  ) {
+    serializer.serializeLength(value.length);
+    for (final item in value) {
+      TraitHelpers.serializeVectorU8(item, serializer);
+    }
+  }
+
+  static List<List<int>> deserializeVectorVectorU8(
+    BinaryDeserializer deserializer,
+  ) {
+    final length = deserializer.deserializeLength();
+    return List.generate(
+      length,
+      (_) => TraitHelpers.deserializeVectorU8(deserializer),
+    );
+  }
 }

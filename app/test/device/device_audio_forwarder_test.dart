@@ -928,6 +928,15 @@ final class _RecordingHub implements NativeHub {
   }
 
   @override
+  void importRingRange({
+    required String requestId,
+    required String sourceId,
+    required String deviceId,
+    required int startedAtMs,
+    required List<Uint8List> frames,
+  }) {}
+
+  @override
   void sealCaptureSegment(String requestId) => _captureState(requestId);
 
   @override

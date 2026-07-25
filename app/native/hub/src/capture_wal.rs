@@ -42,6 +42,7 @@
 //! is visible as `.seg` is a segment whose bytes are on the medium.
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -266,6 +267,33 @@ impl CaptureWal {
         gap_before: bool,
     ) -> io::Result<String> {
         let id = random_id();
+        self.begin_segment_with_id(
+            id,
+            device_id,
+            audio_stream_id,
+            encoding,
+            sample_rate_hz,
+            channels,
+            (self.now_ms)(),
+            gap_before,
+        )
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the segment header is the immutable capture identity"
+    )]
+    fn begin_segment_with_id(
+        &mut self,
+        id: String,
+        device_id: &str,
+        audio_stream_id: &str,
+        encoding: &str,
+        sample_rate_hz: u32,
+        channels: u8,
+        started_at_ms: i64,
+        gap_before: bool,
+    ) -> io::Result<String> {
         let framing = CaptureWalFraming::for_encoding(encoding);
         self.seal_open()?;
         let sequence = self.next_sequence;
@@ -279,7 +307,7 @@ impl CaptureWal {
             framing: Some(framing.as_str().to_owned()),
             sample_rate_hz,
             channels,
-            started_at_ms: (self.now_ms)(),
+            started_at_ms,
             gap_before,
         };
         let line = serde_json::to_string(&header)
@@ -303,6 +331,59 @@ impl CaptureWal {
             audio_bytes: 0,
         });
         Ok(id)
+    }
+
+    pub fn import_opus_range(
+        &mut self,
+        source_id: &str,
+        device_id: &str,
+        started_at_ms: i64,
+        frames: &[Vec<u8>],
+    ) -> io::Result<bool> {
+        let mut digest = Sha256::new();
+        digest.update(device_id.as_bytes());
+        digest.update([0]);
+        digest.update(source_id.as_bytes());
+        let id = format!("{:x}", digest.finalize());
+        let mut audio = Vec::new();
+        for frame in frames {
+            let length = u16::try_from(frame.len()).map_err(|_| {
+                io::Error::new(io::ErrorKind::InvalidInput, "Opus frame is too large.")
+            })?;
+            audio.extend_from_slice(&length.to_be_bytes());
+            audio.extend_from_slice(frame);
+        }
+        if let Some(existing) = self.pending().into_iter().find(|segment| segment.id == id) {
+            let matches = existing.device_id == device_id
+                && existing.audio_stream_id == source_id
+                && existing.encoding == "opus"
+                && self
+                    .read_audio(&existing)
+                    .is_some_and(|bytes| bytes == audio);
+            return if matches {
+                Ok(false)
+            } else {
+                Err(io::Error::new(
+                    io::ErrorKind::AlreadyExists,
+                    "Immutable ring range conflicts with its durable copy.",
+                ))
+            };
+        }
+        self.begin_segment_with_id(
+            id,
+            device_id,
+            source_id,
+            "opus",
+            16_000,
+            1,
+            started_at_ms,
+            false,
+        )?;
+        for frame in frames {
+            self.append(frame)?;
+        }
+        self.seal()?;
+        Ok(true)
     }
 
     /// Appends captured audio to the open segment. A no-op when no segment is
@@ -731,6 +812,38 @@ mod tests {
         assert_eq!(pending[0].framing, CaptureWalFraming::Len16);
         assert_eq!(audio(&wal, &pending[0]), vec![0, 3, 1, 2, 3, 0, 2, 4, 5]);
         assert_eq!(pending[0].audio_bytes, 9);
+    }
+
+    #[test]
+    fn ring_range_import_is_immutable_and_idempotent() {
+        let sandbox = Sandbox::new("ring-import");
+        let (_clock, now) = fixed_clock(1_000);
+        let mut wal = open(&sandbox, CaptureWalBounds::default(), now);
+        let frames = vec![vec![1, 2, 3], vec![4, 5]];
+
+        assert!(
+            wal.import_opus_range("ring_10_12", "device-1", 1_000, &frames)
+                .unwrap_or_else(|error| panic!("range imports: {error}"))
+        );
+        assert!(
+            !wal.import_opus_range("ring_10_12", "device-1", 2_000, &frames)
+                .unwrap_or_else(|error| panic!("range retry succeeds: {error}"))
+        );
+        assert_eq!(wal.pending().len(), 1);
+    }
+
+    #[test]
+    fn ring_range_import_rejects_an_identity_collision() {
+        let sandbox = Sandbox::new("ring-collision");
+        let (_clock, now) = fixed_clock(1_000);
+        let mut wal = open(&sandbox, CaptureWalBounds::default(), now);
+        wal.import_opus_range("ring_10_12", "device-1", 1_000, &[vec![1]])
+            .unwrap_or_else(|error| panic!("range imports: {error}"));
+
+        assert!(
+            wal.import_opus_range("ring_10_12", "device-1", 1_000, &[vec![2]])
+                .is_err()
+        );
     }
 
     #[test]

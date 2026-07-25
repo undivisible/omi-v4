@@ -42,6 +42,14 @@ abstract interface class DeviceRelayDfu {
   bool get dfuSupported;
 }
 
+abstract interface class DeviceRelayWifi {
+  bool get wifiSupported;
+  Future<int> configureWifi(String ssid, String password, {bool home = false});
+  Future<int> startWifiSync();
+  Future<int> stopWifiSync();
+  Future<int> clearHomeWifi();
+}
+
 abstract interface class DeviceRelayAdapter {
   DeviceRelayCapabilities get capabilities;
   Stream<DeviceRelaySnapshot> get snapshots;
@@ -176,6 +184,44 @@ class DeviceRelayService {
     if (role != DeviceRelayRole.mobileOwner) return false;
     final Object led = adapter;
     return led is DeviceRelayLed && led.captureLedSupported;
+  }
+
+  bool get wifiSupported {
+    if (role != DeviceRelayRole.mobileOwner) return false;
+    final Object wifi = adapter;
+    return wifi is DeviceRelayWifi && wifi.wifiSupported;
+  }
+
+  Future<int> configureWifi(String ssid, String password, {bool home = false}) {
+    final Object wifi = adapter;
+    if (role != DeviceRelayRole.mobileOwner || wifi is! DeviceRelayWifi) {
+      return Future.value(0xfe);
+    }
+    return wifi.configureWifi(ssid, password, home: home);
+  }
+
+  Future<int> startWifiSync() {
+    final Object wifi = adapter;
+    if (role != DeviceRelayRole.mobileOwner || wifi is! DeviceRelayWifi) {
+      return Future.value(0xfe);
+    }
+    return wifi.startWifiSync();
+  }
+
+  Future<int> stopWifiSync() {
+    final Object wifi = adapter;
+    if (role != DeviceRelayRole.mobileOwner || wifi is! DeviceRelayWifi) {
+      return Future.value(0xfe);
+    }
+    return wifi.stopWifiSync();
+  }
+
+  Future<int> clearHomeWifi() {
+    final Object wifi = adapter;
+    if (role != DeviceRelayRole.mobileOwner || wifi is! DeviceRelayWifi) {
+      return Future.value(0xfe);
+    }
+    return wifi.clearHomeWifi();
   }
 
   Stream<DeviceAudioFrame> audioFrames(String deviceId) {

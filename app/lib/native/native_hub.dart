@@ -326,6 +326,13 @@ abstract interface class NativeHub {
     required String requestId,
     required Uint8List bytes,
   });
+  void importRingRange({
+    required String requestId,
+    required String sourceId,
+    required String deviceId,
+    required int startedAtMs,
+    required List<Uint8List> frames,
+  });
 
   /// Seals the open segment so it becomes uploadable. Answered by exactly one
   /// [NativeEventCaptureWalState].
@@ -418,6 +425,15 @@ mixin NativeHubWithoutCapture implements NativeHub {
   void appendCaptureAudio({
     required String requestId,
     required Uint8List bytes,
+  }) {}
+
+  @override
+  void importRingRange({
+    required String requestId,
+    required String sourceId,
+    required String deviceId,
+    required int startedAtMs,
+    required List<Uint8List> frames,
   }) {}
 
   @override
@@ -706,6 +722,15 @@ final class UnavailableNativeHub implements NativeHub {
   void appendCaptureAudio({
     required String requestId,
     required Uint8List bytes,
+  }) => _unavailable();
+
+  @override
+  void importRingRange({
+    required String requestId,
+    required String sourceId,
+    required String deviceId,
+    required int startedAtMs,
+    required List<Uint8List> frames,
   }) => _unavailable();
 
   @override
@@ -1166,6 +1191,23 @@ final class RinfNativeHub implements NativeHub {
     required String requestId,
     required Uint8List bytes,
   }) => _send(requestId, CommandAppendCaptureAudio(bytes: bytes));
+
+  @override
+  void importRingRange({
+    required String requestId,
+    required String sourceId,
+    required String deviceId,
+    required int startedAtMs,
+    required List<Uint8List> frames,
+  }) => _send(
+    requestId,
+    CommandImportRingRange(
+      sourceId: sourceId,
+      deviceId: deviceId,
+      startedAtMs: startedAtMs,
+      frames: frames,
+    ),
+  );
 
   @override
   void sealCaptureSegment(String requestId) =>

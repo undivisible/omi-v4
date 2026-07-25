@@ -2661,6 +2661,7 @@ async fn execute(
         | Command::ConfigureCaptureUpload { .. }
         | Command::BeginCaptureSegment { .. }
         | Command::AppendCaptureAudio { .. }
+        | Command::ImportRingRange { .. }
         | Command::SealCaptureSegment
         | Command::DrainCaptureWal
         | Command::ReadCaptureWalState

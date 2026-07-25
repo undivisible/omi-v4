@@ -48,6 +48,8 @@ const DRAIN_INTERVAL: Duration = Duration::from_secs(60);
 /// audio frame, so the queue absorbs several seconds of frames while a seal or
 /// an eviction is in progress.
 const CAPTURE_QUEUE_CAPACITY: usize = 512;
+const MAX_RING_RANGE_FRAMES: usize = 16_000;
+const MAX_RING_RANGE_BYTES: usize = 1024 * 1024;
 
 /// The subdirectory of the shared `.omi` data directory the log lives in.
 const WAL_SUBDIRECTORY: &str = "capture-wal";
@@ -87,6 +89,13 @@ pub enum CaptureControl {
     Append {
         request_id: String,
         bytes: Vec<u8>,
+    },
+    ImportRingRange {
+        request_id: String,
+        source_id: String,
+        device_id: String,
+        started_at_ms: i64,
+        frames: Vec<Vec<u8>>,
     },
     Seal {
         request_id: String,
@@ -272,6 +281,35 @@ impl CaptureService {
                 };
                 NativeEvent::CaptureAudioAppended(CaptureAudioAppended { request_id, error })
                     .send();
+            }
+            CaptureControl::ImportRingRange {
+                request_id,
+                source_id,
+                device_id,
+                started_at_ms,
+                frames,
+            } => {
+                let bytes = frames
+                    .iter()
+                    .fold(0_usize, |total, frame| total.saturating_add(frame.len()));
+                let error = if source_id.is_empty()
+                    || device_id.is_empty()
+                    || started_at_ms <= 0
+                    || frames.is_empty()
+                    || frames.len() > MAX_RING_RANGE_FRAMES
+                    || bytes > MAX_RING_RANGE_BYTES
+                {
+                    Some("ring range is invalid or exceeds its bound".to_owned())
+                } else {
+                    match self.wal.lock().await.as_mut() {
+                        Some(wal) => wal
+                            .import_opus_range(&source_id, &device_id, started_at_ms, &frames)
+                            .err()
+                            .map(|error| error.to_string()),
+                        None => Some("capture log is not open".to_owned()),
+                    }
+                };
+                self.publish_state(request_id, 0, error).await;
             }
             CaptureControl::Seal { request_id } => {
                 let error = match self.wal.lock().await.as_mut() {
