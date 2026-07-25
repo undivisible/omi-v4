@@ -11,6 +11,7 @@ pub mod gpio_pins;
 pub mod haptic;
 pub mod imu_gesture;
 pub mod led;
+pub mod metrics;
 pub mod offline_packer;
 pub mod sd_ring;
 pub mod settings_math;
@@ -29,6 +30,7 @@ pub extern "C" fn omi_rust_selftest() -> i32 {
         + haptic::selftest()
         + led::selftest()
         + feedback::selftest()
+        + metrics::selftest()
         + settings_math::selftest()
         + storage_proto::selftest()
         + sd_ring::selftest()
@@ -651,6 +653,21 @@ pub extern "C" fn omi_rust_haptic_motor_set(on: bool) -> i32 {
 #[no_mangle]
 pub extern "C" fn omi_rust_led_pulse_width_ns(period_ns: u32, level: u8) -> u32 {
     led::pulse_width_ns(period_ns, level)
+}
+
+#[no_mangle]
+pub extern "C" fn omi_rust_metrics_reset() {
+    metrics::reset();
+}
+
+#[no_mangle]
+pub extern "C" fn omi_rust_metrics_increment(metric: u8) {
+    metrics::increment(metric);
+}
+
+#[no_mangle]
+pub extern "C" fn omi_rust_metrics_read(metric: u8) -> u32 {
+    metrics::read(metric)
 }
 
 #[repr(C)]

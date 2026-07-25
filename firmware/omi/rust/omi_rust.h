@@ -81,6 +81,9 @@ int omi_rust_haptic_motor_init(void);
 int omi_rust_haptic_motor_set(bool on);
 
 uint32_t omi_rust_led_pulse_width_ns(uint32_t period_ns, uint8_t level);
+void omi_rust_metrics_reset(void);
+void omi_rust_metrics_increment(uint8_t metric);
+uint32_t omi_rust_metrics_read(uint8_t metric);
 
 typedef enum {
     OMI_RUST_ERROR_SETTINGS = 0,
