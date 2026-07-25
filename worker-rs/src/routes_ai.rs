@@ -79,6 +79,38 @@ fn rate_limiter_stub(env: &Env, key: &str) -> Result<Stub> {
     env.durable_object("RATE_LIMITER")?.get_by_name(key)
 }
 
+/// Read the request body while enforcing `limit`, aborting as soon as the
+/// accumulated size would exceed it. Mirrors the streaming size gate in the
+/// TypeScript `boundedJson` helper so multi-megabyte ASR posts are not fully
+/// buffered before refusal (workers-rs `Request::bytes` has no mid-read cap).
+async fn read_body_limited(req: &mut Request, limit: usize) -> Option<Vec<u8>> {
+    let declared = req
+        .headers()
+        .get("content-length")
+        .ok()
+        .flatten()
+        .map(|raw| crate::jsnum::number_from_str(&raw));
+    if let Some(n) = declared {
+        if n.is_finite() && n > limit as f64 {
+            return None;
+        }
+    }
+    let capacity = declared
+        .filter(|n| n.is_finite() && *n >= 0.0 && *n <= limit as f64)
+        .map(|n| n as usize)
+        .unwrap_or(0);
+    let mut stream = req.stream().ok()?;
+    let mut buf = Vec::with_capacity(capacity);
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.ok()?;
+        if asr_logic::body_chunk_exceeds(buf.len(), chunk.len(), limit) {
+            return None;
+        }
+        buf.extend_from_slice(&chunk);
+    }
+    Some(buf)
+}
+
 pub(crate) async fn consume_rate_limit(
     env: &Env,
     key: &str,
@@ -704,7 +736,8 @@ async fn handle_asr(mut req: Request, ctx: RouteContext<()>) -> Result<Response>
         return error_json("Managed Pro required", 403);
     }
 
-    let bytes = req.bytes().await.ok();
+    // Stream with an early size abort; content-length was already checked above.
+    let bytes = read_body_limited(&mut req, asr_logic::maximum_body_bytes()).await;
     let Some(body) = managed_ai::bounded_json(
         content_length.as_deref(),
         bytes.as_deref(),
@@ -737,7 +770,8 @@ async fn handle_asr(mut req: Request, ctx: RouteContext<()>) -> Result<Response>
         &auth.uid,
         "mimo-asr",
         asr_logic::ASR_MODEL,
-        request.audio.chars().count() as i64,
+        // Base64 audio is ASCII; byte length matches JS `String.length`.
+        request.audio.len() as i64,
         0,
         None,
         now,
@@ -1053,23 +1087,25 @@ async fn handle_stt_stream(req: Request, ctx: RouteContext<()>) -> Result<Respon
         Ok(db) => db,
         Err(_) => return error_json("Managed STT unavailable", 503),
     };
-    let admission_row = db
-        .prepare("SELECT admission_token FROM managed_stt_sessions WHERE id = ?1 AND uid = ?2 AND status = 'ready'")
+    // One D1 read for admission + Deepgram session params (avoids a second
+    // SELECT after claim; those columns are immutable after create).
+    let session_row = db
+        .prepare(
+            "SELECT admission_token, model, language, encoding, sample_rate, channels, diarize,\n                    interim_results, reserved_seconds\n             FROM managed_stt_sessions WHERE id = ?1 AND uid = ?2 AND status = 'ready'",
+        )
         .bind(&[session_id.clone().into(), auth.uid.clone().into()]);
-    let acquisition_token = match admission_row {
-        Ok(statement) => statement
-            .first::<Value>(None)
-            .await
-            .ok()
-            .flatten()
-            .and_then(|row| {
-                row.get("admission_token")
-                    .and_then(Value::as_str)
-                    .map(str::to_string)
-            }),
+    let session_row = match session_row {
+        Ok(statement) => statement.first::<Value>(None).await.ok().flatten(),
         Err(_) => return error_json("Managed STT unavailable", 503),
     };
-    let Some(acquisition_token) = acquisition_token else {
+    let Some(row) = session_row else {
+        return error_json("STT session unavailable", 409);
+    };
+    let Some(acquisition_token) = row
+        .get("admission_token")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+    else {
         return error_json("STT session unavailable", 409);
     };
 
@@ -1145,19 +1181,6 @@ async fn handle_stt_stream(req: Request, ctx: RouteContext<()>) -> Result<Respon
         return error_json("Managed STT unavailable", 503);
     }
 
-    let row = db
-        .prepare(
-            "SELECT model, language, encoding, sample_rate, channels, diarize,\n                    interim_results, reserved_seconds\n             FROM managed_stt_sessions WHERE id = ?1 AND uid = ?2",
-        )
-        .bind(&[session_id.clone().into(), auth.uid.clone().into()]);
-    let row = match row {
-        Ok(statement) => statement.first::<Value>(None).await.ok().flatten(),
-        Err(_) => None,
-    };
-    let Some(row) = row else {
-        fail_and_release_stt(&ctx, &stub, &session_id, &auth.uid, &acquisition_token).await;
-        return error_json("STT session unavailable", 409);
-    };
     let session_seconds = row
         .get("reserved_seconds")
         .and_then(Value::as_i64)

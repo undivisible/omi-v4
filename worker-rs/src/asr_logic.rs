@@ -48,6 +48,15 @@ pub fn declared_length_exceeds(content_length: Option<&str>) -> bool {
     }
 }
 
+/// True when appending `chunk_len` bytes to a buffer of `current_len` would
+/// exceed `limit`. Used by the wasm ASR glue's streaming body reader.
+pub fn body_chunk_exceeds(current_len: usize, chunk_len: usize, limit: usize) -> bool {
+    match current_len.checked_add(chunk_len) {
+        Some(total) => total > limit,
+        None => true,
+    }
+}
+
 /// Port of the body validation after `boundedJson`. Ordering matches the TS:
 /// the base64 char-cap (413) is checked before the shape validation (400).
 pub fn classify(body: &Value) -> AsrOutcome {
@@ -135,6 +144,15 @@ mod tests {
         )));
         assert!(!declared_length_exceeds(Some("100")));
         assert!(!declared_length_exceeds(None));
+    }
+
+    #[test]
+    fn body_chunk_gate_aborts_at_limit() {
+        assert!(!body_chunk_exceeds(0, 10, 10));
+        assert!(body_chunk_exceeds(0, 11, 10));
+        assert!(body_chunk_exceeds(8, 3, 10));
+        assert!(!body_chunk_exceeds(7, 3, 10));
+        assert!(body_chunk_exceeds(usize::MAX, 1, usize::MAX));
     }
 
     #[test]
