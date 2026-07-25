@@ -173,9 +173,8 @@ class Bridge:
         observer = CallerAudioObserver(asyncio.get_running_loop(), self._caller_audio)
         try:
             connection.connect(token, channel, uid)
-            local_user = connection.get_local_user()
-            local_user.register_audio_frame_observer(observer)
-            local_user.subscribe_all_audio()
+            connection.register_audio_frame_observer(observer, 0, None)
+            connection.get_local_user().subscribe_all_audio()
             await self._pump(api_key, model, connection)
         finally:
             # Teardown runs on every exit path, including cancellation: the
