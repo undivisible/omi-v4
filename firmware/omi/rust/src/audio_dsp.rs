@@ -25,6 +25,74 @@ pub fn avg_abs_amplitude(buf: &[i16]) -> u32 {
     (sum / buf.len() as u64) as u32
 }
 
+#[derive(Default)]
+pub struct AadSilencePolicy {
+    last_voice_ms: i64,
+    woke: bool,
+}
+
+impl AadSilencePolicy {
+    pub fn reset(&mut self, now_ms: i64) {
+        self.last_voice_ms = now_ms;
+        self.woke = false;
+    }
+
+    pub fn mark_woke(&mut self) {
+        self.woke = true;
+    }
+
+    pub fn should_sleep(
+        &mut self,
+        samples: &[i16],
+        now_ms: i64,
+        threshold: u32,
+        hold_ms: i64,
+        storage_transfer_active: bool,
+    ) -> bool {
+        if self.woke || avg_abs_amplitude(samples) >= threshold {
+            self.last_voice_ms = now_ms;
+            self.woke = false;
+        }
+        !storage_transfer_active && now_ms.saturating_sub(self.last_voice_ms) >= hold_ms.max(0)
+    }
+}
+
+#[cfg(target_os = "none")]
+pub mod aad_state {
+    use zephyr::sync::Mutex;
+
+    use super::AadSilencePolicy;
+
+    static POLICY: Mutex<AadSilencePolicy> = Mutex::new(AadSilencePolicy {
+        last_voice_ms: 0,
+        woke: false,
+    });
+
+    pub fn reset(now_ms: i64) {
+        POLICY.lock().unwrap().reset(now_ms);
+    }
+
+    pub fn mark_woke() {
+        POLICY.lock().unwrap().mark_woke();
+    }
+
+    pub fn should_sleep(
+        samples: &[i16],
+        now_ms: i64,
+        threshold: u32,
+        hold_ms: i64,
+        storage_transfer_active: bool,
+    ) -> bool {
+        POLICY.lock().unwrap().should_sleep(
+            samples,
+            now_ms,
+            threshold,
+            hold_ms,
+            storage_transfer_active,
+        )
+    }
+}
+
 pub fn selftest() -> i32 {
     let mut failures = 0;
 
@@ -49,6 +117,14 @@ pub fn selftest() -> i32 {
         failures += 1;
     }
 
+    let mut aad = AadSilencePolicy::default();
+    aad.reset(100);
+    if aad.should_sleep(&[0], 1_099, 10, 1_000, false)
+        || !aad.should_sleep(&[0], 1_100, 10, 1_000, false)
+    {
+        failures += 1;
+    }
+
     failures
 }
 
@@ -68,5 +144,18 @@ mod tests {
     fn avg_abs_handles_signs_and_empty() {
         assert_eq!(avg_abs_amplitude(&[]), 0);
         assert_eq!(avg_abs_amplitude(&[-10, 20, -30]), 20);
+    }
+
+    #[test]
+    fn aad_silence_waits_for_hold_and_defers_during_transfer() {
+        let mut policy = AadSilencePolicy::default();
+        policy.reset(1_000);
+        assert!(!policy.should_sleep(&[0], 1_999, 10, 1_000, false));
+        assert!(policy.should_sleep(&[0], 2_000, 10, 1_000, false));
+        policy.mark_woke();
+        assert!(!policy.should_sleep(&[0], 2_001, 10, 1_000, false));
+        assert!(!policy.should_sleep(&[0], 3_001, 10, 1_000, true));
+        assert!(policy.should_sleep(&[0], 3_001, 10, 1_000, false));
+        assert!(!policy.should_sleep(&[20], 3_002, 10, 1_000, false));
     }
 }

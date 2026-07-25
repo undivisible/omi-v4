@@ -163,6 +163,37 @@ pub unsafe extern "C" fn omi_rust_audio_avg_abs_amplitude(buf: *const i16, n: us
     }
 }
 
+#[cfg(target_os = "none")]
+#[no_mangle]
+pub extern "C" fn omi_rust_audio_aad_reset(now_ms: i64) {
+    audio_dsp::aad_state::reset(now_ms);
+}
+
+#[cfg(target_os = "none")]
+#[no_mangle]
+pub extern "C" fn omi_rust_audio_aad_mark_woke() {
+    audio_dsp::aad_state::mark_woke();
+}
+
+#[cfg(target_os = "none")]
+#[no_mangle]
+#[allow(clippy::missing_safety_doc)]
+#[allow(clippy::undocumented_unsafe_blocks)]
+pub unsafe extern "C" fn omi_rust_audio_aad_should_sleep(
+    buf: *const i16,
+    n: usize,
+    now_ms: i64,
+    threshold: u32,
+    hold_ms: i64,
+    storage_transfer_active: bool,
+) -> bool {
+    if buf.is_null() || n == 0 {
+        return false;
+    }
+    let samples = unsafe { core::slice::from_raw_parts(buf, n) };
+    audio_dsp::aad_state::should_sleep(samples, now_ms, threshold, hold_ms, storage_transfer_active)
+}
+
 #[no_mangle]
 pub extern "C" fn omi_rust_settings_clamp_dim_ratio(value: u8) -> u8 {
     settings_math::clamp_dim_ratio(value)

@@ -82,10 +82,8 @@ static K_SEM_DEFINE(aad_sem, 0, 1);
 #define AAD_PDM_SETTLE_MS 20
 
 static atomic_t aad_wake_pending = ATOMIC_INIT(0); /* WAKE edge seen by ISR */
-static atomic_t aad_woke = ATOMIC_INIT(0);         /* tell mic ctx it just woke */
 static atomic_t aad_in_sleep = ATOMIC_INIT(0);     /* mic is in hardware AAD sleep */
 static atomic_t aad_req_sleep = ATOMIC_INIT(0);    /* silence timer asked to sleep */
-static int64_t aad_last_voice_ms;
 
 static void aad_track_silence(const int16_t *buf, size_t n);
 static int aad_hw_start(void);
@@ -373,7 +371,8 @@ static void exit_hw_aad(void)
     aad_wake_irq(false);
     t5838_aad_release_clk(); /* hand CLK back to the PDM peripheral */
     atomic_set(&aad_in_sleep, 0);
-    atomic_set(&aad_woke, 1); /* reset silence timer in mic ctx */
+    omi_rust_audio_aad_mark_woke(); /* tell mic ctx it just woke */
+    /* reset silence timer in mic ctx */
     sd_request_power(true);   /* power on + remount SD before audio starts flowing */
     mic_resume();             /* dmic START reclaims CLK via pinctrl */
     LOG_INF("AAD: WAKE -> mic resumed");
@@ -411,18 +410,16 @@ static void aad_track_silence(const int16_t *buf, size_t n)
 {
     int64_t now = k_uptime_get();
 
-    if (atomic_cas(&aad_woke, 1, 0)) {
-        aad_last_voice_ms = now;
-    }
-    if (omi_rust_audio_avg_abs_amplitude(buf, n) >= CONFIG_OMI_VAD_ABS_THRESHOLD) {
-        aad_last_voice_ms = now;
-    }
     /* Sleep after a long silence whether online or offline. When connected, the
      * BLE link stays up (only the mic + PDM sleep); sound resumes streaming.
      * BUT never sleep while a BLE sync transfer is running: the AAD entry +
      * conn-param low-power would stall the sync. Defer sleep until it finishes. */
-    if (!atomic_get(&aad_in_sleep) && !storage_transfer_active() &&
-        (now - aad_last_voice_ms) >= CONFIG_OMI_VAD_HOLD_MS) {
+    if (omi_rust_audio_aad_should_sleep(buf,
+                                        n,
+                                        now,
+                                        CONFIG_OMI_VAD_ABS_THRESHOLD,
+                                        CONFIG_OMI_VAD_HOLD_MS,
+                                        storage_transfer_active())) {
         atomic_set(&aad_req_sleep, 1);
         k_sem_give(&aad_sem);
     }
@@ -450,7 +447,7 @@ static int aad_hw_start(void)
     }
     (void) gpio_pin_interrupt_configure_dt(&aad_wake, GPIO_INT_DISABLE); /* armed on first sleep */
 
-    aad_last_voice_ms = k_uptime_get();
+    omi_rust_audio_aad_reset(k_uptime_get());
     k_thread_create(&aad_thread_data,
                     aad_stack,
                     K_THREAD_STACK_SIZEOF(aad_stack),

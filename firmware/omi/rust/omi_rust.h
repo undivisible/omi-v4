@@ -151,6 +151,11 @@ void omi_rust_ble_charging_mark_notified(bool charging);
 void omi_rust_ble_charging_reset(void);
 void omi_rust_audio_stereo_to_mono(const int16_t *interleaved, size_t frames, int16_t *mono_out);
 uint32_t omi_rust_audio_avg_abs_amplitude(const int16_t *buf, size_t n);
+void omi_rust_audio_aad_reset(int64_t now_ms);
+void omi_rust_audio_aad_mark_woke(void);
+bool omi_rust_audio_aad_should_sleep(const int16_t *buf, size_t n, int64_t now_ms,
+                                     uint32_t threshold, int64_t hold_ms,
+                                     bool storage_transfer_active);
 
 uint8_t omi_rust_settings_clamp_dim_ratio(uint8_t value);
 uint8_t omi_rust_settings_clamp_mic_gain(uint8_t value);
