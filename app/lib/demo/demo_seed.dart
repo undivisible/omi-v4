@@ -219,6 +219,8 @@ List<MeetingNote> demoMeetingNotes() => [
         'Agreed the CV1 image stays on NCS v3.4.0 for this OTA and the devkit '
         'targets come off the supported matrix until the nrfx 3.x PDM port is '
         'done. OTA stays on the MCUmgr Bluetooth transport.',
+    meetingType: 'project-planning',
+    rawTranscript: '',
     startedAt: _ago(const Duration(hours: 6)),
     endedAt: _ago(const Duration(hours: 5, minutes: 25)),
     participants: const ['You', 'Firmware'],
@@ -245,6 +247,8 @@ List<MeetingNote> demoMeetingNotes() => [
         'Went through how zkr keeps evidence authoritative and indexes '
         'disposable, and where rx4 sits in extraction and ranking. Retrieval '
         'packs stay bounded, tenant-scoped and cited.',
+    meetingType: 'retrospective',
+    rawTranscript: '',
     startedAt: _ago(const Duration(days: 1, hours: 3)),
     endedAt: _ago(const Duration(days: 1, hours: 2, minutes: 10)),
     participants: const ['You', 'Memory'],
@@ -268,6 +272,8 @@ List<MeetingNote> demoMeetingNotes() => [
         'only proposes strict action requests. Dispatch is durable and '
         'at-most-once, and outcome_unknown is reported honestly rather than '
         'retried.',
+    meetingType: 'project-planning',
+    rawTranscript: '',
     startedAt: _ago(const Duration(days: 2, hours: 5)),
     endedAt: _ago(const Duration(days: 2, hours: 4, minutes: 20)),
     participants: const ['You', 'Agent'],

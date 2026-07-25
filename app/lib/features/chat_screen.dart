@@ -1056,16 +1056,21 @@ class ChatScreenState extends State<ChatScreen>
         case NativeEventMeetingInsight(:final value):
           _progress = value.text;
         case NativeEventMeetingCompleted(:final value):
+          final requestId =
+              'meeting-summary-${DateTime.now().microsecondsSinceEpoch}';
+          final text = [
+            'Meeting summary: ${value.summary}',
+            for (final action in value.actions) '• $action',
+          ].join('\n');
           _messages.add(
-            _ChatMessage(
-              requestId:
-                  'meeting-summary-${DateTime.now().microsecondsSinceEpoch}',
-              text: [
-                'Meeting summary: ${value.summary}',
-                for (final action in value.actions) '• $action',
-              ].join('\n'),
-              fromUser: false,
-            ),
+            _ChatMessage(requestId: requestId, text: text, fromUser: false),
+          );
+          unawaited(
+            widget.services
+                .saveAssistantMessage(requestId: requestId, text: text)
+                .catchError((Object failure, _) {
+                  debugPrint('chat_screen meeting summary save: $failure');
+                }),
           );
           unawaited(_loadMeetingNotes());
         default:
@@ -1771,6 +1776,7 @@ class ChatScreenState extends State<ChatScreen>
         ),
       if (_showSkeleton)
         () => _AssistantRow(
+          spinning: true,
           child: const _SkeletonBubble(key: Key('chat_skeleton')),
         )
       else if (_progress != null && _activityMarquee == null)
@@ -2489,7 +2495,6 @@ class _TaskRow extends StatelessWidget {
     required this.completeKey,
     required this.onComplete,
     required this.onTap,
-    this.sourceTag,
     super.key,
   });
 
@@ -2498,7 +2503,6 @@ class _TaskRow extends StatelessWidget {
   final Key completeKey;
   final VoidCallback? onComplete;
   final VoidCallback onTap;
-  final String? sourceTag;
 
   @override
   Widget build(BuildContext context) {
@@ -2554,30 +2558,6 @@ class _TaskRow extends StatelessWidget {
                       ),
                     ),
                   ),
-                  if (sourceTag case final tag?) ...[
-                    const SizedBox(width: 16),
-                    DecoratedBox(
-                      decoration: BoxDecoration(
-                        border: Border.all(color: colors.hairline),
-                        borderRadius: BorderRadius.circular(999),
-                      ),
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 8,
-                          vertical: 2,
-                        ),
-                        child: Text(
-                          tag.toUpperCase(),
-                          style: TextStyle(
-                            fontSize: 9,
-                            fontWeight: FontWeight.w600,
-                            letterSpacing: 1.17,
-                            color: colors.muted,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ],
                 ],
               ),
             ),
@@ -2605,7 +2585,6 @@ class _RichTaskRow extends StatelessWidget {
     required this.completeKey,
     required this.onComplete,
     required this.onTap,
-    this.sourceTag,
     super.key,
   });
 
@@ -2614,7 +2593,6 @@ class _RichTaskRow extends StatelessWidget {
   final Key completeKey;
   final VoidCallback? onComplete;
   final VoidCallback onTap;
-  final String? sourceTag;
 
   @override
   Widget build(BuildContext context) {
@@ -2739,31 +2717,6 @@ class _RichTaskRow extends StatelessWidget {
                                 ],
                               ),
                             ),
-                            if (sourceTag case final tag?)
-                              Padding(
-                                padding: const EdgeInsets.only(left: 10),
-                                child: DecoratedBox(
-                                  decoration: BoxDecoration(
-                                    border: Border.all(color: colors.hairline),
-                                    borderRadius: BorderRadius.circular(999),
-                                  ),
-                                  child: Padding(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 8,
-                                      vertical: 2,
-                                    ),
-                                    child: Text(
-                                      tag.toUpperCase(),
-                                      style: TextStyle(
-                                        fontSize: 9,
-                                        fontWeight: FontWeight.w600,
-                                        letterSpacing: 1.17,
-                                        color: colors.muted,
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                              ),
                           ],
                         ),
                       ),
@@ -2981,7 +2934,7 @@ class _MeetingNoteRow extends StatelessWidget {
                           ),
                         ),
                         Text(
-                          'MEETING',
+                          note.meetingTypeLabel.toUpperCase(),
                           style: TextStyle(
                             fontSize: 9,
                             fontWeight: FontWeight.w600,

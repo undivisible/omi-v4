@@ -614,6 +614,8 @@ void main() {
         value: MeetingCompleted(
           title: 'Standup',
           summary: 'Standup wrapped',
+          meetingType: 'standup',
+          rawTranscript: 'Standup wrapped.',
           actions: ['Send the notes'],
           startedAtMs: 0,
           endedAtMs: 0,

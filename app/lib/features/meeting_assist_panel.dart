@@ -25,11 +25,13 @@ class MeetingAssistPanelState extends State<MeetingAssistPanel> {
   final _jot = TextEditingController();
   final List<MeetingTranscriptTurn> _highlights = [];
   final List<MeetingInsight> _insights = [];
+  final List<String> _preMeetingContext = [];
   final List<String> _memoryContext = [];
   bool _active = false;
   bool _farEndSilent = false;
   String? _micOnlyReason;
   String? _title;
+  String? _lastPreMeetingRequestId;
   String? _lastContextRequestId;
   int _contextSequence = 0;
 
@@ -53,17 +55,37 @@ class MeetingAssistPanelState extends State<MeetingAssistPanel> {
     if (!mounted) return;
     switch (event) {
       case NativeEventMeetingStateChanged(:final value):
+        final starting = value.active && !_active;
+        final title = value.suggestedTitle?.trim();
+        final preMeetingQuery =
+            starting &&
+                title != null &&
+                title.isNotEmpty &&
+                title.toLowerCase() != 'meeting'
+            ? title
+            : null;
         setState(() {
           _active = value.active;
           _title = value.suggestedTitle ?? _title;
+          if (starting) {
+            _preMeetingContext.clear();
+            _lastPreMeetingRequestId = null;
+          }
           if (!value.active) {
             _highlights.clear();
             _insights.clear();
+            _preMeetingContext.clear();
             _memoryContext.clear();
             _farEndSilent = false;
             _micOnlyReason = null;
+            _title = null;
+            _lastPreMeetingRequestId = null;
+            _lastContextRequestId = null;
           }
         });
+        if (preMeetingQuery != null) {
+          _requestPreMeetingContext(preMeetingQuery);
+        }
       case NativeEventMeetingTranscriptTurn(:final value)
           when _active && value.text.trim().isNotEmpty:
         setState(() {
@@ -82,6 +104,18 @@ class MeetingAssistPanelState extends State<MeetingAssistPanel> {
         if (value.kind == 'response') {
           _requestMemoryContext(value.sourceText);
         }
+      case NativeEventMemorySearchResults(:final value)
+          when _active && value.requestId == _lastPreMeetingRequestId:
+        setState(() {
+          _preMeetingContext
+            ..clear()
+            ..addAll(
+              value.items
+                  .map((item) => item.excerpt.trim())
+                  .where((excerpt) => excerpt.isNotEmpty)
+                  .take(MeetingAssistPanel.maxContextItems),
+            );
+        });
       case NativeEventMemorySearchResults(:final value)
           when _active && value.requestId == _lastContextRequestId:
         setState(() {
@@ -105,6 +139,20 @@ class MeetingAssistPanelState extends State<MeetingAssistPanel> {
         }
       default:
         break;
+    }
+  }
+
+  void _requestPreMeetingContext(String query) {
+    final requestId = 'meeting-pre-context-${_contextSequence++}';
+    _lastPreMeetingRequestId = requestId;
+    try {
+      widget.services.nativeHub.search(
+        requestId: requestId,
+        query: query,
+        limit: MeetingAssistPanel.maxContextItems,
+      );
+    } on Object {
+      _lastPreMeetingRequestId = null;
     }
   }
 
@@ -240,6 +288,31 @@ class MeetingAssistPanelState extends State<MeetingAssistPanel> {
                       color: Color(0xffe4614d),
                     ),
                   ),
+                ],
+                if (_preMeetingContext.isNotEmpty) ...[
+                  const SizedBox(height: 6),
+                  Text(
+                    'BEFORE THIS MEETING',
+                    key: const Key('meeting_pre_context'),
+                    style: OmiAccentText.sectionLabel.copyWith(
+                      fontSize: 10,
+                      letterSpacing: 1.1,
+                      color: scheme.onSurfaceVariant,
+                    ),
+                  ),
+                  for (final excerpt in _preMeetingContext)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 4),
+                      child: Text(
+                        excerpt,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: scheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ),
                 ],
                 if (_highlights.isNotEmpty) ...[
                   const SizedBox(height: 6),

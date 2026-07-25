@@ -366,6 +366,8 @@ void main() {
             id: 'meeting-1',
             title: 'Design sync',
             summary: '',
+            meetingType: 'general',
+            rawTranscript: '',
             startedAt: now.subtract(const Duration(days: 4)),
             endedAt: now.subtract(const Duration(days: 4, minutes: -25)),
             participants: const [],

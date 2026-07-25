@@ -56,6 +56,7 @@ void main() {
     await tester.pump();
     expect(find.byKey(const Key('meeting_assist_panel')), findsOneWidget);
     expect(find.text('Standup'), findsOneWidget);
+    expect(hub.searchQueries, ['Standup']);
 
     hub.eventsController.add(
       const NativeEventMeetingTranscriptTurn(
@@ -88,12 +89,12 @@ void main() {
       find.text('The beta ships Friday after QA signs off.'),
       findsOneWidget,
     );
-    expect(hub.searchQueries, ['When do we ship the beta?']);
+    expect(hub.searchQueries, ['Standup', 'When do we ship the beta?']);
 
     hub.eventsController.add(
       NativeEventMemorySearchResults(
         value: MemorySearchResults(
-          requestId: hub.searchRequestIds.single,
+          requestId: hub.searchRequestIds.last,
           query: 'When do we ship the beta?',
           items: const [
             MemorySearchItem(
@@ -134,6 +135,169 @@ void main() {
     await tester.pump();
     expect(find.byKey(const Key('meeting_assist_panel')), findsNothing);
   });
+
+  testWidgets(
+    'pre-meeting context is scoped, bounded, and cleared between meetings',
+    (tester) async {
+      final (services, hub) = await servicesWithHub();
+      addTearDown(services.dispose);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(body: MeetingAssistPanel(services: services)),
+        ),
+      );
+
+      hub.eventsController.add(
+        const NativeEventMeetingStateChanged(
+          value: MeetingStateChanged(
+            active: true,
+            suggestedTitle: 'Design review',
+          ),
+        ),
+      );
+      await tester.pump();
+      expect(hub.searchQueries, ['Design review']);
+      final firstRequestId = hub.searchRequestIds.single;
+
+      hub.eventsController.add(
+        const NativeEventMemorySearchResults(
+          value: MemorySearchResults(
+            requestId: 'stale-request',
+            query: 'Design review',
+            items: [
+              MemorySearchItem(
+                kind: 'fact',
+                id: 'stale',
+                excerpt: 'Stale context',
+                relevanceBasisPoints: 9000,
+                evidenceIds: [],
+              ),
+            ],
+            gaps: [],
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+      expect(find.text('Stale context'), findsNothing);
+
+      hub.eventsController.add(
+        NativeEventMemorySearchResults(
+          value: MemorySearchResults(
+            requestId: firstRequestId,
+            query: 'Design review',
+            items: const [
+              MemorySearchItem(
+                kind: 'fact',
+                id: 'claim-1',
+                excerpt: 'The launch target is Friday.',
+                relevanceBasisPoints: 9000,
+                evidenceIds: [],
+              ),
+              MemorySearchItem(
+                kind: 'fact',
+                id: 'claim-2',
+                excerpt: 'Ana owns the design handoff.',
+                relevanceBasisPoints: 8500,
+                evidenceIds: [],
+              ),
+              MemorySearchItem(
+                kind: 'fact',
+                id: 'claim-3',
+                excerpt: 'The open question is pricing.',
+                relevanceBasisPoints: 8000,
+                evidenceIds: [],
+              ),
+              MemorySearchItem(
+                kind: 'fact',
+                id: 'claim-4',
+                excerpt: 'This fourth result is outside the limit.',
+                relevanceBasisPoints: 7500,
+                evidenceIds: [],
+              ),
+            ],
+            gaps: const [],
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+      expect(find.byKey(const Key('meeting_pre_context')), findsOneWidget);
+      expect(find.text('BEFORE THIS MEETING'), findsOneWidget);
+      expect(find.text('The launch target is Friday.'), findsOneWidget);
+      expect(find.text('Ana owns the design handoff.'), findsOneWidget);
+      expect(find.text('The open question is pricing.'), findsOneWidget);
+      expect(
+        find.text('This fourth result is outside the limit.'),
+        findsNothing,
+      );
+
+      hub.eventsController.add(
+        const NativeEventMeetingStateChanged(
+          value: MeetingStateChanged(
+            active: true,
+            suggestedTitle: 'Renamed design review',
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+      expect(hub.searchQueries, ['Design review']);
+
+      hub.eventsController.add(
+        const NativeEventMeetingStateChanged(
+          value: MeetingStateChanged(active: false, suggestedTitle: null),
+        ),
+      );
+      hub.eventsController.add(
+        const NativeEventMeetingStateChanged(
+          value: MeetingStateChanged(active: true, suggestedTitle: ' Meeting '),
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+      expect(hub.searchQueries, ['Design review']);
+      expect(find.byKey(const Key('meeting_pre_context')), findsNothing);
+      expect(find.text('The launch target is Friday.'), findsNothing);
+
+      hub.eventsController.add(
+        const NativeEventMeetingStateChanged(
+          value: MeetingStateChanged(active: false, suggestedTitle: null),
+        ),
+      );
+      hub.eventsController.add(
+        const NativeEventMeetingStateChanged(
+          value: MeetingStateChanged(active: true, suggestedTitle: 'Standup'),
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+      expect(hub.searchQueries, ['Design review', 'Standup']);
+      expect(hub.searchRequestIds.last, isNot(firstRequestId));
+
+      hub.eventsController.add(
+        NativeEventMemorySearchResults(
+          value: MemorySearchResults(
+            requestId: firstRequestId,
+            query: 'Design review',
+            items: const [
+              MemorySearchItem(
+                kind: 'fact',
+                id: 'old-meeting',
+                excerpt: 'Old meeting context',
+                relevanceBasisPoints: 9000,
+                evidenceIds: [],
+              ),
+            ],
+            gaps: const [],
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+      expect(find.text('Old meeting context'), findsNothing);
+    },
+  );
 
   testWidgets('an unattributed turn renders without a speaker prefix', (
     tester,

@@ -33,6 +33,8 @@ void main() {
           id: 'meeting-1',
           title: 'Design sync',
           summary: 'Agreed the launch date',
+          meetingType: 'project-planning',
+          rawTranscript: '',
           startedAt: DateTime.utc(2026, 7, 21, 12),
           endedAt: DateTime.utc(2026, 7, 21, 12, 25),
           participants: const [],
@@ -412,7 +414,7 @@ void main() {
     },
   );
 
-  testWidgets('meeting events surface progress and a local summary message', (
+  testWidgets('meeting events surface progress and persist the summary', (
     tester,
   ) async {
     final auth = AuthController(
@@ -425,6 +427,7 @@ void main() {
     );
     await auth.restoreSession();
     final hub = _MeetingEventHub();
+    final conversationTransport = _RecordingConversationTransport();
     final services = AppServices.forTesting(
       nativeHub: hub,
       deviceRelay: DeviceRelayService(
@@ -433,6 +436,7 @@ void main() {
       ),
       auth: auth,
       memoryDatabasePath: (uid) => '/tmp/$uid.sqlite3',
+      conversations: conversationTransport,
     );
     addTearDown(services.dispose);
     await services.initialize();
@@ -480,6 +484,8 @@ void main() {
         value: MeetingCompleted(
           title: 'Standup',
           summary: 'Team agreed to ship Friday.',
+          meetingType: 'standup',
+          rawTranscript: 'Ana: We will ship Friday.',
           actions: ['Email release notes'],
           startedAtMs: 5,
           endedAtMs: 10,
@@ -498,6 +504,12 @@ void main() {
       findsOneWidget,
     );
     expect(find.textContaining('• Email release notes'), findsOneWidget);
+    expect(conversationTransport.appended, hasLength(1));
+    expect(conversationTransport.appended.single.role, 'assistant');
+    expect(
+      conversationTransport.appended.single.text,
+      'Meeting summary: Team agreed to ship Friday.\n• Email release notes',
+    );
   });
 }
 
@@ -590,6 +602,33 @@ final class _ThrowingConversationTransport implements ConversationTransport {
     replayCalls += 1;
     throw const WorkerAuthenticationException('Sign in is required');
   }
+}
+
+final class _RecordingConversationTransport implements ConversationTransport {
+  final List<ConversationMessage> appended = [];
+
+  @override
+  Future<ConversationMessage> append({
+    required String clientMessageId,
+    required String role,
+    required String source,
+    required String text,
+  }) async {
+    final message = ConversationMessage(
+      cursor: appended.length + 1,
+      clientMessageId: clientMessageId,
+      role: role,
+      source: source,
+      text: text,
+      createdAt: 0,
+    );
+    appended.add(message);
+    return message;
+  }
+
+  @override
+  Future<List<ConversationMessage>> replay({required int after}) async =>
+      const [];
 }
 
 final class _Transport implements CurrentsTransport {

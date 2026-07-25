@@ -9,6 +9,8 @@ void main() {
   const completed = MeetingCompleted(
     title: 'Standup',
     summary: 'Team agreed to ship Friday.',
+    meetingType: 'standup',
+    rawTranscript: 'Ana: We will ship Friday.',
     actions: ['Email release notes'],
     startedAtMs: 5000,
     endedAtMs: 65000,
@@ -23,6 +25,8 @@ void main() {
     final note = MeetingNote.fromCompleted(completed);
     expect(note.id, 'meeting-65000');
     expect(note.title, 'Standup');
+    expect(note.meetingType, 'standup');
+    expect(note.rawTranscript, 'Ana: We will ship Friday.');
     expect(
       note.startedAt,
       DateTime.fromMillisecondsSinceEpoch(5000, isUtc: true),
@@ -41,6 +45,8 @@ void main() {
     expect(restored.id, note.id);
     expect(restored.title, note.title);
     expect(restored.summary, note.summary);
+    expect(restored.meetingType, note.meetingType);
+    expect(restored.rawTranscript, note.rawTranscript);
     expect(restored.startedAt, note.startedAt);
     expect(restored.endedAt, note.endedAt);
     expect(restored.participants, note.participants);
@@ -49,16 +55,46 @@ void main() {
     expect(restored.actions, note.actions);
     expect(restored.markdown, note.markdown);
     expect(restored.metadataJson, note.metadataJson);
+    expect(restored.starred, isFalse);
+    expect(restored.completedActionIndexes, isEmpty);
   });
 
   test('malformed persisted json degrades to defaults', () {
     final note = MeetingNote.fromJson(const {
       'participants': ['Ana', 7],
       'startedAt': 'not-a-date',
+      'starred': 'yes',
+      'completedActionIndexes': ['done'],
     });
     expect(note.title, 'Meeting');
+    expect(note.meetingType, 'general');
+    expect(note.rawTranscript, isEmpty);
     expect(note.participants, ['Ana']);
+    expect(note.starred, isFalse);
+    expect(note.completedActionIndexes, isEmpty);
     expect(note.startedAt, DateTime.fromMillisecondsSinceEpoch(0, isUtc: true));
+  });
+
+  test('meeting type and transcript remain strictly bounded', () {
+    final note = MeetingNote.fromJson({
+      'meetingType': 'board-meeting',
+      'rawTranscript': '😀' * (MeetingNote.maxRawTranscriptCharacters + 10),
+    });
+    expect(note.meetingType, 'general');
+    expect(
+      note.rawTranscript.runes.length,
+      MeetingNote.maxRawTranscriptCharacters,
+    );
+    expect(note.rawTranscript.endsWith('😀'), isTrue);
+  });
+
+  test('stars and completed actions persist with invalid indexes removed', () {
+    final note = MeetingNote.fromCompleted(
+      completed,
+    ).copyWith(starred: true, completedActionIndexes: const {0, 7, -1});
+    final restored = MeetingNote.fromJson(note.toJson());
+    expect(restored.starred, isTrue);
+    expect(restored.completedActionIndexes, {0});
   });
 
   test('preferences store saves newest-first, dedupes, and removes', () async {
