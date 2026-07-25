@@ -1626,14 +1626,13 @@ async fn handle_webhook_stripe(mut req: Request, ctx: RouteContext<()>) -> Resul
         let inserted = receipt()?.run().await?;
         let duplicate = changes(&inserted) == 0;
         if let Some(session_id) = object.and_then(|o| o.get("id")).and_then(Value::as_str) {
-            let _ = crate::routes_channels::expire_channel_checkout(
-                &ctx.env,
-                session_id,
-                now as i64,
-            )
-            .await;
+            let _ =
+                crate::routes_channels::expire_channel_checkout(&ctx.env, session_id, now as i64)
+                    .await;
         }
-        return Response::from_json(&json!({ "received": true, "duplicate": duplicate, "updated": false }));
+        return Response::from_json(
+            &json!({ "received": true, "duplicate": duplicate, "updated": false }),
+        );
     }
     if envelope.event_type == "invoice.payment_failed" {
         let inserted = receipt()?.run().await?;
@@ -1657,7 +1656,9 @@ async fn handle_webhook_stripe(mut req: Request, ctx: RouteContext<()>) -> Resul
                 "updated": changes(&revoked) > 0,
             }));
         }
-        return Response::from_json(&json!({ "received": true, "duplicate": duplicate, "updated": false }));
+        return Response::from_json(
+            &json!({ "received": true, "duplicate": duplicate, "updated": false }),
+        );
     }
     match &envelope.plan {
         wh::StripePlan::ReceiptOnly { has_object } => {
@@ -1692,12 +1693,9 @@ async fn handle_webhook_stripe(mut req: Request, ctx: RouteContext<()>) -> Resul
                         .bind(&[js_str(customer), now.into(), js_str(uid)])?,
                 ])
                 .await?;
-            let channel = crate::routes_channels::complete_channel_checkout(
-                &ctx.env,
-                completion,
-                now as i64,
-            )
-            .await?;
+            let channel =
+                crate::routes_channels::complete_channel_checkout(&ctx.env, completion, now as i64)
+                    .await?;
             Response::from_json(&json!({
                 "received": true,
                 "duplicate": changes(&results[0]) == 0,

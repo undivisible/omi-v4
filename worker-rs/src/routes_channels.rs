@@ -9,11 +9,14 @@ use serde_json::{json, Value};
 use worker::wasm_bindgen::JsValue;
 use worker::*;
 
+use crate::billing;
+use crate::byok_pricing::{self, format_price};
 use crate::channel_checkout::{
     self, checkout_idempotency_key, checkout_reply, ChannelCheckout, CheckoutCompletion,
     EXPIRE_CHANNEL_CHECKOUT_SQL,
 };
 use crate::channel_commands as cmd;
+use crate::channel_group::{self, GROUP_CHANNEL_LINK_ERROR};
 use crate::channel_link;
 use crate::channel_signup::{
     self, parse_signup_answer, FirstContact, SignupAnswer, SignupResult, CLARIFY_ANSWER_TEXT,
@@ -23,12 +26,9 @@ use crate::delivery::{
     self, coordinator_name, http_outcome, network_error_message, network_outcome, retry_delay,
     stable_idempotency_key, Channel, RetryAfterHints, MAX_ATTEMPTS,
 };
-use crate::billing;
-use crate::byok_pricing::{self, format_price};
-use crate::channel_group::{self, GROUP_CHANNEL_LINK_ERROR};
 use crate::glue::error_json;
-use crate::stripe_sync::APPLY_SUBSCRIPTION_STATE_SQL;
 use crate::inbox_fallback as fallback;
+use crate::stripe_sync::APPLY_SUBSCRIPTION_STATE_SQL;
 use crate::worker_util::{now_ms, uuid_v4 as random_uuid};
 
 // ---------------------------------------------------------------------------
@@ -443,8 +443,12 @@ async fn stripe_price(secret: &str, price_id: &str) -> Option<(String, String, i
         crate::stripe_sync::encode_path_segment(price_id)
     );
     let headers = Headers::new();
-    headers.set("authorization", &format!("Bearer {secret}")).ok()?;
-    headers.set("stripe-version", crate::stripe_sync::STRIPE_VERSION).ok()?;
+    headers
+        .set("authorization", &format!("Bearer {secret}"))
+        .ok()?;
+    headers
+        .set("stripe-version", crate::stripe_sync::STRIPE_VERSION)
+        .ok()?;
     let mut init = RequestInit::new();
     init.with_method(Method::Get).with_headers(headers);
     let request = Request::new_with_init(&url, &init).ok()?;
@@ -559,13 +563,7 @@ async fn create_checkout_session(
         params.push(("customer_update[address]".into(), "auto".into()));
         params.push(("customer_update[name]".into(), "auto".into()));
     }
-    let session = stripe_post(
-        &secret,
-        "checkout/sessions",
-        &params,
-        Some(idempotency_key),
-    )
-    .await?;
+    let session = stripe_post(&secret, "checkout/sessions", &params, Some(idempotency_key)).await?;
     Ok(session.map(|(id, url)| (id, url, price_cents)))
 }
 
@@ -838,7 +836,10 @@ pub async fn sign_up_channel_sender(
         .await?;
     if let Some(binding) = binding {
         let binding_uid = json_str(&binding, "uid").unwrap_or_default();
-        return if existing_account.as_ref().is_some_and(|a| a.uid == binding_uid) {
+        return if existing_account
+            .as_ref()
+            .is_some_and(|a| a.uid == binding_uid)
+        {
             Ok(SignupResult::Existing { uid: binding_uid })
         } else {
             Ok(SignupResult::Conflict)
@@ -854,8 +855,8 @@ pub async fn sign_up_channel_sender(
     }
     let uid = channel_uid();
     let audit_id = random_uuid();
-    let audit_details = json!({ "channelUserId": channel_user_id, "channelChatId": channel_chat_id })
-        .to_string();
+    let audit_details =
+        json!({ "channelUserId": channel_user_id, "channelChatId": channel_chat_id }).to_string();
     let results = db
         .batch(vec![
             db.prepare(
@@ -941,7 +942,12 @@ pub async fn claim_channel_account(
         ])?
         .run()
         .await?;
-    let changes = result.meta().ok().flatten().and_then(|m| m.changes).unwrap_or(0);
+    let changes = result
+        .meta()
+        .ok()
+        .flatten()
+        .and_then(|m| m.changes)
+        .unwrap_or(0);
     Ok((changes == 1).then_some(account.uid))
 }
 
@@ -1008,12 +1014,10 @@ async fn mark_first_contact_answered(
 
 async fn retire_channel_account(env: &Env, uid: &str, now: i64) -> Result<()> {
     let db = env.d1("DB")?;
-    db.prepare(
-        "UPDATE channel_accounts SET retired_at = ?1 WHERE uid = ?2 AND retired_at IS NULL",
-    )
-    .bind(&[(now as f64).into(), uid.into()])?
-    .run()
-    .await?;
+    db.prepare("UPDATE channel_accounts SET retired_at = ?1 WHERE uid = ?2 AND retired_at IS NULL")
+        .bind(&[(now as f64).into(), uid.into()])?
+        .run()
+        .await?;
     Ok(())
 }
 
@@ -1025,7 +1029,8 @@ async fn offer_checkout(
     channel_chat_id: &str,
     now: i64,
 ) -> Result<Option<String>> {
-    let checkout = issue_channel_checkout(env, uid, channel, channel_user_id, channel_chat_id, now).await?;
+    let checkout =
+        issue_channel_checkout(env, uid, channel, channel_user_id, channel_chat_id, now).await?;
     Ok(checkout_reply(&checkout))
 }
 
@@ -1196,8 +1201,7 @@ pub async fn handle_channel_message(
         return start_link(env, channel, channel_user_id, channel_chat_id, now).await;
     };
     let masked = cmd::mask_email(binding.email.as_deref());
-    let channel_account =
-        binding.email.is_none() && is_channel_account(env, &binding.uid).await?;
+    let channel_account = binding.email.is_none() && is_channel_account(env, &binding.uid).await?;
     let reply = match command.name {
         "/help" => cmd::channel_help_text(),
         "/signup" => {

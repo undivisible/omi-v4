@@ -17,14 +17,8 @@ pub const CHECKOUT_GLOBAL_WINDOW_MS: i64 = 60 * 60_000;
 /// Outcome of issuing a checkout link from chat.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ChannelCheckout {
-    Issued {
-        url: String,
-        price_cents: i64,
-    },
-    Reused {
-        url: String,
-        price_cents: i64,
-    },
+    Issued { url: String, price_cents: i64 },
+    Reused { url: String, price_cents: i64 },
     Subscribed,
     RateLimited,
     Unavailable,
@@ -51,10 +45,7 @@ pub struct CompleteCheckoutDecision {
 
 /// Whether the completion event carries enough to attempt provisioning.
 pub fn checkout_prerequisites_met(event: &CheckoutCompletion) -> bool {
-    event.session_id.is_some()
-        && event.uid.is_some()
-        && event.customer.is_some()
-        && event.paid
+    event.session_id.is_some() && event.uid.is_some() && event.customer.is_some() && event.paid
 }
 
 /// Whether the stored session row's uid matches the event uid.
@@ -178,7 +169,8 @@ pub fn subscription_retired_text(price_cents: i64) -> String {
 /// Map an issuance outcome to the chat reply, if any.
 pub fn checkout_reply(checkout: &ChannelCheckout) -> Option<String> {
     match checkout {
-        ChannelCheckout::Issued { url, price_cents } | ChannelCheckout::Reused { url, price_cents } => {
+        ChannelCheckout::Issued { url, price_cents }
+        | ChannelCheckout::Reused { url, price_cents } => {
             Some(checkout_offer_text(url, *price_cents))
         }
         ChannelCheckout::Subscribed => Some(ALREADY_SUBSCRIBED_TEXT.to_string()),
@@ -191,7 +183,10 @@ pub const EXPIRE_CHANNEL_CHECKOUT_SQL: &str =
     "UPDATE channel_checkout_sessions SET expires_at = ?1 WHERE session_id = ?2 AND completed_at IS NULL";
 
 /// Build a [`CheckoutCompletion`] from a Stripe checkout session object.
-pub fn checkout_completion_from_object(object: &serde_json::Value, event_created: i64) -> CheckoutCompletion {
+pub fn checkout_completion_from_object(
+    object: &serde_json::Value,
+    event_created: i64,
+) -> CheckoutCompletion {
     let string = |key: &str| object.get(key).and_then(|v| v.as_str()).map(String::from);
     let payment_status = object.get("payment_status").and_then(|v| v.as_str());
     CheckoutCompletion {
@@ -258,10 +253,11 @@ mod tests {
 
     #[test]
     fn completion_copy_follows_claim_and_retire_state() {
-        assert!(subscription_confirmation_message(1_200, None, false)
-            .contains("you're subscribed"));
-        assert!(subscription_confirmation_message(1_200, Some("real"), false)
-            .contains("signed-in Omi account"));
+        assert!(subscription_confirmation_message(1_200, None, false).contains("you're subscribed"));
+        assert!(
+            subscription_confirmation_message(1_200, Some("real"), false)
+                .contains("signed-in Omi account")
+        );
         assert!(subscription_confirmation_message(1_200, None, true).contains("was closed"));
     }
 
