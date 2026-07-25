@@ -2839,18 +2839,33 @@ async fn execute(
             ephemeral_token,
             model,
         } => {
-            crate::facetime_bridge::place_call(
-                &request_id,
-                crate::facetime_bridge::CallRequest {
-                    link,
-                    display_name,
-                    video,
-                    ephemeral_token,
-                    model,
-                },
-                &cancellation,
-            )
-            .await;
+            #[cfg(feature = "facetime")]
+            {
+                crate::facetime_bridge::place_call(
+                    &request_id,
+                    crate::facetime_bridge::CallRequest {
+                        link,
+                        display_name,
+                        video,
+                        ephemeral_token,
+                        model,
+                    },
+                    &cancellation,
+                )
+                .await;
+            }
+            #[cfg(not(feature = "facetime"))]
+            {
+                let _ = (link, display_name, video, ephemeral_token, model);
+                NativeEvent::CallState(crate::signals::CallState {
+                    request_id: request_id.to_owned(),
+                    state: crate::signals::CallPhase::Failed,
+                    detail: Some(
+                        "FaceTime calling is not enabled in this build".to_owned(),
+                    ),
+                })
+                .send();
+            }
             false
         }
     }

@@ -8,11 +8,25 @@ publish = false
 [lib]
 crate-type = ["lib", "cdylib", "staticlib"]
 
+# FaceTime / headless Chromium call join is product-deferred (worker returns
+# 501; no bridge container). Keep the stack compiling under `--features
+# facetime` / `--all-features`, but leave it out of default mobile/desktop
+# builds so the CDP browser path does not ship until product turns it on.
+[features]
+default = []
+facetime = []
+
 [dependencies]
 base64 = "0.23"
 getrandom = "0.4"
 sha2 = "0.10"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
+# FIND-020 / RUSTSEC-2025-0141: `rinf` pulls unmaintained `bincode` 1.x for
+# Dart↔Rust signal codec. Advisory is informational (unmaintained), not a
+# known exploit. Do not yank or replace rinf here — watch
+# https://github.com/cunarist/rinf for a postcard/rkyv (or other) codec, or
+# pin a rinf release that drops bincode; until then accept the transitive
+# dep and re-check on every rinf upgrade.
 rinf = "8.10.0"
 futures = "0.3"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }

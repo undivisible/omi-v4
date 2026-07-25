@@ -1,6 +1,7 @@
 mod approval;
 pub mod brief;
 mod byok_tier;
+#[cfg(feature = "facetime")]
 mod call_bridge;
 mod capture_gap_log;
 pub mod capture_policy;
@@ -15,11 +16,14 @@ mod daily_review;
 mod dev_gemini;
 mod evidence;
 mod extraction;
+#[cfg(feature = "facetime")]
 mod facetime_bridge;
+#[cfg(feature = "facetime")]
 mod facetime_page;
 mod hosted_search;
 mod live_voice;
 mod local_ai;
+#[cfg(feature = "facetime")]
 mod mark_video;
 pub mod meeting;
 mod meeting_capture;
