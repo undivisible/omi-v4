@@ -382,8 +382,8 @@ VoiceNoteTranscriber workerVoiceNoteTranscriber(
           'audio': base64Encode(wav),
         },
       );
-    } on WorkerAuthenticationException catch (error) {
-      throw error;
+    } on WorkerAuthenticationException {
+      rethrow;
     } on WorkerResponseException catch (error) {
       throw StateError(error.message);
     }

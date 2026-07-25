@@ -2,7 +2,6 @@ import 'dart:async';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:omi/memory/memory.dart';
-import 'package:omi/native/generated/serde/serde.dart';
 import 'package:omi/native/generated/signals/signals.dart';
 import 'package:omi/native/native_hub.dart';
 import 'package:shared_preferences/shared_preferences.dart';

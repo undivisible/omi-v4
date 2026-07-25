@@ -260,7 +260,7 @@ final class PillPanelClient {
           ],
           sessionTurns: [
             for (final raw in (arguments?['sessionTurns'] as List?) ?? const [])
-              if (OverlayTurn.fromMap(raw) case final turn?) turn,
+              ?OverlayTurn.fromMap(raw),
           ],
           status: arguments?['status'] as String?,
           error: arguments?['error'] as String?,
