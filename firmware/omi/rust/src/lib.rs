@@ -3,6 +3,7 @@
 
 pub mod audio_dsp;
 pub mod battery;
+pub mod ble_policy;
 pub mod button;
 pub mod features;
 pub mod feedback;
@@ -25,6 +26,7 @@ pub extern "C" fn omi_rust_selftest() -> i32 {
     framing::selftest()
         + audio_dsp::selftest()
         + battery::selftest()
+        + ble_policy::selftest()
         + imu_gesture::selftest()
         + button::selftest()
         + haptic::selftest()
@@ -91,6 +93,38 @@ pub unsafe extern "C" fn omi_rust_packet_header(id: u16, index: u8, out: *mut u8
 #[no_mangle]
 pub extern "C" fn omi_rust_audio_chunk_size(mtu: u16, remaining: u32) -> u32 {
     framing::audio_chunk_size(mtu, remaining)
+}
+
+#[no_mangle]
+pub extern "C" fn omi_rust_ble_conn_params_reevaluate(
+    audio_subscribed: bool,
+    storage_transfer_active: bool,
+) -> i8 {
+    match ble_policy::reevaluate_connection(audio_subscribed, storage_transfer_active) {
+        Some(true) => 1,
+        Some(false) => 0,
+        None => -1,
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn omi_rust_ble_conn_params_reset() {
+    ble_policy::reset_connection();
+}
+
+#[no_mangle]
+pub extern "C" fn omi_rust_ble_charging_should_notify(charging: bool, force: bool) -> bool {
+    ble_policy::should_notify_charging(charging, force)
+}
+
+#[no_mangle]
+pub extern "C" fn omi_rust_ble_charging_mark_notified(charging: bool) {
+    ble_policy::mark_charging_notified(charging);
+}
+
+#[no_mangle]
+pub extern "C" fn omi_rust_ble_charging_reset() {
+    ble_policy::reset_charging();
 }
 
 /// # Safety

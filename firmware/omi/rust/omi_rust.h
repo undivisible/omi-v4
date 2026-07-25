@@ -144,6 +144,11 @@ uint16_t omi_rust_storage_encode_read_begin(uint64_t start_seq, uint32_t packet_
 uint16_t omi_rust_storage_encode_data(const uint8_t *payload, uint16_t payload_len, uint8_t *out);
 
 uint32_t omi_rust_audio_chunk_size(uint16_t mtu, uint32_t remaining);
+int8_t omi_rust_ble_conn_params_reevaluate(bool audio_subscribed, bool storage_transfer_active);
+void omi_rust_ble_conn_params_reset(void);
+bool omi_rust_ble_charging_should_notify(bool charging, bool force);
+void omi_rust_ble_charging_mark_notified(bool charging);
+void omi_rust_ble_charging_reset(void);
 void omi_rust_audio_stereo_to_mono(const int16_t *interleaved, size_t frames, int16_t *mono_out);
 uint32_t omi_rust_audio_avg_abs_amplitude(const int16_t *buf, size_t n);
 

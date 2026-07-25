@@ -37,6 +37,7 @@ state live in Rust via the zephyr crate.
 - [x] Offline SD Opus packer FSM
 - [x] Features GATT bitmask assemble
 - [x] Transport user-event queue ownership (Rust `Queue<16>`; C mutex+GATT)
+- [x] Transport adaptive-connection and charging-notification policy state
 - [x] GPIO shells: `bat_read`, `sdcard_en`, `rfsw_en`, `pdm_en` (zephyr `GpioPin`)
 - [ ] Any remaining byte-packing helpers found in future audits
 - [ ] BLE / Opus / PDM / ADC / I2C / SD worker / PWM / `main` — still C

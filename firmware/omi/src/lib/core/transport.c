@@ -52,11 +52,8 @@ extern bool is_capturing;
 static atomic_t pusher_stop_flag;
 
 #ifdef CONFIG_OMI_ENABLE_ADAPTIVE_CONN_PARAMS
-static bool conn_params_fast = true;
 static struct k_work_delayable conn_params_apply_work;
 static void conn_params_apply_work_handler(struct k_work *work);
-#else
-#define conn_params_fast true
 #endif
 
 struct bt_conn *current_connection = NULL;
@@ -731,8 +728,6 @@ static ssize_t settings_charging_status_read_handler(struct bt_conn *conn,
     return bt_gatt_attr_read(conn, attr, buf, len, offset, &charging_status, sizeof(charging_status));
 }
 
-static int8_t charging_status_last_notified = -1;
-
 static int notify_charging_status(struct bt_conn *conn, bool force_notify)
 {
     if (conn == NULL) {
@@ -744,7 +739,7 @@ static int notify_charging_status(struct bt_conn *conn, bool force_notify)
     }
 
     uint8_t charging_status = is_charging ? 1U : 0U;
-    if (!force_notify && charging_status_last_notified == (int8_t) charging_status) {
+    if (!omi_rust_ble_charging_should_notify(charging_status, force_notify)) {
         return 0;
     }
 
@@ -754,7 +749,7 @@ static int notify_charging_status(struct bt_conn *conn, bool force_notify)
         return err;
     }
 
-    charging_status_last_notified = (int8_t) charging_status;
+    omi_rust_ble_charging_mark_notified(charging_status);
     LOG_INF("Charging status notified: %u", charging_status);
     return 0;
 }
@@ -904,7 +899,7 @@ static void _transport_connected(struct bt_conn *conn, uint8_t err)
     LOG_INF("Initial MTU: %u", mtu);
     mtu_recheck_attempts = 0;
 #ifdef CONFIG_OMI_ENABLE_ADAPTIVE_CONN_PARAMS
-    conn_params_fast = true;
+    omi_rust_ble_conn_params_reset();
 #endif
 
     // Request aggressive connection params for higher BLE sync throughput.
@@ -968,7 +963,7 @@ static void _transport_disconnected(struct bt_conn *conn, uint8_t err)
     mtu_recheck_attempts = 0;
 #ifdef CONFIG_OMI_ENABLE_ADAPTIVE_CONN_PARAMS
     k_work_cancel_delayable(&conn_params_apply_work);
-    conn_params_fast = true;
+    omi_rust_ble_conn_params_reset();
 #endif
 
     is_connected = false;
@@ -995,7 +990,7 @@ static void _transport_disconnected(struct bt_conn *conn, uint8_t err)
         current_connection = NULL;
     }
     current_mtu = 0;
-    charging_status_last_notified = -1;
+    omi_rust_ble_charging_reset();
 
     // Reset the audio TX throttle semaphore so the pusher thread is not
     // left blocked forever if it was waiting for a slot when the connection dropped.
@@ -1129,17 +1124,16 @@ static void conn_params_apply_work_handler(struct k_work *work)
         return;
     }
 
-    bool want_fast = transport_is_audio_subscribed();
+    bool storage_transfer = false;
 #ifdef CONFIG_OMI_ENABLE_OFFLINE_STORAGE
-    want_fast = want_fast || storage_transfer_active();
+    storage_transfer = storage_transfer_active();
 #endif
-
-    if (want_fast == conn_params_fast) {
+    int8_t want_fast = omi_rust_ble_conn_params_reevaluate(
+        transport_is_audio_subscribed(), storage_transfer);
+    if (want_fast < 0) {
         return;
     }
-
-    conn_params_fast = want_fast;
-    update_conn_params_mode(conn, want_fast);
+    update_conn_params_mode(conn, want_fast > 0);
 }
 
 void transport_conn_params_reevaluate(void)
