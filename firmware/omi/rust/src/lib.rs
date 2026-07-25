@@ -199,6 +199,20 @@ pub extern "C" fn omi_rust_rtc_seconds_clamped(now_ms: u64) -> u32 {
 }
 
 #[no_mangle]
+#[allow(clippy::missing_safety_doc)]
+pub unsafe extern "C" fn omi_rust_rtc_format_utc_datetime(
+    utc_epoch_s: u64,
+    out: *mut u8,
+    out_len: usize,
+) -> i32 {
+    if out.is_null() {
+        return -22;
+    }
+    let out = unsafe { core::slice::from_raw_parts_mut(out, out_len) };
+    time::format_utc_datetime(utc_epoch_s, out).map_or_else(|err| err, |_| 0)
+}
+
+#[no_mangle]
 pub extern "C" fn omi_rust_imu_boot_epoch_ms(base_epoch_s: u64, base_ts: u32, ts_now: u32) -> u64 {
     time::imu_boot_epoch_ms(base_epoch_s, base_ts, ts_now)
 }

@@ -1,9 +1,6 @@
 #include <zephyr/logging/log.h>
 #include <zephyr/kernel.h>
 
-#include <errno.h>
-#include <stdio.h>
-
 #include "rtc.h"
 #include "lib/core/settings.h"
 #include "lib/core/sd_card.h"
@@ -33,65 +30,8 @@ static void rtc_persist_work_handler(struct k_work *work)
     }
 }
 
-// Debug functions to format UTC datetime strings
 #ifdef CONFIG_LOG
-static void civil_from_days(int64_t z_days, int32_t *year, uint8_t *month, uint8_t *day)
-{
-    /*
-     * Howard Hinnant's algorithm: convert days since 1970-01-01 into Y-M-D.
-     * Works for a wide range of dates with only integer math.
-     */
-    int64_t z = z_days + 719468;
-    int64_t era = (z >= 0) ? (z / 146097) : ((z - 146096) / 146097);
-    uint32_t doe = (uint32_t)(z - era * 146097);
-    uint32_t yoe = (doe - doe / 1460U + doe / 36524U - doe / 146096U) / 365U;
-    int32_t y = (int32_t)yoe + (int32_t)era * 400;
-    uint32_t doy = doe - (365U * yoe + yoe / 4U - yoe / 100U);
-    uint32_t mp = (5U * doy + 2U) / 153U;
-    uint32_t d = doy - (153U * mp + 2U) / 5U + 1U;
-    uint32_t m = mp + ((mp < 10U) ? 3U : (uint32_t)-9);
-    y += (m <= 2U);
-
-    *year = y;
-    *month = (uint8_t)m;
-    *day = (uint8_t)d;
-}
-
-static int rtc_format_utc_datetime(int64_t utc_epoch_s, char *out, size_t out_len)
-{
-    if (out == NULL) {
-        return -EINVAL;
-    }
-    if (out_len < RTC_UTC_DATETIME_STRLEN) {
-        out[0] = '\0';
-        return -ENOSPC;
-    }
-    if (utc_epoch_s < 0) {
-        out[0] = '\0';
-        return -EINVAL;
-    }
-
-    int64_t days = utc_epoch_s / 86400;
-    int64_t sod = utc_epoch_s % 86400;
-    if (sod < 0) {
-        sod += 86400;
-        days -= 1;
-    }
-
-    int32_t year;
-    uint8_t month;
-    uint8_t day;
-    civil_from_days(days, &year, &month, &day);
-
-    uint8_t hour = (uint8_t)(sod / 3600);
-    uint8_t minute = (uint8_t)((sod % 3600) / 60);
-    uint8_t second = (uint8_t)(sod % 60);
-
-    (void)snprintf(out, out_len, "%04d-%02u-%02u %02u:%02u:%02u",
-                   year, month, day, hour, minute, second);
-    return 0;
-}
-
+// Debug functions to format UTC datetime strings
 int rtc_format_now_utc_datetime(char *out, size_t out_len)
 {
     uint64_t now_s = get_utc_time();
@@ -101,7 +41,7 @@ int rtc_format_now_utc_datetime(char *out, size_t out_len)
         }
         return -ENODATA;
     }
-    return rtc_format_utc_datetime((int64_t)now_s, out, out_len);
+    return omi_rust_rtc_format_utc_datetime(now_s, (uint8_t *)out, out_len);
 }
 #endif
 

@@ -26,6 +26,71 @@ pub fn utc_seconds_clamped(now_ms: u64) -> u32 {
     }
 }
 
+pub const UTC_DATETIME_LEN: usize = 20;
+
+/*
+ * Howard Hinnant's algorithm: convert days since 1970-01-01 into Y-M-D.
+ * Works for a wide range of dates with only integer math.
+ */
+pub fn format_utc_datetime(utc_epoch_s: u64, out: &mut [u8]) -> Result<(), i32> {
+    if out.len() < UTC_DATETIME_LEN {
+        if let Some(first) = out.first_mut() {
+            *first = 0;
+        }
+        return Err(-28);
+    }
+
+    let mut days = (utc_epoch_s / 86_400) as i64;
+    let sod = (utc_epoch_s % 86_400) as u32;
+    days += 719_468;
+    let era = if days >= 0 {
+        days / 146_097
+    } else {
+        (days - 146_096) / 146_097
+    };
+    let doe = (days - era * 146_097) as u32;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let mut year = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = mp as i64 + if mp < 10 { 3 } else { -9 };
+    if month <= 2 {
+        year += 1;
+    }
+    if !(0..=9_999).contains(&year) {
+        out[0] = 0;
+        return Err(-34);
+    }
+
+    let hour = sod / 3_600;
+    let minute = (sod % 3_600) / 60;
+    let second = sod % 60;
+    let fields = [
+        (year as u32, 4, 0),
+        (month as u32, 2, 5),
+        (day, 2, 8),
+        (hour, 2, 11),
+        (minute, 2, 14),
+        (second, 2, 17),
+    ];
+    out[..UTC_DATETIME_LEN].fill(b'0');
+    out[4] = b'-';
+    out[7] = b'-';
+    out[10] = b' ';
+    out[13] = b':';
+    out[16] = b':';
+    out[19] = 0;
+    for (value, width, start) in fields {
+        let mut value = value;
+        for index in (start..start + width).rev() {
+            out[index] = b'0' + (value % 10) as u8;
+            value /= 10;
+        }
+    }
+    Ok(())
+}
+
 /// Wrap-safe 24-bit IMU timestamp delta → new epoch milliseconds.
 pub fn imu_boot_epoch_ms(base_epoch_s: u64, base_ts: u32, ts_now: u32) -> u64 {
     let delta_ticks = (ts_now.wrapping_sub(base_ts)) & IMU_TIMESTAMP_MASK;
@@ -141,6 +206,10 @@ pub fn selftest() -> i32 {
     if utc_seconds_clamped(0) != 0 || utc_seconds_clamped(2500) != 2 {
         failures += 1;
     }
+    let mut datetime = [0u8; UTC_DATETIME_LEN];
+    if format_utc_datetime(0, &mut datetime).is_err() || datetime != *b"1970-01-01 00:00:00\0" {
+        failures += 1;
+    }
     // 10 ticks * 6400 us = 64000 us = 64 ms; base 1s → 1064 ms.
     if imu_boot_epoch_ms(1, 0, 10) != 1064 {
         failures += 1;
@@ -167,5 +236,16 @@ mod tests {
     fn imu_wrap_and_scale() {
         assert_eq!(imu_boot_epoch_ms(10, 0, 100), 10_000 + 640);
         assert_eq!(imu_boot_epoch_ms(0, 0x00FF_FFFE, 1), 19);
+    }
+
+    #[test]
+    fn formats_utc_datetime_and_rejects_short_buffers() {
+        let mut out = [0u8; UTC_DATETIME_LEN];
+        format_utc_datetime(1_709_251_199, &mut out).unwrap();
+        assert_eq!(&out, b"2024-02-29 23:59:59\0");
+
+        let mut short = [b'x'; UTC_DATETIME_LEN - 1];
+        assert_eq!(format_utc_datetime(0, &mut short), Err(-28));
+        assert_eq!(short[0], 0);
     }
 }

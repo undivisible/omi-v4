@@ -163,6 +163,7 @@ int omi_rust_settings_parse_lsm6dsl_time_base(const uint8_t *buf, size_t len,
 uint64_t omi_rust_rtc_extrapolate_ms(uint64_t base_epoch_ms, int64_t base_uptime_ms,
                                      int64_t now_uptime_ms);
 uint32_t omi_rust_rtc_seconds_clamped(uint64_t now_ms);
+int omi_rust_rtc_format_utc_datetime(uint64_t utc_epoch_s, uint8_t *out, size_t out_len);
 uint64_t omi_rust_imu_boot_epoch_ms(uint64_t base_epoch_s, uint32_t base_ts, uint32_t ts_now);
 
 void omi_rust_rtc_clock_init(void);
