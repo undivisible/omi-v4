@@ -4,6 +4,7 @@ use crate::approval::{
 };
 use crate::approval::{ProposalDecisionError, ProposalRegistry, ProposalStatus, unix_time_ms};
 use crate::byok_tier::ByokProvider;
+use crate::capture_service::CaptureControl;
 use crate::chat_router::ChatRouter;
 use crate::computer_use::{
     BoundComputerUseAction, ComputerUseError, ExecutionOutcome, PreparedComputerUseAction,
@@ -1266,31 +1267,41 @@ pub struct CommandDispatcher {
     assistant_provider: Arc<StdMutex<Arc<dyn AssistantProvider>>>,
     transcription: Option<mpsc::Sender<TranscriptionControl>>,
     live_tool_calls: Option<mpsc::Receiver<crate::transcription::LiveToolCalls>>,
+    capture: Option<mpsc::Sender<CaptureControl>>,
 }
 
 impl CommandDispatcher {
     #[cfg_attr(not(test), allow(dead_code))]
     pub fn channel() -> (mpsc::Sender<ClientCommand>, Self) {
-        Self::channel_inner(None, None)
+        Self::channel_inner(None, None, None)
     }
 
     #[allow(dead_code)]
     pub fn channel_with_transcription(
         transcription: mpsc::Sender<TranscriptionControl>,
     ) -> (mpsc::Sender<ClientCommand>, Self) {
-        Self::channel_inner(Some(transcription), None)
+        Self::channel_inner(Some(transcription), None, None)
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn channel_with_capture(
+        capture: mpsc::Sender<CaptureControl>,
+    ) -> (mpsc::Sender<ClientCommand>, Self) {
+        Self::channel_inner(None, None, Some(capture))
     }
 
     pub fn channel_with_transcription_and_live_tools(
         transcription: mpsc::Sender<TranscriptionControl>,
         live_tool_calls: mpsc::Receiver<crate::transcription::LiveToolCalls>,
+        capture: mpsc::Sender<CaptureControl>,
     ) -> (mpsc::Sender<ClientCommand>, Self) {
-        Self::channel_inner(Some(transcription), Some(live_tool_calls))
+        Self::channel_inner(Some(transcription), Some(live_tool_calls), Some(capture))
     }
 
     fn channel_inner(
         transcription: Option<mpsc::Sender<TranscriptionControl>>,
         live_tool_calls: Option<mpsc::Receiver<crate::transcription::LiveToolCalls>>,
+        capture: Option<mpsc::Sender<CaptureControl>>,
     ) -> (mpsc::Sender<ClientCommand>, Self) {
         let (sender, receiver) = mpsc::channel(COMMAND_QUEUE_CAPACITY);
         (
@@ -1302,6 +1313,7 @@ impl CommandDispatcher {
                 assistant_provider: Arc::new(StdMutex::new(production_assistant_provider())),
                 transcription,
                 live_tool_calls,
+                capture,
             },
         )
     }
@@ -1443,6 +1455,29 @@ impl CommandDispatcher {
                         accepted: false,
                     })
                     .send();
+                }
+                continue;
+            }
+            // Capture work is handled on the dispatcher loop and forwarded on a
+            // single ordered channel rather than spawned: an append that
+            // overtook the seal in front of it would land in the wrong segment,
+            // and the log's own thread is what keeps the disk write off this
+            // one.
+            if let Some(control) = capture_control(&request_id, &command.command) {
+                let delivered = match &self.capture {
+                    Some(capture) => capture.send(control).await.is_ok(),
+                    None => false,
+                };
+                if !delivered {
+                    // Retryable on purpose: the audio is still on the wire, and
+                    // the client's next segment can succeed where this one did
+                    // not.
+                    error(
+                        Some(request_id),
+                        "capture_log_unavailable",
+                        "the capture write-ahead log is not running",
+                        true,
+                    );
                 }
                 continue;
             }
@@ -1808,6 +1843,90 @@ impl CommandDispatcher {
             )
             .await;
         }
+    }
+}
+
+/// Translates the capture half of the command surface into the control the
+/// log's own thread understands, or `None` when this command is not capture
+/// work. Kept out of the dispatch loop so the mapping — which is the whole
+/// contract between the client and the write-ahead log — reads in one place.
+fn capture_control(request_id: &str, command: &Command) -> Option<CaptureControl> {
+    match command {
+        Command::OpenCaptureWal {
+            directory,
+            max_bytes,
+            max_age_ms,
+            max_segment_bytes,
+        } => Some(CaptureControl::Open {
+            request_id: request_id.to_owned(),
+            directory: directory.clone(),
+            max_bytes: *max_bytes,
+            max_age_ms: *max_age_ms,
+            max_segment_bytes: *max_segment_bytes,
+        }),
+        Command::ConfigureCaptureUpload {
+            endpoint,
+            firebase_token,
+        } => Some(CaptureControl::ConfigureUpload {
+            endpoint: endpoint.clone(),
+            firebase_token: firebase_token.clone(),
+        }),
+        Command::BeginCaptureSegment {
+            device_id,
+            audio_stream_id,
+            encoding,
+            sample_rate_hz,
+            channels,
+            gap_before,
+        } => Some(CaptureControl::BeginSegment {
+            request_id: request_id.to_owned(),
+            device_id: device_id.clone(),
+            audio_stream_id: audio_stream_id.clone(),
+            encoding: *encoding,
+            sample_rate_hz: *sample_rate_hz,
+            channels: *channels,
+            gap_before: *gap_before,
+        }),
+        Command::AppendCaptureAudio { bytes } => Some(CaptureControl::Append {
+            request_id: request_id.to_owned(),
+            bytes: bytes.clone(),
+        }),
+        Command::SealCaptureSegment => Some(CaptureControl::Seal {
+            request_id: request_id.to_owned(),
+        }),
+        Command::DrainCaptureWal => Some(CaptureControl::Drain {
+            request_id: request_id.to_owned(),
+        }),
+        Command::ReadCaptureWalState => Some(CaptureControl::ReadState {
+            request_id: request_id.to_owned(),
+        }),
+        Command::CloseCaptureWal => Some(CaptureControl::Close {
+            request_id: request_id.to_owned(),
+        }),
+        Command::RecordCaptureGap {
+            device_id,
+            reason,
+            ended_at_ms,
+            ended_stream_id,
+        } => Some(CaptureControl::RecordGap {
+            device_id: device_id.clone(),
+            reason: reason.clone(),
+            ended_at_ms: *ended_at_ms,
+            ended_stream_id: ended_stream_id.clone(),
+        }),
+        Command::RecordCaptureResume {
+            device_id,
+            at_ms,
+            stream_id,
+        } => Some(CaptureControl::RecordResume {
+            device_id: device_id.clone(),
+            at_ms: *at_ms,
+            stream_id: stream_id.clone(),
+        }),
+        Command::ReadCaptureGaps => Some(CaptureControl::ReadGaps {
+            request_id: request_id.to_owned(),
+        }),
+        _ => None,
     }
 }
 
@@ -2596,7 +2715,20 @@ async fn execute(
         | Command::StopTranscription { .. }
         | Command::StartLiveVoice { .. }
         | Command::StopLiveVoice { .. }
-        | Command::UpdateLiveVoiceContext { .. } => false,
+        | Command::UpdateLiveVoiceContext { .. }
+        // Capture work never reaches here: the dispatch loop forwards it to the
+        // write-ahead log's own thread and never spawns a task for it.
+        | Command::OpenCaptureWal { .. }
+        | Command::ConfigureCaptureUpload { .. }
+        | Command::BeginCaptureSegment { .. }
+        | Command::AppendCaptureAudio { .. }
+        | Command::SealCaptureSegment
+        | Command::DrainCaptureWal
+        | Command::ReadCaptureWalState
+        | Command::CloseCaptureWal
+        | Command::RecordCaptureGap { .. }
+        | Command::RecordCaptureResume { .. }
+        | Command::ReadCaptureGaps => false,
         Command::DeviceState { .. } => {
             progress(
                 &request_id,
@@ -6131,6 +6263,7 @@ mod tests {
             }))),
             transcription: None,
             live_tool_calls: None,
+            capture: None,
         };
         let running = tokio::spawn(dispatcher.run());
         let capture = |request_id: &str, text: &str, occurred_at_ms| ClientCommand {
@@ -6339,6 +6472,79 @@ mod tests {
         let joined = tasks.join_next().await;
         reap_joined(joined, &active, &mut CompletedCaptures::default(), 0).await;
         assert!(active.lock().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn capture_commands_reach_the_log_in_the_order_they_were_sent() {
+        let (capture_sender, mut capture) = mpsc::channel(8);
+        let (sender, dispatcher) = CommandDispatcher::channel_with_capture(capture_sender);
+        for command in [
+            Command::BeginCaptureSegment {
+                device_id: "omi-1".to_owned(),
+                audio_stream_id: "stream-1".to_owned(),
+                encoding: crate::signals::AudioEncoding::Opus,
+                sample_rate_hz: 16_000,
+                channels: 1,
+                gap_before: false,
+            },
+            Command::AppendCaptureAudio {
+                bytes: vec![1, 2, 3],
+            },
+            Command::SealCaptureSegment,
+        ] {
+            sender
+                .send(ClientCommand {
+                    request_id: "capture-1".to_owned(),
+                    command,
+                })
+                .await
+                .unwrap_or_else(|_| panic!("dispatcher must accept a command"));
+        }
+        drop(sender);
+        dispatcher.run().await;
+
+        // One request id for three commands: capture work is forwarded rather
+        // than registered as an active command, so it never collides with
+        // itself the way a spawned command would.
+        assert!(matches!(
+            capture.recv().await,
+            Some(CaptureControl::BeginSegment { .. })
+        ));
+        assert!(matches!(
+            capture.recv().await,
+            Some(CaptureControl::Append { bytes, .. }) if bytes == vec![1, 2, 3]
+        ));
+        assert!(matches!(
+            capture.recv().await,
+            Some(CaptureControl::Seal { .. })
+        ));
+    }
+
+    #[tokio::test]
+    async fn capture_work_with_no_log_running_is_reported_as_retryable() {
+        let (sender, dispatcher) = CommandDispatcher::channel();
+        sender
+            .send(ClientCommand {
+                request_id: "capture-1".to_owned(),
+                command: Command::OpenCaptureWal {
+                    directory: "/tmp/omi-capture-test".to_owned(),
+                    max_bytes: None,
+                    max_age_ms: None,
+                    max_segment_bytes: None,
+                },
+            })
+            .await
+            .unwrap_or_else(|_| panic!("dispatcher must accept a command"));
+        drop(sender);
+        let _ = crate::signals::test_events::take();
+        dispatcher.run().await;
+
+        let events = crate::signals::test_events::take();
+        let reported = events.iter().any(|event| {
+            matches!(event, NativeEvent::Error(error)
+                if error.code == "capture_log_unavailable" && error.retryable)
+        });
+        assert!(reported, "{events:?}");
     }
 
     #[tokio::test]

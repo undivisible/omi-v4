@@ -94,6 +94,17 @@ export 'generated/signals/signals.dart'
         NativeEventLiveVoiceState,
         NativeEventLiveVoiceTranscript,
         SystemAudioCaptureMode,
+        CaptureGap,
+        CaptureGaps,
+        CaptureAudioAppended,
+        CaptureSegmentBegun,
+        CaptureWalOpened,
+        CaptureWalState,
+        NativeEventCaptureAudioAppended,
+        NativeEventCaptureGaps,
+        NativeEventCaptureSegmentBegun,
+        NativeEventCaptureWalOpened,
+        NativeEventCaptureWalState,
         NativeEventTranscriptGap,
         NativeEventToolProgress,
         NativeEventTranscriptDelta,
@@ -271,6 +282,90 @@ abstract interface class NativeHub {
     bool video = true,
   });
 
+  /// Opens (creating if needed) the pendant capture write-ahead log under
+  /// [directory], the shared `.omi` data directory. Answered by exactly one
+  /// [NativeEventCaptureWalOpened]; an `error` there means capture still runs
+  /// but nothing is durable, which is reported rather than fatal. Every bound
+  /// is optional and omitting one takes the hub's own default.
+  void openCaptureWal({
+    required String requestId,
+    required String directory,
+    int? maxBytes,
+    int? maxAgeMs,
+    int? maxSegmentBytes,
+  });
+
+  /// Supplies (or withdraws) the credentials sealed segments are uploaded
+  /// with. Either half missing leaves the log holding every segment until it
+  /// ages or size-evicts out, which is the only safe answer when nobody is
+  /// signed in: audio is never dropped because the route was unreachable.
+  void configureCaptureUpload({
+    required String requestId,
+    String? endpoint,
+    String? firebaseToken,
+  });
+
+  /// Seals whatever is open and starts a new segment. Answered by exactly one
+  /// [NativeEventCaptureSegmentBegun] carrying the id that is the upload's
+  /// idempotency key.
+  void beginCaptureSegment({
+    required String requestId,
+    required String deviceId,
+    required String audioStreamId,
+    required AudioEncoding encoding,
+    required int sampleRateHz,
+    required int channels,
+    bool gapBefore = false,
+  });
+
+  /// Appends one decoded frame to the open segment. Answered by exactly one
+  /// [NativeEventCaptureAudioAppended], which is what lets the caller put the
+  /// frame on disk before it puts the same frame on the transcription socket.
+  void appendCaptureAudio({
+    required String requestId,
+    required Uint8List bytes,
+  });
+
+  /// Seals the open segment so it becomes uploadable. Answered by exactly one
+  /// [NativeEventCaptureWalState].
+  void sealCaptureSegment(String requestId);
+
+  /// Runs one upload pass now. Answered by exactly one
+  /// [NativeEventCaptureWalState]; concurrent requests share the pass already
+  /// in flight.
+  void drainCaptureWal(String requestId);
+
+  /// Reports what the log is holding without uploading anything. Answered by
+  /// exactly one [NativeEventCaptureWalState].
+  void readCaptureWalState(String requestId);
+
+  /// Seals the open segment and releases the file handle. Answered by exactly
+  /// one [NativeEventCaptureWalState].
+  void closeCaptureWal(String requestId);
+
+  /// Records that capture stopped. The resume side arrives separately, because
+  /// a device that never comes back still has a discontinuity worth showing.
+  void recordCaptureGap({
+    required String requestId,
+    required String deviceId,
+    required String reason,
+    required int endedAtMs,
+    required String endedStreamId,
+  });
+
+  /// Attaches the resume side to the most recent open gap for this device.
+  /// [streamId] is always the NEW stream, which is what makes the two sides of
+  /// the discontinuity impossible to read as one recording.
+  void recordCaptureResume({
+    required String requestId,
+    required String deviceId,
+    required int atMs,
+    required String streamId,
+  });
+
+  /// Answered by exactly one [NativeEventCaptureGaps], oldest first.
+  void readCaptureGaps(String requestId);
+
   /// Resolves the dev-only assistant credential the app falls back to with no
   /// account. Answered by exactly one [NativeEventDevAssistantResolved].
   void resolveDevAssistant(String requestId);
@@ -280,6 +375,81 @@ abstract interface class NativeHub {
   /// [NativeEventRewind] carrying the same `requestId`.
   void rewind({required String requestId, required RewindRequest request});
   void dispose();
+}
+
+/// The capture half of [NativeHub], stubbed out.
+///
+/// Only the mobile pendant path drives the write-ahead log, so a hub standing
+/// in for something else — the demo, a desktop-only build, a test double —
+/// implements everything else and mixes this in rather than restating eleven
+/// no-ops. Mixing it in is also the honest answer: a hub that cannot capture
+/// silently records nothing, which is exactly what [HubCapture] treats as "not
+/// durable" rather than as a failure.
+mixin NativeHubWithoutCapture implements NativeHub {
+  @override
+  void openCaptureWal({
+    required String requestId,
+    required String directory,
+    int? maxBytes,
+    int? maxAgeMs,
+    int? maxSegmentBytes,
+  }) {}
+
+  @override
+  void configureCaptureUpload({
+    required String requestId,
+    String? endpoint,
+    String? firebaseToken,
+  }) {}
+
+  @override
+  void beginCaptureSegment({
+    required String requestId,
+    required String deviceId,
+    required String audioStreamId,
+    required AudioEncoding encoding,
+    required int sampleRateHz,
+    required int channels,
+    bool gapBefore = false,
+  }) {}
+
+  @override
+  void appendCaptureAudio({
+    required String requestId,
+    required Uint8List bytes,
+  }) {}
+
+  @override
+  void sealCaptureSegment(String requestId) {}
+
+  @override
+  void drainCaptureWal(String requestId) {}
+
+  @override
+  void readCaptureWalState(String requestId) {}
+
+  @override
+  void closeCaptureWal(String requestId) {}
+
+  @override
+  void recordCaptureGap({
+    required String requestId,
+    required String deviceId,
+    required String reason,
+    required int endedAtMs,
+    required String endedStreamId,
+  }) {}
+
+  @override
+  void recordCaptureResume({
+    required String requestId,
+    required String deviceId,
+    required int atMs,
+    required String streamId,
+  }) {}
+
+  @override
+  void readCaptureGaps(String requestId) {}
 }
 
 NativeHub createNativeHub() => kIsWeb
@@ -502,6 +672,71 @@ final class UnavailableNativeHub implements NativeHub {
     String? displayName,
     bool video = true,
   }) => _unavailable();
+
+  @override
+  void openCaptureWal({
+    required String requestId,
+    required String directory,
+    int? maxBytes,
+    int? maxAgeMs,
+    int? maxSegmentBytes,
+  }) => _unavailable();
+
+  @override
+  void configureCaptureUpload({
+    required String requestId,
+    String? endpoint,
+    String? firebaseToken,
+  }) => _unavailable();
+
+  @override
+  void beginCaptureSegment({
+    required String requestId,
+    required String deviceId,
+    required String audioStreamId,
+    required AudioEncoding encoding,
+    required int sampleRateHz,
+    required int channels,
+    bool gapBefore = false,
+  }) => _unavailable();
+
+  @override
+  void appendCaptureAudio({
+    required String requestId,
+    required Uint8List bytes,
+  }) => _unavailable();
+
+  @override
+  void sealCaptureSegment(String requestId) => _unavailable();
+
+  @override
+  void drainCaptureWal(String requestId) => _unavailable();
+
+  @override
+  void readCaptureWalState(String requestId) => _unavailable();
+
+  @override
+  void closeCaptureWal(String requestId) => _unavailable();
+
+  @override
+  void recordCaptureGap({
+    required String requestId,
+    required String deviceId,
+    required String reason,
+    required int endedAtMs,
+    required String endedStreamId,
+  }) => _unavailable();
+
+  @override
+  void recordCaptureResume({
+    required String requestId,
+    required String deviceId,
+    required int atMs,
+    required String streamId,
+  }) => _unavailable();
+
+  @override
+  void readCaptureGaps(String requestId) => _unavailable();
 
   @override
   void resolveDevAssistant(String requestId) => _unavailable();
@@ -868,6 +1103,121 @@ final class RinfNativeHub implements NativeHub {
       model: model,
     ),
   );
+
+  @override
+  void openCaptureWal({
+    required String requestId,
+    required String directory,
+    int? maxBytes,
+    int? maxAgeMs,
+    int? maxSegmentBytes,
+  }) => _send(
+    requestId,
+    CommandOpenCaptureWal(
+      directory: directory,
+      maxBytes: _unsigned(maxBytes),
+      maxAgeMs: maxAgeMs,
+      maxSegmentBytes: _unsigned(maxSegmentBytes),
+    ),
+  );
+
+  @override
+  void configureCaptureUpload({
+    required String requestId,
+    String? endpoint,
+    String? firebaseToken,
+  }) => _send(
+    requestId,
+    CommandConfigureCaptureUpload(
+      endpoint: endpoint,
+      firebaseToken: firebaseToken,
+    ),
+  );
+
+  @override
+  void beginCaptureSegment({
+    required String requestId,
+    required String deviceId,
+    required String audioStreamId,
+    required AudioEncoding encoding,
+    required int sampleRateHz,
+    required int channels,
+    bool gapBefore = false,
+  }) => _send(
+    requestId,
+    CommandBeginCaptureSegment(
+      deviceId: deviceId,
+      audioStreamId: audioStreamId,
+      encoding: encoding,
+      sampleRateHz: sampleRateHz,
+      channels: channels,
+      gapBefore: gapBefore,
+    ),
+  );
+
+  @override
+  void appendCaptureAudio({
+    required String requestId,
+    required Uint8List bytes,
+  }) => _send(requestId, CommandAppendCaptureAudio(bytes: bytes));
+
+  @override
+  void sealCaptureSegment(String requestId) =>
+      _send(requestId, const CommandSealCaptureSegment());
+
+  @override
+  void drainCaptureWal(String requestId) =>
+      _send(requestId, const CommandDrainCaptureWal());
+
+  @override
+  void readCaptureWalState(String requestId) =>
+      _send(requestId, const CommandReadCaptureWalState());
+
+  @override
+  void closeCaptureWal(String requestId) =>
+      _send(requestId, const CommandCloseCaptureWal());
+
+  @override
+  void recordCaptureGap({
+    required String requestId,
+    required String deviceId,
+    required String reason,
+    required int endedAtMs,
+    required String endedStreamId,
+  }) => _send(
+    requestId,
+    CommandRecordCaptureGap(
+      deviceId: deviceId,
+      reason: reason,
+      endedAtMs: endedAtMs,
+      endedStreamId: endedStreamId,
+    ),
+  );
+
+  @override
+  void recordCaptureResume({
+    required String requestId,
+    required String deviceId,
+    required int atMs,
+    required String streamId,
+  }) => _send(
+    requestId,
+    CommandRecordCaptureResume(
+      deviceId: deviceId,
+      atMs: atMs,
+      streamId: streamId,
+    ),
+  );
+
+  @override
+  void readCaptureGaps(String requestId) =>
+      _send(requestId, const CommandReadCaptureGaps());
+
+  /// The generated bridge types carry Rust's `u64` as a [Uint64], so a bound
+  /// the caller expressed as a plain Dart int is widened here rather than at
+  /// every call site.
+  static Uint64? _unsigned(int? value) =>
+      value == null ? null : Uint64.fromBigInt(BigInt.from(value));
 
   @override
   void resolveDevAssistant(String requestId) =>

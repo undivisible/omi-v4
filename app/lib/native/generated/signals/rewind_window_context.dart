@@ -81,7 +81,7 @@ class RewindWindowContext {
           '$runtimeType('
           'bundleId: $bundleId, '
           'appName: $appName, '
-          'windowTitle: [REDACTED]'
+          'windowTitle: $windowTitle'
           ')';
       return true;
     }());

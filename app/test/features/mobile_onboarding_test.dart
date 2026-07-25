@@ -675,7 +675,7 @@ final class _Adapter implements DeviceRelayAdapter, DeviceRelayHaptics {
   Stream<bool> connectionState(String deviceId) => _connections.stream;
 }
 
-final class _Hub implements NativeHub {
+final class _Hub with NativeHubWithoutCapture implements NativeHub {
   @override
   void rewind({required String requestId, required RewindRequest request}) {}
 

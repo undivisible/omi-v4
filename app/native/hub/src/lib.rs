@@ -2,7 +2,12 @@ mod approval;
 pub mod brief;
 mod byok_tier;
 mod call_bridge;
+mod capture_gap_log;
 pub mod capture_policy;
+mod capture_service;
+mod capture_upload;
+mod capture_wal;
+mod capture_wal_uploader;
 mod chat_router;
 mod computer_use;
 mod computer_use_tools;
@@ -54,6 +59,7 @@ async fn main() {
     let (command_sender, dispatcher) = CommandDispatcher::channel_with_transcription_and_live_tools(
         transcription_sender,
         live_tool_calls,
+        capture_service::spawn(),
     );
     let (meeting_sender, meeting_runtime) = meeting::channel(command_sender.clone());
     meeting::install(meeting_sender);

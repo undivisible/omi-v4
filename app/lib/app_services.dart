@@ -1609,9 +1609,8 @@ final class AppServices {
     return _captureSetup ??=
         CaptureCoordinator.create(
           forwarder: deviceAudio,
-          transport: _worker == null
-              ? const UnavailableCaptureUploadTransport()
-              : WorkerCaptureUploadTransport(_worker),
+          hub: nativeHub,
+          uploadCredentials: _captureUploadCredentials,
           onError: _reportCaptureError,
         ).then((coordinator) {
           if (_disposed) {
@@ -1622,6 +1621,17 @@ final class AppServices {
           capture = coordinator;
           return coordinator;
         });
+  }
+
+  /// The credentials the hub uploads sealed segments with, resolved fresh at
+  /// every pass. A signed-out account resolves to nothing, which leaves the
+  /// audio in the log rather than dropping it.
+  Future<({String? endpoint, String? firebaseToken})>
+  _captureUploadCredentials() async {
+    final origin = _workerOrigin;
+    if (origin == null) return (endpoint: null, firebaseToken: null);
+    final session = auth.snapshot.session;
+    return (endpoint: origin.toString(), firebaseToken: session?.idToken);
   }
 
   /// Capture setup outlives a disposed service by a microtask or two, so the

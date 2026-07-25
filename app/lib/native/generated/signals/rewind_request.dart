@@ -262,7 +262,7 @@ class RewindRequestPreviewTaken extends RewindRequest {
       fullString =
           '$runtimeType('
           'stepId: $stepId, '
-          'luma: [REDACTED]'
+          'luma: $luma'
           ')';
       return true;
     }());
@@ -337,8 +337,8 @@ class RewindRequestFrameEncoded extends RewindRequest {
       fullString =
           '$runtimeType('
           'stepId: $stepId, '
-          'jpeg: [REDACTED], '
-          'ocrText: [REDACTED]'
+          'jpeg: $jpeg, '
+          'ocrText: $ocrText'
           ')';
       return true;
     }());
@@ -807,7 +807,7 @@ class RewindRequestSearch extends RewindRequest {
     assert(() {
       fullString =
           '$runtimeType('
-          'query: [REDACTED], '
+          'query: $query, '
           'limit: $limit'
           ')';
       return true;

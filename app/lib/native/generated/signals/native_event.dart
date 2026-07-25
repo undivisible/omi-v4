@@ -78,7 +78,19 @@ abstract class NativeEvent {
       case 27:
         return NativeEventDevAssistantResolved.load(deserializer);
       case 28:
+        return NativeEventAudioGateStats.load(deserializer);
+      case 29:
         return NativeEventRewind.load(deserializer);
+      case 30:
+        return NativeEventCaptureWalOpened.load(deserializer);
+      case 31:
+        return NativeEventCaptureSegmentBegun.load(deserializer);
+      case 32:
+        return NativeEventCaptureAudioAppended.load(deserializer);
+      case 33:
+        return NativeEventCaptureWalState.load(deserializer);
+      case 34:
+        return NativeEventCaptureGaps.load(deserializer);
       default:
         throw Exception(
           'Unknown variant index for NativeEvent: ' + index.toString(),
@@ -1605,6 +1617,59 @@ class NativeEventDevAssistantResolved extends NativeEvent {
 }
 
 @immutable
+class NativeEventAudioGateStats extends NativeEvent {
+  const NativeEventAudioGateStats({required this.value}) : super();
+
+  static NativeEventAudioGateStats load(BinaryDeserializer deserializer) {
+    deserializer.increaseContainerDepth();
+    final instance = NativeEventAudioGateStats(
+      value: AudioGateStats.deserialize(deserializer),
+    );
+    deserializer.decreaseContainerDepth();
+    return instance;
+  }
+
+  final AudioGateStats value;
+
+  NativeEventAudioGateStats copyWith({AudioGateStats? value}) {
+    return NativeEventAudioGateStats(value: value ?? this.value);
+  }
+
+  void serialize(BinarySerializer serializer) {
+    serializer.increaseContainerDepth();
+    serializer.serializeVariantIndex(28);
+    value.serialize(serializer);
+    serializer.decreaseContainerDepth();
+  }
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    if (other.runtimeType != runtimeType) return false;
+
+    return other is NativeEventAudioGateStats && value == other.value;
+  }
+
+  @override
+  int get hashCode => value.hashCode;
+
+  @override
+  String toString() {
+    String? fullString;
+
+    assert(() {
+      fullString =
+          '$runtimeType('
+          'value: $value'
+          ')';
+      return true;
+    }());
+
+    return fullString ?? 'NativeEventAudioGateStats';
+  }
+}
+
+@immutable
 class NativeEventRewind extends NativeEvent {
   const NativeEventRewind({required this.value}) : super();
 
@@ -1625,7 +1690,7 @@ class NativeEventRewind extends NativeEvent {
 
   void serialize(BinarySerializer serializer) {
     serializer.increaseContainerDepth();
-    serializer.serializeVariantIndex(28);
+    serializer.serializeVariantIndex(29);
     value.serialize(serializer);
     serializer.decreaseContainerDepth();
   }
@@ -1654,6 +1719,271 @@ class NativeEventRewind extends NativeEvent {
     }());
 
     return fullString ?? 'NativeEventRewind';
+  }
+}
+
+@immutable
+class NativeEventCaptureWalOpened extends NativeEvent {
+  const NativeEventCaptureWalOpened({required this.value}) : super();
+
+  static NativeEventCaptureWalOpened load(BinaryDeserializer deserializer) {
+    deserializer.increaseContainerDepth();
+    final instance = NativeEventCaptureWalOpened(
+      value: CaptureWalOpened.deserialize(deserializer),
+    );
+    deserializer.decreaseContainerDepth();
+    return instance;
+  }
+
+  final CaptureWalOpened value;
+
+  NativeEventCaptureWalOpened copyWith({CaptureWalOpened? value}) {
+    return NativeEventCaptureWalOpened(value: value ?? this.value);
+  }
+
+  void serialize(BinarySerializer serializer) {
+    serializer.increaseContainerDepth();
+    serializer.serializeVariantIndex(30);
+    value.serialize(serializer);
+    serializer.decreaseContainerDepth();
+  }
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    if (other.runtimeType != runtimeType) return false;
+
+    return other is NativeEventCaptureWalOpened && value == other.value;
+  }
+
+  @override
+  int get hashCode => value.hashCode;
+
+  @override
+  String toString() {
+    String? fullString;
+
+    assert(() {
+      fullString =
+          '$runtimeType('
+          'value: $value'
+          ')';
+      return true;
+    }());
+
+    return fullString ?? 'NativeEventCaptureWalOpened';
+  }
+}
+
+@immutable
+class NativeEventCaptureSegmentBegun extends NativeEvent {
+  const NativeEventCaptureSegmentBegun({required this.value}) : super();
+
+  static NativeEventCaptureSegmentBegun load(BinaryDeserializer deserializer) {
+    deserializer.increaseContainerDepth();
+    final instance = NativeEventCaptureSegmentBegun(
+      value: CaptureSegmentBegun.deserialize(deserializer),
+    );
+    deserializer.decreaseContainerDepth();
+    return instance;
+  }
+
+  final CaptureSegmentBegun value;
+
+  NativeEventCaptureSegmentBegun copyWith({CaptureSegmentBegun? value}) {
+    return NativeEventCaptureSegmentBegun(value: value ?? this.value);
+  }
+
+  void serialize(BinarySerializer serializer) {
+    serializer.increaseContainerDepth();
+    serializer.serializeVariantIndex(31);
+    value.serialize(serializer);
+    serializer.decreaseContainerDepth();
+  }
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    if (other.runtimeType != runtimeType) return false;
+
+    return other is NativeEventCaptureSegmentBegun && value == other.value;
+  }
+
+  @override
+  int get hashCode => value.hashCode;
+
+  @override
+  String toString() {
+    String? fullString;
+
+    assert(() {
+      fullString =
+          '$runtimeType('
+          'value: $value'
+          ')';
+      return true;
+    }());
+
+    return fullString ?? 'NativeEventCaptureSegmentBegun';
+  }
+}
+
+@immutable
+class NativeEventCaptureAudioAppended extends NativeEvent {
+  const NativeEventCaptureAudioAppended({required this.value}) : super();
+
+  static NativeEventCaptureAudioAppended load(BinaryDeserializer deserializer) {
+    deserializer.increaseContainerDepth();
+    final instance = NativeEventCaptureAudioAppended(
+      value: CaptureAudioAppended.deserialize(deserializer),
+    );
+    deserializer.decreaseContainerDepth();
+    return instance;
+  }
+
+  final CaptureAudioAppended value;
+
+  NativeEventCaptureAudioAppended copyWith({CaptureAudioAppended? value}) {
+    return NativeEventCaptureAudioAppended(value: value ?? this.value);
+  }
+
+  void serialize(BinarySerializer serializer) {
+    serializer.increaseContainerDepth();
+    serializer.serializeVariantIndex(32);
+    value.serialize(serializer);
+    serializer.decreaseContainerDepth();
+  }
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    if (other.runtimeType != runtimeType) return false;
+
+    return other is NativeEventCaptureAudioAppended && value == other.value;
+  }
+
+  @override
+  int get hashCode => value.hashCode;
+
+  @override
+  String toString() {
+    String? fullString;
+
+    assert(() {
+      fullString =
+          '$runtimeType('
+          'value: $value'
+          ')';
+      return true;
+    }());
+
+    return fullString ?? 'NativeEventCaptureAudioAppended';
+  }
+}
+
+@immutable
+class NativeEventCaptureWalState extends NativeEvent {
+  const NativeEventCaptureWalState({required this.value}) : super();
+
+  static NativeEventCaptureWalState load(BinaryDeserializer deserializer) {
+    deserializer.increaseContainerDepth();
+    final instance = NativeEventCaptureWalState(
+      value: CaptureWalState.deserialize(deserializer),
+    );
+    deserializer.decreaseContainerDepth();
+    return instance;
+  }
+
+  final CaptureWalState value;
+
+  NativeEventCaptureWalState copyWith({CaptureWalState? value}) {
+    return NativeEventCaptureWalState(value: value ?? this.value);
+  }
+
+  void serialize(BinarySerializer serializer) {
+    serializer.increaseContainerDepth();
+    serializer.serializeVariantIndex(33);
+    value.serialize(serializer);
+    serializer.decreaseContainerDepth();
+  }
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    if (other.runtimeType != runtimeType) return false;
+
+    return other is NativeEventCaptureWalState && value == other.value;
+  }
+
+  @override
+  int get hashCode => value.hashCode;
+
+  @override
+  String toString() {
+    String? fullString;
+
+    assert(() {
+      fullString =
+          '$runtimeType('
+          'value: $value'
+          ')';
+      return true;
+    }());
+
+    return fullString ?? 'NativeEventCaptureWalState';
+  }
+}
+
+@immutable
+class NativeEventCaptureGaps extends NativeEvent {
+  const NativeEventCaptureGaps({required this.value}) : super();
+
+  static NativeEventCaptureGaps load(BinaryDeserializer deserializer) {
+    deserializer.increaseContainerDepth();
+    final instance = NativeEventCaptureGaps(
+      value: CaptureGaps.deserialize(deserializer),
+    );
+    deserializer.decreaseContainerDepth();
+    return instance;
+  }
+
+  final CaptureGaps value;
+
+  NativeEventCaptureGaps copyWith({CaptureGaps? value}) {
+    return NativeEventCaptureGaps(value: value ?? this.value);
+  }
+
+  void serialize(BinarySerializer serializer) {
+    serializer.increaseContainerDepth();
+    serializer.serializeVariantIndex(34);
+    value.serialize(serializer);
+    serializer.decreaseContainerDepth();
+  }
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    if (other.runtimeType != runtimeType) return false;
+
+    return other is NativeEventCaptureGaps && value == other.value;
+  }
+
+  @override
+  int get hashCode => value.hashCode;
+
+  @override
+  String toString() {
+    String? fullString;
+
+    assert(() {
+      fullString =
+          '$runtimeType('
+          'value: $value'
+          ')';
+      return true;
+    }());
+
+    return fullString ?? 'NativeEventCaptureGaps';
   }
 }
 

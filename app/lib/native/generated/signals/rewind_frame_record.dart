@@ -140,8 +140,8 @@ class RewindFrameRecord {
           'hash: $hash, '
           'appName: $appName, '
           'bundleId: $bundleId, '
-          'windowTitle: [REDACTED], '
-          'ocrText: [REDACTED]'
+          'windowTitle: $windowTitle, '
+          'ocrText: $ocrText'
           ')';
       return true;
     }());

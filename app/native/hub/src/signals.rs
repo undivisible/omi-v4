@@ -180,6 +180,81 @@ pub enum Command {
     Rewind {
         request: RewindRequest,
     },
+    /// Open (creating if needed) the pendant capture write-ahead log under the
+    /// client's shared `.omi` data directory. Answered by exactly one
+    /// [`CaptureWalOpened`], whose `error` is set when the log could not be
+    /// opened at all — read-only storage, no space — which the client treats
+    /// as "capture works, durability does not" rather than as a capture
+    /// failure. Every bound is optional; omitting one takes the hub's default.
+    OpenCaptureWal {
+        directory: String,
+        max_bytes: Option<u64>,
+        max_age_ms: Option<i64>,
+        max_segment_bytes: Option<u64>,
+    },
+    /// Supply (or withdraw) the credentials sealed segments are uploaded with.
+    /// Either half missing leaves the log holding every segment until it ages
+    /// or size-evicts out, which is the only safe answer when nobody is signed
+    /// in: audio is never dropped because the route was unreachable.
+    ConfigureCaptureUpload {
+        endpoint: Option<String>,
+        firebase_token: Option<String>,
+    },
+    /// Seal whatever is open and start a new segment. Answered by exactly one
+    /// [`CaptureSegmentBegun`] carrying the id that will be the upload's
+    /// idempotency key.
+    BeginCaptureSegment {
+        device_id: String,
+        audio_stream_id: String,
+        encoding: AudioEncoding,
+        sample_rate_hz: u32,
+        channels: u8,
+        gap_before: bool,
+    },
+    /// Append one decoded audio frame to the open segment. Answered by exactly
+    /// one [`CaptureAudioAppended`], because the client must not hand the same
+    /// frame to the transcription socket until the bytes are with the operating
+    /// system: disk first is what makes a frame that was in flight when the
+    /// process died recoverable. The acknowledgement is also the capture path's
+    /// only backpressure — without it the client would read the pendant faster
+    /// than the log could absorb it and the queue would simply move somewhere
+    /// nobody can see. It shares the command channel with
+    /// [`Command::BeginCaptureSegment`] and [`Command::SealCaptureSegment`] so
+    /// that an append can never overtake the segment boundary it belongs to.
+    AppendCaptureAudio {
+        bytes: Vec<u8>,
+    },
+    /// Seal the open segment so it becomes uploadable, then re-apply the
+    /// bounds. Answered by exactly one [`CaptureWalState`].
+    SealCaptureSegment,
+    /// Run one upload pass now. Answered by exactly one [`CaptureWalState`];
+    /// concurrent requests share the pass already in flight.
+    DrainCaptureWal,
+    /// Report what the log is holding, without uploading anything. Answered by
+    /// exactly one [`CaptureWalState`].
+    ReadCaptureWalState,
+    /// Seal the open segment and release the file handle. Answered by exactly
+    /// one [`CaptureWalState`].
+    CloseCaptureWal,
+    /// Record that capture stopped. The resume side arrives separately, as
+    /// [`Command::RecordCaptureResume`], because a device that never comes
+    /// back still has a discontinuity worth showing.
+    RecordCaptureGap {
+        device_id: String,
+        reason: String,
+        ended_at_ms: i64,
+        ended_stream_id: String,
+    },
+    /// Attach the resume side to the most recent open gap for this device.
+    /// `stream_id` is always the *new* stream, which is what makes the two
+    /// sides of the discontinuity impossible to read as one recording.
+    RecordCaptureResume {
+        device_id: String,
+        at_ms: i64,
+        stream_id: String,
+    },
+    /// Answered by exactly one [`CaptureGaps`].
+    ReadCaptureGaps,
 }
 
 /// The Rewind engine's request surface.
@@ -546,6 +621,79 @@ pub enum NativeEvent {
     DevAssistantResolved(DevAssistant),
     AudioGateStats(AudioGateStats),
     Rewind(RewindUpdate),
+    CaptureWalOpened(CaptureWalOpened),
+    CaptureSegmentBegun(CaptureSegmentBegun),
+    CaptureAudioAppended(CaptureAudioAppended),
+    CaptureWalState(CaptureWalState),
+    CaptureGaps(CaptureGaps),
+}
+
+/// The answer to a [`Command::AppendCaptureAudio`]. Sent once the bytes have
+/// been handed to the operating system, or once the write has failed — either
+/// way the client may stop holding the frame. `error` never means the frame
+/// should be re-sent: the log has already moved past it, and a duplicate
+/// append would put the same audio into the segment twice.
+#[derive(Debug, Serialize, SignalPiece)]
+pub struct CaptureAudioAppended {
+    pub request_id: String,
+    pub error: Option<String>,
+}
+
+/// The answer to a [`Command::OpenCaptureWal`]. `directory` is the log the hub
+/// settled on, so the client can show where audio is being kept; `error`
+/// carries why there is no log at all, which degrades capture to "live only"
+/// rather than stopping it.
+#[derive(Debug, Serialize, SignalPiece)]
+pub struct CaptureWalOpened {
+    pub request_id: String,
+    pub directory: Option<String>,
+    pub error: Option<String>,
+}
+
+/// The answer to a [`Command::BeginCaptureSegment`]. `segment_id` is the
+/// client-supplied idempotency key the transcription endpoint deduplicates on;
+/// it is `None` exactly when `error` explains why no segment was opened.
+#[derive(Debug, Serialize, SignalPiece)]
+pub struct CaptureSegmentBegun {
+    pub request_id: String,
+    pub segment_id: Option<String>,
+    pub error: Option<String>,
+}
+
+/// What the write-ahead log is holding, and what the last pass did with it.
+///
+/// `pending_segments` is what the UI surfaces as "N clips waiting to upload":
+/// durability the user cannot see is durability they will not trust.
+/// `last_error` is the reason the pass stopped early, and is not fatal — the
+/// segments it left behind are still on disk.
+#[derive(Debug, Serialize, SignalPiece)]
+pub struct CaptureWalState {
+    pub request_id: String,
+    pub pending_segments: u64,
+    pub pending_bytes: u64,
+    pub oldest_started_at_ms: Option<i64>,
+    pub uploaded: u64,
+    pub last_error: Option<String>,
+}
+
+/// One recorded discontinuity in capture. The two stream ids are always
+/// different: a restart opens a new stream rather than continuing the old one,
+/// which is what makes the audio either side impossible to re-splice.
+#[derive(Clone, Debug, Serialize, SignalPiece)]
+pub struct CaptureGap {
+    pub device_id: String,
+    pub reason: String,
+    pub ended_at_ms: i64,
+    pub ended_stream_id: String,
+    pub resumed_at_ms: Option<i64>,
+    pub resumed_stream_id: Option<String>,
+}
+
+/// The answer to a [`Command::ReadCaptureGaps`], oldest first.
+#[derive(Debug, Serialize, SignalPiece)]
+pub struct CaptureGaps {
+    pub request_id: String,
+    pub gaps: Vec<CaptureGap>,
 }
 
 /// What the voice-activity gate kept off the metered transcription socket for

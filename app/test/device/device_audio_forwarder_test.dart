@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -701,14 +700,15 @@ void main() {
         _AudioAdapter adapter,
         _RecordingHub hub,
         DeviceAudioForwarder forwarder,
-        VolatileCaptureGapLog gaps,
+        HubCapture capture,
         List<String> stopped,
       })
     >
     build({bool autoRestart = true}) async {
       final adapter = _AudioAdapter();
       final hub = _RecordingHub();
-      final gaps = VolatileCaptureGapLog();
+      final capture = HubCapture(hub);
+      addTearDown(capture.dispose);
       final stopped = <String>[];
       final forwarder = DeviceAudioForwarder(
         relay: DeviceRelayService(
@@ -716,7 +716,7 @@ void main() {
           adapter: adapter,
         ),
         hub: hub,
-        gapRecorder: gaps,
+        capture: capture,
         autoRestart: autoRestart,
         restartDelay: Duration.zero,
         onCaptureStopped: stopped.add,
@@ -732,7 +732,7 @@ void main() {
         adapter: adapter,
         hub: hub,
         forwarder: forwarder,
-        gaps: gaps,
+        capture: capture,
         stopped: stopped,
       );
     }
@@ -769,7 +769,7 @@ void main() {
       harness.adapter.audio.add([12, 0, 0, 2]);
       await settle();
 
-      final recorded = await harness.gaps.read();
+      final recorded = await harness.capture.readGaps();
       expect(recorded, hasLength(1));
       final gap = recorded.single;
       expect(gap.reason, DeviceAudioGapReason.packetDiscontinuity.name);
@@ -783,24 +783,23 @@ void main() {
     });
 
     test('marks the resumed write-ahead segment as following a gap', () async {
-      final directory = Directory.systemTemp.createTempSync('omi-wal-restart');
-      addTearDown(() => directory.deleteSync(recursive: true));
       final harness = await build();
-      // Installed after the first start so only the resumed session is logged.
-      harness.forwarder.wal = await CaptureWal.open(directory: directory);
       harness.adapter.audio.add([10, 0, 0, 1]);
       harness.adapter.audio.add([12, 0, 0, 2]);
       await settle();
 
       await harness.forwarder.stop();
-      final segments = await harness.forwarder.wal!.pending();
-      expect(segments, isNotEmpty);
-      expect(segments.first.gapBefore, isTrue);
+      final segments = harness.hub.captureSegments;
+      expect(segments, hasLength(2));
+      // Only the resumed session follows a discontinuity, and it opens under
+      // the new stream id rather than continuing the interrupted one.
+      expect(segments.first.gapBefore, isFalse);
+      expect(segments.last.gapBefore, isTrue);
       expect(
-        segments.first.audioStreamId,
+        segments.last.audioStreamId,
         harness.hub.starts.last.audioStreamId,
       );
-      await harness.forwarder.wal!.close();
+      expect(segments.last.audioStreamId, isNot(segments.first.audioStreamId));
       await harness.adapter.close();
     });
 
@@ -812,7 +811,7 @@ void main() {
       await settle();
 
       expect(harness.hub.starts, hasLength(1));
-      expect(await harness.gaps.read(), isEmpty);
+      expect(await harness.capture.readGaps(), isEmpty);
       expect(harness.stopped, isEmpty);
       expect(harness.forwarder.active, isFalse);
       await harness.adapter.close();
@@ -828,7 +827,7 @@ void main() {
 
         expect(harness.hub.starts, hasLength(1));
         expect(harness.forwarder.active, isFalse);
-        final recorded = await harness.gaps.read();
+        final recorded = await harness.capture.readGaps();
         expect(recorded, hasLength(1));
         expect(recorded.single.resumedAt, isNull);
         expect(harness.stopped, hasLength(1));
@@ -875,6 +874,125 @@ final class _RecordingHub implements NativeHub {
   void rewind({required String requestId, required RewindRequest request}) {}
 
   @override
+  void openCaptureWal({
+    required String requestId,
+    required String directory,
+    int? maxBytes,
+    int? maxAgeMs,
+    int? maxSegmentBytes,
+  }) => eventsController.add(
+    NativeEventCaptureWalOpened(
+      value: CaptureWalOpened(requestId: requestId, directory: directory),
+    ),
+  );
+
+  @override
+  void configureCaptureUpload({
+    required String requestId,
+    String? endpoint,
+    String? firebaseToken,
+  }) {}
+
+  @override
+  void beginCaptureSegment({
+    required String requestId,
+    required String deviceId,
+    required String audioStreamId,
+    required AudioEncoding encoding,
+    required int sampleRateHz,
+    required int channels,
+    bool gapBefore = false,
+  }) {
+    captureSegments.add((audioStreamId: audioStreamId, gapBefore: gapBefore));
+    eventsController.add(
+      NativeEventCaptureSegmentBegun(
+        value: CaptureSegmentBegun(
+          requestId: requestId,
+          segmentId: 'segment-${_captureSegmentSequence++}',
+        ),
+      ),
+    );
+  }
+
+  @override
+  void appendCaptureAudio({
+    required String requestId,
+    required Uint8List bytes,
+  }) {
+    captureAppends.add(bytes);
+    eventsController.add(
+      NativeEventCaptureAudioAppended(
+        value: CaptureAudioAppended(requestId: requestId),
+      ),
+    );
+  }
+
+  @override
+  void sealCaptureSegment(String requestId) => _captureState(requestId);
+
+  @override
+  void drainCaptureWal(String requestId) => _captureState(requestId);
+
+  @override
+  void readCaptureWalState(String requestId) => _captureState(requestId);
+
+  @override
+  void closeCaptureWal(String requestId) => _captureState(requestId);
+
+  void _captureState(String requestId) => eventsController.add(
+    NativeEventCaptureWalState(
+      value: CaptureWalState(
+        requestId: requestId,
+        pendingSegments: Uint64.fromBigInt(BigInt.from(captureSegments.length)),
+        pendingBytes: Uint64.fromBigInt(BigInt.zero),
+        uploaded: Uint64.fromBigInt(BigInt.zero),
+      ),
+    ),
+  );
+
+  @override
+  void recordCaptureGap({
+    required String requestId,
+    required String deviceId,
+    required String reason,
+    required int endedAtMs,
+    required String endedStreamId,
+  }) => captureGaps.add(
+    CaptureGap(
+      deviceId: deviceId,
+      reason: reason,
+      endedAtMs: endedAtMs,
+      endedStreamId: endedStreamId,
+    ),
+  );
+
+  @override
+  void recordCaptureResume({
+    required String requestId,
+    required String deviceId,
+    required int atMs,
+    required String streamId,
+  }) {
+    for (var index = captureGaps.length - 1; index >= 0; index--) {
+      final gap = captureGaps[index];
+      if (gap.deviceId == deviceId && gap.resumedAtMs == null) {
+        captureGaps[index] = gap.resumed(
+          at: DateTime.fromMillisecondsSinceEpoch(atMs, isUtc: true),
+          streamId: streamId,
+        );
+        return;
+      }
+    }
+  }
+
+  @override
+  void readCaptureGaps(String requestId) => eventsController.add(
+    NativeEventCaptureGaps(
+      value: CaptureGaps(requestId: requestId, gaps: List.of(captureGaps)),
+    ),
+  );
+
+  @override
   void resolveDevAssistant(String requestId) {}
   _RecordingHub({
     this.available = true,
@@ -894,6 +1012,15 @@ final class _RecordingHub implements NativeHub {
   final stopAcknowledgements = <TranscriptionStopAcknowledgement>[];
   final lifecycleTerminals = <TranscriptionStatus>[];
   final eventsController = StreamController<NativeEvent>.broadcast(sync: true);
+
+  /// The hub owns the write-ahead log now, so what the forwarder does to
+  /// durability is observable here as commands rather than as files: which
+  /// segments were opened and under which stream, which frames were appended,
+  /// and which discontinuities were recorded.
+  final captureSegments = <({String audioStreamId, bool gapBefore})>[];
+  final captureAppends = <Uint8List>[];
+  final captureGaps = <CaptureGap>[];
+  int _captureSegmentSequence = 0;
   bool _failed = false;
 
   @override
