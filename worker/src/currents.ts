@@ -7,6 +7,7 @@ import {
 } from "./crepus-safety";
 import { scanOnboardedUsers } from "./cron-cursor";
 import { refreshCurrents } from "./currents-refresh";
+import { RECEIPT_CLAIM_AUTH_MARKER } from "./auth";
 import { ensureMemoryProjected } from "./memory-projection";
 import { localClock } from "./digests";
 import type { AppEnv, Bindings } from "./types";
@@ -27,7 +28,10 @@ const unreportedOutcome = JSON.stringify({
 });
 
 currents.use("*", async (context, next) => {
-  await ensureMemoryProjected(context.env.DB, context.get("auth").uid);
+  const auth = context.get("auth");
+  if (auth.uid !== RECEIPT_CLAIM_AUTH_MARKER) {
+    await ensureMemoryProjected(context.env.DB, auth.uid);
+  }
   await next();
 });
 
@@ -137,7 +141,11 @@ const risk = (value: unknown) =>
 
 const contentKindFromAction = (action: Record<string, unknown>) => {
   const kind = action.kind;
-  if (kind === "agent_action" || kind === "human_action" || kind === "awareness")
+  if (
+    kind === "agent_action" ||
+    kind === "human_action" ||
+    kind === "awareness"
+  )
     return kind;
   return "human_action";
 };
@@ -148,39 +156,39 @@ const rowToCurrent = (row: Record<string, unknown>) => {
     unknown
   >;
   return {
-  id: String(row.id),
-  status: String(row.status),
-  title: String(row.title),
-  summary: String(row.summary),
-  evidence: [{ sourceId: String(row.source_id), reason: String(row.reason) }],
-  sourceKind: row.source_kind == null ? null : String(row.source_kind),
-  contentKind: contentKindFromAction(proposedAction),
-  reason: String(row.reason),
-  confidence: Number(row.confidence_basis_points) / 10_000,
-  proposedNextStep: String(row.instruction),
-  proposedAction,
-  timing: {
-    surfaceAt: new Date(Number(row.surface_at)).toISOString(),
-    expiresAt:
-      row.expires_at == null
-        ? null
-        : new Date(Number(row.expires_at)).toISOString(),
-    snoozedUntil:
-      row.snoozed_until == null
-        ? null
-        : new Date(Number(row.snoozed_until)).toISOString(),
-  },
-  feedbackReference:
-    row.feedback_reference == null ? null : String(row.feedback_reference),
-  executionReference:
-    row.execution_reference == null ? null : String(row.execution_reference),
-  createdAt: new Date(Number(row.created_at)).toISOString(),
-  updatedAt: new Date(Number(row.updated_at)).toISOString(),
-  // Surface the AI-authored .crepus source (if any) under metadata so the
-  // client can render it via the constrained crepuscularity_flutter renderer.
-  ...(sanitizeCrepus(row.crepus) === null
-    ? {}
-    : { metadata: { crepus: sanitizeCrepus(row.crepus) } }),
+    id: String(row.id),
+    status: String(row.status),
+    title: String(row.title),
+    summary: String(row.summary),
+    evidence: [{ sourceId: String(row.source_id), reason: String(row.reason) }],
+    sourceKind: row.source_kind == null ? null : String(row.source_kind),
+    contentKind: contentKindFromAction(proposedAction),
+    reason: String(row.reason),
+    confidence: Number(row.confidence_basis_points) / 10_000,
+    proposedNextStep: String(row.instruction),
+    proposedAction,
+    timing: {
+      surfaceAt: new Date(Number(row.surface_at)).toISOString(),
+      expiresAt:
+        row.expires_at == null
+          ? null
+          : new Date(Number(row.expires_at)).toISOString(),
+      snoozedUntil:
+        row.snoozed_until == null
+          ? null
+          : new Date(Number(row.snoozed_until)).toISOString(),
+    },
+    feedbackReference:
+      row.feedback_reference == null ? null : String(row.feedback_reference),
+    executionReference:
+      row.execution_reference == null ? null : String(row.execution_reference),
+    createdAt: new Date(Number(row.created_at)).toISOString(),
+    updatedAt: new Date(Number(row.updated_at)).toISOString(),
+    // Surface the AI-authored .crepus source (if any) under metadata so the
+    // client can render it via the constrained crepuscularity_flutter renderer.
+    ...(sanitizeCrepus(row.crepus) === null
+      ? {}
+      : { metadata: { crepus: sanitizeCrepus(row.crepus) } }),
   };
 };
 
@@ -774,8 +782,29 @@ currents.post("/executions/:id/approve", async (context) => {
 });
 
 currents.post("/executions/:id/receipts/:receiptId/claim", async (context) => {
-  const uid = context.get("auth").uid;
+  const auth = context.get("auth");
   const body = await object(context.req.raw);
+  const claimUid =
+    auth.uid === RECEIPT_CLAIM_AUTH_MARKER
+      ? (() => {
+          const authorization = context.req.header("authorization") ?? "";
+          const bearer = authorization.startsWith("Bearer ")
+            ? authorization.slice(7).trim()
+            : "";
+          const token = exactText(body?.receiptToken, 43);
+          if (
+            !token ||
+            !receiptTokenPattern.test(token) ||
+            bearer !== token ||
+            !body ||
+            typeof body.subject !== "string" ||
+            !body.subject.trim()
+          )
+            return null;
+          return body.subject.trim();
+        })()
+      : auth.uid;
+  if (!claimUid) return context.json({ error: "Authentication failed" }, 401);
   if (
     !body ||
     !onlyKeys(body, [
@@ -799,7 +828,7 @@ currents.post("/executions/:id/receipts/:receiptId/claim", async (context) => {
   if (
     !token ||
     !receiptTokenPattern.test(token) ||
-    subject !== uid ||
+    subject !== claimUid ||
     !operationId ||
     !proposalId ||
     !actionHash ||
@@ -827,7 +856,7 @@ currents.post("/executions/:id/receipts/:receiptId/claim", async (context) => {
     ).bind(
       now,
       id,
-      uid,
+      claimUid,
       receiptId,
       tokenHash,
       operationId,
@@ -844,7 +873,7 @@ currents.post("/executions/:id/receipts/:receiptId/claim", async (context) => {
          WHERE id = ?3 AND uid = ?2 AND state = 'outcome_unknown'
            AND outcome = ?4 AND receipt_claimed_at = ?1
        )`,
-    ).bind(now, uid, id, unreportedOutcome),
+    ).bind(now, claimUid, id, unreportedOutcome),
   ]);
   if (claimed.meta.changes !== 1)
     return context.json(
@@ -854,7 +883,7 @@ currents.post("/executions/:id/receipts/:receiptId/claim", async (context) => {
   const stored = await context.env.DB.prepare(
     "SELECT receipt_issued_at, receipt_expires_at FROM current_executions WHERE id = ?1 AND uid = ?2 AND receipt_claimed_at = ?3",
   )
-    .bind(id, uid, now)
+    .bind(id, claimUid, now)
     .first<{ receipt_issued_at: number; receipt_expires_at: number }>();
   if (!stored)
     return context.json({ error: "Claimed receipt could not be loaded" }, 500);
@@ -864,7 +893,7 @@ currents.post("/executions/:id/receipts/:receiptId/claim", async (context) => {
     receipt: {
       version: receiptVersion,
       receiptId,
-      subject: uid,
+      subject: claimUid,
       policyGeneration,
       operationId,
       proposalId,

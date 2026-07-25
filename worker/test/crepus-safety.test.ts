@@ -16,6 +16,7 @@ describe("crepus safety", () => {
     expect(isAllowedCrepusAction("open:https://example.com/path")).toBe(true);
     expect(isAllowedCrepusAction("exec:rm -rf /")).toBe(false);
     expect(isAllowedCrepusAction("open:file:///etc/passwd")).toBe(false);
+    expect(isAllowedCrepusAction("open:http://192.168.0.1/admin")).toBe(false);
   });
 
   test("rejects unknown action verbs in a source document", () => {

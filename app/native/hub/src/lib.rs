@@ -34,6 +34,7 @@ mod proactive_binds;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 pub mod rewind;
 mod runtime;
+mod runtime_capture;
 mod scan;
 mod self_improve;
 pub mod signals;
@@ -50,7 +51,7 @@ use transcription::AudioDispatcher;
 
 write_interface!();
 
-#[tokio::main(flavor = "current_thread")]
+#[tokio::main(flavor = "multi_thread", worker_threads = 4)]
 async fn main() {
     NativeEvent::RuntimeStatus(runtime_status(false)).send();
 

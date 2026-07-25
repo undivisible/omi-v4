@@ -7,6 +7,8 @@ use url::Url;
 
 pub const CREPUS_MAX_LEN: usize = 8000;
 
+pub const CREPUS_ACTION_PAYLOAD_MAX_LEN: usize = 2000;
+
 const CREPUS_IMAGE_URL_MAX_LEN: usize = 2000;
 
 const BLOCKED_IMAGE_HOSTS: &[&str] = &["localhost", "127.0.0.1", "0.0.0.0", "::1", "[::1]"];
@@ -68,19 +70,15 @@ pub fn is_allowed_crepus_action(action: &str) -> bool {
         return true;
     }
     if let Some(rest) = action.strip_prefix("prompt:") {
-        return !rest.trim().is_empty();
+        let payload = rest.trim();
+        return !payload.is_empty() && payload.len() <= CREPUS_ACTION_PAYLOAD_MAX_LEN;
     }
     if let Some(rest) = action.strip_prefix("compute:") {
-        return !rest.trim().is_empty();
+        let payload = rest.trim();
+        return !payload.is_empty() && payload.len() <= CREPUS_ACTION_PAYLOAD_MAX_LEN;
     }
     if let Some(rest) = action.strip_prefix("open:") {
-        return match Url::parse(rest.trim()) {
-            Ok(url) => {
-                (url.scheme() == "http" || url.scheme() == "https")
-                    && url.host_str().is_some_and(|host| !host.is_empty())
-            }
-            Err(_) => false,
-        };
+        return is_public_http_url(rest.trim());
     }
     false
 }
@@ -135,9 +133,8 @@ fn is_private_or_local_host(hostname: &str) -> bool {
     a == 192 && b == 168
 }
 
-/// A crepus `image`/`img` `src` must be a bounded, public `http(s)` URL that
-/// carries no userinfo.
-pub fn is_safe_crepus_image_url(url: &str) -> bool {
+/// Public `http(s)` URL with no credentials and no private-network hosts.
+pub fn is_public_http_url(url: &str) -> bool {
     if url.is_empty() || url.len() > CREPUS_IMAGE_URL_MAX_LEN {
         return false;
     }
@@ -157,6 +154,12 @@ pub fn is_safe_crepus_image_url(url: &str) -> bool {
         return false;
     }
     !is_private_or_local_host(host)
+}
+
+/// A crepus `image`/`img` `src` must be a bounded, public `http(s)` URL that
+/// carries no userinfo.
+pub fn is_safe_crepus_image_url(url: &str) -> bool {
+    is_public_http_url(url)
 }
 
 fn is_ident_byte(byte: u8) -> bool {
@@ -397,6 +400,8 @@ mod tests {
         for action in [
             "exec:rm -rf /",
             "open:file:///etc/passwd",
+            "open:http://127.0.0.1/admin",
+            "open:http://192.168.0.1/",
             "open:javascript:alert(1)",
             "prompt:",
             "compute:   ",

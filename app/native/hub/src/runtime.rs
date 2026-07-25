@@ -17,6 +17,7 @@ use crate::computer_use_tools::{
 use crate::hosted_search::{SearchBackend, dispatch as dispatch_hosted_search};
 use crate::live_voice::LiveFunctionCall;
 use crate::model_tier::{Capability, ModelTier};
+use crate::runtime_capture::capture_control;
 use crate::signals::{
     ActionProposal, ActionRisk, ApprovalDecision, ApprovalDecisionAcknowledgement, AssistantDelta,
     AssistantProvider as ProviderKind, BriefComposed, CaptureSource, ClientCommand, Command,
@@ -1465,7 +1466,7 @@ impl CommandDispatcher {
             // one.
             if let Some(control) = capture_control(&request_id, &command.command) {
                 let delivered = match &self.capture {
-                    Some(capture) => capture.send(control).await.is_ok(),
+                    Some(capture) => capture.try_send(control).is_ok(),
                     None => false,
                 };
                 if !delivered {
@@ -1843,90 +1844,6 @@ impl CommandDispatcher {
             )
             .await;
         }
-    }
-}
-
-/// Translates the capture half of the command surface into the control the
-/// log's own thread understands, or `None` when this command is not capture
-/// work. Kept out of the dispatch loop so the mapping — which is the whole
-/// contract between the client and the write-ahead log — reads in one place.
-fn capture_control(request_id: &str, command: &Command) -> Option<CaptureControl> {
-    match command {
-        Command::OpenCaptureWal {
-            directory,
-            max_bytes,
-            max_age_ms,
-            max_segment_bytes,
-        } => Some(CaptureControl::Open {
-            request_id: request_id.to_owned(),
-            directory: directory.clone(),
-            max_bytes: *max_bytes,
-            max_age_ms: *max_age_ms,
-            max_segment_bytes: *max_segment_bytes,
-        }),
-        Command::ConfigureCaptureUpload {
-            endpoint,
-            firebase_token,
-        } => Some(CaptureControl::ConfigureUpload {
-            endpoint: endpoint.clone(),
-            firebase_token: firebase_token.clone(),
-        }),
-        Command::BeginCaptureSegment {
-            device_id,
-            audio_stream_id,
-            encoding,
-            sample_rate_hz,
-            channels,
-            gap_before,
-        } => Some(CaptureControl::BeginSegment {
-            request_id: request_id.to_owned(),
-            device_id: device_id.clone(),
-            audio_stream_id: audio_stream_id.clone(),
-            encoding: *encoding,
-            sample_rate_hz: *sample_rate_hz,
-            channels: *channels,
-            gap_before: *gap_before,
-        }),
-        Command::AppendCaptureAudio { bytes } => Some(CaptureControl::Append {
-            request_id: request_id.to_owned(),
-            bytes: bytes.clone(),
-        }),
-        Command::SealCaptureSegment => Some(CaptureControl::Seal {
-            request_id: request_id.to_owned(),
-        }),
-        Command::DrainCaptureWal => Some(CaptureControl::Drain {
-            request_id: request_id.to_owned(),
-        }),
-        Command::ReadCaptureWalState => Some(CaptureControl::ReadState {
-            request_id: request_id.to_owned(),
-        }),
-        Command::CloseCaptureWal => Some(CaptureControl::Close {
-            request_id: request_id.to_owned(),
-        }),
-        Command::RecordCaptureGap {
-            device_id,
-            reason,
-            ended_at_ms,
-            ended_stream_id,
-        } => Some(CaptureControl::RecordGap {
-            device_id: device_id.clone(),
-            reason: reason.clone(),
-            ended_at_ms: *ended_at_ms,
-            ended_stream_id: ended_stream_id.clone(),
-        }),
-        Command::RecordCaptureResume {
-            device_id,
-            at_ms,
-            stream_id,
-        } => Some(CaptureControl::RecordResume {
-            device_id: device_id.clone(),
-            at_ms: *at_ms,
-            stream_id: stream_id.clone(),
-        }),
-        Command::ReadCaptureGaps => Some(CaptureControl::ReadGaps {
-            request_id: request_id.to_owned(),
-        }),
-        _ => None,
     }
 }
 
@@ -4478,8 +4395,6 @@ fn validate_computer_use_receipt(
             .receipt_token
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
-        && !receipt.firebase_token.trim().is_empty()
-        && receipt.firebase_token.len() <= 16 * 1024
 }
 
 async fn claim_computer_use_receipt(
@@ -4505,7 +4420,7 @@ async fn claim_computer_use_receipt(
     let risk = computer_use_risk_name(receipt.risk);
     let request = reqwest::Client::new()
         .post(endpoint)
-        .bearer_auth(&receipt.firebase_token)
+        .bearer_auth(&receipt.receipt_token)
         .json(&ApprovalReceiptClaim {
             receipt_token: &receipt.receipt_token,
             subject: &receipt.subject,

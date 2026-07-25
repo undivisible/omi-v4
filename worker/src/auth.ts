@@ -1,6 +1,9 @@
 import type { MiddlewareHandler } from "hono";
 import type { AppEnv, Auth } from "./types";
 
+export const RECEIPT_CLAIM_AUTH_MARKER = "__receipt_claim__";
+const receiptTokenPattern = /^[A-Za-z0-9_-]{43}$/;
+
 type FirebaseClaims = {
   aud?: unknown;
   email?: unknown;
@@ -112,6 +115,17 @@ export const requireAuth: MiddlewareHandler<AppEnv> = async (context, next) => {
     : "";
   if (!token || !context.env.FIREBASE_PROJECT_ID)
     return context.json({ error: "Authentication required" }, 401);
+  const path = context.req.path;
+  if (
+    receiptTokenPattern.test(token) &&
+    path.includes("/executions/") &&
+    path.includes("/receipts/") &&
+    path.endsWith("/claim")
+  ) {
+    context.set("auth", { uid: RECEIPT_CLAIM_AUTH_MARKER, email: null });
+    await next();
+    return;
+  }
   try {
     const auth = await verifyFirebaseToken(
       token,

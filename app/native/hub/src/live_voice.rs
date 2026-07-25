@@ -21,6 +21,7 @@ const GO_AWAY_DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_sec
 const MAX_TOKEN_BYTES: usize = 16 * 1024;
 const MAX_PENDING_AUDIO_BYTES: usize = 256 * 1024;
 const EVENT_QUEUE_CAPACITY: usize = 64;
+const AUDIO_CHANNEL_CAPACITY: usize = 64;
 const INPUT_SAMPLE_RATE_HZ: u32 = 16_000;
 const DEFAULT_OUTPUT_SAMPLE_RATE_HZ: u32 = 24_000;
 
@@ -85,8 +86,8 @@ pub(crate) enum LiveControl {
 }
 
 pub(crate) struct RealtimeVoiceHandle {
-    audio_sender: Option<mpsc::UnboundedSender<Vec<u8>>>,
-    control_sender: Option<mpsc::UnboundedSender<LiveControl>>,
+    audio_sender: Option<mpsc::Sender<Vec<u8>>>,
+    control_sender: Option<mpsc::Sender<LiveControl>>,
     pending_audio_bytes: Arc<AtomicUsize>,
     draining: Arc<AtomicBool>,
     events: Option<mpsc::Receiver<RealtimeVoiceEvent>>,
@@ -113,7 +114,7 @@ impl RealtimeVoiceHandle {
             return Err("live voice audio queue is full".to_owned());
         }
         let result = sender
-            .send(bytes.to_vec())
+            .try_send(bytes.to_vec())
             .map_err(|_| "live voice session is closed".to_owned());
         if result.is_err() {
             self.pending_audio_bytes
@@ -124,13 +125,13 @@ impl RealtimeVoiceHandle {
 
     pub(crate) fn finish(&self) {
         if let Some(sender) = &self.control_sender {
-            let _ = sender.send(LiveControl::Finish);
+            let _ = sender.try_send(LiveControl::Finish);
         }
     }
 
     pub(crate) fn cancel(&self) {
         if let Some(sender) = &self.control_sender {
-            let _ = sender.send(LiveControl::Cancel);
+            let _ = sender.try_send(LiveControl::Cancel);
         }
     }
 
@@ -139,7 +140,7 @@ impl RealtimeVoiceHandle {
             return;
         }
         if let Some(sender) = &self.control_sender {
-            let _ = sender.send(LiveControl::UpdateContext(text.to_owned()));
+            let _ = sender.try_send(LiveControl::UpdateContext(text.to_owned()));
         }
     }
 
@@ -153,8 +154,8 @@ impl RealtimeVoiceHandle {
     /// only ever come from `RealtimeVoiceProvider::open`.
     #[cfg(test)]
     pub(crate) fn from_parts(
-        audio_sender: mpsc::UnboundedSender<Vec<u8>>,
-        control_sender: mpsc::UnboundedSender<LiveControl>,
+        audio_sender: mpsc::Sender<Vec<u8>>,
+        control_sender: mpsc::Sender<LiveControl>,
         events: mpsc::Receiver<RealtimeVoiceEvent>,
     ) -> Self {
         Self {
@@ -567,8 +568,8 @@ impl RealtimeVoiceProvider for GeminiLiveProvider {
     fn open(&self, session: RealtimeVoiceSession) -> Result<RealtimeVoiceHandle, String> {
         validate_session(&session)?;
         let endpoint = live_endpoint(&session.ephemeral_token)?;
-        let (audio_sender, audio_receiver) = mpsc::unbounded_channel();
-        let (control_sender, control_receiver) = mpsc::unbounded_channel();
+        let (audio_sender, audio_receiver) = mpsc::channel(AUDIO_CHANNEL_CAPACITY);
+        let (control_sender, control_receiver) = mpsc::channel(AUDIO_CHANNEL_CAPACITY);
         let (event_sender, event_receiver) = mpsc::channel(EVENT_QUEUE_CAPACITY);
         let pending_audio_bytes = Arc::new(AtomicUsize::new(0));
         let draining = Arc::new(AtomicBool::new(false));
@@ -610,8 +611,8 @@ impl RealtimeVoiceProvider for GeminiLiveProvider {
 async fn run(
     session: RealtimeVoiceSession,
     endpoint: Url,
-    mut audio_receiver: mpsc::UnboundedReceiver<Vec<u8>>,
-    mut control_receiver: mpsc::UnboundedReceiver<LiveControl>,
+    mut audio_receiver: mpsc::Receiver<Vec<u8>>,
+    mut control_receiver: mpsc::Receiver<LiveControl>,
     events: mpsc::Sender<RealtimeVoiceEvent>,
     pending_audio_bytes: Arc<AtomicUsize>,
     draining_flag: Arc<AtomicBool>,
@@ -975,15 +976,15 @@ async fn dispatch_server_payload(
                 return DispatchOutcome::stopped();
             }
             for (sample_rate_hz, bytes) in audio {
-                if events
-                    .send(RealtimeVoiceEvent::AudioChunk {
-                        sample_rate_hz,
-                        bytes,
-                    })
-                    .await
-                    .is_err()
-                {
-                    return DispatchOutcome::stopped();
+                match events.try_send(RealtimeVoiceEvent::AudioChunk {
+                    sample_rate_hz,
+                    bytes,
+                }) {
+                    Ok(()) => {}
+                    Err(mpsc::error::TrySendError::Full(_)) => {}
+                    Err(mpsc::error::TrySendError::Closed(_)) => {
+                        return DispatchOutcome::stopped();
+                    }
                 }
             }
             if let Some(text) = transcript
@@ -1348,8 +1349,8 @@ mod tests {
 
     #[tokio::test]
     async fn update_context_sends_live_control_with_client_content_text() {
-        let (audio_tx, _audio_rx) = mpsc::unbounded_channel();
-        let (control_tx, mut control_rx) = mpsc::unbounded_channel();
+        let (audio_tx, _audio_rx) = mpsc::channel(8);
+        let (control_tx, mut control_rx) = mpsc::channel(8);
         let (_events_tx, events_rx) = mpsc::channel(4);
         let handle = RealtimeVoiceHandle::from_parts(audio_tx, control_tx, events_rx);
         handle.update_context("   ");
@@ -1374,7 +1375,7 @@ mod tests {
 
     #[test]
     fn audio_queue_is_bounded() {
-        let (audio_sender, mut audio_receiver) = mpsc::unbounded_channel();
+        let (audio_sender, mut audio_receiver) = mpsc::channel(8);
         let handle = RealtimeVoiceHandle {
             audio_sender: Some(audio_sender),
             control_sender: None,
@@ -1496,7 +1497,7 @@ mod tests {
 
     #[test]
     fn send_audio_is_rejected_once_the_session_is_draining() {
-        let (audio_sender, _audio_receiver) = mpsc::unbounded_channel();
+        let (audio_sender, _audio_receiver) = mpsc::channel(8);
         let handle = RealtimeVoiceHandle {
             audio_sender: Some(audio_sender),
             control_sender: None,

@@ -25,6 +25,8 @@ const DEEPGRAM_HOST: &str = "api.deepgram.com";
 const DEEPGRAM_PATH: &str = "/v1/listen";
 const MAX_CREDENTIAL_BYTES: usize = 16 * 1024;
 const MAX_PENDING_AUDIO_BYTES: usize = 64 * 1024;
+const AUDIO_CHANNEL_CAPACITY: usize = 64;
+const MAX_RECONNECT_BUFFER_BYTES: usize = 64 * 1024;
 const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(8);
 pub(crate) const FINAL_DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
 
@@ -211,8 +213,8 @@ pub(crate) async fn connect(
 }
 
 pub(crate) struct SttHandle {
-    audio_sender: Option<mpsc::UnboundedSender<Vec<u8>>>,
-    control_sender: Option<mpsc::UnboundedSender<SttControl>>,
+    audio_sender: Option<mpsc::Sender<Vec<u8>>>,
+    control_sender: Option<mpsc::Sender<SttControl>>,
     pending_audio_bytes: Arc<AtomicUsize>,
 }
 
@@ -244,7 +246,7 @@ impl SttHandle {
             }
         }
         let result = sender
-            .send(bytes.to_vec())
+            .try_send(bytes.to_vec())
             .map_err(|_| SttError::ConnectionFailed);
         if result.is_err() {
             self.pending_audio_bytes
@@ -255,13 +257,13 @@ impl SttHandle {
 
     pub(crate) fn finish(&self) {
         if let Some(sender) = &self.control_sender {
-            let _ = sender.send(SttControl::Finish);
+            let _ = sender.try_send(SttControl::Finish);
         }
     }
 
     pub(crate) fn cancel(&self) {
         if let Some(sender) = &self.control_sender {
-            let _ = sender.send(SttControl::Cancel);
+            let _ = sender.try_send(SttControl::Cancel);
         }
     }
 }
@@ -273,8 +275,8 @@ pub(crate) fn spawn(
     trusted_worker_origin: Option<&str>,
 ) -> Result<SttHandle, SttError> {
     let plan = ConnectionPlan::from_auth(auth, &config, trusted_worker_origin)?;
-    let (audio_sender, audio_receiver) = mpsc::unbounded_channel();
-    let (control_sender, control_receiver) = mpsc::unbounded_channel();
+    let (audio_sender, audio_receiver) = mpsc::channel(AUDIO_CHANNEL_CAPACITY);
+    let (control_sender, control_receiver) = mpsc::channel(AUDIO_CHANNEL_CAPACITY);
     let pending_audio_bytes = Arc::new(AtomicUsize::new(0));
     tokio::spawn(run(
         config,
@@ -303,12 +305,50 @@ pub(crate) fn spawn(
     })
 }
 
+#[derive(Default)]
+struct ReconnectAudioBuffer {
+    frames: Vec<Vec<u8>>,
+    bytes: usize,
+}
+
+impl ReconnectAudioBuffer {
+    fn stash(&mut self, frame: Vec<u8>, pending_audio_bytes: &AtomicUsize) {
+        let len = frame.len();
+        while self.bytes.saturating_add(len) > MAX_RECONNECT_BUFFER_BYTES && !self.frames.is_empty() {
+            if let Some(old) = self.frames.first() {
+                self.bytes -= old.len();
+                self.frames.remove(0);
+            }
+        }
+        if self.bytes.saturating_add(len) <= MAX_RECONNECT_BUFFER_BYTES {
+            self.bytes += len;
+            self.frames.push(frame);
+        }
+        pending_audio_bytes.fetch_sub(len, Ordering::AcqRel);
+    }
+
+    async fn flush(
+        &mut self,
+        socket: &mut WebSocketStream<MaybeTlsStream<TcpStream>>,
+        encoding: AudioEncoding,
+    ) -> bool {
+        while let Some(bytes) = self.frames.pop() {
+            self.bytes -= bytes.len();
+            let encoded = encode_audio(&bytes, encoding);
+            if socket.send(Message::Binary(encoded.into())).await.is_err() {
+                return false;
+            }
+        }
+        true
+    }
+}
+
 #[cfg_attr(test, allow(dead_code))]
 async fn run(
     config: SttConfig,
     plan: ConnectionPlan,
-    mut audio_receiver: mpsc::UnboundedReceiver<Vec<u8>>,
-    mut control_receiver: mpsc::UnboundedReceiver<SttControl>,
+    mut audio_receiver: mpsc::Receiver<Vec<u8>>,
+    mut control_receiver: mpsc::Receiver<SttControl>,
     pending_audio_bytes: Arc<AtomicUsize>,
 ) {
     let connection = connect(&plan);
@@ -347,6 +387,7 @@ async fn run(
         stt_epoch: 0,
     })
     .send();
+    let mut reconnect_buffer = ReconnectAudioBuffer::default();
     loop {
         tokio::select! {
             biased;
@@ -420,8 +461,22 @@ async fn run(
                     &mut audio_receiver,
                     &mut control_receiver,
                     &pending_audio_bytes,
+                    &mut reconnect_buffer,
                 ).await {
-                    Some(reconnected) => socket = reconnected,
+                    Some(reconnected) => {
+                        socket = reconnected;
+                        if !reconnect_buffer.flush(&mut socket, config.encoding).await {
+                            let now = unix_time_ms();
+                            NativeEvent::TranscriptGap(state.reconnect_gap(now, now)).send();
+                            terminal_error(
+                                &config,
+                                "transcription_connection_lost",
+                                "transcription provider connection was lost while replaying buffered audio",
+                                state.epoch,
+                            );
+                            return;
+                        }
+                    }
                     None => return,
                 },
                 Some(Err(_)) => match recover(
@@ -431,8 +486,22 @@ async fn run(
                     &mut audio_receiver,
                     &mut control_receiver,
                     &pending_audio_bytes,
+                    &mut reconnect_buffer,
                 ).await {
-                    Some(reconnected) => socket = reconnected,
+                    Some(reconnected) => {
+                        socket = reconnected;
+                        if !reconnect_buffer.flush(&mut socket, config.encoding).await {
+                            let now = unix_time_ms();
+                            NativeEvent::TranscriptGap(state.reconnect_gap(now, now)).send();
+                            terminal_error(
+                                &config,
+                                "transcription_connection_lost",
+                                "transcription provider connection was lost while replaying buffered audio",
+                                state.epoch,
+                            );
+                            return;
+                        }
+                    }
                     None => return,
                 },
                 Some(Ok(_)) => {}
@@ -476,9 +545,10 @@ async fn recover(
     config: &SttConfig,
     plan: &ConnectionPlan,
     state: &mut TranscriptState,
-    audio_receiver: &mut mpsc::UnboundedReceiver<Vec<u8>>,
-    control_receiver: &mut mpsc::UnboundedReceiver<SttControl>,
+    audio_receiver: &mut mpsc::Receiver<Vec<u8>>,
+    control_receiver: &mut mpsc::Receiver<SttControl>,
     pending_audio_bytes: &AtomicUsize,
+    reconnect_buffer: &mut ReconnectAudioBuffer,
 ) -> Option<WebSocketStream<MaybeTlsStream<TcpStream>>> {
     let disconnected_at = unix_time_ms();
     if !plan.reconnectable {
@@ -505,6 +575,7 @@ async fn recover(
             audio_receiver,
             control_receiver,
             pending_audio_bytes,
+            reconnect_buffer,
             delay_ms,
         )
         .await?;
@@ -519,7 +590,7 @@ async fn recover(
                 }
                 audio = audio_receiver.recv() => {
                     if let Some(bytes) = audio {
-                        pending_audio_bytes.fetch_sub(bytes.len(), Ordering::AcqRel);
+                        reconnect_buffer.stash(bytes, pending_audio_bytes);
                     }
                 }
                 result = &mut connection => break result.ok(),
@@ -550,9 +621,10 @@ async fn recover(
 async fn recovery_delay(
     config: &SttConfig,
     state: &mut TranscriptState,
-    audio_receiver: &mut mpsc::UnboundedReceiver<Vec<u8>>,
-    control_receiver: &mut mpsc::UnboundedReceiver<SttControl>,
+    audio_receiver: &mut mpsc::Receiver<Vec<u8>>,
+    control_receiver: &mut mpsc::Receiver<SttControl>,
     pending_audio_bytes: &AtomicUsize,
+    reconnect_buffer: &mut ReconnectAudioBuffer,
     delay_ms: u64,
 ) -> Option<()> {
     let delay = tokio::time::sleep(std::time::Duration::from_millis(delay_ms));
@@ -566,7 +638,7 @@ async fn recovery_delay(
             }
             audio = audio_receiver.recv() => {
                 if let Some(bytes) = audio {
-                    pending_audio_bytes.fetch_sub(bytes.len(), Ordering::AcqRel);
+                    reconnect_buffer.stash(bytes, pending_audio_bytes);
                 }
             }
             () = &mut delay => return Some(()),
@@ -1001,8 +1073,8 @@ mod tests {
 
     #[test]
     fn terminal_control_is_independent_from_bounded_audio() {
-        let (audio_sender, mut audio_receiver) = mpsc::unbounded_channel();
-        let (control_sender, mut control_receiver) = mpsc::unbounded_channel();
+        let (audio_sender, mut audio_receiver) = mpsc::channel(AUDIO_CHANNEL_CAPACITY);
+        let (control_sender, mut control_receiver) = mpsc::channel(AUDIO_CHANNEL_CAPACITY);
         let handle = SttHandle {
             audio_sender: Some(audio_sender),
             control_sender: Some(control_sender),

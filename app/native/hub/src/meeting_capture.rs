@@ -434,7 +434,19 @@ mod platform {
         if std::fs::create_dir(&dir).is_ok() {
             restrict_directory_permissions(&dir);
         }
-        dir.join("capture.wav")
+        let path = dir.join("capture.wav");
+        #[cfg(unix)]
+        {
+            use std::fs::OpenOptions;
+            use std::os::unix::fs::OpenOptionsExt;
+            let _ = OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(true)
+                .mode(0o600)
+                .open(&path);
+        }
+        path
     }
 
     #[cfg(unix)]

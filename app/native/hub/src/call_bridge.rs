@@ -293,16 +293,16 @@ mod tests {
 
     struct Rig {
         handle: Option<RealtimeVoiceHandle>,
-        upstream_audio: mpsc::UnboundedReceiver<Vec<u8>>,
-        control: mpsc::UnboundedReceiver<LiveControl>,
+        upstream_audio: mpsc::Receiver<Vec<u8>>,
+        control: mpsc::Receiver<LiveControl>,
         events: mpsc::Sender<RealtimeVoiceEvent>,
         caller: mpsc::Sender<Vec<u8>>,
         caller_rx: Option<mpsc::Receiver<Vec<u8>>>,
     }
 
     fn rig() -> Rig {
-        let (audio_tx, upstream_audio) = mpsc::unbounded_channel();
-        let (control_tx, control) = mpsc::unbounded_channel();
+        let (audio_tx, upstream_audio) = mpsc::channel(8);
+        let (control_tx, control) = mpsc::channel(8);
         let (events, events_rx) = mpsc::channel(64);
         let (caller, caller_rx) = mpsc::channel(64);
         Rig {

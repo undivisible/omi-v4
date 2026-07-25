@@ -2275,9 +2275,39 @@ const UNREPORTED_OUTCOME: &str =
 async fn handle_receipt_claim(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
     let auth = authed!(req, ctx);
     let db = ctx.env.d1("DB")?;
-    ensure_projected(&db, &auth.uid).await?;
     let body = json_object(&mut req).await;
-    let input = match validate_receipt_claim(body.as_ref(), &auth.uid) {
+    let claim_uid = if auth.uid == crate::glue::RECEIPT_CLAIM_AUTH_MARKER {
+        let authorization = req
+            .headers()
+            .get("authorization")
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        let bearer = crate::auth::bearer_token(&authorization).unwrap_or_default();
+        let object = body
+            .as_ref()
+            .and_then(Value::as_object)
+            .ok_or_else(|| error_json("Invalid receipt claim", 400))?;
+        let token = object
+            .get("receiptToken")
+            .and_then(Value::as_str)
+            .filter(|value| routes_memory::is_receipt_token(value))
+            .ok_or_else(|| error_json("Invalid receipt claim", 400))?;
+        if bearer != token {
+            return error_json("Authentication failed", 401);
+        }
+        object
+            .get("subject")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| error_json("Invalid receipt claim", 400))?
+            .to_string()
+    } else {
+        auth.uid.clone()
+    };
+    ensure_projected(&db, &claim_uid).await?;
+    let input = match validate_receipt_claim(body.as_ref(), &claim_uid) {
         Ok(input) => input,
         Err(message) => return error_json(message, 400),
     };
@@ -2293,7 +2323,7 @@ async fn handle_receipt_claim(mut req: Request, ctx: RouteContext<()>) -> Result
                 &[
                     n(now),
                     s(&id),
-                    s(&auth.uid),
+                    s(&claim_uid),
                     s(&receipt_id),
                     s(&token_hash),
                     s(&input.operation_id),
@@ -2307,7 +2337,7 @@ async fn handle_receipt_claim(mut req: Request, ctx: RouteContext<()>) -> Result
             stmt(
                 &db,
                 "UPDATE currents SET status = 'expired', updated_at = ?1\n       WHERE uid = ?2 AND status = 'accepted' AND id = (\n         SELECT current_id FROM current_executions\n         WHERE id = ?3 AND uid = ?2 AND state = 'outcome_unknown'\n           AND outcome = ?4 AND receipt_claimed_at = ?1\n       )",
-                &[n(now), s(&auth.uid), s(&id), s(UNREPORTED_OUTCOME)],
+                &[n(now), s(&claim_uid), s(&id), s(UNREPORTED_OUTCOME)],
             )?,
         ])
         .await?;
@@ -2317,7 +2347,7 @@ async fn handle_receipt_claim(mut req: Request, ctx: RouteContext<()>) -> Result
     let stored = d1_first(
         &db,
         "SELECT receipt_issued_at, receipt_expires_at FROM current_executions WHERE id = ?1 AND uid = ?2 AND receipt_claimed_at = ?3",
-        &[s(&id), s(&auth.uid), n(now)],
+        &[s(&id), s(&claim_uid), n(now)],
     )
     .await?;
     let Some(stored) = stored else {
@@ -2329,7 +2359,7 @@ async fn handle_receipt_claim(mut req: Request, ctx: RouteContext<()>) -> Result
         "receipt": {
             "version": RECEIPT_VERSION,
             "receiptId": receipt_id,
-            "subject": auth.uid,
+            "subject": claim_uid,
             "policyGeneration": input.policy_generation,
             "operationId": input.operation_id,
             "proposalId": input.proposal_id,

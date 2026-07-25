@@ -4,6 +4,8 @@ import 'package:crepuscularity_flutter/crepuscularity_flutter.dart';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import 'crepus_url_policy.dart';
+
 /// Reads an optional AI-authored `.crepus` widget description from a current's
 /// metadata. The model emits a constrained `.crepus` string; the
 /// `crepuscularity_flutter` package parses and renders it. Absent or blank →
@@ -88,15 +90,14 @@ Future<void> dispatchCrepusAction(
   const promptPrefix = 'prompt:';
   if (action.startsWith(promptPrefix)) {
     final text = action.substring(promptPrefix.length).trim();
-    // No draft sink means no way to show the text first, so the action is
-    // dropped rather than sent behind the user's back.
-    if (text.isNotEmpty) onDraftPrompt?.call(text);
+    if (text.isEmpty || text.length > 2000) return;
+    onDraftPrompt?.call(text);
     return;
   }
   const computePrefix = 'compute:';
   if (action.startsWith(computePrefix)) {
     final text = action.substring(computePrefix.length).trim();
-    if (text.isEmpty) return;
+    if (text.isEmpty || text.length > 2000) return;
     if (!await confirmCrepusCompute(context, text)) return;
     onPrompt(text);
     return;
@@ -104,9 +105,7 @@ Future<void> dispatchCrepusAction(
   const openPrefix = 'open:';
   if (action.startsWith(openPrefix)) {
     final uri = Uri.tryParse(action.substring(openPrefix.length).trim());
-    // Same URL safety as the rest of the app: external http(s) links only.
-    if (uri == null || (uri.scheme != 'https' && uri.scheme != 'http')) return;
-    if (uri.host.isEmpty) return;
+    if (uri == null || !isPublicHttpUri(uri)) return;
     if (!await confirmCrepusOpen(context, uri)) return;
     unawaited(launchUrl(uri, mode: LaunchMode.externalApplication));
     return;

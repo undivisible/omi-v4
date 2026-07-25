@@ -4,6 +4,8 @@
 
 export const crepusMaxLen = 8000;
 
+export const crepusActionPayloadMaxLen = 2000;
+
 const crepusImageUrlMaxLen = 2000;
 
 const blockedImageHosts = new Set([
@@ -48,22 +50,22 @@ const decodeCrepusValue = (
 export const isAllowedCrepusAction = (action: string): boolean => {
   if (action === "complete" || action === "accept") return true;
   const promptPrefix = "prompt:";
-  if (action.startsWith(promptPrefix))
-    return action.slice(promptPrefix.length).trim().length > 0;
+  if (action.startsWith(promptPrefix)) {
+    const payload = action.slice(promptPrefix.length).trim();
+    return (
+      payload.length > 0 && payload.length <= crepusActionPayloadMaxLen
+    );
+  }
   const computePrefix = "compute:";
-  if (action.startsWith(computePrefix))
-    return action.slice(computePrefix.length).trim().length > 0;
+  if (action.startsWith(computePrefix)) {
+    const payload = action.slice(computePrefix.length).trim();
+    return (
+      payload.length > 0 && payload.length <= crepusActionPayloadMaxLen
+    );
+  }
   const openPrefix = "open:";
   if (action.startsWith(openPrefix)) {
-    try {
-      const url = new URL(action.slice(openPrefix.length).trim());
-      return (
-        (url.protocol === "http:" || url.protocol === "https:") &&
-        url.hostname.length > 0
-      );
-    } catch {
-      return false;
-    }
+    return isPublicHttpUrl(action.slice(openPrefix.length).trim());
   }
   return false;
 };
@@ -91,7 +93,7 @@ const isPrivateOrLocalHost = (hostname: string): boolean => {
   return false;
 };
 
-export const isSafeCrepusImageUrl = (url: string): boolean => {
+export const isPublicHttpUrl = (url: string): boolean => {
   if (url.length === 0 || url.length > crepusImageUrlMaxLen) return false;
   let parsed: URL;
   try {
@@ -104,6 +106,9 @@ export const isSafeCrepusImageUrl = (url: string): boolean => {
   if (parsed.hostname.length === 0) return false;
   return !isPrivateOrLocalHost(parsed.hostname);
 };
+
+export const isSafeCrepusImageUrl = (url: string): boolean =>
+  isPublicHttpUrl(url);
 
 export const findDisallowedCrepusAction = (source: string): string | null => {
   for (const match of source.matchAll(crepusEventPattern)) {

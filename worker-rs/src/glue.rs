@@ -23,6 +23,8 @@ use crate::{billing, conversations as conv, crypto_util, desktop_auth, webhooks 
 const JWKS_URL: &str =
     "https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com";
 
+pub(crate) const RECEIPT_CLAIM_AUTH_MARKER: &str = "__receipt_claim__";
+
 thread_local! {
     // Per-isolate JWKS cache: (expires_at_ms, keys). Mirrors the module-level
     // `keys` cache in auth.ts.
@@ -235,6 +237,18 @@ pub(crate) async fn authenticate(req: &Request, ctx: &RouteContext<()>) -> AuthO
     };
     if project_id.is_empty() {
         return reject("Authentication required", 401);
+    }
+
+    let path = req.path();
+    if crate::routes_memory::is_receipt_token(&token)
+        && path.contains("/executions/")
+        && path.contains("/receipts/")
+        && path.ends_with("/claim")
+    {
+        return AuthOutcome::Ok(Auth {
+            uid: RECEIPT_CLAIM_AUTH_MARKER.to_string(),
+            email: None,
+        });
     }
 
     let keys = match firebase_keys().await {
