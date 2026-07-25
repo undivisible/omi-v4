@@ -15,7 +15,7 @@
          for the low-battery / capture-stopped alerts. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <application
-        android:label="omi"
+        android:label="Omi R4"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity
