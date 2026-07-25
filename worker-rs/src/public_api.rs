@@ -310,6 +310,46 @@ pub fn facetime_result(
     }
 }
 
+pub fn facetime_session_result(
+    outcome: crate::facetime::FaceTimeSessionOutcome,
+    app_url: Option<&str>,
+) -> OperationResult {
+    use crate::facetime::FaceTimeSessionOutcome as Outcome;
+    match outcome {
+        Outcome::Ok { handle, session_id } => OperationResult::new(
+            201,
+            json!({
+                "call": {
+                    "handle": handle,
+                    "sessionId": session_id,
+                    "link": crate::facetime::session_link(app_url, &session_id),
+                },
+            }),
+        ),
+        Outcome::Unavailable => OperationResult::new(
+            503,
+            json!({
+                "error": "FaceTime calling is not provisioned on this account",
+                "code": "facetime_unavailable",
+            }),
+        ),
+        Outcome::Unconfigured => {
+            OperationResult::new(503, json!({ "error": "FaceTime calling unavailable" }))
+        }
+        Outcome::Rejected { .. } => {
+            OperationResult::new(400, json!({ "error": "Handle rejected by provider" }))
+        }
+        Outcome::Capacity { retry_after } => OperationResult {
+            status: 429,
+            body: json!({ "error": "FaceTime capacity exceeded" }),
+            retry_after: Some(retry_after),
+        },
+        Outcome::Failed => {
+            OperationResult::new(502, json!({ "error": "FaceTime calling unavailable" }))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -527,6 +567,12 @@ mod tests {
             facetime_result(FaceTimeOutcome::Failed, "abc", None).status,
             502
         );
+        let capacity = facetime_session_result(
+            crate::facetime::FaceTimeSessionOutcome::Capacity { retry_after: 60 },
+            None,
+        );
+        assert_eq!(capacity.status, 429);
+        assert_eq!(capacity.retry_after, Some(60));
     }
 
     #[test]

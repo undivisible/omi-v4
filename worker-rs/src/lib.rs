@@ -10,8 +10,8 @@ pub mod byok_pricing;
 pub mod channel_checkout;
 pub mod channel_commands;
 pub mod channel_group;
-pub mod channel_signup;
 pub mod channel_link;
+pub mod channel_signup;
 pub mod channel_style;
 pub mod conversations;
 pub mod crepus_safety;
@@ -65,6 +65,8 @@ mod routes_ai;
 mod routes_channels;
 #[cfg(target_arch = "wasm32")]
 mod routes_device;
+#[cfg(target_arch = "wasm32")]
+mod routes_facetime;
 #[cfg(target_arch = "wasm32")]
 mod routes_keys;
 #[cfg(target_arch = "wasm32")]

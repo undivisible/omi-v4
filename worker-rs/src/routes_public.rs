@@ -9,7 +9,8 @@
 //! per uid.
 
 use serde_json::{json, Value};
-use worker::{Headers, Request, Response, Result, RouteContext, Router};
+use worker::wasm_bindgen::JsValue;
+use worker::{Headers, Method, Request, RequestInit, Response, Result, RouteContext, Router, Stub};
 
 use crate::glue::{error_json, ConvMessage};
 use crate::mcp;
@@ -18,6 +19,7 @@ use crate::routes_ai::consume_rate_limit;
 use crate::routes_keys::{require_api_access, require_scope, ApiAuth};
 use crate::routes_memory::wasm_glue as memory;
 use crate::worker_util::{now_ms, uuid_v4};
+use crate::{managed_ai, speech};
 
 /// Register the public API and MCP routes on the shared glue router.
 pub fn register(router: Router<'static, ()>) -> Router<'static, ()> {
@@ -33,10 +35,488 @@ pub fn register(router: Router<'static, ()>) -> Router<'static, ()> {
         )
         .get_async("/api/v1/notes", handle_notes)
         .post_async("/api/v1/assistant/messages", handle_assistant_messages)
+        .post_async(
+            "/api/v1/speech/transcriptions",
+            handle_speech_transcriptions,
+        )
+        .post_async("/api/v1/speech/synthesis", handle_speech_synthesis)
         .post_async("/api/v1/facetime/calls", handle_facetime_calls)
         .post_async("/mcp", handle_mcp_post)
         .get_async("/mcp", handle_mcp_get)
         .delete_async("/mcp", handle_mcp_delete)
+}
+
+async fn do_post(stub: &Stub, url: &str, payload: &Value) -> Result<Response> {
+    let mut init = RequestInit::new();
+    init.with_method(Method::Post);
+    let headers = Headers::new();
+    headers.set("content-type", "application/json")?;
+    init.with_headers(headers);
+    init.with_body(Some(JsValue::from_str(&payload.to_string())));
+    stub.fetch_with_request(Request::new_with_init(url, &init)?)
+        .await
+}
+
+fn speech_unavailable() -> OperationResult {
+    OperationResult::new(503, json!({ "error": "Managed speech unavailable" }))
+}
+
+struct SpeechReservation {
+    stub: Stub,
+    token: String,
+}
+
+async fn release_speech(reservation: &SpeechReservation, request_id: &str, uid: &str) {
+    let _ = do_post(
+        &reservation.stub,
+        "https://stt-admission.internal/release",
+        &json!({ "sessionId": request_id, "uid": uid, "acquisitionToken": reservation.token }),
+    )
+    .await;
+}
+
+async fn admit_speech(
+    stub: &Stub,
+    request_id: &str,
+    uid: &str,
+    reserved_seconds: i64,
+    estimated_cost: i64,
+) -> std::result::Result<(String, bool), OperationResult> {
+    let mut response = do_post(
+        stub,
+        "https://stt-admission.internal/admit",
+        &json!({
+            "sessionId": request_id, "uid": uid, "reservedSeconds": reserved_seconds,
+            "costBudgetMicrousd": estimated_cost,
+        }),
+    )
+    .await
+    .map_err(|_| speech_unavailable())?;
+    if response.status_code() >= 300 {
+        let retry_after = response
+            .headers()
+            .get("retry-after")
+            .ok()
+            .flatten()
+            .and_then(|v| v.parse().ok());
+        return Err(OperationResult {
+            status: 429,
+            body: json!({ "error": "Managed speech capacity exceeded" }),
+            retry_after,
+        });
+    }
+    let body = response
+        .json::<Value>()
+        .await
+        .map_err(|_| speech_unavailable())?;
+    let token = body
+        .get("acquisitionToken")
+        .and_then(Value::as_str)
+        .filter(|v| v.len() >= 16)
+        .ok_or_else(speech_unavailable)?
+        .to_string();
+    if body.get("admitted").and_then(Value::as_bool) != Some(true) {
+        return Err(speech_unavailable());
+    }
+    Ok((
+        token,
+        body.get("duplicate").and_then(Value::as_bool) != Some(true)
+            || body.get("reacquired").and_then(Value::as_bool) == Some(true),
+    ))
+}
+
+async fn reserve_speech(
+    ctx: &RouteContext<()>,
+    uid: &str,
+    kind: speech::SpeechKind,
+    client_message_id: &str,
+    model: &str,
+    request_hash: &str,
+    reserved_seconds: i64,
+    estimated_cost: i64,
+    request_id: &str,
+) -> std::result::Result<SpeechReservation, OperationResult> {
+    let db = ctx.env.d1("DB").map_err(|_| speech_unavailable())?;
+    let existing = db
+        .prepare("SELECT status, request_hash, result, updated_at FROM managed_speech_requests WHERE uid = ?1 AND kind = ?2 AND client_message_id = ?3")
+        .bind(&[uid.into(), kind.slug().into(), client_message_id.into()])
+        .map_err(|_| speech_unavailable())?
+        .first::<Value>(None)
+        .await
+        .map_err(|_| speech_unavailable())?;
+    let existing_ref = existing.as_ref().map(|row| {
+        (
+            row.get("status")
+                .and_then(Value::as_str)
+                .unwrap_or_default(),
+            row.get("request_hash")
+                .and_then(Value::as_str)
+                .unwrap_or_default(),
+            row.get("result").and_then(Value::as_str),
+            row.get("updated_at")
+                .and_then(crate::glue::json_to_i64)
+                .unwrap_or(0),
+        )
+    });
+    let now = now_ms();
+    let reclaims = match speech::decide_reservation(
+        existing_ref,
+        request_hash,
+        speech::stale_started_window_ms(
+            crate::worker_util::secret_or_var(&ctx.env, "SPEECH_UPSTREAM_TIMEOUT_MS").as_deref(),
+        ),
+        now,
+    ) {
+        speech::ReservationDecision::Replay(body) => {
+            return Err(OperationResult::new(200, Value::Object(body)))
+        }
+        speech::ReservationDecision::Refuse(result) => return Err(result),
+        speech::ReservationDecision::Fresh { reclaims } => reclaims,
+    };
+    let stub = ctx
+        .env
+        .durable_object("STT_ADMISSION")
+        .map_err(|_| speech_unavailable())?
+        .get_by_name("managed-stt-global")
+        .map_err(|_| speech_unavailable())?;
+    let (mut token, mut owns) =
+        admit_speech(&stub, request_id, uid, reserved_seconds, estimated_cost).await?;
+    if !owns && reclaims {
+        let _ = do_post(
+            &stub,
+            "https://stt-admission.internal/release",
+            &json!({ "sessionId": request_id, "uid": uid, "acquisitionToken": token }),
+        )
+        .await;
+        (token, owns) =
+            admit_speech(&stub, request_id, uid, reserved_seconds, estimated_cost).await?;
+    }
+    if !owns {
+        return Err(OperationResult::new(
+            409,
+            json!({ "error": "Speech request in progress" }),
+        ));
+    }
+    let reservation = SpeechReservation { stub, token };
+    let changed = db.prepare("INSERT INTO managed_speech_requests (id, uid, client_message_id, kind, model, status, request_hash, reserved_seconds, estimated_cost_microusd, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, 'started', ?6, ?7, ?8, ?9, ?9) ON CONFLICT(uid, kind, client_message_id) DO UPDATE SET status = 'started', model = excluded.model, updated_at = excluded.updated_at, result = NULL, upstream_status = NULL, completed_at = NULL WHERE managed_speech_requests.status = 'failed' OR (?10 = 1 AND managed_speech_requests.updated_at = ?11)")
+        .bind(&[request_id.into(), uid.into(), client_message_id.into(), kind.slug().into(), model.into(), request_hash.into(), (reserved_seconds as f64).into(), (estimated_cost as f64).into(), (now as f64).into(), if reclaims { 1.0.into() } else { 0.0.into() }, (existing_ref.map(|row| row.3).unwrap_or(0) as f64).into()])
+        .map_err(|_| speech_unavailable())?.run().await.map_err(|_| speech_unavailable())?;
+    if crate::worker_util::changes(&changed) != 1 {
+        release_speech(&reservation, request_id, uid).await;
+        return Err(OperationResult::new(
+            409,
+            json!({ "error": "Speech request in progress" }),
+        ));
+    }
+    let claim = do_post(
+        &reservation.stub,
+        "https://stt-admission.internal/claim",
+        &json!({ "sessionId": request_id, "uid": uid, "acquisitionToken": reservation.token }),
+    )
+    .await;
+    if !claim
+        .map(|response| response.status_code() < 300)
+        .unwrap_or(false)
+    {
+        release_speech(&reservation, request_id, uid).await;
+        return Err(OperationResult::new(
+            409,
+            json!({ "error": "Speech request in progress" }),
+        ));
+    }
+    Ok(reservation)
+}
+
+async fn settle_speech(
+    ctx: &RouteContext<()>,
+    reservation: &SpeechReservation,
+    uid: &str,
+    request_id: &str,
+    status: &str,
+    upstream_status: Option<u16>,
+    result: Option<&Value>,
+) {
+    if let Ok(db) = ctx.env.d1("DB") {
+        let statement = db.prepare("UPDATE managed_speech_requests SET status = ?1, upstream_status = ?2, result = ?3, completed_at = ?4, updated_at = ?4 WHERE id = ?5 AND uid = ?6");
+        if let Ok(statement) = statement.bind(&[
+            status.into(),
+            upstream_status
+                .map(|value| (value as f64).into())
+                .unwrap_or(JsValue::NULL),
+            result
+                .map(|value| value.to_string().into())
+                .unwrap_or(JsValue::NULL),
+            (now_ms() as f64).into(),
+            request_id.into(),
+            uid.into(),
+        ]) {
+            let _ = statement.run().await;
+        }
+    }
+    release_speech(reservation, request_id, uid).await;
+}
+
+async fn call_speech_upstream(
+    ctx: &RouteContext<()>,
+    payload: &Value,
+) -> std::result::Result<(Value, u16), Option<u16>> {
+    let secret = crate::worker_util::secret_or_var(&ctx.env, "OPENROUTER_API_KEY")
+        .or_else(|| crate::worker_util::secret_or_var(&ctx.env, "MIMO_API_KEY"))
+        .filter(|value| !value.trim().is_empty())
+        .ok_or(None)?;
+    let gateway =
+        managed_ai::ai_gateway_route(|name| crate::worker_util::secret_or_var(&ctx.env, name));
+    let endpoint = match &gateway {
+        Some(route) => route.url.clone(),
+        None => crate::worker_util::secret_or_var(&ctx.env, "OPENROUTER_CHAT_COMPLETIONS_URL")
+            .unwrap_or_else(|| speech::OPENROUTER_COMPLETION_ENDPOINT.into()),
+    };
+    if url::Url::parse(&endpoint)
+        .ok()
+        .filter(|url| url.scheme() == "https")
+        .is_none()
+    {
+        return Err(None);
+    }
+    let mut init = RequestInit::new();
+    init.with_method(Method::Post);
+    let headers = Headers::new();
+    headers
+        .set("authorization", &format!("Bearer {secret}"))
+        .map_err(|_| None)?;
+    headers
+        .set("content-type", "application/json")
+        .map_err(|_| None)?;
+    if let Some(token) = gateway.and_then(|route| route.token) {
+        headers
+            .set("cf-aig-authorization", &format!("Bearer {token}"))
+            .map_err(|_| None)?;
+    }
+    init.with_headers(headers);
+    init.with_body(Some(JsValue::from_str(&payload.to_string())));
+    let request = Request::new_with_init(&endpoint, &init).map_err(|_| None)?;
+    let mut response = worker::Fetch::Request(request)
+        .send()
+        .await
+        .map_err(|_| None)?;
+    let status = response.status_code();
+    if status >= 300 {
+        return Err(Some(status));
+    }
+    response
+        .json::<Value>()
+        .await
+        .map(|body| (body, status))
+        .map_err(|_| Some(status))
+}
+
+pub(crate) async fn transcribe_audio_operation(
+    ctx: &RouteContext<()>,
+    uid: &str,
+    input: &Value,
+) -> OperationResult {
+    let plan = match speech::plan_transcription(
+        |name| crate::worker_util::secret_or_var(&ctx.env, name),
+        uid,
+        input,
+        speech::default_transcribe_preference(),
+    ) {
+        Ok(plan) => plan,
+        Err(result) => return result,
+    };
+    if let Some(limited) = gate(
+        ctx,
+        uid,
+        &Budget {
+            bucket: "public-transcribe",
+            limit: speech::TRANSCRIBE_LIMIT.0,
+            window_ms: speech::TRANSCRIBE_LIMIT.1,
+        },
+    )
+    .await
+    {
+        return limited;
+    }
+    if !crate::glue::has_active_pro(ctx, uid).await.unwrap_or(false) {
+        return OperationResult::new(
+            403,
+            json!({ "error": "Pro subscription required for dictation. Subscribe in Settings → Billing." }),
+        );
+    }
+    let reservation = match reserve_speech(
+        ctx,
+        uid,
+        speech::SpeechKind::Transcribe,
+        &plan.client_message_id,
+        &plan.model,
+        &plan.request_hash,
+        plan.reserved_seconds,
+        plan.estimated_cost,
+        &plan.request_id,
+    )
+    .await
+    {
+        Ok(value) => value,
+        Err(result) => return result,
+    };
+    let (body, status) = match call_speech_upstream(ctx, &plan.upstream_body()).await {
+        Ok(value) => value,
+        Err(status) => {
+            settle_speech(
+                ctx,
+                &reservation,
+                uid,
+                &plan.request_id,
+                "failed",
+                status,
+                None,
+            )
+            .await;
+            return OperationResult::new(502, json!({ "error": "Managed speech unavailable" }));
+        }
+    };
+    let Some(content) = speech::message_of(&body)
+        .and_then(|message| message.get("content"))
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+    else {
+        settle_speech(
+            ctx,
+            &reservation,
+            uid,
+            &plan.request_id,
+            "failed",
+            Some(status),
+            None,
+        )
+        .await;
+        return OperationResult::new(502, json!({ "error": "Managed speech unavailable" }));
+    };
+    let result = plan.result(&speech::parse_segments(
+        content,
+        plan.declared_duration.map(|value| value as f64),
+    ));
+    settle_speech(
+        ctx,
+        &reservation,
+        uid,
+        &plan.request_id,
+        "complete",
+        Some(status),
+        Some(&result),
+    )
+    .await;
+    OperationResult::new(200, result)
+}
+
+pub(crate) async fn speak_text_operation(
+    ctx: &RouteContext<()>,
+    uid: &str,
+    input: &Value,
+) -> OperationResult {
+    let plan = match speech::plan_speech(
+        |name| crate::worker_util::secret_or_var(&ctx.env, name),
+        uid,
+        input,
+    ) {
+        Ok(plan) => plan,
+        Err(result) => return result,
+    };
+    if let Some(limited) = gate(
+        ctx,
+        uid,
+        &Budget {
+            bucket: "public-speak",
+            limit: speech::SPEAK_LIMIT.0,
+            window_ms: speech::SPEAK_LIMIT.1,
+        },
+    )
+    .await
+    {
+        return limited;
+    }
+    if !crate::glue::has_active_pro(ctx, uid).await.unwrap_or(false) {
+        return OperationResult::new(
+            403,
+            json!({ "error": "Pro subscription required for speech synthesis. Subscribe in Settings → Billing." }),
+        );
+    }
+    let reservation = match reserve_speech(
+        ctx,
+        uid,
+        speech::SpeechKind::Speak,
+        &plan.client_message_id,
+        &plan.model,
+        &plan.request_hash,
+        plan.reserved_seconds,
+        plan.estimated_cost,
+        &plan.request_id,
+    )
+    .await
+    {
+        Ok(value) => value,
+        Err(result) => return result,
+    };
+    let (body, status) = match call_speech_upstream(ctx, &plan.upstream_body()).await {
+        Ok(value) => value,
+        Err(status) => {
+            settle_speech(
+                ctx,
+                &reservation,
+                uid,
+                &plan.request_id,
+                "failed",
+                status,
+                None,
+            )
+            .await;
+            return OperationResult::new(502, json!({ "error": "Managed speech unavailable" }));
+        }
+    };
+    let Some(audio) = speech::message_of(&body)
+        .and_then(|message| message.get("audio"))
+        .and_then(Value::as_object)
+        .and_then(|audio| audio.get("data"))
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+    else {
+        settle_speech(
+            ctx,
+            &reservation,
+            uid,
+            &plan.request_id,
+            "failed",
+            Some(status),
+            None,
+        )
+        .await;
+        return OperationResult::new(502, json!({ "error": "Managed speech unavailable" }));
+    };
+    if audio.len() > speech::MAXIMUM_SPEAK_BASE64_CHARS {
+        settle_speech(
+            ctx,
+            &reservation,
+            uid,
+            &plan.request_id,
+            "failed",
+            Some(status),
+            None,
+        )
+        .await;
+        return OperationResult::new(502, json!({ "error": "Synthesized audio too large" }));
+    }
+    let result = plan.result(audio);
+    settle_speech(
+        ctx,
+        &reservation,
+        uid,
+        &plan.request_id,
+        "complete",
+        Some(status),
+        Some(&result),
+    )
+    .await;
+    OperationResult::new(200, result)
 }
 
 macro_rules! api_auth {
@@ -463,7 +943,8 @@ async fn run_tool(
         "list_meeting_notes" => list_notes_operation(ctx, uid, arguments).await,
         "list_conversation_messages" => list_conversation_operation(ctx, uid, arguments).await,
         "ask_omi" => ask_omi_operation(ctx, uid, arguments).await,
-        // FaceTime is not exposed on worker-rs: no Gemini Live bridge container.
+        "transcribe_audio" => transcribe_audio_operation(ctx, uid, arguments).await,
+        "speak_text" => speak_text_operation(ctx, uid, arguments).await,
         _ => OperationResult::new(400, json!({ "error": "Unknown tool" })),
     }
 }

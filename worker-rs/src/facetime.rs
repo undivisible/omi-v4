@@ -104,7 +104,7 @@ pub fn session_link(app_url: Option<&str>, session_id: &str) -> String {
 
 /// What the bridge needs to join the call's audio channel. `uid` is the Agora
 /// user id the bridge publishes under; 0 means "let Agora assign one".
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct AgoraCredentials {
     pub app_id: String,
     pub channel_name: String,
@@ -128,6 +128,35 @@ pub enum FaceTimeOutcome {
         status: u16,
     },
     Failed,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum FaceTimeSessionOutcome {
+    Ok { handle: String, session_id: String },
+    Unconfigured,
+    Unavailable,
+    Rejected { status: u16 },
+    Capacity { retry_after: i64 },
+    Failed,
+}
+
+fn positive_integer(value: Option<&str>) -> Option<i64> {
+    value
+        .and_then(|value| value.trim().parse::<i64>().ok())
+        .filter(|value| *value > 0)
+}
+
+pub fn max_session_seconds(value: Option<&str>) -> i64 {
+    positive_integer(value).unwrap_or(600).min(3_600)
+}
+
+pub fn cost_microusd_per_minute(value: Option<&str>) -> i64 {
+    positive_integer(value).unwrap_or(30_000)
+}
+
+pub fn bridge_configured(env: impl Fn(&str) -> Option<String>) -> bool {
+    env("GEMINI_API_KEY").is_some_and(|value| !value.trim().is_empty())
+        && env("GEMINI_LIVE_MODEL").is_some_and(|value| !value.trim().is_empty())
 }
 
 pub fn facetime_provider_configured(env: impl Fn(&str) -> Option<String>) -> bool {
@@ -436,5 +465,27 @@ mod tests {
             ("SENDBLUE_SECRET_KEY", "cli-secret"),
             ("SENDBLUE_FACETIME_NUMBER", "+15550000000"),
         ])));
+    }
+
+    #[test]
+    fn bridge_configuration_and_cost_limits_match_the_session_contract() {
+        let env = |pairs: &'static [(&'static str, &'static str)]| {
+            move |name: &str| {
+                pairs
+                    .iter()
+                    .find(|(key, _)| *key == name)
+                    .map(|(_, value)| (*value).to_string())
+            }
+        };
+        assert!(bridge_configured(env(&[
+            ("GEMINI_API_KEY", "key"),
+            ("GEMINI_LIVE_MODEL", "model"),
+        ])));
+        assert!(!bridge_configured(env(&[("GEMINI_API_KEY", "key")])));
+        assert_eq!(max_session_seconds(None), 600);
+        assert_eq!(max_session_seconds(Some("7200")), 3_600);
+        assert_eq!(max_session_seconds(Some("0")), 600);
+        assert_eq!(cost_microusd_per_minute(None), 30_000);
+        assert_eq!(cost_microusd_per_minute(Some("42000")), 42_000);
     }
 }
