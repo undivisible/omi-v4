@@ -11,17 +11,13 @@
 /// Maximum accepted length of a current's `.crepus` source, in characters.
 /// Mirrors `crepusMaxLen` in `worker/src/currents.ts` and
 /// `CrepusLimits.maxSourceLength` in the Flutter package.
-pub const CREPUS_MAX_LEN: usize = 8000;
+pub const CREPUS_MAX_LEN: usize = crate::crepus_safety::CREPUS_MAX_LEN;
 
 /// Trim and length-check a candidate `.crepus` string. Returns the trimmed
 /// source when non-empty and within the cap, otherwise `None` (pass-through
 /// rejection — no lowering, no parsing).
 pub fn sanitize_crepus(value: &str) -> Option<String> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() || trimmed.chars().count() > CREPUS_MAX_LEN {
-        return None;
-    }
-    Some(trimmed.to_string())
+    crate::crepus_safety::sanitize_crepus(value)
 }
 
 #[cfg(test)]

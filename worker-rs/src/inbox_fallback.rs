@@ -28,10 +28,12 @@ pub const OFFLINE_ACKNOWLEDGEMENT: &str = "Got it — I'll answer when your desk
 /// inventing one — parity with `worker/src/inbox-fallback.ts`.
 pub const SYSTEM_PROMPT_BASE: &str = "You are Omi, the user's personal assistant, replying over a messaging channel while their desktop is offline. Answer the user's latest message directly and concisely in plain text.";
 
-/// `systemPrompt` — base plus the channel command injection.
-pub fn system_prompt() -> String {
+/// `systemPromptForChannel` — base, the channel style rules, then the channel
+/// command injection.
+pub fn system_prompt_for_channel(channel: &str) -> String {
     format!(
-        "{SYSTEM_PROMPT_BASE}\n\n{}",
+        "{SYSTEM_PROMPT_BASE}\n\n{}\n\n{}",
+        crate::channel_style::channel_style_prompt(channel),
         crate::channel_commands::channel_command_prompt()
     )
 }
@@ -60,11 +62,12 @@ pub fn responder_disabled(flag: Option<&str>) -> bool {
 /// `buildMessages` — system prompt (optionally augmented with memory context),
 /// then history, then the inbound user message.
 pub fn build_messages(
+    channel: &str,
     memory_context: Option<&str>,
     history: &[Message],
     inbound: &str,
 ) -> Vec<Message> {
-    let base = system_prompt();
+    let base = system_prompt_for_channel(channel);
     let system_content = match memory_context {
         None => base,
         Some(context) => format!("{base}\n\n{context}"),
@@ -89,8 +92,9 @@ pub fn shape_history(chronological: &[(String, String)]) -> Vec<Message> {
 
 /// Final reply: trim, cap at `maxReplyCharacters`, and fall back to the offline
 /// acknowledgement when the result is empty.
-pub fn finalize_reply(reply: &str) -> String {
-    let trimmed = reply.trim();
+pub fn finalize_reply(channel: &str, reply: &str) -> String {
+    let sanitized = crate::channel_style::sanitize_channel_reply(channel, reply);
+    let trimmed = sanitized.trim();
     let capped: String = trimmed.chars().take(MAX_REPLY_CHARACTERS).collect();
     if capped.is_empty() {
         OFFLINE_ACKNOWLEDGEMENT.to_string()
@@ -123,18 +127,34 @@ mod tests {
     #[test]
     fn build_messages_without_memory() {
         let history = vec![Message::new("user", "hi"), Message::new("assistant", "hey")];
-        let out = build_messages(None, &history, "latest");
+        let out = build_messages("telegram", None, &history, "latest");
         assert_eq!(out.len(), 4);
         assert_eq!(out[0].role, "system");
-        assert_eq!(out[0].content, system_prompt());
+        assert_eq!(out[0].content, system_prompt_for_channel("telegram"));
         assert!(out[0].content.contains("/logout"));
         assert_eq!(out[3], Message::new("user", "latest"));
     }
 
     #[test]
+    fn the_prompt_carries_the_channel_style_rules() {
+        let telegram = system_prompt_for_channel("telegram");
+        let imessage = system_prompt_for_channel("imessage");
+        assert!(telegram.contains("Delivery channel: Telegram."));
+        assert!(imessage.contains("Delivery channel: iMessage/SMS."));
+        for prompt in [&telegram, &imessage] {
+            assert!(prompt.starts_with(SYSTEM_PROMPT_BASE));
+            assert!(prompt.contains("no markdown"));
+            assert!(prompt.contains("/logout"));
+        }
+    }
+
+    #[test]
     fn build_messages_with_memory_context() {
-        let out = build_messages(Some("MEMORY"), &[], "q");
-        assert_eq!(out[0].content, format!("{}\n\nMEMORY", system_prompt()));
+        let out = build_messages("imessage", Some("MEMORY"), &[], "q");
+        assert_eq!(
+            out[0].content,
+            format!("{}\n\nMEMORY", system_prompt_for_channel("imessage"))
+        );
         assert_eq!(out.len(), 2);
     }
 
@@ -154,11 +174,34 @@ mod tests {
 
     #[test]
     fn finalize_trims_caps_and_falls_back() {
-        assert_eq!(finalize_reply("  hello  "), "hello");
-        assert_eq!(finalize_reply("   "), OFFLINE_ACKNOWLEDGEMENT);
-        assert_eq!(finalize_reply(""), OFFLINE_ACKNOWLEDGEMENT);
+        assert_eq!(finalize_reply("telegram", "  hello  "), "hello");
+        assert_eq!(finalize_reply("telegram", "   "), OFFLINE_ACKNOWLEDGEMENT);
+        assert_eq!(finalize_reply("telegram", ""), OFFLINE_ACKNOWLEDGEMENT);
         let long: String = "x".repeat(5_000);
-        assert_eq!(finalize_reply(&long).chars().count(), MAX_REPLY_CHARACTERS);
+        assert_eq!(
+            finalize_reply("telegram", &long).chars().count(),
+            MAX_REPLY_CHARACTERS
+        );
+    }
+
+    #[test]
+    fn finalize_strips_markdown_before_capping() {
+        assert_eq!(
+            finalize_reply("telegram", "**bold** and `code`"),
+            "bold and code"
+        );
+        // A reply that is nothing but a fenced block falls back rather than
+        // sending an empty message.
+        assert_eq!(
+            finalize_reply("imessage", "```\ntext \"hi\"\n```"),
+            OFFLINE_ACKNOWLEDGEMENT
+        );
+        // iMessage caps tighter than the fallback ceiling.
+        let long: String = "x".repeat(5_000);
+        assert_eq!(
+            finalize_reply("imessage", &long).chars().count(),
+            crate::channel_style::IMESSAGE_REPLY_LIMIT
+        );
     }
 
     #[test]

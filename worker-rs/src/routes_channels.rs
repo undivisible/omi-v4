@@ -216,6 +216,13 @@ pub async fn issue_link_code(
     let Some(secret) = channel_webhook_secret(env, channel) else {
         return Ok(None);
     };
+    if crate::channel_group::is_group_channel_chat(
+        channel.as_str(),
+        channel_user_id,
+        channel_chat_id,
+    ) {
+        return Ok(None);
+    }
     let db = env.d1("DB")?;
     let pending = db
         .prepare(
@@ -509,7 +516,11 @@ pub async fn send_channel_text(
     chat_id: &str,
     text: &str,
 ) -> Result<bool> {
-    let Some(request) = provider_send_request(env, channel, chat_id, text, None)? else {
+    let plain = crate::channel_style::sanitize_channel_reply(channel.as_str(), text);
+    if plain.is_empty() {
+        return Ok(false);
+    }
+    let Some(request) = provider_send_request(env, channel, chat_id, &plain, None)? else {
         return Ok(false);
     };
     match Fetch::Request(request).send().await {
@@ -1021,7 +1032,8 @@ async fn respond_to_item(env: &Env, id: &str, uid: &str, now: i64) -> Result<()>
     let mut reply = if env_has_active_pro(env, uid).await {
         let memory_context = memory_context_for(env, uid, &text).await;
         let history = recent_history(env, uid, &channel).await.unwrap_or_default();
-        let messages = fallback::build_messages(memory_context.as_deref(), &history, &text);
+        let messages =
+            fallback::build_messages(&channel, memory_context.as_deref(), &history, &text);
         match managed_inbox_completion(env, uid, &messages).await {
             Some(completion) => completion,
             None => {
@@ -1042,7 +1054,7 @@ async fn respond_to_item(env: &Env, id: &str, uid: &str, now: i64) -> Result<()>
     } else {
         fallback::OFFLINE_ACKNOWLEDGEMENT.to_string()
     };
-    reply = fallback::finalize_reply(&reply);
+    reply = fallback::finalize_reply(&channel, &reply);
     let result = complete_inbox_item_done(env, uid, id, &lease_token, &reply, now_ms()).await;
     if !result.ok {
         release_for_retry(env, id, uid, &lease_token, &result.error).await?;

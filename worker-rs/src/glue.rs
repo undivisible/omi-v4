@@ -80,6 +80,7 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         // Phase 2: unauthenticated inbound webhooks (own auth: secret header /
         // HMAC). Mounted before the `/v1/*` auth guard in the TS worker.
         .post_async("/v1/webhooks/telegram", handle_webhook_telegram)
+        .post_async("/v1/webhooks/sendblue/:token", handle_webhook_sendblue)
         .post_async("/v1/webhooks/stripe", handle_webhook_stripe)
         // Phase 2: desktop auth handoff (no `/v1/*` middleware; /complete does
         // its own Firebase verification internally).
@@ -1116,6 +1117,7 @@ enum LinkOutcome {
     Linked,
     Invalid,
     Conflict,
+    Group,
 }
 
 /// Port of `bind`: consume a link token and bind (or rebind) a channel.
@@ -1126,6 +1128,9 @@ async fn bind_channel(
     channel_chat_id: &str,
     token: &str,
 ) -> Result<LinkOutcome> {
+    if crate::channel_group::is_group_channel_chat(channel, channel_user_id, channel_chat_id) {
+        return Ok(LinkOutcome::Group);
+    }
     let existing = db
         .prepare(
             "SELECT uid FROM channel_bindings WHERE channel = ?1 AND channel_user_id = ?2 AND revoked_at IS NULL",
@@ -1283,9 +1288,18 @@ async fn handle_webhook_telegram(mut req: Request, ctx: RouteContext<()>) -> Res
         if !fresh {
             return Response::from_json(&json!({ "accepted": true, "duplicate": true }));
         }
-        let linked = bind_channel(&db, "telegram", &message.user_id, &message.chat_id, &token)
-            .await?
-            == LinkOutcome::Linked;
+        let outcome =
+            bind_channel(&db, "telegram", &message.user_id, &message.chat_id, &token).await?;
+        if outcome == LinkOutcome::Group {
+            let _ = crate::routes_channels::send_channel_text(
+                &ctx.env,
+                Channel::Telegram,
+                &message.chat_id,
+                crate::channel_group::GROUP_CHANNEL_LINK_ERROR,
+            )
+            .await;
+        }
+        let linked = outcome == LinkOutcome::Linked;
         return Response::from_json(&json!({ "accepted": true, "linked": linked }));
     }
     let processed = process_channel_message(
@@ -1297,6 +1311,76 @@ async fn handle_webhook_telegram(mut req: Request, ctx: RouteContext<()>) -> Res
         &message.user_id,
         &message.chat_id,
         &message.text,
+        &body,
+    )
+    .await?;
+    if !fresh {
+        return Response::from_json(&json!({ "accepted": true, "duplicate": true }));
+    }
+    Response::from_json(&json!({
+        "accepted": true,
+        "queued": processed.queued,
+        "replied": processed.replied,
+    }))
+}
+
+async fn handle_webhook_sendblue(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let path_token = ctx.param("token").cloned().unwrap_or_default();
+    let signing = header(&req, "sb-signing-secret");
+    let env_value = |key: &str| secret_or_var(&ctx.env, key);
+    if !crate::sendblue::verify_sendblue_webhook(
+        env_value,
+        &path_token,
+        if signing.is_empty() {
+            None
+        } else {
+            Some(signing.as_str())
+        },
+    ) {
+        return error_json("Unauthorized", 401);
+    }
+    let Ok(body) = req.json::<Value>().await else {
+        return error_json("Invalid body", 400);
+    };
+    let Some(inbound) = crate::sendblue::parse_sendblue_inbound(&body) else {
+        return Response::from_json(&json!({ "accepted": true, "queued": false }));
+    };
+    let event_id = format!("message.received:{}", inbound.message_handle);
+    let db = ctx.env.d1("DB")?;
+    let fresh = record_webhook(&db, crate::sendblue::IMESSAGE_CHANNEL, &event_id).await?;
+    if let Some(token) = wh::link_token(&inbound.text, false) {
+        if !fresh {
+            return Response::from_json(&json!({ "accepted": true, "duplicate": true }));
+        }
+        let outcome = bind_channel(
+            &db,
+            crate::sendblue::IMESSAGE_CHANNEL,
+            &inbound.sender,
+            &inbound.chat_id,
+            &token,
+        )
+        .await?;
+        if outcome == LinkOutcome::Group {
+            let _ = crate::routes_channels::send_channel_text(
+                &ctx.env,
+                Channel::IMessage,
+                &inbound.chat_id,
+                crate::channel_group::GROUP_CHANNEL_LINK_ERROR,
+            )
+            .await;
+        }
+        let linked = outcome == LinkOutcome::Linked;
+        return Response::from_json(&json!({ "accepted": true, "linked": linked }));
+    }
+    let processed = process_channel_message(
+        &ctx.env,
+        Channel::IMessage,
+        fresh,
+        &event_id,
+        &inbound.message_handle,
+        &inbound.sender,
+        &inbound.chat_id,
+        &inbound.text,
         &body,
     )
     .await?;
