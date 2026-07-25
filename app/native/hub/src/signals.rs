@@ -1,3 +1,14 @@
+//! Rinf IPC boundary between the Flutter isolate and the Rust hub.
+//!
+//! Every [`ClientCommand`] crosses a trust boundary: the Dart side is treated
+//! as an untrusted peer for security-sensitive operations. The hub validates,
+//! caps, and pins externally visible behaviour instead of trusting caller
+//! strings — managed-worker origins are allowlisted, cloud memory applies
+//! require a configured trusted assistant and monotonic sequences, deletion
+//! log records apply only when [`Command::ApplyMemory::apply_deletions`] is
+//! true, client memory and Live session context are size-capped, and audio
+//! chunks are bounded. Credentials and message bodies in debug output are
+//! redacted in generated Dart bindings.
 use rinf::{DartSignal, DartSignalBinary, RustSignal, SignalPiece};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
@@ -83,6 +94,10 @@ pub enum Command {
     /// Apply authoritative cloud memory-log commits into the local zkr database.
     ApplyMemory {
         commits: Vec<MemoryApplyCommit>,
+        /// When true, `deletion` log records may retract local zkr rows. Omitted
+        /// or false keeps deletions out of the apply so a compromised isolate
+        /// cannot wipe memory through this IPC surface.
+        apply_deletions: Option<bool>,
     },
     ListMemoryItems {
         limit: u32,

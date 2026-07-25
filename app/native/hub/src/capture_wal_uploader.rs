@@ -42,19 +42,18 @@ pub async fn drain(
     max_attempts_per_pass: u32,
 ) -> CaptureDrain {
     let attempts = max_attempts_per_pass.max(1);
-    let segments = match wal.lock().await.as_ref() {
-        Some(wal) => wal.pending(),
-        None => return CaptureDrain::default(),
+    let segments = {
+        let guard = wal.lock().await;
+        guard.as_ref().map(CaptureWal::pending).unwrap_or_default()
     };
     let mut pending = segments.len() as u64;
     let mut uploaded = 0_u64;
     let mut last_error = None;
     for segment in &segments {
-        let audio = wal
-            .lock()
-            .await
-            .as_ref()
-            .and_then(|wal| wal.read_audio(segment));
+        let audio = {
+            let guard = wal.lock().await;
+            guard.as_ref().and_then(|wal| wal.read_audio(segment))
+        };
         let Some(audio) = audio else {
             // Evicted between listing and reading. Nothing to send.
             continue;
@@ -78,8 +77,11 @@ pub async fn drain(
             // surfaced rather than swallowed.
             last_error = result.message;
         }
-        if let Some(wal) = wal.lock().await.as_ref() {
-            wal.remove(segment);
+        {
+            let guard = wal.lock().await;
+            if let Some(wal) = guard.as_ref() {
+                wal.remove(segment);
+            }
         }
         pending = pending.saturating_sub(1);
     }

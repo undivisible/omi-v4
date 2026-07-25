@@ -756,6 +756,7 @@ pub struct MeetingSession {
     title: Option<String>,
     manual: bool,
     transcript: String,
+    transcript_char_count: usize,
     last_speaker: Option<MeetingSpeaker>,
     roster: SpeakerRoster,
     limiter: InsightLimiter,
@@ -773,6 +774,7 @@ impl MeetingSession {
             title: title.filter(|value| !value.trim().is_empty()),
             manual,
             transcript: String::new(),
+            transcript_char_count: 0,
             last_speaker: None,
             roster: SpeakerRoster::default(),
             limiter: InsightLimiter::default(),
@@ -805,7 +807,7 @@ impl MeetingSession {
     /// before speaker attribution existed.
     pub fn push_final(&mut self, speaker: MeetingSpeaker, text: &str) {
         let text = text.trim();
-        let accumulated = self.transcript.chars().count();
+        let accumulated = self.transcript_char_count;
         if text.is_empty() || accumulated >= RAW_TRANSCRIPT_CHARS {
             return;
         }
@@ -825,12 +827,16 @@ impl MeetingSession {
             }
         }
         let remaining = RAW_TRANSCRIPT_CHARS.saturating_sub(accumulated);
-        if prefix.chars().count() >= remaining {
+        let prefix_chars = prefix.chars().count();
+        if prefix_chars >= remaining {
             return;
         }
+        let text_budget = remaining - prefix_chars;
+        let text_chars: String = text.chars().take(text_budget).collect();
+        let added_chars = text_chars.chars().count();
         self.transcript.push_str(&prefix);
-        self.transcript
-            .extend(text.chars().take(remaining - prefix.chars().count()));
+        self.transcript.push_str(&text_chars);
+        self.transcript_char_count = accumulated + prefix_chars + added_chars;
         self.last_speaker = Some(speaker);
     }
 
@@ -1437,25 +1443,33 @@ impl MeetingRuntime {
                     [] => return,
                     [single] => note_prompt(single, session.jots(), session.title()),
                     chunks => {
-                        let mut digests = Vec::with_capacity(chunks.len());
-                        for (index, chunk) in chunks.iter().enumerate() {
+                        let title = session.title().to_owned();
+                        let jots = session.jots().to_vec();
+                        let chunk_futures = chunks.iter().enumerate().map(|(index, chunk)| {
                             let prompt = chunk_summary_prompt(
                                 chunk,
                                 index + 1,
                                 chunks.len(),
-                                session.title(),
+                                &title,
                             );
-                            let digest = tokio::select! {
-                                () = cancellation.cancelled() => return,
-                                output = generate_note_output(&prompt, generator.as_ref(), &cancellation) => output,
-                            };
-                            digests.push(digest.unwrap_or_else(|| chunk.clone()));
+                            let generator = generator.clone();
+                            let cancellation = cancellation.clone();
+                            let fallback = chunk.clone();
+                            async move {
+                                tokio::select! {
+                                    () = cancellation.cancelled() => None,
+                                    output = generate_note_output(&prompt, generator.as_ref(), &cancellation) => {
+                                        Some(output.unwrap_or(fallback))
+                                    }
+                                }
+                            }
+                        });
+                        let digests = futures::future::join_all(chunk_futures).await;
+                        if digests.iter().any(|digest| digest.is_none()) {
+                            return;
                         }
-                        digest_note_prompt(
-                            &combine_chunk_digests(&digests),
-                            session.jots(),
-                            session.title(),
-                        )
+                        let digests: Vec<String> = digests.into_iter().flatten().collect();
+                        digest_note_prompt(&combine_chunk_digests(&digests), &jots, &title)
                     }
                 };
                 let output = tokio::select! {

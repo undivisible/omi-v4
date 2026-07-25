@@ -314,7 +314,8 @@ struct ReconnectAudioBuffer {
 impl ReconnectAudioBuffer {
     fn stash(&mut self, frame: Vec<u8>, pending_audio_bytes: &AtomicUsize) {
         let len = frame.len();
-        while self.bytes.saturating_add(len) > MAX_RECONNECT_BUFFER_BYTES && !self.frames.is_empty() {
+        while self.bytes.saturating_add(len) > MAX_RECONNECT_BUFFER_BYTES && !self.frames.is_empty()
+        {
             if let Some(old) = self.frames.first() {
                 self.bytes -= old.len();
                 self.frames.remove(0);

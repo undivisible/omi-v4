@@ -164,6 +164,7 @@ abstract interface class NativeHub {
   void applyMemory({
     required String requestId,
     required List<MemoryApplyCommit> commits,
+    bool applyDeletions = false,
   });
   void listMemoryItems({required String requestId, int limit = 50});
   void correctMemory({
@@ -524,6 +525,7 @@ final class UnavailableNativeHub implements NativeHub {
   void applyMemory({
     required String requestId,
     required List<MemoryApplyCommit> commits,
+    bool applyDeletions = false,
   }) => _unavailable();
 
   @override
@@ -882,7 +884,11 @@ final class RinfNativeHub implements NativeHub {
   void applyMemory({
     required String requestId,
     required List<MemoryApplyCommit> commits,
-  }) => _send(requestId, CommandApplyMemory(commits: commits));
+    bool applyDeletions = false,
+  }) => _send(
+    requestId,
+    CommandApplyMemory(commits: commits, applyDeletions: applyDeletions),
+  );
 
   @override
   void listMemoryItems({required String requestId, int limit = 50}) =>

@@ -189,6 +189,7 @@ final class HubMemoryMirrorStore implements MemoryMirrorStore {
             ),
           )
           .toList(),
+      applyDeletions: true,
     );
     await response;
     _mirroredSequence = high;

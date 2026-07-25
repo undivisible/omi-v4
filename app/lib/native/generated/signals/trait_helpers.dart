@@ -165,6 +165,24 @@ class TraitHelpers {
     }
   }
 
+  static void serializeOptionBool(bool? value, BinarySerializer serializer) {
+    if (value == null) {
+      serializer.serializeOptionTag(false);
+    } else {
+      serializer.serializeOptionTag(true);
+      serializer.serializeBool(value);
+    }
+  }
+
+  static bool? deserializeOptionBool(BinaryDeserializer deserializer) {
+    final tag = deserializer.deserializeOptionTag();
+    if (tag) {
+      return deserializer.deserializeBool();
+    } else {
+      return null;
+    }
+  }
+
   static void serializeOptionI64(int? value, BinarySerializer serializer) {
     if (value == null) {
       serializer.serializeOptionTag(false);

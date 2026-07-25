@@ -19,6 +19,9 @@ const AUDIO_QUEUE_CAPACITY: usize = 32;
 const MAX_ACTIVE_AUDIO_SESSIONS: usize = 8;
 const MAX_ACTIVE_LIVE_SESSIONS: usize = 2;
 const AUDIO_SESSION_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
+/// How often idle transcription sessions are swept. Per-chunk retain scanned
+/// every active session on every audio frame; a periodic sweep is enough.
+const SESSION_IDLE_SWEEP_INTERVAL: Duration = Duration::from_secs(5);
 /// How often a streaming session reports what its gate has saved. Every chunk
 /// would be one event per twenty milliseconds of audio for a number that only
 /// moves slowly; a session that ends sooner than this still reports once, on
@@ -100,8 +103,36 @@ pub(crate) enum TranscriptionControl {
     Fence,
 }
 
-#[derive(Default)]
-pub(crate) struct AudioSessions(pub(crate) HashMap<String, AudioSession>);
+pub(crate) struct AudioSessions {
+    pub(crate) sessions: HashMap<String, AudioSession>,
+    last_idle_sweep: Instant,
+}
+
+impl Default for AudioSessions {
+    fn default() -> Self {
+        Self {
+            sessions: HashMap::new(),
+            last_idle_sweep: Instant::now(),
+        }
+    }
+}
+
+impl AudioSessions {
+    fn maybe_sweep_idle(&mut self, now: Instant) {
+        if now.saturating_duration_since(self.last_idle_sweep) < SESSION_IDLE_SWEEP_INTERVAL {
+            return;
+        }
+        self.last_idle_sweep = now;
+        self.sessions.retain(|_, session| {
+            now.saturating_duration_since(session.last_seen) < AUDIO_SESSION_IDLE_TIMEOUT
+        });
+    }
+}
+
+pub(crate) enum LiveAcceptOutcome {
+    Accepted,
+    NotLive(AudioChunk),
+}
 
 pub(crate) struct AudioProgress {
     pub(crate) request_id: String,
@@ -252,25 +283,17 @@ impl LiveSessions {
         }
     }
 
-    pub(crate) fn contains(&self, stream_id: &str) -> bool {
-        self.sessions
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
-            .contains_key(stream_id)
-    }
-
-    pub(crate) fn accept(&mut self, chunk: AudioChunk) -> Result<(), AudioAcceptError> {
+    pub(crate) fn try_accept(
+        &self,
+        chunk: AudioChunk,
+    ) -> Result<LiveAcceptOutcome, AudioAcceptError> {
         let mut sessions = self
             .sessions
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
-        let session = sessions
-            .get_mut(&chunk.request_id)
-            .ok_or_else(|| AudioAcceptError {
-                request_id: chunk.request_id.clone(),
-                code: "live_voice_not_started",
-                message: "live voice stream must be started before sending audio".to_owned(),
-            })?;
+        let Some(session) = sessions.get_mut(&chunk.request_id) else {
+            return Ok(LiveAcceptOutcome::NotLive(chunk));
+        };
         if chunk.sequence != session.next_sequence {
             return Err(AudioAcceptError {
                 request_id: chunk.request_id,
@@ -305,7 +328,7 @@ impl LiveSessions {
             if let Some(session) = sessions.remove(&stream_id) {
                 session.handle.finish();
             }
-            return Ok(());
+            return Ok(LiveAcceptOutcome::Accepted);
         }
         session
             .handle
@@ -314,7 +337,8 @@ impl LiveSessions {
                 request_id: chunk.request_id,
                 code: "live_voice_provider_unavailable",
                 message,
-            })
+            })?;
+        Ok(LiveAcceptOutcome::Accepted)
     }
 }
 
@@ -595,28 +619,27 @@ impl AudioDispatcher {
                     None => {}
                 },
                 chunk = self.receiver.recv() => match chunk {
-                    Some(chunk) if self.live.contains(&chunk.request_id) => {
-                        if let Err(failure) = self.live.accept(chunk) {
-                            NativeEvent::Error(NativeError {
+                    Some(chunk) => match self.live.try_accept(chunk) {
+                        Ok(LiveAcceptOutcome::Accepted) => {}
+                        Ok(LiveAcceptOutcome::NotLive(chunk)) => match self.sessions.accept(chunk) {
+                            Ok(Some(next)) => {
+                                NativeEvent::ToolProgress(ToolProgress {
+                                    request_id: next.request_id,
+                                    tool: "audio".to_owned(),
+                                    status: next.status,
+                                    detail: Some(next.detail),
+                                })
+                                .send();
+                            }
+                            Ok(None) => {}
+                            Err(failure) => NativeEvent::Error(NativeError {
                                 request_id: Some(failure.request_id),
                                 code: failure.code.to_owned(),
                                 message: failure.message,
                                 retryable: false,
                             })
-                            .send();
-                        }
-                    }
-                    Some(chunk) => match self.sessions.accept(chunk) {
-                        Ok(Some(next)) => {
-                            NativeEvent::ToolProgress(ToolProgress {
-                                request_id: next.request_id,
-                                tool: "audio".to_owned(),
-                                status: next.status,
-                                detail: Some(next.detail),
-                            })
-                            .send();
-                        }
-                        Ok(None) => {}
+                            .send(),
+                        },
                         Err(failure) => NativeEvent::Error(NativeError {
                             request_id: Some(failure.request_id),
                             code: failure.code.to_owned(),
@@ -659,7 +682,7 @@ impl AudioSessions {
                 message: "local transcription is unavailable".to_owned(),
             });
         }
-        if let Some(existing) = self.0.get(&start.audio_stream_id) {
+        if let Some(existing) = self.sessions.get(&start.audio_stream_id) {
             let exact = existing.device_id == start.device_id
                 && existing.route == start.auth.route()
                 && existing.language == start.language
@@ -676,7 +699,7 @@ impl AudioSessions {
                 })
             };
         }
-        if self.0.len() >= MAX_ACTIVE_AUDIO_SESSIONS {
+        if self.sessions.len() >= MAX_ACTIVE_AUDIO_SESSIONS {
             return Err(AudioAcceptError {
                 request_id: start.request_id,
                 code: "audio_capacity_exceeded",
@@ -705,7 +728,7 @@ impl AudioSessions {
             })?,
         );
         let stream_id = start.audio_stream_id.clone();
-        self.0.insert(
+        self.sessions.insert(
             stream_id.clone(),
             AudioSession {
                 start_request_id: start.request_id,
@@ -741,7 +764,7 @@ impl AudioSessions {
         TranscriptionStopAcknowledgement,
         Option<TranscriptionStatus>,
     ) {
-        if let Some(mut session) = self.0.remove(stream_id) {
+        if let Some(mut session) = self.sessions.remove(stream_id) {
             session.phase = TranscriptionPhase::Draining;
             session.gate.finish();
             NativeEvent::AudioGateStats(gate_stats(stream_id, &session.gate)).send();
@@ -776,7 +799,7 @@ impl AudioSessions {
     }
 
     pub(crate) fn cancel_all(&mut self) {
-        for (stream_id, session) in self.0.drain() {
+        for (stream_id, session) in self.sessions.drain() {
             if let Some(provider) = &session.provider {
                 provider.cancel();
             } else {
@@ -803,10 +826,8 @@ impl AudioSessions {
         chunk: AudioChunk,
         now: Instant,
     ) -> Result<Option<AudioProgress>, AudioAcceptError> {
-        self.0.retain(|_, session| {
-            now.saturating_duration_since(session.last_seen) < AUDIO_SESSION_IDLE_TIMEOUT
-        });
-        if !self.0.contains_key(&chunk.request_id) {
+        self.maybe_sweep_idle(now);
+        if !self.sessions.contains_key(&chunk.request_id) {
             return Err(AudioAcceptError {
                 request_id: chunk.request_id,
                 code: "transcription_not_started",
@@ -814,7 +835,7 @@ impl AudioSessions {
             });
         }
         let session = self
-            .0
+            .sessions
             .get_mut(&chunk.request_id)
             .ok_or_else(|| AudioAcceptError {
                 request_id: chunk.request_id.clone(),
@@ -918,7 +939,7 @@ impl AudioSessions {
                 stt_epoch: epoch,
             })
             .send();
-            self.0.remove(&stream_id);
+            self.sessions.remove(&stream_id);
             Some((
                 ToolStatus::Complete,
                 format!("accepted {accepted_bytes} audio bytes"),

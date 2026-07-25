@@ -1105,27 +1105,39 @@ class CommandExportMemory extends Command {
 
 @immutable
 class CommandApplyMemory extends Command {
-  const CommandApplyMemory({required this.commits}) : super();
+  const CommandApplyMemory({required this.commits, this.applyDeletions})
+    : super();
 
   static CommandApplyMemory load(BinaryDeserializer deserializer) {
     deserializer.increaseContainerDepth();
     final instance = CommandApplyMemory(
       commits: TraitHelpers.deserializeVectorMemoryApplyCommit(deserializer),
+      applyDeletions: TraitHelpers.deserializeOptionBool(deserializer),
     );
     deserializer.decreaseContainerDepth();
     return instance;
   }
 
   final List<MemoryApplyCommit> commits;
+  final bool? applyDeletions;
 
-  CommandApplyMemory copyWith({List<MemoryApplyCommit>? commits}) {
-    return CommandApplyMemory(commits: commits ?? this.commits);
+  CommandApplyMemory copyWith({
+    List<MemoryApplyCommit>? commits,
+    bool? Function()? applyDeletions,
+  }) {
+    return CommandApplyMemory(
+      commits: commits ?? this.commits,
+      applyDeletions: applyDeletions == null
+          ? this.applyDeletions
+          : applyDeletions(),
+    );
   }
 
   void serialize(BinarySerializer serializer) {
     serializer.increaseContainerDepth();
     serializer.serializeVariantIndex(12);
     TraitHelpers.serializeVectorMemoryApplyCommit(commits, serializer);
+    TraitHelpers.serializeOptionBool(applyDeletions, serializer);
     serializer.decreaseContainerDepth();
   }
 
@@ -1134,11 +1146,13 @@ class CommandApplyMemory extends Command {
     if (identical(this, other)) return true;
     if (other.runtimeType != runtimeType) return false;
 
-    return other is CommandApplyMemory && listEquals(commits, other.commits);
+    return other is CommandApplyMemory &&
+        listEquals(commits, other.commits) &&
+        applyDeletions == other.applyDeletions;
   }
 
   @override
-  int get hashCode => commits.hashCode;
+  int get hashCode => Object.hash(commits, applyDeletions);
 
   @override
   String toString() {
@@ -1147,7 +1161,8 @@ class CommandApplyMemory extends Command {
     assert(() {
       fullString =
           '$runtimeType('
-          'commits: $commits'
+          'commits: $commits, '
+          'applyDeletions: $applyDeletions'
           ')';
       return true;
     }());

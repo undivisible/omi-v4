@@ -646,6 +646,20 @@ fn client_context_within_limit(context: Option<&str>, max_bytes: usize) -> Resul
     Ok(())
 }
 
+fn filter_memory_apply_commits(
+    commits: Vec<MemoryApplyCommit>,
+    apply_deletions: bool,
+) -> Vec<MemoryApplyCommit> {
+    if apply_deletions {
+        commits
+    } else {
+        commits
+            .into_iter()
+            .filter(|commit| commit.record_kind != "deletion")
+            .collect()
+    }
+}
+
 fn validate_memory_apply_commits(
     commits: &[MemoryApplyCommit],
     high_water: i64,
@@ -2195,12 +2209,6 @@ fn combined_context(
     }
 }
 
-fn local_user_profile_context(user_profile_path: Option<&Path>) -> Option<String> {
-    let path = user_profile_path?;
-    let document = crate::user_profile::read_user_profile(path)?;
-    crate::user_profile::format_about_user(&document)
-}
-
 #[expect(
     clippy::too_many_arguments,
     reason = "the assistant turn carries independently sourced inputs; grouping them would only relabel the arity"
@@ -2239,7 +2247,12 @@ async fn dispatch_assistant(
         Some(context) => Some(context),
         None => local_memory_context(state, &text, cancellation).await,
     };
-    let about_user = local_user_profile_context(user_profile_path.as_deref());
+    let user_profile = user_profile_path
+        .as_deref()
+        .and_then(crate::user_profile::read_user_profile);
+    let about_user = user_profile
+        .as_ref()
+        .and_then(crate::user_profile::format_about_user);
     let context = combined_context(
         about_user.as_deref(),
         profile.as_ref().map(|value| value.lines.as_str()),
@@ -2264,9 +2277,8 @@ async fn dispatch_assistant(
         Some(&format!("{ONLINE_CHAT_MODEL_DETAIL}:{routed_model}")),
     );
     let mut prompt = framed_assistant_prompt(origin, context.as_deref(), &text);
-    if let Some(path) = user_profile_path.as_deref()
-        && let Some(document) = crate::user_profile::read_user_profile(path)
-        && let Some(custom_prompt) = crate::user_profile::custom_prompt(&document)
+    if let Some(document) = user_profile.as_ref()
+        && let Some(custom_prompt) = crate::user_profile::custom_prompt(document)
     {
         prompt = format!("{prompt}\n\n{custom_prompt}");
     }
@@ -2535,8 +2547,18 @@ async fn execute(
             .await;
             false
         }
-        Command::ApplyMemory { commits } => {
-            apply_memory(&request_id, &state, commits, &cancellation).await;
+        Command::ApplyMemory {
+            commits,
+            apply_deletions,
+        } => {
+            apply_memory(
+                &request_id,
+                &state,
+                commits,
+                apply_deletions.unwrap_or(false),
+                &cancellation,
+            )
+            .await;
             false
         }
         Command::ListMemoryItems { limit } => {
@@ -3719,6 +3741,7 @@ async fn apply_memory(
     request_id: &str,
     state: &Mutex<RuntimeState>,
     commits: Vec<MemoryApplyCommit>,
+    apply_deletions: bool,
     cancellation: &CancellationToken,
 ) {
     let Some(memory) = state.lock().await.memory.clone() else {
@@ -3755,6 +3778,19 @@ async fn apply_memory(
             return;
         }
     };
+    let commits = filter_memory_apply_commits(commits, apply_deletions);
+    if commits.is_empty() {
+        state.lock().await.memory_mirror_high_water = validated_high;
+        NativeEvent::MemoryApplied(MemoryApplied {
+            request_id: request_id.to_owned(),
+            commits_applied: 0,
+            commits_skipped: 0,
+            records_applied: 0,
+            records_skipped: 0,
+        })
+        .send();
+        return;
+    }
     let request_id = request_id.to_owned();
     let error_request_id = request_id.clone();
     let task = spawn_blocking(move || apply_configured_memory(&memory, &request_id, commits));
@@ -6565,7 +6601,7 @@ mod tests {
                 ..
             })
         ));
-        assert!(sessions.0.is_empty());
+        assert!(sessions.sessions.is_empty());
     }
 
     #[test]
@@ -6721,12 +6757,13 @@ mod tests {
                 ..
             })
         ));
-        assert!(sessions.0.is_empty());
+        assert!(sessions.sessions.is_empty());
     }
 
     #[test]
     fn audio_overflow_does_not_partially_advance_a_session() {
-        let mut sessions = AudioSessions(HashMap::from([(
+        let mut sessions = AudioSessions::default();
+        sessions.sessions.insert(
             "voice-1".to_owned(),
             AudioSession {
                 start_request_id: "start-voice-1".to_owned(),
@@ -6750,8 +6787,8 @@ mod tests {
                 ),
                 last_gate_report: Instant::now(),
             },
-        )]));
-        let previous_seen = sessions.0["voice-1"].last_seen;
+        );
+        let previous_seen = sessions.sessions["voice-1"].last_seen;
         let failure = sessions.accept(AudioChunk {
             request_id: "voice-1".to_owned(),
             sequence: u64::MAX,
@@ -6768,7 +6805,7 @@ mod tests {
                 ..
             })
         ));
-        let session = &sessions.0["voice-1"];
+        let session = &sessions.sessions["voice-1"];
         assert_eq!(session.next_sequence, u64::MAX);
         assert_eq!(session.accepted_bytes, 7);
         assert_eq!(session.last_seen, previous_seen);
@@ -6794,10 +6831,10 @@ mod tests {
                 ..
             }))
         ));
-        assert!(!sessions.0.contains_key("voice-1"));
+        assert!(!sessions.sessions.contains_key("voice-1"));
         start_audio(&mut sessions, "voice-2");
         sessions.cancel_all();
-        assert!(sessions.0.is_empty());
+        assert!(sessions.sessions.is_empty());
     }
 
     #[test]
@@ -6810,7 +6847,7 @@ mod tests {
         assert_eq!(acknowledgement.request_id, "stop-1");
         assert!(acknowledgement.accepted);
         assert!(status.is_none());
-        assert!(sessions.0.is_empty());
+        assert!(sessions.sessions.is_empty());
         let (duplicate, status) = sessions.stop("stop-2", "voice-1");
         assert!(!duplicate.accepted);
         assert!(status.is_none());
@@ -7721,6 +7758,29 @@ mod tests {
     }
 
     #[test]
+    fn memory_apply_filters_deletions_without_opt_in() {
+        let commits = vec![
+            MemoryApplyCommit {
+                sequence: 2,
+                recorded_at_ms: 1,
+                record_kind: "claim".to_owned(),
+                record_json: "{}".to_owned(),
+            },
+            MemoryApplyCommit {
+                sequence: 3,
+                recorded_at_ms: 2,
+                record_kind: "deletion".to_owned(),
+                record_json: "{}".to_owned(),
+            },
+        ];
+        let filtered = filter_memory_apply_commits(commits.clone(), false);
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].record_kind, "claim");
+        let kept = filter_memory_apply_commits(commits, true);
+        assert_eq!(kept.len(), 2);
+    }
+
+    #[test]
     fn memory_apply_commits_require_monotonic_sequences_and_bounds() {
         let ok = MemoryApplyCommit {
             sequence: 2,
@@ -7911,6 +7971,7 @@ mod tests {
                 record_kind: "claim".to_owned(),
                 record_json: "{}".to_owned(),
             }],
+            false,
             &CancellationToken::new(),
         )
         .await;
