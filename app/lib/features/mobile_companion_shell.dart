@@ -845,7 +845,7 @@ class MobilePendantPageState extends State<MobilePendantPage> {
           icon: Icons.error_outline_rounded,
           iconColor: _coral,
           title: 'Last error',
-          detail: '$lastError',
+          detail: deviceRelayErrorMessage(lastError),
         ),
     ],
   ];

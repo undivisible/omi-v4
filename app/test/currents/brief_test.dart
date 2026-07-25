@@ -143,9 +143,13 @@ void main() {
       expect(crepusRenders('stack col gap-2\n  text "Design review"'), isTrue);
     });
 
-    test('accepts progress and meter widgets', () {
+    test('accepts progress, meter, and sparkline widgets', () {
       expect(crepusRenders('stack col\n  progress value=3 max=5'), isTrue);
       expect(crepusRenders('stack col\n  meter value=72'), isTrue);
+      expect(
+        crepusRenders('stack col\n  sparkline values=1,2,3,4 color=green'),
+        isTrue,
+      );
     });
 
     test('rejects blank, unsupported, and oversized documents', () {

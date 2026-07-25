@@ -162,6 +162,32 @@ void main() {
     test('returns null when no valid code is present', () {
       expect(ChannelLinkCode.extractFrom('hello there'), isNull);
     });
+
+    test('returns null for a dependency bump list', () {
+      const msg = '''  dbus 0.7.13 (0.7.14 available)
+  flutter_secure_storage_darwin 0.3.2 (0.4.0 available)
+  flutter_secure_storage_platform_interface 2.0.1 (2.0.2 available)
+  hooks 2.0.2 (2.1.0 available)
+  matcher 0.12.19 (0.12.20 available)
+  mcumgr_flutter 0.4.2 (0.9.1 available)
+  meta 1.18.0 (1.19.0 available)
+  package_config 2.2.0 (3.0.0 available)
+  posix 6.5.0 (6.5.2 available)
+  protobuf 3.1.0 (6.0.0 available)
+  record_use 0.6.0 (1.0.0 available)
+  rxdart 0.27.7 (0.28.0 available)
+  test_api 0.7.11 (0.7.13 available)
+  vector_math 2.2.0 (2.4.1 available)
+bump these deps''';
+      expect(ChannelLinkCode.extractFrom(msg), isNull);
+    });
+
+    test('still finds a code in link-entry prose', () {
+      expect(
+        ChannelLinkCode.extractFrom('iMessage pairing code N5PKKYR'),
+        'N5PKKYR',
+      );
+    });
   });
 }
 

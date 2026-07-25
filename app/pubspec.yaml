@@ -50,7 +50,7 @@ dependencies:
   gpt_markdown: ^1.1.8
   flutter_local_notifications: ^22.1.0
   package_info_plus: ^10.2.1
-  mcumgr_flutter: ^0.4.2
+  mcumgr_flutter: ^0.9.1
   archive: ^4.0.7
   # Crepuscularity Flutter renderer for AI-authored currents (see
   # lib/currents/crepus_current.dart). PINNED GIT dependency, not a path

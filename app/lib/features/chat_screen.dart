@@ -1078,11 +1078,12 @@ class ChatScreenState extends State<ChatScreen>
     final text = _input.text.trim();
     if (text.isEmpty || _activeRequestId != null || _sending) return;
     // A channel link code in the chat box is a link action, not a message for
-    // the assistant — redeem it here and confirm inline (bare code or prose).
+    // the assistant — redeem it here and confirm inline (bare code or prose
+    // that clearly mentions linking). Long prompts are never intercepted.
     final code = ChannelLinkCode.extractFrom(text);
     final channels = widget.services.channels;
     if (code != null && channels != null) {
-      await _redeemLinkCode(channels, code);
+      await _redeemLinkCode(channels, code, userText: text);
       return;
     }
     _sending = true;
@@ -1111,14 +1112,18 @@ class ChatScreenState extends State<ChatScreen>
     }
   }
 
-  Future<void> _redeemLinkCode(ChannelClient channels, String code) async {
+  Future<void> _redeemLinkCode(
+    ChannelClient channels,
+    String code, {
+    required String userText,
+  }) async {
     _sending = true;
     setState(() {
       _beginExchange();
       _messages.add(
         _ChatMessage(
           requestId: 'channel-link:$code',
-          text: code,
+          text: userText,
           fromUser: true,
         ),
       );

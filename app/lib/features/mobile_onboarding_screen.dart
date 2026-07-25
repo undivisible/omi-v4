@@ -675,7 +675,10 @@ class _PairStageState extends State<_PairStage> {
         ],
         if (error case final message?) ...[
           const SizedBox(height: 8),
-          Text('$message', style: const TextStyle(color: Color(0xffffb4ab))),
+          Text(
+            deviceRelayErrorMessage(message),
+            style: const TextStyle(color: Color(0xffffb4ab)),
+          ),
         ],
       ],
     ),

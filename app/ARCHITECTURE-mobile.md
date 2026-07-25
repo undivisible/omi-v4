@@ -88,7 +88,7 @@ Codec ids are mapped by `DeviceAudioCodec.fromFirmwareId` (`app/lib/device/devic
 
 ### 3.2 Scan
 
-`scan()` requests BLE permissions, checks adapter power state (mapping failures to `DeviceCapabilityState.permissionRequired` / `adapterUnavailable`), then folds in system-connected peripherals *before* scanning — a pendant that is already connected at the OS level stops advertising and would otherwise be invisible (`universal_ble_device_relay.dart:82-86`). Scanning runs for a fixed `scanSettle` of 5 seconds with a service filter on the Omi UUID.
+`scan()` requests BLE permissions, checks adapter power state (mapping failures to `DeviceCapabilityState.permissionRequired` / `adapterUnavailable`), then folds in system-connected peripherals *before* scanning — a pendant that is already connected at the OS level stops advertising and would otherwise be invisible (`universal_ble_device_relay.dart:82-86`). Scanning runs for a fixed `scanSettle` of 5 seconds with a service filter on the Omi UUID. **`connect()` requests the same permissions before attaching**, including auto-reconnect on launch when no scan runs.
 
 ### 3.3 Connect
 

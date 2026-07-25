@@ -36,7 +36,7 @@ bool crepusRenders(String source) {
             BadgeNode(:final label) => label.trim().isNotEmpty,
             CheckboxNode(:final label) => label.trim().isNotEmpty,
             ToggleNode(:final label) => label.trim().isNotEmpty,
-            ProgressNode() || MeterNode() => true,
+            ProgressNode() || MeterNode() || SparklineNode() => true,
             _ => false,
           };
       if (!walk(childrenOf(node))) return false;

@@ -82,19 +82,32 @@ final class UniversalBleDeviceRelayAdapter
   @override
   Stream<DeviceRelaySnapshot> get snapshots => _snapshots.stream;
 
+  /// BLE operations must prompt before touching the adapter. [scan] always did;
+  /// [connect] can attach to a system-connected pendant without scanning, so
+  /// auto-reconnect on launch must request here too.
+  Future<void> _ensureBlePermissions(String operation) async {
+    if (await UniversalBle.hasPermissions()) return;
+    try {
+      await UniversalBle.requestPermissions();
+    } catch (_) {
+      _emitUnavailable(DeviceCapabilityState.permissionRequired);
+      throw DeviceRelayUnavailable(
+        operation,
+        DeviceCapabilityState.permissionRequired,
+      );
+    }
+    if (!await UniversalBle.hasPermissions()) {
+      _emitUnavailable(DeviceCapabilityState.permissionRequired);
+      throw DeviceRelayUnavailable(
+        operation,
+        DeviceCapabilityState.permissionRequired,
+      );
+    }
+  }
+
   @override
   Future<List<RelayDevice>> scan() async {
-    if (!await UniversalBle.hasPermissions()) {
-      try {
-        await UniversalBle.requestPermissions();
-      } catch (_) {
-        _emitUnavailable(DeviceCapabilityState.permissionRequired);
-        throw const DeviceRelayUnavailable(
-          'scan',
-          DeviceCapabilityState.permissionRequired,
-        );
-      }
-    }
+    await _ensureBlePermissions('scan');
     final availability = await UniversalBle.getBluetoothAvailabilityState();
     if (availability != AvailabilityState.poweredOn) {
       _emitUnavailable(DeviceCapabilityState.adapterUnavailable);
@@ -166,6 +179,7 @@ final class UniversalBleDeviceRelayAdapter
 
   @override
   Future<RelayDevice> connect(String deviceId) async {
+    await _ensureBlePermissions('connect');
     if (_connectedId == deviceId && _connectedDevice != null && _connected) {
       // Re-emit so a UI that missed the original connect snapshot (or whose
       // reconnect button was pressed while already connected) refreshes.

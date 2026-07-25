@@ -75,6 +75,27 @@ void main() {
   });
 
   test(
+    'connect requests bluetooth permissions before attaching without a scan',
+    () async {
+      platform.permissionsGranted = false;
+      platform.systemDevices = [
+        BleDevice(
+          deviceId: 'omi-system',
+          name: 'Omi',
+          services: const [_omiService],
+        ),
+      ];
+
+      final device = await adapter.connect('omi-system');
+
+      expect(platform.requestPermissionsCalls, 1);
+      expect(device.id, 'omi-system');
+      expect(platform.startScanCalls, 0);
+      expect(platform.connectedIds, ['omi-system']);
+    },
+  );
+
+  test(
     'connect attaches to a system-connected device without a scan',
     () async {
       platform.systemDevices = [
@@ -354,6 +375,8 @@ final class _FakeBlePlatform extends UniversalBlePlatform {
   List<BleDevice> advertisedDevices = const [];
   final List<String> connectedIds = [];
   int startScanCalls = 0;
+  int requestPermissionsCalls = 0;
+  bool permissionsGranted = true;
   // Characteristics an older pendant firmware does not expose: reads and
   // writes against them fail the way the platform channel would.
   final Set<String> missingCharacteristics = {};
@@ -367,6 +390,18 @@ final class _FakeBlePlatform extends UniversalBlePlatform {
 
   @override
   Future<bool> enableBluetooth() async => true;
+
+  @override
+  Future<bool> hasPermissions({bool withAndroidFineLocation = false}) async =>
+      permissionsGranted;
+
+  @override
+  Future<void> requestPermissions({
+    bool withAndroidFineLocation = false,
+  }) async {
+    requestPermissionsCalls += 1;
+    permissionsGranted = true;
+  }
 
   @override
   Future<bool> disableBluetooth() async => true;

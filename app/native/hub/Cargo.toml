@@ -56,4 +56,8 @@ expect_used = "deny"
 wildcard_imports = "deny"
 
 [profile.release]
+# Stripping the whole release graph breaks proc-macro dylibs on macOS.
+strip = false
+
+[profile.release.package.hub]
 strip = "symbols"

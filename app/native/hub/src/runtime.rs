@@ -1949,46 +1949,47 @@ casual chat: when a step can be carried out here, propose the concrete action or
 the user's approval instead of only describing it. Keep any text reply short enough to read at \
 a glance.";
 
-const CREPUS_ARTIFACTS_GUIDANCE: &str = "You may render an interactive artifact instead of prose \
-when a structured, visual, or actionable answer beats plain text — comparisons, plans, \
-dashboards, checklists, profile/memory summaries, progress recaps. Emit it as a fenced block \
-tagged `crepus`. When an artifact fits, put the structured content ONLY inside the artifact — \
-do not repeat the same bullets or lists as markdown above or below it.\n\n\
-The syntax is indentation-based. Parent containers (`stack`, `view`, `card`, `section`, `scroll`) \
-nest child arrays by indenting children underneath. Supported nodes: text, stack (row/col, gap-N), \
-scroll, button, toggle, checkbox, progress, meter, badge, divider, spacer, image, if, foreach, \
-list, listitem.\n\n\
-Lists: put each row under `list` as either a bare `\"line\"` or `listitem \"line\"`. Do not emit \
-empty listitem rows. Example profile section:\n\
+const CREPUS_ARTIFACTS_GUIDANCE: &str = "Reply guidelines — default to clear markdown prose with \
+actionable steps, recommendations, and context the user can follow. Most answers should be helpful \
+text first.\n\n\
+Use a ```crepus artifact only when a structured or interactive surface clearly beats prose — \
+numeric trends, side-by-side comparisons with tap actions, or a checklist the user will work \
+through. Do NOT default to artifacts for status pings, simple Q&A, dependency or config lists, \
+or instructions that read better as direct guidelines.\n\n\
+When you do use an artifact:\n\
+- Lead with substantive prose BEFORE the fence: explain what to do and why.\n\
+- Do NOT emit badge+list \"dashboards\" that repeat the same bullets as a faux status card.\n\
+- For metrics over time, use full-width `sparkline` (or progress/meter for a single ratio) with \
+real values — not placeholder activity feeds.\n\
+- Put structured content ONLY inside the artifact; never duplicate the same lists above and below \
+it.\n\n\
+Supported nodes: text, stack (row/col, gap-N), scroll, button, toggle, checkbox, progress, meter, \
+badge, divider, spacer, image, if, foreach, list, listitem, sparkline.\n\n\
+Sparkline (full-width trend — prefer this over list-only summaries when numbers exist):\n\
 ```crepus\n\
 stack col gap-2\n\
-  text \"Recent Context & Email Activity\"\n\
-  list\n\
-    listitem \"Mar 12 — Sam asked about the Q2 roadmap\"\n\
-    listitem \"Mar 10 — Invoice reminder from Acme\"\n\
-    listitem \"Mar 8 — Calendar invite for design review\"\n\
-  button \"Summarize inbox\" onclick={prompt:Summarize my recent email threads}\n\
+  text \"Weekly focus hours\"\n\
+  sparkline color=blue variant=gradient values=6,8,7,11,9,13,12\n\
+  text \"Trending up — protect two deep-work blocks tomorrow.\"\n\
 ```\n\n\
-Tasks / currents-style boards — nest containers and use static rows or `foreach items as item` when \
-iterating structured data:\n\
+Actionable checklist with buttons (when the user will tap through steps):\n\
 ```crepus\n\
 stack col gap-2\n\
-  text \"Open tasks\"\n\
+  text \"Ship checklist\"\n\
   list\n\
-    listitem \"Ship the firmware fix\"\n\
-    listitem \"Review PR #42\"\n\
-  progress value=2 max=5\n\
-  button \"Review all\" onclick={prompt:Review my open tasks}\n\
+    listitem \"Run flutter test\"\n\
+    listitem \"Rebuild to Applications\"\n\
+  button \"Run tests\" onclick={prompt:Run flutter test in app/}\n\
 ```\n\n\
 Progress and meter always show a percentage in the UI — set value/max (and min for meter); do not \
 duplicate a separate `%` text line unless you also need a caption.\n\n\
 Data bindings: `text bind=fieldName` or `text \"{item.title}\"` inside `foreach items as item`. \
 Actions: `onclick={prompt:...}`, `onclick={open:https://...}`, or `onclick={compute:...}` on \
 `button` or `listitem`. ONE verb per action, nothing else.\n\n\
-Do NOT invent other node kinds or verbs. When an artifact would not help, answer in normal \
-markdown. When you create a Current with create_current, put a matching crepus infographic in \
-the crepus field (hero + supporting lines, progress/meter/chips) instead of relying on plain \
-title/summary alone.";
+Do NOT invent other node kinds or verbs. When an artifact would not help, answer in normal markdown \
+only. When you create a Current with create_current, put a matching crepus infographic in the \
+crepus field (hero line + sparkline or progress when numeric, supporting actions) instead of a \
+plain title/summary badge wall.";
 
 fn framed_assistant_prompt(
     origin: Option<MessageOrigin>,

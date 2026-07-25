@@ -30,11 +30,27 @@ abstract final class ChannelLinkCode {
     return normalized;
   }
 
+  /// Prose that reads like someone pasting a link code, not arbitrary chat.
+  static final _linkCodeContext = RegExp(
+    r'\b(?:code|link|paste|telegram|imessage|pairing|omi)\b',
+    caseSensitive: false,
+  );
+
   /// Finds a link code in free-form text (e.g. "my telegram code is K7QP2RM").
   static String? extractFrom(String value) {
-    final direct = tryParse(value);
+    final trimmed = value.trim();
+    if (trimmed.isEmpty) return null;
+
+    final direct = tryParse(trimmed);
     if (direct != null) return direct;
-    final chunks = value.toUpperCase().split(RegExp('[^$alphabet]+'));
+
+    // Long or multi-line messages are assistant prompts. Scraping them for
+    // code-shaped substrings false-positives on ordinary words — e.g.
+    // "package_config" contains "PACKAGE".
+    if (trimmed.contains('\n') || trimmed.length > 80) return null;
+    if (!_linkCodeContext.hasMatch(trimmed)) return null;
+
+    final chunks = trimmed.toUpperCase().split(RegExp('[^$alphabet]+'));
     for (final chunk in chunks.reversed) {
       final parsed = tryParse(chunk);
       if (parsed != null) return parsed;
@@ -44,7 +60,7 @@ abstract final class ChannelLinkCode {
       caseSensitive: false,
     );
     String? found;
-    for (final match in pattern.allMatches(value)) {
+    for (final match in pattern.allMatches(trimmed)) {
       final parsed = tryParse(match.group(0)!);
       if (parsed != null) found = parsed;
     }

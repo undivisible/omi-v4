@@ -127,3 +127,17 @@ class DeviceRelayUnavailable implements Exception {
   @override
   String toString() => 'DeviceRelayUnavailable($operation, ${state.name})';
 }
+
+/// User-facing copy for relay failures surfaced in mobile pairing UI.
+String deviceRelayErrorMessage(Object error) {
+  if (error is! DeviceRelayUnavailable) return error.toString();
+  return switch (error.state) {
+    DeviceCapabilityState.permissionRequired =>
+      'Bluetooth access is required. Allow it when prompted, or enable it in Settings.',
+    DeviceCapabilityState.adapterUnavailable =>
+      'Turn on Bluetooth to connect your Omi.',
+    DeviceCapabilityState.unsupported =>
+      'Bluetooth is not available on this device.',
+    DeviceCapabilityState.available => error.toString(),
+  };
+}
