@@ -94,8 +94,8 @@ parity with `worker/wrangler.jsonc` — no action needed.
 Custom domains and cron are enabled in `wrangler.toml`. Deploy from this directory:
 
 ```sh
-npm run deploy
-# or: worker-build --release && npx wrangler deploy
+bun run deploy
+# or: worker-build --release && bunx wrangler deploy
 ```
 
 Do **not** re-enable `routes` or `triggers.crons` on the TS worker — dual cron or
@@ -146,6 +146,6 @@ To revert to the TS worker on the custom domains:
   `worker-rs/public/` and point `[assets] directory` there.
 - **nodejs_compat**: the TS worker sets `compatibility_flags = ["nodejs_compat"]`;
   the Rust worker does not need it (pure wasm, no Node APIs) and omits it.
-- **FaceTime** is not ported: no Gemini Live bridge container in worker-rs.
-  Public API / MCP FaceTime tools return 501 or are absent; vars are present for
-  future porting. Do not dual-route FaceTime on a TS shadow worker.
+- **FaceTime** is implemented in worker-rs with a Sendblue session flow and a
+  required Gemini Live bridge container. A local dry-run needs Docker to build
+  that image. Do not dual-route FaceTime on a TS shadow worker.

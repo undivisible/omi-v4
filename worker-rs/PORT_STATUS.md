@@ -1,10 +1,11 @@
 # PORT_STATUS — TypeScript worker → Rust (workers-rs)
 
 > **Production cutover complete (2026-07-24).** `worker-rs` serves
-> `omi.tsc.hk` and `api.omi.tsc.hk`. `worker/` owns the D1 migrations, the
-> static `public/` assets that `worker-rs` serves, and the build scripts; its
-> routes and cron are disabled. FaceTime is intentionally absent in Rust (no
-> bridge container; returns 501 / tool absent).
+> `omi.tsc.hk` and `api.omi.tsc.hk`. Language-neutral `cloud/` owns D1
+> migrations, static assets, and static builds; `worker-rs` declares and
+> serves them. `worker/` is a dormant rollback configuration with routes and
+> cron disabled. FaceTime is implemented in Rust with a required container
+> binding; it has not been deployed from this migration work.
 >
 > **`worker/src` and `worker/test` are retained deliberately.** A scenario-level
 > audit on 2026-07-25 found that the port is **not** at parity: the features in
@@ -16,7 +17,8 @@
 ## Audit snapshot (2026-07-24, post-cutover)
 
 **Production:** `worker-rs` (`omi-v4-api-rs`) on `omi.tsc.hk` + `api.omi.tsc.hk`.
-**Migrations:** `worker/` (`omi-v4-api`) — no routes, no cron.
+**Migrations/assets:** `cloud/` — `worker-rs` declares `migrations_dir` and
+serves `cloud/public`; `worker/` has no routes or cron.
 
 `worker-rs` is the authoritative behavioural implementation: it is what serves
 production. The TypeScript remains the authoritative *specification* for the
@@ -33,17 +35,17 @@ Anything marked **absent** is behaviour the production worker does not have.
 | Gap | Severity | Status |
 |---|---|---|
 | `channel-checkout.ts` — `/subscribe` in chat, Stripe link issuance, webhook provisioning, `invoice.payment_failed` / `checkout.session.expired` | High | **ported 2026-07-25** — `channel_checkout.rs` + `routes_channels` + Stripe webhook/`stripe_sync` reconcile |
-| `channel-signup.ts` — first-contact question, `parseSignupAnswer`, chat-native accounts, claim/retire helpers | High | **partial** — signup/first-contact/`/subscribe` ported (`channel_signup.rs`); **claim-on-link still missing** (see below) |
-| Cloudflare AI Gateway (`aiGatewayRoute`) incl. the account/gateway id path-smuggling validation | Medium | **absent** — `CF_AI_GATEWAY_*` vars in `wrangler.toml` are read by nothing |
-| Managed speech routes (`/api/v1/speech/*`) and the `speak_text` / `transcribe_audio` MCP tools | Medium | **absent** — `speech.rs` is a fully tested pure island with no caller |
-| Authoritative memory log — append-on-sync, `GET /memory/log`, `memory_log_cursors` | Medium | **absent** — `memory_log.rs` is now compiled and tested but still has no route |
-| `observability.ts` — Sentry error capture + Better Stack log shipping | Medium | **partial** — the cron heartbeat is ported (`glue::ping_heartbeat`); `createSentry`, the `onError` capture and the `tail` log export are still absent, native Workers Observability only |
-| Streaming usage-tail settlement writes no `status='complete'` row for a streamed turn | Medium | reconciled by cron only |
-| STT "idempotency key reused with different configuration" 409 | Medium | **absent** — the row is re-read but not compared |
-| BYOK negotiation: closing the prior open session on start, and the superseded-session accept guard | Medium | **absent** |
-| `user-profile.ts` `formatAboutUser` in memory context | Low | ported 2026-07-25 (`user_profile.rs`), not yet wired into `wasm_glue` |
-| FaceTime / `facetime-bridge` | High if product-critical | **intentionally absent** — 501 / no MCP tool; needs bridge container |
-| `DELETE /account` Vectorize claim purge | Low | deferred |
+| `channel-signup.ts` — first-contact question, `parseSignupAnswer`, chat-native accounts, claim/retire helpers | High | **ported 2026-07-25** — link redemption claims or retires the chat-native placeholder atomically |
+| Cloudflare AI Gateway (`aiGatewayRoute`) incl. the account/gateway id path-smuggling validation | Medium | **ported 2026-07-25** — canonical account/gateway validation and authenticated routing |
+| Managed speech routes (`/api/v1/speech/*`) and the `speak_text` / `transcribe_audio` MCP tools | Medium | **ported 2026-07-25** — routes, MCP dispatch, D1 idempotency, admission and settlement wired |
+| Authoritative memory log — append-on-sync, `GET /memory/log`, `memory_log_cursors` | Medium | **ported 2026-07-25** — sync append/projection and authenticated route wired |
+| `observability.ts` — Sentry error capture + Better Stack log shipping | Medium | **partial** — heartbeat and Sentry envelope capture are wired; Tail export is unsupported by workers-rs 0.8.5 |
+| Streaming usage-tail settlement writes no `status='complete'` row for a streamed turn | Medium | **ported 2026-07-25** — SSE tail finalizes the ledger and admission |
+| STT "idempotency key reused with different configuration" 409 | Medium | **ported 2026-07-25** |
+| BYOK negotiation: closing the prior open session on start, and the superseded-session accept guard | Medium | **ported 2026-07-25** |
+| `user-profile.ts` `formatAboutUser` in memory context | Low | **ported 2026-07-25** — wired before relevant claims |
+| FaceTime / `facetime-bridge` | High if product-critical | **implemented 2026-07-25** — Sendblue, session state, MCP and Rust container binding; deploy requires container build |
+| `DELETE /account` Vectorize claim purge | Low | **ported 2026-07-25** |
 | Audio bytes persistence on device upload | Known stub | both TS and RS returned `persisted: false` |
 
 **Closed 2026-07-25** (were absent, now ported with host tests):
@@ -107,7 +109,7 @@ resolved — noted inline).
 | `routes.ts` → `GET|PUT /profile/onboarding` | `glue.rs::handle_onboarding_*` | **ported** | Same INSERT…ON CONFLICT + 400 on `complete!=true`. |
 | `routes.ts` → `GET|PUT /settings` | `src/settings.rs` + `glue.rs::handle_settings_*` | **ported** | Security-relevant: `PUT` owns `user_settings.revision` (= `policy_generation`), the mechanism a user uses to revoke standing current-approvals — the approval gate in `routes_memory/wasm_glue.rs` reads `policy_generation = COALESCE((SELECT revision FROM user_settings…), 0)`, so without this route the revision could never bump and revocation was inoperative. Parity: same up-front validation (patch keys, `Number(expectedRevision)` safe-int ≥0 with `undefined`→NaN reject, duration allow-list, approval/proactive value checks), 409 revision conflict, `expandsAuthority` owner-confirmation-receipt consume (403 shapes), scoped `setting_scopes` upsert (`ON CONFLICT(uid,duration,scope_id)`) vs persistent `revision+1` UPDATE / `revision=1` INSERT-OR-IGNORE, `settingsDiff`, and the scopeId/expiresAt guards. Pure logic + 8 host tests in `settings.rs`. |
 | `routes.ts` → `POST /channels/:channel/messages` | `glue.rs::handle_channel_message_post` + `routes_channels::dispatch_channel_message` | **ported** | App-initiated outbound send: `text`/idempotency-key validation (len≥8 + `^[A-Za-z0-9._:-]+$`), `channel_bindings` lookup (409 not-linked), idempotent `INSERT OR IGNORE INTO channel_deliveries` + re-read conflict (409), `appendConversationMessage` (409 on conflict), DeliveryCoordinator `/deliver` dispatch (503 on failure), and the 200/503/502/202 status machine from the re-read state. `dispatch_channel_message` added to `routes_channels.rs` (uses the existing `dispatch_to_coordinator`). Pure `valid_idempotency_key` + `delivery_status` with 2 host tests in `delivery.rs`. |
-| `routes.ts` → `DELETE /account` | `glue.rs::handle_account_delete` | **partial** | D1 batch delete across all uid-scoped tables at parity. Vectorize claim-vector cleanup deferred — **blocked** on Vectorize binding (see below). |
+| `routes.ts` → `DELETE /account` | `glue.rs::handle_account_delete` | **ported** | D1 batch delete and Vectorize claim-vector cleanup. |
 
 ## Phase 2 (this task — landed)
 
@@ -136,8 +138,7 @@ in `wrangler.toml`. Runtime is fail-safe: when the bindings are absent the FFI
 returns `None` and memory context is `null`, matching TS behaviour — so the
 build is honest with or without the index provisioned. The scheduled
 `backfillClaimVectors`/`drainPendingEmbeddings` drivers run via `cron_slice`;
-`DELETE /account` vector cleanup remains the one deferred Vectorize consumer
-(documented in Phase 1).
+`DELETE /account` uses the same FFI to remove the account's claim vectors.
 
 ## Device cloud sync (home STA)
 
@@ -162,12 +163,12 @@ build is honest with or without the index provisioned. The scheduled
 | `stt.ts`, `stt-admission.ts` (DO), `asr.ts`, `voice.ts` | **ported** | See "AI routes" below. |
 | `memory-projection.ts`, `memory-sync.ts` | **ported** | See "Memory & currents" below. |
 | `memory-vectors.ts`, `embeddings.ts` | **ported (default)** | Vectorize via `js_sys` FFI; see Vectorize section. |
-| `facetime.ts` / bridge | **intentionally absent** | Needs Gemini Live bridge container; keep on TS until that stack exists for RS. Hub FaceTime join is behind `facetime` Cargo feature (default off). |
+| `facetime.ts` / bridge | **implemented** | Sendblue call/session flow, MCP tool and required Rust container/DO binding are wired. |
 | `digests.ts`, `cron-cursor.ts` | **ported** | See "Cron jobs" below. |
 | `stripe-sync.ts` | **ported** | `src/stripe_sync.rs`, ported separately; `reconcileStripeSubscriptions` is wired into `glue.rs::scheduled` in its TS position. |
-| `observability.ts` | **partial** | Heartbeat only; Sentry capture and tail log shipping remain absent. See the audit table above. |
+| `observability.ts` | **partial** | Heartbeat and Sentry capture are wired; Tail log shipping is unavailable in workers-rs 0.8.5. |
 | `channel-checkout.ts` | **ported** | `src/channel_checkout.rs` + `routes_channels` + webhook/`stripe_sync` reconcile; `/subscribe` in `CHANNEL_COMMANDS`. |
-| `channel-signup.ts` | **partial** | Pure signup + first-contact in `channel_signup.rs` / `routes_channels`; **claim-on-link on `POST /v1/channels/link` still missing** — TS retires/claims the chat-native placeholder (`claimChannelAccount`) when redeeming a link code; Rust `handle_channel_link_redeem` binds only and does not claim the placeholder, and rejects an existing binding owned by that placeholder with 409. |
+| `channel-signup.ts` | **ported** | Signup, first-contact, `/subscribe`, and placeholder claim/retire on link redemption are wired. |
 
 ## Cron jobs
 
@@ -295,13 +296,10 @@ via `WebSocket::events()`.
 DO bindings (`ASSISTANT_ADMISSION`, `STT_ADMISSION`, `RATE_LIMITER`) and the
 `v1` migration are declared in `wrangler.toml`.
 
-**Deferred glue (cutover):** (1) streaming *usage-tail* settlement — the chat
-route marks the ledger `streaming` and relies on
-`reconcile_managed_assistant_requests` (ported, wired via a one-line call in the
-`scheduled` event owned by glue) rather than parsing the SSE tail inline;
-(2) the `waitUntil`-based durable retry wrapper around finalize/release is
-best-effort here. Behaviour parity of the decision logic is proven by the host
-tests; these two items are runtime-fidelity refinements, not logic gaps.
+**Streaming settlement:** the response stream now observes the final usage tail,
+marks the ledger complete, and settles/releases admission inline. The
+`waitUntil`-based durable retry wrapper around finalize/release remains
+best-effort because workers-rs handlers have no execution context.
 
 Gates: `cargo test` 65 green (host); `cargo clippy --all-targets -D warnings`
 clean (host); `cargo clippy --target wasm32-unknown-unknown -D warnings` clean;
@@ -356,14 +354,9 @@ Production cutover is **done** (2026-07-24). The 2026-07-25 audit found the
 earlier "~95% parity" figure was optimistic; the absent-behaviour rows in the
 table above are the backlog that number concealed. Residual risks:
 
-- **The absent features are absent in production, not merely untested.** Chat
-  `/subscribe` checkout and chat-native signup **were ported 2026-07-25**
-  (`channel_checkout` / `channel_signup` / `routes_channels`). Remaining channel
-  gap: **claim-on-link** — `POST /v1/channels/link` does not claim/retire the
-  chat-native placeholder account the way TS `routes.post("/channels/link")`
-  does, so redeeming a code against a signup-created placeholder can 409 or
-  leave an unclaimed `channel_accounts` row. `claim_channel_account` exists but
-  is not called from the redeem path.
+- **Scenario-level production proof is still required.** Host tests and wasm
+  checks cover the newly wired paths, but no production route or container has
+  been deployed by this work.
 - **Digests, daily Currents and cursor rotation were inert from the 2026-07-24
   cutover until they were ported on 2026-07-25.** No user received a
   cron-minted Current or a digest in that window. The three jobs are now in
@@ -371,11 +364,6 @@ table above are the backlog that number concealed. Residual risks:
   current from the next tick in their local morning, not backfilled. The
   heartbeat that would have caught this within a minute is now ported too, and
   is the reason to treat any future silent cron as a monitoring failure first.
-- **DELETE /account Vectorize cleanup** still deferred: account deletion removes
-  all D1 rows but does not delete the user's claim vectors from the
-  `omi-memory-claims` index. Orphaned vectors are uid-filtered and never
-  surfaced to other users, but they are not purged. The `delete_by_ids` FFI
-  exists; wiring it into the delete path is the one open Vectorize consumer.
 - **Durable Object state does not migrate** at cutover. The Rust worker uses its
   own DO namespace (`AssistantAdmissionDo`/`SttAdmissionDo`/`RateLimiterDo`/
   `DeliveryCoordinator`). In-flight admission ledgers and rate-limit counters
@@ -383,16 +371,13 @@ table above are the backlog that number concealed. Residual risks:
 - **Provider `fetch` timeouts**: workers-rs `RequestInit` has no `AbortSignal`
   field, so the TS per-request `AbortSignal.timeout(...)` guards are dropped in
   favour of the platform subrequest timeout (delivery, MIMO completion).
-- **Streaming usage-tail settlement** for `/v1/chat/completions` is reconciled
-  by the minutely cron rather than parsed inline; budgets converge within one
-  cron cycle (TS-equivalent deferral).
 - **Local dev caveat**: Vectorize is "not supported" in `wrangler dev --local`
   and AI "always remote"; semantic-search paths return null/empty locally. This
   is a Miniflare limitation, not a port gap — both work against the deployed
   worker (or `wrangler dev --remote`).
-- **Assets path** `../worker/public` is outside the project dir; wrangler 4.x
-  accepts it (verified). If a future wrangler rejects it, copy into
-  `worker-rs/public/` via a `[build]` step (documented in CUTOVER.md).
+- **Better Stack Tail export remains absent.** `worker-macros` 0.8.5 exposes no
+  Tail event handler; native Workers Observability and the new Sentry capture
+  remain active.
 
 ## Build pipeline (RESOLVED)
 
