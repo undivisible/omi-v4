@@ -17,6 +17,7 @@ pub mod offline_packer;
 pub mod sd_ring;
 pub mod settings_math;
 pub mod storage_proto;
+pub mod storage_transfer;
 pub mod time;
 pub mod user_event;
 pub mod wifi_proto;
@@ -35,6 +36,7 @@ pub extern "C" fn omi_rust_selftest() -> i32 {
         + metrics::selftest()
         + settings_math::selftest()
         + storage_proto::selftest()
+        + storage_transfer::selftest()
         + sd_ring::selftest()
         + time::selftest()
         + user_event::selftest()
@@ -849,6 +851,76 @@ pub extern "C" fn omi_rust_storage_ble_chunk_size(mtu: u16) -> u16 {
 #[no_mangle]
 pub extern "C" fn omi_rust_storage_crc32_update_byte(crc: u32, byte: u8) -> u32 {
     storage_proto::crc32_update(crc, &[byte])
+}
+
+#[no_mangle]
+pub extern "C" fn omi_rust_storage_transfer_reset() {
+    storage_transfer::reset();
+}
+
+#[no_mangle]
+pub extern "C" fn omi_rust_storage_transfer_start(start_seq: u64, packet_count: u32) {
+    storage_transfer::start(start_seq, packet_count);
+}
+
+#[no_mangle]
+pub extern "C" fn omi_rust_storage_transfer_active() -> bool {
+    storage_transfer::active()
+}
+
+#[no_mangle]
+pub extern "C" fn omi_rust_storage_transfer_read_begin_sent() -> bool {
+    storage_transfer::read_begin_sent()
+}
+
+#[no_mangle]
+pub extern "C" fn omi_rust_storage_transfer_mark_read_begin_sent() {
+    storage_transfer::mark_read_begin_sent();
+}
+
+#[no_mangle]
+pub extern "C" fn omi_rust_storage_transfer_done_pending() -> bool {
+    storage_transfer::done_pending()
+}
+
+#[no_mangle]
+pub extern "C" fn omi_rust_storage_transfer_complete(status: u8) {
+    storage_transfer::complete(status);
+}
+
+#[no_mangle]
+pub extern "C" fn omi_rust_storage_transfer_start_seq() -> u64 {
+    storage_transfer::start_seq()
+}
+
+#[no_mangle]
+pub extern "C" fn omi_rust_storage_transfer_current_seq() -> u64 {
+    storage_transfer::current_seq()
+}
+
+#[no_mangle]
+pub extern "C" fn omi_rust_storage_transfer_remaining_packets() -> u32 {
+    storage_transfer::remaining_packets()
+}
+
+#[no_mangle]
+pub extern "C" fn omi_rust_storage_transfer_end_status() -> u8 {
+    storage_transfer::end_status()
+}
+
+#[no_mangle]
+pub extern "C" fn omi_rust_storage_transfer_data_crc() -> u32 {
+    storage_transfer::data_crc()
+}
+
+#[no_mangle]
+pub extern "C" fn omi_rust_storage_transfer_note_packets_read(packets_read: u32) {
+    storage_transfer::note_packets_read(packets_read);
+}
+
+#[no_mangle]
+pub extern "C" fn omi_rust_storage_transfer_update_crc_byte(byte: u8) {
+    storage_transfer::update_crc_byte(byte);
 }
 
 /// # Safety

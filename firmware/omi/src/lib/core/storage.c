@@ -139,15 +139,6 @@ static uint64_t pending_start_seq;
 static uint32_t pending_packet_count;
 static uint64_t pending_advance_seq;
 
-static bool transfer_active;
-static bool read_begin_sent;
-static bool done_pending;
-static uint64_t transfer_start_seq;
-static uint64_t current_read_seq;
-static uint32_t remaining_packets;
-static uint8_t transfer_end_status;
-static uint32_t transfer_data_crc;
-
 static atomic_t storage_status_used_bytes = ATOMIC_INIT(0);
 static atomic_t storage_status_unread_packets = ATOMIC_INIT(0);
 static atomic_t storage_status_free_bytes = ATOMIC_INIT(0);
@@ -340,7 +331,8 @@ static int send_ack(struct bt_conn *conn, uint8_t status)
 
 static int send_done(struct bt_conn *conn, uint8_t status, uint64_t next_seq)
 {
-    uint16_t len = omi_rust_storage_encode_done(status, next_seq, transfer_data_crc, control_notify_buf);
+    uint16_t len = omi_rust_storage_encode_done(
+        status, next_seq, omi_rust_storage_transfer_data_crc(), control_notify_buf);
     return storage_notify(conn, control_notify_buf, len);
 }
 
@@ -367,14 +359,7 @@ static int send_ring_info_response(struct bt_conn *conn)
 
 static void reset_transfer_state(void)
 {
-    transfer_active = false;
-    read_begin_sent = false;
-    done_pending = false;
-    transfer_start_seq = 0;
-    current_read_seq = 0;
-    remaining_packets = 0;
-    transfer_end_status = 0;
-    transfer_data_crc = 0;
+    omi_rust_storage_transfer_reset();
     transport_conn_params_reevaluate();
 }
 
@@ -390,7 +375,7 @@ void storage_stop_transfer(void)
 
 bool storage_transfer_active(void)
 {
-    return transfer_active;
+    return omi_rust_storage_transfer_active();
 }
 
 static bool consume_stop_request(void)
@@ -424,14 +409,7 @@ static int start_pending_read(struct bt_conn *conn)
         requested_packets = (available_packets > UINT32_MAX) ? UINT32_MAX : (uint32_t) available_packets;
     }
 
-    transfer_active = true;
-    read_begin_sent = false;
-    done_pending = false;
-    transfer_start_seq = pending_start_seq;
-    current_read_seq = pending_start_seq;
-    remaining_packets = requested_packets;
-    transfer_end_status = 0;
-    transfer_data_crc = 0;
+    omi_rust_storage_transfer_start(pending_start_seq, requested_packets);
     sync_speed_reset(SYNC_SPEED_MODE_NONE);
     transport_conn_params_reevaluate();
 
@@ -440,7 +418,7 @@ static int start_pending_read(struct bt_conn *conn)
 
 static void write_to_gatt(struct bt_conn *conn)
 {
-    if (!transfer_active || done_pending) {
+    if (!omi_rust_storage_transfer_active() || omi_rust_storage_transfer_done_pending()) {
         return;
     }
 
@@ -448,9 +426,11 @@ static void write_to_gatt(struct bt_conn *conn)
         return;
     }
 
-    if (!read_begin_sent) {
+    if (!omi_rust_storage_transfer_read_begin_sent()) {
         uint16_t len = omi_rust_storage_encode_read_begin(
-            transfer_start_seq, remaining_packets, control_notify_buf);
+            omi_rust_storage_transfer_start_seq(),
+            omi_rust_storage_transfer_remaining_packets(),
+            control_notify_buf);
 
         int err = storage_notify(conn, control_notify_buf, len);
         if (err == -ENOMEM) {
@@ -463,17 +443,15 @@ static void write_to_gatt(struct bt_conn *conn)
             return;
         }
         if (err) {
-            transfer_end_status = storage_status_from_error(err, STORAGE_NOT_READY);
-            done_pending = true;
-            remaining_packets = 0;
+            omi_rust_storage_transfer_complete(storage_status_from_error(err, STORAGE_NOT_READY));
             return;
         }
 
-        read_begin_sent = true;
+        omi_rust_storage_transfer_mark_read_begin_sent();
     }
 
-    if (remaining_packets == 0U) {
-        done_pending = true;
+    if (omi_rust_storage_transfer_remaining_packets() == 0U) {
+        omi_rust_storage_transfer_complete(0);
         return;
     }
 
@@ -485,25 +463,26 @@ static void write_to_gatt(struct bt_conn *conn)
 
     uint16_t ble_chunk = get_ble_data_chunk_size(conn);
 
-    while (remaining_packets > 0U) {
+    while (omi_rust_storage_transfer_remaining_packets() > 0U) {
         if (consume_stop_request()) {
             return;
         }
 
-        uint32_t packets_to_read = MIN(remaining_packets, (uint32_t) STORAGE_CHUNK_COUNT);
+        uint32_t packets_to_read = MIN(omi_rust_storage_transfer_remaining_packets(), (uint32_t) STORAGE_CHUNK_COUNT);
         uint32_t bytes_read = 0;
         uint32_t packets_read = 0;
         int ret = sd_ring_read(
-            current_read_seq, storage_buffer, packets_to_read * RAW_AUDIO_PACKET_BYTES, &bytes_read, &packets_read);
+            omi_rust_storage_transfer_current_seq(),
+            storage_buffer,
+            packets_to_read * RAW_AUDIO_PACKET_BYTES,
+            &bytes_read,
+            &packets_read);
         if (ret < 0) {
-            transfer_end_status = storage_status_from_error(ret, STORAGE_NOT_READY);
-            done_pending = true;
-            remaining_packets = 0;
+            omi_rust_storage_transfer_complete(storage_status_from_error(ret, STORAGE_NOT_READY));
             return;
         }
         if (packets_read == 0U || bytes_read == 0U) {
-            done_pending = true;
-            remaining_packets = 0;
+            omi_rust_storage_transfer_complete(0);
             return;
         }
 
@@ -530,25 +509,20 @@ static void write_to_gatt(struct bt_conn *conn)
                 return;
             }
             if (err) {
-                transfer_end_status = storage_status_from_error(err, STORAGE_NOT_READY);
-                done_pending = true;
-                remaining_packets = 0;
+                omi_rust_storage_transfer_complete(storage_status_from_error(err, STORAGE_NOT_READY));
                 return;
             }
 
             bytes_sent += payload;
             for (uint32_t i = bytes_sent - payload; i < bytes_sent; i++) {
-                transfer_data_crc = omi_rust_storage_crc32_update_byte(transfer_data_crc, storage_buffer[i]);
+                omi_rust_storage_transfer_update_crc_byte(storage_buffer[i]);
             }
             sync_speed_add_bytes(payload);
         }
 
-        current_read_seq += packets_read;
-        remaining_packets -= packets_read;
+        omi_rust_storage_transfer_note_packets_read(packets_read);
 
     }
-
-    done_pending = true;
 }
 
 static ssize_t storage_read_characteristic(struct bt_conn *conn,
@@ -979,11 +953,14 @@ static void storage_write(void)
             }
         }
 
-        if (transfer_active) {
+        if (omi_rust_storage_transfer_active()) {
             if (conn == NULL) {
                 storage_stop_transfer();
-            } else if (done_pending) {
-                int err = send_done(conn, transfer_end_status, current_read_seq);
+            } else if (omi_rust_storage_transfer_done_pending()) {
+                int err = send_done(
+                    conn,
+                    omi_rust_storage_transfer_end_status(),
+                    omi_rust_storage_transfer_current_seq());
                 if (err == -ENOMEM) {
                     k_yield();
                 } else {
@@ -997,7 +974,7 @@ static void storage_write(void)
 
 #ifdef CONFIG_OMI_ENABLE_WIFI
         if (wifi_sync_all_requested && is_wifi_on() && is_wifi_transport_ready() &&
-            !wifi_transfer_active && !transfer_active) {
+            !wifi_transfer_active && !omi_rust_storage_transfer_active()) {
             wifi_sync_all_requested = 0;
             sd_ring_info_t info;
             if (sd_ring_get_info(&info) == 0 && info.write_seq > info.read_seq) {
@@ -1022,7 +999,7 @@ static void storage_write(void)
             }
         }
 #endif
-        if (!transfer_active) {
+        if (!omi_rust_storage_transfer_active()) {
             if (conn) {
                 storage_status_cache_maybe_refresh(false);
             }

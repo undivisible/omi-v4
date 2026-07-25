@@ -29,6 +29,7 @@ state live in Rust via the zephyr crate.
 - [x] LED pulse-width math
 - [x] Feedback error patterns
 - [x] Storage BLE sync wire format (parse + ACK/DONE/INFO/DATA/READ_BEGIN)
+- [x] Storage BLE transfer orchestration state
 - [x] SD ring validation + seq/sector math + timestamp names
 - [x] User-event payload encode
 - [x] RTC extrapolate + soft-clock state/mutex/uptime + IMU boot time delta
