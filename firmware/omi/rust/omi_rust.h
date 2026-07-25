@@ -133,8 +133,9 @@ uint8_t omi_rust_storage_parse_command(const uint8_t *buf, uint16_t len,
                                        omi_rust_storage_parsed_t *out);
 uint8_t omi_rust_storage_status_from_error(int err, uint8_t fallback_status);
 uint16_t omi_rust_storage_ble_chunk_size(uint16_t mtu);
+uint32_t omi_rust_storage_crc32_update_byte(uint32_t crc, uint8_t byte);
 uint16_t omi_rust_storage_encode_ack(uint8_t status, uint8_t *out);
-uint16_t omi_rust_storage_encode_done(uint8_t status, uint64_t next_seq, uint8_t *out);
+uint16_t omi_rust_storage_encode_done(uint8_t status, uint64_t next_seq, uint32_t crc, uint8_t *out);
 uint16_t omi_rust_storage_encode_ring_info(const omi_rust_ring_info_fields_t *info, uint8_t *out);
 uint16_t omi_rust_storage_encode_read_begin(uint64_t start_seq, uint32_t packet_count, uint8_t *out);
 uint16_t omi_rust_storage_encode_data(const uint8_t *payload, uint16_t payload_len, uint8_t *out);

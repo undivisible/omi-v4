@@ -750,6 +750,11 @@ pub extern "C" fn omi_rust_storage_ble_chunk_size(mtu: u16) -> u16 {
     storage_proto::ble_data_chunk_size(mtu)
 }
 
+#[no_mangle]
+pub extern "C" fn omi_rust_storage_crc32_update_byte(crc: u32, byte: u8) -> u32 {
+    storage_proto::crc32_update(crc, &[byte])
+}
+
 /// # Safety
 ///
 /// `out` must be null or point at at least `storage_proto::ACK_PAYLOAD_LEN` writable bytes.
@@ -774,13 +779,14 @@ pub unsafe extern "C" fn omi_rust_storage_encode_ack(status: u8, out: *mut u8) -
 pub unsafe extern "C" fn omi_rust_storage_encode_done(
     status: u8,
     next_seq: u64,
+    crc: u32,
     out: *mut u8,
 ) -> u16 {
     if out.is_null() {
         return 0;
     }
     let mut buf = [0u8; storage_proto::DONE_PAYLOAD_LEN];
-    let len = storage_proto::encode_done(status, next_seq, &mut buf);
+    let len = storage_proto::encode_done(status, next_seq, crc, &mut buf);
     // SAFETY: caller guarantees writable output buffer.
     unsafe {
         core::ptr::copy_nonoverlapping(buf.as_ptr(), out, len);

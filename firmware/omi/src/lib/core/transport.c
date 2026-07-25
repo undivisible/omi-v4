@@ -1023,10 +1023,6 @@ static void _le_param_updated(struct bt_conn *conn, uint16_t interval, uint16_t 
             latency,
             supervision_timeout);
 
-    if (conn_params_fast && interval > CONFIG_OMI_CONN_INTERVAL_FAST_MAX) {
-        LOG_WRN("Connection interval still high (%u units). Re-requesting preferred params.", interval);
-        update_conn_params(conn);
-    }
 }
 
 static void _le_phy_updated(struct bt_conn *conn, struct bt_conn_le_phy_info *param)

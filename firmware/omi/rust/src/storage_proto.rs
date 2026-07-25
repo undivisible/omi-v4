@@ -18,7 +18,7 @@ pub const NOTIFY_DONE: u8 = 0x04;
 pub const NOTIFY_READ_BEGIN: u8 = 0x05;
 
 pub const ACK_PAYLOAD_LEN: usize = 2;
-pub const DONE_PAYLOAD_LEN: usize = 10;
+pub const DONE_PAYLOAD_LEN: usize = 14;
 pub const RING_INFO_PAYLOAD_LEN: usize = 31;
 pub const READ_BEGIN_PAYLOAD_LEN: usize = 13;
 
@@ -157,10 +157,22 @@ pub fn encode_ack(status: u8, out: &mut [u8]) -> usize {
     ACK_PAYLOAD_LEN
 }
 
-pub fn encode_done(status: u8, next_seq: u64, out: &mut [u8]) -> usize {
+pub fn crc32_update(mut crc: u32, data: &[u8]) -> u32 {
+    crc = !crc;
+    for byte in data {
+        crc ^= u32::from(*byte);
+        for _ in 0..8 {
+            crc = (crc >> 1) ^ (0xEDB8_8320 & 0u32.wrapping_sub(crc & 1));
+        }
+    }
+    !crc
+}
+
+pub fn encode_done(status: u8, next_seq: u64, crc: u32, out: &mut [u8]) -> usize {
     out[0] = NOTIFY_DONE;
     out[1] = status;
     put_be64(next_seq, &mut out[2..10]);
+    put_be32(crc, &mut out[10..14]);
     DONE_PAYLOAD_LEN
 }
 
@@ -199,10 +211,13 @@ pub fn selftest() -> i32 {
     }
 
     let mut done = [0u8; DONE_PAYLOAD_LEN];
-    if encode_done(9, 0x0123_4567_89AB_CDEF, &mut done) != DONE_PAYLOAD_LEN {
+    if encode_done(9, 0x0123_4567_89AB_CDEF, 0xCBF4_3926, &mut done) != DONE_PAYLOAD_LEN {
         failures += 1;
     }
-    if done[0] != NOTIFY_DONE || done[1] != 9 || done[2..] != 0x0123_4567_89AB_CDEFu64.to_be_bytes()
+    if done[0] != NOTIFY_DONE
+        || done[1] != 9
+        || done[2..10] != 0x0123_4567_89AB_CDEFu64.to_be_bytes()
+        || done[10..14] != 0xCBF4_3926u32.to_be_bytes()
     {
         failures += 1;
     }
@@ -282,10 +297,18 @@ mod tests {
     #[test]
     fn done_wire_format() {
         let mut out = [0u8; DONE_PAYLOAD_LEN];
-        encode_done(0, 0xDEAD_BEEF_CAFE_BABEu64, &mut out);
+        encode_done(0, 0xDEAD_BEEF_CAFE_BABEu64, 0xCBF4_3926, &mut out);
         assert_eq!(out[0], NOTIFY_DONE);
         assert_eq!(out[1], 0);
-        assert_eq!(&out[2..], &0xDEAD_BEEF_CAFE_BABEu64.to_be_bytes());
+        assert_eq!(&out[2..10], &0xDEAD_BEEF_CAFE_BABEu64.to_be_bytes());
+        assert_eq!(&out[10..], &0xCBF4_3926u32.to_be_bytes());
+    }
+
+    #[test]
+    fn crc_matches_golden_vector() {
+        assert_eq!(crc32_update(0, b"123456789"), 0xCBF4_3926);
+        let first = crc32_update(0, b"1234");
+        assert_eq!(crc32_update(first, b"56789"), 0xCBF4_3926);
     }
 
     #[test]
