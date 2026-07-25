@@ -2,7 +2,7 @@
 
 *Interface reference for the mobile/desktop apps. Every entry below is derived
 from the firmware sources in this directory; file and function citations are
-inline so each claim is checkable. Reflects `firmware/omi/VERSION` 3.1.0 on top
+inline so each claim is checkable. Reflects `firmware/omi/VERSION` 4.0.0 on top
 of upstream `BasedHardware/omi` `ed4e513e` (see `PROVENANCE.md`).*
 
 ## 0. Which device am I talking to?

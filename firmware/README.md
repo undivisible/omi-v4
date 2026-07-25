@@ -321,7 +321,7 @@ Zephyr `VERSION` file at build time; there is no hand-maintained literal:
 
 | Target | Version file | Current |
 | --- | --- | --- |
-| `omi-cv1` | `omi/VERSION` | 3.2.0 |
+| `omi-cv1` | `omi/VERSION` | 4.0.0 |
 | `devkit-*` | `devkit/VERSION` | 1.1.0 |
 
 `CMakeLists.txt` parses the file before `find_package(Zephyr)` and writes a
