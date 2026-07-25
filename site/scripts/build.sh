@@ -44,4 +44,6 @@ rsync --archive --delete \
   --exclude '/hub/' --exclude '/portal/' --exclude '/engine/' \
   "$staged/" "$out/"
 
+cp "$repo/app/assets/images/omi_pendant.png" "$out/omi-pendant-product.png"
+
 echo "build-site: wrote $out ($(du -sh "$staged" | cut -f1) of site, apps kept)"

@@ -192,53 +192,45 @@ class Home extends StatelessComponent {
       path: '/',
       rail: const [
         ('top', 'Omi'),
-        ('what', 'What it does'),
-        ('memory', 'Memory'),
-        ('reach', 'Reach'),
-        ('hardware', 'Hardware'),
-        ('api', 'API'),
+        ('currents', 'Currents'),
+        ('pendant', 'Pendant'),
         ('privacy', 'Privacy'),
-        ('pricing', 'Pricing'),
-        ('negotiate', 'Negotiate'),
       ],
-      children: [
-        _hero(),
-        _whatItDoes(),
-        _memory(),
-        _reach(),
-        _hardware(),
-        _openSurface(),
-        _privacy(),
-        _pricing(),
-        _negotiate(),
-      ],
+      children: [_hero(), _currents(), _pendant(), _privacy()],
     );
   }
 
   Component _hero() {
     return section(
       [
-        const OmiMark.hero(),
         div([
-          p([
-            .text('PRIVATE MEMORY · OPEN BY DESIGN'),
-          ], classes: 'label rise d1'),
+          p([.text('OMI · PRIVATE MEMORY')], classes: 'label rise d1'),
           h1(
-            [.text('The part of life you should not have to remember alone.')],
+            [.text('Be here. Omi keeps the thread.')],
             classes: 'giant rise d2',
             id: 't1',
           ),
           div([
             p([
               .text(
-                'Omi keeps the context behind your work, your conversations, '
-                'and your next move — quietly, across every place life happens.',
+                'A private memory for the things that matter while you are busy '
+                'living them.',
               ),
             ], classes: 'mid rise d3'),
             div([const PrimaryActions()], classes: 'rise d4'),
           ], classes: 'hero-foot'),
         ], classes: 'hero-grid'),
-        const _HubEmbed(),
+        div([
+          const OmiMark.hero(),
+          img(
+            src: '/omi-pendant-product.png',
+            alt: 'The Omi pendant.',
+            width: 1103,
+            height: 1287,
+            classes: 'hero-pendant rise d3',
+          ),
+          span([.text('02.5 CM')], classes: 'pendant-measure'),
+        ], classes: 'hero-object'),
       ],
       classes: 'hero wrap',
       id: 'top',
@@ -246,7 +238,51 @@ class Home extends StatelessComponent {
     );
   }
 
-  Component _whatItDoes() {
+  Component _currents() {
+    return section(
+      [
+        div([
+          p([.text('CURRENTS')], classes: 'label'),
+          h2(
+            [.text('Your attention, edited.')],
+            classes: 'big',
+            id: 'currents-title',
+          ),
+          p([.text('A few clear signals. Evidence attached.')], classes: 'mid'),
+        ], classes: 'section-intro reveal'),
+        const _CurrentsRecreation(),
+      ],
+      classes: 'currents-stage wrap',
+      id: 'currents',
+      attributes: {'aria-labelledby': 'currents-title'},
+    );
+  }
+
+  Component _pendant() {
+    return section(
+      [
+        div([
+          p([.text('THE PENDANT')], classes: 'label'),
+          h2([.text('A quiet witness.')], classes: 'big', id: 'pendant-title'),
+          p([
+            .text('Wear it. Forget it. Find the moment later.'),
+          ], classes: 'mid'),
+          a(
+            [.text('See Omi in the app')],
+            classes: 'btn btn-solid',
+            href: portalUrl,
+          ),
+        ], classes: 'pendant-copy reveal'),
+        _Shot('omi-worn', 'Omi worn on a lanyard in an open-plan office.'),
+        _Shot('omi-desk', 'Omi on a meeting-room table beside two laptops.'),
+      ],
+      classes: 'pendant-stage wrap',
+      id: 'pendant',
+      attributes: {'aria-labelledby': 'pendant-title'},
+    );
+  }
+
+  Component whatItDoes() {
     return section(
       [
         h2([.text('What it does')], classes: 'label', id: 't2'),
@@ -265,7 +301,7 @@ class Home extends StatelessComponent {
     );
   }
 
-  Component _memory() {
+  Component memory() {
     return section(
       [
         h2([.text('Memory')], classes: 'label', id: 't8'),
@@ -320,7 +356,7 @@ class Home extends StatelessComponent {
     );
   }
 
-  Component _reach() {
+  Component reach() {
     return section(
       [
         h2([.text('Reach')], classes: 'label', id: 't9'),
@@ -350,7 +386,7 @@ class Home extends StatelessComponent {
     );
   }
 
-  Component _hardware() {
+  Component hardware() {
     return section(
       [
         h2([.text('The hardware')], classes: 'label', id: 't6'),
@@ -406,7 +442,7 @@ class Home extends StatelessComponent {
     );
   }
 
-  Component _openSurface() {
+  Component openSurface() {
     return section(
       [
         h2([.text('Open surface')], classes: 'label', id: 't3'),
@@ -471,30 +507,20 @@ class Home extends StatelessComponent {
       [
         h2([.text('Privacy')], classes: 'label', id: 't4'),
         p([
-          .text('Your memory is yours — and you can read the boundary.'),
+          .text('Your memory stays yours.'),
         ], classes: 'big reveal measure-tight'),
         ul([
           li([
             b([.text('Your account is the source of truth.')]),
-            .text(
-              ' What’s remembered lives in your account. Your computer keeps a '
-              'private offline copy it can rebuild from that. Search indexes '
-              'are helpers — not a second secret memory.',
-            ),
+            .text(' Your account is the source of truth.'),
           ]),
           li([
             b([.text('On-device summaries.')]),
-            .text(
-              ' When Omi scans your workspace, summaries can stay on your Mac — '
-              'no network call required on Apple silicon.',
-            ),
+            .text(' Summaries can stay on your Mac.'),
           ]),
           li([
             b([.text('Open source.')]),
-            .text(
-              ' You can read the code for what stays on your devices, what '
-              'syncs to your account, and what goes to AI providers.',
-            ),
+            .text(' The boundary is open source.'),
           ]),
         ], classes: 'notes split reveal'),
       ],
@@ -504,7 +530,7 @@ class Home extends StatelessComponent {
     );
   }
 
-  Component _pricing() {
+  Component pricing() {
     return section(
       [
         h2([.text('Pricing')], classes: 'label', id: 't5'),
@@ -557,7 +583,7 @@ class Home extends StatelessComponent {
   /// The joke is that the button does what it says. `worker/src/byok-pricing.ts`
   /// holds the band and `worker/src/byok-negotiation.ts` runs the conversation;
   /// `docs/byok.md` is the written version of both.
-  Component _negotiate() {
+  Component negotiate() {
     return section(
       [
         h2([.text('Negotiate')], classes: 'label', id: 't7'),
@@ -642,8 +668,8 @@ class Home extends StatelessComponent {
 /// `web/main.js` mounts the iframe as soon as the page loads. Until the app
 /// is ready the frame shows a CSS still that reserves layout; the still hides
 /// once the hub posts `ready`.
-class _HubEmbed extends StatelessComponent {
-  const _HubEmbed();
+class HubEmbedLegacy extends StatelessComponent {
+  const HubEmbedLegacy();
 
   @override
   Component build(BuildContext context) {
@@ -678,5 +704,69 @@ class _HubEmbed extends StatelessComponent {
         ),
       ]),
     ], classes: 'shot reveal');
+  }
+}
+
+class _CurrentsRecreation extends StatelessComponent {
+  const _CurrentsRecreation();
+
+  @override
+  Component build(BuildContext context) {
+    return div([
+      div([
+        const OmiMark.nav(),
+        div([
+          span([.text('CURRENTS')], classes: 'label'),
+          span([.text('4 signals · cited')], classes: 'signal-count'),
+        ], classes: 'canvas-headline'),
+      ], classes: 'canvas-head'),
+      div([
+        article([
+          div([
+            span([.text('YOU')], classes: 'signal-pill'),
+            span([.text('NOW · FIRMWARE')], classes: 'signal-meta'),
+          ], classes: 'signal-topline'),
+          h3([.text('CV1 holds the line.')]),
+          p([.text('Next OTA: NCS 3.4.0. Devkit-v1 waits for the PDM port.')]),
+          div([
+            a([.text('Review the decision')], href: portalUrl),
+            span([.text('2 sources · 5h ago')]),
+          ], classes: 'signal-footer'),
+        ], classes: 'current-card current-card--now'),
+        article([
+          span([.text('CUTOVER')], classes: 'signal-meta'),
+          h3([.text('Cutover has an order.')]),
+          p([.text('Auth + D1 first. Billing stays put.')]),
+          div([
+            for (final item in ['AUTH', 'D1', 'BILLING', 'CHANNELS'])
+              span([.text(item)], classes: 'route-token'),
+          ], classes: 'route-map'),
+        ], classes: 'current-card current-card--route'),
+        article([
+          span([.text('REWIND')], classes: 'signal-meta'),
+          h3([.text('Quiet screens stay quiet.')]),
+          p([.text('dHash drops duplicates. Check it while scrolling.')]),
+          div(List.generate(16, (_) => span([])), classes: 'hash-grid'),
+        ], classes: 'current-card current-card--rewind'),
+        article([
+          span([.text('MEMORY')], classes: 'signal-meta'),
+          h3([.text('Corrections stay visible.')]),
+          p([.text('The mirror keeps the before and after.')]),
+          div([
+            span([.text('original')]),
+            span([.text('corrected')]),
+          ], classes: 'evidence-slips'),
+        ], classes: 'current-card current-card--memory'),
+      ], classes: 'currents-grid'),
+      a(
+        [
+          span([.text('1 more signal')], classes: 'signal-meta'),
+          span([.text('The brief renderer stays allowlisted.')]),
+          span([.text('Open Omi →')]),
+        ],
+        classes: 'more-signal',
+        href: portalUrl,
+      ),
+    ], classes: 'currents-canvas reveal');
   }
 }
