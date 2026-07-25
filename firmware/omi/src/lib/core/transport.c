@@ -27,9 +27,6 @@
 #include "lib/battery/battery.h"
 #include "omi_rust.h"
 #include "mic.h"
-#ifdef CONFIG_OMI_ENABLE_MONITOR
-#include "monitor.h"
-#endif
 #include "rtc.h"
 #include "sd_card.h"
 #include "settings.h"
@@ -1325,7 +1322,7 @@ static bool write_to_tx_queue(uint8_t *data, size_t size)
 {
 #ifdef CONFIG_OMI_ENABLE_MONITOR
     // Increment the counter
-    monitor_inc_tx_queue_write();
+    omi_rust_metrics_increment(OMI_RUST_METRIC_TX_QUEUE_WRITE);
 #endif
 
     if (size > CODEC_OUTPUT_MAX_BYTES) {
@@ -1444,7 +1441,7 @@ static bool push_to_gatt(struct bt_conn *conn)
             };
             int err = bt_gatt_notify_cb(conn, &params);
 #ifdef CONFIG_OMI_ENABLE_MONITOR
-            monitor_inc_gatt_notify();
+            omi_rust_metrics_increment(OMI_RUST_METRIC_GATT_NOTIFY);
 #endif
 
             // Log failure
@@ -1505,7 +1502,7 @@ bool write_to_storage(void)
     }
 
 #ifdef CONFIG_OMI_ENABLE_MONITOR
-    monitor_inc_storage_write();
+    omi_rust_metrics_increment(OMI_RUST_METRIC_STORAGE_WRITE);
 #endif
     return true;
 }

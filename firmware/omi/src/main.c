@@ -11,9 +11,6 @@
 #include "lib/core/led.h"
 #include "lib/core/lib/battery/battery.h"
 #include "lib/core/mic.h"
-#ifdef CONFIG_OMI_ENABLE_MONITOR
-#include "lib/core/monitor.h"
-#endif
 #include "lib/core/settings.h"
 #include "lib/core/transport.h"
 #include "lib/core/user_event.h"
@@ -83,12 +80,12 @@ static void print_reset_reason(void)
 static void codec_handler(uint8_t *data, size_t len)
 {
 #ifdef CONFIG_OMI_ENABLE_MONITOR
-    monitor_inc_broadcast_audio();
+    omi_rust_metrics_increment(OMI_RUST_METRIC_BROADCAST_AUDIO);
 #endif
     int err = broadcast_audio_packets(data, len);
     if (err) {
 #ifdef CONFIG_OMI_ENABLE_MONITOR
-        monitor_inc_broadcast_audio_failed();
+        omi_rust_metrics_increment(OMI_RUST_METRIC_BROADCAST_AUDIO_FAILED);
 #endif
     }
 }
@@ -97,7 +94,7 @@ static void mic_handler(int16_t *buffer)
 {
 #ifdef CONFIG_OMI_ENABLE_MONITOR
     // Track total bytes processed (each sample is 2 bytes)
-    monitor_inc_mic_buffer();
+    omi_rust_metrics_increment(OMI_RUST_METRIC_MIC_BUFFER);
 #endif
 
     // Hardware AAD (T5838) is handled inside mic.c; the mic callback only
@@ -329,10 +326,7 @@ int main(void)
 #ifdef CONFIG_OMI_ENABLE_MONITOR
     // Initialize monitoring system
     LOG_INF("Initializing monitoring system...\n");
-    ret = monitor_init();
-    if (ret) {
-        LOG_ERR("Failed to initialize monitoring system (err %d)", ret);
-    }
+    omi_rust_metrics_reset();
 #endif
 
     if (setting_ret) {
@@ -440,7 +434,13 @@ int main(void)
     while (1) {
         watchdog_feed();
 #ifdef CONFIG_OMI_ENABLE_MONITOR
-        monitor_log_metrics();
+        LOG_INF("Metrics: Mic buffers: %u, GATT notify: %u, Broadcast: %u, Broadcast failed: %u, TX queue: %u, Storage: %u",
+                omi_rust_metrics_read(OMI_RUST_METRIC_MIC_BUFFER),
+                omi_rust_metrics_read(OMI_RUST_METRIC_GATT_NOTIFY),
+                omi_rust_metrics_read(OMI_RUST_METRIC_BROADCAST_AUDIO),
+                omi_rust_metrics_read(OMI_RUST_METRIC_BROADCAST_AUDIO_FAILED),
+                omi_rust_metrics_read(OMI_RUST_METRIC_TX_QUEUE_WRITE),
+                omi_rust_metrics_read(OMI_RUST_METRIC_STORAGE_WRITE));
 #endif
 
         set_led_state();
