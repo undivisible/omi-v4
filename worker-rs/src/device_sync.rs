@@ -4,6 +4,7 @@
 //! a long-lived `omi_dev_` token; the pendant uploads audio metadata with that
 //! bearer. Audio bytes are not persisted yet (`persisted: false` stub).
 
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use serde_json::Value;
 
 use crate::api_keys::{digest, timing_safe_equal};
@@ -128,6 +129,7 @@ pub struct UploadRequest {
     pub start_seq: String,
     pub packet_count: i64,
     pub byte_count: i64,
+    pub audio: Vec<u8>,
 }
 
 /// Approximate decoded byte length from base64 text (`Math.floor(len * 3 / 4)`).
@@ -179,7 +181,16 @@ pub fn validate_upload(body: Option<&Value>) -> Result<UploadRequest, &'static s
     {
         return Err("Invalid upload fields");
     }
-    let byte_count = base64_byte_count(&audio);
+    if base64_byte_count(&audio) > MAXIMUM_UPLOAD_BYTES {
+        return Err("Audio too large");
+    }
+    let decoded = STANDARD
+        .decode(&audio)
+        .map_err(|_| "Invalid upload fields")?;
+    if decoded.is_empty() {
+        return Err("Invalid upload fields");
+    }
+    let byte_count = decoded.len() as i64;
     if byte_count > MAXIMUM_UPLOAD_BYTES {
         return Err("Audio too large");
     }
@@ -187,6 +198,7 @@ pub fn validate_upload(body: Option<&Value>) -> Result<UploadRequest, &'static s
         start_seq,
         packet_count: packet_count as i64,
         byte_count,
+        audio: decoded,
     })
 }
 

@@ -1,5 +1,6 @@
 export type Bindings = {
   DB: D1Database;
+  DEVICE_AUDIO: R2Bucket;
   MEMORY_VECTORS?: VectorizeIndex;
   AI?: {
     run(model: string, inputs: Record<string, unknown>): Promise<unknown>;

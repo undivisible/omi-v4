@@ -266,17 +266,50 @@ async fn handle_audio_upload(mut req: Request, ctx: RouteContext<()>) -> Result<
         .and_then(|value| value.parse::<f64>().ok())
         .filter(|value| value.is_finite())
     {
-        if declared > MAXIMUM_UPLOAD_BYTES as f64 {
+        if declared > (MAXIMUM_UPLOAD_BYTES + 96) as f64 {
             return error_json("Audio too large", 413);
         }
     }
 
-    let body = json_object(&mut req).await;
-    let upload = match device_sync::validate_upload(body.as_ref()) {
-        Ok(upload) => upload,
-        Err("Audio too large") => return error_json("Audio too large", 413),
-        Err(message) => return error_json(message, 400),
-    };
+    let content_type = req
+        .headers()
+        .get("content-type")
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    let upload =
+        if content_type.split(';').next().map(str::trim) == Some("application/octet-stream") {
+            let bytes = req.bytes().await?;
+            let Some(preamble) = device_sync::parse_home_upload_preamble(&bytes) else {
+                return error_json("Invalid upload body", 400);
+            };
+            if preamble.device_id != device.device_id {
+                return error_json("Invalid upload body", 400);
+            }
+            let audio = bytes[preamble.header_len..].to_vec();
+            if preamble.packet_bytes == 0
+                || audio.len() != preamble.packet_count as usize * preamble.packet_bytes as usize
+                || audio.is_empty()
+            {
+                return error_json("Invalid upload fields", 400);
+            }
+            if audio.len() > MAXIMUM_UPLOAD_BYTES as usize {
+                return error_json("Audio too large", 413);
+            }
+            device_sync::UploadRequest {
+                start_seq: preamble.start_seq,
+                packet_count: preamble.packet_count as i64,
+                byte_count: audio.len() as i64,
+                audio,
+            }
+        } else {
+            let body = json_object(&mut req).await;
+            match device_sync::validate_upload(body.as_ref()) {
+                Ok(upload) => upload,
+                Err("Audio too large") => return error_json("Audio too large", 413),
+                Err(message) => return error_json(message, 400),
+            }
+        };
 
     let db = ctx.env.d1("DB")?;
     let now = now_ms();
@@ -297,9 +330,18 @@ async fn handle_audio_upload(mut req: Request, ctx: RouteContext<()>) -> Result<
 
     // Metadata receipt only — audio bytes are not persisted yet (home STA stub).
     let upload_id = uuid_v4();
+    let storage_key = format!(
+        "{}/{}/{}-{}.bin",
+        device.uid, device.device_id, upload.start_seq, upload.packet_count
+    );
+    let bucket = ctx.env.bucket("DEVICE_AUDIO")?;
+    bucket
+        .put(&storage_key, upload.audio.clone())
+        .execute()
+        .await?;
     d1_run(
         &db,
-        "INSERT INTO device_audio_uploads\n       (id, device_id, uid, start_seq, packet_count, byte_count, created_at)\n     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        "INSERT INTO device_audio_uploads\n       (id, device_id, uid, start_seq, packet_count, byte_count, created_at, storage_key)\n     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)\n     ON CONFLICT(device_id, start_seq, packet_count) DO UPDATE SET\n       byte_count = excluded.byte_count,\n       created_at = excluded.created_at,\n       storage_key = excluded.storage_key",
         &[
             s(&upload_id),
             s(&device.device_id),
@@ -308,6 +350,7 @@ async fn handle_audio_upload(mut req: Request, ctx: RouteContext<()>) -> Result<
             n(upload.packet_count),
             n(upload.byte_count),
             n(now),
+            s(&storage_key),
         ],
     )
     .await?;
@@ -316,7 +359,7 @@ async fn handle_audio_upload(mut req: Request, ctx: RouteContext<()>) -> Result<
         &json!({
             "uploadId": upload_id,
             "accepted": true,
-            "persisted": false,
+            "persisted": true,
             "startSeq": upload.start_seq,
             "packetCount": upload.packet_count,
             "byteCount": upload.byte_count,

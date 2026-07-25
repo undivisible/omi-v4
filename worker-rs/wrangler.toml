@@ -84,6 +84,10 @@ binding = "DB"
 database_name = "omi-v4"
 database_id = "74aab5eb-a81d-4494-9283-d48052b8a068"
 
+[[r2_buckets]]
+binding = "DEVICE_AUDIO"
+bucket_name = "omi-v4-device-audio"
+
 # Semantic memory search — parity with the TS worker's `vectorize` binding.
 # One-time setup before deploy (see CUTOVER.md):
 #   wrangler vectorize create omi-memory-claims --dimensions=768 --metric=cosine

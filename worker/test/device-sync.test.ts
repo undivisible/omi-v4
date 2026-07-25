@@ -27,10 +27,18 @@ const allowingRateLimiter = {
 } as unknown as DurableObjectNamespace;
 
 let database: D1Database;
+const storedAudio = new Map<string, Uint8Array>();
 
 const bindings = () =>
   ({
     DB: database,
+    DEVICE_AUDIO: {
+      put: async (key: string, value: Uint8Array) => {
+        storedAudio.set(key, value);
+        return null;
+      },
+      delete: async (key: string) => storedAudio.delete(key),
+    },
     RATE_LIMITER: allowingRateLimiter,
     FIREBASE_PROJECT_ID: "test",
     APP_URL: "https://example.test",
@@ -74,6 +82,43 @@ const upload = (
       method: "POST",
       headers,
       body: typeof body === "string" ? body : JSON.stringify(body),
+    },
+    bindings(),
+  );
+};
+
+const binaryUpload = (
+  deviceId: string,
+  token: string,
+  startSeq: bigint,
+  packets: Uint8Array[],
+) => {
+  const app = new Hono<AppEnv>();
+  app.route("/api/v1/devices", deviceSync);
+  const idBytes = new TextEncoder().encode(deviceId);
+  const packetBytes = packets[0]?.byteLength ?? 0;
+  const body = new Uint8Array(
+    3 + idBytes.byteLength + 14 + packetBytes * packets.length,
+  );
+  body.set([0xc1, 1, idBytes.byteLength], 0);
+  body.set(idBytes, 3);
+  const base = 3 + idBytes.byteLength;
+  const view = new DataView(body.buffer);
+  view.setBigUint64(base, startSeq);
+  view.setUint32(base + 8, packets.length);
+  view.setUint16(base + 12, packetBytes);
+  packets.forEach((packet, index) =>
+    body.set(packet, base + 14 + index * packetBytes),
+  );
+  return app.request(
+    `/api/v1/devices/${deviceId}/audio`,
+    {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/octet-stream",
+      },
+      body,
     },
     bindings(),
   );
@@ -189,10 +234,12 @@ describe("device-sync register + upload", () => {
       .prepare(`UPDATE devices SET revoked_at = ?1 WHERE id = ?2`)
       .bind(Date.now(), body.deviceId)
       .run();
-    expect(await verifyDeviceToken(database, body.token, Date.now())).toBeNull();
+    expect(
+      await verifyDeviceToken(database, body.token, Date.now()),
+    ).toBeNull();
   });
 
-  test("upload returns persisted:false without rateKey", async () => {
+  test("upload persists audio without rateKey", async () => {
     const created = await register("alpha", { deviceUid: "pendant-upload" });
     const { deviceId, token } = (await created.json()) as {
       deviceId: string;
@@ -205,10 +252,38 @@ describe("device-sync register + upload", () => {
     });
     expect(response.status).toBe(200);
     const body = (await response.json()) as Record<string, unknown>;
-    expect(body.persisted).toBe(false);
+    expect(body.persisted).toBe(true);
     expect(body.accepted).toBe(true);
     expect(body.startSeq).toBe("100");
     expect(Object.keys(body)).not.toContain("rateKey");
+    expect(storedAudio.size).toBeGreaterThan(0);
+  });
+
+  test("binary firmware upload validates framing and persists packets", async () => {
+    const created = await register("alpha", { deviceUid: "pendant-binary" });
+    const { deviceId, token } = (await created.json()) as {
+      deviceId: string;
+      token: string;
+    };
+    const response = await binaryUpload(deviceId, token, 9007199254740993n, [
+      Uint8Array.of(1, 2, 3, 4),
+      Uint8Array.of(5, 6, 7, 8),
+    ]);
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as Record<string, unknown>;
+    expect(body.persisted).toBe(true);
+    expect(body.startSeq).toBe("9007199254740993");
+    expect(body.byteCount).toBe(8);
+    expect(
+      [...storedAudio.values()].some((value) => value.byteLength === 8),
+    ).toBe(true);
+    const storedCount = storedAudio.size;
+    const retry = await binaryUpload(deviceId, token, 9007199254740993n, [
+      Uint8Array.of(1, 2, 3, 4),
+      Uint8Array.of(5, 6, 7, 8),
+    ]);
+    expect(retry.status).toBe(200);
+    expect(storedAudio.size).toBe(storedCount);
   });
 
   test("upload 401 without token and 403 on device mismatch", async () => {
