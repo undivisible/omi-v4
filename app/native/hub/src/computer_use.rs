@@ -536,8 +536,10 @@ pub(crate) fn test_bound(
 
 #[cfg(test)]
 mod tests {
-    use super::valid_action;
-    use crate::signals::ComputerUseAction;
+    use super::{ComputerUseError, available, bind, capabilities, prepare, valid_action};
+    use crate::signals::{ActionRisk, ComputerUseAction};
+    #[cfg(target_os = "macos")]
+    use praefectus::CancellationToken;
 
     #[test]
     fn semantic_actions_are_bounded() {
@@ -559,5 +561,146 @@ mod tests {
             value: "x".repeat(16 * 1024 + 1),
             background_only: false,
         }));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn native_praefectus_capabilities_probe_is_internally_consistent() {
+        let status = capabilities();
+        assert_eq!(
+            available(),
+            status
+                .as_ref()
+                .is_some_and(|caps| caps.actions.iter().any(|action| action.available))
+        );
+        let Some(caps) = status else {
+            eprintln!("computer-use capabilities unavailable (permissions/backend)");
+            return;
+        };
+        eprintln!(
+            "computer-use probe: platform={} backend={} isolation={:?} permissions={} actions={}",
+            caps.platform,
+            caps.backend,
+            caps.session_isolation,
+            caps.permissions.len(),
+            caps.actions.len()
+        );
+        for permission in &caps.permissions {
+            eprintln!(
+                "  permission {} granted={}",
+                permission.name, permission.granted
+            );
+        }
+        for action in &caps.actions {
+            eprintln!(
+                "  action {} available={} route={:?} background={:?}",
+                action.name, action.available, action.delivery_route, action.background_support
+            );
+        }
+        assert!(!caps.platform.is_empty());
+        assert!(!caps.backend.is_empty());
+        assert_eq!(caps.backend, "praefectus-macos-ax");
+        let accessibility_granted = caps
+            .permissions
+            .iter()
+            .find(|permission| permission.name == "accessibility")
+            .is_some_and(|permission| permission.granted);
+        if accessibility_granted {
+            assert!(
+                caps.actions.iter().any(|action| matches!(
+                    action.name.as_str(),
+                    "invoke" | "set_value"
+                ) && action.available),
+                "with Accessibility granted, invoke/set_value must be available"
+            );
+        } else {
+            assert!(
+                caps.actions.is_empty() || caps.actions.iter().all(|action| !action.available),
+                "without Accessibility, computer-use actions must be unavailable"
+            );
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn bind_rejects_invalid_actions_before_observation() {
+        let token = CancellationToken::default();
+        assert_eq!(
+            bind(
+                ComputerUseAction::Invoke {
+                    target_name: " ".to_owned(),
+                    background_only: false,
+                },
+                &token,
+            ),
+            Err(ComputerUseError::TargetUnavailable)
+        );
+        assert_eq!(
+            bind(
+                ComputerUseAction::SetValue {
+                    target_name: "Email".to_owned(),
+                    value: "x".repeat(16 * 1024 + 1),
+                    background_only: false,
+                },
+                &token,
+            ),
+            Err(ComputerUseError::TargetUnavailable)
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn cancelled_bind_fails_closed_for_missing_target() {
+        let token = CancellationToken::default();
+        token.cancel();
+        let result = bind(
+            ComputerUseAction::Invoke {
+                target_name: "omi-nonexistent-target-9f3c2a1b".to_owned(),
+                background_only: false,
+            },
+            &token,
+        );
+        assert_eq!(result, Err(ComputerUseError::TargetUnavailable));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn prepare_mints_stable_operation_hash_for_bound_action() {
+        let bound = super::BoundComputerUseAction {
+            display: ComputerUseAction::Invoke {
+                target_name: "Save".to_owned(),
+                background_only: false,
+            },
+            target: praefectus::semantic::SemanticTargetRef {
+                observation_id: "1".repeat(64),
+                generation: 1,
+                provenance_hash: "2".repeat(64),
+                element_id: "3".repeat(64),
+                fingerprint_hash: "4".repeat(64),
+            },
+            provenance: crate::signals::ComputerUseTargetProvenance {
+                process_id: 42,
+                process_generation: "gen".to_owned(),
+                window_id: "win".to_owned(),
+                role: "button".to_owned(),
+                observation_generation: 7,
+            },
+            expires_at_ms: i64::MAX,
+        };
+        let first = prepare(
+            bound.clone(),
+            "proposal-a",
+            "user-a",
+            ActionRisk::Destructive,
+        )
+        .unwrap_or_else(|error| panic!("prepare failed: {error:?}"));
+        let second = prepare(bound, "proposal-a", "user-a", ActionRisk::Destructive)
+            .unwrap_or_else(|error| panic!("prepare failed: {error:?}"));
+        assert_eq!(first.operation_id, second.operation_id);
+        assert_eq!(first.action_hash(), second.action_hash());
+        assert!(first.action_hash().len() >= 32);
+        assert!(first.operation_id.starts_with("omi-op:"));
+        assert_eq!(first.subject, second.subject);
+        assert!(first.subject.starts_with("omi-user:"));
     }
 }

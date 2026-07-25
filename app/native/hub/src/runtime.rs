@@ -7403,4 +7403,242 @@ mod tests {
             vec![("quick reply".to_owned(), false), (String::new(), true),]
         );
     }
+
+    #[test]
+    fn trusted_assistant_origin_requires_allowlist() {
+        assert!(
+            managed_worker_base_allowlisted("https://attacker.example.com", None).is_err(),
+            "empty allowlist must reject every origin"
+        );
+        assert!(
+            managed_worker_base_allowlisted(
+                "https://attacker.example.com",
+                Some("https://assistant.example.test"),
+            )
+            .is_err()
+        );
+        assert_eq!(
+            managed_worker_base_allowlisted(
+                "https://assistant.example.test",
+                Some("https://assistant.example.test,https://other.example.test"),
+            )
+            .as_deref(),
+            Ok("https://assistant.example.test/v1")
+        );
+        assert!(
+            managed_worker_base_allowlisted(
+                "https://assistant.example.test/extra",
+                Some("https://assistant.example.test"),
+            )
+            .is_err(),
+            "origin must not carry a path"
+        );
+    }
+
+    #[test]
+    fn memory_apply_commits_require_monotonic_sequences_and_bounds() {
+        let ok = MemoryApplyCommit {
+            sequence: 2,
+            recorded_at_ms: 1,
+            record_kind: "claim".to_owned(),
+            record_json: "{}".to_owned(),
+        };
+        assert_eq!(
+            validate_memory_apply_commits(std::slice::from_ref(&ok), 1).ok(),
+            Some(2)
+        );
+        assert!(validate_memory_apply_commits(&[], 0).is_err());
+        assert!(
+            validate_memory_apply_commits(std::slice::from_ref(&ok), 2).is_err(),
+            "sequence must advance past high water"
+        );
+        let too_large = MemoryApplyCommit {
+            sequence: 3,
+            recorded_at_ms: 1,
+            record_kind: "claim".to_owned(),
+            record_json: "x".repeat(MAX_MEMORY_RECORD_JSON_BYTES + 1),
+        };
+        assert!(validate_memory_apply_commits(&[too_large], 2).is_err());
+        let zero_time = MemoryApplyCommit {
+            sequence: 3,
+            recorded_at_ms: 0,
+            record_kind: "claim".to_owned(),
+            record_json: "{}".to_owned(),
+        };
+        assert!(validate_memory_apply_commits(&[zero_time], 2).is_err());
+    }
+
+    #[test]
+    fn client_context_caps_reject_oversized_prompts() {
+        assert!(client_context_within_limit(None, 8).is_ok());
+        assert!(client_context_within_limit(Some("short"), 8).is_ok());
+        assert!(client_context_within_limit(Some("too-long!!"), 8).is_err());
+        assert!(
+            client_context_within_limit(
+                Some(&"x".repeat(MAX_CLIENT_MEMORY_CONTEXT_BYTES + 1)),
+                MAX_CLIENT_MEMORY_CONTEXT_BYTES,
+            )
+            .is_err()
+        );
+        assert!(
+            client_context_within_limit(
+                Some(&"y".repeat(MAX_LIVE_SESSION_CONTEXT_BYTES + 1)),
+                MAX_LIVE_SESSION_CONTEXT_BYTES,
+            )
+            .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn prepare_computer_use_registration_rejects_invalid_tool_calls() {
+        let cancellation = CancellationToken::new();
+        assert!(
+            prepare_computer_use_registration(
+                "live-1",
+                "call/bad",
+                COMPUTER_INVOKE_TOOL,
+                serde_json::json!({"target_name":"Save","background_only":false}),
+                "user-a",
+                &cancellation,
+            )
+            .await
+            .is_err()
+        );
+        assert!(
+            prepare_computer_use_registration(
+                "live-1",
+                "call_1",
+                "not_a_computer_tool",
+                serde_json::json!({}),
+                "user-a",
+                &cancellation,
+            )
+            .await
+            .is_err()
+        );
+        assert!(
+            prepare_computer_use_registration(
+                "live-1",
+                "call_1",
+                COMPUTER_SET_VALUE_TOOL,
+                serde_json::json!({
+                    "target_name": "",
+                    "value": "hi",
+                    "background_only": false
+                }),
+                "user-a",
+                &cancellation,
+            )
+            .await
+            .is_err()
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn prepare_computer_use_registration_fails_closed_when_target_missing() {
+        let cancellation = CancellationToken::new();
+        cancellation.cancel();
+        let error = prepare_computer_use_registration(
+            "live-1",
+            "call_1",
+            COMPUTER_INVOKE_TOOL,
+            serde_json::json!({
+                "target_name": "omi-nonexistent-target-9f3c2a1b",
+                "background_only": false
+            }),
+            "user-a",
+            &cancellation,
+        )
+        .await
+        .err()
+        .unwrap_or_else(|| panic!("missing target must fail closed"));
+        assert!(
+            error.contains("bound safely")
+                || error.contains("unavailable")
+                || error.contains("ambiguous")
+                || error.contains("invalid"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn meeting_auth_without_trusted_origin_is_rejected() {
+        let _ = crate::signals::test_events::take();
+        let state = Arc::new(Mutex::new(RuntimeState::default()));
+        let accepted = execute(
+            ClientCommand {
+                request_id: "meeting-auth-1".to_owned(),
+                command: Command::ProvideMeetingAuth {
+                    auth: TranscriptionAuth::Managed {
+                        endpoint: "wss://attacker.example.com/v1/listen".to_owned(),
+                        firebase_token: "token".to_owned(),
+                    },
+                    trusted_worker_origin: Some("https://attacker.example.com".to_owned()),
+                },
+            },
+            state,
+            Arc::new(UnavailableAssistantProvider {
+                reason: "unused".to_owned(),
+            }),
+            CancellationToken::new(),
+            None,
+            0,
+        )
+        .await;
+        assert!(!accepted);
+        let events = crate::signals::test_events::take();
+        assert!(
+            events.iter().any(|event| matches!(
+                event,
+                NativeEvent::Error(error)
+                    if error.request_id.as_deref() == Some("meeting-auth-1")
+                        && error.code == "meeting_auth_unavailable"
+            )),
+            "expected meeting_auth_unavailable, got {events:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn apply_memory_requires_trusted_worker_origin() {
+        let _ = crate::signals::test_events::take();
+        let database_path = std::env::temp_dir().join(format!(
+            "omi-apply-memory-auth-{}-{}.sqlite",
+            std::process::id(),
+            unix_time_ms()
+        ));
+        let database = MemoryDb::open(database_path.to_string_lossy().as_ref())
+            .unwrap_or_else(|error| panic!("open memory db: {error}"));
+        let state = Mutex::new(RuntimeState {
+            memory: Some(Arc::new(StdMutex::new(MemoryContext {
+                database,
+                tenant_id: TenantId::new("user-a").unwrap_or_else(|error| panic!("{error}")),
+                person_id: PersonId::new("user-a").unwrap_or_else(|error| panic!("{error}")),
+            }))),
+            ..RuntimeState::default()
+        });
+        apply_memory(
+            "apply-1",
+            &state,
+            vec![MemoryApplyCommit {
+                sequence: 1,
+                recorded_at_ms: 1,
+                record_kind: "claim".to_owned(),
+                record_json: "{}".to_owned(),
+            }],
+            &CancellationToken::new(),
+        )
+        .await;
+        let events = crate::signals::test_events::take();
+        assert!(
+            events.iter().any(|event| matches!(
+                event,
+                NativeEvent::Error(error)
+                    if error.request_id.as_deref() == Some("apply-1")
+                        && error.code == "memory_apply_unauthorized"
+            )),
+            "expected memory_apply_unauthorized, got {events:?}"
+        );
+        let _ = std::fs::remove_file(database_path);
+    }
 }
