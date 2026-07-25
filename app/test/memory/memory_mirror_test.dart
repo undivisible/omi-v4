@@ -66,6 +66,7 @@ final class _ApplyHub implements NativeHub {
   void applyMemory({
     required String requestId,
     required List<MemoryApplyCommit> commits,
+    bool applyDeletions = false,
   }) {
     applyCalls.add(commits);
     _events.add(
@@ -101,6 +102,7 @@ final class _IdempotentApplyHub implements NativeHub {
   void applyMemory({
     required String requestId,
     required List<MemoryApplyCommit> commits,
+    bool applyDeletions = false,
   }) {
     applyCalls.add(commits);
     final skipped = applyCalls.length == 1 ? 0 : commits.length;
@@ -136,6 +138,7 @@ final class _FailingApplyHub implements NativeHub {
   void applyMemory({
     required String requestId,
     required List<MemoryApplyCommit> commits,
+    bool applyDeletions = false,
   }) {
     _events.add(
       NativeEventError(

@@ -282,6 +282,7 @@ final class _ScanHub with NativeHubWithoutCapture implements NativeHub {
   void applyMemory({
     required String requestId,
     required List<MemoryApplyCommit> commits,
+    bool applyDeletions = false,
   }) {}
 
   @override

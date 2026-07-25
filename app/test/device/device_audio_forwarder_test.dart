@@ -1056,6 +1056,7 @@ final class _RecordingHub implements NativeHub {
   void applyMemory({
     required String requestId,
     required List<MemoryApplyCommit> commits,
+    bool applyDeletions = false,
   }) {}
 
   @override
