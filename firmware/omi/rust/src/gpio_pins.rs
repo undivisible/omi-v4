@@ -7,7 +7,7 @@ mod pins {
     use core::sync::atomic::{AtomicBool, Ordering};
 
     use zephyr::device::gpio::GpioPin;
-    use zephyr::raw::{ZR_GPIO_INPUT, ZR_GPIO_OUTPUT, ZR_GPIO_OUTPUT_ACTIVE, ENODEV};
+    use zephyr::raw::{ENODEV, ZR_GPIO_INPUT, ZR_GPIO_OUTPUT, ZR_GPIO_OUTPUT_ACTIVE};
 
     /// Nordic `NRF_GPIO_DRIVE_S0H1` (standard 0, high 1) from nordic-nrf-gpio.h.
     const NRF_GPIO_DRIVE_S0H1: u32 = 0x0200;
@@ -17,12 +17,7 @@ mod pins {
     // already serialized the matching C API.
     unsafe impl Sync for Slot {}
 
-    fn take_pin(
-        slot: &Slot,
-        init: &AtomicBool,
-        get: fn() -> Option<GpioPin>,
-        flags: u32,
-    ) -> i32 {
+    fn take_pin(slot: &Slot, init: &AtomicBool, get: fn() -> Option<GpioPin>, flags: u32) -> i32 {
         if init.load(Ordering::Acquire) {
             return 0;
         }
@@ -88,7 +83,9 @@ mod pins {
         if err != 0 {
             return err;
         }
-        with_pin(&BAT_READ, &BAT_READ_INIT, |pin| pin.configure(ZR_GPIO_INPUT))
+        with_pin(&BAT_READ, &BAT_READ_INIT, |pin| {
+            pin.configure(ZR_GPIO_INPUT)
+        })
     }
 
     pub fn sd_en_set(on: bool) -> i32 {

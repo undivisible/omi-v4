@@ -172,8 +172,9 @@ pub fn apply_charge_skew(adc_pin_mv: i32, is_charging: bool) -> i32 {
 
 /// Voltage-divider scale matching C's float cast to `uint16_t`.
 pub fn divider_to_battery_mv(adc_pin_mv: i32) -> u16 {
-    (adc_pin_mv as f32 * ((u32::from(DIVIDER_R1) + u32::from(DIVIDER_R2)) as f32
-        / f32::from(DIVIDER_R2))) as u16
+    (adc_pin_mv as f32
+        * ((u32::from(DIVIDER_R1) + u32::from(DIVIDER_R2)) as f32 / f32::from(DIVIDER_R2)))
+        as u16
 }
 
 /// Monotonic clamp + EMA init/step for `battery_get_percentage`.

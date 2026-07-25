@@ -26,7 +26,7 @@ mod motor {
     use core::sync::atomic::{AtomicBool, Ordering};
 
     use zephyr::device::gpio::GpioPin;
-    use zephyr::raw::{ZR_GPIO_OUTPUT, ENODEV};
+    use zephyr::raw::{ENODEV, ZR_GPIO_OUTPUT};
 
     struct Slot(UnsafeCell<Option<GpioPin>>);
     // SAFETY: access is gated by INIT and only from cooperative contexts that

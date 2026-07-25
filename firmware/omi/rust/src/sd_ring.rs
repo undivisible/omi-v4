@@ -143,9 +143,7 @@ pub fn selftest() -> i32 {
         failures += 1;
     }
     let mut name = [0u8; 16];
-    if format_timestamp_name(0x1A2B_3C4D, &mut name) != 12
-        || &name[..12] != b"1A2B3C4D.txt"
-    {
+    if format_timestamp_name(0x1A2B_3C4D, &mut name) != 12 || &name[..12] != b"1A2B3C4D.txt" {
         failures += 1;
     }
     failures
@@ -164,7 +162,10 @@ mod tests {
     fn used_and_sector_math() {
         assert_eq!(ring_used_packets(100, 40, false, 0, 0), 60);
         assert_eq!(ring_used_bytes(100, 40, false, 0, 0), 60 * 444);
-        assert_eq!(batch_sector_for_base_seq(72, 8), RAW_META_SECTORS + 2 * RAW_BATCH_SECTORS);
+        assert_eq!(
+            batch_sector_for_base_seq(72, 8),
+            RAW_META_SECTORS + 2 * RAW_BATCH_SECTORS
+        );
     }
 
     #[test]
