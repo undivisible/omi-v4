@@ -402,6 +402,13 @@ async fn handle_channel_link_redeem(mut req: Request, ctx: RouteContext<()>) -> 
         return error_json("Unknown or expired code", 404);
     };
     let db = ctx.env.d1("DB")?;
+    if crate::channel_group::is_group_channel_chat(
+        pending.channel.as_str(),
+        &pending.channel_user_id,
+        &pending.channel_chat_id,
+    ) {
+        return error_json(crate::channel_group::GROUP_CHANNEL_LINK_ERROR, 400);
+    }
     let existing = db
         .prepare(
             "SELECT uid FROM channel_bindings WHERE channel = ?1 AND channel_user_id = ?2 AND revoked_at IS NULL",
@@ -412,18 +419,48 @@ async fn handle_channel_link_redeem(mut req: Request, ctx: RouteContext<()>) -> 
         ])?
         .first::<Value>(None)
         .await?;
+    let placeholder = crate::routes_channels::live_channel_account(
+        &ctx.env,
+        pending.channel,
+        &pending.channel_user_id,
+    )
+    .await?;
     if let Some(existing) = existing.as_ref() {
-        if row_str(existing, "uid").as_deref() != Some(auth.uid.as_str()) {
+        let existing_uid = row_str(existing, "uid");
+        if existing_uid.as_deref() != Some(auth.uid.as_str())
+            && existing_uid.as_deref() != placeholder.as_ref().map(|account| account.uid.as_str())
+        {
             return error_json("Chat is linked to another account", 409);
         }
+    }
+    let consumed = db
+        .prepare(
+            "UPDATE channel_link_codes SET consumed_at = ?1 WHERE code_hash = ?2 AND consumed_at IS NULL AND expires_at > ?1",
+        )
+        .bind(&[(now as f64).into(), pending.code_hash.clone().into()])?
+        .run()
+        .await?;
+    if changes(&consumed) != 1 {
+        return error_json("Unknown or expired code", 404);
     }
     let details = json!({
         "channelUserId": pending.channel_user_id,
         "channelChatId": pending.channel_chat_id,
     })
     .to_string();
-    let results = db
+    db
         .batch(vec![
+            db.prepare(
+                "UPDATE channel_accounts SET claimed_at = ?1, claimed_by_uid = ?2\n       WHERE uid = ?3 AND claimed_at IS NULL AND retired_at IS NULL",
+            )
+            .bind(&[
+                (now as f64).into(),
+                auth.uid.clone().into(),
+                placeholder
+                    .as_ref()
+                    .map(|account| JsValue::from(account.uid.clone()))
+                    .unwrap_or(JsValue::NULL),
+            ])?,
             db.prepare(
                 "INSERT INTO channel_bindings (channel, channel_user_id, uid, verified_at, revoked_at, channel_chat_id)\n                 VALUES (?1, ?2, ?3, ?4, NULL, ?5)\n                 ON CONFLICT(channel, channel_user_id) DO UPDATE SET\n                   uid = excluded.uid, verified_at = excluded.verified_at,\n                   revoked_at = NULL, channel_chat_id = excluded.channel_chat_id",
             )
@@ -444,15 +481,8 @@ async fn handle_channel_link_redeem(mut req: Request, ctx: RouteContext<()>) -> 
                 details.into(),
                 (now as f64).into(),
             ])?,
-            db.prepare(
-                "UPDATE channel_link_codes SET consumed_at = ?1 WHERE code_hash = ?2 AND consumed_at IS NULL AND expires_at > ?1",
-            )
-            .bind(&[(now as f64).into(), pending.code_hash.clone().into()])?,
         ])
         .await?;
-    if changes(&results[2]) != 1 {
-        return error_json("Unknown or expired code", 404);
-    }
     let _ = crate::routes_channels::send_channel_text(
         &ctx.env,
         pending.channel,
@@ -1018,10 +1048,12 @@ const UID_SCOPED_TABLES: &[&str] = &[
     "memory_evidence",
     "memory_source_revisions",
     "memory_sources",
+    "memory_records",
+    "memory_projection_state",
+    "memory_log_cursors",
+    "memory_log",
     "zkr_sync_events",
     "zkr_sync_commits",
-    "zkr_memory_records",
-    "zkr_memory_projection_state",
     "conversation_replay_cursors",
     "conversation_messages",
     "conversations",
@@ -1064,6 +1096,16 @@ async fn handle_account_delete(req: Request, ctx: RouteContext<()>) -> Result<Re
     // binding (0.8.5), so that deferred cleanup is intentionally deferred to a
     // later phase — see PORT_STATUS.md. The D1 row deletion below is at full
     // parity.
+    let claims = db
+        .prepare("SELECT id FROM memory_claims WHERE uid = ?1")
+        .bind(&[auth.uid.clone().into()])?
+        .all()
+        .await?;
+    let claim_ids = claims
+        .results::<Value>()?
+        .iter()
+        .filter_map(|row| row_str(row, "id"))
+        .collect::<Vec<_>>();
     let statements: Vec<worker::D1PreparedStatement> = UID_SCOPED_TABLES
         .iter()
         .map(|table| {
@@ -1072,6 +1114,7 @@ async fn handle_account_delete(req: Request, ctx: RouteContext<()>) -> Result<Re
         })
         .collect::<Result<Vec<_>>>()?;
     db.batch(statements).await?;
+    crate::routes_memory::delete_claim_vectors(&ctx.env, &claim_ids).await;
     Ok(Response::empty()?.with_status(204))
 }
 

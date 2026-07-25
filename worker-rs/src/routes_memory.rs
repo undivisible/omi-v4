@@ -230,6 +230,50 @@ pub fn build_memory_context(contents: &[String], cap: usize) -> Option<String> {
     Some(output)
 }
 
+pub fn build_memory_context_with_profile(
+    profiles: &[Value],
+    contents: &[String],
+    cap: usize,
+) -> Option<String> {
+    let mut soul = std::collections::HashMap::new();
+    let mut name = None;
+    let mut languages = Vec::new();
+    for profile in profiles {
+        let key = profile.get("profileKey").and_then(Value::as_str);
+        let content = profile.get("content").and_then(Value::as_str);
+        match (key, content) {
+            (Some("name"), Some(content)) => name = Some(content),
+            (Some("languages"), Some(content)) => {
+                languages = content
+                    .split(',')
+                    .map(|value| value.trim().to_string())
+                    .collect()
+            }
+            (Some(key), Some(content)) if crate::user_profile::is_soul_section_key(key) => {
+                soul.insert(key.to_string(), content.to_string());
+            }
+            _ => {}
+        }
+    }
+    let about_user =
+        crate::user_profile::format_about_user(name, &languages, &|key| soul.get(key).cloned());
+    let mut output = about_user
+        .clone()
+        .unwrap_or_else(|| "Relevant synced memory (server-retrieved, may be partial):".into());
+    if about_user.is_some() && !contents.is_empty() {
+        output.push_str("\n\nRelevant synced memory (server-retrieved, may be partial):");
+    }
+    for content in contents {
+        let snippet: String = content.chars().take(SNIPPET_CHARACTERS).collect();
+        let line = format!("\n- {snippet}");
+        if output.chars().count() + line.chars().count() > cap {
+            break;
+        }
+        output.push_str(&line);
+    }
+    (about_user.is_some() || !contents.is_empty()).then_some(output)
+}
+
 // ---------------------------------------------------------------------------
 // memory-sync: commit parsing / scope checks / record identity
 // ---------------------------------------------------------------------------
@@ -934,6 +978,8 @@ pub fn relevance_basis_points(index: usize) -> i64 {
 pub(crate) mod wasm_glue;
 
 #[cfg(target_arch = "wasm32")]
+pub(crate) use wasm_glue::delete_claim_vectors;
+#[cfg(target_arch = "wasm32")]
 pub use wasm_glue::{cron_slice, memory_context_for, register};
 
 #[cfg(test)]
@@ -1192,6 +1238,26 @@ mod tests {
         let ctx = build_memory_context(&["espresso".into()], 2000).unwrap();
         assert!(ctx.contains("Relevant synced memory"));
         assert!(ctx.contains("espresso"));
+    }
+
+    #[test]
+    fn profile_context_precedes_relevant_claims() {
+        let profiles = vec![
+            json!({ "profileKey": "Goals", "content": "Ship v4." }),
+            json!({ "profileKey": "name", "content": "Ada" }),
+            json!({ "profileKey": "languages", "content": "en, fr" }),
+        ];
+        let context = build_memory_context_with_profile(
+            &profiles,
+            &["Ada prefers evidence-backed releases.".into()],
+            CONTEXT_CHARACTER_CAP,
+        )
+        .expect("context");
+        assert!(context.starts_with("About the user:\nThe user's name is Ada."));
+        assert!(context.contains("The user's preferred languages: en, fr."));
+        assert!(context.contains("User context — Goals:\nShip v4."));
+        assert!(context.contains("Relevant synced memory (server-retrieved, may be partial):"));
+        assert!(context.ends_with("- Ada prefers evidence-backed releases."));
     }
 
     #[test]

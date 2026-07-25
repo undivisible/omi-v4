@@ -465,7 +465,9 @@ async fn stripe_price(secret: &str, price_id: &str) -> Option<(String, String, i
         .and_then(|v| v.as_i64().or_else(|| v.as_f64().map(|f| f as i64)))
         .unwrap_or(1)
         .max(1);
-    let unit_amount = body.get("unit_amount").and_then(json_i64);
+    let unit_amount = body
+        .get("unit_amount")
+        .and_then(|value| json_i64(value, "unit_amount"));
     Some((
         currency.to_string(),
         product.to_string(),

@@ -23,6 +23,8 @@ use crate::currents_refresh::{
 };
 use crate::glue::{authenticate, error_json, json_to_i64, AuthOutcome};
 use crate::managed_ai;
+use crate::memory_log;
+use crate::routes_memory;
 use crate::worker_util::{changes, now_ms, secret_or_var as env_get, uuid_v4};
 use worker::{Headers, Method, RequestInit};
 
@@ -38,6 +40,7 @@ pub fn register(router: Router<'_, ()>) -> Router<'_, ()> {
     router
         // memory-sync
         .post_async("/v1/memory/zkr-sync", handle_zkr_sync)
+        .get_async("/v1/memory/log", handle_memory_log)
         // memory retrieval + CRUD
         .get_async("/v1/memory/retrieve", handle_retrieve)
         .post_async("/v1/memory/retrieve", handle_retrieve)
@@ -424,6 +427,15 @@ async fn drain_pending_embeddings(env: &Env, limit: i64) -> Result<()> {
     Ok(())
 }
 
+pub(crate) async fn delete_claim_vectors(env: &Env, claim_ids: &[String]) {
+    let Some(index) = vectorize(env) else {
+        return;
+    };
+    for ids in claim_ids.chunks(DELETE_CHUNK_SIZE) {
+        let _ = index.delete_by_ids(ids).await;
+    }
+}
+
 async fn backfill_claim_vectors(env: &Env, limit: i64) -> Result<i64> {
     if vectorize(env).is_none() {
         return Ok(0);
@@ -503,12 +515,14 @@ pub(crate) async fn search_memory_claims(
 /// Vectorize/AI is unbound, there are no matches, or any step fails — matching
 /// the TS `try/catch → null` contract so callers degrade gracefully.
 pub async fn memory_context_for(env: &Env, uid: &str, query: &str) -> Option<String> {
+    let db = env.d1("DB").ok()?;
+    let profiles = list_profile_memories(&db, uid, 24).await.ok()?;
     let items = search_memory_claims(env, uid, query, 8).await.ok()?;
     let contents: Vec<String> = items
         .iter()
         .map(|item| str_field(item, "content"))
         .collect();
-    super::build_memory_context(&contents, super::CONTEXT_CHARACTER_CAP)
+    super::build_memory_context_with_profile(&profiles, &contents, super::CONTEXT_CHARACTER_CAP)
 }
 
 // ---------------------------------------------------------------------------
@@ -517,44 +531,107 @@ pub async fn memory_context_for(env: &Env, uid: &str, query: &str) -> Option<Str
 
 mod projection_sql;
 
-async fn project_zkr_memory(db: &D1Database, uid: &str, replica_id: &str) -> Result<()> {
+async fn project_zkr_memory(db: &D1Database, uid: &str, _replica_id: &str) -> Result<()> {
+    let state = d1_first(
+        db,
+        "SELECT sequence FROM memory_projection_state WHERE uid = ?1",
+        &[s(uid)],
+    )
+    .await?;
+    let mut cursor = state
+        .as_ref()
+        .and_then(|row| row.get("sequence"))
+        .and_then(json_to_i64)
+        .unwrap_or(0);
+    loop {
+        let rows = d1_all(db, memory_log::READ_SQL, &[s(uid), n(cursor), n(500)]).await?;
+        if rows.is_empty() {
+            break;
+        }
+        let mut statements = Vec::new();
+        for row in &rows {
+            let sequence = row.get("sequence").and_then(json_to_i64).unwrap_or(cursor);
+            let kind = str_field(row, "record_kind");
+            let id = str_field(row, "record_id");
+            let payload_text = str_field(row, "payload");
+            let payload: Value = serde_json::from_str(&payload_text)
+                .map_err(|_| worker::Error::RustError("Invalid memory log payload".into()))?;
+            let record = SyncRecord {
+                kind: kind.clone(),
+                record: payload,
+            };
+            let deleted_at = if kind == "deletion" {
+                deletion_target(&record).map(|target| target.deleted_at)
+            } else {
+                match record.record.as_object() {
+                    Some(body) if kind == "source" => body
+                        .get("source")
+                        .and_then(Value::as_object)
+                        .and_then(|source| source.get("deleted_at"))
+                        .and_then(json_to_i64),
+                    Some(body) => body.get("deleted_at").and_then(json_to_i64),
+                    None => None,
+                }
+            };
+            statements.push(stmt(
+                db,
+                "INSERT INTO memory_records (uid, record_kind, record_id, payload, sequence, recorded_at, deleted_at)\n             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)\n             ON CONFLICT(uid, record_kind, record_id) DO UPDATE SET\n               payload = excluded.payload, sequence = excluded.sequence, recorded_at = excluded.recorded_at,\n               deleted_at = COALESCE(excluded.deleted_at, memory_records.deleted_at)\n             WHERE excluded.sequence >= memory_records.sequence",
+                &[
+                    s(uid),
+                    s(&kind),
+                    s(&id),
+                    s(&payload_text),
+                    n(sequence),
+                    n(row.get("recorded_at").and_then(json_to_i64).unwrap_or(0)),
+                    nullable_n(deleted_at),
+                ],
+            )?);
+            if let Some(target) = deletion_target(&record) {
+                statements.push(stmt(
+                    db,
+                    "UPDATE memory_records SET deleted_at = ?1, sequence = ?2\n               WHERE uid = ?3 AND record_kind = ?4 AND record_id = ?5 AND sequence <= ?2",
+                    &[n(target.deleted_at), n(sequence), s(uid), s(&target.kind), s(&target.id)],
+                )?);
+            }
+            cursor = sequence;
+        }
+        db.batch(statements).await?;
+    }
     let sql_statements = projection_sql::projection_statements();
     let mut statements = Vec::with_capacity(sql_statements.len());
     for sql in &sql_statements {
-        statements.push(stmt(db, sql, &[s(uid), s(replica_id)])?);
+        statements.push(stmt(db, sql, &[s(uid)])?);
     }
     db.batch(statements).await?;
-    let source = d1_first(
-        db,
-        "SELECT COALESCE(MAX(source_sequence), 0) AS sequence FROM zkr_memory_records WHERE uid = ?1 AND replica_id = ?2",
-        &[s(uid), s(replica_id)],
-    )
-    .await?;
-    let sequence = source
-        .as_ref()
-        .and_then(|r| r.get("sequence"))
-        .and_then(json_to_i64)
-        .unwrap_or(0);
     d1_run(
         db,
-        "INSERT INTO zkr_memory_projection_state (uid, replica_id, source_sequence, projected_at)\n       VALUES (?1, ?2, ?3, ?4)\n       ON CONFLICT(uid, replica_id) DO UPDATE SET\n         source_sequence = excluded.source_sequence,\n         projected_at = excluded.projected_at",
-        &[s(uid), s(replica_id), n(sequence), n(now_ms())],
+        "INSERT INTO memory_projection_state (uid, sequence, projected_at)\n       VALUES (?1, ?2, ?3)\n       ON CONFLICT(uid) DO UPDATE SET\n         sequence = MAX(memory_projection_state.sequence, excluded.sequence),\n         projected_at = excluded.projected_at",
+        &[s(uid), n(cursor), n(now_ms())],
     )
     .await?;
     Ok(())
 }
 
 pub(crate) async fn ensure_projected(db: &D1Database, uid: &str) -> Result<()> {
-    let pending = d1_all(
+    let head = d1_first(db, memory_log::HEAD_SQL, &[s(uid)]).await?;
+    let state = d1_first(
         db,
-        "SELECT records.replica_id\n       FROM (\n         SELECT replica_id, MAX(source_sequence) AS source_sequence\n         FROM zkr_memory_records WHERE uid = ?1 GROUP BY replica_id\n       ) records\n       LEFT JOIN zkr_memory_projection_state state\n         ON state.uid = ?1 AND state.replica_id = records.replica_id\n       WHERE state.source_sequence IS NULL OR state.source_sequence < records.source_sequence\n       ORDER BY records.replica_id LIMIT 100",
+        "SELECT sequence FROM memory_projection_state WHERE uid = ?1",
         &[s(uid)],
     )
     .await?;
-    for row in pending {
-        if let Some(replica_id) = row.get("replica_id").and_then(Value::as_str) {
-            project_zkr_memory(db, uid, replica_id).await?;
-        }
+    let head = head
+        .as_ref()
+        .and_then(|row| row.get("sequence"))
+        .and_then(json_to_i64)
+        .unwrap_or(0);
+    let projected = state
+        .as_ref()
+        .and_then(|row| row.get("sequence"))
+        .and_then(json_to_i64)
+        .unwrap_or(0);
+    if head > projected {
+        project_zkr_memory(db, uid, "").await?;
     }
     Ok(())
 }
@@ -628,33 +705,17 @@ async fn apply_commit(
     for (record, identity) in records.iter().zip(identities.iter()) {
         statements.push(stmt(
             db,
-            "INSERT INTO zkr_memory_records\n           (uid, replica_id, record_kind, record_id, payload, source_sequence, deleted_at)\n         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)\n         ON CONFLICT(uid, replica_id, record_kind, record_id) DO UPDATE SET\n           payload = excluded.payload,\n           source_sequence = excluded.source_sequence,\n           deleted_at = excluded.deleted_at\n         WHERE excluded.source_sequence >= zkr_memory_records.source_sequence",
+            memory_log::APPEND_SQL,
             &[
                 s(uid),
                 s(replica_id),
                 s(&identity.kind),
                 s(&identity.id),
                 s(&canonical_json(&record.record)),
-                n(commit.sequence),
-                nullable_n(identity.deleted_at),
+                n(commit.recorded_at),
+                n(now),
             ],
         )?);
-    }
-    for record in &records {
-        if let Some(target) = deletion_target(record) {
-            statements.push(stmt(
-                db,
-                "UPDATE zkr_memory_records SET deleted_at = ?1, source_sequence = ?2\n             WHERE uid = ?3 AND replica_id = ?4 AND record_kind = ?5 AND record_id = ?6\n               AND source_sequence <= ?2",
-                &[
-                    n(target.deleted_at),
-                    n(commit.sequence),
-                    s(uid),
-                    s(replica_id),
-                    s(&target.kind),
-                    s(&target.id),
-                ],
-            )?);
-        }
     }
     db.batch(statements).await?;
     project_zkr_memory(db, uid, replica_id).await?;
@@ -830,6 +891,61 @@ async fn handle_zkr_sync(mut req: Request, ctx: RouteContext<()>) -> Result<Resp
     Response::from_json(&json!({ "replica_id": replica_id, "commits": statuses }))
 }
 
+async fn handle_memory_log(req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let auth = authed!(req, ctx);
+    let url = req.url()?;
+    let param = |key: &str| {
+        url.query_pairs()
+            .find(|(name, _)| name == key)
+            .map(|(_, value)| value.to_string())
+    };
+    let Some(cursor) = memory_log::validate_cursor(
+        param("after").as_deref(),
+        param("limit").as_deref(),
+        param("replica_id").as_deref(),
+    ) else {
+        return error_json("Invalid memory log cursor", 400);
+    };
+    let db = ctx.env.d1("DB")?;
+    let rows = d1_all(
+        &db,
+        memory_log::READ_SQL,
+        &[s(&auth.uid), n(cursor.after), n(cursor.limit)],
+    )
+    .await?;
+    let records = rows
+        .into_iter()
+        .map(|row| {
+            let payload = serde_json::from_str::<Value>(&str_field(&row, "payload"))
+                .map_err(|_| worker::Error::RustError("Invalid memory log payload".into()))?;
+            Ok(json!({
+                "sequence": row.get("sequence").and_then(json_to_i64).unwrap_or(0),
+                "origin_replica": str_field(&row, "origin_replica"),
+                "record_kind": str_field(&row, "record_kind"),
+                "record_id": str_field(&row, "record_id"),
+                "payload": payload,
+                "recorded_at": row.get("recorded_at").and_then(json_to_i64).unwrap_or(0),
+                "appended_at": row.get("appended_at").and_then(json_to_i64).unwrap_or(0),
+            }))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let head = d1_first(&db, memory_log::HEAD_SQL, &[s(&auth.uid)])
+        .await?
+        .as_ref()
+        .and_then(|row| row.get("sequence"))
+        .and_then(json_to_i64)
+        .unwrap_or(0);
+    if let Some(replica_id) = cursor.replica_id {
+        d1_run(
+            &db,
+            memory_log::CURSOR_SQL,
+            &[s(&auth.uid), s(&replica_id), n(cursor.after), n(now_ms())],
+        )
+        .await?;
+    }
+    Response::from_json(&memory_log::page_envelope(records, cursor.after, head))
+}
+
 // ---------------------------------------------------------------------------
 // memory retrieval routes (routes.ts)
 // ---------------------------------------------------------------------------
@@ -965,7 +1081,7 @@ pub(crate) async fn list_profile_memories(
     let now = now_ms();
     let rows = d1_all(
         db,
-        "SELECT p.id, c.value, c.valid_from, c.valid_to, c.recorded_at, p.updated_at,\n            p.profile_kind, p.status, s.kind AS source, e.id AS evidence_id,\n            e.source_revision_id, e.quote, e.locator, s.id AS source_id\n     FROM memory_profile_entries p\n     JOIN memory_claims c ON c.id = p.claim_id AND c.uid = p.uid\n     JOIN memory_claim_evidence ce ON ce.claim_id = c.id AND ce.uid = c.uid\n     JOIN memory_evidence e ON e.id = ce.evidence_id AND e.uid = ce.uid\n     JOIN memory_source_revisions r ON r.id = e.source_revision_id AND r.uid = e.uid\n     JOIN memory_sources s ON s.id = r.source_id AND s.uid = r.uid\n     WHERE p.uid = ?1 AND p.status != 'archived' AND c.status = 'accepted' AND c.retracted_at IS NULL\n       AND (c.valid_from IS NULL OR c.valid_from <= ?2)\n       AND (c.valid_to IS NULL OR c.valid_to > ?2)\n       AND (c.recorded_until IS NULL OR c.recorded_until > ?2)\n       AND (c.zkr_tier IS NULL OR c.zkr_tier != 'archive')\n       AND (c.zkr_processing_state IS NULL OR c.zkr_processing_state = 'processed')\n       AND ce.relation = 'supports' AND e.tombstoned_at IS NULL AND s.tombstoned_at IS NULL\n     ORDER BY p.updated_at DESC LIMIT 500",
+        "SELECT p.id, p.profile_key, c.value, c.valid_from, c.valid_to, c.recorded_at, p.updated_at,\n            p.profile_kind, p.status, s.kind AS source, e.id AS evidence_id,\n            e.source_revision_id, e.quote, e.locator, s.id AS source_id\n     FROM memory_profile_entries p\n     JOIN memory_claims c ON c.id = p.claim_id AND c.uid = p.uid\n     JOIN memory_claim_evidence ce ON ce.claim_id = c.id AND ce.uid = c.uid\n     JOIN memory_evidence e ON e.id = ce.evidence_id AND e.uid = ce.uid\n     JOIN memory_source_revisions r ON r.id = e.source_revision_id AND r.uid = e.uid\n     JOIN memory_sources s ON s.id = r.source_id AND s.uid = r.uid\n     WHERE p.uid = ?1 AND p.status != 'archived' AND c.status = 'accepted' AND c.retracted_at IS NULL\n       AND (c.valid_from IS NULL OR c.valid_from <= ?2)\n       AND (c.valid_to IS NULL OR c.valid_to > ?2)\n       AND (c.recorded_until IS NULL OR c.recorded_until > ?2)\n       AND (c.zkr_tier IS NULL OR c.zkr_tier != 'archive')\n       AND (c.zkr_processing_state IS NULL OR c.zkr_processing_state = 'processed')\n       AND ce.relation = 'supports' AND e.tombstoned_at IS NULL AND s.tombstoned_at IS NULL\n     ORDER BY p.updated_at DESC LIMIT 500",
         &[s(uid), n(now)],
     )
     .await?;
@@ -992,6 +1108,7 @@ pub(crate) async fn list_profile_memories(
             id.clone(),
             json!({
                 "id": id,
+                "profileKey": row.get("profile_key").cloned().unwrap_or_else(|| Value::String(id.clone())),
                 "content": str_field(row, "value"),
                 "source": str_field(row, "source"),
                 "evidence": [evidence],
@@ -2288,25 +2405,28 @@ async fn handle_receipt_claim(mut req: Request, ctx: RouteContext<()>) -> Result
             .flatten()
             .unwrap_or_default();
         let bearer = crate::auth::bearer_token(&authorization).unwrap_or_default();
-        let object = body
-            .as_ref()
-            .and_then(Value::as_object)
-            .ok_or_else(|| error_json("Invalid receipt claim", 400))?;
-        let token = object
+        let Some(object) = body.as_ref().and_then(Value::as_object) else {
+            return error_json("Invalid receipt claim", 400);
+        };
+        let Some(token) = object
             .get("receiptToken")
             .and_then(Value::as_str)
             .filter(|value| routes_memory::is_receipt_token(value))
-            .ok_or_else(|| error_json("Invalid receipt claim", 400))?;
+        else {
+            return error_json("Invalid receipt claim", 400);
+        };
         if bearer != token {
             return error_json("Authentication failed", 401);
         }
-        object
+        let Some(subject) = object
             .get("subject")
             .and_then(Value::as_str)
             .map(str::trim)
             .filter(|value| !value.is_empty())
-            .ok_or_else(|| error_json("Invalid receipt claim", 400))?
-            .to_string()
+        else {
+            return error_json("Invalid receipt claim", 400);
+        };
+        subject.to_string()
     } else {
         auth.uid.clone()
     };

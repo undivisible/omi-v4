@@ -3,10 +3,8 @@
 //! every statement is bound `(uid, replica_id)` as `?1`/`?2`.
 
 /// `projectedId(alias, kind, id)` from memory-projection.ts.
-fn projected_id(alias: &str, kind: &str, id: &str) -> String {
-    format!(
-        "'zkr:' || hex(CAST({alias}.uid AS BLOB)) || ':' || hex(CAST({alias}.replica_id AS BLOB)) || ':{kind}:' || hex(CAST({id} AS BLOB))"
-    )
+fn projected_id(_alias: &str, _kind: &str, id: &str) -> String {
+    id.to_string()
 }
 
 /// The ten INSERT/DELETE statements batched by `projectZkrMemory`, in order.
@@ -204,4 +202,16 @@ pub(super) fn projection_statements() -> Vec<String> {
            updated_at = excluded.updated_at"
         ),
     ]
+    .into_iter()
+    .map(|sql| {
+        sql.replace("zkr_memory_records", "memory_records")
+            .replace(" AND s.replica_id = e.replica_id", "")
+            .replace(" AND correction.replica_id = c.replica_id", "")
+            .replace(" AND s.replica_id = ?2", "")
+            .replace(" AND e.replica_id = ?2", "")
+            .replace(" AND c.replica_id = ?2", "")
+            .replace(" AND l.replica_id = ?2", "")
+            .replace(" AND p.replica_id = ?2", "")
+    })
+    .collect()
 }
