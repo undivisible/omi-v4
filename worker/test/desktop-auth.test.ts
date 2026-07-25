@@ -42,7 +42,6 @@ afterAll(() => miniflare.dispose());
 describe("desktop browser auth", () => {
   test("binds the verifier and returns one custom token", async () => {
     const verifier = "v".repeat(43);
-    const sessionId = "s".repeat(43);
     const digest = await crypto.subtle.digest(
       "SHA-256",
       new TextEncoder().encode(verifier),
@@ -55,6 +54,11 @@ describe("desktop browser auth", () => {
     );
     const confirmationChallenge =
       Buffer.from(confirmationDigest).toString("base64url");
+    const sessionDigest = await crypto.subtle.digest(
+      "SHA-256",
+      new TextEncoder().encode(`${challenge}\0${confirmationChallenge}`),
+    );
+    const sessionId = Buffer.from(sessionDigest).toString("base64url");
     const app = new Hono<AppEnv>();
     app.route("/", desktopAuth);
     const started = await app.request(
@@ -125,6 +129,13 @@ describe("desktop browser auth", () => {
   });
 
   test("fails closed without the browser origin", async () => {
+    const challenge = "b".repeat(43);
+    const confirmationChallenge = "c".repeat(43);
+    const sessionDigest = await crypto.subtle.digest(
+      "SHA-256",
+      new TextEncoder().encode(`${challenge}\0${confirmationChallenge}`),
+    );
+    const sessionId = Buffer.from(sessionDigest).toString("base64url");
     const app = new Hono<AppEnv>();
     app.route("/", desktopAuth);
     const response = await app.request(
@@ -132,11 +143,7 @@ describe("desktop browser auth", () => {
       {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          sessionId: "a".repeat(43),
-          challenge: "b".repeat(43),
-          confirmationChallenge: "c".repeat(43),
-        }),
+        body: JSON.stringify({ sessionId, challenge, confirmationChallenge }),
       },
       { DB: database, FIREBASE_PROJECT_ID: "test" },
     );

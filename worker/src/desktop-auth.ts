@@ -41,6 +41,23 @@ const verifierChallenge = async (verifier: string): Promise<string> =>
     ),
   );
 
+const deriveSessionId = async (
+  challenge: string,
+  confirmationChallenge: string,
+): Promise<string | null> => {
+  if (!sessionPattern.test(challenge) || !sessionPattern.test(confirmationChallenge))
+    return null;
+  const derived = base64Url(
+    new Uint8Array(
+      await crypto.subtle.digest(
+        "SHA-256",
+        encoder.encode(`${challenge}\0${confirmationChallenge}`),
+      ),
+    ),
+  );
+  return sessionPattern.test(derived) ? derived : null;
+};
+
 const validPublicOrigin = (source: string): URL | null => {
   try {
     const url = new URL(source);
@@ -136,11 +153,14 @@ export const createFirebaseCustomToken = async (
 
 desktopAuth.post("/start", async (context) => {
   const body = await json(context.req.raw);
-  const sessionId = value(body?.sessionId);
   const challenge = value(body?.challenge);
   const confirmationChallenge = value(body?.confirmationChallenge);
+  const sessionId = value(body?.sessionId);
   const appUrl = context.env.APP_URL;
-  if (!sessionId || !challenge || !confirmationChallenge)
+  if (!challenge || !confirmationChallenge || !sessionId)
+    return context.json({ error: "Invalid handoff" }, 400);
+  const derived = await deriveSessionId(challenge, confirmationChallenge);
+  if (!derived || derived !== sessionId)
     return context.json({ error: "Invalid handoff" }, 400);
   const appOrigin = appUrl ? validPublicOrigin(appUrl) : null;
   if (!appOrigin)

@@ -127,22 +127,11 @@ fn canonical_json_pair(a: &str, b: &str) -> String {
 // ---------------------------------------------------------------------------
 
 /// Uppercase hex of the UTF-8 bytes of `value` (`hex` in memory-vectors.ts).
-pub fn hex_upper(value: &str) -> String {
-    let mut out = String::with_capacity(value.len() * 2);
-    for byte in value.as_bytes() {
-        out.push_str(&format!("{byte:02X}"));
-    }
-    out
-}
-
-/// `projectedClaimId(uid, replicaId, recordId)`.
-pub fn projected_claim_id(uid: &str, replica_id: &str, record_id: &str) -> String {
-    format!(
-        "zkr:{}:{}:claim:{}",
-        hex_upper(uid),
-        hex_upper(replica_id),
-        hex_upper(record_id)
-    )
+/// `projectedClaimId(recordId)` — the identity since migration 0030 retired the
+/// per-replica `zkr:<uid>:<replica>:claim:` namespace. `uid` and `replica_id` are
+/// kept for call-site stability only.
+pub fn projected_claim_id(_uid: &str, _replica_id: &str, record_id: &str) -> String {
+    record_id.to_string()
 }
 
 /// `claimText(claim)` — subject/predicate (non-empty) then content, ` | `-joined.
@@ -476,6 +465,62 @@ fn c_text(value: Option<&Value>, limit: usize) -> Option<String> {
 /// `bounded(value, limit)` — first `limit` Unicode code points.
 pub fn bounded(value: &str, limit: usize) -> String {
     value.chars().take(limit).collect()
+}
+
+/// `crepusText` — whitespace-normalized, quotes/backslashes stripped, truncated.
+pub fn crepus_text(value: &str, limit: usize) -> String {
+    let joined = value
+        .split_whitespace()
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    joined
+        .chars()
+        .filter(|c| *c != '"' && *c != '\\')
+        .take(limit)
+        .collect()
+}
+
+/// Deterministic hero `.crepus` for a generated current (parity with
+/// `heroCrepus` in `worker/src/currents.ts`). Returns `None` when the title
+/// sanitizes to empty or the document fails `sanitize_crepus`.
+pub fn hero_crepus(title: &str, summary: &str, action_label: &str) -> Option<String> {
+    use crate::crepus_safety::{is_public_http_url, sanitize_crepus};
+    let hero_title = crepus_text(title, 60);
+    if hero_title.is_empty() {
+        return None;
+    }
+    let hero_summary = crepus_text(summary, 90);
+    let label = crepus_text(action_label, 60);
+    let mut lines = vec![
+        "stack col gap-2".to_string(),
+        "  badge \"Now\"".to_string(),
+        format!("  text text-2xl font-semibold \"{hero_title}\""),
+    ];
+    if !hero_summary.is_empty() {
+        lines.push(format!("  text text-sm text-muted \"{hero_summary}\""));
+    }
+    if !label.is_empty() {
+        lines.push(format!("  button \"{label}\" onclick=accept"));
+    }
+    let haystack = format!("{title} {summary}");
+    if let Some(link) = extract_http_url(&haystack) {
+        if link.len() <= 400 && !link.contains(['\\', '{', '}', '"']) && is_public_http_url(&link) {
+            lines.push(format!("  button \"Open link\" onclick={{open:{link}}}"));
+        }
+    }
+    sanitize_crepus(&lines.join("\n"))
+}
+
+fn extract_http_url(haystack: &str) -> Option<String> {
+    let start = haystack
+        .find("http://")
+        .or_else(|| haystack.find("https://"))?;
+    let rest = &haystack[start..];
+    let end = rest
+        .find(|c: char| c.is_whitespace() || c == '"')
+        .unwrap_or(rest.len());
+    Some(rest[..end].to_string())
 }
 
 /// `exactText(value, limit)` — non-empty, bounded, and already trimmed.
@@ -1036,18 +1081,11 @@ mod tests {
         ];
         let ids = touched_claim_ids("alpha", "desktop", &records);
         assert_eq!(ids.len(), 2); // old-claim + new-claim, deduped
-        assert_eq!(ids[0], projected_claim_id("alpha", "desktop", "old-claim"));
-        assert_eq!(ids[1], projected_claim_id("alpha", "desktop", "new-claim"));
+        assert_eq!(ids[0], "old-claim");
+        assert_eq!(ids[1], "new-claim");
     }
 
     #[test]
-    fn projected_claim_id_matches_uppercase_hex() {
-        // "a" = 0x61.
-        assert_eq!(projected_claim_id("a", "b", "c"), "zkr:61:62:claim:63");
-    }
-
-    #[test]
-    #[ignore = "TS memory-vectors.ts projectedClaimId is the identity since migration 0030 retired the zkr:<uid>:<replica>: namespace; the Rust projection SQL still writes zkr ids and changing it would orphan existing rows"]
     fn projected_claim_id_should_be_the_identity_after_migration_0030() {
         assert_eq!(projected_claim_id("a", "b", "c"), "c");
     }

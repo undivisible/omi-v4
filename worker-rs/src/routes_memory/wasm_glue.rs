@@ -1857,20 +1857,24 @@ pub(crate) async fn generate_one_current(
         "instruction": bounded(&format!("Review this memory and decide the smallest next action: {value}"), 500),
     })
     .to_string();
+    let title = bounded(&format!("Revisit: {value}"), 120);
+    let summary = bounded(&content, 500);
+    let crepus = hero_crepus(&title, &summary, "Do this next");
     let inserted = d1_run(
         db,
-        "INSERT OR IGNORE INTO currents\n      (id, uid, evidence_id, title, summary, reason, confidence_basis_points,\n       proposed_action, status, surface_at, generation_key, created_at, updated_at)\n     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'candidate', ?9, ?10, ?9, ?9)",
+        "INSERT OR IGNORE INTO currents\n      (id, uid, evidence_id, title, summary, reason, confidence_basis_points,\n       proposed_action, status, surface_at, generation_key, created_at, updated_at, crepus)\n     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'candidate', ?9, ?10, ?9, ?9, ?11)",
         &[
             s(&id),
             s(uid),
             nullable_s(source.get("evidence_id").and_then(Value::as_str)),
-            s(&bounded(&format!("Revisit: {value}"), 120)),
-            s(&bounded(&content, 500)),
+            s(&title),
+            s(&summary),
             s(&bounded(&format!("Based on: {quote}"), 500)),
             n(confidence_bps),
             s(&proposed_action),
             n(now),
             s(&format!("claim:{claim_id}")),
+            nullable_s(crepus.as_deref()),
         ],
     )
     .await?;

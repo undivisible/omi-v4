@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 import '../auth/auth.dart';
@@ -126,7 +127,8 @@ final class WorkerHttpClient {
       '127.0.0.1',
       '::1',
     }.contains(uri.host.toLowerCase());
-    if ((uri.scheme != 'https' && !(uri.scheme == 'http' && loopback)) ||
+    if ((uri.scheme != 'https' &&
+            !(uri.scheme == 'http' && loopback && kDebugMode)) ||
         uri.host.isEmpty ||
         uri.userInfo.isNotEmpty ||
         uri.hasQuery ||
@@ -378,7 +380,7 @@ final class WorkerManagedSttClient implements ManagedSttClient {
     if (!RegExp(r'^[a-f0-9]{64}$').hasMatch(sessionId) ||
         websocketUrl == null ||
         (websocketUrl.scheme != 'wss' &&
-            !(websocketUrl.scheme == 'ws' && loopback)) ||
+            !(websocketUrl.scheme == 'ws' && loopback && kDebugMode)) ||
         websocketUrl.userInfo.isNotEmpty ||
         websocketUrl.hasQuery ||
         websocketUrl.hasFragment ||

@@ -52,13 +52,17 @@ final class DesktopAuthHandoff {
     final generation = ++_generation;
     final random = Random.secure();
     final verifier = _randomValue(random);
-    final sessionId = _randomValue(random);
     final challenge = base64UrlEncode(
       sha256.convert(utf8.encode(verifier)).bytes,
     ).replaceAll('=', '');
     final confirmationCode = List.generate(6, (_) => random.nextInt(10)).join();
     final confirmationChallenge = base64UrlEncode(
       sha256.convert(utf8.encode(confirmationCode)).bytes,
+    ).replaceAll('=', '');
+    final sessionId = base64UrlEncode(
+      sha256
+          .convert(utf8.encode('$challenge\u0000$confirmationChallenge'))
+          .bytes,
     ).replaceAll('=', '');
     onConfirmationCode(confirmationCode);
     final client = clientFactory();

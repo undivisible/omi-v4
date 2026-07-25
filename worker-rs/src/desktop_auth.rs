@@ -38,6 +38,16 @@ pub fn verifier_challenge(verifier: &str) -> String {
     sha256_base64url(verifier)
 }
 
+/// Derives the desktop-auth session id from the client-supplied PKCE challenges
+/// so the id cannot be chosen independently of the verifier material.
+pub fn derive_session_id(challenge: &str, confirmation_challenge: &str) -> Option<String> {
+    if !valid_session_value(challenge) || !valid_session_value(confirmation_challenge) {
+        return None;
+    }
+    let derived = sha256_base64url(&format!("{challenge}\0{confirmation_challenge}"));
+    valid_session_value(&derived).then_some(derived)
+}
+
 /// Port of `validPublicOrigin`: https (or http on loopback) origin with no
 /// credentials, query, fragment, and only an empty/`/` path. Returns the
 /// normalized origin URL string on success.
@@ -152,6 +162,20 @@ mod tests {
             verifier_challenge("123456"),
             "jZae727K08KaOmKSgOaGzww_XVqGr_PKEgIMkjrcbJI"
         );
+    }
+
+    #[test]
+    fn derive_session_id_binds_challenges() {
+        let challenge = "a".repeat(43);
+        let confirmation = "b".repeat(43);
+        let session = derive_session_id(&challenge, &confirmation).expect("derived");
+        assert!(valid_session_value(&session));
+        assert_ne!(session, challenge);
+        assert_eq!(
+            derive_session_id(&challenge, &confirmation),
+            Some(session.clone())
+        );
+        assert!(derive_session_id("short", &confirmation).is_none());
     }
 
     fn test_key() -> RsaPrivateKey {

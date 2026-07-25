@@ -1622,15 +1622,19 @@ fn session_value(body: &Option<Value>, key: &str) -> Option<String> {
 
 async fn handle_desktop_start(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
     let body = json_object(&mut req).await;
-    let session_id = session_value(&body, "sessionId");
     let challenge = session_value(&body, "challenge");
     let confirmation_challenge = session_value(&body, "confirmationChallenge");
-    let app_url = secret_or_var(&ctx.env, "APP_URL");
-    let (Some(session_id), Some(challenge), Some(confirmation_challenge)) =
-        (session_id, challenge, confirmation_challenge)
+    let session_id = session_value(&body, "sessionId");
+    let (Some(challenge), Some(confirmation_challenge), Some(session_id)) =
+        (challenge, confirmation_challenge, session_id)
     else {
         return error_json("Invalid handoff", 400);
     };
+    let derived = desktop_auth::derive_session_id(&challenge, &confirmation_challenge);
+    if derived.as_deref() != Some(session_id.as_str()) {
+        return error_json("Invalid handoff", 400);
+    }
+    let app_url = secret_or_var(&ctx.env, "APP_URL");
     let app_origin = app_url
         .as_deref()
         .and_then(desktop_auth::valid_public_origin);
