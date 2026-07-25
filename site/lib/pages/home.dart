@@ -220,18 +220,19 @@ class Home extends StatelessComponent {
       [
         const OmiMark.hero(),
         div([
-          p([.text('Omi — 2026')], classes: 'label rise d1'),
+          p([
+            .text('PRIVATE MEMORY · OPEN BY DESIGN'),
+          ], classes: 'label rise d1'),
           h1(
-            [.text('A second brain that actually remembers.')],
+            [.text('The part of life you should not have to remember alone.')],
             classes: 'giant rise d2',
             id: 't1',
           ),
           div([
             p([
               .text(
-                'One place across desktop, mobile and the web. It listens with '
-                'you, remembers in a way you can check, and meets you on '
-                'Telegram, iMessage, and FaceTime when you link them.',
+                'Omi keeps the context behind your work, your conversations, '
+                'and your next move — quietly, across every place life happens.',
               ),
             ], classes: 'mid rise d3'),
             div([const PrimaryActions()], classes: 'rise d4'),
@@ -306,7 +307,11 @@ class Home extends StatelessComponent {
           ]),
         ], classes: 'notes split reveal'),
         p([
-          a([.text('How remembering stays honest')], classes: 'arrow', href: '/architecture#memory'),
+          a(
+            [.text('How remembering stays honest')],
+            classes: 'arrow',
+            href: '/architecture#memory',
+          ),
         ], classes: 'links band-gap reveal'),
       ],
       classes: 'band wrap',
@@ -507,9 +512,7 @@ class Home extends StatelessComponent {
           article([
             h3([.text('Omi with your own keys')], classes: 'label'),
             p([.text('More than 60% off')], classes: 'amount'),
-            p([
-              .text('vs managed Omi AI at ~\$35/month'),
-            ], classes: 'small'),
+            p([.text('vs managed Omi AI at ~\$35/month')], classes: 'small'),
             p([
               .text(
                 'Sign in with an xAI or ChatGPT subscription you already pay '
@@ -670,10 +673,8 @@ class _HubEmbed extends StatelessComponent {
       ),
       figcaption([
         .text(
-          'Omi running in this page against seeded sample data — not '
-          'anyone\'s account. No sign-in, and nothing you do here leaves '
-          'your browser. Capture, the pendant, on-device transcription and '
-          'computer use need the desktop build.',
+          'A live Omi workspace, running on seeded sample data. No sign-in; '
+          'nothing you do here leaves your browser.',
         ),
       ]),
     ], classes: 'shot reveal');

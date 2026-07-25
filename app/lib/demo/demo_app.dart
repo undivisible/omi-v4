@@ -158,99 +158,112 @@ class _DemoBannerState extends State<DemoBanner> {
       key: const Key('demo_banner_host'),
       children: [
         Material(
-          color: dark ? const Color(0xff232321) : const Color(0xfff0eee6),
-          child: SafeArea(
-            bottom: false,
-            child: Semantics(
-              container: true,
-              label:
-                  'Demo. Sample data only. Nothing you do here leaves your '
-                  'browser.',
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(14, 7, 8, 7),
-                child: Row(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 7,
-                        vertical: 2,
-                      ),
-                      decoration: BoxDecoration(
-                        border: Border.all(color: muted),
-                        borderRadius: BorderRadius.circular(5),
-                      ),
-                      child: Text(
-                        'DEMO',
-                        style: TextStyle(
-                          fontSize: 10,
-                          fontWeight: FontWeight.w700,
-                          letterSpacing: 0.9,
-                          color: ink,
+          color: Colors.transparent,
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                colors: dark
+                    ? const [Color(0xff2c2927), Color(0xff232321)]
+                    : const [Color(0xffffeee2), Color(0xfffff9ed)],
+              ),
+              border: Border(
+                bottom: BorderSide(color: ink.withValues(alpha: .09)),
+              ),
+            ),
+            child: SafeArea(
+              bottom: false,
+              child: Semantics(
+                container: true,
+                label:
+                    'Demo. Sample data only. Nothing you do here leaves your '
+                    'browser.',
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 8, 10, 8),
+                  child: Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 7,
+                          vertical: 2,
+                        ),
+                        decoration: BoxDecoration(
+                          color: ink.withValues(alpha: .06),
+                          border: Border.all(color: ink.withValues(alpha: .12)),
+                          borderRadius: BorderRadius.circular(999),
+                        ),
+                        child: Text(
+                          'DEMO',
+                          style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.w600,
+                            letterSpacing: 1.1,
+                            color: ink,
+                          ),
                         ),
                       ),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Text(
-                        compact
-                            ? 'Sample data. Not your account.'
-                            : 'Sample data, not your account. Nothing you '
-                                  'type here leaves your browser.',
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontSize: 11.5,
-                          height: 1.25,
-                          color: muted,
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          compact
+                              ? 'Sample data. Not your account.'
+                              : 'Sample data, not your account. Nothing you '
+                                    'type here leaves your browser.',
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 11.5,
+                            height: 1.25,
+                            color: muted,
+                          ),
                         ),
                       ),
-                    ),
-                    TextButton(
-                      key: const Key('demo_open_omi'),
-                      onPressed: _openOmi,
-                      style: TextButton.styleFrom(
-                        foregroundColor: ink,
-                        padding: const EdgeInsets.symmetric(horizontal: 12),
-                        minimumSize: const Size(0, 32),
-                        textStyle: const TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
+                      TextButton(
+                        key: const Key('demo_open_omi'),
+                        onPressed: _openOmi,
+                        style: TextButton.styleFrom(
+                          foregroundColor: ink,
+                          padding: const EdgeInsets.symmetric(horizontal: 12),
+                          minimumSize: const Size(0, 32),
+                          textStyle: const TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                          ),
                         ),
+                        child: Text(compact ? 'Open' : 'Open Omi'),
                       ),
-                      child: Text(compact ? 'Open' : 'Open Omi'),
-                    ),
-                    const SizedBox(width: 2),
-                    DecoratedBox(
-                      decoration: BoxDecoration(
-                        color: _settingsOpen
-                            ? ink.withValues(alpha: .12)
-                            : Colors.transparent,
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(
+                      const SizedBox(width: 2),
+                      DecoratedBox(
+                        decoration: BoxDecoration(
                           color: _settingsOpen
-                              ? ink.withValues(alpha: .22)
+                              ? ink.withValues(alpha: .12)
                               : Colors.transparent,
-                        ),
-                      ),
-                      child: Semantics(
-                        button: true,
-                        label: _settingsOpen ? 'Close settings' : 'Settings',
-                        child: InkWell(
-                          key: const Key('demo_open_settings'),
-                          onTap: _toggleSettings,
                           borderRadius: BorderRadius.circular(8),
-                          child: Padding(
-                            padding: const EdgeInsets.all(8),
-                            child: Icon(
-                              Icons.tune_rounded,
-                              size: 18,
-                              color: _settingsOpen ? ink : muted,
+                          border: Border.all(
+                            color: _settingsOpen
+                                ? ink.withValues(alpha: .22)
+                                : Colors.transparent,
+                          ),
+                        ),
+                        child: Semantics(
+                          button: true,
+                          label: _settingsOpen ? 'Close settings' : 'Settings',
+                          child: InkWell(
+                            key: const Key('demo_open_settings'),
+                            onTap: _toggleSettings,
+                            borderRadius: BorderRadius.circular(8),
+                            child: Padding(
+                              padding: const EdgeInsets.all(8),
+                              child: Icon(
+                                Icons.tune_rounded,
+                                size: 18,
+                                color: _settingsOpen ? ink : muted,
+                              ),
                             ),
                           ),
                         ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
               ),
             ),

@@ -310,7 +310,7 @@ class _OmiAppState extends State<OmiApp> {
       navigatorKey: widget.navigatorKey,
       navigatorObservers: widget.navigatorObservers,
       builder: widget.overlayBuilder,
-      themeMode: ThemeMode.system,
+      themeMode: omiDemoMode ? ThemeMode.light : ThemeMode.system,
       theme: ThemeData(
         brightness: Brightness.light,
         scaffoldBackgroundColor: paper,
