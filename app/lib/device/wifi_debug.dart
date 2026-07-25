@@ -26,6 +26,30 @@ Uint8List wifiCredentialsCommand(
   ]);
 }
 
+Uint8List wifiCloudCommand(String host, String deviceId, String token) {
+  final hostBytes = utf8.encode(host);
+  final deviceIdBytes = utf8.encode(deviceId);
+  final tokenBytes = utf8.encode(token);
+  if (hostBytes.isEmpty || hostBytes.length > 128) {
+    throw const FormatException('Cloud host must be 1–128 bytes');
+  }
+  if (deviceIdBytes.isEmpty || deviceIdBytes.length > 64) {
+    throw const FormatException('Device ID must be 1–64 bytes');
+  }
+  if (tokenBytes.isEmpty || tokenBytes.length > 96) {
+    throw const FormatException('Device token must be 1–96 bytes');
+  }
+  return Uint8List.fromList([
+    0x12,
+    hostBytes.length,
+    ...hostBytes,
+    deviceIdBytes.length,
+    ...deviceIdBytes,
+    tokenBytes.length,
+    ...tokenBytes,
+  ]);
+}
+
 String wifiResultMessage(int code) => switch (code) {
   0x00 => 'Command accepted',
   0x01 => 'Invalid command length',

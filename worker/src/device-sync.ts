@@ -128,7 +128,10 @@ const object = async (request: Request) => {
 };
 
 /** Firebase auth, or an already-injected `auth` (test harnesses). */
-const requireRegisterAuth: MiddlewareHandler<AppEnv> = async (context, next) => {
+const requireRegisterAuth: MiddlewareHandler<AppEnv> = async (
+  context,
+  next,
+) => {
   try {
     if (context.get("auth")?.uid) {
       await next();
@@ -203,8 +206,7 @@ deviceSync.post("/register", requireRegisterAuth, async (context) => {
     .run();
 
   const host =
-    context.env.APP_URL?.replace(/\/$/, "") ||
-    new URL(context.req.url).origin;
+    context.env.APP_URL?.replace(/\/$/, "") || new URL(context.req.url).origin;
 
   return context.json({
     deviceId,
@@ -222,30 +224,56 @@ deviceSync.post("/:deviceId/audio", requireDeviceToken, async (context) => {
     return context.json({ error: "Device mismatch" }, 403);
 
   const declared = Number(context.req.header("content-length"));
-  if (Number.isFinite(declared) && declared > maximumUploadBytes)
+  if (Number.isFinite(declared) && declared > maximumUploadBytes + 96)
     return context.json({ error: "Audio too large" }, 413);
 
-  const body = await object(context.req.raw);
-  if (!body) return context.json({ error: "Invalid upload body" }, 400);
-
-  const startSeq = parseStartSeq(body.startSeq);
-  const packetCount = Number(body.packetCount);
-  const audio =
-    typeof body.audio === "string"
-      ? body.audio
-      : typeof body.audioBase64 === "string"
-        ? body.audioBase64
-        : "";
+  let startSeq: string | null;
+  let packetCount: number;
+  let audio: Uint8Array;
+  if (
+    context.req.header("content-type")?.split(";", 1)[0].trim() ===
+    "application/octet-stream"
+  ) {
+    const bytes = new Uint8Array(await context.req.arrayBuffer());
+    const preamble = parseHomeUploadPreamble(bytes);
+    if (!preamble || preamble.deviceId !== authDeviceId)
+      return context.json({ error: "Invalid upload body" }, 400);
+    startSeq = preamble.startSeq;
+    packetCount = preamble.packetCount;
+    audio = bytes.subarray(preamble.headerLen);
+    if (
+      preamble.packetBytes === 0 ||
+      audio.byteLength !== packetCount * preamble.packetBytes
+    )
+      return context.json({ error: "Invalid upload fields" }, 400);
+  } else {
+    const body = await object(context.req.raw);
+    if (!body) return context.json({ error: "Invalid upload body" }, 400);
+    startSeq = parseStartSeq(body.startSeq);
+    packetCount = Number(body.packetCount);
+    const encoded =
+      typeof body.audio === "string"
+        ? body.audio
+        : typeof body.audioBase64 === "string"
+          ? body.audioBase64
+          : "";
+    try {
+      audio = Uint8Array.from(atob(encoded), (value) => value.charCodeAt(0));
+    } catch {
+      return context.json({ error: "Invalid upload fields" }, 400);
+    }
+  }
   if (
     startSeq === null ||
     !Number.isFinite(packetCount) ||
+    !Number.isInteger(packetCount) ||
     packetCount < 0 ||
     packetCount > 100_000 ||
-    !audio
+    audio.byteLength === 0
   )
     return context.json({ error: "Invalid upload fields" }, 400);
 
-  const byteCount = Math.floor((audio.length * 3) / 4);
+  const byteCount = audio.byteLength;
   if (byteCount > maximumUploadBytes)
     return context.json({ error: "Audio too large" }, 413);
 
@@ -261,10 +289,18 @@ deviceSync.post("/:deviceId/audio", requireDeviceToken, async (context) => {
 
   // Metadata receipt only — audio bytes are not persisted yet (home STA stub).
   const uploadId = crypto.randomUUID();
+  const storageKey = `${context.get("auth").uid}/${authDeviceId}/${startSeq}-${packetCount}.bin`;
+  await context.env.DEVICE_AUDIO.put(storageKey, audio, {
+    httpMetadata: { contentType: "application/octet-stream" },
+  });
   await context.env.DB.prepare(
     `INSERT INTO device_audio_uploads
-       (id, device_id, uid, start_seq, packet_count, byte_count, created_at)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)`,
+         (id, device_id, uid, start_seq, packet_count, byte_count, created_at, storage_key)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+       ON CONFLICT(device_id, start_seq, packet_count) DO UPDATE SET
+         byte_count = excluded.byte_count,
+         created_at = excluded.created_at,
+         storage_key = excluded.storage_key`,
   )
     .bind(
       uploadId,
@@ -274,13 +310,14 @@ deviceSync.post("/:deviceId/audio", requireDeviceToken, async (context) => {
       packetCount,
       byteCount,
       now,
+      storageKey,
     )
     .run();
 
   return context.json({
     uploadId,
     accepted: true,
-    persisted: false,
+    persisted: true,
     startSeq,
     packetCount,
     byteCount,
