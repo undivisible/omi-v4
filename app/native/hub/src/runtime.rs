@@ -2716,6 +2716,35 @@ async fn execute(
             );
             false
         }
+        Command::SetVoiceGate {
+            enabled,
+            threshold_basis_points,
+            pre_roll_ms,
+            hangover_ms,
+        } => {
+            let policy =
+                crate::vad::set_policy(enabled, threshold_basis_points, pre_roll_ms, hangover_ms);
+            // The acknowledgement states the policy actually in force rather
+            // than the one asked for, so a client that sent an out-of-range
+            // value learns what it got instead of assuming it was honoured.
+            progress(
+                &request_id,
+                "voice_gate",
+                ToolStatus::Complete,
+                Some(&format!(
+                    "voice gate {} at {} bp with {} ms pre-roll and {} ms hangover",
+                    if policy.enabled {
+                        "enabled"
+                    } else {
+                        "disabled"
+                    },
+                    policy.threshold_basis_points,
+                    policy.pre_roll_ms,
+                    policy.hangover_ms,
+                )),
+            );
+            false
+        }
         Command::ComposeBrief { now_local, items } => {
             compose_brief(&request_id, &now_local, items, &cancellation).await;
             false
@@ -6464,6 +6493,13 @@ mod tests {
                 epoch: 0,
                 phase: TranscriptionPhase::Streaming,
                 provider: None,
+                gate: crate::vad::SpeechGate::new(
+                    crate::vad::GatePolicy::default(),
+                    AudioEncoding::Opus,
+                    16_000,
+                    1,
+                ),
+                last_gate_report: Instant::now(),
             },
         )]));
         let previous_seen = sessions.0["voice-1"].last_seen;

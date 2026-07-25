@@ -130,6 +130,23 @@ pub enum Command {
     SetSystemAudioCaptureMode {
         mode: crate::capture_policy::SystemAudioCaptureMode,
     },
+    /// Turn client-side voice-activity gating of the device audio path on or
+    /// off, and optionally retune it. Every tuning field is optional so a
+    /// client that only wants the kill switch does not have to restate the
+    /// values it never chose. Answered by exactly one [`ToolProgress`] naming
+    /// the policy that ended up in force.
+    ///
+    /// `threshold_basis_points` is the root-mean-square level at which audio
+    /// counts as speech, in basis points of full scale; `pre_roll_ms` is how
+    /// much audio ahead of a detected onset is kept so the first word is not
+    /// clipped; `hangover_ms` is how long the gate stays open after speech
+    /// stops so a pause does not split one utterance in two.
+    SetVoiceGate {
+        enabled: bool,
+        threshold_basis_points: Option<u32>,
+        pre_roll_ms: Option<u32>,
+        hangover_ms: Option<u32>,
+    },
     /// Compose the currents brief for the items the client just refreshed.
     /// Answered by exactly one [`BriefComposed`], whose `crepus` is `None`
     /// whenever the brief could not be composed — the client then keeps the
@@ -361,6 +378,26 @@ pub enum NativeEvent {
     BriefComposed(BriefComposed),
     CallState(CallState),
     DevAssistantResolved(DevAssistant),
+    AudioGateStats(AudioGateStats),
+}
+
+/// What the voice-activity gate kept off the metered transcription socket for
+/// one audio stream, so the saving can be seen rather than assumed. It is a
+/// local signal to the client and goes nowhere else.
+///
+/// `gateable` is `false` for an encoding whose loudness cannot be read without
+/// decoding it — Opus, today — and such a stream is passed through in full
+/// rather than gated on a guess. Reading `suppressed_bytes` as a saving is only
+/// meaningful when `enabled` and `gateable` are both true.
+#[derive(Debug, Serialize, SignalPiece)]
+pub struct AudioGateStats {
+    pub audio_stream_id: String,
+    pub enabled: bool,
+    pub gateable: bool,
+    pub forwarded_bytes: u64,
+    pub suppressed_bytes: u64,
+    pub forwarded_ms: u64,
+    pub suppressed_ms: u64,
 }
 
 /// The answer to a [`Command::ResolveDevAssistant`]. `credential` is the

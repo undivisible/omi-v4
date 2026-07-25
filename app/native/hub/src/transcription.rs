@@ -3,11 +3,12 @@ use crate::live_voice::{
     RealtimeVoiceProvider, RealtimeVoiceSession, validate_session,
 };
 use crate::signals::{
-    AudioChunk, AudioEncoding, LiveVoiceAudio, LiveVoicePhase, LiveVoiceState, LiveVoiceTranscript,
-    NativeError, NativeEvent, ToolProgress, ToolStatus, TranscriptionAuth, TranscriptionRoute,
-    TranscriptionState, TranscriptionStatus, TranscriptionStopAcknowledgement,
+    AudioChunk, AudioEncoding, AudioGateStats, LiveVoiceAudio, LiveVoicePhase, LiveVoiceState,
+    LiveVoiceTranscript, NativeError, NativeEvent, ToolProgress, ToolStatus, TranscriptionAuth,
+    TranscriptionRoute, TranscriptionState, TranscriptionStatus, TranscriptionStopAcknowledgement,
 };
 use crate::stt::{self, SttConfig, SttHandle};
+use crate::vad::{GateDecision, SpeechGate};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -18,6 +19,11 @@ const AUDIO_QUEUE_CAPACITY: usize = 32;
 const MAX_ACTIVE_AUDIO_SESSIONS: usize = 8;
 const MAX_ACTIVE_LIVE_SESSIONS: usize = 2;
 const AUDIO_SESSION_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
+/// How often a streaming session reports what its gate has saved. Every chunk
+/// would be one event per twenty milliseconds of audio for a number that only
+/// moves slowly; a session that ends sooner than this still reports once, on
+/// the way out.
+const GATE_REPORT_INTERVAL: Duration = Duration::from_secs(15);
 
 pub(crate) struct AudioSession {
     pub(crate) start_request_id: String,
@@ -33,6 +39,12 @@ pub(crate) struct AudioSession {
     pub(crate) epoch: u32,
     pub(crate) phase: TranscriptionPhase,
     pub(crate) provider: Option<SttHandle>,
+    /// Decides which of this stream's audio is worth the metered socket. It
+    /// lives on the session rather than on the provider because its pre-roll
+    /// and hangover are per-stream state, and because a session that
+    /// reconnects its provider must not forget what it was holding.
+    pub(crate) gate: SpeechGate,
+    pub(crate) last_gate_report: Instant,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -621,6 +633,23 @@ impl AudioDispatcher {
     }
 }
 
+/// Packages a gate's running total for the client. The durations are derived
+/// from the byte counts and the stream's own format, because a saving stated in
+/// seconds of audio is the one that lines up with how a transcription session
+/// is billed.
+fn gate_stats(audio_stream_id: &str, gate: &SpeechGate) -> AudioGateStats {
+    let stats = gate.stats();
+    AudioGateStats {
+        audio_stream_id: audio_stream_id.to_owned(),
+        enabled: gate.enabled(),
+        gateable: gate.gateable(),
+        forwarded_bytes: stats.forwarded_bytes,
+        suppressed_bytes: stats.suppressed_bytes,
+        forwarded_ms: gate.bytes_to_ms(stats.forwarded_bytes),
+        suppressed_ms: gate.bytes_to_ms(stats.suppressed_bytes),
+    }
+}
+
 impl AudioSessions {
     pub(crate) fn start(&mut self, start: StartTranscription) -> Result<(), AudioAcceptError> {
         if matches!(&start.auth, TranscriptionAuth::Local) {
@@ -692,6 +721,13 @@ impl AudioSessions {
                 epoch: 0,
                 phase: TranscriptionPhase::Streaming,
                 provider,
+                gate: SpeechGate::new(
+                    crate::vad::policy(),
+                    start.encoding,
+                    start.sample_rate_hz,
+                    start.channels,
+                ),
+                last_gate_report: Instant::now(),
             },
         );
         Ok(())
@@ -707,6 +743,8 @@ impl AudioSessions {
     ) {
         if let Some(mut session) = self.0.remove(stream_id) {
             session.phase = TranscriptionPhase::Draining;
+            session.gate.finish();
+            NativeEvent::AudioGateStats(gate_stats(stream_id, &session.gate)).send();
             let provider_reports_terminal = session.provider.is_some();
             if let Some(provider) = &session.provider {
                 provider.cancel();
@@ -803,16 +841,34 @@ impl AudioSessions {
                 message: "audio format changed during an active session".to_owned(),
             });
         }
-        if !chunk.end_of_stream
-            && let Some(provider) = &session.provider
-        {
-            provider
-                .send_audio(&chunk.bytes)
-                .map_err(|failure| AudioAcceptError {
-                    request_id: chunk.request_id.clone(),
-                    code: "transcription_provider_unavailable",
-                    message: failure.to_string(),
-                })?;
+        // Voice-activity gating happens here, between accepting a chunk from
+        // the client and paying to send it: the sequence and byte accounting
+        // above describe what the device delivered, which must stay true
+        // whether or not the audio was worth transmitting.
+        if !chunk.end_of_stream {
+            session.gate.set_policy(crate::vad::policy());
+            let decision = session.gate.observe(&chunk.bytes);
+            if let Some(provider) = &session.provider {
+                let send = |bytes: &[u8]| {
+                    provider
+                        .send_audio(bytes)
+                        .map_err(|failure| AudioAcceptError {
+                            request_id: chunk.request_id.clone(),
+                            code: "transcription_provider_unavailable",
+                            message: failure.to_string(),
+                        })
+                };
+                match &decision {
+                    GateDecision::Pass => send(&chunk.bytes)?,
+                    // The retained run-up goes first so the provider hears the
+                    // start of the word, not its second half.
+                    GateDecision::PassWithPreRoll(pre_roll) => {
+                        send(pre_roll)?;
+                        send(&chunk.bytes)?;
+                    }
+                    GateDecision::Suppress => {}
+                }
+            }
         }
         let first_chunk = session.next_sequence == 0;
         let next_sequence =
@@ -835,6 +891,19 @@ impl AudioSessions {
         session.next_sequence = next_sequence;
         session.accepted_bytes = accepted_bytes;
         session.last_seen = now;
+        // A saving nobody can see is one nobody will trust, so the gate's
+        // running total is reported periodically and again when the stream
+        // ends. It stays inside the process: this is a signal to the client,
+        // not a measurement sent anywhere.
+        if chunk.end_of_stream
+            || now.saturating_duration_since(session.last_gate_report) >= GATE_REPORT_INTERVAL
+        {
+            session.last_gate_report = now;
+            if chunk.end_of_stream {
+                session.gate.finish();
+            }
+            NativeEvent::AudioGateStats(gate_stats(&chunk.request_id, &session.gate)).send();
+        }
         let progress = if chunk.end_of_stream {
             let stream_id = chunk.request_id.clone();
             let epoch = session.epoch;
@@ -889,6 +958,128 @@ mod tests {
             resumption_handle,
             session_context: None,
         }
+    }
+
+    fn started_stream(encoding: AudioEncoding) -> AudioSessions {
+        let mut sessions = AudioSessions::default();
+        let started = sessions.start(StartTranscription {
+            request_id: "voice-1".to_owned(),
+            audio_stream_id: "voice-1".to_owned(),
+            device_id: "omi-1".to_owned(),
+            auth: TranscriptionAuth::Byok {
+                endpoint: "wss://api.deepgram.com/v1/listen".to_owned(),
+                api_key: "key".to_owned(),
+            },
+            trusted_worker_origin: None,
+            language: "en".to_owned(),
+            sample_rate_hz: 16_000,
+            channels: 1,
+            encoding,
+        });
+        assert!(started.is_ok());
+        sessions
+    }
+
+    /// 16 kHz mono 16-bit audio at `amplitude`, alternating sign so a loud
+    /// window measures loud rather than averaging to a constant offset.
+    fn pcm16(amplitude: i16, ms: u32) -> Vec<u8> {
+        (0..(16 * ms as usize))
+            .flat_map(|index| {
+                let value = if index % 2 == 0 {
+                    amplitude
+                } else {
+                    -amplitude
+                };
+                value.to_le_bytes()
+            })
+            .collect()
+    }
+
+    fn feed(
+        sessions: &mut AudioSessions,
+        encoding: AudioEncoding,
+        chunks: impl IntoIterator<Item = Vec<u8>>,
+    ) -> AudioGateStats {
+        let mut sequence = 0;
+        for bytes in chunks {
+            let accepted = sessions.accept(AudioChunk {
+                request_id: "voice-1".to_owned(),
+                sequence,
+                sample_rate_hz: 16_000,
+                channels: 1,
+                encoding,
+                end_of_stream: false,
+                bytes,
+            });
+            assert!(accepted.is_ok());
+            sequence += 1;
+        }
+        let _ = crate::signals::test_events::take();
+        let ended = sessions.accept(AudioChunk {
+            request_id: "voice-1".to_owned(),
+            sequence,
+            sample_rate_hz: 16_000,
+            channels: 1,
+            encoding,
+            end_of_stream: true,
+            bytes: Vec::new(),
+        });
+        assert!(ended.is_ok());
+        crate::signals::test_events::take()
+            .into_iter()
+            .find_map(|event| match event {
+                NativeEvent::AudioGateStats(stats) => Some(stats),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("a finished stream reports what its gate saved"))
+    }
+
+    #[test]
+    fn silence_from_the_device_never_reaches_the_metered_session() {
+        let mut sessions = started_stream(AudioEncoding::PcmS16Le);
+        let stats = feed(
+            &mut sessions,
+            AudioEncoding::PcmS16Le,
+            (0..50).map(|_| pcm16(0, 20)),
+        );
+        assert!(stats.enabled);
+        assert!(stats.gateable);
+        assert_eq!(stats.forwarded_bytes, 0);
+        // A second of silence accepted from the device, and a second of
+        // silence that was never paid to transmit.
+        assert_eq!(stats.suppressed_ms, 1_000);
+        assert_eq!(stats.suppressed_bytes, 50 * pcm16(0, 20).len() as u64);
+    }
+
+    #[test]
+    fn speech_reaches_the_session_together_with_the_silence_before_it() {
+        let mut sessions = started_stream(AudioEncoding::PcmS16Le);
+        let stats = feed(
+            &mut sessions,
+            AudioEncoding::PcmS16Le,
+            (0..50)
+                .map(|_| pcm16(0, 20))
+                .chain((0..10).map(|_| pcm16(6_000, 20))),
+        );
+        // Everything spoken, plus the retained run-up that keeps the first
+        // word whole; the rest of the silence stayed on the device.
+        assert_eq!(stats.forwarded_ms, 300 + 200);
+        assert_eq!(stats.suppressed_ms, 1_000 - 300);
+    }
+
+    #[test]
+    fn an_opus_stream_is_forwarded_whole_and_says_it_was_not_gated() {
+        let mut sessions = started_stream(AudioEncoding::Opus);
+        // Opus packets carry no loudness the hub can read without decoding
+        // them, so the gate must not pretend to judge these bytes.
+        let stats = feed(
+            &mut sessions,
+            AudioEncoding::Opus,
+            (0..10).map(|_| vec![0xfc_u8; 80]),
+        );
+        assert!(!stats.gateable);
+        assert_eq!(stats.forwarded_bytes, 800);
+        assert_eq!(stats.suppressed_bytes, 0);
     }
 
     #[test]
