@@ -26,7 +26,7 @@ const DEEPGRAM_PATH: &str = "/v1/listen";
 const MAX_CREDENTIAL_BYTES: usize = 16 * 1024;
 const MAX_PENDING_AUDIO_BYTES: usize = 64 * 1024;
 const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(8);
-const FINAL_DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
+pub(crate) const FINAL_DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
 
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum SttError {
@@ -405,7 +405,9 @@ async fn run(
             message = socket.next() => match message {
                 Some(Ok(Message::Text(text))) => {
                     if let Some(delta) = state.parse(text.as_ref(), unix_time_ms()) {
-                        if delta.final_segment {
+                        if delta.final_segment
+                            && config.request_id == crate::meeting_capture::CAPTURE_STREAM_ID
+                        {
                             crate::meeting::observe_final_segment(&delta.text, diarization_key(&delta));
                         }
                         NativeEvent::TranscriptDelta(delta).send();
@@ -449,7 +451,9 @@ async fn drain_final_results(
             match message {
                 Ok(Message::Text(text)) => {
                     if let Some(delta) = state.parse(text.as_ref(), unix_time_ms()) {
-                        if delta.final_segment {
+                        if delta.final_segment
+                            && config.request_id == crate::meeting_capture::CAPTURE_STREAM_ID
+                        {
                             crate::meeting::observe_final_segment(
                                 &delta.text,
                                 diarization_key(&delta),

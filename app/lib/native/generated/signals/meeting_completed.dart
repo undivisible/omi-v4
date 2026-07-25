@@ -6,6 +6,8 @@ class MeetingCompleted {
   const MeetingCompleted({
     required this.title,
     required this.summary,
+    required this.meetingType,
+    required this.rawTranscript,
     required this.actions,
     required this.startedAtMs,
     required this.endedAtMs,
@@ -21,6 +23,8 @@ class MeetingCompleted {
     final instance = MeetingCompleted(
       title: deserializer.deserializeString(),
       summary: deserializer.deserializeString(),
+      meetingType: deserializer.deserializeString(),
+      rawTranscript: deserializer.deserializeString(),
       actions: TraitHelpers.deserializeVectorStr(deserializer),
       startedAtMs: deserializer.deserializeInt64(),
       endedAtMs: deserializer.deserializeInt64(),
@@ -45,6 +49,8 @@ class MeetingCompleted {
 
   final String title;
   final String summary;
+  final String meetingType;
+  final String rawTranscript;
   final List<String> actions;
   final int startedAtMs;
   final int endedAtMs;
@@ -57,6 +63,8 @@ class MeetingCompleted {
   MeetingCompleted copyWith({
     String? title,
     String? summary,
+    String? meetingType,
+    String? rawTranscript,
     List<String>? actions,
     int? startedAtMs,
     int? endedAtMs,
@@ -69,6 +77,8 @@ class MeetingCompleted {
     return MeetingCompleted(
       title: title ?? this.title,
       summary: summary ?? this.summary,
+      meetingType: meetingType ?? this.meetingType,
+      rawTranscript: rawTranscript ?? this.rawTranscript,
       actions: actions ?? this.actions,
       startedAtMs: startedAtMs ?? this.startedAtMs,
       endedAtMs: endedAtMs ?? this.endedAtMs,
@@ -84,6 +94,8 @@ class MeetingCompleted {
     serializer.increaseContainerDepth();
     serializer.serializeString(title);
     serializer.serializeString(summary);
+    serializer.serializeString(meetingType);
+    serializer.serializeString(rawTranscript);
     TraitHelpers.serializeVectorStr(actions, serializer);
     serializer.serializeInt64(startedAtMs);
     serializer.serializeInt64(endedAtMs);
@@ -109,6 +121,8 @@ class MeetingCompleted {
     return other is MeetingCompleted &&
         title == other.title &&
         summary == other.summary &&
+        meetingType == other.meetingType &&
+        rawTranscript == other.rawTranscript &&
         listEquals(actions, other.actions) &&
         startedAtMs == other.startedAtMs &&
         endedAtMs == other.endedAtMs &&
@@ -123,6 +137,8 @@ class MeetingCompleted {
   int get hashCode => Object.hash(
     title,
     summary,
+    meetingType,
+    rawTranscript,
     actions,
     startedAtMs,
     endedAtMs,
@@ -142,6 +158,8 @@ class MeetingCompleted {
           '$runtimeType('
           'title: $title, '
           'summary: $summary, '
+          'meetingType: $meetingType, '
+          'rawTranscript: $rawTranscript, '
           'actions: $actions, '
           'startedAtMs: $startedAtMs, '
           'endedAtMs: $endedAtMs, '

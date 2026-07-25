@@ -32,6 +32,7 @@ pub const MAX_JOTS: usize = 200;
 const JOT_CHARS: usize = 500;
 const CONTROL_QUEUE_CAPACITY: usize = 64;
 const DEFAULT_TITLE: &str = "Meeting";
+const FINAL_DRAIN_GRACE: Duration = Duration::from_millis(100);
 
 /// How long the detector gate must stay off before a manual session ends by
 /// itself.
@@ -191,6 +192,7 @@ impl ActionItem {
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct MeetingNote {
+    pub meeting_type: MeetingType,
     pub title: Option<String>,
     pub summary: String,
     pub participants: Vec<String>,
@@ -210,6 +212,34 @@ impl MeetingNote {
 
     pub fn action_lines(&self) -> Vec<String> {
         self.actions.iter().map(ActionItem::line).collect()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum MeetingType {
+    OneOnOne,
+    Standup,
+    Sales,
+    CustomerInterview,
+    Retrospective,
+    ProjectPlanning,
+    #[default]
+    #[serde(other)]
+    General,
+}
+
+impl MeetingType {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::General => "general",
+            Self::OneOnOne => "one-on-one",
+            Self::Standup => "standup",
+            Self::Sales => "sales",
+            Self::CustomerInterview => "customer-interview",
+            Self::Retrospective => "retrospective",
+            Self::ProjectPlanning => "project-planning",
+        }
     }
 }
 
@@ -257,8 +287,10 @@ fn build_note_prompt(
     };
     format!(
         "You are a meeting note taker. Working title: {title}. From the {source_noun} below, \
-         write a polished structured meeting note. Return ONLY valid JSON in this exact format: \
-         {{\"title\":\"short descriptive title\",\"summary\":\"2-3 sentence executive summary\",\
+         classify the meeting and write a polished structured meeting note in the same response. \
+         Return ONLY valid JSON in this exact format: \
+         {{\"meetingType\":\"general|one-on-one|standup|sales|customer-interview|retrospective|project-planning\",\
+         \"title\":\"short descriptive title\",\"summary\":\"2-3 sentence executive summary\",\
          \"participants\":[\"names actually mentioned, or empty\"],\
          \"sections\":[{{\"heading\":\"topic\",\"points\":[\"key point\"]}}],\
          \"decisions\":[\"decisions made\"],\
@@ -279,6 +311,15 @@ fn build_note_prompt(
          sections; the summary and participants have their own fields.\n\
          - Keep points specific and concrete. Prefer the actual numbers, names, and commitments \
          over abstractions.\n\
+         - Choose exactly one meetingType from the allowed values. Use general whenever the type \
+         is uncertain or mixed.\n\
+         - Format emphasis by meetingType: general covers concrete topics, decisions, actions, \
+         and open questions; one-on-one emphasizes goals, feedback, growth, blockers, and mutual \
+         commitments; standup emphasizes progress, blockers, next work, and ownership; sales \
+         emphasizes needs, objections, buying signals, stakeholders, and follow-up; \
+         customer-interview emphasizes observed workflows, problems, pain, behavior, and requests; \
+         retrospective emphasizes what worked, what did not, causes, and experiments; \
+         project-planning emphasizes scope, milestones, dependencies, risks, owners, and dates.\n\
          - Leave any array empty rather than padding it.\
          {jot_block}\n\n{source_label}:\n{bounded}"
     )
@@ -425,6 +466,8 @@ enum ActionEntry {
 
 #[derive(serde::Deserialize)]
 struct NotePayload {
+    #[serde(default, rename = "meetingType")]
+    meeting_type: MeetingType,
     #[serde(default)]
     title: String,
     #[serde(default)]
@@ -472,6 +515,7 @@ pub fn parse_note(output: &str) -> Option<MeetingNote> {
     let payload: NotePayload = serde_json::from_str(output.get(start..=end)?).ok()?;
     let summary = payload.summary.trim().to_owned();
     (!summary.is_empty()).then(|| MeetingNote {
+        meeting_type: payload.meeting_type,
         title: Some(payload.title.trim().to_owned()).filter(|value| !value.is_empty()),
         summary,
         participants: clean_list(payload.participants),
@@ -507,6 +551,7 @@ pub fn fallback_note(transcript: &str, jots: &[String]) -> MeetingNote {
         points: jots.to_vec(),
     });
     MeetingNote {
+        meeting_type: MeetingType::General,
         title: None,
         summary: summary.split_whitespace().collect::<Vec<_>>().join(" "),
         participants: Vec::new(),
@@ -599,6 +644,7 @@ pub fn metadata_json(
 ) -> String {
     serde_json::json!({
         "kind": "meeting",
+        "meetingType": note.meeting_type.name(),
         "title": note.title.as_deref().unwrap_or(title),
         "startedAtMs": started_at_ms,
         "endedAtMs": ended_at_ms,
@@ -834,8 +880,12 @@ pub fn compose_completion(
     let started_at_ms = session.started_at_ms();
     let markdown = note_markdown(&note, session.title(), started_at_ms, now_ms);
     let metadata = metadata_json(&note, session.title(), started_at_ms, now_ms);
-    let transcript: String = session
+    let raw_transcript: String = session
         .transcript()
+        .chars()
+        .take(RAW_TRANSCRIPT_CHARS)
+        .collect();
+    let transcript: String = raw_transcript
         .chars()
         .take(SUMMARY_TRANSCRIPT_CHARS)
         .collect();
@@ -857,9 +907,12 @@ pub fn compose_completion(
     };
     let actions = note.action_lines();
     let key_points = note.key_points();
+    let meeting_type = note.meeting_type.name().to_owned();
     let completed = MeetingCompleted {
         title,
         summary: note.summary,
+        meeting_type,
+        raw_transcript,
         actions,
         started_at_ms,
         ended_at_ms: now_ms,
@@ -899,10 +952,6 @@ pub enum MeetingControl {
     ConfigureNoteProvider(NoteGenerator),
 }
 
-pub fn capture_allowed(mode: SystemAudioCaptureMode, session_active: bool) -> bool {
-    capture_plan(mode, true, session_active).system_audio && session_active
-}
-
 #[derive(Default)]
 pub struct CaptureSlot<H> {
     handle: Option<H>,
@@ -928,18 +977,22 @@ impl<H> CaptureSlot<H> {
         session_active: bool,
         start: impl FnOnce(CapturePlan, TranscriptionAuth, Option<String>) -> Option<H>,
     ) {
-        if !capture_allowed(mode, session_active) {
+        if !session_active {
             self.handle = None;
+            return;
+        }
+        let plan = capture_plan(mode, true, session_active);
+        if !plan.system_audio {
+            self.handle = None;
+            if let Some((auth, trusted_worker_origin)) = self.pending.take() {
+                self.handle = start(plan, auth, trusted_worker_origin);
+            }
             return;
         }
         if self.handle.is_none()
             && let Some((auth, trusted_worker_origin)) = self.pending.take()
         {
-            self.handle = start(
-                capture_plan(mode, true, session_active),
-                auth,
-                trusted_worker_origin,
-            );
+            self.handle = start(plan, auth, trusted_worker_origin);
         }
     }
 
@@ -1109,21 +1162,56 @@ async fn reached(deadline: Option<tokio::time::Instant>) {
     }
 }
 
+fn announce_microphone_fallback() {
+    NativeEvent::Error(NativeError {
+        request_id: Some(crate::meeting_capture::CAPTURE_STREAM_ID.to_owned()),
+        code: "meeting_system_audio_unavailable".to_owned(),
+        message: "system audio capture is disabled; using microphone-only capture".to_owned(),
+        retryable: true,
+    })
+    .send();
+}
+
 impl MeetingRuntime {
     pub async fn run(mut self) {
         let mut session: Option<MeetingSession> = None;
+        let mut finishing: Option<MeetingSession> = None;
         let mut announced = false;
         let mut gate_active = false;
+        let mut gate_title: Option<String> = None;
         let mut auto_start_suppressed = false;
         let mut manual_end: Option<tokio::time::Instant> = None;
+        let mut finish_deadline: Option<tokio::time::Instant> = None;
+        let mut pending_manual_start: Option<Option<String>> = None;
         loop {
             let control = tokio::select! {
                 () = self.cancellation.cancelled() => break,
                 () = reached(manual_end) => {
                     manual_end = None;
-                    if let Some(finished) = session.take() {
-                        self.capture.stop();
+                    self.begin_final_drain(
+                        &mut session,
+                        &mut finishing,
+                        &mut finish_deadline,
+                    );
+                    announce(session.as_ref(), &mut announced);
+                    continue;
+                }
+                () = reached(finish_deadline) => {
+                    finish_deadline = None;
+                    if let Some(finished) = finishing.take() {
                         self.finish(finished);
+                    }
+                    if let Some(title) = pending_manual_start.take() {
+                        auto_start_suppressed = false;
+                        session = Some(MeetingSession::new(title, true));
+                        self.sync_capture(true);
+                    } else if session.is_none()
+                        && gate_active
+                        && !auto_start_suppressed
+                        && should_auto_start(self.mode, true)
+                    {
+                        session = Some(MeetingSession::new(gate_title.clone(), false));
+                        self.sync_capture(true);
                     }
                     announce(session.as_ref(), &mut announced);
                     continue;
@@ -1137,14 +1225,17 @@ impl MeetingRuntime {
                 MeetingControl::Start { title } => {
                     auto_start_suppressed = false;
                     manual_end = None;
-                    match &mut session {
-                        Some(current) => current.upgrade_to_manual(title),
-                        None => session = Some(MeetingSession::new(title, true)),
+                    if finishing.is_some() && session.is_none() {
+                        pending_manual_start = Some(title);
+                    } else {
+                        match &mut session {
+                            Some(current) => current.upgrade_to_manual(title),
+                            None => session = Some(MeetingSession::new(title, true)),
+                        }
+                        self.sync_capture(session.is_some());
                     }
-                    self.sync_capture(session.is_some());
                 }
                 MeetingControl::Stop => {
-                    self.capture.stop();
                     manual_end = None;
                     // Stopping by hand mid-call must not be undone a poll later
                     // by a detector that is still holding the gate open, so
@@ -1152,17 +1243,18 @@ impl MeetingRuntime {
                     // Starting again remains available throughout, because a
                     // manual Start ignores the gate entirely.
                     auto_start_suppressed = gate_active;
-                    if let Some(finished) = session.take() {
-                        self.finish(finished);
-                    }
+                    pending_manual_start = None;
+                    self.begin_final_drain(&mut session, &mut finishing, &mut finish_deadline);
                 }
                 MeetingControl::Gate {
                     active: true,
                     suggested_title,
                 } => {
                     gate_active = true;
+                    gate_title.clone_from(&suggested_title);
                     manual_end = None;
                     if session.is_none()
+                        && finishing.is_none()
                         && !auto_start_suppressed
                         && should_auto_start(self.mode, true)
                     {
@@ -1172,13 +1264,15 @@ impl MeetingRuntime {
                 }
                 MeetingControl::Gate { active: false, .. } => {
                     gate_active = false;
+                    gate_title = None;
                     auto_start_suppressed = false;
                     match session.as_ref().map(MeetingSession::is_manual) {
                         Some(false) => {
-                            if let Some(finished) = session.take() {
-                                self.capture.stop();
-                                self.finish(finished);
-                            }
+                            self.begin_final_drain(
+                                &mut session,
+                                &mut finishing,
+                                &mut finish_deadline,
+                            );
                         }
                         Some(true) => {
                             manual_end = Some(tokio::time::Instant::now() + MANUAL_GATE_OFF_GRACE);
@@ -1191,7 +1285,10 @@ impl MeetingRuntime {
                     diarized,
                     text,
                 } => {
-                    if let Some(current) = &mut session {
+                    if let Some(current) = &mut finishing {
+                        let speaker = current.resolve_speaker(diarized, speaker);
+                        current.push_final(speaker, &text);
+                    } else if let Some(current) = &mut session {
                         let speaker = current.resolve_speaker(diarized, speaker);
                         current.push_final(speaker, &text);
                         NativeEvent::MeetingTranscriptTurn(MeetingTranscriptTurn {
@@ -1216,8 +1313,16 @@ impl MeetingRuntime {
                     self.sync_capture(session.is_some());
                 }
                 MeetingControl::SetMode { mode } => {
+                    let route_fallback = session.is_some()
+                        && self.mode != SystemAudioCaptureMode::Never
+                        && mode == SystemAudioCaptureMode::Never;
                     self.mode = mode;
-                    self.sync_capture(session.is_some());
+                    if route_fallback {
+                        self.capture.stop();
+                        announce_microphone_fallback();
+                    } else {
+                        self.sync_capture(session.is_some());
+                    }
                 }
                 MeetingControl::ConfigureNoteProvider(generator) => {
                     self.note_generator = Some(generator);
@@ -1232,6 +1337,10 @@ impl MeetingRuntime {
     fn sync_capture(&mut self, session_active: bool) {
         self.capture
             .sync(self.mode, session_active, |plan, auth, origin| {
+                if !plan.system_audio {
+                    announce_microphone_fallback();
+                    return None;
+                }
                 match crate::meeting_capture::start(plan, auth, origin) {
                     Ok(handle) => Some(handle),
                     Err(message) => {
@@ -1250,6 +1359,23 @@ impl MeetingRuntime {
                     }
                 }
             });
+    }
+
+    fn begin_final_drain(
+        &mut self,
+        session: &mut Option<MeetingSession>,
+        finishing: &mut Option<MeetingSession>,
+        finish_deadline: &mut Option<tokio::time::Instant>,
+    ) {
+        self.capture.stop();
+        if let Some(finished) = session.take() {
+            if let Some(previous) = finishing.replace(finished) {
+                self.finish(previous);
+            }
+            *finish_deadline = Some(
+                tokio::time::Instant::now() + crate::stt::FINAL_DRAIN_TIMEOUT + FINAL_DRAIN_GRACE,
+            );
+        }
     }
 
     fn maybe_classify(&self, session: &mut MeetingSession, speaker: MeetingSpeaker, text: &str) {
@@ -1298,40 +1424,49 @@ impl MeetingRuntime {
         let cancellation = self.cancellation.clone();
         let generator = self.note_generator.clone();
         tokio::spawn(async move {
-            if session.transcript().trim().is_empty() {
+            let transcript_empty = session.transcript().trim().is_empty();
+            if transcript_empty && session.jots().is_empty() {
                 return;
             }
             let now_ms = chrono::Utc::now().timestamp_millis();
-            let chunks = transcript_chunks(session.transcript());
-            let prompt = match chunks.as_slice() {
-                [] => return,
-                [single] => note_prompt(single, session.jots(), session.title()),
-                chunks => {
-                    let mut digests = Vec::with_capacity(chunks.len());
-                    for (index, chunk) in chunks.iter().enumerate() {
-                        let prompt =
-                            chunk_summary_prompt(chunk, index + 1, chunks.len(), session.title());
-                        let digest = tokio::select! {
-                            () = cancellation.cancelled() => return,
-                            output = generate_note_output(&prompt, generator.as_ref(), &cancellation) => output,
-                        };
-                        digests.push(digest.unwrap_or_else(|| chunk.clone()));
+            let note = if transcript_empty {
+                fallback_note(session.transcript(), session.jots())
+            } else {
+                let chunks = transcript_chunks(session.transcript());
+                let prompt = match chunks.as_slice() {
+                    [] => return,
+                    [single] => note_prompt(single, session.jots(), session.title()),
+                    chunks => {
+                        let mut digests = Vec::with_capacity(chunks.len());
+                        for (index, chunk) in chunks.iter().enumerate() {
+                            let prompt = chunk_summary_prompt(
+                                chunk,
+                                index + 1,
+                                chunks.len(),
+                                session.title(),
+                            );
+                            let digest = tokio::select! {
+                                () = cancellation.cancelled() => return,
+                                output = generate_note_output(&prompt, generator.as_ref(), &cancellation) => output,
+                            };
+                            digests.push(digest.unwrap_or_else(|| chunk.clone()));
+                        }
+                        digest_note_prompt(
+                            &combine_chunk_digests(&digests),
+                            session.jots(),
+                            session.title(),
+                        )
                     }
-                    digest_note_prompt(
-                        &combine_chunk_digests(&digests),
-                        session.jots(),
-                        session.title(),
-                    )
-                }
+                };
+                let output = tokio::select! {
+                    () = cancellation.cancelled() => return,
+                    output = generate_note_output(&prompt, generator.as_ref(), &cancellation) => output,
+                };
+                output
+                    .as_deref()
+                    .and_then(parse_note)
+                    .unwrap_or_else(|| fallback_note(session.transcript(), session.jots()))
             };
-            let output = tokio::select! {
-                () = cancellation.cancelled() => return,
-                output = generate_note_output(&prompt, generator.as_ref(), &cancellation) => output,
-            };
-            let note = output
-                .as_deref()
-                .and_then(parse_note)
-                .unwrap_or_else(|| fallback_note(session.transcript(), session.jots()));
             let (completed, capture) = compose_completion(&session, note, now_ms);
             let _ = captures.send(capture).await;
             NativeEvent::MeetingCompleted(completed).send();
@@ -1506,13 +1641,15 @@ mod tests {
 
     #[test]
     fn note_json_is_parsed_from_fenced_output() {
-        let output = "Sure, here you go:\n```json\n{\"title\":\" Launch Sync \",\"summary\":\"We \
+        let output = "Sure, here you go:\n```json\n{\"meetingType\":\"project-planning\",\
+                      \"title\":\" Launch Sync \",\"summary\":\"We \
                       aligned on launch. Follow-ups were assigned.\",\"participants\":[\"Ana\",\" \
                       \"],\"sections\":[{\"heading\":\"Launch\",\"points\":[\"Beta ships \
                       Friday\",\"  \"]},{\"heading\":\"Empty\",\"points\":[]}],\"decisions\":\
                       [\"Ship Friday\"],\"actions\":[\"Ship beta\",\"  \",\"Email QA\"],\
                       \"openQuestions\":[\"Who signs off pricing?\",\" \"]}\n```";
         let note = parse_note(output).unwrap_or_else(|| panic!("note parses"));
+        assert_eq!(note.meeting_type, MeetingType::ProjectPlanning);
         assert_eq!(note.title.as_deref(), Some("Launch Sync"));
         assert_eq!(
             note.summary,
@@ -1525,6 +1662,32 @@ mod tests {
         assert_eq!(note.decisions, vec!["Ship Friday"]);
         assert_eq!(note.action_lines(), vec!["Ship beta", "Email QA"]);
         assert_eq!(note.open_questions, vec!["Who signs off pricing?"]);
+    }
+
+    #[test]
+    fn meeting_type_is_bounded_with_a_strict_general_fallback() {
+        for (name, expected) in [
+            ("general", MeetingType::General),
+            ("one-on-one", MeetingType::OneOnOne),
+            ("standup", MeetingType::Standup),
+            ("sales", MeetingType::Sales),
+            ("customer-interview", MeetingType::CustomerInterview),
+            ("retrospective", MeetingType::Retrospective),
+            ("project-planning", MeetingType::ProjectPlanning),
+        ] {
+            let note = parse_note(&format!(
+                "{{\"meetingType\":\"{name}\",\"summary\":\"Aligned.\"}}"
+            ))
+            .unwrap_or_else(|| panic!("note parses"));
+            assert_eq!(note.meeting_type, expected);
+            assert_eq!(note.meeting_type.name(), name);
+        }
+        let unknown = parse_note("{\"meetingType\":\"board-meeting\",\"summary\":\"Aligned.\"}")
+            .unwrap_or_else(|| panic!("note parses"));
+        let missing =
+            parse_note("{\"summary\":\"Aligned.\"}").unwrap_or_else(|| panic!("note parses"));
+        assert_eq!(unknown.meeting_type, MeetingType::General);
+        assert_eq!(missing.meeting_type, MeetingType::General);
     }
 
     #[test]
@@ -1567,6 +1730,7 @@ mod tests {
             &jots,
         );
         assert_eq!(fallback.summary, "First point. Second point!");
+        assert_eq!(fallback.meeting_type, MeetingType::General);
         assert!(fallback.actions.is_empty());
         assert_eq!(fallback.sections.len(), 1);
         assert_eq!(fallback.sections[0].heading, "Notes");
@@ -1577,6 +1741,7 @@ mod tests {
     #[test]
     fn note_markdown_renders_every_populated_section() {
         let note = MeetingNote {
+            meeting_type: MeetingType::ProjectPlanning,
             title: Some("Launch Sync".to_owned()),
             summary: "We aligned on launch.".to_owned(),
             participants: vec!["Ana".to_owned(), "Ben".to_owned()],
@@ -1612,6 +1777,7 @@ mod tests {
     #[test]
     fn metadata_json_carries_structured_meeting_fields() {
         let note = MeetingNote {
+            meeting_type: MeetingType::Standup,
             title: None,
             summary: "Short.".to_owned(),
             participants: vec!["Ana".to_owned()],
@@ -1630,6 +1796,7 @@ mod tests {
             serde_json::from_str(&metadata_json(&note, "Standup", 5, 9))
                 .unwrap_or_else(|error_value| panic!("metadata parses: {error_value}"));
         assert_eq!(metadata["kind"], "meeting");
+        assert_eq!(metadata["meetingType"], "standup");
         assert_eq!(metadata["title"], "Standup");
         assert_eq!(metadata["startedAtMs"], 5);
         assert_eq!(metadata["endedAtMs"], 9);
@@ -1661,6 +1828,29 @@ mod tests {
         assert!(with_jots.contains("rough notes"));
         let without = note_prompt("hello", &[], "Sync");
         assert!(!without.contains("rough notes"));
+    }
+
+    #[test]
+    fn note_prompt_classifies_and_formats_the_bounded_meeting_types() {
+        let prompt = note_prompt("hello", &[], "Sync");
+        for meeting_type in [
+            "general",
+            "one-on-one",
+            "standup",
+            "sales",
+            "customer-interview",
+            "retrospective",
+            "project-planning",
+        ] {
+            assert!(prompt.contains(meeting_type));
+        }
+        assert!(prompt.contains("Use general whenever the type is uncertain or mixed"));
+        assert!(prompt.contains("one-on-one emphasizes goals, feedback, growth"));
+        assert!(prompt.contains("standup emphasizes progress, blockers, next work"));
+        assert!(prompt.contains("sales emphasizes needs, objections, buying signals"));
+        assert!(prompt.contains("customer-interview emphasizes observed workflows"));
+        assert!(prompt.contains("retrospective emphasizes what worked"));
+        assert!(prompt.contains("project-planning emphasizes scope, milestones"));
     }
 
     #[test]
@@ -1955,9 +2145,31 @@ mod tests {
             panic!("capture must not restart after the session ends")
         });
         assert!(!slot.active());
-        assert!(!capture_allowed(SystemAudioCaptureMode::Always, false));
-        assert!(!capture_allowed(SystemAudioCaptureMode::Never, true));
-        assert!(capture_allowed(SystemAudioCaptureMode::Always, true));
+    }
+
+    #[test]
+    fn capture_slot_routes_each_never_mode_auth_attempt_once() {
+        let mut slot: CaptureSlot<()> = CaptureSlot::new();
+        let mut attempts = 0;
+        slot.provide(TranscriptionAuth::Local, None);
+        slot.sync(SystemAudioCaptureMode::Never, true, |plan, auth, _| {
+            assert!(!plan.system_audio);
+            assert!(plan.microphone);
+            assert!(matches!(auth, TranscriptionAuth::Local));
+            attempts += 1;
+            None
+        });
+        slot.sync(SystemAudioCaptureMode::Never, true, |_, _, _| {
+            panic!("the same auth attempt must not be routed twice")
+        });
+        slot.provide(TranscriptionAuth::Local, None);
+        slot.sync(SystemAudioCaptureMode::Never, true, |plan, _, _| {
+            assert!(!plan.system_audio);
+            attempts += 1;
+            None
+        });
+        assert_eq!(attempts, 2);
+        assert!(!slot.active());
     }
 
     #[test]
@@ -1968,6 +2180,7 @@ mod tests {
         let (completed, capture) = compose_completion(
             &session,
             MeetingNote {
+                meeting_type: MeetingType::Standup,
                 title: None,
                 summary: "Team agreed to ship Friday.".to_owned(),
                 participants: vec!["Ana".to_owned()],
@@ -1986,6 +2199,11 @@ mod tests {
         );
         assert_eq!(completed.title, "Standup");
         assert_eq!(completed.summary, "Team agreed to ship Friday.");
+        assert_eq!(completed.meeting_type, "standup");
+        assert_eq!(
+            completed.raw_transcript,
+            "Them: We agreed to ship on Friday.\nYou: I'll email the release notes."
+        );
         assert_eq!(completed.actions, vec!["Email release notes — Ana"]);
         assert_eq!(completed.started_at_ms, 5);
         assert_eq!(completed.ended_at_ms, 10);
@@ -2063,12 +2281,91 @@ mod tests {
         mpsc::Receiver<ClientCommand>,
     ) {
         let (captures, capture_receiver) = mpsc::channel(8);
-        let (controls, runtime) = channel(captures);
+        let (controls, mut runtime) = channel(captures);
+        runtime.note_generator = Some(Arc::new(|_, _| {
+            Box::pin(async {
+                Some(
+                    r#"{"meetingType":"general","title":"","summary":"Meeting notes","participants":[],"sections":[],"decisions":[],"actions":[],"openQuestions":[]}"#
+                        .to_owned(),
+                )
+            })
+        }));
         (controls, runtime, capture_receiver)
     }
 
     async fn send(controls: &mpsc::Sender<MeetingControl>, control: MeetingControl) {
         assert!(controls.send(control).await.is_ok());
+    }
+
+    fn capture_evidence(capture: ClientCommand) -> String {
+        let Command::CaptureEvent {
+            text: Some(evidence),
+            ..
+        } = capture.command
+        else {
+            panic!("meeting completion must produce capture evidence");
+        };
+        evidence
+    }
+
+    #[test]
+    fn never_mode_emits_one_microphone_fallback_signal_per_auth_attempt() {
+        let _ = crate::signals::test_events::take();
+        let (_, mut runtime, _) = runtime();
+        runtime.mode = SystemAudioCaptureMode::Never;
+        runtime.capture.provide(TranscriptionAuth::Local, None);
+        runtime.sync_capture(true);
+        runtime.sync_capture(true);
+        runtime.capture.provide(TranscriptionAuth::Local, None);
+        runtime.sync_capture(true);
+        let errors: Vec<_> = crate::signals::test_events::take()
+            .into_iter()
+            .filter_map(|event| match event {
+                NativeEvent::Error(error) if error.code == "meeting_system_audio_unavailable" => {
+                    Some(error)
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(errors.len(), 2);
+        assert!(errors.iter().all(|error| {
+            error.request_id.as_deref() == Some(crate::meeting_capture::CAPTURE_STREAM_ID)
+                && error.retryable
+        }));
+    }
+
+    #[tokio::test]
+    async fn switching_an_active_meeting_to_never_routes_fallback_once() {
+        let _ = crate::signals::test_events::take();
+        let (controls, runtime, _) = runtime();
+        let driven = tokio::spawn(runtime.run());
+        send(&controls, MeetingControl::Start { title: None }).await;
+        send(
+            &controls,
+            MeetingControl::SetMode {
+                mode: SystemAudioCaptureMode::Never,
+            },
+        )
+        .await;
+        send(
+            &controls,
+            MeetingControl::SetMode {
+                mode: SystemAudioCaptureMode::Never,
+            },
+        )
+        .await;
+        drop(controls);
+        let _ = driven.await;
+        let errors: Vec<_> = crate::signals::test_events::take()
+            .into_iter()
+            .filter_map(|event| match event {
+                NativeEvent::Error(error) if error.code == "meeting_system_audio_unavailable" => {
+                    Some(error)
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(errors.len(), 1);
     }
 
     #[tokio::test]
@@ -2089,6 +2386,148 @@ mod tests {
             meeting_states(),
             vec![(true, Some("Quarterly Review".to_owned())), (false, None)]
         );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn final_segments_at_the_stt_timeout_boundary_reach_the_completed_meeting() {
+        let _ = crate::signals::test_events::take();
+        let (controls, runtime, mut captures) = runtime();
+        let driven = tokio::spawn(runtime.run());
+        send(
+            &controls,
+            MeetingControl::Start {
+                title: Some("Boundary".to_owned()),
+            },
+        )
+        .await;
+        send(
+            &controls,
+            MeetingControl::FinalSegment {
+                speaker: MeetingSpeaker::Them,
+                diarized: None,
+                text: "before stop".to_owned(),
+            },
+        )
+        .await;
+        send(&controls, MeetingControl::Stop).await;
+        tokio::task::yield_now().await;
+        assert_eq!(
+            meeting_states(),
+            vec![(true, Some("Boundary".to_owned())), (false, None)]
+        );
+        assert!(captures.try_recv().is_err());
+        tokio::time::sleep(crate::stt::FINAL_DRAIN_TIMEOUT).await;
+        send(
+            &controls,
+            MeetingControl::FinalSegment {
+                speaker: MeetingSpeaker::Them,
+                diarized: None,
+                text: "boundary final".to_owned(),
+            },
+        )
+        .await;
+        tokio::time::sleep(FINAL_DRAIN_GRACE).await;
+        let evidence = capture_evidence(
+            captures
+                .recv()
+                .await
+                .unwrap_or_else(|| panic!("meeting completion capture")),
+        );
+        assert!(evidence.contains("Them: before stop boundary final"));
+        drop(controls);
+        let _ = driven.await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_manual_restart_waits_for_the_old_drain_without_mixing_transcripts() {
+        let _ = crate::signals::test_events::take();
+        let (controls, runtime, mut captures) = runtime();
+        let driven = tokio::spawn(runtime.run());
+        send(
+            &controls,
+            MeetingControl::Start {
+                title: Some("Old".to_owned()),
+            },
+        )
+        .await;
+        send(&controls, MeetingControl::Stop).await;
+        send(
+            &controls,
+            MeetingControl::Start {
+                title: Some("New".to_owned()),
+            },
+        )
+        .await;
+        send(
+            &controls,
+            MeetingControl::FinalSegment {
+                speaker: MeetingSpeaker::Them,
+                diarized: None,
+                text: "old tail".to_owned(),
+            },
+        )
+        .await;
+        tokio::task::yield_now().await;
+        assert_eq!(
+            meeting_states(),
+            vec![(true, Some("Old".to_owned())), (false, None)]
+        );
+        tokio::time::sleep(crate::stt::FINAL_DRAIN_TIMEOUT + FINAL_DRAIN_GRACE).await;
+        let old_evidence = capture_evidence(
+            captures
+                .recv()
+                .await
+                .unwrap_or_else(|| panic!("old meeting completion capture")),
+        );
+        assert!(old_evidence.contains("Them: old tail"));
+        assert_eq!(meeting_states(), vec![(true, Some("New".to_owned()))]);
+        send(
+            &controls,
+            MeetingControl::FinalSegment {
+                speaker: MeetingSpeaker::Them,
+                diarized: None,
+                text: "new opening".to_owned(),
+            },
+        )
+        .await;
+        send(&controls, MeetingControl::Stop).await;
+        tokio::time::sleep(crate::stt::FINAL_DRAIN_TIMEOUT + FINAL_DRAIN_GRACE).await;
+        let new_evidence = capture_evidence(
+            captures
+                .recv()
+                .await
+                .unwrap_or_else(|| panic!("new meeting completion capture")),
+        );
+        assert!(new_evidence.contains("Them: new opening"));
+        assert!(!new_evidence.contains("old tail"));
+        drop(controls);
+        let _ = driven.await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_jot_only_meeting_still_produces_a_note() {
+        let (controls, runtime, mut captures) = runtime();
+        let driven = tokio::spawn(runtime.run());
+        send(&controls, MeetingControl::Start { title: None }).await;
+        send(
+            &controls,
+            MeetingControl::Jot {
+                text: "Follow up on pricing".to_owned(),
+            },
+        )
+        .await;
+        send(&controls, MeetingControl::Stop).await;
+        tokio::time::sleep(crate::stt::FINAL_DRAIN_TIMEOUT + FINAL_DRAIN_GRACE).await;
+        let evidence = capture_evidence(
+            captures
+                .recv()
+                .await
+                .unwrap_or_else(|| panic!("jot-only completion capture")),
+        );
+        assert!(evidence.contains("## Notes"));
+        assert!(evidence.contains("- Follow up on pricing"));
+        drop(controls);
+        let _ = driven.await;
     }
 
     #[tokio::test]
@@ -2127,7 +2566,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn a_manual_stop_survives_the_still_open_gate_and_still_allows_a_restart() {
         let (controls, runtime, _captures) = runtime();
         let driven = tokio::spawn(runtime.run());
@@ -2149,6 +2588,7 @@ mod tests {
         )
         .await;
         send(&controls, MeetingControl::Start { title: None }).await;
+        tokio::time::sleep(crate::stt::FINAL_DRAIN_TIMEOUT + FINAL_DRAIN_GRACE).await;
         drop(controls);
         let _ = driven.await;
         assert_eq!(

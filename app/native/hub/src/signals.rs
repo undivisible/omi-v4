@@ -963,6 +963,8 @@ impl std::fmt::Debug for MeetingTranscriptTurn {
 pub struct MeetingCompleted {
     pub title: String,
     pub summary: String,
+    pub meeting_type: String,
+    pub raw_transcript: String,
     pub actions: Vec<String>,
     pub started_at_ms: i64,
     pub ended_at_ms: i64,
@@ -979,6 +981,8 @@ impl std::fmt::Debug for MeetingCompleted {
             .debug_struct("MeetingCompleted")
             .field("title", &self.title)
             .field("summary", &"[redacted]")
+            .field("meeting_type", &self.meeting_type)
+            .field("raw_transcript", &"[redacted]")
             .field("actions", &self.actions.len())
             .field("started_at_ms", &self.started_at_ms)
             .field("ended_at_ms", &self.ended_at_ms)
