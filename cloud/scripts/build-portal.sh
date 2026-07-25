@@ -2,10 +2,10 @@
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-worker="$(dirname "$here")"
-repo="$(dirname "$worker")"
+cloud="$(dirname "$here")"
+repo="$(dirname "$cloud")"
 app="$repo/app"
-out="$worker/public/portal"
+out="$cloud/public/portal"
 
 command -v flutter >/dev/null 2>&1 || {
   echo "build-portal: flutter not found on PATH" >&2

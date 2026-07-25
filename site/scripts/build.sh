@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
 # Builds the static site and copies it over the Worker's asset directory.
 #
-# The Worker serves `worker/public/` as static assets, so that directory is
+# The Worker serves `cloud/public/` as static assets, so that directory is
 # the site's output — everything in it except `hub/`, `portal/` and `engine/`
 # is generated. Those three are Flutter web output produced separately
-# (`worker/scripts/build-hub.sh`, `build-portal.sh`, `build-web-engine.sh`) and
+# (`cloud/scripts/build-hub.sh`, `build-portal.sh`, `build-web-engine.sh`) and
 # are left untouched here.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 site="$(dirname "$here")"
 repo="$(dirname "$site")"
-out="$repo/worker/public"
+out="$repo/cloud/public"
 staged="$site/build/jaspr"
 
 # The Jaspr CLI needs a real Dart SDK on PATH; the Homebrew shim resolves

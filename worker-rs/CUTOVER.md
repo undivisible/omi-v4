@@ -1,13 +1,13 @@
 # CUTOVER — omi-v4-api (TS) → omi-v4-api-rs (Rust)
 
 **Status: DONE (2026-07-24).** Production traffic is on `omi-v4-api-rs` at
-`omi.tsc.hk` and `api.omi.tsc.hk`. The TypeScript worker (`omi-v4-api`) remains
-deployed for **D1 migrations only** — its `routes` and `triggers.crons` are
-disabled in `worker/wrangler.jsonc`.
+`omi.tsc.hk` and `api.omi.tsc.hk`. The TypeScript worker (`omi-v4-api`) is a
+dormant rollback configuration — its `routes` and `triggers.crons` are disabled
+in `worker/wrangler.jsonc`.
 
-Both workers bind the **same** D1 database (`database_id 74aab5eb-…`); the **TS
-worker owns the schema/migrations** — the Rust worker declares no
-`migrations_dir` and must never run D1 migrations.
+Both workers bind the **same** D1 database (`database_id 74aab5eb-…`); the
+language-neutral `cloud/migrations/` directory is the schema source of truth,
+and the Rust worker declares it as `migrations_dir`.
 
 This document is kept as rollback/deploy reference.
 
@@ -110,7 +110,7 @@ curl https://omi-v4-api-rs.<subdomain>.workers.dev/health
 
 Then the authenticated spot-checks from README.md (`/v1/me`, `/v1/setup-health`,
 `/v1/entitlement`, `/v1/profile/onboarding`, a webhook, an inbox round-trip).
-Confirm static assets serve: `curl .../` returns `worker/public/index.html`.
+Confirm static assets serve: `curl .../` returns `cloud/public/index.html`.
 
 ## 6. Verify production
 
@@ -140,7 +140,7 @@ To revert to the TS worker on the custom domains:
   `DeliveryCoordinator`) — a **separate** DO namespace from the TS worker. In-
   flight DO state (admission ledgers, rate-limit counters) does NOT carry over
   at cutover; both are in-memory/short-TTL and self-heal within a cron cycle.
-- **Assets path** `../worker/public` is outside the project dir. wrangler 4.x
+- **Assets path** `../cloud/public` is outside the project dir. wrangler 4.x
   accepts it (verified: "Read 3 files from the assets directory …"). If a future
   wrangler rejects it, add a `[build]` step that copies the files into
   `worker-rs/public/` and point `[assets] directory` there.

@@ -1,0 +1,11 @@
+{
+  "name": "@omi/v4-cloud-assets",
+  "private": true,
+  "scripts": {
+    "build:hub": "bash scripts/build-hub.sh",
+    "build:portal": "bash scripts/build-portal.sh",
+    "build:site": "bash ../site/scripts/build.sh",
+    "dev:site": "bash ../site/scripts/serve.sh",
+    "build": "bun run build:site && bun run build:hub && bun run build:portal"
+  }
+}

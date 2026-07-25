@@ -13,12 +13,12 @@ Three pages:
 
 ## Commands
 
-Both are run from `worker/`, so a deploy cannot ship a stale site:
+Static builds are run from `cloud/`, so a deploy cannot ship a stale site:
 
 ```
-bun run build:site   # build and copy into worker/public/
+(cd ../cloud && bun run build:site)   # build and copy into cloud/public/
 bun run dev:site     # hot reload at http://localhost:8080
-bun run deploy       # build:site, then build:hub, then wrangler deploy
+(cd ../cloud && bun run build)         # build static assets
 ```
 
 They shell out to `site/scripts/build.sh` and `site/scripts/serve.sh`, which
@@ -30,13 +30,13 @@ One-time setup: `dart pub global activate jaspr_cli`.
 ## Where it builds to
 
 `jaspr build` writes `site/build/jaspr/`, and `scripts/build.sh` rsyncs that
-over `worker/public/`, which the Worker serves as static assets.
+over `cloud/public/`, which the Worker serves as static assets.
 
-**`worker/public/` is generated output.** Everything in it comes from one of
+**`cloud/public/` is generated output.** Everything in it comes from one of
 two builds and nothing in it should be edited by hand:
 
-- the site — this project, via `bun run build:site`
-- `worker/public/hub/` — the Flutter web build, via `bun run build:hub`
+- the site — this project, via `cd ../cloud && bun run build:site`
+- `cloud/public/hub/` — the Flutter web build, via `cd ../cloud && bun run build:hub`
   (already gitignored in `worker/.gitignore`)
 
 The rsync passes `--exclude '/hub/'`, so the two builds do not clobber each
@@ -65,7 +65,7 @@ additive: without either, every page still renders and every link still works.
 ## Why the hub is an iframe and not `jaspr_flutter_embed`
 
 The hub is embedded as an iframe onto the standalone `/hub/` build produced by
-`worker/scripts/build-hub.sh`, loaded when the hero frame nears the viewport
+`cloud/scripts/build-hub.sh`, loaded when the hero frame nears the viewport
 (or on pointer/focus interaction). That build is compiled with
 `--dart-define=OMI_DEMO=1`, which boots the real `OmiShell` against the seeded
 in-process services in `app/lib/demo/`: seeded conversation history, currents,
@@ -112,7 +112,7 @@ replaced inline styles, and the API reference's prose styles.
 
 `/docs/api` is generated here but belongs on `api.omi.tsc.hk`, alongside the
 API and the portal. Until the domains are split it builds into
-`worker/public/docs/api/index.html` with everything else and is reachable at
+`cloud/public/docs/api/index.html` with everything else and is reachable at
 `omi.tsc.hk/docs/api`. Moving it is a routing change on the Worker's side, not
 a change here: the page is a self-contained static file that needs
 `/styles.css` and the three fonts served from the same origin.

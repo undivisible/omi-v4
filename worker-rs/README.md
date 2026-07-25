@@ -3,15 +3,16 @@
 Production Cloudflare Worker for the Omi v4 API — serves `omi.tsc.hk` and
 `api.omi.tsc.hk`. Parity port of the TypeScript worker in `worker/`.
 
-The TypeScript worker (`worker/`, name `omi-v4-api`) remains the **D1 schema and
-migrations source of truth** only. Its custom-domain routes and cron are disabled
-after cutover; run `wrangler d1 migrations apply` from `worker/`.
+The TypeScript worker (`worker/`, name `omi-v4-api`) is a dormant rollback
+configuration. Its custom-domain routes and cron are disabled after cutover;
+run `wrangler d1 migrations apply` from `worker-rs/` against `cloud/migrations/`.
 
 FaceTime is intentionally absent here (no Gemini Live bridge container). Public
 API / MCP FaceTime paths return 501 or are not exposed — see `src/facetime.rs`.
 
 This crate has its own `wrangler.toml` (`name = "omi-v4-api-rs"`) and binds the
-**same** D1 database (`database_id = 74aab5eb-...`) without `migrations_dir`.
+**same** D1 database (`database_id = 74aab5eb-...`) with its `migrations_dir`
+in `cloud/migrations/`.
 
 ## Layout
 

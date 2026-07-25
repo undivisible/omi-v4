@@ -1,6 +1,6 @@
 # Production API worker — serves omi.tsc.hk and api.omi.tsc.hk.
-# The TypeScript worker in worker/ remains the D1 schema/migrations source of
-# truth only; it must not declare routes or cron (see worker/wrangler.jsonc).
+# Cloud inputs live in cloud/; the dormant TypeScript worker must not declare
+# routes or cron (see worker/wrangler.jsonc).
 name = "omi-v4-api-rs"
 main = "build/worker/shim.mjs"
 compatibility_date = "2026-07-21"
@@ -26,13 +26,13 @@ custom_domain = true
 pattern = "api.omi.tsc.hk"
 custom_domain = true
 
-# Static assets — the TS worker serves worker/public at the custom domain root.
+# Static assets — cloud/public serves at the custom domain root.
 # wrangler resolves this relative to THIS project dir; a path outside the
-# project (../worker/public) is accepted by wrangler 4.x (verified with
+# project (../cloud/public) is accepted by wrangler 4.x (verified with
 # `deploy --dry-run`). If a future wrangler rejects it, copy the files into
 # worker-rs/public as a [build] step instead. See CUTOVER.md.
 [assets]
-directory = "../worker/public"
+directory = "../cloud/public"
 
 [vars]
 ENVIRONMENT = "production"
@@ -77,12 +77,12 @@ STT_GLOBAL_COST_BUDGET_MICROUSD = "9600000"
 crons = ["* * * * *"]
 
 # Same physical D1 database as worker/wrangler.jsonc (binding + database_id
-# match the TS worker). Intentionally NO migrations_dir: the TS worker owns
-# migrations.
+# match the dormant worker). Cloud migrations are applied from this project.
 [[d1_databases]]
 binding = "DB"
 database_name = "omi-v4"
 database_id = "74aab5eb-a81d-4494-9283-d48052b8a068"
+migrations_dir = "../cloud/migrations"
 
 [[r2_buckets]]
 binding = "DEVICE_AUDIO"
@@ -131,6 +131,16 @@ class_name = "SttAdmissionDo"
 name = "RATE_LIMITER"
 class_name = "RateLimiterDo"
 
+[[durable_objects.bindings]]
+name = "FACETIME_BRIDGE"
+class_name = "FaceTimeBridge"
+
+[[containers]]
+class_name = "FaceTimeBridge"
+image = "../worker/container/facetime-bridge/Dockerfile"
+instance_type = "basic"
+max_instances = 10
+
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = [
@@ -139,3 +149,7 @@ new_sqlite_classes = [
   "SttAdmissionDo",
   "RateLimiterDo",
 ]
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["FaceTimeBridge"]

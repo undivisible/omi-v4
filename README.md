@@ -11,8 +11,9 @@ Omi v4 captures what happens around you (pendant audio, meetings, your workspace
 | `app` | Flutter client for iOS, Android, macOS, Windows, and web — one codebase, mobile and desktop surfaces |
 | `app/native/hub` | The Rust "hub" (Rinf-bridged): assistant dispatch and model-tier routing, Gemini Live voice, workspace scan, meetings, memory, computer-use |
 | `app/macos/Runner` | macOS native layer — window chrome, summoned input overlay, voice waveform/glow overlays, global input, menu bar, EventKit |
-| `worker` | Cloudflare Worker (Bun, Hono, TypeScript) — **D1 migrations source of truth**; routes/cron disabled after cutover |
-| `worker-rs` | **Production API** on `omi.tsc.hk` + `api.omi.tsc.hk` (`omi-v4-api-rs`) — see [`worker-rs/CUTOVER.md`](worker-rs/CUTOVER.md) and [`worker-rs/PORT_STATUS.md`](worker-rs/PORT_STATUS.md) |
+| `worker` | Cloudflare Worker reference implementation (Bun, Hono, TypeScript); routes/cron disabled after cutover |
+| `worker-rs` | **Production API** on `omi.tsc.hk` + `api.omi.tsc.hk` (`omi-v4-api-rs`) and D1 migration runner — see [`worker-rs/CUTOVER.md`](worker-rs/CUTOVER.md) and [`worker-rs/PORT_STATUS.md`](worker-rs/PORT_STATUS.md) |
+| `cloud` | Language-neutral D1 migrations and static assets/build scripts |
 | `firmware` | Pendant firmware (nRF5340 CV1 and nRF52840 DevKits). Built with nRF Connect SDK; host Rust tests + west CI in [`.github/workflows/ci-firmware.yml`](.github/workflows/ci-firmware.yml) — see [`firmware/README.md`](firmware/README.md) |
 
 External engines: [`tschk/zkr`](https://github.com/tschk/zkr) for evidence-backed temporal memory, `rx4` for extraction and ranking, `praefectus` for desktop computer-use.

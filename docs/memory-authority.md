@@ -33,7 +33,7 @@ device keeps a local mirror of that log so it works offline.**
 ## 2. The authority boundary, precisely
 
 The unit of authority is the append-only `memory_log` table in D1, one ordered
-stream per UID (`worker/migrations/0029_memory_authority_log.sql`,
+stream per UID (`cloud/migrations/0029_memory_authority_log.sql`,
 `worker/src/memory-log.ts`).
 
 * **The Worker assigns the sequence.** A record is not part of the user's memory

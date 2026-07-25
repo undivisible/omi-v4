@@ -8,14 +8,13 @@
   // Cloudflare dashboard, queryable without a third-party sink. head_sampling_rate
   // 1 keeps every request while volume is low; dial down if it gets noisy.
   "observability": { "enabled": true, "head_sampling_rate": 1 },
-  // Schema/migrations source of truth only — production traffic is worker-rs
-  // (omi-v4-api-rs on omi.tsc.hk + api.omi.tsc.hk). Keep this name for
-  // `wrangler d1 migrations apply` and other migration commands.
+  // Dormant rollback configuration only — production traffic is worker-rs
+  // (omi-v4-api-rs on omi.tsc.hk + api.omi.tsc.hk).
   // "routes": [
   //   { "pattern": "omi.tsc.hk", "custom_domain": true },
   //   { "pattern": "api.omi.tsc.hk", "custom_domain": true }
   // ],
-  "assets": { "directory": "./public" },
+  "assets": { "directory": "../cloud/public" },
   "vars": {
     "ENVIRONMENT": "production",
     "CF_AI_GATEWAY_ACCOUNT_ID": "fc62a6e6528bec6d3d81c3bf8967ceeb",
@@ -127,8 +126,7 @@
     {
       "binding": "DB",
       "database_name": "omi-v4",
-      "database_id": "74aab5eb-a81d-4494-9283-d48052b8a068",
-      "migrations_dir": "migrations"
+      "database_id": "74aab5eb-a81d-4494-9283-d48052b8a068"
     }
   ],
   "r2_buckets": [

@@ -2,10 +2,10 @@
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-worker="$(dirname "$here")"
-repo="$(dirname "$worker")"
+cloud="$(dirname "$here")"
+repo="$(dirname "$cloud")"
 app="$repo/app"
-out="$worker/public/hub"
+out="$cloud/public/hub"
 
 command -v flutter >/dev/null 2>&1 || {
   echo "build-hub: flutter not found on PATH" >&2
@@ -41,7 +41,7 @@ cp "$here/hub-llm.js" "$out/hub-llm.js"
 # network, no bun — the tier is simply not offered: hub-llm.js probes for
 # vendor/transformers.js and reports the tier unavailable when it is absent.
 vendor="$out/vendor"
-cache="$worker/.cache/hub-vendor"
+cache="$cloud/.cache/hub-vendor"
 if command -v bun >/dev/null 2>&1; then
   mkdir -p "$cache"
   # Its own manifest, so the install lands here and not in the Worker's

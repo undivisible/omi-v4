@@ -16,7 +16,7 @@ Omi v4 is an ultrasimple thinking partner and second brain that works across eve
 | Live STT | Rust owns bounded transcription sessions; Deepgram is the managed/BYOK live route, local STT fails closed until a real provider exists, and MiMo remains batch-only |
 | Rust runtime | One `hub` crate using `rx4` ("rotary"), `rs_ai`, and platform-gated `praefectus` |
 | Device ownership | Mobile owns BLE, background hardware relay, firmware, pairing, and device management; desktop owns primary assistant interaction and computer use |
-| Cloud | Production API: Rust `worker-rs/` on `omi.tsc.hk` + `api.omi.tsc.hk`. D1 migrations: TypeScript `worker/` only. D1, R2, Queues, Workflows, Durable Objects where coordination requires them |
+| Cloud | Production API and D1 migration runner: Rust `worker-rs/` on `omi.tsc.hk` + `api.omi.tsc.hk`; language-neutral inputs in `cloud/`. D1, R2, Queues, Workflows, Durable Objects where coordination requires them |
 | Identity | Firebase Auth remains; phone OTP is primary, Google/Apple OAuth optional, Firebase UID is the initial canonical user ID |
 | Data | New SaaS data goes to D1; no Firestore/D1 dual-write; import upstream Firestore data only through explicit jobs |
 | Memory | Personal Memory and Recommendation Memory remain separate domains |
