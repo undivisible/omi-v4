@@ -12,10 +12,16 @@ import 'setup_account_screens.dart';
 
 /// The web entry point at api.omi.tsc.hk/portal.
 ///
-/// It is the signed-in app, not the demo: sign-in first, then the same hub the
-/// desktop build shows. Onboarding is skipped entirely — the setup it drives
-/// (screen capture, keyboard, providers on device) has no web counterpart, and
-/// an account is created in the desktop or mobile app, never here.
+/// This is the signed-in **web hub** — the same Flutter chat shell the desktop
+/// app opens, but without the in-process Rust runtime (`app/native/hub/`).
+/// Native desktop links that runtime for capture, meetings, local memory, and
+/// accessibility computer-use; the portal talks to the Worker for account
+/// settings, composer dictation, remote agent delegation, and conversation
+/// sync instead.
+///
+/// Onboarding is skipped: setup it drives (screen capture, keyboard, device
+/// providers) has no web counterpart, and accounts are created in the desktop
+/// or mobile app.
 class WebPortalScreen extends StatefulWidget {
   const WebPortalScreen({required this.services, super.key});
 

@@ -1,11 +1,11 @@
 import 'dart:async';
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../app_services.dart';
 import '../capabilities/desktop_capabilities.dart';
+import '../capabilities/hub_platform.dart';
 import '../demo/demo_mode.dart';
 import '../keyboard/keyboard.dart';
 import '../menu_bar/desktop_menu_bar.dart';
@@ -54,8 +54,7 @@ class _OmiShellState extends State<OmiShell> {
 
   static const _windowChromeChannel = MethodChannel('omi/window_chrome');
 
-  bool get _isMacDesktop =>
-      !kIsWeb && defaultTargetPlatform == TargetPlatform.macOS;
+  bool get _isMacDesktop => desktopChromeSupported;
 
   @override
   void initState() {
@@ -326,8 +325,9 @@ class _OmiShellState extends State<OmiShell> {
             if (widget.previewMode)
               _PreviewNotice(onExit: widget.onExitPreview),
             if (widget.previewMode) const SizedBox(height: 12),
-            if (_inputDiagnostics case final diagnostics?
-                when !diagnostics.globalCaptureLive) ...[
+            if (_desktopKeyboard.supported)
+              if (_inputDiagnostics case final diagnostics?
+                  when !diagnostics.globalCaptureLive) ...[
               _GlobalInputNotice(
                 diagnostics: diagnostics,
                 onGrant: () => unawaited(
@@ -353,7 +353,7 @@ class _OmiShellState extends State<OmiShell> {
     final hubBackground = Theme.of(context).brightness == Brightness.dark
         ? const Color(0xff1c1c1a)
         : const Color(0xfff7f6f1);
-    final meetingAssist = widget.previewMode
+    final meetingAssist = widget.previewMode || !meetingAssistSupported
         ? null
         : Align(
             alignment: Alignment.topCenter,

@@ -12,6 +12,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../api/worker_http.dart'
     show BillingEntitlement, OmiPlan, WorkerAuthenticationException;
 import '../app_services.dart';
+import '../capabilities/hub_platform.dart';
 import '../channels/channels.dart';
 import '../currents/crepus_current.dart';
 import '../currents/currents.dart';
@@ -369,6 +370,7 @@ class ChatScreenState extends State<ChatScreen>
   /// wrote belong next to "what matters next", where the user is already
   /// looking. Reloaded whenever a meeting completes.
   Future<void> _loadMeetingNotes() async {
+    if (!meetingAssistSupported) return;
     List<MeetingNote> notes;
     try {
       notes = await widget.services.meetingNotes.list();
@@ -500,10 +502,11 @@ class ChatScreenState extends State<ChatScreen>
           return;
         }
         try {
-          final ax = await AxContext.snapshot();
-          final sessionContext = ax.asSessionContextPrompt(
-            'Screen context for this voice session:',
-          );
+          final sessionContext = desktopVoiceSupported
+              ? (await AxContext.snapshot()).asSessionContextPrompt(
+                  'Screen context for this voice session:',
+                )
+              : null;
           await widget.services.startDesktopVoice(
             sessionContext: sessionContext,
           );
@@ -1454,7 +1457,9 @@ class ChatScreenState extends State<ChatScreen>
                                               tasks: tasks,
                                               briefCrepus:
                                                   currents?.briefCrepus,
-                                              meetingNotes: _meetingNotes,
+                                              meetingNotes: meetingAssistSupported
+                                                  ? _meetingNotes
+                                                  : const [],
                                               onOpenMeetingNotes:
                                                   _openMeetingNotes,
                                               onComplete: currents == null

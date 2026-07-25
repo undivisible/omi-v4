@@ -9,6 +9,7 @@ import '../api/api_keys_client.dart';
 import '../api/worker_http.dart';
 import '../app_services.dart';
 import '../capabilities/desktop_capabilities.dart';
+import '../capabilities/hub_platform.dart';
 import '../channels/channels.dart';
 import '../conversations/conversations.dart';
 import '../integrations/apple_eventkit.dart';
@@ -57,8 +58,7 @@ enum SettingsSection {
 bool get _isWindowsStyle =>
     !kIsWeb && defaultTargetPlatform == TargetPlatform.windows;
 
-bool get _isMacDesktop =>
-    !kIsWeb && defaultTargetPlatform == TargetPlatform.macOS;
+bool get _isMacDesktop => desktopChromeSupported;
 
 /// The warm-paper palette, pinned rather than read from the ambient theme so
 /// settings looks identical in its own native window and in the in-window
@@ -2221,9 +2221,11 @@ Future<List<OmiNumber>> loadOmiNumbers(AppServices services) async {
   }
 
   var meetings = const <MeetingNote>[];
-  try {
-    meetings = await services.meetingNotes.list();
-  } catch (_) {}
+  if (meetingAssistSupported) {
+    try {
+      meetings = await services.meetingNotes.list();
+    } catch (_) {}
+  }
   var transcribedMinutes = 0;
   for (final note in meetings) {
     final span = note.endedAt.difference(note.startedAt);

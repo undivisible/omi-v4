@@ -16,6 +16,7 @@ import 'api/worker_http.dart';
 import 'auth/auth.dart';
 import 'auth/firebase_bootstrap.dart';
 import 'capabilities/desktop_capabilities.dart';
+import 'capabilities/hub_platform.dart';
 import 'channels/channels.dart';
 import 'conversations/conversations.dart';
 import 'currents/currents.dart';
@@ -803,6 +804,9 @@ final class AppServices {
   }
 
   void startMeeting({String? title}) {
+    if (!meetingAssistSupported) {
+      throw StateError('Meeting assist is not available on this platform.');
+    }
     if (!chatReady) {
       throw StateError('Native services are not connected.');
     }
@@ -813,6 +817,9 @@ final class AppServices {
   }
 
   void stopMeeting() {
+    if (!meetingAssistSupported) {
+      throw StateError('Meeting assist is not available on this platform.');
+    }
     if (!chatReady) {
       throw StateError('Native services are not connected.');
     }
@@ -821,6 +828,7 @@ final class AppServices {
 
   void jotMeetingNote(String text) {
     if (text.trim().isEmpty) return;
+    if (!meetingAssistSupported) return;
     if (!chatReady) {
       throw StateError('Native services are not connected.');
     }
