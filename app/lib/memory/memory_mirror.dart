@@ -163,8 +163,7 @@ final class HubMemoryMirrorStore implements MemoryMirrorStore {
           (event) =>
               (event is NativeEventMemoryApplied &&
                   event.value.requestId == requestId) ||
-              (event is NativeEventError &&
-                  event.value.requestId == requestId),
+              (event is NativeEventError && event.value.requestId == requestId),
         )
         .map((event) {
           if (event is NativeEventError) {

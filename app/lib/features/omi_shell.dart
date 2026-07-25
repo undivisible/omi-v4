@@ -144,9 +144,9 @@ class _OmiShellState extends State<OmiShell> {
         content: Text(
           event.inputMonitoring
               ? 'Global double-Shift needs Input Monitoring in System Settings '
-                  '→ Privacy & Security. It still works inside the hub window.'
+                    '→ Privacy & Security. It still works inside the hub window.'
               : 'Allow Input Monitoring so double-Shift works outside Omi. '
-                  'System Settings should open now.',
+                    'System Settings should open now.',
         ),
         duration: const Duration(seconds: 8),
       ),
@@ -319,12 +319,7 @@ class _OmiShellState extends State<OmiShell> {
     final paddedBody = SafeArea(
       left: !wide,
       child: Padding(
-        padding: EdgeInsets.fromLTRB(
-          sidePadding,
-          topPadding,
-          sidePadding,
-          12,
-        ),
+        padding: EdgeInsets.fromLTRB(sidePadding, topPadding, sidePadding, 12),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [

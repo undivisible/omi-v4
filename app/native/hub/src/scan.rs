@@ -594,9 +594,9 @@ fn scan_notes() -> SourceScan {
     )
 }
 
-#[cfg(any(target_os = "macos", test))]
+#[cfg(target_os = "macos")]
 const MAIL_FLAG_ANSWERED: i64 = 0x4;
-#[cfg(any(target_os = "macos", test))]
+#[cfg(target_os = "macos")]
 const MAIL_FLAG_FLAGGED: i64 = 0x10;
 #[cfg(any(target_os = "macos", test))]
 const MAIL_SCORE_FLOOR: i32 = -40;

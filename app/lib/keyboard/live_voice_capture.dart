@@ -400,9 +400,7 @@ final class LiveVoiceCapture {
 
   Future<void> _refreshSessionContext(String streamId) async {
     final session = _session;
-    if (session == null ||
-        session.streamId != streamId ||
-        session.stopping) {
+    if (session == null || session.streamId != streamId || session.stopping) {
       return;
     }
     final text = await _freshSessionContext();

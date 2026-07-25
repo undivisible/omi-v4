@@ -112,11 +112,7 @@ impl ChatRouter {
     /// Selects the hub [`ModelTier`] for an online prompt. Search and vision
     /// intents are detected first; short simple chat turns route to Speed
     /// (Mercury); everything else defers to rx4's heuristics.
-    pub(crate) fn route_prompt(
-        &self,
-        prompt: &str,
-        origin: Option<MessageOrigin>,
-    ) -> ModelTier {
+    pub(crate) fn route_prompt(&self, prompt: &str, origin: Option<MessageOrigin>) -> ModelTier {
         let lowered = prompt.to_lowercase();
         if SEARCH_MARKERS.iter().any(|marker| lowered.contains(marker)) {
             return ModelTier::Search;
@@ -126,7 +122,9 @@ impl ChatRouter {
         }
         if !likely_needs_tools(prompt, origin)
             && is_short_simple(prompt)
-            && !HEAVY_KEYWORDS.iter().any(|keyword| lowered.contains(keyword))
+            && !HEAVY_KEYWORDS
+                .iter()
+                .any(|keyword| lowered.contains(keyword))
         {
             return ModelTier::Speed;
         }
@@ -213,10 +211,7 @@ mod tests {
     #[test]
     fn route_prompt_selects_expected_tiers() {
         let router = default_router();
-        assert_eq!(
-            router.route_prompt("hi there", None),
-            ModelTier::Speed
-        );
+        assert_eq!(router.route_prompt("hi there", None), ModelTier::Speed);
         assert_eq!(
             router.route_prompt("prove this theorem step by step", None),
             ModelTier::Smart

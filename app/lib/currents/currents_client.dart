@@ -6,12 +6,11 @@ final _receiptTokenPattern = RegExp(r'^[A-Za-z0-9_-]{43}$');
 
 enum CurrentContentKind { agentAction, humanAction, awareness }
 
-CurrentContentKind currentContentKindFromWire(String? value) =>
-    switch (value) {
-      'agent_action' => CurrentContentKind.agentAction,
-      'awareness' => CurrentContentKind.awareness,
-      _ => CurrentContentKind.humanAction,
-    };
+CurrentContentKind currentContentKindFromWire(String? value) => switch (value) {
+  'agent_action' => CurrentContentKind.agentAction,
+  'awareness' => CurrentContentKind.awareness,
+  _ => CurrentContentKind.humanAction,
+};
 
 String currentContentKindLabel(CurrentContentKind kind) => switch (kind) {
   CurrentContentKind.agentAction => 'Omi',
@@ -55,9 +54,7 @@ final class CurrentCard {
     title: _text(json, 'title'),
     summary: _text(json, 'summary'),
     sourceKind: _optionalText(json, 'sourceKind'),
-    contentKind: currentContentKindFromWire(
-      _optionalText(json, 'contentKind'),
-    ),
+    contentKind: currentContentKindFromWire(_optionalText(json, 'contentKind')),
     metadata: json['metadata'] is Map
         ? (json['metadata'] as Map).cast<String, Object?>()
         : null,

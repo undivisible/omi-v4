@@ -3,7 +3,7 @@
   "private": true,
   "scripts": {
     "build": "worker-build --release",
-    "deploy": "worker-build --release && wrangler deploy",
-    "deploy:dry-run": "worker-build --release && wrangler deploy --dry-run"
+    "deploy": "worker-build --release && bunx wrangler deploy",
+    "deploy:dry-run": "worker-build --release && bunx wrangler deploy --dry-run"
   }
 }

@@ -174,11 +174,7 @@ class _CurrentsBriefState extends State<CurrentsBrief> {
   Widget build(BuildContext context) {
     final now = widget.now ?? DateTime.now();
     final compact = widget.compact;
-    final plan = planBrief(
-      widget.cards,
-      now: now,
-      maxRest: compact ? 2 : 3,
-    );
+    final plan = planBrief(widget.cards, now: now, maxRest: compact ? 2 : 3);
     final palette = widget.palette;
     final composed = widget.briefCrepus;
     if (composed != null && crepusRenders(composed)) {
@@ -279,10 +275,7 @@ class _BriefShell extends StatelessWidget {
         ),
       ],
     ),
-    child: Padding(
-      padding: EdgeInsets.all(compact ? 12 : 20),
-      child: child,
-    ),
+    child: Padding(padding: EdgeInsets.all(compact ? 12 : 20), child: child),
   );
 }
 
@@ -598,8 +591,9 @@ class _BriefRow extends StatelessWidget {
     }
     final start = entry.startsAt;
     final lead = start == null
-        ? (entry.card.sourceKind ?? currentContentKindLabel(entry.card.contentKind))
-            .toUpperCase()
+        ? (entry.card.sourceKind ??
+                  currentContentKindLabel(entry.card.contentKind))
+              .toUpperCase()
         : briefCountdown(start, now).toUpperCase();
     return DecoratedBox(
       decoration: BoxDecoration(

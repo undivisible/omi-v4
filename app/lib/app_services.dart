@@ -30,6 +30,7 @@ import 'random_id.dart';
 import 'memory/transcript_memory_ingestor.dart';
 import 'native/native_hub.dart';
 import 'onboarding/onboarding_completion.dart';
+import 'profile/user_profile.dart';
 import 'providers/providers.dart';
 import 'settings/settings.dart';
 
@@ -580,6 +581,14 @@ final class AppServices {
     } catch (_) {
       return null;
     }
+  }
+
+  Future<void> _syncUserProfileSidecar(String uid, String databasePath) async {
+    try {
+      final document = await PreferencesUserProfileStore().load(uid);
+      if (document.isEmpty) return;
+      await PreferencesUserProfileStore().writeSidecar(databasePath, document);
+    } catch (_) {}
   }
 
   Future<void> initialize() async {
@@ -1282,6 +1291,7 @@ final class AppServices {
         tenantId: _localOfflinePersonId,
         personId: _localOfflinePersonId,
       );
+      unawaited(_syncUserProfileSidecar(_localOfflinePersonId, databasePath));
       _transcriptMemoryIngestor.configure(
         personId: _localOfflinePersonId,
         authorityGeneration: _authorityGeneration,
@@ -1322,6 +1332,7 @@ final class AppServices {
       tenantId: session.uid,
       personId: session.uid,
     );
+    unawaited(_syncUserProfileSidecar(session.uid, databasePath));
     _transcriptMemoryIngestor.configure(
       personId: session.uid,
       authorityGeneration: _authorityGeneration,
@@ -1344,35 +1355,37 @@ final class AppServices {
         !productionReady) {
       return;
     }
-    _memoryCursorStore ??= PreferencesMemorySyncCursorStore();
-    final replicaId = await _memoryCursorStore!.replicaId();
-    if (_disposed || auth.snapshot.session?.uid != uid) return;
-    _memoryMirrorPump ??= MemoryMirrorPump(
-      transport: WorkerMemoryMirrorTransport(worker),
-      store: HubMemoryMirrorStore(
-        hub: nativeHub,
-        events: nativeHub.events,
+    try {
+      _memoryCursorStore ??= PreferencesMemorySyncCursorStore();
+      final replicaId = await _memoryCursorStore!.replicaId();
+      if (_disposed || auth.snapshot.session?.uid != uid) return;
+      _memoryMirrorPump ??= MemoryMirrorPump(
+        transport: WorkerMemoryMirrorTransport(worker),
+        store: HubMemoryMirrorStore(
+          hub: nativeHub,
+          events: nativeHub.events,
+          replicaId: replicaId,
+        ),
+        cursor: PreferencesMemoryMirrorCursor(),
         replicaId: replicaId,
-      ),
-      cursor: PreferencesMemoryMirrorCursor(),
-      replicaId: replicaId,
-      onFailure: _reportMemoryFailure,
-    );
-    _memoryMirrorPump!.onFailure = _reportMemoryFailure;
-    _memoryMirrorPump!.start(uid);
+        onFailure: _reportMemoryFailure,
+      );
+      _memoryMirrorPump!.onFailure = _reportMemoryFailure;
+      _memoryMirrorPump!.start(uid);
+    } on Object catch (error, stackTrace) {
+      // Mirror setup must not block onboarding scan / production sync. The
+      // local memory store is already configured; pull can retry later.
+      _reportMemoryFailure(error, stackTrace);
+    }
   }
 
   void _reportMemoryFailure(Object error, StackTrace stackTrace) {
     if (_disposed) return;
     memorySyncNotice.value = _describeMemoryFailure(error);
     assert(() {
-      debugPrint('Memory sync failure: $error');
+      debugPrint('Memory sync failure: $error\n$stackTrace');
       return true;
     }());
-    if (_nativeEvents.isClosed) return;
-    try {
-      _nativeEvents.addError(error, stackTrace);
-    } catch (_) {}
   }
 
   void _clearMemoryFailureNotice() {

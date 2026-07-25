@@ -83,7 +83,11 @@ class _MeetingNotesScreenState extends State<MeetingNotesScreen> {
                   trailing: IconButton(
                     key: Key('meeting_note_delete_${note.id}'),
                     tooltip: 'Delete note',
-                    icon: Icon(Icons.delete_outline, size: 18, color: colors.muted),
+                    icon: Icon(
+                      Icons.delete_outline,
+                      size: 18,
+                      color: colors.muted,
+                    ),
                     onPressed: () => _remove(note),
                   ),
                   onTap: () => Navigator.of(context).push(
@@ -112,7 +116,11 @@ class MeetingNoteDetailScreen extends StatelessWidget {
     trailing: IconButton(
       key: const Key('meeting_note_copy'),
       tooltip: 'Copy as markdown',
-      icon: Icon(Icons.copy_outlined, size: 18, color: _MeetingNotesColors.of(context).muted),
+      icon: Icon(
+        Icons.copy_outlined,
+        size: 18,
+        color: _MeetingNotesColors.of(context).muted,
+      ),
       onPressed: () async {
         await Clipboard.setData(ClipboardData(text: note.markdown));
         if (!context.mounted) return;

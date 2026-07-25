@@ -11,6 +11,7 @@ import 'package:omi/device/device.dart';
 import 'package:omi/features/onboarding_screen.dart';
 import 'package:omi/native/native_hub.dart';
 import 'package:omi/onboarding/hub_checklist.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 final class _AllGrantedCapabilities implements DesktopCapabilityGateway {
   @override
@@ -72,11 +73,27 @@ final class _HangingCurrentsTransport implements CurrentsTransport {
   const _HangingCurrentsTransport();
 
   @override
-  Future<CurrentsResponse> send(CurrentsRequest request) =>
-      Completer<CurrentsResponse>().future;
+  Future<CurrentsResponse> send(CurrentsRequest request) {
+    // Starter-task prep awaits currents.load(), which hits refresh. Hang only
+    // that path so scan/profile can still complete beforehand.
+    if (request.path == '/v1/currents/refresh' ||
+        request.path == '/v1/currents/generate') {
+      return Completer<CurrentsResponse>().future;
+    }
+    return Future.value(
+      const CurrentsResponse(
+        statusCode: 200,
+        body: {'currents': <Object?>[], 'refreshed': false, 'reason': 'idle'},
+      ),
+    );
+  }
 }
 
 void main() {
+  setUp(() {
+    SharedPreferences.setMockInitialValues({});
+  });
+
   Future<void> reachProfileStep(
     WidgetTester tester,
     _ScanHub hub,
@@ -99,7 +116,7 @@ void main() {
     );
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('continue_preview_intro')));
-    for (var i = 0; i < 10; i++) {
+    for (var i = 0; i < 50 && hub.scanRequests.isEmpty; i++) {
       await tester.pump(const Duration(milliseconds: 100));
     }
     expect(hub.scanRequests, hasLength(1));
@@ -169,69 +186,71 @@ void main() {
     },
   );
 
-  testWidgets(
-    'a signed-in currents generate cycle that never responds shows the '
-    'preparing state, times out, and continues with derived tasks',
-    (tester) async {
-      final hub = _ScanHub();
-      final gateway = _FakeSignedInGateway();
-      final auth = AuthController(gateway);
-      await auth.setConsent(true);
-      await auth.signIn(AuthProvider.google);
-      await auth.grantProcessingConsent();
-      expect(auth.snapshot.hasProcessingAuthority, isTrue);
-      final worker = WorkerHttpClient(
-        baseUri: Uri.parse('https://worker.invalid'),
-        sessionProvider: auth.validSession,
-      );
-      final services = AppServices.forTesting(
-        nativeHub: hub,
-        deviceRelay: DeviceRelayService(
-          role: DeviceRelayRole.desktopObserver,
-          adapter: const UnavailableDeviceRelayAdapter(),
-        ),
-        auth: auth,
-        currentsClient: const CurrentsClient(_HangingCurrentsTransport()),
-        worker: worker,
-        memoryDatabasePath: (uid) => '/tmp/$uid.sqlite3',
-      );
-      addTearDown(services.dispose);
-      addTearDown(hub.close);
-      final store = VolatileHubChecklistStore();
+  testWidgets('a signed-in currents refresh that never responds shows the '
+      'preparing state, times out, and continues with derived tasks', (
+    tester,
+  ) async {
+    final hub = _ScanHub();
+    final gateway = _FakeSignedInGateway();
+    final auth = AuthController(gateway);
+    await auth.setConsent(true);
+    await auth.signIn(AuthProvider.google);
+    await auth.grantProcessingConsent();
+    expect(auth.snapshot.hasProcessingAuthority, isTrue);
+    final worker = WorkerHttpClient(
+      baseUri: Uri.parse('https://worker.invalid'),
+      sessionProvider: auth.validSession,
+    );
+    final services = AppServices.forTesting(
+      nativeHub: hub,
+      deviceRelay: DeviceRelayService(
+        role: DeviceRelayRole.desktopObserver,
+        adapter: const UnavailableDeviceRelayAdapter(),
+      ),
+      auth: auth,
+      currentsClient: const CurrentsClient(_HangingCurrentsTransport()),
+      // Needed for canUseApi so the bounded currents refresh wait runs.
+      worker: worker,
+      memoryDatabasePath: (uid) => '/tmp/$uid.sqlite3',
+    );
+    addTearDown(hub.close);
+    final store = VolatileHubChecklistStore();
 
-      await reachProfileStep(
-        tester,
-        hub,
-        services,
-        store,
-        starterTaskTimeout: const Duration(milliseconds: 400),
-      );
-      await tester.ensureVisible(find.byKey(const Key('keep_profile')));
-      await tester.tap(find.byKey(const Key('keep_profile')));
+    await reachProfileStep(
+      tester,
+      hub,
+      services,
+      store,
+      starterTaskTimeout: const Duration(milliseconds: 400),
+    );
+    await tester.ensureVisible(find.byKey(const Key('keep_profile')));
+    await tester.tap(find.byKey(const Key('keep_profile')));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    // The bounded wait is visible while currents.refresh hangs.
+    expect(find.byKey(const Key('preparing_tasks')), findsOneWidget);
+    expect(find.text('Preparing your tasks…'), findsOneWidget);
+
+    for (var i = 0; i < 10; i++) {
       await tester.pump(const Duration(milliseconds: 100));
+    }
+    // The profile step now hands off to the BYOK step; skipping it keeps
+    // this test about starter tasks rather than about provider setup.
+    await tester.ensureVisible(find.byKey(const Key('byok_skip_connect')));
+    await tester.tap(find.byKey(const Key('byok_skip_connect')));
+    for (var i = 0; i < 10; i++) {
+      await tester.pump(const Duration(milliseconds: 100));
+    }
 
-      // The bounded wait is visible while the generate cycle hangs.
-      expect(find.byKey(const Key('preparing_tasks')), findsOneWidget);
-      expect(find.text('Preparing your tasks…'), findsOneWidget);
-
-      for (var i = 0; i < 10; i++) {
-        await tester.pump(const Duration(milliseconds: 100));
-      }
-      // The profile step now hands off to the BYOK step; skipping it keeps
-      // this test about starter tasks rather than about provider setup.
-      await tester.ensureVisible(find.byKey(const Key('byok_skip_connect')));
-      await tester.tap(find.byKey(const Key('byok_skip_connect')));
-      for (var i = 0; i < 10; i++) {
-        await tester.pump(const Duration(milliseconds: 100));
-      }
-
-      // Timed out gracefully: onboarding advanced and local derivation
-      // still produced the starter tasks.
-      expect(find.byKey(const Key('shift_left')), findsOneWidget);
-      expect(store.tasks, isNotEmpty);
-      expect(store.tasks[0], contains('Alpenglow'));
-    },
-  );
+    // Timed out gracefully: onboarding advanced and local derivation
+    // still produced the starter tasks.
+    expect(find.byKey(const Key('shift_left')), findsOneWidget);
+    expect(store.tasks, isNotEmpty);
+    expect(store.tasks[0], contains('Alpenglow'));
+    // Cancel the memory-mirror periodic timer before Flutter's post-test
+    // timer invariant (tearDown runs too late for that check).
+    services.dispose();
+  });
 }
 
 final class _FakeSignedInGateway implements AuthGateway {
@@ -263,7 +282,8 @@ final class _FakeSignedInGateway implements AuthGateway {
   Future<AuthSession?> restoreSession() async => null;
 
   @override
-  Future<AuthSession?> refreshSession({bool forceRefresh = false}) async => currentSession;
+  Future<AuthSession?> refreshSession({bool forceRefresh = false}) async =>
+      currentSession;
 
   @override
   Future<PhoneOtpChallenge> requestPhoneOtp(String phoneNumber) =>

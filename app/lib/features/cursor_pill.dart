@@ -806,8 +806,8 @@ class _TurnBubble extends StatelessWidget {
     OverlayTurnOrigin.telegram => _telegramBlue,
     OverlayTurnOrigin.imessage => _imessageGreen,
     OverlayTurnOrigin.user => _pillCream.withValues(alpha: 0.55),
-    OverlayTurnOrigin.assistant || OverlayTurnOrigin.system => _pillInk
-        .withValues(alpha: 0.35),
+    OverlayTurnOrigin.assistant ||
+    OverlayTurnOrigin.system => _pillInk.withValues(alpha: 0.35),
   };
 
   Color get _textColor => switch (origin) {

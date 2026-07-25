@@ -22,10 +22,12 @@ import '../settings/settings.dart';
 import '../ui/burst_glow.dart';
 import '../ui/scroll_edge_fade.dart';
 import 'meeting_notes.dart';
+import '../profile/user_profile_settings_panel.dart';
 import 'rewind/rewind_settings_tile.dart';
 
 enum SettingsSection {
   account('Account', Icons.person_outline_rounded),
+  personal('Personal context', Icons.psychology_outlined),
   plan('Plan & Billing', Icons.credit_card_outlined),
   providers('AI Providers', Icons.key_outlined),
   permissions('Permissions', Icons.lock_outline_rounded),
@@ -138,6 +140,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   List<SettingsSection> get sections => [
     SettingsSection.account,
+    SettingsSection.personal,
     SettingsSection.plan,
     SettingsSection.providers,
     SettingsSection.developer,
@@ -178,6 +181,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ] else if (!previewMode)
           DeleteLocalDataTile(services: services),
       ],
+      SettingsSection.personal => const [],
       SettingsSection.plan => [
         if (previewMode || services.billing == null)
           const _InfoTile(
@@ -412,22 +416,31 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ),
         Divider(height: 1, color: colors.hairline),
         Expanded(
-          child: ScrollEdgeFade(
-            color: colors.page,
-            child: ListView(
-              padding: const EdgeInsets.symmetric(vertical: 16),
-              children: [
-                if (_numbersRevealed) ...[
-                  OmiNumbersCard(
-                    loader: widget.numbersLoader ?? _defaultNumbersLoader,
-                    onDismiss: () => setState(() => _numbersRevealed = false),
+          child: active == SettingsSection.personal
+              ? Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  child: UserProfileSettingsPanel(
+                    services: widget.services,
+                    previewMode: widget.previewMode,
                   ),
-                  const SizedBox(height: 12),
-                ],
-                _SettingsGroup(children: _tiles(active)),
-              ],
-            ),
-          ),
+                )
+              : ScrollEdgeFade(
+                  color: colors.page,
+                  child: ListView(
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                    children: [
+                      if (_numbersRevealed) ...[
+                        OmiNumbersCard(
+                          loader: widget.numbersLoader ?? _defaultNumbersLoader,
+                          onDismiss: () =>
+                              setState(() => _numbersRevealed = false),
+                        ),
+                        const SizedBox(height: 12),
+                      ],
+                      _SettingsGroup(children: _tiles(active)),
+                    ],
+                  ),
+                ),
         ),
       ],
     );
@@ -1362,8 +1375,8 @@ class _AccessibilitySetupTileState extends State<AccessibilitySetupTile> {
             : snapshot.hasError
             ? 'Could not check Accessibility access: ${snapshot.error}'
             : value?.detail ??
-                'Accessibility lets Omi read the active window for '
-                    'overlay and voice context.',
+                  'Accessibility lets Omi read the active window for '
+                      'overlay and voice context.',
         state: state,
         onPressed:
             !widget.previewMode &&

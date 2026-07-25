@@ -1136,7 +1136,11 @@ class MobilePendantPageState extends State<MobilePendantPage> {
       const SizedBox(height: 6),
       Text(
         'Desktop, Telegram, and iMessage in one thread.',
-        style: TextStyle(fontSize: 14, height: 1.35, color: _pageInkSoft(context)),
+        style: TextStyle(
+          fontSize: 14,
+          height: 1.35,
+          color: _pageInkSoft(context),
+        ),
       ),
       const SizedBox(height: 18),
       if (_conversationError != null)
@@ -1150,7 +1154,8 @@ class MobilePendantPageState extends State<MobilePendantPage> {
           key: Key('companion_transcripts_empty'),
           icon: Icons.chat_bubble_outline_rounded,
           title: 'No messages yet',
-          detail: 'Talk on desktop, Telegram, or iMessage and it shows up here.',
+          detail:
+              'Talk on desktop, Telegram, or iMessage and it shows up here.',
         )
       else ...[
         for (final message in _conversation)
@@ -2151,7 +2156,11 @@ class _PendantHeroState extends State<_PendantHero>
                       : '${widget.deviceName} · ${widget.phaseLabel}',
                   style: TextStyle(
                     fontSize: 15,
-                    color: Color.lerp(_pageInkSoft(context), _stateConnected, .55),
+                    color: Color.lerp(
+                      _pageInkSoft(context),
+                      _stateConnected,
+                      .55,
+                    ),
                   ),
                 ),
               ),

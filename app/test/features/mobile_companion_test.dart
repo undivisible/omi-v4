@@ -1579,17 +1579,13 @@ void main() {
       find.byKey(const Key('companion_delete_account_confirm')),
       findsOneWidget,
     );
-    expect(
-      requests.where((request) => request.path == '/v1/account'),
-      isEmpty,
-    );
+    expect(requests.where((request) => request.path == '/v1/account'), isEmpty);
     await tester.tap(find.byKey(const Key('companion_delete_account_confirm')));
     await tester.pumpAndSettle();
 
-    expect(
-      requests.where((request) => request.path == '/v1/account'),
-      [(method: 'DELETE', path: '/v1/account')],
-    );
+    expect(requests.where((request) => request.path == '/v1/account'), [
+      (method: 'DELETE', path: '/v1/account'),
+    ]);
     expect(fixture.services.auth.snapshot.session, isNull);
     fixture.services.dispose();
   });
@@ -1791,50 +1787,54 @@ void main() {
     fixture.services.dispose();
   });
 
-  testWidgets('memory tab shows the floating search bar without page headings', (
-    tester,
-  ) async {
-    SharedPreferences.setMockInitialValues({});
-    await tester.binding.setSurfaceSize(const Size(800, 1600));
-    addTearDown(() => tester.binding.setSurfaceSize(null));
-    final auth = await _authorizedAuth('user-a');
-    final hub = _Hub();
-    final services = AppServices.forTesting(
-      nativeHub: hub,
-      deviceRelay: DeviceRelayService(
-        role: DeviceRelayRole.mobileOwner,
-        adapter: _Adapter(),
-      ),
-      auth: auth,
-      memory: MemoryClient(_CompanionMemoryTransport()),
-      memoryDatabasePath: (uid) => '/tmp/$uid.sqlite3',
-      managedStt: _ManagedStt(
-        ManagedSttSession(
-          websocketUrl: 'wss://api.example.test/v1/stt/sessions/s/stream',
-          session: _session('user-a'),
+  testWidgets(
+    'memory tab shows the floating search bar without page headings',
+    (tester) async {
+      SharedPreferences.setMockInitialValues({});
+      await tester.binding.setSurfaceSize(const Size(800, 1600));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final auth = await _authorizedAuth('user-a');
+      final hub = _Hub();
+      final services = AppServices.forTesting(
+        nativeHub: hub,
+        deviceRelay: DeviceRelayService(
+          role: DeviceRelayRole.mobileOwner,
+          adapter: _Adapter(),
         ),
-      ),
-    );
-    await services.initialize();
-
-    await tester.pumpWidget(
-      MaterialApp(
-        home: MobileCompanionShell(
-          services: services,
-          pairedDevices: VolatilePairedDeviceStore(),
+        auth: auth,
+        memory: MemoryClient(_CompanionMemoryTransport()),
+        memoryDatabasePath: (uid) => '/tmp/$uid.sqlite3',
+        managedStt: _ManagedStt(
+          ManagedSttSession(
+            websocketUrl: 'wss://api.example.test/v1/stt/sessions/s/stream',
+            session: _session('user-a'),
+          ),
         ),
-      ),
-    );
-    await tester.pumpAndSettle();
+      );
+      await services.initialize();
 
-    expect(find.byKey(const Key('companion_page_view')), findsOneWidget);
-    await tester.tap(find.widgetWithText(GestureDetector, 'Memory'));
-    await tester.pumpAndSettle();
+      await tester.pumpWidget(
+        MaterialApp(
+          home: MobileCompanionShell(
+            services: services,
+            pairedDevices: VolatilePairedDeviceStore(),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
 
-    expect(find.byKey(const Key('memory_floating_bar')), findsOneWidget);
-    expect(find.text('Search what Omi knows, or add something new.'), findsNothing);
-    services.dispose();
-  });
+      expect(find.byKey(const Key('companion_page_view')), findsOneWidget);
+      await tester.tap(find.widgetWithText(GestureDetector, 'Memory'));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('memory_floating_bar')), findsOneWidget);
+      expect(
+        find.text('Search what Omi knows, or add something new.'),
+        findsNothing,
+      );
+      services.dispose();
+    },
+  );
 }
 
 // Device work hops between the fake test clock and real async (stream
@@ -1883,7 +1883,10 @@ Future<void> _selectCompanionTab(WidgetTester tester, String label) async {
 final class _CompanionMemoryTransport implements MemoryTransport {
   @override
   Future<MemoryResponse> send(MemoryRequest request) async =>
-      const MemoryResponse(statusCode: 200, body: {'query': '', 'items': [], 'gaps': []});
+      const MemoryResponse(
+        statusCode: 200,
+        body: {'query': '', 'items': [], 'gaps': []},
+      );
 }
 
 final class _CurrentsTransport implements CurrentsTransport {
@@ -2051,7 +2054,8 @@ final class _Gateway implements AuthGateway {
       const PhoneOtpChallenge(verificationId: 'test');
 
   @override
-  Future<AuthSession?> refreshSession({bool forceRefresh = false}) async => currentSession;
+  Future<AuthSession?> refreshSession({bool forceRefresh = false}) async =>
+      currentSession;
 
   @override
   Future<AuthSession?> restoreSession() async => currentSession;

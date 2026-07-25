@@ -462,7 +462,8 @@ void main() {
     expect(
       messages.width,
       greaterThan(_testReadingColumnMaxWidth + 80),
-      reason: 'the scroll surface should span the viewport, not the reading column',
+      reason:
+          'the scroll surface should span the viewport, not the reading column',
     );
 
     await send(tester, 'hello');

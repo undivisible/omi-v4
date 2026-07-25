@@ -83,6 +83,10 @@ android {
                 // Signing with the debug keys for now, so `flutter run --release` works.
                 signingConfigs.getByName("debug")
             }
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
         }
     }
 }
@@ -101,4 +105,6 @@ dependencies {
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")
     // NotificationCompat for the capture foreground service. Apache-2.0.
     implementation("androidx.core:core-ktx:1.13.1")
+    // Satisfy SLF4J's optional binder so R8 release minify does not fail.
+    implementation("org.slf4j:slf4j-nop:2.0.17")
 }

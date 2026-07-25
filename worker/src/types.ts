@@ -120,6 +120,7 @@ export type Channel = "telegram" | "imessage";
 
 export type PersonalMemory = {
   id: string;
+  profileKey: string;
   content: string;
   source: string;
   evidence: MemoryEvidence[];

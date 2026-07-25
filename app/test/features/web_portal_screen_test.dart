@@ -11,10 +11,7 @@ void main() {
     tester,
   ) async {
     final gateway = _Gateway();
-    final auth = AuthController(
-      gateway,
-      consentStore: VolatileConsentStore(),
-    );
+    final auth = AuthController(gateway, consentStore: VolatileConsentStore());
     final services = AppServices.forTesting(
       auth: auth,
       nativeHub: _FakeHub(),
@@ -69,8 +66,7 @@ final class _Gateway implements AuthGateway {
   Future<AuthSession> confirmPhoneOtp({
     required PhoneOtpChallenge challenge,
     required String code,
-  }) async =>
-      _session;
+  }) async => _session;
 
   @override
   Future<PhoneOtpChallenge> requestPhoneOtp(String phoneNumber) async =>
@@ -89,8 +85,7 @@ final class _Gateway implements AuthGateway {
   @override
   Future<AuthSession> signInWithDesktopBrowser({
     required void Function(String code) onConfirmationCode,
-  }) async =>
-      _session;
+  }) async => _session;
 
   @override
   Future<void> signOut() async {}

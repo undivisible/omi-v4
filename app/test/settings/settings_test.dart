@@ -52,40 +52,43 @@ void main() {
     expect(transport.requests.single.path, '/v1/setup-health');
   });
 
-  test('setup health prefers channels.imessage over legacy channels.blooio', () async {
-    final transport = QueueTransport([
-      const SettingsResponse(
-        statusCode: 200,
-        body: {
-          'worker': true,
-          'firebase': true,
-          'memory': true,
-          'channels': {'telegram': true, 'imessage': true, 'blooio': false},
-          'billing': false,
-          'models': {'managedChat': true, 'managedStt': false},
-          'desktopAuth': false,
-        },
-      ),
-      const SettingsResponse(
-        statusCode: 200,
-        body: {
-          'worker': true,
-          'firebase': true,
-          'memory': true,
-          'channels': {'telegram': false, 'blooio': true},
-          'billing': false,
-          'models': {'managedChat': false, 'managedStt': false},
-          'desktopAuth': false,
-        },
-      ),
-    ]);
+  test(
+    'setup health prefers channels.imessage over legacy channels.blooio',
+    () async {
+      final transport = QueueTransport([
+        const SettingsResponse(
+          statusCode: 200,
+          body: {
+            'worker': true,
+            'firebase': true,
+            'memory': true,
+            'channels': {'telegram': true, 'imessage': true, 'blooio': false},
+            'billing': false,
+            'models': {'managedChat': true, 'managedStt': false},
+            'desktopAuth': false,
+          },
+        ),
+        const SettingsResponse(
+          statusCode: 200,
+          body: {
+            'worker': true,
+            'firebase': true,
+            'memory': true,
+            'channels': {'telegram': false, 'blooio': true},
+            'billing': false,
+            'models': {'managedChat': false, 'managedStt': false},
+            'desktopAuth': false,
+          },
+        ),
+      ]);
 
-    final preferred = await SettingsClient(transport).getSetupHealth();
-    expect(preferred.imessage, isTrue);
+      final preferred = await SettingsClient(transport).getSetupHealth();
+      expect(preferred.imessage, isTrue);
 
-    final legacy = await SettingsClient(transport).getSetupHealth();
-    expect(legacy.imessage, isTrue);
-  });
+      final legacy = await SettingsClient(transport).getSetupHealth();
+      expect(legacy.imessage, isTrue);
+    },
+  );
 
   test('sends expected revision and task scope', () async {
     final transport = QueueTransport([

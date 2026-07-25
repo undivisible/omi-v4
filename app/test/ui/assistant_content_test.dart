@@ -123,15 +123,16 @@ void main() {
         streaming: true,
       ),
     );
-    expect(find.byKey(const Key('assistant_crepus_artifact_skeleton')), findsOneWidget);
+    expect(
+      find.byKey(const Key('assistant_crepus_artifact_skeleton')),
+      findsOneWidget,
+    );
     expect(find.byType(CrepusView), findsNothing);
     expect(find.text('Live Activity'), findsNothing);
     expect(find.byType(AssistantMarkdown), findsOneWidget);
   });
 
-  testWidgets('completed crepus fades in after streaming ends', (
-    tester,
-  ) async {
+  testWidgets('completed crepus fades in after streaming ends', (tester) async {
     await tester.pumpWidget(
       _host(
         '```crepus\n'
@@ -142,7 +143,10 @@ void main() {
         streaming: false,
       ),
     );
-    expect(find.byKey(const Key('assistant_crepus_artifact_skeleton')), findsNothing);
+    expect(
+      find.byKey(const Key('assistant_crepus_artifact_skeleton')),
+      findsNothing,
+    );
     expect(find.byType(CrepusView), findsOneWidget);
     expect(find.text('Live Activity'), findsOneWidget);
   });
