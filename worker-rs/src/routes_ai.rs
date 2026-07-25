@@ -705,7 +705,7 @@ async fn handle_chat_completions(mut req: Request, ctx: RouteContext<()>) -> Res
     let stream_failed = Rc::clone(&failed);
     let final_env = ctx.env.clone();
     let final_request_id = request_id.clone();
-    let stream = worker::ByteStream::from(upstream_stream)
+    let stream = upstream_stream
         .map(move |chunk| match chunk {
             Ok(chunk) => {
                 stream_tail.borrow_mut().push(&chunk);

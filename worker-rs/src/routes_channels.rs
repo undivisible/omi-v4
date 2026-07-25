@@ -10,7 +10,7 @@ use worker::wasm_bindgen::JsValue;
 use worker::*;
 
 use crate::billing;
-use crate::byok_pricing::{self, format_price};
+use crate::byok_pricing;
 use crate::channel_checkout::{
     self, checkout_idempotency_key, checkout_reply, ChannelCheckout, CheckoutCompletion,
     EXPIRE_CHANNEL_CHECKOUT_SQL,
@@ -369,6 +369,7 @@ async fn checkout_allowed(env: &Env, channel: Channel, channel_user_id: &str) ->
     global
 }
 
+#[allow(dead_code)]
 async fn signup_allowed(env: &Env, channel: Channel, channel_user_id: &str) -> bool {
     let (per_sender, _) = crate::routes_ai::consume_rate_limit(
         env,
@@ -481,6 +482,7 @@ async fn stripe_price(secret: &str, price_id: &str) -> Option<(String, String, i
     ))
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn create_checkout_session(
     env: &Env,
     uid: &str,
@@ -805,6 +807,7 @@ pub async fn live_channel_account(
     }))
 }
 
+#[allow(dead_code)]
 fn channel_uid() -> String {
     let mut bytes = [0u8; 16];
     getrandom::getrandom(&mut bytes).expect("getrandom");
@@ -818,6 +821,7 @@ fn channel_uid() -> String {
 }
 
 /// `signUpChannelSender`.
+#[allow(dead_code)]
 pub async fn sign_up_channel_sender(
     env: &Env,
     channel: Channel,
@@ -919,6 +923,7 @@ pub async fn sign_up_channel_sender(
 }
 
 /// `claimChannelAccount`.
+#[allow(dead_code)]
 pub async fn claim_channel_account(
     env: &Env,
     channel: Channel,

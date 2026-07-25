@@ -125,6 +125,7 @@ async fn admit_speech(
     ))
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn reserve_speech(
     ctx: &RouteContext<()>,
     uid: &str,
