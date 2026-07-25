@@ -4,6 +4,7 @@ use crate::approval::{
 };
 use crate::approval::{ProposalDecisionError, ProposalRegistry, ProposalStatus, unix_time_ms};
 use crate::byok_tier::ByokProvider;
+use crate::chat_router::ChatRouter;
 use crate::computer_use::{
     BoundComputerUseAction, ComputerUseError, ExecutionOutcome, PreparedComputerUseAction,
     available as computer_use_available, capabilities as computer_use_capabilities,
@@ -18,10 +19,11 @@ use crate::model_tier::{Capability, ModelTier};
 use crate::signals::{
     ActionProposal, ActionRisk, ApprovalDecision, ApprovalDecisionAcknowledgement, AssistantDelta,
     AssistantProvider as ProviderKind, BriefComposed, CaptureSource, ClientCommand, Command,
-    ComputerUseAction, ComputerUseAuthorityReceipt, MemoryApplied, MemoryApplyCommit,
-    MemoryCaptured, MemoryCorrected, MemoryExportCommit, MemoryExported, MemoryItem, MemoryItems,
-    MemorySearchItem, MemorySearchResults, MemorySourceDeleted, MessageOrigin, NativeError,
-    NativeEvent, OnboardingScanCompleted, OnboardingScanSource, OnboardingScanState, RuntimePhase,
+    ComputerUseAction, ComputerUseAuthorityReceipt, MAX_CLIENT_MEMORY_CONTEXT_BYTES,
+    MAX_LIVE_SESSION_CONTEXT_BYTES, MemoryApplied, MemoryApplyCommit, MemoryCaptured,
+    MemoryCorrected, MemoryExportCommit, MemoryExported, MemoryItem, MemoryItems, MemorySearchItem,
+    MemorySearchResults, MemorySourceDeleted, MessageOrigin, NativeError, NativeEvent,
+    OnboardingScanCompleted, OnboardingScanSource, OnboardingScanState, RuntimePhase,
     RuntimeStatus, ToolProgress, ToolStatus, TranscriptLocator, TranscriptionStopAcknowledgement,
 };
 #[cfg(test)]
@@ -56,6 +58,8 @@ const PROVIDER_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const PROVIDER_EVENT_TIMEOUT: Duration = Duration::from_secs(45);
 const COMPUTER_USE_RECEIPT_VERSION: &str = "omi-current-authority-v1";
 const MAX_APPROVAL_RESPONSE_BYTES: usize = 32 * 1024;
+const MAX_MEMORY_APPLY_COMMITS: usize = 256;
+const MAX_MEMORY_RECORD_JSON_BYTES: usize = 256 * 1024;
 #[cfg(test)]
 const MAX_ACTIVE_AUDIO_SESSIONS: usize = 8;
 #[cfg(test)]
@@ -78,6 +82,8 @@ struct RuntimeState {
     user_profile_path: Option<PathBuf>,
     self_improve: Option<rx4::self_improve::SelfImprove>,
     personality: Option<rx4::Personality>,
+    memory_mirror_high_water: i64,
+    chat_router: Option<ChatRouter>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -506,7 +512,21 @@ impl AssistantProviderConfig {
 }
 
 fn managed_worker_base(origin: &str) -> Result<String, String> {
-    let validated = validate_endpoint(origin, false, None)?;
+    let allowlist = managed_ai_origins_allowlist();
+    managed_worker_base_allowlisted(origin, allowlist.as_deref())
+}
+
+fn managed_ai_origins_allowlist() -> Option<String> {
+    std::env::var("OMI_MANAGED_AI_ORIGINS")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+}
+
+fn managed_worker_base_allowlisted(
+    origin: &str,
+    allowlist: Option<&str>,
+) -> Result<String, String> {
+    let validated = validate_endpoint(origin, true, allowlist)?;
     let parsed =
         Url::parse(&validated.url).map_err(|_| "managed assistant origin is invalid".to_owned())?;
     if parsed.path() != "/" {
@@ -604,6 +624,79 @@ fn public_ipv4(ip: Ipv4Addr) -> bool {
         && !ip.is_unspecified()
         && !ip.is_multicast()
         && ip != Ipv4Addr::BROADCAST
+        && !is_cgnat(ip)
+}
+
+fn is_cgnat(ip: Ipv4Addr) -> bool {
+    ip.octets()[0] == 100 && (ip.octets()[1] & 0xC0) == 64
+}
+
+fn client_context_within_limit(context: Option<&str>, max_bytes: usize) -> Result<(), String> {
+    if context.is_some_and(|value| value.len() > max_bytes) {
+        return Err(format!("client context exceeds {max_bytes} bytes"));
+    }
+    Ok(())
+}
+
+fn validate_memory_apply_commits(
+    commits: &[MemoryApplyCommit],
+    high_water: i64,
+) -> Result<i64, String> {
+    if commits.is_empty() {
+        return Err("memory apply requires at least one commit".to_owned());
+    }
+    if commits.len() > MAX_MEMORY_APPLY_COMMITS {
+        return Err(format!(
+            "memory apply exceeds {MAX_MEMORY_APPLY_COMMITS} commits per request"
+        ));
+    }
+    let mut last_sequence = high_water;
+    for commit in commits {
+        if commit.sequence <= last_sequence {
+            return Err("memory apply commits must be strictly increasing".to_owned());
+        }
+        if commit.recorded_at_ms <= 0 {
+            return Err("memory apply commit recorded_at_ms must be positive".to_owned());
+        }
+        if commit.record_json.len() > MAX_MEMORY_RECORD_JSON_BYTES {
+            return Err("memory apply commit payload is too large".to_owned());
+        }
+        last_sequence = commit.sequence;
+    }
+    Ok(last_sequence)
+}
+
+struct PreparedComputerUseRegistration {
+    proposal: ActionProposal,
+    prepared: PreparedComputerUseAction,
+}
+
+async fn prepare_computer_use_registration(
+    parent_id: &str,
+    call_id: &str,
+    tool_name: &str,
+    arguments: serde_json::Value,
+    uid: &str,
+    cancellation: &CancellationToken,
+) -> Result<PreparedComputerUseRegistration, String> {
+    let mut proposal = computer_use_proposal(parent_id, call_id, tool_name, arguments)?;
+    let action = proposal.computer_action.clone().ok_or_else(|| {
+        "assistant provider returned an invalid computer-use tool call".to_owned()
+    })?;
+    let bound = bind_computer_use_action(action, cancellation).await?;
+    proposal.expires_at_ms = Some(
+        proposal
+            .expires_at_ms
+            .unwrap_or(i64::MAX)
+            .min(bound.expires_at_ms),
+    );
+    let prepared =
+        crate::computer_use::prepare(bound, &proposal.proposal_id, uid, proposal.risk)
+            .map_err(|_| "the semantic computer action could not be bound safely".to_owned())?;
+    proposal.operation_id = Some(prepared.operation_id.clone());
+    proposal.action_hash = Some(prepared.action_hash().to_owned());
+    proposal.target_provenance = Some(prepared.bound.provenance.clone());
+    Ok(PreparedComputerUseRegistration { proposal, prepared })
 }
 
 fn is_unique_local(ip: Ipv6Addr) -> bool {
@@ -1355,6 +1448,18 @@ impl CommandDispatcher {
                 session_context,
             } = &command.command
             {
+                if let Err(message) = client_context_within_limit(
+                    session_context.as_deref(),
+                    MAX_LIVE_SESSION_CONTEXT_BYTES,
+                ) {
+                    error(
+                        Some(request_id),
+                        "live_voice_context_invalid",
+                        &message,
+                        false,
+                    );
+                    continue;
+                }
                 let Some(transcription) = &self.transcription else {
                     error(
                         Some(request_id),
@@ -1418,6 +1523,18 @@ impl CommandDispatcher {
                 session_context,
             } = &command.command
             {
+                if let Err(message) = client_context_within_limit(
+                    Some(session_context.as_str()),
+                    MAX_LIVE_SESSION_CONTEXT_BYTES,
+                ) {
+                    error(
+                        Some(request_id),
+                        "live_voice_context_invalid",
+                        &message,
+                        false,
+                    );
+                    continue;
+                }
                 let Some(transcription) = &self.transcription else {
                     error(
                         Some(request_id),
@@ -1475,6 +1592,7 @@ impl CommandDispatcher {
                         continue;
                     }
                 }
+                state.chat_router = None;
                 continue;
             }
             if let Command::ConfigureAssistant {
@@ -1502,6 +1620,7 @@ impl CommandDispatcher {
                                 config: config.clone(),
                                 computer_use_enabled: computer_use_available(),
                             });
+                        self.state.lock().await.chat_router = None;
                         publish_note_provider(&self.assistant_provider);
                         publish_brief_provider(Some(&config));
                         progress(
@@ -1529,6 +1648,7 @@ impl CommandDispatcher {
                     Arc::new(UnavailableAssistantProvider {
                         reason: "no model provider is configured".to_owned(),
                     });
+                self.state.lock().await.chat_router = None;
                 publish_note_provider(&self.assistant_provider);
                 publish_brief_provider(None);
                 progress(
@@ -1660,15 +1780,15 @@ impl CommandDispatcher {
                 .clone();
             let execution_generation = authority_generation;
             tasks.spawn(async move {
-                let outcome = tokio::spawn(execute(
+                let outcome = Ok(execute(
                     command,
                     state,
                     assistant_provider,
                     cancellation,
                     configuration_generation,
                     execution_generation,
-                ))
-                .await;
+                )
+                .await);
                 (request_id, outcome)
             });
         }
@@ -2053,7 +2173,24 @@ async fn dispatch_assistant(
     origin: Option<MessageOrigin>,
 ) {
     let generation = state.lock().await.configuration_generation;
-    let user_profile_path = state.lock().await.user_profile_path.clone();
+    let (user_profile_path, routed_tier) = {
+        let mut guard = state.lock().await;
+        let user_profile_path = guard.user_profile_path.clone();
+        let router = guard.chat_router.get_or_insert_with(ChatRouter::from_env);
+        let routed_tier = router.route_prompt(&text, origin);
+        (user_profile_path, routed_tier)
+    };
+    if let Err(message) =
+        client_context_within_limit(memory_context.as_deref(), MAX_CLIENT_MEMORY_CONTEXT_BYTES)
+    {
+        error(
+            Some(request_id.to_owned()),
+            "assistant_context_invalid",
+            &message,
+            false,
+        );
+        return;
+    }
     let profile = local_profile_context(state, cancellation).await;
     let memory_context = match memory_context {
         Some(context) => Some(context),
@@ -2069,14 +2206,13 @@ async fn dispatch_assistant(
     // Models refuses too much ("Unable to work with that request.") and has no
     // tool/memory access, so it is kept for small local jobs only —
     // summarization, onboarding, meeting extraction, model selection.
-    let _ = (local_ai_available, origin);
+    let _ = local_ai_available;
     // Online context is intentionally NOT de-identified: the cloud side has
     // to recognize the user across iMessage/Telegram channels, so identity
     // must survive the hop.
     // Going online: the model router picks the tier (and therefore the model
     // slug from `model_tier.rs`) for this prompt instead of a single fixed
     // model, and the choice is reported alongside the online marker.
-    let routed_tier = crate::chat_router::ChatRouter::from_env().route_prompt(&text, origin);
     let routed_model = provider.model_for_tier(routed_tier);
     progress(
         request_id,
@@ -2189,6 +2325,7 @@ async fn dispatch_assistant(
                 if final_segment {
                     final_sent = true;
                 }
+                drop(state);
                 NativeEvent::AssistantDelta(AssistantDelta {
                     request_id: request_id.to_owned(),
                     text: delta,
@@ -2519,15 +2656,25 @@ async fn execute(
         }
         Command::ProvideMeetingAuth {
             auth,
-            trusted_worker_origin,
+            trusted_worker_origin: _,
         } => {
-            crate::meeting::provide_auth(auth, trusted_worker_origin);
-            progress(
-                &request_id,
-                "meeting",
-                ToolStatus::Complete,
-                Some("meeting capture auth accepted"),
-            );
+            let origin = state.lock().await.managed_worker_origin.clone();
+            if origin.is_none() {
+                error(
+                    Some(request_id),
+                    "meeting_auth_unavailable",
+                    "managed assistant origin is not configured",
+                    false,
+                );
+            } else {
+                crate::meeting::provide_auth(auth, origin);
+                progress(
+                    &request_id,
+                    "meeting",
+                    ToolStatus::Complete,
+                    Some("meeting capture auth accepted"),
+                );
+            }
             false
         }
         Command::ResolveDevAssistant => {
@@ -2662,16 +2809,16 @@ async fn scan_onboarding(
         for scan in scans {
             let mut memory_source_id = None;
             if let Some(memory) = &memory {
+                let mut memory_guard = memory
+                    .lock()
+                    .map_err(|_| "memory database lock was poisoned".to_owned())?;
                 for item in &scan.memories {
                     if scan_cancellation.is_cancelled() {
                         return Ok(None);
                     }
-                    let mut memory = memory
-                        .lock()
-                        .map_err(|_| "memory database lock was poisoned".to_owned())?;
-                    let tenant_id = memory.tenant_id.clone();
-                    let person_id = memory.person_id.clone();
-                    let remembered = memory
+                    let tenant_id = memory_guard.tenant_id.clone();
+                    let person_id = memory_guard.person_id.clone();
+                    let remembered = memory_guard
                         .database
                         .remember(RememberInput {
                             tenant_id,
@@ -2884,6 +3031,8 @@ async fn configure_memory(
             state.personality = personality;
             state.computer_use_ledger_path = computer_use_ledger_path;
             state.user_profile_path = Some(user_profile_path);
+            state.memory_mirror_high_water = 0;
+            state.chat_router = None;
             drop(state);
             NativeEvent::RuntimeStatus(runtime_status(true)).send();
             let review_cancellation = cancellation.clone();
@@ -3375,11 +3524,39 @@ async fn apply_memory(
         );
         return;
     };
+    let high_water = {
+        let guard = state.lock().await;
+        if guard.managed_worker_origin.is_none() {
+            error(
+                Some(request_id.to_owned()),
+                "memory_apply_unauthorized",
+                "configure trusted assistant before applying cloud commits",
+                false,
+            );
+            return;
+        }
+        guard.memory_mirror_high_water
+    };
+    let validated_high = match validate_memory_apply_commits(&commits, high_water) {
+        Ok(next) => next,
+        Err(message) => {
+            error(
+                Some(request_id.to_owned()),
+                "memory_apply_invalid",
+                &message,
+                false,
+            );
+            return;
+        }
+    };
     let request_id = request_id.to_owned();
     let error_request_id = request_id.clone();
     let task = spawn_blocking(move || apply_configured_memory(&memory, &request_id, commits));
     match await_blocking(task, cancellation).await {
-        BlockingOutcome::Complete(event) => NativeEvent::MemoryApplied(event).send(),
+        BlockingOutcome::Complete(event) => {
+            state.lock().await.memory_mirror_high_water = validated_high;
+            NativeEvent::MemoryApplied(event).send();
+        }
         BlockingOutcome::Failed(error_value) => error(
             Some(error_request_id.clone()),
             "memory_apply_failed",
@@ -4132,64 +4309,31 @@ async fn register_live_computer_use_tool_calls(
                 continue;
             }
         };
-        let mut proposal =
-            match computer_use_proposal(&live_stream_id, &call.id, &call.name, arguments) {
-                Ok(proposal) => proposal,
-                Err(_) => {
-                    error(
-                        Some(live_stream_id.clone()),
-                        "computer_use_tool_invalid",
-                        "live voice returned an invalid computer-use tool call",
-                        false,
-                    );
-                    continue;
-                }
-            };
-        let Some(action) = proposal.computer_action.clone() else {
-            error(
-                Some(live_stream_id.clone()),
-                "computer_use_tool_invalid",
-                "live voice returned an invalid computer-use tool call",
-                false,
-            );
-            continue;
-        };
-        let bound = match bind_computer_use_action(action, &cancellation).await {
-            Ok(bound) => bound,
-            Err(_) => {
-                error(
-                    Some(live_stream_id.clone()),
-                    "computer_use_binding_failed",
-                    "the semantic computer action could not be bound safely",
-                    false,
-                );
+        let registration = match prepare_computer_use_registration(
+            &live_stream_id,
+            &call.id,
+            &call.name,
+            arguments,
+            &uid,
+            &cancellation,
+        )
+        .await
+        {
+            Ok(registration) => registration,
+            Err(code) => {
+                let (error_code, message) = if code.contains("invalid") {
+                    ("computer_use_tool_invalid", code.as_str())
+                } else {
+                    (
+                        "computer_use_binding_failed",
+                        "the semantic computer action could not be bound safely",
+                    )
+                };
+                error(Some(live_stream_id.clone()), error_code, message, false);
                 continue;
             }
         };
-        proposal.expires_at_ms = Some(
-            proposal
-                .expires_at_ms
-                .unwrap_or(i64::MAX)
-                .min(bound.expires_at_ms),
-        );
-        let prepared =
-            match crate::computer_use::prepare(bound, &proposal.proposal_id, &uid, proposal.risk) {
-                Ok(prepared) => {
-                    proposal.operation_id = Some(prepared.operation_id.clone());
-                    proposal.action_hash = Some(prepared.action_hash().to_owned());
-                    proposal.target_provenance = Some(prepared.bound.provenance.clone());
-                    prepared
-                }
-                Err(_) => {
-                    error(
-                        Some(live_stream_id.clone()),
-                        "computer_use_binding_failed",
-                        "the semantic computer action could not be bound safely",
-                        false,
-                    );
-                    continue;
-                }
-            };
+        let PreparedComputerUseRegistration { proposal, prepared } = registration;
         let mut state = state.lock().await;
         if state.configuration_generation != generation
             || state.authority_uid.as_deref() != Some(&uid)
@@ -5505,22 +5649,29 @@ mod tests {
             .is_ok()
         );
         assert!(!public_ip(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1))));
+        assert!(!public_ip(IpAddr::V4(Ipv4Addr::new(100, 64, 0, 1))));
         assert!(!public_ip(IpAddr::V4(Ipv4Addr::new(169, 254, 1, 1))));
         assert!(!public_ip(IpAddr::V6(Ipv6Addr::LOCALHOST)));
         assert!(public_ip(IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1))));
         assert_eq!(
-            managed_worker_base("https://managed.example.com").as_deref(),
-            Ok("https://managed.example.com/v1")
-        );
-        assert!(
-            AssistantProviderConfig::from_runtime(
-                ProviderKind::Worker,
-                "managed-chat".to_owned(),
-                Some("https://managed.example.com/v1".to_owned()),
-                "session-token".to_owned(),
+            managed_worker_base_allowlisted(
+                "https://managed.example.com",
                 Some("https://managed.example.com"),
             )
-            .is_ok()
+            .as_deref(),
+            Ok("https://managed.example.com/v1")
+        );
+        let worker = HashMap::from([
+            ("OMI_AI_PROVIDER", "worker"),
+            ("OMI_AI_MODEL", "managed-chat"),
+            ("OMI_AI_AUTH_TOKEN", "session-token"),
+            ("OMI_AI_ENDPOINT", "https://managed.example.com/v1"),
+            ("OMI_MANAGED_AI_ORIGINS", "https://managed.example.com"),
+        ]);
+        assert!(
+            configured_assistant_provider(|name| worker.get(name).map(ToString::to_string))
+                .unwrap_or_else(|failure| panic!("Worker provider configures: {failure}"))
+                .is_some()
         );
         assert!(
             AssistantProviderConfig::from_runtime(

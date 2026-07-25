@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
 pub const MAX_AUDIO_CHUNK_BYTES: usize = 256 * 1024;
+pub const MAX_CLIENT_MEMORY_CONTEXT_BYTES: usize = 32 * 1024;
+pub const MAX_LIVE_SESSION_CONTEXT_BYTES: usize = 64 * 1024;
 
 #[derive(Deserialize, DartSignal)]
 pub struct ClientCommand {

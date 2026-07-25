@@ -432,19 +432,28 @@ mod platform {
             std::process::id()
         ));
         if std::fs::create_dir(&dir).is_ok() {
-            restrict_permissions(&dir);
+            restrict_directory_permissions(&dir);
         }
         dir.join("capture.wav")
     }
 
     #[cfg(unix)]
-    fn restrict_permissions(path: &std::path::Path) {
+    fn restrict_directory_permissions(path: &std::path::Path) {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700));
+    }
+
+    #[cfg(not(unix))]
+    fn restrict_directory_permissions(_path: &std::path::Path) {}
+
+    #[cfg(unix)]
+    fn restrict_file_permissions(path: &std::path::Path) {
         use std::os::unix::fs::PermissionsExt;
         let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
     }
 
     #[cfg(not(unix))]
-    fn restrict_permissions(_path: &std::path::Path) {}
+    fn restrict_file_permissions(_path: &std::path::Path) {}
 
     fn cleanup_capture(path: &PathBuf) {
         let _ = std::fs::remove_file(path);
@@ -466,7 +475,7 @@ mod platform {
             {
                 // The capture library creates the file with default
                 // permissions; tighten them now that it exists.
-                restrict_permissions(path);
+                restrict_file_permissions(path);
                 return Some(header);
             }
             if Instant::now() >= deadline {

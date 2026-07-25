@@ -3,6 +3,8 @@
 //! left/right Shift transitions; this module turns them into intents the UI
 //! consumes (overlay summon, voice toggle, dismiss).
 
+#![allow(dead_code)]
+
 const DEFAULT_DOUBLE_CHORD_WINDOW_MS: u64 = 400;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
