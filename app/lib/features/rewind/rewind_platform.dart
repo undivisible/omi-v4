@@ -1,6 +1,32 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
-import 'rewind_models.dart';
+import '../../native/native_hub.dart';
+
+/// True on the one platform that has both a framebuffer worth remembering and
+/// the native capture surface this file talks to. Everywhere else the engine
+/// exists but never captures.
+bool get rewindSupported =>
+    !kIsWeb && defaultTargetPlatform == TargetPlatform.macOS;
+
+/// Reads a window context off the channel. The trimming matters: a blank field
+/// is the absence of a fact, not the empty string, and the hub's heartbeat
+/// treats a changed context as a reason to capture.
+RewindWindowContext rewindContextFromMap(Object? value) {
+  if (value is! Map) return const RewindWindowContext();
+  String? field(String key) {
+    final raw = value[key];
+    if (raw is! String) return null;
+    final trimmed = raw.trim();
+    return trimmed.isEmpty ? null : trimmed;
+  }
+
+  return RewindWindowContext(
+    bundleId: field('bundleId'),
+    appName: field('appName'),
+    windowTitle: field('windowTitle'),
+  );
+}
 
 /// One sample of the machine's state, taken before any pixels are read.
 final class RewindSystemState {
@@ -17,7 +43,7 @@ final class RewindSystemState {
   final bool permitted;
 
   static const unavailable = RewindSystemState(
-    context: RewindWindowContext.unknown,
+    context: RewindWindowContext(),
     idleFor: Duration.zero,
     locked: true,
     permitted: false,
@@ -104,7 +130,7 @@ final class MacRewindCapturePlatform implements RewindCapturePlatform {
     if (raw == null) return RewindSystemState.unavailable;
     final idleSeconds = raw['idleSeconds'];
     return RewindSystemState(
-      context: RewindWindowContext.fromMap(raw),
+      context: rewindContextFromMap(raw),
       idleFor: Duration(
         milliseconds: idleSeconds is num
             ? (idleSeconds * 1000).round().clamp(0, 1 << 40)
@@ -152,4 +178,34 @@ final class MacRewindCapturePlatform implements RewindCapturePlatform {
       return null;
     }
   }
+}
+
+/// A capture platform that never captures. Used on every platform that is not
+/// macOS, and in the settings window's engine, where the controls must work
+/// but a second capture loop must not exist.
+final class InertRewindCapturePlatform implements RewindCapturePlatform {
+  const InertRewindCapturePlatform();
+
+  @override
+  Future<RewindSystemState> readState() async => RewindSystemState.unavailable;
+
+  @override
+  Future<Uint8List?> preview() async => null;
+
+  @override
+  Future<RewindEncodedFrame?> encodeHeldFrame({
+    bool recognizeText = true,
+  }) async => null;
+
+  @override
+  Future<void> discardHeldFrame() async {}
+
+  @override
+  Future<void> setIndicator({
+    required bool recording,
+    required bool paused,
+  }) async {}
+
+  @override
+  void setIndicatorHandler(void Function(String action)? handler) {}
 }

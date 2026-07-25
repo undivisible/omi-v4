@@ -85,6 +85,26 @@ final class DemoNativeHub implements NativeHub {
   @override
   void clearAssistant(String requestId) {}
 
+  /// The demo never records a screen, so every Rewind request is answered the
+  /// way an unsupported platform answers it: nothing is available, and the
+  /// settings row says so instead of pretending to be armed.
+  @override
+  void rewind({required String requestId, required RewindRequest request}) =>
+      _later(
+        requestId,
+        Duration.zero,
+        () => _emit(
+          NativeEventRewind(
+            value: RewindUpdate(
+              requestId: requestId,
+              payload: const RewindPayloadUnavailable(
+                detail: 'Rewind is not part of the demo.',
+              ),
+            ),
+          ),
+        ),
+      );
+
   /// The demo has a "key" so the app takes its no-account local path, which is
   /// what puts the real hub UI on screen without a sign-in. It is a marker,
   /// not a credential: [sendMessage] never calls a model with it.

@@ -27,6 +27,41 @@ export 'generated/signals/signals.dart'
         NativeEventDevAssistantResolved,
         MessageOrigin,
         NativeEvent,
+        NativeEventRewind,
+        RewindDirective,
+        RewindDirectiveDiscard,
+        RewindDirectiveEncode,
+        RewindDirectiveIdle,
+        RewindDirectivePreview,
+        RewindDirectiveStored,
+        RewindFrameRecord,
+        RewindPayload,
+        RewindPayloadDirective,
+        RewindPayloadFrames,
+        RewindPayloadStatus,
+        RewindPayloadUnavailable,
+        RewindRequest,
+        RewindRequestAllowBundleId,
+        RewindRequestDeleteAll,
+        RewindRequestDeleteFrame,
+        RewindRequestDeleteLast,
+        RewindRequestDenyBundleId,
+        RewindRequestFrameEncoded,
+        RewindRequestListFrames,
+        RewindRequestOpen,
+        RewindRequestPreviewTaken,
+        RewindRequestSearch,
+        RewindRequestSetEnabled,
+        RewindRequestSetPaused,
+        RewindRequestSetPrivacyFlags,
+        RewindRequestSetRetention,
+        RewindRequestStatus,
+        RewindRequestTick,
+        RewindRetentionOption,
+        RewindSkipReason,
+        RewindStatus,
+        RewindUpdate,
+        RewindWindowContext,
         NativeEventActionProposal,
         NativeEventApprovalDecisionAcknowledged,
         NativeEventAssistantDelta,
@@ -239,6 +274,11 @@ abstract interface class NativeHub {
   /// Resolves the dev-only assistant credential the app falls back to with no
   /// account. Answered by exactly one [NativeEventDevAssistantResolved].
   void resolveDevAssistant(String requestId);
+
+  /// Drives one step of the Rewind capture handshake, or one thing the user
+  /// asked the screen-history engine to do. Answered by exactly one
+  /// [NativeEventRewind] carrying the same `requestId`.
+  void rewind({required String requestId, required RewindRequest request});
   void dispose();
 }
 
@@ -465,6 +505,10 @@ final class UnavailableNativeHub implements NativeHub {
 
   @override
   void resolveDevAssistant(String requestId) => _unavailable();
+
+  @override
+  void rewind({required String requestId, required RewindRequest request}) =>
+      _unavailable();
 
   @override
   void cancel(String requestId) => _unavailable();
@@ -828,6 +872,10 @@ final class RinfNativeHub implements NativeHub {
   @override
   void resolveDevAssistant(String requestId) =>
       _send(requestId, const CommandResolveDevAssistant());
+
+  @override
+  void rewind({required String requestId, required RewindRequest request}) =>
+      _send(requestId, CommandRewind(request: request));
 
   @override
   void cancel(String requestId) => _send(requestId, const CommandCancel());

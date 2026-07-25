@@ -77,6 +77,8 @@ abstract class NativeEvent {
         return NativeEventCallState.load(deserializer);
       case 27:
         return NativeEventDevAssistantResolved.load(deserializer);
+      case 28:
+        return NativeEventRewind.load(deserializer);
       default:
         throw Exception(
           'Unknown variant index for NativeEvent: ' + index.toString(),
@@ -1599,6 +1601,59 @@ class NativeEventDevAssistantResolved extends NativeEvent {
     }());
 
     return fullString ?? 'NativeEventDevAssistantResolved';
+  }
+}
+
+@immutable
+class NativeEventRewind extends NativeEvent {
+  const NativeEventRewind({required this.value}) : super();
+
+  static NativeEventRewind load(BinaryDeserializer deserializer) {
+    deserializer.increaseContainerDepth();
+    final instance = NativeEventRewind(
+      value: RewindUpdate.deserialize(deserializer),
+    );
+    deserializer.decreaseContainerDepth();
+    return instance;
+  }
+
+  final RewindUpdate value;
+
+  NativeEventRewind copyWith({RewindUpdate? value}) {
+    return NativeEventRewind(value: value ?? this.value);
+  }
+
+  void serialize(BinarySerializer serializer) {
+    serializer.increaseContainerDepth();
+    serializer.serializeVariantIndex(28);
+    value.serialize(serializer);
+    serializer.decreaseContainerDepth();
+  }
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    if (other.runtimeType != runtimeType) return false;
+
+    return other is NativeEventRewind && value == other.value;
+  }
+
+  @override
+  int get hashCode => value.hashCode;
+
+  @override
+  String toString() {
+    String? fullString;
+
+    assert(() {
+      fullString =
+          '$runtimeType('
+          'value: $value'
+          ')';
+      return true;
+    }());
+
+    return fullString ?? 'NativeEventRewind';
   }
 }
 

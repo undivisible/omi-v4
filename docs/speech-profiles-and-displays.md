@@ -23,7 +23,7 @@
 | Layer | Today |
 |---|---|
 | **Capture** | `RewindCaptureBridge.swift` → `CGDisplayCreateImage(CGMainDisplayID())` — **main display only**. |
-| **Policy / storage** | Dart: `rewind_service.dart`, `rewind_policy.dart`, `rewind_platform.dart` (encode + on-device OCR via Vision on macOS). |
+| **Policy / storage** | Rust: `app/native/hub/src/rewind/` (policy, dHash gate, privacy rules, store, retention). Dart keeps `rewind_platform.dart` (encode + on-device OCR via Vision on macOS) and `rewind_client.dart`, which drives the preview → policy → encode handshake across the bridge. |
 | **Overlay placement** | Pill / voice chrome use the screen under the cursor (`NSScreen.screens` + mouse) — positioning only, not full-desktop grab. |
 | **Windows** | No Rewind capture shim yet (`InertRewindCapturePlatform` off macOS). |
 

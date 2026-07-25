@@ -119,6 +119,29 @@ class TraitHelpers {
     }
   }
 
+  static void serializeOptionRewindSkipReason(
+    RewindSkipReason? value,
+    BinarySerializer serializer,
+  ) {
+    if (value == null) {
+      serializer.serializeOptionTag(false);
+    } else {
+      serializer.serializeOptionTag(true);
+      value.serialize(serializer);
+    }
+  }
+
+  static RewindSkipReason? deserializeOptionRewindSkipReason(
+    BinaryDeserializer deserializer,
+  ) {
+    final tag = deserializer.deserializeOptionTag();
+    if (tag) {
+      return RewindSkipReasonExtension.deserialize(deserializer);
+    } else {
+      return null;
+    }
+  }
+
   static void serializeOptionTranscriptLocator(
     TranscriptLocator? value,
     BinarySerializer serializer,
@@ -366,6 +389,46 @@ class TraitHelpers {
     return List.generate(
       length,
       (_) => OnboardingScanSource.deserialize(deserializer),
+    );
+  }
+
+  static void serializeVectorRewindFrameRecord(
+    List<RewindFrameRecord> value,
+    BinarySerializer serializer,
+  ) {
+    serializer.serializeLength(value.length);
+    for (final item in value) {
+      item.serialize(serializer);
+    }
+  }
+
+  static List<RewindFrameRecord> deserializeVectorRewindFrameRecord(
+    BinaryDeserializer deserializer,
+  ) {
+    final length = deserializer.deserializeLength();
+    return List.generate(
+      length,
+      (_) => RewindFrameRecord.deserialize(deserializer),
+    );
+  }
+
+  static void serializeVectorRewindRetentionOption(
+    List<RewindRetentionOption> value,
+    BinarySerializer serializer,
+  ) {
+    serializer.serializeLength(value.length);
+    for (final item in value) {
+      item.serialize(serializer);
+    }
+  }
+
+  static List<RewindRetentionOption> deserializeVectorRewindRetentionOption(
+    BinaryDeserializer deserializer,
+  ) {
+    final length = deserializer.deserializeLength();
+    return List.generate(
+      length,
+      (_) => RewindRetentionOption.deserialize(deserializer),
     );
   }
 

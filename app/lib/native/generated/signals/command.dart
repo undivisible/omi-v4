@@ -67,6 +67,8 @@ abstract class Command {
         return CommandResolveDevAssistant.load(deserializer);
       case 28:
         return CommandUpdateLiveVoiceContext.load(deserializer);
+      case 29:
+        return CommandRewind.load(deserializer);
       default:
         throw Exception(
           'Unknown variant index for Command: ' + index.toString(),
@@ -2180,5 +2182,58 @@ class CommandUpdateLiveVoiceContext extends Command {
     }());
 
     return fullString ?? 'CommandUpdateLiveVoiceContext';
+  }
+}
+
+@immutable
+class CommandRewind extends Command {
+  const CommandRewind({required this.request}) : super();
+
+  static CommandRewind load(BinaryDeserializer deserializer) {
+    deserializer.increaseContainerDepth();
+    final instance = CommandRewind(
+      request: RewindRequest.deserialize(deserializer),
+    );
+    deserializer.decreaseContainerDepth();
+    return instance;
+  }
+
+  final RewindRequest request;
+
+  CommandRewind copyWith({RewindRequest? request}) {
+    return CommandRewind(request: request ?? this.request);
+  }
+
+  void serialize(BinarySerializer serializer) {
+    serializer.increaseContainerDepth();
+    serializer.serializeVariantIndex(29);
+    request.serialize(serializer);
+    serializer.decreaseContainerDepth();
+  }
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    if (other.runtimeType != runtimeType) return false;
+
+    return other is CommandRewind && request == other.request;
+  }
+
+  @override
+  int get hashCode => request.hashCode;
+
+  @override
+  String toString() {
+    String? fullString;
+
+    assert(() {
+      fullString =
+          '$runtimeType('
+          'request: $request'
+          ')';
+      return true;
+    }());
+
+    return fullString ?? 'CommandRewind';
   }
 }

@@ -84,6 +84,12 @@ struct RuntimeState {
     personality: Option<rx4::Personality>,
     memory_mirror_high_water: i64,
     chat_router: Option<ChatRouter>,
+    /// The Rewind timeline, once the client has opened it. It lives behind a
+    /// std mutex rather than the async one because every operation on it is
+    /// blocking file work that runs on `spawn_blocking`, never on the
+    /// current-thread reactor.
+    #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+    rewind: Option<Arc<StdMutex<crate::rewind::Engine>>>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -2720,6 +2726,10 @@ async fn execute(
             compose_brief(&request_id, &now_local, items, &cancellation).await;
             false
         }
+        Command::Rewind { request } => {
+            rewind(&request_id, &state, request, &cancellation).await;
+            false
+        }
         Command::JoinCall {
             link,
             display_name,
@@ -2742,6 +2752,123 @@ async fn execute(
             false
         }
     }
+}
+
+/// Drives one step of the Rewind capture handshake, or one thing the user
+/// asked the screen-history engine to do.
+///
+/// The hub cannot call back across the bridge, so control of the capture loop
+/// stays where the MethodChannel is — on the Flutter side, which ticks, reads
+/// the preview and runs the encoder. What moved here is the deciding: every
+/// message the client sends is answered by exactly one directive naming the
+/// single next thing it may do. That is what preserves the frame-economy
+/// invariant across the move, because the client is never told to encode until
+/// the engine has already hashed the 72-byte preview and decided to keep the
+/// frame. See [`crate::rewind::engine`] for the protocol in full.
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+async fn rewind(
+    request_id: &str,
+    state: &Arc<Mutex<RuntimeState>>,
+    request: crate::signals::RewindRequest,
+    cancellation: &CancellationToken,
+) {
+    use crate::rewind::{Engine, bridge};
+    use crate::signals::RewindRequest;
+
+    if let RewindRequest::Open { root } = request {
+        // The client resolves `~/.omi` the same way every other local store
+        // does and hands the path in; the hub never invents a location for
+        // someone's screen history.
+        let path = PathBuf::from(root);
+        let task = spawn_blocking(move || Ok(Engine::open(path)));
+        let engine = match await_blocking(task, cancellation).await {
+            BlockingOutcome::Complete(engine) => Arc::new(StdMutex::new(engine)),
+            BlockingOutcome::Failed(message) => {
+                rewind_unavailable(request_id, &message);
+                return;
+            }
+            BlockingOutcome::Cancelled => {
+                cancelled(request_id);
+                return;
+            }
+        };
+        state.lock().await.rewind = Some(Arc::clone(&engine));
+        rewind_step(
+            request_id,
+            &engine,
+            crate::rewind::Request::Status,
+            cancellation,
+        )
+        .await;
+        return;
+    }
+
+    let engine = state.lock().await.rewind.clone();
+    let Some(engine) = engine else {
+        rewind_unavailable(request_id, "the Rewind timeline has not been opened");
+        return;
+    };
+    let Some(step) = bridge::request_from_signal(request) else {
+        rewind_unavailable(request_id, "unsupported Rewind request");
+        return;
+    };
+    rewind_step(request_id, &engine, step, cancellation).await;
+}
+
+/// Runs one engine step on the blocking pool and answers with its payload.
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+async fn rewind_step(
+    request_id: &str,
+    engine: &Arc<StdMutex<crate::rewind::Engine>>,
+    request: crate::rewind::Request,
+    cancellation: &CancellationToken,
+) {
+    let engine = Arc::clone(engine);
+    let now_ms = unix_time_ms();
+    let task = spawn_blocking(move || {
+        let mut guard = engine
+            .lock()
+            .map_err(|_| "the Rewind engine lock was poisoned".to_owned())?;
+        let response = guard.handle(request, now_ms);
+        Ok(crate::rewind::bridge::payload_from_response(
+            response,
+            guard.root(),
+        ))
+    });
+    match await_blocking(task, cancellation).await {
+        BlockingOutcome::Complete(payload) => rewind_answer(request_id, payload),
+        BlockingOutcome::Failed(message) => rewind_unavailable(request_id, &message),
+        BlockingOutcome::Cancelled => cancelled(request_id),
+    }
+}
+
+/// A Rewind request on a platform with no framebuffer to read. Not an error:
+/// the client simply has nothing to show, and says so in the settings row.
+#[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+async fn rewind(
+    request_id: &str,
+    _state: &Arc<Mutex<RuntimeState>>,
+    _request: crate::signals::RewindRequest,
+    _cancellation: &CancellationToken,
+) {
+    rewind_unavailable(request_id, "Rewind is available on desktop only");
+}
+
+fn rewind_answer(request_id: &str, payload: crate::signals::RewindPayload) {
+    NativeEvent::Rewind(crate::signals::RewindUpdate {
+        request_id: request_id.to_owned(),
+        payload,
+    })
+    .send();
+}
+
+fn rewind_unavailable(request_id: &str, detail: &str) {
+    rewind_answer(
+        request_id,
+        crate::signals::RewindPayload::Unavailable {
+            detail: detail.to_owned(),
+        },
+    );
 }
 
 /// Composes the currents brief and answers with whatever came back.

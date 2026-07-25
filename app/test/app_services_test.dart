@@ -3079,6 +3079,9 @@ final class _FakeAuthGateway implements AuthGateway {
 
 final class _FakeHub implements NativeHub {
   @override
+  void rewind({required String requestId, required RewindRequest request}) {}
+
+  @override
   void resolveDevAssistant(String requestId) {}
   final eventsController = StreamController<NativeEvent>.broadcast();
   final meetingAuth = <(TranscriptionAuth, String?)>[];
