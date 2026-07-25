@@ -34,12 +34,10 @@ Anything marked **absent** is behaviour the production worker does not have.
 |---|---|---|
 | `channel-checkout.ts` — `/subscribe` in chat, Stripe link issuance, webhook provisioning, `invoice.payment_failed` / `checkout.session.expired` | High | **absent** — no Rust module; `/subscribe` is not in `CHANNEL_COMMANDS` |
 | `channel-signup.ts` — first-contact question, `parseSignupAnswer`, chat-native accounts, claim/retire | High | **absent** — no Rust module |
-| `digests.ts` — nightly recap, daily brief, digest deliveries, local-clock windows | High | **absent** — no Rust module, not in `scheduled` |
-| `cron-cursor.ts` — `scanOnboardedUsers` page/wrap rotation over `cron_cursors` | High | **absent** — the Rust cron has no per-user rotation |
 | Cloudflare AI Gateway (`aiGatewayRoute`) incl. the account/gateway id path-smuggling validation | Medium | **absent** — `CF_AI_GATEWAY_*` vars in `wrangler.toml` are read by nothing |
 | Managed speech routes (`/api/v1/speech/*`) and the `speak_text` / `transcribe_audio` MCP tools | Medium | **absent** — `speech.rs` is a fully tested pure island with no caller |
 | Authoritative memory log — append-on-sync, `GET /memory/log`, `memory_log_cursors` | Medium | **absent** — `memory_log.rs` is now compiled and tested but still has no route |
-| `observability.ts` — Sentry/Better Stack heartbeat + log shipping | Medium | **absent** — native Workers Observability only |
+| `observability.ts` — Sentry error capture + Better Stack log shipping | Medium | **partial** — the cron heartbeat is ported (`glue::ping_heartbeat`); `createSentry`, the `onError` capture and the `tail` log export are still absent, native Workers Observability only |
 | Streaming usage-tail settlement writes no `status='complete'` row for a streamed turn | Medium | reconciled by cron only |
 | STT "idempotency key reused with different configuration" 409 | Medium | **absent** — the row is re-read but not compared |
 | BYOK negotiation: closing the prior open session on start, and the superseded-session accept guard | Medium | **absent** |
@@ -50,6 +48,18 @@ Anything marked **absent** is behaviour the production worker does not have.
 
 **Closed 2026-07-25** (were absent, now ported with host tests):
 
+- **The Stripe webhook dropped the unclaimed-customer guard.** Both entitlement
+  writes in `glue.rs` set `stripe_customer_id = excluded.stripe_customer_id`
+  unconditionally. `entitlements.stripe_customer_id` is uniquely indexed
+  (migration 0004) and Stripe reuses one customer across two Omi accounts that
+  share an email, so the second account's webhook threw on the index — a 500,
+  and no entitlement for someone who had paid. `stripe-entitlement.ts:20` records
+  that this had already happened once and been fixed there; the port lost the
+  fix. Worse, the reconciliation sweep could not repair it, because the sweep
+  would hit the same index: the one customer the net exists for was the one it
+  could never catch. Both statements now use the guarded
+  `stripe_sync::{CLAIM_STRIPE_CUSTOMER_SQL, APPLY_SUBSCRIPTION_STATE_SQL}`, so
+  the webhook and the sweep share one statement and cannot diverge again.
 - `POST /v1/webhooks/sendblue/:token` — the parser was ported but **no route was
   registered**, so iMessage inbound was dead in production. Registered in
   `glue.rs`.
@@ -66,6 +76,19 @@ Anything marked **absent** is behaviour the production worker does not have.
 - `user-profile.ts` → `src/user_profile.rs` (pure logic; wiring pending).
 - `memory_log.rs` was never declared in `lib.rs` — dead code whose five tests
   never ran. Now compiled.
+- **The cron ran four of the TS worker's seven scheduled jobs.** `cron-cursor.ts`
+  → `src/cron_cursor.rs`, `digests.ts` → `src/digests.rs`, and the
+  `generateDueCurrents` driver → `currents.rs::wasm_glue`, all three wired into
+  `glue.rs::scheduled` along with the Better Stack heartbeat. Until this landed,
+  no user had received a cron-minted Current or a digest since the 2026-07-24
+  cutover, and the missing heartbeat is why that went unnoticed: the monitor was
+  never told the batch had run, so it had nothing to alert on.
+- **`currents.ts` was recorded below as "ported" while its cron driver had never
+  been written.** The routes were ported; `generateDueCurrents` — the daily
+  driver that mints Currents for every onboarded user in their local morning —
+  was not, and the row said nothing about it. Corrected in place. Read that as a
+  warning about this document: a row that names a file is not evidence that
+  every exported symbol in the file has a counterpart here.
 
 Legend: **ported** (parity, tested) · **partial** (some routes) ·
 **pending** (not started) · **blocked** (needs a workers-rs binding gap
@@ -77,7 +100,7 @@ resolved — noted inline).
 |---|---|---|---|
 | `auth.ts` | `src/auth.rs` + `glue.rs::authenticate`/`firebase_keys` | **ported** | RS256 via RustCrypto `rsa` (pure, no WebCrypto). JWKS fetch + per-isolate cache + Cache-Control max-age. Same 401/503 error shapes. 13 unit tests. |
 | `entitlement.ts` | `src/entitlement.rs` + `glue.rs::has_active_pro` | **ported** | `DEV_FAKE_PRO`/`ENVIRONMENT` guard + row matrix. 8 tests. |
-| `index.ts` (fetch router, `/health`, `scheduled`) | `glue.rs::fetch` + `glue.rs::scheduled` | **ported** | Router + `/health` + all route groups registered. The single `#[event(scheduled)]` runs every minutely-cron piece in TS order: `deliverDueChannelMessages`, `respondToStaleInboxItems`, `reconcileManagedAssistantRequests`, then `backfillClaimVectors → drainPendingEmbeddings` (memory `cron_slice`). `[triggers] crons = ["* * * * *"]` declared in `wrangler.toml`. DO exports present. Divergence: workers-rs Router handlers get no execution `Context`, so the TS `waitUntil` slices are awaited inline (each error-isolated, matching the per-branch `.catch`). |
+| `index.ts` (fetch router, `/health`, `scheduled`) | `glue.rs::fetch` + `glue.rs::scheduled` | **ported** | Router + `/health` + all route groups registered. The single `#[event(scheduled)]` runs every minutely-cron piece in TS order: `generateDueDigests → generateDueCurrents → deliverDueChannelMessages` (one chain: digests are generated before deliveries drain so a digest entering the queue this tick ships in the same batch, and a failure earlier in the chain skips the rest of it), `respondToStaleInboxItems`, `reconcileManagedAssistantRequests`, `reconcileStripeSubscriptions`, then `backfillClaimVectors → drainPendingEmbeddings` (memory `cron_slice`), then `pingHeartbeat`. `[triggers] crons = ["* * * * *"]` declared in `wrangler.toml`. DO exports present. Divergences: workers-rs Router handlers get no execution `Context`, so the TS `waitUntil` slices are awaited inline (each error-isolated, matching the per-branch `.catch`) and run sequentially rather than concurrently. Heartbeat parity is exact including the asymmetry — `reconcileManagedAssistantRequests` is the only TS branch without a `.catch`, so it is the only failure that suppresses the beat. |
 | `routes.ts` → `GET /me` | `glue.rs::handle_me` | **ported** | Includes `channel_bindings` lookup. |
 | `routes.ts` → `GET /setup-health` | `src/setup_health.rs` + `glue.rs::handle_setup_health` | **ported** | Identical boolean shape. 4 tests. |
 | `routes.ts` → `GET /entitlement` | `glue.rs::handle_entitlement` | **ported** | |
@@ -134,14 +157,43 @@ build is honest with or without the index provisioned. The scheduled
 |---|---|---|
 | `assistant.ts`, `assistant-admission.ts` (DO) | **ported** | See "AI routes" below. |
 | `conversations.ts` | **ported** | See the Delivery / AI / Memory sections below; D1 replay + inbox landed. |
-| `currents.ts` | **ported** | See "Memory & currents" below (includes refresh). |
+| `currents.ts` | **ported** | Routes + refresh: see "Memory & currents" below. The `generateDueCurrents` cron driver was missing when this row first read "ported"; ported 2026-07-25 into `currents.rs::wasm_glue` — see "Cron jobs" below. |
 | `delivery.ts` (DeliveryCoordinator DO) | **ported** | See "Delivery" below. |
 | `stt.ts`, `stt-admission.ts` (DO), `asr.ts`, `voice.ts` | **ported** | See "AI routes" below. |
 | `memory-projection.ts`, `memory-sync.ts` | **ported** | See "Memory & currents" below. |
 | `memory-vectors.ts`, `embeddings.ts` | **ported (default)** | Vectorize via `js_sys` FFI; see Vectorize section. |
 | `facetime.ts` / bridge | **intentionally absent** | Needs Gemini Live bridge container; keep on TS until that stack exists for RS. |
-| `digests.ts`, `cron-cursor.ts`, `stripe-sync.ts`, `observability.ts` | **absent** | Never ported. `glue.rs::scheduled` runs delivery, inbox fallback, assistant reconcile and the vector cron slice only — no digest generation and no per-user cursor rotation. |
+| `digests.ts`, `cron-cursor.ts` | **ported** | See "Cron jobs" below. |
+| `stripe-sync.ts` | **ported** | `src/stripe_sync.rs`, ported separately; `reconcileStripeSubscriptions` is wired into `glue.rs::scheduled` in its TS position. |
+| `observability.ts` | **partial** | Heartbeat only; Sentry capture and tail log shipping remain absent. See the audit table above. |
 | `channel-checkout.ts`, `channel-signup.ts` | **absent** | Never ported; see the audit table above. |
+
+## Cron jobs
+
+The minutely cron is the whole of the product's proactive surface, and it is the
+one place where "the module exists" and "the module runs" come apart: a driver
+that nothing calls looks identical to a ported one in a table like this. All
+seven TS jobs now run. Ordering inside `glue.rs::scheduled` is behaviour — see
+the `index.ts` row in Phase 1.
+
+| TS module | Rust | Status | Notes |
+|---|---|---|---|
+| `cron-cursor.ts` | `src/cron_cursor.rs` | **ported** | `loadCronCursor`/`saveCronCursor`/`scanOnboardedUsers` over `cron_cursors`. The keyset page resumes strictly after the stored uid and wraps to the head within the same tick when the tail is exhausted; the wrap is completed by *writing* `""`, not only by the re-query, which is what stops a cursor parking past the tail for ever. Each cron name rotates independently. Rotation decisions are pure (`should_wrap`, `cursor_after_page`) with 6 host tests that replay the TS `cron-cursor.test.ts` page/wrap sequence against an in-memory keyset. |
+| `digests.ts` | `src/digests.rs` | **ported** | `localClock`, the daily (07) / nightly (21) local windows, both body builders and `storeDigest` (fixed `input_revision` per kind → UNIQUE (uid, local_date, input_revision) idempotency, citations, and the single `channel_deliveries` enqueue keyed `digest:<kind>:<uid>:<local_date>`). Clock, window test and body assembly are pure with 19 host tests: negative offsets, fractional offsets (+05:30, +05:45, −03:30), the hour-wide window swept minute by minute, local midnight / month / leap-year rollover, the nightly `[day_start, +1 day)` window against a non-UTC day, and the local-date idempotency key across a whole local day. |
+| `currents.ts` → `generateDueCurrents` | `currents.rs::wasm_glue` | **ported** | Daily driver: rotate a page of onboarded users, gate on the user's own local 07 hour, skip anyone with a `currents_daily_batches` row for that local date, mint up to 3 via the existing `generate_one_current`, then record the batch row (written even when nothing was minted — it marks the turn, not the yield). `CURRENTS_DAILY_HOUR` aliases `digests::DAILY_HOUR` so the two windows cannot drift. 2 host tests. |
+| `observability.ts` → `pingHeartbeat` | `glue.rs::ping_heartbeat` | **ported** | POST to `BETTERSTACK_HEARTBEAT_URL` (read as var-then-secret, undeclared in `wrangler.toml` on purpose so an unconfigured environment is simply silent), every failure path silent. Fired only when the batch resolves, so a broken cron alerts by *absence*. |
+
+Known parity gaps in this group (documented, not defects):
+- Body caps count Unicode scalars (`chars().take(4096)`) where the TS `slice`
+  counts UTF-16 code units; they differ only for astral characters straddling
+  the 4096th position. Same divergence as the channel reply cap.
+- The five cron branches run sequentially rather than under a `Promise.all`, so
+  a slow branch delays the ones after it within a tick (crate-wide divergence:
+  workers-rs handlers get no execution `Context`).
+
+Gates after this group (rustup `stable`): `cargo test --lib` 385 passed / 1
+ignored · `cargo clippy --all-targets -- -D warnings` clean ·
+`cargo clippy --target wasm32-unknown-unknown -- -D warnings` clean.
 
 ## workers-rs 0.8.5 binding support (findings)
 
@@ -270,7 +322,7 @@ workers-rs I/O layer is wasm-only.
 | `memory-sync.ts` | `routes_memory.rs` (pure) + `wasm_glue.rs::handle_zkr_sync` | **ported** | `POST /v1/memory/zkr-sync`: scope checks (tenant/person == uid), commit/event staging + 409 conflict shapes, `applyCommit` (idempotent replay, correction/deletion), `touchedClaimIds` → vector enqueue + inline drain. Pure parsing/identity/canonical-json host-tested. |
 | `memory-vectors.ts` | `routes_memory.rs` (pure) + `wasm_glue.rs` | **ported** | `projectedClaimId`, `claimText`, drain partition (eligible→upsert / missing→delete), backfill, `searchMemoryClaims` (uid-filtered query + D1 re-check). Vectorize via hand-written `js_sys` FFI (`Vectorize::{query,upsert,delete_by_ids}`); AI via native `Ai` binding. |
 | `embeddings.ts` | `routes_memory.rs::{embedding_inputs,parse_embeddings}` + `wasm_glue.rs::embed_texts` | **ported** | `@cf/baai/bge-base-en-v1.5` via `Ai.run`; response-shape validation host-tested. |
-| `currents.ts` | `routes_memory.rs` (pure) + `wasm_glue.rs` | **ported** | generate/candidates/list/feedback/accept/approve/receipt-claim/reject/outcome. Deterministic confidence+learned-adjustment ordering (SQL) + weights host-tested; `rowToCurrent` projection + ISO formatting host-tested; sha256 (RustCrypto), receipt tokens (base64url), uuid v4. |
+| `currents.ts` | `routes_memory.rs` (pure) + `wasm_glue.rs` | **ported** | generate/candidates/list/feedback/accept/approve/receipt-claim/reject/outcome. Deterministic confidence+learned-adjustment ordering (SQL) + weights host-tested; `rowToCurrent` projection + ISO formatting host-tested; sha256 (RustCrypto), receipt tokens (base64url), uuid v4. **Routes only** — the `generateDueCurrents` cron driver is `currents.rs::wasm_glue`, ported 2026-07-25 (see "Cron jobs"). Known gap: `generate_one_current` does not author the `heroCrepus` `.crepus` hero column the TS insert carries, so a cron-minted or `/generate`d Current renders as the client's hand-built row rather than the Now-Brief card. |
 | `memory-projection.ts` | `wasm_glue/projection_sql.rs` + `wasm_glue.rs::{project_zkr_memory,ensure_projected}` | **ported** | Needed by the group; 10-statement projection batch reproduced verbatim, run as per-route middleware. |
 | `routes.ts` memory routes | `wasm_glue.rs` | **ported** | `GET/POST /v1/memory/retrieve`, `GET /v1/memory/semantic-search`, `GET|POST /v1/memories`, `POST /v1/memory/sources/:id/revisions`, `DELETE /v1/memory/sources/:id`, `GET|POST /v1/memory/daily-reviews`. |
 
@@ -304,9 +356,15 @@ earlier "~95% parity" figure was optimistic; the absent-behaviour rows in the
 table above are the backlog that number concealed. Residual risks:
 
 - **The absent features are absent in production, not merely untested.** Chat
-  `/subscribe` checkout, chat-native signup, digests, and cron cursor rotation
-  do not exist in the deployed worker. Anything that depended on them has been
-  silently inert since cutover.
+  `/subscribe` checkout and chat-native signup do not exist in the deployed
+  worker. Anything that depended on them has been silently inert since cutover.
+- **Digests, daily Currents and cursor rotation were inert from the 2026-07-24
+  cutover until they were ported on 2026-07-25.** No user received a
+  cron-minted Current or a digest in that window. The three jobs are now in
+  `glue.rs::scheduled`, but nothing has replayed the missed days: users are
+  current from the next tick in their local morning, not backfilled. The
+  heartbeat that would have caught this within a minute is now ported too, and
+  is the reason to treat any future silent cron as a monitoring failure first.
 - **DELETE /account Vectorize cleanup** still deferred: account deletion removes
   all D1 rows but does not delete the user's claim vectors from the
   `omi-memory-claims` index. Orphaned vectors are uid-filtered and never

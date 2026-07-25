@@ -35,21 +35,71 @@ fn start() {
 }
 
 // Scheduled cron handler — parity with the TS `index.ts` minutely cron, which
-// runs `Promise.all([deliverDueChannelMessages, respondToStaleInboxItems,
-// reconcileManagedAssistantRequests, backfillClaimVectors→drainPendingEmbeddings])`.
+// runs `Promise.all([generateDueDigests→generateDueCurrents→deliverDueChannelMessages,
+// respondToStaleInboxItems, reconcileManagedAssistantRequests,
+// reconcileStripeSubscriptions, backfillClaimVectors→drainPendingEmbeddings])`
+// and then pings the Better Stack heartbeat.
 // workers-rs Router handlers do not receive the execution `Context`, so the
 // TS `waitUntil` deferral is awaited inline here; each slice fails independently
 // (errors ignored, matching the TS `.catch(() => undefined)` on each branch).
 #[event(scheduled)]
 async fn scheduled(_event: worker::ScheduledEvent, env: Env, _ctx: worker::ScheduleContext) {
-    // --- Delivery group: deliver due channel messages ---
-    let _ = crate::routes_channels::deliver_due_channel_messages(&env).await;
+    // --- Digests → Currents → Delivery group ---
+    // Digests are generated before deliveries drain, so a digest that enters the
+    // queue this tick can be picked up in the same batch. The TS expresses this
+    // as one `.then()` chain inside the `Promise.all`, so the sequencing is
+    // behaviour as much as the ordering is: a failure earlier in the chain skips
+    // the rest of it rather than draining against a half-built queue.
+    if crate::digests::generate_due_digests(&env).await.is_ok()
+        && crate::currents::generate_due_currents(&env).await.is_ok()
+    {
+        let _ = crate::routes_channels::deliver_due_channel_messages(&env).await;
+    }
     // --- Inbox fallback responder: reply to unclaimed inbox items ---
     let _ = crate::routes_channels::respond_to_stale_inbox_items(&env).await;
     // --- Managed AI: reconcile in-flight/streaming assistant requests ---
-    let _ = crate::routes_ai::reconcile_managed_assistant_requests(&env).await;
+    // The one branch the TS does not wrap in `.catch(() => undefined)`, so it is
+    // the only one whose failure rejects the batch and suppresses the heartbeat
+    // below. Preserved as-is: that asymmetry is what the monitor is watching.
+    let batch_resolved = crate::routes_ai::reconcile_managed_assistant_requests(&env)
+        .await
+        .is_ok();
+    // --- Stripe: reconcile subscriptions a webhook never arrived for ---
+    // A Stripe webhook that never arrives would otherwise leave a paying
+    // customer with nothing, silently and permanently. This re-reads a bounded
+    // handful of stale subscriptions per tick.
+    let _ = crate::stripe_sync::reconcile_stripe_subscriptions(&env).await;
     // --- Memory & Currents group: backfillClaimVectors → drainPendingEmbeddings ---
     crate::routes_memory::cron_slice(&env).await;
+    // Ping the Better Stack heartbeat only when the whole cron batch resolves; a
+    // rejection skips the ping so Better Stack alerts on the missed beat. No-op
+    // when BETTERSTACK_HEARTBEAT_URL is unset.
+    if batch_resolved {
+        ping_heartbeat(&env).await;
+    }
+}
+
+/// Ping a Better Stack heartbeat monitor after a successful scheduled run
+/// (`pingHeartbeat` in `worker/src/observability.ts`).
+///
+/// The point of the beat is that it is *absent* when the cron is broken, which
+/// is why it is the last thing the handler does and why every failure path here
+/// is silent: a heartbeat that could not be reached is Better Stack's signal to
+/// raise, not an error for the worker to raise on its own.
+async fn ping_heartbeat(env: &Env) {
+    let Some(url) = secret_or_var(env, "BETTERSTACK_HEARTBEAT_URL").filter(|url| !url.is_empty())
+    else {
+        return;
+    };
+    let Ok(url) = Url::parse(&url) else {
+        return;
+    };
+    let mut init = worker::RequestInit::new();
+    init.with_method(worker::Method::Post);
+    let Ok(request) = Request::new_with_init(url.as_str(), &init) else {
+        return;
+    };
+    let _ = Fetch::Request(request).send().await;
 }
 
 #[event(fetch)]
@@ -1493,10 +1543,8 @@ async fn handle_webhook_stripe(mut req: Request, ctx: RouteContext<()>) -> Resul
             let results = db
                 .batch(vec![
                     receipt()?,
-                    db.prepare(
-                        "INSERT INTO entitlements (uid, plan, status, stripe_customer_id, updated_at)\n                           SELECT uid, 'byok', 'inactive', ?1, ?2 FROM users WHERE uid = ?3\n                           ON CONFLICT(uid) DO UPDATE SET stripe_customer_id = excluded.stripe_customer_id,\n                             updated_at = excluded.updated_at",
-                    )
-                    .bind(&[js_str(customer), now_ms().into(), js_str(uid)])?,
+                    db.prepare(crate::stripe_sync::CLAIM_STRIPE_CUSTOMER_SQL)
+                        .bind(&[js_str(customer), now_ms().into(), js_str(uid)])?,
                 ])
                 .await?;
             Response::from_json(&json!({
@@ -1509,22 +1557,20 @@ async fn handle_webhook_stripe(mut req: Request, ctx: RouteContext<()>) -> Resul
             let results = db
                 .batch(vec![
                     receipt()?,
-                    db.prepare(
-                        "INSERT INTO entitlements\n                           (uid, plan, status, valid_until, stripe_customer_id, updated_at, stripe_subscription_id, stripe_price_id, stripe_event_created)\n                         SELECT uid, 'pro', ?1, ?2, ?3, ?4, ?5, ?6, ?7 FROM users WHERE uid = ?8\n                         ON CONFLICT(uid) DO UPDATE SET\n                           plan = 'pro', status = excluded.status, valid_until = excluded.valid_until,\n                           stripe_customer_id = excluded.stripe_customer_id,\n                           stripe_subscription_id = COALESCE(excluded.stripe_subscription_id, entitlements.stripe_subscription_id),\n                           stripe_price_id = COALESCE(excluded.stripe_price_id, entitlements.stripe_price_id),\n                           stripe_event_created = excluded.stripe_event_created,\n                           updated_at = excluded.updated_at\n                         WHERE excluded.stripe_event_created >= entitlements.stripe_event_created",
-                    )
-                    .bind(&[
-                        js_str(if sub.active { "active" } else { "inactive" }),
-                        match sub.valid_until {
-                            Some(v) => (v as f64).into(),
-                            None => JsValue::NULL,
-                        },
-                        js_str(&sub.customer),
-                        now_ms().into(),
-                        js_opt(sub.subscription.as_deref()),
-                        js_opt(sub.price_id.as_deref()),
-                        (sub.event_created as f64).into(),
-                        js_str(&sub.uid),
-                    ])?,
+                    db.prepare(crate::stripe_sync::APPLY_SUBSCRIPTION_STATE_SQL)
+                        .bind(&[
+                            js_str(if sub.active { "active" } else { "inactive" }),
+                            match sub.valid_until {
+                                Some(v) => (v as f64).into(),
+                                None => JsValue::NULL,
+                            },
+                            js_str(&sub.customer),
+                            now_ms().into(),
+                            js_opt(sub.subscription.as_deref()),
+                            js_opt(sub.price_id.as_deref()),
+                            (sub.event_created as f64).into(),
+                            js_str(&sub.uid),
+                        ])?,
                 ])
                 .await?;
             Response::from_json(&json!({

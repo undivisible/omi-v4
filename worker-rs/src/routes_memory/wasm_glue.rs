@@ -1525,7 +1525,7 @@ async fn handle_current_refresh(mut req: Request, ctx: RouteContext<()>) -> Resu
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum GenerateOutcomeKind {
+pub(crate) enum GenerateOutcomeKind {
     Created,
     Existing,
     Empty,
@@ -1817,7 +1817,11 @@ async fn proactive_enabled(db: &D1Database, uid: &str) -> Result<&'static str> {
     }
 }
 
-async fn generate_one_current(db: &D1Database, uid: &str, now: i64) -> Result<GenerateOutcomeKind> {
+pub(crate) async fn generate_one_current(
+    db: &D1Database,
+    uid: &str,
+    now: i64,
+) -> Result<GenerateOutcomeKind> {
     match proactive_enabled(db, uid).await? {
         "no" => return Ok(GenerateOutcomeKind::Disabled),
         "invalid" => return Ok(GenerateOutcomeKind::InvalidSettings),
