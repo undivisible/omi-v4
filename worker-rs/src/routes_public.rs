@@ -912,16 +912,39 @@ async fn handle_assistant_messages(mut req: Request, ctx: RouteContext<()>) -> R
     respond(ask_omi_operation(&ctx, &auth.uid, &body).await)
 }
 
-/// FaceTime requires the Gemini Live bridge container (TS-only). Fail closed
-/// with 501 so API clients get an explicit signal rather than a missing route.
-async fn handle_facetime_calls(req: Request, ctx: RouteContext<()>) -> Result<Response> {
+async fn handle_speech_transcriptions(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let auth = api_auth!(req, ctx);
+    scoped!(auth, "speech:write");
+    let text = match bounded_payload(&mut req, speech::MAXIMUM_TRANSCRIBE_BODY_BYTES).await {
+        Ok(body) if body.is_object() => body,
+        _ => {
+            return respond(OperationResult::new(
+                413,
+                json!({ "error": "Audio too large" }),
+            ))
+        }
+    };
+    respond(transcribe_audio_operation(&ctx, &auth.uid, &text).await)
+}
+
+async fn handle_speech_synthesis(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let auth = api_auth!(req, ctx);
+    scoped!(auth, "speech:write");
+    let body = match object_body(&mut req, "Invalid speech request").await {
+        Ok(body) => body,
+        Err(response) => return response,
+    };
+    respond(speak_text_operation(&ctx, &auth.uid, &body).await)
+}
+
+async fn handle_facetime_calls(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
     let auth = api_auth!(req, ctx);
     scoped!(auth, "facetime:write");
-    Ok(Response::from_json(&json!({
-        "error": "FaceTime calling is not available on this deployment",
-        "code": "facetime_not_ported",
-    }))?
-    .with_status(501))
+    let body = match object_body(&mut req, "Invalid FaceTime handle").await {
+        Ok(body) => body,
+        Err(response) => return response,
+    };
+    respond(crate::routes_facetime::operation(&ctx, &auth.uid, &body).await)
 }
 
 // ---------------------------------------------------------------------------
@@ -945,6 +968,7 @@ async fn run_tool(
         "ask_omi" => ask_omi_operation(ctx, uid, arguments).await,
         "transcribe_audio" => transcribe_audio_operation(ctx, uid, arguments).await,
         "speak_text" => speak_text_operation(ctx, uid, arguments).await,
+        "start_facetime_call" => crate::routes_facetime::operation(ctx, uid, arguments).await,
         _ => OperationResult::new(400, json!({ "error": "Unknown tool" })),
     }
 }

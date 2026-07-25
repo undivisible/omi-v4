@@ -94,6 +94,24 @@ pub const TOOLS: &[ToolDefinition] = &[
         description: "Ask the user's Omi assistant a question. Omi answers with the user's synced memory and recent conversation in context, and the exchange is recorded in their conversation history. Requires an Omi Pro account.",
         scope: "assistant:write",
     },
+    ToolDefinition {
+        name: "transcribe_audio",
+        title: "Transcribe audio",
+        description: "Transcribe a recording server-side and return timed segments. The audio is sent inline as base64, so the whole JSON-RPC request must stay under 256 KiB. clientMessageId makes the call idempotent. Requires an active Omi Pro account.",
+        scope: "speech:write",
+    },
+    ToolDefinition {
+        name: "speak_text",
+        title: "Synthesize speech",
+        description: "Read text aloud and return the spoken audio as base64. Bounded to 1000 characters per call. clientMessageId makes the call idempotent. Requires an active Omi Pro account.",
+        scope: "speech:write",
+    },
+    ToolDefinition {
+        name: "start_facetime_call",
+        title: "Start a FaceTime call",
+        description: "Place a real FaceTime Audio call. This rings the given handle on the person's actual device immediately and Omi joins the call's audio server-side, so the person can just talk. Side-effectful and not undoable — confirm the handle with the user before calling it. The handle must be an E.164 phone number (like +15551234567); the provider dials numbers, not email addresses. Returns a 'not yet available' error on accounts with no FaceTime line provisioned.",
+        scope: "facetime:write",
+    },
 ];
 
 pub fn tool_for(name: &str) -> Option<&'static ToolDefinition> {
@@ -218,6 +236,42 @@ pub fn input_schema(name: &str) -> Value {
                 },
             }),
             &["text"],
+        ),
+        "transcribe_audio" => schema_object(
+            json!({
+                "audio": { "type": "string", "description": "Base64-encoded audio bytes, no data: URL prefix.", "minLength": 1 },
+                "format": { "type": "string", "enum": ["wav", "mp3", "ogg", "opus"], "description": "Container of the supplied audio. Opus must be Ogg-encapsulated." },
+                "clientMessageId": { "type": "string", "description": "Caller-supplied idempotency id.", "minLength": 8, "maxLength": 120 },
+                "language": { "type": "string", "description": "BCP-47 language hint such as en or en-US. Defaults to auto.", "maxLength": 32 },
+                "durationSeconds": integer_schema("Known duration of the audio in seconds.", 1, 3600),
+            }),
+            &["audio", "format", "clientMessageId"],
+        ),
+        "speak_text" => schema_object(
+            json!({
+                "text": { "type": "string", "description": "The text to speak, read out verbatim.", "minLength": 1, "maxLength": 1000 },
+                "clientMessageId": { "type": "string", "description": "Caller-supplied idempotency id.", "minLength": 8, "maxLength": 120 },
+                "voice": { "type": "string", "enum": ["alloy", "ash", "ballad", "coral", "echo", "sage", "shimmer", "verse"], "description": "Voice to speak with. Defaults to alloy." },
+                "format": { "type": "string", "enum": ["mp3", "opus"], "description": "Container of the returned audio. Defaults to mp3." },
+            }),
+            &["text", "clientMessageId"],
+        ),
+        "start_facetime_call" => schema_object(
+            json!({
+                "handle": {
+                    "type": "string",
+                    "description": "Who to call: an E.164 phone number ('+' then 7-15 digits) or an email address.",
+                    "minLength": 3,
+                    "maxLength": 254,
+                },
+                "idempotencyKey": {
+                    "type": "string",
+                    "description": "Optional caller-supplied key, 8-120 characters of [A-Za-z0-9._:-], so a retry does not place a second call.",
+                    "minLength": 8,
+                    "maxLength": 120,
+                },
+            }),
+            &["handle"],
         ),
         _ => Value::Null,
     }
@@ -459,7 +513,7 @@ mod tests {
     fn lists_every_tool_with_a_precise_input_schema() {
         let listed = listed_tools();
         let tools = listed.as_array().unwrap();
-        assert_eq!(tools.len(), 7);
+        assert_eq!(tools.len(), TOOLS.len());
         for tool in tools {
             let schema = &tool["inputSchema"];
             assert_eq!(schema["type"], json!("object"));
@@ -472,6 +526,8 @@ mod tests {
             json!(["title", "summary", "reason", "proposedNextStep"])
         );
         assert!(listed_tools()[2]["inputSchema"].get("required").is_none());
+        assert_eq!(tool_for("transcribe_audio").unwrap().scope, "speech:write");
+        assert_eq!(tool_for("speak_text").unwrap().scope, "speech:write");
     }
 
     #[test]

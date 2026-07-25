@@ -34,6 +34,33 @@ pub enum ManagedCompletionTier {
     Search,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AiGatewayRoute {
+    pub url: String,
+    pub token: Option<String>,
+}
+
+pub fn ai_gateway_route(value: impl Fn(&str) -> Option<String>) -> Option<AiGatewayRoute> {
+    let account = value("CF_AI_GATEWAY_ACCOUNT_ID")?.trim().to_string();
+    let gateway = value("CF_AI_GATEWAY_ID")?.trim().to_string();
+    if account.len() != 32
+        || !account
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        || gateway.is_empty()
+        || gateway.len() > 64
+        || !gateway.bytes().enumerate().all(|(index, byte)| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || (index > 0 && byte == b'-')
+        })
+    {
+        return None;
+    }
+    Some(AiGatewayRoute {
+        url: format!("https://gateway.ai.cloudflare.com/v1/{account}/{gateway}/openrouter/v1/chat/completions"),
+        token: value("CF_AI_GATEWAY_TOKEN").map(|value| value.trim().to_string()).filter(|value| !value.is_empty()),
+    })
+}
+
 /// Resolves the tier a request's `model` names, or `None` when it matches
 /// neither the balanced nor the search model. The search tier only applies
 /// when its model differs from the balanced one, so a deployment that has not
@@ -628,6 +655,37 @@ pub fn bounded_json(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ai_gateway_route_rejects_path_smuggling_and_carries_its_token() {
+        assert!(ai_gateway_route(|name| match name {
+            "CF_AI_GATEWAY_ACCOUNT_ID" => Some("../evil".into()),
+            "CF_AI_GATEWAY_ID" => Some("default".into()),
+            _ => None,
+        })
+        .is_none());
+        assert!(ai_gateway_route(|name| match name {
+            "CF_AI_GATEWAY_ACCOUNT_ID" => Some("f".repeat(32)),
+            "CF_AI_GATEWAY_ID" => Some("a/../../b".into()),
+            _ => None,
+        })
+        .is_none());
+        let route = ai_gateway_route(|name| match name {
+            "CF_AI_GATEWAY_ACCOUNT_ID" => Some("f".repeat(32)),
+            "CF_AI_GATEWAY_ID" => Some("default".into()),
+            "CF_AI_GATEWAY_TOKEN" => Some("gateway-token".into()),
+            _ => None,
+        })
+        .unwrap();
+        assert_eq!(
+            route.url,
+            format!(
+                "https://gateway.ai.cloudflare.com/v1/{}/default/openrouter/v1/chat/completions",
+                "f".repeat(32)
+            )
+        );
+        assert_eq!(route.token.as_deref(), Some("gateway-token"));
+    }
     use serde_json::json;
 
     fn valid() -> Value {

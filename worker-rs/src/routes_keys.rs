@@ -523,6 +523,11 @@ async fn call_model(
         managed_ai::XIAOMI_COMPLETION_ENDPOINT,
         managed_ai::XIAOMI_HOSTNAME,
     )?;
+    let gateway = managed_ai::ai_gateway_route(|name| env_get(&ctx.env, name));
+    let endpoint_url = gateway
+        .as_ref()
+        .and_then(|route| worker::Url::parse(&route.url).ok())
+        .unwrap_or(endpoint_url);
     let model = managed_ai::model_for_tier(managed_ai::ModelTier::Balanced, |name| {
         env_get(&ctx.env, name)
     });
@@ -550,6 +555,11 @@ async fn call_model(
         .set("authorization", &format!("Bearer {secret}"))
         .ok()?;
     headers.set("content-type", "application/json").ok()?;
+    if let Some(token) = gateway.and_then(|route| route.token) {
+        headers
+            .set("cf-aig-authorization", &format!("Bearer {token}"))
+            .ok()?;
+    }
     init.with_headers(headers);
     init.with_body(Some(JsValue::from_str(&body.to_string())));
     let request = Request::new_with_init(endpoint_url.as_str(), &init).ok()?;
