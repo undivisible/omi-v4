@@ -231,7 +231,17 @@ uint32_t omi_rust_features_assemble(const omi_rust_feature_flags_t *flags);
 uint16_t omi_rust_wifi_encode_softap_header(uint64_t read_seq, uint64_t write_seq,
                                            uint16_t packet_bytes, uint8_t *out);
 uint16_t omi_rust_wifi_encode_softap_done(uint64_t next_seq, uint8_t status, uint8_t *out);
-uint8_t omi_rust_wifi_classify_command(uint8_t cmd);
+typedef struct {
+    uint8_t command;
+    uint16_t first_offset;
+    uint8_t first_len;
+    uint16_t second_offset;
+    uint8_t second_len;
+    uint16_t third_offset;
+    uint8_t third_len;
+} omi_rust_wifi_parsed_t;
+uint8_t omi_rust_wifi_parse_command(const uint8_t *buf, uint16_t len, bool home_enabled,
+                                    omi_rust_wifi_parsed_t *out);
 uint8_t omi_rust_wifi_err_hw_unavailable(void);
 
 typedef enum {

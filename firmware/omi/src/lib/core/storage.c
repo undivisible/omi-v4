@@ -116,7 +116,6 @@ static bool wifi_transfer_active;
 static uint64_t wifi_read_seq;
 static uint64_t wifi_end_seq;
 static bool wifi_header_sent;
-#define WIFI_CFG_ERR_INVALID_PWD_LEN 4
 #define WIFI_NOTIFY_ATTR_IDX 8
 static ssize_t storage_wifi_handler(struct bt_conn *conn,
                                     const struct bt_gatt_attr *attr,
@@ -627,10 +626,13 @@ static ssize_t storage_wifi_handler(struct bt_conn *conn,
     ARG_UNUSED(attr);
     ARG_UNUSED(offset);
     ARG_UNUSED(flags);
-    uint8_t result = 0;
-
-    if (len < 1U) {
-        wifi_notify_result(conn, 1);
+    const uint8_t *bytes = buf;
+    omi_rust_wifi_parsed_t parsed;
+    uint8_t result = omi_rust_wifi_parse_command(bytes, len,
+                                                   IS_ENABLED(CONFIG_OMI_ENABLE_WIFI_HOME_STA),
+                                                   &parsed);
+    if (result != 0) {
+        wifi_notify_result(conn, result);
         return len;
     }
 
@@ -639,36 +641,12 @@ static ssize_t storage_wifi_handler(struct bt_conn *conn,
         return len;
     }
 
-    const uint8_t *bytes = buf;
-    const uint8_t cmd = bytes[0];
-
-    switch (omi_rust_wifi_classify_command(cmd)) {
+    switch (parsed.command) {
     case 0x01: {
-        if (len < 2U) {
-            result = 2;
-            break;
-        }
-        uint16_t idx = 1;
-        uint8_t ssid_len = bytes[idx++];
-        if (ssid_len == 0 || ssid_len > WIFI_MAX_SSID_LEN || idx + ssid_len > len) {
-            result = 3;
-            break;
-        }
         char ssid[WIFI_MAX_SSID_LEN + 1] = {0};
-        memcpy(ssid, &bytes[idx], ssid_len);
-        idx += ssid_len;
-        if (idx >= len) {
-            result = WIFI_CFG_ERR_INVALID_PWD_LEN;
-            break;
-        }
-        uint8_t pwd_len = bytes[idx++];
-        if (pwd_len < WIFI_MIN_PASSWORD_LEN || pwd_len > WIFI_MAX_PASSWORD_LEN ||
-            idx + pwd_len > len) {
-            result = WIFI_CFG_ERR_INVALID_PWD_LEN;
-            break;
-        }
         char pwd[WIFI_MAX_PASSWORD_LEN + 1] = {0};
-        memcpy(pwd, &bytes[idx], pwd_len);
+        memcpy(ssid, &bytes[parsed.first_offset], parsed.first_len);
+        memcpy(pwd, &bytes[parsed.second_offset], parsed.second_len);
         result = setup_wifi_credentials(ssid, pwd) == 0 ? 0 : 3;
         break;
     }
@@ -700,31 +678,10 @@ static ssize_t storage_wifi_handler(struct bt_conn *conn,
     }
 #ifdef CONFIG_OMI_ENABLE_WIFI_HOME_STA
     case 0x10: {
-        if (len < 2U) {
-            result = 2;
-            break;
-        }
-        uint16_t idx = 1;
-        uint8_t ssid_len = bytes[idx++];
-        if (ssid_len == 0 || ssid_len > WIFI_MAX_SSID_LEN || idx + ssid_len > len) {
-            result = 3;
-            break;
-        }
         char ssid[WIFI_MAX_SSID_LEN + 1] = {0};
-        memcpy(ssid, &bytes[idx], ssid_len);
-        idx += ssid_len;
-        if (idx >= len) {
-            result = WIFI_CFG_ERR_INVALID_PWD_LEN;
-            break;
-        }
-        uint8_t pwd_len = bytes[idx++];
-        if (pwd_len < WIFI_MIN_PASSWORD_LEN || pwd_len > WIFI_MAX_PASSWORD_LEN ||
-            idx + pwd_len > len) {
-            result = WIFI_CFG_ERR_INVALID_PWD_LEN;
-            break;
-        }
         char pwd[WIFI_MAX_PASSWORD_LEN + 1] = {0};
-        memcpy(pwd, &bytes[idx], pwd_len);
+        memcpy(ssid, &bytes[parsed.first_offset], parsed.first_len);
+        memcpy(pwd, &bytes[parsed.second_offset], parsed.second_len);
         result = wifi_home_set_credentials(ssid, pwd) == 0 ? 0 : 3;
         break;
     }
@@ -733,51 +690,15 @@ static ssize_t storage_wifi_handler(struct bt_conn *conn,
         result = 0;
         break;
     case 0x12: {
-        if (len < 2U) {
-            result = 0x21;
-            break;
-        }
-        uint16_t idx = 1;
-        uint8_t host_len = bytes[idx++];
-        if (host_len == 0 || idx + host_len >= len) {
-            result = 0x21;
-            break;
-        }
         char host[129] = {0};
-        if (host_len > 128) {
-            result = 0x21;
-            break;
-        }
-        memcpy(host, &bytes[idx], host_len);
-        idx += host_len;
-        if (idx >= len) {
-            result = 0x21;
-            break;
-        }
-        uint8_t device_id_len = bytes[idx++];
-        if (device_id_len == 0 || device_id_len > 64 || idx + device_id_len >= len) {
-            result = 0x21;
-            break;
-        }
         char device_id[65] = {0};
-        memcpy(device_id, &bytes[idx], device_id_len);
-        idx += device_id_len;
-        uint8_t token_len = bytes[idx++];
-        if (token_len == 0 || token_len > 96 || idx + token_len > len) {
-            result = 0x21;
-            break;
-        }
         char token[97] = {0};
-        memcpy(token, &bytes[idx], token_len);
+        memcpy(host, &bytes[parsed.first_offset], parsed.first_len);
+        memcpy(device_id, &bytes[parsed.second_offset], parsed.second_len);
+        memcpy(token, &bytes[parsed.third_offset], parsed.third_len);
         result = wifi_home_set_cloud_token(host, device_id, token) == 0 ? 0 : 0x21;
         break;
     }
-#else
-    case 0x10:
-    case 0x11:
-    case 0x12:
-        result = 0x20;
-        break;
 #endif
     default:
         result = 0xFF;

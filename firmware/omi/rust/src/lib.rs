@@ -1142,20 +1142,107 @@ pub unsafe extern "C" fn omi_rust_wifi_encode_softap_done(
     len as u16
 }
 
+#[repr(C)]
+pub struct OmiRustWifiParsed {
+    pub command: u8,
+    pub first_offset: u16,
+    pub first_len: u8,
+    pub second_offset: u16,
+    pub second_len: u8,
+    pub third_offset: u16,
+    pub third_len: u8,
+}
+
 /// Parse a WiFi BLE command byte. Returns a status code; for SETUP/HOME_SETUP /
 /// CLOUD_TOKEN the caller still walks the payload in C (credentials stay in C).
 #[no_mangle]
-pub extern "C" fn omi_rust_wifi_classify_command(cmd: u8) -> u8 {
-    match wifi_proto::classify_command(cmd) {
-        wifi_proto::WifiBleCommand::Setup => wifi_proto::WIFI_CMD_SETUP,
-        wifi_proto::WifiBleCommand::Start => wifi_proto::WIFI_CMD_START,
-        wifi_proto::WifiBleCommand::Shutdown => wifi_proto::WIFI_CMD_SHUTDOWN,
-        wifi_proto::WifiBleCommand::DeleteAll => wifi_proto::WIFI_CMD_DELETE_ALL,
-        wifi_proto::WifiBleCommand::HomeSetup => wifi_proto::WIFI_CMD_HOME_SETUP,
-        wifi_proto::WifiBleCommand::HomeClear => wifi_proto::WIFI_CMD_HOME_CLEAR,
-        wifi_proto::WifiBleCommand::CloudToken => wifi_proto::WIFI_CMD_CLOUD_TOKEN,
-        wifi_proto::WifiBleCommand::Unknown(_) => wifi_proto::WIFI_ERR_UNKNOWN_CMD,
+#[allow(clippy::missing_safety_doc)]
+pub unsafe extern "C" fn omi_rust_wifi_parse_command(
+    buf: *const u8,
+    len: u16,
+    home_enabled: bool,
+    out: *mut OmiRustWifiParsed,
+) -> u8 {
+    if buf.is_null() || out.is_null() || len == 0 {
+        return wifi_proto::WIFI_ERR_INVALID_LEN;
     }
+    let bytes = unsafe { core::slice::from_raw_parts(buf, len as usize) };
+    let parsed = match wifi_proto::parse_ble_command_with_home_enabled(bytes, home_enabled) {
+        wifi_proto::ParsedWifiCommand::Setup(credentials) => OmiRustWifiParsed {
+            command: wifi_proto::WIFI_CMD_SETUP,
+            first_offset: (credentials.ssid.as_ptr() as usize - bytes.as_ptr() as usize) as u16,
+            first_len: credentials.ssid.len() as u8,
+            second_offset: (credentials.password.as_ptr() as usize - bytes.as_ptr() as usize)
+                as u16,
+            second_len: credentials.password.len() as u8,
+            third_offset: 0,
+            third_len: 0,
+        },
+        wifi_proto::ParsedWifiCommand::Start => OmiRustWifiParsed {
+            command: wifi_proto::WIFI_CMD_START,
+            first_offset: 0,
+            first_len: 0,
+            second_offset: 0,
+            second_len: 0,
+            third_offset: 0,
+            third_len: 0,
+        },
+        wifi_proto::ParsedWifiCommand::Shutdown => OmiRustWifiParsed {
+            command: wifi_proto::WIFI_CMD_SHUTDOWN,
+            first_offset: 0,
+            first_len: 0,
+            second_offset: 0,
+            second_len: 0,
+            third_offset: 0,
+            third_len: 0,
+        },
+        wifi_proto::ParsedWifiCommand::DeleteAll => OmiRustWifiParsed {
+            command: wifi_proto::WIFI_CMD_DELETE_ALL,
+            first_offset: 0,
+            first_len: 0,
+            second_offset: 0,
+            second_len: 0,
+            third_offset: 0,
+            third_len: 0,
+        },
+        wifi_proto::ParsedWifiCommand::HomeSetup(credentials) => OmiRustWifiParsed {
+            command: wifi_proto::WIFI_CMD_HOME_SETUP,
+            first_offset: (credentials.ssid.as_ptr() as usize - bytes.as_ptr() as usize) as u16,
+            first_len: credentials.ssid.len() as u8,
+            second_offset: (credentials.password.as_ptr() as usize - bytes.as_ptr() as usize)
+                as u16,
+            second_len: credentials.password.len() as u8,
+            third_offset: 0,
+            third_len: 0,
+        },
+        wifi_proto::ParsedWifiCommand::HomeClear => OmiRustWifiParsed {
+            command: wifi_proto::WIFI_CMD_HOME_CLEAR,
+            first_offset: 0,
+            first_len: 0,
+            second_offset: 0,
+            second_len: 0,
+            third_offset: 0,
+            third_len: 0,
+        },
+        wifi_proto::ParsedWifiCommand::CloudToken {
+            host,
+            device_id,
+            token,
+        } => OmiRustWifiParsed {
+            command: wifi_proto::WIFI_CMD_CLOUD_TOKEN,
+            first_offset: (host.as_ptr() as usize - bytes.as_ptr() as usize) as u16,
+            first_len: host.len() as u8,
+            second_offset: (device_id.as_ptr() as usize - bytes.as_ptr() as usize) as u16,
+            second_len: device_id.len() as u8,
+            third_offset: (token.as_ptr() as usize - bytes.as_ptr() as usize) as u16,
+            third_len: token.len() as u8,
+        },
+        wifi_proto::ParsedWifiCommand::Error(status) => return status,
+    };
+    unsafe {
+        *out = parsed;
+    }
+    wifi_proto::WIFI_ERR_OK
 }
 
 #[no_mangle]
@@ -1233,5 +1320,52 @@ fn feedback_kind_from_u8(kind: u8) -> Option<feedback::ErrorKind> {
         9 => Some(feedback::ErrorKind::Codec),
         10 => Some(feedback::ErrorKind::Microphone),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wifi_ffi_returns_payload_offsets() {
+        let bytes = [
+            wifi_proto::WIFI_CMD_SETUP,
+            3,
+            b'o',
+            b'm',
+            b'i',
+            8,
+            b'p',
+            b'a',
+            b's',
+            b's',
+            b'w',
+            b'o',
+            b'r',
+            b'd',
+        ];
+        let mut parsed = OmiRustWifiParsed {
+            command: 0,
+            first_offset: 0,
+            first_len: 0,
+            second_offset: 0,
+            second_len: 0,
+        };
+        assert_eq!(
+            unsafe {
+                omi_rust_wifi_parse_command(bytes.as_ptr(), bytes.len() as u16, true, &mut parsed)
+            },
+            wifi_proto::WIFI_ERR_OK
+        );
+        assert_eq!(parsed.command, wifi_proto::WIFI_CMD_SETUP);
+        assert_eq!(
+            &bytes[parsed.first_offset as usize..][..parsed.first_len as usize],
+            b"omi"
+        );
+        assert_eq!(
+            &bytes[parsed.second_offset as usize..][..parsed.second_len as usize],
+            b"password"
+        );
     }
 }

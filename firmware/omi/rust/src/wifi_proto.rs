@@ -85,15 +85,18 @@ pub fn classify_command(cmd: u8) -> WifiBleCommand {
 }
 
 fn parse_credentials(buf: &[u8]) -> Result<WifiCredentials<'_>, u8> {
-    if buf.len() < 2 {
+    if buf.is_empty() {
         return Err(WIFI_ERR_INVALID_SETUP);
     }
     let ssid_len = buf[0] as usize;
-    if ssid_len == 0 || ssid_len > WIFI_SSID_MAX || 1 + ssid_len >= buf.len() {
+    if ssid_len == 0 || ssid_len > WIFI_SSID_MAX || 1 + ssid_len > buf.len() {
         return Err(WIFI_ERR_INVALID_SSID);
     }
     let ssid = &buf[1..1 + ssid_len];
     let pwd_len_idx = 1 + ssid_len;
+    if pwd_len_idx >= buf.len() {
+        return Err(WIFI_ERR_INVALID_PWD_LEN);
+    }
     let pwd_len = buf[pwd_len_idx] as usize;
     let pwd_start = pwd_len_idx + 1;
     if !(WIFI_PASSWORD_MIN..=WIFI_PASSWORD_MAX).contains(&pwd_len)
@@ -136,7 +139,10 @@ fn parse_host_token(buf: &[u8]) -> Result<ParsedWifiCommand<'_>, u8> {
     })
 }
 
-pub fn parse_ble_command(buf: &[u8]) -> ParsedWifiCommand<'_> {
+pub fn parse_ble_command_with_home_enabled(
+    buf: &[u8],
+    home_enabled: bool,
+) -> ParsedWifiCommand<'_> {
     if buf.is_empty() {
         return ParsedWifiCommand::Error(WIFI_ERR_INVALID_LEN);
     }
@@ -148,17 +154,30 @@ pub fn parse_ble_command(buf: &[u8]) -> ParsedWifiCommand<'_> {
         WifiBleCommand::Start => ParsedWifiCommand::Start,
         WifiBleCommand::Shutdown => ParsedWifiCommand::Shutdown,
         WifiBleCommand::DeleteAll => ParsedWifiCommand::DeleteAll,
+        WifiBleCommand::HomeSetup if !home_enabled => {
+            ParsedWifiCommand::Error(WIFI_ERR_HOME_DISABLED)
+        }
         WifiBleCommand::HomeSetup => match parse_credentials(&buf[1..]) {
             Ok(creds) => ParsedWifiCommand::HomeSetup(creds),
             Err(code) => ParsedWifiCommand::Error(code),
         },
+        WifiBleCommand::HomeClear if !home_enabled => {
+            ParsedWifiCommand::Error(WIFI_ERR_HOME_DISABLED)
+        }
         WifiBleCommand::HomeClear => ParsedWifiCommand::HomeClear,
+        WifiBleCommand::CloudToken if !home_enabled => {
+            ParsedWifiCommand::Error(WIFI_ERR_HOME_DISABLED)
+        }
         WifiBleCommand::CloudToken => match parse_host_token(&buf[1..]) {
             Ok(command) => command,
             Err(code) => ParsedWifiCommand::Error(code),
         },
         WifiBleCommand::Unknown(_) => ParsedWifiCommand::Error(WIFI_ERR_UNKNOWN_CMD),
     }
+}
+
+pub fn parse_ble_command(buf: &[u8]) -> ParsedWifiCommand<'_> {
+    parse_ble_command_with_home_enabled(buf, true)
 }
 
 pub fn encode_softap_header(
@@ -273,6 +292,12 @@ pub fn selftest() -> i32 {
         failures += 1;
     }
 
+    if parse_ble_command_with_home_enabled(&[WIFI_CMD_HOME_CLEAR], false)
+        != ParsedWifiCommand::Error(WIFI_ERR_HOME_DISABLED)
+    {
+        failures += 1;
+    }
+
     failures
 }
 
@@ -343,5 +368,33 @@ mod tests {
     #[test]
     fn selftest_passes() {
         assert_eq!(selftest(), 0);
+    }
+
+    #[test]
+    fn disabled_home_commands_do_not_parse_credentials() {
+        assert_eq!(
+            parse_ble_command_with_home_enabled(&[WIFI_CMD_HOME_SETUP], false),
+            ParsedWifiCommand::Error(WIFI_ERR_HOME_DISABLED)
+        );
+    }
+
+    #[test]
+    fn missing_password_length_is_invalid_password() {
+        assert_eq!(
+            parse_ble_command(&[WIFI_CMD_SETUP, 3, b'a', b'b', b'c']),
+            ParsedWifiCommand::Error(WIFI_ERR_INVALID_PWD_LEN)
+        );
+    }
+
+    #[test]
+    fn credential_error_statuses_match_the_ble_handler() {
+        assert_eq!(
+            parse_ble_command(&[WIFI_CMD_SETUP]),
+            ParsedWifiCommand::Error(WIFI_ERR_INVALID_SETUP)
+        );
+        assert_eq!(
+            parse_ble_command(&[WIFI_CMD_SETUP, 0]),
+            ParsedWifiCommand::Error(WIFI_ERR_INVALID_SSID)
+        );
     }
 }
