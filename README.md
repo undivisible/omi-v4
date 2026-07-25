@@ -37,6 +37,22 @@ The architecture documents describe only how this system is built; every compara
 
 ## Quality gates
 
+One-shot desktop + hub verification:
+
+```sh
+bash scripts/omi-desktop-smoke.sh
+```
+
+Hub-only (Rust):
+
+```sh
+bash scripts/hub-quality.sh
+bash scripts/hub-computer-use.sh          # unit + audit regressions
+bash scripts/hub-computer-use.sh --live   # macOS: live praefectus AX observation (needs Accessibility)
+```
+
+Manual gates (same as CI):
+
 ```sh
 cd app
 dart format --output=none --set-exit-if-changed lib test
@@ -59,6 +75,12 @@ cargo test --lib
 cargo clippy --all-targets -- -D warnings
 cargo clippy --target wasm32-unknown-unknown -- -D warnings
 npm run deploy:dry-run
+```
+
+Live computer-use on macOS: grant **Accessibility** to Terminal or Cursor, then:
+
+```sh
+OMI_LIVE_CU=1 bash scripts/hub-computer-use.sh --live
 ```
 
 The Rust hub's tests link against the Swift runtime; if `cargo test` fails to load libraries, prefix it with:

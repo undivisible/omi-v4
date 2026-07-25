@@ -703,4 +703,52 @@ mod tests {
         assert_eq!(first.subject, second.subject);
         assert!(first.subject.starts_with("omi-user:"));
     }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn live_semantic_observation_when_permitted() {
+        use super::now_ms;
+        use praefectus::{CancellationToken, NativeExecutor};
+
+        if std::env::var("OMI_LIVE_CU").as_deref() != Ok("1") {
+            return;
+        }
+        let caps = capabilities().unwrap_or_else(|| {
+            panic!("praefectus capabilities must resolve on macOS when OMI_LIVE_CU=1")
+        });
+        let accessibility_granted = caps
+            .permissions
+            .iter()
+            .find(|permission| permission.name == "accessibility")
+            .is_some_and(|permission| permission.granted);
+        if !accessibility_granted {
+            panic!(
+                "OMI_LIVE_CU=1 but Accessibility is not granted. \
+                 System Settings → Privacy & Security → Accessibility → enable Terminal or Cursor."
+            );
+        }
+        let executor = NativeExecutor::default();
+        let cancellation = CancellationToken::default();
+        let deadline = now_ms().saturating_add(15_000);
+        let observation = executor
+            .observe_semantic(&cancellation, deadline)
+            .unwrap_or_else(|error| {
+                panic!("semantic observation failed with Accessibility granted: {error:?}")
+            });
+        observation
+            .validate(now_ms())
+            .unwrap_or_else(|error| panic!("observation invalid: {error:?}"));
+        eprintln!(
+            "live semantic observation: generation={} elements={}",
+            observation.generation,
+            observation.elements.len()
+        );
+        assert!(observation.generation > 0);
+        assert!(
+            caps.actions.iter().any(|action| {
+                matches!(action.name.as_str(), "invoke" | "set_value") && action.available
+            }),
+            "invoke/set_value must be available when Accessibility is granted"
+        );
+    }
 }
