@@ -13,6 +13,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
+use wsola::TimeStretch;
 
 const COMMAND_QUEUE_CAPACITY: usize = 32;
 const AUDIO_QUEUE_CAPACITY: usize = 32;
@@ -27,6 +28,178 @@ const SESSION_IDLE_SWEEP_INTERVAL: Duration = Duration::from_secs(5);
 /// moves slowly; a session that ends sooner than this still reports once, on
 /// the way out.
 const GATE_REPORT_INTERVAL: Duration = Duration::from_secs(15);
+const DEFAULT_STT_TEMPO: u8 = 1;
+const MAX_STT_TEMPO: u8 = 3;
+
+pub(crate) struct AudioTimeCompressor {
+    stretcher: Option<TimeStretch>,
+    encoding: AudioEncoding,
+    channels: usize,
+    pending: Vec<u8>,
+    output_bytes: u64,
+    tempo: u8,
+}
+
+impl AudioTimeCompressor {
+    pub(crate) fn new(
+        sample_rate_hz: u32,
+        channels: u8,
+        encoding: AudioEncoding,
+        tempo: u8,
+    ) -> Result<Self, &'static str> {
+        if !(DEFAULT_STT_TEMPO..=MAX_STT_TEMPO).contains(&tempo) {
+            return Err("transcription tempo must be 1, 2, or 3");
+        }
+        if tempo > 1 && !matches!(encoding, AudioEncoding::PcmS16Le | AudioEncoding::PcmU8) {
+            return Err("transcription compression requires PCM audio");
+        }
+        let mut stretcher = (tempo > 1)
+            .then(|| TimeStretch::new(sample_rate_hz, u16::from(channels)))
+            .transpose()
+            .map_err(|_| "transcription time compression could not start")?;
+        if let Some(value) = &mut stretcher {
+            value.set_tempo(f32::from(tempo));
+        }
+        Ok(Self {
+            stretcher,
+            encoding,
+            channels: usize::from(channels),
+            pending: Vec::new(),
+            output_bytes: 0,
+            tempo,
+        })
+    }
+
+    fn process(&mut self, bytes: &[u8]) -> Vec<u8> {
+        let Some(stretcher) = &mut self.stretcher else {
+            self.output_bytes = self.output_bytes.saturating_add(bytes.len() as u64);
+            return bytes.to_vec();
+        };
+        self.pending.extend_from_slice(bytes);
+        let sample_bytes = if self.encoding == AudioEncoding::PcmS16Le {
+            2
+        } else {
+            1
+        };
+        let frame_bytes = sample_bytes * self.channels;
+        let complete = self.pending.len() / frame_bytes * frame_bytes;
+        if complete == 0 {
+            return Vec::new();
+        }
+        let remainder = self.pending.split_off(complete);
+        let input = std::mem::replace(&mut self.pending, remainder);
+        let samples = decode_samples(&input, self.encoding);
+        stretcher.push(&samples);
+        let output = encode_samples(&stretcher.pull(samples.len()), self.encoding);
+        self.output_bytes = self.output_bytes.saturating_add(output.len() as u64);
+        output
+    }
+
+    fn flush(&mut self) -> Result<Vec<u8>, &'static str> {
+        if !self.pending.is_empty() {
+            return Err("transcription audio ended mid-frame");
+        }
+        let Some(stretcher) = &mut self.stretcher else {
+            return Ok(Vec::new());
+        };
+        let output = encode_samples(&stretcher.flush(), self.encoding);
+        self.output_bytes = self.output_bytes.saturating_add(output.len() as u64);
+        Ok(output)
+    }
+
+    fn output_ms(&self, sample_rate_hz: u32) -> u64 {
+        let sample_bytes = if self.encoding == AudioEncoding::PcmS16Le {
+            2
+        } else {
+            1
+        };
+        let bytes_per_second = u64::from(sample_rate_hz)
+            .saturating_mul(self.channels as u64)
+            .saturating_mul(sample_bytes);
+        self.output_bytes.saturating_mul(1_000) / bytes_per_second.max(1)
+    }
+
+    fn provider_bytes(&self) -> u64 {
+        if self.encoding == AudioEncoding::PcmU8 {
+            self.output_bytes.saturating_mul(2)
+        } else {
+            self.output_bytes
+        }
+    }
+}
+
+fn decode_samples(bytes: &[u8], encoding: AudioEncoding) -> Vec<f32> {
+    match encoding {
+        AudioEncoding::PcmS16Le => bytes
+            .chunks_exact(2)
+            .map(|sample| f32::from(i16::from_le_bytes([sample[0], sample[1]])) / 32_768.0)
+            .collect(),
+        AudioEncoding::PcmU8 => bytes
+            .iter()
+            .map(|sample| (f32::from(*sample) - 128.0) / 128.0)
+            .collect(),
+        AudioEncoding::Opus => Vec::new(),
+    }
+}
+
+fn encode_samples(samples: &[f32], encoding: AudioEncoding) -> Vec<u8> {
+    match encoding {
+        AudioEncoding::PcmS16Le => samples
+            .iter()
+            .flat_map(|sample| {
+                (((*sample).clamp(-1.0, 1.0) * 32_767.0).round() as i16).to_le_bytes()
+            })
+            .collect(),
+        AudioEncoding::PcmU8 => samples
+            .iter()
+            .map(|sample| ((*sample).clamp(-1.0, 1.0) * 127.0 + 128.0).round() as u8)
+            .collect(),
+        AudioEncoding::Opus => Vec::new(),
+    }
+}
+
+impl AudioSession {
+    fn send_audio(&mut self, bytes: &[u8], request_id: &str) -> Result<(), AudioAcceptError> {
+        let output = self.compressor.process(bytes);
+        if output.is_empty() {
+            return Ok(());
+        }
+        if let Some(provider) = &self.provider {
+            provider
+                .send_audio(&output)
+                .map_err(|failure| AudioAcceptError {
+                    request_id: request_id.to_owned(),
+                    code: "transcription_provider_unavailable",
+                    message: failure.to_string(),
+                })?;
+        }
+        Ok(())
+    }
+
+    fn flush_audio(&mut self, request_id: &str) -> Result<(), AudioAcceptError> {
+        let output = self
+            .compressor
+            .flush()
+            .map_err(|message| AudioAcceptError {
+                request_id: request_id.to_owned(),
+                code: "transcription_audio_invalid",
+                message: message.to_owned(),
+            })?;
+        if output.is_empty() {
+            return Ok(());
+        }
+        if let Some(provider) = &self.provider {
+            provider
+                .send_audio(&output)
+                .map_err(|failure| AudioAcceptError {
+                    request_id: request_id.to_owned(),
+                    code: "transcription_provider_unavailable",
+                    message: failure.to_string(),
+                })?;
+        }
+        Ok(())
+    }
+}
 
 pub(crate) struct AudioSession {
     pub(crate) start_request_id: String,
@@ -35,6 +208,7 @@ pub(crate) struct AudioSession {
     pub(crate) sample_rate_hz: u32,
     pub(crate) channels: u8,
     pub(crate) encoding: crate::signals::AudioEncoding,
+    pub(crate) tempo: u8,
     pub(crate) last_seen: Instant,
     pub(crate) device_id: String,
     pub(crate) route: TranscriptionRoute,
@@ -47,6 +221,7 @@ pub(crate) struct AudioSession {
     /// and hangover are per-stream state, and because a session that
     /// reconnects its provider must not forget what it was holding.
     pub(crate) gate: SpeechGate,
+    pub(crate) compressor: AudioTimeCompressor,
     pub(crate) last_gate_report: Instant,
 }
 
@@ -66,6 +241,7 @@ pub(crate) struct StartTranscription {
     pub(crate) sample_rate_hz: u32,
     pub(crate) channels: u8,
     pub(crate) encoding: AudioEncoding,
+    pub(crate) tempo: u8,
 }
 
 pub(crate) struct StartLiveVoice {
@@ -660,7 +836,12 @@ impl AudioDispatcher {
 /// from the byte counts and the stream's own format, because a saving stated in
 /// seconds of audio is the one that lines up with how a transcription session
 /// is billed.
-fn gate_stats(audio_stream_id: &str, gate: &SpeechGate) -> AudioGateStats {
+fn gate_stats(
+    audio_stream_id: &str,
+    gate: &SpeechGate,
+    compressor: &AudioTimeCompressor,
+    sample_rate_hz: u32,
+) -> AudioGateStats {
     let stats = gate.stats();
     AudioGateStats {
         audio_stream_id: audio_stream_id.to_owned(),
@@ -670,6 +851,9 @@ fn gate_stats(audio_stream_id: &str, gate: &SpeechGate) -> AudioGateStats {
         suppressed_bytes: stats.suppressed_bytes,
         forwarded_ms: gate.bytes_to_ms(stats.forwarded_bytes),
         suppressed_ms: gate.bytes_to_ms(stats.suppressed_bytes),
+        provider_bytes: compressor.provider_bytes(),
+        provider_ms: compressor.output_ms(sample_rate_hz),
+        tempo_milli: u32::from(compressor.tempo) * 1_000,
     }
 }
 
@@ -688,7 +872,8 @@ impl AudioSessions {
                 && existing.language == start.language
                 && existing.sample_rate_hz == start.sample_rate_hz
                 && existing.channels == start.channels
-                && existing.encoding == start.encoding;
+                && existing.encoding == start.encoding
+                && existing.tempo == start.tempo;
             return if exact {
                 Ok(())
             } else {
@@ -707,6 +892,17 @@ impl AudioSessions {
             });
         }
         let route = start.auth.route();
+        let compressor = AudioTimeCompressor::new(
+            start.sample_rate_hz,
+            start.channels,
+            start.encoding,
+            start.tempo,
+        )
+        .map_err(|message| AudioAcceptError {
+            request_id: start.request_id.clone(),
+            code: "transcription_compression_invalid",
+            message: message.to_owned(),
+        })?;
         let provider = Some(
             stt::spawn(
                 SttConfig {
@@ -737,6 +933,7 @@ impl AudioSessions {
                 sample_rate_hz: start.sample_rate_hz,
                 channels: start.channels,
                 encoding: start.encoding,
+                tempo: start.tempo,
                 last_seen: Instant::now(),
                 device_id: start.device_id,
                 route,
@@ -750,6 +947,7 @@ impl AudioSessions {
                     start.sample_rate_hz,
                     start.channels,
                 ),
+                compressor,
                 last_gate_report: Instant::now(),
             },
         );
@@ -767,7 +965,13 @@ impl AudioSessions {
         if let Some(mut session) = self.sessions.remove(stream_id) {
             session.phase = TranscriptionPhase::Draining;
             session.gate.finish();
-            NativeEvent::AudioGateStats(gate_stats(stream_id, &session.gate)).send();
+            NativeEvent::AudioGateStats(gate_stats(
+                stream_id,
+                &session.gate,
+                &session.compressor,
+                session.sample_rate_hz,
+            ))
+            .send();
             let provider_reports_terminal = session.provider.is_some();
             if let Some(provider) = &session.provider {
                 provider.cancel();
@@ -869,26 +1073,15 @@ impl AudioSessions {
         if !chunk.end_of_stream {
             session.gate.set_policy(crate::vad::policy());
             let decision = session.gate.observe(&chunk.bytes);
-            if let Some(provider) = &session.provider {
-                let send = |bytes: &[u8]| {
-                    provider
-                        .send_audio(bytes)
-                        .map_err(|failure| AudioAcceptError {
-                            request_id: chunk.request_id.clone(),
-                            code: "transcription_provider_unavailable",
-                            message: failure.to_string(),
-                        })
-                };
-                match &decision {
-                    GateDecision::Pass => send(&chunk.bytes)?,
-                    // The retained run-up goes first so the provider hears the
-                    // start of the word, not its second half.
-                    GateDecision::PassWithPreRoll(pre_roll) => {
-                        send(pre_roll)?;
-                        send(&chunk.bytes)?;
-                    }
-                    GateDecision::Suppress => {}
+            match &decision {
+                GateDecision::Pass => session.send_audio(&chunk.bytes, &chunk.request_id)?,
+                // The retained run-up goes first so the provider hears the
+                // start of the word, not its second half.
+                GateDecision::PassWithPreRoll(pre_roll) => {
+                    session.send_audio(pre_roll, &chunk.request_id)?;
+                    session.send_audio(&chunk.bytes, &chunk.request_id)?;
                 }
+                GateDecision::Suppress => {}
             }
         }
         let first_chunk = session.next_sequence == 0;
@@ -922,8 +1115,15 @@ impl AudioSessions {
             session.last_gate_report = now;
             if chunk.end_of_stream {
                 session.gate.finish();
+                session.flush_audio(&chunk.request_id)?;
             }
-            NativeEvent::AudioGateStats(gate_stats(&chunk.request_id, &session.gate)).send();
+            NativeEvent::AudioGateStats(gate_stats(
+                &chunk.request_id,
+                &session.gate,
+                &session.compressor,
+                session.sample_rate_hz,
+            ))
+            .send();
         }
         let progress = if chunk.end_of_stream {
             let stream_id = chunk.request_id.clone();
@@ -996,6 +1196,7 @@ mod tests {
             sample_rate_hz: 16_000,
             channels: 1,
             encoding,
+            tempo: 1,
         });
         assert!(started.is_ok());
         sessions
@@ -1014,6 +1215,63 @@ mod tests {
                 value.to_le_bytes()
             })
             .collect()
+    }
+
+    #[test]
+    fn one_x_compression_is_a_byte_exact_bypass() {
+        let input = pcm16(6_000, 200);
+        let mut compressor = AudioTimeCompressor::new(16_000, 1, AudioEncoding::PcmS16Le, 1)
+            .unwrap_or_else(|error_value| panic!("{error_value}"));
+        assert_eq!(compressor.process(&input), input);
+        assert!(compressor.flush().is_ok_and(|output| output.is_empty()));
+    }
+
+    #[test]
+    fn two_x_compression_halves_duration_without_doubling_pitch() {
+        let samples = (0..32_000)
+            .map(|index| {
+                let phase = 2.0 * std::f32::consts::PI * 440.0 * index as f32 / 16_000.0;
+                (phase.sin() * 20_000.0).round() as i16
+            })
+            .collect::<Vec<_>>();
+        let input = samples
+            .iter()
+            .flat_map(|sample| sample.to_le_bytes())
+            .collect::<Vec<_>>();
+        let mut compressor = AudioTimeCompressor::new(16_000, 1, AudioEncoding::PcmS16Le, 2)
+            .unwrap_or_else(|error_value| panic!("{error_value}"));
+        let mut output = Vec::new();
+        for chunk in input.chunks(640) {
+            output.extend(compressor.process(chunk));
+        }
+        output.extend(
+            compressor
+                .flush()
+                .unwrap_or_else(|error_value| panic!("{error_value}")),
+        );
+        let output_samples = decode_samples(&output, AudioEncoding::PcmS16Le);
+        assert!((14_400..=17_600).contains(&output_samples.len()));
+        let positive_crossings = output_samples
+            .windows(2)
+            .filter(|pair| pair[0] <= 0.0 && pair[1] > 0.0)
+            .count();
+        let frequency = positive_crossings as f32 * 16_000.0 / output_samples.len() as f32;
+        assert!((400.0..=480.0).contains(&frequency));
+    }
+
+    #[test]
+    fn transcription_tempo_is_bounded_and_opt_in() {
+        assert!(AudioTimeCompressor::new(16_000, 1, AudioEncoding::PcmS16Le, 1).is_ok());
+        assert!(AudioTimeCompressor::new(16_000, 1, AudioEncoding::PcmS16Le, 2).is_ok());
+        assert!(AudioTimeCompressor::new(16_000, 1, AudioEncoding::PcmS16Le, 3).is_ok());
+        assert!(AudioTimeCompressor::new(16_000, 1, AudioEncoding::PcmS16Le, 0).is_err());
+        assert!(AudioTimeCompressor::new(16_000, 1, AudioEncoding::PcmS16Le, 4).is_err());
+        assert!(AudioTimeCompressor::new(16_000, 1, AudioEncoding::Opus, 2).is_err());
+
+        let mut unaligned = AudioTimeCompressor::new(16_000, 1, AudioEncoding::PcmS16Le, 2)
+            .unwrap_or_else(|error_value| panic!("{error_value}"));
+        assert!(unaligned.process(&[1]).is_empty());
+        assert!(unaligned.flush().is_err());
     }
 
     fn feed(
@@ -1086,6 +1344,27 @@ mod tests {
         // word whole; the rest of the silence stayed on the device.
         assert_eq!(stats.forwarded_ms, 300 + 200);
         assert_eq!(stats.suppressed_ms, 1_000 - 300);
+        assert_eq!(stats.provider_ms, stats.forwarded_ms);
+        assert_eq!(stats.tempo_milli, 1_000);
+    }
+
+    #[test]
+    fn two_x_session_reports_the_shorter_provider_clock() {
+        let mut sessions = started_stream(AudioEncoding::PcmS16Le);
+        sessions
+            .sessions
+            .get_mut("voice-1")
+            .unwrap_or_else(|| panic!("session started"))
+            .compressor = AudioTimeCompressor::new(16_000, 1, AudioEncoding::PcmS16Le, 2)
+            .unwrap_or_else(|error_value| panic!("{error_value}"));
+        let stats = feed(
+            &mut sessions,
+            AudioEncoding::PcmS16Le,
+            (0..100).map(|_| pcm16(6_000, 20)),
+        );
+        assert_eq!(stats.forwarded_ms, 2_000);
+        assert!((900..=1_100).contains(&stats.provider_ms));
+        assert_eq!(stats.tempo_milli, 2_000);
     }
 
     #[test]

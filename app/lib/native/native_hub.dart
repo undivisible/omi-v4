@@ -126,6 +126,8 @@ export 'generated/signals/signals.dart'
         TranscriptDelta;
 export 'generated/signals/signals.dart' show Uint64;
 
+const _sttTempo = int.fromEnvironment('OMI_STT_TEMPO', defaultValue: 1);
+
 abstract interface class NativeHub {
   bool get available;
   Stream<NativeEvent> get events;
@@ -1031,6 +1033,7 @@ final class RinfNativeHub implements NativeHub {
       sampleRateHz: sampleRateHz,
       channels: channels,
       encoding: encoding,
+      tempo: _sttTempo,
     ),
   );
 

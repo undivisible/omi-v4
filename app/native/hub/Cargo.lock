@@ -1333,6 +1333,7 @@ dependencies = [
  "tokio-util",
  "url",
  "wasapi",
+ "wsola",
  "zkr",
 ]
 
@@ -3746,6 +3747,15 @@ name = "writeable"
 version = "0.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1ffae5123b2d3fc086436f8834ae3ab053a283cfac8fe0a0b8eaae044768a4c4"
+
+[[package]]
+name = "wsola"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "542a5d4e1f44b1af2eeef27a918d15d117ce326af641153efbfe436b586418f5"
+dependencies = [
+ "thiserror 2.0.19",
+]
 
 [[package]]
 name = "x11rb"

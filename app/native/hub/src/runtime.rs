@@ -32,7 +32,8 @@ use crate::signals::{
 use crate::signals::{AudioChunk, TranscriptionAuth, TranscriptionRoute};
 #[cfg(test)]
 use crate::transcription::{
-    AudioAcceptError, AudioProgress, AudioSession, AudioSessions, TranscriptionPhase,
+    AudioAcceptError, AudioProgress, AudioSession, AudioSessions, AudioTimeCompressor,
+    TranscriptionPhase,
 };
 use crate::transcription::{StartTranscription, TranscriptionControl};
 use futures::StreamExt;
@@ -1400,6 +1401,7 @@ impl CommandDispatcher {
                 sample_rate_hz,
                 channels,
                 encoding,
+                tempo,
             } = &command.command
             {
                 if audio_stream_id.trim().is_empty()
@@ -1407,6 +1409,7 @@ impl CommandDispatcher {
                     || language.trim().is_empty()
                     || !(8_000..=192_000).contains(sample_rate_hz)
                     || !(1..=2).contains(channels)
+                    || !(1..=3).contains(tempo)
                 {
                     error(
                         Some(request_id),
@@ -1435,6 +1438,7 @@ impl CommandDispatcher {
                     sample_rate_hz: *sample_rate_hz,
                     channels: *channels,
                     encoding: *encoding,
+                    tempo: *tempo,
                 };
                 if transcription
                     .send(TranscriptionControl::Start(start))
@@ -6584,6 +6588,7 @@ mod tests {
                 sample_rate_hz: 16_000,
                 channels: 1,
                 encoding: AudioEncoding::Opus,
+                tempo: 1,
             })
             .unwrap_or_else(|failure| panic!("start failed: {}", failure.message));
     }
@@ -6601,6 +6606,7 @@ mod tests {
             sample_rate_hz: 16_000,
             channels: 1,
             encoding: AudioEncoding::Opus,
+            tempo: 1,
         });
         assert!(matches!(
             failure,
@@ -6699,6 +6705,7 @@ mod tests {
             sample_rate_hz: 16_000,
             channels: 1,
             encoding: AudioEncoding::Opus,
+            tempo: 1,
         });
         assert!(matches!(
             failure,
@@ -6795,6 +6802,7 @@ mod tests {
                 sample_rate_hz: 16_000,
                 channels: 1,
                 encoding: AudioEncoding::Opus,
+                tempo: 1,
                 last_seen: Instant::now(),
                 device_id: "omi-1".to_owned(),
                 route: TranscriptionRoute::Byok,
@@ -6808,6 +6816,8 @@ mod tests {
                     16_000,
                     1,
                 ),
+                compressor: AudioTimeCompressor::new(16_000, 1, AudioEncoding::Opus, 1)
+                    .unwrap_or_else(|error_value| panic!("{error_value}")),
                 last_gate_report: Instant::now(),
             },
         );

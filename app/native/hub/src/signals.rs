@@ -54,6 +54,7 @@ pub enum Command {
         sample_rate_hz: u32,
         channels: u8,
         encoding: AudioEncoding,
+        tempo: u8,
     },
     StopTranscription {
         audio_stream_id: String,
@@ -747,6 +748,9 @@ pub struct AudioGateStats {
     pub suppressed_bytes: u64,
     pub forwarded_ms: u64,
     pub suppressed_ms: u64,
+    pub provider_bytes: u64,
+    pub provider_ms: u64,
+    pub tempo_milli: u32,
 }
 
 /// The answer to exactly one [`RewindRequest`].

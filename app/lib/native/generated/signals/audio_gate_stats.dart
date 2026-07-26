@@ -19,6 +19,9 @@ class AudioGateStats {
     required this.suppressedBytes,
     required this.forwardedMs,
     required this.suppressedMs,
+    required this.providerBytes,
+    required this.providerMs,
+    required this.tempoMilli,
   });
 
   static AudioGateStats deserialize(BinaryDeserializer deserializer) {
@@ -31,6 +34,9 @@ class AudioGateStats {
       suppressedBytes: deserializer.deserializeUint64(),
       forwardedMs: deserializer.deserializeUint64(),
       suppressedMs: deserializer.deserializeUint64(),
+      providerBytes: deserializer.deserializeUint64(),
+      providerMs: deserializer.deserializeUint64(),
+      tempoMilli: deserializer.deserializeUint32(),
     );
     deserializer.decreaseContainerDepth();
     return instance;
@@ -52,6 +58,9 @@ class AudioGateStats {
   final Uint64 suppressedBytes;
   final Uint64 forwardedMs;
   final Uint64 suppressedMs;
+  final Uint64 providerBytes;
+  final Uint64 providerMs;
+  final int tempoMilli;
 
   AudioGateStats copyWith({
     String? audioStreamId,
@@ -61,6 +70,9 @@ class AudioGateStats {
     Uint64? suppressedBytes,
     Uint64? forwardedMs,
     Uint64? suppressedMs,
+    Uint64? providerBytes,
+    Uint64? providerMs,
+    int? tempoMilli,
   }) {
     return AudioGateStats(
       audioStreamId: audioStreamId ?? this.audioStreamId,
@@ -70,6 +82,9 @@ class AudioGateStats {
       suppressedBytes: suppressedBytes ?? this.suppressedBytes,
       forwardedMs: forwardedMs ?? this.forwardedMs,
       suppressedMs: suppressedMs ?? this.suppressedMs,
+      providerBytes: providerBytes ?? this.providerBytes,
+      providerMs: providerMs ?? this.providerMs,
+      tempoMilli: tempoMilli ?? this.tempoMilli,
     );
   }
 
@@ -82,6 +97,9 @@ class AudioGateStats {
     serializer.serializeUint64(suppressedBytes);
     serializer.serializeUint64(forwardedMs);
     serializer.serializeUint64(suppressedMs);
+    serializer.serializeUint64(providerBytes);
+    serializer.serializeUint64(providerMs);
+    serializer.serializeUint32(tempoMilli);
     serializer.decreaseContainerDepth();
   }
 
@@ -103,7 +121,10 @@ class AudioGateStats {
         forwardedBytes == other.forwardedBytes &&
         suppressedBytes == other.suppressedBytes &&
         forwardedMs == other.forwardedMs &&
-        suppressedMs == other.suppressedMs;
+        suppressedMs == other.suppressedMs &&
+        providerBytes == other.providerBytes &&
+        providerMs == other.providerMs &&
+        tempoMilli == other.tempoMilli;
   }
 
   @override
@@ -115,6 +136,9 @@ class AudioGateStats {
     suppressedBytes,
     forwardedMs,
     suppressedMs,
+    providerBytes,
+    providerMs,
+    tempoMilli,
   );
 
   @override
@@ -130,7 +154,10 @@ class AudioGateStats {
           'forwardedBytes: $forwardedBytes, '
           'suppressedBytes: $suppressedBytes, '
           'forwardedMs: $forwardedMs, '
-          'suppressedMs: $suppressedMs'
+          'suppressedMs: $suppressedMs, '
+          'providerBytes: $providerBytes, '
+          'providerMs: $providerMs, '
+          'tempoMilli: $tempoMilli'
           ')';
       return true;
     }());
