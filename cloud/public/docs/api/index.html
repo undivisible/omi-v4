@@ -1019,7 +1019,7 @@
           <p><code>POST /facetime/start-call</code> returns <code>{appId, channelName, token, uid}</code> for an
           Agora channel rather than a link. Joining that channel needs Agora's native
           Server Gateway SDK (x86_64 Linux), which cannot run in the Workers runtime, so
-          the bridge is a <strong>Cloudflare Container</strong> (<code>worker/container/facetime-bridge</code>)
+          the bridge is a <strong>Cloudflare Container</strong> (<code>worker-rs/container/facetime-bridge</code>)
           driven by the <code>FaceTimeBridge</code> Durable Object:</p>
           <ol>
           <li><code>startFaceTimeSession</code> takes an admission reservation from <code>STT_ADMISSION</code>

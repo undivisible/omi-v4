@@ -98,6 +98,50 @@
   }
 })();
 
+(() => {
+  const icon = document.querySelector('link[rel~="icon"]');
+  const quiet = window.matchMedia("(prefers-reduced-motion: reduce)");
+  if (!icon || quiet.matches) return;
+
+  let frame = 0;
+  let timer = 0;
+
+  const paint = () => {
+    const turn = frame * 24;
+    frame = (frame + 1) % 15;
+    const dots = Array.from({ length: 8 }, (_, index) => {
+      const angle = ((index * 45 - 90) * Math.PI) / 180;
+      const x = (16 + Math.cos(angle) * 8.4).toFixed(2);
+      const y = (16 + Math.sin(angle) * 8.4).toFixed(2);
+      return `<circle cx="${x}" cy="${y}" r="2.12"/>`;
+    }).join("");
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="7" fill="#191714"/><g fill="#fffaf3" transform="rotate(${turn} 16 16)">${dots}</g></svg>`;
+    icon.href = `data:image/svg+xml,${encodeURIComponent(svg)}`;
+  };
+
+  const start = () => {
+    if (timer || document.visibilityState !== "visible") return;
+    paint();
+    timer = window.setInterval(paint, 1000 / 15);
+  };
+
+  const stop = () => {
+    if (!timer) return;
+    window.clearInterval(timer);
+    timer = 0;
+  };
+
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") start();
+    else stop();
+  });
+  quiet.addEventListener("change", (event) => {
+    if (event.matches) stop();
+    else start();
+  });
+  start();
+})();
+
 // The hero embeds the real hub — the Flutter web build at /hub/. It loads
 // when the frame nears the viewport or the reader interacts with it, so the
 // marketing page stays light until the demo is actually in view.
@@ -147,8 +191,8 @@
 
     const live = document.createElement("iframe");
     live.title = "Omi, running on sample data";
-    live.src = "/hub/";
-    live.allow = "clipboard-write";
+  live.src = "/hub/?v=guided-hub-v4";
+    live.allow = "clipboard-write; language-model";
     live.addEventListener("error", fail);
     live.addEventListener("load", () => {
       try {
