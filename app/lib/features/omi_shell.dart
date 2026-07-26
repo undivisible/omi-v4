@@ -350,7 +350,9 @@ class _OmiShellState extends State<OmiShell> {
     // On macOS the pill renders inside its own panel window (a second Flutter
     // engine); drawing it in the hub too would show it twice.
     final pill = _isMacDesktop && !widget.previewMode ? null : _cursorPill;
-    final hubBackground = Theme.of(context).brightness == Brightness.dark
+    final hubBackground = omiDemoMode
+        ? Colors.transparent
+        : Theme.of(context).brightness == Brightness.dark
         ? const Color(0xff1c1c1a)
         : const Color(0xfff7f6f1);
     final meetingAssist = widget.previewMode || !meetingAssistSupported
@@ -360,9 +362,11 @@ class _OmiShellState extends State<OmiShell> {
             child: MeetingAssistPanel(services: widget.services),
           );
     if (pill == null) {
-      return Scaffold(
-        backgroundColor: hubBackground,
-        body: Stack(children: [paddedBody, ?meetingAssist]),
+      return _DemoHubBackdrop(
+        child: Scaffold(
+          backgroundColor: hubBackground,
+          body: Stack(children: [paddedBody, ?meetingAssist]),
+        ),
       );
     }
     return ListenableBuilder(
@@ -372,18 +376,20 @@ class _OmiShellState extends State<OmiShell> {
         // waveform are native windows, and the hub must stay exactly as it
         // is while voice is up.
         final showPill = pill.state != CursorPillState.listening;
-        return Scaffold(
-          backgroundColor: hubBackground,
-          body: Stack(
-            children: [
-              paddedBody,
-              ?meetingAssist,
-              if (showPill)
-                Align(
-                  alignment: Alignment.topLeft,
-                  child: CursorPill(controller: pill),
-                ),
-            ],
+        return _DemoHubBackdrop(
+          child: Scaffold(
+            backgroundColor: hubBackground,
+            body: Stack(
+              children: [
+                paddedBody,
+                ?meetingAssist,
+                if (showPill)
+                  Align(
+                    alignment: Alignment.topLeft,
+                    child: CursorPill(controller: pill),
+                  ),
+              ],
+            ),
           ),
         );
       },
@@ -398,7 +404,8 @@ class _WarmPaperHub extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final dark = Theme.of(context).brightness == Brightness.dark;
+    final dark =
+        !omiDemoMode && Theme.of(context).brightness == Brightness.dark;
     return Theme(
       data: Theme.of(context).copyWith(
         brightness: dark ? Brightness.dark : Brightness.light,
@@ -436,6 +443,55 @@ class _WarmPaperHub extends StatelessWidget {
         key: const Key('warm_paper_hub'),
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
         child: child,
+      ),
+    );
+  }
+}
+
+class _DemoHubBackdrop extends StatelessWidget {
+  const _DemoHubBackdrop({required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    if (!omiDemoMode) return child;
+    return DecoratedBox(
+      key: const Key('demo_hub_backdrop'),
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [Color(0xfffff8ed), Color(0xffffeee2), Color(0xffeef1e4)],
+        ),
+      ),
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          const IgnorePointer(
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: RadialGradient(
+                  center: Alignment(-1, -1),
+                  radius: 1.1,
+                  colors: [Color(0x88f2c2ac), Color(0x00f2c2ac)],
+                ),
+              ),
+            ),
+          ),
+          const IgnorePointer(
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: RadialGradient(
+                  center: Alignment(1.1, 1),
+                  radius: 1.05,
+                  colors: [Color(0x6696c4ff), Color(0x00d3e081)],
+                ),
+              ),
+            ),
+          ),
+          child,
+        ],
       ),
     );
   }

@@ -2387,7 +2387,14 @@ class _ChatHome extends StatelessWidget {
             delayMs: 0,
             child: Column(
               children: [
-                OmiActivityOrb(size: compact ? 32 : 48),
+                OmiActivityOrb(
+                  key: compact ? const Key('demo_rotating_mark') : null,
+                  size: compact ? 40 : 48,
+                  period: compact
+                      ? const Duration(seconds: 10)
+                      : const Duration(seconds: 8),
+                  color: compact ? const Color(0xff4e4965) : null,
+                ),
                 SizedBox(height: compact ? 8 : 16),
                 Text(
                   greeting,
