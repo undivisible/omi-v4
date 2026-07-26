@@ -11,6 +11,15 @@ pub fn interleaved_stereo_to_mono(interleaved: &[i16], mono_out: &mut [i16]) {
     }
 }
 
+pub fn stereo_frame_count(byte_len: usize, max_frames: usize) -> Option<usize> {
+    let frame_bytes = core::mem::size_of::<i16>() * 2;
+    if byte_len == 0 || !byte_len.is_multiple_of(frame_bytes) {
+        return None;
+    }
+    let frames = byte_len / frame_bytes;
+    (frames <= max_frames).then_some(frames)
+}
+
 pub fn avg_abs_amplitude(buf: &[i16]) -> u32 {
     if buf.is_empty() {
         return 0;
@@ -125,6 +134,13 @@ pub fn selftest() -> i32 {
         failures += 1;
     }
 
+    if stereo_frame_count(6_400, 1_600) != Some(1_600)
+        || stereo_frame_count(6_401, 1_600).is_some()
+        || stereo_frame_count(6_404, 1_600).is_some()
+    {
+        failures += 1;
+    }
+
     failures
 }
 
@@ -144,6 +160,15 @@ mod tests {
     fn avg_abs_handles_signs_and_empty() {
         assert_eq!(avg_abs_amplitude(&[]), 0);
         assert_eq!(avg_abs_amplitude(&[-10, 20, -30]), 20);
+    }
+
+    #[test]
+    fn stereo_frame_count_validates_block_shape_and_capacity() {
+        assert_eq!(stereo_frame_count(6_400, 1_600), Some(1_600));
+        assert_eq!(stereo_frame_count(4, 1), Some(1));
+        assert_eq!(stereo_frame_count(0, 1_600), None);
+        assert_eq!(stereo_frame_count(6_401, 1_600), None);
+        assert_eq!(stereo_frame_count(6_404, 1_600), None);
     }
 
     #[test]

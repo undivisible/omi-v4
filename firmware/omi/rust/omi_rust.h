@@ -181,6 +181,7 @@ bool omi_rust_ble_charging_should_notify(bool charging, bool force);
 void omi_rust_ble_charging_mark_notified(bool charging);
 void omi_rust_ble_charging_reset(void);
 void omi_rust_audio_stereo_to_mono(const int16_t *interleaved, size_t frames, int16_t *mono_out);
+size_t omi_rust_audio_stereo_frame_count(size_t byte_len, size_t max_frames);
 uint32_t omi_rust_audio_avg_abs_amplitude(const int16_t *buf, size_t n);
 void omi_rust_audio_aad_reset(int64_t now_ms);
 void omi_rust_audio_aad_mark_woke(void);

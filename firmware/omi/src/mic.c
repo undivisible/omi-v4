@@ -92,13 +92,12 @@ static int aad_hw_start(void);
 static void process_audio_buffer(void *buffer, uint32_t size)
 {
     /* size is total interleaved stereo size: frames * 2ch * 2bytes */
-    __ASSERT_NO_MSG((size % (BYTES_PER_SAMPLE * CHANNELS)) == 0);
-    size_t frames = size / (BYTES_PER_SAMPLE * CHANNELS);
+    size_t frames = omi_rust_audio_stereo_frame_count(size, MAX_FRAMES);
     int16_t *inter = (int16_t *) buffer;
 
     /* Verify we don't exceed static buffer size */
-    if (frames > MAX_FRAMES) {
-        LOG_ERR("Frame count %zu exceeds MAX_FRAMES %d", frames, MAX_FRAMES);
+    if (frames == 0) {
+        LOG_ERR("Invalid stereo PDM buffer of %u bytes", size);
         k_mem_slab_free(&mem_slab, buffer);
         return;
     }

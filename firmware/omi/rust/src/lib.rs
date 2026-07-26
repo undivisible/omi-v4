@@ -150,6 +150,11 @@ pub unsafe extern "C" fn omi_rust_audio_stereo_to_mono(
     }
 }
 
+#[no_mangle]
+pub extern "C" fn omi_rust_audio_stereo_frame_count(byte_len: usize, max_frames: usize) -> usize {
+    audio_dsp::stereo_frame_count(byte_len, max_frames).unwrap_or(0)
+}
+
 /// # Safety
 ///
 /// `buf` must be null or point at `n` readable i16 samples.
