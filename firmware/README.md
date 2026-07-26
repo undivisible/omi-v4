@@ -443,6 +443,8 @@ C. The crate is host-testable (`cd omi/rust && cargo test`) so it can later be
 shared with `app/native/hub` and stop the two ends of the wire format from
 drifting. Moving the ring-buffer ownership itself into Rust still waits on either a small
 C-backed buffer API or further `zephyr`-crate integration beyond haptic GPIO.
+`cd omi/rust/qemu && cargo run --release` runs the production button and wire-framing
+self-tests on QEMU's Cortex-M4 MPS2-AN386 model.
 
 ## Formatting
 
