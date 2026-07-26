@@ -17,6 +17,7 @@ import '../channels/channels.dart';
 import '../currents/crepus_current.dart';
 import '../currents/currents.dart';
 import '../demo/demo_mode.dart';
+import '../demo/demo_model.dart';
 import '../demo/demo_prompt_bus.dart';
 import '../keyboard/keyboard.dart';
 import '../native/generated/signals/signals.dart'
@@ -137,15 +138,15 @@ class _HubColors {
   const _HubColors.light()
     : this._(
         ink: const Color(0xff171716),
-        muted: const Color(0xff8d8980),
+        muted: const Color(0xff756b61),
         hairline: const Color(0x1a000000),
-        hintBlue: const Color(0xff3139fb),
-        cardBg: Colors.white,
+        hintBlue: const Color(0xff4d6976),
+        cardBg: const Color(0xfffbf4e9),
         cardShadow: const Color(0x0a000000),
-        sendBg: const Color(0xff171716),
+        sendBg: const Color(0xff24383d),
         sendFg: Colors.white,
         sendDisabledBg: const Color(0x33171716),
-        rowHover: const Color(0x8cffffff),
+        rowHover: const Color(0x8cfbf4e9),
         focusRing: const Color(0x40171716),
       );
 
@@ -154,12 +155,12 @@ class _HubColors {
         ink: const Color(0xfff4f2ea),
         muted: const Color(0xffa6a49c),
         hairline: const Color(0x1affffff),
-        hintBlue: const Color(0xff9aa0ff),
-        cardBg: const Color(0xff232321),
+        hintBlue: const Color(0xffa1beb9),
+        cardBg: const Color(0xff302a27),
         cardShadow: const Color(0x33000000),
-        sendBg: const Color(0xfffffcec),
-        sendFg: const Color(0xff171716),
-        sendDisabledBg: const Color(0x33fffcec),
+        sendBg: const Color(0xffe5d6bc),
+        sendFg: const Color(0xff201a17),
+        sendDisabledBg: const Color(0x33e5d6bc),
         rowHover: const Color(0x14ffffff),
         focusRing: const Color(0x59fffcec),
       );
@@ -776,6 +777,7 @@ class ChatScreenState extends State<ChatScreen>
   /// the newest message is the "new chat" gesture.
   void _startNewConversation() {
     _cancelNewChatPull();
+    if (omiDemoMode) DemoModel.instance.startNewConversation();
     _collapseChatSessionToHistory();
   }
 
@@ -2126,7 +2128,11 @@ class _HistoryTopFade extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final dark = Theme.of(context).brightness == Brightness.dark;
-    final page = dark ? const Color(0xff1c1c1a) : const Color(0xfff7f6f1);
+    final page = dark
+        ? const Color(0xff1c1c1a)
+        : omiDemoMode
+        ? Colors.transparent
+        : const Color(0xfff7f6f1);
     return DecoratedBox(
       key: const Key('history_top_fade'),
       decoration: BoxDecoration(
@@ -2299,7 +2305,7 @@ class _VoiceEdgeGradient extends StatelessWidget {
           gradient: RadialGradient(
             center: Alignment(-1.15, -1.1),
             radius: .9,
-            colors: [Color(0x55f25e6b), Color(0x00f25e6b)],
+            colors: [Color(0x55a85e46), Color(0x00a85e46)],
           ),
         ),
       ),
@@ -2308,7 +2314,7 @@ class _VoiceEdgeGradient extends StatelessWidget {
           gradient: RadialGradient(
             center: Alignment(1.15, -.9),
             radius: .9,
-            colors: [Color(0x5596c4ff), Color(0x0096c4ff)],
+            colors: [Color(0x554e687c), Color(0x004e687c)],
           ),
         ),
       ),
@@ -2317,7 +2323,7 @@ class _VoiceEdgeGradient extends StatelessWidget {
           gradient: RadialGradient(
             center: Alignment(.9, 1.15),
             radius: .9,
-            colors: [Color(0x55d3e081), Color(0x00d3e081)],
+            colors: [Color(0x55a6aa79), Color(0x00a6aa79)],
           ),
         ),
       ),
@@ -2326,7 +2332,7 @@ class _VoiceEdgeGradient extends StatelessWidget {
           gradient: RadialGradient(
             center: Alignment(-1.1, 1.05),
             radius: .9,
-            colors: [Color(0x55f2c2ac), Color(0x00f2c2ac)],
+            colors: [Color(0x55c78067), Color(0x00c78067)],
           ),
         ),
       ),
@@ -2375,72 +2381,33 @@ class _ChatHome extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = _HubColors.of(context);
-    final compact = omiDemoMode;
     return Padding(
-      padding: EdgeInsets.symmetric(vertical: compact ? 10 : 28),
+      padding: const EdgeInsets.symmetric(vertical: 28),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          if (!compact)
-            _Reveal(
-              delayMs: 0,
-              child: Column(
-                children: [
-                  OmiActivityOrb(size: 48, period: const Duration(seconds: 8)),
-                  const SizedBox(height: 16),
-                  Text(
-                    greeting,
-                    key: const Key('hub_greeting'),
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      fontSize: 44,
-                      fontWeight: FontWeight.w500,
-                      letterSpacing: -1.98,
-                      color: colors.ink,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          if (compact)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 8),
-              child: DecoratedBox(
-                key: const Key('demo_history_preview'),
-                decoration: BoxDecoration(
-                  color: colors.cardBg.withValues(alpha: .72),
-                  border: Border.all(color: colors.hairline),
-                  borderRadius: BorderRadius.circular(16),
-                ),
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(10, 8, 12, 8),
-                  child: Row(
-                    children: [
-                      OmiActivityOrb(
-                        key: const Key('demo_rotating_mark'),
-                        size: 22,
-                        period: const Duration(seconds: 10),
-                        color: const Color(0xff4e4965),
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          demoHubWelcome,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            fontSize: 11,
-                            height: 1.28,
-                            color: colors.ink,
-                          ),
-                        ),
-                      ),
-                    ],
+          _Reveal(
+            delayMs: 0,
+            child: Column(
+              children: [
+                OmiActivityOrb(size: 48, period: const Duration(seconds: 8)),
+                const SizedBox(height: 16),
+                Text(
+                  greeting,
+                  key: const Key('hub_greeting'),
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontFamily: 'Literata',
+                    fontSize: 44,
+                    fontWeight: FontWeight.w500,
+                    letterSpacing: -1.98,
+                    color: colors.ink,
                   ),
                 ),
-              ),
+              ],
             ),
-          if (!compact) const SizedBox(height: 36),
+          ),
+          const SizedBox(height: 36),
           // No "what matters next" heading and no "all tasks" link: this
           // section already IS what matters next, and anyone who wants the
           // full list can just ask the agent for it.
@@ -2455,15 +2422,14 @@ class _ChatHome extends StatelessWidget {
                     onDraftPrompt: onDraftPrompt,
                     onComplete: onComplete,
                   ),
-                if (!(compact && setupTaskDone))
-                  _TaskRow(
-                    key: const Key('task_setup_omi'),
-                    title: 'Set up Omi.',
-                    done: setupTaskDone,
-                    completeKey: const Key('complete_setup_omi'),
-                    onComplete: onToggleSetupTask,
-                    onTap: onToggleSetupTask,
-                  ),
+                _TaskRow(
+                  key: const Key('task_setup_omi'),
+                  title: 'Set up Omi.',
+                  done: setupTaskDone,
+                  completeKey: const Key('complete_setup_omi'),
+                  onComplete: onToggleSetupTask,
+                  onTap: onToggleSetupTask,
+                ),
                 for (final title in starterTasks)
                   if (HubTaskMeta.tryDecode(title) case final meta?)
                     _RichTaskRow(
@@ -2483,13 +2449,13 @@ class _ChatHome extends StatelessWidget {
                       onComplete: () => onToggleStarterTask(title),
                       onTap: () => onPrompt(title),
                     ),
-                for (final note in meetingNotes.take(compact ? 1 : 3))
+                for (final note in meetingNotes.take(3))
                   _MeetingNoteRow(
                     key: ValueKey('meeting_note_${note.id}'),
                     note: note,
                     onTap: onOpenMeetingNotes,
                   ),
-                if (meetingNotes.length > (compact ? 1 : 3))
+                if (meetingNotes.length > 3)
                   DecoratedBox(
                     decoration: BoxDecoration(
                       border: Border(top: BorderSide(color: colors.hairline)),
@@ -2549,7 +2515,6 @@ class _CurrentFocusState extends State<_CurrentFocus> {
     );
     final hero = plan.hero;
     if (hero == null) return const SizedBox.shrink();
-    final compact = omiDemoMode;
     final colors = _HubColors.of(context);
     final card = hero.card;
     final evidence = card.item.evidence;
@@ -2595,17 +2560,17 @@ class _CurrentFocusState extends State<_CurrentFocus> {
               ),
             ),
             Padding(
-              padding: EdgeInsets.all(compact ? 10 : 20),
+              padding: const EdgeInsets.all(20),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   Row(
                     children: [
                       SizedBox(
-                        width: compact ? 26 : 30,
-                        height: compact ? 26 : 30,
+                        width: 30,
+                        height: 30,
                         child: OmiActivityOrb(
-                          size: compact ? 18 : 22,
+                          size: 22,
                           state: OmiOrbState.thinking,
                           period: const Duration(seconds: 7),
                           color: colors.hintBlue,
@@ -2625,19 +2590,20 @@ class _CurrentFocusState extends State<_CurrentFocus> {
                       _CurrentChip(label: source, color: colors.hintBlue),
                     ],
                   ),
-                  SizedBox(height: compact ? 8 : 18),
+                  const SizedBox(height: 18),
                   Text(
                     card.title,
                     key: const Key('current_focus_title'),
                     style: TextStyle(
-                      fontSize: compact ? 20 : 24,
+                      fontFamily: 'Literata',
+                      fontSize: 24,
                       height: 1.08,
                       fontWeight: FontWeight.w600,
                       letterSpacing: -1,
                       color: colors.ink,
                     ),
                   ),
-                  if (!compact && card.summary.trim().isNotEmpty) ...[
+                  if (card.summary.trim().isNotEmpty) ...[
                     const SizedBox(height: 9),
                     Text(
                       card.summary,
@@ -2650,14 +2616,14 @@ class _CurrentFocusState extends State<_CurrentFocus> {
                       ),
                     ),
                   ],
-                  SizedBox(height: compact ? 8 : 18),
+                  const SizedBox(height: 18),
                   _CurrentDetail(
                     label: 'WHY NOW',
                     text: card.item.reason,
                     color: colors,
                     detailKey: const Key('current_focus_reason'),
                   ),
-                  SizedBox(height: compact ? 8 : 12),
+                  const SizedBox(height: 12),
                   _CurrentDetail(
                     label: 'EVIDENCE',
                     text: evidence
@@ -2665,21 +2631,15 @@ class _CurrentFocusState extends State<_CurrentFocus> {
                         .join(' · '),
                     color: colors,
                     detailKey: const Key('current_focus_evidence'),
-                    maxLines: compact ? 1 : 2,
                   ),
-                  SizedBox(height: compact ? 8 : 16),
+                  const SizedBox(height: 16),
                   DecoratedBox(
                     decoration: BoxDecoration(
                       color: colors.hintBlue.withValues(alpha: .10),
                       borderRadius: BorderRadius.circular(14),
                     ),
                     child: Padding(
-                      padding: EdgeInsets.fromLTRB(
-                        14,
-                        compact ? 8 : 12,
-                        10,
-                        compact ? 6 : 10,
-                      ),
+                      padding: const EdgeInsets.fromLTRB(14, 12, 10, 10),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
@@ -2705,7 +2665,7 @@ class _CurrentFocusState extends State<_CurrentFocus> {
                               color: colors.ink,
                             ),
                           ),
-                          SizedBox(height: compact ? 2 : 6),
+                          const SizedBox(height: 6),
                           Row(
                             children: [
                               TextButton(
@@ -2715,9 +2675,9 @@ class _CurrentFocusState extends State<_CurrentFocus> {
                                 ),
                                 style: TextButton.styleFrom(
                                   foregroundColor: colors.hintBlue,
-                                  padding: EdgeInsets.symmetric(
+                                  padding: const EdgeInsets.symmetric(
                                     horizontal: 4,
-                                    vertical: compact ? 3 : 6,
+                                    vertical: 6,
                                   ),
                                   textStyle: const TextStyle(
                                     fontSize: 13,
@@ -2734,9 +2694,9 @@ class _CurrentFocusState extends State<_CurrentFocus> {
                                       widget.onComplete!(card.item.id),
                                   style: TextButton.styleFrom(
                                     foregroundColor: colors.muted,
-                                    padding: EdgeInsets.symmetric(
+                                    padding: const EdgeInsets.symmetric(
                                       horizontal: 4,
-                                      vertical: compact ? 3 : 6,
+                                      vertical: 6,
                                     ),
                                     textStyle: const TextStyle(
                                       fontSize: 13,
@@ -2768,14 +2728,12 @@ class _CurrentDetail extends StatelessWidget {
     required this.text,
     required this.color,
     required this.detailKey,
-    this.maxLines = 2,
   });
 
   final String label;
   final String text;
   final _HubColors color;
   final Key detailKey;
-  final int maxLines;
 
   @override
   Widget build(BuildContext context) => DecoratedBox(
@@ -2800,7 +2758,7 @@ class _CurrentDetail extends StatelessWidget {
           Text(
             text,
             key: detailKey,
-            maxLines: maxLines,
+            maxLines: 2,
             overflow: TextOverflow.ellipsis,
             style: TextStyle(fontSize: 12, height: 1.35, color: color.ink),
           ),

@@ -15,10 +15,16 @@
   const VENDOR = "vendor/";
   const MODEL_ID = "HuggingFaceTB/SmolLM2-360M-Instruct";
   const MODEL_LABEL = "SmolLM2 360M Instruct";
+  const PROMPT_OPTIONS = {
+    expectedInputs: [{ type: "text", languages: ["en"] }],
+    expectedOutputs: [{ type: "text", languages: ["en"] }],
+  };
   // The weights plus the ONNX runtime wasm this origin serves alongside them.
   const MODEL_MB = 330;
 
   let promptSession = null;
+  let promptSystem = "";
+  let promptAbort = null;
   let generator = null;
   let cancelled = false;
   // The last probe and prepare results. They are read back as plain string
@@ -27,20 +33,20 @@
   let lastProbe = "";
   let lastPrepare = "";
 
-  const hasPromptApi = () =>
-    typeof globalThis.LanguageModel !== "undefined" ||
-    (globalThis.ai && typeof globalThis.ai.languageModel !== "undefined");
+  const hasPromptApi = () => typeof globalThis.LanguageModel !== "undefined";
 
-  const languageModel = () =>
-    globalThis.LanguageModel || (globalThis.ai && globalThis.ai.languageModel);
+  const languageModel = () => globalThis.LanguageModel;
 
   async function probePromptApi() {
     if (!hasPromptApi()) return "unsupported";
     try {
       const api = languageModel();
-      const state = api.availability
-        ? await api.availability()
-        : (await api.capabilities()).available;
+      let state;
+      try {
+        state = await api.availability(PROMPT_OPTIONS);
+      } catch (_) {
+        state = await api.availability();
+      }
       if (state === "unavailable" || state === "no") return "unsupported";
       return state === "available" || state === "readily"
         ? "ready"
@@ -98,9 +104,40 @@
     return lastProbe;
   }
 
-  async function preparePromptApi() {
-    if (promptSession) return;
-    promptSession = await languageModel().create();
+  function promptMonitor(onProgress) {
+    return (monitor) => {
+      monitor.addEventListener("downloadprogress", (event) => {
+        if (typeof onProgress === "function") {
+          onProgress(Math.round((event.loaded / event.total) * 100));
+        }
+      });
+    };
+  }
+
+  async function preparePromptApi(system = "", onProgress = null) {
+    if (promptSession && promptSystem === system) return;
+    try {
+      promptSession?.destroy?.();
+    } catch (_) {}
+    promptAbort?.abort();
+    promptAbort = null;
+    const initialPrompts = system
+      ? [{ role: "system", content: system }]
+      : [];
+    const options = {
+      ...PROMPT_OPTIONS,
+      initialPrompts,
+      monitor: promptMonitor(onProgress),
+    };
+    try {
+      promptSession = await languageModel().create(options);
+    } catch (_) {
+      promptSession = await languageModel().create({
+        initialPrompts,
+        monitor: promptMonitor(onProgress),
+      });
+    }
+    promptSystem = system;
   }
 
   async function prepareWebgpu(onProgress) {
@@ -128,7 +165,7 @@
   async function prepare(tier, onProgress) {
     lastPrepare = "";
     try {
-      if (tier === "prompt-api") await preparePromptApi();
+      if (tier === "prompt-api") await preparePromptApi("", onProgress);
       else if (tier === "webgpu") await prepareWebgpu(onProgress);
       else lastPrepare = "unsupported";
       lastPrepare = lastPrepare || "ready";
@@ -139,7 +176,7 @@
   }
 
   function messages(payload) {
-    const turns = [{ role: "system", content: payload.system }];
+    const turns = [];
     for (const turn of payload.history || []) {
       turns.push({ role: turn.role, content: turn.text });
     }
@@ -148,11 +185,13 @@
   }
 
   async function askPromptApi(payload, onChunk) {
-    await preparePromptApi();
-    const prompt = messages(payload)
-      .map((turn) => `${turn.role}: ${turn.content}`)
-      .join("\n\n");
-    const stream = promptSession.promptStreaming(prompt);
+    await preparePromptApi(payload.system);
+    promptAbort = new AbortController();
+    const turns = messages(payload);
+    const prompt = turns.length === 1 ? payload.prompt : turns;
+    const stream = promptSession.promptStreaming(prompt, {
+      signal: promptAbort.signal,
+    });
     let seen = "";
     for await (const piece of stream) {
       if (cancelled) return;
@@ -196,6 +235,18 @@
 
   function cancel() {
     cancelled = true;
+    promptAbort?.abort();
+  }
+
+  function reset() {
+    cancel();
+    try {
+      promptSession?.destroy?.();
+    } catch (_) {}
+    promptSession = null;
+    promptSystem = "";
+    promptAbort = null;
+    cancelled = false;
   }
 
   // `startAsk` is the fire-and-forget form: the Dart side takes its result
@@ -210,6 +261,7 @@
     startAsk,
     ask,
     cancel,
+    reset,
     get last() {
       return lastProbe;
     },

@@ -328,20 +328,20 @@ class _OmiShellState extends State<OmiShell> {
             if (_desktopKeyboard.supported)
               if (_inputDiagnostics case final diagnostics?
                   when !diagnostics.globalCaptureLive) ...[
-              _GlobalInputNotice(
-                diagnostics: diagnostics,
-                onGrant: () => unawaited(
-                  !diagnostics.inputMonitoring
-                      ? widget.services.capabilities.request(
-                          CoreCapability.inputMonitoring,
-                        )
-                      : widget.services.capabilities.request(
-                          CoreCapability.accessibility,
-                        ),
+                _GlobalInputNotice(
+                  diagnostics: diagnostics,
+                  onGrant: () => unawaited(
+                    !diagnostics.inputMonitoring
+                        ? widget.services.capabilities.request(
+                            CoreCapability.inputMonitoring,
+                          )
+                        : widget.services.capabilities.request(
+                            CoreCapability.accessibility,
+                          ),
+                  ),
                 ),
-              ),
-              const SizedBox(height: 12),
-            ],
+                const SizedBox(height: 12),
+              ],
             Expanded(child: chat),
           ],
         ),
@@ -462,7 +462,7 @@ class _DemoHubBackdrop extends StatelessWidget {
         gradient: LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
-          colors: [Color(0xfffff8ed), Color(0xffffeee2), Color(0xffeef1e4)],
+          colors: [Color(0xffeadbc7), Color(0xffe0d1bd), Color(0xffd5e0d3)],
         ),
       ),
       child: Stack(
@@ -474,7 +474,7 @@ class _DemoHubBackdrop extends StatelessWidget {
                 gradient: RadialGradient(
                   center: Alignment(-1, -1),
                   radius: 1.1,
-                  colors: [Color(0x88f2c2ac), Color(0x00f2c2ac)],
+                  colors: [Color(0x889b5948), Color(0x009b5948)],
                 ),
               ),
             ),
@@ -485,7 +485,7 @@ class _DemoHubBackdrop extends StatelessWidget {
                 gradient: RadialGradient(
                   center: Alignment(1.1, 1),
                   radius: 1.05,
-                  colors: [Color(0x6696c4ff), Color(0x00d3e081)],
+                  colors: [Color(0x665b8291), Color(0x00876375)],
                 ),
               ),
             ),

@@ -15,7 +15,7 @@ enum MobileOnboardingStage { intro, account, pair, teach, finish }
 
 const _headingStyle = TextStyle(
   color: Color(0xfffffcec),
-  fontFamily: OmiFonts.sans,
+  fontFamily: 'Literata',
   fontSize: 30,
   fontWeight: FontWeight.w500,
   height: 1.2,
@@ -23,8 +23,8 @@ const _headingStyle = TextStyle(
 );
 const _headingZoneHeight = 72.0;
 const _secondaryCream = Color(0xccfffcec);
-const _stateBlue = Color(0xff5aa7ff);
-const _stateRed = Color(0xffff6a58);
+const _stateBlue = Color(0xff7896a4);
+const _stateRed = Color(0xffb76154);
 
 class MobileOnboardingScreen extends StatefulWidget {
   const MobileOnboardingScreen({
@@ -45,7 +45,7 @@ class MobileOnboardingScreen extends StatefulWidget {
 class _MobileOnboardingScreenState extends State<MobileOnboardingScreen> {
   static const _cream = Color(0xfffffcec);
   static const _ink = Color(0xff171716);
-  static const _backdropInk = Color(0xff23221e);
+  static const _backdropInk = Color(0xff2b2722);
 
   late final PairedDeviceStore _pairedDevices =
       widget.pairedDevices ?? PreferencesPairedDeviceStore();
@@ -407,7 +407,7 @@ class _IntroStage extends StatelessWidget {
             textAlign: TextAlign.center,
             style: TextStyle(
               color: Color(0xfffffcec),
-              fontFamily: OmiFonts.sans,
+              fontFamily: 'Literata',
               fontSize: 33,
               fontWeight: FontWeight.w500,
               height: 1.12,

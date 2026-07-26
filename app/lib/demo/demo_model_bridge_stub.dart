@@ -31,3 +31,5 @@ Stream<String> askDemoModel(String tier, String payloadJson) =>
     const Stream<String>.empty();
 
 void cancelDemoModel() {}
+
+void resetDemoModel() {}

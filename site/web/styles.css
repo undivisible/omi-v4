@@ -26,6 +26,38 @@
   font-display: swap;
 }
 
+@font-face {
+  font-family: "Arimo";
+  src: url("/arimo-regular.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Arimo";
+  src: url("/arimo-semibold.ttf") format("truetype");
+  font-weight: 600 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Literata";
+  src: url("/literata-regular.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Literata";
+  src: url("/literata-semibold.ttf") format("truetype");
+  font-weight: 600 900;
+  font-style: normal;
+  font-display: swap;
+}
+
 :root {
   /* Palette taken from the app: _HubColors.dark in chat_screen.dart and the
      onboarding backdrop's edge colours. */
@@ -39,8 +71,9 @@
   --ease: cubic-bezier(0.22, 1, 0.36, 1);
   --pad: clamp(1.25rem, 5vw, 4.5rem);
   --font:
-    "Inter", -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI",
+    "Arimo", -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI",
     sans-serif;
+  --serif: "Literata", "Iowan Old Style", Georgia, serif;
   --mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   --pixel:
     "Geist Pixel", "Geist Mono", ui-monospace, "SF Mono", Menlo, Consolas,
@@ -51,6 +84,13 @@
   margin: 0;
   padding: 0;
   box-sizing: border-box;
+}
+
+h1,
+h2,
+.big {
+  font-family: var(--serif);
+  font-optical-sizing: auto;
 }
 
 html {
@@ -1647,24 +1687,25 @@ main > .band.wrap {
 }
 
 :root {
-  --font: "Avenir Next", "Segoe UI", sans-serif;
+  --font: "Arimo", -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
+  --serif: "Literata", "Iowan Old Style", Georgia, serif;
   --ink: #171411;
-  --cream: #fff9f1;
+  --cream: #f7efe4;
   --muted: #665f57;
   --rule: rgba(23, 20, 17, 0.11);
   --sky: #a85c4e;
 }
 
 html {
-  background: #f6e7da;
+  background: #e6d5bc;
 }
 
 body {
   background:
-    radial-gradient(circle at 13% 18%, rgba(255, 170, 139, 0.46), transparent 28rem),
-    radial-gradient(circle at 92% 15%, rgba(166, 191, 255, 0.38), transparent 31rem),
-    radial-gradient(circle at 78% 79%, rgba(215, 225, 132, 0.38), transparent 29rem),
-    #f6e7da;
+    radial-gradient(circle at 13% 18%, rgba(159, 86, 62, 0.45), transparent 28rem),
+    radial-gradient(circle at 92% 15%, rgba(87, 127, 127, 0.42), transparent 31rem),
+    radial-gradient(circle at 78% 79%, rgba(123, 77, 104, 0.33), transparent 29rem),
+    #e6d5bc;
 }
 
 .field {
@@ -2360,11 +2401,13 @@ body {
 }
 
 main:has(.hub-page) {
-  height: calc(100svh - 3.25rem);
+  min-height: 0;
 }
 
 .hub-page {
-  height: 100%;
+  position: relative;
+  height: calc(100svh - 3.25rem);
+  min-height: 34rem;
 }
 
 .hub-page .sr-only {
@@ -2392,13 +2435,36 @@ main:has(.hub-page) {
   border: 0;
   border-radius: 0;
   box-shadow: none;
-  background: #fffaf3;
+  background: #e9dcc8;
 }
 
 .hub-page .shot-frame iframe {
   width: calc(100% / var(--hub-scale));
   height: calc(100% / var(--hub-scale));
   border-radius: 0;
+}
+
+.hub-about-link {
+  position: absolute;
+  z-index: 2;
+  left: 1rem;
+  bottom: 1rem;
+  padding: 0.65rem 0.85rem;
+  border: 1px solid rgba(23, 20, 17, 0.18);
+  border-radius: 999px;
+  background: rgba(247, 239, 228, 0.86);
+  color: var(--ink);
+  font-size: 0.7rem;
+  letter-spacing: 0.04em;
+  text-decoration: none;
+  touch-action: manipulation;
+  backdrop-filter: blur(12px);
+}
+
+.hub-about-link:hover,
+.hub-about-link:focus-visible {
+  background: var(--ink);
+  color: var(--cream);
 }
 
 .foot-compact {
@@ -2426,13 +2492,72 @@ main:has(.hub-page) {
   margin: 0;
 }
 
+.landing-brief {
+  display: grid;
+  grid-template-columns: minmax(0, 1.05fr) minmax(17rem, 0.95fr);
+  gap: clamp(2rem, 8vw, 8rem);
+  align-items: center;
+  padding-block: clamp(5rem, 11vw, 10rem);
+}
+
+.landing-brief-copy .big {
+  max-width: 15ch;
+  margin: 0.65rem 0 1.25rem;
+}
+
+.landing-brief-copy .mid {
+  max-width: 34rem;
+  margin-bottom: 1rem;
+}
+
+.landing-brief-copy .small {
+  max-width: 32rem;
+  margin-bottom: 1.75rem;
+}
+
+.landing-pendant-panel {
+  display: grid;
+  grid-template-columns: minmax(8rem, 0.75fr) minmax(12rem, 1fr);
+  gap: 1.5rem;
+  align-items: center;
+  padding: clamp(1.25rem, 3vw, 2.25rem);
+  border: 1px solid var(--rule);
+  border-radius: 1.5rem;
+  background: linear-gradient(135deg, #c98468, #afc5bd 52%, #a77a8c);
+}
+
+.landing-pendant {
+  width: 100%;
+  max-height: 18rem;
+  object-fit: contain;
+}
+
+.landing-pendant-copy p:not(.label) {
+  margin: 0.5rem 0 0;
+  color: var(--ink);
+}
+
+.landing-pendant-copy .small {
+  color: var(--muted);
+}
+
 @media (max-width: 700px) {
   main:has(.hub-page) {
-    height: calc(100svh - 5rem);
+    min-height: 0;
   }
 
   .hub-page .shot-frame {
     --hub-scale: 1;
+  }
+
+  .hub-page {
+    height: calc(100svh - 5rem);
+    min-height: 30rem;
+  }
+
+  .landing-brief {
+    grid-template-columns: 1fr;
+    gap: 2.5rem;
   }
 
   .foot-compact {

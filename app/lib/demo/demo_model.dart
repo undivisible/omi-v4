@@ -73,14 +73,14 @@ class DemoModel extends ChangeNotifier {
 
   /// What the visitor is told, verbatim, about the current tier.
   String get label => switch (_tier) {
-    DemoModelTier.promptApi => 'Your browser\'s built-in model, on-device',
+    DemoModelTier.promptApi => 'Your browser\'s Prompt API, on-device',
     DemoModelTier.webgpu => '$downloadModel, on-device via WebGPU',
     DemoModelTier.scripted => 'Scripted preview — no model is running',
   };
 
   String get detail => switch (_tier) {
     DemoModelTier.promptApi =>
-      'Chrome is answering with the model already installed on this machine. '
+      'Your browser is answering with the model installed on this machine. '
           'Nothing is downloaded and nothing is sent anywhere.',
     DemoModelTier.webgpu =>
       'A small instruct model you chose to download is running on this '
@@ -171,6 +171,8 @@ class DemoModel extends ChangeNotifier {
   }
 
   void cancel() => cancelDemoModel();
+
+  void startNewConversation() => resetDemoModel();
 
   /// Called when a generation failed outright. The tour carries on scripted
   /// rather than leaving a dead chat behind.

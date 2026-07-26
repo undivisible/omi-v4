@@ -164,7 +164,7 @@ class _DemoBannerState extends State<DemoBanner> {
               gradient: LinearGradient(
                 colors: dark
                     ? const [Color(0xff2c2927), Color(0xff232321)]
-                    : const [Color(0xffffeee2), Color(0xfffff9ed)],
+                    : const [Color(0xffeadbc7), Color(0xffdce2d5)],
               ),
               border: Border(
                 bottom: BorderSide(color: ink.withValues(alpha: .09)),

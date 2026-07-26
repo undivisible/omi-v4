@@ -36,6 +36,7 @@ extension type _Llm._(JSObject _) implements JSObject {
     JSFunction onError,
   );
   external void cancel();
+  external void reset();
 }
 
 /// Asks the bridge what this browser can run, retrying briefly.
@@ -133,5 +134,11 @@ Stream<String> askDemoModel(String tier, String payloadJson) {
 void cancelDemoModel() {
   try {
     _llm?.cancel();
+  } catch (_) {}
+}
+
+void resetDemoModel() {
+  try {
+    _llm?.reset();
   } catch (_) {}
 }

@@ -149,19 +149,19 @@ class _SettingsWindowAppState extends State<SettingsWindowApp> {
     themeMode: ThemeMode.system,
     theme: ThemeData(
       brightness: Brightness.light,
-      fontFamily: OmiFonts.sans,
+      fontFamily: 'Arimo',
       textTheme: omiTextTheme,
-      scaffoldBackgroundColor: const Color(0xfff7f6f1),
+      scaffoldBackgroundColor: const Color(0xfff3eadc),
       colorScheme: const ColorScheme.light(
-        primary: Color(0xff171716),
-        surface: Color(0xfffffefa),
-        onSurface: Color(0xff171716),
-        onSurfaceVariant: Color(0xff706e68),
+        primary: Color(0xff24383d),
+        surface: Color(0xfffbf4e9),
+        onSurface: Color(0xff201a17),
+        onSurfaceVariant: Color(0xff6b6258),
       ),
     ),
     darkTheme: ThemeData(
       brightness: Brightness.dark,
-      fontFamily: OmiFonts.sans,
+      fontFamily: 'Arimo',
       textTheme: omiTextTheme,
       scaffoldBackgroundColor: const Color(0xff171716),
       colorScheme: const ColorScheme.dark(
@@ -297,12 +297,12 @@ class _OmiAppState extends State<OmiApp> {
 
   @override
   Widget build(BuildContext context) {
-    const background = Color(0xff0b1013);
-    const surface = Color(0xff151c20);
-    const accent = Color(0xfffffcec);
-    const paper = Color(0xfff7f6f1);
-    const paperSurface = Color(0xfffffefa);
-    const ink = Color(0xff171716);
+    const background = Color(0xff24201e);
+    const surface = Color(0xff302a27);
+    const accent = Color(0xfff2e9dc);
+    const paper = Color(0xfff3eadc);
+    const paperSurface = Color(0xfffbf4e9);
+    const ink = Color(0xff201a17);
     const textTheme = omiTextTheme;
     return MaterialApp(
       title: 'Omi',
@@ -318,10 +318,10 @@ class _OmiAppState extends State<OmiApp> {
           primary: ink,
           surface: paperSurface,
           onSurface: ink,
-          onSurfaceVariant: Color(0xff706e68),
-          secondary: Color(0xff2f9d8a),
+          onSurfaceVariant: Color(0xff6b6258),
+          secondary: Color(0xff55746f),
         ),
-        fontFamily: OmiFonts.sans,
+        fontFamily: 'Arimo',
         textTheme: textTheme,
         inputDecorationTheme: InputDecorationTheme(
           filled: true,
@@ -338,9 +338,9 @@ class _OmiAppState extends State<OmiApp> {
         colorScheme: const ColorScheme.dark(
           primary: accent,
           surface: surface,
-          onSurface: Color(0xfff4f7f6),
+          onSurface: Color(0xfff2e9dc),
         ),
-        fontFamily: OmiFonts.sans,
+        fontFamily: 'Arimo',
         textTheme: textTheme,
         inputDecorationTheme: InputDecorationTheme(
           filled: true,

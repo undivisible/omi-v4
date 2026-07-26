@@ -68,8 +68,16 @@ class OmiAccentText {
 /// [ThemeData] from this so desktop, mobile and web share one typographic
 /// system in both brightnesses.
 const omiTextTheme = TextTheme(
-  displaySmall: TextStyle(fontWeight: FontWeight.w600, letterSpacing: -1),
-  headlineMedium: TextStyle(fontWeight: FontWeight.w600, letterSpacing: -.5),
+  displaySmall: TextStyle(
+    fontFamily: 'Literata',
+    fontWeight: FontWeight.w600,
+    letterSpacing: -1,
+  ),
+  headlineMedium: TextStyle(
+    fontFamily: 'Literata',
+    fontWeight: FontWeight.w600,
+    letterSpacing: -.5,
+  ),
   titleMedium: TextStyle(fontWeight: FontWeight.w600),
   bodyLarge: TextStyle(height: 1.45),
 );

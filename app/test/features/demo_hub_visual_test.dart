@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:omi/app_services.dart';
 import 'package:omi/auth/auth.dart';
-import 'package:omi/demo/demo_app.dart';
 import 'package:omi/demo/demo_mode.dart';
 import 'package:omi/device/device.dart';
 import 'package:omi/features/omi_shell.dart';
@@ -38,18 +37,9 @@ void main() {
       Colors.transparent,
     );
     final mark = tester.widget<OmiActivityOrb>(
-      find.byKey(const Key('demo_rotating_mark')),
+      find.byType(OmiActivityOrb).first,
     );
-    expect(mark.period, const Duration(seconds: 10));
-  }, skip: !omiDemoMode);
-
-  testWidgets('demo hub seeds its welcome history', (tester) async {
-    final services = await createDemoServices();
-    addTearDown(services.dispose);
-
-    await tester.pumpWidget(MaterialApp(home: OmiShell(services: services)));
-    await tester.pumpAndSettle();
-    expect(find.byKey(const Key('demo_history_preview')), findsOneWidget);
-    expect(find.textContaining('This is your hub:'), findsNWidgets(2));
+    expect(mark.period, const Duration(seconds: 8));
+    expect(find.byKey(const Key('hub_greeting')), findsOneWidget);
   }, skip: !omiDemoMode);
 }
