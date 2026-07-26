@@ -129,6 +129,24 @@ pub extern "C" fn omi_rust_ble_charging_reset() {
     ble_policy::reset_charging();
 }
 
+#[no_mangle]
+pub extern "C" fn omi_rust_ble_mtu_recheck_reset() {
+    ble_policy::reset_mtu_recheck();
+}
+
+#[no_mangle]
+pub extern "C" fn omi_rust_ble_mtu_recheck_can_schedule() -> bool {
+    ble_policy::mtu_recheck_can_schedule()
+}
+
+#[no_mangle]
+pub extern "C" fn omi_rust_ble_mtu_recheck_step(
+    connection_present: bool,
+    mtu: u16,
+) -> ble_policy::MtuRecheckDecision {
+    ble_policy::mtu_recheck_step(connection_present, mtu)
+}
+
 /// # Safety
 ///
 /// `interleaved` must be null or point at `2 * frames` readable i16 samples.

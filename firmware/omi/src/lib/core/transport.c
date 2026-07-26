@@ -121,10 +121,8 @@ static void exchange_func(struct bt_conn *conn, uint8_t att_err, struct bt_gatt_
 static struct bt_gatt_exchange_params exchange_params;
 
 #define MTU_RECHECK_DELAY_MS 800
-#define MTU_RECHECK_MAX_ATTEMPTS 6
 #define CONN_PHY_DELAY_MS 300
 #define CONN_DLE_MTU_DELAY_MS 1000
-static uint8_t mtu_recheck_attempts = 0;
 K_WORK_DELAYABLE_DEFINE(mtu_recheck_work, mtu_recheck_work_handler);
 static void conn_post_connect_phy_work_handler(struct k_work *work);
 static void conn_post_connect_dle_mtu_work_handler(struct k_work *work);
@@ -894,7 +892,7 @@ static void _transport_connected(struct bt_conn *conn, uint8_t err)
             info.le.latency,
             supervision_timeout);
     LOG_INF("Initial MTU: %u", mtu);
-    mtu_recheck_attempts = 0;
+    omi_rust_ble_mtu_recheck_reset();
 #ifdef CONFIG_OMI_ENABLE_ADAPTIVE_CONN_PARAMS
     omi_rust_ble_conn_params_reset();
 #endif
@@ -957,7 +955,7 @@ static void _transport_disconnected(struct bt_conn *conn, uint8_t err)
     k_work_cancel_delayable(&mtu_recheck_work);
     k_work_cancel_delayable(&conn_post_connect_phy_work);
     k_work_cancel_delayable(&conn_post_connect_dle_mtu_work);
-    mtu_recheck_attempts = 0;
+    omi_rust_ble_mtu_recheck_reset();
 #ifdef CONFIG_OMI_ENABLE_ADAPTIVE_CONN_PARAMS
     k_work_cancel_delayable(&conn_params_apply_work);
     omi_rust_ble_conn_params_reset();
@@ -1187,7 +1185,7 @@ static void update_data_length(struct bt_conn *conn)
 
 static void schedule_mtu_recheck(void)
 {
-    if (mtu_recheck_attempts >= MTU_RECHECK_MAX_ATTEMPTS) {
+    if (!omi_rust_ble_mtu_recheck_can_schedule()) {
         return;
     }
 
@@ -1199,24 +1197,21 @@ static void mtu_recheck_work_handler(struct k_work *work)
     ARG_UNUSED(work);
 
     struct bt_conn *conn = current_connection;
-    if (!conn) {
-        mtu_recheck_attempts = 0;
+    uint16_t mtu = conn ? bt_gatt_get_mtu(conn) : 0;
+    if (conn) {
+        current_mtu = mtu;
+    }
+    omi_rust_mtu_recheck_decision_t decision = omi_rust_ble_mtu_recheck_step(conn != NULL, mtu);
+    if (!decision.request_exchange) {
+        if (decision.negotiated) {
+            LOG_INF("MTU recheck success: negotiated MTU is now %u (payload %u)", mtu, mtu - 3);
+        }
         return;
     }
-
-    uint16_t mtu = bt_gatt_get_mtu(conn);
-    current_mtu = mtu;
-    if (mtu > 23) {
-        LOG_INF("MTU recheck success: negotiated MTU is now %u (payload %u)", mtu, mtu - 3);
-        mtu_recheck_attempts = 0;
-        return;
-    }
-
-    mtu_recheck_attempts++;
-    LOG_WRN("MTU still %u, re-requesting exchange (%u/%u)", mtu, mtu_recheck_attempts, MTU_RECHECK_MAX_ATTEMPTS);
+    LOG_WRN("MTU still %u, re-requesting exchange (%u)", mtu, decision.attempt);
     update_mtu(conn);
 
-    if (mtu_recheck_attempts < MTU_RECHECK_MAX_ATTEMPTS) {
+    if (decision.reschedule) {
         schedule_mtu_recheck();
     }
 }

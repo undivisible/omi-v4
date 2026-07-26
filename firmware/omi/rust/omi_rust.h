@@ -180,6 +180,15 @@ void omi_rust_ble_conn_params_reset(void);
 bool omi_rust_ble_charging_should_notify(bool charging, bool force);
 void omi_rust_ble_charging_mark_notified(bool charging);
 void omi_rust_ble_charging_reset(void);
+typedef struct {
+    bool request_exchange;
+    bool reschedule;
+    bool negotiated;
+    uint8_t attempt;
+} omi_rust_mtu_recheck_decision_t;
+void omi_rust_ble_mtu_recheck_reset(void);
+bool omi_rust_ble_mtu_recheck_can_schedule(void);
+omi_rust_mtu_recheck_decision_t omi_rust_ble_mtu_recheck_step(bool connection_present, uint16_t mtu);
 void omi_rust_audio_stereo_to_mono(const int16_t *interleaved, size_t frames, int16_t *mono_out);
 size_t omi_rust_audio_stereo_frame_count(size_t byte_len, size_t max_frames);
 uint32_t omi_rust_audio_avg_abs_amplitude(const int16_t *buf, size_t n);
