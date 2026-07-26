@@ -608,6 +608,28 @@ pub extern "C" fn omi_rust_sd_batch_header_valid(
     sd_ring::batch_header_valid(magic, version, packet_count, start_seq)
 }
 
+#[no_mangle]
+#[allow(clippy::missing_safety_doc)]
+#[allow(clippy::undocumented_unsafe_blocks)]
+pub unsafe extern "C" fn omi_rust_sd_apply_flush(
+    state: *mut sd_ring::FlushState,
+    current_batch_base_seq: u64,
+    current_batch_packets: u32,
+    capacity_packets: u32,
+) {
+    if state.is_null() {
+        return;
+    }
+    unsafe {
+        *state = sd_ring::apply_flush(
+            *state,
+            current_batch_base_seq,
+            current_batch_packets,
+            capacity_packets,
+        );
+    }
+}
+
 /// # Safety
 ///
 /// `out` must be null or point at `out_len` writable bytes.

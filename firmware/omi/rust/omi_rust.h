@@ -41,6 +41,13 @@ bool omi_rust_sd_meta_valid(uint32_t magic, uint16_t version, uint64_t write_seq
                             uint32_t capacity_packets);
 bool omi_rust_sd_batch_header_valid(uint32_t magic, uint16_t version, uint16_t packet_count,
                                     uint64_t start_seq);
+typedef struct {
+    uint64_t read_seq;
+    uint64_t write_seq;
+    uint64_t dropped_packets;
+} omi_rust_sd_flush_state_t;
+void omi_rust_sd_apply_flush(omi_rust_sd_flush_state_t *state, uint64_t current_batch_base_seq,
+                             uint32_t current_batch_packets, uint32_t capacity_packets);
 size_t omi_rust_sd_format_timestamp_name(uint32_t timestamp, uint8_t *out, size_t out_len);
 
 typedef enum {

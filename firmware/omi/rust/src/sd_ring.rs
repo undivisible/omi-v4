@@ -14,6 +14,45 @@ pub const RAW_META_MAGIC: u32 = 0x4F4D_4952;
 pub const RAW_BATCH_MAGIC: u32 = 0x4F4D_4942;
 pub const RAW_LAYOUT_VERSION: u16 = 1;
 
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FlushState {
+    pub read_seq: u64,
+    pub write_seq: u64,
+    pub dropped_packets: u64,
+}
+
+pub fn apply_flush(
+    mut state: FlushState,
+    current_batch_base_seq: u64,
+    current_batch_packets: u32,
+    capacity_packets: u32,
+) -> FlushState {
+    let capacity = u64::from(capacity_packets);
+    let new_write_seq = current_batch_base_seq.wrapping_add(u64::from(current_batch_packets));
+
+    if state.write_seq <= current_batch_base_seq && current_batch_base_seq >= capacity {
+        let overwritten_end_seq = current_batch_base_seq
+            .wrapping_sub(capacity)
+            .wrapping_add(u64::from(RAW_PACKETS_PER_BATCH));
+        if state.read_seq < overwritten_end_seq {
+            state.dropped_packets = state
+                .dropped_packets
+                .wrapping_add(overwritten_end_seq.wrapping_sub(state.read_seq));
+            state.read_seq = overwritten_end_seq;
+        }
+    }
+
+    let used_packets = new_write_seq.wrapping_sub(state.read_seq);
+    if used_packets > capacity {
+        let overflow = used_packets.wrapping_sub(capacity);
+        state.read_seq = state.read_seq.wrapping_add(overflow);
+        state.dropped_packets = state.dropped_packets.wrapping_add(overflow);
+    }
+    state.write_seq = new_write_seq;
+    state
+}
+
 pub fn ring_used_packets(
     write_seq: u64,
     read_seq: u64,
@@ -142,6 +181,22 @@ pub fn selftest() -> i32 {
     if batch_header_valid(RAW_BATCH_MAGIC, RAW_LAYOUT_VERSION, 1, 1) {
         failures += 1;
     }
+    if apply_flush(
+        FlushState {
+            read_seq: 0,
+            write_seq: 72,
+            dropped_packets: 0,
+        },
+        72,
+        RAW_PACKETS_PER_BATCH,
+        72,
+    ) != (FlushState {
+        read_seq: 36,
+        write_seq: 108,
+        dropped_packets: 36,
+    }) {
+        failures += 1;
+    }
     let mut name = [0u8; 16];
     if format_timestamp_name(0x1A2B_3C4D, &mut name) != 12 || &name[..12] != b"1A2B3C4D.txt" {
         failures += 1;
@@ -182,5 +237,43 @@ mod tests {
         assert_eq!(format_timestamp_name(0xDEAD_BEEF, &mut buf), 12);
         assert_eq!(&buf[..12], b"DEADBEEF.txt");
         assert_eq!(buf[12], 0);
+    }
+
+    #[test]
+    fn flush_advances_ring_window() {
+        assert_eq!(
+            apply_flush(
+                FlushState {
+                    read_seq: 50,
+                    write_seq: 100,
+                    dropped_packets: 3,
+                },
+                100,
+                36,
+                72,
+            ),
+            FlushState {
+                read_seq: 64,
+                write_seq: 136,
+                dropped_packets: 17,
+            }
+        );
+        assert_eq!(
+            apply_flush(
+                FlushState {
+                    read_seq: 0,
+                    write_seq: 10,
+                    dropped_packets: 0,
+                },
+                10,
+                8,
+                12,
+            ),
+            FlushState {
+                read_seq: 6,
+                write_seq: 18,
+                dropped_packets: 6,
+            }
+        );
     }
 }

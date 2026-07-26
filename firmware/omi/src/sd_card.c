@@ -476,22 +476,18 @@ static int flush_current_batch(bool sync_requested)
         return -EIO;
     }
 
-    uint64_t new_write_seq = current_batch_base_seq + current_batch_packets;
-
-    if (ring_state.write_seq <= current_batch_base_seq && current_batch_base_seq >= ring_state.capacity_packets) {
-        uint64_t overwritten_end_seq = current_batch_base_seq - ring_state.capacity_packets + RAW_PACKETS_PER_BATCH;
-        if (ring_state.read_seq < overwritten_end_seq) {
-            ring_state.dropped_packets += overwritten_end_seq - ring_state.read_seq;
-            ring_state.read_seq = overwritten_end_seq;
-        }
-    }
-
-    if ((new_write_seq - ring_state.read_seq) > ring_state.capacity_packets) {
-        uint64_t overflow = (new_write_seq - ring_state.read_seq) - ring_state.capacity_packets;
-        ring_state.read_seq += overflow;
-        ring_state.dropped_packets += overflow;
-    }
-    ring_state.write_seq = new_write_seq;
+    omi_rust_sd_flush_state_t flush_state = {
+        .read_seq = ring_state.read_seq,
+        .write_seq = ring_state.write_seq,
+        .dropped_packets = ring_state.dropped_packets,
+    };
+    omi_rust_sd_apply_flush(&flush_state,
+                            current_batch_base_seq,
+                            current_batch_packets,
+                            ring_state.capacity_packets);
+    ring_state.read_seq = flush_state.read_seq;
+    ring_state.write_seq = flush_state.write_seq;
+    ring_state.dropped_packets = flush_state.dropped_packets;
 
     ret = persist_ring_metadata();
     if (ret < 0) {
