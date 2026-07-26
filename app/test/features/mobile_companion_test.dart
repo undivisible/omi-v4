@@ -378,7 +378,7 @@ void main() {
   testWidgets('only the hero blurs and fades as the page scrolls', (
     tester,
   ) async {
-    await tester.binding.setSurfaceSize(const Size(390, 720));
+    await tester.binding.setSurfaceSize(const Size(390, 500));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final fixture = await _mobileFixture('user-a');
 

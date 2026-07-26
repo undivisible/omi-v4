@@ -6,8 +6,7 @@ bool isPublicHttpUri(Uri uri) {
 }
 
 bool isPrivateOrLocalHost(String host) {
-  final normalized =
-      host.toLowerCase().replaceAll('[', '').replaceAll(']', '');
+  final normalized = host.toLowerCase().replaceAll('[', '').replaceAll(']', '');
   if (normalized == 'localhost' ||
       normalized == '127.0.0.1' ||
       normalized == '0.0.0.0' ||
