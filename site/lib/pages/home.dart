@@ -183,21 +183,27 @@ class Home extends StatelessComponent {
   @override
   Component build(BuildContext context) {
     return Page(
-      title: 'Omi — your private second brain',
-      description:
-          'Start inside Omi: a guided, live demo of the private second brain '
-          'that turns evidence into the next useful thing.',
+      title: 'Omi — guided hub',
+      description: 'A live, guided Omi hub running on disclosed sample data.',
       path: '/',
-      rail: const [
-        ('top', 'Start'),
-        ('hub', 'The hub'),
-        ('make-it-yours', 'Make it yours'),
-      ],
-      children: [_hubHero(), _hub(), _makeItYours()],
+      compactFooter: true,
+      children: [_hubOnly()],
     );
   }
 
-  Component _hubHero() {
+  Component _hubOnly() {
+    return section(
+      [
+        h1([.text('Omi guided hub')], classes: 'sr-only', id: 'hub-title'),
+        const HubEmbedLegacy(),
+      ],
+      classes: 'hub-page',
+      id: 'hub',
+      attributes: {'aria-labelledby': 'hub-title'},
+    );
+  }
+
+  Component hubHeroLegacy() {
     return section(
       [
         div([
@@ -244,7 +250,7 @@ class Home extends StatelessComponent {
     );
   }
 
-  Component _hub() {
+  Component hubLegacy() {
     return section(
       [
         div([
@@ -264,7 +270,7 @@ class Home extends StatelessComponent {
     );
   }
 
-  Component _makeItYours() {
+  Component makeItYoursLegacy() {
     return section(
       [
         div([
@@ -820,13 +826,7 @@ class HubEmbedLegacy extends StatelessComponent {
         id: 'hub-frame',
         attributes: {'data-state': 'idle'},
       ),
-      figcaption([
-        .text(
-          'A live Omi workspace, running on seeded sample data. No sign-in; '
-          'nothing you do here leaves your browser.',
-        ),
-      ]),
-    ], classes: 'shot reveal');
+    ], classes: 'shot');
   }
 }
 

@@ -136,7 +136,9 @@ class _FooterColumn extends StatelessComponent {
 }
 
 class SiteFooter extends StatelessComponent {
-  const SiteFooter({super.key});
+  const SiteFooter({this.compact = false, super.key});
+
+  final bool compact;
 
   /// The columns are the ones omi.me publishes, pointing at the same places.
   static const _company = [
@@ -172,6 +174,13 @@ class SiteFooter extends StatelessComponent {
 
   @override
   Component build(BuildContext context) {
+    if (compact) {
+      return footer([
+        p([const OmiMark.footer(), .text(' thought to action.')]),
+        p([.text('Based Hardware Inc. · San Francisco')]),
+        p([.text('© 2026')]),
+      ], classes: 'foot-compact wrap');
+    }
     return footer([
       div([
         div([
@@ -207,6 +216,7 @@ class Page extends StatelessComponent {
     required this.path,
     required this.children,
     this.rail = const [],
+    this.compactFooter = false,
     super.key,
   });
 
@@ -215,6 +225,7 @@ class Page extends StatelessComponent {
   final String path;
   final List<Component> children;
   final List<(String, String)> rail;
+  final bool compactFooter;
 
   @override
   Component build(BuildContext context) {
@@ -257,7 +268,7 @@ class Page extends StatelessComponent {
       a([.text('Skip to content')], classes: 'skip-link', href: '#main'),
       const GlowField(),
       main_([if (rail.isNotEmpty) SectionRail(rail), ...children], id: 'main'),
-      const SiteFooter(),
+      SiteFooter(compact: compactFooter),
     ]);
   }
 }
