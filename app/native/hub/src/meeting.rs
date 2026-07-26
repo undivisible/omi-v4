@@ -2592,7 +2592,11 @@ mod tests {
             },
         )
         .await;
+        tokio::time::sleep(Duration::from_millis(1)).await;
+        let mut states = meeting_states();
         send(&controls, MeetingControl::Stop).await;
+        tokio::time::sleep(Duration::from_millis(1)).await;
+        states.extend(meeting_states());
         send(
             &controls,
             MeetingControl::Gate {
@@ -2602,11 +2606,13 @@ mod tests {
         )
         .await;
         send(&controls, MeetingControl::Start { title: None }).await;
+        tokio::time::sleep(Duration::from_millis(1)).await;
         tokio::time::sleep(crate::stt::FINAL_DRAIN_TIMEOUT + FINAL_DRAIN_GRACE).await;
         drop(controls);
         let _ = driven.await;
+        states.extend(meeting_states());
         assert_eq!(
-            meeting_states(),
+            states,
             vec![
                 (true, Some("zoom.us".to_owned())),
                 (false, None),
