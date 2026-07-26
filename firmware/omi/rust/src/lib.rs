@@ -1398,6 +1398,8 @@ mod tests {
             first_len: 0,
             second_offset: 0,
             second_len: 0,
+            third_offset: 0,
+            third_len: 0,
         };
         assert_eq!(
             unsafe {
