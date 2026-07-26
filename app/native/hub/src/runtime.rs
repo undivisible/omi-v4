@@ -501,10 +501,16 @@ impl AssistantProviderConfig {
         // A `compatible` endpoint's model is opaque: nothing has verified it,
         // and refusing every non-text request there would break the one
         // provider whose single-model behaviour has to keep working.
-        if self.byok_provider().is_none() {
-            return Ok(model);
-        }
-        let capabilities = crate::byok_tier::capabilities_of(&model);
+        let mut capabilities = match self.kind {
+            AssistantProviderKind::Worker => {
+                crate::model_tier::capabilities_of(&model, |name| std::env::var(name).ok())
+            }
+            AssistantProviderKind::Compatible => vec![Capability::Text],
+            _ => crate::byok_tier::capabilities_of(&model).to_vec(),
+        };
+        if self.kind == AssistantProviderKind::Worker && !capabilities.contains(&Capability::Text) {
+            capabilities.push(Capability::Text);
+        };
         let missing: Vec<_> = required
             .iter()
             .filter(|capability| !capabilities.contains(capability))
@@ -5824,9 +5830,10 @@ mod tests {
         }
         // Nothing has verified an arbitrary endpoint's model, so refusing it
         // would break the one provider whose single model must keep working.
-        assert_eq!(
-            config.model_for_capability(ModelTier::Multimodal, &[Capability::ImageIn]),
-            Ok("house-model".to_owned())
+        assert!(
+            config
+                .model_for_capability(ModelTier::Multimodal, &[Capability::ImageIn])
+                .is_err()
         );
     }
 

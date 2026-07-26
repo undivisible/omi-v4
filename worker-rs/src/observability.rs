@@ -6,6 +6,56 @@ pub struct SentryEnvelope {
     pub body: String,
 }
 
+#[allow(clippy::too_many_arguments)]
+pub fn foglamp_trace(
+    trace_id: &str,
+    name: &str,
+    provider: &str,
+    model: &str,
+    start_time: i64,
+    end_time: i64,
+    status: &str,
+    input_tokens: Option<i64>,
+    output_tokens: Option<i64>,
+    environment: &str,
+) -> serde_json::Value {
+    let mut usage = serde_json::Map::new();
+    if let Some(value) = input_tokens.filter(|value| *value >= 0) {
+        usage.insert("inputTokens".into(), json!(value));
+    }
+    if let Some(value) = output_tokens.filter(|value| *value >= 0) {
+        usage.insert("outputTokens".into(), json!(value));
+    }
+    if let (Some(input), Some(output)) = (input_tokens, output_tokens) {
+        if input >= 0 && output >= 0 {
+            usage.insert("totalTokens".into(), json!(input + output));
+        }
+    }
+    let mut span = json!({
+        "spanId": format!("{trace_id}-llm"),
+        "spanType": "llm",
+        "name": name,
+        "startTime": start_time,
+        "endTime": end_time.max(start_time),
+        "status": status,
+        "provider": provider,
+        "modelId": model,
+        "metadata": { "environment": environment },
+    });
+    if !usage.is_empty() {
+        span["usage"] = serde_json::Value::Object(usage);
+    }
+    json!({
+        "version": "v1",
+        "traces": [{
+            "traceId": trace_id,
+            "traceName": name,
+            "metadata": { "environment": environment },
+            "spans": [span],
+        }],
+    })
+}
+
 pub fn sentry_envelope(
     dsn: &str,
     environment: &str,
@@ -66,7 +116,7 @@ pub fn sentry_envelope(
 
 #[cfg(test)]
 mod tests {
-    use super::sentry_envelope;
+    use super::{foglamp_trace, sentry_envelope};
     use serde_json::Value;
 
     #[test]
@@ -118,5 +168,26 @@ mod tests {
         assert!(
             sentry_envelope("https://public@example.com/", "production", None, "failed").is_none()
         );
+    }
+
+    #[test]
+    fn builds_a_private_foglamp_trace() {
+        let trace = foglamp_trace(
+            "request-1",
+            "managed-chat",
+            "openrouter",
+            "perplexity/sonar",
+            100,
+            125,
+            "ok",
+            Some(10),
+            Some(5),
+            "production",
+        );
+
+        assert_eq!(trace["version"], "v1");
+        assert_eq!(trace["traces"][0]["spans"][0]["usage"]["totalTokens"], 15);
+        assert!(trace["traces"][0]["spans"][0].get("input").is_none());
+        assert!(trace["traces"][0]["spans"][0].get("output").is_none());
     }
 }

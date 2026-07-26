@@ -40,9 +40,20 @@ pub struct AiGatewayRoute {
     pub token: Option<String>,
 }
 
-pub fn ai_gateway_route(value: impl Fn(&str) -> Option<String>) -> Option<AiGatewayRoute> {
-    let account = value("CF_AI_GATEWAY_ACCOUNT_ID")?.trim().to_string();
-    let gateway = value("CF_AI_GATEWAY_ID")?.trim().to_string();
+pub fn ai_gateway_route(
+    value: impl Fn(&str) -> Option<String>,
+) -> Result<Option<AiGatewayRoute>, &'static str> {
+    let account = value("CF_AI_GATEWAY_ACCOUNT_ID")
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    let gateway = value("CF_AI_GATEWAY_ID")
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    let (account, gateway) = match (account, gateway) {
+        (None, None) => return Ok(None),
+        (Some(account), Some(gateway)) => (account, gateway),
+        _ => return Err("Cloudflare AI Gateway configuration is incomplete"),
+    };
     if account.len() != 32
         || !account
             .bytes()
@@ -53,12 +64,20 @@ pub fn ai_gateway_route(value: impl Fn(&str) -> Option<String>) -> Option<AiGate
             byte.is_ascii_lowercase() || byte.is_ascii_digit() || (index > 0 && byte == b'-')
         })
     {
-        return None;
+        return Err("Cloudflare AI Gateway configuration is invalid");
     }
-    Some(AiGatewayRoute {
+    let token = value("CF_AI_GATEWAY_TOKEN")
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    if token.as_deref().is_some_and(|value| {
+        value.len() > 4096 || value.bytes().any(|byte| byte.is_ascii_control())
+    }) {
+        return Err("Cloudflare AI Gateway token is invalid");
+    }
+    Ok(Some(AiGatewayRoute {
         url: format!("https://gateway.ai.cloudflare.com/v1/{account}/{gateway}/openrouter/v1/chat/completions"),
-        token: value("CF_AI_GATEWAY_TOKEN").map(|value| value.trim().to_string()).filter(|value| !value.is_empty()),
-    })
+        token,
+    }))
 }
 
 /// Resolves the tier a request's `model` names, or `None` when it matches
@@ -663,19 +682,33 @@ mod tests {
             "CF_AI_GATEWAY_ID" => Some("default".into()),
             _ => None,
         })
-        .is_none());
+        .is_err());
         assert!(ai_gateway_route(|name| match name {
             "CF_AI_GATEWAY_ACCOUNT_ID" => Some("f".repeat(32)),
             "CF_AI_GATEWAY_ID" => Some("a/../../b".into()),
             _ => None,
         })
-        .is_none());
+        .is_err());
+        assert!(ai_gateway_route(|name| match name {
+            "CF_AI_GATEWAY_ACCOUNT_ID" => Some("f".repeat(32)),
+            _ => None,
+        })
+        .is_err());
+        assert!(ai_gateway_route(|name| match name {
+            "CF_AI_GATEWAY_ACCOUNT_ID" => Some("f".repeat(32)),
+            "CF_AI_GATEWAY_ID" => Some("default".into()),
+            "CF_AI_GATEWAY_TOKEN" => Some("bad\nvalue".into()),
+            _ => None,
+        })
+        .is_err());
+        assert_eq!(ai_gateway_route(|_| None), Ok(None));
         let route = ai_gateway_route(|name| match name {
             "CF_AI_GATEWAY_ACCOUNT_ID" => Some("f".repeat(32)),
             "CF_AI_GATEWAY_ID" => Some("default".into()),
             "CF_AI_GATEWAY_TOKEN" => Some("gateway-token".into()),
             _ => None,
         })
+        .unwrap()
         .unwrap();
         assert_eq!(
             route.url,

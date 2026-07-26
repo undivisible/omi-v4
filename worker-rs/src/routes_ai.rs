@@ -27,7 +27,7 @@ use crate::glue::{authenticate, error_json, has_active_pro, AuthOutcome};
 use crate::rate_limit::RateLimiter;
 use crate::stt_admission::{Limits as SttLimits, SttAdmission};
 use crate::worker_util::{now_ms, secret_or_var as env_get, uuid_v4};
-use crate::{asr_logic, managed_ai, stt_logic, voice_logic};
+use crate::{asr_logic, managed_ai, observability, stt_logic, voice_logic};
 
 const DO_STATE_KEY: &str = "state";
 
@@ -78,6 +78,60 @@ fn assistant_admission_stub(env: &Env) -> Result<Stub> {
 fn stt_admission_stub(env: &Env) -> Result<Stub> {
     env.durable_object("STT_ADMISSION")?
         .get_by_name("managed-stt-global")
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn send_foglamp_trace(
+    env: &Env,
+    trace_id: &str,
+    name: &str,
+    provider: &str,
+    model: &str,
+    start_time: i64,
+    status: &str,
+    input_tokens: Option<i64>,
+    output_tokens: Option<i64>,
+) {
+    let Some(key) = env_get(env, "FOGLAMP_API_KEY").filter(|value| !value.is_empty()) else {
+        return;
+    };
+    let endpoint = env_get(env, "FOGLAMP_INGEST_URL")
+        .unwrap_or_else(|| "https://ingest.foglamp.dev/ingest".into());
+    let Ok(url) = worker::Url::parse(&endpoint) else {
+        return;
+    };
+    if url.scheme() != "https" {
+        return;
+    }
+    let environment = env_get(env, "ENVIRONMENT").unwrap_or_else(|| "development".into());
+    let payload = observability::foglamp_trace(
+        trace_id,
+        name,
+        provider,
+        model,
+        start_time,
+        now_ms(),
+        status,
+        input_tokens,
+        output_tokens,
+        &environment,
+    );
+    let mut init = RequestInit::new();
+    init.with_method(Method::Post);
+    let headers = Headers::new();
+    if headers
+        .set("authorization", &format!("Bearer {key}"))
+        .and_then(|_| headers.set("content-type", "application/json"))
+        .is_err()
+    {
+        return;
+    }
+    init.with_headers(headers);
+    init.with_body(Some(JsValue::from_str(&payload.to_string())));
+    let Ok(request) = Request::new_with_init(url.as_str(), &init) else {
+        return;
+    };
+    let _ = worker::Fetch::Request(request).send().await;
 }
 
 fn rate_limiter_stub(env: &Env, key: &str) -> Result<Stub> {
@@ -223,8 +277,7 @@ pub async fn run_managed_inbox_completion(
     uid: &str,
     messages: &[managed_ai::Message],
 ) -> Option<String> {
-    let endpoint = env_get(env, "MIMO_CHAT_COMPLETIONS_URL")?;
-    let secret = env_get(env, "MIMO_API_KEY")?;
+    let endpoint = env_get(env, "MIMO_CHAT_COMPLETIONS_URL");
     // Meeting-note-style one-shot completions run on the BALANCED tier, which
     // defaults to MIMO_MODEL when set.
     let model =
@@ -232,16 +285,26 @@ pub async fn run_managed_inbox_completion(
     if messages.is_empty() {
         return None;
     }
-    let endpoint_url = managed_ai::validate_pinned_endpoint(
-        &endpoint,
-        managed_ai::XIAOMI_COMPLETION_ENDPOINT,
-        managed_ai::XIAOMI_HOSTNAME,
-    )?;
-    let gateway = managed_ai::ai_gateway_route(|name| env_get(env, name));
-    let endpoint_url = gateway
-        .as_ref()
-        .and_then(|route| worker::Url::parse(&route.url).ok())
-        .unwrap_or(endpoint_url);
+    let gateway = managed_ai::ai_gateway_route(|name| env_get(env, name)).ok()?;
+    let trace_provider = if gateway.is_some() {
+        "openrouter"
+    } else {
+        "mimo"
+    };
+    let (endpoint_url, secret) = match &gateway {
+        Some(route) => (
+            worker::Url::parse(&route.url).ok()?,
+            env_get(env, "OPENROUTER_API_KEY")?,
+        ),
+        None => (
+            managed_ai::validate_pinned_endpoint(
+                &endpoint?,
+                managed_ai::XIAOMI_COMPLETION_ENDPOINT,
+                managed_ai::XIAOMI_HOSTNAME,
+            )?,
+            env_get(env, "MIMO_API_KEY")?,
+        ),
+    };
     let input_price =
         managed_ai::price(env_get(env, "MIMO_INPUT_MICROUSD_PER_MILLION_TOKENS").as_deref())?;
     let output_price =
@@ -256,6 +319,7 @@ pub async fn run_managed_inbox_completion(
     );
 
     let request_id = uuid_v4();
+    let trace_started_at = now_ms();
     let stub = assistant_admission_stub(env).ok()?;
     let admission = do_post(
         &stub,
@@ -347,6 +411,18 @@ pub async fn run_managed_inbox_completion(
                 output_price,
             )
             .await;
+            send_foglamp_trace(
+                env,
+                &request_id,
+                "managed-inbox-completion",
+                trace_provider,
+                &model,
+                trace_started_at,
+                "error",
+                None,
+                None,
+            )
+            .await;
             return None;
         }
     };
@@ -362,6 +438,18 @@ pub async fn run_managed_inbox_completion(
             Some(upstream_status),
             input_price,
             output_price,
+        )
+        .await;
+        send_foglamp_trace(
+            env,
+            &request_id,
+            "managed-inbox-completion",
+            trace_provider,
+            &model,
+            trace_started_at,
+            "error",
+            None,
+            None,
         )
         .await;
         return None;
@@ -387,6 +475,18 @@ pub async fn run_managed_inbox_completion(
         Some(upstream_status),
         input_price,
         output_price,
+    )
+    .await;
+    send_foglamp_trace(
+        env,
+        &request_id,
+        "managed-inbox-completion",
+        trace_provider,
+        &model,
+        trace_started_at,
+        if content.is_some() { "ok" } else { "error" },
+        input_tokens,
+        output_tokens,
     )
     .await;
     content
@@ -558,20 +658,25 @@ async fn handle_chat_completions(mut req: Request, ctx: RouteContext<()>) -> Res
             "openrouter",
         ),
     };
-    let (Some(endpoint), Some(secret)) = (endpoint, secret) else {
+    let gateway = match managed_ai::ai_gateway_route(|name| env_get(&ctx.env, name)) {
+        Ok(gateway) => gateway,
+        Err(_) => return error_json("Managed AI unavailable", 503),
+    };
+    let (endpoint_url, secret) = match &gateway {
+        Some(route) => (
+            worker::Url::parse(&route.url).ok(),
+            env_get(&ctx.env, "OPENROUTER_API_KEY"),
+        ),
+        None => (
+            endpoint
+                .as_deref()
+                .and_then(|value| managed_ai::validate_pinned_endpoint(value, pinned, hostname)),
+            secret,
+        ),
+    };
+    let (Some(endpoint_url), Some(secret)) = (endpoint_url, secret) else {
         return error_json("Managed AI unavailable", 503);
     };
-    let Some(endpoint_url) = managed_ai::validate_pinned_endpoint(&endpoint, pinned, hostname)
-    else {
-        return error_json("Managed AI unavailable", 503);
-    };
-    let gateway = (tier == managed_ai::ManagedCompletionTier::Balanced)
-        .then(|| managed_ai::ai_gateway_route(|name| env_get(&ctx.env, name)))
-        .flatten();
-    let endpoint_url = gateway
-        .as_ref()
-        .and_then(|route| worker::Url::parse(&route.url).ok())
-        .unwrap_or(endpoint_url);
 
     let Some(parsed) = body
         .as_ref()
@@ -686,6 +791,18 @@ async fn handle_chat_completions(mut req: Request, ctx: RouteContext<()>) -> Res
         Err(_) => {
             finalize_managed_request(&ctx, &request_id, "failed", None).await;
             release_assistant(&stub, &request_id).await;
+            send_foglamp_trace(
+                &ctx.env,
+                &request_id,
+                "managed-chat-completion",
+                provider,
+                &model,
+                now,
+                "error",
+                None,
+                None,
+            )
+            .await;
             return error_json("Managed AI unavailable", 502);
         }
     };
@@ -693,6 +810,18 @@ async fn handle_chat_completions(mut req: Request, ctx: RouteContext<()>) -> Res
     if upstream_status >= 300 {
         finalize_managed_request(&ctx, &request_id, "failed", Some(upstream_status as i64)).await;
         release_assistant(&stub, &request_id).await;
+        send_foglamp_trace(
+            &ctx.env,
+            &request_id,
+            "managed-chat-completion",
+            provider,
+            &model,
+            now,
+            "error",
+            None,
+            None,
+        )
+        .await;
         return error_json("Managed AI unavailable", 502);
     }
 
@@ -705,6 +834,8 @@ async fn handle_chat_completions(mut req: Request, ctx: RouteContext<()>) -> Res
     let stream_failed = Rc::clone(&failed);
     let final_env = ctx.env.clone();
     let final_request_id = request_id.clone();
+    let final_model = model.clone();
+    let final_provider = provider.to_owned();
     let stream = upstream_stream
         .map(move |chunk| match chunk {
             Ok(chunk) => {
@@ -719,6 +850,7 @@ async fn handle_chat_completions(mut req: Request, ctx: RouteContext<()>) -> Res
         .chain(stream::once(async move {
             let (input_tokens, output_tokens) = usage_tail.borrow().usage();
             if let Ok(stub) = assistant_admission_stub(&final_env) {
+                let status = if failed.get() { "error" } else { "ok" };
                 settle_managed_inbox(
                     &final_env,
                     &stub,
@@ -729,6 +861,18 @@ async fn handle_chat_completions(mut req: Request, ctx: RouteContext<()>) -> Res
                     Some(upstream_status as i64),
                     input_price,
                     output_price,
+                )
+                .await;
+                send_foglamp_trace(
+                    &final_env,
+                    &final_request_id,
+                    "managed-chat-completion",
+                    &final_provider,
+                    &final_model,
+                    now,
+                    status,
+                    input_tokens,
+                    output_tokens,
                 )
                 .await;
             }
@@ -769,22 +913,29 @@ async fn mark_streaming(ctx: &RouteContext<()>, request_id: &str, upstream_statu
 
 async fn handle_asr(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
     let endpoint = env_get(&ctx.env, "MIMO_CHAT_COMPLETIONS_URL");
-    let secret = env_get(&ctx.env, "MIMO_API_KEY");
-    let (Some(endpoint), Some(secret)) = (endpoint, secret) else {
+    let gateway = match managed_ai::ai_gateway_route(|name| env_get(&ctx.env, name)) {
+        Ok(gateway) => gateway,
+        Err(_) => return error_json("Managed AI unavailable", 503),
+    };
+    let (endpoint_url, secret) = match &gateway {
+        Some(route) => (
+            worker::Url::parse(&route.url).ok(),
+            env_get(&ctx.env, "OPENROUTER_API_KEY"),
+        ),
+        None => (
+            endpoint.as_deref().and_then(|value| {
+                managed_ai::validate_pinned_endpoint(
+                    value,
+                    managed_ai::XIAOMI_COMPLETION_ENDPOINT,
+                    managed_ai::XIAOMI_HOSTNAME,
+                )
+            }),
+            env_get(&ctx.env, "MIMO_API_KEY"),
+        ),
+    };
+    let (Some(endpoint_url), Some(secret)) = (endpoint_url, secret) else {
         return error_json("Managed AI unavailable", 503);
     };
-    let Some(endpoint_url) = managed_ai::validate_pinned_endpoint(
-        &endpoint,
-        managed_ai::XIAOMI_COMPLETION_ENDPOINT,
-        managed_ai::XIAOMI_HOSTNAME,
-    ) else {
-        return error_json("Managed AI unavailable", 503);
-    };
-    let gateway = managed_ai::ai_gateway_route(|name| env_get(&ctx.env, name));
-    let endpoint_url = gateway
-        .as_ref()
-        .and_then(|route| worker::Url::parse(&route.url).ok())
-        .unwrap_or(endpoint_url);
 
     let content_length = req.headers().get("content-length").ok().flatten();
     if asr_logic::declared_length_exceeds(content_length.as_deref()) {
@@ -973,9 +1124,9 @@ async fn handle_stt_create(mut req: Request, ctx: RouteContext<()>) -> Result<Re
     let cost_per_minute = crate::jsnum::positive_integer_str(
         env_get(&ctx.env, "STT_COST_MICROUSD_PER_MINUTE").as_deref(),
     );
-    let deepgram = env_get(&ctx.env, "DEEPGRAM_API_KEY");
+    let xai = env_get(&ctx.env, "XAI_API_KEY");
     let (Some(max_session_seconds), Some(cost_per_minute), true) =
-        (max_session_seconds, cost_per_minute, deepgram.is_some())
+        (max_session_seconds, cost_per_minute, xai.is_some())
     else {
         return error_json("Managed STT unavailable", 503);
     };
@@ -1056,7 +1207,7 @@ async fn handle_stt_create(mut req: Request, ctx: RouteContext<()>) -> Result<Re
     };
     let insert = db
         .prepare(
-            "INSERT INTO managed_stt_sessions\n             (id, uid, idempotency_key, provider, model, language, encoding, sample_rate,\n              channels, diarize, interim_results, device_id, source_id, status,\n              reserved_seconds, estimated_cost_microusd, created_at, updated_at, admission_token)\n             VALUES (?1, ?2, ?3, 'deepgram', ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,\n              'ready', ?13, ?14, ?15, ?15, ?16)\n             ON CONFLICT(uid, idempotency_key) DO UPDATE SET\n               admission_token = excluded.admission_token,\n               updated_at = excluded.updated_at\n             WHERE managed_stt_sessions.status = 'ready'",
+            "INSERT INTO managed_stt_sessions\n             (id, uid, idempotency_key, provider, model, language, encoding, sample_rate,\n              channels, diarize, interim_results, device_id, source_id, status,\n              reserved_seconds, estimated_cost_microusd, created_at, updated_at, admission_token)\n             VALUES (?1, ?2, ?3, 'xai', ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,\n              'ready', ?13, ?14, ?15, ?15, ?16)\n             ON CONFLICT(uid, idempotency_key) DO UPDATE SET\n               admission_token = excluded.admission_token,\n               updated_at = excluded.updated_at\n             WHERE managed_stt_sessions.status = 'ready'",
         )
         .bind(&[
             session_id.clone().into(),
@@ -1181,7 +1332,7 @@ async fn handle_stt_stream(req: Request, ctx: RouteContext<()>) -> Result<Respon
         return error_json("STT session unavailable", 409);
     };
 
-    let secret = env_get(&ctx.env, "DEEPGRAM_API_KEY");
+    let secret = env_get(&ctx.env, "XAI_API_KEY");
     let max_session_seconds =
         crate::jsnum::positive_integer_str(env_get(&ctx.env, "STT_MAX_SESSION_SECONDS").as_deref());
     let connect_timeout = crate::jsnum::positive_integer_str(
@@ -1263,7 +1414,7 @@ async fn handle_stt_stream(req: Request, ctx: RouteContext<()>) -> Result<Respon
     };
 
     // Connect to Deepgram, upgrading to a WebSocket.
-    let query = stt_logic::deepgram_query(
+    let query = stt_logic::xai_query(
         row.get("model").and_then(Value::as_str).unwrap_or_default(),
         row.get("language")
             .and_then(Value::as_str)
@@ -1286,7 +1437,7 @@ async fn handle_stt_stream(req: Request, ctx: RouteContext<()>) -> Result<Respon
             .unwrap_or_default()
             == 1,
     );
-    let mut upstream_url = url::Url::parse("https://api.deepgram.com/v1/listen")
+    let mut upstream_url = url::Url::parse("https://api.x.ai/v1/stt")
         .map_err(|e| worker::Error::RustError(e.to_string()))?;
     {
         let mut pairs = upstream_url.query_pairs_mut();
@@ -1297,7 +1448,7 @@ async fn handle_stt_stream(req: Request, ctx: RouteContext<()>) -> Result<Respon
     let mut init = RequestInit::new();
     let headers = Headers::new();
     headers.set("Upgrade", "websocket")?;
-    headers.set("Authorization", &format!("Token {secret}"))?;
+    headers.set("Authorization", &format!("Bearer {secret}"))?;
     init.with_headers(headers);
     let upstream_request = Request::new_with_init(upstream_url.as_str(), &init)?;
     let upstream_response = match worker::Fetch::Request(upstream_request).send().await {

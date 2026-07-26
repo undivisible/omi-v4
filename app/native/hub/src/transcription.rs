@@ -988,7 +988,7 @@ mod tests {
             audio_stream_id: "voice-1".to_owned(),
             device_id: "omi-1".to_owned(),
             auth: TranscriptionAuth::Byok {
-                endpoint: "wss://api.deepgram.com/v1/listen".to_owned(),
+                endpoint: "wss://api.x.ai/v1/stt".to_owned(),
                 api_key: "key".to_owned(),
             },
             trusted_worker_origin: None,

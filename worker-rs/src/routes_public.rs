@@ -261,12 +261,16 @@ async fn call_speech_upstream(
     ctx: &RouteContext<()>,
     payload: &Value,
 ) -> std::result::Result<(Value, u16), Option<u16>> {
-    let secret = crate::worker_util::secret_or_var(&ctx.env, "OPENROUTER_API_KEY")
-        .or_else(|| crate::worker_util::secret_or_var(&ctx.env, "MIMO_API_KEY"))
-        .filter(|value| !value.trim().is_empty())
-        .ok_or(None)?;
     let gateway =
-        managed_ai::ai_gateway_route(|name| crate::worker_util::secret_or_var(&ctx.env, name));
+        managed_ai::ai_gateway_route(|name| crate::worker_util::secret_or_var(&ctx.env, name))
+            .map_err(|_| None)?;
+    let secret = match &gateway {
+        Some(_) => crate::worker_util::secret_or_var(&ctx.env, "OPENROUTER_API_KEY"),
+        None => crate::worker_util::secret_or_var(&ctx.env, "OPENROUTER_API_KEY")
+            .or_else(|| crate::worker_util::secret_or_var(&ctx.env, "MIMO_API_KEY")),
+    }
+    .filter(|value| !value.trim().is_empty())
+    .ok_or(None)?;
     let endpoint = match &gateway {
         Some(route) => route.url.clone(),
         None => crate::worker_util::secret_or_var(&ctx.env, "OPENROUTER_CHAT_COMPLETIONS_URL")

@@ -88,22 +88,17 @@ than sending the input to a model that cannot read it.
 
 ## 2. Speech-to-text (transcription)
 
-**Off Deepgram, onto OpenRouter.** The model originally named here does not
-exist on OpenRouter; see the verification note below for what was chosen
-instead.
+**Off Deepgram, onto xAI's native Speech to Text API.** The live route uses
+`wss://api.x.ai/v1/stt`; it is not routed through OpenRouter.
 
-- **Was planned: `x-ai/grok-stt-1.0`** — xAI's dedicated STT model. A
-  purpose-built transcription model would beat bending a chat model into STT,
-  but it is not on OpenRouter (see below), so it is not what ships.
-- **Primary today: `google/gemini-3.5-flash-lite`** (audio→text, ~$0.30/M
-  audio) — the `transcribe` tier default. `openai/gpt-audio-mini` is the next
-  option. (`inception/mercury-2` and `xiaomi/mimo-v2.5*` are not audio models.)
+- **Live STT:** xAI Speech to Text, with PCM streaming, interim results,
+  timestamps, and diarization.
+- **Batch model-router fallback:** `google/gemini-3.5-flash-lite` remains the
+  `transcribe` tier default where a request/response audio model is required.
 
-**Verified 2026-07-23 against the live OpenRouter model list:
-`x-ai/grok-stt-1.0` is not published on OpenRouter.** Nothing matching
-`grok-stt` appears in `GET https://openrouter.ai/api/v1/models`, and the only
-`x-ai` entries are the Grok chat models. The audio-*input* models actually
-available are, cheapest first:
+**Verified 2026-07-26 against xAI's official documentation:** native batch and
+streaming STT are available at `/v1/stt`; streaming costs $0.20/hour and
+supports diarization. The OpenRouter audio-input options remain batch routes:
 
 | Model | Audio input | Note |
 |-------|-------------|------|
@@ -320,9 +315,9 @@ constraint was lifted.
 |-------|------|--------------|--------|
 | Workers logs/metrics | **Workers Observability** (native) | Logpush → Better Stack/Datadog | ✅ enabled both workers |
 | LLM gateway | **Cloudflare AI Gateway** | Portkey, Kong AI Gateway | wiring in §4 |
-| LLM tracing/eval | **Hold** — covered for now by AI Gateway + Better Stack logs | foglamp.dev (hosted, add for eval), Langfuse (self-host — impractical on Cloudflare, see below) | deferred |
-| Errors / APM | **Sentry** (worker **and** Flutter client) | Bugsnag, Rollbar, Highlight, GlitchTip (self-host) | to wire |
-| Uptime + status + on-call | **Better Stack** (uptime + logs + incidents in one) | **Hyperping** (uptime/status/on-call focus), Pingdom, Checkly, UptimeRobot | to wire |
+| LLM tracing/eval | **foglamp.dev** (hosted) | Langfuse (self-host — impractical on Cloudflare, see below) | worker wired; key required |
+| Errors / APM | **Better Stack Errors** (Sentry-compatible worker envelopes) | Sentry, Bugsnag, Rollbar, Highlight, GlitchTip | worker wired; DSN required |
+| Uptime + status + on-call | **Better Stack** (uptime + logs + incidents in one) | **Hyperping** (uptime/status/on-call focus), Pingdom, Checkly, UptimeRobot | log/heartbeat code wired; account setup required |
 
 ### Tool notes (the four you flagged)
 - **foglamp.dev** — LLM observability: cost/latency/quality per call, "catch
@@ -338,15 +333,12 @@ constraint was lifted.
   standard for application errors on both the worker and the Flutter app.
 
 ### Recommended shape
-- **LLM:** Cloudflare AI Gateway (caching/cost/retries) **+** log prompt/
-  completion events into Better Stack Logs. That covers cost, latency, and
-  request inspection without another vendor.
-  - **LLM tracing/eval is deferred.** Langfuse self-hosting is impractical on
-    Cloudflare (its Postgres + ClickHouse + Redis + S3 stack has no managed
-    Cloudflare equivalent — you'd run external DBs, defeating the point). If we
-    later want prompt-level eval/quality scoring (the one thing AI Gateway +
-    Better Stack don't give), add hosted **foglamp.dev** then.
-- **Errors:** Sentry on the worker and the Flutter client.
+- **LLM:** Cloudflare AI Gateway (caching/cost/retries) plus opt-in
+  **foglamp.dev** traces for managed completions. Traces contain provider,
+  model, timing, status, and token counts only; prompts, responses, user IDs,
+  and session content are excluded.
+- **Errors:** Better Stack Errors on the worker through its Sentry-compatible
+  envelope endpoint. The Flutter client remains unwired.
 - **Uptime/incidents:** Better Stack (one tool for uptime + status page +
   on-call + log sink), Hyperping if we want status-page-first.
 - **Infra logs:** Workers Observability now; Logpush into Better Stack if we
@@ -355,5 +347,9 @@ constraint was lifted.
 ## 6. What needs your input to go live
 - **OpenRouter key** + point the endpoint at OpenRouter (or the AI Gateway).
 - **AI Gateway:** create it, set `CF_AI_GATEWAY_ACCOUNT_ID` / `CF_AI_GATEWAY_ID`.
-- **Langfuse / Sentry / Better Stack:** accounts + keys (secrets you set).
+- **Foglamp / Better Stack:** accounts + keys (secrets you set). Set
+  `FOGLAMP_API_KEY`, optionally `FOGLAMP_INGEST_URL`, `BETTERSTACK_LOGS_URL`,
+  `BETTERSTACK_LOGS_TOKEN`, `BETTERSTACK_HEARTBEAT_URL`, and
+  `BETTERSTACK_SENTRY_DSN` with `wrangler secret put`; none belong in
+  `wrangler.toml`.
 - **`GEMINI_API_KEY`** stays required for Gemini Live.

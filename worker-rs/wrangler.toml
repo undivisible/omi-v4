@@ -59,7 +59,7 @@ FACETIME_MAX_SESSION_SECONDS = "600"
 FACETIME_COST_MICROUSD_PER_MINUTE = "30000"
 AGORA_CLOUD_PROXY = "tcp"
 STT_MAX_SESSION_SECONDS = "900"
-STT_COST_MICROUSD_PER_MINUTE = "10000"
+STT_COST_MICROUSD_PER_MINUTE = "3334"
 STT_UPSTREAM_CONNECT_TIMEOUT_MS = "10000"
 STT_CLAIM_DEADLINE_SECONDS = "60"
 STT_BUDGET_WINDOW_SECONDS = "3600"
@@ -103,6 +103,11 @@ index_name = "omi-memory-claims"
 # Workers AI — parity with the TS worker's `ai` binding (bge embeddings).
 [ai]
 binding = "AI"
+
+[[ai_search]]
+binding = "DOCUMENT_SEARCH"
+instance_name = "omi-documents"
+remote = true
 
 # Secrets (set via `wrangler secret put`), NOT committed — provision the same
 # set the TS worker uses before cutover (see CUTOVER.md for the full list):

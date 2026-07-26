@@ -24,6 +24,7 @@ pub mod delivery;
 pub mod desktop_auth;
 pub mod device_sync;
 pub mod digests;
+pub mod document_search;
 pub mod entitlement;
 pub mod facetime;
 pub mod inbox_fallback;
@@ -66,6 +67,8 @@ mod routes_ai;
 mod routes_channels;
 #[cfg(target_arch = "wasm32")]
 mod routes_device;
+#[cfg(target_arch = "wasm32")]
+mod routes_documents;
 #[cfg(target_arch = "wasm32")]
 mod routes_facetime;
 #[cfg(target_arch = "wasm32")]

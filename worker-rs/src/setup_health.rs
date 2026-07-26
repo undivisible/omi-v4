@@ -24,7 +24,7 @@ pub struct SetupHealthInputs<'a> {
     pub stripe_webhook_secret: Option<&'a str>,
     pub app_url: Option<&'a str>,
     pub mimo_api_key: Option<&'a str>,
-    pub deepgram_api_key: Option<&'a str>,
+    pub xai_api_key: Option<&'a str>,
     pub gemini_api_key: Option<&'a str>,
     pub gemini_live_model: Option<&'a str>,
     pub mimo_chat_completions_url: Option<&'a str>,
@@ -53,7 +53,7 @@ pub fn setup_health_body(input: &SetupHealthInputs<'_>) -> Value {
             && configured(input.app_url),
         "models": {
             "managedChat": configured(input.mimo_api_key),
-            "managedStt": configured(input.deepgram_api_key),
+            "managedStt": configured(input.xai_api_key),
             "managedLiveVoice": configured(input.gemini_api_key)
                 && configured(input.gemini_live_model),
             "managedAsr": configured(input.mimo_api_key)
@@ -84,7 +84,7 @@ mod tests {
             stripe_webhook_secret: None,
             app_url: None,
             mimo_api_key: None,
-            deepgram_api_key: None,
+            xai_api_key: None,
             gemini_api_key: None,
             gemini_live_model: None,
             mimo_chat_completions_url: None,
@@ -246,7 +246,7 @@ mod tests {
             stripe_webhook_secret: Some(secrets[10]),
             app_url: Some(secrets[11]),
             mimo_api_key: Some(secrets[12]),
-            deepgram_api_key: Some(secrets[13]),
+            xai_api_key: Some(secrets[13]),
             gemini_api_key: Some(secrets[14]),
             gemini_live_model: Some(secrets[15]),
             mimo_chat_completions_url: Some(secrets[16]),
