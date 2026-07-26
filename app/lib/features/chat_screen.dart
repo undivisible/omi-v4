@@ -1409,7 +1409,7 @@ class ChatScreenState extends State<ChatScreen>
                               physics: const AlwaysScrollableScrollPhysics(
                                 parent: BouncingScrollPhysics(),
                               ),
-                              reverse: true,
+                              reverse: !omiDemoMode && !widget.previewMode,
                               // The message directly above the home view is
                               // the peek, so it has to be built even when the
                               // home view is taller than the viewport.
@@ -2381,36 +2381,40 @@ class _ChatHome extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          _Reveal(
-            delayMs: 0,
-            child: Column(
-              children: [
-                OmiActivityOrb(
-                  key: compact ? const Key('demo_rotating_mark') : null,
-                  size: compact ? 40 : 48,
-                  period: compact
-                      ? const Duration(seconds: 10)
-                      : const Duration(seconds: 8),
-                  color: compact ? const Color(0xff4e4965) : null,
-                ),
-                SizedBox(height: compact ? 8 : 16),
-                Text(
-                  greeting,
-                  key: const Key('hub_greeting'),
-                  textAlign: TextAlign.center,
-                  maxLines: compact ? 2 : null,
-                  overflow: compact ? TextOverflow.ellipsis : null,
-                  style: TextStyle(
-                    fontSize: compact ? 26 : 44,
-                    fontWeight: FontWeight.w500,
-                    letterSpacing: compact ? -0.8 : -1.98,
-                    color: colors.ink,
+          if (!compact)
+            _Reveal(
+              delayMs: 0,
+              child: Column(
+                children: [
+                  OmiActivityOrb(size: 48, period: const Duration(seconds: 8)),
+                  const SizedBox(height: 16),
+                  Text(
+                    greeting,
+                    key: const Key('hub_greeting'),
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize: 44,
+                      fontWeight: FontWeight.w500,
+                      letterSpacing: -1.98,
+                      color: colors.ink,
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
-          ),
-          SizedBox(height: compact ? 14 : 36),
+          if (compact)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Center(
+                child: OmiActivityOrb(
+                  key: const Key('demo_rotating_mark'),
+                  size: 28,
+                  period: const Duration(seconds: 10),
+                  color: const Color(0xff4e4965),
+                ),
+              ),
+            ),
+          if (!compact) const SizedBox(height: 36),
           // No "what matters next" heading and no "all tasks" link: this
           // section already IS what matters next, and anyone who wants the
           // full list can just ask the agent for it.
@@ -2519,6 +2523,7 @@ class _CurrentFocusState extends State<_CurrentFocus> {
     );
     final hero = plan.hero;
     if (hero == null) return const SizedBox.shrink();
+    final compact = omiDemoMode;
     final colors = _HubColors.of(context);
     final card = hero.card;
     final evidence = card.item.evidence;
@@ -2564,7 +2569,7 @@ class _CurrentFocusState extends State<_CurrentFocus> {
               ),
             ),
             Padding(
-              padding: const EdgeInsets.all(20),
+              padding: EdgeInsets.all(compact ? 14 : 20),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
@@ -2594,7 +2599,7 @@ class _CurrentFocusState extends State<_CurrentFocus> {
                       _CurrentChip(label: source, color: colors.hintBlue),
                     ],
                   ),
-                  const SizedBox(height: 18),
+                  SizedBox(height: compact ? 12 : 18),
                   Text(
                     card.title,
                     key: const Key('current_focus_title'),
@@ -2606,7 +2611,7 @@ class _CurrentFocusState extends State<_CurrentFocus> {
                       color: colors.ink,
                     ),
                   ),
-                  if (card.summary.trim().isNotEmpty) ...[
+                  if (!compact && card.summary.trim().isNotEmpty) ...[
                     const SizedBox(height: 9),
                     Text(
                       card.summary,
@@ -2619,7 +2624,7 @@ class _CurrentFocusState extends State<_CurrentFocus> {
                       ),
                     ),
                   ],
-                  const SizedBox(height: 18),
+                  SizedBox(height: compact ? 12 : 18),
                   _CurrentDetail(
                     label: 'WHY NOW',
                     text: card.item.reason,
@@ -2635,7 +2640,7 @@ class _CurrentFocusState extends State<_CurrentFocus> {
                     color: colors,
                     detailKey: const Key('current_focus_evidence'),
                   ),
-                  const SizedBox(height: 16),
+                  SizedBox(height: compact ? 10 : 16),
                   DecoratedBox(
                     decoration: BoxDecoration(
                       color: colors.hintBlue.withValues(alpha: .10),
