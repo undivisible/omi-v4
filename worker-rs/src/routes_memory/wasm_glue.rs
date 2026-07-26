@@ -57,6 +57,7 @@ pub fn register(router: Router<'_, ()>) -> Router<'_, ()> {
         // currents
         .post_async("/v1/currents/generate", handle_current_generate)
         .post_async("/v1/currents/candidates", handle_current_candidates)
+        .post_async("/v1/currents/meeting-actions", handle_meeting_actions)
         .get_async("/v1/currents", handle_currents_list)
         .post_async("/v1/currents/refresh", handle_current_refresh)
         .post_async("/v1/currents/:id/feedback", handle_current_feedback)
@@ -1614,6 +1615,62 @@ async fn handle_current_candidates(mut req: Request, ctx: RouteContext<()>) -> R
         .await?
         .unwrap_or(Value::Null);
     Ok(Response::from_json(&json!({ "current": row_to_current(&current) }))?.with_status(201))
+}
+
+async fn handle_meeting_actions(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let auth = authed!(req, ctx);
+    let db = ctx.env.d1("DB")?;
+    let body = json_object(&mut req).await;
+    let input = match validate_meeting_actions(body.as_ref()) {
+        Ok(input) => input,
+        Err(message) => return error_json(message, 400),
+    };
+    let now = now_ms();
+    let mut statements = Vec::with_capacity(input.actions.len() * 5);
+    for (index, action) in input.actions.iter().enumerate() {
+        let key = format!("meeting:{}:{index}", input.ended_at_ms);
+        let source_id = format!("{key}:source");
+        let revision_id = format!("{key}:revision");
+        let evidence_id = format!("{key}:evidence");
+        let current_id = format!("{key}:current");
+        let delivery_id = format!("{key}:delivery");
+        let payload = json!({
+            "title": input.title,
+            "summary": input.summary,
+            "action": action,
+            "endedAtMs": input.ended_at_ms,
+        })
+        .to_string();
+        let proposed_action = json!({ "kind": "review", "instruction": action }).to_string();
+        let delivery_text = format!("Action from {}: {}", input.title, action);
+        statements.push(stmt(
+            &db,
+            "INSERT OR IGNORE INTO memory_sources (id, uid, kind, created_at, updated_at) VALUES (?1, ?2, 'meeting', ?3, ?3)",
+            &[s(&source_id), s(&auth.uid), n(now)],
+        )?);
+        statements.push(stmt(
+            &db,
+            "INSERT OR IGNORE INTO memory_source_revisions (id, source_id, uid, revision, content_hash, payload, observed_at, created_at) VALUES (?1, ?2, ?3, 1, ?4, ?5, ?6, ?6)",
+            &[s(&revision_id), s(&source_id), s(&auth.uid), s(&sha256_hex(&payload)), s(&payload), n(input.ended_at_ms)],
+        )?);
+        statements.push(stmt(
+            &db,
+            "INSERT OR IGNORE INTO memory_evidence (id, uid, source_revision_id, quote, locator, created_at) VALUES (?1, ?2, ?3, ?4, '[]', ?5)",
+            &[s(&evidence_id), s(&auth.uid), s(&revision_id), s(action), n(now)],
+        )?);
+        statements.push(stmt(
+            &db,
+            "INSERT OR IGNORE INTO currents (id, uid, evidence_id, title, summary, reason, confidence_basis_points, proposed_action, status, surface_at, generation_key, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, 'Action item captured from a completed meeting', 10000, ?6, 'surfaced', ?7, ?8, ?7, ?7)",
+            &[s(&current_id), s(&auth.uid), s(&evidence_id), s(action), s(&input.summary), s(&proposed_action), n(now), s(&key)],
+        )?);
+        statements.push(stmt(
+            &db,
+            "INSERT OR IGNORE INTO channel_deliveries (id, uid, channel, idempotency_key, channel_chat_id, text, next_attempt_at, created_at, updated_at) SELECT ?1, b.uid, b.channel, ?2, COALESCE(b.channel_chat_id, b.channel_user_id), ?3, ?4, ?4, ?4 FROM channel_bindings b WHERE b.uid = ?5 AND b.revoked_at IS NULL ORDER BY b.verified_at DESC LIMIT 1",
+            &[s(&delivery_id), s(&key), s(&delivery_text), n(now), s(&auth.uid)],
+        )?);
+    }
+    db.batch(statements).await?;
+    Response::from_json(&json!({ "created": input.actions.len() }))
 }
 
 async fn handle_currents_list(req: Request, ctx: RouteContext<()>) -> Result<Response> {

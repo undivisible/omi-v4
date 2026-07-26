@@ -5,6 +5,13 @@ import XCTest
 
 class RunnerTests: XCTestCase {
 
+  func testAXContextReaderDeniesCredentialApplications() {
+    XCTAssertTrue(AXContextReader.deniedBundleIdentifiers.contains("com.1password.1password"))
+    XCTAssertTrue(AXContextReader.deniedBundleIdentifiers.contains("com.apple.Passwords"))
+    XCTAssertTrue(AXContextReader.deniedBundleIdentifiers.contains("com.bitwarden.desktop"))
+    XCTAssertFalse(AXContextReader.deniedBundleIdentifiers.contains("com.apple.TextEdit"))
+  }
+
   func testProbeErrorsDistinguishAbsentFromDenied() {
     XCTAssertEqual(MacPermissionService.classifyProbeError(code: NSFileReadNoSuchFileError), "absent")
     XCTAssertEqual(MacPermissionService.classifyProbeError(code: NSFileNoSuchFileError), "absent")

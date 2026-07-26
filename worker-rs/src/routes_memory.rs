@@ -750,6 +750,40 @@ pub struct CandidateInput {
     pub expires_at: Option<i64>,
 }
 
+#[derive(Debug, PartialEq)]
+pub struct MeetingActionsInput {
+    pub title: String,
+    pub summary: String,
+    pub actions: Vec<String>,
+    pub ended_at_ms: i64,
+}
+
+pub fn validate_meeting_actions(body: Option<&Value>) -> Result<MeetingActionsInput, &'static str> {
+    let err = "Invalid meeting actions";
+    let title = c_text(body.and_then(|b| b.get("title")), 120).ok_or(err)?;
+    let summary = c_text(body.and_then(|b| b.get("summary")), 500).ok_or(err)?;
+    let ended_at_ms = body
+        .and_then(|b| b.get("endedAtMs"))
+        .and_then(safe_int_value)
+        .filter(|value| *value >= 0)
+        .ok_or(err)?;
+    let values = body
+        .and_then(|b| b.get("actions"))
+        .and_then(Value::as_array)
+        .filter(|values| !values.is_empty() && values.len() <= 50)
+        .ok_or(err)?;
+    let actions = values
+        .iter()
+        .map(|value| c_text(Some(value), 500).ok_or(err))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(MeetingActionsInput {
+        title,
+        summary,
+        actions,
+        ended_at_ms,
+    })
+}
+
 /// Validate a candidate body (`Invalid Current candidate` on failure).
 pub fn validate_candidate(body: Option<&Value>) -> Result<CandidateInput, &'static str> {
     let err = "Invalid Current candidate";
@@ -1343,6 +1377,26 @@ mod tests {
             "proposedNextStep": "step", "confidence": 0.5, "surfaceAt": 100, "expiresAt": 50,
         });
         assert!(validate_candidate(Some(&bad_expiry)).is_err());
+    }
+
+    #[test]
+    fn validate_meeting_actions_enforces_bounds() {
+        let value = json!({
+            "title": "Weekly sync",
+            "summary": "Agreed next steps",
+            "actions": ["Ship the fix — Ana", "Review the release"],
+            "endedAtMs": 123,
+        });
+        let input = validate_meeting_actions(Some(&value)).unwrap();
+        assert_eq!(input.actions.len(), 2);
+        assert_eq!(input.ended_at_ms, 123);
+        assert!(validate_meeting_actions(Some(&json!({
+            "title": "Weekly sync",
+            "summary": "Agreed next steps",
+            "actions": [],
+            "endedAtMs": 123,
+        })))
+        .is_err());
     }
 
     #[test]

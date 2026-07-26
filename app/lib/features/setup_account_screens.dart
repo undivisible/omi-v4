@@ -2229,11 +2229,9 @@ Future<List<OmiNumber>> loadOmiNumbers(AppServices services) async {
   }
 
   var meetings = const <MeetingNote>[];
-  if (meetingAssistSupported) {
-    try {
-      meetings = await services.meetingNotes.list();
-    } catch (_) {}
-  }
+  try {
+    meetings = await services.meetingNotes.list();
+  } catch (_) {}
   var transcribedMinutes = 0;
   for (final note in meetings) {
     final span = note.endedAt.difference(note.startedAt);
