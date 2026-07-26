@@ -536,8 +536,12 @@ pub(crate) fn test_bound(
 
 #[cfg(test)]
 mod tests {
-    use super::{ComputerUseError, available, bind, capabilities, prepare, valid_action};
-    use crate::signals::{ActionRisk, ComputerUseAction};
+    use super::valid_action;
+    #[cfg(target_os = "macos")]
+    use super::{ComputerUseError, available, bind, capabilities, prepare};
+    #[cfg(target_os = "macos")]
+    use crate::signals::ActionRisk;
+    use crate::signals::ComputerUseAction;
     #[cfg(target_os = "macos")]
     use praefectus::CancellationToken;
 
