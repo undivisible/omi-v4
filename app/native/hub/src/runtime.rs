@@ -1531,7 +1531,7 @@ impl CommandDispatcher {
                     ephemeral_token: ephemeral_token.clone(),
                     model: model.clone(),
                     resumption_handle: resumption_handle.clone(),
-                    session_context: session_context.clone(),
+                    session_context: Some(live_session_context(session_context.as_deref())),
                 };
                 if transcription
                     .send(TranscriptionControl::StartLive(start))
@@ -1604,7 +1604,7 @@ impl CommandDispatcher {
                     .send(TranscriptionControl::UpdateLiveContext {
                         request_id,
                         stream_id: live_stream_id.clone(),
-                        session_context: session_context.clone(),
+                        session_context: live_session_context(Some(session_context)),
                     })
                     .await
                     .is_err()
@@ -2065,6 +2065,25 @@ fn framed_assistant_prompt(
     }
 }
 
+fn current_datetime_context(now: chrono::DateTime<chrono::FixedOffset>) -> String {
+    format!(
+        "<current_datetime>\nCurrent local date and time: {}\nTimezone offset: {}\n</current_datetime>",
+        now.format("%Y-%m-%d %H:%M:%S %:z"),
+        now.format("%:z")
+    )
+}
+
+fn live_session_context(session_context: Option<&str>) -> String {
+    let datetime = current_datetime_context(chrono::Local::now().fixed_offset());
+    match session_context
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        Some(context) => format!("{datetime}\n\n{context}"),
+        None => datetime,
+    }
+}
+
 fn assistant_prompt(memory_context: Option<&str>, text: &str) -> String {
     match memory_context
         .map(str::trim)
@@ -2276,7 +2295,11 @@ async fn dispatch_assistant(
         ToolStatus::Complete,
         Some(&format!("{ONLINE_CHAT_MODEL_DETAIL}:{routed_model}")),
     );
-    let mut prompt = framed_assistant_prompt(origin, context.as_deref(), &text);
+    let mut prompt = format!(
+        "{}\n\n{}",
+        framed_assistant_prompt(origin, context.as_deref(), &text),
+        current_datetime_context(chrono::Local::now().fixed_offset())
+    );
     if let Some(document) = user_profile.as_ref()
         && let Some(custom_prompt) = crate::user_profile::custom_prompt(document)
     {
@@ -7323,6 +7346,19 @@ mod tests {
         assert!(chat.ends_with("hello"));
         assert_eq!(framed_assistant_prompt(None, None, "hello"), chat);
         assert!(!chat.contains("desktop agent"));
+    }
+
+    #[test]
+    fn dynamic_datetime_context_is_local_and_live_context_preserves_screen_context() {
+        let now = chrono::DateTime::parse_from_rfc3339("2026-07-25T14:30:00-04:00")
+            .unwrap_or_else(|error| panic!("fixed timestamp parses: {error}"));
+        let datetime = current_datetime_context(now);
+        assert!(datetime.contains("2026-07-25 14:30:00 -04:00"));
+        assert!(datetime.contains("Timezone offset: -04:00"));
+
+        let live = live_session_context(Some("Current screen:\nMail"));
+        assert!(live.contains("<current_datetime>"));
+        assert!(live.ends_with("Current screen:\nMail"));
     }
 
     #[tokio::test]
