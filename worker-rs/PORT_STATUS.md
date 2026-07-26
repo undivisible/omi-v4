@@ -2,8 +2,8 @@
 
 > **Production cutover complete (2026-07-24).** `worker-rs` serves
 > `omi.tsc.hk` and `api.omi.tsc.hk`. Language-neutral `cloud/` owns D1
-> migrations, static assets, static builds, and the FaceTime container image.
-> The retired TypeScript runtime and test suite were removed after the
+> migrations, static assets, and static builds. `worker-rs` owns the FaceTime
+> container image. The retired TypeScript runtime and test suite were removed after the
 > scenario-level Rust checks recorded here passed.
 
 ## Audit snapshot (2026-07-24, post-cutover)

@@ -234,7 +234,7 @@ citation cannot appear in the profile view either.
 ## 9. The vector index
 
 Semantic recall is a second index over the same claims, never a second source.
-`worker/src/memory-vectors.ts` enqueues touched claim ids into
+`worker-rs/src/routes_memory/wasm_glue.rs` enqueues touched claim ids into
 `pending_embeddings` after every log append — from the cloud write paths and
 from `zkr-sync` alike — and `drainPendingEmbeddings` embeds them through Workers
 AI and upserts into Vectorize, deleting the vector instead when the claim is no
