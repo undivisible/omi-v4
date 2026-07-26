@@ -18,7 +18,7 @@ command -v flutter >/dev/null 2>&1 || {
 # the build the marketing site's "Try the hub" embed loads; the signed-in web
 # app is a different deployment and must not be built from here.
 (cd "$app" && flutter build web --release --base-href=/hub/ \
-  --dart-define=OMI_DEMO=1)
+  --dart-define=OMI_DEMO=1 --no-wasm-dry-run)
 
 rm -rf "$out"
 mkdir -p "$out"

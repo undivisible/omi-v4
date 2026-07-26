@@ -142,7 +142,9 @@ final class AppServices {
       source: _conversationSource,
       now: _now,
       isReady: () => chatReady || localMode,
-      isLocalOnly: () => localMode && !chatReady,
+      isLocalOnly: () =>
+          (localMode && !chatReady) ||
+          (conversations == null && localConversations != null),
       localStore: localConversations,
       isDisposed: () => _disposed,
       currentUid: () => auth.snapshot.session?.uid,

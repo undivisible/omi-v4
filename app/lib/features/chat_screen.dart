@@ -1409,7 +1409,7 @@ class ChatScreenState extends State<ChatScreen>
                               physics: const AlwaysScrollableScrollPhysics(
                                 parent: BouncingScrollPhysics(),
                               ),
-                              reverse: !omiDemoMode && !widget.previewMode,
+                              reverse: true,
                               // The message directly above the home view is
                               // the peek, so it has to be built even when the
                               // home view is taller than the viewport.
@@ -2405,12 +2405,38 @@ class _ChatHome extends StatelessWidget {
           if (compact)
             Padding(
               padding: const EdgeInsets.only(bottom: 8),
-              child: Center(
-                child: OmiActivityOrb(
-                  key: const Key('demo_rotating_mark'),
-                  size: 28,
-                  period: const Duration(seconds: 10),
-                  color: const Color(0xff4e4965),
+              child: DecoratedBox(
+                key: const Key('demo_history_preview'),
+                decoration: BoxDecoration(
+                  color: colors.cardBg.withValues(alpha: .72),
+                  border: Border.all(color: colors.hairline),
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(10, 8, 12, 8),
+                  child: Row(
+                    children: [
+                      OmiActivityOrb(
+                        key: const Key('demo_rotating_mark'),
+                        size: 22,
+                        period: const Duration(seconds: 10),
+                        color: const Color(0xff4e4965),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          demoHubWelcome,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 11,
+                            height: 1.28,
+                            color: colors.ink,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ),
@@ -2569,17 +2595,17 @@ class _CurrentFocusState extends State<_CurrentFocus> {
               ),
             ),
             Padding(
-              padding: EdgeInsets.all(compact ? 14 : 20),
+              padding: EdgeInsets.all(compact ? 10 : 20),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   Row(
                     children: [
                       SizedBox(
-                        width: 30,
-                        height: 30,
+                        width: compact ? 26 : 30,
+                        height: compact ? 26 : 30,
                         child: OmiActivityOrb(
-                          size: 22,
+                          size: compact ? 18 : 22,
                           state: OmiOrbState.thinking,
                           period: const Duration(seconds: 7),
                           color: colors.hintBlue,
@@ -2599,12 +2625,12 @@ class _CurrentFocusState extends State<_CurrentFocus> {
                       _CurrentChip(label: source, color: colors.hintBlue),
                     ],
                   ),
-                  SizedBox(height: compact ? 12 : 18),
+                  SizedBox(height: compact ? 8 : 18),
                   Text(
                     card.title,
                     key: const Key('current_focus_title'),
                     style: TextStyle(
-                      fontSize: 24,
+                      fontSize: compact ? 20 : 24,
                       height: 1.08,
                       fontWeight: FontWeight.w600,
                       letterSpacing: -1,
@@ -2624,14 +2650,14 @@ class _CurrentFocusState extends State<_CurrentFocus> {
                       ),
                     ),
                   ],
-                  SizedBox(height: compact ? 12 : 18),
+                  SizedBox(height: compact ? 8 : 18),
                   _CurrentDetail(
                     label: 'WHY NOW',
                     text: card.item.reason,
                     color: colors,
                     detailKey: const Key('current_focus_reason'),
                   ),
-                  const SizedBox(height: 12),
+                  SizedBox(height: compact ? 8 : 12),
                   _CurrentDetail(
                     label: 'EVIDENCE',
                     text: evidence
@@ -2639,15 +2665,21 @@ class _CurrentFocusState extends State<_CurrentFocus> {
                         .join(' · '),
                     color: colors,
                     detailKey: const Key('current_focus_evidence'),
+                    maxLines: compact ? 1 : 2,
                   ),
-                  SizedBox(height: compact ? 10 : 16),
+                  SizedBox(height: compact ? 8 : 16),
                   DecoratedBox(
                     decoration: BoxDecoration(
                       color: colors.hintBlue.withValues(alpha: .10),
                       borderRadius: BorderRadius.circular(14),
                     ),
                     child: Padding(
-                      padding: const EdgeInsets.fromLTRB(14, 12, 10, 10),
+                      padding: EdgeInsets.fromLTRB(
+                        14,
+                        compact ? 8 : 12,
+                        10,
+                        compact ? 6 : 10,
+                      ),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
@@ -2673,7 +2705,7 @@ class _CurrentFocusState extends State<_CurrentFocus> {
                               color: colors.ink,
                             ),
                           ),
-                          const SizedBox(height: 6),
+                          SizedBox(height: compact ? 2 : 6),
                           Row(
                             children: [
                               TextButton(
@@ -2683,9 +2715,9 @@ class _CurrentFocusState extends State<_CurrentFocus> {
                                 ),
                                 style: TextButton.styleFrom(
                                   foregroundColor: colors.hintBlue,
-                                  padding: const EdgeInsets.symmetric(
+                                  padding: EdgeInsets.symmetric(
                                     horizontal: 4,
-                                    vertical: 6,
+                                    vertical: compact ? 3 : 6,
                                   ),
                                   textStyle: const TextStyle(
                                     fontSize: 13,
@@ -2702,9 +2734,9 @@ class _CurrentFocusState extends State<_CurrentFocus> {
                                       widget.onComplete!(card.item.id),
                                   style: TextButton.styleFrom(
                                     foregroundColor: colors.muted,
-                                    padding: const EdgeInsets.symmetric(
+                                    padding: EdgeInsets.symmetric(
                                       horizontal: 4,
-                                      vertical: 6,
+                                      vertical: compact ? 3 : 6,
                                     ),
                                     textStyle: const TextStyle(
                                       fontSize: 13,
@@ -2736,12 +2768,14 @@ class _CurrentDetail extends StatelessWidget {
     required this.text,
     required this.color,
     required this.detailKey,
+    this.maxLines = 2,
   });
 
   final String label;
   final String text;
   final _HubColors color;
   final Key detailKey;
+  final int maxLines;
 
   @override
   Widget build(BuildContext context) => DecoratedBox(
@@ -2766,7 +2800,7 @@ class _CurrentDetail extends StatelessWidget {
           Text(
             text,
             key: detailKey,
-            maxLines: 2,
+            maxLines: maxLines,
             overflow: TextOverflow.ellipsis,
             style: TextStyle(fontSize: 12, height: 1.35, color: color.ink),
           ),

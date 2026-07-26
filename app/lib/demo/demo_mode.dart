@@ -14,5 +14,10 @@ const bool omiDemoMode = _omiDemo == '1' || _omiDemo == 'true';
 /// conversation all agree with each other.
 const demoPersonName = 'Alex';
 
+const demoHubWelcome =
+    'Hi — I’m Omi. This is your hub: recent conversations sit above, your '
+    'Current tells you where to start, and every useful answer can point back '
+    'to its source.';
+
 /// Where "Open Omi" sends a visitor who wants the real thing.
 const demoSignInUrl = '/portal';

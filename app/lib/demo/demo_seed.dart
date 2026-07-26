@@ -1,6 +1,7 @@
 import '../features/meeting_notes.dart';
 import '../native/generated/signals/signals.dart'
     show MemoryItem, MemorySearchItem;
+import 'demo_mode.dart';
 
 /// The demo's working context.
 ///
@@ -61,6 +62,27 @@ Map<String, Object?> _current({
 
 /// The currents the demo's hub home shows, newest intent first.
 List<Map<String, Object?>> demoCurrents() => [
+  _current(
+    id: 'current-meet-omi',
+    title: 'Meet your Omi hub.',
+    summary:
+        'Omi turns the context you choose to capture into evidence-backed '
+        'memory, then brings forward the few things worth your attention.',
+    sourceKind: 'start here',
+    reason:
+        'This is the place to see what matters, trace why, and decide what '
+        'to do. Everything in this browser is sample data.',
+    proposedNextStep: 'Ask Omi: What are Currents?',
+    confidence: 1,
+    createdAgo: const Duration(minutes: 1),
+    evidence: const [
+      (
+        'source-zkr-principles',
+        'Every important claim links back to its source; corrections '
+            'supersede history instead of rewriting it.',
+      ),
+    ],
+  ),
   _current(
     id: 'current-pendant-ncs',
     title:
@@ -320,10 +342,9 @@ const demoConversation = <({String role, String text})>[
   (
     role: 'assistant',
     text:
-        'Welcome — I am Omi, and this is a guided walkthrough of my own hub. '
-        'Everything here is sample data belonging to nobody, and it all runs '
-        'in your browser. Ask me anything, or take the tour from the panel in '
-        'the corner.',
+        '$demoHubWelcome Ask “What are Currents?”, “How do you know that?”, '
+        'or “Show me the brief.” Everything here is sample data running in '
+        'your browser.',
   ),
 ];
 
