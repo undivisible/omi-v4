@@ -2388,7 +2388,7 @@ main:has(.hub-page) {
 .hub-page .shot-frame {
   height: 100%;
   aspect-ratio: auto;
-  --hub-scale: 1;
+  --hub-scale: 0.88;
   border: 0;
   border-radius: 0;
   box-shadow: none;
@@ -2429,6 +2429,10 @@ main:has(.hub-page) {
 @media (max-width: 700px) {
   main:has(.hub-page) {
     height: calc(100svh - 5rem);
+  }
+
+  .hub-page .shot-frame {
+    --hub-scale: 1;
   }
 
   .foot-compact {
