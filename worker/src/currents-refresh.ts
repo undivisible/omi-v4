@@ -12,7 +12,11 @@ const completionTimeoutMs = 20_000;
 export type CurrentContentKind = "agent_action" | "human_action" | "awareness";
 
 export const normalizeContentKind = (value: unknown): CurrentContentKind => {
-  if (value === "agent_action" || value === "human_action" || value === "awareness")
+  if (
+    value === "agent_action" ||
+    value === "human_action" ||
+    value === "awareness"
+  )
     return value;
   return "human_action";
 };
@@ -52,10 +56,7 @@ type GeneratedDraft = {
 const collapse = (value: string) =>
   value.split(/\s+/).filter(Boolean).join(" ");
 
-const readState = async (
-  env: Bindings,
-  uid: string,
-): Promise<RefreshState> => {
+const readState = async (env: Bindings, uid: string): Promise<RefreshState> => {
   const row = await env.DB.prepare(
     "SELECT last_checked_at, last_regenerated_at, memory_watermark FROM currents_refresh_state WHERE uid = ?1",
   )
@@ -216,7 +217,9 @@ const speedCompletion = async (
       choices?: Array<{ message?: { content?: unknown } }>;
     };
     const content = value.choices?.[0]?.message?.content;
-    return typeof content === "string" && content.trim() ? content.trim() : null;
+    return typeof content === "string" && content.trim()
+      ? content.trim()
+      : null;
   } catch {
     return null;
   }
@@ -230,7 +233,7 @@ export const aiNeedsRefresh = async (
   if (context.memoryLines.length === 0) return null;
   const prompt = [
     "Decide whether proactive task suggestions should refresh.",
-    "Reply ONLY with JSON: {\"refresh\":true|false,\"reason\":\"...\"}",
+    'Reply ONLY with JSON: {"refresh":true|false,"reason":"..."}',
     "",
     `Existing currents (${context.existingTitles.length}):`,
     ...context.existingTitles.slice(0, 8).map((title) => `- ${title}`),
@@ -239,10 +242,12 @@ export const aiNeedsRefresh = async (
     `Memory watermark ms: ${state.memory_watermark}; latest memory ms: ${context.memoryWatermark}`,
     "",
     "Recent memory excerpts:",
-    ...context.memoryLines.slice(0, 6).map(
-      (line) =>
-        `- [${line.sourceKind ?? "memory"}] ${collapse(line.content).slice(0, 160)}`,
-    ),
+    ...context.memoryLines
+      .slice(0, 6)
+      .map(
+        (line) =>
+          `- [${line.sourceKind ?? "memory"}] ${collapse(line.content).slice(0, 160)}`,
+      ),
   ].join("\n");
   const content = await speedCompletion(env, prompt);
   if (!content) return null;
@@ -272,7 +277,9 @@ const inferKind = (line: MemoryLine): CurrentContentKind => {
 };
 
 const heuristicDrafts = (context: RefreshContext): GeneratedDraft[] => {
-  const seen = new Set(context.existingTitles.map((title) => title.toLowerCase()));
+  const seen = new Set(
+    context.existingTitles.map((title) => title.toLowerCase()),
+  );
   const drafts: GeneratedDraft[] = [];
   for (const line of context.memoryLines) {
     const content = collapse(line.content);
@@ -294,9 +301,7 @@ const heuristicDrafts = (context: RefreshContext): GeneratedDraft[] => {
             ? `Keep in mind for today: ${content}`.slice(0, 500)
             : `Do the smallest next step: ${content}`.slice(0, 500),
       evidenceId: line.evidenceId,
-      ...(contentKind === "agent_action"
-        ? { tool: "assistant" }
-        : {}),
+      ...(contentKind === "agent_action" ? { tool: "assistant" } : {}),
     });
     if (drafts.length >= refreshBatchSize) break;
   }
@@ -312,12 +317,14 @@ const parseDrafts = (
   if (!Array.isArray(items)) return [];
   const drafts: GeneratedDraft[] = [];
   for (const item of items) {
-    if (item === null || typeof item !== "object" || Array.isArray(item)) continue;
+    if (item === null || typeof item !== "object" || Array.isArray(item))
+      continue;
     const row = item as Record<string, unknown>;
     const evidenceId =
       typeof row.evidenceId === "string" ? row.evidenceId.trim() : "";
     const title = typeof row.title === "string" ? collapse(row.title) : "";
-    const summary = typeof row.summary === "string" ? collapse(row.summary) : "";
+    const summary =
+      typeof row.summary === "string" ? collapse(row.summary) : "";
     const reason = typeof row.reason === "string" ? collapse(row.reason) : "";
     const instruction =
       typeof row.instruction === "string" ? collapse(row.instruction) : "";
@@ -362,10 +369,12 @@ const aiDrafts = async (
     "- awareness: meetings, events, deadlines to know about",
     "",
     "Use evidenceId values from this list only:",
-    ...context.memoryLines.slice(0, 12).map(
-      (line) =>
-        `- ${line.evidenceId} [${line.sourceKind ?? "memory"}] ${collapse(line.content).slice(0, 140)}`,
-    ),
+    ...context.memoryLines
+      .slice(0, 12)
+      .map(
+        (line) =>
+          `- ${line.evidenceId} [${line.sourceKind ?? "memory"}] ${collapse(line.content).slice(0, 140)}`,
+      ),
     "",
     "Avoid repeating these existing titles:",
     ...context.existingTitles.slice(0, 8).map((title) => `- ${title}`),
@@ -375,11 +384,7 @@ const aiDrafts = async (
   return parseDrafts(content, allowed);
 };
 
-const expireRefreshBatch = async (
-  env: Bindings,
-  uid: string,
-  now: number,
-) => {
+const expireRefreshBatch = async (env: Bindings, uid: string, now: number) => {
   await env.DB.prepare(
     `UPDATE currents SET status = 'expired', updated_at = ?1
      WHERE uid = ?2 AND status IN ('candidate', 'surfaced', 'snoozed')
@@ -520,7 +525,10 @@ export const refreshCurrents = async (
   } else {
     await writeState(env, uid, {
       last_checked_at: now,
-      memory_watermark: Math.max(state.memory_watermark, context.memoryWatermark),
+      memory_watermark: Math.max(
+        state.memory_watermark,
+        context.memoryWatermark,
+      ),
     });
   }
   return {

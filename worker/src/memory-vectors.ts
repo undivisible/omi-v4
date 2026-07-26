@@ -274,7 +274,8 @@ export const memoryContextFor = async (
     const claimLines = items.map(
       (item) => `\n- ${item.content.slice(0, snippetCharacters)}`,
     );
-    let output = aboutUser ?? "Relevant synced memory (server-retrieved, may be partial):";
+    let output =
+      aboutUser ?? "Relevant synced memory (server-retrieved, may be partial):";
     if (aboutUser && claimLines.length > 0) {
       output = `${aboutUser}\n\nRelevant synced memory (server-retrieved, may be partial):`;
     }

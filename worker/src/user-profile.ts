@@ -20,7 +20,9 @@ const stableSoulSections = new Set([
 ]);
 
 export const isSoulSectionKey = (key: string): boolean =>
-  soulSections.some((section) => section.toLowerCase() === key.trim().toLowerCase());
+  soulSections.some(
+    (section) => section.toLowerCase() === key.trim().toLowerCase(),
+  );
 
 export const soulSectionStability = (section: string): "stable" | "current" =>
   stableSoulSections.has(section) ? "stable" : "current";
