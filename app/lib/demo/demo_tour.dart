@@ -350,7 +350,7 @@ class _TierLine extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final live = model.tier != DemoModelTier.scripted;
+    final live = model.tier == DemoModelTier.promptApi;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -384,11 +384,6 @@ class _TierLine extends StatelessWidget {
   }
 }
 
-/// The WebGPU opt-in.
-///
-/// It is only rendered when the machine passed every check, it names the
-/// download and its size before anything is fetched, and one click is the
-/// only thing that can start the fetch.
 class _ModelOptIn extends StatelessWidget {
   const _ModelOptIn({
     required this.model,
@@ -406,7 +401,7 @@ class _ModelOptIn extends StatelessWidget {
       return Padding(
         padding: const EdgeInsets.only(top: 10),
         child: Text(
-          'Downloading ${model.downloadModel} — ${model.progress}%',
+          'Preparing your browser\'s model — ${model.progress}%',
           style: TextStyle(fontSize: 11.5, color: muted),
         ),
       );
@@ -420,8 +415,6 @@ class _ModelOptIn extends StatelessWidget {
         ),
       );
     }
-    // The browser's own model first: it is smaller, shared with every other
-    // site, and the browser owns the download.
     if (model.canOfferPromptApi) {
       return _OptIn(
         buttonKey: const Key('demo_tour_enable_browser_model'),
@@ -436,38 +429,7 @@ class _ModelOptIn extends StatelessWidget {
         muted: muted,
       );
     }
-    if (!model.canOfferWebgpu) return const SizedBox.shrink();
-    return Padding(
-      padding: const EdgeInsets.only(top: 10),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            'This machine could run a real model here instead. It downloads '
-            '${model.downloadModel} and its runtime — about '
-            '${model.downloadMb} MB — and then runs on your GPU. Nothing you '
-            'type is sent anywhere, and nothing is fetched until you press '
-            'this.',
-            style: TextStyle(fontSize: 11.5, height: 1.45, color: muted),
-          ),
-          const SizedBox(height: 8),
-          TextButton(
-            key: const Key('demo_tour_enable_model'),
-            onPressed: model.enableWebgpu,
-            style: TextButton.styleFrom(
-              foregroundColor: ink,
-              padding: const EdgeInsets.symmetric(horizontal: 10),
-              minimumSize: const Size(0, 32),
-              textStyle: const TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-            child: Text('Download ${model.downloadMb} MB and run it here'),
-          ),
-        ],
-      ),
-    );
+    return const SizedBox.shrink();
   }
 }
 

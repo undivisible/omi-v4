@@ -11,7 +11,7 @@ import 'demo_seed.dart';
 /// The seeded stand-in for the Rust hub, used only by the public demo build.
 ///
 /// It answers the requests that carry the demo's content — memory, the brief,
-/// and one scripted assistant turn per message — entirely in this isolate. It
+/// and one Prompt API assistant turn per message — entirely in this isolate. It
 /// deliberately does **not** pretend to do anything it could not do in a
 /// browser: capture, the pendant, transcription, live voice, meetings,
 /// computer-use approvals and the workspace scan all throw
@@ -178,9 +178,8 @@ final class DemoNativeHub with NativeHubWithoutCapture implements NativeHub {
   /// One assistant turn.
   ///
   /// Where it comes from depends on what the browser can run: the visitor's
-  /// own on-device model when there is one, and the seeded replies when there
-  /// is not. Either way nothing leaves the page — there is no endpoint in
-  /// this build to send anything to.
+  /// own on-device Prompt API when there is one. Nothing leaves the page —
+  /// there is no endpoint in this build to send anything to.
   ///
   /// Whichever answers, the message is first offered to the tour, so asking
   /// about currents opens currents.
@@ -201,22 +200,14 @@ final class DemoNativeHub with NativeHubWithoutCapture implements NativeHub {
       prompt: text,
     );
     if (stream != null) {
-      unawaited(_stream(requestId, stream, step, text));
+      unawaited(_stream(requestId, stream));
       return;
     }
-    _scripted(requestId, step?.reply ?? demoReplyFor(text));
+    _unavailableReply(requestId);
   }
 
-  /// Relays a model's tokens onto the hub's own delta events. A failure
-  /// before the first token falls back to the scripted answer rather than
-  /// stranding the visitor mid-tour; a failure after it ends the turn
-  /// honestly.
-  Future<void> _stream(
-    String requestId,
-    Stream<String> stream,
-    DemoTourStep? step,
-    String text,
-  ) async {
+  /// Relays a model's tokens onto the hub's own delta events.
+  Future<void> _stream(String requestId, Stream<String> stream) async {
     var started = false;
     try {
       await for (final chunk in stream) {
@@ -234,15 +225,15 @@ final class DemoNativeHub with NativeHubWithoutCapture implements NativeHub {
         );
       }
     } catch (error) {
-      DemoModel.instance.degradeToScripted(error);
+      DemoModel.instance.degradeToUnavailable(error);
       if (!started) {
-        _scripted(requestId, step?.reply ?? demoReplyFor(text));
+        _unavailableReply(requestId);
         return;
       }
     }
     if (_events.isClosed) return;
     if (!started) {
-      _scripted(requestId, step?.reply ?? demoReplyFor(text));
+      _unavailableReply(requestId);
       return;
     }
     _emit(
@@ -256,39 +247,18 @@ final class DemoNativeHub with NativeHubWithoutCapture implements NativeHub {
     );
   }
 
-  /// The seeded answer, streamed a clause at a time so the chat behaves the
-  /// way it does against the real hub.
-  void _scripted(String requestId, String reply) {
-    final chunks = _chunk(reply);
-    var index = 0;
-    void step() {
-      if (_events.isClosed) return;
-      final last = index == chunks.length - 1;
-      _emit(
-        NativeEventAssistantDelta(
-          value: AssistantDelta(
-            requestId: requestId,
-            text: chunks[index],
-            finalSegment: last,
-          ),
+  void _unavailableReply(String requestId) {
+    _emit(
+      NativeEventAssistantDelta(
+        value: AssistantDelta(
+          requestId: requestId,
+          text:
+              'The browser Prompt API is unavailable here. You can still '
+              'explore the guided hub and its cited Currents.',
+          finalSegment: true,
         ),
-      );
-      index += 1;
-      if (last) return;
-      _later(requestId, const Duration(milliseconds: 55), step);
-    }
-
-    _later(requestId, const Duration(milliseconds: 320), step);
-  }
-
-  static List<String> _chunk(String reply) {
-    final words = reply.split(' ');
-    final chunks = <String>[];
-    for (var i = 0; i < words.length; i += 4) {
-      final slice = words.skip(i).take(4).join(' ');
-      chunks.add(i == 0 ? slice : ' $slice');
-    }
-    return chunks.isEmpty ? [reply] : chunks;
+      ),
+    );
   }
 
   @override

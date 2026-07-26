@@ -34,8 +34,7 @@ Future<void> runOmiDemo(Widget Function(AppServices services) buildApp) async {
   // ignore: invalid_use_of_visible_for_testing_member
   SharedPreferences.setMockInitialValues(demoPreferences());
   // Asks the browser what it can run before the first frame. This only reads
-  // capabilities — it downloads nothing, and the WebGPU tier stays behind its
-  // opt-in whatever the answer is.
+  // capabilities — it does not download a model whatever the answer is.
   unawaited(DemoModel.instance.resolve());
   final services = await createDemoServices();
   runApp(buildApp(services));

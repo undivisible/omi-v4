@@ -43,7 +43,7 @@ extension type _Llm._(JSObject _) implements JSObject {
 ///
 /// The retry is not superstition: this runs during boot, and a probe that
 /// lost a race with the script tag would otherwise pin the demo to the
-/// scripted tier for the whole session.
+/// unavailable state for the whole session.
 Future<DemoModelProbe> probeDemoModels() async {
   for (var attempt = 0; attempt < 25; attempt++) {
     final llm = _llm;
@@ -63,9 +63,6 @@ Future<DemoModelProbe> probeDemoModels() async {
           final decoded = jsonDecode(raw) as Map<String, Object?>;
           return DemoModelProbe(
             promptApi: (decoded['promptApi'] as String?) ?? 'unsupported',
-            webgpu: decoded['webgpu'] == true,
-            model: (decoded['model'] as String?) ?? '',
-            downloadMb: (decoded['downloadMb'] as num?)?.round() ?? 0,
           );
         } catch (error) {
           debugPrint('demo model probe decode failed: $error');
@@ -85,7 +82,7 @@ Future<String> prepareDemoModel(
   if (llm == null) return 'unsupported';
   // Started, then waited on by polling the result property. The promise these
   // calls return cannot be awaited reliably from here, and a tour that hangs
-  // on an unresolvable future would never fall back to its scripted tier.
+  // on an unresolvable future would never settle on its unavailable state.
   try {
     llm.prepare(
       tier.toJS,

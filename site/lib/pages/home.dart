@@ -187,7 +187,7 @@ class Home extends StatelessComponent {
       description: 'A live, guided Omi hub running on disclosed sample data.',
       path: '/',
       compactFooter: true,
-      children: [_hubOnly(), _landingInfo()],
+      children: [_hubOnly()],
     );
   }
 
@@ -196,73 +196,10 @@ class Home extends StatelessComponent {
       [
         h1([.text('Omi guided hub')], classes: 'sr-only', id: 'hub-title'),
         const HubEmbedLegacy(),
-        a(
-          [.text('Learn about Omi ↓')],
-          classes: 'hub-about-link',
-          href: '#about',
-        ),
       ],
       classes: 'hub-page',
       id: 'hub',
       attributes: {'aria-labelledby': 'hub-title'},
-    );
-  }
-
-  Component _landingInfo() {
-    return section(
-      [
-        div([
-          p([.text('ABOUT OMI')], classes: 'label'),
-          h2(
-            [.text('Context you choose. Memory you can check.')],
-            classes: 'big',
-            id: 'about-title',
-          ),
-          p([
-            .text(
-              'Omi is a proactive second brain. It turns chats, meetings, and '
-              'desktop context into evidence-backed memory, then brings forward '
-              'the few cited things worth attention.',
-            ),
-          ], classes: 'mid'),
-          p([
-            .text(
-              'Use the same conversation across desktop, mobile, web, Telegram, '
-              'and iMessage. Omi asks before it takes an action.',
-            ),
-          ], classes: 'small'),
-          a([.text('Open Omi')], classes: 'btn btn-solid', href: portalUrl),
-        ], classes: 'landing-brief-copy'),
-        div([
-          img(
-            src: '/omi-pendant-product.png',
-            alt: 'The optional Omi pendant.',
-            width: 1103,
-            height: 1287,
-            classes: 'landing-pendant',
-            attributes: {'loading': 'lazy'},
-          ),
-          div([
-            p([.text('THE PENDANT · OPTIONAL')], classes: 'label'),
-            p([
-              .text(
-                'The pendant relays audio over Bluetooth through your phone. '
-                'The desktop can also capture voice, meetings, and workspace '
-                'context.',
-              ),
-            ]),
-            p([
-              .text(
-                'Capture should stay visible and controllable: pause, delete, '
-                'and retention choices belong to you.',
-              ),
-            ], classes: 'small'),
-          ], classes: 'landing-pendant-copy'),
-        ], classes: 'landing-pendant-panel'),
-      ],
-      classes: 'landing-brief wrap',
-      id: 'about',
-      attributes: {'aria-labelledby': 'about-title'},
     );
   }
 

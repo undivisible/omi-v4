@@ -64,14 +64,16 @@ Map<String, Object?> _current({
 List<Map<String, Object?>> demoCurrents() => [
   _current(
     id: 'current-meet-omi',
-    title: 'Meet your Omi hub.',
+    title: 'Context you choose. Memory you can check.',
     summary:
-        'Omi turns the context you choose to capture into evidence-backed '
-        'memory, then brings forward the few things worth your attention.',
+        'Omi is a proactive second brain. It turns chats, meetings, and '
+        'desktop context into evidence-backed memory, then brings forward '
+        'the few cited things worth attention.',
     sourceKind: 'start here',
     reason:
-        'This is the place to see what matters, trace why, and decide what '
-        'to do. Everything in this browser is sample data.',
+        'Use the same conversation across desktop, mobile, web, Telegram, '
+        'and iMessage. Omi asks before it takes an action. Everything in '
+        'this browser is sample data.',
     proposedNextStep: 'Ask Omi: What are Currents?',
     confidence: 1,
     createdAgo: const Duration(minutes: 1),
@@ -80,6 +82,26 @@ List<Map<String, Object?>> demoCurrents() => [
         'source-zkr-principles',
         'Every important claim links back to its source; corrections '
             'supersede history instead of rewriting it.',
+      ),
+    ],
+  ),
+  _current(
+    id: 'current-pendant-optional',
+    title: 'The pendant is optional.',
+    summary:
+        'It relays audio over Bluetooth through your phone. Desktop can also '
+        'capture voice, meetings, and workspace context.',
+    sourceKind: 'capture',
+    reason:
+        'Capture stays visible and controllable: pause, delete, and '
+        'retention choices belong to you.',
+    proposedNextStep: 'Ask Omi: What can I control?',
+    confidence: 0.98,
+    createdAgo: const Duration(minutes: 2),
+    evidence: const [
+      (
+        'source-firmware-readme',
+        'The pendant is built around a Bluetooth relay and its capture path.',
       ),
     ],
   ),
@@ -347,103 +369,6 @@ const demoConversation = <({String role, String text})>[
         'your browser.',
   ),
 ];
-
-/// Canned assistant replies, matched on keywords. The demo never reaches a
-/// model — this map is the whole of what it can say, and [demoFallbackReply]
-/// says so out loud rather than pretending otherwise.
-const demoReplies = <(List<String>, String)>[
-  (
-    ['pendant', 'firmware', 'ncs', 'nrf', 'pdm', 'devkit'],
-    'Pendant firmware builds against NCS v3.4.0 inside Nordic\'s toolchain '
-        'container, for the omi/nrf5340/cpuapp board target. The nRF52840 '
-        'devkit targets still assume the nrfx 2.x PDM API and do not build '
-        'under 3.x, so they are excluded rather than shipped broken. OTA runs '
-        'over the MCUmgr Bluetooth transport, and the static partition map has '
-        'to be scoped to the board target by filename.\n\n'
-        'Cited: firmware/README.md build matrix, the partition-map rename.',
-  ),
-  (
-    ['worker', 'cloudflare', 'rust', 'cutover', 'd1'],
-    'There are two Workers: the deployed TypeScript one (Bun, Hono, D1) and '
-        'worker-rs, a cutover-ready parity port on workers-rs. The routes can '
-        'move one at a time. Auth and the D1 read paths are stateless enough '
-        'to go first; billing and channel delivery hold state and should go '
-        'last, once the read paths have run in production for a while.',
-  ),
-  (
-    ['memory', 'zkr', 'evidence', 'claim', 'citation', 'correction'],
-    'Memory is zkr: source evidence is authoritative, claims are temporal — '
-        'they record both when a fact was true and when it was recorded — and '
-        'corrections supersede history rather than rewriting it. Embeddings '
-        'and search indexes are projections that can be rebuilt from the '
-        'stored evidence. Retrieval is bounded, tenant-scoped, and always '
-        'cited, which is why every current on your hub carries its sources.',
-  ),
-  (
-    ['rewind', 'capture', 'dhash', 'screen', 'frame'],
-    'Rewind\'s capture policy compares a perceptual hash of each frame against '
-        'the previous one and skips the preview encode when they are near '
-        'duplicates, so an idle screen stops writing frames. The threshold is '
-        'the part worth checking: scrolling content is where a hash-based skip '
-        'is most likely to be either too eager or useless.',
-  ),
-  (
-    ['crepus', 'crepuscularity', 'brief', 'render', 'ui'],
-    'The hub composes the hero brief as a .crepus document and Crepuscularity '
-        'renders it. Because a model authored it, the client treats it as '
-        'untrusted input: a document that is blank, over the node or depth '
-        'caps, or that references a node kind outside the allowlist is '
-        'rejected, and the hand-built brief renders instead. That rejection is '
-        'the security boundary, not a nicety.',
-  ),
-  (
-    ['praefectus', 'computer use', 'approval', 'agent', 'action'],
-    'Computer use goes through Praefectus. The model only proposes strict '
-        'ActionRequest values; the host keeps planning, identity, approval, '
-        'permissions and policy. The host signs one bounded Ed25519 '
-        'AuthorityGrant per operation and Praefectus verifies it against a '
-        'pinned issuer key before dispatching. Dispatch is durable and '
-        'at-most-once — and when the outcome genuinely is not known, it says '
-        'outcome_unknown rather than claiming a safe cancellation.',
-  ),
-  (
-    ['alpenglow', 'linux', 'boot', 'musl', 'distro'],
-    'Alpenglow is the musl Linux side project: dinit as init, Oil packages, an '
-        'immutable rootfs loaded entirely into RAM from an erofs or squashfs '
-        'image, with /home, package state and caches persisted on a '
-        'bcachefs-backed /state. It boots to login in under a second on '
-        'native virtualisation.',
-  ),
-  (
-    ['architecture', 'omi', 'how does', 'overview', 'stack'],
-    'Omi is one Flutter client over a Rust hub. The hub (Rinf-bridged) does '
-        'assistant dispatch and model-tier routing, Gemini Live voice, the '
-        'workspace scan, meetings, memory and computer use. A Cloudflare '
-        'Worker handles auth, D1 persistence, billing and channel delivery. '
-        'The pendant is an nRF5340 running the CV1 firmware image. Memory is '
-        'zkr, extraction and ranking is rx4, computer use is Praefectus, and '
-        'the brief is rendered by Crepuscularity.',
-  ),
-];
-
-const demoFallbackReply =
-    'No model is running in this browser, so I am answering from a fixed set '
-    'of notes: what Omi is, the brief, currents, memory and citations, '
-    'meetings, the pendant, and settings — plus how it is built, from the '
-    'pendant firmware and the Worker to zkr memory, Rewind capture, '
-    'Crepuscularity, Praefectus and Alpenglow. '
-    'Nothing you type here leaves your browser. Open Omi for the real '
-    'assistant.';
-
-String demoReplyFor(String prompt) {
-  final text = prompt.toLowerCase();
-  for (final (keywords, reply) in demoReplies) {
-    for (final keyword in keywords) {
-      if (text.contains(keyword)) return reply;
-    }
-  }
-  return demoFallbackReply;
-}
 
 /// The memory the seeded currents cite. Every `sourceId` in [demoCurrents]
 /// appears here, so following a citation lands somewhere real.
