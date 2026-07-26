@@ -2295,10 +2295,12 @@ async fn dispatch_assistant(
         ToolStatus::Complete,
         Some(&format!("{ONLINE_CHAT_MODEL_DETAIL}:{routed_model}")),
     );
+    let framed_prompt = framed_assistant_prompt(origin, context.as_deref(), &text);
+    let datetime = current_datetime_context(chrono::Local::now().fixed_offset());
     let mut prompt = format!(
-        "{}\n\n{}",
-        framed_assistant_prompt(origin, context.as_deref(), &text),
-        current_datetime_context(chrono::Local::now().fixed_offset())
+        "{}{}\n\n{text}",
+        framed_prompt.strip_suffix(&text).unwrap_or(&framed_prompt),
+        datetime
     );
     if let Some(document) = user_profile.as_ref()
         && let Some(custom_prompt) = crate::user_profile::custom_prompt(document)
@@ -7300,6 +7302,7 @@ mod tests {
         assert!(captured.starts_with(CREPUS_ARTIFACTS_GUIDANCE));
         assert!(captured.contains("Relevant things you know about the user:\n"));
         assert!(captured.contains("Sam prefers espresso"));
+        assert!(captured.contains("<current_datetime>"));
         assert!(captured.ends_with("\n\nwhat coffee do I like?"));
 
         dispatch_assistant(
