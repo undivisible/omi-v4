@@ -13,7 +13,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 
-use super::models::{Frame, Retention};
+use super::models::{Display, Frame, Retention};
 
 const INDEX_NAME: &str = "index.jsonl";
 const FRAMES_DIR_NAME: &str = "frames";
@@ -26,6 +26,7 @@ const FRAMES_DIR_NAME: &str = "frames";
 pub struct NewFrame {
     pub captured_at_ms: i64,
     pub hash: String,
+    pub display: Display,
     pub app_name: Option<String>,
     pub bundle_id: Option<String>,
     pub window_title: Option<String>,
@@ -114,8 +115,9 @@ impl Store {
         self.load();
         let captured_at_ms = record.captured_at_ms;
         let relative = format!(
-            "{FRAMES_DIR_NAME}/{}/{captured_at_ms}.jpg",
-            day(captured_at_ms)
+            "{FRAMES_DIR_NAME}/{}/{captured_at_ms}-{}.jpg",
+            day(captured_at_ms),
+            safe_display_id(&record.display.id)
         );
         let path = self.root.join(&relative);
         if let Some(parent) = path.parent() {
@@ -127,6 +129,7 @@ impl Store {
             relative_path: relative,
             bytes: jpeg.len() as u64,
             hash: record.hash,
+            display: record.display,
             app_name: record.app_name,
             bundle_id: record.bundle_id,
             window_title: record.window_title,
@@ -293,6 +296,19 @@ impl Store {
     }
 }
 
+fn safe_display_id(id: &str) -> String {
+    let value: String = id
+        .chars()
+        .filter(|character| character.is_ascii_alphanumeric() || *character == '-')
+        .take(64)
+        .collect();
+    if value.is_empty() {
+        "display".to_owned()
+    } else {
+        value
+    }
+}
+
 /// Frames are filed by local calendar day, which is how a person looks for
 /// them; the row inside the index still carries the exact UTC instant.
 fn day(captured_at_ms: i64) -> String {
@@ -307,7 +323,7 @@ fn day(captured_at_ms: i64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{NewFrame, Store};
+    use super::{Display, NewFrame, Store};
     use crate::rewind::models::Retention;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -385,6 +401,7 @@ mod tests {
                     NewFrame {
                         captured_at_ms: BASE,
                         hash: "0123456789abcdef".to_owned(),
+                        display: Display::default(),
                         app_name: Some("Terminal".to_owned()),
                         bundle_id: Some("com.apple.Terminal".to_owned()),
                         window_title: Some("zsh".to_owned()),

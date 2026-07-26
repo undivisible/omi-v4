@@ -173,50 +173,61 @@ final class RewindClient extends ChangeNotifier {
     try {
       final state = await platform.readState();
       _systemState = state;
-      final first = await transport(
-        RewindRequestTick(
-          context: state.context,
-          idleMs: state.idleFor.inMilliseconds,
-          locked: state.locked,
-          permitted: state.permitted,
-        ),
-      );
-      final opening = _directiveOf(first);
-      if (opening is! RewindDirectivePreview) {
-        _apply(first);
-        return;
-      }
-      final stepId = _stepIdOf(first);
-      if (stepId == null) return;
+      final displays = await platform.displays();
+      var stored = false;
+      for (final display in displays) {
+        final first = await transport(
+          RewindRequestTick(
+            context: state.context,
+            display: display,
+            idleMs: state.idleFor.inMilliseconds,
+            locked: state.locked,
+            permitted: state.permitted,
+          ),
+        );
+        final opening = _directiveOf(first);
+        if (opening is! RewindDirectivePreview) {
+          _apply(first);
+          continue;
+        }
+        final stepId = _stepIdOf(first);
+        if (stepId == null) continue;
 
-      final luma = await platform.preview();
-      holding = luma != null;
-      final second = await transport(
-        RewindRequestPreviewTaken(stepId: stepId, luma: luma ?? const <int>[]),
-      );
-      final verdict = _directiveOf(second);
-      if (verdict is! RewindDirectiveEncode) {
-        // Either the similarity gate rejected it or the capture failed. The
-        // full frame is still sitting in native memory, unencoded; the
-        // `finally` drops it.
-        return;
-      }
+        final luma = await platform.preview(display);
+        holding = luma != null;
+        final second = await transport(
+          RewindRequestPreviewTaken(
+            stepId: stepId,
+            luma: luma ?? const <int>[],
+          ),
+        );
+        final verdict = _directiveOf(second);
+        if (verdict is! RewindDirectiveEncode) {
+          // Either the similarity gate rejected it or the capture failed. The
+          // full frame is still sitting in native memory, unencoded; the
+          // `finally` drops it.
+          if (holding) await platform.discardHeldFrame();
+          holding = false;
+          continue;
+        }
 
-      final encoded = await platform.encodeHeldFrame(
-        recognizeText: verdict.recognizeText,
-      );
-      // Encoding consumes the held frame whether or not it produced bytes.
-      holding = false;
-      final third = await transport(
-        RewindRequestFrameEncoded(
-          stepId: stepId,
-          jpeg: encoded?.jpeg ?? const <int>[],
-          ocrText: encoded?.ocrText,
-        ),
-      );
-      if (_directiveOf(third) is RewindDirectiveStored) {
-        await refreshFrames();
+        final encoded = await platform.encodeHeldFrame(
+          recognizeText: verdict.recognizeText,
+        );
+        // Encoding consumes the held frame whether or not it produced bytes.
+        holding = false;
+        final third = await transport(
+          RewindRequestFrameEncoded(
+            stepId: stepId,
+            jpeg: encoded?.jpeg ?? const <int>[],
+            ocrText: encoded?.ocrText,
+          ),
+        );
+        if (_directiveOf(third) is RewindDirectiveStored) {
+          stored = true;
+        }
       }
+      if (stored) await refreshFrames();
     } finally {
       if (holding) await platform.discardHeldFrame();
       _inFlight = false;

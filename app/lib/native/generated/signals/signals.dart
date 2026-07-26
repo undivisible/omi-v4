@@ -72,6 +72,7 @@ part 'onboarding_scan_completed.dart';
 part 'onboarding_scan_source.dart';
 part 'onboarding_scan_state.dart';
 part 'rewind_directive.dart';
+part 'rewind_display.dart';
 part 'rewind_frame_record.dart';
 part 'rewind_payload.dart';
 part 'rewind_request.dart';

@@ -192,7 +192,8 @@ class _FrameRow extends StatelessWidget {
               const SizedBox(width: 12),
               Expanded(
                 child: Text(
-                  frame.windowTitle ?? frame.appName ?? 'Screen',
+                  '${frame.display.name} · '
+                  '${frame.windowTitle ?? frame.appName ?? 'Screen'}',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
@@ -233,7 +234,7 @@ class _FrameDetail extends StatelessWidget {
           children: [
             Expanded(
               child: Text(
-                '${frame.appName ?? 'Screen'} · '
+                '${frame.display.name} · ${frame.appName ?? 'Screen'} · '
                 '${DateTime.fromMillisecondsSinceEpoch(frame.capturedAtMs)}',
                 style: TextStyle(
                   fontFamily: OmiFonts.sans,

@@ -9,11 +9,11 @@
 use std::path::Path;
 
 use super::engine::{Directive, Request, Response, Status};
-use super::models::{Frame, Retention, WindowContext};
+use super::models::{Display, Frame, Retention, WindowContext};
 use super::privacy::SkipReason;
 use crate::signals::{
-    RewindDirective, RewindFrameRecord, RewindPayload, RewindRequest, RewindRetentionOption,
-    RewindSkipReason, RewindStatus, RewindWindowContext,
+    RewindDirective, RewindDisplay, RewindFrameRecord, RewindPayload, RewindRequest,
+    RewindRetentionOption, RewindSkipReason, RewindStatus, RewindWindowContext,
 };
 
 impl From<RewindWindowContext> for WindowContext {
@@ -23,6 +23,34 @@ impl From<RewindWindowContext> for WindowContext {
             app_name: trimmed(context.app_name),
             window_title: trimmed(context.window_title),
         }
+    }
+}
+
+impl From<RewindDisplay> for Display {
+    fn from(display: RewindDisplay) -> Self {
+        Self {
+            id: display.id,
+            name: display.name,
+            x: display.x,
+            y: display.y,
+            width: display.width,
+            height: display.height,
+            scale: display.scale,
+            primary: display.primary,
+        }
+    }
+}
+
+fn display_to_signal(display: &Display) -> RewindDisplay {
+    RewindDisplay {
+        id: display.id.clone(),
+        name: display.name.clone(),
+        x: display.x,
+        y: display.y,
+        width: display.width,
+        height: display.height,
+        scale: display.scale,
+        primary: display.primary,
     }
 }
 
@@ -43,11 +71,13 @@ pub fn request_from_signal(request: RewindRequest) -> Option<Request> {
         RewindRequest::Open { .. } => return None,
         RewindRequest::Tick {
             context,
+            display,
             idle_ms,
             locked,
             permitted,
         } => Request::Tick {
             context: context.into(),
+            display: display.into(),
             idle_ms: idle_ms.max(0),
             locked,
             permitted,
@@ -195,6 +225,7 @@ fn frame_to_signal(frame: &Frame, root: &Path) -> RewindFrameRecord {
             .into_owned(),
         bytes: frame.bytes,
         hash: frame.hash.clone(),
+        display: display_to_signal(&frame.display),
         app_name: frame.app_name.clone(),
         bundle_id: frame.bundle_id.clone(),
         window_title: frame.window_title.clone(),
@@ -206,7 +237,7 @@ fn frame_to_signal(frame: &Frame, root: &Path) -> RewindFrameRecord {
 mod tests {
     use super::{bounded, request_from_signal, trimmed};
     use crate::rewind::engine::Request;
-    use crate::signals::{RewindRequest, RewindWindowContext};
+    use crate::signals::{RewindDisplay, RewindRequest, RewindWindowContext};
 
     #[test]
     fn open_is_not_something_the_engine_handles() {
@@ -234,6 +265,16 @@ mod tests {
                 bundle_id: Some("com.apple.Terminal".to_owned()),
                 app_name: Some(" Terminal ".to_owned()),
                 window_title: Some("   ".to_owned()),
+            },
+            display: RewindDisplay {
+                id: "1".to_owned(),
+                name: "Primary".to_owned(),
+                x: 0,
+                y: 0,
+                width: 1920,
+                height: 1080,
+                scale: 2.0,
+                primary: true,
             },
             idle_ms: -5,
             locked: false,

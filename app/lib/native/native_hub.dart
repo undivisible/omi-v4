@@ -34,6 +34,7 @@ export 'generated/signals/signals.dart'
         RewindDirectiveIdle,
         RewindDirectivePreview,
         RewindDirectiveStored,
+        RewindDisplay,
         RewindFrameRecord,
         RewindPayload,
         RewindPayloadDirective,
