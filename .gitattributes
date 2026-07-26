@@ -1,0 +1,8 @@
+firmware/omi/src/lib/core/lib/opus-1.2.1/** linguist-vendored
+firmware/devkit/** linguist-vendored
+firmware/test/** linguist-vendored
+app/ios/Flutter/** linguist-generated
+app/ios/Runner/GeneratedPluginRegistrant.* linguist-generated
+app/macos/Flutter/** linguist-generated
+app/windows/flutter/** linguist-generated
+app/lib/native/generated/** linguist-generated
