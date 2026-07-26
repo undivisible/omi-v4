@@ -185,22 +185,145 @@ class Home extends StatelessComponent {
     return Page(
       title: 'Omi — your private second brain',
       description:
-          'Omi is a private second brain: memory you can trust, live meetings, '
-          'Currents and Now Brief, Telegram and iMessage, computer help with '
-          'your approval, a voice summon, a wearable pendant, and FaceTime '
-          'calls. Open source.',
+          'Start inside Omi: a guided, live demo of the private second brain '
+          'that turns evidence into the next useful thing.',
       path: '/',
       rail: const [
-        ('top', 'Omi'),
-        ('currents', 'Currents'),
-        ('pendant', 'Pendant'),
-        ('privacy', 'Privacy'),
+        ('top', 'Start'),
+        ('hub', 'The hub'),
+        ('make-it-yours', 'Make it yours'),
       ],
-      children: [_hero(), _currents(), _pendant(), _privacy()],
+      children: [_hubHero(), _hub(), _makeItYours()],
     );
   }
 
-  Component _hero() {
+  Component _hubHero() {
+    return section(
+      [
+        div([
+          const OmiMark.hero(),
+          p([.text('OMI · GUIDED HUB')], classes: 'label rise d1'),
+          h1(
+            [.text('Start with what matters.')],
+            classes: 'giant rise d2',
+            id: 'hub-hero-title',
+          ),
+          p([
+            .text(
+              'Ask Omi anything. It shows its reasoning, the memory behind it, '
+              'and the next thing worth doing.',
+            ),
+          ], classes: 'mid rise d3'),
+          div([
+            a(
+              [.text('Enter the hub ↓')],
+              classes: 'btn btn-solid',
+              href: '#hub',
+            ),
+            a(
+              [.text('Open the app')],
+              classes: 'btn btn-line',
+              href: downloadUrl,
+            ),
+          ], classes: 'links rise d4'),
+        ], classes: 'hub-hero-copy'),
+        div([
+          img(
+            src: '/omi-pendant-product.png',
+            alt: 'The Omi pendant.',
+            width: 1103,
+            height: 1287,
+            classes: 'hub-pendant rise d3',
+          ),
+          span([.text('PENDANT · OPTIONAL')], classes: 'hub-measure'),
+        ], classes: 'hub-hero-object'),
+      ],
+      classes: 'hub-hero wrap',
+      id: 'top',
+      attributes: {'aria-labelledby': 'hub-hero-title'},
+    );
+  }
+
+  Component _hub() {
+    return section(
+      [
+        div([
+          p([.text('LIVE DEMO')], classes: 'label'),
+          h2([.text('Learn Omi inside Omi.')], classes: 'big', id: 'hub-title'),
+          p([
+            .text(
+              'Use the guide in the corner. Every Current can show why it surfaced.',
+            ),
+          ], classes: 'mid'),
+        ], classes: 'hub-intro reveal'),
+        const HubEmbedLegacy(),
+      ],
+      classes: 'hub-stage wrap',
+      id: 'hub',
+      attributes: {'aria-labelledby': 'hub-title'},
+    );
+  }
+
+  Component _makeItYours() {
+    return section(
+      [
+        div([
+          p([.text('MAKE IT YOURS')], classes: 'label'),
+          h2(
+            [.text('Let it in, on your terms.')],
+            classes: 'big',
+            id: 'make-title',
+          ),
+        ], classes: 'hub-intro reveal'),
+        div([
+          article([
+            span([.text('01')], classes: 'label'),
+            h3([.text('Ask.')]),
+            p([
+              .text(
+                'Chat, meetings, and the things you choose to capture become findable.',
+              ),
+            ]),
+          ]),
+          article([
+            span([.text('02')], classes: 'label'),
+            h3([.text('Connect Apple Calendar.')]),
+            p([
+              .text(
+                'In the native app, grant Calendar and Reminders access. Omi can use that context and, if you enable it, mirror due Currents back.',
+              ),
+            ]),
+          ]),
+          article([
+            span([.text('03')], classes: 'label'),
+            h3([.text('Stay in control.')]),
+            p([
+              .text(
+                'See the source. Correct it. Dismiss it. Omi acts only with your approval.',
+              ),
+            ]),
+          ]),
+        ], classes: 'hub-steps reveal'),
+        div([
+          p([
+            .text(
+              'No browser history. No hidden activity profile. Just the access you choose.',
+            ),
+          ]),
+          a(
+            [.text('Download Omi')],
+            classes: 'btn btn-solid',
+            href: downloadUrl,
+          ),
+        ], classes: 'hub-privacy reveal'),
+      ],
+      classes: 'hub-make wrap',
+      id: 'make-it-yours',
+      attributes: {'aria-labelledby': 'make-title'},
+    );
+  }
+
+  Component heroLegacy() {
     return section(
       [
         div([
@@ -238,7 +361,7 @@ class Home extends StatelessComponent {
     );
   }
 
-  Component _currents() {
+  Component currentsLegacy() {
     return section(
       [
         div([
@@ -258,7 +381,7 @@ class Home extends StatelessComponent {
     );
   }
 
-  Component _pendant() {
+  Component pendantLegacy() {
     return section(
       [
         div([
@@ -502,7 +625,7 @@ class Home extends StatelessComponent {
     );
   }
 
-  Component _privacy() {
+  Component privacyLegacy() {
     return section(
       [
         h2([.text('Privacy')], classes: 'label', id: 't4'),
