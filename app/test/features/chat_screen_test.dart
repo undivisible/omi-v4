@@ -118,9 +118,7 @@ void main() {
     );
   });
 
-  testWidgets('currents rows show a source tag for conversation evidence', (
-    tester,
-  ) async {
+  testWidgets('currents focus the most critical card', (tester) async {
     final createdAt = DateTime.utc(2026, 7, 21, 12);
     final services = AppServices.forTesting(
       nativeHub: const UnavailableNativeHub('test'),
@@ -182,12 +180,15 @@ void main() {
     services.currents!.items = seeded;
     await tester.pump();
 
-    expect(find.byKey(const Key('brief_hero')), findsOneWidget);
+    expect(find.byKey(const Key('current_focus')), findsOneWidget);
     expect(
-      find.byKey(const ValueKey('brief_row_meeting-follow-up')),
-      findsOneWidget,
+      tester.widget<Text>(find.byKey(const Key('current_focus_title'))).data,
+      'Do the other thing',
     );
-    expect(find.text('CONVERSATION'), findsOneWidget);
+    expect(find.byKey(const Key('current_focus_reason')), findsOneWidget);
+    expect(find.byKey(const Key('current_focus_evidence')), findsOneWidget);
+    expect(find.byKey(const Key('current_focus_next_action')), findsOneWidget);
+    expect(find.text('Send the notes'), findsNothing);
   });
 
   testWidgets('task rows render from currents and dismiss on complete tap', (
@@ -241,18 +242,22 @@ void main() {
     services.currents!.items = currents.items;
     await tester.pump();
 
-    expect(find.byKey(const Key('brief_hero')), findsOneWidget);
-    expect(find.byKey(const ValueKey('brief_row_second')), findsOneWidget);
-    expect(find.byKey(const Key('brief_hero_title')), findsOneWidget);
-    expect(find.text('Reply to Alex'), findsOneWidget);
+    expect(find.byKey(const Key('current_focus')), findsOneWidget);
+    expect(find.byKey(const Key('current_focus_title')), findsOneWidget);
+    expect(
+      tester.widget<Text>(find.byKey(const Key('current_focus_title'))).data,
+      'Finish the release',
+    );
 
-    await tester.tap(find.byKey(const Key('brief_hero_done')));
+    await tester.tap(find.byKey(const Key('current_focus_done')));
     await tester.pump();
     await tester.pump();
 
-    expect(find.byKey(const Key('brief_hero_title')), findsOneWidget);
-    expect(find.text('Reply to Alex'), findsOneWidget);
-    expect(find.text('Reply to Alex summary'), findsOneWidget);
+    expect(find.byKey(const Key('current_focus_title')), findsOneWidget);
+    expect(
+      tester.widget<Text>(find.byKey(const Key('current_focus_title'))).data,
+      'Reply to Alex',
+    );
   });
 
   // Full hint rotation only kicks in once chatReady is true, which requires

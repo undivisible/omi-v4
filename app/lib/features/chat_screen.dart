@@ -370,7 +370,7 @@ class ChatScreenState extends State<ChatScreen>
   /// wrote belong next to "what matters next", where the user is already
   /// looking. Reloaded whenever a meeting completes.
   Future<void> _loadMeetingNotes() async {
-    if (!meetingAssistSupported) return;
+    if (!meetingAssistSupported && !widget.previewMode) return;
     List<MeetingNote> notes;
     try {
       notes = await widget.services.meetingNotes.list();
@@ -1455,9 +1455,9 @@ class ChatScreenState extends State<ChatScreen>
                                               onToggleStarterTask:
                                                   _toggleStarterTask,
                                               tasks: tasks,
-                                              briefCrepus:
-                                                  currents?.briefCrepus,
-                                              meetingNotes: meetingAssistSupported
+                                              meetingNotes:
+                                                  meetingAssistSupported ||
+                                                      widget.previewMode
                                                   ? _meetingNotes
                                                   : const [],
                                               onOpenMeetingNotes:
@@ -2343,7 +2343,6 @@ class _ChatHome extends StatelessWidget {
     required this.doneStarterTasks,
     required this.onToggleStarterTask,
     required this.tasks,
-    this.briefCrepus,
     required this.meetingNotes,
     required this.onOpenMeetingNotes,
     required this.onComplete,
@@ -2361,7 +2360,6 @@ class _ChatHome extends StatelessWidget {
   final Set<String> doneStarterTasks;
   final ValueChanged<String> onToggleStarterTask;
   final List<CurrentCard> tasks;
-  final String? briefCrepus;
   final List<MeetingNote> meetingNotes;
   final VoidCallback onOpenMeetingNotes;
   final ValueChanged<String>? onComplete;
@@ -2421,6 +2419,12 @@ class _ChatHome extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
+                if (tasks.isNotEmpty)
+                  _CurrentFocus(
+                    cards: tasks,
+                    onDraftPrompt: onDraftPrompt,
+                    onComplete: onComplete,
+                  ),
                 if (!(compact && setupTaskDone))
                   _TaskRow(
                     key: const Key('task_setup_omi'),
@@ -2449,16 +2453,6 @@ class _ChatHome extends StatelessWidget {
                       onComplete: () => onToggleStarterTask(title),
                       onTap: () => onPrompt(title),
                     ),
-                if (tasks.isNotEmpty)
-                  CurrentsBrief(
-                    cards: tasks,
-                    briefCrepus: briefCrepus,
-                    palette: _crepusPalette(colors),
-                    compact: compact,
-                    onPrompt: onPrompt,
-                    onDraftPrompt: onDraftPrompt,
-                    onComplete: onComplete,
-                  ),
                 for (final note in meetingNotes.take(compact ? 1 : 3))
                   _MeetingNoteRow(
                     key: ValueKey('meeting_note_${note.id}'),
@@ -2498,6 +2492,310 @@ class _ChatHome extends StatelessWidget {
       ),
     );
   }
+}
+
+class _CurrentFocus extends StatefulWidget {
+  const _CurrentFocus({
+    required this.cards,
+    required this.onDraftPrompt,
+    required this.onComplete,
+  });
+
+  final List<CurrentCard> cards;
+  final ValueChanged<String> onDraftPrompt;
+  final ValueChanged<String>? onComplete;
+
+  @override
+  State<_CurrentFocus> createState() => _CurrentFocusState();
+}
+
+class _CurrentFocusState extends State<_CurrentFocus> {
+  @override
+  Widget build(BuildContext context) {
+    final plan = planBrief(
+      widget.cards,
+      now: DateTime.now(),
+      maxRest: widget.cards.length,
+    );
+    final hero = plan.hero;
+    if (hero == null) return const SizedBox.shrink();
+    final colors = _HubColors.of(context);
+    final card = hero.card;
+    final evidence = card.item.evidence;
+    final source = (card.sourceKind ?? 'Current').toUpperCase();
+    final surface = Color.alphaBlend(
+      colors.hintBlue.withValues(alpha: .08),
+      colors.cardBg,
+    );
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: DecoratedBox(
+        key: const Key('current_focus'),
+        decoration: BoxDecoration(
+          color: surface,
+          borderRadius: BorderRadius.circular(24),
+          border: Border.all(color: colors.hairline),
+          boxShadow: [
+            BoxShadow(
+              color: colors.cardShadow,
+              offset: const Offset(0, 10),
+              blurRadius: 28,
+            ),
+          ],
+        ),
+        child: Stack(
+          children: [
+            Positioned(
+              top: -72,
+              right: -52,
+              child: IgnorePointer(
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    gradient: RadialGradient(
+                      colors: [
+                        colors.hintBlue.withValues(alpha: .24),
+                        colors.hintBlue.withValues(alpha: 0),
+                      ],
+                    ),
+                  ),
+                  child: const SizedBox(width: 220, height: 220),
+                ),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(
+                    children: [
+                      SizedBox(
+                        width: 30,
+                        height: 30,
+                        child: OmiActivityOrb(
+                          size: 22,
+                          state: OmiOrbState.thinking,
+                          period: const Duration(seconds: 7),
+                          color: colors.hintBlue,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        'CURRENT',
+                        style: TextStyle(
+                          fontSize: 9,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: 1.2,
+                          color: colors.muted,
+                        ),
+                      ),
+                      const Spacer(),
+                      _CurrentChip(label: source, color: colors.hintBlue),
+                    ],
+                  ),
+                  const SizedBox(height: 18),
+                  Text(
+                    card.title,
+                    key: const Key('current_focus_title'),
+                    style: TextStyle(
+                      fontSize: 24,
+                      height: 1.08,
+                      fontWeight: FontWeight.w600,
+                      letterSpacing: -1,
+                      color: colors.ink,
+                    ),
+                  ),
+                  if (card.summary.trim().isNotEmpty) ...[
+                    const SizedBox(height: 9),
+                    Text(
+                      card.summary,
+                      maxLines: 3,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 13,
+                        height: 1.4,
+                        color: colors.muted,
+                      ),
+                    ),
+                  ],
+                  const SizedBox(height: 18),
+                  _CurrentDetail(
+                    label: 'WHY NOW',
+                    text: card.item.reason,
+                    color: colors,
+                    detailKey: const Key('current_focus_reason'),
+                  ),
+                  const SizedBox(height: 12),
+                  _CurrentDetail(
+                    label: 'EVIDENCE',
+                    text: evidence
+                        .map((item) => '${item.sourceId}: ${item.reason}')
+                        .join(' · '),
+                    color: colors,
+                    detailKey: const Key('current_focus_evidence'),
+                  ),
+                  const SizedBox(height: 16),
+                  DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: colors.hintBlue.withValues(alpha: .10),
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(14, 12, 10, 10),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'NEXT ACTION',
+                            style: TextStyle(
+                              fontSize: 9,
+                              fontWeight: FontWeight.w700,
+                              letterSpacing: 1.1,
+                              color: colors.muted,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            card.item.proposedNextStep,
+                            key: const Key('current_focus_next_action'),
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 13,
+                              height: 1.32,
+                              fontWeight: FontWeight.w600,
+                              color: colors.ink,
+                            ),
+                          ),
+                          const SizedBox(height: 6),
+                          Row(
+                            children: [
+                              TextButton(
+                                key: const Key('current_focus_act'),
+                                onPressed: () => widget.onDraftPrompt(
+                                  card.item.proposedNextStep,
+                                ),
+                                style: TextButton.styleFrom(
+                                  foregroundColor: colors.hintBlue,
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 4,
+                                    vertical: 6,
+                                  ),
+                                  textStyle: const TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                                child: const Text('Work on this →'),
+                              ),
+                              if (widget.onComplete != null) ...[
+                                const SizedBox(width: 8),
+                                TextButton(
+                                  key: const Key('current_focus_done'),
+                                  onPressed: () =>
+                                      widget.onComplete!(card.item.id),
+                                  style: TextButton.styleFrom(
+                                    foregroundColor: colors.muted,
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 4,
+                                      vertical: 6,
+                                    ),
+                                    textStyle: const TextStyle(
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                  child: const Text('Done'),
+                                ),
+                              ],
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _CurrentDetail extends StatelessWidget {
+  const _CurrentDetail({
+    required this.label,
+    required this.text,
+    required this.color,
+    required this.detailKey,
+  });
+
+  final String label;
+  final String text;
+  final _HubColors color;
+  final Key detailKey;
+
+  @override
+  Widget build(BuildContext context) => DecoratedBox(
+    decoration: BoxDecoration(
+      border: Border(left: BorderSide(color: color.hairline)),
+    ),
+    child: Padding(
+      padding: const EdgeInsets.only(left: 10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 9,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 1.1,
+              color: color.muted,
+            ),
+          ),
+          const SizedBox(height: 3),
+          Text(
+            text,
+            key: detailKey,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(fontSize: 12, height: 1.35, color: color.ink),
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
+class _CurrentChip extends StatelessWidget {
+  const _CurrentChip({required this.label, required this.color});
+
+  final String label;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) => DecoratedBox(
+    decoration: BoxDecoration(
+      color: color.withValues(alpha: .10),
+      borderRadius: BorderRadius.circular(999),
+    ),
+    child: Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      child: Text(
+        label,
+        style: TextStyle(
+          fontSize: 8,
+          fontWeight: FontWeight.w800,
+          letterSpacing: .9,
+          color: color,
+        ),
+      ),
+    ),
+  );
 }
 
 class _TaskRow extends StatelessWidget {

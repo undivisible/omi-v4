@@ -1012,7 +1012,6 @@ void main() {
     );
     expect(find.text('9:30 AM – 10:15 AM'), findsWidgets);
     expect(find.text('Agenda: onboarding polish'), findsWidgets);
-    expect(find.text('Reply to Alex about the notes'), findsWidgets);
     expect(
       find.byKey(
         const ValueKey('rich_task_card_Reply to Alex about the notes'),
