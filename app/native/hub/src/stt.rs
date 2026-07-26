@@ -28,7 +28,7 @@ const MAX_PENDING_AUDIO_BYTES: usize = 64 * 1024;
 const AUDIO_CHANNEL_CAPACITY: usize = 64;
 const MAX_RECONNECT_BUFFER_BYTES: usize = 64 * 1024;
 const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(8);
-pub(crate) const FINAL_DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
+pub(crate) const FINAL_DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum SttError {

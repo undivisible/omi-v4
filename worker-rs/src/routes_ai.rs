@@ -13,6 +13,7 @@ use std::{
     rc::Rc,
 };
 
+use base64::Engine;
 use futures_util::{stream, StreamExt};
 use serde_json::{json, Value};
 use worker::wasm_bindgen;
@@ -1124,7 +1125,7 @@ async fn handle_stt_create(mut req: Request, ctx: RouteContext<()>) -> Result<Re
     let cost_per_minute = crate::jsnum::positive_integer_str(
         env_get(&ctx.env, "STT_COST_MICROUSD_PER_MINUTE").as_deref(),
     );
-    let xai = env_get(&ctx.env, "XAI_API_KEY");
+    let xai = env_get(&ctx.env, "OPENROUTER_API_KEY");
     let (Some(max_session_seconds), Some(cost_per_minute), true) =
         (max_session_seconds, cost_per_minute, xai.is_some())
     else {
@@ -1207,7 +1208,7 @@ async fn handle_stt_create(mut req: Request, ctx: RouteContext<()>) -> Result<Re
     };
     let insert = db
         .prepare(
-            "INSERT INTO managed_stt_sessions\n             (id, uid, idempotency_key, provider, model, language, encoding, sample_rate,\n              channels, diarize, interim_results, device_id, source_id, status,\n              reserved_seconds, estimated_cost_microusd, created_at, updated_at, admission_token)\n             VALUES (?1, ?2, ?3, 'xai', ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,\n              'ready', ?13, ?14, ?15, ?15, ?16)\n             ON CONFLICT(uid, idempotency_key) DO UPDATE SET\n               admission_token = excluded.admission_token,\n               updated_at = excluded.updated_at\n             WHERE managed_stt_sessions.status = 'ready'",
+            "INSERT INTO managed_stt_sessions\n             (id, uid, idempotency_key, provider, model, language, encoding, sample_rate,\n              channels, diarize, interim_results, device_id, source_id, status,\n              reserved_seconds, estimated_cost_microusd, created_at, updated_at, admission_token)\n             VALUES (?1, ?2, ?3, 'openrouter', ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,\n              'ready', ?13, ?14, ?15, ?15, ?16)\n             ON CONFLICT(uid, idempotency_key) DO UPDATE SET\n               admission_token = excluded.admission_token,\n               updated_at = excluded.updated_at\n             WHERE managed_stt_sessions.status = 'ready'",
         )
         .bind(&[
             session_id.clone().into(),
@@ -1332,7 +1333,7 @@ async fn handle_stt_stream(req: Request, ctx: RouteContext<()>) -> Result<Respon
         return error_json("STT session unavailable", 409);
     };
 
-    let secret = env_get(&ctx.env, "XAI_API_KEY");
+    let secret = env_get(&ctx.env, "OPENROUTER_API_KEY");
     let max_session_seconds =
         crate::jsnum::positive_integer_str(env_get(&ctx.env, "STT_MAX_SESSION_SECONDS").as_deref());
     let connect_timeout = crate::jsnum::positive_integer_str(
@@ -1408,66 +1409,17 @@ async fn handle_stt_stream(req: Request, ctx: RouteContext<()>) -> Result<Respon
         .get("reserved_seconds")
         .and_then(Value::as_i64)
         .filter(|s| *s > 0 && *s <= max_session_seconds);
-    let Some(_session_seconds) = session_seconds else {
+    let Some(session_seconds) = session_seconds else {
         fail_and_release_stt(&ctx, &stub, &session_id, &auth.uid, &acquisition_token).await;
         return error_json("STT session unavailable", 409);
     };
 
     // Connect to Deepgram, upgrading to a WebSocket.
-    let query = stt_logic::xai_query(
-        row.get("model").and_then(Value::as_str).unwrap_or_default(),
-        row.get("language")
-            .and_then(Value::as_str)
-            .unwrap_or_default(),
-        row.get("encoding")
-            .and_then(Value::as_str)
-            .unwrap_or_default(),
-        row.get("sample_rate")
-            .and_then(Value::as_i64)
-            .unwrap_or_default(),
-        row.get("channels")
-            .and_then(Value::as_i64)
-            .unwrap_or_default(),
-        row.get("diarize")
-            .and_then(Value::as_i64)
-            .unwrap_or_default()
-            == 1,
-        row.get("interim_results")
-            .and_then(Value::as_i64)
-            .unwrap_or_default()
-            == 1,
-    );
-    let mut upstream_url = url::Url::parse("https://api.x.ai/v1/stt")
-        .map_err(|e| worker::Error::RustError(e.to_string()))?;
-    {
-        let mut pairs = upstream_url.query_pairs_mut();
-        for (key, value) in &query {
-            pairs.append_pair(key, value);
-        }
-    }
-    let mut init = RequestInit::new();
-    let headers = Headers::new();
-    headers.set("Upgrade", "websocket")?;
-    headers.set("Authorization", &format!("Bearer {secret}"))?;
-    init.with_headers(headers);
-    let upstream_request = Request::new_with_init(upstream_url.as_str(), &init)?;
-    let upstream_response = match worker::Fetch::Request(upstream_request).send().await {
-        Ok(response) => response,
-        Err(_) => {
-            fail_and_release_stt(&ctx, &stub, &session_id, &auth.uid, &acquisition_token).await;
-            return error_json("Managed STT unavailable", 502);
-        }
-    };
-    let Some(upstream_socket) = upstream_response.websocket() else {
-        fail_and_release_stt(&ctx, &stub, &session_id, &auth.uid, &acquisition_token).await;
-        return error_json("Managed STT unavailable", 502);
-    };
 
     let pair = WebSocketPair::new()?;
     let server = pair.server;
     let client = pair.client;
     server.accept()?;
-    upstream_socket.accept()?;
 
     // Spawn the bidirectional relay. Terminal settlement (DB status +
     // admission release) mirrors `bridgeSttSockets`; the pure
@@ -1476,14 +1428,36 @@ async fn handle_stt_stream(req: Request, ctx: RouteContext<()>) -> Result<Respon
     let relay_session = session_id.clone();
     let relay_uid = auth.uid.clone();
     let relay_token = acquisition_token.clone();
+    let relay_config = OpenRouterStt {
+        secret,
+        language: row
+            .get("language")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        sample_rate: row
+            .get("sample_rate")
+            .and_then(Value::as_i64)
+            .unwrap_or_default(),
+        channels: row
+            .get("channels")
+            .and_then(Value::as_i64)
+            .unwrap_or_default(),
+        diarize: row
+            .get("diarize")
+            .and_then(Value::as_i64)
+            .unwrap_or_default()
+            == 1,
+        session_seconds,
+    };
     wasm_bindgen_futures::spawn_local(async move {
         bridge_sockets(
             env,
             server,
-            upstream_socket,
             relay_session,
             relay_uid,
             relay_token,
+            relay_config,
         )
         .await;
     });
@@ -1516,10 +1490,10 @@ async fn fail_and_release_stt(
 async fn bridge_sockets(
     env: Env,
     server: worker::WebSocket,
-    upstream: worker::WebSocket,
     session_id: String,
     uid: String,
     token: String,
+    config: OpenRouterStt,
 ) {
     use stt_logic::{bridge_outcome, BridgeEvent, BridgeStatus};
     use worker::WebsocketEvent;
@@ -1528,59 +1502,74 @@ async fn bridge_sockets(
         Ok(events) => events.fuse(),
         Err(_) => return,
     };
-    let mut upstream_events = match upstream.events() {
-        Ok(events) => events.fuse(),
-        Err(_) => return,
+    let Some(chunk_bytes) = stt_logic::chunk_bytes(config.sample_rate, config.channels) else {
+        return;
     };
+    let bytes_per_second = config
+        .sample_rate
+        .checked_mul(config.channels)
+        .and_then(|value| value.checked_mul(2))
+        .unwrap_or_default();
+    let maximum_bytes = bytes_per_second
+        .checked_mul(config.session_seconds)
+        .and_then(|value| usize::try_from(value).ok())
+        .unwrap_or_default();
+    let mut audio = Vec::with_capacity(chunk_bytes);
+    let mut accepted_bytes = 0usize;
+    let mut transcribed_bytes = 0usize;
 
-    let close_status = |code: u16| {
-        if code == 1000 || code == 1001 {
-            BridgeStatus::Complete
-        } else {
-            BridgeStatus::Failed
-        }
-    };
-
-    let status = loop {
-        futures_util::select! {
-            client = server_events.next() => {
-                match client {
-                    Some(Ok(WebsocketEvent::Message(message))) => {
-                        let event = if let Some(text) = message.text() {
-                            BridgeEvent::ClientFrame { size: text.len() }
-                        } else {
-                            BridgeEvent::ClientFrame { size: message.bytes().map(|b| b.len()).unwrap_or(usize::MAX) }
-                        };
-                        if let Some(outcome) = bridge_outcome(&[event]) {
-                            break outcome;
-                        }
-                        let sent = match message.text() {
-                            Some(text) => upstream.send_with_str(&text),
-                            None => upstream.send_with_bytes(message.bytes().unwrap_or_default()),
-                        };
-                        if sent.is_err() {
-                            break BridgeStatus::Failed;
-                        }
+    let status = 'relay: loop {
+        match server_events.next().await {
+            Some(Ok(WebsocketEvent::Message(message))) => {
+                let event = if let Some(text) = message.text() {
+                    BridgeEvent::ClientFrame { size: text.len() }
+                } else {
+                    BridgeEvent::ClientFrame {
+                        size: message.bytes().map(|b| b.len()).unwrap_or(usize::MAX),
                     }
-                    Some(Ok(WebsocketEvent::Close(event))) => break close_status(event.code()),
-                    Some(Err(_)) | None => break BridgeStatus::Failed,
+                };
+                if let Some(outcome) = bridge_outcome(&[event]) {
+                    break outcome;
+                }
+                if let Some(text) = message.text() {
+                    if text != r#"{"type":"audio.done"}"# {
+                        break BridgeStatus::Failed;
+                    }
+                    if !audio.is_empty()
+                        && send_openrouter_chunk(&server, &config, transcribed_bytes, &audio)
+                            .await
+                            .is_err()
+                    {
+                        break BridgeStatus::Failed;
+                    }
+                    break BridgeStatus::Complete;
+                }
+                let bytes = message.bytes().unwrap_or_default();
+                accepted_bytes = match accepted_bytes.checked_add(bytes.len()) {
+                    Some(value) if value <= maximum_bytes => value,
+                    _ => break BridgeStatus::Failed,
+                };
+                audio.extend_from_slice(&bytes);
+                while audio.len() >= chunk_bytes {
+                    let remainder = audio.split_off(chunk_bytes);
+                    let chunk = std::mem::replace(&mut audio, remainder);
+                    if send_openrouter_chunk(&server, &config, transcribed_bytes, &chunk)
+                        .await
+                        .is_err()
+                    {
+                        break 'relay BridgeStatus::Failed;
+                    }
+                    transcribed_bytes += chunk.len();
                 }
             }
-            provider = upstream_events.next() => {
-                match provider {
-                    Some(Ok(WebsocketEvent::Message(message))) => {
-                        let sent = match message.text() {
-                            Some(text) => server.send_with_str(&text),
-                            None => server.send_with_bytes(message.bytes().unwrap_or_default()),
-                        };
-                        if sent.is_err() {
-                            break BridgeStatus::Failed;
-                        }
-                    }
-                    Some(Ok(WebsocketEvent::Close(event))) => break close_status(event.code()),
-                    Some(Err(_)) | None => break BridgeStatus::Failed,
-                }
+            Some(Ok(WebsocketEvent::Close(event))) => {
+                break if event.code() == 1000 || event.code() == 1001 {
+                    BridgeStatus::Complete
+                } else {
+                    BridgeStatus::Failed
+                };
             }
+            Some(Err(_)) | None => break BridgeStatus::Failed,
         }
     };
 
@@ -1589,7 +1578,6 @@ async fn bridge_sockets(
         BridgeStatus::Failed => "failed",
     };
     let _ = server.close(Some(1000), Some("Session closed"));
-    let _ = upstream.close(Some(1000), Some("Session closed"));
     if let Ok(db) = env.d1("DB") {
         let now = now_ms();
         if let Ok(statement) = db
@@ -1602,6 +1590,64 @@ async fn bridge_sockets(
     if let Ok(stub) = stt_admission_stub(&env) {
         release_stt(&stub, &session_id, &uid, &token).await;
     }
+}
+
+struct OpenRouterStt {
+    secret: String,
+    language: String,
+    sample_rate: i64,
+    channels: i64,
+    diarize: bool,
+    session_seconds: i64,
+}
+
+async fn send_openrouter_chunk(
+    server: &worker::WebSocket,
+    config: &OpenRouterStt,
+    offset_bytes: usize,
+    audio: &[u8],
+) -> std::result::Result<(), ()> {
+    let wav = stt_logic::wav(audio, config.sample_rate, config.channels).ok_or(())?;
+    let body = stt_logic::openrouter_body(
+        base64::engine::general_purpose::STANDARD.encode(wav),
+        &config.language,
+        config.diarize,
+    );
+    let mut init = RequestInit::new();
+    init.with_method(Method::Post);
+    let headers = Headers::new();
+    headers
+        .set("authorization", &format!("Bearer {}", config.secret))
+        .map_err(|_| ())?;
+    headers
+        .set("content-type", "application/json")
+        .map_err(|_| ())?;
+    init.with_headers(headers);
+    init.with_body(Some(JsValue::from_str(&body.to_string())));
+    let request =
+        Request::new_with_init(stt_logic::OPENROUTER_STT_ENDPOINT, &init).map_err(|_| ())?;
+    let mut response = worker::Fetch::Request(request)
+        .send()
+        .await
+        .map_err(|_| ())?;
+    if response.status_code() >= 300 {
+        return Err(());
+    }
+    let response = response.json::<Value>().await.map_err(|_| ())?;
+    let bytes_per_second = config
+        .sample_rate
+        .checked_mul(config.channels)
+        .and_then(|value| value.checked_mul(2))
+        .filter(|value| *value > 0)
+        .ok_or(())? as f64;
+    for event in stt_logic::transcript_events(
+        &response,
+        offset_bytes as f64 / bytes_per_second,
+        config.channels,
+    ) {
+        server.send_with_str(event.to_string()).map_err(|_| ())?;
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------

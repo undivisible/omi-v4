@@ -892,7 +892,7 @@ async fn handle_setup_health(req: Request, ctx: RouteContext<()>) -> Result<Resp
     let stripe_webhook_secret = any("STRIPE_WEBHOOK_SECRET");
     let app_url = any("APP_URL");
     let mimo_api_key = any("MIMO_API_KEY");
-    let xai_api_key = any("XAI_API_KEY");
+    let openrouter_api_key = any("OPENROUTER_API_KEY");
     let gemini_api_key = any("GEMINI_API_KEY");
     let gemini_live_model = any("GEMINI_LIVE_MODEL");
     let mimo_chat_completions_url = any("MIMO_CHAT_COMPLETIONS_URL");
@@ -913,7 +913,7 @@ async fn handle_setup_health(req: Request, ctx: RouteContext<()>) -> Result<Resp
         stripe_webhook_secret: stripe_webhook_secret.as_deref(),
         app_url: app_url.as_deref(),
         mimo_api_key: mimo_api_key.as_deref(),
-        xai_api_key: xai_api_key.as_deref(),
+        openrouter_api_key: openrouter_api_key.as_deref(),
         gemini_api_key: gemini_api_key.as_deref(),
         gemini_live_model: gemini_live_model.as_deref(),
         mimo_chat_completions_url: mimo_chat_completions_url.as_deref(),
