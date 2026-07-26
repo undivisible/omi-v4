@@ -68,6 +68,29 @@ void main() {
     },
   );
 
+  test(
+    'controller syncs an accepted current with its execution reference',
+    () async {
+      List<CurrentCard>? synced;
+      final controller = CurrentsController(
+        CurrentsClient(_Transport()),
+        onItemsRefreshed: (items) async => synced = items,
+      );
+      await controller.load();
+
+      final handoff = await controller.accept('current-1');
+      await Future<void>.delayed(Duration.zero);
+
+      expect(handoff.executionId, 'execution-1');
+      expect(controller.items.single.item.status, CurrentStatus.accepted);
+      expect(
+        controller.items.single.item.executionReference,
+        handoff.executionId,
+      );
+      expect(synced?.single.item.status, CurrentStatus.accepted);
+    },
+  );
+
   test('controller coalesces overlapping refreshes', () async {
     final transport = _Transport()..pauseGenerate = Completer<void>();
     final controller = CurrentsController(CurrentsClient(transport));

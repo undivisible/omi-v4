@@ -7,7 +7,7 @@ void main() {
   CurrentCard card(
     String id, {
     DateTime? expiresAt,
-    String status = 'surfaced',
+    String status = 'accepted',
   }) => CurrentCard.fromJson({
     'id': id,
     'status': status,
@@ -21,6 +21,8 @@ void main() {
     },
     'confidence': 0.8,
     'proposedNextStep': 'Next step for $id',
+    if (status == 'accepted' || status == 'completed')
+      'executionReference': 'execution-$id',
     'createdAt': '2026-07-22T07:00:00Z',
     'updatedAt': '2026-07-22T07:00:00Z',
     'title': 'Task $id',
@@ -45,7 +47,7 @@ void main() {
   });
 
   test(
-    'creates one event for a time-bound current and stays idempotent',
+    'creates one event for an accepted time-bound current and stays idempotent',
     () async {
       final writer = _FakeWriter();
       final store = VolatileEventKitTaskSyncStore(isEnabled: true);
@@ -89,6 +91,20 @@ void main() {
     );
 
     await sync.apply([card('c')]);
+
+    expect(writer.upserts, isEmpty);
+  });
+
+  test('surfaced currents are not added until accepted', () async {
+    final writer = _FakeWriter();
+    final sync = EventKitTaskSync(
+      writer: writer,
+      store: VolatileEventKitTaskSyncStore(isEnabled: true),
+    );
+
+    await sync.apply([
+      card('pending', expiresAt: shortDue, status: 'surfaced'),
+    ]);
 
     expect(writer.upserts, isEmpty);
   });

@@ -255,7 +255,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
             source: source,
             previewMode: previewMode,
           ),
-        EventKitProactiveSyncTile(previewMode: previewMode),
+        EventKitProactiveSyncTile(
+          previewMode: previewMode,
+          onEnabled: services.syncCurrentsToEventKit,
+        ),
       ],
       SettingsSection.connections => [
         for (final connector in oauthConnectors)
@@ -1673,12 +1676,14 @@ class EventKitProactiveSyncTile extends StatefulWidget {
     required this.previewMode,
     this.eventKit,
     this.store,
+    this.onEnabled,
     super.key,
   });
 
   final bool previewMode;
   final AppleEventKitWriter? eventKit;
   final EventKitTaskSyncStore? store;
+  final Future<void> Function()? onEnabled;
 
   @override
   State<EventKitProactiveSyncTile> createState() =>
@@ -1740,6 +1745,9 @@ class _EventKitProactiveSyncTileState extends State<EventKitProactiveSyncTile> {
         return;
       }
       await store.setEnabled(true);
+      try {
+        await widget.onEnabled?.call();
+      } catch (_) {}
       if (mounted) setState(() => enabled = true);
     } catch (_) {
       if (mounted) setState(() => needsPermission = true);

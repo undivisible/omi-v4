@@ -3235,6 +3235,7 @@ class _SettingsSheetState extends State<_SettingsSheet> {
               child: EventKitProactiveSyncTile(
                 key: const Key('companion_eventkit_proactive_sync'),
                 previewMode: widget.previewMode,
+                onEnabled: widget.services.syncCurrentsToEventKit,
               ),
             ),
             if (!widget.previewMode) ...[

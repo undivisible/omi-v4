@@ -133,7 +133,9 @@ final class EventKitTaskSync {
         await writer.status(source) == AppleEventKitAuthorization.fullAccess;
     final active = <String, CurrentCard>{
       for (final card in cards)
-        if (!card.item.isTerminal) card.item.id: card,
+        if (card.item.status == CurrentStatus.accepted &&
+            card.item.timing.expiresAt != null)
+          card.item.id: card,
     };
     for (final card in active.values) {
       final id = card.item.id;

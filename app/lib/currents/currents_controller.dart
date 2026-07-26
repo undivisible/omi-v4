@@ -62,7 +62,30 @@ final class CurrentsController extends ChangeNotifier {
   Future<void> snooze(String id, DateTime until) =>
       _feedback(id, CurrentStatus.snoozed, snoozedUntil: until);
 
-  Future<CurrentActionHandoff> accept(String id) => _client.accept(id);
+  Future<CurrentActionHandoff> accept(String id) async {
+    final handoff = await _client.accept(id);
+    items = List.unmodifiable([
+      for (final card in items)
+        if (card.item.id == id)
+          CurrentCard(
+            item: card.item.transitionTo(
+              CurrentStatus.accepted,
+              at: _now(),
+              executionReference: handoff.executionId,
+            ),
+            title: card.title,
+            summary: card.summary,
+            sourceKind: card.sourceKind,
+            contentKind: card.contentKind,
+            metadata: card.metadata,
+          )
+        else
+          card,
+    ]);
+    _notifyItemsRefreshed();
+    notifyListeners();
+    return handoff;
+  }
 
   Future<void> _feedback(
     String id,

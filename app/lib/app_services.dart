@@ -103,6 +103,7 @@ final class AppServices {
     this._meetingMic,
   }) : _captureModeStore =
            captureModeStore ?? PreferencesSystemAudioCaptureModeStore(),
+       _currentsTaskSync = currentsTaskSync,
        currents = currentsClient == null
            ? null
            : CurrentsController(
@@ -351,6 +352,7 @@ final class AppServices {
   final ConversationTransport? conversations;
   final CurrentsController? currents;
   final WorkerHttpClient? _worker;
+  final EventKitTaskSync? _currentsTaskSync;
 
   /// Transcribes a short recording (composer dictation) through the Worker's
   /// batch endpoint, which picks an audio-capable model by capability. Null
@@ -1233,6 +1235,12 @@ final class AppServices {
 
   Future<String> handoffCurrentAction(CurrentActionHandoff handoff) =>
       _conversationController.handoff(handoff);
+
+  Future<void> syncCurrentsToEventKit() async {
+    final sync = _currentsTaskSync;
+    if (sync == null) return;
+    await sync.apply(currents?.items ?? const []);
+  }
 
   String get _conversationSource => kIsWeb
       ? 'web'
