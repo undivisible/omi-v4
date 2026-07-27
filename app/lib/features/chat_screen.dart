@@ -1024,6 +1024,15 @@ class ChatScreenState extends State<ChatScreen>
             _removeProposalsForParent(value.requestId);
           }
         case NativeEventActionProposal(:final value):
+          final requestId = value.requestId;
+          if (requestId != _activeRequestId &&
+              !requestId.startsWith('approval-')) {
+            return;
+          }
+          if (value.expiresAtMs != null &&
+              value.expiresAtMs! <= DateTime.now().millisecondsSinceEpoch) {
+            return;
+          }
           _proposals[value.proposalId] = value;
           _proposalExpiryTimers.remove(value.proposalId)?.cancel();
           if (value.expiresAtMs != null) {
