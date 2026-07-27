@@ -5,6 +5,7 @@
 
 pub mod api_keys;
 pub mod auth;
+pub mod auth_session_flow;
 pub mod billing;
 pub mod byok_negotiation;
 pub mod byok_pricing;
