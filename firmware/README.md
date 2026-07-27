@@ -439,9 +439,11 @@ deliberately avoid).
 calls `omi_rust_ring_header` / `omi_rust_ring_header_decode` /
 `omi_rust_packet_header` for `write_to_tx_queue`, `read_from_tx_queue` and
 `push_to_gatt`; the Zephyr ring buffer, GATT notify, and MTU throttling stay in
-C. The crate is host-testable (`cd omi/rust && cargo test`) so it can later be
-shared with `app/native/hub` and stop the two ends of the wire format from
-drifting. Moving the ring-buffer ownership itself into Rust still waits on either a small
+C. The crate is host-testable (`cd omi/rust && cargo test --locked`) so it can
+later be shared with `app/native/hub` and stop the two ends of the wire format
+from drifting. Pass `--locked`: a host build resolves without the
+`target_os = "none"` zephyr dependencies, so a bare `cargo test` rewrites
+`Cargo.lock` and drops the entries the device build needs. Moving the ring-buffer ownership itself into Rust still waits on either a small
 C-backed buffer API or further `zephyr`-crate integration beyond haptic GPIO.
 `cd omi/rust/qemu && cargo run --release` runs the production button and wire-framing
 self-tests on QEMU's Cortex-M4 MPS2-AN386 model.
