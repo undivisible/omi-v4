@@ -68,7 +68,7 @@ dependencies:
       ref: v0.11.0
       path: plugins/crepuscularity-flutter
   flowtoken_flutter: ^0.1.1
-
+  liquid_glass_widgets: ^0.24.1
 dev_dependencies:
   flutter_test:
     sdk: flutter
