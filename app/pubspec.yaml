@@ -136,6 +136,10 @@ rinf:
     - hub
   gen_output_dir: lib/native/generated
 
+# A `pubspec_overrides.yaml` REPLACES this whole block rather than merging with
+# it, so a local checkout that adds one entry there silently drops every pin
+# below and builds a different dependency set than CI. Copy this block into that
+# file whenever you create one.
 dependency_overrides:
   # rinf PR #681 (Dart Native Assets for macOS/iOS) — replaces the
   # CocoaPods-driven Rust build. The upstream SPM PR (#675) was closed as
