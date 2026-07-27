@@ -20,6 +20,7 @@ import 'features/setup_account_screens.dart';
 import 'features/web_portal_screen.dart';
 import 'onboarding/hub_checklist.dart';
 import 'onboarding/onboarding_completion.dart';
+import 'ui/omi_cold_open.dart';
 import 'ui/omi_orb.dart';
 import 'ui/omi_typography.dart';
 
@@ -215,6 +216,11 @@ class _OmiAppState extends State<OmiApp> {
   bool _onboardingComplete = false;
   int _completionGeneration = 0;
 
+  /// The cold open runs once per launch, and only the first time this state is
+  /// built — a sign-out or a data wipe re-checks completion but does not
+  /// re-open the app.
+  bool _openDone = false;
+
   @override
   void initState() {
     super.initState();
@@ -351,28 +357,57 @@ class _OmiAppState extends State<OmiApp> {
           ),
         ),
       ),
-      home: Uri.base.queryParameters['desktop_auth'] != null
-          ? DesktopAuthScreen(
-              services: services,
-              sessionId: Uri.base.queryParameters['desktop_auth']!,
-            )
-          : _webPortal
-          ? WebPortalScreen(services: services)
-          : _checkingCompletion
-          // The first frame the user ever sees is the mark, not a spinner.
-          ? const Scaffold(
-              body: Center(child: OmiActivityOrb.loading(size: 64)),
-            )
-          : _onboardingComplete
-          ? _mobileCompanion
-                ? MobileCompanionShell(services: services)
-                : OmiShell(services: services)
-          : _mobileCompanion
-          ? MobileOnboardingScreen(
-              services: services,
-              onFinish: _completeOnboarding,
-            )
-          : OnboardingScreen(services: services, onFinish: _completeOnboarding),
+      home: _home,
     );
   }
+
+  /// The deep-link and web entry points are somebody arriving mid-task, not the
+  /// app opening, so they skip the cold open entirely.
+  Widget get _home {
+    final desktopAuth = Uri.base.queryParameters['desktop_auth'];
+    if (desktopAuth != null) {
+      return DesktopAuthScreen(services: services, sessionId: desktopAuth);
+    }
+    if (_webPortal) return WebPortalScreen(services: services);
+    if (_openDone) return _destination;
+    // The destination is built underneath the open as soon as it is known, so
+    // the mark shrinking to 64 is landing on the real screen rather than on a
+    // placeholder that is swapped out a frame later.
+    return Stack(
+      children: [
+        if (!_checkingCompletion) _destination else const _BootField(),
+        OmiColdOpen(onDone: () => setState(() => _openDone = true)),
+      ],
+    );
+  }
+
+  Widget get _destination {
+    // The first frame the user ever sees is the mark, not a spinner.
+    if (_checkingCompletion) {
+      return const Scaffold(
+        body: Center(child: OmiActivityOrb.loading(size: 64)),
+      );
+    }
+    if (_onboardingComplete) {
+      return _mobileCompanion
+          ? MobileCompanionShell(services: services)
+          : OmiShell(services: services);
+    }
+    return _mobileCompanion
+        ? MobileOnboardingScreen(
+            services: services,
+            onFinish: _completeOnboarding,
+          )
+        : OnboardingScreen(services: services, onFinish: _completeOnboarding);
+  }
+}
+
+/// What sits behind the cold open while the completion check is still out —
+/// the scaffold colour and nothing else, because the open is already drawing
+/// the mark over it.
+class _BootField extends StatelessWidget {
+  const _BootField();
+
+  @override
+  Widget build(BuildContext context) => const Scaffold(body: SizedBox.expand());
 }
