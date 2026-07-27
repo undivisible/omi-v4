@@ -1,172 +1,203 @@
-# Auth migration plan — Firebase → Cloudflare Workers
+# Auth migration — Firebase → worker-rs
 
-**Status:** plan only — production still uses Firebase ID tokens (`worker/src/auth.ts`, `app/lib/auth/`). Do not implement until this doc is reviewed and sequenced.
+**Status:** phase 0 half landed. `session_token.rs`, `channel_auth.rs` and
+migration `0038_worker_auth.sql` are in the tree and tested; nothing is wired
+into a route yet, so production still authenticates with Firebase ID tokens and
+behaviour is unchanged.
 
-## Why move
+This replaces an earlier draft written before the TypeScript worker was retired
+on 2026-07-24. That draft's architecture was sound and is kept here; its file
+paths were not, because `worker/src/auth.ts`, `desktop-auth.ts` and `routes.ts`
+no longer exist.
 
-- **Single stack:** API, D1, Durable Objects, and auth all on Cloudflare — fewer external dependencies and clearer data residency.
-- **Cost & control:** Firebase Auth billing and Google lock-in; worker-issued sessions let us tune TTL, revocation, and audit in D1.
-- **Consistency:** Desktop browser handoff (`worker/src/desktop-auth.ts`) already mints short-lived worker sessions; extending that pattern to all clients is natural.
+## Why the uid is the whole story
 
-Firebase **UID** is the tenant key everywhere today (`users.uid`, `channel_bindings.uid`, hub `firebase_memory_scope`, Stripe `metadata.firebase_uid`). Migration must preserve or map that key so memory, channels, and billing stay attached.
+`users.uid` is a Firebase uid, and every table keys on it — `channel_bindings`,
+`entitlements`, `api_keys`, memory, currents, conversations, Stripe
+`metadata.firebase_uid`. Preserve the uid and this is a **credential**
+migration, not a data migration. Nothing needs rewriting; users need re-issuing.
 
----
+That single fact is why the plan below has no backfill script and no
+`auth_migration_links` table with per-table rewrites.
 
-## Current architecture
+## What is in the tree now
 
-| Layer | Mechanism |
-|---|---|
-| **Mobile / desktop sign-in** | Firebase Auth (Google, Apple, phone OTP) via `app/lib/auth/auth_controller.dart` |
-| **API auth** | `Authorization: Bearer <Firebase ID token>` verified RS256 against Google JWKs (`verifyFirebaseToken`) |
-| **Session on client** | Firebase refresh tokens; serialized refresh + 401 retry (commit `0a321b0`) |
-| **Worker user row** | Upsert on first authenticated request: `INSERT INTO users (uid, email, …)` where `uid = Firebase sub` |
-| **Desktop handoff** | PKCE-style session in `desktop_auth_sessions`; still bound with Firebase token at finish |
-| **Public API** | API keys **or** Firebase bearer (`public-api.ts`) |
-| **Channels / billing** | All keyed by Firebase UID |
+### `worker-rs/src/session_token.rs`
 
-There is **no** separate worker session table for normal app traffic — the Firebase JWT *is* the session.
+Two credentials, deliberately different in kind:
 
----
+- **Access token** — compact HS256 JWT, 15 min, verified with no database read.
+- **Refresh token** — 32 opaque bytes; only the SHA-256 digest is stored, the
+  same shape `api_keys` uses, so a database read cannot recover a credential.
 
-## Target architecture
+No new dependency. `hmac`, `sha2`, `base64` and `subtle` were already in
+`Cargo.toml`, and a JWT is a signature over two base64url segments. A JWT crate
+would add a wasm-compatibility surface to maintain for ~60 lines of logic — see
+the crate survey below for what that surface costs.
 
-Cloudflare does not ship a Firebase Auth replacement. The practical target is **first-party auth on Workers**:
+The header is a fixed constant, never parsed. Reading `alg` from the token is
+how JWT verifiers end up accepting `none` or confusing HS256 with RS256; there
+is one algorithm here, so there is nothing to read. A test asserts an
+`alg: none` token is refused.
 
-1. **Identity providers (unchanged UX):** Google, Apple, phone OTP — but OAuth/OIDC flows terminate at the Worker, not Firebase SDK.
-2. **Worker-issued JWTs** (HS256 or ES256 with key in Workers secret / rotating KV):
-   - Claims: `sub` (Omi user id), `email`, `iat`, `exp`, optional `session_id`
-   - Short access token (15–60 min) + refresh token stored hashed in D1
-3. **D1 tables** (new):
-   - `auth_identities` — `(provider, provider_subject) → uid`
-   - `auth_sessions` — refresh token hash, device label, revoked_at, last_seen
-   - `auth_migration_links` — `firebase_uid → omi_uid` during transition (often 1:1)
-4. **`requireAuth` middleware** accepts **either** Firebase JWT **or** Omi JWT during migration window; sets unified `Auth { uid, email, source }`.
+`verify_access_token` takes an optional previous secret so `AUTH_TOKEN_SECRET`
+can rotate without signing every live session out.
 
-Optional later: **Cloudflare Zero Trust Access** in front of `/portal` only — not a replacement for mobile/desktop API auth.
+### `worker-rs/src/channel_auth.rs`
 
----
+Sign-in by a code the bot sends. This direction is friendlier than the inverse
+and it is also weaker, and that difference drives everything in the module.
 
-## User id strategy
+`handle_channel_link_redeem` already consumes these codes — but there the caller
+is *already authenticated* and the code only binds a chat to a known uid. It is
+a second factor, rate-limited per uid. Used for sign-in the code is the entire
+credential, presented by an anonymous caller with no uid to key a limit on. The
+keyspace is 31^7 ≈ 2.75e10: ample against one guesser, thin against a
+distributed one when many codes are live.
 
-**Recommended:** keep `users.uid` values equal to existing Firebase UIDs for migrated users.
+Three limits, all needed:
 
-- Zero rewrite of memory blobs, channel bindings, entitlements, conversation rows.
-- New sign-ups after cutover get `omi_` or UUID ids; migration table only needed for edge cases.
+| Limit | Stops |
+| --- | --- |
+| per-IP, 10 / 10 min | the naive case |
+| global failure budget, 500 / 10 min | a guesser rotating IPs — nothing else does |
+| per-code attempts, 5 then locked | a code under attack dying instead of the endpoint locking out honest users |
 
-**Alternative:** new canonical id + `auth_migration_links` on every table — high risk, avoid unless Firebase export forces it.
+Plus a 3-minute TTL for sign-in codes against 15 for binding codes, and a
+`purpose` column so a binding code can never be spent as a sign-in credential.
 
----
+Malformed input deliberately does **not** consume the global budget: someone
+pasting a URL into the code box must not push the endpoint toward lockout.
 
-## Transition phases
+### `cloud/migrations/0038_worker_auth.sql`
 
-### Phase 0 — Prep (no user impact)
+`auth_sessions` (refresh digests, origin, rotation chain) and `auth_identities`
+(provider+subject → uid). `auth_identities` is redundant with
+`channel_bindings` for channel sign-in on day one, but it is what lets a
+Firebase user who signs in with the same Google account or phone number land on
+their **existing** uid. It is the load-bearing piece of phase 2.
 
-- [ ] Add D1 migrations: `auth_identities`, `auth_sessions`, `auth_migration_links`
-- [ ] Implement `issueOmiToken` / `verifyOmiToken` alongside `verifyFirebaseToken`
-- [ ] Dual-verify middleware behind env flag `AUTH_DUAL_MODE=1`
-- [ ] Admin script: import Firebase users export into `auth_identities` (email, phone, provider ids) keyed by existing UID
-- [ ] Metrics: log `auth.source` (`firebase` vs `omi`) per route
+Plus `attempts`, `locked_at` and `purpose` on `channel_link_codes`.
 
-### Phase 1 — New sign-ups on Worker auth (optional early)
+## What is not built
 
-- Web portal (`api.omi.tsc.hk/portal`) and new app builds use Worker OAuth first.
-- Firebase remains for existing installs until forced upgrade.
-- On first Worker login for an email that exists in Firebase export → attach to same UID.
+- The routes: `/v1/auth/channel/exchange`, `/v1/auth/refresh`, `/v1/auth/signout`,
+  `/v1/auth/upgrade`.
+- `glue.rs::authenticate` still verifies Firebase only. Dual-mode is phase 0's
+  remaining half.
+- `routes_channels.rs::sign_up_channel_sender` is still `#[allow(dead_code)]`.
+- The Flutter `WorkerAuthGateway`.
 
-### Phase 2 — Dual auth (main migration window)
+## Crate survey — wasm32-unknown-unknown
 
-- All app versions ≥ **N** send Omi JWT; older builds still send Firebase JWT.
-- `requireAuth` tries Omi JWT first, falls back to Firebase.
-- **Silent migration on login:** user signs in with Google/Apple/phone on new stack → worker finds `auth_identities` or Firebase token one last time → issues Omi refresh session, marks `auth_migration_links.migrated_at`.
-- **Desktop handoff:** replace Firebase bind step with Omi access token at session finish.
-- **Channel link / API keys:** unchanged — still `uid`-scoped.
+worker-rs compiles to `wasm32-unknown-unknown`. That kills most Rust auth
+crates, and the failures are not obvious from documentation. Every verdict below
+came from building a `cdylib` probe under worker-rs's own rustflags.
 
-### Phase 3 — Firebase read-only
+| Crate | wasm32 | Note |
+| --- | --- | --- |
+| `jsonwebtoken 11` + `rust_crypto` | pass | HS256/RS256/ES256/EdDSA all verified |
+| `jsonwebtoken 11` default | **trap** | compiles with *no crypto provider*; fails at runtime, not build time |
+| `jsonwebtoken` + `aws_lc_rs` | fail | getrandom without `js` |
+| `pasetors 0.8` | pass | the only working PASETO option |
+| `rusty_paseto`, `biscuit` | fail | `ring` — `SystemRandom` has no impl for this target |
+| `josekit` | fail | openssl-sys |
+| `argon2 0.5` | pass | but see below |
+| `openidconnect 4` + `default-features = false` | pass | no reqwest, no TLS; plugs into `worker::Fetch` |
+| anything pulling `ring` | fail | blanket exclusion |
 
-- Disable new Firebase project sign-ups in Firebase console.
-- Reject Firebase JWTs except for allowlisted UIDs not yet migrated (401 + `migrate: true` body).
-- Push app update: “Sign in again once to update your session.”
+Two traps worth writing down:
 
-### Phase 4 — Firebase off
+**`pasetors` works by accident of feature unification.** `ed25519-compact`
+declares getrandom with `wasm_js`, which unifies into `orion`'s copy. `orion`
+alone does not enable it — which is exactly why `branca`, which pulls `orion`
+without `ed25519-compact`, fails. If you adopt `pasetors`, pin it and add a wasm
+CI check, because a dependency bump can silently break it.
 
-- Remove `verifyFirebaseToken`, Firebase SDK from Flutter/Rust clients, `FIREBASE_PROJECT_ID` secret.
-- Delete Firebase project after backup export.
+**getrandom has three incompatible generations.** 0.2 needs `features = ["js"]`
+(already pinned). 0.4 needs `features = ["wasm_js"]`. **0.3 needs a rustflag**,
+not a feature — `--cfg getrandom_backend="wasm_js"` in `.cargo/config.toml`. 0.2
+and 0.3 were verified to coexist in one binary.
 
----
+**Do not add argon2.** There are no passwords anywhere in this design — channel
+identity, OIDC and OTP are all passwordless. Argon2 is also deliberately slow
+and memory-hungry, which is a poor fit for the Workers CPU budget. The existing
+`api_keys` pattern (high-entropy secret, SHA-256 stored, constant-time compare)
+is correct for tokens and needs no KDF.
 
-## Per-platform client changes
+`axum-login`, `tower-sessions` and `oxide-auth` assume a tokio/tower runtime
+with `Send + 'static` futures; workers-rs futures are `!Send`. This is reasoning
+from their APIs, not a build test.
 
-| Client | Work |
-|---|---|
-| **Flutter `auth_gateway`** | New `WorkerAuthGateway`: OAuth deep links / ASWebAuthenticationSession, secure storage for refresh token |
-| **Phone OTP** | Worker sends SMS (Twilio/etc.) or keep Firebase phone **only** until SMS on worker is ready — explicit sub-phase |
-| **Rust hub** | Replace Firebase token in sync calls with Omi JWT from Dart sidecar / shared keychain |
-| **Web portal** | Cookie or localStorage refresh; CSRF on refresh endpoint |
-| **MCP / public API** | API keys unchanged; bearer docs mention Omi JWT |
+## Migration phases
 
----
+**Phase 0 — additive, zero user impact.** *(half done)*
+Migration 0038, `session_token.rs`, `channel_auth.rs` — landed. Remaining: add
+`verify_access_token` to `authenticate` **before** the Firebase path behind
+`AUTH_DUAL_MODE`, and in the Firebase success branch
+`INSERT OR IGNORE INTO auth_identities (provider='firebase', subject=uid, uid)`.
+That builds the identity map from live traffic — no Firebase export, no admin
+script, no downtime.
 
-## Existing edge cases
+**Phase 1 — channel sign-in live.** Ship `/v1/auth/channel/exchange`. New users
+get `usr_` uids. **An existing Firebase user who already linked a chat gets
+their identical uid back through `channel_bindings`** — migrated silently the
+first time they use it.
 
-### Channel-only accounts (`chan_*` UIDs)
+**Phase 2 — silent upgrade.** New app builds, on first launch with a valid
+Firebase session, POST `/v1/auth/upgrade` with the Firebase bearer. The worker
+verifies it one last time, issues an `auth_sessions` row for the same uid,
+records the identity, and the app drops Firebase. The user notices nothing.
 
-Created via `/signup` on Telegram/iMessage (being removed). These have no email and no Firebase identity.
+**Phase 3 — Firebase read-only.** No new Firebase sign-ups; `authenticate`
+still accepts Firebase but returns a `migrate: true` hint.
 
-**Migration options:**
+**Phase 4 — off.** Delete `verify_firebase_token`, `create_firebase_custom_token`,
+the three secrets, `firebase_core`/`firebase_auth`. `rsa 0.9` can leave
+`Cargo.toml` — it exists only for Firebase RS256 verify and custom-token
+signing — unless `openidconnect` is adopted, which pulls it back.
 
-1. **Soft deprecation:** leave `chan_*` rows; `/status` and `/whoami` already explain “sign in on desktop and /start to move across.”
-2. **Merge flow:** when user links code after real sign-in, offer to import channel conversation history into their Firebase/Worker UID (one-time `UPDATE channel_bindings SET uid = ?` + conversation merge job).
-3. **Hard sunset:** email/Telegram nudge + delete unlinked `chan_*` after 90 days.
+**Export the Firebase users before phase 3, not after.** It is the only thing
+that makes the residual set recoverable, and it is unavailable once the project
+is deleted.
 
-Recommend **1 + 2** — no forced data loss.
+**Rollback** is flipping `AUTH_DUAL_MODE`. No data is destroyed before phase 4.
 
-### Stripe metadata
+## Who could be stranded
 
-Today: `metadata.firebase_uid`. Add `metadata.omi_uid` in parallel during Phase 2; webhook handler accepts either until Phase 4.
+Users who never open the app during phase 2 **and** have no linked chat.
 
-### BYOK / entitlements
+- Google/Apple: the Firebase export gives `(provider, sub) → uid`, so signing in
+  with the same account lands on the same uid. Needs the OIDC work.
+- Phone-only: the export carries `phone_number` → `auth_identities('phone', …)`.
+  Needs worker SMS — **Sendblue is already integrated** (`sendblue.rs`,
+  `SENDBLUE_NUMBER`), so no Twilio.
+- Worst case: uid recoverable by verified email against `users.email`, behind a
+  manual support path. Nobody loses data.
 
-Already keyed by `uid` — no change if UID preserved.
+## Blast radius in the app
 
----
+Smaller than it looks. **One file imports Firebase** —
+`app/lib/auth/firebase_bootstrap.dart` — with one production caller in
+`app_services.dart`. `AuthGateway` is a real seam and **does not change shape**,
+so all 11 test fakes keep compiling.
 
-## Security checklist
+`app/lib/api/worker_http.dart` needs **no changes at all**: it is already
+provider-generic and every feature client rides it. `AuthSession` needs no model
+change — `idToken` carries the Omi access token instead. `AuthPhase.restoring`
+already exists, which is exactly what a network-round-trip `restoreSession()`
+needs.
 
-- Refresh tokens: opaque, hashed (SHA-256), rotatable on use
-- Revocation: `auth_sessions.revoked_at` + optional KV denylist for access tokens
-- Rate limits: reuse `rate-limit.ts` on `/v1/auth/*`
-- OAuth state/nonce stored in D1 or KV with TTL
-- Phone OTP: same 6-digit pattern as desktop handoff or TOTP-style
-- No auth secrets in client binaries except public OAuth client ids
+The one genuinely new client dependency is secure storage: Firebase owns refresh
+persistence today and nothing in the app persists tokens itself. On macOS that
+means a keychain entitlement, which `Release.entitlements` does not currently
+have.
 
----
+There is **no** `google-services.json`, no `GoogleService-Info.plist`, no
+`firebase_options.dart`, no Gradle plugin. Config exists only as `--dart-define`
+— which is why CI-built releases could never sign in until that was fixed.
 
-## Rollback
-
-Keep Firebase project and dual-verify for **≥ 30 days** after Phase 2 start. Rollback = flip `AUTH_DUAL_MODE` to Firebase-only and ship hotfix client if needed.
-
----
-
-## Open decisions (need product sign-off)
-
-1. **Phone OTP:** migrate off Firebase Auth phone provider in Phase 2 or Phase 4?
-2. **Session length:** match Firebase (~1h ID token) or longer-lived refresh with sliding window?
-3. **Web-only users:** is portal-only auth enough before forcing app download?
-4. **chan_* sunset date** if any channel-only accounts remain in prod.
-
----
-
-## Related files
-
-- `worker/src/auth.ts` — Firebase verification today
-- `worker/src/desktop-auth.ts` — partial worker session pattern
-- `app/lib/auth/` — client auth abstraction
-- `worker/src/routes.ts` — `POST /v1/channels/link` and all authenticated routes
-- `docs/telegram-test.md` — channel linking (independent of auth provider if UID stable)
-
----
-
-## Immediate fixes (done separately from this plan)
-
-- Telegram `/signup` no longer creates channel-only accounts — directs users to download app and link.
-- Desktop chat redeems link codes embedded in natural language (e.g. “my telegram code is CMKCVXM”), not only bare 7-character messages.
+The token crosses into Rust as a field named `firebaseToken`
+(`command.dart`, `transcription_auth.dart`), and `tool/check_rinf_bindings.sh`
+asserts those names. It is an opaque bearer string, so nothing breaks
+functionally; rename it in a dedicated commit, not mixed into the auth change.
