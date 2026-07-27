@@ -31,6 +31,8 @@ import 'meeting_notes.dart';
 import 'mobile_update_check.dart';
 import 'transcript_log_store.dart';
 import 'wifi_debug_panel.dart';
+import '../ui/omi_glass.dart';
+import '../ui/omi_wa_palette.dart';
 
 const _paper = Color(0xfff7f6f1);
 const _surface = Color(0xfffffefa);
@@ -939,17 +941,26 @@ class MobilePendantPageState extends State<MobilePendantPage> {
                         if (index == 1) unawaited(_loadConversation());
                       },
                       children: [
-                        _currentsPage(
-                          device: device,
-                          connected: connected,
-                          capturing: capturing,
-                          busy: busy,
-                          phase: phase,
-                          capturedMs: capturedMs,
-                          deviceTiles: deviceTiles,
+                        OmiWaBackdrop(
+                          gradient: OmiWaPalette.dawn,
+                          child: _currentsPage(
+                            device: device,
+                            connected: connected,
+                            capturing: capturing,
+                            busy: busy,
+                            phase: phase,
+                            capturedMs: capturedMs,
+                            deviceTiles: deviceTiles,
+                          ),
                         ),
-                        _conversationsPage(),
-                        _memoryPage(),
+                        OmiWaBackdrop(
+                          gradient: OmiWaPalette.indigo,
+                          child: _conversationsPage(),
+                        ),
+                        OmiWaBackdrop(
+                          gradient: OmiWaPalette.moss,
+                          child: _memoryPage(),
+                        ),
                       ],
                     ),
             ),
@@ -996,52 +1007,57 @@ class MobilePendantPageState extends State<MobilePendantPage> {
     final hairline = dark ? const Color(0x1ffffcec) : _hairline;
     return SafeArea(
       top: false,
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          color: dark ? _inkSheet : _surface,
-          border: Border(top: BorderSide(color: hairline)),
-        ),
-        child: Row(
-          children: [
-            for (var index = 0; index < labels.length; index++)
-              Expanded(
-                child: InkWell(
-                  key: Key('companion_tab_$index'),
-                  onTap: () => unawaited(
-                    _pageController?.animateToPage(
-                      index,
-                      duration: const Duration(milliseconds: 240),
-                      curve: Curves.easeOutCubic,
+      child: OmiGlass(
+        tone: OmiGlassTone.chrome,
+        radius: 26,
+        interactive: true,
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            color: (dark ? _inkSheet : _surface).withValues(alpha: 0.55),
+            border: Border(top: BorderSide(color: hairline)),
+          ),
+          child: Row(
+            children: [
+              for (var index = 0; index < labels.length; index++)
+                Expanded(
+                  child: InkWell(
+                    key: Key('companion_tab_$index'),
+                    onTap: () => unawaited(
+                      _pageController?.animateToPage(
+                        index,
+                        duration: const Duration(milliseconds: 240),
+                        curve: Curves.easeOutCubic,
+                      ),
                     ),
-                  ),
-                  child: Padding(
-                    padding: const EdgeInsets.fromLTRB(8, 9, 8, 7),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(
-                          icons[index],
-                          size: 22,
-                          color: _pageIndex == index ? selectedFg : idleFg,
-                        ),
-                        const SizedBox(height: 3),
-                        Text(
-                          labels[index],
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                            fontSize: 11,
-                            fontWeight: _pageIndex == index
-                                ? FontWeight.w700
-                                : FontWeight.w500,
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(8, 9, 8, 7),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            icons[index],
+                            size: 22,
                             color: _pageIndex == index ? selectedFg : idleFg,
                           ),
-                        ),
-                      ],
+                          const SizedBox(height: 3),
+                          Text(
+                            labels[index],
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: _pageIndex == index
+                                  ? FontWeight.w700
+                                  : FontWeight.w500,
+                              color: _pageIndex == index ? selectedFg : idleFg,
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                   ),
                 ),
-              ),
-          ],
+            ],
+          ),
         ),
       ),
     );

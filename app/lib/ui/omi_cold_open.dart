@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import 'omi_orb.dart';
+import 'omi_wa_palette.dart';
 
 /// The cold open: the eight dots arrive from off the edges of the screen, lock
 /// into the mark, run one lap of [OmiOrbMotion.tusiPendulum], then shrink to
@@ -13,6 +14,7 @@ import 'omi_orb.dart';
 class OmiColdOpen extends StatefulWidget {
   const OmiColdOpen({
     required this.onDone,
+    this.plate,
     this.background,
     this.color,
     this.handoffSize = 64,
@@ -23,8 +25,13 @@ class OmiColdOpen extends StatefulWidget {
   /// faded off. Under reduce motion it is called on the first frame instead.
   final VoidCallback onDone;
 
-  /// Both default to the ambient theme, so the open does not flash a dark
-  /// field over a light build on its way in.
+  /// The field the dots arrive over. Defaults to Wada's plate 166 — Grenadine
+  /// Pink falling through Naples Yellow into Deep Slate Green, the warm-to-cold
+  /// run of a sunrise, which is what an app opening is.
+  final OmiWaGradient? plate;
+
+  /// Overrides [plate] with a flat colour. Defaults to the ambient theme, so
+  /// the open does not flash a dark field over a light build on its way in.
   final Color? background;
   final Color? color;
 
@@ -98,6 +105,9 @@ class _OmiColdOpenState extends State<OmiColdOpen>
             painter: OmiColdOpenPainter(
               progress: _clock.value,
               background: widget.background ?? theme.scaffoldBackgroundColor,
+              plate: widget.background == null
+                  ? (widget.plate ?? OmiWaPalette.dawn)
+                  : null,
               ink: widget.color ?? theme.colorScheme.primary,
               handoffSize: widget.handoffSize,
             ),
@@ -122,10 +132,15 @@ class OmiColdOpenPainter extends CustomPainter {
     required this.background,
     required this.ink,
     required this.handoffSize,
+    this.plate,
   });
 
   final double progress;
   final Color background;
+
+  /// Painted over [background] when set. The dots read against the plate's
+  /// dark end, which is why every plate in the palette finishes dark.
+  final OmiWaGradient? plate;
   final Color ink;
   final double handoffSize;
 
@@ -139,10 +154,20 @@ class OmiColdOpenPainter extends CustomPainter {
         ? 1.0
         : 1 - Curves.easeOutCubic.transform(_span(_settleEnd, 1));
     if (fieldAlpha > 0) {
+      final field = Offset.zero & size;
       canvas.drawRect(
-        Offset.zero & size,
+        field,
         Paint()..color = background.withValues(alpha: fieldAlpha),
       );
+      final wash = plate;
+      if (wash != null) {
+        canvas.drawRect(
+          field,
+          Paint()
+            ..shader = wash.bokashi().createShader(field)
+            ..color = const Color(0xffffffff).withValues(alpha: fieldAlpha),
+        );
+      }
     }
 
     final (placements, unitSize, markAlpha) = _frame(size, openSize);
@@ -248,6 +273,7 @@ class OmiColdOpenPainter extends CustomPainter {
   bool shouldRepaint(OmiColdOpenPainter old) =>
       old.progress != progress ||
       old.background != background ||
+      old.plate != plate ||
       old.ink != ink ||
       old.handoffSize != handoffSize;
 }
