@@ -80,8 +80,20 @@ final class AuthSnapshot {
     this.processingConsent,
   });
 
+  /// Before the stored session has been looked for. Not the same as
+  /// [AuthSnapshot.cleared]: this one has no answer yet.
   const AuthSnapshot.initial()
     : phase = AuthPhase.restoring,
+      consentGranted = false,
+      session = null,
+      challenge = null,
+      failure = null,
+      processingConsent = null;
+
+  /// After signing out or revoking consent. The answer is known and it is
+  /// "no session" — screens should act on it rather than wait.
+  const AuthSnapshot.cleared()
+    : phase = AuthPhase.signedOut,
       consentGranted = false,
       session = null,
       challenge = null,
