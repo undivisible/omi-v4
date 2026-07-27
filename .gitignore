@@ -24,3 +24,4 @@ worker/.dev.vars
 # Local agent / IDE scratch (not part of the product).
 .claude/
 .worktrees/
+firmware/omi/build-cv1-check/
