@@ -7322,7 +7322,10 @@ mod tests {
             .unwrap_or_else(|failure| failure.into_inner())
             .clone()
             .unwrap_or_else(|| panic!("provider receives a prompt"));
-        assert!(captured.starts_with(CREPUS_ARTIFACTS_GUIDANCE));
+        // Who Omi is leads every prompt; the origin only decides which framing
+        // follows it.
+        assert!(captured.starts_with(ASSISTANT_PERSONA));
+        assert!(captured.contains(CREPUS_ARTIFACTS_GUIDANCE));
         assert!(captured.contains("Relevant things you know about the user:\n"));
         assert!(captured.contains("Sam prefers espresso"));
         assert!(captured.ends_with("\n\nwhat coffee do I like?"));
@@ -7343,7 +7346,8 @@ mod tests {
             .unwrap_or_else(|failure| failure.into_inner())
             .clone()
             .unwrap_or_else(|| panic!("provider receives a prompt"));
-        assert!(plain.starts_with(CREPUS_ARTIFACTS_GUIDANCE));
+        assert!(plain.starts_with(ASSISTANT_PERSONA));
+        assert!(plain.contains(CREPUS_ARTIFACTS_GUIDANCE));
         assert!(plain.ends_with("plain message"));
 
         let oversized = "x".repeat(3 * MEMORY_CONTEXT_CHARACTER_LIMIT);
@@ -7360,14 +7364,16 @@ mod tests {
             Some("- Works at Acme"),
             "open the quarterly report",
         );
-        assert!(framed.starts_with(OVERLAY_AGENT_FRAMING));
+        assert!(framed.starts_with(ASSISTANT_PERSONA));
+        assert!(framed.contains(OVERLAY_AGENT_FRAMING));
         assert!(framed.contains("Relevant things you know about the user:\n- Works at Acme"));
         assert!(framed.ends_with("open the quarterly report"));
 
         // Chat and unspecified origins carry the crepus-artifacts guidance and
         // end with the user's own words, but never the desktop-agent framing.
         let chat = framed_assistant_prompt(Some(MessageOrigin::Chat), None, "hello");
-        assert!(chat.starts_with(CREPUS_ARTIFACTS_GUIDANCE));
+        assert!(chat.starts_with(ASSISTANT_PERSONA));
+        assert!(chat.contains(CREPUS_ARTIFACTS_GUIDANCE));
         assert!(chat.ends_with("hello"));
         assert_eq!(framed_assistant_prompt(None, None, "hello"), chat);
         assert!(!chat.contains("desktop agent"));
@@ -7402,7 +7408,8 @@ mod tests {
             .unwrap_or_else(|failure| failure.into_inner())
             .clone()
             .unwrap_or_else(|| panic!("provider receives the overlay prompt"));
-        assert!(captured.starts_with(OVERLAY_AGENT_FRAMING));
+        assert!(captured.starts_with(ASSISTANT_PERSONA));
+        assert!(captured.contains(OVERLAY_AGENT_FRAMING));
         assert!(captured.ends_with("open my latest draft"));
     }
 
