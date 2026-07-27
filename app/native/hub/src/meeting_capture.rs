@@ -8,6 +8,34 @@ use std::time::{Duration, Instant};
 pub(crate) const CAPTURE_STREAM_ID: &str = "meeting-capture";
 pub(crate) const CAPTURE_SAMPLE_RATE_HZ: u32 = 16_000;
 
+/// The rates a capture device actually runs at. An observed frame rate is
+/// snapped to whichever of these it is closest to, so ordinary jitter in the
+/// measurement does not produce a resampler tuned to 47,913 Hz.
+#[cfg(any(target_os = "macos", test))]
+const STANDARD_SAMPLE_RATES_HZ: [u32; 11] = [
+    8_000, 11_025, 16_000, 22_050, 24_000, 32_000, 44_100, 48_000, 88_200, 96_000, 192_000,
+];
+
+/// Rounds a measured frame rate to the nearest rate a device plausibly runs
+/// at, or leaves it alone when it is nowhere near one.
+///
+/// The tolerance is deliberately wide. The measurement it corrects is a count
+/// of frames over a wall-clock window read from a file another process is
+/// appending to, so it carries buffering jitter that a tight tolerance would
+/// reject — and being 4% off the true rate is far worse than snapping a
+/// slightly noisy 46,800 to 48,000.
+#[cfg(any(target_os = "macos", test))]
+pub(crate) fn snap_to_standard_rate(observed_hz: f64) -> u32 {
+    let rounded = observed_hz.round().max(1.0) as u32;
+    STANDARD_SAMPLE_RATES_HZ
+        .into_iter()
+        .find(|candidate| {
+            let candidate = f64::from(*candidate);
+            (observed_hz - candidate).abs() / candidate <= 0.08
+        })
+        .unwrap_or(rounded)
+}
+
 /// Which side of the call an utterance came from.
 ///
 /// The macOS capture writes a two-track WAV where `ch0` is the local
@@ -274,6 +302,67 @@ impl LinearResampler {
     }
 }
 
+/// Watches how fast frames actually arrive and reports a corrected input rate
+/// when the declared one is wrong.
+///
+/// Measurement only begins once the reader has drained the backlog the tap
+/// wrote while the header was being waited for; until then frames arrive as
+/// fast as the disk serves them and say nothing about the device clock. A
+/// short read is the signal that the reader has caught up with the writer.
+#[cfg(any(target_os = "macos", test))]
+#[derive(Debug, Default)]
+pub(crate) struct RateWatch {
+    window: Option<(Instant, u64)>,
+}
+
+/// How long a measurement window runs before it is trusted. Long enough that
+/// the writer's own buffering (hound flushes in kilobyte-sized blocks) averages
+/// out, short enough that a wrong rate is corrected within a few sentences.
+#[cfg(any(target_os = "macos", test))]
+const RATE_WINDOW: Duration = Duration::from_secs(6);
+
+/// How far the observed rate must sit from the rate in use before the resampler
+/// is rebuilt. Well above the drift between two free-running clocks, well below
+/// the smallest ratio between two standard rates (16k → 22.05k is 38%).
+#[cfg(any(target_os = "macos", test))]
+const RATE_CORRECTION_THRESHOLD: f64 = 0.15;
+
+#[cfg(any(target_os = "macos", test))]
+impl RateWatch {
+    /// Marks the reader as level with the writer. The next frames observed
+    /// start a fresh window, so the drained backlog is not counted as though
+    /// it had arrived in real time.
+    pub(crate) fn caught_up(&mut self) {
+        self.window = None;
+    }
+
+    pub(crate) fn observe(&mut self, frames: usize, current_rate_hz: u32) -> Option<u32> {
+        self.observe_at(frames, current_rate_hz, Instant::now())
+    }
+
+    fn observe_at(&mut self, frames: usize, current_rate_hz: u32, now: Instant) -> Option<u32> {
+        let (started, counted) = self.window.get_or_insert((now, 0));
+        *counted += frames as u64;
+        let elapsed = now.duration_since(*started);
+        if elapsed < RATE_WINDOW {
+            return None;
+        }
+        let observed = *counted as f64 / elapsed.as_secs_f64();
+        // Either way the window has served its purpose; start a new one so a
+        // rate that keeps drifting keeps being corrected.
+        self.window = None;
+        let snapped = snap_to_standard_rate(observed);
+        if snapped == current_rate_hz {
+            return None;
+        }
+        let current = f64::from(current_rate_hz.max(1));
+        if (f64::from(snapped) - current).abs() / current < RATE_CORRECTION_THRESHOLD {
+            return None;
+        }
+        Some(snapped)
+    }
+}
+
 pub(crate) fn pcm_bytes(samples: &[i16]) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(samples.len() * 2);
     for sample in samples {
@@ -365,9 +454,9 @@ pub(crate) fn parse_wav_header(reader: &mut impl std::io::Read) -> Option<WavHea
 #[cfg(target_os = "macos")]
 mod platform {
     use super::{
-        CAPTURE_SAMPLE_RATE_HZ, CAPTURE_STREAM_ID, FarEndWatch, LinearResampler, WavHeader,
-        mix_two_track_to_mono_measured, observe_track_energy, parse_wav_header, pcm_bytes,
-        reset_speaker_tracker,
+        CAPTURE_SAMPLE_RATE_HZ, CAPTURE_STREAM_ID, FarEndWatch, LinearResampler, RateWatch,
+        WavHeader, mix_two_track_to_mono_measured, observe_track_energy, parse_wav_header,
+        pcm_bytes, reset_speaker_tracker,
     };
     use crate::capture_policy::CapturePlan;
     use crate::signals::{AudioEncoding, NativeError, NativeEvent, TranscriptionAuth};
@@ -530,7 +619,9 @@ mod platform {
         if file.seek(SeekFrom::Start(header.data_offset)).is_err() {
             return true;
         }
-        let mut resampler = LinearResampler::new(header.sample_rate, CAPTURE_SAMPLE_RATE_HZ);
+        let mut input_rate_hz = header.sample_rate;
+        let mut resampler = LinearResampler::new(input_rate_hz, CAPTURE_SAMPLE_RATE_HZ);
+        let mut rate_watch = RateWatch::default();
         let mut bytes = [0u8; 16_384];
         let mut remainder = Vec::new();
         let mut failing_since: Option<Instant> = None;
@@ -542,14 +633,31 @@ mod platform {
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
             }
             let read = match file.read(&mut bytes) {
-                Ok(0) => continue,
+                Ok(0) => {
+                    rate_watch.caught_up();
+                    continue;
+                }
                 Ok(read) => read,
                 Err(_) => return true,
             };
+            if read < bytes.len() {
+                rate_watch.caught_up();
+            }
             let (frames, energy) = mix_two_track_to_mono_measured(&bytes[..read], &mut remainder);
             observe_track_energy(energy);
-            if far_end.observe(energy, header.sample_rate) {
+            if far_end.observe(energy, input_rate_hz) {
                 emit_error("meeting_far_end_silent");
+            }
+            // The tap appends to this file in real time, so frames-per-second
+            // measured off the wall clock *is* the capture rate. Trusting the
+            // header instead is what turns a device running faster than it
+            // declares into chipmunked audio and a transcript of nonsense:
+            // every frame still reaches the provider, just labelled at the
+            // wrong rate. Re-tuning the resampler to what the file is actually
+            // producing corrects the whole class, in either direction.
+            if let Some(observed_hz) = rate_watch.observe(frames.len(), input_rate_hz) {
+                input_rate_hz = observed_hz;
+                resampler = LinearResampler::new(input_rate_hz, CAPTURE_SAMPLE_RATE_HZ);
             }
             let mono = resampler.process(&frames);
             if mono.is_empty() {
@@ -937,8 +1045,9 @@ pub(crate) fn start(
 #[cfg(test)]
 mod tests {
     use super::{
-        FarEndWatch, LinearResampler, MeetingSpeaker, SpeakerTracker, TrackEnergy, WavHeader,
-        interleave_two_track, mix_two_track_to_mono_measured, parse_wav_header, pcm_bytes,
+        FarEndWatch, LinearResampler, MeetingSpeaker, RateWatch, SpeakerTracker, TrackEnergy,
+        WavHeader, interleave_two_track, mix_two_track_to_mono_measured, parse_wav_header,
+        pcm_bytes, snap_to_standard_rate,
     };
     use std::time::{Duration, Instant};
 
@@ -1075,6 +1184,84 @@ mod tests {
     #[test]
     fn pcm_bytes_are_little_endian() {
         assert_eq!(pcm_bytes(&[1, -2]), vec![1, 0, 254, 255]);
+    }
+
+    #[test]
+    fn a_measured_rate_snaps_to_the_nearest_real_device_rate() {
+        assert_eq!(snap_to_standard_rate(47_913.0), 48_000);
+        assert_eq!(snap_to_standard_rate(16_004.0), 16_000);
+        assert_eq!(snap_to_standard_rate(43_100.0), 44_100);
+        // Nowhere near anything a device runs at: left alone rather than
+        // snapped to a rate that would be just as wrong in a new way.
+        assert_eq!(snap_to_standard_rate(60_000.0), 60_000);
+    }
+
+    /// Feeds `seconds` of audio at `actual_hz` through the watch, one 20 ms
+    /// poll at a time, and returns the correction it asks for.
+    fn watch_correction(actual_hz: u32, declared_hz: u32, seconds: u64) -> Option<u32> {
+        let mut watch = RateWatch::default();
+        watch.caught_up();
+        let mut now = Instant::now();
+        let poll = Duration::from_millis(20);
+        let frames_per_poll = actual_hz as usize / 50;
+        let mut correction = None;
+        for _ in 0..(seconds * 50) {
+            now += poll;
+            if let Some(rate) = watch.observe_at(frames_per_poll, declared_hz, now) {
+                correction = Some(rate);
+            }
+        }
+        correction
+    }
+
+    #[test]
+    fn a_device_running_faster_than_it_declares_is_corrected() {
+        // The chipmunk case: 48 kHz of audio labelled 16 kHz reaches the
+        // provider three times too fast.
+        assert_eq!(watch_correction(48_000, 16_000, 8), Some(48_000));
+    }
+
+    #[test]
+    fn a_device_running_slower_than_it_declares_is_corrected() {
+        assert_eq!(watch_correction(16_000, 48_000, 8), Some(16_000));
+    }
+
+    #[test]
+    fn an_honest_header_is_left_alone() {
+        assert_eq!(watch_correction(48_000, 48_000, 30), None);
+        assert_eq!(watch_correction(44_100, 44_100, 30), None);
+    }
+
+    #[test]
+    fn clock_drift_between_two_devices_does_not_trigger_a_correction() {
+        // A capture clock running 1% off the declared rate is normal and must
+        // not churn the resampler.
+        assert_eq!(watch_correction(48_480, 48_000, 30), None);
+    }
+
+    #[test]
+    fn a_window_shorter_than_the_measurement_period_says_nothing() {
+        assert_eq!(watch_correction(48_000, 16_000, 5), None);
+    }
+
+    #[test]
+    fn draining_a_backlog_does_not_count_as_a_measurement() {
+        // The tap writes while the header is being waited for, so the first
+        // reads return audio far faster than real time. Measuring across them
+        // would read as an enormous sample rate.
+        let mut watch = RateWatch::default();
+        let start = Instant::now();
+        // Two seconds of backlog arriving in ten milliseconds.
+        assert_eq!(
+            watch.observe_at(96_000, 48_000, start + Duration::from_millis(10)),
+            None
+        );
+        watch.caught_up();
+        let mut now = start + Duration::from_millis(10);
+        for _ in 0..500 {
+            now += Duration::from_millis(20);
+            assert_eq!(watch.observe_at(960, 48_000, now), None);
+        }
     }
 
     #[test]
