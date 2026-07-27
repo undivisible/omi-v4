@@ -331,7 +331,28 @@ class ChatScreenState extends State<ChatScreen>
   }
 
   void _currentsChanged() {
+    // Starter tasks stand in for currents on a hub that has none. Once the
+    // pipeline produces real ones they have been superseded, so retire them
+    // rather than stacking generated suggestions on top of onboarding
+    // scaffolding derived from a single scan.
+    if (widget.services.currents?.items.isNotEmpty ?? false) {
+      unawaited(_retireStarterTasks());
+    }
     if (mounted) setState(() {});
+  }
+
+  Future<void> _retireStarterTasks() async {
+    if (_starterTasks.isEmpty) return;
+    try {
+      await _checklist.clearStarterTasks();
+    } catch (_) {
+      return;
+    }
+    if (!mounted) return;
+    setState(() {
+      _starterTasks = const [];
+      _doneStarterTasks.clear();
+    });
   }
 
   Future<void> _loadChecklist() async {
