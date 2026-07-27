@@ -131,4 +131,27 @@ final class OverlayAppLauncher {
       return null;
     }
   }
+
+  /// Returns installed application display names matching [query], best first.
+  Future<List<String>> searchApps(
+    String query, {
+    int limit = 20,
+  }) async {
+    if (!supported || query.trim().isEmpty) return const [];
+    try {
+      final result = await _channel.invokeMethod<List<Object?>>('searchApps', {
+        'query': query,
+        'limit': limit,
+      });
+      if (result == null) return const [];
+      return [
+        for (final entry in result)
+          if (entry is String && entry.isNotEmpty) entry,
+      ];
+    } on PlatformException {
+      return const [];
+    } on MissingPluginException {
+      return const [];
+    }
+  }
 }

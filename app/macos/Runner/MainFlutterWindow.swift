@@ -917,36 +917,60 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
       result(AXContextReader.snapshot())
     }
 
+    InstalledAppIndex.shared.warm()
+
     let launcher = FlutterMethodChannel(
       name: "omi/launcher",
       binaryMessenger: flutterViewController.engine.binaryMessenger)
     launcher.setMethodCallHandler { call, result in
-      guard call.method == "openApp" else {
-        result(FlutterMethodNotImplemented)
-        return
-      }
-      guard
-        let query = (call.arguments as? String)?
-          .trimmingCharacters(in: .whitespacesAndNewlines),
-        !query.isEmpty
-      else {
-        result(nil)
-        return
-      }
-      DispatchQueue.global(qos: .userInitiated).async {
+      switch call.method {
+      case "openApp":
         guard
-          let url = Self.resolveApplicationURL(
-            query: query, candidates: Self.installedApplicationURLs())
+          let query = (call.arguments as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+          !query.isEmpty
         else {
-          DispatchQueue.main.async { result(nil) }
+          result(nil)
           return
         }
-        let name = url.deletingPathExtension().lastPathComponent
-        let configuration = NSWorkspace.OpenConfiguration()
-        configuration.activates = true
-        NSWorkspace.shared.openApplication(at: url, configuration: configuration) { application, error in
-          DispatchQueue.main.async { result(error == nil ? name : nil) }
+        DispatchQueue.global(qos: .userInitiated).async {
+          guard let url = InstalledAppIndex.shared.resolve(query: query) else {
+            DispatchQueue.main.async { result(nil) }
+            return
+          }
+          let name = url.deletingPathExtension().lastPathComponent
+          let configuration = NSWorkspace.OpenConfiguration()
+          configuration.activates = true
+          NSWorkspace.shared.openApplication(at: url, configuration: configuration) {
+            application, error in
+            DispatchQueue.main.async { result(error == nil ? name : nil) }
+          }
         }
+      case "searchApps":
+        let query: String
+        let limit: Int
+        if let raw = call.arguments as? String {
+          query = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+          limit = 20
+        } else if let args = call.arguments as? [String: Any],
+          let raw = args["query"] as? String
+        {
+          query = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+          limit = args["limit"] as? Int ?? 20
+        } else {
+          result([])
+          return
+        }
+        guard !query.isEmpty else {
+          result([])
+          return
+        }
+        DispatchQueue.global(qos: .userInitiated).async {
+          let matches = InstalledAppIndex.shared.search(query: query, limit: limit)
+          DispatchQueue.main.async { result(matches) }
+        }
+      default:
+        result(FlutterMethodNotImplemented)
       }
     }
 
@@ -1016,48 +1040,14 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
       ?? NSScreen.main
   }
 
-  /// Directories scanned for the overlay's deterministic "open <app>" fast
-  /// path. Shallow, launch-time cheap; NSWorkspace performs the real open.
-  static var launcherSearchRoots: [URL] {
-    [
-      URL(fileURLWithPath: "/Applications", isDirectory: true),
-      URL(fileURLWithPath: "/Applications/Utilities", isDirectory: true),
-      URL(fileURLWithPath: "/System/Applications", isDirectory: true),
-      URL(fileURLWithPath: "/System/Applications/Utilities", isDirectory: true),
-      URL(
-        fileURLWithPath: NSHomeDirectory() + "/Applications", isDirectory: true),
-    ]
-  }
+  static var launcherSearchRoots: [URL] { InstalledAppIndex.searchRoots }
 
   static func installedApplicationURLs(roots: [URL] = launcherSearchRoots) -> [URL] {
-    var applications: [URL] = []
-    for root in roots {
-      guard
-        let entries = try? FileManager.default.contentsOfDirectory(
-          at: root, includingPropertiesForKeys: nil,
-          options: [.skipsHiddenFiles])
-      else { continue }
-      applications.append(
-        contentsOf: entries.filter { $0.pathExtension == "app" })
-    }
-    return applications
+    InstalledAppIndex.installedApplicationURLs(roots: roots)
   }
 
-  /// Deterministic name match for the overlay launcher: exact name first,
-  /// then prefix, then substring — all case-insensitive — so "chrome" finds
-  /// "Google Chrome" and "safari" never loses to "Safari Technology Preview".
   static func resolveApplicationURL(query: String, candidates: [URL]) -> URL? {
-    let normalized = query.lowercased()
-    guard !normalized.isEmpty else { return nil }
-    var prefixMatch: URL?
-    var substringMatch: URL?
-    for url in candidates {
-      let name = url.deletingPathExtension().lastPathComponent.lowercased()
-      if name == normalized { return url }
-      if prefixMatch == nil, name.hasPrefix(normalized) { prefixMatch = url }
-      if substringMatch == nil, name.contains(normalized) { substringMatch = url }
-    }
-    return prefixMatch ?? substringMatch
+    InstalledAppIndex.resolveApplicationURL(query: query, candidates: candidates)
   }
 
   /// The text-input pill sits just below-right of the cursor, clamped to the
