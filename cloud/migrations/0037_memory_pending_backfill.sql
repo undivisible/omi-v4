@@ -1,3 +1,27 @@
+-- The vector drain treats 'pending' as ineligible, routes those ids to
+-- index.delete_by_ids, and then stamps vector_indexed_at anyway
+-- (wasm_glue.rs:289, :412). backfill_claim_vectors only selects rows where
+-- that column IS NULL (:447), so a released claim would never be revisited and
+-- semantic search would keep missing it.
+--
+-- Clearing the stamp puts them back in the backfill queue. This runs *before*
+-- the release below so 'pending' still identifies exactly the stranded rows:
+-- once they are flipped to 'processed' they are indistinguishable from claims
+-- that were legitimately embedded, and re-embedding those would be a full
+-- re-run of the corpus. Rows already queued in pending_embeddings are skipped,
+-- matching the backfill's own guard.
+UPDATE memory_claims
+   SET vector_indexed_at = NULL
+ WHERE vector_indexed_at IS NOT NULL
+   AND zkr_processing_state = 'pending'
+   AND status = 'accepted'
+   AND retracted_at IS NULL
+   AND (zkr_tier IS NULL OR zkr_tier != 'archive')
+   AND NOT EXISTS (
+     SELECT 1 FROM pending_embeddings p
+      WHERE p.uid = memory_claims.uid AND p.claim_id = memory_claims.id
+   );
+
 -- Claims extracted from transcripts were minted with processing_state
 -- 'pending', and nothing ever promoted them. Every read path requires
 -- 'processed', so this memory was stored, synced and projected, then filtered
@@ -28,24 +52,13 @@ SELECT c.id, c.uid, c.content, c.subject, c.predicate, c.value
    AND (c.zkr_tier IS NULL OR c.zkr_tier != 'archive')
    AND (c.zkr_processing_state IS NULL OR c.zkr_processing_state = 'processed');
 
--- The vector drain treats 'pending' as ineligible, routes those ids to
--- index.delete_by_ids, and then stamps vector_indexed_at anyway
--- (wasm_glue.rs:289, :412). backfill_claim_vectors only selects rows where
--- that column IS NULL (:447), so a released claim would never be revisited and
--- semantic search would keep missing it.
---
--- Clearing the stamp puts them back in the backfill queue. Scoped to the rows
--- this migration just released, so claims that were legitimately indexed keep
--- their stamp and are not re-embedded. Rows already queued in
--- pending_embeddings are skipped, matching the backfill's own guard.
-UPDATE memory_claims
-   SET vector_indexed_at = NULL
- WHERE vector_indexed_at IS NOT NULL
-   AND status = 'accepted'
-   AND retracted_at IS NULL
-   AND (zkr_tier IS NULL OR zkr_tier != 'archive')
-   AND zkr_processing_state = 'processed'
-   AND NOT EXISTS (
-     SELECT 1 FROM pending_embeddings p
-      WHERE p.uid = memory_claims.uid AND p.claim_id = memory_claims.id
-   );
+-- Currents are generated from the same filtered memory view, so every current
+-- produced while the claims above were stranded was built from an effectively
+-- empty corpus. Zeroing the state expires the 15-minute check interval and
+-- drops the watermark below the released claims, so the next app open takes
+-- the `new_memory` branch of heuristic_needs_refresh instead of waiting out
+-- MIN_REGENERATE_INTERVAL_MS on stale input.
+UPDATE currents_refresh_state
+   SET last_checked_at = 0,
+       last_regenerated_at = 0,
+       memory_watermark = 0;
