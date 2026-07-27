@@ -54,6 +54,23 @@ class OmiWaGradient {
     colors: [for (final color in stops) color.withValues(alpha: opacity)],
   );
 
+  /// The same plate pulled toward its own dark end by [amount], 0 to 1.
+  ///
+  /// Wada printed on paper, so his plates run bright. A screen at night wants
+  /// the same hues with the lights down, and lerping toward the plate's own
+  /// darkest colour keeps the hue relationships he chose instead of flattening
+  /// everything toward grey.
+  OmiWaGradient deepened(double amount) {
+    final t = amount.clamp(0.0, 1.0);
+    final floor = stops.last;
+    return OmiWaGradient(
+      plate: plate,
+      name: name,
+      stops: [for (final c in stops) Color.lerp(c, floor, t)!],
+      names: names,
+    );
+  }
+
   /// The colour to sit type in when this gradient is behind it.
   Color get ink =>
       ThemeData.estimateBrightnessForColor(stops.last) == Brightness.dark

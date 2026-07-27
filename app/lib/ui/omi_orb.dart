@@ -27,6 +27,7 @@ class OmiActivityOrb extends StatefulWidget {
     this.motion,
     this.amplitude = 0,
     this.color,
+    this.reactive = false,
     super.key,
   });
 
@@ -63,6 +64,11 @@ class OmiActivityOrb extends StatefulWidget {
   /// it is placed on.
   final Color? color;
 
+  /// Whether the mark answers the pointer: dots shoulder away from a hovering
+  /// cursor and get shoved harder on a press, then spring back. Off by default
+  /// — a mark used as a loading indicator should not twitch under the cursor.
+  final bool reactive;
+
   @override
   State<OmiActivityOrb> createState() => _OmiActivityOrbState();
 }
@@ -81,6 +87,14 @@ class _OmiActivityOrbState extends State<OmiActivityOrb>
   /// Progress through the one-shot scatter-and-reform, 0 to 1.
   double _burst = 1;
   Duration _lastTick = Duration.zero;
+
+  /// Where the pointer is, in canvas units from the ring centre. Null when it
+  /// is not over the mark.
+  Offset? _pointer;
+
+  /// How hard the pointer is currently shoving. Hover settles toward a nudge,
+  /// a press spikes it, and it always decays back.
+  double _shove = 0;
 
   late OmiOrbMotion _motion = _requested;
 
@@ -113,6 +127,11 @@ class _OmiActivityOrbState extends State<OmiActivityOrb>
     // A critically damped follow: quick to rise, no overshoot.
     _level += (target - _level) * (1 - math.pow(0.002, dt));
     if (_burst < 1) _burst = math.min(1, _burst + dt / 0.9);
+    final shoveTarget = _pointer == null ? 0.0 : _hoverShove;
+    // Decays faster than it rises, so a press reads as an impulse rather than
+    // a state the mark gets stuck in.
+    final rate = _shove > shoveTarget ? 0.0015 : 0.02;
+    _shove += (shoveTarget - _shove) * (1 - math.pow(rate, dt));
     if (_morph < 1) {
       _morph = math.min(
         1,
@@ -171,6 +190,26 @@ class _OmiActivityOrbState extends State<OmiActivityOrb>
     _syncMotion();
   }
 
+  /// What a hover alone is worth. A press adds to it directly.
+  static const double _hoverShove = 0.34;
+
+  void _trackPointer(Offset local) {
+    if (!widget.reactive || _reduceMotion) return;
+    final unit = widget.size / OmiMarkGeometry.canvas;
+    final centre = Offset(widget.size / 2, widget.size / 2);
+    setState(() => _pointer = (local - centre) / unit);
+  }
+
+  void _releasePointer() {
+    if (_pointer == null) return;
+    setState(() => _pointer = null);
+  }
+
+  void _press() {
+    if (!widget.reactive || _reduceMotion) return;
+    setState(() => _shove = 1);
+  }
+
   bool get _reduceMotion =>
       debugOmiOrbStatic ||
       (MediaQuery.maybeOf(context)?.disableAnimations ?? false);
@@ -185,6 +224,8 @@ class _OmiActivityOrbState extends State<OmiActivityOrb>
       _burst = 1;
       _from = null;
       _morph = 1;
+      _pointer = null;
+      _shove = 0;
     } else if (!_clock.isAnimating) {
       _lastTick = Duration.zero;
       _clock.repeat();
@@ -206,25 +247,43 @@ class _OmiActivityOrbState extends State<OmiActivityOrb>
   @override
   Widget build(BuildContext context) {
     final still = _reduceMotion;
-    return Semantics(
-      label: 'Omi',
-      child: RepaintBoundary(
-        child: SizedBox.square(
-          dimension: widget.size,
-          child: AnimatedBuilder(
-            animation: _clock,
-            builder: (context, _) => CustomPaint(
-              painter: OmiMarkPainter(
-                placements: still
-                    ? omiOrbPlacements(motion: OmiOrbMotion.mark, turn: 0)
-                    : _placementsNow(),
-                color: widget.color ?? DefaultTextStyle.of(context).style.color,
-              ),
+    Widget mark = RepaintBoundary(
+      child: SizedBox.square(
+        dimension: widget.size,
+        child: AnimatedBuilder(
+          animation: _clock,
+          builder: (context, _) => CustomPaint(
+            painter: OmiMarkPainter(
+              placements: still
+                  ? omiOrbPlacements(motion: OmiOrbMotion.mark, turn: 0)
+                  : _placementsNow(),
+              color: widget.color ?? DefaultTextStyle.of(context).style.color,
+              pointer: still ? null : _pointer,
+              shove: still ? 0 : _shove,
             ),
           ),
         ),
       ),
     );
+    if (widget.reactive && !still) {
+      mark = MouseRegion(
+        onEnter: (event) => _trackPointer(event.localPosition),
+        onHover: (event) => _trackPointer(event.localPosition),
+        onExit: (_) => _releasePointer(),
+        child: Listener(
+          behavior: HitTestBehavior.translucent,
+          onPointerDown: (event) {
+            _trackPointer(event.localPosition);
+            _press();
+          },
+          onPointerMove: (event) => _trackPointer(event.localPosition),
+          onPointerUp: (_) => _releasePointer(),
+          onPointerCancel: (_) => _releasePointer(),
+          child: mark,
+        ),
+      );
+    }
+    return Semantics(label: 'Omi', child: mark);
   }
 }
 
@@ -238,10 +297,18 @@ class OmiMarkPainter extends CustomPainter {
     this.centre,
     this.unit,
     this.opacity = 1,
+    this.pointer,
+    this.shove = 0,
   });
 
   final List<OmiDotPlacement> placements;
   final Color? color;
+
+  /// Where the pointer is, in canvas units from the ring centre, or null.
+  final Offset? pointer;
+
+  /// How hard [pointer] is pushing, 0 to 1.
+  final double shove;
 
   /// Where the ring centre lands. Defaults to the middle of the canvas.
   final Offset? centre;
@@ -265,7 +332,8 @@ class OmiMarkPainter extends CustomPainter {
     for (final dot in placements) {
       final alpha = (dot.alpha * opacity).clamp(0.0, 1.0);
       if (alpha <= 0) continue;
-      final at = origin + dot.offset * scale;
+      final shifted = _shouldered(dot.offset);
+      final at = origin + shifted * scale;
       final r = OmiMarkGeometry.dotRadius * scale * dot.scale;
 
       canvas.drawCircle(
@@ -277,11 +345,28 @@ class OmiMarkPainter extends CustomPainter {
     }
   }
 
+  /// Pushes a dot away from the pointer, hardest when the pointer is right on
+  /// it and falling off smoothly with distance. The dot is displaced, never
+  /// dragged along, so the ring deforms around the cursor and springs back
+  /// when it leaves rather than following it.
+  Offset _shouldered(Offset at) {
+    final from = pointer;
+    if (from == null || shove <= 0) return at;
+    final away = at - from;
+    final distance = away.distance;
+    if (distance < 0.001) return at;
+    const reach = 96.0;
+    final falloff = math.exp(-(distance * distance) / (2 * 44 * 44));
+    return at + (away / distance) * (reach * shove * falloff);
+  }
+
   @override
   bool shouldRepaint(OmiMarkPainter old) =>
       !identical(old.placements, placements) ||
       old.color != color ||
       old.centre != centre ||
       old.unit != unit ||
-      old.opacity != opacity;
+      old.opacity != opacity ||
+      old.pointer != pointer ||
+      old.shove != shove;
 }

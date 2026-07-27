@@ -5,6 +5,7 @@ import 'omi_typography.dart';
 export 'omi_cold_open.dart';
 export 'omi_orb.dart';
 export 'omi_glass.dart';
+export 'omi_idle_showcase.dart';
 export 'omi_wa_palette.dart';
 export 'omi_typography.dart';
 export 'scroll_edge_fade.dart';

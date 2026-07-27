@@ -105,8 +105,10 @@ class _OmiColdOpenState extends State<OmiColdOpen>
             painter: OmiColdOpenPainter(
               progress: _clock.value,
               background: widget.background ?? theme.scaffoldBackgroundColor,
+              // Wada printed on paper and his plates run bright; the open is
+              // a dark room with a mark in it.
               plate: widget.background == null
-                  ? (widget.plate ?? OmiWaPalette.dawn)
+                  ? (widget.plate ?? OmiWaPalette.dawn).deepened(0.42)
                   : null,
               ink: widget.color ?? theme.colorScheme.primary,
               handoffSize: widget.handoffSize,
@@ -123,6 +125,10 @@ const double _fieldEnd = 0.02;
 const double _convergeEnd = 0.30;
 const double _showcaseEnd = 0.822;
 const double _settleEnd = 0.914;
+
+/// How many points are in the sky the mark arrives through.
+const int _starCount = 90;
+const double _tau = math.pi * 2;
 
 /// Draws one frame of the open. Public so a preview harness can step the
 /// timeline without a ticker.
@@ -167,7 +173,33 @@ class OmiColdOpenPainter extends CustomPainter {
             ..shader = wash.bokashi().createShader(field)
             ..color = const Color(0xffffffff).withValues(alpha: fieldAlpha),
         );
+        // Plate 166 is at its palest exactly where the mark lands, and cream
+        // dots on Naples Yellow are invisible. A soft well of the plate's own
+        // dark end gives them ground without breaking the sunrise.
+        final middle = Offset(size.width / 2, size.height / 2);
+        final well = size.shortestSide * 0.72;
+        // Deepens as the dots arrive rather than sitting there through the
+        // empty field beat, where it reads as a smudge with nothing in it.
+        final depth =
+            0.62 *
+            Curves.easeInOutCubic.transform(_span(_fieldEnd, _convergeEnd));
+        if (depth > 0) {
+          canvas.drawCircle(
+            middle,
+            well,
+            Paint()
+              ..shader = RadialGradient(
+                colors: [
+                  wash.stops.last.withValues(alpha: depth * fieldAlpha),
+                  wash.stops.last.withValues(alpha: depth * 0.45 * fieldAlpha),
+                  wash.stops.last.withValues(alpha: 0.0),
+                ],
+                stops: const [0.0, 0.55, 1.0],
+              ).createShader(Rect.fromCircle(center: middle, radius: well)),
+          );
+        }
       }
+      _stars(canvas, size, fieldAlpha);
     }
 
     final (placements, unitSize, markAlpha) = _frame(size, openSize);
@@ -179,6 +211,39 @@ class OmiColdOpenPainter extends CustomPainter {
       unit: unitSize / OmiMarkGeometry.canvas,
       opacity: markAlpha,
     ).paint(canvas, size);
+  }
+
+  /// The field the mark arrives through: faint fixed points that fade up
+  /// before the dots and hold until the handover. Positions come from a hash
+  /// of the index rather than a generator, so the sky is the same sky every
+  /// launch and the painter stays pure.
+  void _stars(Canvas canvas, Size size, double fieldAlpha) {
+    if (progress >= _settleEnd) return;
+    // Up over the field beat, then held.
+    final rise = (progress / _fieldEnd).clamp(0.0, 1.0);
+    final paint = Paint();
+    for (var i = 0; i < _starCount; i++) {
+      final hx = _hash(i * 2 + 1);
+      final hy = _hash(i * 2 + 2);
+      final twinkle = 0.55 + 0.45 * math.sin(_tau * (progress * 1.5 + hx));
+      final at = Offset(hx * size.width, hy * size.height);
+      // Clear of the mark, or they read as stray dots that failed to arrive.
+      final middle = Offset(size.width / 2, size.height / 2);
+      if ((at - middle).distance < size.shortestSide * 0.3) continue;
+      final alpha =
+          0.42 * rise * fieldAlpha * twinkle * (0.4 + 0.6 * _hash(i * 2 + 3));
+      canvas.drawCircle(
+        at,
+        (0.6 + 1.5 * _hash(i * 2 + 4)) * (size.shortestSide / 380),
+        paint..color = ink.withValues(alpha: alpha.clamp(0.0, 1.0)),
+      );
+    }
+  }
+
+  /// A cheap deterministic 0..1 from an integer.
+  double _hash(int n) {
+    final x = math.sin(n * 127.1 + 311.7) * 43758.5453;
+    return x - x.floorToDouble();
   }
 
   /// This frame's dots, the size the mark is drawn at, and its overall opacity.
