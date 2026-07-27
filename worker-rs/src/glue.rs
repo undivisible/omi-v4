@@ -265,19 +265,9 @@ pub(crate) async fn authenticate(req: &Request, ctx: &RouteContext<()>) -> AuthO
         .flatten()
         .unwrap_or_default();
     let token = auth::bearer_token(&authorization);
-    let project_id = ctx
-        .env
-        .var("FIREBASE_PROJECT_ID")
-        .ok()
-        .map(|v| v.to_string());
-
-    let (Some(token), Some(project_id)) = (token, project_id) else {
+    let Some(token) = token else {
         return reject("Authentication required", 401);
     };
-    if project_id.is_empty() {
-        return reject("Authentication required", 401);
-    }
-
     let path = req.path();
     if crate::routes_memory::is_receipt_token(&token)
         && path.contains("/executions/")
@@ -288,6 +278,36 @@ pub(crate) async fn authenticate(req: &Request, ctx: &RouteContext<()>) -> AuthO
             uid: RECEIPT_CLAIM_AUTH_MARKER.to_string(),
             email: None,
         });
+    }
+
+    let dual_mode = matches!(
+        secret_or_var(&ctx.env, "AUTH_DUAL_MODE").as_deref(),
+        Some("1" | "true" | "TRUE" | "yes" | "YES")
+    );
+    let worker_secret = secret_or_var(&ctx.env, "AUTH_TOKEN_SECRET");
+    if auth::worker_auth_enabled(dual_mode, worker_secret.as_deref()) {
+        let previous_secret = secret_or_var(&ctx.env, "AUTH_TOKEN_PREVIOUS_SECRET");
+        if let Some(identity) = auth::worker_session_auth(
+            &token,
+            Date::now().as_millis() as i64,
+            worker_secret.as_deref().unwrap_or_default(),
+            previous_secret.as_deref(),
+        ) {
+            return AuthOutcome::Ok(identity);
+        }
+    }
+
+    let project_id = ctx
+        .env
+        .var("FIREBASE_PROJECT_ID")
+        .ok()
+        .map(|v| v.to_string());
+
+    let Some(project_id) = project_id else {
+        return reject("Authentication required", 401);
+    };
+    if project_id.is_empty() {
+        return reject("Authentication required", 401);
     }
 
     let keys = match firebase_keys().await {

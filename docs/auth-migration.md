@@ -1,9 +1,6 @@
 # Auth migration — Firebase → worker-rs
 
-**Status:** phase 0 half landed. `session_token.rs`, `channel_auth.rs` and
-migration `0038_worker_auth.sql` are in the tree and tested; nothing is wired
-into a route yet, so production still authenticates with Firebase ID tokens and
-behaviour is unchanged.
+**Status:** phase 0 is wired for dual-mode authentication; phase 1 routes are not built.
 
 This replaces an earlier draft written before the TypeScript worker was retired
 on 2026-07-24. That draft's architecture was sound and is kept here; its file
@@ -83,8 +80,6 @@ Plus `attempts`, `locked_at` and `purpose` on `channel_link_codes`.
 
 - The routes: `/v1/auth/channel/exchange`, `/v1/auth/refresh`, `/v1/auth/signout`,
   `/v1/auth/upgrade`.
-- `glue.rs::authenticate` still verifies Firebase only. Dual-mode is phase 0's
-  remaining half.
 - `routes_channels.rs::sign_up_channel_sender` is still `#[allow(dead_code)]`.
 - The Flutter `WorkerAuthGateway`.
 
@@ -131,13 +126,14 @@ from their APIs, not a build test.
 
 ## Migration phases
 
-**Phase 0 — additive, zero user impact.** *(half done)*
-Migration 0038, `session_token.rs`, `channel_auth.rs` — landed. Remaining: add
-`verify_access_token` to `authenticate` **before** the Firebase path behind
-`AUTH_DUAL_MODE`, and in the Firebase success branch
+**Phase 0 — additive, zero user impact.** **Dual-mode authentication is complete
+in source.** Migration 0038, `session_token.rs`, `channel_auth.rs`, and
+`authenticate` are landed. With `AUTH_DUAL_MODE` and `AUTH_TOKEN_SECRET`
+configured, Worker access tokens are accepted before the Firebase fallback.
+Remaining: in the Firebase-success branch, add
 `INSERT OR IGNORE INTO auth_identities (provider='firebase', subject=uid, uid)`.
-That builds the identity map from live traffic — no Firebase export, no admin
-script, no downtime.
+That builds the identity map from live traffic — no Firebase export, admin
+script, or downtime.
 
 **Phase 1 — channel sign-in live.** Ship `/v1/auth/channel/exchange`. New users
 get `usr_` uids. **An existing Firebase user who already linked a chat gets

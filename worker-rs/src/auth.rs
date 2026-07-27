@@ -167,6 +167,29 @@ pub fn verify_firebase_token(
     })
 }
 
+/// Verify a Worker-issued access token and express it through the same identity
+/// type used by the existing Firebase authentication middleware. Worker tokens
+/// deliberately carry no mutable profile attributes, so email remains absent.
+pub fn worker_session_auth(
+    token: &str,
+    now_ms: i64,
+    secret: &str,
+    previous_secret: Option<&str>,
+) -> Option<Auth> {
+    let claims =
+        crate::session_token::verify_access_token(token, now_ms, secret, previous_secret).ok()?;
+    Some(Auth {
+        uid: claims.uid,
+        email: None,
+    })
+}
+
+/// Worker sessions are opt-in during the Firebase migration and cannot be
+/// activated without a signing secret.
+pub fn worker_auth_enabled(dual_mode: bool, secret: Option<&str>) -> bool {
+    dual_mode && secret.is_some_and(|value| !value.is_empty())
+}
+
 /// Extract a bearer token from an Authorization header value, matching the TS
 /// `authorization.startsWith("Bearer ")` + slice(7).trim() behaviour.
 pub fn bearer_token(authorization: &str) -> Option<String> {
@@ -375,6 +398,30 @@ mod tests {
         assert_eq!(bearer_token("Bearer "), None);
         assert_eq!(bearer_token("Basic abc"), None);
         assert_eq!(bearer_token(""), None);
+    }
+
+    #[test]
+    fn worker_session_token_maps_to_existing_auth_shape() {
+        let now = 1_700_000_000_000;
+        let token = crate::session_token::issue_access_token(
+            "existing-firebase-uid",
+            "session-1",
+            now,
+            crate::session_token::ACCESS_TOKEN_TTL_MS,
+            "worker-secret",
+        );
+        let auth =
+            worker_session_auth(&token, now, "worker-secret", None).expect("valid worker session");
+        assert_eq!(auth.uid, "existing-firebase-uid");
+        assert_eq!(auth.email, None);
+    }
+
+    #[test]
+    fn worker_auth_activation_requires_dual_mode_and_nonempty_secret() {
+        assert!(worker_auth_enabled(true, Some("secret")));
+        assert!(!worker_auth_enabled(false, Some("secret")));
+        assert!(!worker_auth_enabled(true, None));
+        assert!(!worker_auth_enabled(true, Some("")));
     }
 
     #[test]

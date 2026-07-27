@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:omi/ui/omi_cold_open.dart';
 import 'package:omi/ui/omi_mark_anchor.dart';
 
 void main() {
@@ -95,5 +96,35 @@ void main() {
     await tester.pump();
 
     expect(tester.takeException(), isNull);
+  });
+
+  group('the open only flies to an anchor it can reach', () {
+    const size = Size(800, 600);
+
+    Rect? reachable(Rect? handoff) =>
+        OmiColdOpenPainter.reachableAnchor(handoff, size);
+
+    test('an anchor scrolled above the viewport is refused', () {
+      // The hub greeter sits at the top of a scrollable, so opening onto a
+      // chat with history reports it off the top of the screen. Flying there
+      // would take the mark out of frame instead of handing it over.
+      expect(reachable(const Rect.fromLTWH(376, -420, 48, 48)), isNull);
+    });
+
+    test('an anchor past the bottom or side is refused', () {
+      expect(reachable(const Rect.fromLTWH(376, 900, 48, 48)), isNull);
+      expect(reachable(const Rect.fromLTWH(-200, 300, 48, 48)), isNull);
+      expect(reachable(const Rect.fromLTWH(1200, 300, 48, 48)), isNull);
+    });
+
+    test('an anchor on screen is accepted whole', () {
+      const target = Rect.fromLTWH(376, 100, 48, 48);
+      expect(reachable(target), target);
+    });
+
+    test('a degenerate or absent anchor is refused', () {
+      expect(reachable(null), isNull);
+      expect(reachable(Rect.zero), isNull);
+    });
   });
 }

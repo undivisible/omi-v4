@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 
 import 'omi_mark_anchor.dart';
 import 'omi_orb.dart';
-import 'omi_wa_palette.dart';
 
 /// The cold open: the eight dots arrive from off the edges of the screen, lock
 /// into the mark, run one lap of [OmiOrbMotion.tusiPendulum], then travel to
@@ -19,7 +18,6 @@ import 'omi_wa_palette.dart';
 class OmiColdOpen extends StatefulWidget {
   const OmiColdOpen({
     required this.onDone,
-    this.plate,
     this.color,
     this.handoffSize = 64,
     super.key,
@@ -28,14 +26,6 @@ class OmiColdOpen extends StatefulWidget {
   /// Called once, when the mark has reached [handoffSize] and the field has
   /// faded off. Under reduce motion it is called on the first frame instead.
   final VoidCallback onDone;
-
-  /// The field the dots arrive over. Defaults to Wada's plate 166 — Grenadine
-  /// Pink falling through Naples Yellow into Deep Slate Green, the warm-to-cold
-  /// run of a sunrise, which is what an app opening is, pulled toward its own
-  /// floor because his plates were printed on paper and this is a dark room.
-  ///
-  /// A flat field is a one-stop gradient; there is no second way to say it.
-  final OmiWaGradient? plate;
 
   final Color? color;
 
@@ -111,7 +101,6 @@ class _OmiColdOpenState extends State<OmiColdOpen>
             painter: OmiColdOpenPainter(
               progress: _clock.value,
               background: theme.scaffoldBackgroundColor,
-              plate: widget.plate ?? OmiWaPalette.dawn.deepened(0.42),
               ink: widget.color ?? theme.colorScheme.primary,
               handoffSize: widget.handoffSize,
               handoff: anchor?.value,
@@ -131,7 +120,6 @@ const double _settleEnd = 0.78;
 
 /// How many points are in the sky the mark arrives through.
 const int _starCount = 90;
-const double _tau = math.pi * 2;
 
 /// Draws one frame of the open. Public so a preview harness can step the
 /// timeline without a ticker.
@@ -139,7 +127,6 @@ class OmiColdOpenPainter extends CustomPainter {
   const OmiColdOpenPainter({
     required this.progress,
     required this.background,
-    required this.plate,
     required this.ink,
     required this.handoffSize,
     this.handoff,
@@ -147,12 +134,9 @@ class OmiColdOpenPainter extends CustomPainter {
 
   final double progress;
 
-  /// Shows only while the plate fades, so the field never goes transparent.
+  /// The room the mark arrives in, and the only thing behind it.
   final Color background;
 
-  /// The dots read against the plate's dark end, which is why every plate in
-  /// the palette finishes dark.
-  final OmiWaGradient plate;
   final Color ink;
   final double handoffSize;
 
@@ -173,45 +157,15 @@ class OmiColdOpenPainter extends CustomPainter {
         ? 1.0
         : 1 - Curves.easeInOutCubic.transform(_span(_settleEnd, 0.94));
     if (fieldAlpha > 0) {
-      final field = Offset.zero & size;
+      // Flat ink, no plate. A sunrise wash behind the mark meant the open had
+      // to fight its own background for the dots to be legible — the radial
+      // well, the deepening, the alpha juggling — and all of that machinery is
+      // what made it look busy. Nothing behind the mark but the room the app
+      // is about to fill.
       canvas.drawRect(
-        field,
+        Offset.zero & size,
         Paint()..color = background.withValues(alpha: fieldAlpha),
       );
-      {
-        final wash = plate;
-        canvas.drawRect(
-          field,
-          Paint()
-            ..shader = wash.bokashi().createShader(field)
-            ..color = const Color(0xffffffff).withValues(alpha: fieldAlpha),
-        );
-        // Plate 166 is at its palest exactly where the mark lands, and cream
-        // dots on Naples Yellow are invisible. A soft well of the plate's own
-        // dark end gives them ground without breaking the sunrise.
-        final middle = Offset(size.width / 2, size.height / 2);
-        final well = size.shortestSide * 0.72;
-        // Deepens as the dots arrive rather than sitting there through the
-        // empty field beat, where it reads as a smudge with nothing in it.
-        final depth =
-            0.62 *
-            Curves.easeInOutCubic.transform(_span(_fieldEnd, _convergeEnd));
-        if (depth > 0) {
-          canvas.drawCircle(
-            middle,
-            well,
-            Paint()
-              ..shader = RadialGradient(
-                colors: [
-                  wash.stops.last.withValues(alpha: depth * fieldAlpha),
-                  wash.stops.last.withValues(alpha: depth * 0.45 * fieldAlpha),
-                  wash.stops.last.withValues(alpha: 0.0),
-                ],
-                stops: const [0.0, 0.55, 1.0],
-              ).createShader(Rect.fromCircle(center: middle, radius: well)),
-          );
-        }
-      }
     }
     _stars(canvas, size, fieldAlpha);
 
@@ -226,12 +180,26 @@ class OmiColdOpenPainter extends CustomPainter {
     ).paint(canvas, size);
   }
 
+  /// The anchor, but only when it is somewhere the user can actually see.
+  ///
+  /// The hub's mark lives at the top of a scrollable, so opening onto a chat
+  /// with history reports it scrolled *above* the viewport — a negative y. Fly
+  /// to that and the mark exits the top of the screen instead of handing over,
+  /// which is worse than not having an anchor at all. Off-screen means fall
+  /// back to the centred shrink.
+  static Rect? reachableAnchor(Rect? handoff, Size size) {
+    if (handoff == null || handoff.isEmpty) return null;
+    return (Offset.zero & size).contains(handoff.center) ? handoff : null;
+  }
+
+  Rect? _reachable(Size size) => reachableAnchor(handoff, size);
+
   /// Where the mark is drawn this frame: the middle of the window until the
   /// settle beat, then travelling to the destination's mark on the same eased
   /// curve the shrink uses, so position and size arrive together.
   Offset _centre(Size size) {
     final middle = Offset(size.width / 2, size.height / 2);
-    final target = handoff?.center;
+    final target = _reachable(size)?.center;
     if (target == null || progress <= _settleEnd) return middle;
     return Offset.lerp(
       middle,
@@ -240,9 +208,9 @@ class OmiColdOpenPainter extends CustomPainter {
     )!;
   }
 
-  /// The size the mark lands at. A reported anchor is measured from the widget
+  /// The size the mark lands at. A reachable anchor is measured from the widget
   /// that is about to take over, so it beats the constant in every case.
-  double get _landingSize => handoff?.shortestSide ?? handoffSize;
+  double _landingSize(Size size) => _reachable(size)?.shortestSide ?? handoffSize;
 
   /// The field the mark arrives through: faint fixed points that fade up
   /// before the dots and hold until the handover. Positions come from a hash
@@ -250,22 +218,28 @@ class OmiColdOpenPainter extends CustomPainter {
   /// launch and the painter stays pure.
   void _stars(Canvas canvas, Size size, double fieldAlpha) {
     if (progress >= _settleEnd) return;
-    // Up over the field beat, then held.
-    final rise = (progress / _fieldEnd).clamp(0.0, 1.0);
+    // Up over the field beat, then held. Fixed, not twinkling: eighty points
+    // each pulsing on their own sine was the single cheapest thing on screen,
+    // and a sky does not flicker at one and a half hertz. They rise once and
+    // hold, so the only thing moving in the frame is the mark.
+    final rise = Curves.easeOutCubic.transform(
+      (progress / _fieldEnd).clamp(0.0, 1.0),
+    );
     final paint = Paint();
+    final middle = Offset(size.width / 2, size.height / 2);
     for (var i = 0; i < _starCount; i++) {
       final hx = _hash(i * 2 + 1);
       final hy = _hash(i * 2 + 2);
-      final twinkle = 0.55 + 0.45 * math.sin(_tau * (progress * 1.5 + hx));
       final at = Offset(hx * size.width, hy * size.height);
       // Clear of the mark, or they read as stray dots that failed to arrive.
-      final middle = Offset(size.width / 2, size.height / 2);
       if ((at - middle).distance < size.shortestSide * 0.3) continue;
-      final alpha =
-          0.42 * rise * fieldAlpha * twinkle * (0.4 + 0.6 * _hash(i * 2 + 3));
+      // A wide spread of faint to very faint. An even field of identical dots
+      // reads as noise; depth is what makes it read as distance.
+      final depth = _hash(i * 2 + 3);
+      final alpha = 0.30 * rise * fieldAlpha * (0.10 + 0.90 * depth * depth);
       canvas.drawCircle(
         at,
-        (0.6 + 1.5 * _hash(i * 2 + 4)) * (size.shortestSide / 380),
+        (0.5 + 1.1 * depth) * (size.shortestSide / 420),
         paint..color = ink.withValues(alpha: alpha.clamp(0.0, 1.0)),
       );
     }
@@ -323,7 +297,7 @@ class OmiColdOpenPainter extends CustomPainter {
     final eased = Curves.easeInOutCubic.transform(out);
     return (
       omiOrbPlacements(motion: OmiOrbMotion.mark, turn: 0),
-      openSize + (_landingSize - openSize) * eased,
+      openSize + (_landingSize(size) - openSize) * eased,
       // Holds at full through the shrink, then clears completely over the last
       // tenth as the app's own mark takes over. Stopping short of zero leaves a
       // ghost sitting on the hub.
@@ -341,15 +315,19 @@ class OmiColdOpenPainter extends CustomPainter {
             ((t - i * stagger) / (1 - stagger * (OmiMarkGeometry.dotCount - 1)))
                 .clamp(0.0, 1.0);
         final rest = OmiMarkGeometry.radiusOf(i);
-        final flight = Curves.easeOutBack.transform(local);
+        // No overshoot. easeOutBack made eight dots bounce past their radius
+        // and spring back, which is the house style of every cheap splash
+        // screen there has ever been. A long decelerating glide that simply
+        // arrives is what reads as weight.
+        final flight = Curves.easeOutQuint.transform(local);
         final glide = Curves.easeOutCubic.transform(local);
         return OmiDotPlacement(
           offset:
               OmiMarkGeometry.directionAt(
-                OmiMarkGeometry.angleOf(i) + (1 - glide) * 0.9,
+                OmiMarkGeometry.angleOf(i) + (1 - glide) * 0.55,
               ) *
               (reach + (rest - reach) * flight),
-          scale: 0.32 + 0.68 * glide,
+          scale: 0.55 + 0.45 * glide,
           alpha: (local * 5).clamp(0.0, 1.0),
         );
       }, growable: false);
@@ -372,7 +350,6 @@ class OmiColdOpenPainter extends CustomPainter {
   bool shouldRepaint(OmiColdOpenPainter old) =>
       old.progress != progress ||
       old.background != background ||
-      old.plate != plate ||
       old.ink != ink ||
       old.handoffSize != handoffSize ||
       old.handoff != handoff;

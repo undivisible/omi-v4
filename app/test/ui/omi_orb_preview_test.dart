@@ -5,7 +5,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:omi/ui/omi_cold_open.dart';
 import 'package:omi/ui/omi_orb.dart';
-import 'package:omi/ui/omi_wa_palette.dart';
 
 /// Renders the motion catalog and the cold open to PNG contact sheets, so the
 /// choreography can be looked at rather than reasoned about. Inert unless a
@@ -76,7 +75,6 @@ void main() {
       OmiColdOpenPainter(
         progress: i / (frames - 1),
         background: _field,
-        plate: OmiWaPalette.dawn.deepened(0.42),
         ink: _ink,
         handoffSize: 64,
       ).paint(canvas, const Size(w, h));
