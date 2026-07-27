@@ -17,7 +17,7 @@ import 'omi_orb.dart';
 class OmiIdleShowcase extends StatefulWidget {
   const OmiIdleShowcase({
     this.size = 48,
-    this.settleAfter = const Duration(seconds: 14),
+    this.settleAfter = const Duration(seconds: 10),
     this.lap = const Duration(milliseconds: 5200),
     this.color,
     this.reactive = true,
@@ -38,6 +38,11 @@ class OmiIdleShowcase extends StatefulWidget {
   final double amplitude;
 
   /// How long the screen has to be left alone before the mark starts.
+  ///
+  /// Ten seconds is short enough that it reads as the mark noticing you have
+  /// stopped, rather than as a screensaver. What made this feel like too much
+  /// before was the length of the rotation, not the wait — so the rotation is
+  /// two quiet motions and the wait is short.
   final Duration settleAfter;
 
   /// How long each motion is held.
@@ -48,15 +53,16 @@ class OmiIdleShowcase extends StatefulWidget {
   /// Whether the mark answers the pointer while it performs.
   final bool reactive;
 
-  /// The rotation, in order. Each is a motion that reads at a glance and
-  /// returns cleanly to the mark, so the sequence never looks like it broke.
+  /// The rotation, in order.
+  ///
+  /// Two, not six, and both of the quiet geometric ones. The variety in this
+  /// app belongs to the working states — loading, thinking, searching each
+  /// pick from their own set — because there the movement is telling you
+  /// something. A mark performing at rest is just motion in your peripheral
+  /// vision while you try to read.
   static const rotation = <OmiOrbMotion>[
     OmiOrbMotion.doubleCircle,
     OmiOrbMotion.tusi,
-    OmiOrbMotion.pendulumWave,
-    OmiOrbMotion.nestedOrbit,
-    OmiOrbMotion.tusiPendulum,
-    OmiOrbMotion.gather,
   ];
 
   @override

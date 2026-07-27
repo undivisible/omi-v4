@@ -22,8 +22,10 @@ private class OvalBlurView: NSView {
     NSLayoutConstraint.activate([
       shell.centerXAnchor.constraint(equalTo: centerXAnchor),
       shell.centerYAnchor.constraint(equalTo: centerYAnchor),
-      shell.widthAnchor.constraint(equalTo: widthAnchor, multiplier: 0.97),
-      shell.heightAnchor.constraint(equalTo: heightAnchor, multiplier: 0.94),
+      // Full bleed. Any inset at all leaves a band around the edge where the
+      // blur does not reach and the window shows through as a dark ring.
+      shell.widthAnchor.constraint(equalTo: widthAnchor),
+      shell.heightAnchor.constraint(equalTo: heightAnchor),
       effect.leadingAnchor.constraint(equalTo: shell.leadingAnchor),
       effect.trailingAnchor.constraint(equalTo: shell.trailingAnchor),
       effect.topAnchor.constraint(equalTo: shell.topAnchor),

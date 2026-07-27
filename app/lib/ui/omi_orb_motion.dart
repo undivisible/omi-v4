@@ -73,11 +73,24 @@ enum OmiOrbState {
   /// At rest: a slow orbit and a barely-there breath.
   idle,
 
-  /// Working: a highlight walks d1 -> d8 around the ring, one dot at a time.
+  /// Waiting on something that has not started returning yet.
+  loading,
+
+  /// Working out what to say.
   thinking,
 
-  /// Hearing you: the chain flattens into a travelling wave whose amplitude
-  /// is [OmiActivityOrb.amplitude].
+  /// Looking something up outside itself.
+  searching,
+
+  /// A reply is arriving, token by token.
+  streaming,
+
+  /// Talking back.
+  speaking,
+
+  /// Hearing you. The only state that reads the input level, and the only one
+  /// that becomes a wave — a waveform anywhere else is a level meter with
+  /// nothing to meter.
   listening,
 
   /// Done: the dots scatter outward once and re-form.
@@ -216,13 +229,53 @@ class OmiThinkingPulse {
 
 const double _tau = math.pi * 2;
 
-/// The choreography [state] performs unless a caller names a motion outright.
-OmiOrbMotion omiMotionForState(OmiOrbState state) => switch (state) {
-  OmiOrbState.idle => OmiOrbMotion.mark,
-  OmiOrbState.thinking => OmiOrbMotion.pulse,
-  OmiOrbState.listening => OmiOrbMotion.sine,
-  OmiOrbState.success => OmiOrbMotion.successBurst,
+/// The motions a state may be expressed by.
+///
+/// Several states offer more than one so the mark does not play the identical
+/// clip every time it waits — but the choices within a state read the same at a
+/// glance, so the animation still says what the app is doing. Variety within a
+/// meaning, not variety instead of one.
+///
+/// `listening` is deliberately alone: the wave is the input level made visible,
+/// and using it for anything else would be a meter with nothing to meter.
+const Map<OmiOrbState, List<OmiOrbMotion>> omiMotionsForState = {
+  OmiOrbState.idle: [OmiOrbMotion.mark],
+  // Waiting: something turns, nothing is claimed about progress.
+  OmiOrbState.loading: [
+    OmiOrbMotion.pulse,
+    OmiOrbMotion.doubleCircle,
+    OmiOrbMotion.nestedOrbit,
+  ],
+  // Working: inward, gathered, self-contained.
+  OmiOrbState.thinking: [
+    OmiOrbMotion.gather,
+    OmiOrbMotion.tusi,
+    OmiOrbMotion.standingWave,
+  ],
+  // Reaching outward for something.
+  OmiOrbState.searching: [
+    OmiOrbMotion.epicycloid,
+    OmiOrbMotion.lissajous,
+    OmiOrbMotion.nestedOrbit,
+  ],
+  // Arriving: energy travelling along the chain, one direction.
+  OmiOrbState.streaming: [OmiOrbMotion.travellingWave],
+  // Talking: a mouth, not an ear — bars rather than a level wave.
+  OmiOrbState.speaking: [OmiOrbMotion.audioBars],
+  OmiOrbState.listening: [OmiOrbMotion.sine],
+  OmiOrbState.success: [OmiOrbMotion.successBurst],
 };
+
+/// The choreography [state] performs unless a caller names a motion outright.
+///
+/// [seed] picks among the candidates. Callers pass something stable for the
+/// life of one wait — a message id, a request counter — so the motion is
+/// varied between waits and steady during one. A changing seed mid-wait would
+/// make the mark twitch between motions, which is worse than never varying.
+OmiOrbMotion omiMotionForState(OmiOrbState state, {int seed = 0}) {
+  final candidates = omiMotionsForState[state] ?? const [OmiOrbMotion.mark];
+  return candidates[seed.abs() % candidates.length];
+}
 
 /// Every dot's placement for one frame of [motion].
 ///

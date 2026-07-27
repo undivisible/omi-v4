@@ -1447,9 +1447,7 @@ class ChatScreenState extends State<ChatScreen>
                                           ),
                                           child: _Greeter(
                                             child: _ChatHome(
-                                              markState: _sending
-                                                  ? OmiOrbState.thinking
-                                                  : OmiOrbState.idle,
+                                              markState: _markState,
                                               greeting: _greeting(),
                                               setupTaskDone: _setupTaskDone,
                                               onToggleSetupTask:
@@ -1570,6 +1568,25 @@ class ChatScreenState extends State<ChatScreen>
         ),
       ],
     );
+  }
+
+  /// What the mark should be saying about this screen.
+  ///
+  /// Waiting on the first token and receiving tokens are different facts and
+  /// get different motions: nothing has come back yet, versus a reply is
+  /// arriving. Collapsing them makes the mark say "busy" for both, which is
+  /// what a spinner does.
+  OmiOrbState get _markState {
+    if (!_sending) return OmiOrbState.idle;
+    final active = _activeRequestId;
+    if (active == null) return OmiOrbState.thinking;
+    final arrived = _messages.any(
+      (message) =>
+          message.requestId == active &&
+          !message.fromUser &&
+          message.text.trim().isNotEmpty,
+    );
+    return arrived ? OmiOrbState.streaming : OmiOrbState.thinking;
   }
 
   /// The one row allowed to carry the turning mark: the assistant's newest

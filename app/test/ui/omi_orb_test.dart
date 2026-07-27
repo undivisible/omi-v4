@@ -372,11 +372,54 @@ void main() {
   });
 
   group('state mapping', () {
-    test('sends each product state to its choreography', () {
+    test('every state has at least one motion', () {
+      for (final state in OmiOrbState.values) {
+        expect(omiMotionsForState[state], isNotNull, reason: '$state');
+        expect(omiMotionsForState[state], isNotEmpty, reason: '$state');
+      }
+    });
+
+    test('the wave is reserved for hearing you', () {
+      // A waveform on any other state is a level meter with nothing to meter.
+      for (final entry in omiMotionsForState.entries) {
+        if (entry.key == OmiOrbState.listening) continue;
+        expect(
+          entry.value,
+          isNot(contains(OmiOrbMotion.sine)),
+          reason: '${entry.key} must not use the input wave',
+        );
+      }
+      expect(omiMotionsForState[OmiOrbState.listening], [OmiOrbMotion.sine]);
+    });
+
+    test('idle stays the mark, and success stays the burst', () {
       expect(omiMotionForState(OmiOrbState.idle), OmiOrbMotion.mark);
-      expect(omiMotionForState(OmiOrbState.thinking), OmiOrbMotion.pulse);
-      expect(omiMotionForState(OmiOrbState.listening), OmiOrbMotion.sine);
       expect(omiMotionForState(OmiOrbState.success), OmiOrbMotion.successBurst);
+    });
+
+    test('the seed varies the motion between waits, never within one', () {
+      final seen = <OmiOrbMotion>{
+        for (var seed = 0; seed < 12; seed++)
+          omiMotionForState(OmiOrbState.thinking, seed: seed),
+      };
+      expect(seen.length, greaterThan(1), reason: 'seed should vary it');
+      // Same seed, same motion — otherwise the mark twitches mid-wait.
+      for (var seed = 0; seed < 12; seed++) {
+        expect(
+          omiMotionForState(OmiOrbState.thinking, seed: seed),
+          omiMotionForState(OmiOrbState.thinking, seed: seed),
+        );
+      }
+    });
+
+    test('a negative seed is still in range', () {
+      for (final state in OmiOrbState.values) {
+        expect(
+          omiMotionsForState[state],
+          contains(omiMotionForState(state, seed: -7)),
+          reason: '$state',
+        );
+      }
     });
   });
 
