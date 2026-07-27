@@ -2,95 +2,18 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
+import 'omi_orb_motion.dart';
+
+export 'omi_orb_motion.dart';
+
 /// Holds the mark still under `flutter test`. A perpetual rotation never lets
 /// `pumpAndSettle` return, so every widget test that settles a screen holding
 /// the mark would hang; `test/flutter_test_config.dart` flips this true. In
 /// production it stays false and the mark always turns.
 bool debugOmiOrbStatic = false;
 
-/// What the mark is doing. The geometry never changes — only how the eight
-/// dots move — so the identity carries every state instead of being swapped
-/// out for a spinner, a waveform and a checkmark.
-enum OmiOrbState {
-  /// At rest: a slow orbit and a barely-there breath.
-  idle,
-
-  /// Working: a highlight walks d1 -> d8 around the ring, one dot at a time.
-  thinking,
-
-  /// Hearing you: the ring swells and shrinks with [OmiActivityOrb.amplitude].
-  listening,
-
-  /// Done: the dots scatter outward once and re-form.
-  success,
-}
-
-/// The geometry of the Omi mark, measured from `assets/images/omi_logo.png`
-/// and kept identical to `assets/images/omi_mark.svg`, the source of truth.
-///
-/// The artwork is 260x260 with the ring centred at (129.5, 129.5) and every
-/// dot 17.2 units across the radius. The four dots on the axes sit at radius
-/// 86.71 and the four on the diagonals at 91.92 — the mark is a rounded
-/// square rather than a true circle, and that is deliberate, so it is kept.
-///
-/// Dot order matches the SVG: index 0 is due north, and the rest run
-/// clockwise (0 = 12 o'clock, 1 = 1:30, 2 = 3 o'clock … 7 = 10:30).
-@visibleForTesting
-class OmiMarkGeometry {
-  const OmiMarkGeometry._();
-
-  static const double canvas = 260;
-  static const double centre = 129.5;
-  static const double dotRadius = 17.2;
-  static const double axisRadius = 86.71;
-  static const double diagonalRadius = 91.92;
-  static const int dotCount = 8;
-
-  /// Distance from the centre to dot [i] in canvas units.
-  static double radiusOf(int i) => i.isEven ? axisRadius : diagonalRadius;
-
-  /// The angle of dot [i], measured clockwise from due north.
-  static double angleOf(int i) => i * math.pi / 4;
-}
-
-/// The site thinking pulse: `@keyframes omi-dot-pulse` in `site/web/styles.css`.
-/// Each dot peaks at 12% of its cycle, holds dim until 70%, then rests — staggered
-/// by one eighth so the highlight reads as a single point of light walking the ring.
-@visibleForTesting
-class OmiThinkingPulse {
-  const OmiThinkingPulse._();
-
-  static const _ease = Cubic(0.22, 1, 0.36, 1);
-  static const baseOpacity = 0.62;
-  static const peakOpacity = 1.0;
-  static const baseScale = 1.0;
-  static const peakScale = 1.14;
-  static const peakAt = 0.12;
-  static const holdUntil = 0.70;
-
-  /// Local phase for dot [i] within the current lap, 0 to 1.
-  static double localPhase(int i, double turn) =>
-      (turn + (OmiMarkGeometry.dotCount - i) / OmiMarkGeometry.dotCount) % 1;
-
-  /// Opacity and scale at [localT], matching the site keyframes.
-  static (double opacity, double scale) at(double localT) {
-    if (localT <= peakAt) {
-      final t = _ease.transform(localT / peakAt);
-      return (
-        baseOpacity + (peakOpacity - baseOpacity) * t,
-        baseScale + (peakScale - baseScale) * t,
-      );
-    }
-    if (localT <= holdUntil) {
-      final t = _ease.transform((localT - peakAt) / (holdUntil - peakAt));
-      return (
-        peakOpacity + (baseOpacity - peakOpacity) * t,
-        peakScale + (baseScale - peakScale) * t,
-      );
-    }
-    return (baseOpacity, baseScale);
-  }
-}
+/// How long the mark takes to cross from one motion to the next.
+const Duration omiOrbMorphDuration = Duration(milliseconds: 240);
 
 /// The omi mark — the ring of eight dots from the brand logo, drawn dot by dot
 /// so it can breathe, think, listen and celebrate. It is the greeter avatar,
@@ -101,6 +24,7 @@ class OmiActivityOrb extends StatefulWidget {
     this.size = 46,
     this.period = const Duration(seconds: 8),
     this.state = OmiOrbState.idle,
+    this.motion,
     this.amplitude = 0,
     this.color,
     super.key,
@@ -119,16 +43,20 @@ class OmiActivityOrb extends StatefulWidget {
 
   final double size;
 
-  /// One full lap of the idle orbit, or one full walk of the thinking highlight
-  /// around the ring, takes this long. The idle greeter turns slowly; the
-  /// loading constructor tightens the pulse to match the site.
+  /// One full lap of the current motion takes this long. The idle greeter turns
+  /// slowly; the loading constructor tightens the pulse to match the site.
   final Duration period;
 
-  /// What the mark is expressing.
+  /// What the mark is expressing. Picks the motion unless [motion] overrides it.
   final OmiOrbState state;
 
-  /// For [OmiOrbState.listening]: the current input level, 0 to 1. The ring
-  /// breathes outward with it, so the mark is the level meter.
+  /// The choreography to run, when a surface wants one the product states do
+  /// not reach for — a showcase idle, a nested-circle wait. Null follows
+  /// [state] through [omiMotionForState].
+  final OmiOrbMotion? motion;
+
+  /// For [OmiOrbState.listening]: the current input level, 0 to 1. The wave
+  /// grows out of the ring with it, so the mark is the level meter.
   final double amplitude;
 
   /// Defaults to the ambient text colour, so the mark sits in whatever surface
@@ -154,6 +82,17 @@ class _OmiActivityOrbState extends State<OmiActivityOrb>
   double _burst = 1;
   Duration _lastTick = Duration.zero;
 
+  late OmiOrbMotion _motion = _requested;
+
+  /// The frame the previous motion was showing when it was interrupted, held so
+  /// the new one can be crossed into rather than cut to. Null once the cross is
+  /// finished.
+  List<OmiDotPlacement>? _from;
+  double _morph = 1;
+
+  OmiOrbMotion get _requested =>
+      widget.motion ?? omiMotionForState(widget.state);
+
   @override
   void initState() {
     super.initState();
@@ -174,6 +113,40 @@ class _OmiActivityOrbState extends State<OmiActivityOrb>
     // A critically damped follow: quick to rise, no overshoot.
     _level += (target - _level) * (1 - math.pow(0.002, dt));
     if (_burst < 1) _burst = math.min(1, _burst + dt / 0.9);
+    if (_morph < 1) {
+      _morph = math.min(
+        1,
+        _morph + dt / (omiOrbMorphDuration.inMicroseconds / 1e6),
+      );
+      if (_morph >= 1) _from = null;
+    }
+  }
+
+  /// Freezes the motion being abandoned and starts crossing into [next]. The
+  /// frozen frame is a plain list of placements, so an interruption partway
+  /// through a previous cross carries the blended pose forward instead of
+  /// snapping back to the motion it had already half-left.
+  void _crossTo(OmiOrbMotion next) {
+    _from = _placementsNow();
+    _motion = next;
+    _morph = 0;
+  }
+
+  List<OmiDotPlacement> _placementsNow() {
+    final current = omiOrbPlacements(
+      motion: _motion,
+      turn: _clock.value,
+      level: _level,
+      burst: _burst,
+    );
+    final previous = _from;
+    if (previous == null || _morph >= 1) return current;
+    final t = Curves.easeOutCubic.transform(_morph.clamp(0.0, 1.0));
+    return List<OmiDotPlacement>.generate(
+      OmiMarkGeometry.dotCount,
+      (i) => OmiDotPlacement.lerp(previous[i], current[i], t),
+      growable: false,
+    );
   }
 
   @override
@@ -185,6 +158,15 @@ class _OmiActivityOrbState extends State<OmiActivityOrb>
     }
     if (old.state != widget.state && widget.state == OmiOrbState.success) {
       _burst = 0;
+    }
+    if (_requested != _motion) {
+      if (_reduceMotion) {
+        _motion = _requested;
+        _from = null;
+        _morph = 1;
+      } else {
+        _crossTo(_requested);
+      }
     }
     _syncMotion();
   }
@@ -201,6 +183,8 @@ class _OmiActivityOrbState extends State<OmiActivityOrb>
       if (_clock.isAnimating) _clock.stop();
       _level = 0;
       _burst = 1;
+      _from = null;
+      _morph = 1;
     } else if (!_clock.isAnimating) {
       _lastTick = Duration.zero;
       _clock.repeat();
@@ -230,12 +214,10 @@ class _OmiActivityOrbState extends State<OmiActivityOrb>
           child: AnimatedBuilder(
             animation: _clock,
             builder: (context, _) => CustomPaint(
-              painter: _OmiMarkPainter(
-                turn: still ? 0 : _clock.value,
-                state: still ? OmiOrbState.idle : widget.state,
-                level: still ? 0 : _level,
-                burst: still ? 1 : _burst,
-                still: still,
+              painter: OmiMarkPainter(
+                placements: still
+                    ? omiOrbPlacements(motion: OmiOrbMotion.mark, turn: 0)
+                    : _placementsNow(),
                 color: widget.color ?? DefaultTextStyle.of(context).style.color,
               ),
             ),
@@ -246,75 +228,45 @@ class _OmiActivityOrbState extends State<OmiActivityOrb>
   }
 }
 
-class _OmiMarkPainter extends CustomPainter {
-  const _OmiMarkPainter({
-    required this.turn,
-    required this.state,
-    required this.level,
-    required this.burst,
-    required this.still,
+/// Draws eight dots wherever a motion put them. It knows nothing about states
+/// or choreography: hand it placements in the mark's canvas space and it draws
+/// the mark, which is what lets the cold open reuse it at full-screen size.
+class OmiMarkPainter extends CustomPainter {
+  const OmiMarkPainter({
+    required this.placements,
     required this.color,
+    this.centre,
+    this.unit,
+    this.opacity = 1,
   });
 
-  /// Position within the current lap, 0 to 1.
-  final double turn;
-  final OmiOrbState state;
-  final double level;
-  final double burst;
-  final bool still;
+  final List<OmiDotPlacement> placements;
   final Color? color;
+
+  /// Where the ring centre lands. Defaults to the middle of the canvas.
+  final Offset? centre;
+
+  /// Canvas units per logical pixel. Defaults to fitting the 260-unit mark to
+  /// the shortest side.
+  final double? unit;
+
+  final double opacity;
 
   @override
   void paint(Canvas canvas, Size size) {
     final ink = color ?? const Color(0xFFFFFCEC);
-    final unit = size.shortestSide / OmiMarkGeometry.canvas;
-    final centre = Offset(size.width / 2, size.height / 2);
-
-    // The whole ring orbits for idle and success; thinking keeps the ring still
-    // so only the sequential highlight reads, matching the site mark.
-    final spin = switch (state) {
-      OmiOrbState.idle => turn,
-      OmiOrbState.thinking => 0.0,
-      OmiOrbState.listening => turn * 0.12,
-      OmiOrbState.success => turn * 0.5,
-    };
-    final spinAngle = still ? 0.0 : spin * 2 * math.pi;
-
-    // Scatter-and-reform: everything flies out at once and settles back with
-    // an eased return, so the ring snaps home rather than drifting home.
-    final eased = Curves.easeOutBack.transform(burst.clamp(0.0, 1.0));
-    final scatter = burst >= 1 ? 0.0 : math.sin(burst * math.pi) * 34;
+    final scale = unit ?? size.shortestSide / OmiMarkGeometry.canvas;
+    final origin = centre ?? Offset(size.width / 2, size.height / 2);
 
     final glow = Paint()
-      ..color = ink.withValues(alpha: 0.34)
-      ..maskFilter = MaskFilter.blur(BlurStyle.normal, 9 * unit);
-    final body = Paint()..color = ink;
+      ..maskFilter = MaskFilter.blur(BlurStyle.normal, 9 * scale);
+    final body = Paint();
 
-    for (var i = 0; i < OmiMarkGeometry.dotCount; i++) {
-      final radius =
-          OmiMarkGeometry.radiusOf(i) +
-          scatter +
-          level * 13 * (0.55 + 0.45 * _phaseOf(i));
-      final angle = OmiMarkGeometry.angleOf(i) + spinAngle;
-
-      // Canvas y grows downward and index 0 is due north, so north is -y.
-      final at =
-          centre + Offset(math.sin(angle), -math.cos(angle)) * radius * unit;
-
-      late final double scale;
-      late final double alpha;
-      if (state == OmiOrbState.thinking && !still) {
-        final pulse = OmiThinkingPulse.at(OmiThinkingPulse.localPhase(i, turn));
-        scale = pulse.$2 + level * 0.1;
-        alpha = pulse.$1 * (burst >= 1 ? 1.0 : eased.clamp(0.0, 1.0));
-      } else {
-        final phase = _phaseOf(i);
-        scale = 1 + phase * 0.16 + level * 0.1;
-        alpha =
-            (0.6 + phase * 0.4) * (burst >= 1 ? 1.0 : eased.clamp(0.0, 1.0));
-      }
-
-      final r = OmiMarkGeometry.dotRadius * unit * scale;
+    for (final dot in placements) {
+      final alpha = (dot.alpha * opacity).clamp(0.0, 1.0);
+      if (alpha <= 0) continue;
+      final at = origin + dot.offset * scale;
+      final r = OmiMarkGeometry.dotRadius * scale * dot.scale;
 
       canvas.drawCircle(
         at,
@@ -325,30 +277,11 @@ class _OmiMarkPainter extends CustomPainter {
     }
   }
 
-  /// How lit dot [i] is right now, 0 to 1.
-  double _phaseOf(int i) {
-    if (still) return 0;
-    switch (state) {
-      case OmiOrbState.idle:
-        // A shared breath, offset a little around the ring so the mark never
-        // pulses as one flat blob.
-        final t = (turn + i / OmiMarkGeometry.dotCount / 3) % 1;
-        return 0.35 * (0.5 - 0.5 * math.cos(t * 2 * math.pi));
-      case OmiOrbState.thinking:
-        return 0;
-      case OmiOrbState.listening:
-        return level;
-      case OmiOrbState.success:
-        return burst >= 1 ? 0.25 : 1 - burst;
-    }
-  }
-
   @override
-  bool shouldRepaint(_OmiMarkPainter old) =>
-      old.turn != turn ||
-      old.state != state ||
-      old.level != level ||
-      old.burst != burst ||
-      old.still != still ||
-      old.color != color;
+  bool shouldRepaint(OmiMarkPainter old) =>
+      !identical(old.placements, placements) ||
+      old.color != color ||
+      old.centre != centre ||
+      old.unit != unit ||
+      old.opacity != opacity;
 }

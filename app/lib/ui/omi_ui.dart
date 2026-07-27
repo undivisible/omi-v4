@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'omi_typography.dart';
 
+export 'omi_cold_open.dart';
 export 'omi_orb.dart';
 export 'omi_typography.dart';
 export 'scroll_edge_fade.dart';
