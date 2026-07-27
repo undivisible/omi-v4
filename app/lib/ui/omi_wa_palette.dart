@@ -70,12 +70,6 @@ class OmiWaGradient {
       names: names,
     );
   }
-
-  /// The colour to sit type in when this gradient is behind it.
-  Color get ink =>
-      ThemeData.estimateBrightnessForColor(stops.last) == Brightness.dark
-      ? const Color(0xfffffcec)
-      : const Color(0xff171716);
 }
 
 /// The plates this app draws on.

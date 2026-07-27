@@ -229,7 +229,13 @@ class _OmiAppState extends State<OmiApp> {
     _refreshCompletion();
   }
 
-  void _authChanged() => _refreshCompletion(notify: true);
+  /// `_refreshCompletion` returns early when the uid has not moved, which is
+  /// exactly what happens on `restoring` -> `signedOut`. Rebuild regardless,
+  /// or the boot state has nothing to tell it the answer arrived.
+  void _authChanged() {
+    _refreshCompletion(notify: true);
+    if (mounted) setState(() {});
+  }
 
   void _dataWiped() {
     _checkedUid = null;
@@ -375,15 +381,21 @@ class _OmiAppState extends State<OmiApp> {
     // placeholder that is swapped out a frame later.
     return Stack(
       children: [
-        if (!_checkingCompletion) _destination else const _BootField(),
+        if (_settled) _destination else const _BootField(),
         OmiColdOpen(onDone: () => setState(() => _openDone = true)),
       ],
     );
   }
 
+  /// Whether there is anything true to show yet. Auth reports `restoring`
+  /// until it has looked for a stored session; deciding before then renders
+  /// onboarding and swaps it out a beat later, which is what the user sees as
+  /// the app "starting in onboarding before finding the thing".
+  bool get _settled => !_checkingCompletion && !services.auth.snapshot.settling;
+
   Widget get _destination {
     // The first frame the user ever sees is the mark, not a spinner.
-    if (_checkingCompletion) {
+    if (!_settled) {
       return const Scaffold(
         body: Center(child: OmiActivityOrb.loading(size: 64)),
       );

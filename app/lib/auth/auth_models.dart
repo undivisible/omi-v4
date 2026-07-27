@@ -3,6 +3,12 @@ import 'consent_store.dart';
 enum AuthProvider { phone, google, apple }
 
 enum AuthPhase {
+  /// The stored session has not been looked for yet. Distinct from
+  /// [signedOut], which is an answer: this one means there is no answer.
+  /// Screens that branch on being signed in have to wait this out, or they
+  /// render the signed-out branch and then swap it a beat later.
+  restoring,
+
   signedOut,
   requestingOtp,
   awaitingOtp,
@@ -75,7 +81,7 @@ final class AuthSnapshot {
   });
 
   const AuthSnapshot.initial()
-    : phase = AuthPhase.signedOut,
+    : phase = AuthPhase.restoring,
       consentGranted = false,
       session = null,
       challenge = null,
@@ -91,4 +97,8 @@ final class AuthSnapshot {
 
   bool get hasProcessingAuthority =>
       session != null && processingConsent?.authorizes(session!.uid) == true;
+
+  /// Whether the answer is still outstanding. Nothing should decide what to
+  /// show the user while this is true.
+  bool get settling => phase == AuthPhase.restoring;
 }

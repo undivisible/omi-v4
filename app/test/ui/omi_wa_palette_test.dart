@@ -48,21 +48,5 @@ void main() {
         expect(color.a, closeTo(0.2, 0.005));
       }
     });
-
-    test('ink contrasts with the colour type actually lands on', () {
-      // Every plate here ends dark, so type over a full bokashi is cream.
-      for (final gradient in OmiWaPalette.all) {
-        final onLast = ThemeData.estimateBrightnessForColor(
-          gradient.stops.last,
-        );
-        expect(
-          gradient.ink,
-          onLast == Brightness.dark
-              ? const Color(0xfffffcec)
-              : const Color(0xff171716),
-          reason: gradient.name,
-        );
-      }
-    });
   });
 }
