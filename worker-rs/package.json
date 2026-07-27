@@ -3,8 +3,9 @@
   "private": true,
   "scripts": {
     "build": "worker-build --release",
-    "deploy": "worker-build --release && bunx wrangler deploy",
-    "deploy:dry-run": "worker-build --release && bunx wrangler deploy --dry-run",
+    "deploy": "bun run assets && worker-build --release && bunx wrangler deploy",
+    "assets": "cd ../cloud && bun run build",
+    "deploy:dry-run": "bun run assets && worker-build --release && bunx wrangler deploy --dry-run",
     "test:tail": "bun test test/tail-export.test.mjs"
   }
 }
