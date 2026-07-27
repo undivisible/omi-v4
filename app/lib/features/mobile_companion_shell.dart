@@ -956,28 +956,29 @@ class MobilePendantPageState extends State<MobilePendantPage> {
             _pageTabs(),
           ],
         ),
-        Positioned(
-          top: 0,
-          right: 0,
-          child: SafeArea(
-            child: Padding(
-              padding: const EdgeInsets.only(top: 8, right: 14),
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  color: _surface,
-                  border: Border.all(color: _hairline),
-                  shape: BoxShape.circle,
-                ),
-                child: IconButton(
-                  key: const Key('companion_settings_button'),
-                  tooltip: 'Settings',
-                  onPressed: _openSettings,
-                  icon: const Icon(Icons.settings_outlined, size: 20),
+        if (_pageIndex == 0)
+          Positioned(
+            top: 0,
+            right: 0,
+            child: SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.only(top: 8, right: 14),
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: _surface,
+                    border: Border.all(color: _hairline),
+                    shape: BoxShape.circle,
+                  ),
+                  child: IconButton(
+                    key: const Key('companion_settings_button'),
+                    tooltip: 'Settings',
+                    onPressed: _openSettings,
+                    icon: const Icon(Icons.settings_outlined, size: 20),
+                  ),
                 ),
               ),
             ),
           ),
-        ),
       ],
     );
   }
@@ -1148,25 +1149,6 @@ class MobilePendantPageState extends State<MobilePendantPage> {
 
   Widget _conversationsPage() {
     final tiles = <Widget>[
-      Text(
-        'Conversations',
-        style: TextStyle(
-          fontSize: 28,
-          fontWeight: FontWeight.w700,
-          letterSpacing: -0.6,
-          color: _pageInk(context),
-        ),
-      ),
-      const SizedBox(height: 6),
-      Text(
-        'Chats, meetings, and captured audio in one place.',
-        style: TextStyle(
-          fontSize: 14,
-          height: 1.35,
-          color: _pageInkSoft(context),
-        ),
-      ),
-      const SizedBox(height: 18),
       if (_conversationError != null)
         _PaperTile(
           icon: Icons.cloud_off_outlined,
