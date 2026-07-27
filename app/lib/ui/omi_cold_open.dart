@@ -2,12 +2,17 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
+import 'omi_mark_anchor.dart';
 import 'omi_orb.dart';
 import 'omi_wa_palette.dart';
 
 /// The cold open: the eight dots arrive from off the edges of the screen, lock
-/// into the mark, run one lap of [OmiOrbMotion.tusiPendulum], then shrink to
-/// the size the app's own mark is about to appear at and hand over.
+/// into the mark, run one lap of [OmiOrbMotion.tusiPendulum], then travel to
+/// where the app's own mark already sits and hand over to it.
+///
+/// The last beat is the whole point. Finishing at the centre of the window and
+/// cutting to a hub whose mark lives above the greeting is two screens; moving
+/// to that mark's real position and fading out on top of it is one.
 ///
 /// It is the app-launch beat only. Nothing else in the product is allowed to
 /// hold the user for three seconds, so nothing else uses it.
@@ -34,8 +39,9 @@ class OmiColdOpen extends StatefulWidget {
 
   final Color? color;
 
-  /// The size the mark leaves at — match it to the mark the next screen shows
-  /// and the handover reads as one continuous object.
+  /// The size the mark leaves at, used when the destination has not reported
+  /// where its own mark is. A published anchor supersedes it, because a
+  /// measured size cannot be wrong and a constant can.
   final double handoffSize;
 
   /// Field, converge, lock, showcase, settle, hand off.
@@ -91,6 +97,7 @@ class _OmiColdOpenState extends State<OmiColdOpen>
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final anchor = OmiMarkAnchorScope.maybeOf(context);
     return Semantics(
       label: 'Omi',
       child: GestureDetector(
@@ -98,7 +105,7 @@ class _OmiColdOpenState extends State<OmiColdOpen>
         onTap: _finish,
         behavior: HitTestBehavior.opaque,
         child: AnimatedBuilder(
-          animation: _clock,
+          animation: Listenable.merge([_clock, ?anchor]),
           builder: (context, _) => CustomPaint(
             size: Size.infinite,
             painter: OmiColdOpenPainter(
@@ -107,6 +114,7 @@ class _OmiColdOpenState extends State<OmiColdOpen>
               plate: widget.plate ?? OmiWaPalette.dawn.deepened(0.42),
               ink: widget.color ?? theme.colorScheme.primary,
               handoffSize: widget.handoffSize,
+              handoff: anchor?.value,
             ),
           ),
         ),
@@ -134,6 +142,7 @@ class OmiColdOpenPainter extends CustomPainter {
     required this.plate,
     required this.ink,
     required this.handoffSize,
+    this.handoff,
   });
 
   final double progress;
@@ -146,6 +155,11 @@ class OmiColdOpenPainter extends CustomPainter {
   final OmiWaGradient plate;
   final Color ink;
   final double handoffSize;
+
+  /// Where the destination's own mark sits, when it has reported. The settle
+  /// beat travels here rather than shrinking in place, so the dots end up
+  /// exactly where the app is already drawing them.
+  final Rect? handoff;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -206,11 +220,29 @@ class OmiColdOpenPainter extends CustomPainter {
     OmiMarkPainter(
       placements: placements,
       color: ink,
-      centre: Offset(size.width / 2, size.height / 2),
+      centre: _centre(size),
       unit: unitSize / OmiMarkGeometry.canvas,
       opacity: markAlpha,
     ).paint(canvas, size);
   }
+
+  /// Where the mark is drawn this frame: the middle of the window until the
+  /// settle beat, then travelling to the destination's mark on the same eased
+  /// curve the shrink uses, so position and size arrive together.
+  Offset _centre(Size size) {
+    final middle = Offset(size.width / 2, size.height / 2);
+    final target = handoff?.center;
+    if (target == null || progress <= _settleEnd) return middle;
+    return Offset.lerp(
+      middle,
+      target,
+      Curves.easeInOutCubic.transform(_span(_settleEnd, 1)),
+    )!;
+  }
+
+  /// The size the mark lands at. A reported anchor is measured from the widget
+  /// that is about to take over, so it beats the constant in every case.
+  double get _landingSize => handoff?.shortestSide ?? handoffSize;
 
   /// The field the mark arrives through: faint fixed points that fade up
   /// before the dots and hold until the handover. Positions come from a hash
@@ -291,7 +323,7 @@ class OmiColdOpenPainter extends CustomPainter {
     final eased = Curves.easeInOutCubic.transform(out);
     return (
       omiOrbPlacements(motion: OmiOrbMotion.mark, turn: 0),
-      openSize + (handoffSize - openSize) * eased,
+      openSize + (_landingSize - openSize) * eased,
       // Holds at full through the shrink, then clears completely over the last
       // tenth as the app's own mark takes over. Stopping short of zero leaves a
       // ghost sitting on the hub.
@@ -342,5 +374,6 @@ class OmiColdOpenPainter extends CustomPainter {
       old.background != background ||
       old.plate != plate ||
       old.ink != ink ||
-      old.handoffSize != handoffSize;
+      old.handoffSize != handoffSize ||
+      old.handoff != handoff;
 }

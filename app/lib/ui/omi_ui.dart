@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'omi_typography.dart';
 
 export 'omi_cold_open.dart';
+export 'omi_mark_anchor.dart';
 export 'omi_orb.dart';
 export 'omi_glass.dart';
 export 'omi_idle_showcase.dart';

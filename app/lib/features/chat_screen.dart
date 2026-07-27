@@ -2437,7 +2437,12 @@ class _ChatHome extends StatelessWidget {
             delayMs: 0,
             child: Column(
               children: [
-                OmiIdleShowcase(size: 48, state: markState),
+                // The cold open finishes on this mark, so it publishes where
+                // it is. Without that the open lands at the middle of the
+                // window and the hand-over reads as a cut to a second screen.
+                OmiMarkAnchorTarget(
+                  child: OmiIdleShowcase(size: 48, state: markState),
+                ),
                 const SizedBox(height: 16),
                 Text(
                   greeting,

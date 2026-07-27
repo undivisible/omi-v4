@@ -21,6 +21,7 @@ import 'features/web_portal_screen.dart';
 import 'onboarding/hub_checklist.dart';
 import 'onboarding/onboarding_completion.dart';
 import 'ui/omi_cold_open.dart';
+import 'ui/omi_mark_anchor.dart';
 import 'ui/omi_orb.dart';
 import 'ui/omi_typography.dart';
 
@@ -221,6 +222,11 @@ class _OmiAppState extends State<OmiApp> {
   /// re-open the app.
   bool _openDone = false;
 
+  /// Where the destination's own mark is, published by whichever screen is
+  /// building underneath the open. It is what lets the open finish *on* that
+  /// mark instead of at the middle of the window.
+  final _markAnchor = OmiMarkAnchor();
+
   @override
   void initState() {
     super.initState();
@@ -377,13 +383,17 @@ class _OmiAppState extends State<OmiApp> {
     if (_webPortal) return WebPortalScreen(services: services);
     if (_openDone) return _destination;
     // The destination is built underneath the open as soon as it is known, so
-    // the mark shrinking to 64 is landing on the real screen rather than on a
-    // placeholder that is swapped out a frame later.
-    return Stack(
-      children: [
-        if (_settled) _destination else const _BootField(),
-        OmiColdOpen(onDone: () => setState(() => _openDone = true)),
-      ],
+    // its mark has been laid out and measured by the time the open starts
+    // travelling to it. Landing on a placeholder that is swapped out a frame
+    // later is what made this read as two screens.
+    return OmiMarkAnchorScope(
+      anchor: _markAnchor,
+      child: Stack(
+        children: [
+          if (_settled) _destination else const _BootField(),
+          OmiColdOpen(onDone: () => setState(() => _openDone = true)),
+        ],
+      ),
     );
   }
 
