@@ -28,6 +28,18 @@ fn bounded_field(value: &str) -> String {
         .collect()
 }
 
+/// Claims are minted `Processed`, not `Pending`.
+///
+/// Every read path — nine queries in the worker, ten inside zkr — requires
+/// `processing_state = 'processed'`, and nothing anywhere promotes a claim out
+/// of `Pending`. Minting `Pending` therefore wrote transcript memory that was
+/// synced, projected, and then invisible to search, retrieval, currents and
+/// channel replies. The state survives in the type system for a real review
+/// stage; until something exists to do that review, claiming one happened is
+/// the bug.
+///
+/// What validation there is already happens here: empty titles are dropped,
+/// fields are bounded, and the count is capped.
 pub fn candidate_claims(model_output: &str, valid_from_ms: i64) -> Vec<ClaimInput> {
     let mut claims = Vec::new();
     let mut proactive = rx4::extract_proactive_loose(model_output);
@@ -45,7 +57,7 @@ pub fn candidate_claims(model_output: &str, valid_from_ms: i64) -> Vec<ClaimInpu
             kind: ClaimKind::Task,
             valid_from: valid_from_ms,
             tier: MemoryTier::ShortTerm,
-            processing_state: MemoryProcessingState::Pending,
+            processing_state: MemoryProcessingState::Processed,
         });
     }
     if claims.len() < MAX_CLAIMS {
@@ -63,7 +75,7 @@ pub fn candidate_claims(model_output: &str, valid_from_ms: i64) -> Vec<ClaimInpu
                 kind: ClaimKind::Fact,
                 valid_from: valid_from_ms,
                 tier: MemoryTier::ShortTerm,
-                processing_state: MemoryProcessingState::Pending,
+                processing_state: MemoryProcessingState::Processed,
             });
         }
     }
@@ -104,7 +116,7 @@ mod tests {
         assert_eq!(claims[0].kind, ClaimKind::Task);
         assert_eq!(claims[0].valid_from, 42);
         assert_eq!(claims[0].tier, MemoryTier::ShortTerm);
-        assert_eq!(claims[0].processing_state, MemoryProcessingState::Pending);
+        assert_eq!(claims[0].processing_state, MemoryProcessingState::Processed);
         assert!(claims.iter().all(|claim| claim.subject != "low"));
     }
 
