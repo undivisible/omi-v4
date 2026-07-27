@@ -673,10 +673,11 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
 
   override func awakeFromNib() {
     let flutterViewController = FlutterViewController()
-    // The nib carries a small centred rect. The shell is a borderless
-    // transparent surface that owns the display, so take the whole screen
-    // rather than sitting in a window-shaped hole in the middle of it.
-    let windowFrame = NSScreen.main?.frame ?? self.frame
+    // The nib carries a small centred rect; the shell should own the display.
+    // `visibleFrame`, not `frame`: the latter includes the menu bar and dock
+    // strips, so the window extends under them and the parts of it they cover
+    // read as grey bands around the app.
+    let windowFrame = NSScreen.main?.visibleFrame ?? self.frame
     self.alphaValue = 0
     self.styleMask = [.borderless, .resizable, .miniaturizable]
     self.isOpaque = false
@@ -694,7 +695,13 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
     let rootViewController = NSViewController()
     let rootView = NSView(frame: NSRect(origin: .zero, size: windowFrame.size))
     rootView.wantsLayer = true
-    rootView.layer?.backgroundColor = NSColor.clear.cgColor
+    // Not clear: a transparent root means every pixel Flutter has not painted
+    // shows whatever is behind the window, which reads as grey bands around
+    // the content. This is the app's own ink, so an unpainted edge is
+    // indistinguishable from the app rather than a hole in it.
+    rootView.layer?.backgroundColor = NSColor(
+      calibratedRed: 0x17 / 255, green: 0x17 / 255, blue: 0x16 / 255, alpha: 1
+    ).cgColor
     rootViewController.view = rootView
     rootViewController.addChild(flutterViewController)
     self.contentViewController = rootViewController
