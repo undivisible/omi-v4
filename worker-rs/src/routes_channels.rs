@@ -11,6 +11,7 @@ use worker::*;
 
 use crate::billing;
 use crate::byok_pricing;
+use crate::channel_auth;
 use crate::channel_checkout::{
     self, checkout_idempotency_key, checkout_reply, ChannelCheckout, CheckoutCompletion,
     EXPIRE_CHANNEL_CHECKOUT_SQL,
@@ -272,6 +273,77 @@ pub async fn issue_link_code(
     .run()
     .await?;
     Ok(Some((code, expires_at)))
+}
+
+/// `issueSigninCode`: re-derive the outstanding sign-in code for a sender, or
+/// mint a separate short-lived bearer code. It deliberately never reads or
+/// writes `purpose = 'link'` rows.
+pub async fn issue_signin_code(
+    env: &Env,
+    channel: Channel,
+    channel_user_id: &str,
+    channel_chat_id: &str,
+    now: i64,
+) -> Result<Option<(String, i64)>> {
+    let Some(secret) = channel_webhook_secret(env, channel) else {
+        return Ok(None);
+    };
+    if crate::channel_group::is_group_channel_chat(
+        channel.as_str(),
+        channel_user_id,
+        channel_chat_id,
+    ) {
+        return Ok(None);
+    }
+    let db = env.d1("DB")?;
+    let pending = db
+        .prepare(
+            "SELECT nonce, expires_at FROM channel_link_codes\n     WHERE channel = ?1 AND channel_user_id = ?2 AND purpose = ?3\n       AND consumed_at IS NULL AND expires_at > ?4\n     ORDER BY expires_at DESC LIMIT 1",
+        )
+        .bind(&[
+            channel.as_str().into(),
+            channel_user_id.into(),
+            channel_auth::PURPOSE_SIGNIN.into(),
+            (now as f64).into(),
+        ])?
+        .first::<Value>(None)
+        .await?;
+    if let Some(pending) = pending {
+        let nonce = json_str(&pending, "nonce").unwrap_or_default();
+        let expires_at = json_i64(&pending, "expires_at").unwrap_or(now);
+        let code =
+            channel_link::derive_link_code(&secret, channel.as_str(), channel_user_id, &nonce);
+        return Ok(Some((code, expires_at)));
+    }
+
+    // A seven-character code has a finite keyspace. Do not let a rare collision
+    // overwrite (or inherit) a link code belonging to another sender.
+    for _ in 0..4 {
+        let nonce = random_uuid();
+        let code =
+            channel_link::derive_link_code(&secret, channel.as_str(), channel_user_id, &nonce);
+        let expires_at = now + channel_auth::SIGNIN_CODE_TTL_MS;
+        let inserted = db
+            .prepare(
+                "INSERT INTO channel_link_codes\n       (code_hash, channel, channel_user_id, channel_chat_id, nonce, expires_at, created_at, purpose)\n     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)\n     ON CONFLICT(code_hash) DO NOTHING\n     RETURNING code_hash",
+            )
+            .bind(&[
+                channel_link::code_hash(&code).into(),
+                channel.as_str().into(),
+                channel_user_id.into(),
+                channel_chat_id.into(),
+                nonce.into(),
+                (expires_at as f64).into(),
+                (now as f64).into(),
+                channel_auth::PURPOSE_SIGNIN.into(),
+            ])?
+            .first::<Value>(None)
+            .await?;
+        if inserted.is_some() {
+            return Ok(Some((code, expires_at)));
+        }
+    }
+    Ok(None)
 }
 
 /// A code resolved to the chat it was issued to.
@@ -1174,6 +1246,25 @@ async fn start_link(
     }
 }
 
+async fn start_signin(
+    env: &Env,
+    channel: Channel,
+    channel_user_id: &str,
+    channel_chat_id: &str,
+    now: i64,
+) -> Result<ChannelOutcome> {
+    match issue_signin_code(env, channel, channel_user_id, channel_chat_id, now).await? {
+        Some((code, _)) => Ok(ChannelOutcome {
+            reply: Some(cmd::signin_code_text(&code)),
+            enqueue: false,
+        }),
+        None => Ok(ChannelOutcome {
+            reply: None,
+            enqueue: false,
+        }),
+    }
+}
+
 /// `handleChannelMessage`: the one shared dispatcher, run before the assistant.
 pub async fn handle_channel_message(
     env: &Env,
@@ -1206,6 +1297,15 @@ pub async fn handle_channel_message(
             enqueue: false,
         });
     };
+    if command.name == "/signin" {
+        if binding.is_none() && !unlinked_reply_allowed(env, channel, channel_user_id).await {
+            return Ok(ChannelOutcome {
+                reply: None,
+                enqueue: false,
+            });
+        }
+        return start_signin(env, channel, channel_user_id, channel_chat_id, now).await;
+    }
     let Some(binding) = binding else {
         if command.name == "/signup" {
             mark_first_contact_answered(env, channel, channel_user_id, now).await?;
