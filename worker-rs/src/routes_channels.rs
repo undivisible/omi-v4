@@ -313,6 +313,9 @@ struct ChannelBinding {
     uid: String,
     verified_at: i64,
     email: Option<String>,
+    /// When this chat was last told what `/logout` will do. Repeating the whole
+    /// explanation to someone who just read it is noise, not care.
+    logout_prompted_at: Option<i64>,
 }
 
 async fn channel_binding(
@@ -323,7 +326,7 @@ async fn channel_binding(
     let db = env.d1("DB")?;
     let row = db
         .prepare(
-            "SELECT b.uid AS uid, b.verified_at AS verified_at, u.email AS email\n     FROM channel_bindings b LEFT JOIN users u ON u.uid = b.uid\n     WHERE b.channel = ?1 AND b.channel_user_id = ?2 AND b.revoked_at IS NULL",
+            "SELECT b.uid AS uid, b.verified_at AS verified_at,\n            b.logout_prompted_at AS logout_prompted_at, u.email AS email\n     FROM channel_bindings b LEFT JOIN users u ON u.uid = b.uid\n     WHERE b.channel = ?1 AND b.channel_user_id = ?2 AND b.revoked_at IS NULL",
         )
         .bind(&[channel.as_str().into(), channel_user_id.into()])?
         .first::<Value>(None)
@@ -332,7 +335,29 @@ async fn channel_binding(
         uid: json_str(&row, "uid").unwrap_or_default(),
         verified_at: json_i64(&row, "verified_at").unwrap_or(0),
         email: json_str(&row, "email"),
+        logout_prompted_at: json_i64(&row, "logout_prompted_at"),
     }))
+}
+
+/// How long a `/logout` explanation stands before it is worth repeating in
+/// full. Long enough that sending the command a few times in a row gets the
+/// short answer, short enough that coming back tomorrow gets the whole thing.
+const LOGOUT_PROMPT_TTL_MS: i64 = 30 * 60 * 1000;
+
+async fn remember_logout_prompt(
+    env: &Env,
+    channel: Channel,
+    channel_user_id: &str,
+    now: i64,
+) -> Result<()> {
+    env.d1("DB")?
+        .prepare(
+            "UPDATE channel_bindings SET logout_prompted_at = ?1\n     WHERE channel = ?2 AND channel_user_id = ?3 AND revoked_at IS NULL",
+        )
+        .bind(&[now.into(), channel.as_str().into(), channel_user_id.into()])?
+        .run()
+        .await?;
+    Ok(())
 }
 
 async fn unlinked_reply_allowed(env: &Env, channel: Channel, channel_user_id: &str) -> bool {
@@ -1265,7 +1290,15 @@ Your account stays linked."
         }
         _ => {
             if !parsed.argument.eq_ignore_ascii_case("confirm") {
-                if channel_account {
+                // Someone who just read what this does and sent it again needs
+                // the one thing they have to type, not the explanation over.
+                let repeated = binding
+                    .logout_prompted_at
+                    .is_some_and(|at| now.saturating_sub(at) < LOGOUT_PROMPT_TTL_MS);
+                remember_logout_prompt(env, channel, channel_user_id, now).await?;
+                if repeated {
+                    "Still waiting on /logout confirm.".to_string()
+                } else if channel_account {
                     "This chat is the account, so there's no separate login to sign out of. To keep what I know, sign in on your phone or desktop and send /start here first. Send /logout confirm to close it instead — I'll stop answering here and this account won't be handed to anyone else.".to_string()
                 } else {
                     format!(
