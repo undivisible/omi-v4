@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../memory/memory.dart';
+import '../ui/omi_orb.dart';
 
 // The paper palette the rest of the companion shell paints in, kept local so
 // this screen stands alone without reaching into the shell's private colours.
@@ -256,13 +257,9 @@ class _MobileMemoryScreenState extends State<MobileMemoryScreen> {
                     height: 40,
                     child: Center(
                       child: _addBusy
-                          ? SizedBox(
-                              width: 18,
-                              height: 18,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2,
-                                color: dark ? _ink : _cream,
-                              ),
+                          ? OmiActivityOrb.loading(
+                              size: 18,
+                              color: dark ? _ink : _cream,
                             )
                           : Icon(
                               Icons.add_rounded,

@@ -234,7 +234,16 @@ class _MeetingNotesScreenState extends State<MeetingNotesScreen> {
       title: 'Meeting notes',
       body: switch ((notes, _error)) {
         (_, final String error) => Center(child: Text(error)),
-        (null, _) => const Center(child: OmiActivityOrb.loading(size: 44)),
+        // A full-screen wait with room to breathe: the diagonals drop to an
+        // inner ring and counter-turn, so the mark reads as nested circles
+        // rather than the tight loading pulse a button-sized mark gets.
+        (null, _) => const Center(
+          child: OmiActivityOrb(
+            size: 44,
+            motion: OmiOrbMotion.doubleCircle,
+            period: Duration(milliseconds: 2400),
+          ),
+        ),
         (final List<MeetingNote> loaded, _) when loaded.isEmpty => const Center(
           child: Text('No meeting notes yet.'),
         ),

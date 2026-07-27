@@ -21,6 +21,7 @@ import '../native/generated/signals/signals.dart'
 import '../providers/providers.dart';
 import '../settings/settings.dart';
 import '../ui/burst_glow.dart';
+import '../ui/omi_orb.dart';
 import '../ui/scroll_edge_fade.dart';
 import 'meeting_notes.dart';
 import '../profile/user_profile_settings_panel.dart';
@@ -2195,10 +2196,7 @@ class _PlanTileState extends State<_PlanTile> {
           iconSize: 18,
           onPressed: opening ? null : () => open(value),
           icon: opening
-              ? const SizedBox.square(
-                  dimension: 18,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                )
+              ? const OmiActivityOrb.loading(size: 18)
               : const Icon(Icons.arrow_forward_rounded),
         ),
       );
