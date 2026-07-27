@@ -12,6 +12,8 @@ import '../menu_bar/desktop_menu_bar.dart';
 import '../native/native_hub.dart';
 import 'chat_screen.dart';
 import 'cursor_pill.dart';
+import '../ui/omi_glass.dart';
+import '../ui/omi_wa_palette.dart';
 import 'cursor_pill_controller.dart';
 import 'hub_opener.dart';
 import 'meeting_assist_panel.dart';
@@ -439,10 +441,17 @@ class _WarmPaperHub extends StatelessWidget {
           ),
         ),
       ),
-      child: Padding(
-        key: const Key('warm_paper_hub'),
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-        child: child,
+      // The hub takes the same ground the mobile home does — Wada's plate 166,
+      // held back far enough to read as weather rather than as content — so
+      // desktop and phone are the same room seen from two doors.
+      child: OmiWaBackdrop(
+        gradient: OmiWaPalette.dawn,
+        opacity: 0.1,
+        child: Padding(
+          key: const Key('warm_paper_hub'),
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          child: child,
+        ),
       ),
     );
   }

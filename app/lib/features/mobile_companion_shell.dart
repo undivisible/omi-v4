@@ -32,6 +32,7 @@ import 'mobile_update_check.dart';
 import 'transcript_log_store.dart';
 import 'wifi_debug_panel.dart';
 import '../ui/omi_glass.dart';
+import '../ui/omi_idle_showcase.dart';
 import '../ui/omi_wa_palette.dart';
 
 const _paper = Color(0xfff7f6f1);
@@ -1073,6 +1074,17 @@ class MobilePendantPageState extends State<MobilePendantPage> {
     required List<Widget> deviceTiles,
   }) {
     final content = <Widget>[
+      // The pendant above is the device; this is Omi. It sits below the hero
+      // rather than above it because the hero deliberately drops the top
+      // safe-area inset so the cord reaches past the notch. Left alone it
+      // works through the showcase motions, and it shoulders away from a
+      // finger the same way the desktop greeter does.
+      const Center(
+        child: Padding(
+          padding: EdgeInsets.only(bottom: 10),
+          child: OmiIdleShowcase(size: 40),
+        ),
+      ),
       _LiveTranscriptStrip(
         connected: connected,
         capturing: capturing,
