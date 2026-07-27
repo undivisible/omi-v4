@@ -33,6 +33,7 @@ import 'transcript_log_store.dart';
 import 'wifi_debug_panel.dart';
 import '../ui/omi_glass.dart';
 import '../ui/omi_idle_showcase.dart';
+import '../ui/omi_orb.dart';
 import '../ui/omi_wa_palette.dart';
 
 const _paper = Color(0xfff7f6f1);
@@ -1079,10 +1080,19 @@ class MobilePendantPageState extends State<MobilePendantPage> {
       // safe-area inset so the cord reaches past the notch. Left alone it
       // works through the showcase motions, and it shoulders away from a
       // finger the same way the desktop greeter does.
-      const Center(
+      Center(
         child: Padding(
-          padding: EdgeInsets.only(bottom: 10),
-          child: OmiIdleShowcase(size: 40),
+          padding: const EdgeInsets.only(bottom: 10),
+          child: OmiIdleShowcase(
+            size: 40,
+            // Capturing is Omi listening; connecting is Omi working. Only a
+            // pendant sitting idle leaves it free to perform.
+            state: capturing
+                ? OmiOrbState.listening
+                : busy
+                ? OmiOrbState.thinking
+                : OmiOrbState.idle,
+          ),
         ),
       ),
       _LiveTranscriptStrip(

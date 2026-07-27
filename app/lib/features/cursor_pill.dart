@@ -347,9 +347,18 @@ class _CursorPillState extends State<CursorPill> {
                 level: widget.controller.level,
                 animated: !MediaQuery.disableAnimationsOf(context),
               ),
-              PillWaveform(
+              // The mark is the waveform. Eight bars drawn next to the
+              // cursor were a level meter that happened to sit near Omi;
+              // the same eight dots riding the wave are Omi listening.
+              ValueListenableBuilder<double>(
                 key: const Key('cursor_pill_waveform'),
-                level: widget.controller.level,
+                valueListenable: widget.controller.level,
+                builder: (context, level, _) => OmiActivityOrb(
+                  size: 34,
+                  state: OmiOrbState.listening,
+                  amplitude: level,
+                  color: _pillGreen,
+                ),
               ),
             ],
           ),

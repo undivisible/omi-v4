@@ -39,7 +39,7 @@ class OmiColdOpen extends StatefulWidget {
   final double handoffSize;
 
   /// Field, converge, lock, showcase, settle, hand off.
-  static const Duration duration = Duration(milliseconds: 3260);
+  static const Duration duration = Duration(milliseconds: 2400);
 
   @override
   State<OmiColdOpen> createState() => _OmiColdOpenState();
@@ -117,9 +117,9 @@ class _OmiColdOpenState extends State<OmiColdOpen>
 
 /// The beats, as fractions of [OmiColdOpen.duration].
 const double _fieldEnd = 0.02;
-const double _convergeEnd = 0.30;
-const double _showcaseEnd = 0.822;
-const double _settleEnd = 0.914;
+const double _convergeEnd = 0.34;
+const double _showcaseEnd = 0.70;
+const double _settleEnd = 0.78;
 
 /// How many points are in the sky the mark arrives through.
 const int _starCount = 90;
@@ -153,9 +153,11 @@ class OmiColdOpenPainter extends CustomPainter {
 
     // The field goes out first and the mark second, so the last thing on screen
     // is the mark over the app rather than the mark over a black hole.
+    // The field goes early and the mark lands late, so the handover is the mark
+    // settling onto the app rather than a cut between two screens.
     final fieldAlpha = progress <= _settleEnd
         ? 1.0
-        : 1 - Curves.easeOutCubic.transform(_span(_settleEnd, 1));
+        : 1 - Curves.easeInOutCubic.transform(_span(_settleEnd, 0.94));
     if (fieldAlpha > 0) {
       final field = Offset.zero & size;
       canvas.drawRect(
@@ -290,7 +292,10 @@ class OmiColdOpenPainter extends CustomPainter {
     return (
       omiOrbPlacements(motion: OmiOrbMotion.mark, turn: 0),
       openSize + (handoffSize - openSize) * eased,
-      1 - Curves.easeInCubic.transform(out) * 0.35,
+      // Holds at full through the shrink, then clears completely over the last
+      // tenth as the app's own mark takes over. Stopping short of zero leaves a
+      // ghost sitting on the hub.
+      1 - Curves.easeInCubic.transform(_span(0.90, 1)),
     );
   }
 

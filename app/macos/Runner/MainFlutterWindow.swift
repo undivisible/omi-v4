@@ -22,8 +22,8 @@ private class OvalBlurView: NSView {
     NSLayoutConstraint.activate([
       shell.centerXAnchor.constraint(equalTo: centerXAnchor),
       shell.centerYAnchor.constraint(equalTo: centerYAnchor),
-      shell.widthAnchor.constraint(equalTo: widthAnchor, multiplier: 0.88),
-      shell.heightAnchor.constraint(equalTo: heightAnchor, multiplier: 0.76),
+      shell.widthAnchor.constraint(equalTo: widthAnchor, multiplier: 0.97),
+      shell.heightAnchor.constraint(equalTo: heightAnchor, multiplier: 0.94),
       effect.leadingAnchor.constraint(equalTo: shell.leadingAnchor),
       effect.trailingAnchor.constraint(equalTo: shell.trailingAnchor),
       effect.topAnchor.constraint(equalTo: shell.topAnchor),
@@ -37,7 +37,7 @@ private class OvalBlurView: NSView {
     super.layout()
     guard shell.bounds.size != maskSize, shell.bounds.width > 0, shell.bounds.height > 0 else { return }
     maskSize = shell.bounds.size
-    shell.layer?.backgroundColor = NSColor(calibratedWhite: 0.2, alpha: 0.8).cgColor
+    shell.layer?.backgroundColor = NSColor(calibratedWhite: 0.16, alpha: 0.42).cgColor
     let mask = NSImage(size: maskSize, flipped: false) { bounds in
       guard
         let gradient = CGGradient(
@@ -671,7 +671,10 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
 
   override func awakeFromNib() {
     let flutterViewController = FlutterViewController()
-    let windowFrame = self.frame
+    // The nib carries a small centred rect. The shell is a borderless
+    // transparent surface that owns the display, so take the whole screen
+    // rather than sitting in a window-shaped hole in the middle of it.
+    let windowFrame = NSScreen.main?.frame ?? self.frame
     self.alphaValue = 0
     self.styleMask = [.borderless, .resizable, .miniaturizable]
     self.isOpaque = false

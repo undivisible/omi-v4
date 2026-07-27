@@ -21,10 +21,21 @@ class OmiIdleShowcase extends StatefulWidget {
     this.lap = const Duration(milliseconds: 5200),
     this.color,
     this.reactive = true,
+    this.state = OmiOrbState.idle,
+    this.amplitude = 0,
     super.key,
   });
 
   final double size;
+
+  /// What the app is doing right now. Anything other than idle wins outright:
+  /// a mark performing a showcase lap while the assistant is thinking or
+  /// listening is a mark that is not telling the truth about the app. The
+  /// showcase is what it does when there is nothing to say.
+  final OmiOrbState state;
+
+  /// Input level, for [OmiOrbState.listening].
+  final double amplitude;
 
   /// How long the screen has to be left alone before the mark starts.
   final Duration settleAfter;
@@ -57,12 +68,21 @@ class _OmiIdleShowcaseState extends State<OmiIdleShowcase> {
   Timer? _advance;
   int _step = -1;
 
-  bool get _performing => _step >= 0;
+  /// Only performs when the app has nothing else for it to express.
+  bool get _performing => _step >= 0 && widget.state == OmiOrbState.idle;
 
   @override
   void initState() {
     super.initState();
     _arm();
+  }
+
+  @override
+  void didUpdateWidget(covariant OmiIdleShowcase old) {
+    super.didUpdateWidget(old);
+    // Work arriving is a reason to stop performing and a reason to restart the
+    // clock, exactly like a pointer event.
+    if (old.state != widget.state && widget.state != OmiOrbState.idle) _stir();
   }
 
   bool get _quiet =>
@@ -103,7 +123,12 @@ class _OmiIdleShowcaseState extends State<OmiIdleShowcase> {
   @override
   Widget build(BuildContext context) {
     if (_quiet) {
-      return OmiActivityOrb(size: widget.size, color: widget.color);
+      return OmiActivityOrb(
+        size: widget.size,
+        color: widget.color,
+        state: widget.state,
+        amplitude: widget.amplitude,
+      );
     }
     return Listener(
       behavior: HitTestBehavior.translucent,
@@ -114,6 +139,8 @@ class _OmiIdleShowcaseState extends State<OmiIdleShowcase> {
         size: widget.size,
         color: widget.color,
         reactive: widget.reactive,
+        state: widget.state,
+        amplitude: widget.amplitude,
         motion: _performing ? OmiIdleShowcase.rotation[_step] : null,
         period: _performing ? widget.lap : const Duration(seconds: 8),
       ),

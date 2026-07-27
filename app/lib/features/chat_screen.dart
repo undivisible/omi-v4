@@ -1447,6 +1447,9 @@ class ChatScreenState extends State<ChatScreen>
                                           ),
                                           child: _Greeter(
                                             child: _ChatHome(
+                                              markState: _sending
+                                                  ? OmiOrbState.thinking
+                                                  : OmiOrbState.idle,
                                               greeting: _greeting(),
                                               setupTaskDone: _setupTaskDone,
                                               onToggleSetupTask:
@@ -2357,7 +2360,13 @@ class _ChatHome extends StatelessWidget {
     this.showByokHint = false,
     this.onOpenByok,
     this.onDismissByok,
+    this.markState = OmiOrbState.idle,
   });
+
+  /// What the mark should be expressing. The greeter is the most-looked-at
+  /// mark in the app, so it should say what Omi is actually doing rather than
+  /// idling through a showcase while a reply is streaming in.
+  final OmiOrbState markState;
 
   final String greeting;
   final bool setupTaskDone;
@@ -2390,7 +2399,7 @@ class _ChatHome extends StatelessWidget {
             delayMs: 0,
             child: Column(
               children: [
-                const OmiIdleShowcase(size: 48),
+                OmiIdleShowcase(size: 48, state: markState),
                 const SizedBox(height: 16),
                 Text(
                   greeting,
