@@ -20,6 +20,7 @@
 //! testable against a clock the test supplies.
 
 pub mod bridge;
+pub mod description;
 pub mod dhash;
 pub mod engine;
 pub mod models;

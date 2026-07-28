@@ -15,6 +15,7 @@ class RewindFrameRecord {
     this.bundleId,
     this.windowTitle,
     this.ocrText,
+    this.visualCaption,
   });
 
   static RewindFrameRecord deserialize(BinaryDeserializer deserializer) {
@@ -30,6 +31,9 @@ class RewindFrameRecord {
       bundleId: TraitHelpers.deserializeOptionStr(deserializer),
       windowTitle: TraitHelpers.deserializeOptionStr(deserializer),
       ocrText: TraitHelpers.deserializeOptionStr(deserializer),
+      visualCaption: TraitHelpers.deserializeOptionRewindVisualCaption(
+        deserializer,
+      ),
     );
     deserializer.decreaseContainerDepth();
     return instance;
@@ -54,6 +58,7 @@ class RewindFrameRecord {
   final String? bundleId;
   final String? windowTitle;
   final String? ocrText;
+  final RewindVisualCaption? visualCaption;
 
   RewindFrameRecord copyWith({
     int? capturedAtMs,
@@ -66,6 +71,7 @@ class RewindFrameRecord {
     String? Function()? bundleId,
     String? Function()? windowTitle,
     String? Function()? ocrText,
+    RewindVisualCaption? Function()? visualCaption,
   }) {
     return RewindFrameRecord(
       capturedAtMs: capturedAtMs ?? this.capturedAtMs,
@@ -78,6 +84,9 @@ class RewindFrameRecord {
       bundleId: bundleId == null ? this.bundleId : bundleId(),
       windowTitle: windowTitle == null ? this.windowTitle : windowTitle(),
       ocrText: ocrText == null ? this.ocrText : ocrText(),
+      visualCaption: visualCaption == null
+          ? this.visualCaption
+          : visualCaption(),
     );
   }
 
@@ -93,6 +102,7 @@ class RewindFrameRecord {
     TraitHelpers.serializeOptionStr(bundleId, serializer);
     TraitHelpers.serializeOptionStr(windowTitle, serializer);
     TraitHelpers.serializeOptionStr(ocrText, serializer);
+    TraitHelpers.serializeOptionRewindVisualCaption(visualCaption, serializer);
     serializer.decreaseContainerDepth();
   }
 
@@ -117,7 +127,8 @@ class RewindFrameRecord {
         appName == other.appName &&
         bundleId == other.bundleId &&
         windowTitle == other.windowTitle &&
-        ocrText == other.ocrText;
+        ocrText == other.ocrText &&
+        visualCaption == other.visualCaption;
   }
 
   @override
@@ -132,6 +143,7 @@ class RewindFrameRecord {
     bundleId,
     windowTitle,
     ocrText,
+    visualCaption,
   );
 
   @override
@@ -150,7 +162,8 @@ class RewindFrameRecord {
           'appName: $appName, '
           'bundleId: $bundleId, '
           'windowTitle: $windowTitle, '
-          'ocrText: $ocrText'
+          'ocrText: $ocrText, '
+          'visualCaption: $visualCaption'
           ')';
       return true;
     }());

@@ -76,13 +76,15 @@ pub fn classify(body: &Value) -> Outcome {
 pub fn upstream_body(image: &Image) -> Value {
     json!({
         "model": MODEL,
-        "messages": [{
-            "role": "user",
-            "content": [
-                { "type": "text", "text": PROMPT },
+        "messages": [
+            { "role": "system", "content": PROMPT },
+            {
+                "role": "user",
+                "content": [
                 { "type": "image_url", "image_url": { "url": format!("data:{};base64,{}", image.mime_type, image.base64) } }
-            ]
-        }],
+                ]
+            }
+        ],
         "stream": false,
         "max_tokens": MAXIMUM_OUTPUT_TOKENS,
         "temperature": 0
@@ -145,10 +147,11 @@ mod tests {
         assert_eq!(body["max_tokens"], MAXIMUM_OUTPUT_TOKENS);
         assert_eq!(body["temperature"], 0);
         assert_eq!(
-            body["messages"][0]["content"][1]["image_url"]["url"],
+            body["messages"][1]["content"][0]["image_url"]["url"],
             format!("data:image/jpeg;base64,{}", jpeg())
         );
-        assert!(body["messages"][0]["content"][0]["text"]
+        assert_eq!(body["messages"][0]["role"], "system");
+        assert!(body["messages"][0]["content"]
             .as_str()
             .unwrap()
             .contains("factually"));

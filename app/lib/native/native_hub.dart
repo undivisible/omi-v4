@@ -62,6 +62,7 @@ export 'generated/signals/signals.dart'
         RewindSkipReason,
         RewindStatus,
         RewindUpdate,
+        RewindVisualCaption,
         RewindWindowContext,
         NativeEventActionProposal,
         NativeEventApprovalDecisionAcknowledged,
@@ -405,7 +406,6 @@ mixin NativeHubWithoutCapture implements NativeHub {
     int? maxAgeMs,
     int? maxSegmentBytes,
   }) {}
-
   @override
   void configureCaptureUpload({
     required String requestId,

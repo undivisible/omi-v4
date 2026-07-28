@@ -286,6 +286,18 @@ class _FrameDetail extends StatelessWidget {
             ),
           ),
         ],
+        if (frame.visualCaption != null) ...[
+          const SizedBox(height: 12),
+          SelectableText(
+            frame.visualCaption!.text,
+            style: TextStyle(
+              fontFamily: OmiFonts.sans,
+              fontSize: 13,
+              height: 1.4,
+              color: colors.ink,
+            ),
+          ),
+        ],
       ],
     ),
   );

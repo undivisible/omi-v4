@@ -35,7 +35,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use super::dhash::PreviewHash;
-use super::models::{Display, Frame, PolicyConfig, Retention, WindowContext};
+use super::models::{Display, Frame, PolicyConfig, Retention, VisualCaption, WindowContext};
 use super::policy::{CapturePolicy, Tick};
 use super::privacy::{PrivacySettings, SkipReason};
 use super::settings::{Settings, SettingsFile};
@@ -214,6 +214,14 @@ impl Engine {
     /// the bridge needs it to hand absolute paths to the image renderer.
     pub fn root(&self) -> &std::path::Path {
         self.store.root()
+    }
+
+    pub fn latest_frame(&self) -> Option<Frame> {
+        self.store.frames().last().cloned()
+    }
+
+    pub fn set_visual_caption(&mut self, relative_path: &str, caption: VisualCaption) -> bool {
+        self.store.set_visual_caption(relative_path, caption)
     }
 
     pub fn handle(&mut self, request: Request, now_ms: i64) -> Response {
@@ -447,6 +455,7 @@ impl Engine {
                 bundle_id: pending.tick.context.bundle_id.clone(),
                 window_title: title,
                 ocr_text,
+                visual_caption: None,
             },
             self.settings.retention,
         );

@@ -142,6 +142,29 @@ class TraitHelpers {
     }
   }
 
+  static void serializeOptionRewindVisualCaption(
+    RewindVisualCaption? value,
+    BinarySerializer serializer,
+  ) {
+    if (value == null) {
+      serializer.serializeOptionTag(false);
+    } else {
+      serializer.serializeOptionTag(true);
+      value.serialize(serializer);
+    }
+  }
+
+  static RewindVisualCaption? deserializeOptionRewindVisualCaption(
+    BinaryDeserializer deserializer,
+  ) {
+    final tag = deserializer.deserializeOptionTag();
+    if (tag) {
+      return RewindVisualCaption.deserialize(deserializer);
+    } else {
+      return null;
+    }
+  }
+
   static void serializeOptionTranscriptLocator(
     TranscriptLocator? value,
     BinarySerializer serializer,
