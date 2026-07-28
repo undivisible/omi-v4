@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:math' as math;
-import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -1012,10 +1011,9 @@ class MobilePendantPageState extends State<MobilePendantPage> {
       child: OmiGlass(
         tone: OmiGlassTone.chrome,
         radius: 26,
-        interactive: true,
+        interactive: false,
         child: DecoratedBox(
           decoration: BoxDecoration(
-            color: (dark ? _inkSheet : _surface).withValues(alpha: 0.55),
             border: Border(top: BorderSide(color: hairline)),
           ),
           child: Row(
@@ -1957,7 +1955,6 @@ class _FadingHero extends StatelessWidget {
   const _FadingHero({required this.scrollOffset, required this.child});
 
   static const _fadeDistance = 220.0;
-  static const _maxBlur = 9.0;
 
   final ValueListenable<double> scrollOffset;
   final Widget child;
@@ -1968,17 +1965,12 @@ class _FadingHero extends StatelessWidget {
     child: child,
     builder: (context, offset, child) {
       final progress = (offset / _fadeDistance).clamp(0.0, 1.0);
-      final sigma = progress * _maxBlur;
       final hero = Opacity(
         key: const Key('companion_hero_fade'),
         opacity: 1 - progress,
         child: child,
       );
-      if (sigma <= 0.01) return hero;
-      return ImageFiltered(
-        imageFilter: ui.ImageFilter.blur(sigmaX: sigma, sigmaY: sigma),
-        child: hero,
-      );
+      return hero;
     },
   );
 }
