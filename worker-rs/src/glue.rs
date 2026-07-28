@@ -175,6 +175,8 @@ async fn fetch(req: Request, env: Env, ctx: Context) -> Result<Response> {
         .post_async("/v1/auth/desktop/exchange", handle_desktop_exchange)
         .post_async("/v1/auth/channel/exchange", handle_channel_exchange)
         .post_async("/v1/auth/refresh", handle_auth_refresh)
+        .post_async("/v1/auth/signout", handle_auth_signout)
+        .post_async("/v1/auth/upgrade", handle_auth_upgrade)
         // Phase 2: billing (authenticated).
         .post_async("/v1/payments/stripe/checkout", handle_billing_checkout)
         .post_async("/v1/payments/stripe/portal", handle_billing_portal)
@@ -299,6 +301,13 @@ pub(crate) async fn authenticate(req: &Request, ctx: &RouteContext<()>) -> AuthO
         }
     }
 
+    authenticate_firebase_bearer(&token, ctx).await
+}
+
+/// Firebase-only authentication for credential upgrades. This intentionally
+/// bypasses the Worker-token branch in `authenticate`, so a Worker bearer can
+/// never be exchanged for another Worker session.
+async fn authenticate_firebase_bearer(token: &str, ctx: &RouteContext<()>) -> AuthOutcome {
     let project_id = ctx
         .env
         .var("FIREBASE_PROJECT_ID")
@@ -317,11 +326,11 @@ pub(crate) async fn authenticate(req: &Request, ctx: &RouteContext<()>) -> AuthO
         Err(_) => return reject("Authentication unavailable", 503),
     };
     let now = (Date::now().as_millis() / 1000) as i64;
-    let Some(identity) = auth::verify_firebase_token(&token, &project_id, now, &keys) else {
+    let Some(identity) = auth::verify_firebase_token(token, &project_id, now, &keys) else {
         return reject("Authentication failed", 401);
     };
 
-    // Upsert the user, matching requireAuth's INSERT ... ON CONFLICT.
+    // Upsert the canonical Firebase user, matching requireAuth's INSERT ... ON CONFLICT.
     let db = match ctx.env.d1("DB") {
         Ok(db) => db,
         Err(_) => return reject("Authentication unavailable", 503),
@@ -2207,6 +2216,100 @@ async fn handle_auth_refresh(mut req: Request, ctx: RouteContext<()>) -> Result<
         return opaque_auth_failure();
     }
     Response::from_json(&response)
+}
+
+async fn handle_auth_signout(req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let Some(secret) = worker_session_secret(&ctx) else {
+        return opaque_auth_failure();
+    };
+    let authorization = req
+        .headers()
+        .get("authorization")
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    let Some(token) = auth::bearer_token(&authorization) else {
+        return opaque_auth_failure();
+    };
+    let previous_secret = secret_or_var(&ctx.env, "AUTH_TOKEN_PREVIOUS_SECRET");
+    let now = now_ms() as i64;
+    let Some(session_id) = crate::auth_session_flow::worker_signout_session_id(
+        &token,
+        now,
+        true,
+        Some(&secret),
+        previous_secret.as_deref(),
+    ) else {
+        return opaque_auth_failure();
+    };
+    let db = match ctx.env.d1("DB") {
+        Ok(db) => db,
+        Err(_) => return opaque_auth_failure(),
+    };
+    let result = db
+        .prepare(
+            "UPDATE auth_sessions\n             SET revoked_at = ?2, last_seen_at = ?2\n             WHERE id = ?1 AND revoked_at IS NULL",
+        )
+        .bind(&[js_str(&session_id), (now as f64).into()])?
+        .run()
+        .await;
+    let Ok(result) = result else {
+        return opaque_auth_failure();
+    };
+    if changes(&result) != 1 {
+        return opaque_auth_failure();
+    }
+    Ok(Response::empty()?.with_status(204))
+}
+
+async fn handle_auth_upgrade(req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let Some(secret) = worker_session_secret(&ctx) else {
+        return opaque_auth_failure();
+    };
+    let authorization = req
+        .headers()
+        .get("authorization")
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    let Some(token) = auth::bearer_token(&authorization) else {
+        return opaque_auth_failure();
+    };
+    let identity = match authenticate_firebase_bearer(&token, &ctx).await {
+        AuthOutcome::Ok(identity) => identity,
+        AuthOutcome::Reject(response) => return Ok(response),
+    };
+    let now = now_ms() as i64;
+    let session_id = uuid_v4();
+    let Some(response) = mint_worker_session(&identity.uid, &session_id, now, &secret) else {
+        return opaque_auth_failure();
+    };
+    let write = crate::auth_session_flow::firebase_upgrade_write(&session_id, now, &response);
+    let db = match ctx.env.d1("DB") {
+        Ok(db) => db,
+        Err(_) => return opaque_auth_failure(),
+    };
+    let result = db
+        .prepare(
+            "INSERT INTO auth_sessions\n             (id, uid, refresh_hash, device_label, origin, created_at, last_seen_at, expires_at, rotated_from)\n             VALUES (?1, ?2, ?3, NULL, ?4, ?5, ?5, ?6, NULL)",
+        )
+        .bind(&[
+            js_str(&write.id),
+            js_str(&write.uid),
+            js_str(&write.refresh_hash),
+            js_str(&write.origin),
+            (write.created_at as f64).into(),
+            (write.expires_at as f64).into(),
+        ])?
+        .run()
+        .await;
+    let Ok(result) = result else {
+        return opaque_auth_failure();
+    };
+    if changes(&result) != 1 {
+        return opaque_auth_failure();
+    }
+    Ok(Response::from_json(&response)?.with_status(201))
 }
 
 // ===========================================================================
