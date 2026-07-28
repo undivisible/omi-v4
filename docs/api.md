@@ -726,7 +726,7 @@ The iMessage/SMS/RCS channel uses Sendblue. The stored channel id is
 headers. Sendblue has **no idempotency key**, so the delivery queue's lease and
 status machinery is the only duplicate-send guard; do not retry outside it.
 
-**Inbound** — `POST /webhooks/sendblue/<SENDBLUE_WEBHOOK_PATH_TOKEN>`.
+**Inbound** — `POST /v1/webhooks/sendblue/<SENDBLUE_WEBHOOK_PATH_TOKEN>`.
 
 > **Security caveat, stated plainly.** Sendblue does not sign webhook bodies.
 > It echoes the shared secret configured for the endpoint back in an
@@ -735,7 +735,8 @@ status machinery is the only duplicate-send guard; do not retry outside it.
 > once can forge inbound messages until it is rotated. This is materially
 > weaker than HMAC-signed Stripe webhooks, and cannot be fixed from our side.
 >
-> Compensating controls, all implemented in `worker/src/sendblue.ts`:
+> Compensating controls are implemented in the active Rust Worker route
+> (`worker-rs/src/glue.rs`) and provider verifier (`worker-rs/src/sendblue.rs`):
 >
 > 1. The header is compared in **constant time**, so it cannot be recovered by
 >    timing the endpoint.

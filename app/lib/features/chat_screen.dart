@@ -2492,7 +2492,7 @@ class _ChatHome extends StatelessWidget {
                     child: InkWell(
                       key: const Key('hub_empty_start'),
                       onTap: () => onDraftPrompt(
-                        'I want to set my context: what I’m working on, what I care about, and what to ignore.',
+                        'Show me the private workspace context you have from this Mac, what you’re using it for, and anything I should correct or exclude.',
                       ),
                       hoverColor: colors.rowHover,
                       splashColor: Colors.transparent,
@@ -2503,7 +2503,7 @@ class _ChatHome extends StatelessWidget {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              'Start with the context Omi should carry.',
+                              'Your private computer context is ready.',
                               style: TextStyle(
                                 fontSize: 16,
                                 fontWeight: FontWeight.w600,
@@ -2512,7 +2512,7 @@ class _ChatHome extends StatelessWidget {
                             ),
                             const SizedBox(height: 4),
                             Text(
-                              'Set what matters and what to filter out →',
+                              'Review what Omi found and adjust it →',
                               style: TextStyle(
                                 fontSize: 13,
                                 fontWeight: FontWeight.w600,

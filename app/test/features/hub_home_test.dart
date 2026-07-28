@@ -357,7 +357,11 @@ void main() {
       expect(start, findsOneWidget);
       expect(find.textContaining('Nothing needs attention'), findsNothing);
       expect(
-        find.text('Start with the context Omi should carry.'),
+        find.text('Your private computer context is ready.'),
+        findsOneWidget,
+      );
+      expect(
+        find.text('Review what Omi found and adjust it →'),
         findsOneWidget,
       );
       await tester.tap(start);
@@ -368,7 +372,7 @@ void main() {
             .widget<TextField>(find.byKey(const Key('chat_input')))
             .controller!
             .text,
-        'I want to set my context: what I’m working on, what I care about, and what to ignore.',
+        'Show me the private workspace context you have from this Mac, what you’re using it for, and anything I should correct or exclude.',
       );
     },
   );
