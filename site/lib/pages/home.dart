@@ -183,23 +183,12 @@ class Home extends StatelessComponent {
   @override
   Component build(BuildContext context) {
     return Page(
-      title: 'Omi — guided hub',
-      description: 'A live, guided Omi hub running on disclosed sample data.',
+      title: 'Omi — private memory that stays useful',
+      description:
+          'Omi keeps the thread across the moments you choose to remember, with a transparent guided demo before you connect anything.',
       path: '/',
       compactFooter: true,
-      children: [_hubOnly()],
-    );
-  }
-
-  Component _hubOnly() {
-    return section(
-      [
-        h1([.text('Omi guided hub')], classes: 'sr-only', id: 'hub-title'),
-        const HubEmbedLegacy(),
-      ],
-      classes: 'hub-page',
-      id: 'hub',
-      attributes: {'aria-labelledby': 'hub-title'},
+      children: [hubHeroLegacy(), hubLegacy(), makeItYoursLegacy()],
     );
   }
 
@@ -210,24 +199,24 @@ class Home extends StatelessComponent {
           const OmiMark.hero(),
           p([.text('OMI · GUIDED HUB')], classes: 'label rise d1'),
           h1(
-            [.text('Start with what matters.')],
+            [.text('Life moves fast. Keep the thread.')],
             classes: 'giant rise d2',
             id: 'hub-hero-title',
           ),
           p([
             .text(
-              'Ask Omi anything. It shows its reasoning, the memory behind it, '
-              'and the next thing worth doing.',
+              'A private memory for the things you choose to keep — with sources, '
+              'context, and a next step you can act on.',
             ),
           ], classes: 'mid rise d3'),
           div([
             a(
-              [.text('Enter the hub ↓')],
+              [.text('Try the sample Hub ↓')],
               classes: 'btn btn-solid',
               href: '#hub',
             ),
             a(
-              [.text('Open the app')],
+              [.text('Open your Omi')],
               classes: 'btn btn-line',
               href: downloadUrl,
             ),
@@ -254,11 +243,16 @@ class Home extends StatelessComponent {
     return section(
       [
         div([
-          p([.text('LIVE DEMO')], classes: 'label'),
-          h2([.text('Learn Omi inside Omi.')], classes: 'big', id: 'hub-title'),
+          p([.text('TRY THE DEMO · SAMPLE DATA')], classes: 'label'),
+          h2(
+            [.text('See Omi make a moment useful.')],
+            classes: 'big',
+            id: 'hub-title',
+          ),
           p([
             .text(
-              'Use the guide in the corner. Every Current can show why it surfaced.',
+              'Explore a guided example before you connect anything. This Hub uses '
+              'sample data, never your account.',
             ),
           ], classes: 'mid'),
         ], classes: 'hub-intro reveal'),
