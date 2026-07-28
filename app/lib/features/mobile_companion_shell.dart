@@ -2012,10 +2012,6 @@ class _PendantHero extends StatefulWidget {
 
 class _PendantHeroState extends State<_PendantHero>
     with TickerProviderStateMixin {
-  late final AnimationController _sway = AnimationController(
-    vsync: this,
-    duration: const Duration(seconds: 6),
-  );
   // While the pendant is connecting it breathes: the image itself pulses in
   // opacity, which is the busy signal now that the spinner beside it is gone.
   late final AnimationController _pulse = AnimationController(
@@ -2038,12 +2034,7 @@ class _PendantHeroState extends State<_PendantHero>
   void didChangeDependencies() {
     super.didChangeDependencies();
     _animationsDisabled = MediaQuery.disableAnimationsOf(context);
-    if (_animationsDisabled) {
-      _sway.stop();
-      _pulse.stop();
-    } else if (!_sway.isAnimating) {
-      _sway.repeat();
-    }
+    if (_animationsDisabled) _pulse.stop();
     _syncPulse();
   }
 
@@ -2071,7 +2062,6 @@ class _PendantHeroState extends State<_PendantHero>
 
   @override
   void dispose() {
-    _sway.dispose();
     _pulse.dispose();
     super.dispose();
   }
@@ -2178,25 +2168,14 @@ class _PendantHeroState extends State<_PendantHero>
               ? Duration.zero
               : const Duration(milliseconds: 520),
           curve: Curves.easeOutCubic,
-          builder: (context, warmth, _) => AnimatedBuilder(
-            animation: _sway,
-            // Anchored to the top edge, which the layout above pins to the very
-            // top of the screen: scaling about the centre would walk the
-            // pendant down the page as it warms up.
-            child: Transform.scale(
-              scale: .965 + warmth * .035,
-              alignment: Alignment.topCenter,
-              child: pulsing(pendantFor(warmth)),
-            ),
-            builder: (context, child) {
-              final t = _sway.value * 2 * math.pi;
-              final angle = animationsDisabled ? 0.0 : math.sin(t) * .012;
-              return Transform.rotate(
-                angle: angle,
-                alignment: Alignment.topCenter,
-                child: child,
-              );
-            },
+          // Anchored to the top edge, which the layout above pins to the very
+          // top of the screen: scaling about the centre would walk the pendant
+          // down the page as it warms up. This is a short state transition, not
+          // ambient motion after the intro/connect animation has finished.
+          builder: (context, warmth, _) => Transform.scale(
+            scale: .965 + warmth * .035,
+            alignment: Alignment.topCenter,
+            child: pulsing(pendantFor(warmth)),
           ),
         ),
       ],

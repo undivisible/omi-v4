@@ -1,6 +1,32 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
+const _captureNotificationChannelId = 'omi_capture';
+const _captureNotificationChannelName = 'Capture';
+const _captureNotificationChannelDescription =
+    'Shown while your Omi pendant is streaming audio to this phone.';
+
+/// Capture is visible in Notification Center without interrupting the screen
+/// the user is already looking at. A foreground iOS alert applies a system blur
+/// to the app beneath it, so it is deliberately disabled here.
+NotificationDetails captureNotificationDetails() => const NotificationDetails(
+  android: AndroidNotificationDetails(
+    _captureNotificationChannelId,
+    _captureNotificationChannelName,
+    channelDescription: _captureNotificationChannelDescription,
+    importance: Importance.low,
+    priority: Priority.low,
+    ongoing: true,
+    playSound: false,
+    enableVibration: false,
+  ),
+  iOS: DarwinNotificationDetails(
+    presentAlert: false,
+    presentBadge: false,
+    presentSound: false,
+  ),
+);
+
 /// Posts the ambient "Omi is listening" phone notification raised when the
 /// user starts a capture from the pendant hero. Kept behind an interface so
 /// widget tests can observe the call without touching platform channels.
@@ -33,10 +59,6 @@ final class LocalCaptureNotifier implements CaptureNotifier {
        _platform = platform ?? defaultTargetPlatform;
 
   static const _notificationId = 0xa11;
-  static const _channelId = 'omi_capture';
-  static const _channelName = 'Capture';
-  static const _channelDescription =
-      'Shown while your Omi pendant is streaming audio to this phone.';
 
   final FlutterLocalNotificationsPlugin _plugin;
   final TargetPlatform _platform;
@@ -80,23 +102,7 @@ final class LocalCaptureNotifier implements CaptureNotifier {
         id: _notificationId,
         title: 'Omi is listening',
         body: '$deviceName is streaming audio to this phone.',
-        notificationDetails: const NotificationDetails(
-          android: AndroidNotificationDetails(
-            _channelId,
-            _channelName,
-            channelDescription: _channelDescription,
-            importance: Importance.low,
-            priority: Priority.low,
-            ongoing: true,
-            playSound: false,
-            enableVibration: false,
-          ),
-          iOS: DarwinNotificationDetails(
-            presentAlert: true,
-            presentBadge: false,
-            presentSound: false,
-          ),
-        ),
+        notificationDetails: captureNotificationDetails(),
       );
     } catch (_) {}
   }
