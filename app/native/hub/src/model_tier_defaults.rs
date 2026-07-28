@@ -11,7 +11,10 @@ pub(crate) const DEFAULT_TRANSCRIBE_MODEL: &str = "google/gemini-3.5-flash-lite"
 pub(crate) const DEFAULT_SPEAK_MODEL: &str = "openai/gpt-audio-mini";
 
 pub(crate) const MODEL_CAPABILITIES: &[(&str, &[Capability])] = &[
-    ("xiaomi/mimo-v2.5", &[Capability::Text, Capability::AudioIn]),
+    (
+        "xiaomi/mimo-v2.5",
+        &[Capability::Text, Capability::AudioIn, Capability::ImageIn],
+    ),
     ("xiaomi/mimo-v2.5-pro", &[Capability::Text]),
     ("inception/mercury-2", &[Capability::Text]),
     ("perplexity/sonar", &[Capability::Text]),

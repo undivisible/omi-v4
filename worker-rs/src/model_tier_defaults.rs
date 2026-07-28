@@ -12,7 +12,7 @@ pub const DEFAULT_TRANSCRIBE_MODEL: &str = "google/gemini-3.5-flash-lite";
 pub const DEFAULT_SPEAK_MODEL: &str = "openai/gpt-audio-mini";
 
 pub const MODEL_CAPABILITIES: &[(&str, &[ModelCapability])] = &[
-    ("xiaomi/mimo-v2.5", &[Text, AudioIn]),
+    ("xiaomi/mimo-v2.5", &[Text, AudioIn, ImageIn]),
     ("xiaomi/mimo-v2.5-pro", &[Text]),
     ("inception/mercury-2", &[Text]),
     ("perplexity/sonar", &[Text]),

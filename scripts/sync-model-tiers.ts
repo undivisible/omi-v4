@@ -44,7 +44,9 @@ const hubCapabilities = Object.entries(config.capabilities)
         }
       })
       .join(", ");
-    return `    ("${model}", &[${rustCaps}]),`;
+    return caps.length > 1
+      ? `    (\n        "${model}",\n        &[${rustCaps}],\n    ),`
+      : `    ("${model}", &[${rustCaps}]),`;
   })
   .join("\n");
 
@@ -92,8 +94,8 @@ const workerRsCapabilities = Object.entries(config.capabilities)
 
 const workerRsFile = `//! @generated from config/model-tiers.json — do not edit; run scripts/sync-model-tiers.ts
 
-use super::ModelCapability::{AudioIn, AudioOut, ImageIn, Text};
 use super::ModelCapability;
+use super::ModelCapability::{AudioIn, AudioOut, ImageIn, Text};
 
 ${workerRsDefaults}
 

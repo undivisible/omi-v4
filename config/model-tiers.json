@@ -18,7 +18,7 @@
     "speak": "OMI_MODEL_SPEAK"
   },
   "capabilities": {
-    "xiaomi/mimo-v2.5": ["text", "audioIn"],
+    "xiaomi/mimo-v2.5": ["text", "audioIn", "imageIn"],
     "xiaomi/mimo-v2.5-pro": ["text"],
     "inception/mercury-2": ["text"],
     "perplexity/sonar": ["text"],
