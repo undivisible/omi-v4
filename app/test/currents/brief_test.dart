@@ -24,6 +24,9 @@ CurrentCard _card({
   DateTime? endsAt,
   String? detail,
   String? crepus,
+  String? sourceKind,
+  String? evidenceSourceId,
+  String? evidenceReason,
 }) {
   final created = _now.subtract(const Duration(hours: 1));
   final metadata = <String, Object?>{
@@ -39,7 +42,12 @@ CurrentCard _card({
   return CurrentCard(
     item: CurrentItem.candidate(
       id: id,
-      evidence: [CurrentEvidence(sourceId: 'source-$id', reason: 'because')],
+      evidence: [
+        CurrentEvidence(
+          sourceId: evidenceSourceId ?? 'source-$id',
+          reason: evidenceReason ?? 'because',
+        ),
+      ],
       reason: 'because',
       timing: CurrentTiming(surfaceAt: created),
       confidence: confidence,
@@ -48,6 +56,7 @@ CurrentCard _card({
     ),
     title: title,
     summary: summary,
+    sourceKind: sourceKind,
     metadata: metadata.isEmpty ? null : metadata,
   );
 }
@@ -102,6 +111,25 @@ void main() {
         expect(plan.hero?.card.item.id, 'b');
       },
     );
+
+    test('keeps promotional email from becoming the hero over real work', () {
+      final plan = planBrief([
+        _card(
+          id: 'promo',
+          title: 'Limited-time discount for your AI subscription',
+          confidence: .98,
+          sourceKind: 'email',
+          evidenceSourceId: 'apple_mail:promo-1',
+          evidenceReason: 'newsletter unsubscribe offer',
+        ),
+        _card(
+          id: 'work',
+          title: 'Review the onboarding changes',
+          confidence: .72,
+        ),
+      ], now: _now);
+      expect(plan.hero?.card.item.id, 'work');
+    });
 
     test('empty input yields an empty plan', () {
       expect(planBrief(const [], now: _now).isEmpty, isTrue);
@@ -162,14 +190,12 @@ void main() {
 
   group('CurrentsBrief', () {
     testWidgets(
-      'renders a composed infographic without duplicating THEN rows',
+      'ignores a composed infographic and keeps deterministic actionable rows',
       (tester) async {
         const composed =
             'stack col gap-2\n'
-            '  text text-3xl "Design review"\n'
-            '  divider\n'
-            '  list\n'
-            '    listitem "Reply to Ana"';
+            '  sparkline values=1,2,3,4 color=green\n'
+            '  text text-3xl "Design review"';
         await tester.pumpWidget(
           _host(
             CurrentsBrief(
@@ -188,36 +214,41 @@ void main() {
             ),
           ),
         );
-        expect(find.byKey(const Key('brief_infographic')), findsOneWidget);
-        expect(find.text('THEN'), findsNothing);
-        expect(find.text('Reply to Ana'), findsOneWidget);
+        expect(find.byKey(const Key('brief_infographic')), findsNothing);
+        expect(find.byKey(const Key('brief_hero_title')), findsOneWidget);
+        expect(find.byKey(const Key('brief_hero_prep')), findsOneWidget);
+        expect(find.byKey(const Key('brief_hero_done')), findsNothing);
+        expect(find.text('THEN'), findsOneWidget);
+        expect(find.byKey(const ValueKey('brief_row_b')), findsOneWidget);
       },
     );
 
-    testWidgets('renders the AI-composed hero when the source is supported', (
-      tester,
-    ) async {
-      await tester.pumpWidget(
-        _host(
-          CurrentsBrief(
-            cards: [
-              _card(
-                id: 'a',
-                title: 'Design review',
-                startsAt: _now.add(const Duration(minutes: 12)),
-                crepus:
-                    'stack col gap-2\n  text text-3xl "Design review"\n  text text-sm "In 12 min"',
-              ),
-            ],
-            palette: _palette,
-            now: _now,
-            onPrompt: (_) {},
+    testWidgets(
+      'keeps an actionable hero when a card has generated layout source',
+      (tester) async {
+        await tester.pumpWidget(
+          _host(
+            CurrentsBrief(
+              cards: [
+                _card(
+                  id: 'a',
+                  title: 'Design review',
+                  startsAt: _now.add(const Duration(minutes: 12)),
+                  crepus:
+                      'stack col gap-2\n  sparkline values=1,2,3,4 color=green\n  text text-sm "In 12 min"',
+                ),
+              ],
+              palette: _palette,
+              now: _now,
+              onPrompt: (_) {},
+            ),
           ),
-        ),
-      );
-      expect(find.text('Design review'), findsOneWidget);
-      expect(find.byKey(const Key('brief_hero_title')), findsNothing);
-    });
+        );
+        expect(find.byKey(const Key('brief_hero_title')), findsOneWidget);
+        expect(find.byKey(const Key('brief_hero_prep')), findsOneWidget);
+        expect(find.text('Design review'), findsOneWidget);
+      },
+    );
 
     testWidgets('malformed IR still renders a usable hand-built brief', (
       tester,
@@ -269,7 +300,7 @@ void main() {
       expect(completed, ['a']);
     });
 
-    testWidgets('a non-whitelisted action in the composed hero is inert', (
+    testWidgets('generated layout source cannot add actions to a current', (
       tester,
     ) async {
       await tester.pumpWidget(
@@ -284,13 +315,13 @@ void main() {
             ],
             palette: _palette,
             now: _now,
-            onPrompt: (_) => fail('prompt should not fire'),
-            onComplete: (_) => fail('complete should not fire'),
+            onPrompt: (_) => fail('generated action must not fire'),
+            onComplete: (_) => fail('generated action must not fire'),
           ),
         ),
       );
-      await tester.tap(find.text('Danger'));
-      await tester.pump();
+      expect(find.text('Danger'), findsNothing);
+      expect(find.byKey(const Key('brief_hero_prep')), findsOneWidget);
     });
 
     testWidgets('an empty brief is calm, not broken', (tester) async {
