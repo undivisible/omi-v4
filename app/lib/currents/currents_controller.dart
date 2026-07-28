@@ -10,6 +10,32 @@ import 'currents.dart';
 /// only exists so a hub that never answers cannot leak a pending composition.
 const _composeTimeout = Duration(seconds: 30);
 
+/// Client-side safety net for older servers: metadata/source-status/onboarding
+/// chatter is not a Current. The worker applies the same contract at
+/// generation time; keeping this boundary local prevents stale deployments
+/// from occupying the desktop's focus surface.
+bool isSurfaceableDesktopCurrent(CurrentCard card) {
+  final text = [
+    card.title,
+    card.summary,
+    card.item.reason,
+    card.item.proposedNextStep,
+    ...card.item.evidence.map((evidence) => evidence.reason),
+  ].join(' ').toLowerCase();
+  const forbidden = <String>[
+    'reply to yourself',
+    'reply to me',
+    'about getting started',
+    'getting started',
+    'source available',
+    'source-available',
+    'open source now',
+    'open-source now',
+    'source availability',
+  ];
+  return !forbidden.any(text.contains);
+}
+
 final class CurrentsController extends ChangeNotifier {
   CurrentsController(
     this._client, {
@@ -45,7 +71,9 @@ final class CurrentsController extends ChangeNotifier {
     notifyListeners();
     try {
       final outcome = await _client.refresh();
-      items = outcome.items;
+      items = List.unmodifiable(
+        outcome.items.where(isSurfaceableDesktopCurrent),
+      );
       _notifyItemsRefreshed();
       _composeBrief();
     } on CurrentsClientException catch (failure) {
