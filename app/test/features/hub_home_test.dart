@@ -347,23 +347,31 @@ void main() {
     return services;
   }
 
-  testWidgets('an empty home offers a draftable next step', (tester) async {
-    final store = VolatileHubChecklistStore();
-    await pumpLocalHub(tester, store);
+  testWidgets(
+    'an empty home starts a context briefing, never an empty-state claim',
+    (tester) async {
+      final store = VolatileHubChecklistStore();
+      await pumpLocalHub(tester, store);
 
-    final start = find.byKey(const Key('hub_empty_start'));
-    expect(start, findsOneWidget);
-    await tester.tap(start);
-    await tester.pump();
+      final start = find.byKey(const Key('hub_empty_start'));
+      expect(start, findsOneWidget);
+      expect(find.textContaining('Nothing needs attention'), findsNothing);
+      expect(
+        find.text('Start with the context Omi should carry.'),
+        findsOneWidget,
+      );
+      await tester.tap(start);
+      await tester.pump();
 
-    expect(
-      tester
-          .widget<TextField>(find.byKey(const Key('chat_input')))
-          .controller!
-          .text,
-      'Help me decide what to focus on next.',
-    );
-  });
+      expect(
+        tester
+            .widget<TextField>(find.byKey(const Key('chat_input')))
+            .controller!
+            .text,
+        'I want to set my context: what I’m working on, what I care about, and what to ignore.',
+      );
+    },
+  );
 
   testWidgets('starter task row tap sends the title as a chat message', (
     tester,

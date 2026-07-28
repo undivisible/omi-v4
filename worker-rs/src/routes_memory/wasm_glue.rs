@@ -1930,6 +1930,7 @@ async fn ai_drafts(env: &Env, context: &RefreshContext) -> Vec<GeneratedDraft> {
         .collect();
     let mut prompt = vec![
         "Generate refreshed proactive suggestions ('currents') for the user.".to_string(),
+        "Surface only concrete user-relevant work, commitments, deadlines, decisions, or events supported by the evidence. Do not surface source/import status, open-source news, onboarding, generic getting-started prompts, or instructions to reply to the user/themselves. If no evidence deserves attention, return an empty items array.".to_string(),
         "Return ONLY JSON:".to_string(),
         "{\"items\":[{\"contentKind\":\"agent_action|human_action|awareness\",\"title\":\"...\",\"summary\":\"...\",\"reason\":\"...\",\"instruction\":\"...\",\"evidenceId\":\"...\",\"tool\":\"optional for agent_action\"}]}"
             .to_string(),

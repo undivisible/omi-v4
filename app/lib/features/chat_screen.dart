@@ -1479,6 +1479,8 @@ class ChatScreenState extends State<ChatScreen>
                                               onToggleStarterTask:
                                                   _toggleStarterTask,
                                               tasks: tasks,
+                                              briefCrepus:
+                                                  currents?.briefCrepus,
                                               meetingNotes:
                                                   meetingAssistSupported ||
                                                       widget.previewMode
@@ -2390,6 +2392,7 @@ class _ChatHome extends StatelessWidget {
     required this.doneStarterTasks,
     required this.onToggleStarterTask,
     required this.tasks,
+    this.briefCrepus,
     required this.meetingNotes,
     required this.onOpenMeetingNotes,
     required this.onComplete,
@@ -2413,6 +2416,7 @@ class _ChatHome extends StatelessWidget {
   final Set<String> doneStarterTasks;
   final ValueChanged<String> onToggleStarterTask;
   final List<CurrentCard> tasks;
+  final String? briefCrepus;
   final List<MeetingNote> meetingNotes;
   final VoidCallback onOpenMeetingNotes;
   final ValueChanged<String>? onComplete;
@@ -2471,6 +2475,7 @@ class _ChatHome extends StatelessWidget {
                 if (tasks.isNotEmpty)
                   _CurrentFocus(
                     cards: tasks,
+                    briefCrepus: briefCrepus,
                     onDraftPrompt: onDraftPrompt,
                     onComplete: onComplete,
                   ),
@@ -2487,7 +2492,7 @@ class _ChatHome extends StatelessWidget {
                     child: InkWell(
                       key: const Key('hub_empty_start'),
                       onTap: () => onDraftPrompt(
-                        'Help me decide what to focus on next.',
+                        'I want to set my context: what I’m working on, what I care about, and what to ignore.',
                       ),
                       hoverColor: colors.rowHover,
                       splashColor: Colors.transparent,
@@ -2498,7 +2503,7 @@ class _ChatHome extends StatelessWidget {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              'Nothing needs attention yet.',
+                              'Start with the context Omi should carry.',
                               style: TextStyle(
                                 fontSize: 16,
                                 fontWeight: FontWeight.w600,
@@ -2507,7 +2512,7 @@ class _ChatHome extends StatelessWidget {
                             ),
                             const SizedBox(height: 4),
                             Text(
-                              'Tell Omi what you’re working on →',
+                              'Set what matters and what to filter out →',
                               style: TextStyle(
                                 fontSize: 13,
                                 fontWeight: FontWeight.w600,
@@ -2590,11 +2595,13 @@ class _ChatHome extends StatelessWidget {
 class _CurrentFocus extends StatefulWidget {
   const _CurrentFocus({
     required this.cards,
+    this.briefCrepus,
     required this.onDraftPrompt,
     required this.onComplete,
   });
 
   final List<CurrentCard> cards;
+  final String? briefCrepus;
   final ValueChanged<String> onDraftPrompt;
   final ValueChanged<String>? onComplete;
 
@@ -2605,6 +2612,21 @@ class _CurrentFocus extends StatefulWidget {
 class _CurrentFocusState extends State<_CurrentFocus> {
   @override
   Widget build(BuildContext context) {
+    final colors = _HubColors.of(context);
+    final infographic = widget.briefCrepus;
+    if (infographic != null && crepusRenders(infographic)) {
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 12),
+        child: CurrentsBrief(
+          cards: widget.cards,
+          briefCrepus: infographic,
+          palette: _crepusPalette(colors),
+          onPrompt: widget.onDraftPrompt,
+          onDraftPrompt: widget.onDraftPrompt,
+          onComplete: widget.onComplete,
+        ),
+      );
+    }
     final plan = planBrief(
       widget.cards,
       now: DateTime.now(),
@@ -2612,7 +2634,6 @@ class _CurrentFocusState extends State<_CurrentFocus> {
     );
     final hero = plan.hero;
     if (hero == null) return const SizedBox.shrink();
-    final colors = _HubColors.of(context);
     final card = hero.card;
     final evidence = card.item.evidence;
     final source = (card.sourceKind ?? 'Current').toUpperCase();
