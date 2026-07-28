@@ -272,6 +272,17 @@ class _RewindSettingsTileState extends State<RewindSettingsTile> {
                 unawaited(client.setPrivacyFlags(readOnScreenText: value)),
           ),
           _Divider(colors: colors),
+          _Row(
+            colors: colors,
+            icon: Icons.auto_awesome_outlined,
+            title: 'Automatically describe frames',
+            detail:
+                'Each saved frame gets a short factual caption. Omi uses '
+                'Apple Foundation Models on this Mac when available; '
+                'otherwise the frame may be sent to Omi cloud for a MiMo '
+                'caption.',
+          ),
+          _Divider(colors: colors),
           _Toggle(
             colors: colors,
             keyValue: const Key('rewind_titles'),

@@ -143,6 +143,11 @@ void main() {
     expect(find.byKey(const Key('rewind_pause')), findsOneWidget);
     expect(find.byKey(const Key('rewind_private_browsing')), findsOneWidget);
     expect(find.byKey(const Key('rewind_ocr')), findsOneWidget);
+    expect(find.text('Automatically describe frames'), findsOneWidget);
+    expect(
+      find.textContaining('otherwise the frame may be sent to Omi cloud'),
+      findsOneWidget,
+    );
     expect(find.byKey(const Key('rewind_retention')), findsOneWidget);
 
     await tester.tap(find.byKey(const Key('rewind_pause')));
