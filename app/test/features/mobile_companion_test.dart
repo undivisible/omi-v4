@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
+import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 import 'package:omi/api/worker_http.dart';
 import 'package:omi/app_services.dart';
 import 'package:omi/auth/auth.dart';
@@ -375,7 +376,7 @@ void main() {
     fixture.services.dispose();
   });
 
-  testWidgets('only the hero blurs and fades as the page scrolls', (
+  testWidgets('the hero fades but stays sharp as the page scrolls', (
     tester,
   ) async {
     await tester.binding.setSurfaceSize(const Size(390, 500));
@@ -412,24 +413,33 @@ void main() {
 
     expect(tester.widget<Opacity>(fade).opacity, lessThan(1));
     expect(tester.widget<Opacity>(fade).opacity, greaterThan(0));
-    // The blur wraps only the hero, so the sections below scroll crisply.
-    expect(find.byType(ImageFiltered), findsOneWidget);
-    expect(
-      find.descendant(
-        of: find.byType(ImageFiltered),
-        matching: find.byKey(const Key('companion_pendant_image')),
-      ),
-      findsOneWidget,
-    );
-    expect(
-      find.descendant(
-        of: find.byType(ImageFiltered),
-        matching: find.byKey(const Key('companion_session_list')),
-      ),
-      findsNothing,
-    );
+    // The primary hero must remain legible; scrolling only fades it out.
+    expect(find.byType(ImageFiltered), findsNothing);
     fixture.services.dispose();
   });
+
+  testWidgets(
+    'the tab rail uses stationary glass while each tab handles taps',
+    (tester) async {
+      final fixture = await _mobileFixture('user-a');
+      await tester.pumpWidget(
+        MaterialApp(
+          home: MobileCompanionShell(
+            services: fixture.services,
+            pairedDevices: VolatilePairedDeviceStore(),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final glass = tester.widget<AdaptiveGlass>(find.byType(AdaptiveGlass));
+      expect(glass.isInteractive, isFalse);
+      expect(find.byKey(const Key('companion_tab_0')), findsOneWidget);
+      expect(find.byKey(const Key('companion_tab_1')), findsOneWidget);
+      expect(find.byKey(const Key('companion_tab_2')), findsOneWidget);
+      fixture.services.dispose();
+    },
+  );
 
   testWidgets('the pendant image starts flush with the top of the screen', (
     tester,
