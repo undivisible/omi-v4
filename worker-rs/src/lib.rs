@@ -32,6 +32,7 @@ pub mod facetime;
 pub mod inbox_fallback;
 pub mod mcp;
 pub mod mcp_oauth;
+pub mod mcp_oauth_routes;
 pub mod memory_log;
 pub mod observability;
 pub mod public_api;

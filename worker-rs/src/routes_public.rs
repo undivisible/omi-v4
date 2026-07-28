@@ -14,6 +14,9 @@ use worker::{Headers, Method, Request, RequestInit, Response, Result, RouteConte
 
 use crate::glue::{error_json, ConvMessage};
 use crate::mcp;
+use crate::mcp_oauth_routes::{
+    metadata_for_path, AUTHORIZATION_SERVER_METADATA_PATH, PROTECTED_RESOURCE_METADATA_PATH,
+};
 use crate::public_api::{self as api, Budget, OperationResult};
 use crate::routes_ai::consume_rate_limit;
 use crate::routes_keys::{require_api_access, require_scope, ApiAuth};
@@ -41,6 +44,14 @@ pub fn register(router: Router<'static, ()>) -> Router<'static, ()> {
         )
         .post_async("/api/v1/speech/synthesis", handle_speech_synthesis)
         .post_async("/api/v1/facetime/calls", handle_facetime_calls)
+        .get_async(
+            AUTHORIZATION_SERVER_METADATA_PATH,
+            handle_authorization_server_metadata,
+        )
+        .get_async(
+            PROTECTED_RESOURCE_METADATA_PATH,
+            handle_protected_resource_metadata,
+        )
         .post_async("/mcp", handle_mcp_post)
         .get_async("/mcp", handle_mcp_get)
         .delete_async("/mcp", handle_mcp_delete)
@@ -59,6 +70,26 @@ async fn do_post(stub: &Stub, url: &str, payload: &Value) -> Result<Response> {
 
 fn speech_unavailable() -> OperationResult {
     OperationResult::new(503, json!({ "error": "Managed speech unavailable" }))
+}
+
+async fn handle_authorization_server_metadata(
+    _req: Request,
+    _ctx: RouteContext<()>,
+) -> Result<Response> {
+    Response::from_json(
+        &metadata_for_path(AUTHORIZATION_SERVER_METADATA_PATH)
+            .expect("registered authorization-server metadata route"),
+    )
+}
+
+async fn handle_protected_resource_metadata(
+    _req: Request,
+    _ctx: RouteContext<()>,
+) -> Result<Response> {
+    Response::from_json(
+        &metadata_for_path(PROTECTED_RESOURCE_METADATA_PATH)
+            .expect("registered protected-resource metadata route"),
+    )
 }
 
 struct SpeechReservation {
