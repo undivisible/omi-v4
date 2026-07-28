@@ -37,6 +37,13 @@ void main() {
     binding.platformDispatcher.clearAccessibilityFeaturesTestValue();
   });
 
+  test('capture notifications stay out of the iOS foreground', () {
+    final details = captureNotificationDetails();
+    expect(details.iOS, isNotNull);
+    expect(details.iOS!.presentAlert, isFalse);
+    expect(details.iOS!.presentSound, isFalse);
+  });
+
   test('probe connectDevice completes', () async {
     final fixture = await _mobileFixture('user-a');
     final device = await fixture.services
@@ -592,6 +599,38 @@ void main() {
     expect(find.byKey(const Key('companion_pendant_faded')), findsNothing);
     fixture.services.dispose();
   });
+
+  testWidgets(
+    'the resting pendant has no ongoing sway after its one-shot burst',
+    (tester) async {
+      tester.binding.platformDispatcher.accessibilityFeaturesTestValue =
+          const FakeAccessibilityFeatures(disableAnimations: false);
+      final fixture = await _mobileFixture('user-a');
+      await tester.pumpWidget(
+        MaterialApp(
+          home: MobileCompanionShell(
+            services: fixture.services,
+            pairedDevices: VolatilePairedDeviceStore(),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 1500));
+      await tester.pump(const Duration(milliseconds: 750));
+
+      final rotationTerms = tester
+          .widgetList<Transform>(
+            find.descendant(
+              of: find.byKey(const Key('companion_pendant_tap')),
+              matching: find.byType(Transform),
+            ),
+          )
+          .map((transform) => transform.transform.storage[1])
+          .where((term) => term.abs() > .0001);
+      expect(rotationTerms, isEmpty);
+      fixture.services.dispose();
+    },
+  );
 
   testWidgets('the resting pendant carries no ring, only the connect burst '
       'and the hint', (tester) async {
