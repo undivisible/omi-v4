@@ -71,11 +71,46 @@ pub fn validate_pkce_s256(challenge: &str, method: &str, verifier: &str) -> Resu
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GrantScopeError {
+    NotAllowed,
+    FreshConfirmationRequired,
+    NotAvailable,
+}
+
+/// Produces the exact client grant recorded after explicit first-party consent.
+/// A grant can only narrow registered capabilities; it cannot be broadened by
+/// request parameters or an approval UI default.
+pub fn decide_grant_scopes(
+    client_allowed: &[&str],
+    requested: &[&str],
+    fresh_privileged_confirmation: bool,
+) -> Result<Vec<String>, GrantScopeError> {
+    let mut approved = Vec::new();
+    for scope in requested {
+        if !crate::api_keys::is_scope(scope) || !client_allowed.contains(scope) {
+            return Err(GrantScopeError::NotAllowed);
+        }
+        // FaceTime can initiate an external call, so it stays outside OAuth v1.
+        if *scope == "facetime:write" {
+            return Err(GrantScopeError::NotAvailable);
+        }
+        let privileged = matches!(*scope, "assistant:write" | "speech:write");
+        if privileged && !fresh_privileged_confirmation {
+            return Err(GrantScopeError::FreshConfirmationRequired);
+        }
+        if !approved.iter().any(|existing: &String| existing == scope) {
+            approved.push((*scope).to_owned());
+        }
+    }
+    Ok(approved)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        canonical_issuer, canonical_resource, validate_pkce_s256, validate_redirect_uri, PkceError,
-        RedirectError,
+        canonical_issuer, canonical_resource, decide_grant_scopes, validate_pkce_s256,
+        validate_redirect_uri, GrantScopeError, PkceError, RedirectError,
     };
 
     #[test]
@@ -97,6 +132,30 @@ mod tests {
         ] {
             assert_eq!(validate_redirect_uri(invalid), Err(RedirectError::Invalid));
         }
+    }
+
+    #[test]
+    fn consent_cannot_broaden_a_client_and_privileged_scopes_need_fresh_confirmation() {
+        assert_eq!(
+            decide_grant_scopes(
+                &["memory:read", "assistant:write"],
+                &["memory:read", "memory:read"],
+                false,
+            ),
+            Ok(vec!["memory:read".to_owned()])
+        );
+        assert_eq!(
+            decide_grant_scopes(&["memory:read"], &["currents:read"], false),
+            Err(GrantScopeError::NotAllowed)
+        );
+        assert_eq!(
+            decide_grant_scopes(&["assistant:write"], &["assistant:write"], false),
+            Err(GrantScopeError::FreshConfirmationRequired)
+        );
+        assert_eq!(
+            decide_grant_scopes(&["facetime:write"], &["facetime:write"], true),
+            Err(GrantScopeError::NotAvailable)
+        );
     }
 
     #[test]
