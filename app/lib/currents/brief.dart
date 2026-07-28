@@ -588,19 +588,8 @@ class _BriefRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final crepus = entry.crepus;
-    if (crepus != null && crepusRenders(crepus)) {
-      return CrepusCurrentRow(
-        source: crepus,
-        palette: palette,
-        proposedNextStep: entry.card.item.proposedNextStep,
-        onDraftPrompt: onDraftPrompt,
-        onComplete: onComplete == null
-            ? null
-            : () => onComplete!(entry.card.item.id),
-        onPrompt: onPrompt,
-      );
-    }
+    // Supporting Currents keep the same native interaction contract as the
+    // hero. Model-authored layouts may not replace or intercept this row.
     final start = entry.startsAt;
     final lead = start == null
         ? (entry.card.sourceKind ??

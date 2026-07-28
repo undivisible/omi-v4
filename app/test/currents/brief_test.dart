@@ -338,6 +338,38 @@ void main() {
       expect(find.text('Nothing scheduled'), findsOneWidget);
     });
 
+    testWidgets('a generated secondary current remains a native tappable row', (
+      tester,
+    ) async {
+      final prompts = <String>[];
+      await tester.pumpWidget(
+        _host(
+          CurrentsBrief(
+            cards: [
+              _card(
+                id: 'a',
+                title: 'Design review',
+                startsAt: _now.add(const Duration(minutes: 12)),
+              ),
+              _card(
+                id: 'b',
+                title: 'Reply to Ana',
+                crepus: 'stack col\n  sparkline values=1,2,3,4',
+              ),
+            ],
+            palette: _palette,
+            now: _now,
+            onPrompt: prompts.add,
+          ),
+        ),
+      );
+
+      final row = find.byKey(const ValueKey('brief_row_b'));
+      expect(row, findsOneWidget);
+      await tester.tap(row);
+      expect(prompts, ['prep Reply to Ana']);
+    });
+
     testWidgets('secondary currents render under the hero', (tester) async {
       await tester.pumpWidget(
         _host(
