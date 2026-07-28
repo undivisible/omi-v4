@@ -347,6 +347,24 @@ void main() {
     return services;
   }
 
+  testWidgets('an empty home offers a draftable next step', (tester) async {
+    final store = VolatileHubChecklistStore();
+    await pumpLocalHub(tester, store);
+
+    final start = find.byKey(const Key('hub_empty_start'));
+    expect(start, findsOneWidget);
+    await tester.tap(start);
+    await tester.pump();
+
+    expect(
+      tester
+          .widget<TextField>(find.byKey(const Key('chat_input')))
+          .controller!
+          .text,
+      'Help me decide what to focus on next.',
+    );
+  });
+
   testWidgets('starter task row tap sends the title as a chat message', (
     tester,
   ) async {

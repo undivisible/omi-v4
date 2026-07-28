@@ -2474,6 +2474,51 @@ class _ChatHome extends StatelessWidget {
                     onDraftPrompt: onDraftPrompt,
                     onComplete: onComplete,
                   ),
+                if (tasks.isEmpty &&
+                    starterTasks.isEmpty &&
+                    meetingNotes.isEmpty)
+                  DecoratedBox(
+                    decoration: BoxDecoration(
+                      border: Border(
+                        top: BorderSide(color: colors.hairline),
+                        bottom: BorderSide(color: colors.hairline),
+                      ),
+                    ),
+                    child: InkWell(
+                      key: const Key('hub_empty_start'),
+                      onTap: () => onDraftPrompt(
+                        'Help me decide what to focus on next.',
+                      ),
+                      hoverColor: colors.rowHover,
+                      splashColor: Colors.transparent,
+                      highlightColor: Colors.transparent,
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Nothing needs attention yet.',
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w600,
+                                color: colors.ink,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              'Tell Omi what you’re working on →',
+                              style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                                color: colors.hintBlue,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
                 _TaskRow(
                   key: const Key('task_setup_omi'),
                   title: 'Set up Omi.',
