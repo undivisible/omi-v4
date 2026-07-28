@@ -57,6 +57,24 @@ void main() {
   );
 
   test(
+    'desktop rejects self-reply and source-status Currents from old servers',
+    () {
+      final bad = _current('surfaced')
+        ..['title'] = 'Roomote is source-available now'
+        ..['summary'] =
+            'You could reply to Carter Max Lee about getting started.'
+        ..['reason'] = 'A source is available.'
+        ..['proposedNextStep'] = 'Reply to yourself.';
+
+      expect(isSurfaceableDesktopCurrent(CurrentCard.fromJson(bad)), isFalse);
+      expect(
+        isSurfaceableDesktopCurrent(CurrentCard.fromJson(_current('surfaced'))),
+        isTrue,
+      );
+    },
+  );
+
+  test(
     'controller removes feedback items without rewriting cited memory',
     () async {
       final controller = CurrentsController(CurrentsClient(_Transport()));
