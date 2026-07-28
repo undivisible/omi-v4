@@ -173,6 +173,8 @@ async fn fetch(req: Request, env: Env, ctx: Context) -> Result<Response> {
         .post_async("/v1/auth/desktop/start", handle_desktop_start)
         .post_async("/v1/auth/desktop/complete", handle_desktop_complete)
         .post_async("/v1/auth/desktop/exchange", handle_desktop_exchange)
+        .post_async("/v1/auth/channel/exchange", handle_channel_exchange)
+        .post_async("/v1/auth/refresh", handle_auth_refresh)
         // Phase 2: billing (authenticated).
         .post_async("/v1/payments/stripe/checkout", handle_billing_checkout)
         .post_async("/v1/payments/stripe/portal", handle_billing_portal)
@@ -1975,6 +1977,236 @@ async fn handle_desktop_exchange(mut req: Request, ctx: RouteContext<()>) -> Res
         return error_json("Handoff already consumed", 409);
     }
     Response::from_json(&json!({ "customToken": token }))
+}
+
+// ===========================================================================
+// Worker-issued channel sessions
+// ===========================================================================
+
+fn worker_session_secret(ctx: &RouteContext<()>) -> Option<String> {
+    let dual_mode = matches!(
+        secret_or_var(&ctx.env, "AUTH_DUAL_MODE").as_deref(),
+        Some("1" | "true" | "TRUE" | "yes" | "YES")
+    );
+    let secret = secret_or_var(&ctx.env, "AUTH_TOKEN_SECRET");
+    crate::auth_session_flow::exchange_enabled(dual_mode, secret.as_deref()).then_some(secret?)
+}
+
+fn opaque_auth_failure() -> Result<Response> {
+    error_json("Authentication failed", 401)
+}
+
+fn mint_worker_session(
+    uid: &str,
+    session_id: &str,
+    now: i64,
+    secret: &str,
+) -> Option<crate::auth_session_flow::TokenResponse> {
+    let mut entropy = [0u8; crate::session_token::REFRESH_TOKEN_BYTES];
+    getrandom::getrandom(&mut entropy).ok()?;
+    crate::auth_session_flow::mint_response(uid, session_id, now, secret, &entropy).ok()
+}
+
+async fn handle_channel_exchange(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let Some(secret) = worker_session_secret(&ctx) else {
+        return opaque_auth_failure();
+    };
+    let body = json_object(&mut req).await;
+    let Some(code) = body
+        .as_ref()
+        .and_then(|value| value.get("code"))
+        .and_then(Value::as_str)
+        .and_then(crate::channel_link::normalize_link_code)
+    else {
+        return opaque_auth_failure();
+    };
+    let now = now_ms() as i64;
+    let code_hash = crate::channel_link::code_hash(&code);
+    let db = match ctx.env.d1("DB") {
+        Ok(db) => db,
+        Err(_) => return opaque_auth_failure(),
+    };
+    let row = match db
+        .prepare(
+            "SELECT c.channel, c.channel_user_id, c.channel_chat_id, c.purpose, c.expires_at,\n                    c.consumed_at, c.attempts, c.locked_at, b.uid AS bound_uid\n             FROM channel_link_codes c\n             LEFT JOIN channel_bindings b\n               ON b.channel = c.channel AND b.channel_user_id = c.channel_user_id\n              AND b.revoked_at IS NULL\n             WHERE c.code_hash = ?1",
+        )
+        .bind(&[js_str(&code_hash)])
+    {
+        Ok(statement) => statement.first::<Value>(None).await.ok().flatten(),
+        Err(_) => None,
+    };
+    let stored = row.as_ref().map(|value| crate::channel_auth::StoredCode {
+        purpose: row_str(value, "purpose").unwrap_or_default(),
+        expires_at_ms: value
+            .get("expires_at")
+            .and_then(json_to_i64)
+            .unwrap_or_default(),
+        consumed_at_ms: value.get("consumed_at").and_then(json_to_i64),
+        attempts: value
+            .get("attempts")
+            .and_then(json_to_i64)
+            .unwrap_or_default(),
+        locked_at_ms: value.get("locked_at").and_then(json_to_i64),
+        is_group_chat: row_str(value, "channel")
+            .and_then(|channel| Channel::parse(&channel))
+            .is_none_or(|channel| {
+                crate::channel_group::is_group_channel_chat(
+                    channel.as_str(),
+                    &row_str(value, "channel_user_id").unwrap_or_default(),
+                    &row_str(value, "channel_chat_id").unwrap_or_default(),
+                )
+            }),
+        bound_uid: row_str(value, "bound_uid"),
+    });
+    let crate::channel_auth::ExchangeDecision::Accept { uid, is_new } =
+        crate::channel_auth::decide(stored.as_ref(), now)
+    else {
+        return opaque_auth_failure();
+    };
+    let Some(row) = row else {
+        return opaque_auth_failure();
+    };
+    let Some(channel) = row_str(&row, "channel").and_then(|value| Channel::parse(&value)) else {
+        return opaque_auth_failure();
+    };
+    let channel_user_id = row_str(&row, "channel_user_id").unwrap_or_default();
+    let channel_chat_id = row_str(&row, "channel_chat_id").unwrap_or_default();
+    let uid = if is_new {
+        match crate::routes_channels::sign_up_channel_sender(
+            &ctx.env,
+            channel,
+            &channel_user_id,
+            &channel_chat_id,
+            now,
+        )
+        .await
+        {
+            Ok(crate::channel_signup::SignupResult::Created { uid })
+            | Ok(crate::channel_signup::SignupResult::Existing { uid }) => uid,
+            _ => return opaque_auth_failure(),
+        }
+    } else {
+        uid
+    };
+    let session_id = uuid_v4();
+    let Some(response) = mint_worker_session(&uid, &session_id, now, &secret) else {
+        return opaque_auth_failure();
+    };
+    let write = crate::auth_session_flow::session_write(&session_id, "", "channel", now, &response);
+    let result = db
+        .batch(vec![
+            db.prepare(
+                "UPDATE channel_link_codes\n                 SET consumed_at = ?2\n                 WHERE code_hash = ?1 AND purpose = 'signin' AND consumed_at IS NULL\n                   AND expires_at > ?2 AND attempts < ?3 AND locked_at IS NULL",
+            )
+            .bind(&[
+                js_str(&code_hash),
+                (now as f64).into(),
+                (crate::channel_auth::MAX_CODE_ATTEMPTS as f64).into(),
+            ])?,
+            db.prepare(
+                "INSERT INTO auth_sessions\n                 (id, uid, refresh_hash, device_label, origin, created_at, last_seen_at, expires_at, rotated_from)\n                 SELECT ?1, ?2, ?3, NULL, ?4, ?5, ?5, ?6, NULL\n                 WHERE EXISTS (SELECT 1 FROM channel_link_codes\n                               WHERE code_hash = ?7 AND purpose = 'signin' AND consumed_at = ?5)",
+            )
+            .bind(&[
+                js_str(&write.id),
+                js_str(&write.uid),
+                js_str(&write.refresh_hash),
+                js_str(&write.origin),
+                (write.created_at as f64).into(),
+                (write.expires_at as f64).into(),
+                js_str(&code_hash),
+            ])?,
+        ])
+        .await;
+    let Ok(results) = result else {
+        return opaque_auth_failure();
+    };
+    if results.len() != 2 || changes(&results[0]) != 1 || changes(&results[1]) != 1 {
+        return opaque_auth_failure();
+    }
+    Ok(Response::from_json(&response)?.with_status(201))
+}
+
+async fn handle_auth_refresh(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let Some(secret) = worker_session_secret(&ctx) else {
+        return opaque_auth_failure();
+    };
+    let body = json_object(&mut req).await;
+    let refresh_token = body
+        .as_ref()
+        .and_then(|value| value.get("refreshToken"))
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let crate::auth_session_flow::RefreshInput::Lookup { refresh_hash } =
+        crate::auth_session_flow::refresh_input(refresh_token)
+    else {
+        return opaque_auth_failure();
+    };
+    let now = now_ms() as i64;
+    let db = match ctx.env.d1("DB") {
+        Ok(db) => db,
+        Err(_) => return opaque_auth_failure(),
+    };
+    let row = match db
+        .prepare(
+            "SELECT id, uid, origin FROM auth_sessions\n             WHERE refresh_hash = ?1 AND revoked_at IS NULL AND expires_at > ?2",
+        )
+        .bind(&[js_str(&refresh_hash), (now as f64).into()])
+    {
+        Ok(statement) => statement.first::<Value>(None).await.ok().flatten(),
+        Err(_) => None,
+    };
+    let Some(row) = row else {
+        return opaque_auth_failure();
+    };
+    let (Some(old_session_id), Some(uid), Some(origin)) = (
+        row_str(&row, "id"),
+        row_str(&row, "uid"),
+        row_str(&row, "origin"),
+    ) else {
+        return opaque_auth_failure();
+    };
+    let session_id = uuid_v4();
+    let Some(response) = mint_worker_session(&uid, &session_id, now, &secret) else {
+        return opaque_auth_failure();
+    };
+    let write = crate::auth_session_flow::session_write(
+        &session_id,
+        &old_session_id,
+        &origin,
+        now,
+        &response,
+    );
+    let result = db
+        .batch(vec![
+            db.prepare(
+                "UPDATE auth_sessions\n                 SET revoked_at = ?2, last_seen_at = ?2\n                 WHERE id = ?1 AND refresh_hash = ?3 AND revoked_at IS NULL AND expires_at > ?2",
+            )
+            .bind(&[
+                js_str(&old_session_id),
+                (now as f64).into(),
+                js_str(&refresh_hash),
+            ])?,
+            db.prepare(
+                "INSERT INTO auth_sessions\n                 (id, uid, refresh_hash, device_label, origin, created_at, last_seen_at, expires_at, rotated_from)\n                 SELECT ?1, ?2, ?3, NULL, ?4, ?5, ?5, ?6, ?7\n                 WHERE EXISTS (SELECT 1 FROM auth_sessions WHERE id = ?7 AND revoked_at = ?5)",
+            )
+            .bind(&[
+                js_str(&write.id),
+                js_str(&write.uid),
+                js_str(&write.refresh_hash),
+                js_str(&write.origin),
+                (write.created_at as f64).into(),
+                (write.expires_at as f64).into(),
+                js_str(&old_session_id),
+            ])?,
+        ])
+        .await;
+    let Ok(results) = result else {
+        return opaque_auth_failure();
+    };
+    if results.len() != 2 || changes(&results[0]) != 1 || changes(&results[1]) != 1 {
+        return opaque_auth_failure();
+    }
+    Response::from_json(&response)
 }
 
 // ===========================================================================
