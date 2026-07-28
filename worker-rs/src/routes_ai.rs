@@ -17,7 +17,7 @@ use base64::Engine;
 use futures_util::{stream, StreamExt};
 use serde_json::{json, Value};
 use worker::wasm_bindgen;
-use worker::wasm_bindgen::JsValue;
+use worker::wasm_bindgen::{JsCast, JsValue};
 use worker::{
     durable_object, Env, Headers, Method, Request, RequestInit, Response, Result, RouteContext,
     Router, State, Stub, WebSocketPair,
@@ -26,17 +26,25 @@ use worker::{
 use crate::assistant_admission::{AssistantAdmission, Limits as AssistantLimits, Outcome};
 use crate::glue::{authenticate, error_json, has_active_pro, AuthOutcome};
 use crate::rate_limit::RateLimiter;
+use crate::rewind_description;
 use crate::stt_admission::{Limits as SttLimits, SttAdmission};
 use crate::worker_util::{now_ms, secret_or_var as env_get, uuid_v4};
 use crate::{asr_logic, managed_ai, observability, stt_logic, voice_logic};
 
 const DO_STATE_KEY: &str = "state";
 
+#[wasm_bindgen::prelude::wasm_bindgen]
+extern "C" {
+    #[wasm_bindgen::prelude::wasm_bindgen(catch, js_namespace = AbortSignal, js_name = timeout)]
+    fn timeout_signal(milliseconds: u32) -> std::result::Result<JsValue, JsValue>;
+}
+
 /// Register the managed-AI routes on the shared glue router.
 pub fn register(router: Router<'static, ()>) -> Router<'static, ()> {
     router
         .post_async("/v1/chat/completions", handle_chat_completions)
         .post_async("/v1/asr/transcribe", handle_asr)
+        .post_async("/v1/rewind/describe", handle_rewind_describe)
         .post_async("/v1/voice/gemini/token", handle_voice_token)
         .post_async("/v1/stt/sessions", handle_stt_create)
         .get_async("/v1/stt/sessions/:sessionId/stream", handle_stt_stream)
@@ -1032,6 +1040,184 @@ async fn handle_asr(mut req: Request, ctx: RouteContext<()>) -> Result<Response>
     };
     finalize_managed_request(&ctx, &request_id, "complete", Some(upstream_status as i64)).await;
     Response::from_json(&json!({ "text": text }))
+}
+
+async fn handle_rewind_describe(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let auth = match authenticate(&req, &ctx).await {
+        AuthOutcome::Ok(auth) => auth,
+        AuthOutcome::Reject(response) => return Ok(response),
+    };
+    let content_length = req.headers().get("content-length").ok().flatten();
+    if content_length
+        .as_deref()
+        .and_then(|value| {
+            crate::jsnum::number_from_str(value)
+                .is_finite()
+                .then(|| crate::jsnum::number_from_str(value))
+        })
+        .is_some_and(|value| value > rewind_description::maximum_body_bytes() as f64)
+    {
+        return error_json("Image too large", 413);
+    }
+    let bytes = read_body_limited(&mut req, rewind_description::maximum_body_bytes()).await;
+    let Some(body) = managed_ai::bounded_json(
+        content_length.as_deref(),
+        bytes.as_deref(),
+        rewind_description::maximum_body_bytes(),
+    ) else {
+        return error_json("Invalid request", 400);
+    };
+    let image = match rewind_description::classify(&body) {
+        rewind_description::Outcome::Ok(image) => image,
+        rewind_description::Outcome::TooLarge => return error_json("Image too large", 413),
+        rewind_description::Outcome::Invalid => return error_json("Invalid request", 400),
+    };
+    let endpoint = env_get(&ctx.env, "MIMO_CHAT_COMPLETIONS_URL").and_then(|value| {
+        managed_ai::validate_pinned_endpoint(
+            &value,
+            managed_ai::XIAOMI_COMPLETION_ENDPOINT,
+            managed_ai::XIAOMI_HOSTNAME,
+        )
+    });
+    let secret = env_get(&ctx.env, "MIMO_API_KEY").filter(|value| !value.is_empty());
+    let (Some(endpoint), Some(secret)) = (endpoint, secret) else {
+        return error_json("Rewind descriptions unavailable", 503);
+    };
+    let input_price =
+        managed_ai::price(env_get(&ctx.env, "MIMO_INPUT_MICROUSD_PER_MILLION_TOKENS").as_deref());
+    let output_price =
+        managed_ai::price(env_get(&ctx.env, "MIMO_OUTPUT_MICROUSD_PER_MILLION_TOKENS").as_deref());
+    let (Some(input_price), Some(output_price)) = (input_price, output_price) else {
+        return error_json("Rewind descriptions unavailable", 503);
+    };
+    let (allowed, retry_after) = consume_rate_limit(
+        &ctx.env,
+        &format!("rewind-describe:{}", auth.uid),
+        30,
+        60_000,
+    )
+    .await;
+    if !allowed {
+        let mut response =
+            Response::from_json(&json!({ "error": "Too many requests" }))?.with_status(429);
+        response
+            .headers_mut()
+            .set("retry-after", &retry_after.to_string())?;
+        return Ok(response);
+    }
+    let request_id = uuid_v4();
+    let input_tokens = 1024;
+    let estimated_cost = managed_ai::cost_for(
+        input_tokens,
+        rewind_description::MAXIMUM_OUTPUT_TOKENS,
+        input_price,
+        output_price,
+    );
+    let stub = match assistant_admission_stub(&ctx.env) {
+        Ok(stub) => stub,
+        Err(_) => return error_json("Rewind descriptions unavailable", 503),
+    };
+    let admission = do_post(
+        &stub,
+        "https://assistant-admission.internal/admit",
+        &json!({
+            "requestId": request_id,
+            "uid": auth.uid,
+            "tokenBudget": input_tokens + rewind_description::MAXIMUM_OUTPUT_TOKENS,
+            "costBudgetMicrousd": estimated_cost,
+        }),
+    )
+    .await;
+    let Ok(admission) = admission else {
+        return error_json("Rewind descriptions unavailable", 503);
+    };
+    if admission.status_code() >= 300 {
+        let retry_after = admission.headers().get("retry-after").ok().flatten();
+        let mut response =
+            Response::from_json(&json!({ "error": "Rewind description capacity exceeded" }))?
+                .with_status(429);
+        if let Some(retry_after) = retry_after {
+            response.headers_mut().set("retry-after", &retry_after)?;
+        }
+        return Ok(response);
+    }
+    let now = now_ms();
+    if insert_managed_request(
+        &ctx,
+        &request_id,
+        &auth.uid,
+        "mimo",
+        rewind_description::MODEL,
+        image.base64.len() as i64,
+        rewind_description::MAXIMUM_OUTPUT_TOKENS,
+        Some(estimated_cost),
+        now,
+    )
+    .await
+    .is_err()
+    {
+        release_assistant(&stub, &request_id).await;
+        return error_json("Rewind descriptions unavailable", 503);
+    }
+    let mut init = RequestInit::new();
+    init.with_method(Method::Post);
+    let headers = Headers::new();
+    headers.set("authorization", &format!("Bearer {secret}"))?;
+    headers.set("content-type", "application/json")?;
+    init.with_headers(headers);
+    init.with_body(Some(JsValue::from_str(
+        &rewind_description::upstream_body(&image).to_string(),
+    )));
+    let request = Request::new_with_init(endpoint.as_str(), &init)?;
+    let Ok(signal) = timeout_signal(rewind_description::REQUEST_TIMEOUT_MS as u32) else {
+        finalize_managed_request(&ctx, &request_id, "failed", None).await;
+        release_assistant(&stub, &request_id).await;
+        return error_json("Rewind descriptions unavailable", 503);
+    };
+    let signal = worker::AbortSignal::from(signal.unchecked_into::<web_sys::AbortSignal>());
+    let mut upstream = match worker::Fetch::Request(request)
+        .send_with_signal(&signal)
+        .await
+    {
+        Ok(response) => response,
+        Err(_) => {
+            finalize_managed_request(&ctx, &request_id, "failed", None).await;
+            release_assistant(&stub, &request_id).await;
+            return error_json("Rewind descriptions unavailable", 502);
+        }
+    };
+    let status = upstream.status_code();
+    if status >= 300 {
+        finalize_managed_request(&ctx, &request_id, "failed", Some(status as i64)).await;
+        release_assistant(&stub, &request_id).await;
+        return error_json("Rewind descriptions unavailable", 502);
+    }
+    let caption = upstream
+        .json::<Value>()
+        .await
+        .ok()
+        .and_then(|body| rewind_description::parse_caption(&body));
+    let Some(caption) = caption else {
+        finalize_managed_request(&ctx, &request_id, "failed", Some(status as i64)).await;
+        release_assistant(&stub, &request_id).await;
+        return error_json("Rewind descriptions unavailable", 502);
+    };
+    finalize_managed_request(&ctx, &request_id, "complete", Some(status as i64)).await;
+    let _ = do_post(
+        &stub,
+        "https://assistant-admission.internal/settle",
+        &json!({
+            "requestId": request_id,
+            "tokenBudget": input_tokens + rewind_description::MAXIMUM_OUTPUT_TOKENS,
+            "costBudgetMicrousd": estimated_cost,
+        }),
+    )
+    .await;
+    Response::from_json(&json!({
+        "text": caption,
+        "source": "cloud_mimo_v2_5",
+        "model": rewind_description::MODEL,
+    }))
 }
 
 // ---------------------------------------------------------------------------

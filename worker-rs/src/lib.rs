@@ -51,6 +51,7 @@ pub mod assistant_admission;
 pub mod jsnum;
 pub mod managed_ai;
 pub mod rate_limit;
+pub mod rewind_description;
 pub mod stt_admission;
 pub mod stt_logic;
 pub mod voice_logic;
