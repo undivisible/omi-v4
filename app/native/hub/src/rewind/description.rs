@@ -83,9 +83,7 @@ fn usable_caption(value: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        LocalVisualAvailability, MAXIMUM_IMAGE_BYTES, local_visual_availability, request_body,
-    };
+    use super::{LocalVisualAvailability, local_visual_availability, request_body};
 
     #[test]
     fn local_visual_is_deterministically_unavailable() {
@@ -100,6 +98,5 @@ mod tests {
         let body = request_body(&[0xff, 0xd8, 0xff]);
         assert_eq!(body.as_object().map(|object| object.len()), Some(2));
         assert_eq!(body["mimeType"], "image/jpeg");
-        assert!(MAXIMUM_IMAGE_BYTES > 0);
     }
 }
