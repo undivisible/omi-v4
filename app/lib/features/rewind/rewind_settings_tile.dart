@@ -79,6 +79,7 @@ class RewindSettingsTile extends StatefulWidget {
 class _RewindSettingsTileState extends State<RewindSettingsTile> {
   RewindClient? _client;
   final _excludeController = TextEditingController();
+  bool _deleteDialogOpen = false;
 
   @override
   void initState() {
@@ -115,28 +116,34 @@ class _RewindSettingsTileState extends State<RewindSettingsTile> {
   }
 
   Future<void> _confirmDeleteAll(RewindClient client) async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Delete every recorded frame?'),
-        content: const Text(
-          'Every screenshot and every line of text Rewind has kept is '
-          'removed from this machine. This cannot be undone.',
+    if (_deleteDialogOpen) return;
+    _deleteDialogOpen = true;
+    try {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Delete every recorded frame?'),
+          content: const Text(
+            'Every screenshot and every line of text Rewind has kept is '
+            'removed from this machine. This cannot be undone.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              key: const Key('rewind_delete_all_confirm'),
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('Delete everything'),
+            ),
+          ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            key: const Key('rewind_delete_all_confirm'),
-            onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Delete everything'),
-          ),
-        ],
-      ),
-    );
-    if (confirmed ?? false) await client.deleteAll();
+      );
+      if (confirmed ?? false) await client.deleteAll();
+    } finally {
+      _deleteDialogOpen = false;
+    }
   }
 
   @override
