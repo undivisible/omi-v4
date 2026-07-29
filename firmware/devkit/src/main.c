@@ -6,6 +6,7 @@
 #include "codec.h"
 #include "config.h"
 #include "led.h"
+#include "lib/battery/battery.h"
 #include "mic.h"
 #include "omi_ext.h"
 #include "sdcard.h"

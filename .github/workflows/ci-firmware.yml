@@ -261,8 +261,11 @@ jobs:
           if ! command -v rustup >/dev/null 2>&1; then
             apt-get update
             apt-get install --yes --no-install-recommends curl
-            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
-              | sh -s -- -y --profile minimal --default-toolchain stable --component clippy
+            (
+              export LD_LIBRARY_PATH=
+              /usr/bin/curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+                | sh -s -- -y --profile minimal --default-toolchain stable --component clippy
+            )
           fi
           . "${HOME}/.cargo/env"
           rustup component add clippy
