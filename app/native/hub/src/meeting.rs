@@ -1224,7 +1224,21 @@ impl MeetingRuntime {
                 }
                 control = self.receiver.recv() => match control {
                     Some(control) => control,
-                    None => break,
+                    None => {
+                        // Channel closed — sender dropped.  Process any
+                        // pending finish and manual-start before exiting,
+                        // in case finish_deadline lost the race against
+                        // recv() returning None.
+                        if let Some(finished) = finishing.take() {
+                            self.finish(finished);
+                        }
+                        if let Some(title) = pending_manual_start.take() {
+                            session = Some(MeetingSession::new(title, true));
+                            self.sync_capture(true);
+                            announce(session.as_ref(), &mut announced);
+                        }
+                        break;
+                    }
                 },
             };
             match control {
