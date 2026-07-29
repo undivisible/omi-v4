@@ -243,3 +243,13 @@ retracted or archived claim is removed from the index rather than left to be
 matched. `searchMemoryClaims` filters by `uid` at the index and then re-checks
 every hit against `memory_claims` with the liveness and time-window conditions
 before returning it, so a stale vector can cost a result but cannot produce one.
+
+## 10. Cupboard tenant control plane
+
+`cupboard_tenants` maps an authenticated Omi UID to one persisted random opaque
+tenant identifier. `GET /v1/memory/cupboard/tenant` reports whether the caller
+has a mapping; `POST` explicitly mints one and is idempotent; `DELETE` removes
+the caller's mapping so a later `POST` mints a new opaque identifier. This is a
+control-plane prerequisite only: it does not call Cupboard, transfer or encrypt
+memory payloads, change the authority of zkr evidence or `memory_log`, or alter
+retrieval, MCP, pairing, or grants.

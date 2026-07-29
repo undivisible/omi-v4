@@ -18,6 +18,10 @@ use worker::{D1Database, D1PreparedStatement, D1Result};
 use crate::auth::Auth;
 use crate::channel_commands;
 use crate::crypto_util::sha256_hex;
+use crate::cupboard_tenant::{
+    mapping_response, MappingOperation, CUPBOARD_TENANT_DELETE_SQL, CUPBOARD_TENANT_INSERT_SQL,
+    CUPBOARD_TENANT_LOOKUP_SQL,
+};
 use crate::currents_refresh::{
     self, GeneratedDraft, MemoryLine, RefreshContext, RefreshState, REFRESH_BATCH_SIZE,
 };
@@ -41,6 +45,9 @@ pub fn register(router: Router<'_, ()>) -> Router<'_, ()> {
         // memory-sync
         .post_async("/v1/memory/zkr-sync", handle_zkr_sync)
         .get_async("/v1/memory/log", handle_memory_log)
+        .get_async("/v1/memory/cupboard/tenant", handle_cupboard_tenant_get)
+        .post_async("/v1/memory/cupboard/tenant", handle_cupboard_tenant_post)
+        .delete_async("/v1/memory/cupboard/tenant", handle_cupboard_tenant_delete)
         // memory retrieval + CRUD
         .get_async("/v1/memory/retrieve", handle_retrieve)
         .post_async("/v1/memory/retrieve", handle_retrieve)
@@ -150,6 +157,58 @@ macro_rules! authed {
             Err(response) => return Ok(response),
         }
     };
+}
+
+async fn cupboard_tenant_id(db: &D1Database, uid: &str) -> Result<Option<String>> {
+    Ok(d1_first(db, CUPBOARD_TENANT_LOOKUP_SQL, &[s(uid)])
+        .await?
+        .and_then(|row| {
+            row.get("tenant_id")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        }))
+}
+
+async fn handle_cupboard_tenant_get(req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let auth = authed!(req, ctx);
+    let db = ctx.env.d1("DB")?;
+    let tenant_id = cupboard_tenant_id(&db, &auth.uid).await?;
+    let response = mapping_response(tenant_id.as_deref(), MappingOperation::Read);
+    Ok(Response::from_json(&response.body)?.with_status(response.status))
+}
+
+async fn handle_cupboard_tenant_post(req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let auth = authed!(req, ctx);
+    let db = ctx.env.d1("DB")?;
+    if let Some(tenant_id) = cupboard_tenant_id(&db, &auth.uid).await? {
+        let response = mapping_response(Some(&tenant_id), MappingOperation::Existing);
+        return Ok(Response::from_json(&response.body)?.with_status(response.status));
+    }
+
+    let tenant_id = uuid_v4();
+    let result = d1_run(
+        &db,
+        CUPBOARD_TENANT_INSERT_SQL,
+        &[s(&auth.uid), s(&tenant_id), n(now_ms())],
+    )
+    .await?;
+    let Some(tenant_id) = cupboard_tenant_id(&db, &auth.uid).await? else {
+        return error_json("Tenant mapping unavailable", 503);
+    };
+    let operation = if changes(&result) == 1 {
+        MappingOperation::Minted
+    } else {
+        MappingOperation::Existing
+    };
+    let response = mapping_response(Some(&tenant_id), operation);
+    Ok(Response::from_json(&response.body)?.with_status(response.status))
+}
+
+async fn handle_cupboard_tenant_delete(req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let auth = authed!(req, ctx);
+    let db = ctx.env.d1("DB")?;
+    d1_run(&db, CUPBOARD_TENANT_DELETE_SQL, &[s(&auth.uid)]).await?;
+    Ok(Response::empty()?.with_status(204))
 }
 
 pub(crate) async fn d1_first(

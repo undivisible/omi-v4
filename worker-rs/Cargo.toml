@@ -21,6 +21,7 @@ aes-gcm = { version = "0.10", default-features = false, features = ["aes", "allo
 
 [dev-dependencies]
 rand = "0.8"
+rusqlite = { version = "0.37", features = ["bundled"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 worker = { version = "0.8", features = ["d1", "http"] }

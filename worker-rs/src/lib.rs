@@ -21,6 +21,7 @@ pub mod conversations;
 pub mod crepus_safety;
 pub mod cron_cursor;
 pub mod crypto_util;
+pub mod cupboard_tenant;
 pub mod currents;
 pub mod currents_refresh;
 pub mod delivery;
