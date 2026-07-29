@@ -102,10 +102,6 @@ bool is_connected = false;
 bool is_charging = false;
 extern bool is_off;
 extern bool usb_charge;
-#ifdef CONFIG_OMI_ENABLE_CAPTURE_LED
-extern bool is_capturing;
-#endif
-
 #ifdef CONFIG_OMI_ENABLE_IDLE_SLEEP
 #define IDLE_SLEEP_TIMEOUT_SEC (CONFIG_OMI_IDLE_SLEEP_TIMEOUT_MIN * 60)
 #define MAIN_LOOP_PERIOD_MS 500
