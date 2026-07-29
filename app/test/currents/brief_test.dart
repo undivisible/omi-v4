@@ -190,7 +190,7 @@ void main() {
 
   group('CurrentsBrief', () {
     testWidgets(
-      'ignores a composed infographic and keeps deterministic actionable rows',
+      'renders a valid composed infographic while keeping the follow-on rows',
       (tester) async {
         const composed =
             'stack col gap-2\n'
@@ -214,9 +214,9 @@ void main() {
             ),
           ),
         );
-        expect(find.byKey(const Key('brief_infographic')), findsNothing);
-        expect(find.byKey(const Key('brief_hero_title')), findsOneWidget);
-        expect(find.byKey(const Key('brief_hero_prep')), findsOneWidget);
+        expect(find.byKey(const Key('brief_infographic')), findsOneWidget);
+        expect(find.byKey(const Key('brief_hero_title')), findsNothing);
+        expect(find.byKey(const Key('brief_hero_prep')), findsNothing);
         expect(find.byKey(const Key('brief_hero_done')), findsNothing);
         expect(find.text('THEN'), findsOneWidget);
         expect(find.byKey(const ValueKey('brief_row_b')), findsOneWidget);

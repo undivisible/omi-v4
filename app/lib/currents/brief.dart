@@ -217,10 +217,10 @@ class _CurrentsBriefState extends State<CurrentsBrief> {
     final compact = widget.compact;
     final plan = planBrief(widget.cards, now: now, maxRest: compact ? 2 : 3);
     final palette = widget.palette;
-    // Currents are action surfaces. A model-composed visualization may be
-    // useful as supporting content later, but it must never replace the
-    // deterministic hero, action controls, or secondary rows.
     final hero = plan.hero;
+    final infographic = widget.briefCrepus;
+    final showInfographic =
+        hero != null && infographic != null && crepusRenders(infographic);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -233,6 +233,19 @@ class _CurrentsBriefState extends State<CurrentsBrief> {
               label: 'Clear',
               trailing: 'Nothing scheduled',
             ),
+          )
+        else if (showInfographic)
+          _BriefInfographic(
+            key: const Key('brief_infographic'),
+            source: infographic,
+            palette: palette,
+            proposedNextStep: hero.card.item.proposedNextStep,
+            compact: compact,
+            onPrompt: widget.onPrompt,
+            onDraftPrompt: widget.onDraftPrompt,
+            onComplete: widget.onComplete == null
+                ? null
+                : () => widget.onComplete!(hero.card.item.id),
           )
         else
           _BriefHero(
