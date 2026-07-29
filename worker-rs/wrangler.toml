@@ -36,6 +36,7 @@ directory = "../cloud/public"
 
 [vars]
 ENVIRONMENT = "production"
+OMI_LEGACY_BASE_URL = "https://api.omi.me"
 CF_AI_GATEWAY_ACCOUNT_ID = "fc62a6e6528bec6d3d81c3bf8967ceeb"
 CF_AI_GATEWAY_ID = "default"
 FIREBASE_PROJECT_ID = "based-hardware"

@@ -3,6 +3,7 @@
 //! `worker/` remains a frozen TypeScript behavioural reference until every
 //! retained surface has scenario-level Rust parity. See `PORT_STATUS.md`.
 
+pub mod api_key_migration;
 pub mod api_keys;
 pub mod auth;
 pub mod auth_session_flow;

@@ -8,8 +8,11 @@
 
 use serde_json::{json, Value};
 use worker::wasm_bindgen::JsValue;
-use worker::{Headers, Method, Request, RequestInit, Response, Result, RouteContext, Router};
+use worker::{
+    Headers, Method, Request, RequestInit, RequestRedirect, Response, Result, RouteContext, Router,
+};
 
+use crate::api_key_migration::{self, LegacyKeyKind};
 use crate::api_keys::{self, Credential, KeyCandidate};
 use crate::byok_negotiation as byok;
 use crate::byok_pricing::{self, PriceBand};
@@ -27,6 +30,16 @@ pub fn register(router: Router<'static, ()>) -> Router<'static, ()> {
         .get_async("/v1/api-keys", handle_keys_list)
         .post_async("/v1/api-keys", handle_keys_create)
         .delete_async("/v1/api-keys/:id", handle_keys_delete)
+        .get_async(
+            "/v1/api-key-migrations/eligible",
+            handle_migrations_eligible,
+        )
+        .get_async(
+            "/v1/api-key-migrations/legacy-metadata",
+            handle_legacy_key_metadata,
+        )
+        .get_async("/v1/api-key-migrations", handle_migrations_list)
+        .post_async("/v1/api-key-migrations", handle_migrations_create)
         .get_async("/v1/byok/plan", handle_plan_get)
         .post_async("/v1/byok/plan/standard", handle_plan_standard)
         .post_async("/v1/byok/negotiation", handle_negotiation_start)
@@ -311,6 +324,210 @@ async fn handle_keys_delete(req: Request, ctx: RouteContext<()>) -> Result<Respo
         return error_json("API key not found", 404);
     }
     Ok(Response::empty()?.with_status(204))
+}
+
+async fn handle_migrations_list(req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let auth = firebase!(req, ctx);
+    let db = ctx.env.d1("DB")?;
+    let rows = d1_all(
+        &db,
+        "SELECT id, replacement_key_id, legacy_kind, completed_at\n         FROM api_key_migrations WHERE uid = ?1 ORDER BY completed_at DESC LIMIT 100",
+        &[s(&auth.uid)],
+    )
+    .await?;
+    let migrations: Vec<Value> = rows
+        .iter()
+        .filter_map(|row| {
+            let id = row.get("id")?.as_str()?;
+            let replacement = row.get("replacement_key_id")?.as_str()?;
+            let kind = LegacyKeyKind::parse(row.get("legacy_kind")?.as_str()?)?;
+            let completed = row.get("completed_at").and_then(json_to_i64)?;
+            Some(api_key_migration::migration_receipt(
+                id,
+                &auth.uid,
+                replacement,
+                kind,
+                completed,
+            ))
+        })
+        .collect();
+    Response::from_json(&json!({ "migrations": migrations }))
+}
+
+async fn handle_migrations_create(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let auth = firebase!(req, ctx);
+    let now = now_ms();
+    let body = json_body(&mut req).await.unwrap_or(Value::Null);
+    let Ok(request) = api_key_migration::validate_migration_request(&body, now) else {
+        return error_json("Invalid migration request", 400);
+    };
+    let (allowed, retry_after) = consume_rate_limit(
+        &ctx.env,
+        &format!("api-key-migration:{}", auth.uid),
+        api_keys::MINT_RATE_LIMIT,
+        api_keys::MINT_RATE_WINDOW_MS,
+    )
+    .await;
+    if !allowed {
+        return retry_after_json(&json!({ "error": "Too many requests" }), 429, retry_after);
+    }
+    let db = ctx.env.d1("DB")?;
+    let live = d1_first(
+        &db,
+        "SELECT COUNT(*) AS total FROM api_keys WHERE uid = ?1 AND revoked_at IS NULL",
+        &[s(&auth.uid)],
+    )
+    .await?;
+    let total = live
+        .as_ref()
+        .and_then(|row| row.get("total"))
+        .and_then(json_to_i64)
+        .unwrap_or(0);
+    if total >= api_keys::MAXIMUM_KEYS_PER_UID {
+        return error_json("API key limit reached", 409);
+    }
+
+    let mut prefix_bytes = [0u8; 4];
+    let mut secret_bytes = [0u8; 32];
+    getrandom::getrandom(&mut prefix_bytes).expect("getrandom");
+    getrandom::getrandom(&mut secret_bytes).expect("getrandom");
+    let minted = api_keys::mint_api_key(prefix_bytes, secret_bytes);
+    let key_id = uuid_v4();
+    let migration_id = uuid_v4();
+    // D1 applies this batch atomically: an audit receipt can never exist
+    // without its replacement key, and a migration key can never be secretless.
+    db.batch(vec![
+        db.prepare(
+            "INSERT INTO api_keys (id, uid, name, prefix, key_hash, scopes, created_at, expires_at)\n             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL)",
+        )
+        .bind(&[
+            key_id.clone().into(),
+            auth.uid.clone().into(),
+            request.name.clone().into(),
+            minted.prefix.clone().into(),
+            minted.hash.clone().into(),
+            Value::from(request.scopes.clone()).to_string().into(),
+            (now as f64).into(),
+        ])?,
+        db.prepare(
+            "INSERT INTO api_key_migrations (id, uid, replacement_key_id, legacy_kind, created_at, completed_at)\n             VALUES (?1, ?2, ?3, ?4, ?5, ?5)",
+        )
+        .bind(&[
+            migration_id.clone().into(),
+            auth.uid.clone().into(),
+            key_id.clone().into(),
+            request.legacy_kind.wire_name().into(),
+            (now as f64).into(),
+        ])?,
+    ])
+    .await?;
+    let stored = d1_first(
+        &db,
+        &format!("{KEY_COLUMNS}\n     FROM api_keys WHERE id = ?1 AND uid = ?2"),
+        &[s(&key_id), s(&auth.uid)],
+    )
+    .await?
+    .unwrap_or(Value::Null);
+    json_status(
+        &json!({
+            "key": minted.key,
+            "apiKey": row_to_key(&stored),
+            "migration": api_key_migration::migration_receipt(
+                &migration_id, &auth.uid, &key_id, request.legacy_kind, now,
+            ),
+        }),
+        201,
+    )
+}
+
+async fn handle_migrations_eligible(req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let auth = firebase!(req, ctx);
+    let db = ctx.env.d1("DB")?;
+    let row = d1_first(
+        &db,
+        "SELECT id FROM api_key_migrations\n         WHERE uid = ?1 AND legacy_kind = ?2\n         ORDER BY completed_at DESC\n         LIMIT 1",
+        &[s(&auth.uid), s("mcp")],
+    )
+    .await?;
+    let receipt_id = row
+        .as_ref()
+        .and_then(|value| value.get("id"))
+        .and_then(Value::as_str);
+    let body = api_key_migration::eligible_migration(receipt_id);
+    Response::from_json(&body)
+}
+
+fn unavailable_response() -> Result<Response> {
+    json_status(
+        &api_key_migration::legacy_metadata_unavailable(),
+        api_key_migration::LEGACY_METADATA_UNAVAILABLE_STATUS,
+    )
+}
+
+/// Read one allowlisted upstream endpoint with the caller's own Firebase
+/// bearer. The bearer lives only for the duration of this call: it is never
+/// written to D1, never logged, and never reaches a response body. Any upstream
+/// failure collapses to `None` so the caller answers opaquely.
+async fn read_legacy_metadata(endpoint: &str, bearer: &str) -> Option<Value> {
+    let mut init = RequestInit::new();
+    init.with_method(Method::Get);
+    init.with_redirect(RequestRedirect::Error);
+    let headers = Headers::new();
+    headers
+        .set("authorization", &format!("Bearer {bearer}"))
+        .ok()?;
+    headers.set("accept", "application/json").ok()?;
+    init.with_headers(headers);
+    let request = Request::new_with_init(endpoint, &init).ok()?;
+    let mut upstream = worker::Fetch::Request(request).send().await.ok()?;
+    if upstream.status_code() >= 300 {
+        return None;
+    }
+    upstream.json::<Value>().await.ok()
+}
+
+/// `GET /v1/api-key-migrations/legacy-metadata` — metadata-only discovery of
+/// the upstream keys this account could migrate away from.
+///
+/// The route is management-authenticated like every other key route. Discovery
+/// on top of that needs a credential upstream will honour, which only a
+/// Firebase ID token is: a worker-issued session is signed by this worker and
+/// means nothing to Omi, so it stops here without a request being made. The
+/// response is a metadata projection — no legacy key, no replacement key and no
+/// bearer can appear in it.
+async fn handle_legacy_key_metadata(req: Request, ctx: RouteContext<()>) -> Result<Response> {
+    let _auth = firebase!(req, ctx);
+    let authorization = req
+        .headers()
+        .get("authorization")
+        .ok()
+        .flatten()
+        .unwrap_or_default();
+    let Some(bearer) = api_key_migration::forwardable_firebase_bearer(&authorization) else {
+        return unavailable_response();
+    };
+    let Some(base) = env_get(&ctx.env, "OMI_LEGACY_BASE_URL") else {
+        return unavailable_response();
+    };
+    let mut entries = Vec::new();
+    let mut reached_upstream = false;
+    for kind in api_key_migration::LEGACY_KEY_KINDS {
+        let Some(endpoint) = api_key_migration::legacy_metadata_endpoint(&base, kind) else {
+            continue;
+        };
+        let Some(upstream) = read_legacy_metadata(&endpoint, &bearer).await else {
+            continue;
+        };
+        reached_upstream = true;
+        let projected = api_key_migration::project_legacy_metadata(kind, &upstream);
+        entries.extend(projected);
+    }
+    // Reaching neither source is indistinguishable from holding no forwardable
+    // credential, rather than being reported as an upstream diagnosis.
+    if !reached_upstream {
+        return unavailable_response();
+    }
+    Response::from_json(&api_key_migration::legacy_metadata_response(entries))
 }
 
 // ---------------------------------------------------------------------------
