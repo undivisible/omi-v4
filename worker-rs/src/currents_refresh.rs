@@ -83,6 +83,25 @@ pub fn collapse(value: &str) -> String {
     value.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+/// Reject metadata and onboarding chatter that is not a user-relevant Current.
+/// This is intentionally applied after every draft source is normalised, rather
+/// than trusting either the model prompt or a fallback to make this distinction.
+pub fn is_surfaceable_draft(fields: &[&str]) -> bool {
+    let text = fields.join(" ").to_lowercase();
+    const FORBIDDEN: &[&str] = &[
+        "reply to yourself",
+        "reply to me",
+        "about getting started",
+        "getting started",
+        "source available",
+        "source-available",
+        "open source now",
+        "open-source now",
+        "source availability",
+    ];
+    !FORBIDDEN.iter().any(|marker| text.contains(marker))
+}
+
 /// `parseJsonObject` — accepts bare JSON or ```json fenced blocks.
 pub fn parse_json_object(text: &str) -> Option<serde_json::Map<String, serde_json::Value>> {
     let trimmed = text.trim();
@@ -226,6 +245,9 @@ pub fn heuristic_drafts(context: &RefreshContext) -> Vec<GeneratedDraft> {
         } else {
             instruction
         };
+        if !is_surfaceable_draft(&[&title, &summary, &reason, &instruction]) {
+            continue;
+        }
         drafts.push(GeneratedDraft {
             content_kind,
             title,
@@ -312,6 +334,9 @@ pub fn parse_drafts(
         } else {
             instruction
         };
+        if !is_surfaceable_draft(&[&title, &summary, &reason, &instruction]) {
+            continue;
+        }
         let tool = row
             .get("tool")
             .and_then(|v| v.as_str())
@@ -445,6 +470,20 @@ mod tests {
         assert_eq!(drafts[0].content_kind, CurrentContentKind::AgentAction);
         assert_eq!(drafts[0].title, "Draft reply");
         assert_eq!(drafts[1].content_kind, CurrentContentKind::Awareness);
+    }
+
+    #[test]
+    fn parse_drafts_rejects_self_reply_source_status_and_onboarding_noise() {
+        let allowed: HashSet<String> = ["ev-1"].into_iter().map(str::to_string).collect();
+        let content = r#"{"items":[
+          {"contentKind":"human_action","title":"Reply to yourself","summary":"Reply to Carter Max Lee about getting started.","reason":"A source is available.","instruction":"Reply to yourself","evidenceId":"ev-1"},
+          {"contentKind":"awareness","title":"Roomote is source-available","summary":"It is open source now.","reason":"source availability","instruction":"Tell the user this","evidenceId":"ev-1"},
+          {"contentKind":"human_action","title":"Review the proposal","summary":"The proposal needs a decision today.","reason":"A deadline is today.","instruction":"Choose an owner and next step.","evidenceId":"ev-1"}
+        ]}"#;
+
+        let drafts = parse_drafts(content, &allowed);
+        assert_eq!(drafts.len(), 1);
+        assert_eq!(drafts[0].title, "Review the proposal");
     }
 
     #[test]
