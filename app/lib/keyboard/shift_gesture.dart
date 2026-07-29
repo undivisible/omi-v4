@@ -40,6 +40,8 @@ class ShiftGestureMachine {
   bool _rightDown = false;
   bool _chordConsumed = false;
   DateTime? _pendingChordAt;
+  DateTime? _singleShiftTapAt;
+  PhysicalShift? _singleShiftTapKey;
 
   /// True while a first chord is waiting out [doubleChordWindow]; the owner
   /// must schedule [chordTimeout] after that window to resolve it.
@@ -71,6 +73,8 @@ class ShiftGestureMachine {
     final bothDown = _leftDown && _rightDown;
     if (bothDown && !_chordConsumed) {
       _chordConsumed = true;
+      _singleShiftTapAt = null;
+      _singleShiftTapKey = null;
       final at = _now();
       final pendingAt = _pendingChordAt;
       if (pendingAt != null && at.difference(pendingAt) <= doubleChordWindow) {
@@ -79,6 +83,23 @@ class ShiftGestureMachine {
       }
       _pendingChordAt = at;
       return const [];
+    }
+
+    // macOS reports physical Shift transitions through flagsChanged. Supporting
+    // two taps of either physical key matches the public "double-Shift" affordance;
+    // the existing two-key chord remains available for people who use it.
+    if (!pressed && !_leftDown && !_rightDown && !_chordConsumed) {
+      final at = _now();
+      final priorAt = _singleShiftTapAt;
+      if (priorAt != null &&
+          _singleShiftTapKey == key &&
+          at.difference(priorAt) <= doubleChordWindow) {
+        _singleShiftTapAt = null;
+        _singleShiftTapKey = null;
+        return const [ShiftGestureAction.toggleVoice];
+      }
+      _singleShiftTapAt = at;
+      _singleShiftTapKey = key;
     }
 
     _clearChordWhenReleased();
@@ -96,7 +117,7 @@ class ShiftGestureMachine {
   }
 
   List<ShiftGestureAction> escape() {
-    _pendingChordAt = null;
+    _reset();
     return const [ShiftGestureAction.escape];
   }
 
@@ -111,5 +132,7 @@ class ShiftGestureMachine {
     _rightDown = false;
     _chordConsumed = false;
     _pendingChordAt = null;
+    _singleShiftTapAt = null;
+    _singleShiftTapKey = null;
   }
 }

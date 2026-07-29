@@ -65,7 +65,20 @@ void main() {
     expect(gesture.hasPendingChord, isTrue);
   });
 
-  test('a single Shift never activates the gesture', () {
+  test('double-tapping either physical Shift toggles voice globally', () {
+    final gesture = machine();
+
+    expect(gesture.shift(PhysicalShift.left, true), isEmpty);
+    expect(gesture.shift(PhysicalShift.left, false), isEmpty);
+    advance(const Duration(milliseconds: 250));
+    expect(gesture.shift(PhysicalShift.left, true), isEmpty);
+    expect(gesture.shift(PhysicalShift.left, false), [
+      ShiftGestureAction.toggleVoice,
+    ]);
+    expect(gesture.hasPendingChord, isFalse);
+  });
+
+  test('one Shift tap never activates the gesture', () {
     final gesture = machine();
 
     expect(gesture.shift(PhysicalShift.left, true), isEmpty);
