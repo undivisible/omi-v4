@@ -80,6 +80,7 @@ part 'rewind_retention_option.dart';
 part 'rewind_skip_reason.dart';
 part 'rewind_status.dart';
 part 'rewind_update.dart';
+part 'rewind_visual_caption.dart';
 part 'rewind_window_context.dart';
 part 'runtime_phase.dart';
 part 'runtime_status.dart';
