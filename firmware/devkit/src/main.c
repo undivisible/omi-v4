@@ -222,7 +222,7 @@ int main(void)
     LOG_INF("Firmware revision: %s", CONFIG_BT_DIS_FW_REV_STR);
     LOG_INF("Hardware revision: %s", CONFIG_BT_DIS_HW_REV_STR);
     // Force QSPI flash into deep sleep mode
-#if DT_NODE_EXISTS(DT_NODELABEL(p25q16h))
+#if IS_ENABLED(CONFIG_PM_DEVICE) && DT_NODE_HAS_STATUS(DT_NODELABEL(p25q16h), okay)
     const struct device *flash_dev = DEVICE_DT_GET(DT_NODELABEL(p25q16h));
     if (device_is_ready(flash_dev)) {
         err = pm_device_action_run(flash_dev, PM_DEVICE_ACTION_SUSPEND);
