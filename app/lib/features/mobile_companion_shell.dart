@@ -132,7 +132,6 @@ class _MobileCompanionShellState extends State<MobileCompanionShell> {
   // the hero while the user is speaking. Cleared once the segment finalizes.
   String _interimText = '';
   StreamSubscription<NativeEvent>? _nativeEventSubscription;
-  bool _settingsSheetOpen = false;
 
   @override
   void initState() {
@@ -367,6 +366,7 @@ class MobilePendantPageState extends State<MobilePendantPage> {
       PreferencesMobileCompanionCache();
   List<CurrentCard>? _cachedCurrents;
   String? _cachedBriefCrepus;
+  bool _settingsSheetOpen = false;
 
   bool get _mobile => relay.role == DeviceRelayRole.mobileOwner;
 
