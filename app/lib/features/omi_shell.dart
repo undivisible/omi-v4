@@ -328,20 +328,20 @@ class _OmiShellState extends State<OmiShell> {
             if (_desktopKeyboard.supported)
               if (_inputDiagnostics case final diagnostics?
                   when !diagnostics.globalCaptureLive) ...[
-              _GlobalInputNotice(
-                diagnostics: diagnostics,
-                onGrant: () => unawaited(
-                  !diagnostics.inputMonitoring
-                      ? widget.services.capabilities.request(
-                          CoreCapability.inputMonitoring,
-                        )
-                      : widget.services.capabilities.request(
-                          CoreCapability.accessibility,
-                        ),
+                _GlobalInputNotice(
+                  diagnostics: diagnostics,
+                  onGrant: () => unawaited(
+                    !diagnostics.inputMonitoring
+                        ? widget.services.capabilities.request(
+                            CoreCapability.inputMonitoring,
+                          )
+                        : widget.services.capabilities.request(
+                            CoreCapability.accessibility,
+                          ),
+                  ),
                 ),
-              ),
-              const SizedBox(height: 12),
-            ],
+                const SizedBox(height: 12),
+              ],
             Expanded(child: chat),
           ],
         ),
