@@ -80,15 +80,6 @@ jobs:
       run:
         shell: bash
     steps:
-      - name: Install Git HTTPS transport
-        run: |
-          set -euo pipefail
-          apt-get update
-          apt-get install --reinstall --yes --no-install-recommends git
-          export PATH="/usr/bin:${PATH}"
-          echo /usr/bin >> "${GITHUB_PATH}"
-          test -x "$(git --exec-path)/git-remote-https"
-
       - name: Trust the workspace inside the container
         run: git config --global --add safe.directory '*'
 
@@ -104,6 +95,15 @@ jobs:
       - name: Resolve the NCS toolchain on PATH
         if: steps.cache.outputs.cache-hit != 'true'
         run: bash .github/scripts/setup-ncs-toolchain.sh
+
+      - name: Install Git HTTPS transport
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          apt-get update
+          apt-get install --reinstall --yes --no-install-recommends git
+          echo /usr/bin >> "${GITHUB_PATH}"
+          test -x "$(/usr/bin/git --exec-path)/git-remote-https"
 
       - name: Fetch the nRF Connect SDK
         if: steps.cache.outputs.cache-hit != 'true'
