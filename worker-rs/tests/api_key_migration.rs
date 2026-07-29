@@ -117,6 +117,27 @@ fn eligible_migration_is_metadata_only_and_reuses_defaults_and_receipts() {
 }
 
 #[test]
+fn eligible_route_fails_closed_without_account_owned_legacy_inventory() {
+    let route_source =
+        fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/routes_keys.rs"))
+            .expect("read migration route source");
+    let eligible_handler = route_source
+        .split("async fn handle_migrations_eligible")
+        .nth(1)
+        .and_then(|tail| tail.split("fn unavailable_response").next())
+        .expect("eligible migration handler");
+
+    assert!(
+        eligible_handler.contains("unavailable_response()"),
+        "the route has no account-owned legacy inventory and must answer opaquely unavailable"
+    );
+    assert!(
+        !eligible_handler.contains("eligible_migration("),
+        "the route must not implicitly claim eligibility without legacy inventory"
+    );
+}
+
+#[test]
 fn legacy_metadata_endpoints_are_pinned_to_two_allowlisted_paths_under_the_configured_base() {
     let expected_kinds = [LegacyKeyKind::Mcp, LegacyKeyKind::Dev];
     assert_eq!(LEGACY_KEY_KINDS, expected_kinds);

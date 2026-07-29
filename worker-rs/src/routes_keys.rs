@@ -441,20 +441,11 @@ async fn handle_migrations_create(mut req: Request, ctx: RouteContext<()>) -> Re
 }
 
 async fn handle_migrations_eligible(req: Request, ctx: RouteContext<()>) -> Result<Response> {
-    let auth = firebase!(req, ctx);
-    let db = ctx.env.d1("DB")?;
-    let row = d1_first(
-        &db,
-        "SELECT id FROM api_key_migrations\n         WHERE uid = ?1 AND legacy_kind = ?2\n         ORDER BY completed_at DESC\n         LIMIT 1",
-        &[s(&auth.uid), s("mcp")],
-    )
-    .await?;
-    let receipt_id = row
-        .as_ref()
-        .and_then(|value| value.get("id"))
-        .and_then(Value::as_str);
-    let body = api_key_migration::eligible_migration(receipt_id);
-    Response::from_json(&body)
+    let _auth = firebase!(req, ctx);
+    // This route has no account-owned legacy inventory source yet. A prior
+    // migration receipt is not evidence that an account currently owns a
+    // migratable legacy key, so fail closed rather than implying eligibility.
+    unavailable_response()
 }
 
 fn unavailable_response() -> Result<Response> {

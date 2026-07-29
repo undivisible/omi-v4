@@ -3,7 +3,6 @@
 //! HTTP/D1 bindings intentionally live elsewhere. Keeping issuer, resource,
 //! redirect, and PKCE decisions here makes the security contract host-testable.
 
-use serde_json::{json, Value};
 use url::Url;
 
 /// This must never be inferred from `Host`: reverse proxies and hostile
@@ -21,29 +20,6 @@ pub const OAUTH_SCOPES: &[&str] = &[
     "assistant:write",
     "speech:write",
 ];
-
-pub fn authorization_server_metadata() -> Value {
-    json!({
-        "issuer": CANONICAL_ISSUER,
-        "authorization_endpoint": format!("{CANONICAL_ISSUER}/oauth/authorize"),
-        "token_endpoint": format!("{CANONICAL_ISSUER}/oauth/token"),
-        "revocation_endpoint": format!("{CANONICAL_ISSUER}/oauth/revoke"),
-        "response_types_supported": ["code"],
-        "grant_types_supported": ["authorization_code", "refresh_token"],
-        "code_challenge_methods_supported": ["S256"],
-        "scopes_supported": OAUTH_SCOPES,
-        "token_endpoint_auth_methods_supported": ["none"],
-    })
-}
-
-pub fn protected_resource_metadata() -> Value {
-    json!({
-        "resource": CANONICAL_RESOURCE,
-        "authorization_servers": [CANONICAL_ISSUER],
-        "bearer_methods_supported": ["header"],
-        "scopes_supported": OAUTH_SCOPES,
-    })
-}
 
 pub fn canonical_issuer() -> &'static str {
     CANONICAL_ISSUER
@@ -144,9 +120,8 @@ pub fn decide_grant_scopes(
 #[cfg(test)]
 mod tests {
     use super::{
-        authorization_server_metadata, canonical_issuer, canonical_resource, decide_grant_scopes,
-        protected_resource_metadata, validate_pkce_s256, validate_redirect_uri, GrantScopeError,
-        PkceError, RedirectError,
+        canonical_issuer, canonical_resource, decide_grant_scopes, validate_pkce_s256,
+        validate_redirect_uri, GrantScopeError, PkceError, RedirectError,
     };
 
     #[test]
@@ -168,40 +143,6 @@ mod tests {
         ] {
             assert_eq!(validate_redirect_uri(invalid), Err(RedirectError::Invalid));
         }
-    }
-
-    #[test]
-    fn discovery_metadata_is_canonical_and_advertises_only_secure_grants() {
-        let authorization = authorization_server_metadata();
-        assert_eq!(authorization["issuer"], canonical_issuer());
-        assert_eq!(
-            authorization["authorization_endpoint"],
-            "https://api.omi.tsc.hk/oauth/authorize"
-        );
-        assert_eq!(
-            authorization["token_endpoint"],
-            "https://api.omi.tsc.hk/oauth/token"
-        );
-        assert_eq!(
-            authorization["code_challenge_methods_supported"],
-            serde_json::json!(["S256"])
-        );
-        assert_eq!(
-            authorization["grant_types_supported"],
-            serde_json::json!(["authorization_code", "refresh_token"])
-        );
-        assert!(authorization["grant_types_supported"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|value| value != "implicit" && value != "password"));
-
-        let resource = protected_resource_metadata();
-        assert_eq!(resource["resource"], canonical_resource());
-        assert_eq!(
-            resource["authorization_servers"],
-            serde_json::json!([canonical_issuer()])
-        );
     }
 
     #[test]
