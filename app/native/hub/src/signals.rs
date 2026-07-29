@@ -861,6 +861,16 @@ pub struct RewindFrameRecord {
     pub bundle_id: Option<String>,
     pub window_title: Option<String>,
     pub ocr_text: Option<String>,
+    pub visual_caption: Option<RewindVisualCaption>,
+}
+
+#[derive(Debug, Serialize, SignalPiece)]
+pub struct RewindVisualCaption {
+    pub text: String,
+    pub source: String,
+    pub model: String,
+    pub description_version: u32,
+    pub described_at_ms: i64,
 }
 
 /// A frame row is a description of what was on someone's screen, so the two
@@ -880,6 +890,10 @@ impl std::fmt::Debug for RewindFrameRecord {
                 &self.window_title.as_ref().map(|_| "[redacted]"),
             )
             .field("ocr_text", &self.ocr_text.as_ref().map(|_| "[redacted]"))
+            .field(
+                "visual_caption",
+                &self.visual_caption.as_ref().map(|_| "[redacted]"),
+            )
             .finish()
     }
 }

@@ -43,7 +43,7 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
-use tokio::sync::{Mutex, mpsc};
+use tokio::sync::{Mutex, Semaphore, mpsc};
 use tokio::task::{JoinError, JoinHandle, JoinSet, spawn_blocking};
 use tokio_util::sync::CancellationToken;
 use url::{Host, Url};
@@ -81,6 +81,7 @@ struct RuntimeState {
     authority_uid: Option<String>,
     proposals: ProposalRegistry,
     managed_worker_origin: Option<String>,
+    rewind_cloud: Option<RewindCloud>,
     computer_use_ledger_path: Option<PathBuf>,
     user_profile_path: Option<PathBuf>,
     self_improve: Option<rx4::self_improve::SelfImprove>,
@@ -94,6 +95,23 @@ struct RuntimeState {
     #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
     rewind: Option<Arc<StdMutex<crate::rewind::Engine>>>,
 }
+
+#[derive(Clone)]
+struct RewindCloud {
+    endpoint: String,
+    credential: String,
+}
+
+impl RewindCloud {
+    fn from_assistant(config: &AssistantProviderConfig) -> Option<Self> {
+        (config.kind == AssistantProviderKind::Worker).then_some(Self {
+            endpoint: config.endpoint.clone()?,
+            credential: config.credential.clone(),
+        })
+    }
+}
+
+static REWIND_DESCRIPTION_SLOTS: std::sync::OnceLock<Arc<Semaphore>> = std::sync::OnceLock::new();
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct CaptureFingerprint {
@@ -1686,7 +1704,9 @@ impl CommandDispatcher {
                                 config: config.clone(),
                                 computer_use_enabled: computer_use_available(),
                             });
-                        self.state.lock().await.chat_router = None;
+                        let mut state = self.state.lock().await;
+                        state.chat_router = None;
+                        state.rewind_cloud = RewindCloud::from_assistant(&config);
                         publish_note_provider(&self.assistant_provider);
                         publish_brief_provider(Some(&config));
                         progress(
@@ -1714,7 +1734,9 @@ impl CommandDispatcher {
                     Arc::new(UnavailableAssistantProvider {
                         reason: "no model provider is configured".to_owned(),
                     });
-                self.state.lock().await.chat_router = None;
+                let mut state = self.state.lock().await;
+                state.chat_router = None;
+                state.rewind_cloud = None;
                 publish_note_provider(&self.assistant_provider);
                 publish_brief_provider(None);
                 progress(
@@ -2953,6 +2975,7 @@ async fn rewind(
         state.lock().await.rewind = Some(Arc::clone(&engine));
         rewind_step(
             request_id,
+            state,
             &engine,
             crate::rewind::Request::Status,
             cancellation,
@@ -2970,33 +2993,133 @@ async fn rewind(
         rewind_unavailable(request_id, "unsupported Rewind request");
         return;
     };
-    rewind_step(request_id, &engine, step, cancellation).await;
+    rewind_step(request_id, state, &engine, step, cancellation).await;
 }
 
 /// Runs one engine step on the blocking pool and answers with its payload.
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 async fn rewind_step(
     request_id: &str,
+    state: &Arc<Mutex<RuntimeState>>,
     engine: &Arc<StdMutex<crate::rewind::Engine>>,
     request: crate::rewind::Request,
     cancellation: &CancellationToken,
 ) {
     let engine = Arc::clone(engine);
+    let description_engine = Arc::clone(&engine);
     let now_ms = unix_time_ms();
     let task = spawn_blocking(move || {
         let mut guard = engine
             .lock()
             .map_err(|_| "the Rewind engine lock was poisoned".to_owned())?;
         let response = guard.handle(request, now_ms);
-        Ok(crate::rewind::bridge::payload_from_response(
-            response,
-            guard.root(),
+        let stored = should_schedule_rewind_description(&response)
+            .then(|| guard.latest_frame())
+            .flatten();
+        Ok((
+            crate::rewind::bridge::payload_from_response(response, guard.root()),
+            stored,
         ))
     });
     match await_blocking(task, cancellation).await {
-        BlockingOutcome::Complete(payload) => rewind_answer(request_id, payload),
+        BlockingOutcome::Complete((payload, stored)) => {
+            if let Some(frame) = stored {
+                let cloud = state.lock().await.rewind_cloud.clone();
+                schedule_rewind_description(Arc::clone(&description_engine), frame, cloud);
+            }
+            rewind_answer(request_id, payload);
+        }
         BlockingOutcome::Failed(message) => rewind_unavailable(request_id, &message),
         BlockingOutcome::Cancelled => cancelled(request_id),
+    }
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+fn should_schedule_rewind_description(response: &crate::rewind::Response) -> bool {
+    matches!(
+        response,
+        crate::rewind::Response::Directive {
+            directive: crate::rewind::Directive::Stored,
+            ..
+        }
+    )
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+fn schedule_rewind_description(
+    engine: Arc<StdMutex<crate::rewind::Engine>>,
+    frame: crate::rewind::models::Frame,
+    cloud: Option<RewindCloud>,
+) {
+    let Some(cloud) = cloud else {
+        return;
+    };
+    let slots = REWIND_DESCRIPTION_SLOTS
+        .get_or_init(|| Arc::new(Semaphore::new(2)))
+        .clone();
+    let Ok(permit) = slots.try_acquire_owned() else {
+        return;
+    };
+    tokio::spawn(async move {
+        let path = match engine.lock() {
+            Ok(guard) => guard.root().join(&frame.relative_path),
+            Err(_) => return,
+        };
+        let image = match spawn_blocking(move || std::fs::read(path)).await {
+            Ok(Ok(image)) => image,
+            _ => return,
+        };
+        if crate::rewind::description::local_visual_availability()
+            != crate::rewind::description::LocalVisualAvailability::Unavailable
+        {
+            return;
+        }
+        let Some(text) = crate::rewind::description::describe_in_cloud(
+            &cloud.endpoint,
+            &cloud.credential,
+            &image,
+        )
+        .await
+        else {
+            return;
+        };
+        let caption = crate::rewind::description::caption(
+            text,
+            crate::rewind::description::cloud_source(),
+            crate::rewind::description::cloud_model(),
+            unix_time_ms(),
+        );
+        if let Ok(mut guard) = engine.lock() {
+            let _ = guard.set_visual_caption(&frame.relative_path, caption);
+        }
+        drop(permit);
+    });
+}
+
+#[cfg(test)]
+mod rewind_description_tests {
+    use super::should_schedule_rewind_description;
+    use crate::rewind::privacy::SkipReason;
+    use crate::rewind::{Directive, Response};
+
+    #[test]
+    fn only_a_stored_frame_schedules_description() {
+        assert!(should_schedule_rewind_description(&Response::Directive {
+            step_id: 1,
+            directive: Directive::Stored,
+        }));
+        assert!(!should_schedule_rewind_description(&Response::Directive {
+            step_id: 1,
+            directive: Directive::Discard {
+                reason: SkipReason::PrivateWindow,
+            },
+        }));
+        assert!(!should_schedule_rewind_description(&Response::Directive {
+            step_id: 1,
+            directive: Directive::Idle {
+                reason: SkipReason::Unchanged,
+            },
+        }));
     }
 }
 

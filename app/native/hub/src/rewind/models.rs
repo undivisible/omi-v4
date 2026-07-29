@@ -221,6 +221,16 @@ pub struct Frame {
     /// what search and any downstream model actually reads — the image itself
     /// never leaves the machine.
     pub ocr_text: Option<String>,
+    pub visual_caption: Option<VisualCaption>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct VisualCaption {
+    pub text: String,
+    pub source: String,
+    pub model: String,
+    pub description_version: u32,
+    pub described_at_ms: i64,
 }
 
 /// A frame row is a description of what was on someone's screen, so the two
@@ -240,6 +250,10 @@ impl std::fmt::Debug for Frame {
                 &self.window_title.as_ref().map(|_| "[redacted]"),
             )
             .field("ocr_text", &self.ocr_text.as_ref().map(|_| "[redacted]"))
+            .field(
+                "visual_caption",
+                &self.visual_caption.as_ref().map(|_| "[redacted]"),
+            )
             .finish()
     }
 }
@@ -258,6 +272,18 @@ impl Frame {
         insert_optional(&mut map, "bundleId", self.bundle_id.as_ref());
         insert_optional(&mut map, "title", self.window_title.as_ref());
         insert_optional(&mut map, "text", self.ocr_text.as_ref());
+        if let Some(caption) = &self.visual_caption {
+            map.insert(
+                "visualCaption".into(),
+                serde_json::json!({
+                    "text": caption.text,
+                    "source": caption.source,
+                    "model": caption.model,
+                    "descriptionVersion": caption.description_version,
+                    "describedAt": format_instant(caption.described_at_ms),
+                }),
+            );
+        }
         if self.display.id != "primary"
             || self.display.name != "Primary display"
             || self.display.width != 0
@@ -322,8 +348,33 @@ impl Frame {
             bundle_id: optional_string(map.get("bundleId")),
             window_title: optional_string(map.get("title")),
             ocr_text: optional_string(map.get("text")),
+            visual_caption: parse_visual_caption(map.get("visualCaption")),
         })
     }
+}
+
+fn parse_visual_caption(value: Option<&Value>) -> Option<VisualCaption> {
+    let map = value?.as_object()?;
+    let text = optional_string(map.get("text"))?;
+    let source = optional_string(map.get("source"))?;
+    let model = optional_string(map.get("model"))?;
+    let description_version = map
+        .get("descriptionVersion")
+        .and_then(Value::as_u64)
+        .and_then(|value| u32::try_from(value).ok())?;
+    let described_at_ms = map
+        .get("describedAt")
+        .and_then(Value::as_str)
+        .and_then(parse_instant)?;
+    (!text.trim().is_empty() && !source.trim().is_empty() && !model.trim().is_empty()).then_some(
+        VisualCaption {
+            text,
+            source,
+            model,
+            description_version,
+            described_at_ms,
+        },
+    )
 }
 
 fn insert_optional(map: &mut Map<String, Value>, key: &str, value: Option<&String>) {
@@ -353,7 +404,7 @@ pub fn parse_instant(text: &str) -> Option<i64> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Display, Frame, Retention, format_instant, parse_instant};
+    use super::{Display, Frame, Retention, VisualCaption, format_instant, parse_instant};
     use serde_json::Value;
 
     #[test]
@@ -402,6 +453,13 @@ mod tests {
             bundle_id: Some("com.apple.Terminal".to_owned()),
             window_title: Some("zsh".to_owned()),
             ocr_text: Some("flutter analyze".to_owned()),
+            visual_caption: Some(VisualCaption {
+                text: "A terminal window.".to_owned(),
+                source: "local_foundation_models".to_owned(),
+                model: "apple-foundation-models".to_owned(),
+                description_version: 1,
+                described_at_ms: 1_784_000_000_100,
+            }),
         };
         let encoded = frame.to_json();
         assert_eq!(Frame::from_json(&encoded), Some(frame));
@@ -418,6 +476,20 @@ mod tests {
             panic!("a complete row parses");
         };
         assert_eq!(parsed.to_json(), bare);
+    }
+
+    #[test]
+    fn legacy_frame_rows_decode_without_a_caption() {
+        let legacy = serde_json::json!({
+            "at": "2026-07-23T10:00:00.000Z",
+            "path": "frames/2026-07-23/1.jpg",
+            "bytes": 1,
+            "hash": "a",
+        });
+        assert_eq!(
+            Frame::from_json(&legacy).and_then(|frame| frame.visual_caption),
+            None
+        );
     }
 
     #[test]
@@ -464,6 +536,7 @@ mod tests {
             bundle_id: None,
             window_title: Some("Re: severance terms".to_owned()),
             ocr_text: Some("account number 1234".to_owned()),
+            visual_caption: None,
         };
         let debug = format!("{frame:?}");
         assert!(!debug.contains("severance"));

@@ -13,7 +13,8 @@ use super::models::{Display, Frame, Retention, WindowContext};
 use super::privacy::SkipReason;
 use crate::signals::{
     RewindDirective, RewindDisplay, RewindFrameRecord, RewindPayload, RewindRequest,
-    RewindRetentionOption, RewindSkipReason, RewindStatus, RewindWindowContext,
+    RewindRetentionOption, RewindSkipReason, RewindStatus, RewindVisualCaption,
+    RewindWindowContext,
 };
 
 impl From<RewindWindowContext> for WindowContext {
@@ -230,6 +231,16 @@ fn frame_to_signal(frame: &Frame, root: &Path) -> RewindFrameRecord {
         bundle_id: frame.bundle_id.clone(),
         window_title: frame.window_title.clone(),
         ocr_text: frame.ocr_text.clone(),
+        visual_caption: frame
+            .visual_caption
+            .as_ref()
+            .map(|caption| RewindVisualCaption {
+                text: caption.text.clone(),
+                source: caption.source.clone(),
+                model: caption.model.clone(),
+                description_version: caption.description_version,
+                described_at_ms: caption.described_at_ms,
+            }),
     }
 }
 

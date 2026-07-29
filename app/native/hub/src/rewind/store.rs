@@ -13,7 +13,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 
-use super::models::{Display, Frame, Retention};
+use super::models::{Display, Frame, Retention, VisualCaption};
 
 const INDEX_NAME: &str = "index.jsonl";
 const FRAMES_DIR_NAME: &str = "frames";
@@ -31,6 +31,7 @@ pub struct NewFrame {
     pub bundle_id: Option<String>,
     pub window_title: Option<String>,
     pub ocr_text: Option<String>,
+    pub visual_caption: Option<VisualCaption>,
 }
 
 pub struct Store {
@@ -134,6 +135,7 @@ impl Store {
             bundle_id: record.bundle_id,
             window_title: record.window_title,
             ocr_text: record.ocr_text,
+            visual_caption: record.visual_caption,
         };
         self.total_bytes = self.total_bytes.saturating_add(frame.bytes);
         self.frames.push(frame.clone());
@@ -183,6 +185,10 @@ impl Store {
                 frame.ocr_text.as_deref(),
                 frame.app_name.as_deref(),
                 frame.window_title.as_deref(),
+                frame
+                    .visual_caption
+                    .as_ref()
+                    .map(|caption| caption.text.as_str()),
             ]
             .into_iter()
             .flatten()
@@ -197,6 +203,19 @@ impl Store {
             }
         }
         results
+    }
+
+    pub fn set_visual_caption(&mut self, relative_path: &str, caption: VisualCaption) -> bool {
+        self.load();
+        let Some(frame) = self
+            .frames
+            .iter_mut()
+            .find(|frame| frame.relative_path == relative_path)
+        else {
+            return false;
+        };
+        frame.visual_caption = Some(caption);
+        self.rewrite_index().is_ok()
     }
 
     /// Deletes a single frame — the timeline's per-frame delete.
@@ -324,7 +343,7 @@ fn day(captured_at_ms: i64) -> String {
 #[cfg(test)]
 mod tests {
     use super::{Display, NewFrame, Store};
-    use crate::rewind::models::Retention;
+    use crate::rewind::models::{Retention, VisualCaption};
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::Duration;
@@ -406,6 +425,7 @@ mod tests {
                         bundle_id: Some("com.apple.Terminal".to_owned()),
                         window_title: Some("zsh".to_owned()),
                         ocr_text: Some("flutter analyze".to_owned()),
+                        visual_caption: None,
                     },
                     Retention::default(),
                 )
@@ -420,6 +440,27 @@ mod tests {
         assert_eq!(frame.ocr_text.as_deref(), Some("flutter analyze"));
         assert_eq!(reopened.total_bytes(), 64);
         assert!(reopened.file_for(frame).exists());
+    }
+
+    #[test]
+    fn captions_are_searchable_after_they_are_stored() {
+        let scratch = Scratch::new();
+        let mut store = open(&scratch);
+        let Ok(frame) = store.write(&bytes(64), record(BASE, "caption"), Retention::default())
+        else {
+            panic!("writing a frame succeeds");
+        };
+        assert!(store.set_visual_caption(
+            &frame.relative_path,
+            VisualCaption {
+                text: "A blue bicycle beside a desk.".to_owned(),
+                source: "local_foundation_models".to_owned(),
+                model: "apple-foundation-models".to_owned(),
+                description_version: 1,
+                described_at_ms: BASE + 1,
+            },
+        ));
+        assert_eq!(store.search("bicycle", 1).len(), 1);
     }
 
     #[test]
