@@ -39,6 +39,27 @@ final class FakeApiKeysClient implements ApiKeysClient {
   }
 
   @override
+  Future<List<ApiKeyMigrationReceipt>> listMigrations() async => const [];
+
+  @override
+  Future<MintedApiKeyMigration> migrateLegacyKey({
+    required LegacyApiKeyKind legacyKind,
+    required String name,
+    required List<ApiKeyScope> scopes,
+  }) async {
+    final key = await createKey(name: name, scopes: scopes);
+    return MintedApiKeyMigration(
+      key: key,
+      receipt: ApiKeyMigrationReceipt(
+        id: 'migration-$minted',
+        legacyKind: legacyKind,
+        replacementKeyId: key.summary.id,
+        completedAt: DateTime.fromMillisecondsSinceEpoch(1000),
+      ),
+    );
+  }
+
+  @override
   Future<void> revokeKey(String id) async {
     keys.removeWhere((key) => key.id == id);
   }

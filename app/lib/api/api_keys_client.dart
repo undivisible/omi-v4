@@ -70,6 +70,37 @@ final class MintedApiKey {
   final ApiKeySummary summary;
 }
 
+/// The kind of old Omi integration a user is replacing. This is metadata only;
+/// the client never uploads or persists an old credential.
+enum LegacyApiKeyKind {
+  mcp('mcp', 'Legacy MCP client'),
+  dev('dev', 'Legacy developer/API client');
+
+  const LegacyApiKeyKind(this.wireName, this.label);
+  final String wireName;
+  final String label;
+}
+
+final class ApiKeyMigrationReceipt {
+  const ApiKeyMigrationReceipt({
+    required this.id,
+    required this.legacyKind,
+    required this.replacementKeyId,
+    required this.completedAt,
+  });
+
+  final String id;
+  final LegacyApiKeyKind legacyKind;
+  final String replacementKeyId;
+  final DateTime completedAt;
+}
+
+final class MintedApiKeyMigration {
+  const MintedApiKeyMigration({required this.key, required this.receipt});
+  final MintedApiKey key;
+  final ApiKeyMigrationReceipt receipt;
+}
+
 /// The API key surface the settings UI talks to. An interface so the create
 /// and revoke flows can be exercised without a worker.
 abstract interface class ApiKeysClient {
@@ -81,6 +112,14 @@ abstract interface class ApiKeysClient {
   });
 
   Future<void> revokeKey(String id);
+
+  Future<List<ApiKeyMigrationReceipt>> listMigrations();
+
+  Future<MintedApiKeyMigration> migrateLegacyKey({
+    required LegacyApiKeyKind legacyKind,
+    required String name,
+    required List<ApiKeyScope> scopes,
+  });
 }
 
 final class WorkerApiKeysClient implements ApiKeysClient {
@@ -129,6 +168,84 @@ final class WorkerApiKeysClient implements ApiKeysClient {
       throw const WorkerResponseException('Worker returned an invalid key');
     }
     return MintedApiKey(plaintext: plaintext, summary: _summary(summary));
+  }
+
+  @override
+  Future<List<ApiKeyMigrationReceipt>> listMigrations() async {
+    final body = _body(
+      await _client.send(method: 'GET', path: '/v1/api-key-migrations'),
+    );
+    final migrations = body['migrations'];
+    if (migrations is! List) {
+      throw const WorkerResponseException('Worker returned invalid migrations');
+    }
+    return [
+      for (final entry in migrations)
+        if (entry is Map<String, Object?>) _migration(entry),
+    ];
+  }
+
+  @override
+  Future<MintedApiKeyMigration> migrateLegacyKey({
+    required LegacyApiKeyKind legacyKind,
+    required String name,
+    required List<ApiKeyScope> scopes,
+  }) async {
+    if (name.trim().isEmpty || scopes.isEmpty) {
+      throw const WorkerResponseException(
+        'A replacement key needs a name and at least one scope',
+      );
+    }
+    final body = _body(
+      await _client.send(
+        method: 'POST',
+        path: '/v1/api-key-migrations',
+        body: {
+          'legacyKind': legacyKind.wireName,
+          'name': name.trim(),
+          'scopes': [for (final scope in scopes) scope.wireName],
+        },
+      ),
+    );
+    final plaintext = body['key'];
+    final summary = body['apiKey'];
+    final receipt = body['migration'];
+    if (plaintext is! String ||
+        plaintext.isEmpty ||
+        summary is! Map<String, Object?> ||
+        receipt is! Map<String, Object?>) {
+      throw const WorkerResponseException('Worker returned an invalid migration');
+    }
+    return MintedApiKeyMigration(
+      key: MintedApiKey(plaintext: plaintext, summary: _summary(summary)),
+      receipt: _migration(receipt),
+    );
+  }
+
+  ApiKeyMigrationReceipt _migration(Map<String, Object?> row) {
+    final id = row['id'];
+    final kind = row['legacyKind'];
+    final replacement = row['replacementKeyId'];
+    final completed = _time(row['completedAt']);
+    final legacyKind = switch (kind) {
+      'mcp' => LegacyApiKeyKind.mcp,
+      'dev' => LegacyApiKeyKind.dev,
+      _ => null,
+    };
+    if (id is! String ||
+        id.isEmpty ||
+        legacyKind == null ||
+        replacement is! String ||
+        replacement.isEmpty ||
+        completed == null) {
+      throw const WorkerResponseException('Worker returned an invalid migration');
+    }
+    return ApiKeyMigrationReceipt(
+      id: id,
+      legacyKind: legacyKind,
+      replacementKeyId: replacement,
+      completedAt: completed,
+    );
   }
 
   @override
