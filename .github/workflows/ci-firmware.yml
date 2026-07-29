@@ -80,6 +80,15 @@ jobs:
       run:
         shell: bash
     steps:
+      - name: Install Git HTTPS transport
+        run: |
+          set -euo pipefail
+          apt-get update
+          apt-get install --reinstall --yes --no-install-recommends git
+          export PATH="/usr/bin:${PATH}"
+          echo /usr/bin >> "${GITHUB_PATH}"
+          test -x "$(git --exec-path)/git-remote-https"
+
       - name: Trust the workspace inside the container
         run: git config --global --add safe.directory '*'
 
