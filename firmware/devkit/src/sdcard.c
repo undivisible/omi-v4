@@ -411,6 +411,7 @@ int get_offset()
 
 void sd_off()
 {
+#if DT_NODE_HAS_STATUS(DT_NODELABEL(spi2), okay)
     // Suspend SPI peripheral to save power
     const struct device *spi_dev = DEVICE_DT_GET(DT_NODELABEL(spi2));
     if (device_is_ready(spi_dev)) {
@@ -421,12 +422,14 @@ void sd_off()
     gpio_pin_configure(DEVICE_DT_GET(DT_NODELABEL(gpio1)), 13, GPIO_DISCONNECTED); // SCK
     gpio_pin_configure(DEVICE_DT_GET(DT_NODELABEL(gpio0)), 2, GPIO_DISCONNECTED);  // CS
     gpio_pin_set_dt(&sd_en_gpio_pin, 0);
+#endif
 
     sd_enabled = false;
 }
 
 void sd_on()
 {
+#if DT_NODE_HAS_STATUS(DT_NODELABEL(spi2), okay)
     gpio_pin_set_dt(&sd_en_gpio_pin, 1);
     gpio_pin_configure(DEVICE_DT_GET(DT_NODELABEL(gpio1)), 15, GPIO_OUTPUT);     // MOSI
     gpio_pin_configure(DEVICE_DT_GET(DT_NODELABEL(gpio1)), 14, GPIO_INPUT);      // MISO
@@ -437,6 +440,9 @@ void sd_on()
         pm_device_action_run(spi_dev, PM_DEVICE_ACTION_RESUME);
     }
     sd_enabled = true;
+#else
+    sd_enabled = false;
+#endif
 }
 
 bool is_sd_on()
