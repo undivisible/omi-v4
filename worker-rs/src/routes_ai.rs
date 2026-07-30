@@ -768,23 +768,9 @@ async fn mark_streaming(ctx: &RouteContext<()>, request_id: &str, upstream_statu
 // ---------------------------------------------------------------------------
 
 async fn handle_asr(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
-    let endpoint = env_get(&ctx.env, "MIMO_CHAT_COMPLETIONS_URL");
-    let secret = env_get(&ctx.env, "MIMO_API_KEY");
-    let (Some(endpoint), Some(secret)) = (endpoint, secret) else {
+    let Some(secret) = env_get(&ctx.env, "OPENROUTER_API_KEY") else {
         return error_json("Managed AI unavailable", 503);
     };
-    let Some(endpoint_url) = managed_ai::validate_pinned_endpoint(
-        &endpoint,
-        managed_ai::XIAOMI_COMPLETION_ENDPOINT,
-        managed_ai::XIAOMI_HOSTNAME,
-    ) else {
-        return error_json("Managed AI unavailable", 503);
-    };
-    let gateway = managed_ai::ai_gateway_route(|name| env_get(&ctx.env, name));
-    let endpoint_url = gateway
-        .as_ref()
-        .and_then(|route| worker::Url::parse(&route.url).ok())
-        .unwrap_or(endpoint_url);
 
     let content_length = req.headers().get("content-length").ok().flatten();
     if asr_logic::declared_length_exceeds(content_length.as_deref()) {
@@ -831,7 +817,7 @@ async fn handle_asr(mut req: Request, ctx: RouteContext<()>) -> Result<Response>
         &ctx,
         &request_id,
         &auth.uid,
-        "mimo-asr",
+        "openrouter-grok-stt",
         asr_logic::ASR_MODEL,
         // Base64 audio is ASCII; byte length matches JS `String.length`.
         request.audio.len() as i64,
@@ -850,14 +836,11 @@ async fn handle_asr(mut req: Request, ctx: RouteContext<()>) -> Result<Response>
     let headers = Headers::new();
     headers.set("authorization", &format!("Bearer {secret}"))?;
     headers.set("content-type", "application/json")?;
-    if let Some(token) = gateway.and_then(|route| route.token) {
-        headers.set("cf-aig-authorization", &format!("Bearer {token}"))?;
-    }
     init.with_headers(headers);
     init.with_body(Some(JsValue::from_str(
         &asr_logic::upstream_body(&request).to_string(),
     )));
-    let upstream_request = Request::new_with_init(endpoint_url.as_str(), &init)?;
+    let upstream_request = Request::new_with_init(asr_logic::OPENROUTER_STT_ENDPOINT, &init)?;
     let mut upstream = match worker::Fetch::Request(upstream_request).send().await {
         Ok(response) => response,
         Err(_) => {

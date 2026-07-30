@@ -172,7 +172,7 @@ The nightly cycle creates one editable, idempotent Daily Review per Person, loca
 | Omi BLE/audio | Reuse upstream Flutter iOS/Android protocol, transports, and 3-byte audio framing |
 | Phone microphone | Reuse upstream native phone-mic bridges and Flutter capture lifecycle |
 | Streaming STT | Deepgram for live multilingual transcription; local STT is deferred until a real provider is integrated |
-| Managed batch STT | MiMo `mimo-v2.5-asr` for compatible Omi AI recordings |
+| Managed batch STT | OpenRouter `x-ai/grok-stt-1.0` for compatible Omi AI recordings |
 | Desktop/web | Control and observe a linked mobile capture session; desktop microphone can use platform plugins, browser capture remains foreground-only |
 
 Do not rewrite the proven BLE and microphone bridges through Rinf during v0. Rinf carries their state and bounded audio events into Rust only where Rust processing is useful.
@@ -270,7 +270,7 @@ Use a same-model subagent only when the task needs independent deep reasoning or
 ### Omi AI plan
 
 - Everything in Omi plus managed model and transcription quotas.
-- MiMo `mimo-v2.5`, `mimo-v2.5-pro`, and compatible `mimo-v2.5-asr` routes.
+- MiMo `mimo-v2.5` and `mimo-v2.5-pro` chat routes plus OpenRouter `x-ai/grok-stt-1.0` transcription.
 - Hosted scheduled work and higher channel/action limits.
 - Stripe webhook entitlement is checked on every managed route.
 - Managed `mimo-v2.5-pro` planning uses Xiaomi's official overseas pay-as-you-go price published at https://platform.xiaomimimo.com/docs/en-US/price/pay-as-you-go and verified 2026-07-21: USD $0.435 per million uncached input tokens and $0.87 per million output tokens. Worker micro-USD price variables remain configurable and fail closed when missing, non-integral, or non-positive.

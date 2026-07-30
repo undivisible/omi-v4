@@ -8,7 +8,7 @@ your account/keys/hardware. See `docs/ai-and-observability.md` for the "why".
 - [x] Fix doubled slug prefixes (`xiaomi/xiaomi/…`, `google/google/…`)
 - [x] Speed tier → `inception/mercury-2`; search tier → `perplexity/sonar`
 - [x] Wire the **search tier** into an actual search-intent path: `chat_router` detects search intent and returns `ModelTier::Search`; managed (paying) turns resolve to `perplexity/sonar` and the worker assistant route forwards them to OpenRouter, BYOK OpenAI/xAI turns run the provider-hosted `web_search` tool via the Responses API (`hosted_search.rs`), and citations are surfaced on the reply in every case
-- [ ] **STT: drop Deepgram → `x-ai/grok-stt-1.0`** (verify streaming vs batch; Gemini Live built-in transcription for the realtime path)
+- [x] **STT: use `x-ai/grok-stt-1.0` for batch transcription** (Gemini Live built-in transcription remains the realtime path)
 - [ ] **Embeddings:** keep Cloudflare Workers AI (`bge-base`) for text; add a multimodal embedder only for images (CF multimodal model on-infra, or `gemini-embedding-2`)
 - [ ] **rs_ai consolidation:** move Gemini Live + OpenRouter + local onto `rs_ai` (replace the hand-rolled `live_voice.rs` WebSocket)
 - [ ] A/B `xiaomi/mimo-v2.5` (balanced, ~80% of traffic) vs `google/gemini-3.5-flash` / `deepseek` before fully trusting it

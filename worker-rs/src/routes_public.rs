@@ -260,17 +260,20 @@ async fn settle_speech(
 async fn call_speech_upstream(
     ctx: &RouteContext<()>,
     payload: &Value,
+    endpoint: &str,
+    use_gateway: bool,
 ) -> std::result::Result<(Value, u16), Option<u16>> {
     let secret = crate::worker_util::secret_or_var(&ctx.env, "OPENROUTER_API_KEY")
-        .or_else(|| crate::worker_util::secret_or_var(&ctx.env, "MIMO_API_KEY"))
         .filter(|value| !value.trim().is_empty())
         .ok_or(None)?;
-    let gateway =
-        managed_ai::ai_gateway_route(|name| crate::worker_util::secret_or_var(&ctx.env, name));
-    let endpoint = match &gateway {
+    let gateway = use_gateway
+        .then(|| {
+            managed_ai::ai_gateway_route(|name| crate::worker_util::secret_or_var(&ctx.env, name))
+        })
+        .flatten();
+    let endpoint = match gateway.as_ref() {
         Some(route) => route.url.clone(),
-        None => crate::worker_util::secret_or_var(&ctx.env, "OPENROUTER_CHAT_COMPLETIONS_URL")
-            .unwrap_or_else(|| speech::OPENROUTER_COMPLETION_ENDPOINT.into()),
+        None => endpoint.to_string(),
     };
     if url::Url::parse(&endpoint)
         .ok()
@@ -360,7 +363,14 @@ pub(crate) async fn transcribe_audio_operation(
         Ok(value) => value,
         Err(result) => return result,
     };
-    let (body, status) = match call_speech_upstream(ctx, &plan.upstream_body()).await {
+    let (body, status) = match call_speech_upstream(
+        ctx,
+        &plan.upstream_body(),
+        speech::OPENROUTER_TRANSCRIPTIONS_ENDPOINT,
+        false,
+    )
+    .await
+    {
         Ok(value) => value,
         Err(status) => {
             settle_speech(
@@ -376,8 +386,8 @@ pub(crate) async fn transcribe_audio_operation(
             return OperationResult::new(502, json!({ "error": "Managed speech unavailable" }));
         }
     };
-    let Some(content) = speech::message_of(&body)
-        .and_then(|message| message.get("content"))
+    let Some(content) = body
+        .get("text")
         .and_then(Value::as_str)
         .filter(|value| !value.trim().is_empty())
     else {
@@ -458,22 +468,25 @@ pub(crate) async fn speak_text_operation(
         Ok(value) => value,
         Err(result) => return result,
     };
-    let (body, status) = match call_speech_upstream(ctx, &plan.upstream_body()).await {
-        Ok(value) => value,
-        Err(status) => {
-            settle_speech(
-                ctx,
-                &reservation,
-                uid,
-                &plan.request_id,
-                "failed",
-                status,
-                None,
-            )
-            .await;
-            return OperationResult::new(502, json!({ "error": "Managed speech unavailable" }));
-        }
-    };
+    let endpoint = crate::worker_util::secret_or_var(&ctx.env, "OPENROUTER_CHAT_COMPLETIONS_URL")
+        .unwrap_or_else(|| speech::OPENROUTER_COMPLETION_ENDPOINT.into());
+    let (body, status) =
+        match call_speech_upstream(ctx, &plan.upstream_body(), &endpoint, true).await {
+            Ok(value) => value,
+            Err(status) => {
+                settle_speech(
+                    ctx,
+                    &reservation,
+                    uid,
+                    &plan.request_id,
+                    "failed",
+                    status,
+                    None,
+                )
+                .await;
+                return OperationResult::new(502, json!({ "error": "Managed speech unavailable" }));
+            }
+        };
     let Some(audio) = speech::message_of(&body)
         .and_then(|message| message.get("audio"))
         .and_then(Value::as_object)

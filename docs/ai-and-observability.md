@@ -18,7 +18,7 @@ see §4).
 | smart | hard reasoning | `xiaomi/mimo-v2.5-pro` | `OMI_MODEL_SMART` |
 | multimodal | vision / visual computer-use | `google/gemini-3.6-flash` | `OMI_MODEL_MULTIMODAL` |
 | search | web-grounded answers (live search) | `perplexity/sonar` | `OMI_MODEL_SEARCH` |
-| transcribe | server-side speech-to-text for callers with no hub | `google/gemini-3.5-flash-lite` | `OMI_MODEL_TRANSCRIBE` |
+| transcribe | server-side speech-to-text for callers with no hub | `x-ai/grok-stt-1.0` | `OMI_MODEL_TRANSCRIBE` |
 | speak | server-side text-to-speech | `openai/gpt-audio-mini` | `OMI_MODEL_SPEAK` |
 
 Balanced also falls back to the legacy `MIMO_MODEL` when unset.
@@ -56,7 +56,7 @@ through the tier slug alone.
 | `inception/mercury-2` (speed) | yes | — | — | — | — |
 | `perplexity/sonar` (search) | yes | — | — | — | — |
 | `google/gemini-3.6-flash` (multimodal) | yes | yes | — | **yes** | $1.50/M audio |
-| `google/gemini-3.5-flash-lite` (transcribe) | yes | **yes** | — | — | $0.30/M audio |
+| `x-ai/grok-stt-1.0` (transcribe) | — | **yes** | — | — | $0.10/hour |
 | `openai/gpt-audio-mini` (speak) | yes | — | **yes** | — | — |
 
 **The routing rule.** A request states the capabilities it needs and an ordered
@@ -66,11 +66,11 @@ capability. If none does, it **fails loudly** (`ModelCapabilityError` in the
 worker, `CapabilityMismatch` in the hub; the speech endpoints answer 503) rather
 than sending the input to a model that cannot read it.
 
-- **Asynchronous audio prefers balanced.** `asyncAudioTierPreference` is
-  `balanced -> transcribe -> multimodal`, so voice notes, WAL uploads and
-  channel voice messages go to `xiaomi/mimo-v2.5` at $0.14/M — half the
-  transcribe tier — and fall back only if an override leaves balanced
-  text-only. This is the A/B suggested in §2, made the default.
+- **Asynchronous audio prefers transcribe.** `asyncAudioTierPreference` is
+  `transcribe -> balanced -> multimodal`, so voice notes, WAL uploads and
+  channel voice messages go to `x-ai/grok-stt-1.0` through OpenRouter's
+  transcription endpoint and fall back only if an override leaves it
+  unavailable.
 - **Overrides are validated at the point of use, not at startup.** The table
   stays env-overridable exactly as before, but an override naming a model this
   table has not verified satisfies *nothing*: an unknown id is never assumed
@@ -88,49 +88,11 @@ than sending the input to a model that cannot read it.
 
 ## 2. Speech-to-text (transcription)
 
-**Off Deepgram, onto OpenRouter.** The model originally named here does not
-exist on OpenRouter; see the verification note below for what was chosen
-instead.
-
-- **Was planned: `x-ai/grok-stt-1.0`** — xAI's dedicated STT model. A
-  purpose-built transcription model would beat bending a chat model into STT,
-  but it is not on OpenRouter (see below), so it is not what ships.
-- **Primary today: `google/gemini-3.5-flash-lite`** (audio→text, ~$0.30/M
-  audio) — the `transcribe` tier default. `openai/gpt-audio-mini` is the next
-  option. (`inception/mercury-2` and `xiaomi/mimo-v2.5*` are not audio models.)
-
-**Verified 2026-07-23 against the live OpenRouter model list:
-`x-ai/grok-stt-1.0` is not published on OpenRouter.** Nothing matching
-`grok-stt` appears in `GET https://openrouter.ai/api/v1/models`, and the only
-`x-ai` entries are the Grok chat models. The audio-*input* models actually
-available are, cheapest first:
-
-| Model | Audio input | Note |
-|-------|-------------|------|
-| `google/gemini-3.5-flash-lite` | $0.30/M audio tokens | **Chosen default for the `transcribe` tier.** It is the fallback this document already named, it is the cheapest audio-capable model on the list, and it keeps the batch path on the same provider family as the multimodal tier. |
-| `google/gemini-3.1-flash-lite` | $0.50/M | Newer, ~1.7x the price; the upgrade path if 2.5-flash-lite's accuracy disappoints. |
-| `openai/gpt-audio-mini` | $0.60/M | Best if we want one model doing both directions; slightly dearer for input and it is the TTS choice already. |
-| `mistralai/voxtral-small-24b-2507` | $100/M | A dedicated audio model but priced far above the rest for this workload. |
-
-**Why not a model already in the tier table?** Two are audio-capable and were
-considered. `google/gemini-3.6-flash` is the multimodal tier and takes audio at
-$1.50/M — five times the price on what is a high-volume path, for a job that
-does not need frontier vision. More interestingly, **`xiaomi/mimo-v2.5` — the
-balanced tier — accepts audio input** and is the cheapest model on the list at
-$0.14/M prompt. It is worth A/B-ing against the transcribe default on real
-pendant audio: if its transcription quality holds up, the transcribe tier
-collapses into the balanced tier and the table gets shorter rather than longer.
-
-**As of the capability router (§1.1), that is now the default.** Asynchronous
-audio — channel voice notes on Telegram and iMessage, WAL flushes, composer
-dictation, API uploads — resolves to `xiaomi/mimo-v2.5` first, with the
-transcribe tier kept as the fallback. `OMI_MODEL_TRANSCRIBE` still decides that
-fallback, and setting `OMI_MODEL_BALANCED` to something text-only moves the
-audio path back to it automatically rather than breaking it.
-
-The tier is env-overridable, so the moment `x-ai/grok-stt-1.0` (or any better
-STT model) does appear on OpenRouter, setting `OMI_MODEL_TRANSCRIBE` switches
-to it with no code change.
+**OpenRouter Grok STT is the batch transcription route.** `x-ai/grok-stt-1.0`
+uses `POST /api/v1/audio/transcriptions` with base64 audio and returns root
+`text`; it is configured at $0.10/hour ($0.001667/minute). Composer dictation,
+WAL uploads, channel voice messages, and API uploads select this transcribe tier
+before the generic audio-capable fallback tiers.
 
 **Still true:** OpenRouter is request/response, so none of these gives
 *streaming* transcription. The server-side path

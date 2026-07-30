@@ -77,7 +77,7 @@ pendant (Opus/PCM8/PCM16, 3-byte header)
 Decisions:
 
 - **Live path stays Deepgram managed/BYOK through the hub.** This is the audited, implemented slice (PLAN.md "Complete the audited live-STT slice…"; `DeviceAudioForwarder` already maps codecs to `AudioEncoding.pcmU8/pcmS16Le/opus` and speaks the hub's start/stop/ack protocol). Nothing new to design.
-- **Batch path for recovered/offline audio: `POST /v1/asr/transcribe` (mimo-v2.5-asr).** The Worker route exists (`worker/src/asr.ts`), takes base64-chunked long recordings, and PLAN.md pins MiMo ASR as batch-only. Offline-buffered audio (section 4) is uploaded here after reconnect rather than replayed through the live socket — replaying stale audio through a live session is explicitly forbidden by the plan ("Never replay already-sent unacknowledged audio").
+- **Batch path for recovered/offline audio: `POST /v1/asr/transcribe` (`x-ai/grok-stt-1.0` through OpenRouter).** The Worker route exists (`worker/src/asr.ts`) and takes base64-chunked long recordings. Offline-buffered audio (section 4) is uploaded here after reconnect rather than replayed through the live socket — replaying stale audio through a live session is explicitly forbidden by the plan ("Never replay already-sent unacknowledged audio").
 - **Gemini Live is NOT the pendant path.** `worker/src/voice.ts` (`POST /v1/voice/gemini/token`) mints ephemeral tokens for the desktop interactive duplex assistant (see `docs/realtime-voice-abstraction.md`); pendant capture is one-way transcription, not conversation, and must not consume duplex session minutes.
 - **Local STT** remains fail-closed until a real provider exists; the mobile UI shows only managed/BYOK routes.
 
