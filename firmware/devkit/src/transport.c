@@ -425,7 +425,7 @@ static void _transport_connected(struct bt_conn *conn, uint8_t err)
     current_mtu = info.le.data_len->tx_max_len;
     LOG_INF("Transport connected");
     LOG_DBG("Interval: %d, latency: %d, timeout: %d", info.le.interval, info.le.latency, info.le.timeout);
-    LOG_DBG("TX PHY %s, RX PHY %s", phy2str(info.le.phy->tx_phy), phy2str(info.le.phy->rx_phy));
+    LOG_DBG("TX PHY %u, RX PHY %u", info.le.phy->tx_phy, info.le.phy->rx_phy);
     LOG_DBG("LE data len updated: TX (len: %d time: %d) RX (len: %d time: %d)",
             info.le.data_len->tx_max_len,
             info.le.data_len->tx_max_time,

@@ -45,6 +45,10 @@ pub enum Command {
     ConfigureTrustedAssistant {
         managed_worker_origin: String,
     },
+    ConfigureCloudMemory {
+        managed_worker_origin: String,
+        credential: String,
+    },
     ClearAssistant,
     StartTranscription {
         audio_stream_id: String,

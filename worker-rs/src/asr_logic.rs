@@ -4,7 +4,8 @@
 
 use serde_json::{json, Value};
 
-pub const ASR_MODEL: &str = "mimo-v2.5-asr";
+pub const ASR_MODEL: &str = "x-ai/grok-stt-1.0";
+pub const OPENROUTER_STT_ENDPOINT: &str = "https://openrouter.ai/api/v1/audio/transcriptions";
 pub const MAXIMUM_DECODED_AUDIO_BYTES: usize = 10 * 1024 * 1024;
 
 /// `Math.ceil((maximumDecodedAudioBytes * 4) / 3)`.
@@ -96,19 +97,17 @@ pub fn classify(body: &Value) -> AsrOutcome {
 pub fn upstream_body(request: &AsrRequest) -> Value {
     let mut body = json!({
         "model": ASR_MODEL,
-        "messages": [{
-            "role": "user",
-            "content": [{
-                "type": "input_audio",
-                "input_audio": { "data": request.audio, "format": request.format }
-            }]
-        }],
-        "stream": false,
+        "input_audio": { "data": request.audio, "format": request.format },
+        "response_format": "verbose_json",
     });
-    if let Some(language) = &request.language {
+    if let Some(language) = request
+        .language
+        .as_deref()
+        .filter(|language| *language != "auto")
+    {
         body.as_object_mut()
             .unwrap()
-            .insert("asr_options".into(), json!({ "language": language }));
+            .insert("language".into(), json!(language));
     }
     body
 }
@@ -116,12 +115,9 @@ pub fn upstream_body(request: &AsrRequest) -> Value {
 /// Port of the completion parse: `choices[0].message.content` when a string.
 pub fn parse_transcript(value: &Value) -> Option<String> {
     value
-        .get("choices")
-        .and_then(Value::as_array)
-        .and_then(|c| c.first())
-        .and_then(|c| c.get("message"))
-        .and_then(|m| m.get("content"))
+        .get("text")
         .and_then(Value::as_str)
+        .filter(|text| !text.trim().is_empty())
         .map(str::to_string)
 }
 
@@ -187,12 +183,12 @@ mod tests {
             panic!("expected ok");
         };
         let body = upstream_body(&request);
-        assert_eq!(body["model"], json!("mimo-v2.5-asr"));
-        assert_eq!(body["stream"], json!(false));
-        assert_eq!(body["asr_options"], json!({ "language": "zh" }));
+        assert_eq!(body["model"], json!("x-ai/grok-stt-1.0"));
+        assert_eq!(body["language"], json!("zh"));
+        assert_eq!(body["response_format"], json!("verbose_json"));
         assert_eq!(
-            body["messages"][0]["content"][0],
-            json!({ "type": "input_audio", "input_audio": { "data": "QUJD", "format": "mp3" } })
+            body["input_audio"],
+            json!({ "data": "QUJD", "format": "mp3" })
         );
     }
 
@@ -202,12 +198,12 @@ mod tests {
             panic!("expected ok");
         };
         let body = upstream_body(&request);
-        assert!(body.get("asr_options").is_none());
+        assert!(body.get("language").is_none());
     }
 
     #[test]
     fn parses_transcript() {
-        let value = json!({ "choices": [{ "message": { "content": "hello 世界" } }] });
+        let value = json!({ "text": "hello 世界" });
         assert_eq!(parse_transcript(&value).as_deref(), Some("hello 世界"));
         assert_eq!(parse_transcript(&json!({ "choices": [] })), None);
     }

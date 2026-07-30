@@ -6,6 +6,7 @@
 #include "codec.h"
 #include "config.h"
 #include "led.h"
+#include "lib/battery/battery.h"
 #include "mic.h"
 #include "omi_ext.h"
 #include "sdcard.h"
@@ -102,10 +103,6 @@ bool is_connected = false;
 bool is_charging = false;
 extern bool is_off;
 extern bool usb_charge;
-#ifdef CONFIG_OMI_ENABLE_CAPTURE_LED
-extern bool is_capturing;
-#endif
-
 #ifdef CONFIG_OMI_ENABLE_IDLE_SLEEP
 #define IDLE_SLEEP_TIMEOUT_SEC (CONFIG_OMI_IDLE_SLEEP_TIMEOUT_MIN * 60)
 #define MAIN_LOOP_PERIOD_MS 500
@@ -225,6 +222,7 @@ int main(void)
     LOG_INF("Firmware revision: %s", CONFIG_BT_DIS_FW_REV_STR);
     LOG_INF("Hardware revision: %s", CONFIG_BT_DIS_HW_REV_STR);
     // Force QSPI flash into deep sleep mode
+#if IS_ENABLED(CONFIG_PM_DEVICE) && DT_NODE_HAS_STATUS(DT_NODELABEL(p25q16h), okay)
     const struct device *flash_dev = DEVICE_DT_GET(DT_NODELABEL(p25q16h));
     if (device_is_ready(flash_dev)) {
         err = pm_device_action_run(flash_dev, PM_DEVICE_ACTION_SUSPEND);
@@ -234,6 +232,7 @@ int main(void)
     } else {
         LOG_ERR("QSPI flash device not ready");
     }
+#endif
     LOG_PRINTK("\n");
     LOG_INF("Initializing LEDs...\n");
 

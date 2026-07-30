@@ -1327,6 +1327,13 @@ final class AppServices {
       return;
     }
     if (_configuredPersonId == session.uid && _nativeInitialized) {
+      if (_workerOrigin != null) {
+        nativeHub.configureCloudMemory(
+          requestId: 'configure-cloud-memory-${session.uid}',
+          managedWorkerOrigin: _workerOrigin.toString(),
+          credential: session.idToken,
+        );
+      }
       memorySyncPump?.start(session.uid);
       await _startMemoryMirrorPump(session.uid);
       if (_workerOrigin != null && _assistantRefreshTimer == null) {
@@ -1350,6 +1357,13 @@ final class AppServices {
       tenantId: session.uid,
       personId: session.uid,
     );
+    if (_workerOrigin != null) {
+      nativeHub.configureCloudMemory(
+        requestId: 'configure-cloud-memory-${session.uid}',
+        managedWorkerOrigin: _workerOrigin.toString(),
+        credential: session.idToken,
+      );
+    }
     unawaited(_syncUserProfileSidecar(session.uid, databasePath));
     _transcriptMemoryIngestor.configure(
       personId: session.uid,

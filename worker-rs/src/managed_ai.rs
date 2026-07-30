@@ -221,8 +221,8 @@ impl ModelCapability {
 /// transcribe tier's price, and the transcribe tier remains the fallback when
 /// an override leaves balanced text-only.
 pub const ASYNC_AUDIO_TIER_PREFERENCE: &[ModelTier] = &[
-    ModelTier::Balanced,
     ModelTier::Transcribe,
+    ModelTier::Balanced,
     ModelTier::Multimodal,
 ];
 
@@ -978,7 +978,7 @@ mod tests {
     }
 
     #[test]
-    fn asynchronous_audio_picks_the_balanced_model() {
+    fn asynchronous_audio_picks_the_transcribe_model() {
         let env = |_: &str| None;
         assert_eq!(
             select_model_for(
@@ -986,7 +986,7 @@ mod tests {
                 &[ModelCapability::AudioIn],
                 ASYNC_AUDIO_TIER_PREFERENCE
             ),
-            Ok((ModelTier::Balanced, DEFAULT_BALANCED_MODEL.to_string()))
+            Ok((ModelTier::Transcribe, DEFAULT_TRANSCRIBE_MODEL.to_string()))
         );
     }
 

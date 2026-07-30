@@ -11,6 +11,7 @@
         label = "SDHC_0";
         mmc {
             compatible = "zephyr,sdmmc-disk";
+            disk-name = "SD";
             status = "okay";
         };
         spi-max-frequency = <24000000>;  // 24 MHz SPI speed for SD card

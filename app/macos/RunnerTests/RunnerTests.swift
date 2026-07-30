@@ -45,6 +45,7 @@ class RunnerTests: XCTestCase {
       URL(fileURLWithPath: "/Applications/Safari.app"),
       URL(fileURLWithPath: "/Applications/Google Chrome.app"),
       URL(fileURLWithPath: "/System/Applications/Mail.app"),
+      URL(fileURLWithPath: "/Applications/Setapp/Obsidian.app"),
     ]
     XCTAssertEqual(
       MainFlutterWindow.resolveApplicationURL(query: "safari", candidates: candidates)?
@@ -58,9 +59,24 @@ class RunnerTests: XCTestCase {
       MainFlutterWindow.resolveApplicationURL(query: "MAIL", candidates: candidates)?
         .lastPathComponent,
       "Mail.app")
+    XCTAssertEqual(
+      MainFlutterWindow.resolveApplicationURL(query: "obsidian", candidates: candidates)?
+        .lastPathComponent,
+      "Obsidian.app")
     XCTAssertNil(
       MainFlutterWindow.resolveApplicationURL(query: "fizzbuzzer", candidates: candidates))
     XCTAssertNil(MainFlutterWindow.resolveApplicationURL(query: "", candidates: candidates))
+  }
+
+  func testInstalledAppIndexFindsNestedApplicationBundles() {
+    let candidates = [
+      URL(fileURLWithPath: "/Applications/Setapp/Obsidian.app"),
+      URL(fileURLWithPath: "/Applications/Obsidian Helper.app"),
+    ]
+    XCTAssertEqual(
+      MainFlutterWindow.resolveApplicationURL(query: "obsidian", candidates: candidates)?
+        .lastPathComponent,
+      "Obsidian.app")
   }
 
   func testLauncherScansOnlyAppBundlesFromKnownRoots() {

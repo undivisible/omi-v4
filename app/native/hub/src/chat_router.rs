@@ -30,6 +30,15 @@ const VISION_MARKERS: &[&str] = &[
     "on screen",
 ];
 
+const MEMORY_RECALL_MARKERS: &[&str] = &[
+    "what do you remember",
+    "do you remember",
+    "recall ",
+    "my memories",
+    "from my memory",
+    "from my past",
+];
+
 // Extra prompt heuristics layered onto rx4's defaults so hard reasoning routes
 // to the Heavy tier (our SMART model) rather than falling through to Standard.
 const HEAVY_KEYWORDS: &[&str] = &[
@@ -117,7 +126,16 @@ impl ChatRouter {
         if SEARCH_MARKERS.iter().any(|marker| lowered.contains(marker)) {
             return ModelTier::Search;
         }
+        if likely_needs_tools(prompt, origin) {
+            return ModelTier::Smart;
+        }
         if VISION_MARKERS.iter().any(|marker| lowered.contains(marker)) {
+            return ModelTier::Multimodal;
+        }
+        if MEMORY_RECALL_MARKERS
+            .iter()
+            .any(|marker| lowered.contains(marker))
+        {
             return ModelTier::Multimodal;
         }
         if !likely_needs_tools(prompt, origin)
@@ -236,11 +254,20 @@ mod tests {
     }
 
     #[test]
-    fn tool_markers_skip_speed_shortcut() {
+    fn tool_markers_route_to_smart() {
         let router = default_router();
         assert_eq!(
             router.route_prompt("click the save button", None),
-            ModelTier::Balanced
+            ModelTier::Smart
+        );
+    }
+
+    #[test]
+    fn memory_recall_routes_to_multimodal() {
+        let router = default_router();
+        assert_eq!(
+            router.route_prompt("what do you remember about my work?", None),
+            ModelTier::Multimodal
         );
     }
 

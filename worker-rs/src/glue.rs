@@ -930,7 +930,6 @@ async fn handle_setup_health(req: Request, ctx: RouteContext<()>) -> Result<Resp
     let openrouter_api_key = any("OPENROUTER_API_KEY");
     let gemini_api_key = any("GEMINI_API_KEY");
     let gemini_live_model = any("GEMINI_LIVE_MODEL");
-    let mimo_chat_completions_url = any("MIMO_CHAT_COMPLETIONS_URL");
     let firebase_service_account_email = any("FIREBASE_SERVICE_ACCOUNT_EMAIL");
     let firebase_service_account_private_key = any("FIREBASE_SERVICE_ACCOUNT_PRIVATE_KEY");
 
@@ -951,7 +950,6 @@ async fn handle_setup_health(req: Request, ctx: RouteContext<()>) -> Result<Resp
         openrouter_api_key: openrouter_api_key.as_deref(),
         gemini_api_key: gemini_api_key.as_deref(),
         gemini_live_model: gemini_live_model.as_deref(),
-        mimo_chat_completions_url: mimo_chat_completions_url.as_deref(),
         firebase_service_account_email: firebase_service_account_email.as_deref(),
         firebase_service_account_private_key: firebase_service_account_private_key.as_deref(),
     });

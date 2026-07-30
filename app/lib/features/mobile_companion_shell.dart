@@ -368,6 +368,7 @@ class MobilePendantPageState extends State<MobilePendantPage> {
       PreferencesMobileCompanionCache();
   List<CurrentCard>? _cachedCurrents;
   String? _cachedBriefCrepus;
+  bool _settingsSheetOpen = false;
 
   bool get _mobile => relay.role == DeviceRelayRole.mobileOwner;
 
@@ -1259,6 +1260,8 @@ class MobilePendantPageState extends State<MobilePendantPage> {
   }
 
   void _openSettings() {
+    if (_settingsSheetOpen) return;
+    _settingsSheetOpen = true;
     // The sheet's own surface is drawn inside the draggable child, so the
     // modal itself stays transparent: a DraggableScrollableSheet always fills
     // the bounded height it is given, and a coloured modal background would
@@ -1294,7 +1297,7 @@ class MobilePendantPageState extends State<MobilePendantPage> {
             );
           },
         ),
-      ),
+      ).whenComplete(() => _settingsSheetOpen = false),
     );
   }
 }
@@ -2969,6 +2972,7 @@ class _SettingsSheetState extends State<_SettingsSheet> {
   }) async {
     final confirmed = await showDialog<bool>(
       context: context,
+      useRootNavigator: true,
       builder: (dialogContext) => AlertDialog(
         title: Text(title),
         content: Text(message),
@@ -3032,6 +3036,7 @@ class _SettingsSheetState extends State<_SettingsSheet> {
     if (device == null) return;
     final name = await showDialog<String>(
       context: context,
+      useRootNavigator: true,
       builder: (dialogContext) => _RenameDialog(initialName: device.name),
     );
     if (name == null || name.isEmpty) return;

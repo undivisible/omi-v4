@@ -222,6 +222,9 @@ jobs:
           if [ -n "${BOARD_ROOT}" ]; then
             extra+=("-DBOARD_ROOT=${BOARD_ROOT}")
           fi
+          if [ "${APP_DIR}" = "${GITHUB_WORKSPACE}/firmware/omi" ]; then
+            extra+=("-DEXTRA_ZEPHYR_MODULES=${NCS_WORKSPACE}/modules/lang/rust")
+          fi
           if [ -n "${CMAKE_ARGS}" ]; then
             read -r -a parsed <<< "${CMAKE_ARGS}"
             for arg in "${parsed[@]}"; do

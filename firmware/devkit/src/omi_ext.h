@@ -33,6 +33,10 @@
 #define OMI_USER_EVENT_SRC_IMU 0x03
 #define OMI_USER_EVENT_SRC_SYSTEM 0x04
 
+#ifdef CONFIG_OMI_ENABLE_CAPTURE_LED
+extern bool is_capturing;
+#endif
+
 /**
  * @brief Register the extension services with the GATT database.
  *

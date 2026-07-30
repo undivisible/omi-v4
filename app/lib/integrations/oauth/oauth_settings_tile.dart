@@ -95,6 +95,7 @@ class _OAuthConnectorTileState extends State<OAuthConnectorTile> {
   bool busy = false;
   bool expanded = false;
   String? message;
+  bool _clientIdDialogOpen = false;
 
   @override
   void initState() {
@@ -182,15 +183,21 @@ class _OAuthConnectorTileState extends State<OAuthConnectorTile> {
   Future<String?> _ensureClientId() async {
     final existing = await manager.clientIds.read(widget.connector.id);
     if (existing != null && existing.isNotEmpty) return existing;
-    if (!mounted) return null;
-    final entered = await showDialog<String>(
-      context: context,
-      builder: (context) => _ClientIdDialog(connector: widget.connector),
-    );
-    final trimmed = entered?.trim();
-    if (trimmed == null || trimmed.isEmpty) return null;
-    await manager.clientIds.write(widget.connector.id, trimmed);
-    return trimmed;
+    if (!mounted || _clientIdDialogOpen) return null;
+    _clientIdDialogOpen = true;
+    try {
+      final entered = await showDialog<String>(
+        context: context,
+        useRootNavigator: true,
+        builder: (context) => _ClientIdDialog(connector: widget.connector),
+      );
+      final trimmed = entered?.trim();
+      if (trimmed == null || trimmed.isEmpty) return null;
+      await manager.clientIds.write(widget.connector.id, trimmed);
+      return trimmed;
+    } finally {
+      _clientIdDialogOpen = false;
+    }
   }
 
   String get _state {

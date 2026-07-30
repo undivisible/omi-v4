@@ -36,12 +36,13 @@ use crate::transcription::{
     TranscriptionPhase,
 };
 use crate::transcription::{StartTranscription, TranscriptionControl};
+use fastembed::{EmbeddingModel, TextEmbedding, TextInitOptions};
 use futures::StreamExt;
 use rs_ai_core::{StreamEvent, ToolChoice, ToolDefinition};
 use std::collections::{HashMap, VecDeque, hash_map::Entry};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex as StdMutex};
+use std::sync::{Arc, LazyLock, Mutex as StdMutex};
 use std::time::Duration;
 use tokio::sync::{Mutex, mpsc};
 use tokio::task::{JoinError, JoinHandle, JoinSet, spawn_blocking};
@@ -63,6 +64,7 @@ const COMPUTER_USE_RECEIPT_VERSION: &str = "omi-current-authority-v1";
 const MAX_APPROVAL_RESPONSE_BYTES: usize = 32 * 1024;
 const MAX_MEMORY_APPLY_COMMITS: usize = 256;
 const MAX_MEMORY_RECORD_JSON_BYTES: usize = 256 * 1024;
+const MAX_CLOUD_MEMORY_CREDENTIAL_BYTES: usize = 16 * 1024;
 #[cfg(test)]
 const MAX_ACTIVE_AUDIO_SESSIONS: usize = 8;
 #[cfg(test)]
@@ -74,6 +76,20 @@ pub(crate) struct MemoryContext {
     pub(crate) person_id: PersonId,
 }
 
+#[derive(Clone)]
+struct CloudMemoryConfig {
+    endpoint: Url,
+    credential: String,
+}
+
+struct CloudMemoryItem {
+    id: String,
+    content: String,
+    evidence_ids: Vec<String>,
+}
+
+static FASTEMBED: LazyLock<StdMutex<Option<TextEmbedding>>> = LazyLock::new(|| StdMutex::new(None));
+
 #[derive(Default)]
 struct RuntimeState {
     memory: Option<Arc<StdMutex<MemoryContext>>>,
@@ -81,6 +97,7 @@ struct RuntimeState {
     authority_uid: Option<String>,
     proposals: ProposalRegistry,
     managed_worker_origin: Option<String>,
+    cloud_memory: Option<CloudMemoryConfig>,
     computer_use_ledger_path: Option<PathBuf>,
     user_profile_path: Option<PathBuf>,
     self_improve: Option<rx4::self_improve::SelfImprove>,
@@ -1541,7 +1558,7 @@ impl CommandDispatcher {
                     ephemeral_token: ephemeral_token.clone(),
                     model: model.clone(),
                     resumption_handle: resumption_handle.clone(),
-                    session_context: session_context.clone(),
+                    session_context: Some(live_session_context(session_context.as_deref())),
                 };
                 if transcription
                     .send(TranscriptionControl::StartLive(start))
@@ -1614,7 +1631,7 @@ impl CommandDispatcher {
                     .send(TranscriptionControl::UpdateLiveContext {
                         request_id,
                         stream_id: live_stream_id.clone(),
-                        session_context: session_context.clone(),
+                        session_context: live_session_context(Some(session_context)),
                     })
                     .await
                     .is_err()
@@ -1659,6 +1676,44 @@ impl CommandDispatcher {
                     }
                 }
                 state.chat_router = None;
+                continue;
+            }
+            if let Command::ConfigureCloudMemory {
+                managed_worker_origin,
+                credential,
+            } = &command.command
+            {
+                let endpoint = match managed_worker_base(managed_worker_origin).and_then(|base| {
+                    Url::parse(&base)
+                        .and_then(|url| url.join("memory/semantic-search"))
+                        .map_err(|_| "managed memory endpoint is invalid".to_owned())
+                }) {
+                    Ok(endpoint) => endpoint,
+                    Err(message) => {
+                        error(
+                            Some(request_id),
+                            "cloud_memory_configuration_invalid",
+                            &message,
+                            false,
+                        );
+                        continue;
+                    }
+                };
+                if credential.trim().is_empty()
+                    || credential.len() > MAX_CLOUD_MEMORY_CREDENTIAL_BYTES
+                {
+                    error(
+                        Some(request_id),
+                        "cloud_memory_configuration_invalid",
+                        "managed memory credential is invalid",
+                        false,
+                    );
+                    continue;
+                }
+                self.state.lock().await.cloud_memory = Some(CloudMemoryConfig {
+                    endpoint,
+                    credential: credential.clone(),
+                });
                 continue;
             }
             if let Command::ConfigureAssistant {
@@ -2106,6 +2161,25 @@ fn framed_assistant_prompt(
     }
 }
 
+fn current_datetime_context(now: chrono::DateTime<chrono::FixedOffset>) -> String {
+    format!(
+        "<current_datetime>\nCurrent local date and time: {}\nTimezone offset: {}\n</current_datetime>",
+        now.format("%Y-%m-%d %H:%M:%S %:z"),
+        now.format("%:z")
+    )
+}
+
+fn live_session_context(session_context: Option<&str>) -> String {
+    let datetime = current_datetime_context(chrono::Local::now().fixed_offset());
+    match session_context
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        Some(context) => format!("{datetime}\n\n{context}"),
+        None => datetime,
+    }
+}
+
 fn assistant_prompt(memory_context: Option<&str>, text: &str) -> String {
     match memory_context
         .map(str::trim)
@@ -2185,6 +2259,109 @@ async fn local_memory_context(
         }
         BlockingOutcome::Failed(_) | BlockingOutcome::Cancelled => None,
     }
+}
+
+fn local_embedding(query: String) -> Result<Vec<f64>, String> {
+    let mut model = FASTEMBED
+        .lock()
+        .map_err(|_| "local embedding model lock was poisoned".to_owned())?;
+    if model.is_none() {
+        *model = Some(
+            TextEmbedding::try_new(TextInitOptions::new(EmbeddingModel::BGEBaseENV15))
+                .map_err(|error_value| error_value.to_string())?,
+        );
+    }
+    let embeddings = model
+        .as_mut()
+        .ok_or_else(|| "local embedding model is unavailable".to_owned())?
+        .embed(vec![query], Some(1))
+        .map_err(|error_value| error_value.to_string())?;
+    let embedding = embeddings
+        .into_iter()
+        .next()
+        .ok_or_else(|| "local embedding was empty".to_owned())?;
+    if embedding.len() != 768 {
+        return Err("local embedding had an unexpected dimension".to_owned());
+    }
+    Ok(embedding.into_iter().map(f64::from).collect())
+}
+
+async fn cloud_memory_context(
+    state: &Mutex<RuntimeState>,
+    query: &str,
+    limit: u32,
+    cancellation: &CancellationToken,
+) -> Result<Option<Vec<CloudMemoryItem>>, String> {
+    let config = state.lock().await.cloud_memory.clone();
+    let Some(config) = config else {
+        return Ok(None);
+    };
+    let embedding = await_blocking(
+        spawn_blocking({
+            let query = query.to_owned();
+            move || local_embedding(query)
+        }),
+        cancellation,
+    )
+    .await;
+    let embedding = match embedding {
+        BlockingOutcome::Complete(value) => value,
+        BlockingOutcome::Failed(message) => return Err(message),
+        BlockingOutcome::Cancelled => return Err("memory recall was cancelled".to_owned()),
+    };
+    let endpoint = config.endpoint.to_string();
+    tokio::select! {
+        () = cancellation.cancelled() => return Err("memory recall was cancelled".to_owned()),
+        result = endpoint_resolves_publicly(&endpoint) => result?,
+    }
+    let response = tokio::select! {
+        () = cancellation.cancelled() => return Err("memory recall was cancelled".to_owned()),
+        result = tokio::time::timeout(Duration::from_secs(15), reqwest::Client::new()
+            .post(config.endpoint)
+            .bearer_auth(config.credential)
+            .json(&serde_json::json!({ "query": query, "limit": limit.min(20), "vector": embedding }))
+            .send()) => result.map_err(|_| "memory recall timed out".to_owned())?
+                .map_err(|_| "memory recall failed".to_owned())?,
+    };
+    if !response.status().is_success()
+        || response
+            .content_length()
+            .is_some_and(|length| length > MAX_CLIENT_MEMORY_CONTEXT_BYTES as u64)
+    {
+        return Err("memory recall was rejected".to_owned());
+    }
+    let bytes = tokio::select! {
+        () = cancellation.cancelled() => return Err("memory recall was cancelled".to_owned()),
+        result = response.bytes() => result.map_err(|_| "memory recall failed".to_owned())?,
+    };
+    if bytes.len() > MAX_CLIENT_MEMORY_CONTEXT_BYTES {
+        return Err("memory recall response was too large".to_owned());
+    }
+    let body: serde_json::Value = serde_json::from_slice(&bytes)
+        .map_err(|_| "memory recall response was invalid".to_owned())?;
+    let items = body
+        .get("items")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| "memory recall response was invalid".to_owned())?;
+    let items: Vec<CloudMemoryItem> = items
+        .iter()
+        .filter_map(|item| {
+            Some(CloudMemoryItem {
+                id: item.get("id")?.as_str()?.to_owned(),
+                content: item.get("content")?.as_str()?.trim().to_owned(),
+                evidence_ids: item
+                    .get("evidenceIds")
+                    .and_then(serde_json::Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(serde_json::Value::as_str)
+                    .map(str::to_owned)
+                    .collect(),
+            })
+        })
+        .filter(|item| !item.content.is_empty())
+        .collect();
+    Ok((!items.is_empty()).then_some(items))
 }
 
 struct ProfileContext {
@@ -2283,9 +2460,35 @@ async fn dispatch_assistant(
         );
         return;
     }
-    let profile = local_profile_context(state, cancellation).await;
+    let cloud_memory_configured = state.lock().await.cloud_memory.is_some();
+    let profile = if cloud_memory_configured {
+        None
+    } else {
+        local_profile_context(state, cancellation).await
+    };
     let memory_context = match memory_context {
         Some(context) => Some(context),
+        None if cloud_memory_configured => {
+            match cloud_memory_context(state, &text, LOCAL_MEMORY_CONTEXT_ITEMS, cancellation).await
+            {
+                Ok(items) => items.map(|items| {
+                    items
+                        .into_iter()
+                        .map(|item| format!("- {}", item.content))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                }),
+                Err(message) => {
+                    error(
+                        Some(request_id.to_owned()),
+                        "cloud_memory_recall_failed",
+                        &message,
+                        true,
+                    );
+                    return;
+                }
+            }
+        }
         None => local_memory_context(state, &text, cancellation).await,
     };
     let user_profile = user_profile_path
@@ -2317,7 +2520,13 @@ async fn dispatch_assistant(
         ToolStatus::Complete,
         Some(&format!("{ONLINE_CHAT_MODEL_DETAIL}:{routed_model}")),
     );
-    let mut prompt = framed_assistant_prompt(origin, context.as_deref(), &text);
+    let framed_prompt = framed_assistant_prompt(origin, context.as_deref(), &text);
+    let datetime = current_datetime_context(chrono::Local::now().fixed_offset());
+    let mut prompt = format!(
+        "{}{}\n\n{text}",
+        framed_prompt.strip_suffix(&text).unwrap_or(&framed_prompt),
+        datetime
+    );
     if let Some(document) = user_profile.as_ref()
         && let Some(custom_prompt) = crate::user_profile::custom_prompt(document)
     {
@@ -2690,6 +2899,7 @@ async fn execute(
         }
         Command::ConfigureAssistant { .. }
         | Command::ConfigureTrustedAssistant { .. }
+        | Command::ConfigureCloudMemory { .. }
         | Command::ClearAssistant
         | Command::StartTranscription { .. }
         | Command::StopTranscription { .. }
@@ -3740,6 +3950,50 @@ async fn search(
         );
         return;
     };
+    if state.lock().await.cloud_memory.is_some() {
+        if as_of_valid_at_ms.is_some() || as_of_recorded_at_ms.is_some() {
+            error(
+                Some(request_id.to_owned()),
+                "cloud_memory_historical_recall_unavailable",
+                "cloud memory recall currently supports the present state only",
+                false,
+            );
+            return;
+        }
+        match cloud_memory_context(state, &query, limit, cancellation).await {
+            Ok(Some(items)) => NativeEvent::MemorySearchResults(MemorySearchResults {
+                request_id: request_id.to_owned(),
+                query,
+                items: items
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, item)| MemorySearchItem {
+                        kind: "claim".to_owned(),
+                        id: item.id,
+                        excerpt: item.content,
+                        relevance_basis_points: (10_000 - index as u16 * 500).max(1),
+                        evidence_ids: item.evidence_ids,
+                    })
+                    .collect(),
+                gaps: Vec::new(),
+            })
+            .send(),
+            Ok(None) => NativeEvent::MemorySearchResults(MemorySearchResults {
+                request_id: request_id.to_owned(),
+                query,
+                items: Vec::new(),
+                gaps: vec!["No cited memory matched the query.".to_owned()],
+            })
+            .send(),
+            Err(message) => error(
+                Some(request_id.to_owned()),
+                "cloud_memory_recall_failed",
+                &message,
+                true,
+            ),
+        }
+        return;
+    }
     let task = spawn_blocking(move || {
         let memory = memory
             .lock()
@@ -7328,6 +7582,7 @@ mod tests {
         assert!(captured.contains(CREPUS_ARTIFACTS_GUIDANCE));
         assert!(captured.contains("Relevant things you know about the user:\n"));
         assert!(captured.contains("Sam prefers espresso"));
+        assert!(captured.contains("<current_datetime>"));
         assert!(captured.ends_with("\n\nwhat coffee do I like?"));
 
         dispatch_assistant(
@@ -7377,6 +7632,19 @@ mod tests {
         assert!(chat.ends_with("hello"));
         assert_eq!(framed_assistant_prompt(None, None, "hello"), chat);
         assert!(!chat.contains("desktop agent"));
+    }
+
+    #[test]
+    fn dynamic_datetime_context_is_local_and_live_context_preserves_screen_context() {
+        let now = chrono::DateTime::parse_from_rfc3339("2026-07-25T14:30:00-04:00")
+            .unwrap_or_else(|error| panic!("fixed timestamp parses: {error}"));
+        let datetime = current_datetime_context(now);
+        assert!(datetime.contains("2026-07-25 14:30:00 -04:00"));
+        assert!(datetime.contains("Timezone offset: -04:00"));
+
+        let live = live_session_context(Some("Current screen:\nMail"));
+        assert!(live.contains("<current_datetime>"));
+        assert!(live.ends_with("Current screen:\nMail"));
     }
 
     #[tokio::test]

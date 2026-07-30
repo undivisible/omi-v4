@@ -3,9 +3,9 @@
     "speed": "inception/mercury-2",
     "balanced": "xiaomi/mimo-v2.5",
     "smart": "xiaomi/mimo-v2.5-pro",
-    "multimodal": "google/gemini-3.6-flash",
+    "multimodal": "google/gemini-2.5-flash-lite",
     "search": "perplexity/sonar",
-    "transcribe": "google/gemini-3.5-flash-lite",
+    "transcribe": "x-ai/grok-stt-1.0",
     "speak": "openai/gpt-audio-mini"
   },
   "tierEnvVars": {
@@ -22,9 +22,10 @@
     "xiaomi/mimo-v2.5-pro": ["text"],
     "inception/mercury-2": ["text"],
     "perplexity/sonar": ["text"],
-    "google/gemini-3.6-flash": ["text", "audioIn", "imageIn"],
+    "google/gemini-2.5-flash-lite": ["text", "audioIn", "imageIn"],
     "google/gemini-3.5-flash-lite": ["text", "audioIn"],
+    "x-ai/grok-stt-1.0": ["audioIn"],
     "openai/gpt-audio-mini": ["text", "audioOut"]
   },
-  "asyncAudioTierPreference": ["balanced", "transcribe", "multimodal"]
+  "asyncAudioTierPreference": ["transcribe", "balanced", "multimodal"]
 }

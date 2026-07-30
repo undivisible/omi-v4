@@ -51,6 +51,7 @@ class _OmiShellState extends State<OmiShell> {
   PillPanelHost? _pillPanelHost;
   bool _appActive = false;
   DesktopInputDiagnosticsEvent? _inputDiagnostics;
+  bool _settingsRouteOpen = false;
 
   static const _windowChromeChannel = MethodChannel('omi/window_chrome');
 
@@ -219,17 +220,20 @@ class _OmiShellState extends State<OmiShell> {
   }
 
   void _openSettingsRoute([SettingsSection? section]) {
-    if (!mounted) return;
-    Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (context) => SettingsScreen(
-          services: widget.services,
-          previewMode: widget.previewMode,
-          initialSection: section,
-        ),
-        fullscreenDialog: true,
-      ),
-    );
+    if (!mounted || _settingsRouteOpen) return;
+    _settingsRouteOpen = true;
+    Navigator.of(context)
+        .push(
+          MaterialPageRoute<void>(
+            builder: (context) => SettingsScreen(
+              services: widget.services,
+              previewMode: widget.previewMode,
+              initialSection: section,
+            ),
+            fullscreenDialog: true,
+          ),
+        )
+        .whenComplete(() => _settingsRouteOpen = false);
   }
 
   Future<void> _toggleMeeting() async {

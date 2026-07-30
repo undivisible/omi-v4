@@ -107,16 +107,16 @@ pub fn mint_response(
     now_ms: i64,
     secret: &str,
     refresh_entropy: &[u8],
-) -> Result<TokenResponse, ()> {
+) -> Option<TokenResponse> {
     if uid.is_empty()
         || session_id.is_empty()
         || secret.is_empty()
         || refresh_entropy.len() != REFRESH_TOKEN_BYTES
     {
-        return Err(());
+        return None;
     }
     let (refresh_token, refresh_hash) = refresh_token_from_entropy(refresh_entropy);
-    Ok(TokenResponse {
+    Some(TokenResponse {
         access_token: issue_access_token(uid, session_id, now_ms, ACCESS_TOKEN_TTL_MS, secret),
         refresh_token,
         expires_at: now_ms.saturating_add(ACCESS_TOKEN_TTL_MS),

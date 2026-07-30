@@ -27,7 +27,6 @@ pub struct SetupHealthInputs<'a> {
     pub openrouter_api_key: Option<&'a str>,
     pub gemini_api_key: Option<&'a str>,
     pub gemini_live_model: Option<&'a str>,
-    pub mimo_chat_completions_url: Option<&'a str>,
     pub firebase_service_account_email: Option<&'a str>,
     pub firebase_service_account_private_key: Option<&'a str>,
 }
@@ -56,8 +55,7 @@ pub fn setup_health_body(input: &SetupHealthInputs<'_>) -> Value {
             "managedStt": configured(input.openrouter_api_key),
             "managedLiveVoice": configured(input.gemini_api_key)
                 && configured(input.gemini_live_model),
-            "managedAsr": configured(input.mimo_api_key)
-                && configured(input.mimo_chat_completions_url),
+            "managedAsr": configured(input.openrouter_api_key),
         },
         "desktopAuth": configured(input.firebase_service_account_email)
             && configured(input.firebase_service_account_private_key)
@@ -87,7 +85,6 @@ mod tests {
             openrouter_api_key: None,
             gemini_api_key: None,
             gemini_live_model: None,
-            mimo_chat_completions_url: None,
             firebase_service_account_email: None,
             firebase_service_account_private_key: None,
         }
@@ -141,7 +138,7 @@ mod tests {
             setup_health_body(&input)["models"]["managedAsr"],
             json!(false)
         );
-        input.mimo_chat_completions_url = Some("https://x");
+        input.openrouter_api_key = Some("k");
         assert_eq!(
             setup_health_body(&input)["models"]["managedAsr"],
             json!(true)
@@ -225,7 +222,7 @@ mod tests {
             "leak-stripe-webhook-secret",
             "leak-app-url",
             "leak-mimo-api-key",
-            "leak-deepgram-api-key",
+            "leak-openrouter-api-key",
             "leak-gemini-api-key",
             "leak-gemini-live-model",
             "leak-mimo-completions-url",
@@ -249,7 +246,6 @@ mod tests {
             openrouter_api_key: Some(secrets[13]),
             gemini_api_key: Some(secrets[14]),
             gemini_live_model: Some(secrets[15]),
-            mimo_chat_completions_url: Some(secrets[16]),
             firebase_service_account_email: Some(secrets[17]),
             firebase_service_account_private_key: Some(secrets[18]),
         };

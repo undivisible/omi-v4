@@ -802,43 +802,50 @@ class DeleteAccountTile extends StatefulWidget {
 class _DeleteAccountTileState extends State<DeleteAccountTile> {
   bool deleting = false;
   String? error;
+  bool _confirmOpen = false;
 
   Future<void> _confirmAndDelete() async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Delete account?'),
-        content: const Text(
-          'This permanently deletes your account and all data stored with '
-          'Omi — memories, conversations, settings, and connections. This '
-          'cannot be undone.',
-        ),
-        actions: [
-          TextButton(
-            key: const Key('delete_account_cancel'),
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            key: const Key('delete_account_confirm'),
-            style: FilledButton.styleFrom(backgroundColor: Colors.redAccent),
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Delete forever'),
-          ),
-        ],
-      ),
-    );
-    if (confirmed != true || !mounted) return;
-    setState(() {
-      deleting = true;
-      error = null;
-    });
+    if (_confirmOpen || deleting) return;
+    _confirmOpen = true;
     try {
-      await widget.services.deleteAccount();
-    } catch (failure) {
-      if (mounted) setState(() => error = '$failure');
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Delete account?'),
+          content: const Text(
+            'This permanently deletes your account and all data stored with '
+            'Omi — memories, conversations, settings, and connections. This '
+            'cannot be undone.',
+          ),
+          actions: [
+            TextButton(
+              key: const Key('delete_account_cancel'),
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              key: const Key('delete_account_confirm'),
+              style: FilledButton.styleFrom(backgroundColor: Colors.redAccent),
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Delete forever'),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true || !mounted) return;
+      setState(() {
+        deleting = true;
+        error = null;
+      });
+      try {
+        await widget.services.deleteAccount();
+      } catch (failure) {
+        if (mounted) setState(() => error = '$failure');
+      } finally {
+        if (mounted) setState(() => deleting = false);
+      }
     } finally {
-      if (mounted) setState(() => deleting = false);
+      _confirmOpen = false;
     }
   }
 
@@ -875,6 +882,7 @@ class _ChannelLinkTile extends StatefulWidget {
 
 class _ChannelLinkTileState extends State<_ChannelLinkTile> {
   late Future<Set<ChannelProvider>> _linked = _load();
+  bool _sheetOpen = false;
 
   Future<Set<ChannelProvider>> _load() async {
     final linked = <ChannelProvider>{};
@@ -898,15 +906,21 @@ class _ChannelLinkTileState extends State<_ChannelLinkTile> {
   };
 
   Future<void> _openSheet(Set<ChannelProvider> linked) async {
-    final changed = await showDialog<bool>(
-      context: context,
-      builder: (context) => _ChannelLinkDialog(
-        client: widget.client,
-        linked: linked,
-        label: _label,
-      ),
-    );
-    if (changed == true && mounted) _reload();
+    if (_sheetOpen) return;
+    _sheetOpen = true;
+    try {
+      final changed = await showDialog<bool>(
+        context: context,
+        builder: (context) => _ChannelLinkDialog(
+          client: widget.client,
+          linked: linked,
+          label: _label,
+        ),
+      );
+      if (changed == true && mounted) _reload();
+    } finally {
+      _sheetOpen = false;
+    }
   }
 
   @override
@@ -1119,43 +1133,50 @@ class DeleteLocalDataTile extends StatefulWidget {
 class _DeleteLocalDataTileState extends State<DeleteLocalDataTile> {
   bool deleting = false;
   String? error;
+  bool _confirmOpen = false;
 
   Future<void> _confirmAndDelete() async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Delete data?'),
-        content: const Text(
-          'This erases everything Omi stores on this device — conversations, '
-          'transcripts, notes, tasks, and your onboarding profile — and '
-          'returns you to onboarding. This cannot be undone.',
-        ),
-        actions: [
-          TextButton(
-            key: const Key('delete_local_data_cancel'),
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            key: const Key('delete_local_data_confirm'),
-            style: FilledButton.styleFrom(backgroundColor: Colors.redAccent),
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Delete forever'),
-          ),
-        ],
-      ),
-    );
-    if (confirmed != true || !mounted) return;
-    setState(() {
-      deleting = true;
-      error = null;
-    });
+    if (_confirmOpen || deleting) return;
+    _confirmOpen = true;
     try {
-      await widget.services.deleteAccount();
-    } catch (failure) {
-      if (mounted) setState(() => error = '$failure');
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Delete data?'),
+          content: const Text(
+            'This erases everything Omi stores on this device — conversations, '
+            'transcripts, notes, tasks, and your onboarding profile — and '
+            'returns you to onboarding. This cannot be undone.',
+          ),
+          actions: [
+            TextButton(
+              key: const Key('delete_local_data_cancel'),
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              key: const Key('delete_local_data_confirm'),
+              style: FilledButton.styleFrom(backgroundColor: Colors.redAccent),
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Delete forever'),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true || !mounted) return;
+      setState(() {
+        deleting = true;
+        error = null;
+      });
+      try {
+        await widget.services.deleteAccount();
+      } catch (failure) {
+        if (mounted) setState(() => error = '$failure');
+      } finally {
+        if (mounted) setState(() => deleting = false);
+      }
     } finally {
-      if (mounted) setState(() => deleting = false);
+      _confirmOpen = false;
     }
   }
 
@@ -1841,6 +1862,7 @@ class _ProviderTileState extends State<_ProviderTile> {
   late Future<List<ProviderCredential>> credentials =
       widget.services.allProviderCredentials;
   bool expanded = false;
+  bool _configureOpen = false;
 
   void refresh() => setState(() {
     credentials = widget.services.allProviderCredentials;
@@ -1920,16 +1942,19 @@ class _ProviderTileState extends State<_ProviderTile> {
   }
 
   Future<void> configure(ProviderCredential? existing) async {
+    if (_configureOpen) return;
+    _configureOpen = true;
     var provider = existing?.provider ?? AssistantProvider.openAi;
     final model = TextEditingController(text: existing?.model);
     final secret = TextEditingController();
     final endpoint = TextEditingController(text: existing?.endpoint);
     String? error;
     String? info;
-    await showDialog<void>(
-      context: context,
-      builder: (context) => StatefulBuilder(
-        builder: (context, update) => AlertDialog(
+    try {
+      await showDialog<void>(
+        context: context,
+        builder: (context) => StatefulBuilder(
+          builder: (context, update) => AlertDialog(
           title: const Text('Bring your own model'),
           content: SingleChildScrollView(
             child: Column(
@@ -2058,10 +2083,13 @@ class _ProviderTileState extends State<_ProviderTile> {
         ),
       ),
     );
-    model.dispose();
-    secret.dispose();
-    endpoint.dispose();
-    if (mounted) refresh();
+    } finally {
+      _configureOpen = false;
+      model.dispose();
+      secret.dispose();
+      endpoint.dispose();
+      if (mounted) refresh();
+    }
   }
 
   @override
@@ -2501,6 +2529,7 @@ class _ApiKeysTile extends StatefulWidget {
 
 class _ApiKeysTileState extends State<_ApiKeysTile> {
   late Future<List<ApiKeySummary>> _keys = widget.client.listKeys();
+  bool _dialogOpen = false;
 
   void _reload() {
     setState(() {
@@ -2509,11 +2538,17 @@ class _ApiKeysTileState extends State<_ApiKeysTile> {
   }
 
   Future<void> _open() async {
-    await showDialog<void>(
-      context: context,
-      builder: (context) => _ApiKeysDialog(client: widget.client),
-    );
-    if (mounted) _reload();
+    if (_dialogOpen) return;
+    _dialogOpen = true;
+    try {
+      await showDialog<void>(
+        context: context,
+        builder: (context) => _ApiKeysDialog(client: widget.client),
+      );
+      if (mounted) _reload();
+    } finally {
+      _dialogOpen = false;
+    }
   }
 
   @override

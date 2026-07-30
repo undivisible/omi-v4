@@ -1402,6 +1402,7 @@ mod tests {
             third_len: 0,
         };
         assert_eq!(
+            // SAFETY: `bytes` and `parsed` remain valid for this synchronous FFI call.
             unsafe {
                 omi_rust_wifi_parse_command(bytes.as_ptr(), bytes.len() as u16, true, &mut parsed)
             },

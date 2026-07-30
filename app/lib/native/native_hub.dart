@@ -201,6 +201,11 @@ abstract interface class NativeHub {
     required String requestId,
     required String managedWorkerOrigin,
   });
+  void configureCloudMemory({
+    required String requestId,
+    required String managedWorkerOrigin,
+    required String credential,
+  });
   void clearAssistant(String requestId);
   void decideApproval({
     required String requestId,
@@ -625,6 +630,13 @@ final class UnavailableNativeHub implements NativeHub {
   }) => _unavailable();
 
   @override
+  void configureCloudMemory({
+    required String requestId,
+    required String managedWorkerOrigin,
+    required String credential,
+  }) => _unavailable();
+
+  @override
   void clearAssistant(String requestId) => _unavailable();
 
   @override
@@ -992,6 +1004,19 @@ final class RinfNativeHub implements NativeHub {
   }) => _send(
     requestId,
     CommandConfigureTrustedAssistant(managedWorkerOrigin: managedWorkerOrigin),
+  );
+
+  @override
+  void configureCloudMemory({
+    required String requestId,
+    required String managedWorkerOrigin,
+    required String credential,
+  }) => _send(
+    requestId,
+    CommandConfigureCloudMemory(
+      managedWorkerOrigin: managedWorkerOrigin,
+      credential: credential,
+    ),
   );
 
   @override

@@ -96,6 +96,19 @@ jobs:
         if: steps.cache.outputs.cache-hit != 'true'
         run: bash .github/scripts/setup-ncs-toolchain.sh
 
+      - name: Install Git HTTPS transport
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          apt-get update
+          apt-get install --reinstall --yes --no-install-recommends git
+          git_wrapper_dir="${RUNNER_TEMP}/ncs-git-wrapper"
+          mkdir -p "${git_wrapper_dir}"
+          printf '%s\n' '#!/bin/sh' 'exec env GIT_EXEC_PATH="$(/usr/bin/git --exec-path)" /usr/bin/git "$@"' > "${git_wrapper_dir}/git"
+          chmod +x "${git_wrapper_dir}/git"
+          echo "${git_wrapper_dir}" >> "${GITHUB_PATH}"
+          test -x "$("${git_wrapper_dir}/git" --exec-path)/git-remote-https"
+
       - name: Fetch the nRF Connect SDK
         if: steps.cache.outputs.cache-hit != 'true'
         run: |
@@ -246,8 +259,13 @@ jobs:
         run: |
           set -euo pipefail
           if ! command -v rustup >/dev/null 2>&1; then
-            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
-              | sh -s -- -y --profile minimal --default-toolchain stable --component clippy
+            apt-get update
+            apt-get install --yes --no-install-recommends curl
+            (
+              export LD_LIBRARY_PATH=
+              /usr/bin/curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+                | sh -s -- -y --profile minimal --default-toolchain stable --component clippy
+            )
           fi
           . "${HOME}/.cargo/env"
           rustup component add clippy
@@ -270,6 +288,9 @@ jobs:
           extra=()
           if [ -n "${BOARD_ROOT}" ]; then
             extra+=("-DBOARD_ROOT=${BOARD_ROOT}")
+          fi
+          if [ "${APP_DIR}" = "${GITHUB_WORKSPACE}/firmware/omi" ]; then
+            extra+=("-DEXTRA_ZEPHYR_MODULES=${NCS_WORKSPACE}/modules/lang/rust")
           fi
           if [ -n "${CMAKE_ARGS}" ]; then
             read -r -a parsed <<< "${CMAKE_ARGS}"

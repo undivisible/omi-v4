@@ -23,6 +23,8 @@ use crate::managed_ai::{
 use crate::public_api::{invalid, OperationResult};
 
 pub const OPENROUTER_COMPLETION_ENDPOINT: &str = "https://openrouter.ai/api/v1/chat/completions";
+pub const OPENROUTER_TRANSCRIPTIONS_ENDPOINT: &str =
+    "https://openrouter.ai/api/v1/audio/transcriptions";
 
 // Base64 encodes 3 raw bytes as 4 characters, so a ceiling on the decoded
 // audio has to be scaled by 4/3 to become a ceiling on the encoded string.
@@ -344,28 +346,24 @@ pub struct TranscribePlan {
 impl TranscribePlan {
     /// The OpenRouter chat-completions payload for this transcription.
     pub fn upstream_body(&self) -> Value {
-        let instruction = if self.language == "auto" {
-            TRANSCRIPTION_INSTRUCTION.to_string()
-        } else {
-            format!(
-                "{TRANSCRIPTION_INSTRUCTION} The audio is in {}.",
-                self.language
-            )
-        };
-        json!({
+        let mut body = json!({
             "model": self.model,
-            "stream": false,
-            "messages": [{
-                "role": "user",
-                "content": [
-                    { "type": "text", "text": instruction },
-                    {
-                        "type": "input_audio",
-                        "input_audio": { "data": self.audio, "format": self.container },
-                    },
-                ],
-            }],
-        })
+            "input_audio": { "data": self.audio, "format": self.container },
+            "response_format": "verbose_json",
+        });
+        if self.language != "auto" {
+            body.as_object_mut().unwrap().insert(
+                "language".into(),
+                Value::String(
+                    self.language
+                        .split('-')
+                        .next()
+                        .unwrap_or(&self.language)
+                        .to_string(),
+                ),
+            );
+        }
+        body
     }
 
     /// The stored, replayable result for a successful transcription.
@@ -785,7 +783,7 @@ mod tests {
         .unwrap();
         assert_eq!(plan.container, "ogg");
         assert_eq!(plan.language, "auto");
-        assert_eq!(plan.model, "xiaomi/mimo-v2.5");
+        assert_eq!(plan.model, "x-ai/grok-stt-1.0");
         assert_eq!(plan.reserved_seconds, 1);
     }
 
@@ -799,32 +797,19 @@ mod tests {
         )
         .unwrap();
         let body = plan.upstream_body();
-        assert_eq!(body["model"], json!("xiaomi/mimo-v2.5"));
-        assert_eq!(body["stream"], json!(false));
-        assert_eq!(body["messages"][0]["role"], json!("user"));
+        assert_eq!(body["model"], json!("x-ai/grok-stt-1.0"));
+        assert_eq!(body["response_format"], json!("verbose_json"));
         assert_eq!(
-            body["messages"][0]["content"][1],
-            json!({
-                "type": "input_audio",
-                "input_audio": { "data": "AAAA", "format": "ogg" },
-            })
+            body["input_audio"],
+            json!({ "data": "AAAA", "format": "ogg" })
         );
-        // `auto` declares nothing, so the instruction is sent unqualified.
-        assert_eq!(
-            body["messages"][0]["content"][0],
-            json!({ "type": "text", "text": TRANSCRIPTION_INSTRUCTION })
-        );
+        assert!(body.get("language").is_none());
 
         let mut input = transcribe_input();
         input["language"] = json!("fr-CA");
         let declared =
             plan_transcription(env(&[]), "uid-1", &input, ASYNC_AUDIO_TIER_PREFERENCE).unwrap();
-        assert_eq!(
-            declared.upstream_body()["messages"][0]["content"][0]["text"],
-            json!(format!(
-                "{TRANSCRIPTION_INSTRUCTION} The audio is in fr-CA."
-            ))
-        );
+        assert_eq!(declared.upstream_body()["language"], json!("fr"));
     }
 
     #[test]
@@ -953,14 +938,14 @@ mod tests {
             ASYNC_AUDIO_TIER_PREFERENCE,
         )
         .unwrap();
-        assert_eq!(plan.model, "google/gemini-3.5-flash-lite");
+        assert_eq!(plan.model, "x-ai/grok-stt-1.0");
     }
 
     #[test]
     fn a_declared_override_can_restore_the_audio_capable_tier() {
         let plan = plan_transcription(
             env(&[
-                ("OMI_MODEL_BALANCED", "vendor/ears"),
+                ("OMI_MODEL_TRANSCRIBE", "vendor/ears"),
                 (
                     "OMI_MODEL_CAPABILITIES",
                     r#"{"vendor/ears":["text","audioIn"]}"#,
