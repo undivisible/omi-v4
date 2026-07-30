@@ -403,6 +403,13 @@ abstract interface class NativeHub {
 /// durable" rather than as a failure.
 mixin NativeHubWithoutCapture implements NativeHub {
   @override
+  void configureCloudMemory({
+    required String requestId,
+    required String managedWorkerOrigin,
+    required String credential,
+  }) {}
+
+  @override
   void openCaptureWal({
     required String requestId,
     required String directory,
