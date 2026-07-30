@@ -245,11 +245,11 @@ mod tests {
     }
 
     #[test]
-    fn overlay_origin_skips_speed_shortcut() {
+    fn overlay_origin_routes_to_smart_for_the_tool_pipeline() {
         let router = default_router();
         assert_eq!(
             router.route_prompt("hi there", Some(MessageOrigin::Overlay)),
-            ModelTier::Balanced
+            ModelTier::Smart
         );
     }
 
