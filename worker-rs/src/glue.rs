@@ -2015,7 +2015,7 @@ fn mint_worker_session(
 ) -> Option<crate::auth_session_flow::TokenResponse> {
     let mut entropy = [0u8; crate::session_token::REFRESH_TOKEN_BYTES];
     getrandom::getrandom(&mut entropy).ok()?;
-    crate::auth_session_flow::mint_response(uid, session_id, now, secret, &entropy).ok()
+    crate::auth_session_flow::mint_response(uid, session_id, now, secret, &entropy)
 }
 
 async fn handle_channel_exchange(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
