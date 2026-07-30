@@ -29,6 +29,7 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 # dep and re-check on every rinf upgrade.
 rinf = "8.10.0"
 futures = "0.3"
+fastembed = { version = "5.17.4", default-features = false, features = ["hf-hub-rustls-tls", "ort-download-binaries-rustls-tls"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 rs_ai = "0.2.22"
 rs_ai_core = "0.2.21"

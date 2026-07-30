@@ -74,6 +74,13 @@ final class DemoNativeHub with NativeHubWithoutCapture implements NativeHub {
   }) {}
 
   @override
+  void configureCloudMemory({
+    required String requestId,
+    required String managedWorkerOrigin,
+    required String credential,
+  }) {}
+
+  @override
   void configureAssistant({
     required String requestId,
     required AssistantProvider provider,

@@ -42,6 +42,13 @@ pub const EMBEDDING_MODEL: &str = "@cf/baai/bge-base-en-v1.5";
 pub const EMBEDDING_DIMENSIONS: usize = 768;
 pub const EMBEDDING_INPUT_CHARS: usize = 2_000;
 
+pub fn valid_embedding(vector: &[f64]) -> bool {
+    vector.len() == EMBEDDING_DIMENSIONS
+        && vector
+            .iter()
+            .all(|value| value.is_finite() && value.abs() <= 1_000.0)
+}
+
 // memory-vectors.ts tuning constants.
 pub const MAXIMUM_ATTEMPTS: i64 = 8;
 pub const DRAIN_BATCH_SIZE: i64 = 32;
@@ -1420,6 +1427,13 @@ mod tests {
         assert_eq!(relevance_basis_points(0), 10_000);
         assert_eq!(relevance_basis_points(1), 9_500);
         assert_eq!(relevance_basis_points(100), 1); // clamped
+    }
+
+    #[test]
+    fn embeddings_require_the_bound_bge_dimension() {
+        assert!(valid_embedding(&vec![0.0; EMBEDDING_DIMENSIONS]));
+        assert!(!valid_embedding(&vec![0.0; EMBEDDING_DIMENSIONS - 1]));
+        assert!(!valid_embedding(&vec![f64::NAN; EMBEDDING_DIMENSIONS]));
     }
 
     #[test]

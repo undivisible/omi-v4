@@ -45,6 +45,7 @@ pub fn register(router: Router<'_, ()>) -> Router<'_, ()> {
         .get_async("/v1/memory/retrieve", handle_retrieve)
         .post_async("/v1/memory/retrieve", handle_retrieve)
         .get_async("/v1/memory/semantic-search", handle_semantic_search)
+        .post_async("/v1/memory/semantic-search", handle_semantic_search)
         .get_async("/v1/memories", handle_memories_get)
         .post_async("/v1/memories", handle_memories_post)
         .post_async(
@@ -468,16 +469,28 @@ pub(crate) async fn search_memory_claims(
     query: &str,
     top_k: i64,
 ) -> Result<Vec<Value>> {
-    let Some(index) = vectorize(env) else {
+    if vectorize(env).is_none() {
         return Ok(Vec::new());
-    };
+    }
     let Some(vectors) = embed_texts(env, &[query.to_string()]).await else {
         return Ok(Vec::new());
     };
     let Some(vector) = vectors.into_iter().next() else {
         return Ok(Vec::new());
     };
-    let Some(matches) = index.query(&vector, top_k, uid).await else {
+    search_memory_claims_by_vector(env, uid, &vector, top_k).await
+}
+
+async fn search_memory_claims_by_vector(
+    env: &Env,
+    uid: &str,
+    vector: &[f64],
+    top_k: i64,
+) -> Result<Vec<Value>> {
+    let Some(index) = vectorize(env) else {
+        return Ok(Vec::new());
+    };
+    let Some(matches) = index.query(vector, top_k, uid).await else {
         return Ok(Vec::new());
     };
     if matches.is_empty() {
@@ -505,6 +518,25 @@ pub(crate) async fn search_memory_claims(
                 "score": score,
             }));
         }
+    }
+    let citation_stmts: Vec<D1PreparedStatement> = items
+        .iter()
+        .map(|item| {
+            stmt(
+                &db,
+                "SELECT ce.evidence_id FROM memory_claim_evidence ce\n         JOIN memory_evidence e ON e.id = ce.evidence_id AND e.uid = ce.uid\n         JOIN memory_source_revisions r ON r.id = e.source_revision_id AND r.uid = e.uid\n         JOIN memory_sources s ON s.id = r.source_id AND r.uid = e.uid\n         WHERE ce.claim_id = ?1 AND ce.uid = ?2 AND ce.relation = 'supports'\n           AND e.tombstoned_at IS NULL AND s.tombstoned_at IS NULL",
+                &[s(&str_field(item, "id")), s(uid)],
+            )
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let citations = db.batch(citation_stmts).await?;
+    for (item, result) in items.iter_mut().zip(citations.iter()) {
+        let evidence_ids: Vec<String> = result
+            .results::<Value>()?
+            .iter()
+            .map(|row| str_field(row, "evidence_id"))
+            .collect();
+        item["evidenceIds"] = json!(evidence_ids);
     }
     Ok(items)
 }
@@ -1040,28 +1072,51 @@ pub(crate) async fn retrieve_cited_memory(
     Ok(json!({ "query": query, "items": items, "gaps": gaps }))
 }
 
-async fn handle_semantic_search(req: Request, ctx: RouteContext<()>) -> Result<Response> {
+async fn handle_semantic_search(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
     let auth = authed!(req, ctx);
     let db = ctx.env.d1("DB")?;
     ensure_projected(&db, &auth.uid).await?;
-    let url = req.url()?;
-    let query = url
-        .query_pairs()
-        .find(|(k, _)| k == "q")
-        .map(|(_, v)| Value::from(v.to_string()));
-    let query = trimmed(query.as_ref(), 500);
-    let limit = url
-        .query_pairs()
-        .find(|(k, _)| k == "limit")
-        .and_then(|(_, v)| v.parse::<i64>().ok())
-        .unwrap_or(8);
+    let (query, limit, vector) = if req.method() == Method::Post {
+        let Some(body) = json_object(&mut req).await else {
+            return error_json("Invalid retrieval", 400);
+        };
+        let query = trimmed(body.get("query"), 500);
+        let limit = body.get("limit").and_then(Value::as_i64).unwrap_or(8);
+        let vector = body
+            .get("vector")
+            .and_then(Value::as_array)
+            .and_then(|values| values.iter().map(Value::as_f64).collect::<Option<Vec<_>>>());
+        let Some(vector) = vector else {
+            return error_json("Invalid retrieval", 400);
+        };
+        if !routes_memory::valid_embedding(&vector) {
+            return error_json("Invalid retrieval", 400);
+        }
+        (query, limit, Some(vector))
+    } else {
+        let url = req.url()?;
+        let query = url
+            .query_pairs()
+            .find(|(k, _)| k == "q")
+            .map(|(_, v)| Value::from(v.to_string()));
+        let query = trimmed(query.as_ref(), 500);
+        let limit = url
+            .query_pairs()
+            .find(|(k, _)| k == "limit")
+            .and_then(|(_, v)| v.parse::<i64>().ok())
+            .unwrap_or(8);
+        (query, limit, None)
+    };
     let Some(query) = query else {
         return error_json("Invalid retrieval", 400);
     };
     if !(1..=20).contains(&limit) {
         return error_json("Invalid retrieval", 400);
     }
-    let items = search_memory_claims(&ctx.env, &auth.uid, &query, limit).await?;
+    let items = match vector {
+        Some(vector) => search_memory_claims_by_vector(&ctx.env, &auth.uid, &vector, limit).await?,
+        None => search_memory_claims(&ctx.env, &auth.uid, &query, limit).await?,
+    };
     Response::from_json(&json!({ "query": query, "items": items }))
 }
 

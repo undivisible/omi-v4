@@ -26,7 +26,7 @@ if grep -Fq "'credential: \$credential'" "$command_file"; then
   echo "generated assistant credential debug output is not redacted" >&2
   exit 1
 fi
-if [[ "$(grep -Fc "'credential: [REDACTED]'" "$command_file")" -ne 1 ]]; then
+if [[ "$(grep -Fc "'credential: [REDACTED]'" "$command_file")" -ne 2 ]]; then
   echo "generated credential redaction is missing or ambiguous" >&2
   exit 1
 fi

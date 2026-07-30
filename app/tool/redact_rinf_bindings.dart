@@ -15,7 +15,7 @@ void main(List<String> arguments) {
   const redacted = "'credential: [REDACTED]'";
   final matches = exposed.allMatches(source).length;
   final existingRedactions = redacted.allMatches(source).length;
-  if (matches != 1 || existingRedactions != 0) {
+  if (matches != 2 || existingRedactions != 0) {
     stderr.writeln(
       'expected exactly two generated credential debug fields; found '
       '$matches exposed and $existingRedactions redacted',
