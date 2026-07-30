@@ -86,6 +86,8 @@ jobs:
         working-directory: worker-rs
     steps:
       - uses: actions/checkout@v4
+      - uses: dart-lang/setup-dart@v1
+      - run: dart pub global activate jaspr_cli 0.23.2
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt

@@ -27,9 +27,8 @@ class OmiMarkAnchorScope extends InheritedWidget {
 
   final OmiMarkAnchor anchor;
 
-  static OmiMarkAnchor? maybeOf(BuildContext context) => context
-      .dependOnInheritedWidgetOfExactType<OmiMarkAnchorScope>()
-      ?.anchor;
+  static OmiMarkAnchor? maybeOf(BuildContext context) =>
+      context.dependOnInheritedWidgetOfExactType<OmiMarkAnchorScope>()?.anchor;
 
   @override
   bool updateShouldNotify(OmiMarkAnchorScope old) => old.anchor != anchor;

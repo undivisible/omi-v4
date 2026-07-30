@@ -1955,134 +1955,137 @@ class _ProviderTileState extends State<_ProviderTile> {
         context: context,
         builder: (context) => StatefulBuilder(
           builder: (context, update) => AlertDialog(
-          title: const Text('Bring your own model'),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                DropdownButtonFormField<AssistantProvider>(
-                  initialValue: provider,
-                  decoration: const InputDecoration(labelText: 'Provider'),
-                  items: AssistantProvider.values
-                      .where((value) => value != AssistantProvider.worker)
-                      .map(
-                        (value) => DropdownMenuItem(
-                          value: value,
-                          child: Text(value.name),
-                        ),
-                      )
-                      .toList(),
-                  onChanged: (value) => update(() => provider = value!),
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: model,
-                  decoration: const InputDecoration(labelText: 'Model'),
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: secret,
-                  obscureText: true,
-                  decoration: const InputDecoration(labelText: 'API key'),
-                ),
-                if (provider == AssistantProvider.xai ||
-                    provider == AssistantProvider.openAi) ...[
+            title: const Text('Bring your own model'),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  DropdownButtonFormField<AssistantProvider>(
+                    initialValue: provider,
+                    decoration: const InputDecoration(labelText: 'Provider'),
+                    items: AssistantProvider.values
+                        .where((value) => value != AssistantProvider.worker)
+                        .map(
+                          (value) => DropdownMenuItem(
+                            value: value,
+                            child: Text(value.name),
+                          ),
+                        )
+                        .toList(),
+                    onChanged: (value) => update(() => provider = value!),
+                  ),
                   const SizedBox(height: 12),
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: OutlinedButton.icon(
-                      key: Key('signin_${provider.name}'),
-                      icon: const Icon(Icons.login_rounded, size: 18),
-                      label: Text(
-                        provider == AssistantProvider.xai
-                            ? 'Sign in with xAI'
-                            : 'Sign in with ChatGPT',
-                      ),
-                      onPressed: () => _oauthSignIn(
-                        context,
-                        provider,
-                        model.text,
-                        (value) => update(() => info = value),
-                        () => update(() => error = null),
-                        (message) => update(() => error = message),
+                  TextField(
+                    controller: model,
+                    decoration: const InputDecoration(labelText: 'Model'),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: secret,
+                    obscureText: true,
+                    decoration: const InputDecoration(labelText: 'API key'),
+                  ),
+                  if (provider == AssistantProvider.xai ||
+                      provider == AssistantProvider.openAi) ...[
+                    const SizedBox(height: 12),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: OutlinedButton.icon(
+                        key: Key('signin_${provider.name}'),
+                        icon: const Icon(Icons.login_rounded, size: 18),
+                        label: Text(
+                          provider == AssistantProvider.xai
+                              ? 'Sign in with xAI'
+                              : 'Sign in with ChatGPT',
+                        ),
+                        onPressed: () => _oauthSignIn(
+                          context,
+                          provider,
+                          model.text,
+                          (value) => update(() => info = value),
+                          () => update(() => error = null),
+                          (message) => update(() => error = message),
+                        ),
                       ),
                     ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    provider == AssistantProvider.xai
-                        ? 'Uses your SuperGrok or X Premium+ subscription — no '
-                              'separate inference bill. The API key above still '
-                              'works as a fallback.'
-                        : 'Uses your ChatGPT Plus or Pro subscription — no '
-                              'separate inference bill. The API key above still '
-                              'works as a fallback.',
-                    style: const TextStyle(fontSize: 11, height: 1.35),
-                  ),
-                  if (info != null) ...[
-                    const SizedBox(height: 8),
+                    const SizedBox(height: 4),
                     Text(
-                      info!,
-                      key: const Key('signin_info'),
-                      style: const TextStyle(fontSize: 12),
+                      provider == AssistantProvider.xai
+                          ? 'Uses your SuperGrok or X Premium+ subscription — no '
+                                'separate inference bill. The API key above still '
+                                'works as a fallback.'
+                          : 'Uses your ChatGPT Plus or Pro subscription — no '
+                                'separate inference bill. The API key above still '
+                                'works as a fallback.',
+                      style: const TextStyle(fontSize: 11, height: 1.35),
+                    ),
+                    if (info != null) ...[
+                      const SizedBox(height: 8),
+                      Text(
+                        info!,
+                        key: const Key('signin_info'),
+                        style: const TextStyle(fontSize: 12),
+                      ),
+                    ],
+                  ],
+                  if (provider == AssistantProvider.compatible) ...[
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: endpoint,
+                      decoration: const InputDecoration(
+                        labelText: 'HTTPS endpoint',
+                      ),
+                    ),
+                  ],
+                  if (error != null) ...[
+                    const SizedBox(height: 12),
+                    Text(
+                      error!,
+                      style: const TextStyle(color: Colors.redAccent),
                     ),
                   ],
                 ],
-                if (provider == AssistantProvider.compatible) ...[
-                  const SizedBox(height: 12),
-                  TextField(
-                    controller: endpoint,
-                    decoration: const InputDecoration(
-                      labelText: 'HTTPS endpoint',
-                    ),
-                  ),
-                ],
-                if (error != null) ...[
-                  const SizedBox(height: 12),
-                  Text(error!, style: const TextStyle(color: Colors.redAccent)),
-                ],
-              ],
-            ),
-          ),
-          actions: [
-            if (existing != null)
-              TextButton(
-                onPressed: () async {
-                  await widget.services.removeProviderCredential(
-                    existing.provider,
-                  );
-                  if (context.mounted) Navigator.pop(context);
-                },
-                child: const Text('Remove'),
               ),
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Cancel'),
             ),
-            FilledButton(
-              onPressed: () async {
-                try {
-                  await widget.services.saveProviderCredential(
-                    ProviderCredential(
-                      provider: provider,
-                      model: model.text,
-                      credential: secret.text,
-                      endpoint: provider == AssistantProvider.compatible
-                          ? endpoint.text
-                          : null,
-                    ),
-                  );
-                  if (context.mounted) Navigator.pop(context);
-                } catch (failure) {
-                  update(() => error = '$failure');
-                }
-              },
-              child: const Text('Save'),
-            ),
-          ],
+            actions: [
+              if (existing != null)
+                TextButton(
+                  onPressed: () async {
+                    await widget.services.removeProviderCredential(
+                      existing.provider,
+                    );
+                    if (context.mounted) Navigator.pop(context);
+                  },
+                  child: const Text('Remove'),
+                ),
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Cancel'),
+              ),
+              FilledButton(
+                onPressed: () async {
+                  try {
+                    await widget.services.saveProviderCredential(
+                      ProviderCredential(
+                        provider: provider,
+                        model: model.text,
+                        credential: secret.text,
+                        endpoint: provider == AssistantProvider.compatible
+                            ? endpoint.text
+                            : null,
+                      ),
+                    );
+                    if (context.mounted) Navigator.pop(context);
+                  } catch (failure) {
+                    update(() => error = '$failure');
+                  }
+                },
+                child: const Text('Save'),
+              ),
+            ],
+          ),
         ),
-      ),
-    );
+      );
     } finally {
       _configureOpen = false;
       model.dispose();
