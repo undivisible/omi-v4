@@ -854,9 +854,9 @@ async fn handle_me(req: Request, ctx: RouteContext<()>) -> Result<Response> {
     Response::from_json(&json!({
         "uid": auth.uid,
         "email": auth.email,
-        "auth": if auth.key.is_some() { "api_key" } else { "firebase" },
+        "auth": if auth.key.is_some() { "api_key" } else if auth.oauth { "oauth" } else { "firebase" },
         "keyId": auth.key.as_ref().map(|key| key.id.clone()),
-        "scopes": auth.key.as_ref().map(|key| key.scopes.clone()),
+        "scopes": auth.scopes().map(|scopes| scopes.to_vec()),
     }))
 }
 

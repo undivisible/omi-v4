@@ -278,10 +278,13 @@ pub fn input_schema(name: &str) -> Value {
 }
 
 /// `listedTools` — name, title, description, inputSchema.
-pub fn listed_tools() -> Value {
+pub fn listed_tools(scopes: Option<&[String]>) -> Value {
     Value::Array(
         TOOLS
             .iter()
+            .filter(|tool| {
+                scopes.is_none_or(|scopes| scopes.iter().any(|scope| scope == tool.scope))
+            })
             .map(|tool| {
                 json!({
                     "name": tool.name,
@@ -356,7 +359,7 @@ pub fn plan(scopes: Option<&[String]>, message: &Value) -> Plan {
             }),
         )),
         "ping" => Plan::Reply(result(id, json!({}))),
-        "tools/list" => Plan::Reply(result(id, json!({ "tools": listed_tools() }))),
+        "tools/list" => Plan::Reply(result(id, json!({ "tools": listed_tools(scopes) }))),
         "tools/call" => {
             let params = record.get("params").and_then(Value::as_object);
             let Some(name) = params.and_then(|p| p.get("name")).and_then(Value::as_str) else {
@@ -511,7 +514,7 @@ mod tests {
 
     #[test]
     fn lists_every_tool_with_a_precise_input_schema() {
-        let listed = listed_tools();
+        let listed = listed_tools(None);
         let tools = listed.as_array().unwrap();
         assert_eq!(tools.len(), TOOLS.len());
         for tool in tools {
@@ -525,7 +528,9 @@ mod tests {
             tools[3]["inputSchema"]["required"],
             json!(["title", "summary", "reason", "proposedNextStep"])
         );
-        assert!(listed_tools()[2]["inputSchema"].get("required").is_none());
+        assert!(listed_tools(None)[2]["inputSchema"]
+            .get("required")
+            .is_none());
         assert_eq!(tool_for("transcribe_audio").unwrap().scope, "speech:write");
         assert_eq!(tool_for("speak_text").unwrap().scope, "speech:write");
     }
@@ -591,6 +596,22 @@ mod tests {
             ),
             Plan::Call { .. }
         ));
+    }
+
+    #[test]
+    fn scoped_tool_list_exposes_only_authorized_tools() {
+        let scopes = vec!["memory:read".to_string()];
+        let response = reply(plan(
+            Some(&scopes),
+            &json!({ "jsonrpc": "2.0", "id": 5, "method": "tools/list" }),
+        ));
+        let names: Vec<&str> = response["result"]["tools"]
+            .as_array()
+            .expect("tools array")
+            .iter()
+            .filter_map(|tool| tool["name"].as_str())
+            .collect();
+        assert_eq!(names, vec!["search_memory", "list_memories"]);
     }
 
     #[test]

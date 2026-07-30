@@ -78,4 +78,6 @@ mod routes_facetime;
 #[cfg(target_arch = "wasm32")]
 mod routes_keys;
 #[cfg(target_arch = "wasm32")]
+mod routes_oauth;
+#[cfg(target_arch = "wasm32")]
 mod routes_public;

@@ -198,6 +198,7 @@ async fn fetch(req: Request, env: Env, ctx: Context) -> Result<Response> {
     let router = crate::routes_memory::register(router);
     // API keys + BYOK negotiation (first-party, Firebase-authenticated).
     let router = crate::routes_keys::register(router);
+    let router = crate::routes_oauth::register(router);
     // Third-party surface: the public API and the MCP transport, which carry
     // their own `requireApiAccess` credential gate.
     let router = crate::routes_public::register(router);
@@ -304,10 +305,13 @@ pub(crate) async fn authenticate(req: &Request, ctx: &RouteContext<()>) -> AuthO
     authenticate_firebase_bearer(&token, ctx).await
 }
 
-/// Firebase-only authentication for credential upgrades. This intentionally
+/// Firebase-only authentication for credential upgrades and OAuth approval. This intentionally
 /// bypasses the Worker-token branch in `authenticate`, so a Worker bearer can
-/// never be exchanged for another Worker session.
-async fn authenticate_firebase_bearer(token: &str, ctx: &RouteContext<()>) -> AuthOutcome {
+/// never be exchanged for another Worker session or authorize a third-party client.
+pub(crate) async fn authenticate_firebase_bearer(
+    token: &str,
+    ctx: &RouteContext<()>,
+) -> AuthOutcome {
     let project_id = ctx
         .env
         .var("FIREBASE_PROJECT_ID")

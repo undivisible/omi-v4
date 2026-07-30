@@ -57,7 +57,6 @@ async fn json_body(req: &mut Request) -> Option<Value> {
 // Credential gate shared with the public API and MCP
 // ---------------------------------------------------------------------------
 
-/// The API-key context attached to a request (`context.get("apiKey")`).
 pub(crate) struct ApiKeyContext {
     pub(crate) id: String,
     pub(crate) scopes: Vec<String>,
@@ -70,12 +69,16 @@ pub(crate) struct ApiAuth {
     pub(crate) uid: String,
     pub(crate) email: Option<String>,
     pub(crate) key: Option<ApiKeyContext>,
+    pub(crate) scopes: Option<Vec<String>>,
+    pub(crate) oauth: bool,
 }
 
 impl ApiAuth {
     /// `null` for Firebase (every scope), the minted list for an API key.
     pub(crate) fn scopes(&self) -> Option<&[String]> {
-        self.key.as_ref().map(|key| key.scopes.as_slice())
+        self.scopes
+            .as_deref()
+            .or_else(|| self.key.as_ref().map(|key| key.scopes.as_slice()))
     }
 }
 
@@ -133,6 +136,8 @@ pub(crate) async fn verify_api_key(
             id: matched.id.clone(),
             scopes: matched.scopes.clone(),
         }),
+        scopes: Some(matched.scopes.clone()),
+        oauth: false,
     }))
 }
 
@@ -145,14 +150,40 @@ pub(crate) async fn require_api_access(
     let credential = api_keys::credential(&header("authorization"), &header("x-api-key"));
     let token = match credential {
         Credential::Firebase => {
+            if req.path() == "/mcp" && header("authorization").is_empty() {
+                let headers = Headers::new();
+                headers.set(
+                    "www-authenticate",
+                    "Bearer resource_metadata=\"https://api.omi.tsc.hk/.well-known/oauth-protected-resource\"",
+                ).ok();
+                return Err(
+                    Response::from_json(&json!({ "error": "Authentication required" }))
+                        .unwrap_or_else(|_| Response::empty().expect("empty response"))
+                        .with_status(401)
+                        .with_headers(headers),
+                );
+            }
+            if let Ok(Some((uid, scopes))) =
+                crate::routes_oauth::verify_access_token(ctx, &header("authorization")).await
+            {
+                return Ok(ApiAuth {
+                    uid,
+                    email: None,
+                    key: None,
+                    scopes: Some(scopes),
+                    oauth: true,
+                });
+            }
             return match authenticate(req, ctx).await {
                 AuthOutcome::Ok(auth) => Ok(ApiAuth {
                     uid: auth.uid,
                     email: auth.email,
                     key: None,
+                    scopes: None,
+                    oauth: false,
                 }),
                 AuthOutcome::Reject(response) => Err(response),
-            }
+            };
         }
         Credential::ApiKey(token) => token,
     };
