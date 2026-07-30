@@ -39,7 +39,11 @@ final class RewindCaptureBridge: NSObject {
       case "state":
         result(self.state())
       case "preview":
-        result(self.preview())
+        let arguments = call.arguments as? [String: Any]
+        let displayId = arguments?["displayId"] as? UInt32
+        result(self.preview(displayId: displayId))
+      case "displays":
+        result(self.displays())
       case "encodeHeldFrame":
         let arguments = call.arguments as? [String: Any]
         let recognize = arguments?["recognizeText"] as? Bool ?? true
@@ -151,17 +155,38 @@ final class RewindCaptureBridge: NSObject {
 
   // MARK: - Capture
 
-  private func preview() -> FlutterStandardTypedData? {
+  private func displays() -> [[String: Any]] {
+    var count: UInt32 = 0
+    guard CGGetActiveDisplayList(0, nil, &count) == .success else { return [] }
+    var ids = [CGDirectDisplayID](repeating: 0, count: Int(count))
+    guard CGGetActiveDisplayList(count, &ids, &count) == .success else { return [] }
+    return ids.prefix(Int(count)).map { id in
+      let bounds = CGDisplayBounds(id)
+      let screen = NSScreen.screens.first {
+        ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?
+          .uint32Value == id
+      }
+      return [
+        "id": id,
+        "name": screen?.localizedName ?? "Display \(id)",
+        "x": Int(bounds.origin.x),
+        "y": Int(bounds.origin.y),
+        "width": Int(bounds.width),
+        "height": Int(bounds.height),
+        "scale": screen?.backingScaleFactor ?? 1,
+        "primary": id == CGMainDisplayID(),
+      ]
+    }
+  }
+
+  private func preview(displayId: UInt32?) -> FlutterStandardTypedData? {
     heldFrame = nil
     guard !screenLocked, !systemAsleep, CGPreflightScreenCaptureAccess() else { return nil }
-    guard let image = Self.captureMainDisplay() else { return nil }
+    let id = displayId ?? CGMainDisplayID()
+    guard let image = CGDisplayCreateImage(id) else { return nil }
     heldFrame = image
     guard let luma = Self.lumaPreview(image) else { return nil }
     return FlutterStandardTypedData(bytes: luma)
-  }
-
-  private static func captureMainDisplay() -> CGImage? {
-    CGDisplayCreateImage(CGMainDisplayID())
   }
 
   /// Downsamples to the 9x8 difference-hash grid in one draw, straight from

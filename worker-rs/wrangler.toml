@@ -105,6 +105,11 @@ index_name = "omi-memory-claims"
 [ai]
 binding = "AI"
 
+[[ai_search]]
+binding = "DOCUMENT_SEARCH"
+instance_name = "omi-documents"
+remote = true
+
 # Secrets (set via `wrangler secret put`), NOT committed — provision the same
 # set the TS worker uses before cutover (see CUTOVER.md for the full list):
 #   TELEGRAM_WEBHOOK_SECRET, TELEGRAM_BOT_TOKEN, SENDBLUE_*, 

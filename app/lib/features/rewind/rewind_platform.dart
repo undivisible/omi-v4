@@ -82,9 +82,11 @@ final class RewindEncodedFrame {
 abstract interface class RewindCapturePlatform {
   Future<RewindSystemState> readState();
 
+  Future<List<RewindDisplay>> displays();
+
   /// Captures the screen and returns the 72-byte luminance preview, keeping
   /// the full frame in native memory. Null when nothing could be captured.
-  Future<Uint8List?> preview();
+  Future<Uint8List?> preview(RewindDisplay display);
 
   /// Encodes the frame held by the last [preview] call, and — when
   /// [recognizeText] is set — runs on-device text recognition over it in the
@@ -142,7 +144,31 @@ final class MacRewindCapturePlatform implements RewindCapturePlatform {
   }
 
   @override
-  Future<Uint8List?> preview() => _invoke<Uint8List>('preview');
+  Future<List<RewindDisplay>> displays() async {
+    final raw = await _invoke<List<Object?>>('displays');
+    if (raw == null) return const [];
+    return raw
+        .whereType<Map>()
+        .map((display) {
+          num number(String key, [num fallback = 0]) =>
+              display[key] is num ? display[key] as num : fallback;
+          return RewindDisplay(
+            id: number('id').toInt().toString(),
+            name: display['name'] as String? ?? 'Display',
+            x: number('x').toInt(),
+            y: number('y').toInt(),
+            width: number('width').toInt(),
+            height: number('height').toInt(),
+            scale: number('scale', 1).toDouble(),
+            primary: display['primary'] as bool? ?? false,
+          );
+        })
+        .toList(growable: false);
+  }
+
+  @override
+  Future<Uint8List?> preview(RewindDisplay display) =>
+      _invoke<Uint8List>('preview', {'displayId': int.tryParse(display.id)});
 
   @override
   Future<RewindEncodedFrame?> encodeHeldFrame({
@@ -190,7 +216,10 @@ final class InertRewindCapturePlatform implements RewindCapturePlatform {
   Future<RewindSystemState> readState() async => RewindSystemState.unavailable;
 
   @override
-  Future<Uint8List?> preview() async => null;
+  Future<List<RewindDisplay>> displays() async => const [];
+
+  @override
+  Future<Uint8List?> preview(RewindDisplay display) async => null;
 
   @override
   Future<RewindEncodedFrame?> encodeHeldFrame({

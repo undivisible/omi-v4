@@ -26,6 +26,38 @@
   font-display: swap;
 }
 
+@font-face {
+  font-family: "Arimo";
+  src: url("/arimo-regular.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Arimo";
+  src: url("/arimo-semibold.ttf") format("truetype");
+  font-weight: 600 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Literata";
+  src: url("/literata-regular.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Literata";
+  src: url("/literata-semibold.ttf") format("truetype");
+  font-weight: 600 900;
+  font-style: normal;
+  font-display: swap;
+}
+
 :root {
   /* Palette taken from the app: _HubColors.dark in chat_screen.dart and the
      onboarding backdrop's edge colours. */
@@ -39,8 +71,9 @@
   --ease: cubic-bezier(0.22, 1, 0.36, 1);
   --pad: clamp(1.25rem, 5vw, 4.5rem);
   --font:
-    "Inter", -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI",
+    "Arimo", -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI",
     sans-serif;
+  --serif: "Literata", "Iowan Old Style", Georgia, serif;
   --mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   --pixel:
     "Geist Pixel", "Geist Mono", ui-monospace, "SF Mono", Menlo, Consolas,
@@ -51,6 +84,13 @@
   margin: 0;
   padding: 0;
   box-sizing: border-box;
+}
+
+h1,
+h2,
+.big {
+  font-family: var(--serif);
+  font-optical-sizing: auto;
 }
 
 html {
@@ -1647,24 +1687,25 @@ main > .band.wrap {
 }
 
 :root {
-  --font: "Avenir Next", "Segoe UI", sans-serif;
+  --font: "Arimo", -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
+  --serif: "Literata", "Iowan Old Style", Georgia, serif;
   --ink: #171411;
-  --cream: #fff9f1;
+  --cream: #f7efe4;
   --muted: #665f57;
   --rule: rgba(23, 20, 17, 0.11);
   --sky: #a85c4e;
 }
 
 html {
-  background: #f6e7da;
+  background: #e6d5bc;
 }
 
 body {
   background:
-    radial-gradient(circle at 13% 18%, rgba(255, 170, 139, 0.46), transparent 28rem),
-    radial-gradient(circle at 92% 15%, rgba(166, 191, 255, 0.38), transparent 31rem),
-    radial-gradient(circle at 78% 79%, rgba(215, 225, 132, 0.38), transparent 29rem),
-    #f6e7da;
+    radial-gradient(circle at 13% 18%, rgba(159, 86, 62, 0.45), transparent 28rem),
+    radial-gradient(circle at 92% 15%, rgba(87, 127, 127, 0.42), transparent 31rem),
+    radial-gradient(circle at 78% 79%, rgba(123, 77, 104, 0.33), transparent 29rem),
+    #e6d5bc;
 }
 
 .field {
@@ -2360,11 +2401,13 @@ body {
 }
 
 main:has(.hub-page) {
-  height: calc(100svh - 3.25rem);
+  min-height: 0;
 }
 
 .hub-page {
-  height: 100%;
+  position: relative;
+  height: calc(100svh - 3.25rem);
+  min-height: 34rem;
 }
 
 .hub-page .sr-only {
@@ -2388,16 +2431,16 @@ main:has(.hub-page) {
 .hub-page .shot-frame {
   height: 100%;
   aspect-ratio: auto;
-  --hub-scale: 0.88;
+  --hub-scale: 1;
   border: 0;
   border-radius: 0;
   box-shadow: none;
-  background: #fffaf3;
+  background: #e9dcc8;
 }
 
 .hub-page .shot-frame iframe {
-  width: 100%;
-  height: 100%;
+  width: calc(100% / var(--hub-scale));
+  height: calc(100% / var(--hub-scale));
   border-radius: 0;
 }
 
@@ -2428,11 +2471,16 @@ main:has(.hub-page) {
 
 @media (max-width: 700px) {
   main:has(.hub-page) {
-    height: calc(100svh - 5rem);
+    min-height: 0;
   }
 
   .hub-page .shot-frame {
     --hub-scale: 1;
+  }
+
+  .hub-page {
+    height: calc(100svh - 5rem);
+    min-height: 30rem;
   }
 
   .foot-compact {

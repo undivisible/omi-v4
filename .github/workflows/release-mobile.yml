@@ -61,7 +61,7 @@ jobs:
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: '21'
 
       - uses: subosito/flutter-action@v2
         with:
@@ -112,6 +112,49 @@ jobs:
             echo "::notice::ANDROID_KEYSTORE_BASE64 / ANDROID_KEYSTORE_PASSWORD / ANDROID_KEY_ALIAS are not all set. Gradle will fall back to the debug signing config, which means the APK and AAB are not suitable for Play Store upload."
           fi
 
+      # Auth config reaches the app only through --dart-define. A build with
+      # these missing compiles and ships an UnconfiguredAuthGateway: the binary
+      # looks fine and cannot sign in. Every release built before this step
+      # existed had that fault, so this fails loudly rather than shipping it.
+      - name: Resolve Firebase build defines
+        id: firebase
+        env:
+          FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
+          FIREBASE_AUTH_DOMAIN: ${{ secrets.FIREBASE_AUTH_DOMAIN }}
+          FIREBASE_API_KEY: ${{ secrets.FIREBASE_API_KEY }}
+          FIREBASE_APP_ID: ${{ secrets.FIREBASE_APP_ID }}
+          FIREBASE_ANDROID_API_KEY: ${{ secrets.FIREBASE_ANDROID_API_KEY }}
+          FIREBASE_ANDROID_APP_ID: ${{ secrets.FIREBASE_ANDROID_APP_ID }}
+          FIREBASE_IOS_API_KEY: ${{ secrets.FIREBASE_IOS_API_KEY }}
+          FIREBASE_IOS_APP_ID: ${{ secrets.FIREBASE_IOS_APP_ID }}
+          FIREBASE_MACOS_API_KEY: ${{ secrets.FIREBASE_MACOS_API_KEY }}
+          FIREBASE_MACOS_APP_ID: ${{ secrets.FIREBASE_MACOS_APP_ID }}
+          FIREBASE_WINDOWS_API_KEY: ${{ secrets.FIREBASE_WINDOWS_API_KEY }}
+          FIREBASE_WINDOWS_APP_ID: ${{ secrets.FIREBASE_WINDOWS_APP_ID }}
+          FIREBASE_WEB_API_KEY: ${{ secrets.FIREBASE_WEB_API_KEY }}
+          FIREBASE_WEB_APP_ID: ${{ secrets.FIREBASE_WEB_APP_ID }}
+        run: |
+          set -euo pipefail
+          defines=""
+          missing=""
+          for name in FIREBASE_PROJECT_ID FIREBASE_AUTH_DOMAIN FIREBASE_API_KEY \
+                      FIREBASE_APP_ID FIREBASE_ANDROID_API_KEY FIREBASE_ANDROID_APP_ID \
+                      FIREBASE_IOS_API_KEY FIREBASE_IOS_APP_ID FIREBASE_MACOS_API_KEY \
+                      FIREBASE_MACOS_APP_ID FIREBASE_WINDOWS_API_KEY \
+                      FIREBASE_WINDOWS_APP_ID FIREBASE_WEB_API_KEY FIREBASE_WEB_APP_ID; do
+            value="${!name-}"
+            if [ -z "${value}" ]; then
+              missing="${missing} ${name}"
+            else
+              defines="${defines} --dart-define=${name}=${value}"
+            fi
+          done
+          if [ -n "${missing}" ]; then
+            echo "::error::Release builds cannot sign in without these repository secrets:${missing}"
+            exit 1
+          fi
+          echo "defines=${defines# }" >> "$GITHUB_OUTPUT"
+
       - name: Build the release APK and app bundle
         working-directory: app
         env:
@@ -122,8 +165,8 @@ jobs:
         run: |
           set -euo pipefail
           flutter pub get
-          flutter build apk --release
-          flutter build appbundle --release
+          flutter build apk --release ${{ steps.firebase.outputs.defines }}
+          flutter build appbundle --release ${{ steps.firebase.outputs.defines }}
 
       - name: Verify the release signature
         if: steps.signing.outputs.enabled == 'true'
@@ -239,13 +282,56 @@ jobs:
           printf '%s' "${IOS_PROVISIONING_PROFILE_BASE64}" | base64 -d \
             > "${HOME}/Library/MobileDevice/Provisioning Profiles/omi-release.mobileprovision"
 
+      # Auth config reaches the app only through --dart-define. A build with
+      # these missing compiles and ships an UnconfiguredAuthGateway: the binary
+      # looks fine and cannot sign in. Every release built before this step
+      # existed had that fault, so this fails loudly rather than shipping it.
+      - name: Resolve Firebase build defines
+        id: firebase
+        env:
+          FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
+          FIREBASE_AUTH_DOMAIN: ${{ secrets.FIREBASE_AUTH_DOMAIN }}
+          FIREBASE_API_KEY: ${{ secrets.FIREBASE_API_KEY }}
+          FIREBASE_APP_ID: ${{ secrets.FIREBASE_APP_ID }}
+          FIREBASE_ANDROID_API_KEY: ${{ secrets.FIREBASE_ANDROID_API_KEY }}
+          FIREBASE_ANDROID_APP_ID: ${{ secrets.FIREBASE_ANDROID_APP_ID }}
+          FIREBASE_IOS_API_KEY: ${{ secrets.FIREBASE_IOS_API_KEY }}
+          FIREBASE_IOS_APP_ID: ${{ secrets.FIREBASE_IOS_APP_ID }}
+          FIREBASE_MACOS_API_KEY: ${{ secrets.FIREBASE_MACOS_API_KEY }}
+          FIREBASE_MACOS_APP_ID: ${{ secrets.FIREBASE_MACOS_APP_ID }}
+          FIREBASE_WINDOWS_API_KEY: ${{ secrets.FIREBASE_WINDOWS_API_KEY }}
+          FIREBASE_WINDOWS_APP_ID: ${{ secrets.FIREBASE_WINDOWS_APP_ID }}
+          FIREBASE_WEB_API_KEY: ${{ secrets.FIREBASE_WEB_API_KEY }}
+          FIREBASE_WEB_APP_ID: ${{ secrets.FIREBASE_WEB_APP_ID }}
+        run: |
+          set -euo pipefail
+          defines=""
+          missing=""
+          for name in FIREBASE_PROJECT_ID FIREBASE_AUTH_DOMAIN FIREBASE_API_KEY \
+                      FIREBASE_APP_ID FIREBASE_ANDROID_API_KEY FIREBASE_ANDROID_APP_ID \
+                      FIREBASE_IOS_API_KEY FIREBASE_IOS_APP_ID FIREBASE_MACOS_API_KEY \
+                      FIREBASE_MACOS_APP_ID FIREBASE_WINDOWS_API_KEY \
+                      FIREBASE_WINDOWS_APP_ID FIREBASE_WEB_API_KEY FIREBASE_WEB_APP_ID; do
+            value="${!name-}"
+            if [ -z "${value}" ]; then
+              missing="${missing} ${name}"
+            else
+              defines="${defines} --dart-define=${name}=${value}"
+            fi
+          done
+          if [ -n "${missing}" ]; then
+            echo "::error::Release builds cannot sign in without these repository secrets:${missing}"
+            exit 1
+          fi
+          echo "defines=${defines# }" >> "$GITHUB_OUTPUT"
+
       - name: Build the unsigned iOS app
         if: steps.signing.outputs.enabled != 'true'
         working-directory: app
         run: |
           set -euo pipefail
           flutter pub get
-          flutter build ios --release --no-codesign
+          flutter build ios --release --no-codesign ${{ steps.firebase.outputs.defines }}
 
       - name: Build the signed iOS archive and IPA
         if: steps.signing.outputs.enabled == 'true'
@@ -285,7 +371,7 @@ jobs:
           echo "Export options (signing style ${style}, matching CODE_SIGN_STYLE in app/ios/Runner.xcodeproj):"
           cat "${plist}"
           flutter pub get
-          flutter build ipa --release --export-options-plist="${plist}"
+          flutter build ipa --release --export-options-plist="${plist}" ${{ steps.firebase.outputs.defines }}
 
       - name: Collect iOS artifacts
         env:

@@ -10,6 +10,7 @@ class RewindFrameRecord {
     required this.absolutePath,
     required this.bytes,
     required this.hash,
+    required this.display,
     this.appName,
     this.bundleId,
     this.windowTitle,
@@ -24,6 +25,7 @@ class RewindFrameRecord {
       absolutePath: deserializer.deserializeString(),
       bytes: deserializer.deserializeUint64(),
       hash: deserializer.deserializeString(),
+      display: RewindDisplay.deserialize(deserializer),
       appName: TraitHelpers.deserializeOptionStr(deserializer),
       bundleId: TraitHelpers.deserializeOptionStr(deserializer),
       windowTitle: TraitHelpers.deserializeOptionStr(deserializer),
@@ -47,6 +49,7 @@ class RewindFrameRecord {
   final String absolutePath;
   final Uint64 bytes;
   final String hash;
+  final RewindDisplay display;
   final String? appName;
   final String? bundleId;
   final String? windowTitle;
@@ -58,6 +61,7 @@ class RewindFrameRecord {
     String? absolutePath,
     Uint64? bytes,
     String? hash,
+    RewindDisplay? display,
     String? Function()? appName,
     String? Function()? bundleId,
     String? Function()? windowTitle,
@@ -69,6 +73,7 @@ class RewindFrameRecord {
       absolutePath: absolutePath ?? this.absolutePath,
       bytes: bytes ?? this.bytes,
       hash: hash ?? this.hash,
+      display: display ?? this.display,
       appName: appName == null ? this.appName : appName(),
       bundleId: bundleId == null ? this.bundleId : bundleId(),
       windowTitle: windowTitle == null ? this.windowTitle : windowTitle(),
@@ -83,6 +88,7 @@ class RewindFrameRecord {
     serializer.serializeString(absolutePath);
     serializer.serializeUint64(bytes);
     serializer.serializeString(hash);
+    display.serialize(serializer);
     TraitHelpers.serializeOptionStr(appName, serializer);
     TraitHelpers.serializeOptionStr(bundleId, serializer);
     TraitHelpers.serializeOptionStr(windowTitle, serializer);
@@ -107,6 +113,7 @@ class RewindFrameRecord {
         absolutePath == other.absolutePath &&
         bytes == other.bytes &&
         hash == other.hash &&
+        display == other.display &&
         appName == other.appName &&
         bundleId == other.bundleId &&
         windowTitle == other.windowTitle &&
@@ -120,6 +127,7 @@ class RewindFrameRecord {
     absolutePath,
     bytes,
     hash,
+    display,
     appName,
     bundleId,
     windowTitle,
@@ -138,6 +146,7 @@ class RewindFrameRecord {
           'absolutePath: $absolutePath, '
           'bytes: $bytes, '
           'hash: $hash, '
+          'display: $display, '
           'appName: $appName, '
           'bundleId: $bundleId, '
           'windowTitle: $windowTitle, '

@@ -34,6 +34,7 @@ export 'generated/signals/signals.dart'
         RewindDirectiveIdle,
         RewindDirectivePreview,
         RewindDirectiveStored,
+        RewindDisplay,
         RewindFrameRecord,
         RewindPayload,
         RewindPayloadDirective,
@@ -124,6 +125,8 @@ export 'generated/signals/signals.dart'
         ToolStatus,
         TranscriptDelta;
 export 'generated/signals/signals.dart' show Uint64;
+
+const _sttTempo = int.fromEnvironment('OMI_STT_TEMPO', defaultValue: 1);
 
 abstract interface class NativeHub {
   bool get available;
@@ -1055,6 +1058,7 @@ final class RinfNativeHub implements NativeHub {
       sampleRateHz: sampleRateHz,
       channels: channels,
       encoding: encoding,
+      tempo: _sttTempo,
     ),
   );
 

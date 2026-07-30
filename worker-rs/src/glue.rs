@@ -200,6 +200,7 @@ async fn fetch(req: Request, env: Env, ctx: Context) -> Result<Response> {
     // Pendant home-STA self-sync: register (Firebase) + upload (device token).
     // Mounted beside publicApi so device-token auth is not forced through API keys.
     let router = crate::routes_device::register(router);
+    let router = crate::routes_documents::register(router);
     let response = router
         .or_else_any_method("/*catchall", |_req, _ctx| error_json("Not found", 404))
         .run(req, env)
@@ -264,19 +265,9 @@ pub(crate) async fn authenticate(req: &Request, ctx: &RouteContext<()>) -> AuthO
         .flatten()
         .unwrap_or_default();
     let token = auth::bearer_token(&authorization);
-    let project_id = ctx
-        .env
-        .var("FIREBASE_PROJECT_ID")
-        .ok()
-        .map(|v| v.to_string());
-
-    let (Some(token), Some(project_id)) = (token, project_id) else {
+    let Some(token) = token else {
         return reject("Authentication required", 401);
     };
-    if project_id.is_empty() {
-        return reject("Authentication required", 401);
-    }
-
     let path = req.path();
     if crate::routes_memory::is_receipt_token(&token)
         && path.contains("/executions/")
@@ -287,6 +278,36 @@ pub(crate) async fn authenticate(req: &Request, ctx: &RouteContext<()>) -> AuthO
             uid: RECEIPT_CLAIM_AUTH_MARKER.to_string(),
             email: None,
         });
+    }
+
+    let dual_mode = matches!(
+        secret_or_var(&ctx.env, "AUTH_DUAL_MODE").as_deref(),
+        Some("1" | "true" | "TRUE" | "yes" | "YES")
+    );
+    let worker_secret = secret_or_var(&ctx.env, "AUTH_TOKEN_SECRET");
+    if auth::worker_auth_enabled(dual_mode, worker_secret.as_deref()) {
+        let previous_secret = secret_or_var(&ctx.env, "AUTH_TOKEN_PREVIOUS_SECRET");
+        if let Some(identity) = auth::worker_session_auth(
+            &token,
+            Date::now().as_millis() as i64,
+            worker_secret.as_deref().unwrap_or_default(),
+            previous_secret.as_deref(),
+        ) {
+            return AuthOutcome::Ok(identity);
+        }
+    }
+
+    let project_id = ctx
+        .env
+        .var("FIREBASE_PROJECT_ID")
+        .ok()
+        .map(|v| v.to_string());
+
+    let Some(project_id) = project_id else {
+        return reject("Authentication required", 401);
+    };
+    if project_id.is_empty() {
+        return reject("Authentication required", 401);
     }
 
     let keys = match firebase_keys().await {
@@ -891,10 +912,9 @@ async fn handle_setup_health(req: Request, ctx: RouteContext<()>) -> Result<Resp
     let stripe_webhook_secret = any("STRIPE_WEBHOOK_SECRET");
     let app_url = any("APP_URL");
     let mimo_api_key = any("MIMO_API_KEY");
-    let deepgram_api_key = any("DEEPGRAM_API_KEY");
+    let openrouter_api_key = any("OPENROUTER_API_KEY");
     let gemini_api_key = any("GEMINI_API_KEY");
     let gemini_live_model = any("GEMINI_LIVE_MODEL");
-    let openrouter_api_key = any("OPENROUTER_API_KEY");
     let firebase_service_account_email = any("FIREBASE_SERVICE_ACCOUNT_EMAIL");
     let firebase_service_account_private_key = any("FIREBASE_SERVICE_ACCOUNT_PRIVATE_KEY");
 
@@ -912,10 +932,9 @@ async fn handle_setup_health(req: Request, ctx: RouteContext<()>) -> Result<Resp
         stripe_webhook_secret: stripe_webhook_secret.as_deref(),
         app_url: app_url.as_deref(),
         mimo_api_key: mimo_api_key.as_deref(),
-        deepgram_api_key: deepgram_api_key.as_deref(),
+        openrouter_api_key: openrouter_api_key.as_deref(),
         gemini_api_key: gemini_api_key.as_deref(),
         gemini_live_model: gemini_live_model.as_deref(),
-        openrouter_api_key: openrouter_api_key.as_deref(),
         firebase_service_account_email: firebase_service_account_email.as_deref(),
         firebase_service_account_private_key: firebase_service_account_private_key.as_deref(),
     });

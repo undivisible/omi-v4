@@ -7,6 +7,7 @@ import 'package:omi/api/dev_assistant.dart';
 import 'package:omi/app_services.dart';
 import 'package:omi/auth/auth.dart';
 import 'package:omi/currents/currents.dart';
+import 'package:omi/demo/demo_mode.dart';
 import 'package:omi/device/device.dart';
 import 'package:omi/features/chat_screen.dart' show ChatScreen;
 import 'package:omi/features/hub_task_meta.dart';
@@ -214,7 +215,10 @@ void main() {
     );
     final gradient =
         (fade.decoration as BoxDecoration).gradient! as LinearGradient;
-    expect(gradient.colors.first, const Color(0xfff7f6f1));
+    expect(
+      gradient.colors.first,
+      omiDemoMode ? Colors.transparent : const Color(0xfff7f6f1),
+    );
     expect(gradient.colors.last.a, 0);
     final rect = tester.getRect(find.byKey(const Key('history_top_fade')));
     expect(rect.height, 36);

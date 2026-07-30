@@ -60,8 +60,12 @@ file(GLOB core_sources
     src/lib/core/config.h
     src/lib/core/codec.c
     src/lib/core/transport.c
-    src/lib/core/button.c
+    src/lib/core/button_service.c
 )
+
+if(CONFIG_OMI_ENABLE_BUTTON_INPUT)
+    list(APPEND core_sources src/lib/core/button.c)
+endif()
 
 if(CONFIG_OMI_ENABLE_OFFLINE_STORAGE)
     list(APPEND core_sources src/lib/core/storage.c)

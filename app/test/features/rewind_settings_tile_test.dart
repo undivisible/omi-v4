@@ -15,7 +15,10 @@ final class _SilentPlatform implements RewindCapturePlatform {
   Future<RewindSystemState> readState() async => RewindSystemState.unavailable;
 
   @override
-  Future<Uint8List?> preview() async => null;
+  Future<List<RewindDisplay>> displays() async => const [];
+
+  @override
+  Future<Uint8List?> preview(RewindDisplay display) async => null;
 
   @override
   Future<RewindEncodedFrame?> encodeHeldFrame({

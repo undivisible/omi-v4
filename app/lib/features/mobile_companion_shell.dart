@@ -31,6 +31,10 @@ import 'meeting_notes.dart';
 import 'mobile_update_check.dart';
 import 'transcript_log_store.dart';
 import 'wifi_debug_panel.dart';
+import '../ui/omi_glass.dart';
+import '../ui/omi_idle_showcase.dart';
+import '../ui/omi_orb.dart';
+import '../ui/omi_wa_palette.dart';
 
 const _paper = Color(0xfff7f6f1);
 const _surface = Color(0xfffffefa);
@@ -364,6 +368,7 @@ class MobilePendantPageState extends State<MobilePendantPage> {
       PreferencesMobileCompanionCache();
   List<CurrentCard>? _cachedCurrents;
   String? _cachedBriefCrepus;
+  bool _settingsSheetOpen = false;
 
   bool get _mobile => relay.role == DeviceRelayRole.mobileOwner;
 
@@ -939,45 +944,55 @@ class MobilePendantPageState extends State<MobilePendantPage> {
                         if (index == 1) unawaited(_loadConversation());
                       },
                       children: [
-                        _currentsPage(
-                          device: device,
-                          connected: connected,
-                          capturing: capturing,
-                          busy: busy,
-                          phase: phase,
-                          capturedMs: capturedMs,
-                          deviceTiles: deviceTiles,
+                        OmiWaBackdrop(
+                          gradient: OmiWaPalette.dawn,
+                          child: _currentsPage(
+                            device: device,
+                            connected: connected,
+                            capturing: capturing,
+                            busy: busy,
+                            phase: phase,
+                            capturedMs: capturedMs,
+                            deviceTiles: deviceTiles,
+                          ),
                         ),
-                        _conversationsPage(),
-                        _memoryPage(),
+                        OmiWaBackdrop(
+                          gradient: OmiWaPalette.indigo,
+                          child: _conversationsPage(),
+                        ),
+                        OmiWaBackdrop(
+                          gradient: OmiWaPalette.moss,
+                          child: _memoryPage(),
+                        ),
                       ],
                     ),
             ),
             _pageTabs(),
           ],
         ),
-        Positioned(
-          top: 0,
-          right: 0,
-          child: SafeArea(
-            child: Padding(
-              padding: const EdgeInsets.only(top: 8, right: 14),
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  color: _surface,
-                  border: Border.all(color: _hairline),
-                  shape: BoxShape.circle,
-                ),
-                child: IconButton(
-                  key: const Key('companion_settings_button'),
-                  tooltip: 'Settings',
-                  onPressed: _openSettings,
-                  icon: const Icon(Icons.settings_outlined, size: 20),
+        if (_pageIndex == 0)
+          Positioned(
+            top: 0,
+            right: 0,
+            child: SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.only(top: 8, right: 14),
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: _surface,
+                    border: Border.all(color: _hairline),
+                    shape: BoxShape.circle,
+                  ),
+                  child: IconButton(
+                    key: const Key('companion_settings_button'),
+                    tooltip: 'Settings',
+                    onPressed: _openSettings,
+                    icon: const Icon(Icons.settings_outlined, size: 20),
+                  ),
                 ),
               ),
             ),
           ),
-        ),
       ],
     );
   }
@@ -995,52 +1010,57 @@ class MobilePendantPageState extends State<MobilePendantPage> {
     final hairline = dark ? const Color(0x1ffffcec) : _hairline;
     return SafeArea(
       top: false,
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          color: dark ? _inkSheet : _surface,
-          border: Border(top: BorderSide(color: hairline)),
-        ),
-        child: Row(
-          children: [
-            for (var index = 0; index < labels.length; index++)
-              Expanded(
-                child: InkWell(
-                  key: Key('companion_tab_$index'),
-                  onTap: () => unawaited(
-                    _pageController?.animateToPage(
-                      index,
-                      duration: const Duration(milliseconds: 240),
-                      curve: Curves.easeOutCubic,
+      child: OmiGlass(
+        tone: OmiGlassTone.chrome,
+        radius: 26,
+        interactive: true,
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            color: (dark ? _inkSheet : _surface).withValues(alpha: 0.55),
+            border: Border(top: BorderSide(color: hairline)),
+          ),
+          child: Row(
+            children: [
+              for (var index = 0; index < labels.length; index++)
+                Expanded(
+                  child: InkWell(
+                    key: Key('companion_tab_$index'),
+                    onTap: () => unawaited(
+                      _pageController?.animateToPage(
+                        index,
+                        duration: const Duration(milliseconds: 240),
+                        curve: Curves.easeOutCubic,
+                      ),
                     ),
-                  ),
-                  child: Padding(
-                    padding: const EdgeInsets.fromLTRB(8, 9, 8, 7),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(
-                          icons[index],
-                          size: 22,
-                          color: _pageIndex == index ? selectedFg : idleFg,
-                        ),
-                        const SizedBox(height: 3),
-                        Text(
-                          labels[index],
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                            fontSize: 11,
-                            fontWeight: _pageIndex == index
-                                ? FontWeight.w700
-                                : FontWeight.w500,
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(8, 9, 8, 7),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            icons[index],
+                            size: 22,
                             color: _pageIndex == index ? selectedFg : idleFg,
                           ),
-                        ),
-                      ],
+                          const SizedBox(height: 3),
+                          Text(
+                            labels[index],
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: _pageIndex == index
+                                  ? FontWeight.w700
+                                  : FontWeight.w500,
+                              color: _pageIndex == index ? selectedFg : idleFg,
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                   ),
                 ),
-              ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -1056,6 +1076,26 @@ class MobilePendantPageState extends State<MobilePendantPage> {
     required List<Widget> deviceTiles,
   }) {
     final content = <Widget>[
+      // The pendant above is the device; this is Omi. It sits below the hero
+      // rather than above it because the hero deliberately drops the top
+      // safe-area inset so the cord reaches past the notch. Left alone it
+      // works through the showcase motions, and it shoulders away from a
+      // finger the same way the desktop greeter does.
+      Center(
+        child: Padding(
+          padding: const EdgeInsets.only(bottom: 10),
+          child: OmiIdleShowcase(
+            size: 40,
+            // Capturing is Omi listening; connecting is Omi working. Only a
+            // pendant sitting idle leaves it free to perform.
+            state: capturing
+                ? OmiOrbState.listening
+                : busy
+                ? OmiOrbState.thinking
+                : OmiOrbState.idle,
+          ),
+        ),
+      ),
       _LiveTranscriptStrip(
         connected: connected,
         capturing: capturing,
@@ -1148,25 +1188,6 @@ class MobilePendantPageState extends State<MobilePendantPage> {
 
   Widget _conversationsPage() {
     final tiles = <Widget>[
-      Text(
-        'Conversations',
-        style: TextStyle(
-          fontSize: 28,
-          fontWeight: FontWeight.w700,
-          letterSpacing: -0.6,
-          color: _pageInk(context),
-        ),
-      ),
-      const SizedBox(height: 6),
-      Text(
-        'Chats, meetings, and captured audio in one place.',
-        style: TextStyle(
-          fontSize: 14,
-          height: 1.35,
-          color: _pageInkSoft(context),
-        ),
-      ),
-      const SizedBox(height: 18),
       if (_conversationError != null)
         _PaperTile(
           icon: Icons.cloud_off_outlined,
@@ -1239,6 +1260,8 @@ class MobilePendantPageState extends State<MobilePendantPage> {
   }
 
   void _openSettings() {
+    if (_settingsSheetOpen) return;
+    _settingsSheetOpen = true;
     // The sheet's own surface is drawn inside the draggable child, so the
     // modal itself stays transparent: a DraggableScrollableSheet always fills
     // the bounded height it is given, and a coloured modal background would
@@ -1274,7 +1297,7 @@ class MobilePendantPageState extends State<MobilePendantPage> {
             );
           },
         ),
-      ),
+      ).whenComplete(() => _settingsSheetOpen = false),
     );
   }
 }
@@ -2949,6 +2972,7 @@ class _SettingsSheetState extends State<_SettingsSheet> {
   }) async {
     final confirmed = await showDialog<bool>(
       context: context,
+      useRootNavigator: true,
       builder: (dialogContext) => AlertDialog(
         title: Text(title),
         content: Text(message),
@@ -3012,6 +3036,7 @@ class _SettingsSheetState extends State<_SettingsSheet> {
     if (device == null) return;
     final name = await showDialog<String>(
       context: context,
+      useRootNavigator: true,
       builder: (dialogContext) => _RenameDialog(initialName: device.name),
     );
     if (name == null || name.isEmpty) return;

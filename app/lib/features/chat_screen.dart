@@ -17,6 +17,7 @@ import '../channels/channels.dart';
 import '../currents/crepus_current.dart';
 import '../currents/currents.dart';
 import '../demo/demo_mode.dart';
+import '../demo/demo_model.dart';
 import '../demo/demo_prompt_bus.dart';
 import '../keyboard/keyboard.dart';
 import '../native/generated/signals/signals.dart'
@@ -137,15 +138,15 @@ class _HubColors {
   const _HubColors.light()
     : this._(
         ink: const Color(0xff171716),
-        muted: const Color(0xff8d8980),
+        muted: const Color(0xff756b61),
         hairline: const Color(0x1a000000),
-        hintBlue: const Color(0xff3139fb),
-        cardBg: Colors.white,
+        hintBlue: const Color(0xff4d6976),
+        cardBg: const Color(0xfffbf4e9),
         cardShadow: const Color(0x0a000000),
-        sendBg: const Color(0xff171716),
+        sendBg: const Color(0xff24383d),
         sendFg: Colors.white,
         sendDisabledBg: const Color(0x33171716),
-        rowHover: const Color(0x8cffffff),
+        rowHover: const Color(0x8cfbf4e9),
         focusRing: const Color(0x40171716),
       );
 
@@ -154,12 +155,12 @@ class _HubColors {
         ink: const Color(0xfff4f2ea),
         muted: const Color(0xffa6a49c),
         hairline: const Color(0x1affffff),
-        hintBlue: const Color(0xff9aa0ff),
-        cardBg: const Color(0xff232321),
+        hintBlue: const Color(0xffa1beb9),
+        cardBg: const Color(0xff302a27),
         cardShadow: const Color(0x33000000),
-        sendBg: const Color(0xfffffcec),
-        sendFg: const Color(0xff171716),
-        sendDisabledBg: const Color(0x33fffcec),
+        sendBg: const Color(0xffe5d6bc),
+        sendFg: const Color(0xff201a17),
+        sendDisabledBg: const Color(0x33e5d6bc),
         rowHover: const Color(0x14ffffff),
         focusRing: const Color(0x59fffcec),
       );
@@ -330,7 +331,28 @@ class ChatScreenState extends State<ChatScreen>
   }
 
   void _currentsChanged() {
+    // Starter tasks stand in for currents on a hub that has none. Once the
+    // pipeline produces real ones they have been superseded, so retire them
+    // rather than stacking generated suggestions on top of onboarding
+    // scaffolding derived from a single scan.
+    if (widget.services.currents?.items.isNotEmpty ?? false) {
+      unawaited(_retireStarterTasks());
+    }
     if (mounted) setState(() {});
+  }
+
+  Future<void> _retireStarterTasks() async {
+    if (_starterTasks.isEmpty) return;
+    try {
+      await _checklist.clearStarterTasks();
+    } catch (_) {
+      return;
+    }
+    if (!mounted) return;
+    setState(() {
+      _starterTasks = const [];
+      _doneStarterTasks.clear();
+    });
   }
 
   Future<void> _loadChecklist() async {
@@ -776,6 +798,7 @@ class ChatScreenState extends State<ChatScreen>
   /// the newest message is the "new chat" gesture.
   void _startNewConversation() {
     _cancelNewChatPull();
+    if (omiDemoMode) DemoModel.instance.startNewConversation();
     _collapseChatSessionToHistory();
   }
 
@@ -1022,6 +1045,15 @@ class ChatScreenState extends State<ChatScreen>
             _removeProposalsForParent(value.requestId);
           }
         case NativeEventActionProposal(:final value):
+          final requestId = value.requestId;
+          if (requestId != _activeRequestId &&
+              !requestId.startsWith('approval-')) {
+            return;
+          }
+          if (value.expiresAtMs != null &&
+              value.expiresAtMs! <= DateTime.now().millisecondsSinceEpoch) {
+            return;
+          }
           _proposals[value.proposalId] = value;
           _proposalExpiryTimers.remove(value.proposalId)?.cancel();
           if (value.expiresAtMs != null) {
@@ -1409,7 +1441,7 @@ class ChatScreenState extends State<ChatScreen>
                               physics: const AlwaysScrollableScrollPhysics(
                                 parent: BouncingScrollPhysics(),
                               ),
-                              reverse: !omiDemoMode && !widget.previewMode,
+                              reverse: true,
                               // The message directly above the home view is
                               // the peek, so it has to be built even when the
                               // home view is taller than the viewport.
@@ -1445,6 +1477,7 @@ class ChatScreenState extends State<ChatScreen>
                                           ),
                                           child: _Greeter(
                                             child: _ChatHome(
+                                              markState: _markState,
                                               greeting: _greeting(),
                                               setupTaskDone: _setupTaskDone,
                                               onToggleSetupTask:
@@ -1565,6 +1598,25 @@ class ChatScreenState extends State<ChatScreen>
         ),
       ],
     );
+  }
+
+  /// What the mark should be saying about this screen.
+  ///
+  /// Waiting on the first token and receiving tokens are different facts and
+  /// get different motions: nothing has come back yet, versus a reply is
+  /// arriving. Collapsing them makes the mark say "busy" for both, which is
+  /// what a spinner does.
+  OmiOrbState get _markState {
+    if (!_sending) return OmiOrbState.idle;
+    final active = _activeRequestId;
+    if (active == null) return OmiOrbState.thinking;
+    final arrived = _messages.any(
+      (message) =>
+          message.requestId == active &&
+          !message.fromUser &&
+          message.text.trim().isNotEmpty,
+    );
+    return arrived ? OmiOrbState.streaming : OmiOrbState.thinking;
   }
 
   /// The one row allowed to carry the turning mark: the assistant's newest
@@ -2126,7 +2178,11 @@ class _HistoryTopFade extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final dark = Theme.of(context).brightness == Brightness.dark;
-    final page = dark ? const Color(0xff1c1c1a) : const Color(0xfff7f6f1);
+    final page = dark
+        ? const Color(0xff1c1c1a)
+        : omiDemoMode
+        ? Colors.transparent
+        : const Color(0xfff7f6f1);
     return DecoratedBox(
       key: const Key('history_top_fade'),
       decoration: BoxDecoration(
@@ -2299,7 +2355,7 @@ class _VoiceEdgeGradient extends StatelessWidget {
           gradient: RadialGradient(
             center: Alignment(-1.15, -1.1),
             radius: .9,
-            colors: [Color(0x55f25e6b), Color(0x00f25e6b)],
+            colors: [Color(0x55a85e46), Color(0x00a85e46)],
           ),
         ),
       ),
@@ -2308,7 +2364,7 @@ class _VoiceEdgeGradient extends StatelessWidget {
           gradient: RadialGradient(
             center: Alignment(1.15, -.9),
             radius: .9,
-            colors: [Color(0x5596c4ff), Color(0x0096c4ff)],
+            colors: [Color(0x554e687c), Color(0x004e687c)],
           ),
         ),
       ),
@@ -2317,7 +2373,7 @@ class _VoiceEdgeGradient extends StatelessWidget {
           gradient: RadialGradient(
             center: Alignment(.9, 1.15),
             radius: .9,
-            colors: [Color(0x55d3e081), Color(0x00d3e081)],
+            colors: [Color(0x55a6aa79), Color(0x00a6aa79)],
           ),
         ),
       ),
@@ -2326,7 +2382,7 @@ class _VoiceEdgeGradient extends StatelessWidget {
           gradient: RadialGradient(
             center: Alignment(-1.1, 1.05),
             radius: .9,
-            colors: [Color(0x55f2c2ac), Color(0x00f2c2ac)],
+            colors: [Color(0x55c78067), Color(0x00c78067)],
           ),
         ),
       ),
@@ -2351,7 +2407,13 @@ class _ChatHome extends StatelessWidget {
     this.showByokHint = false,
     this.onOpenByok,
     this.onDismissByok,
+    this.markState = OmiOrbState.idle,
   });
+
+  /// What the mark should be expressing. The greeter is the most-looked-at
+  /// mark in the app, so it should say what Omi is actually doing rather than
+  /// idling through a showcase while a reply is streaming in.
+  final OmiOrbState markState;
 
   final String greeting;
   final bool setupTaskDone;
@@ -2375,46 +2437,38 @@ class _ChatHome extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = _HubColors.of(context);
-    final compact = omiDemoMode;
     return Padding(
-      padding: EdgeInsets.symmetric(vertical: compact ? 10 : 28),
+      padding: const EdgeInsets.symmetric(vertical: 28),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          if (!compact)
-            _Reveal(
-              delayMs: 0,
-              child: Column(
-                children: [
-                  OmiActivityOrb(size: 48, period: const Duration(seconds: 8)),
-                  const SizedBox(height: 16),
-                  Text(
-                    greeting,
-                    key: const Key('hub_greeting'),
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      fontSize: 44,
-                      fontWeight: FontWeight.w500,
-                      letterSpacing: -1.98,
-                      color: colors.ink,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          if (compact)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 8),
-              child: Center(
-                child: OmiActivityOrb(
-                  key: const Key('demo_rotating_mark'),
-                  size: 28,
-                  period: const Duration(seconds: 10),
-                  color: const Color(0xff4e4965),
+          _Reveal(
+            delayMs: 0,
+            child: Column(
+              children: [
+                // The cold open finishes on this mark, so it publishes where
+                // it is. Without that the open lands at the middle of the
+                // window and the hand-over reads as a cut to a second screen.
+                OmiMarkAnchorTarget(
+                  child: OmiIdleShowcase(size: 48, state: markState),
                 ),
-              ),
+                const SizedBox(height: 16),
+                Text(
+                  greeting,
+                  key: const Key('hub_greeting'),
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontFamily: 'Literata',
+                    fontSize: 44,
+                    fontWeight: FontWeight.w500,
+                    letterSpacing: -1.98,
+                    color: colors.ink,
+                  ),
+                ),
+              ],
             ),
-          if (!compact) const SizedBox(height: 36),
+          ),
+          const SizedBox(height: 36),
           // No "what matters next" heading and no "all tasks" link: this
           // section already IS what matters next, and anyone who wants the
           // full list can just ask the agent for it.
@@ -2429,15 +2483,14 @@ class _ChatHome extends StatelessWidget {
                     onDraftPrompt: onDraftPrompt,
                     onComplete: onComplete,
                   ),
-                if (!(compact && setupTaskDone))
-                  _TaskRow(
-                    key: const Key('task_setup_omi'),
-                    title: 'Set up Omi.',
-                    done: setupTaskDone,
-                    completeKey: const Key('complete_setup_omi'),
-                    onComplete: onToggleSetupTask,
-                    onTap: onToggleSetupTask,
-                  ),
+                _TaskRow(
+                  key: const Key('task_setup_omi'),
+                  title: 'Set up Omi.',
+                  done: setupTaskDone,
+                  completeKey: const Key('complete_setup_omi'),
+                  onComplete: onToggleSetupTask,
+                  onTap: onToggleSetupTask,
+                ),
                 for (final title in starterTasks)
                   if (HubTaskMeta.tryDecode(title) case final meta?)
                     _RichTaskRow(
@@ -2457,13 +2510,13 @@ class _ChatHome extends StatelessWidget {
                       onComplete: () => onToggleStarterTask(title),
                       onTap: () => onPrompt(title),
                     ),
-                for (final note in meetingNotes.take(compact ? 1 : 3))
+                for (final note in meetingNotes.take(3))
                   _MeetingNoteRow(
                     key: ValueKey('meeting_note_${note.id}'),
                     note: note,
                     onTap: onOpenMeetingNotes,
                   ),
-                if (meetingNotes.length > (compact ? 1 : 3))
+                if (meetingNotes.length > 3)
                   DecoratedBox(
                     decoration: BoxDecoration(
                       border: Border(top: BorderSide(color: colors.hairline)),
@@ -2523,7 +2576,6 @@ class _CurrentFocusState extends State<_CurrentFocus> {
     );
     final hero = plan.hero;
     if (hero == null) return const SizedBox.shrink();
-    final compact = omiDemoMode;
     final colors = _HubColors.of(context);
     final card = hero.card;
     final evidence = card.item.evidence;
@@ -2550,26 +2602,23 @@ class _CurrentFocusState extends State<_CurrentFocus> {
         ),
         child: Stack(
           children: [
+            // A saturated rule down the leading edge instead of a soft bloom
+            // bleeding out of the corner: the accent says "this card" at full
+            // strength in three pixels, where the wash said it faintly across
+            // half the surface and tinted the type on the way.
             Positioned(
-              top: -72,
-              right: -52,
+              top: 0,
+              bottom: 0,
+              left: 0,
               child: IgnorePointer(
                 child: DecoratedBox(
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    gradient: RadialGradient(
-                      colors: [
-                        colors.hintBlue.withValues(alpha: .24),
-                        colors.hintBlue.withValues(alpha: 0),
-                      ],
-                    ),
-                  ),
-                  child: const SizedBox(width: 220, height: 220),
+                  decoration: BoxDecoration(color: colors.hintBlue),
+                  child: const SizedBox(width: 3),
                 ),
               ),
             ),
             Padding(
-              padding: EdgeInsets.all(compact ? 14 : 20),
+              padding: const EdgeInsets.all(20),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
@@ -2599,11 +2648,12 @@ class _CurrentFocusState extends State<_CurrentFocus> {
                       _CurrentChip(label: source, color: colors.hintBlue),
                     ],
                   ),
-                  SizedBox(height: compact ? 12 : 18),
+                  const SizedBox(height: 18),
                   Text(
                     card.title,
                     key: const Key('current_focus_title'),
                     style: TextStyle(
+                      fontFamily: 'Literata',
                       fontSize: 24,
                       height: 1.08,
                       fontWeight: FontWeight.w600,
@@ -2611,7 +2661,7 @@ class _CurrentFocusState extends State<_CurrentFocus> {
                       color: colors.ink,
                     ),
                   ),
-                  if (!compact && card.summary.trim().isNotEmpty) ...[
+                  if (card.summary.trim().isNotEmpty) ...[
                     const SizedBox(height: 9),
                     Text(
                       card.summary,
@@ -2624,7 +2674,7 @@ class _CurrentFocusState extends State<_CurrentFocus> {
                       ),
                     ),
                   ],
-                  SizedBox(height: compact ? 12 : 18),
+                  const SizedBox(height: 18),
                   _CurrentDetail(
                     label: 'WHY NOW',
                     text: card.item.reason,
@@ -2640,7 +2690,7 @@ class _CurrentFocusState extends State<_CurrentFocus> {
                     color: colors,
                     detailKey: const Key('current_focus_evidence'),
                   ),
-                  SizedBox(height: compact ? 10 : 16),
+                  const SizedBox(height: 16),
                   DecoratedBox(
                     decoration: BoxDecoration(
                       color: colors.hintBlue.withValues(alpha: .10),

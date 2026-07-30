@@ -51,6 +51,7 @@ class _OmiShellState extends State<OmiShell> {
   PillPanelHost? _pillPanelHost;
   bool _appActive = false;
   DesktopInputDiagnosticsEvent? _inputDiagnostics;
+  bool _settingsRouteOpen = false;
 
   static const _windowChromeChannel = MethodChannel('omi/window_chrome');
 
@@ -219,17 +220,20 @@ class _OmiShellState extends State<OmiShell> {
   }
 
   void _openSettingsRoute([SettingsSection? section]) {
-    if (!mounted) return;
-    Navigator.of(context).push(
-      MaterialPageRoute<void>(
-        builder: (context) => SettingsScreen(
-          services: widget.services,
-          previewMode: widget.previewMode,
-          initialSection: section,
-        ),
-        fullscreenDialog: true,
-      ),
-    );
+    if (!mounted || _settingsRouteOpen) return;
+    _settingsRouteOpen = true;
+    Navigator.of(context)
+        .push(
+          MaterialPageRoute<void>(
+            builder: (context) => SettingsScreen(
+              services: widget.services,
+              previewMode: widget.previewMode,
+              initialSection: section,
+            ),
+            fullscreenDialog: true,
+          ),
+        )
+        .whenComplete(() => _settingsRouteOpen = false);
   }
 
   Future<void> _toggleMeeting() async {
@@ -312,13 +316,20 @@ class _OmiShellState extends State<OmiShell> {
         : omiDemoMode
         ? 10.0
         : 48.0;
-    final sidePadding = wide
-        ? (omiDemoMode ? 20.0 : 32.0)
-        : (omiDemoMode ? 12.0 : 18.0);
+    // Zero outside the demo: a side margin frames the hub as a panel sitting
+    // on the window rather than as the window, and the strip of bare scaffold
+    // around it is what reads as a bezel. The reading column is width-capped
+    // and centred, so nothing touches the edge without this.
+    final sidePadding = omiDemoMode ? (wide ? 20.0 : 12.0) : 0.0;
     final paddedBody = SafeArea(
       left: !wide,
       child: Padding(
-        padding: EdgeInsets.fromLTRB(sidePadding, topPadding, sidePadding, 12),
+        padding: EdgeInsets.fromLTRB(
+          sidePadding,
+          topPadding,
+          sidePadding,
+          omiDemoMode ? 12 : 0,
+        ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -439,6 +450,11 @@ class _WarmPaperHub extends StatelessWidget {
           ),
         ),
       ),
+      // No plate behind the hub. A wash that covers only the inner panel makes
+      // the scaffold around it a visible frame, and at a tenth opacity it was
+      // never carrying colour so much as muddying the ink. The plates earn
+      // their place as accents — the mark, chips, rules — where they are
+      // saturated enough to read as a decision.
       child: Padding(
         key: const Key('warm_paper_hub'),
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
@@ -462,7 +478,7 @@ class _DemoHubBackdrop extends StatelessWidget {
         gradient: LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
-          colors: [Color(0xfffff8ed), Color(0xffffeee2), Color(0xffeef1e4)],
+          colors: [Color(0xffeadbc7), Color(0xffe0d1bd), Color(0xffd5e0d3)],
         ),
       ),
       child: Stack(
@@ -474,7 +490,7 @@ class _DemoHubBackdrop extends StatelessWidget {
                 gradient: RadialGradient(
                   center: Alignment(-1, -1),
                   radius: 1.1,
-                  colors: [Color(0x88f2c2ac), Color(0x00f2c2ac)],
+                  colors: [Color(0x889b5948), Color(0x009b5948)],
                 ),
               ),
             ),
@@ -485,7 +501,7 @@ class _DemoHubBackdrop extends StatelessWidget {
                 gradient: RadialGradient(
                   center: Alignment(1.1, 1),
                   radius: 1.05,
-                  colors: [Color(0x6696c4ff), Color(0x00d3e081)],
+                  colors: [Color(0x665b8291), Color(0x00876375)],
                 ),
               ),
             ),

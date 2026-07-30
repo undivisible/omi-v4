@@ -22,8 +22,10 @@ private class OvalBlurView: NSView {
     NSLayoutConstraint.activate([
       shell.centerXAnchor.constraint(equalTo: centerXAnchor),
       shell.centerYAnchor.constraint(equalTo: centerYAnchor),
-      shell.widthAnchor.constraint(equalTo: widthAnchor, multiplier: 0.88),
-      shell.heightAnchor.constraint(equalTo: heightAnchor, multiplier: 0.76),
+      // Full bleed. Any inset at all leaves a band around the edge where the
+      // blur does not reach and the window shows through as a dark ring.
+      shell.widthAnchor.constraint(equalTo: widthAnchor),
+      shell.heightAnchor.constraint(equalTo: heightAnchor),
       effect.leadingAnchor.constraint(equalTo: shell.leadingAnchor),
       effect.trailingAnchor.constraint(equalTo: shell.trailingAnchor),
       effect.topAnchor.constraint(equalTo: shell.topAnchor),
@@ -37,7 +39,7 @@ private class OvalBlurView: NSView {
     super.layout()
     guard shell.bounds.size != maskSize, shell.bounds.width > 0, shell.bounds.height > 0 else { return }
     maskSize = shell.bounds.size
-    shell.layer?.backgroundColor = NSColor(calibratedWhite: 0.2, alpha: 0.8).cgColor
+    shell.layer?.backgroundColor = NSColor(calibratedWhite: 0.16, alpha: 0.42).cgColor
     let mask = NSImage(size: maskSize, flipped: false) { bounds in
       guard
         let gradient = CGGradient(
@@ -671,7 +673,11 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
 
   override func awakeFromNib() {
     let flutterViewController = FlutterViewController()
-    let windowFrame = self.frame
+    // The nib carries a small centred rect; the shell should own the display.
+    // `visibleFrame`, not `frame`: the latter includes the menu bar and dock
+    // strips, so the window extends under them and the parts of it they cover
+    // read as grey bands around the app.
+    let windowFrame = NSScreen.main?.visibleFrame ?? self.frame
     self.alphaValue = 0
     self.styleMask = [.borderless, .resizable, .miniaturizable]
     self.isOpaque = false
@@ -689,7 +695,13 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
     let rootViewController = NSViewController()
     let rootView = NSView(frame: NSRect(origin: .zero, size: windowFrame.size))
     rootView.wantsLayer = true
-    rootView.layer?.backgroundColor = NSColor.clear.cgColor
+    // Not clear: a transparent root means every pixel Flutter has not painted
+    // shows whatever is behind the window, which reads as grey bands around
+    // the content. This is the app's own ink, so an unpainted edge is
+    // indistinguishable from the app rather than a hole in it.
+    rootView.layer?.backgroundColor = NSColor(
+      calibratedRed: 0x17 / 255, green: 0x17 / 255, blue: 0x16 / 255, alpha: 1
+    ).cgColor
     rootViewController.view = rootView
     rootViewController.addChild(flutterViewController)
     self.contentViewController = rootViewController
@@ -917,36 +929,60 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
       result(AXContextReader.snapshot())
     }
 
+    InstalledAppIndex.shared.warm()
+
     let launcher = FlutterMethodChannel(
       name: "omi/launcher",
       binaryMessenger: flutterViewController.engine.binaryMessenger)
     launcher.setMethodCallHandler { call, result in
-      guard call.method == "openApp" else {
-        result(FlutterMethodNotImplemented)
-        return
-      }
-      guard
-        let query = (call.arguments as? String)?
-          .trimmingCharacters(in: .whitespacesAndNewlines),
-        !query.isEmpty
-      else {
-        result(nil)
-        return
-      }
-      DispatchQueue.global(qos: .userInitiated).async {
+      switch call.method {
+      case "openApp":
         guard
-          let url = Self.resolveApplicationURL(
-            query: query, candidates: Self.installedApplicationURLs())
+          let query = (call.arguments as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+          !query.isEmpty
         else {
-          DispatchQueue.main.async { result(nil) }
+          result(nil)
           return
         }
-        let name = url.deletingPathExtension().lastPathComponent
-        let configuration = NSWorkspace.OpenConfiguration()
-        configuration.activates = true
-        NSWorkspace.shared.openApplication(at: url, configuration: configuration) { application, error in
-          DispatchQueue.main.async { result(error == nil ? name : nil) }
+        DispatchQueue.global(qos: .userInitiated).async {
+          guard let url = InstalledAppIndex.shared.resolve(query: query) else {
+            DispatchQueue.main.async { result(nil) }
+            return
+          }
+          let name = url.deletingPathExtension().lastPathComponent
+          let configuration = NSWorkspace.OpenConfiguration()
+          configuration.activates = true
+          NSWorkspace.shared.openApplication(at: url, configuration: configuration) {
+            application, error in
+            DispatchQueue.main.async { result(error == nil ? name : nil) }
+          }
         }
+      case "searchApps":
+        let query: String
+        let limit: Int
+        if let raw = call.arguments as? String {
+          query = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+          limit = 20
+        } else if let args = call.arguments as? [String: Any],
+          let raw = args["query"] as? String
+        {
+          query = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+          limit = args["limit"] as? Int ?? 20
+        } else {
+          result([])
+          return
+        }
+        guard !query.isEmpty else {
+          result([])
+          return
+        }
+        DispatchQueue.global(qos: .userInitiated).async {
+          let matches = InstalledAppIndex.shared.search(query: query, limit: limit)
+          DispatchQueue.main.async { result(matches) }
+        }
+      default:
+        result(FlutterMethodNotImplemented)
       }
     }
 
@@ -1016,48 +1052,14 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
       ?? NSScreen.main
   }
 
-  /// Directories scanned for the overlay's deterministic "open <app>" fast
-  /// path. Shallow, launch-time cheap; NSWorkspace performs the real open.
-  static var launcherSearchRoots: [URL] {
-    [
-      URL(fileURLWithPath: "/Applications", isDirectory: true),
-      URL(fileURLWithPath: "/Applications/Utilities", isDirectory: true),
-      URL(fileURLWithPath: "/System/Applications", isDirectory: true),
-      URL(fileURLWithPath: "/System/Applications/Utilities", isDirectory: true),
-      URL(
-        fileURLWithPath: NSHomeDirectory() + "/Applications", isDirectory: true),
-    ]
-  }
+  static var launcherSearchRoots: [URL] { InstalledAppIndex.searchRoots }
 
   static func installedApplicationURLs(roots: [URL] = launcherSearchRoots) -> [URL] {
-    var applications: [URL] = []
-    for root in roots {
-      guard
-        let entries = try? FileManager.default.contentsOfDirectory(
-          at: root, includingPropertiesForKeys: nil,
-          options: [.skipsHiddenFiles])
-      else { continue }
-      applications.append(
-        contentsOf: entries.filter { $0.pathExtension == "app" })
-    }
-    return applications
+    InstalledAppIndex.installedApplicationURLs(roots: roots)
   }
 
-  /// Deterministic name match for the overlay launcher: exact name first,
-  /// then prefix, then substring — all case-insensitive — so "chrome" finds
-  /// "Google Chrome" and "safari" never loses to "Safari Technology Preview".
   static func resolveApplicationURL(query: String, candidates: [URL]) -> URL? {
-    let normalized = query.lowercased()
-    guard !normalized.isEmpty else { return nil }
-    var prefixMatch: URL?
-    var substringMatch: URL?
-    for url in candidates {
-      let name = url.deletingPathExtension().lastPathComponent.lowercased()
-      if name == normalized { return url }
-      if prefixMatch == nil, name.hasPrefix(normalized) { prefixMatch = url }
-      if substringMatch == nil, name.contains(normalized) { substringMatch = url }
-    }
-    return prefixMatch ?? substringMatch
+    InstalledAppIndex.resolveApplicationURL(query: query, candidates: candidates)
   }
 
   /// The text-input pill sits just below-right of the cursor, clamped to the

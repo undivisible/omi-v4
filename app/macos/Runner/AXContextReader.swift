@@ -10,6 +10,17 @@ import Cocoa
 /// channel, and it never throws: on any failure it returns a partial map plus a
 /// `reason`, so a flaky read can never break sending a prompt.
 enum AXContextReader {
+  static let deniedBundleIdentifiers: Set<String> = [
+    "com.1password.1password",
+    "com.agilebits.onepassword7",
+    "com.apple.keychainaccess",
+    "com.apple.Passwords",
+    "com.authy.authy-mac",
+    "com.bitwarden.desktop",
+    "com.dashlane.Dashlane",
+    "com.lastpass.LastPass",
+    "com.protonpass.macos",
+  ]
   // Hard caps so a huge Chromium/Electron tree can never hang the call or
   // balloon the payload: a shallow depth, a small node budget, a total
   // character budget, and a wall-clock deadline checked between nodes.
@@ -26,6 +37,11 @@ enum AXContextReader {
     if let app = NSWorkspace.shared.frontmostApplication {
       result["app"] = app.localizedName
       result["bundleId"] = app.bundleIdentifier
+      if let bundleIdentifier = app.bundleIdentifier,
+        deniedBundleIdentifiers.contains(bundleIdentifier) {
+        result["reason"] = "privacy_denied"
+        return result
+      }
     }
     // AXIsProcessTrusted() is a silent check — it never shows the permission
     // prompt — so calling it (and the reads below) when the grant is missing

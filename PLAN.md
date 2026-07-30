@@ -13,7 +13,7 @@ Omi v4 is an ultrasimple thinking partner and second brain that works across eve
 | --- | --- |
 | Application | Flutter for iOS, Android, macOS, Windows, and web; no desktop WebView |
 | Rust bridge | Rinf typed asynchronous signals; binary signals for bounded audio frames |
-| Live STT | Rust owns bounded transcription sessions; Deepgram is the managed/BYOK live route, local STT fails closed until a real provider exists, and MiMo remains batch-only |
+| Live STT | Rust owns bounded transcription sessions; xAI Speech to Text is the managed/BYOK PCM live route, local STT fails closed until a real provider exists, and MiMo remains batch-only |
 | Rust runtime | One `hub` crate using `rx4` ("rotary"), `rs_ai`, and platform-gated `praefectus` |
 | Device ownership | Mobile owns BLE, background hardware relay, firmware, pairing, and device management; desktop owns primary assistant interaction and computer use |
 | Cloud | Production API and D1 migration runner: Rust `worker-rs/` on `omi.tsc.hk` + `api.omi.tsc.hk`; language-neutral inputs in `cloud/`. D1, R2, Queues, Workflows, Durable Objects where coordination requires them |
@@ -61,8 +61,8 @@ The reusable memory engine lives in the public [`tschk/zkr`](https://github.com/
 - [x] Connect channel messages to the desktop agent with UID-scoped ordered leases, offline retry, atomic conversation persistence, and durable outbound replies.
 - [ ] Prove Telegram and Blooio round trips with real credentials and a continuously connected desktop client.
 - [ ] Finish desktop both-Shift voice capture; the global gesture, microphone/STT path, and failure-safe teardown exist, but physical Windows proof does not.
-- [ ] Add the desktop menu-bar companion: show the single most important current task first, with capture and listening state/actions directly beneath it; keep it a compact portal into the same desktop agent session rather than a separate assistant.
-- [ ] Move `rx4` ("rotary") usage beyond version-reporting into real extraction/ranking calls; it is core to the assistant/extraction/ranking architecture, but integration is in progress.
+- [x] Add the desktop menu-bar companion: show the single most important current task first, with capture and listening state/actions directly beneath it; keep it a compact portal into the same desktop agent session rather than a separate assistant.
+- [x] Move `rx4` ("rotary") usage beyond version-reporting into real extraction/ranking calls; it is core to the assistant/extraction/ranking architecture.
 - [x] Complete the audited live-STT slice between bounded Omi BLE/Rinf audio and idempotent final-transcript `zkr` capture, including managed/BYOK provider routing, reconnect gaps, final drain, cancellation, and typed stop acknowledgements.
 - [ ] Re-prove Android, iOS without signing, macOS, Windows, and web release builds on the exact release head after this integration lands.
 - [ ] Wire Firebase Auth, real channel delivery, physical Omi hardware, desktop permissions/computer use, and model routes against real credentials and devices.
@@ -171,7 +171,7 @@ The nightly cycle creates one editable, idempotent Daily Review per Person, loca
 | --- | --- |
 | Omi BLE/audio | Reuse upstream Flutter iOS/Android protocol, transports, and 3-byte audio framing |
 | Phone microphone | Reuse upstream native phone-mic bridges and Flutter capture lifecycle |
-| Streaming STT | Deepgram for live multilingual transcription; local STT is deferred until a real provider is integrated |
+| Streaming STT | Gemini Live built-in transcription for live PCM; local STT is deferred until a real provider is integrated |
 | Managed batch STT | OpenRouter `x-ai/grok-stt-1.0` for compatible Omi AI recordings |
 | Desktop/web | Control and observe a linked mobile capture session; desktop microphone can use platform plugins, browser capture remains foreground-only |
 
@@ -184,7 +184,7 @@ Flutter sends `StartTranscription` before the first binary audio chunk with the 
 - Managed sessions use an authenticated, entitled Worker session or proxy. Managed provider credentials never ship to the client.
 - Managed chat uses the OpenAI-compatible streaming contract at `/v1/chat/completions`. `rs_ai` emits `stream_options.include_usage: true`; the Worker applies its bounded default when `max_tokens` is absent and rejects requests above its output-token ceiling.
 - BYOK credentials are loaded from platform secure storage, passed once to the native session, and never placed in preferences, URLs, logs, events, or durable storage. Local STT currently fails closed before accepting audio.
-- Deepgram Nova-3 is the first live multilingual route. `multi` means provider auto-detection; unsupported explicit languages fail with a typed error and may fall back only to a route that declares support. MiMo ASR remains recorded/batch-only.
+- xAI Speech to Text is the live route. `multi` omits the formatting-language hint so the provider detects speech naturally; unsupported explicit languages fail with a typed error. MiMo ASR remains recorded/batch-only.
 - Provider connections use keepalive, bounded 250/500/1000 ms BYOK retries, and cancellation on EOS, consent revocation, or authority change. During reconnect, the 64 KiB audio queue remains bounded; disconnected audio that cannot be retained is rejected with an explicit source gap. Never replay already-sent unacknowledged audio; increment the STT epoch when the provider connection changes.
 - A transcript segment keeps the audio stream ID, deterministic segment ID, immutable logical segment sequence across reconnects, STT epoch, device/source ID, provider, language, audio-derived start/end time, text, and final flag. Revisions reuse the segment identity; only final segments enter `zkr`, keyed by Firebase UID, stream, and logical segment sequence.
 
@@ -274,7 +274,7 @@ Use a same-model subagent only when the task needs independent deep reasoning or
 - Hosted scheduled work and higher channel/action limits.
 - Stripe webhook entitlement is checked on every managed route.
 - Managed `mimo-v2.5-pro` planning uses Xiaomi's official overseas pay-as-you-go price published at https://platform.xiaomimimo.com/docs/en-US/price/pay-as-you-go and verified 2026-07-21: USD $0.435 per million uncached input tokens and $0.87 per million output tokens. Worker micro-USD price variables remain configurable and fail closed when missing, non-integral, or non-positive.
-- Managed Deepgram Nova-3 reservations use a conservative USD $0.01 per minute ceiling. [Deepgram's official pricing](https://deepgram.com/pricing) was verified 2026-07-21 at $0.0077 per minute for monolingual and $0.0092 per minute for multilingual pay-as-you-go transcription; the Worker rounds above both rates and fails closed on an invalid price.
+- Managed xAI streaming STT reservations use USD $0.003334 per minute. [xAI's official pricing](https://docs.x.ai/developers/pricing) was verified 2026-07-26 at $0.20 per hour; the Worker rounds up and fails closed on an invalid price.
 - Admission estimates use cache-miss input pricing, the requested output ceiling, UTF-8 content and role bytes, plus fixed per-request and per-message framing reserves. Actual provider usage atomically settles the rolling reservation, including overruns; missing usage retains the conservative reserve and stale requests are reconciled after crashes.
 - The hub surfaces an upgrade/BYOK prompt in `app/lib/features/setup_account_screens.dart`'s `SettingsScreen` contrasting managed Omi AI cost (~$35/mo equivalent usage) against bringing a personal xAI/Grok key (~$5/mo equivalent) to reduce cost; it deep-links into the Settings plan tile and is a real UI addition, not aspirational.
 
@@ -286,7 +286,7 @@ Use a same-model subagent only when the task needs independent deep reasoning or
 | Deep planning | user-selected model; managed `mimo-v2.5-pro` for Omi AI |
 | xAI chat | `grok-4.5` or authenticated catalog choice through supported xAI credentials |
 | xAI voice | `grok-voice-latest` through short-lived client secrets when xAI is selected |
-| Live multilingual STT | Deepgram managed/BYOK; local unavailable until implemented; MiMo remains batch-only |
+| Live multilingual STT | xAI managed/BYOK PCM; local unavailable until implemented; MiMo remains batch-only |
 
 Keep `grok-composer-2.5-fast` only when the authenticated xAI catalog returns it. Existing ChatGPT/Codex and xAI OAuth code is a reference, not proof that consumer subscriptions may fund third-party API traffic. Unsupported subscription-token reuse does not ship; OpenAI API access otherwise uses documented API credentials.
 
@@ -303,7 +303,7 @@ A later version adds a native computer connection: deep OS-level control beyond 
 When a paid plan is reintroduced, offer a subscription tier (e.g. riding an xAI SuperGrok-style subscription) with a visible "or use your own API keys" fallback next to it, plus explicit provider choice rather than one fixed managed stack:
 
 - **Embeddings**: offer a small set of provider choices, or compute them ourselves if cost allows, or run them fully local (candidates to evaluate: OpenAI, Voyage, Cohere, a local model) — survey how comparable agent products (e.g. Pi) structure this choice before committing to one.
-- **STT**: let the user pick among OpenAI, xAI, Gemini, and Deepgram (Deepgram remains the only one implemented today; the others are future BYOK routes).
+- **STT**: xAI is implemented; additional OpenAI, Gemini, and Deepgram choices remain future BYOK routes.
 - Keep this deliberately out of scope until the testing phase above is done — the goal now is zero payment complexity, not a polished pricing page.
 
 ### Future: Google Calendar/Tasks sync via the Worker (deferred)
@@ -328,7 +328,7 @@ Allow a message on a linked channel (Telegram/Blooio) to trigger a computer-use 
 | --- | --- | --- |
 | Product shell | Gradient Flutter onboarding plus a single continuous-chat desktop hub with Currents surfaced as task rows and Settings consolidated into the app menu; Devices is mobile-only, Memory is web-portal-only | Rendered accessibility/responsive audit on every target |
 | Native hub | Generated Rinf signals, UID-scoped production Dart configuration/event consumption, bounded/reaped command registry, ordered configuration, nonblocking/idempotent `zkr` 0.3.0 capture, cited retrieval, correction, and deletion with transcript locators, managed/BYOK live STT, source gaps, final drain, typed stop acknowledgements, atomic computer-use approval/execution, cancellation, `rx4`, and `praefectus` | Credentialed live-provider proof, physical-device lifecycle stress, local STT only after a real provider exists, and real `rx4` extraction/ranking calls beyond version-reporting |
-| Mobile relay | Omi-filtered BLE discovery, connect/discover, battery/codec reads, bounded sequenced PCM8/PCM16/Opus reassembly, native PCM8-to-linear16 conversion, disconnect/EOS, restart handling, and completed-transcript capture into evidenced `zkr` memory | Credentialed live Deepgram, physical iOS/Android sessions, and background recovery |
+| Mobile relay | Omi-filtered BLE discovery, connect/discover, battery/codec reads, bounded sequenced PCM8/PCM16/Opus reassembly, native PCM8-to-linear16 conversion, disconnect/EOS, restart handling, and completed-transcript capture into evidenced `zkr` memory | Credentialed live xAI PCM, physical iOS/Android sessions, Opus decoding or batch fallback, and background recovery |
 | SaaS backend | Firebase-token boundary, D1 memory/settings, Stripe entitlements, Telegram, Blooio, cited retrieval, durable channel-to-desktop leases, and serialized outbound delivery | Real Firebase/Stripe/channel credentials and preview deployment |
 | Shared conversation | UID-scoped persistence, ordered replay, desktop channel dispatch, offline retry, and atomic outbound replies | Live app/web refresh and credentialed Telegram/Blooio proof |
 | Desktop voice | Both-Shift tap/hold/hands-free state machine, macOS/Windows PCM16 capture, permission-first managed STT, authority fencing, final transcript submission, acknowledged pre-EOS cancellation, and navigation/error cleanup | Physical macOS/Windows shortcut tests, Windows negotiated-format proof, and credentialed managed-STT proof |
@@ -349,7 +349,7 @@ Do not count a compiled adapter as a deployed integration. Credentialed provider
 ### Test day 2 — memory, hardware, and actions
 
 1. Exercise Omi BLE/audio and phone microphone on physical iOS and Android devices.
-2. Verify managed and BYOK Deepgram, fail-closed Local behavior, reconnect gaps, deterministic sourced transcript identity, WAL recovery, MiMo batch ASR, and transcript normalization separately.
+2. Verify managed and BYOK xAI PCM STT, fail-closed Local behavior, reconnect gaps, deterministic sourced transcript identity, WAL recovery, MiMo batch ASR, and transcript normalization separately.
 3. Test memory evidence, correction, source deletion, sync, export, and account deletion.
 4. Test both-Shift timing, secure-input suppression, computer-use approval, cancellation, and audit records.
 
@@ -383,7 +383,7 @@ Do not count a compiled adapter as a deployed integration. Credentialed provider
 
 ## Immediate next task
 
-Prove managed/BYOK Deepgram with real credentials and a physical Omi on iOS and Android, including PCM8/PCM16/Opus, reconnect gaps, EOS, stop-before-EOS, and revocation. Next, prove the implemented Telegram/Blooio desktop round trip and cited Current approval/outcome path with real credentials, then add foreground conversation refresh. Run combined multi-platform CI and separately prove Firebase/Cloudflare bindings before calling the product deployed. Add local STT only when `rs_ai_local` supplies a real supported provider; until then it fails closed. Keep nightly Daily Review orchestration as the first v1 follow-on unless it is required for the launch demo.
+Prove managed/BYOK xAI with real credentials and a physical Omi on iOS and Android, including PCM8/PCM16, reconnect gaps, EOS, stop-before-EOS, and revocation; Opus needs decoding or a batch fallback because xAI's streaming contract accepts raw PCM, µ-law, or A-law. Next, prove the implemented Telegram/Blooio desktop round trip and cited Current approval/outcome path with real credentials, then add foreground conversation refresh. Run combined multi-platform CI and separately prove Firebase/Cloudflare bindings before calling the product deployed. Add local STT only when `rs_ai_local` supplies a real supported provider; until then it fails closed. Keep nightly Daily Review orchestration as the first v1 follow-on unless it is required for the launch demo.
 
 ## Progress log
 

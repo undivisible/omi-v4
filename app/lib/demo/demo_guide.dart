@@ -29,17 +29,14 @@ enum DemoSurface {
 ///
 /// [prompt] is what gets typed into the composer when the visitor takes the
 /// step, so the tour reads as a conversation they are having rather than a
-/// slideshow playing at them. [reply] is what the scripted tier says;
-/// [grounding] is what a real model is given to say it in its own words. The
-/// two carry the same facts on purpose — the tour must be coherent either
-/// way.
+/// slideshow playing at them. [grounding] is what the browser Prompt API is
+/// given to say it in its own words.
 class DemoTourStep {
   const DemoTourStep({
     required this.id,
     required this.chip,
     required this.prompt,
     required this.surface,
-    required this.reply,
     required this.grounding,
   });
 
@@ -47,7 +44,6 @@ class DemoTourStep {
   final String chip;
   final String prompt;
   final DemoSurface surface;
-  final String reply;
   final String grounding;
 }
 
@@ -158,12 +154,6 @@ class DemoTour extends ChangeNotifier {
       chip: 'What is Omi?',
       prompt: 'What is Omi?',
       surface: DemoSurface.hub,
-      reply:
-          'Omi is one place where the work you have already done stays '
-          'reachable. It listens where you let it — a pendant, meetings, your '
-          'screen — turns what it hears into evidence-backed memory, and '
-          'raises the few things that actually need you. This hub is that '
-          'surface. Everything on it is sample data.',
       grounding:
           'Omi is a personal AI that captures what the user hears and sees '
           '(pendant, meetings, screen), stores it as evidence-backed memory, '
@@ -176,11 +166,6 @@ class DemoTour extends ChangeNotifier {
       chip: 'Show me the brief',
       prompt: 'Show me the brief',
       surface: DemoSurface.hub,
-      reply:
-          'The top of the hub is the brief: where the day stands, in one '
-          'read. It is composed fresh rather than templated, and if the '
-          'composed version fails its checks the plain hand-built one renders '
-          'instead — a brief is never allowed to be wrong-looking.',
       grounding:
           'The brief sits at the top of the hub and summarises where the day '
           'stands. It is composed as a .crepus document and rendered by '
@@ -192,12 +177,6 @@ class DemoTour extends ChangeNotifier {
       chip: 'What are currents?',
       prompt: 'What are currents?',
       surface: DemoSurface.currents,
-      reply:
-          'Currents are the short list of things worth your attention right '
-          'now. Each one carries why it surfaced, a proposed next step, and '
-          'the evidence behind it. You can dismiss or snooze any of them — go '
-          'ahead, this list is yours for the session. Accepting one hands work '
-          'to the desktop agent, which a browser demo has no way to do.',
       grounding:
           'Currents are surfaced items: title, summary, a reason it surfaced, '
           'a proposed next step, a confidence, and evidence citations. They '
@@ -209,12 +188,6 @@ class DemoTour extends ChangeNotifier {
       chip: 'How do you know that?',
       prompt: 'How do you know that?',
       surface: DemoSurface.memory,
-      reply:
-          'Because every claim points at its source. Memory here stores '
-          'evidence first and claims second, each claim knowing both when it '
-          'was true and when it was recorded. Corrections supersede history '
-          'rather than overwriting it. The citations on those currents resolve '
-          'to the claims on this screen — nothing is cited that is not here.',
       grounding:
           'Memory is evidence-first: sources are authoritative, claims are '
           'temporal (valid time and recorded time), corrections supersede '
@@ -227,11 +200,6 @@ class DemoTour extends ChangeNotifier {
       chip: 'What about meetings?',
       prompt: 'What about meetings?',
       surface: DemoSurface.meetings,
-      reply:
-          'Meetings become notes with key points, decisions and actions, and '
-          'they land next to everything else rather than in a separate app. '
-          'These three are seeded. Recording a real one needs the desktop app '
-          'and a microphone, so the demo does not pretend to.',
       grounding:
           'Meetings are transcribed and summarised into notes with key '
           'points, decisions and actions, surfaced alongside currents on the '
@@ -243,13 +211,6 @@ class DemoTour extends ChangeNotifier {
       chip: 'Show me the pendant',
       prompt: 'Show me the pendant',
       surface: DemoSurface.pendant,
-      reply:
-          'The pendant is the part you wear: an nRF5340 that streams audio '
-          'over Bluetooth to your phone, which relays it to the hub. Blue LED '
-          'while it is connected and idle, red while it is capturing, and the '
-          'battery reports over standard BLE. What you are looking at is a '
-          'simulation drawn in the page — there is no device paired to a '
-          'browser.',
       grounding:
           'The pendant is an nRF5340 running the CV1 firmware, streaming '
           'audio over Bluetooth LE to the phone, which relays bounded chunks '
@@ -262,12 +223,6 @@ class DemoTour extends ChangeNotifier {
       chip: 'Can I bring my own keys?',
       prompt: 'Can I bring my own keys?',
       surface: DemoSurface.settings,
-      reply:
-          'Yes. Under AI Providers you put in your own key and Omi routes '
-          'through it instead of the managed tier. Under API & MCP you get an '
-          'API key and an MCP endpoint, so your memory is reachable from any '
-          'MCP client. These are the real settings screens — they just have no '
-          'account behind them here.',
       grounding:
           'Settings has AI Providers, where a user supplies their own model '
           'key and Omi routes through it instead of the managed tier, and API '
@@ -280,12 +235,6 @@ class DemoTour extends ChangeNotifier {
       chip: 'How do I get the real thing?',
       prompt: 'How do I get the real thing?',
       surface: DemoSurface.hub,
-      reply:
-          'Open Omi from the banner at the top. The real app signs in, keeps '
-          'your memory on your machine and in your account rather than in a '
-          'page, and turns on the parts a browser cannot do: capture, the '
-          'pendant, meetings, computer use. That is the end of the tour — ask '
-          'me anything else you like.',
       grounding:
           'The real app is opened from the demo banner. It signs in and '
           'enables what the browser cannot: capture, the pendant, '

@@ -213,7 +213,7 @@ void main() {
       );
       expect(capturedBody, {
         'idempotencyKey': idempotencyKey,
-        'model': 'nova-3',
+        'model': 'grok-stt',
         'language': 'multi',
         'encoding': 'linear16',
         'sampleRate': 16000,

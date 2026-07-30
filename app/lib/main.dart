@@ -20,6 +20,8 @@ import 'features/setup_account_screens.dart';
 import 'features/web_portal_screen.dart';
 import 'onboarding/hub_checklist.dart';
 import 'onboarding/onboarding_completion.dart';
+import 'ui/omi_cold_open.dart';
+import 'ui/omi_mark_anchor.dart';
 import 'ui/omi_orb.dart';
 import 'ui/omi_typography.dart';
 
@@ -149,19 +151,19 @@ class _SettingsWindowAppState extends State<SettingsWindowApp> {
     themeMode: ThemeMode.system,
     theme: ThemeData(
       brightness: Brightness.light,
-      fontFamily: OmiFonts.sans,
+      fontFamily: 'Arimo',
       textTheme: omiTextTheme,
-      scaffoldBackgroundColor: const Color(0xfff7f6f1),
+      scaffoldBackgroundColor: const Color(0xfff3eadc),
       colorScheme: const ColorScheme.light(
-        primary: Color(0xff171716),
-        surface: Color(0xfffffefa),
-        onSurface: Color(0xff171716),
-        onSurfaceVariant: Color(0xff706e68),
+        primary: Color(0xff24383d),
+        surface: Color(0xfffbf4e9),
+        onSurface: Color(0xff201a17),
+        onSurfaceVariant: Color(0xff6b6258),
       ),
     ),
     darkTheme: ThemeData(
       brightness: Brightness.dark,
-      fontFamily: OmiFonts.sans,
+      fontFamily: 'Arimo',
       textTheme: omiTextTheme,
       scaffoldBackgroundColor: const Color(0xff171716),
       colorScheme: const ColorScheme.dark(
@@ -215,6 +217,16 @@ class _OmiAppState extends State<OmiApp> {
   bool _onboardingComplete = false;
   int _completionGeneration = 0;
 
+  /// The cold open runs once per launch, and only the first time this state is
+  /// built — a sign-out or a data wipe re-checks completion but does not
+  /// re-open the app.
+  bool _openDone = false;
+
+  /// Where the destination's own mark is, published by whichever screen is
+  /// building underneath the open. It is what lets the open finish *on* that
+  /// mark instead of at the middle of the window.
+  final _markAnchor = OmiMarkAnchor();
+
   @override
   void initState() {
     super.initState();
@@ -223,7 +235,13 @@ class _OmiAppState extends State<OmiApp> {
     _refreshCompletion();
   }
 
-  void _authChanged() => _refreshCompletion(notify: true);
+  /// `_refreshCompletion` returns early when the uid has not moved, which is
+  /// exactly what happens on `restoring` -> `signedOut`. Rebuild regardless,
+  /// or the boot state has nothing to tell it the answer arrived.
+  void _authChanged() {
+    _refreshCompletion(notify: true);
+    if (mounted) setState(() {});
+  }
 
   void _dataWiped() {
     _checkedUid = null;
@@ -297,12 +315,12 @@ class _OmiAppState extends State<OmiApp> {
 
   @override
   Widget build(BuildContext context) {
-    const background = Color(0xff0b1013);
-    const surface = Color(0xff151c20);
-    const accent = Color(0xfffffcec);
-    const paper = Color(0xfff7f6f1);
-    const paperSurface = Color(0xfffffefa);
-    const ink = Color(0xff171716);
+    const background = Color(0xff24201e);
+    const surface = Color(0xff302a27);
+    const accent = Color(0xfff2e9dc);
+    const paper = Color(0xfff3eadc);
+    const paperSurface = Color(0xfffbf4e9);
+    const ink = Color(0xff201a17);
     const textTheme = omiTextTheme;
     return MaterialApp(
       title: 'Omi',
@@ -318,10 +336,10 @@ class _OmiAppState extends State<OmiApp> {
           primary: ink,
           surface: paperSurface,
           onSurface: ink,
-          onSurfaceVariant: Color(0xff706e68),
-          secondary: Color(0xff2f9d8a),
+          onSurfaceVariant: Color(0xff6b6258),
+          secondary: Color(0xff55746f),
         ),
-        fontFamily: OmiFonts.sans,
+        fontFamily: 'Arimo',
         textTheme: textTheme,
         inputDecorationTheme: InputDecorationTheme(
           filled: true,
@@ -338,9 +356,9 @@ class _OmiAppState extends State<OmiApp> {
         colorScheme: const ColorScheme.dark(
           primary: accent,
           surface: surface,
-          onSurface: Color(0xfff4f7f6),
+          onSurface: Color(0xfff2e9dc),
         ),
-        fontFamily: OmiFonts.sans,
+        fontFamily: 'Arimo',
         textTheme: textTheme,
         inputDecorationTheme: InputDecorationTheme(
           filled: true,
@@ -351,28 +369,67 @@ class _OmiAppState extends State<OmiApp> {
           ),
         ),
       ),
-      home: Uri.base.queryParameters['desktop_auth'] != null
-          ? DesktopAuthScreen(
-              services: services,
-              sessionId: Uri.base.queryParameters['desktop_auth']!,
-            )
-          : _webPortal
-          ? WebPortalScreen(services: services)
-          : _checkingCompletion
-          // The first frame the user ever sees is the mark, not a spinner.
-          ? const Scaffold(
-              body: Center(child: OmiActivityOrb.loading(size: 64)),
-            )
-          : _onboardingComplete
-          ? _mobileCompanion
-                ? MobileCompanionShell(services: services)
-                : OmiShell(services: services)
-          : _mobileCompanion
-          ? MobileOnboardingScreen(
-              services: services,
-              onFinish: _completeOnboarding,
-            )
-          : OnboardingScreen(services: services, onFinish: _completeOnboarding),
+      home: _home,
     );
   }
+
+  /// The deep-link and web entry points are somebody arriving mid-task, not the
+  /// app opening, so they skip the cold open entirely.
+  Widget get _home {
+    final desktopAuth = Uri.base.queryParameters['desktop_auth'];
+    if (desktopAuth != null) {
+      return DesktopAuthScreen(services: services, sessionId: desktopAuth);
+    }
+    if (_webPortal) return WebPortalScreen(services: services);
+    if (_openDone) return _destination;
+    // The destination is built underneath the open as soon as it is known, so
+    // its mark has been laid out and measured by the time the open starts
+    // travelling to it. Landing on a placeholder that is swapped out a frame
+    // later is what made this read as two screens.
+    return OmiMarkAnchorScope(
+      anchor: _markAnchor,
+      child: Stack(
+        children: [
+          if (_settled) _destination else const _BootField(),
+          OmiColdOpen(onDone: () => setState(() => _openDone = true)),
+        ],
+      ),
+    );
+  }
+
+  /// Whether there is anything true to show yet. Auth reports `restoring`
+  /// until it has looked for a stored session; deciding before then renders
+  /// onboarding and swaps it out a beat later, which is what the user sees as
+  /// the app "starting in onboarding before finding the thing".
+  bool get _settled => !_checkingCompletion && !services.auth.snapshot.settling;
+
+  Widget get _destination {
+    // The first frame the user ever sees is the mark, not a spinner.
+    if (!_settled) {
+      return const Scaffold(
+        body: Center(child: OmiActivityOrb.loading(size: 64)),
+      );
+    }
+    if (_onboardingComplete) {
+      return _mobileCompanion
+          ? MobileCompanionShell(services: services)
+          : OmiShell(services: services);
+    }
+    return _mobileCompanion
+        ? MobileOnboardingScreen(
+            services: services,
+            onFinish: _completeOnboarding,
+          )
+        : OnboardingScreen(services: services, onFinish: _completeOnboarding);
+  }
+}
+
+/// What sits behind the cold open while the completion check is still out —
+/// the scaffold colour and nothing else, because the open is already drawing
+/// the mark over it.
+class _BootField extends StatelessWidget {
+  const _BootField();
+
+  @override
+  Widget build(BuildContext context) => const Scaffold(body: SizedBox.expand());
 }

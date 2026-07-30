@@ -272,7 +272,7 @@ final class AuthController extends ChangeNotifier {
     if (failure case final value?) {
       _fail(value.code, value.message, consentGranted: false);
     } else {
-      _set(const AuthSnapshot.initial());
+      _set(const AuthSnapshot.cleared());
     }
   }
 
@@ -399,7 +399,7 @@ final class AuthController extends ChangeNotifier {
     );
     try {
       await _gateway.signOut();
-      _set(const AuthSnapshot.initial());
+      _set(const AuthSnapshot.cleared());
     } on AuthGatewayException catch (error) {
       _fail(error.failure.code, error.failure.message, consentGranted: false);
     } catch (_) {

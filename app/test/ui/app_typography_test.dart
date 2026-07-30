@@ -1,10 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:omi/main.dart';
-import 'package:omi/ui/omi_typography.dart';
 
 void main() {
-  testWidgets('every app theme sets Inter on every text role', (tester) async {
+  testWidgets('every app theme uses editorial type roles', (tester) async {
     await tester.pumpWidget(
       const OmiApp(platformOverride: TargetPlatform.macOS),
     );
@@ -13,20 +12,21 @@ void main() {
     for (final theme in [app.theme, app.darkTheme]) {
       expect(theme, isNotNull);
       final text = theme!.textTheme;
+      for (final style in [text.displaySmall, text.headlineMedium]) {
+        expect(style?.fontFamily, 'Literata');
+      }
       for (final style in [
-        text.displaySmall,
-        text.headlineMedium,
         text.titleMedium,
         text.bodyLarge,
         text.bodyMedium,
         text.labelLarge,
       ]) {
-        expect(style?.fontFamily, OmiFonts.sans);
+        expect(style?.fontFamily, 'Arimo');
       }
     }
   });
 
-  testWidgets('body text under the app theme renders in Inter', (tester) async {
+  testWidgets('body text under the app theme renders in Arimo', (tester) async {
     await tester.pumpWidget(
       const OmiApp(platformOverride: TargetPlatform.macOS),
     );
@@ -48,7 +48,7 @@ void main() {
           )
           .text
           .style;
-      expect(style?.fontFamily, OmiFonts.sans);
+      expect(style?.fontFamily, 'Arimo');
     }
   });
 }

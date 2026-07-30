@@ -7,31 +7,26 @@ import 'demo_model_bridge.dart';
 
 /// Which model, if any, is answering the demo's chat.
 enum DemoModelTier {
-  /// No model. The seeded replies answer, and the UI says so.
-  scripted,
+  /// No model. Chat stays unavailable, and the UI says so.
+  unavailable,
 
   /// The browser's own on-device model (Chrome's Prompt API). Nothing is
   /// downloaded and nothing leaves the machine.
   promptApi,
-
-  /// transformers.js on WebGPU, running a small instruct model. Only ever
-  /// reached from an explicit opt-in that named the download size first.
-  webgpu,
 }
 
 /// Where the demo's answers are coming from, and what it is allowed to say
 /// about them.
 ///
 /// The rule this class exists to enforce: a reply is only ever described as
-/// coming from a model when a model actually produced it. Every degrade —
-/// no browser model, a refused download, a generation that failed halfway —
-/// lands back on [DemoModelTier.scripted] and the label changes with it.
+/// coming from a model when a model actually produced it. Every degrade lands
+/// on [DemoModelTier.unavailable] and the label changes with it.
 class DemoModel extends ChangeNotifier {
   DemoModel();
 
   static final DemoModel instance = DemoModel();
 
-  DemoModelTier _tier = DemoModelTier.scripted;
+  DemoModelTier _tier = DemoModelTier.unavailable;
   DemoModelProbe _probe = const DemoModelProbe();
   bool _probed = false;
   bool _preparing = false;
@@ -48,11 +43,6 @@ class DemoModel extends ChangeNotifier {
 
   String? get failure => _failure;
 
-  /// The name of the model the WebGPU tier would fetch, for the opt-in copy.
-  String get downloadModel => _probe.model;
-
-  int get downloadMb => _probe.downloadMb;
-
   /// True when the browser's built-in model is installed and will answer
   /// without fetching anything.
   bool get promptApiReady => _probe.promptApi == 'ready';
@@ -63,31 +53,22 @@ class DemoModel extends ChangeNotifier {
   /// every other site rather than being ours to spend.
   bool get canOfferPromptApi =>
       _probe.promptApi == 'downloadable' &&
-      _tier == DemoModelTier.scripted &&
+      _tier == DemoModelTier.unavailable &&
       !_preparing;
-
-  /// True only when the machine passed every capability check and the
-  /// runtime is vendored on this origin. The opt-in is offered nowhere else.
-  bool get canOfferWebgpu =>
-      _probe.webgpu && _tier != DemoModelTier.webgpu && !_preparing;
 
   /// What the visitor is told, verbatim, about the current tier.
   String get label => switch (_tier) {
-    DemoModelTier.promptApi => 'Your browser\'s built-in model, on-device',
-    DemoModelTier.webgpu => '$downloadModel, on-device via WebGPU',
-    DemoModelTier.scripted => 'Scripted preview — no model is running',
+    DemoModelTier.promptApi => 'Your browser\'s Prompt API, on-device',
+    DemoModelTier.unavailable => 'Prompt API unavailable',
   };
 
   String get detail => switch (_tier) {
     DemoModelTier.promptApi =>
-      'Chrome is answering with the model already installed on this machine. '
+      'Your browser is answering with the model installed on this machine. '
           'Nothing is downloaded and nothing is sent anywhere.',
-    DemoModelTier.webgpu =>
-      'A small instruct model you chose to download is running on this '
-          'machine\'s GPU. Nothing you type is sent anywhere.',
-    DemoModelTier.scripted =>
-      'These answers come from a fixed set of notes in the page, not from a '
-          'model. The tour is written to work this way.',
+    DemoModelTier.unavailable =>
+      'This browser does not provide the on-device Prompt API. Explore the '
+          'guided hub; chat replies are unavailable here.',
   };
 
   /// Asks the browser what it can run. Never downloads anything: the only
@@ -120,43 +101,20 @@ class DemoModel extends ChangeNotifier {
       _tier = DemoModelTier.promptApi;
     } else {
       _failure =
-          'Your browser would not start its built-in model, so the tour '
-          'stays scripted.';
-    }
-    notifyListeners();
-  }
-
-  /// The WebGPU opt-in. Only ever called from a button whose label already
-  /// stated the download size.
-  Future<void> enableWebgpu() async {
-    if (_preparing || !_probe.webgpu) return;
-    _preparing = true;
-    _progress = 0;
-    _failure = null;
-    notifyListeners();
-    final result = await prepareDemoModel('webgpu', (percent) {
-      _progress = percent;
-      notifyListeners();
-    });
-    _preparing = false;
-    if (result == 'ready') {
-      _tier = DemoModelTier.webgpu;
-    } else {
-      _failure = 'The model could not start here, so the tour stays scripted.';
+          'Your browser would not start its built-in model, so chat remains '
+          'unavailable here.';
     }
     notifyListeners();
   }
 
   /// Streams an answer from the active model, or null when there is no model
-  /// to ask. A failure before the first token also returns null, so the
-  /// caller can fall back to the scripted reply without having shown a
-  /// half-finished sentence.
+  /// to ask.
   Stream<String>? ask({
     required String system,
     required List<({String role, String text})> history,
     required String prompt,
   }) {
-    if (_tier == DemoModelTier.scripted) return null;
+    if (_tier != DemoModelTier.promptApi) return null;
     final payload = jsonEncode({
       'system': system,
       'history': [
@@ -164,22 +122,19 @@ class DemoModel extends ChangeNotifier {
       ],
       'prompt': prompt,
     });
-    return askDemoModel(
-      _tier == DemoModelTier.promptApi ? 'prompt-api' : 'webgpu',
-      payload,
-    );
+    return askDemoModel('prompt-api', payload);
   }
 
   void cancel() => cancelDemoModel();
 
-  /// Called when a generation failed outright. The tour carries on scripted
-  /// rather than leaving a dead chat behind.
-  void degradeToScripted(Object error) {
-    if (_tier == DemoModelTier.scripted) return;
-    _tier = DemoModelTier.scripted;
+  void startNewConversation() => resetDemoModel();
+
+  /// Called when a generation failed outright.
+  void degradeToUnavailable(Object error) {
+    if (_tier == DemoModelTier.unavailable) return;
+    _tier = DemoModelTier.unavailable;
     _failure =
-        'The on-device model stopped answering, so the tour is scripted from '
-        'here.';
+        'The on-device model stopped answering, so chat is unavailable here.';
     debugPrint('demo model degraded: $error');
     notifyListeners();
   }

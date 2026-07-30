@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:omi/app_services.dart';
@@ -114,6 +115,7 @@ void main() {
     expect(find.text('FROM MEMORY'), findsOneWidget);
     expect(find.text('Beta release is planned for Friday.'), findsOneWidget);
 
+    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
     await tester.enterText(
       find.byKey(const Key('meeting_jot_field')),
       'pricing follow-up',
@@ -125,6 +127,7 @@ void main() {
     await tester.tap(find.byKey(const Key('meeting_stop')));
     await tester.pump();
     expect(hub.stops, 1);
+    debugDefaultTargetPlatformOverride = null;
 
     hub.eventsController.add(
       const NativeEventMeetingStateChanged(
@@ -465,9 +468,11 @@ void main() {
     expect(find.byKey(const Key('meeting_assist_panel')), findsOneWidget);
     expect(services.meetingActive, isTrue);
 
+    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
     await tester.tap(find.byKey(const Key('meeting_stop')));
     await tester.pump();
     expect(hub.stops, 1);
+    debugDefaultTargetPlatformOverride = null;
 
     // The runtime answers a stop with its own state change; without it the
     // panel would keep rendering a session that no longer exists.

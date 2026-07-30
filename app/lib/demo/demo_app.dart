@@ -34,8 +34,7 @@ Future<void> runOmiDemo(Widget Function(AppServices services) buildApp) async {
   // ignore: invalid_use_of_visible_for_testing_member
   SharedPreferences.setMockInitialValues(demoPreferences());
   // Asks the browser what it can run before the first frame. This only reads
-  // capabilities — it downloads nothing, and the WebGPU tier stays behind its
-  // opt-in whatever the answer is.
+  // capabilities — it does not download a model whatever the answer is.
   unawaited(DemoModel.instance.resolve());
   final services = await createDemoServices();
   runApp(buildApp(services));
@@ -164,7 +163,7 @@ class _DemoBannerState extends State<DemoBanner> {
               gradient: LinearGradient(
                 colors: dark
                     ? const [Color(0xff2c2927), Color(0xff232321)]
-                    : const [Color(0xffffeee2), Color(0xfffff9ed)],
+                    : const [Color(0xffeadbc7), Color(0xffdce2d5)],
               ),
               border: Border(
                 bottom: BorderSide(color: ink.withValues(alpha: .09)),

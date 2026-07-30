@@ -137,7 +137,7 @@ void main() {
           .first,
     );
     final decoration = input.decoration! as BoxDecoration;
-    expect(decoration.color, const Color(0xff232321));
+    expect(decoration.color, const Color(0xff302a27));
     expect((decoration.border! as Border).top.color, const Color(0x1affffff));
   });
 

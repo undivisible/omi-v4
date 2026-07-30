@@ -32,38 +32,41 @@ void main() {
     expect(tour.surface.value, DemoSurface.currents);
   });
 
-  test('every step carries both a scripted answer and model grounding', () {
+  test('every step carries its model grounding', () {
     for (final step in DemoTour.steps) {
-      expect(step.reply.trim(), isNotEmpty, reason: step.id);
       expect(step.grounding.trim(), isNotEmpty, reason: step.id);
       expect(step.chip.trim(), isNotEmpty, reason: step.id);
     }
   });
 
-  test('with no model, a tour question is answered from its step', () async {
-    // No browser here, so [DemoModel] stays on the scripted tier — which is
-    // exactly the tier most visitors get.
-    expect(DemoModel.instance.tier, DemoModelTier.scripted);
-    final hub = DemoNativeHub();
-    final buffer = StringBuffer();
-    final done = hub.events
-        .where(
-          (event) =>
-              event is NativeEventAssistantDelta &&
-              event.value.requestId == 'tour-1',
-        )
-        .cast<NativeEventAssistantDelta>()
-        .map((event) {
-          buffer.write(event.value.text);
-          return event.value.finalSegment;
-        })
-        .firstWhere((last) => last);
-    hub.sendMessage(requestId: 'tour-1', text: 'What are currents?');
-    await done;
-    final step = DemoTour.steps.firstWhere((step) => step.id == 'currents');
-    expect(buffer.toString(), step.reply);
-    hub.dispose();
-  });
+  test(
+    'with no model, a tour question shows the Prompt API placeholder',
+    () async {
+      expect(DemoModel.instance.tier, DemoModelTier.unavailable);
+      final hub = DemoNativeHub();
+      final buffer = StringBuffer();
+      final done = hub.events
+          .where(
+            (event) =>
+                event is NativeEventAssistantDelta &&
+                event.value.requestId == 'tour-1',
+          )
+          .cast<NativeEventAssistantDelta>()
+          .map((event) {
+            buffer.write(event.value.text);
+            return event.value.finalSegment;
+          })
+          .firstWhere((last) => last);
+      hub.sendMessage(requestId: 'tour-1', text: 'What are currents?');
+      await done;
+      expect(
+        buffer.toString(),
+        'The browser Prompt API is unavailable here. You can still explore the '
+        'guided hub and its cited Currents.',
+      );
+      hub.dispose();
+    },
+  );
 
   testWidgets(
     'tapping the next chip advances the panel through every step, hosted '
@@ -106,11 +109,7 @@ void main() {
         await tester.pump();
       }
 
-      // The scripted tier answers here — there is no browser model in a test.
-      expect(
-        find.text('Scripted preview — no model is running'),
-        findsOneWidget,
-      );
+      expect(find.text('Prompt API unavailable'), findsOneWidget);
 
       final total = DemoTour.steps.length;
       for (var i = 0; i < total; i++) {

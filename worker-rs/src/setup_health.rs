@@ -24,10 +24,9 @@ pub struct SetupHealthInputs<'a> {
     pub stripe_webhook_secret: Option<&'a str>,
     pub app_url: Option<&'a str>,
     pub mimo_api_key: Option<&'a str>,
-    pub deepgram_api_key: Option<&'a str>,
+    pub openrouter_api_key: Option<&'a str>,
     pub gemini_api_key: Option<&'a str>,
     pub gemini_live_model: Option<&'a str>,
-    pub openrouter_api_key: Option<&'a str>,
     pub firebase_service_account_email: Option<&'a str>,
     pub firebase_service_account_private_key: Option<&'a str>,
 }
@@ -53,7 +52,7 @@ pub fn setup_health_body(input: &SetupHealthInputs<'_>) -> Value {
             && configured(input.app_url),
         "models": {
             "managedChat": configured(input.mimo_api_key),
-            "managedStt": configured(input.deepgram_api_key),
+            "managedStt": configured(input.openrouter_api_key),
             "managedLiveVoice": configured(input.gemini_api_key)
                 && configured(input.gemini_live_model),
             "managedAsr": configured(input.openrouter_api_key),
@@ -83,10 +82,9 @@ mod tests {
             stripe_webhook_secret: None,
             app_url: None,
             mimo_api_key: None,
-            deepgram_api_key: None,
+            openrouter_api_key: None,
             gemini_api_key: None,
             gemini_live_model: None,
-            openrouter_api_key: None,
             firebase_service_account_email: None,
             firebase_service_account_private_key: None,
         }
@@ -224,7 +222,7 @@ mod tests {
             "leak-stripe-webhook-secret",
             "leak-app-url",
             "leak-mimo-api-key",
-            "leak-deepgram-api-key",
+            "leak-openrouter-api-key",
             "leak-gemini-api-key",
             "leak-gemini-live-model",
             "leak-mimo-completions-url",
@@ -245,10 +243,9 @@ mod tests {
             stripe_webhook_secret: Some(secrets[10]),
             app_url: Some(secrets[11]),
             mimo_api_key: Some(secrets[12]),
-            deepgram_api_key: Some(secrets[13]),
+            openrouter_api_key: Some(secrets[13]),
             gemini_api_key: Some(secrets[14]),
             gemini_live_model: Some(secrets[15]),
-            openrouter_api_key: Some(secrets[16]),
             firebase_service_account_email: Some(secrets[17]),
             firebase_service_account_private_key: Some(secrets[18]),
         };

@@ -334,7 +334,7 @@ final class WorkerManagedSttClient implements ManagedSttClient {
       path: '/v1/stt/sessions',
       body: {
         'idempotencyKey': idempotencyKey,
-        'model': 'nova-3',
+        'model': 'grok-stt',
         'language': language,
         'encoding': encoding.name,
         'sampleRate': sampleRate,

@@ -128,6 +128,7 @@ class RewindRequestOpen extends RewindRequest {
 class RewindRequestTick extends RewindRequest {
   const RewindRequestTick({
     required this.context,
+    required this.display,
     required this.idleMs,
     required this.locked,
     required this.permitted,
@@ -137,6 +138,7 @@ class RewindRequestTick extends RewindRequest {
     deserializer.increaseContainerDepth();
     final instance = RewindRequestTick(
       context: RewindWindowContext.deserialize(deserializer),
+      display: RewindDisplay.deserialize(deserializer),
       idleMs: deserializer.deserializeInt64(),
       locked: deserializer.deserializeBool(),
       permitted: deserializer.deserializeBool(),
@@ -146,18 +148,21 @@ class RewindRequestTick extends RewindRequest {
   }
 
   final RewindWindowContext context;
+  final RewindDisplay display;
   final int idleMs;
   final bool locked;
   final bool permitted;
 
   RewindRequestTick copyWith({
     RewindWindowContext? context,
+    RewindDisplay? display,
     int? idleMs,
     bool? locked,
     bool? permitted,
   }) {
     return RewindRequestTick(
       context: context ?? this.context,
+      display: display ?? this.display,
       idleMs: idleMs ?? this.idleMs,
       locked: locked ?? this.locked,
       permitted: permitted ?? this.permitted,
@@ -168,6 +173,7 @@ class RewindRequestTick extends RewindRequest {
     serializer.increaseContainerDepth();
     serializer.serializeVariantIndex(1);
     context.serialize(serializer);
+    display.serialize(serializer);
     serializer.serializeInt64(idleMs);
     serializer.serializeBool(locked);
     serializer.serializeBool(permitted);
@@ -181,13 +187,14 @@ class RewindRequestTick extends RewindRequest {
 
     return other is RewindRequestTick &&
         context == other.context &&
+        display == other.display &&
         idleMs == other.idleMs &&
         locked == other.locked &&
         permitted == other.permitted;
   }
 
   @override
-  int get hashCode => Object.hash(context, idleMs, locked, permitted);
+  int get hashCode => Object.hash(context, display, idleMs, locked, permitted);
 
   @override
   String toString() {
@@ -197,6 +204,7 @@ class RewindRequestTick extends RewindRequest {
       fullString =
           '$runtimeType('
           'context: $context, '
+          'display: $display, '
           'idleMs: $idleMs, '
           'locked: $locked, '
           'permitted: $permitted'

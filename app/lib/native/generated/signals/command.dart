@@ -548,6 +548,7 @@ class CommandStartTranscription extends Command {
     required this.sampleRateHz,
     required this.channels,
     required this.encoding,
+    required this.tempo,
   }) : super();
 
   static CommandStartTranscription load(BinaryDeserializer deserializer) {
@@ -560,6 +561,7 @@ class CommandStartTranscription extends Command {
       sampleRateHz: deserializer.deserializeUint32(),
       channels: deserializer.deserializeUint8(),
       encoding: AudioEncodingExtension.deserialize(deserializer),
+      tempo: deserializer.deserializeUint8(),
     );
     deserializer.decreaseContainerDepth();
     return instance;
@@ -572,6 +574,7 @@ class CommandStartTranscription extends Command {
   final int sampleRateHz;
   final int channels;
   final AudioEncoding encoding;
+  final int tempo;
 
   CommandStartTranscription copyWith({
     String? audioStreamId,
@@ -581,6 +584,7 @@ class CommandStartTranscription extends Command {
     int? sampleRateHz,
     int? channels,
     AudioEncoding? encoding,
+    int? tempo,
   }) {
     return CommandStartTranscription(
       audioStreamId: audioStreamId ?? this.audioStreamId,
@@ -590,6 +594,7 @@ class CommandStartTranscription extends Command {
       sampleRateHz: sampleRateHz ?? this.sampleRateHz,
       channels: channels ?? this.channels,
       encoding: encoding ?? this.encoding,
+      tempo: tempo ?? this.tempo,
     );
   }
 
@@ -603,6 +608,7 @@ class CommandStartTranscription extends Command {
     serializer.serializeUint32(sampleRateHz);
     serializer.serializeUint8(channels);
     encoding.serialize(serializer);
+    serializer.serializeUint8(tempo);
     serializer.decreaseContainerDepth();
   }
 
@@ -618,7 +624,8 @@ class CommandStartTranscription extends Command {
         language == other.language &&
         sampleRateHz == other.sampleRateHz &&
         channels == other.channels &&
-        encoding == other.encoding;
+        encoding == other.encoding &&
+        tempo == other.tempo;
   }
 
   @override
@@ -630,6 +637,7 @@ class CommandStartTranscription extends Command {
     sampleRateHz,
     channels,
     encoding,
+    tempo,
   );
 
   @override
@@ -645,7 +653,8 @@ class CommandStartTranscription extends Command {
           'language: $language, '
           'sampleRateHz: $sampleRateHz, '
           'channels: $channels, '
-          'encoding: $encoding'
+          'encoding: $encoding, '
+          'tempo: $tempo'
           ')';
       return true;
     }());

@@ -31,10 +31,11 @@
 //! stage two, because the step id the engine hands out in exchange two is the
 //! only thing that unlocks exchange three.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use super::dhash::PreviewHash;
-use super::models::{Frame, PolicyConfig, Retention, WindowContext};
+use super::models::{Display, Frame, PolicyConfig, Retention, WindowContext};
 use super::policy::{CapturePolicy, Tick};
 use super::privacy::{PrivacySettings, SkipReason};
 use super::settings::{Settings, SettingsFile};
@@ -52,6 +53,7 @@ pub enum Request {
     /// the framebuffer.
     Tick {
         context: WindowContext,
+        display: Display,
         idle_ms: i64,
         locked: bool,
         permitted: bool,
@@ -154,6 +156,7 @@ pub enum Response {
 /// step that would orphan the held frame.
 struct PendingStep {
     id: u64,
+    display: Display,
     tick: Tick,
     stage: Stage,
 }
@@ -168,7 +171,7 @@ pub struct Engine {
     store: Store,
     settings_file: SettingsFile,
     settings: Settings,
-    policy: CapturePolicy,
+    policies: HashMap<String, CapturePolicy>,
     pending: Option<PendingStep>,
     next_step_id: u64,
     last_skip_reason: Option<SkipReason>,
@@ -186,14 +189,13 @@ impl Engine {
     pub fn open(root: PathBuf) -> Self {
         let mut settings_file = SettingsFile::new(&root);
         let settings = settings_file.read();
-        let policy = CapturePolicy::new(PolicyConfig::default(), settings.privacy.clone());
         let mut store = Store::new(root);
         store.load();
         Self {
             store,
             settings_file,
             settings,
-            policy,
+            policies: HashMap::new(),
             pending: None,
             next_step_id: 1,
             last_skip_reason: None,
@@ -218,10 +220,11 @@ impl Engine {
         match request {
             Request::Tick {
                 context,
+                display,
                 idle_ms,
                 locked,
                 permitted,
-            } => self.tick(context, idle_ms, locked, permitted, now_ms),
+            } => self.tick(context, display, idle_ms, locked, permitted, now_ms),
             Request::PreviewTaken { step_id, luma } => self.preview_taken(step_id, &luma),
             Request::FrameEncoded {
                 step_id,
@@ -267,13 +270,13 @@ impl Engine {
             Request::Search { query, limit } => Response::Frames(self.store.search(&query, limit)),
             Request::DeleteAll => {
                 self.store.delete_all();
-                self.policy.reset();
+                self.policies.values_mut().for_each(CapturePolicy::reset);
                 self.status()
             }
             Request::DeleteLast { window_ms } => {
                 self.store
                     .delete_range(now_ms.saturating_sub(window_ms), now_ms);
-                self.policy.reset();
+                self.policies.values_mut().for_each(CapturePolicy::reset);
                 self.status()
             }
             Request::DeleteFrame { relative_path } => {
@@ -288,6 +291,7 @@ impl Engine {
     fn tick(
         &mut self,
         context: WindowContext,
+        display: Display,
         idle_ms: i64,
         locked: bool,
         permitted: bool,
@@ -308,7 +312,10 @@ impl Engine {
             permitted,
         };
 
-        let decision = self.policy.evaluate(&tick);
+        let policy = self.policies.entry(display.id.clone()).or_insert_with(|| {
+            CapturePolicy::new(PolicyConfig::default(), self.settings.privacy.clone())
+        });
+        let decision = policy.evaluate(&tick);
         if let Some(reason) = decision.reason() {
             self.last_skip_reason = Some(reason);
             // A step that is already open keeps its id; the Busy answer is
@@ -324,6 +331,7 @@ impl Engine {
         self.next_step_id = self.next_step_id.wrapping_add(1);
         self.pending = Some(PendingStep {
             id: step_id,
+            display,
             tick,
             stage: Stage::AwaitingPreview,
         });
@@ -357,8 +365,14 @@ impl Engine {
             };
         };
 
-        if let Some(reason) = self.policy.evaluate_preview(&pending.tick, hash).reason() {
-            self.policy.record_skipped_preview(&pending.tick, hash);
+        let policy = self
+            .policies
+            .entry(pending.display.id.clone())
+            .or_insert_with(|| {
+                CapturePolicy::new(PolicyConfig::default(), self.settings.privacy.clone())
+            });
+        if let Some(reason) = policy.evaluate_preview(&pending.tick, hash).reason() {
+            policy.record_skipped_preview(&pending.tick, hash);
             self.last_skip_reason = Some(reason);
             // The full frame is still sitting in native memory, unencoded. Drop it.
             return Response::Directive {
@@ -370,6 +384,7 @@ impl Engine {
         let recognize_text = self.settings.privacy.read_on_screen_text;
         self.pending = Some(PendingStep {
             id: pending.id,
+            display: pending.display,
             tick: pending.tick,
             stage: Stage::AwaitingEncode { hash },
         });
@@ -427,6 +442,7 @@ impl Engine {
             NewFrame {
                 captured_at_ms: pending.tick.now_ms,
                 hash: hash.to_hex(),
+                display: pending.display.clone(),
                 app_name: pending.tick.context.app_name.clone(),
                 bundle_id: pending.tick.context.bundle_id.clone(),
                 window_title: title,
@@ -446,7 +462,9 @@ impl Engine {
                 },
             };
         }
-        self.policy.record_capture(&pending.tick, hash);
+        if let Some(policy) = self.policies.get_mut(&pending.display.id) {
+            policy.record_capture(&pending.tick, hash);
+        }
         self.last_capture_at_ms = Some(pending.tick.now_ms);
         self.last_skip_reason = None;
         self.captured_this_session = self.captured_this_session.saturating_add(1);
@@ -477,7 +495,7 @@ impl Engine {
         next.enabled = enabled;
         next.paused = false;
         self.persist(next);
-        self.policy.reset();
+        self.policies.values_mut().for_each(CapturePolicy::reset);
         self.pending = None;
         self.status()
     }
@@ -489,7 +507,7 @@ impl Engine {
         let mut next = self.settings.clone();
         next.paused = paused;
         self.persist(next);
-        self.policy.reset();
+        self.policies.values_mut().for_each(CapturePolicy::reset);
         self.pending = None;
         self.status()
     }
@@ -513,7 +531,9 @@ impl Engine {
         let mut next = self.settings.clone();
         next.privacy = privacy.clone();
         self.persist(next);
-        self.policy.privacy = privacy;
+        for policy in self.policies.values_mut() {
+            policy.privacy = privacy.clone();
+        }
         self.status()
     }
 
@@ -533,9 +553,11 @@ impl Engine {
         }
         let was_recording = self.settings.recording();
         self.settings = next;
-        self.policy.privacy = self.settings.privacy.clone();
+        for policy in self.policies.values_mut() {
+            policy.privacy = self.settings.privacy.clone();
+        }
         if was_recording != self.settings.recording() {
-            self.policy.reset();
+            self.policies.values_mut().for_each(CapturePolicy::reset);
             self.pending = None;
         }
     }
@@ -568,7 +590,7 @@ impl Engine {
 mod tests {
     use super::{Directive, Engine, Request, Response, Status};
     use crate::rewind::dhash::PREVIEW_LENGTH;
-    use crate::rewind::models::WindowContext;
+    use crate::rewind::models::{Display, WindowContext};
     use crate::rewind::privacy::SkipReason;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -647,6 +669,7 @@ mod tests {
         let first = engine.handle(
             Request::Tick {
                 context: terminal(),
+                display: Display::default(),
                 idle_ms: 0,
                 locked: false,
                 permitted: true,
@@ -804,6 +827,7 @@ mod tests {
         let response = engine.handle(
             Request::Tick {
                 context: terminal(),
+                display: Display::default(),
                 idle_ms: 0,
                 locked: true,
                 permitted: true,
@@ -838,6 +862,7 @@ mod tests {
         let first = engine.handle(
             Request::Tick {
                 context: terminal(),
+                display: Display::default(),
                 idle_ms: 0,
                 locked: false,
                 permitted: true,
@@ -959,6 +984,7 @@ mod tests {
         let first = engine.handle(
             Request::Tick {
                 context: terminal(),
+                display: Display::default(),
                 idle_ms: 0,
                 locked: false,
                 permitted: true,
@@ -971,6 +997,7 @@ mod tests {
         let second = engine.handle(
             Request::Tick {
                 context: terminal(),
+                display: Display::default(),
                 idle_ms: 0,
                 locked: false,
                 permitted: true,
@@ -1008,6 +1035,7 @@ mod tests {
         let first = engine.handle(
             Request::Tick {
                 context: terminal(),
+                display: Display::default(),
                 idle_ms: 0,
                 locked: false,
                 permitted: true,
@@ -1045,6 +1073,7 @@ mod tests {
         let first = engine.handle(
             Request::Tick {
                 context: terminal(),
+                display: Display::default(),
                 idle_ms: 0,
                 locked: false,
                 permitted: true,
@@ -1075,6 +1104,7 @@ mod tests {
         let first = engine.handle(
             Request::Tick {
                 context: terminal(),
+                display: Display::default(),
                 idle_ms: 0,
                 locked: false,
                 permitted: true,
@@ -1148,6 +1178,7 @@ mod tests {
         let response = engine.handle(
             Request::Tick {
                 context: terminal(),
+                display: Display::default(),
                 idle_ms: 0,
                 locked: false,
                 permitted: true,

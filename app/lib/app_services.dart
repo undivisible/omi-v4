@@ -142,7 +142,9 @@ final class AppServices {
       source: _conversationSource,
       now: _now,
       isReady: () => chatReady || localMode,
-      isLocalOnly: () => localMode && !chatReady,
+      isLocalOnly: () =>
+          (localMode && !chatReady) ||
+          (conversations == null && localConversations != null),
       localStore: localConversations,
       isDisposed: () => _disposed,
       currentUid: () => auth.snapshot.session?.uid,
@@ -1589,6 +1591,24 @@ final class AppServices {
             .save(MeetingNote.fromCompleted(value))
             .catchError((Object _) {}),
       );
+      final worker = _worker;
+      if (worker != null && value.actions.isNotEmpty) {
+        unawaited(
+          worker
+              .send(
+                method: 'POST',
+                path: '/v1/currents/meeting-actions',
+                body: {
+                  'title': value.title,
+                  'summary': value.summary,
+                  'actions': value.actions,
+                  'endedAtMs': value.endedAtMs,
+                },
+              )
+              .then((_) => currents?.load())
+              .catchError((Object _) {}),
+        );
+      }
     } else if (event case NativeEventError(:final value) when _meetingActive) {
       if (value.code == 'meeting_capture_session_lost') {
         unawaited(_provideMeetingAuth().onError((_, _) {}));

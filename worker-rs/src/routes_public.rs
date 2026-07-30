@@ -266,11 +266,12 @@ async fn call_speech_upstream(
     let secret = crate::worker_util::secret_or_var(&ctx.env, "OPENROUTER_API_KEY")
         .filter(|value| !value.trim().is_empty())
         .ok_or(None)?;
-    let gateway = use_gateway
-        .then(|| {
-            managed_ai::ai_gateway_route(|name| crate::worker_util::secret_or_var(&ctx.env, name))
-        })
-        .flatten();
+    let gateway = if use_gateway {
+        managed_ai::ai_gateway_route(|name| crate::worker_util::secret_or_var(&ctx.env, name))
+            .map_err(|_| None)?
+    } else {
+        None
+    };
     let endpoint = match gateway.as_ref() {
         Some(route) => route.url.clone(),
         None => endpoint.to_string(),

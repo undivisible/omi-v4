@@ -5,9 +5,11 @@
 
 pub mod api_keys;
 pub mod auth;
+pub mod auth_session_flow;
 pub mod billing;
 pub mod byok_negotiation;
 pub mod byok_pricing;
+pub mod channel_auth;
 pub mod channel_checkout;
 pub mod channel_commands;
 pub mod channel_group;
@@ -24,6 +26,7 @@ pub mod delivery;
 pub mod desktop_auth;
 pub mod device_sync;
 pub mod digests;
+pub mod document_search;
 pub mod entitlement;
 pub mod facetime;
 pub mod inbox_fallback;
@@ -33,6 +36,7 @@ pub mod observability;
 pub mod public_api;
 pub mod routes_memory;
 pub mod sendblue;
+pub mod session_token;
 pub mod settings;
 pub mod setup_health;
 pub mod speech;
@@ -66,6 +70,8 @@ mod routes_ai;
 mod routes_channels;
 #[cfg(target_arch = "wasm32")]
 mod routes_device;
+#[cfg(target_arch = "wasm32")]
+mod routes_documents;
 #[cfg(target_arch = "wasm32")]
 mod routes_facetime;
 #[cfg(target_arch = "wasm32")]

@@ -195,8 +195,14 @@ class _DesktopAuthScreenState extends State<DesktopAuthScreen> {
                               Semantics(
                                 liveRegion: true,
                                 label: 'Completing desktop sign-in',
-                                child: Center(
-                                  child: OmiActivityOrb.loading(size: 32),
+                                child: const Center(
+                                  // Two machines finding each other: a smaller
+                                  // circle rolling the inside of the mark.
+                                  child: OmiActivityOrb(
+                                    size: 32,
+                                    motion: OmiOrbMotion.nestedOrbit,
+                                    period: Duration(milliseconds: 3200),
+                                  ),
                                 ),
                               ),
                             ],

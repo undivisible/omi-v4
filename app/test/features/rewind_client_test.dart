@@ -15,6 +15,18 @@ final class _CountingPlatform implements RewindCapturePlatform {
   int discardCalls = 0;
   bool? lastRecognizeText;
   Uint8List? nextPreview = Uint8List.fromList(List<int>.filled(72, 3));
+  List<RewindDisplay> availableDisplays = const [
+    RewindDisplay(
+      id: '1',
+      name: 'Primary',
+      x: 0,
+      y: 0,
+      width: 1920,
+      height: 1080,
+      scale: 2,
+      primary: true,
+    ),
+  ];
 
   @override
   Future<RewindSystemState> readState() async => const RewindSystemState(
@@ -29,7 +41,10 @@ final class _CountingPlatform implements RewindCapturePlatform {
   );
 
   @override
-  Future<Uint8List?> preview() async {
+  Future<List<RewindDisplay>> displays() async => availableDisplays;
+
+  @override
+  Future<Uint8List?> preview(RewindDisplay display) async {
     previewCalls++;
     return nextPreview;
   }
@@ -145,6 +160,51 @@ void main() {
     final encoded = engine.sent.whereType<RewindRequestFrameEncoded>().single;
     expect(encoded.jpeg, hasLength(32));
     expect(encoded.ocrText, 'flutter analyze');
+  });
+
+  test('every active display gets its own capture handshake', () async {
+    final platform = _CountingPlatform()
+      ..availableDisplays = const [
+        RewindDisplay(
+          id: '1',
+          name: 'Primary',
+          x: 0,
+          y: 0,
+          width: 1920,
+          height: 1080,
+          scale: 2,
+          primary: true,
+        ),
+        RewindDisplay(
+          id: '2',
+          name: 'External',
+          x: 1920,
+          y: 0,
+          width: 2560,
+          height: 1440,
+          scale: 1,
+          primary: false,
+        ),
+      ];
+    final engine = _ScriptedEngine([
+      const RewindDirectivePreview(),
+      const RewindDirectiveEncode(recognizeText: false),
+      const RewindDirectiveStored(),
+      const RewindDirectivePreview(),
+      const RewindDirectiveEncode(recognizeText: false),
+      const RewindDirectiveStored(),
+    ]);
+    final client = _client(platform, engine);
+    addTearDown(client.dispose);
+
+    await client.pump();
+
+    expect(platform.previewCalls, 2);
+    expect(platform.encodeCalls, 2);
+    expect(
+      engine.sent.whereType<RewindRequestTick>().map((tick) => tick.display.id),
+      ['1', '2'],
+    );
   });
 
   test('the engine decides whether text is read off the frame', () async {

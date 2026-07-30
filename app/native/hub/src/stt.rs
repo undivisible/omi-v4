@@ -21,14 +21,14 @@ use tokio_tungstenite::{
 };
 use url::Url;
 
-const DEEPGRAM_HOST: &str = "api.deepgram.com";
-const DEEPGRAM_PATH: &str = "/v1/listen";
+const XAI_HOST: &str = "api.x.ai";
+const XAI_PATH: &str = "/v1/stt";
 const MAX_CREDENTIAL_BYTES: usize = 16 * 1024;
 const MAX_PENDING_AUDIO_BYTES: usize = 64 * 1024;
 const AUDIO_CHANNEL_CAPACITY: usize = 64;
 const MAX_RECONNECT_BUFFER_BYTES: usize = 64 * 1024;
 const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(8);
-pub(crate) const FINAL_DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
+pub(crate) const FINAL_DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum SttError {
@@ -76,7 +76,7 @@ impl ConnectionPlan {
         config: &SttConfig,
         trusted_worker_origin: Option<&str>,
     ) -> Result<Self, SttError> {
-        let encoding = deepgram_encoding(config)?;
+        let encoding = xai_encoding(config)?;
         match auth {
             TranscriptionAuth::Managed {
                 endpoint,
@@ -87,7 +87,7 @@ impl ConnectionPlan {
                 Ok(Self {
                     endpoint,
                     authorization: format!("Bearer {firebase_token}"),
-                    provider: "deepgram-managed",
+                    provider: "xai-managed",
                     reconnectable: false,
                 })
             }
@@ -95,8 +95,6 @@ impl ConnectionPlan {
                 valid_credential(api_key)?;
                 let mut endpoint = byok_endpoint(endpoint)?;
                 for (key, value) in [
-                    ("model", "nova-3".to_owned()),
-                    ("language", config.language.clone()),
                     ("encoding", encoding.to_owned()),
                     ("sample_rate", config.sample_rate_hz.to_string()),
                     ("channels", config.channels.to_string()),
@@ -105,10 +103,15 @@ impl ConnectionPlan {
                 ] {
                     endpoint.query_pairs_mut().append_pair(key, &value);
                 }
+                if config.language != "multi" {
+                    endpoint
+                        .query_pairs_mut()
+                        .append_pair("language", &config.language);
+                }
                 Ok(Self {
                     endpoint,
                     authorization: format!("Token {api_key}"),
-                    provider: "deepgram-byok",
+                    provider: "xai-byok",
                     reconnectable: true,
                 })
             }
@@ -122,16 +125,13 @@ impl ConnectionPlan {
     }
 }
 
-fn deepgram_encoding(config: &SttConfig) -> Result<&'static str, SttError> {
+fn xai_encoding(config: &SttConfig) -> Result<&'static str, SttError> {
     match config.encoding {
         AudioEncoding::PcmS16Le | AudioEncoding::PcmU8
             if matches!(config.sample_rate_hz, 8_000 | 16_000 | 48_000)
                 && matches!(config.channels, 1 | 2) =>
         {
-            Ok("linear16")
-        }
-        AudioEncoding::Opus if config.sample_rate_hz == 16_000 && config.channels == 1 => {
-            Ok("opus")
+            Ok("pcm")
         }
         _ => Err(SttError::UnsupportedAudio),
     }
@@ -180,9 +180,9 @@ fn managed_endpoint(value: &str, trusted_origin: Option<&str>) -> Result<Url, St
 fn byok_endpoint(value: &str) -> Result<Url, SttError> {
     let endpoint = Url::parse(value).map_err(|_| SttError::InvalidEndpoint)?;
     if endpoint.scheme() != "wss"
-        || endpoint.host_str() != Some(DEEPGRAM_HOST)
+        || endpoint.host_str() != Some(XAI_HOST)
         || endpoint.port_or_known_default() != Some(443)
-        || endpoint.path() != DEEPGRAM_PATH
+        || endpoint.path() != XAI_PATH
         || endpoint.username() != ""
         || endpoint.password().is_some()
         || endpoint.query().is_some()
@@ -407,9 +407,7 @@ async fn run(
                             return;
                         }
                     }
-                    if socket.send(Message::Text(r#"{"type":"Finalize"}"#.into())).await.is_err()
-                        || socket.send(Message::Text(r#"{"type":"CloseStream"}"#.into())).await.is_err()
-                    {
+                    if socket.send(Message::Text(r#"{"type":"audio.done"}"#.into())).await.is_err() {
                         let now = unix_time_ms();
                         NativeEvent::TranscriptGap(state.reconnect_gap(now, now)).send();
                         terminal_error(
@@ -713,12 +711,18 @@ fn unix_time_ms() -> i64 {
 }
 
 #[derive(Deserialize)]
-struct DeepgramResponse {
+struct SttResponse {
+    #[serde(rename = "type")]
+    event_type: Option<String>,
     #[serde(default)]
     is_final: bool,
     #[serde(default)]
     speech_final: bool,
-    channel: Option<DeepgramChannel>,
+    channel: Option<ProviderChannel>,
+    #[serde(default)]
+    text: String,
+    #[serde(default)]
+    words: Vec<ProviderWord>,
     /// `[channel, channel_count]` on a streaming result. Only the first entry
     /// identifies the channel these words came from.
     #[serde(default)]
@@ -726,23 +730,23 @@ struct DeepgramResponse {
 }
 
 #[derive(Deserialize)]
-struct DeepgramChannel {
+struct ProviderChannel {
     #[serde(default)]
-    alternatives: Vec<DeepgramAlternative>,
+    alternatives: Vec<ProviderAlternative>,
 }
 
 #[derive(Deserialize)]
-struct DeepgramAlternative {
+struct ProviderAlternative {
     #[serde(default)]
     transcript: String,
     #[serde(default)]
-    words: Vec<DeepgramWord>,
+    words: Vec<ProviderWord>,
     #[serde(default)]
     languages: Vec<String>,
 }
 
 #[derive(Deserialize)]
-struct DeepgramWord {
+struct ProviderWord {
     start: f64,
     end: f64,
     /// The diarization index Deepgram assigns when `diarize=true` was
@@ -758,7 +762,7 @@ struct DeepgramWord {
 /// speaker change carries two indices; the majority one describes the segment
 /// as a whole, and ties keep the earliest speaker so the label stays stable
 /// as an interim result grows.
-fn dominant_speaker(words: &[DeepgramWord]) -> Option<u32> {
+fn dominant_speaker(words: &[ProviderWord]) -> Option<u32> {
     let mut tally: Vec<(u32, usize)> = Vec::new();
     for speaker in words.iter().filter_map(|word| word.speaker) {
         match tally.iter_mut().find(|(value, _)| *value == speaker) {
@@ -803,9 +807,23 @@ impl TranscriptState {
     }
 
     pub(crate) fn parse(&mut self, json: &str, occurred_at_ms: i64) -> Option<TranscriptDelta> {
-        let response: DeepgramResponse = serde_json::from_str(json).ok()?;
+        let response: SttResponse = serde_json::from_str(json).ok()?;
+        if response
+            .event_type
+            .as_deref()
+            .is_some_and(|kind| kind != "transcript.partial")
+        {
+            return None;
+        }
         let channel_index = response.channel_index.first().copied();
-        let alternative = response.channel?.alternatives.into_iter().next()?;
+        let alternative = response
+            .channel
+            .and_then(|channel| channel.alternatives.into_iter().next())
+            .unwrap_or(ProviderAlternative {
+                transcript: response.text,
+                words: response.words,
+                languages: Vec::new(),
+            });
         let text = alternative.transcript.trim();
         if text.is_empty() {
             return None;
@@ -900,7 +918,7 @@ mod tests {
         let plan = ConnectionPlan::from_auth(&auth, &config(), Some("https://api.omi.example"));
         assert_eq!(
             plan.map(|value| (value.provider, value.reconnectable)),
-            Ok(("deepgram-managed", false))
+            Ok(("xai-managed", false))
         );
         assert!(matches!(
             ConnectionPlan::from_auth(&auth, &config(), Some("https://evil.example")),
@@ -911,14 +929,14 @@ mod tests {
     #[test]
     fn byok_endpoint_is_exact_and_credentials_reject_controls() {
         let auth = TranscriptionAuth::Byok {
-            endpoint: "wss://api.deepgram.com/v1/listen".to_owned(),
-            api_key: "dg-secret".to_owned(),
+            endpoint: "wss://api.x.ai/v1/stt".to_owned(),
+            api_key: "xai-secret".to_owned(),
         };
         let plan = ConnectionPlan::from_auth(&auth, &config(), None);
         assert_eq!(
             plan.as_ref()
                 .map(|value| (value.provider, value.reconnectable)),
-            Ok(("deepgram-byok", true))
+            Ok(("xai-byok", true))
         );
         assert_eq!(
             plan.map(|value| value
@@ -928,7 +946,7 @@ mod tests {
             Ok(true)
         );
         let injected = TranscriptionAuth::Byok {
-            endpoint: "wss://api.deepgram.com/v1/listen".to_owned(),
+            endpoint: "wss://api.x.ai/v1/stt".to_owned(),
             api_key: "secret\r\nleak".to_owned(),
         };
         assert!(matches!(
@@ -947,7 +965,7 @@ mod tests {
 
     #[test]
     fn parser_generates_stable_segments_and_epochs() {
-        let mut state = TranscriptState::new(config(), "deepgram-managed");
+        let mut state = TranscriptState::new(config(), "xai-managed");
         let interim = state
             .parse(
                 r#"{"is_final":false,"channel":{"alternatives":[{"transcript":" hello ","words":[{"start":1.25,"end":1.75}],"languages":["en"]}]}}"#,
@@ -983,8 +1001,33 @@ mod tests {
     }
 
     #[test]
+    fn parser_accepts_xai_streaming_events() {
+        let mut state = TranscriptState::new(config(), "xai-byok");
+        let delta = state
+            .parse(
+                r#"{"type":"transcript.partial","text":"hello","words":[{"text":"hello","start":0.25,"end":0.75,"speaker":2}],"is_final":true,"speech_final":true}"#,
+                1_000,
+            )
+            .ok_or("missing xAI delta");
+        assert!(delta.is_ok());
+        let delta = delta.unwrap_or_else(|_| unreachable!());
+        assert_eq!(delta.text, "hello");
+        assert_eq!((delta.start_ms, delta.end_ms), (250, 750));
+        assert_eq!(delta.speaker, Some(2));
+        assert!(delta.final_segment);
+        assert!(
+            state
+                .parse(
+                    r#"{"type":"transcript.done","text":"hello","duration":0.75}"#,
+                    1_100,
+                )
+                .is_none()
+        );
+    }
+
+    #[test]
     fn diarization_speaker_and_channel_survive_the_parser() {
-        let mut state = TranscriptState::new(config(), "deepgram-byok");
+        let mut state = TranscriptState::new(config(), "xai-byok");
         let delta = state
             .parse(
                 r#"{"is_final":true,"channel_index":[0,1],"channel":{"alternatives":[{"transcript":"we ship on friday","confidence":0.98,"words":[{"word":"we","start":1.0,"end":1.2,"confidence":0.99,"speaker":0,"speaker_confidence":0.71,"punctuated_word":"We"},{"word":"ship","start":1.2,"end":1.5,"confidence":0.98,"speaker":1,"speaker_confidence":0.68,"punctuated_word":"ship"},{"word":"on","start":1.5,"end":1.6,"confidence":0.97,"speaker":1,"speaker_confidence":0.68,"punctuated_word":"on"},{"word":"friday","start":1.6,"end":2.0,"confidence":0.96,"speaker":1,"speaker_confidence":0.68,"punctuated_word":"Friday."}],"languages":["en"]}]}}"#,
@@ -1000,7 +1043,7 @@ mod tests {
 
     #[test]
     fn undiarized_words_leave_the_segment_unattributed() {
-        let mut state = TranscriptState::new(config(), "deepgram-managed");
+        let mut state = TranscriptState::new(config(), "xai-managed");
         let delta = state
             .parse(
                 r#"{"is_final":true,"channel":{"alternatives":[{"transcript":"hello","words":[{"start":1.0,"end":1.2}]}]}}"#,
@@ -1016,7 +1059,7 @@ mod tests {
 
     #[test]
     fn a_second_channel_never_collides_with_the_first_channels_speakers() {
-        let mut state = TranscriptState::new(config(), "deepgram-byok");
+        let mut state = TranscriptState::new(config(), "xai-byok");
         let delta = state
             .parse(
                 r#"{"is_final":true,"channel_index":[1,2],"channel":{"alternatives":[{"transcript":"over here","words":[{"start":1.0,"end":1.2,"speaker":0}]}]}}"#,
@@ -1035,8 +1078,8 @@ mod tests {
         value.sample_rate_hz = 8_000;
         value.encoding = AudioEncoding::PcmU8;
         let auth = TranscriptionAuth::Byok {
-            endpoint: "wss://api.deepgram.com/v1/listen".to_owned(),
-            api_key: "dg-secret".to_owned(),
+            endpoint: "wss://api.x.ai/v1/stt".to_owned(),
+            api_key: "xai-secret".to_owned(),
         };
         let plan = ConnectionPlan::from_auth(&auth, &value, None)
             .unwrap_or_else(|error| panic!("PCM8 plan is valid: {error}"));
@@ -1045,7 +1088,7 @@ mod tests {
                 .query_pairs()
                 .find(|(key, _)| key == "encoding")
                 .map(|(_, value)| value.into_owned()),
-            Some("linear16".to_owned())
+            Some("pcm".to_owned())
         );
         assert_eq!(
             encode_audio(&[0, 128, 255], AudioEncoding::PcmU8),
@@ -1055,21 +1098,21 @@ mod tests {
     }
 
     #[test]
-    fn deepgram_audio_contract_matches_physical_omi_codecs() {
+    fn xai_audio_contract_accepts_only_raw_pcm() {
         let mut value = config();
         value.sample_rate_hz = 8_000;
-        assert_eq!(deepgram_encoding(&value), Ok("linear16"));
+        assert_eq!(xai_encoding(&value), Ok("pcm"));
 
         value.sample_rate_hz = 16_000;
         value.encoding = AudioEncoding::Opus;
-        assert_eq!(deepgram_encoding(&value), Ok("opus"));
+        assert_eq!(xai_encoding(&value), Err(SttError::UnsupportedAudio));
 
         value.channels = 2;
-        assert_eq!(deepgram_encoding(&value), Err(SttError::UnsupportedAudio));
+        assert_eq!(xai_encoding(&value), Err(SttError::UnsupportedAudio));
 
         value.channels = 1;
         value.sample_rate_hz = 48_000;
-        assert_eq!(deepgram_encoding(&value), Err(SttError::UnsupportedAudio));
+        assert_eq!(xai_encoding(&value), Err(SttError::UnsupportedAudio));
     }
 
     #[test]

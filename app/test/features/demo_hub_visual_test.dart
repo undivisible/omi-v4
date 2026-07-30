@@ -37,8 +37,9 @@ void main() {
       Colors.transparent,
     );
     final mark = tester.widget<OmiActivityOrb>(
-      find.byKey(const Key('demo_rotating_mark')),
+      find.byType(OmiActivityOrb).first,
     );
-    expect(mark.period, const Duration(seconds: 10));
+    expect(mark.period, const Duration(seconds: 8));
+    expect(find.byKey(const Key('hub_greeting')), findsOneWidget);
   }, skip: !omiDemoMode);
 }

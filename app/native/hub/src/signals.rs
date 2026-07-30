@@ -58,6 +58,7 @@ pub enum Command {
         sample_rate_hz: u32,
         channels: u8,
         encoding: AudioEncoding,
+        tempo: u8,
     },
     StopTranscription {
         audio_stream_id: String,
@@ -302,6 +303,7 @@ pub enum RewindRequest {
     /// A scheduled policy evaluation. Sampled before any pixels are read.
     Tick {
         context: RewindWindowContext,
+        display: RewindDisplay,
         idle_ms: i64,
         locked: bool,
         permitted: bool,
@@ -426,6 +428,18 @@ pub struct RewindWindowContext {
     pub bundle_id: Option<String>,
     pub app_name: Option<String>,
     pub window_title: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, SignalPiece)]
+pub struct RewindDisplay {
+    pub id: String,
+    pub name: String,
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+    pub scale: f32,
+    pub primary: bool,
 }
 
 impl std::fmt::Debug for RewindWindowContext {
@@ -738,6 +752,9 @@ pub struct AudioGateStats {
     pub suppressed_bytes: u64,
     pub forwarded_ms: u64,
     pub suppressed_ms: u64,
+    pub provider_bytes: u64,
+    pub provider_ms: u64,
+    pub tempo_milli: u32,
 }
 
 /// The answer to exactly one [`RewindRequest`].
@@ -843,6 +860,7 @@ pub struct RewindFrameRecord {
     pub absolute_path: String,
     pub bytes: u64,
     pub hash: String,
+    pub display: RewindDisplay,
     pub app_name: Option<String>,
     pub bundle_id: Option<String>,
     pub window_title: Option<String>,

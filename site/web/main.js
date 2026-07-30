@@ -191,8 +191,8 @@
 
     const live = document.createElement("iframe");
     live.title = "Omi, running on sample data";
-    live.src = "/hub/";
-    live.allow = "clipboard-write";
+  live.src = "/hub/?v=guided-hub-v4";
+    live.allow = "clipboard-write; language-model";
     live.addEventListener("error", fail);
     live.addEventListener("load", () => {
       try {

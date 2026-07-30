@@ -9,6 +9,18 @@
 use serde_json::{Map, Value};
 use std::time::Duration;
 
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Display {
+    pub id: String,
+    pub name: String,
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+    pub scale: f32,
+    pub primary: bool,
+}
+
 /// What Omi knows about the screen at the instant the policy is asked whether
 /// to capture. Deliberately tiny: the frontmost app, its bundle id, and the
 /// window title. Nothing here is stored unless a frame is stored.
@@ -191,7 +203,7 @@ impl Retention {
 }
 
 /// One stored screenshot, as recorded in the on-disk index.
-#[derive(Clone, Eq, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct Frame {
     /// Milliseconds since the Unix epoch. The index writes this back out as a
     /// UTC ISO-8601 instant, which is the format the Dart engine wrote, so an
@@ -201,6 +213,7 @@ pub struct Frame {
     pub bytes: u64,
     /// The 64-bit dHash of the preview this frame was accepted from, as hex.
     pub hash: String,
+    pub display: Display,
     pub app_name: Option<String>,
     pub bundle_id: Option<String>,
     pub window_title: Option<String>,
@@ -245,6 +258,20 @@ impl Frame {
         insert_optional(&mut map, "bundleId", self.bundle_id.as_ref());
         insert_optional(&mut map, "title", self.window_title.as_ref());
         insert_optional(&mut map, "text", self.ocr_text.as_ref());
+        if self.display.id != "primary"
+            || self.display.name != "Primary display"
+            || self.display.width != 0
+            || self.display.height != 0
+        {
+            map.insert("displayId".into(), Value::from(self.display.id.clone()));
+            map.insert("displayName".into(), Value::from(self.display.name.clone()));
+            map.insert("displayX".into(), Value::from(self.display.x));
+            map.insert("displayY".into(), Value::from(self.display.y));
+            map.insert("displayWidth".into(), Value::from(self.display.width));
+            map.insert("displayHeight".into(), Value::from(self.display.height));
+            map.insert("displayScale".into(), Value::from(self.display.scale));
+            map.insert("displayPrimary".into(), Value::from(self.display.primary));
+        }
         Value::Object(map)
     }
 
@@ -264,6 +291,33 @@ impl Frame {
             relative_path,
             bytes,
             hash,
+            display: Display {
+                id: map
+                    .get("displayId")
+                    .and_then(Value::as_str)
+                    .unwrap_or("primary")
+                    .to_owned(),
+                name: map
+                    .get("displayName")
+                    .and_then(Value::as_str)
+                    .unwrap_or("Primary display")
+                    .to_owned(),
+                x: map.get("displayX").and_then(Value::as_i64).unwrap_or(0) as i32,
+                y: map.get("displayY").and_then(Value::as_i64).unwrap_or(0) as i32,
+                width: map.get("displayWidth").and_then(Value::as_u64).unwrap_or(0) as u32,
+                height: map
+                    .get("displayHeight")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0) as u32,
+                scale: map
+                    .get("displayScale")
+                    .and_then(Value::as_f64)
+                    .unwrap_or(1.0) as f32,
+                primary: map
+                    .get("displayPrimary")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(true),
+            },
             app_name: optional_string(map.get("app")),
             bundle_id: optional_string(map.get("bundleId")),
             window_title: optional_string(map.get("title")),
@@ -299,7 +353,7 @@ pub fn parse_instant(text: &str) -> Option<i64> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Frame, Retention, format_instant, parse_instant};
+    use super::{Display, Frame, Retention, format_instant, parse_instant};
     use serde_json::Value;
 
     #[test]
@@ -343,6 +397,7 @@ mod tests {
             relative_path: "frames/2026-07-23/1784000000000.jpg".to_owned(),
             bytes: 64,
             hash: "0123456789abcdef".to_owned(),
+            display: Display::default(),
             app_name: Some("Terminal".to_owned()),
             bundle_id: Some("com.apple.Terminal".to_owned()),
             window_title: Some("zsh".to_owned()),
@@ -404,6 +459,7 @@ mod tests {
             relative_path: "frames/a.jpg".to_owned(),
             bytes: 1,
             hash: "a".to_owned(),
+            display: Display::default(),
             app_name: Some("Mail".to_owned()),
             bundle_id: None,
             window_title: Some("Re: severance terms".to_owned()),

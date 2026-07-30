@@ -32,7 +32,8 @@ use crate::signals::{
 use crate::signals::{AudioChunk, TranscriptionAuth, TranscriptionRoute};
 #[cfg(test)]
 use crate::transcription::{
-    AudioAcceptError, AudioProgress, AudioSession, AudioSessions, TranscriptionPhase,
+    AudioAcceptError, AudioProgress, AudioSession, AudioSessions, AudioTimeCompressor,
+    TranscriptionPhase,
 };
 use crate::transcription::{StartTranscription, TranscriptionControl};
 use fastembed::{EmbeddingModel, TextEmbedding, TextInitOptions};
@@ -518,10 +519,16 @@ impl AssistantProviderConfig {
         // A `compatible` endpoint's model is opaque: nothing has verified it,
         // and refusing every non-text request there would break the one
         // provider whose single-model behaviour has to keep working.
-        if self.byok_provider().is_none() {
-            return Ok(model);
-        }
-        let capabilities = crate::byok_tier::capabilities_of(&model);
+        let mut capabilities = match self.kind {
+            AssistantProviderKind::Worker => {
+                crate::model_tier::capabilities_of(&model, |name| std::env::var(name).ok())
+            }
+            AssistantProviderKind::Compatible => vec![Capability::Text],
+            _ => crate::byok_tier::capabilities_of(&model).to_vec(),
+        };
+        if self.kind == AssistantProviderKind::Worker && !capabilities.contains(&Capability::Text) {
+            capabilities.push(Capability::Text);
+        };
         let missing: Vec<_> = required
             .iter()
             .filter(|capability| !capabilities.contains(capability))
@@ -1411,6 +1418,7 @@ impl CommandDispatcher {
                 sample_rate_hz,
                 channels,
                 encoding,
+                tempo,
             } = &command.command
             {
                 if audio_stream_id.trim().is_empty()
@@ -1418,6 +1426,7 @@ impl CommandDispatcher {
                     || language.trim().is_empty()
                     || !(8_000..=192_000).contains(sample_rate_hz)
                     || !(1..=2).contains(channels)
+                    || !(1..=3).contains(tempo)
                 {
                     error(
                         Some(request_id),
@@ -1446,6 +1455,7 @@ impl CommandDispatcher {
                     sample_rate_hz: *sample_rate_hz,
                     channels: *channels,
                     encoding: *encoding,
+                    tempo: *tempo,
                 };
                 if transcription
                     .send(TranscriptionControl::Start(start))
@@ -2060,6 +2070,22 @@ casual chat: when a step can be carried out here, propose the concrete action or
 the user's approval instead of only describing it. Keep any text reply short enough to read at \
 a glance.";
 
+const ASSISTANT_PERSONA: &str = "You are Omi, and you belong to this user alone. Speak like a \
+friend who is genuinely glad to hear from them, not like a service desk.\n\n\
+Warmth: sound like you enjoy the conversation. Be warm when it is earned or needed, never \
+sycophantic, never gushing.\n\n\
+Wit: dry and light when the moment fits, and skipped entirely when it does not. Never force a \
+joke where a plain answer serves better, never two in a row unless they joke back, and never one \
+they have heard before — if you are unsure whether a joke is original, do not make it.\n\n\
+Brevity: no preamble, no postamble. Never open with \"Here is what I found\" and never close with \
+\"Let me know if you need anything else\" or \"Anything else you want to know\". Match their length: \
+a few words back to a few words, unless they asked for something that needs more.\n\n\
+Adaptiveness: follow their register. Lowercase if they write lowercase. No emoji unless they use \
+them first, and never the same one they just used. No slang they have not used.\n\n\
+Honesty: never invent anything. If you cannot find something or are unsure, say so plainly — that \
+is more useful than a confident guess, and a guess presented as fact is the one thing that would \
+make them stop trusting you.";
+
 const CREPUS_ARTIFACTS_GUIDANCE: &str = "Reply guidelines — default to clear markdown prose with \
 actionable steps, recommendations, and context the user can follow. Most answers should be helpful \
 text first.\n\n\
@@ -2075,7 +2101,12 @@ real values — not placeholder activity feeds.\n\
 - Put structured content ONLY inside the artifact; never duplicate the same lists above and below \
 it.\n\n\
 Supported nodes: text, stack (row/col, gap-N), scroll, button, toggle, checkbox, progress, meter, \
-badge, divider, spacer, image, if, foreach, list, listitem, sparkline.\n\n\
+badge, divider, spacer, image, if, foreach, list, listitem, sparkline, timer.\n\n\
+Timers run. `timer \"Focus\" duration=25m autostart` renders a clock that actually counts down, \
+with its own start, pause and reset. Use it for anything time-bounded — pomodoro, a rest interval, \
+a countdown. Add `countup` for a stopwatch. Duration takes 90s, 25m, 1h.\n\n\
+NEVER fake a running clock with `progress`. A progress node is a number you wrote once; it does \
+not move. A card that says \"Session Active\" over a frozen 4% bar is worse than no card.\n\n\
 Sparkline (full-width trend — prefer this over list-only summaries when numbers exist):\n\
 ```crepus\n\
 stack col gap-2\n\
@@ -2108,15 +2139,25 @@ fn framed_assistant_prompt(
     text: &str,
 ) -> String {
     let prompt = assistant_prompt(memory_context, text);
+    // The persona is who Omi is and does not change with the delivery channel;
+    // the framings below only change what it can render there.
     match origin {
-        Some(MessageOrigin::Overlay) => format!("{OVERLAY_AGENT_FRAMING}\n\n{prompt}"),
+        Some(MessageOrigin::Overlay) => {
+            format!("{ASSISTANT_PERSONA}\n\n{OVERLAY_AGENT_FRAMING}\n\n{prompt}")
+        }
         Some(MessageOrigin::ChannelTelegram) => {
-            format!("{CHANNEL_MESSAGING_FRAMING}\n{CHANNEL_TELEGRAM_FRAMING}\n\n{prompt}")
+            format!(
+                "{ASSISTANT_PERSONA}\n\n{CHANNEL_MESSAGING_FRAMING}\n{CHANNEL_TELEGRAM_FRAMING}\n\n{prompt}"
+            )
         }
         Some(MessageOrigin::ChannelImessage) => {
-            format!("{CHANNEL_MESSAGING_FRAMING}\n{CHANNEL_IMESSAGE_FRAMING}\n\n{prompt}")
+            format!(
+                "{ASSISTANT_PERSONA}\n\n{CHANNEL_MESSAGING_FRAMING}\n{CHANNEL_IMESSAGE_FRAMING}\n\n{prompt}"
+            )
         }
-        Some(MessageOrigin::Chat) | None => format!("{CREPUS_ARTIFACTS_GUIDANCE}\n\n{prompt}"),
+        Some(MessageOrigin::Chat) | None => {
+            format!("{ASSISTANT_PERSONA}\n\n{CREPUS_ARTIFACTS_GUIDANCE}\n\n{prompt}")
+        }
     }
 }
 
@@ -6078,9 +6119,10 @@ mod tests {
         }
         // Nothing has verified an arbitrary endpoint's model, so refusing it
         // would break the one provider whose single model must keep working.
-        assert_eq!(
-            config.model_for_capability(ModelTier::Multimodal, &[Capability::ImageIn]),
-            Ok("house-model".to_owned())
+        assert!(
+            config
+                .model_for_capability(ModelTier::Multimodal, &[Capability::ImageIn])
+                .is_err()
         );
     }
 
@@ -6831,6 +6873,7 @@ mod tests {
                 sample_rate_hz: 16_000,
                 channels: 1,
                 encoding: AudioEncoding::Opus,
+                tempo: 1,
             })
             .unwrap_or_else(|failure| panic!("start failed: {}", failure.message));
     }
@@ -6848,6 +6891,7 @@ mod tests {
             sample_rate_hz: 16_000,
             channels: 1,
             encoding: AudioEncoding::Opus,
+            tempo: 1,
         });
         assert!(matches!(
             failure,
@@ -6946,6 +6990,7 @@ mod tests {
             sample_rate_hz: 16_000,
             channels: 1,
             encoding: AudioEncoding::Opus,
+            tempo: 1,
         });
         assert!(matches!(
             failure,
@@ -7042,6 +7087,7 @@ mod tests {
                 sample_rate_hz: 16_000,
                 channels: 1,
                 encoding: AudioEncoding::Opus,
+                tempo: 1,
                 last_seen: Instant::now(),
                 device_id: "omi-1".to_owned(),
                 route: TranscriptionRoute::Byok,
@@ -7055,6 +7101,8 @@ mod tests {
                     16_000,
                     1,
                 ),
+                compressor: AudioTimeCompressor::new(16_000, 1, AudioEncoding::Opus, 1)
+                    .unwrap_or_else(|error_value| panic!("{error_value}")),
                 last_gate_report: Instant::now(),
             },
         );
@@ -7528,7 +7576,10 @@ mod tests {
             .unwrap_or_else(|failure| failure.into_inner())
             .clone()
             .unwrap_or_else(|| panic!("provider receives a prompt"));
-        assert!(captured.starts_with(CREPUS_ARTIFACTS_GUIDANCE));
+        // Who Omi is leads every prompt; the origin only decides which framing
+        // follows it.
+        assert!(captured.starts_with(ASSISTANT_PERSONA));
+        assert!(captured.contains(CREPUS_ARTIFACTS_GUIDANCE));
         assert!(captured.contains("Relevant things you know about the user:\n"));
         assert!(captured.contains("Sam prefers espresso"));
         assert!(captured.contains("<current_datetime>"));
@@ -7550,7 +7601,8 @@ mod tests {
             .unwrap_or_else(|failure| failure.into_inner())
             .clone()
             .unwrap_or_else(|| panic!("provider receives a prompt"));
-        assert!(plain.starts_with(CREPUS_ARTIFACTS_GUIDANCE));
+        assert!(plain.starts_with(ASSISTANT_PERSONA));
+        assert!(plain.contains(CREPUS_ARTIFACTS_GUIDANCE));
         assert!(plain.ends_with("plain message"));
 
         let oversized = "x".repeat(3 * MEMORY_CONTEXT_CHARACTER_LIMIT);
@@ -7567,14 +7619,16 @@ mod tests {
             Some("- Works at Acme"),
             "open the quarterly report",
         );
-        assert!(framed.starts_with(OVERLAY_AGENT_FRAMING));
+        assert!(framed.starts_with(ASSISTANT_PERSONA));
+        assert!(framed.contains(OVERLAY_AGENT_FRAMING));
         assert!(framed.contains("Relevant things you know about the user:\n- Works at Acme"));
         assert!(framed.ends_with("open the quarterly report"));
 
         // Chat and unspecified origins carry the crepus-artifacts guidance and
         // end with the user's own words, but never the desktop-agent framing.
         let chat = framed_assistant_prompt(Some(MessageOrigin::Chat), None, "hello");
-        assert!(chat.starts_with(CREPUS_ARTIFACTS_GUIDANCE));
+        assert!(chat.starts_with(ASSISTANT_PERSONA));
+        assert!(chat.contains(CREPUS_ARTIFACTS_GUIDANCE));
         assert!(chat.ends_with("hello"));
         assert_eq!(framed_assistant_prompt(None, None, "hello"), chat);
         assert!(!chat.contains("desktop agent"));
@@ -7622,7 +7676,8 @@ mod tests {
             .unwrap_or_else(|failure| failure.into_inner())
             .clone()
             .unwrap_or_else(|| panic!("provider receives the overlay prompt"));
-        assert!(captured.starts_with(OVERLAY_AGENT_FRAMING));
+        assert!(captured.starts_with(ASSISTANT_PERSONA));
+        assert!(captured.contains(OVERLAY_AGENT_FRAMING));
         assert!(captured.ends_with("open my latest draft"));
     }
 

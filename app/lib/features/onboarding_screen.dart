@@ -502,7 +502,7 @@ class _Introduction extends StatelessWidget {
         textAlign: TextAlign.center,
         style: TextStyle(
           color: Color(0xfffffcec),
-          fontFamily: OmiFonts.sans,
+          fontFamily: 'Literata',
           fontSize: 46,
           fontWeight: FontWeight.w500,
           height: 1.08,
@@ -705,7 +705,7 @@ class _OnboardingProfileStepState extends State<OnboardingProfileStep> {
           textAlign: TextAlign.center,
           style: TextStyle(
             color: _cream,
-            fontFamily: OmiFonts.sans,
+            fontFamily: 'Literata',
             fontSize: 38,
             fontWeight: FontWeight.w500,
             height: 1.2,
@@ -851,7 +851,7 @@ class _ScanStep extends StatelessWidget {
           textAlign: TextAlign.center,
           style: const TextStyle(
             color: Color(0xfffffcec),
-            fontFamily: OmiFonts.sans,
+            fontFamily: 'Literata',
             fontSize: 38,
             fontWeight: FontWeight.w500,
             height: 1.2,
@@ -1202,7 +1202,7 @@ class _OnboardingUseStepState extends State<OnboardingUseStep> {
         textAlign: TextAlign.center,
         style: const TextStyle(
           color: Color(0xfffffcec),
-          fontFamily: OmiFonts.sans,
+          fontFamily: 'Literata',
           fontSize: 34,
           fontWeight: FontWeight.w500,
           height: 1.15,

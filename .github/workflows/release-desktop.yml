@@ -130,6 +130,49 @@ jobs:
       # xcconfig xcodebuild reads from XCODE_XCCONFIG_FILE: `flutter build macos`
       # does not forward SETTING=value arguments, and the Xcode project is not
       # this workflow's to edit. The bundle is ad-hoc signed further down.
+      # Auth config reaches the app only through --dart-define. A build with
+      # these missing compiles and ships an UnconfiguredAuthGateway: the binary
+      # looks fine and cannot sign in. Every release built before this step
+      # existed had that fault, so this fails loudly rather than shipping it.
+      - name: Resolve Firebase build defines
+        id: firebase
+        env:
+          FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
+          FIREBASE_AUTH_DOMAIN: ${{ secrets.FIREBASE_AUTH_DOMAIN }}
+          FIREBASE_API_KEY: ${{ secrets.FIREBASE_API_KEY }}
+          FIREBASE_APP_ID: ${{ secrets.FIREBASE_APP_ID }}
+          FIREBASE_ANDROID_API_KEY: ${{ secrets.FIREBASE_ANDROID_API_KEY }}
+          FIREBASE_ANDROID_APP_ID: ${{ secrets.FIREBASE_ANDROID_APP_ID }}
+          FIREBASE_IOS_API_KEY: ${{ secrets.FIREBASE_IOS_API_KEY }}
+          FIREBASE_IOS_APP_ID: ${{ secrets.FIREBASE_IOS_APP_ID }}
+          FIREBASE_MACOS_API_KEY: ${{ secrets.FIREBASE_MACOS_API_KEY }}
+          FIREBASE_MACOS_APP_ID: ${{ secrets.FIREBASE_MACOS_APP_ID }}
+          FIREBASE_WINDOWS_API_KEY: ${{ secrets.FIREBASE_WINDOWS_API_KEY }}
+          FIREBASE_WINDOWS_APP_ID: ${{ secrets.FIREBASE_WINDOWS_APP_ID }}
+          FIREBASE_WEB_API_KEY: ${{ secrets.FIREBASE_WEB_API_KEY }}
+          FIREBASE_WEB_APP_ID: ${{ secrets.FIREBASE_WEB_APP_ID }}
+        run: |
+          set -euo pipefail
+          defines=""
+          missing=""
+          for name in FIREBASE_PROJECT_ID FIREBASE_AUTH_DOMAIN FIREBASE_API_KEY \
+                      FIREBASE_APP_ID FIREBASE_ANDROID_API_KEY FIREBASE_ANDROID_APP_ID \
+                      FIREBASE_IOS_API_KEY FIREBASE_IOS_APP_ID FIREBASE_MACOS_API_KEY \
+                      FIREBASE_MACOS_APP_ID FIREBASE_WINDOWS_API_KEY \
+                      FIREBASE_WINDOWS_APP_ID FIREBASE_WEB_API_KEY FIREBASE_WEB_APP_ID; do
+            value="${!name-}"
+            if [ -z "${value}" ]; then
+              missing="${missing} ${name}"
+            else
+              defines="${defines} --dart-define=${name}=${value}"
+            fi
+          done
+          if [ -n "${missing}" ]; then
+            echo "::error::Release builds cannot sign in without these repository secrets:${missing}"
+            exit 1
+          fi
+          echo "defines=${defines# }" >> "$GITHUB_OUTPUT"
+
       - name: Build the macOS release app
         working-directory: app
         env:
@@ -152,7 +195,7 @@ jobs:
             cat "${xcconfig}"
             export XCODE_XCCONFIG_FILE="${xcconfig}"
           fi
-          flutter build macos --release
+          flutter build macos --release ${{ steps.firebase.outputs.defines }}
 
       - name: Locate the built app bundle
         id: bundle

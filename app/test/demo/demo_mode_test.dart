@@ -53,34 +53,30 @@ void main() {
     expect(after.length, before.length - 1);
   });
 
-  test(
-    'the demo hub answers chat without a model and refuses capture',
-    () async {
-      final hub = DemoNativeHub();
-      addTearDown(hub.dispose);
-      final reply = hub.events
-          .where((event) => event is NativeEventAssistantDelta)
-          .cast<NativeEventAssistantDelta>()
-          .takeWhile((event) => !event.value.finalSegment)
-          .toList();
-      hub.sendMessage(requestId: 'r1', text: 'tell me about zkr memory');
-      expect((await reply).map((event) => event.value.text).join(), isNotEmpty);
-      expect(
-        () => hub.capture(
-          requestId: 'r2',
-          ingestionKey: 'k',
-          source: CaptureSource.chat,
-          occurredAtMs: 0,
-          recordedAtMs: 0,
-        ),
-        throwsA(isA<NativeHubUnavailable>()),
-      );
-      expect(
-        () => hub.startMeeting(requestId: 'r3'),
-        throwsA(isA<NativeHubUnavailable>()),
-      );
-    },
-  );
+  test('the demo hub returns chat guidance and refuses capture', () async {
+    final hub = DemoNativeHub();
+    addTearDown(hub.dispose);
+    final reply = hub.events
+        .where((event) => event is NativeEventAssistantDelta)
+        .cast<NativeEventAssistantDelta>()
+        .firstWhere((event) => event.value.text.isNotEmpty);
+    hub.sendMessage(requestId: 'r1', text: 'tell me about zkr memory');
+    expect((await reply).value.text, isNotEmpty);
+    expect(
+      () => hub.capture(
+        requestId: 'r2',
+        ingestionKey: 'k',
+        source: CaptureSource.chat,
+        occurredAtMs: 0,
+        recordedAtMs: 0,
+      ),
+      throwsA(isA<NativeHubUnavailable>()),
+    );
+    expect(
+      () => hub.startMeeting(requestId: 'r3'),
+      throwsA(isA<NativeHubUnavailable>()),
+    );
+  });
 
   test(
     'the demo reaches local mode, so chat is live without an account',

@@ -516,18 +516,22 @@ async fn call_model(
     granted: &[String],
     transcript: &[byok::TranscriptEntry],
 ) -> Option<String> {
-    let endpoint = env_get(&ctx.env, "MIMO_CHAT_COMPLETIONS_URL")?;
-    let secret = env_get(&ctx.env, "MIMO_API_KEY")?;
-    let endpoint_url = managed_ai::validate_pinned_endpoint(
-        &endpoint,
-        managed_ai::XIAOMI_COMPLETION_ENDPOINT,
-        managed_ai::XIAOMI_HOSTNAME,
-    )?;
-    let gateway = managed_ai::ai_gateway_route(|name| env_get(&ctx.env, name));
-    let endpoint_url = gateway
-        .as_ref()
-        .and_then(|route| worker::Url::parse(&route.url).ok())
-        .unwrap_or(endpoint_url);
+    let endpoint = env_get(&ctx.env, "MIMO_CHAT_COMPLETIONS_URL");
+    let gateway = managed_ai::ai_gateway_route(|name| env_get(&ctx.env, name)).ok()?;
+    let (endpoint_url, secret) = match &gateway {
+        Some(route) => (
+            worker::Url::parse(&route.url).ok()?,
+            env_get(&ctx.env, "OPENROUTER_API_KEY")?,
+        ),
+        None => (
+            managed_ai::validate_pinned_endpoint(
+                &endpoint?,
+                managed_ai::XIAOMI_COMPLETION_ENDPOINT,
+                managed_ai::XIAOMI_HOSTNAME,
+            )?,
+            env_get(&ctx.env, "MIMO_API_KEY")?,
+        ),
+    };
     let model = managed_ai::model_for_tier(managed_ai::ModelTier::Balanced, |name| {
         env_get(&ctx.env, name)
     });

@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../app_services.dart';
 import '../native/native_hub.dart';
 import '../random_id.dart';
+import '../ui/omi_orb.dart';
 import 'user_profile.dart';
 
 class UserProfileSettingsPanel extends StatefulWidget {
@@ -256,13 +257,7 @@ class _UserProfileSettingsPanelState extends State<UserProfileSettingsPanel> {
   Widget build(BuildContext context) {
     final colors = _ProfileChatColors.of(context);
     if (_loading) {
-      return Center(
-        child: SizedBox(
-          width: 18,
-          height: 18,
-          child: CircularProgressIndicator(strokeWidth: 2, color: colors.ink),
-        ),
-      );
+      return Center(child: OmiActivityOrb.loading(size: 18, color: colors.ink));
     }
     return DecoratedBox(
       decoration: BoxDecoration(
@@ -344,14 +339,7 @@ class _UserProfileSettingsPanelState extends State<UserProfileSettingsPanel> {
                       ? null
                       : () => unawaited(_send()),
                   icon: _busy
-                      ? SizedBox(
-                          width: 16,
-                          height: 16,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: colors.muted,
-                          ),
-                        )
+                      ? OmiActivityOrb.loading(size: 16, color: colors.muted)
                       : Icon(Icons.arrow_upward_rounded, color: colors.ink),
                 ),
               ],

@@ -3,7 +3,7 @@
 //! reads/writes (binding lookup, code issuance, unlink dispatch) live in the
 //! wasm glue in `routes_channels.rs`.
 
-use crate::channel_link::LINK_CODE_TTL_MS;
+use crate::{channel_auth::SIGNIN_CODE_TTL_MS, channel_link::LINK_CODE_TTL_MS};
 
 /// A dispatchable command: primary name plus any aliases and a one-line
 /// summary used in `/help` and the system-prompt injection.
@@ -24,6 +24,11 @@ pub const CHANNEL_COMMANDS: &[ChannelCommand] = &[
         name: "/start",
         aliases: &[],
         summary: "link this chat to your Omi account",
+    },
+    ChannelCommand {
+        name: "/signin",
+        aliases: &[],
+        summary: "get a code to sign in with this chat",
     },
     ChannelCommand {
         name: "/signup",
@@ -120,6 +125,19 @@ chat, or by typing it straight into the chat box on Omi for desktop. It expires 
     .join("\n\n")
 }
 
+/// Reply for `/signin`: this bearer code signs the sender into Omi, rather than
+/// binding the chat to an account that is already authenticated.
+pub fn signin_code_text(code: &str) -> String {
+    [
+        format!("Your sign-in code is {code}"),
+        format!(
+            "Enter it in Omi to sign in. It expires in {} minutes and works once.",
+            SIGNIN_CODE_TTL_MS / 60_000
+        ),
+    ]
+    .join("\n\n")
+}
+
 /// `notLinkedText`.
 pub const NOT_LINKED_TEXT: &str =
     "This chat isn't linked to an Omi account yet. Send /start if you already have one \
@@ -210,6 +228,24 @@ mod tests {
         assert_eq!(resolve_command("/clear").unwrap().name, "/reset");
         assert_eq!(resolve_command("/unlink").unwrap().name, "/logout");
         assert!(resolve_command("/frobnicate").is_none());
+    }
+
+    #[test]
+    fn signin_is_a_shared_channel_command() {
+        let command = resolve_command("/signin").expect("sign-in command");
+        assert_eq!(command.name, "/signin");
+        assert!(command.summary.contains("sign in"));
+        assert!(channel_help_text().contains("/signin"));
+        assert!(channel_command_prompt().contains("/signin"));
+    }
+
+    #[test]
+    fn signin_reply_uses_the_short_lived_code_interface() {
+        let reply = signin_code_text("K7QP2RM");
+        assert!(reply.contains("K7QP2RM"));
+        assert!(reply.contains("3 minutes"));
+        assert!(reply.contains("sign in"));
+        assert!(!reply.contains("Link this chat"));
     }
 
     #[test]

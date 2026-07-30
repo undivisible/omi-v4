@@ -13,6 +13,7 @@ use std::{
     rc::Rc,
 };
 
+use base64::Engine;
 use futures_util::{stream, StreamExt};
 use serde_json::{json, Value};
 use worker::wasm_bindgen;
@@ -27,7 +28,7 @@ use crate::glue::{authenticate, error_json, has_active_pro, AuthOutcome};
 use crate::rate_limit::RateLimiter;
 use crate::stt_admission::{Limits as SttLimits, SttAdmission};
 use crate::worker_util::{now_ms, secret_or_var as env_get, uuid_v4};
-use crate::{asr_logic, managed_ai, stt_logic, voice_logic};
+use crate::{asr_logic, managed_ai, observability, stt_logic, voice_logic};
 
 const DO_STATE_KEY: &str = "state";
 
@@ -78,6 +79,60 @@ fn assistant_admission_stub(env: &Env) -> Result<Stub> {
 fn stt_admission_stub(env: &Env) -> Result<Stub> {
     env.durable_object("STT_ADMISSION")?
         .get_by_name("managed-stt-global")
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn send_foglamp_trace(
+    env: &Env,
+    trace_id: &str,
+    name: &str,
+    provider: &str,
+    model: &str,
+    start_time: i64,
+    status: &str,
+    input_tokens: Option<i64>,
+    output_tokens: Option<i64>,
+) {
+    let Some(key) = env_get(env, "FOGLAMP_API_KEY").filter(|value| !value.is_empty()) else {
+        return;
+    };
+    let endpoint = env_get(env, "FOGLAMP_INGEST_URL")
+        .unwrap_or_else(|| "https://ingest.foglamp.dev/ingest".into());
+    let Ok(url) = worker::Url::parse(&endpoint) else {
+        return;
+    };
+    if url.scheme() != "https" {
+        return;
+    }
+    let environment = env_get(env, "ENVIRONMENT").unwrap_or_else(|| "development".into());
+    let payload = observability::foglamp_trace(
+        trace_id,
+        name,
+        provider,
+        model,
+        start_time,
+        now_ms(),
+        status,
+        input_tokens,
+        output_tokens,
+        &environment,
+    );
+    let mut init = RequestInit::new();
+    init.with_method(Method::Post);
+    let headers = Headers::new();
+    if headers
+        .set("authorization", &format!("Bearer {key}"))
+        .and_then(|_| headers.set("content-type", "application/json"))
+        .is_err()
+    {
+        return;
+    }
+    init.with_headers(headers);
+    init.with_body(Some(JsValue::from_str(&payload.to_string())));
+    let Ok(request) = Request::new_with_init(url.as_str(), &init) else {
+        return;
+    };
+    let _ = worker::Fetch::Request(request).send().await;
 }
 
 fn rate_limiter_stub(env: &Env, key: &str) -> Result<Stub> {
@@ -223,8 +278,7 @@ pub async fn run_managed_inbox_completion(
     uid: &str,
     messages: &[managed_ai::Message],
 ) -> Option<String> {
-    let endpoint = env_get(env, "MIMO_CHAT_COMPLETIONS_URL")?;
-    let secret = env_get(env, "MIMO_API_KEY")?;
+    let endpoint = env_get(env, "MIMO_CHAT_COMPLETIONS_URL");
     // Meeting-note-style one-shot completions run on the BALANCED tier, which
     // defaults to MIMO_MODEL when set.
     let model =
@@ -232,16 +286,26 @@ pub async fn run_managed_inbox_completion(
     if messages.is_empty() {
         return None;
     }
-    let endpoint_url = managed_ai::validate_pinned_endpoint(
-        &endpoint,
-        managed_ai::XIAOMI_COMPLETION_ENDPOINT,
-        managed_ai::XIAOMI_HOSTNAME,
-    )?;
-    let gateway = managed_ai::ai_gateway_route(|name| env_get(env, name));
-    let endpoint_url = gateway
-        .as_ref()
-        .and_then(|route| worker::Url::parse(&route.url).ok())
-        .unwrap_or(endpoint_url);
+    let gateway = managed_ai::ai_gateway_route(|name| env_get(env, name)).ok()?;
+    let trace_provider = if gateway.is_some() {
+        "openrouter"
+    } else {
+        "mimo"
+    };
+    let (endpoint_url, secret) = match &gateway {
+        Some(route) => (
+            worker::Url::parse(&route.url).ok()?,
+            env_get(env, "OPENROUTER_API_KEY")?,
+        ),
+        None => (
+            managed_ai::validate_pinned_endpoint(
+                &endpoint?,
+                managed_ai::XIAOMI_COMPLETION_ENDPOINT,
+                managed_ai::XIAOMI_HOSTNAME,
+            )?,
+            env_get(env, "MIMO_API_KEY")?,
+        ),
+    };
     let input_price =
         managed_ai::price(env_get(env, "MIMO_INPUT_MICROUSD_PER_MILLION_TOKENS").as_deref())?;
     let output_price =
@@ -256,6 +320,7 @@ pub async fn run_managed_inbox_completion(
     );
 
     let request_id = uuid_v4();
+    let trace_started_at = now_ms();
     let stub = assistant_admission_stub(env).ok()?;
     let admission = do_post(
         &stub,
@@ -347,6 +412,18 @@ pub async fn run_managed_inbox_completion(
                 output_price,
             )
             .await;
+            send_foglamp_trace(
+                env,
+                &request_id,
+                "managed-inbox-completion",
+                trace_provider,
+                &model,
+                trace_started_at,
+                "error",
+                None,
+                None,
+            )
+            .await;
             return None;
         }
     };
@@ -362,6 +439,18 @@ pub async fn run_managed_inbox_completion(
             Some(upstream_status),
             input_price,
             output_price,
+        )
+        .await;
+        send_foglamp_trace(
+            env,
+            &request_id,
+            "managed-inbox-completion",
+            trace_provider,
+            &model,
+            trace_started_at,
+            "error",
+            None,
+            None,
         )
         .await;
         return None;
@@ -387,6 +476,18 @@ pub async fn run_managed_inbox_completion(
         Some(upstream_status),
         input_price,
         output_price,
+    )
+    .await;
+    send_foglamp_trace(
+        env,
+        &request_id,
+        "managed-inbox-completion",
+        trace_provider,
+        &model,
+        trace_started_at,
+        if content.is_some() { "ok" } else { "error" },
+        input_tokens,
+        output_tokens,
     )
     .await;
     content
@@ -558,20 +659,25 @@ async fn handle_chat_completions(mut req: Request, ctx: RouteContext<()>) -> Res
             "openrouter",
         ),
     };
-    let (Some(endpoint), Some(secret)) = (endpoint, secret) else {
+    let gateway = match managed_ai::ai_gateway_route(|name| env_get(&ctx.env, name)) {
+        Ok(gateway) => gateway,
+        Err(_) => return error_json("Managed AI unavailable", 503),
+    };
+    let (endpoint_url, secret) = match &gateway {
+        Some(route) => (
+            worker::Url::parse(&route.url).ok(),
+            env_get(&ctx.env, "OPENROUTER_API_KEY"),
+        ),
+        None => (
+            endpoint
+                .as_deref()
+                .and_then(|value| managed_ai::validate_pinned_endpoint(value, pinned, hostname)),
+            secret,
+        ),
+    };
+    let (Some(endpoint_url), Some(secret)) = (endpoint_url, secret) else {
         return error_json("Managed AI unavailable", 503);
     };
-    let Some(endpoint_url) = managed_ai::validate_pinned_endpoint(&endpoint, pinned, hostname)
-    else {
-        return error_json("Managed AI unavailable", 503);
-    };
-    let gateway = (tier == managed_ai::ManagedCompletionTier::Balanced)
-        .then(|| managed_ai::ai_gateway_route(|name| env_get(&ctx.env, name)))
-        .flatten();
-    let endpoint_url = gateway
-        .as_ref()
-        .and_then(|route| worker::Url::parse(&route.url).ok())
-        .unwrap_or(endpoint_url);
 
     let Some(parsed) = body
         .as_ref()
@@ -686,6 +792,18 @@ async fn handle_chat_completions(mut req: Request, ctx: RouteContext<()>) -> Res
         Err(_) => {
             finalize_managed_request(&ctx, &request_id, "failed", None).await;
             release_assistant(&stub, &request_id).await;
+            send_foglamp_trace(
+                &ctx.env,
+                &request_id,
+                "managed-chat-completion",
+                provider,
+                &model,
+                now,
+                "error",
+                None,
+                None,
+            )
+            .await;
             return error_json("Managed AI unavailable", 502);
         }
     };
@@ -693,6 +811,18 @@ async fn handle_chat_completions(mut req: Request, ctx: RouteContext<()>) -> Res
     if upstream_status >= 300 {
         finalize_managed_request(&ctx, &request_id, "failed", Some(upstream_status as i64)).await;
         release_assistant(&stub, &request_id).await;
+        send_foglamp_trace(
+            &ctx.env,
+            &request_id,
+            "managed-chat-completion",
+            provider,
+            &model,
+            now,
+            "error",
+            None,
+            None,
+        )
+        .await;
         return error_json("Managed AI unavailable", 502);
     }
 
@@ -705,6 +835,8 @@ async fn handle_chat_completions(mut req: Request, ctx: RouteContext<()>) -> Res
     let stream_failed = Rc::clone(&failed);
     let final_env = ctx.env.clone();
     let final_request_id = request_id.clone();
+    let final_model = model.clone();
+    let final_provider = provider.to_owned();
     let stream = upstream_stream
         .map(move |chunk| match chunk {
             Ok(chunk) => {
@@ -719,6 +851,7 @@ async fn handle_chat_completions(mut req: Request, ctx: RouteContext<()>) -> Res
         .chain(stream::once(async move {
             let (input_tokens, output_tokens) = usage_tail.borrow().usage();
             if let Ok(stub) = assistant_admission_stub(&final_env) {
+                let status = if failed.get() { "error" } else { "ok" };
                 settle_managed_inbox(
                     &final_env,
                     &stub,
@@ -729,6 +862,18 @@ async fn handle_chat_completions(mut req: Request, ctx: RouteContext<()>) -> Res
                     Some(upstream_status as i64),
                     input_price,
                     output_price,
+                )
+                .await;
+                send_foglamp_trace(
+                    &final_env,
+                    &final_request_id,
+                    "managed-chat-completion",
+                    &final_provider,
+                    &final_model,
+                    now,
+                    status,
+                    input_tokens,
+                    output_tokens,
                 )
                 .await;
             }
@@ -956,9 +1101,9 @@ async fn handle_stt_create(mut req: Request, ctx: RouteContext<()>) -> Result<Re
     let cost_per_minute = crate::jsnum::positive_integer_str(
         env_get(&ctx.env, "STT_COST_MICROUSD_PER_MINUTE").as_deref(),
     );
-    let deepgram = env_get(&ctx.env, "DEEPGRAM_API_KEY");
+    let xai = env_get(&ctx.env, "OPENROUTER_API_KEY");
     let (Some(max_session_seconds), Some(cost_per_minute), true) =
-        (max_session_seconds, cost_per_minute, deepgram.is_some())
+        (max_session_seconds, cost_per_minute, xai.is_some())
     else {
         return error_json("Managed STT unavailable", 503);
     };
@@ -1039,7 +1184,7 @@ async fn handle_stt_create(mut req: Request, ctx: RouteContext<()>) -> Result<Re
     };
     let insert = db
         .prepare(
-            "INSERT INTO managed_stt_sessions\n             (id, uid, idempotency_key, provider, model, language, encoding, sample_rate,\n              channels, diarize, interim_results, device_id, source_id, status,\n              reserved_seconds, estimated_cost_microusd, created_at, updated_at, admission_token)\n             VALUES (?1, ?2, ?3, 'deepgram', ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,\n              'ready', ?13, ?14, ?15, ?15, ?16)\n             ON CONFLICT(uid, idempotency_key) DO UPDATE SET\n               admission_token = excluded.admission_token,\n               updated_at = excluded.updated_at\n             WHERE managed_stt_sessions.status = 'ready'",
+            "INSERT INTO managed_stt_sessions\n             (id, uid, idempotency_key, provider, model, language, encoding, sample_rate,\n              channels, diarize, interim_results, device_id, source_id, status,\n              reserved_seconds, estimated_cost_microusd, created_at, updated_at, admission_token)\n             VALUES (?1, ?2, ?3, 'openrouter', ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,\n              'ready', ?13, ?14, ?15, ?15, ?16)\n             ON CONFLICT(uid, idempotency_key) DO UPDATE SET\n               admission_token = excluded.admission_token,\n               updated_at = excluded.updated_at\n             WHERE managed_stt_sessions.status = 'ready'",
         )
         .bind(&[
             session_id.clone().into(),
@@ -1164,7 +1309,7 @@ async fn handle_stt_stream(req: Request, ctx: RouteContext<()>) -> Result<Respon
         return error_json("STT session unavailable", 409);
     };
 
-    let secret = env_get(&ctx.env, "DEEPGRAM_API_KEY");
+    let secret = env_get(&ctx.env, "OPENROUTER_API_KEY");
     let max_session_seconds =
         crate::jsnum::positive_integer_str(env_get(&ctx.env, "STT_MAX_SESSION_SECONDS").as_deref());
     let connect_timeout = crate::jsnum::positive_integer_str(
@@ -1240,66 +1385,17 @@ async fn handle_stt_stream(req: Request, ctx: RouteContext<()>) -> Result<Respon
         .get("reserved_seconds")
         .and_then(Value::as_i64)
         .filter(|s| *s > 0 && *s <= max_session_seconds);
-    let Some(_session_seconds) = session_seconds else {
+    let Some(session_seconds) = session_seconds else {
         fail_and_release_stt(&ctx, &stub, &session_id, &auth.uid, &acquisition_token).await;
         return error_json("STT session unavailable", 409);
     };
 
     // Connect to Deepgram, upgrading to a WebSocket.
-    let query = stt_logic::deepgram_query(
-        row.get("model").and_then(Value::as_str).unwrap_or_default(),
-        row.get("language")
-            .and_then(Value::as_str)
-            .unwrap_or_default(),
-        row.get("encoding")
-            .and_then(Value::as_str)
-            .unwrap_or_default(),
-        row.get("sample_rate")
-            .and_then(Value::as_i64)
-            .unwrap_or_default(),
-        row.get("channels")
-            .and_then(Value::as_i64)
-            .unwrap_or_default(),
-        row.get("diarize")
-            .and_then(Value::as_i64)
-            .unwrap_or_default()
-            == 1,
-        row.get("interim_results")
-            .and_then(Value::as_i64)
-            .unwrap_or_default()
-            == 1,
-    );
-    let mut upstream_url = url::Url::parse("https://api.deepgram.com/v1/listen")
-        .map_err(|e| worker::Error::RustError(e.to_string()))?;
-    {
-        let mut pairs = upstream_url.query_pairs_mut();
-        for (key, value) in &query {
-            pairs.append_pair(key, value);
-        }
-    }
-    let mut init = RequestInit::new();
-    let headers = Headers::new();
-    headers.set("Upgrade", "websocket")?;
-    headers.set("Authorization", &format!("Token {secret}"))?;
-    init.with_headers(headers);
-    let upstream_request = Request::new_with_init(upstream_url.as_str(), &init)?;
-    let upstream_response = match worker::Fetch::Request(upstream_request).send().await {
-        Ok(response) => response,
-        Err(_) => {
-            fail_and_release_stt(&ctx, &stub, &session_id, &auth.uid, &acquisition_token).await;
-            return error_json("Managed STT unavailable", 502);
-        }
-    };
-    let Some(upstream_socket) = upstream_response.websocket() else {
-        fail_and_release_stt(&ctx, &stub, &session_id, &auth.uid, &acquisition_token).await;
-        return error_json("Managed STT unavailable", 502);
-    };
 
     let pair = WebSocketPair::new()?;
     let server = pair.server;
     let client = pair.client;
     server.accept()?;
-    upstream_socket.accept()?;
 
     // Spawn the bidirectional relay. Terminal settlement (DB status +
     // admission release) mirrors `bridgeSttSockets`; the pure
@@ -1308,14 +1404,36 @@ async fn handle_stt_stream(req: Request, ctx: RouteContext<()>) -> Result<Respon
     let relay_session = session_id.clone();
     let relay_uid = auth.uid.clone();
     let relay_token = acquisition_token.clone();
+    let relay_config = OpenRouterStt {
+        secret,
+        language: row
+            .get("language")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        sample_rate: row
+            .get("sample_rate")
+            .and_then(Value::as_i64)
+            .unwrap_or_default(),
+        channels: row
+            .get("channels")
+            .and_then(Value::as_i64)
+            .unwrap_or_default(),
+        diarize: row
+            .get("diarize")
+            .and_then(Value::as_i64)
+            .unwrap_or_default()
+            == 1,
+        session_seconds,
+    };
     wasm_bindgen_futures::spawn_local(async move {
         bridge_sockets(
             env,
             server,
-            upstream_socket,
             relay_session,
             relay_uid,
             relay_token,
+            relay_config,
         )
         .await;
     });
@@ -1348,10 +1466,10 @@ async fn fail_and_release_stt(
 async fn bridge_sockets(
     env: Env,
     server: worker::WebSocket,
-    upstream: worker::WebSocket,
     session_id: String,
     uid: String,
     token: String,
+    config: OpenRouterStt,
 ) {
     use stt_logic::{bridge_outcome, BridgeEvent, BridgeStatus};
     use worker::WebsocketEvent;
@@ -1360,59 +1478,74 @@ async fn bridge_sockets(
         Ok(events) => events.fuse(),
         Err(_) => return,
     };
-    let mut upstream_events = match upstream.events() {
-        Ok(events) => events.fuse(),
-        Err(_) => return,
+    let Some(chunk_bytes) = stt_logic::chunk_bytes(config.sample_rate, config.channels) else {
+        return;
     };
+    let bytes_per_second = config
+        .sample_rate
+        .checked_mul(config.channels)
+        .and_then(|value| value.checked_mul(2))
+        .unwrap_or_default();
+    let maximum_bytes = bytes_per_second
+        .checked_mul(config.session_seconds)
+        .and_then(|value| usize::try_from(value).ok())
+        .unwrap_or_default();
+    let mut audio = Vec::with_capacity(chunk_bytes);
+    let mut accepted_bytes = 0usize;
+    let mut transcribed_bytes = 0usize;
 
-    let close_status = |code: u16| {
-        if code == 1000 || code == 1001 {
-            BridgeStatus::Complete
-        } else {
-            BridgeStatus::Failed
-        }
-    };
-
-    let status = loop {
-        futures_util::select! {
-            client = server_events.next() => {
-                match client {
-                    Some(Ok(WebsocketEvent::Message(message))) => {
-                        let event = if let Some(text) = message.text() {
-                            BridgeEvent::ClientFrame { size: text.len() }
-                        } else {
-                            BridgeEvent::ClientFrame { size: message.bytes().map(|b| b.len()).unwrap_or(usize::MAX) }
-                        };
-                        if let Some(outcome) = bridge_outcome(&[event]) {
-                            break outcome;
-                        }
-                        let sent = match message.text() {
-                            Some(text) => upstream.send_with_str(&text),
-                            None => upstream.send_with_bytes(message.bytes().unwrap_or_default()),
-                        };
-                        if sent.is_err() {
-                            break BridgeStatus::Failed;
-                        }
+    let status = 'relay: loop {
+        match server_events.next().await {
+            Some(Ok(WebsocketEvent::Message(message))) => {
+                let event = if let Some(text) = message.text() {
+                    BridgeEvent::ClientFrame { size: text.len() }
+                } else {
+                    BridgeEvent::ClientFrame {
+                        size: message.bytes().map(|b| b.len()).unwrap_or(usize::MAX),
                     }
-                    Some(Ok(WebsocketEvent::Close(event))) => break close_status(event.code()),
-                    Some(Err(_)) | None => break BridgeStatus::Failed,
+                };
+                if let Some(outcome) = bridge_outcome(&[event]) {
+                    break outcome;
+                }
+                if let Some(text) = message.text() {
+                    if text != r#"{"type":"audio.done"}"# {
+                        break BridgeStatus::Failed;
+                    }
+                    if !audio.is_empty()
+                        && send_openrouter_chunk(&server, &config, transcribed_bytes, &audio)
+                            .await
+                            .is_err()
+                    {
+                        break BridgeStatus::Failed;
+                    }
+                    break BridgeStatus::Complete;
+                }
+                let bytes = message.bytes().unwrap_or_default();
+                accepted_bytes = match accepted_bytes.checked_add(bytes.len()) {
+                    Some(value) if value <= maximum_bytes => value,
+                    _ => break BridgeStatus::Failed,
+                };
+                audio.extend_from_slice(&bytes);
+                while audio.len() >= chunk_bytes {
+                    let remainder = audio.split_off(chunk_bytes);
+                    let chunk = std::mem::replace(&mut audio, remainder);
+                    if send_openrouter_chunk(&server, &config, transcribed_bytes, &chunk)
+                        .await
+                        .is_err()
+                    {
+                        break 'relay BridgeStatus::Failed;
+                    }
+                    transcribed_bytes += chunk.len();
                 }
             }
-            provider = upstream_events.next() => {
-                match provider {
-                    Some(Ok(WebsocketEvent::Message(message))) => {
-                        let sent = match message.text() {
-                            Some(text) => server.send_with_str(&text),
-                            None => server.send_with_bytes(message.bytes().unwrap_or_default()),
-                        };
-                        if sent.is_err() {
-                            break BridgeStatus::Failed;
-                        }
-                    }
-                    Some(Ok(WebsocketEvent::Close(event))) => break close_status(event.code()),
-                    Some(Err(_)) | None => break BridgeStatus::Failed,
-                }
+            Some(Ok(WebsocketEvent::Close(event))) => {
+                break if event.code() == 1000 || event.code() == 1001 {
+                    BridgeStatus::Complete
+                } else {
+                    BridgeStatus::Failed
+                };
             }
+            Some(Err(_)) | None => break BridgeStatus::Failed,
         }
     };
 
@@ -1421,7 +1554,6 @@ async fn bridge_sockets(
         BridgeStatus::Failed => "failed",
     };
     let _ = server.close(Some(1000), Some("Session closed"));
-    let _ = upstream.close(Some(1000), Some("Session closed"));
     if let Ok(db) = env.d1("DB") {
         let now = now_ms();
         if let Ok(statement) = db
@@ -1434,6 +1566,64 @@ async fn bridge_sockets(
     if let Ok(stub) = stt_admission_stub(&env) {
         release_stt(&stub, &session_id, &uid, &token).await;
     }
+}
+
+struct OpenRouterStt {
+    secret: String,
+    language: String,
+    sample_rate: i64,
+    channels: i64,
+    diarize: bool,
+    session_seconds: i64,
+}
+
+async fn send_openrouter_chunk(
+    server: &worker::WebSocket,
+    config: &OpenRouterStt,
+    offset_bytes: usize,
+    audio: &[u8],
+) -> std::result::Result<(), ()> {
+    let wav = stt_logic::wav(audio, config.sample_rate, config.channels).ok_or(())?;
+    let body = stt_logic::openrouter_body(
+        base64::engine::general_purpose::STANDARD.encode(wav),
+        &config.language,
+        config.diarize,
+    );
+    let mut init = RequestInit::new();
+    init.with_method(Method::Post);
+    let headers = Headers::new();
+    headers
+        .set("authorization", &format!("Bearer {}", config.secret))
+        .map_err(|_| ())?;
+    headers
+        .set("content-type", "application/json")
+        .map_err(|_| ())?;
+    init.with_headers(headers);
+    init.with_body(Some(JsValue::from_str(&body.to_string())));
+    let request =
+        Request::new_with_init(stt_logic::OPENROUTER_STT_ENDPOINT, &init).map_err(|_| ())?;
+    let mut response = worker::Fetch::Request(request)
+        .send()
+        .await
+        .map_err(|_| ())?;
+    if response.status_code() >= 300 {
+        return Err(());
+    }
+    let response = response.json::<Value>().await.map_err(|_| ())?;
+    let bytes_per_second = config
+        .sample_rate
+        .checked_mul(config.channels)
+        .and_then(|value| value.checked_mul(2))
+        .filter(|value| *value > 0)
+        .ok_or(())? as f64;
+    for event in stt_logic::transcript_events(
+        &response,
+        offset_bytes as f64 / bytes_per_second,
+        config.channels,
+    ) {
+        server.send_with_str(event.to_string()).map_err(|_| ())?;
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------

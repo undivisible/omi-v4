@@ -43,6 +43,7 @@ tokio-util = { version = "0.7", features = ["rt"] }
 tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
 url = "2"
 zkr = "0.4.0"
+wsola = "0.1.0"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt", "test-util", "time"] }

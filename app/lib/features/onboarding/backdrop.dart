@@ -53,7 +53,7 @@ class _OnboardingBackdropState extends State<OnboardingBackdrop> {
         if (widget.baseColor case final color?)
           ColoredBox(color: color)
         else if (kIsWeb || defaultTargetPlatform != TargetPlatform.macOS)
-          const ColoredBox(color: Color(0xff9ba0a3)),
+          const ColoredBox(color: Color(0xff2b2722)),
         AnimatedOpacity(
           duration: reduceMotion
               ? Duration.zero
@@ -157,15 +157,15 @@ class _OnboardingEdgeGradientState extends State<_OnboardingEdgeGradient>
                 key: const Key('onboarding_gradient_colors'),
                 fit: StackFit.expand,
                 children: [
-                  _EdgeColor(_center(-1.25, -1.2, 0), const Color(0xfff25e6b)),
-                  _EdgeColor(_center(-.25, -1.25, 1), const Color(0xfff2c2ac)),
-                  _EdgeColor(_center(.35, -1.25, 2), const Color(0xffffd0b8)),
-                  _EdgeColor(_center(1.2, -1.05, 3), const Color(0xff96c4ff)),
-                  _EdgeColor(_center(1.25, .05, 4), const Color(0xffb9d6ff)),
-                  _EdgeColor(_center(1.2, 1.15, 5), const Color(0xffd3e081)),
-                  _EdgeColor(_center(.05, 1.25, 6), const Color(0xfff4d69f)),
-                  _EdgeColor(_center(-.75, 1.2, 7), const Color(0xfff2c2ac)),
-                  _EdgeColor(_center(-1.25, .45, 8), const Color(0xffff9a91)),
+                  _EdgeColor(_center(-1.25, -1.2, 0), const Color(0xffa85e46)),
+                  _EdgeColor(_center(-.25, -1.25, 1), const Color(0xffc78067)),
+                  _EdgeColor(_center(.35, -1.25, 2), const Color(0xffd4ae87)),
+                  _EdgeColor(_center(1.2, -1.05, 3), const Color(0xff4e687c)),
+                  _EdgeColor(_center(1.25, .05, 4), const Color(0xff8eafa9)),
+                  _EdgeColor(_center(1.2, 1.15, 5), const Color(0xffa6aa79)),
+                  _EdgeColor(_center(.05, 1.25, 6), const Color(0xffc6a760)),
+                  _EdgeColor(_center(-.75, 1.2, 7), const Color(0xffb86958)),
+                  _EdgeColor(_center(-1.25, .45, 8), const Color(0xff9b6174)),
                 ],
               ),
             ),
