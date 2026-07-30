@@ -51,9 +51,10 @@ final class _FailingStore implements MemoryMirrorStore {
 }
 
 final class _ApplyHub implements NativeHub {
-  _ApplyHub(this._events);
+  _ApplyHub(this._events, {this.failFirst = false});
 
   final StreamController<NativeEvent> _events;
+  final bool failFirst;
   final applyCalls = <List<MemoryApplyCommit>>[];
 
   @override
@@ -69,6 +70,19 @@ final class _ApplyHub implements NativeHub {
     bool applyDeletions = false,
   }) {
     applyCalls.add(commits);
+    if (failFirst && applyCalls.length == 1) {
+      _events.add(
+        NativeEventError(
+          value: NativeError(
+            requestId: requestId,
+            code: 'memory_apply_failed',
+            message: 'apply rejected',
+            retryable: true,
+          ),
+        ),
+      );
+      return;
+    }
     _events.add(
       NativeEventMemoryApplied(
         value: MemoryApplied(
@@ -210,6 +224,80 @@ void main() {
       'mobile',
     ]);
   });
+
+  test(
+    'authoritative log tracer preserves order, canonical replays, revisions, retries, and origins',
+    () async {
+      final record =
+          (int sequence, String originReplica, Map<String, Object?> payload) =>
+              (
+                sequence: sequence,
+                originReplica: originReplica,
+                recordKind: 'claim',
+                recordId: 'claim-1',
+                payload: payload,
+                recordedAt: 11,
+              );
+      final local = record(1, 'desktop', {'value': 'local'});
+      final cloud = record(2, 'cloud', {'a': 'Acme', 'b': 1});
+      final cloudReplay = record(3, 'cloud', {'b': 1, 'a': 'Acme'});
+      final cloudRevision = record(4, 'cloud', {'value': 'revised'});
+      final foreign = record(5, 'mobile', {'value': 'foreign'});
+      final logPage = <String, Object?>{
+        'records': [local, cloud, cloudReplay, cloudRevision, foreign]
+            .map(
+              (entry) => <String, Object?>{
+                'sequence': entry.sequence,
+                'origin_replica': entry.originReplica,
+                'record_kind': entry.recordKind,
+                'record_id': entry.recordId,
+                'payload': entry.payload,
+                'recorded_at': entry.recordedAt,
+              },
+            )
+            .toList(),
+        'next_after': 5,
+        'head': 5,
+        'complete': true,
+      };
+
+      final mirror = InMemoryMemoryMirrorStore();
+      await mirror.apply('alpha', [local, cloud, cloudReplay]);
+      expect(mirror.records('alpha').map((entry) => entry.sequence), [1, 2]);
+      await mirror.apply('alpha', [cloudRevision, foreign]);
+      expect(mirror.records('alpha').map((entry) => entry.sequence), [1, 4, 5]);
+      expect(mirror.records('alpha')[1].payload['value'], 'revised');
+
+      final events = StreamController<NativeEvent>.broadcast();
+      final hub = _ApplyHub(events, failFirst: true);
+      final cursor = PreferencesMemoryMirrorCursor();
+      final transport = _FakeTransport([logPage, logPage]);
+      final pump = MemoryMirrorPump(
+        transport: transport,
+        store: HubMemoryMirrorStore(
+          hub: hub,
+          events: events.stream,
+          replicaId: 'desktop',
+        ),
+        cursor: cursor,
+        replicaId: 'desktop',
+      );
+
+      expect(await pump.pull('alpha'), 0);
+      expect(await cursor.load('alpha'), 0);
+      expect(await pump.pull('alpha'), 5);
+      expect(transport.requestedAfter, [0, 0]);
+      expect(await cursor.load('alpha'), 5);
+      expect(hub.applyCalls, hasLength(2));
+      expect(hub.applyCalls.last.map((commit) => commit.sequence.toInt()), [
+        2,
+        3,
+        4,
+        5,
+      ]);
+      await events.close();
+    },
+  );
 
   test(
     'a later sequence supersedes an earlier one for the same identity',
