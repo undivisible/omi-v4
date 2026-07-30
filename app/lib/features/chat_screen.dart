@@ -2483,6 +2483,51 @@ class _ChatHome extends StatelessWidget {
                     onDraftPrompt: onDraftPrompt,
                     onComplete: onComplete,
                   ),
+                if (tasks.isEmpty &&
+                    starterTasks.isEmpty &&
+                    meetingNotes.isEmpty)
+                  DecoratedBox(
+                    decoration: BoxDecoration(
+                      border: Border(
+                        top: BorderSide(color: colors.hairline),
+                        bottom: BorderSide(color: colors.hairline),
+                      ),
+                    ),
+                    child: InkWell(
+                      key: const Key('hub_empty_start'),
+                      onTap: () => onDraftPrompt(
+                        'Help me decide what to focus on next.',
+                      ),
+                      hoverColor: colors.rowHover,
+                      splashColor: Colors.transparent,
+                      highlightColor: Colors.transparent,
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Nothing needs attention yet.',
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w600,
+                                color: colors.ink,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              'Tell Omi what you’re working on →',
+                              style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                                color: colors.hintBlue,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
                 _TaskRow(
                   key: const Key('task_setup_omi'),
                   title: 'Set up Omi.',
@@ -2586,194 +2631,201 @@ class _CurrentFocusState extends State<_CurrentFocus> {
     );
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
-      child: DecoratedBox(
+      child: InkWell(
         key: const Key('current_focus'),
-        decoration: BoxDecoration(
-          color: surface,
-          borderRadius: BorderRadius.circular(24),
-          border: Border.all(color: colors.hairline),
-          boxShadow: [
-            BoxShadow(
-              color: colors.cardShadow,
-              offset: const Offset(0, 10),
-              blurRadius: 28,
-            ),
-          ],
-        ),
-        child: Stack(
-          children: [
-            // A saturated rule down the leading edge instead of a soft bloom
-            // bleeding out of the corner: the accent says "this card" at full
-            // strength in three pixels, where the wash said it faintly across
-            // half the surface and tinted the type on the way.
-            Positioned(
-              top: 0,
-              bottom: 0,
-              left: 0,
-              child: IgnorePointer(
-                child: DecoratedBox(
-                  decoration: BoxDecoration(color: colors.hintBlue),
-                  child: const SizedBox(width: 3),
+        onTap: () => widget.onDraftPrompt(card.item.proposedNextStep),
+        borderRadius: BorderRadius.circular(24),
+        hoverColor: colors.rowHover,
+        splashColor: Colors.transparent,
+        highlightColor: Colors.transparent,
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            color: surface,
+            borderRadius: BorderRadius.circular(24),
+            border: Border.all(color: colors.hairline),
+            boxShadow: [
+              BoxShadow(
+                color: colors.cardShadow,
+                offset: const Offset(0, 10),
+                blurRadius: 28,
+              ),
+            ],
+          ),
+          child: Stack(
+            children: [
+              // A saturated rule down the leading edge instead of a soft bloom
+              // bleeding out of the corner: the accent says "this card" at full
+              // strength in three pixels, where the wash said it faintly across
+              // half the surface and tinted the type on the way.
+              Positioned(
+                top: 0,
+                bottom: 0,
+                left: 0,
+                child: IgnorePointer(
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(color: colors.hintBlue),
+                    child: const SizedBox(width: 3),
+                  ),
                 ),
               ),
-            ),
-            Padding(
-              padding: const EdgeInsets.all(20),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Row(
-                    children: [
-                      SizedBox(
-                        width: 30,
-                        height: 30,
-                        child: OmiActivityOrb(
-                          size: 22,
-                          state: OmiOrbState.thinking,
-                          period: const Duration(seconds: 7),
-                          color: colors.hintBlue,
+              Padding(
+                padding: const EdgeInsets.all(20),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Row(
+                      children: [
+                        SizedBox(
+                          width: 30,
+                          height: 30,
+                          child: OmiActivityOrb(
+                            size: 22,
+                            state: OmiOrbState.thinking,
+                            period: const Duration(seconds: 7),
+                            color: colors.hintBlue,
+                          ),
                         ),
+                        const SizedBox(width: 8),
+                        Text(
+                          'CURRENT',
+                          style: TextStyle(
+                            fontSize: 9,
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: 1.2,
+                            color: colors.muted,
+                          ),
+                        ),
+                        const Spacer(),
+                        _CurrentChip(label: source, color: colors.hintBlue),
+                      ],
+                    ),
+                    const SizedBox(height: 18),
+                    Text(
+                      card.title,
+                      key: const Key('current_focus_title'),
+                      style: TextStyle(
+                        fontFamily: 'Literata',
+                        fontSize: 24,
+                        height: 1.08,
+                        fontWeight: FontWeight.w600,
+                        letterSpacing: -1,
+                        color: colors.ink,
                       ),
-                      const SizedBox(width: 8),
+                    ),
+                    if (card.summary.trim().isNotEmpty) ...[
+                      const SizedBox(height: 9),
                       Text(
-                        'CURRENT',
+                        card.summary,
+                        maxLines: 3,
+                        overflow: TextOverflow.ellipsis,
                         style: TextStyle(
-                          fontSize: 9,
-                          fontWeight: FontWeight.w700,
-                          letterSpacing: 1.2,
+                          fontSize: 13,
+                          height: 1.4,
                           color: colors.muted,
                         ),
                       ),
-                      const Spacer(),
-                      _CurrentChip(label: source, color: colors.hintBlue),
                     ],
-                  ),
-                  const SizedBox(height: 18),
-                  Text(
-                    card.title,
-                    key: const Key('current_focus_title'),
-                    style: TextStyle(
-                      fontFamily: 'Literata',
-                      fontSize: 24,
-                      height: 1.08,
-                      fontWeight: FontWeight.w600,
-                      letterSpacing: -1,
-                      color: colors.ink,
+                    const SizedBox(height: 18),
+                    _CurrentDetail(
+                      label: 'WHY NOW',
+                      text: card.item.reason,
+                      color: colors,
+                      detailKey: const Key('current_focus_reason'),
                     ),
-                  ),
-                  if (card.summary.trim().isNotEmpty) ...[
-                    const SizedBox(height: 9),
-                    Text(
-                      card.summary,
-                      maxLines: 3,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontSize: 13,
-                        height: 1.4,
-                        color: colors.muted,
+                    const SizedBox(height: 12),
+                    _CurrentDetail(
+                      label: 'EVIDENCE',
+                      text: evidence
+                          .map((item) => '${item.sourceId}: ${item.reason}')
+                          .join(' · '),
+                      color: colors,
+                      detailKey: const Key('current_focus_evidence'),
+                    ),
+                    const SizedBox(height: 16),
+                    DecoratedBox(
+                      decoration: BoxDecoration(
+                        color: colors.hintBlue.withValues(alpha: .10),
+                        borderRadius: BorderRadius.circular(14),
                       ),
-                    ),
-                  ],
-                  const SizedBox(height: 18),
-                  _CurrentDetail(
-                    label: 'WHY NOW',
-                    text: card.item.reason,
-                    color: colors,
-                    detailKey: const Key('current_focus_reason'),
-                  ),
-                  const SizedBox(height: 12),
-                  _CurrentDetail(
-                    label: 'EVIDENCE',
-                    text: evidence
-                        .map((item) => '${item.sourceId}: ${item.reason}')
-                        .join(' · '),
-                    color: colors,
-                    detailKey: const Key('current_focus_evidence'),
-                  ),
-                  const SizedBox(height: 16),
-                  DecoratedBox(
-                    decoration: BoxDecoration(
-                      color: colors.hintBlue.withValues(alpha: .10),
-                      borderRadius: BorderRadius.circular(14),
-                    ),
-                    child: Padding(
-                      padding: const EdgeInsets.fromLTRB(14, 12, 10, 10),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            'NEXT ACTION',
-                            style: TextStyle(
-                              fontSize: 9,
-                              fontWeight: FontWeight.w700,
-                              letterSpacing: 1.1,
-                              color: colors.muted,
-                            ),
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            card.item.proposedNextStep,
-                            key: const Key('current_focus_next_action'),
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              fontSize: 13,
-                              height: 1.32,
-                              fontWeight: FontWeight.w600,
-                              color: colors.ink,
-                            ),
-                          ),
-                          const SizedBox(height: 6),
-                          Row(
-                            children: [
-                              TextButton(
-                                key: const Key('current_focus_act'),
-                                onPressed: () => widget.onDraftPrompt(
-                                  card.item.proposedNextStep,
-                                ),
-                                style: TextButton.styleFrom(
-                                  foregroundColor: colors.hintBlue,
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 4,
-                                    vertical: 6,
-                                  ),
-                                  textStyle: const TextStyle(
-                                    fontSize: 13,
-                                    fontWeight: FontWeight.w700,
-                                  ),
-                                ),
-                                child: const Text('Work on this →'),
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(14, 12, 10, 10),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'NEXT ACTION',
+                              style: TextStyle(
+                                fontSize: 9,
+                                fontWeight: FontWeight.w700,
+                                letterSpacing: 1.1,
+                                color: colors.muted,
                               ),
-                              if (widget.onComplete != null) ...[
-                                const SizedBox(width: 8),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              card.item.proposedNextStep,
+                              key: const Key('current_focus_next_action'),
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontSize: 13,
+                                height: 1.32,
+                                fontWeight: FontWeight.w600,
+                                color: colors.ink,
+                              ),
+                            ),
+                            const SizedBox(height: 6),
+                            Row(
+                              children: [
                                 TextButton(
-                                  key: const Key('current_focus_done'),
-                                  onPressed: () =>
-                                      widget.onComplete!(card.item.id),
+                                  key: const Key('current_focus_act'),
+                                  onPressed: () => widget.onDraftPrompt(
+                                    card.item.proposedNextStep,
+                                  ),
                                   style: TextButton.styleFrom(
-                                    foregroundColor: colors.muted,
+                                    foregroundColor: colors.hintBlue,
                                     padding: const EdgeInsets.symmetric(
                                       horizontal: 4,
                                       vertical: 6,
                                     ),
                                     textStyle: const TextStyle(
                                       fontSize: 13,
-                                      fontWeight: FontWeight.w600,
+                                      fontWeight: FontWeight.w700,
                                     ),
                                   ),
-                                  child: const Text('Done'),
+                                  child: const Text('Work on this →'),
                                 ),
+                                if (widget.onComplete != null) ...[
+                                  const SizedBox(width: 8),
+                                  TextButton(
+                                    key: const Key('current_focus_done'),
+                                    onPressed: () =>
+                                        widget.onComplete!(card.item.id),
+                                    style: TextButton.styleFrom(
+                                      foregroundColor: colors.muted,
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 4,
+                                        vertical: 6,
+                                      ),
+                                      textStyle: const TextStyle(
+                                        fontSize: 13,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                    child: const Text('Done'),
+                                  ),
+                                ],
                               ],
-                            ],
-                          ),
-                        ],
+                            ),
+                          ],
+                        ),
                       ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );

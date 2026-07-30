@@ -32,6 +32,7 @@ pub mod facetime;
 pub mod inbox_fallback;
 pub mod mcp;
 pub mod memory_log;
+pub mod oauth;
 pub mod observability;
 pub mod public_api;
 pub mod routes_memory;
@@ -76,5 +77,7 @@ mod routes_documents;
 mod routes_facetime;
 #[cfg(target_arch = "wasm32")]
 mod routes_keys;
+#[cfg(target_arch = "wasm32")]
+mod routes_oauth;
 #[cfg(target_arch = "wasm32")]
 mod routes_public;

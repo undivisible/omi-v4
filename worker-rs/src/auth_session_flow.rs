@@ -8,7 +8,7 @@ use crate::{
     auth,
     session_token::{
         is_refresh_token, issue_access_token, refresh_token_from_entropy, ACCESS_TOKEN_TTL_MS,
-        REFRESH_TOKEN_BYTES,
+        REFRESH_TOKEN_BYTES, REFRESH_TOKEN_TTL_MS,
     },
 };
 
@@ -25,6 +25,40 @@ pub struct TokenResponse {
     pub refresh_hash: String,
 }
 
+/// The storage-only values for a newly issued session. This deliberately has
+/// no refresh token field: handlers must persist the digest, never the bearer
+/// credential returned to the client.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionWrite {
+    pub id: String,
+    pub uid: String,
+    pub refresh_hash: String,
+    pub origin: String,
+    pub created_at: i64,
+    pub expires_at: i64,
+    pub rotated_from: Option<String>,
+}
+
+/// Builds the D1 record for an issued credential. `rotated_from` is present
+/// only on refresh, allowing the old session to be revoked in the same batch.
+pub fn session_write(
+    session_id: &str,
+    rotated_from: &str,
+    origin: &str,
+    now_ms: i64,
+    response: &TokenResponse,
+) -> SessionWrite {
+    SessionWrite {
+        id: session_id.to_owned(),
+        uid: response.uid.clone(),
+        refresh_hash: response.refresh_hash.clone(),
+        origin: origin.to_owned(),
+        created_at: now_ms,
+        expires_at: now_ms.saturating_add(REFRESH_TOKEN_TTL_MS),
+        rotated_from: (!rotated_from.is_empty()).then(|| rotated_from.to_owned()),
+    }
+}
+
 /// Request validation result for the refresh endpoint. `Reject` must map to
 /// the same opaque 401 as a missing/revoked session, without querying D1.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -37,6 +71,33 @@ pub enum RefreshInput {
 /// Firebase as the fallback credential path during staged rollout.
 pub fn exchange_enabled(dual_mode: bool, secret: Option<&str>) -> bool {
     auth::worker_auth_enabled(dual_mode, secret)
+}
+
+/// Returns the one Worker session an access token may sign out. Firebase
+/// bearers cannot pass this check: only a Worker token with a valid signature
+/// and an enabled dual-mode gate carries a session id.
+pub fn worker_signout_session_id(
+    token: &str,
+    now_ms: i64,
+    dual_mode: bool,
+    secret: Option<&str>,
+    previous_secret: Option<&str>,
+) -> Option<String> {
+    let secret = exchange_enabled(dual_mode, secret).then_some(secret?)?;
+    crate::session_token::verify_access_token(token, now_ms, secret, previous_secret)
+        .ok()
+        .map(|claims| claims.session_id)
+}
+
+/// Creates the storage record for a Firebase-to-Worker credential upgrade.
+/// The caller supplies the already-verified Firebase UID; no identity mapping
+/// or account allocation occurs in this credential-only transition.
+pub fn firebase_upgrade_write(
+    session_id: &str,
+    now_ms: i64,
+    response: &TokenResponse,
+) -> SessionWrite {
+    session_write(session_id, "", "firebase_upgrade", now_ms, response)
 }
 
 /// Makes an HTTP-safe token response and its storage-only refresh digest.
@@ -77,7 +138,10 @@ pub fn refresh_input(value: &str) -> RefreshInput {
 
 #[cfg(test)]
 mod tests {
-    use super::{exchange_enabled, mint_response, refresh_input, RefreshInput};
+    use super::{
+        exchange_enabled, firebase_upgrade_write, mint_response, refresh_input, session_write,
+        worker_signout_session_id, RefreshInput,
+    };
     use crate::session_token::{refresh_token_digest, verify_access_token, ACCESS_TOKEN_TTL_MS};
 
     const NOW: i64 = 1_700_000_000_000;
@@ -117,5 +181,71 @@ mod tests {
                 refresh_hash: refresh_token_digest(&"A".repeat(43))
             }
         );
+    }
+
+    #[test]
+    fn channel_session_write_keeps_only_a_refresh_digest_and_preserves_uid_on_rotation() {
+        let response = mint_response(
+            "firebase-existing-uid",
+            "session-new",
+            NOW,
+            SECRET,
+            &[9; 32],
+        )
+        .expect("valid entropy");
+        let write = session_write("session-new", "session-old", "channel", NOW, &response);
+
+        assert_eq!(write.id, "session-new");
+        assert_eq!(write.uid, "firebase-existing-uid");
+        assert_eq!(write.refresh_hash, response.refresh_hash);
+        assert_eq!(write.origin, "channel");
+        assert_eq!(write.rotated_from.as_deref(), Some("session-old"));
+        assert_eq!(
+            write.expires_at,
+            NOW + crate::session_token::REFRESH_TOKEN_TTL_MS
+        );
+    }
+
+    #[test]
+    fn signout_accepts_only_an_enabled_valid_worker_access_token_for_its_session() {
+        let response = mint_response("firebase-uid", "session-to-revoke", NOW, SECRET, &[3; 32])
+            .expect("valid credentials");
+
+        assert_eq!(
+            worker_signout_session_id(&response.access_token, NOW, true, Some(SECRET), None),
+            Some("session-to-revoke".to_string())
+        );
+        assert_eq!(
+            worker_signout_session_id("firebase.bearer.token", NOW, true, Some(SECRET), None),
+            None
+        );
+        assert_eq!(
+            worker_signout_session_id(&response.access_token, NOW, false, Some(SECRET), None),
+            None
+        );
+        assert_eq!(
+            worker_signout_session_id(&response.access_token, NOW, true, None, None),
+            None
+        );
+    }
+
+    #[test]
+    fn firebase_upgrade_write_keeps_the_firebase_uid_and_only_refresh_digest() {
+        let response = mint_response(
+            "firebase-existing-uid",
+            "upgrade-session",
+            NOW,
+            SECRET,
+            &[5; 32],
+        )
+        .expect("valid credentials");
+        let write = firebase_upgrade_write("upgrade-session", NOW, &response);
+
+        assert_eq!(write.id, "upgrade-session");
+        assert_eq!(write.uid, "firebase-existing-uid");
+        assert_eq!(write.origin, "firebase_upgrade");
+        assert_eq!(write.refresh_hash, response.refresh_hash);
+        assert_ne!(write.refresh_hash, response.refresh_token);
+        assert_eq!(write.rotated_from, None);
     }
 }
