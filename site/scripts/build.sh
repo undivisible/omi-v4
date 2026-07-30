@@ -28,7 +28,14 @@ command -v jaspr >/dev/null 2>&1 || {
   exit 1
 }
 
-(cd "$site" && dart pub get >/dev/null && jaspr build)
+# Allow concurrent local builds to opt into an unused renderer port while CI
+# retains Jaspr's documented default of 8080.
+jaspr_port_args=()
+if [[ -n "${JASPR_PORT:-}" ]]; then
+  jaspr_port_args=(--port "$JASPR_PORT")
+fi
+
+(cd "$site" && dart pub get >/dev/null && jaspr build "${jaspr_port_args[@]}")
 
 # Build artefacts that must never be served: the dev-compiler's package tree,
 # the build manifest, and the package config. Jaspr writes them beside the
