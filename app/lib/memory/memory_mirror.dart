@@ -84,6 +84,17 @@ abstract interface class MemoryMirrorStore {
   Future<void> apply(String uid, List<MemoryMirrorRecord> records);
 }
 
+String _canonicalJson(Object? value) {
+  if (value is List) {
+    return '[${value.map(_canonicalJson).join(',')}]';
+  }
+  if (value is Map<String, Object?>) {
+    final keys = value.keys.toList()..sort();
+    return '{${keys.map((key) => '${jsonEncode(key)}:${_canonicalJson(value[key])}').join(',')}}';
+  }
+  return jsonEncode(value);
+}
+
 final class InMemoryMemoryMirrorStore implements MemoryMirrorStore {
   final Map<String, int> _sequences = {};
   final Map<String, Map<String, MemoryMirrorRecord>> _records = {};
@@ -106,7 +117,10 @@ final class InMemoryMemoryMirrorStore implements MemoryMirrorStore {
         record.recordId,
       ]);
       final existing = byIdentity[identity];
-      if (existing == null || record.sequence > existing.sequence) {
+      if (existing == null ||
+          (record.sequence > existing.sequence &&
+              _canonicalJson(record.payload) !=
+                  _canonicalJson(existing.payload))) {
         byIdentity[identity] = record;
       }
       _sequences[uid] = record.sequence > (_sequences[uid] ?? 0)
