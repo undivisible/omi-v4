@@ -12,9 +12,10 @@ has `paths-ignore: firmware/**`); it is built by its own workflow,
 which runs inside Nordic's prebuilt NCS v3.4.0 toolchain container. See
 [Notes for CI](#notes-for-ci).
 
-> **Partially compile-verified.** `omi-cv1` and `evt-test` build clean under
-> nRF Connect SDK v3.4.0 (Zephyr 4.4.0). The three `devkit-*` targets do **not**
-> build yet — see [Migration status](#migration-status). Before this SDK upgrade
+> **Partially compile-verified.** `omi-cv1`, `evt-test`, `devkit-v1` and
+> `devkit-v1-spisd` build clean under nRF Connect SDK v3.4.0 (Zephyr 4.4.0).
+> `devkit-v2-adafruit` does **not** build yet — see
+> [Migration status](#migration-status). Before this SDK upgrade
 > nothing in this tree had ever been compiled, so several defects fixed during
 > the upgrade were pre-existing rather than caused by it.
 
@@ -27,9 +28,9 @@ This tree was migrated from nRF Connect SDK v2.9.0 (Zephyr 3.7) to v3.4.0
 | --- | --- | --- |
 | `omi-cv1` | builds clean | MCUboot slot layout verified unchanged |
 | `evt-test` | builds clean | |
-| `devkit-v1` | **does not build** | nrfx 3.x PDM API break, plus pre-existing defects |
-| `devkit-v1-spisd` | **does not build** | same |
-| `devkit-v2-adafruit` | **does not build** | same |
+| `devkit-v1` | builds clean | verified in release-firmware run 30666437688 |
+| `devkit-v1-spisd` | builds clean | verified in release-firmware run 30666437688 |
+| `devkit-v2-adafruit` | **does not build** | only target that sets `CONFIG_OMI_ENABLE_USB=y`, so `init_usb()` is linked and needs the legacy USB device stack; config fix applied, not yet CI-verified |
 
 ### What the upgrade changed
 
