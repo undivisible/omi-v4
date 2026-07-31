@@ -1,10 +1,10 @@
 import 'dart:async';
 import 'dart:math' as math;
-import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart' as url_launcher;
@@ -31,7 +31,7 @@ import 'meeting_notes.dart';
 import 'mobile_update_check.dart';
 import 'transcript_log_store.dart';
 import 'wifi_debug_panel.dart';
-import '../ui/omi_glass.dart';
+import '../ui/omi_glass.dart' show OmiWaBackdrop;
 import '../ui/omi_idle_showcase.dart';
 import '../ui/omi_orb.dart';
 import '../ui/omi_wa_palette.dart';
@@ -188,6 +188,8 @@ class _MobileCompanionShellState extends State<MobileCompanionShell> {
   @override
   Widget build(BuildContext context) {
     final dark = _darkMode(context);
+    final foreground = _pageInk(context);
+    final mutedForeground = _pageInkSoft(context);
     return Theme(
       data: Theme.of(context).copyWith(
         brightness: dark ? Brightness.dark : Brightness.light,
@@ -197,11 +199,17 @@ class _MobileCompanionShellState extends State<MobileCompanionShell> {
           onSurface: _ink,
           onSurfaceVariant: _inkSoft,
           secondary: _teal,
-        ).copyWith(brightness: dark ? Brightness.dark : Brightness.light),
+        ).copyWith(
+          brightness: dark ? Brightness.dark : Brightness.light,
+          primary: foreground,
+          surface: dark ? _inkSheet : _surface,
+          onSurface: foreground,
+          onSurfaceVariant: mutedForeground,
+        ),
         textTheme: Theme.of(
           context,
-        ).textTheme.apply(bodyColor: _ink, displayColor: _ink),
-        iconTheme: const IconThemeData(color: _inkSoft),
+        ).textTheme.apply(bodyColor: foreground, displayColor: foreground),
+        iconTheme: IconThemeData(color: mutedForeground),
         switchTheme: SwitchThemeData(
           thumbColor: WidgetStateProperty.resolveWith(
             (states) =>
@@ -915,61 +923,58 @@ class MobilePendantPageState extends State<MobilePendantPage> {
         phase == DeviceConnectionPhase.connecting ||
         phase == DeviceConnectionPhase.disconnecting;
     final deviceTiles = _deviceTiles(phase, connected, lastError);
-    return Stack(
-      clipBehavior: Clip.none,
-      children: [
-        Column(
-          children: [
-            Expanded(
-              child: _pageController == null
-                  ? _currentsPage(
-                      device: device,
-                      connected: connected,
-                      capturing: capturing,
-                      busy: busy,
-                      phase: phase,
-                      capturedMs: capturedMs,
-                      deviceTiles: deviceTiles,
-                    )
-                  : PageView(
-                      key: const Key('companion_page_view'),
-                      controller: _pageController,
-                      onPageChanged: (index) {
-                        setState(() => _pageIndex = index);
-                        unawaited(
-                          _companionCache
-                              .savePageIndex(index)
-                              .catchError((Object _) {}),
-                        );
-                        if (index == 1) unawaited(_loadConversation());
-                      },
-                      children: [
-                        OmiWaBackdrop(
-                          gradient: OmiWaPalette.dawn,
-                          child: _currentsPage(
-                            device: device,
-                            connected: connected,
-                            capturing: capturing,
-                            busy: busy,
-                            phase: phase,
-                            capturedMs: capturedMs,
-                            deviceTiles: deviceTiles,
-                          ),
+    return Scaffold(
+      backgroundColor: Colors.transparent,
+      body: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          Positioned.fill(
+            child: _pageController == null
+                ? _currentsPage(
+                    device: device,
+                    connected: connected,
+                    capturing: capturing,
+                    busy: busy,
+                    phase: phase,
+                    capturedMs: capturedMs,
+                    deviceTiles: deviceTiles,
+                  )
+                : PageView(
+                    key: const Key('companion_page_view'),
+                    controller: _pageController,
+                    onPageChanged: (index) {
+                      setState(() => _pageIndex = index);
+                      unawaited(
+                        _companionCache
+                            .savePageIndex(index)
+                            .catchError((Object _) {}),
+                      );
+                      if (index == 1) unawaited(_loadConversation());
+                    },
+                    children: [
+                      OmiWaBackdrop(
+                        gradient: OmiWaPalette.dawn,
+                        child: _currentsPage(
+                          device: device,
+                          connected: connected,
+                          capturing: capturing,
+                          busy: busy,
+                          phase: phase,
+                          capturedMs: capturedMs,
+                          deviceTiles: deviceTiles,
                         ),
-                        OmiWaBackdrop(
-                          gradient: OmiWaPalette.indigo,
-                          child: _conversationsPage(),
-                        ),
-                        OmiWaBackdrop(
-                          gradient: OmiWaPalette.moss,
-                          child: _memoryPage(),
-                        ),
-                      ],
-                    ),
-            ),
-            _pageTabs(),
-          ],
-        ),
+                      ),
+                      OmiWaBackdrop(
+                        gradient: OmiWaPalette.indigo,
+                        child: _conversationsPage(),
+                      ),
+                      OmiWaBackdrop(
+                        gradient: OmiWaPalette.moss,
+                        child: _memoryPage(),
+                      ),
+                    ],
+                  ),
+          ),
         if (_pageIndex == 0)
           Positioned(
             top: 0,
@@ -993,7 +998,9 @@ class MobilePendantPageState extends State<MobilePendantPage> {
               ),
             ),
           ),
-      ],
+        ],
+      ),
+      bottomNavigationBar: _pageTabs(),
     );
   }
 
@@ -1007,61 +1014,42 @@ class MobilePendantPageState extends State<MobilePendantPage> {
     final dark = _darkMode(context);
     final selectedFg = dark ? _cream : _ink;
     final idleFg = _pageInkSoft(context);
-    final hairline = dark ? const Color(0x1ffffcec) : _hairline;
-    return SafeArea(
-      top: false,
-      child: OmiGlass(
-        tone: OmiGlassTone.chrome,
-        radius: 26,
-        interactive: true,
-        child: DecoratedBox(
-          decoration: BoxDecoration(
-            color: (dark ? _inkSheet : _surface).withValues(alpha: 0.55),
-            border: Border(top: BorderSide(color: hairline)),
+    return GlassTabBar.bottom(
+      tabs: [
+        for (var index = 0; index < labels.length; index++)
+          GlassTab(
+            icon: Icon(icons[index]),
+            activeIcon: Icon(icons[index]),
+            label: labels[index],
+            glowColor: _teal,
           ),
-          child: Row(
-            children: [
-              for (var index = 0; index < labels.length; index++)
-                Expanded(
-                  child: InkWell(
-                    key: Key('companion_tab_$index'),
-                    onTap: () => unawaited(
-                      _pageController?.animateToPage(
-                        index,
-                        duration: const Duration(milliseconds: 240),
-                        curve: Curves.easeOutCubic,
-                      ),
-                    ),
-                    child: Padding(
-                      padding: const EdgeInsets.fromLTRB(8, 9, 8, 7),
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(
-                            icons[index],
-                            size: 22,
-                            color: _pageIndex == index ? selectedFg : idleFg,
-                          ),
-                          const SizedBox(height: 3),
-                          Text(
-                            labels[index],
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                              fontSize: 11,
-                              fontWeight: _pageIndex == index
-                                  ? FontWeight.w700
-                                  : FontWeight.w500,
-                              color: _pageIndex == index ? selectedFg : idleFg,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-            ],
-          ),
+      ],
+      selectedIndex: _pageIndex,
+      onTabSelected: (index) => unawaited(
+        _pageController?.animateToPage(
+          index,
+          duration: const Duration(milliseconds: 240),
+          curve: Curves.easeOutCubic,
         ),
+      ),
+      barHeight: 60,
+      verticalPadding: 8,
+      horizontalPadding: 12,
+      selectedIconColor: selectedFg,
+      unselectedIconColor: idleFg,
+      selectedLabelColor: selectedFg,
+      unselectedLabelColor: idleFg,
+      selectedLabelStyle: const TextStyle(fontWeight: FontWeight.w700),
+      unselectedLabelStyle: const TextStyle(fontWeight: FontWeight.w500),
+      settings: LiquidGlassSettings(
+        glassColor: (dark ? _inkSheet : _surface).withValues(alpha: 0.55),
+        thickness: 18,
+        blur: 8,
+        chromaticAberration: .006,
+        lightIntensity: .35,
+        refractiveIndex: 1.15,
+        saturation: 1.15,
+        glowIntensity: .35,
       ),
     );
   }
@@ -1086,6 +1074,7 @@ class MobilePendantPageState extends State<MobilePendantPage> {
           padding: const EdgeInsets.only(bottom: 10),
           child: OmiIdleShowcase(
             size: 40,
+            color: _pageInk(context),
             // Capturing is Omi listening; connecting is Omi working. Only a
             // pendant sitting idle leaves it free to perform.
             state: capturing
@@ -1953,14 +1942,10 @@ class _FirmwareInstallCard extends StatelessWidget {
   );
 }
 
-// Blurs and fades the hero as the page scrolls: only this widget reacts to the
-// scroll offset, so the rest of the page scrolls without fading. Increasing
-// blur (ImageFiltered) pairs with decreasing opacity tied to scroll position.
 class _FadingHero extends StatelessWidget {
   const _FadingHero({required this.scrollOffset, required this.child});
 
   static const _fadeDistance = 220.0;
-  static const _maxBlur = 9.0;
 
   final ValueListenable<double> scrollOffset;
   final Widget child;
@@ -1971,16 +1956,10 @@ class _FadingHero extends StatelessWidget {
     child: child,
     builder: (context, offset, child) {
       final progress = (offset / _fadeDistance).clamp(0.0, 1.0);
-      final sigma = progress * _maxBlur;
-      final hero = Opacity(
+      return Opacity(
         key: const Key('companion_hero_fade'),
         opacity: 1 - progress,
         child: child,
-      );
-      if (sigma <= 0.01) return hero;
-      return ImageFiltered(
-        imageFilter: ui.ImageFilter.blur(sigmaX: sigma, sigmaY: sigma),
-        child: hero,
       );
     },
   );

@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
+import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 import 'package:omi/api/worker_http.dart';
 import 'package:omi/app_services.dart';
 import 'package:omi/auth/auth.dart';
@@ -23,6 +24,7 @@ import 'package:omi/memory/memory.dart';
 import 'package:omi/native/native_hub.dart';
 import 'package:omi/onboarding/onboarding_completion.dart';
 import 'package:omi/ui/burst_glow.dart';
+import 'package:omi/ui/omi_idle_showcase.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
@@ -375,7 +377,7 @@ void main() {
     fixture.services.dispose();
   });
 
-  testWidgets('only the hero blurs and fades as the page scrolls', (
+  testWidgets('the hero fades without blurring as the page scrolls', (
     tester,
   ) async {
     await tester.binding.setSurfaceSize(const Size(390, 500));
@@ -412,22 +414,25 @@ void main() {
 
     expect(tester.widget<Opacity>(fade).opacity, lessThan(1));
     expect(tester.widget<Opacity>(fade).opacity, greaterThan(0));
-    // The blur wraps only the hero, so the sections below scroll crisply.
-    expect(find.byType(ImageFiltered), findsOneWidget);
-    expect(
-      find.descendant(
-        of: find.byType(ImageFiltered),
-        matching: find.byKey(const Key('companion_pendant_image')),
+    expect(find.byType(ImageFiltered), findsNothing);
+    fixture.services.dispose();
+  });
+
+  testWidgets('companion navigation uses the liquid glass tab bar', (
+    tester,
+  ) async {
+    final fixture = await _mobileFixture('user-a');
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MobileCompanionShell(
+          services: fixture.services,
+          pairedDevices: VolatilePairedDeviceStore(),
+        ),
       ),
-      findsOneWidget,
     );
-    expect(
-      find.descendant(
-        of: find.byType(ImageFiltered),
-        matching: find.byKey(const Key('companion_session_list')),
-      ),
-      findsNothing,
-    );
+    await tester.pumpAndSettle();
+
+    expect(find.byType(GlassTabBar), findsOneWidget);
     fixture.services.dispose();
   });
 
@@ -1540,6 +1545,10 @@ void main() {
       find.byKey(const Key('companion_home')),
     );
     expect(scaffold.backgroundColor, const Color(0xff171716));
+    expect(
+      tester.widget<OmiIdleShowcase>(find.byType(OmiIdleShowcase)).color,
+      const Color(0xfffffcec),
+    );
     fixture.services.dispose();
   });
 
@@ -1783,9 +1792,9 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('Home'), findsOneWidget);
-    expect(find.text('Conversations'), findsOneWidget);
-    expect(find.text('Memory'), findsOneWidget);
+    expect(find.text('Home'), findsAtLeastNWidgets(1));
+    expect(find.text('Conversations'), findsAtLeastNWidgets(1));
+    expect(find.text('Memory'), findsAtLeastNWidgets(1));
     expect(find.text('Currents'), findsNothing);
     expect(find.text('Chat'), findsNothing);
     fixture.services.dispose();
@@ -1874,7 +1883,7 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.byKey(const Key('companion_page_view')), findsOneWidget);
-      await tester.tap(find.widgetWithText(GestureDetector, 'Memory'));
+      await _selectCompanionTab(tester, 'Memory');
       await tester.pumpAndSettle();
 
       expect(find.byKey(const Key('memory_floating_bar')), findsOneWidget);
@@ -1926,7 +1935,13 @@ Future<void> _settle(WidgetTester tester) async {
 }
 
 Future<void> _selectCompanionTab(WidgetTester tester, String label) async {
-  await tester.tap(find.widgetWithText(GestureDetector, label));
+  const labels = ['Home', 'Conversations', 'Memory'];
+  final index = labels.indexOf(label);
+  if (index < 0) throw ArgumentError.value(label, 'label');
+  final bar = tester.getRect(find.byType(GlassTabBar));
+  await tester.tapAt(
+    Offset(bar.left + bar.width * (index + .5) / labels.length, bar.center.dy),
+  );
   await tester.pumpAndSettle();
 }
 
