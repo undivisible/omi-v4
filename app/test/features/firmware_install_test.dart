@@ -30,6 +30,51 @@ void main() {
       expect(entries.single.version, '3.2.0');
     });
 
+    test('parses the manifest west actually emitted for the 4.1.0 '
+        'omi-cv1 release', () {
+      final entries = parseFirmwareManifest('''
+{
+    "format-version": 1,
+    "time": 1785532789,
+    "files": [
+        {
+            "type": "application",
+            "board": "omi",
+            "soc": "nrf5340",
+            "load_address": 66048,
+            "image_index": "0",
+            "slot_index_primary": "1",
+            "slot_index_secondary": "2",
+            "version_MCUBOOT": "4.1.0+0",
+            "size": 264744,
+            "file": "omi.signed.bin",
+            "modtime": 1785532768
+        },
+        {
+            "type": "application",
+            "board": "omi/nrf5340/cpunet",
+            "soc": "nrf5340",
+            "image_index": "1",
+            "slot_index_primary": "3",
+            "slot_index_secondary": "4",
+            "load_address": 16812032,
+            "version": "1",
+            "size": 154248,
+            "file": "ipc_radio.bin",
+            "modtime": 1785532789
+        }
+    ],
+    "name": "omi"
+}
+''');
+
+      expect(entries.map((entry) => entry.image), [0, 1]);
+      expect(entries.map((entry) => entry.file), [
+        'omi.signed.bin',
+        'ipc_radio.bin',
+      ]);
+    });
+
     test('refuses a multi-image manifest that does not name every slot', () {
       expect(
         () => parseFirmwareManifest(
