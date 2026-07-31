@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", test))]
 const LIMIT: usize = 500;
 const MAX_FILES: usize = 200_000;
 const MAX_WALK_DEPTH: usize = 5;
