@@ -3988,12 +3988,12 @@ class _Reveal extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (!visible) return Opacity(opacity: 0, child: child);
-    if (MediaQuery.disableAnimationsOf(context)) return child;
     final total = delayMs + 650;
     return TweenAnimationBuilder<double>(
-      tween: Tween(begin: 0, end: 1),
-      duration: Duration(milliseconds: total),
+      tween: Tween(begin: 0, end: visible ? 1 : 0),
+      duration: MediaQuery.disableAnimationsOf(context)
+          ? Duration.zero
+          : Duration(milliseconds: total),
       curve: Interval(delayMs / total, 1, curve: const Cubic(.22, 1, .36, 1)),
       builder: (context, value, child) => Opacity(
         opacity: value,
