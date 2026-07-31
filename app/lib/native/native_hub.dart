@@ -97,7 +97,13 @@ export 'generated/signals/signals.dart'
         NativeEventLiveVoiceState,
         NativeEventLiveVoiceTranscript,
         SystemAudioCaptureMode,
+        NativeEventSpeechProfiles,
+        SpeechProfilePayload,
+        SpeechProfilePayloadProfiles,
+        SpeechProfilePayloadUnavailable,
+        SpeechProfileRecord,
         SpeechProfileScope,
+        SpeechProfileUpdate,
         CaptureGap,
         CaptureGaps,
         CaptureAudioAppended,
@@ -212,6 +218,44 @@ abstract interface class NativeHub {
   void configureSpeechProfiles({
     required String requestId,
     SpeechProfileScope? scope,
+  });
+
+  /// Asks for every speech profile in [scope]. The answer arrives as a
+  /// `NativeEventSpeechProfiles` carrying the same [requestId].
+  void listSpeechProfiles({
+    required String requestId,
+    required SpeechProfileScope scope,
+  });
+
+  /// Names [profileId], or clears its name when [displayName] is null.
+  void renameSpeechProfile({
+    required String requestId,
+    required SpeechProfileScope scope,
+    required String profileId,
+    String? displayName,
+  });
+
+  /// Folds [sourceProfileId] into [targetProfileId], tombstoning the source.
+  void mergeSpeechProfiles({
+    required String requestId,
+    required SpeechProfileScope scope,
+    required String targetProfileId,
+    required String sourceProfileId,
+  });
+
+  /// Deletes every voiceprint held for [profileId].
+  void forgetSpeechProfile({
+    required String requestId,
+    required SpeechProfileScope scope,
+    required String profileId,
+  });
+
+  /// Stops or resumes learning new voiceprints for [profileId].
+  void pauseSpeechLearning({
+    required String requestId,
+    required SpeechProfileScope scope,
+    required String profileId,
+    required bool paused,
   });
   void clearAssistant(String requestId);
   void decideApproval({
@@ -657,6 +701,43 @@ final class UnavailableNativeHub implements NativeHub {
   }) => _unavailable();
 
   @override
+  void listSpeechProfiles({
+    required String requestId,
+    required SpeechProfileScope scope,
+  }) => _unavailable();
+
+  @override
+  void renameSpeechProfile({
+    required String requestId,
+    required SpeechProfileScope scope,
+    required String profileId,
+    String? displayName,
+  }) => _unavailable();
+
+  @override
+  void mergeSpeechProfiles({
+    required String requestId,
+    required SpeechProfileScope scope,
+    required String targetProfileId,
+    required String sourceProfileId,
+  }) => _unavailable();
+
+  @override
+  void forgetSpeechProfile({
+    required String requestId,
+    required SpeechProfileScope scope,
+    required String profileId,
+  }) => _unavailable();
+
+  @override
+  void pauseSpeechLearning({
+    required String requestId,
+    required SpeechProfileScope scope,
+    required String profileId,
+    required bool paused,
+  }) => _unavailable();
+
+  @override
   void clearAssistant(String requestId) => _unavailable();
 
   @override
@@ -1044,6 +1125,67 @@ final class RinfNativeHub implements NativeHub {
     required String requestId,
     SpeechProfileScope? scope,
   }) => _send(requestId, CommandConfigureSpeechProfiles(scope: scope));
+
+  @override
+  void listSpeechProfiles({
+    required String requestId,
+    required SpeechProfileScope scope,
+  }) => _send(requestId, CommandListSpeechProfiles(scope: scope));
+
+  @override
+  void renameSpeechProfile({
+    required String requestId,
+    required SpeechProfileScope scope,
+    required String profileId,
+    String? displayName,
+  }) => _send(
+    requestId,
+    CommandRenameSpeechProfile(
+      scope: scope,
+      profileId: profileId,
+      displayName: displayName,
+    ),
+  );
+
+  @override
+  void mergeSpeechProfiles({
+    required String requestId,
+    required SpeechProfileScope scope,
+    required String targetProfileId,
+    required String sourceProfileId,
+  }) => _send(
+    requestId,
+    CommandMergeSpeechProfiles(
+      scope: scope,
+      targetProfileId: targetProfileId,
+      sourceProfileId: sourceProfileId,
+    ),
+  );
+
+  @override
+  void forgetSpeechProfile({
+    required String requestId,
+    required SpeechProfileScope scope,
+    required String profileId,
+  }) => _send(
+    requestId,
+    CommandForgetSpeechProfile(scope: scope, profileId: profileId),
+  );
+
+  @override
+  void pauseSpeechLearning({
+    required String requestId,
+    required SpeechProfileScope scope,
+    required String profileId,
+    required bool paused,
+  }) => _send(
+    requestId,
+    CommandPauseSpeechLearning(
+      scope: scope,
+      profileId: profileId,
+      paused: paused,
+    ),
+  );
 
   @override
   void clearAssistant(String requestId) =>

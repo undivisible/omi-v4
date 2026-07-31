@@ -27,6 +27,7 @@ import '../ui/scroll_edge_fade.dart';
 import 'capture_notifier.dart';
 import 'firmware_install.dart';
 import 'firmware_update_check.dart';
+import 'speech_profiles_screen.dart';
 import 'meeting_notes.dart';
 import 'mobile_update_check.dart';
 import 'transcript_log_store.dart';
@@ -3083,6 +3084,17 @@ class _SettingsSheetState extends State<_SettingsSheet> {
     );
   }
 
+  void _openSpeechProfiles() {
+    unawaited(
+      Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (routeContext) =>
+              SpeechProfilesScreen(services: widget.services),
+        ),
+      ),
+    );
+  }
+
   void _openDeveloperOptions() {
     unawaited(
       Navigator.of(context).push(
@@ -3241,6 +3253,19 @@ class _SettingsSheetState extends State<_SettingsSheet> {
                 detail: 'Search what Omi remembers, or add something new.',
                 trailing: const _RowChevron(),
                 onTap: widget.onOpenMemory,
+              ),
+            ],
+            if (!widget.previewMode) ...[
+              const SizedBox(height: _sectionGap),
+              const _SectionLabel('VOICES'),
+              const SizedBox(height: _tileGap),
+              _PaperTile(
+                key: const Key('companion_speech_profiles'),
+                icon: Icons.record_voice_over_outlined,
+                title: 'Voices Omi knows',
+                detail: 'Name, merge, or forget the voices it has learned.',
+                trailing: const _RowChevron(),
+                onTap: _openSpeechProfiles,
               ),
             ],
             const SizedBox(height: _sectionGap),

@@ -96,6 +96,43 @@ final class DemoNativeHub with NativeHubWithoutCapture implements NativeHub {
   }) {}
 
   @override
+  void listSpeechProfiles({
+    required String requestId,
+    required SpeechProfileScope scope,
+  }) => _unavailable();
+
+  @override
+  void renameSpeechProfile({
+    required String requestId,
+    required SpeechProfileScope scope,
+    required String profileId,
+    String? displayName,
+  }) => _unavailable();
+
+  @override
+  void mergeSpeechProfiles({
+    required String requestId,
+    required SpeechProfileScope scope,
+    required String targetProfileId,
+    required String sourceProfileId,
+  }) => _unavailable();
+
+  @override
+  void forgetSpeechProfile({
+    required String requestId,
+    required SpeechProfileScope scope,
+    required String profileId,
+  }) => _unavailable();
+
+  @override
+  void pauseSpeechLearning({
+    required String requestId,
+    required SpeechProfileScope scope,
+    required String profileId,
+    required bool paused,
+  }) => _unavailable();
+
+  @override
   void clearAssistant(String requestId) {}
 
   /// The demo never records a screen, so every Rewind request is answered the

@@ -3467,6 +3467,43 @@ final class _FakeHub with NativeHubWithoutCapture implements NativeHub {
   }
 
   @override
+  void listSpeechProfiles({
+    required String requestId,
+    required SpeechProfileScope scope,
+  }) {}
+
+  @override
+  void renameSpeechProfile({
+    required String requestId,
+    required SpeechProfileScope scope,
+    required String profileId,
+    String? displayName,
+  }) {}
+
+  @override
+  void mergeSpeechProfiles({
+    required String requestId,
+    required SpeechProfileScope scope,
+    required String targetProfileId,
+    required String sourceProfileId,
+  }) {}
+
+  @override
+  void forgetSpeechProfile({
+    required String requestId,
+    required SpeechProfileScope scope,
+    required String profileId,
+  }) {}
+
+  @override
+  void pauseSpeechLearning({
+    required String requestId,
+    required SpeechProfileScope scope,
+    required String profileId,
+    required bool paused,
+  }) {}
+
+  @override
   void clearAssistant(String requestId) {
     assistantClears.add(requestId);
   }
