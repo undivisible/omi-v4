@@ -3046,6 +3046,68 @@ async fn execute(
             rewind(&request_id, &state, request, &cancellation).await;
             false
         }
+        Command::ListSpeechProfiles { scope } => {
+            speech_profiles(&request_id, scope, SpeechProfileEdit::None, &cancellation).await;
+            false
+        }
+        Command::RenameSpeechProfile {
+            scope,
+            profile_id,
+            display_name,
+        } => {
+            speech_profiles(
+                &request_id,
+                scope,
+                SpeechProfileEdit::Rename {
+                    profile_id,
+                    display_name,
+                },
+                &cancellation,
+            )
+            .await;
+            false
+        }
+        Command::MergeSpeechProfiles {
+            scope,
+            target_profile_id,
+            source_profile_id,
+        } => {
+            speech_profiles(
+                &request_id,
+                scope,
+                SpeechProfileEdit::Merge {
+                    target_profile_id,
+                    source_profile_id,
+                },
+                &cancellation,
+            )
+            .await;
+            false
+        }
+        Command::ForgetSpeechProfile { scope, profile_id } => {
+            speech_profiles(
+                &request_id,
+                scope,
+                SpeechProfileEdit::Forget { profile_id },
+                &cancellation,
+            )
+            .await;
+            false
+        }
+        Command::PauseSpeechLearning {
+            scope,
+            profile_id,
+            paused,
+        } => {
+            speech_profiles(
+                &request_id,
+                scope,
+                SpeechProfileEdit::PauseLearning { profile_id, paused },
+                &cancellation,
+            )
+            .await;
+            false
+        }
         Command::JoinCall {
             link,
             display_name,
@@ -3191,6 +3253,121 @@ fn rewind_answer(request_id: &str, payload: crate::signals::RewindPayload) {
         payload,
     })
     .send();
+}
+
+/// The one thing a speech-profile command changes before the list is
+/// published. Listing changes nothing, which is why it is a variant here
+/// rather than a separate path.
+enum SpeechProfileEdit {
+    None,
+    Rename {
+        profile_id: String,
+        display_name: Option<String>,
+    },
+    Merge {
+        target_profile_id: String,
+        source_profile_id: String,
+    },
+    Forget {
+        profile_id: String,
+    },
+    PauseLearning {
+        profile_id: String,
+        paused: bool,
+    },
+}
+
+/// The file the account's voiceprints live in. One database per data
+/// directory, which several accounts on a shared machine may open at once —
+/// every row carries the uid, and that is what keeps them apart.
+fn speech_profile_path(directory: &str) -> PathBuf {
+    PathBuf::from(directory)
+        .join("speech")
+        .join("profiles.sqlite3")
+}
+
+/// Applies one user-control command and answers with the account's profiles.
+///
+/// Every command answers with the whole list rather than a per-command
+/// acknowledgement, because the settings screen has to redraw after any of
+/// them anyway and a merge changes two rows at once. Voiceprints never appear
+/// in the answer — only the metadata a person typed and the count.
+async fn speech_profiles(
+    request_id: &str,
+    scope: crate::signals::SpeechProfileScope,
+    edit: SpeechProfileEdit,
+    cancellation: &CancellationToken,
+) {
+    use crate::speech_profiles::SpeechProfileStore;
+
+    if scope.uid.trim().is_empty() {
+        speech_profiles_unavailable(request_id, "speech profiles need a signed-in account");
+        return;
+    }
+    if scope.directory.trim().is_empty() {
+        speech_profiles_unavailable(request_id, "speech profiles need a local data directory");
+        return;
+    }
+    let path = speech_profile_path(&scope.directory);
+    let now_ms = unix_time_ms();
+    let task = spawn_blocking(move || {
+        let store =
+            SpeechProfileStore::open(&path, &scope.uid).map_err(|error| error.to_string())?;
+        match edit {
+            SpeechProfileEdit::None => Ok(()),
+            SpeechProfileEdit::Rename {
+                profile_id,
+                display_name,
+            } => store.rename_profile(&profile_id, display_name.as_deref(), now_ms),
+            SpeechProfileEdit::Merge {
+                target_profile_id,
+                source_profile_id,
+            } => store.merge_profiles(&target_profile_id, &source_profile_id, now_ms),
+            SpeechProfileEdit::Forget { profile_id } => store.forget_profile(&profile_id, now_ms),
+            SpeechProfileEdit::PauseLearning { profile_id, paused } => {
+                store.set_learning_paused(&profile_id, paused, now_ms)
+            }
+        }
+        .map_err(|error| error.to_string())?;
+        let profiles = store.profiles().map_err(|error| error.to_string())?;
+        Ok(profiles
+            .into_iter()
+            .map(|profile| crate::signals::SpeechProfileRecord {
+                id: profile.id,
+                kind: profile.kind.as_str().to_owned(),
+                display_name: profile.display_name,
+                created_at_ms: profile.created_at_ms,
+                updated_at_ms: profile.updated_at_ms,
+                learning_paused: profile.learning_paused,
+                embedding_count: profile.embeddings.len() as i64,
+            })
+            .collect::<Vec<_>>())
+    });
+    match await_blocking(task, cancellation).await {
+        BlockingOutcome::Complete(profiles) => speech_profiles_answer(
+            request_id,
+            crate::signals::SpeechProfilePayload::Profiles { profiles },
+        ),
+        BlockingOutcome::Failed(message) => speech_profiles_unavailable(request_id, &message),
+        BlockingOutcome::Cancelled => cancelled(request_id),
+    }
+}
+
+fn speech_profiles_answer(request_id: &str, payload: crate::signals::SpeechProfilePayload) {
+    NativeEvent::SpeechProfiles(crate::signals::SpeechProfileUpdate {
+        request_id: request_id.to_owned(),
+        payload,
+    })
+    .send();
+}
+
+fn speech_profiles_unavailable(request_id: &str, detail: &str) {
+    speech_profiles_answer(
+        request_id,
+        crate::signals::SpeechProfilePayload::Unavailable {
+            detail: detail.to_owned(),
+        },
+    );
 }
 
 fn rewind_unavailable(request_id: &str, detail: &str) {

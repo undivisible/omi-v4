@@ -142,9 +142,43 @@ if [[ "$(grep -Fc "'text: [REDACTED], '" "$transcript_file")" -ne 1 ]]; then
   exit 1
 fi
 
+turn_file="$generated_dir/signals/meeting_transcript_turn.dart"
+for field in speaker text; do
+  if grep -Fq "'$field: \$$field, '" "$turn_file"; then
+    echo "generated meeting transcript $field output is not redacted" >&2
+    exit 1
+  fi
+  if [[ "$(grep -Fc "'$field: [REDACTED], '" "$turn_file")" -ne 1 ]]; then
+    echo "generated meeting transcript $field redaction is missing or ambiguous" >&2
+    exit 1
+  fi
+done
+
 assistant_file="$generated_dir/signals/assistant_delta.dart"
 if grep -Fq "'text: \$text, '" "$assistant_file"; then
   echo "generated assistant text debug output is not redacted" >&2
+  exit 1
+fi
+
+for profile_file in speech_profile_record speech_profile_matched; do
+  path="$generated_dir/signals/$profile_file.dart"
+  if grep -Fq "'displayName: \$displayName" "$path"; then
+    echo "generated $profile_file displayName output is not redacted" >&2
+    exit 1
+  fi
+  if [[ "$(grep -Fc "'displayName: [REDACTED]" "$path")" -ne 1 ]]; then
+    echo "generated $profile_file displayName redaction is missing or ambiguous" >&2
+    exit 1
+  fi
+done
+
+rename_profile_block="$(sed -n '/^class CommandRenameSpeechProfile /,/^@immutable$/p' "$command_file")"
+if grep -Fq "'displayName: \$displayName'" <<<"$rename_profile_block"; then
+  echo "generated speech-profile rename displayName output is not redacted" >&2
+  exit 1
+fi
+if [[ "$(grep -Fc "'displayName: [REDACTED]'" <<<"$rename_profile_block")" -ne 1 ]]; then
+  echo "generated speech-profile rename redaction is missing or ambiguous" >&2
   exit 1
 fi
 

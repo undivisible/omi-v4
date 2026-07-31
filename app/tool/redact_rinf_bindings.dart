@@ -292,10 +292,50 @@ void main(List<String> arguments) {
     assistantSource.replaceFirst(exposedText, redactedText),
   );
 
+  final commandRenameProfileSource = file.readAsStringSync();
+  const renameProfileStartMarker =
+      'class CommandRenameSpeechProfile extends Command {';
+  final renameProfileStart = commandRenameProfileSource.indexOf(
+    renameProfileStartMarker,
+  );
+  final renameProfileEnd = commandRenameProfileSource.indexOf(
+    '\n@immutable',
+    renameProfileStart,
+  );
+  if (renameProfileStart < 0 || renameProfileEnd < 0) {
+    stderr.writeln('expected exactly one generated speech-profile rename class');
+    exitCode = 1;
+    return;
+  }
+  final renameProfileSource = commandRenameProfileSource.substring(
+    renameProfileStart,
+    renameProfileEnd,
+  );
+  const exposedProfileName = "'displayName: \$displayName'";
+  const redactedProfileName = "'displayName: [REDACTED]'";
+  if (exposedProfileName.allMatches(renameProfileSource).length != 1 ||
+      redactedProfileName.allMatches(renameProfileSource).isNotEmpty) {
+    stderr.writeln(
+      'expected exactly one generated speech-profile rename displayName field',
+    );
+    exitCode = 1;
+    return;
+  }
+  file.writeAsStringSync(
+    commandRenameProfileSource.replaceRange(
+      renameProfileStart,
+      renameProfileEnd,
+      renameProfileSource.replaceFirst(exposedProfileName, redactedProfileName),
+    ),
+  );
+
   for (final entry in {
     'memory_export_commit.dart': ['recordsJson'],
     'memory_item.dart': ['title', 'body'],
     'onboarding_scan_completed.dart': ['summary', 'detectedName'],
+    'speech_profile_record.dart': ['displayName'],
+    'speech_profile_matched.dart': ['displayName'],
+    'meeting_transcript_turn.dart': ['speaker', 'text'],
   }.entries) {
     final memoryFile = File('${arguments.single}/signals/${entry.key}');
     var memorySource = memoryFile.readAsStringSync();

@@ -97,6 +97,16 @@ abstract class Command {
         return CommandRecordCaptureResume.load(deserializer);
       case 43:
         return CommandReadCaptureGaps.load(deserializer);
+      case 44:
+        return CommandListSpeechProfiles.load(deserializer);
+      case 45:
+        return CommandRenameSpeechProfile.load(deserializer);
+      case 46:
+        return CommandMergeSpeechProfiles.load(deserializer);
+      case 47:
+        return CommandForgetSpeechProfile.load(deserializer);
+      case 48:
+        return CommandPauseSpeechLearning.load(deserializer);
       default:
         throw Exception(
           'Unknown variant index for Command: ' + index.toString(),
@@ -3216,5 +3226,354 @@ class CommandReadCaptureGaps extends Command {
     }());
 
     return fullString ?? 'CommandReadCaptureGaps';
+  }
+}
+
+@immutable
+class CommandListSpeechProfiles extends Command {
+  const CommandListSpeechProfiles({required this.scope}) : super();
+
+  static CommandListSpeechProfiles load(BinaryDeserializer deserializer) {
+    deserializer.increaseContainerDepth();
+    final instance = CommandListSpeechProfiles(
+      scope: SpeechProfileScope.deserialize(deserializer),
+    );
+    deserializer.decreaseContainerDepth();
+    return instance;
+  }
+
+  final SpeechProfileScope scope;
+
+  CommandListSpeechProfiles copyWith({SpeechProfileScope? scope}) {
+    return CommandListSpeechProfiles(scope: scope ?? this.scope);
+  }
+
+  void serialize(BinarySerializer serializer) {
+    serializer.increaseContainerDepth();
+    serializer.serializeVariantIndex(44);
+    scope.serialize(serializer);
+    serializer.decreaseContainerDepth();
+  }
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    if (other.runtimeType != runtimeType) return false;
+
+    return other is CommandListSpeechProfiles && scope == other.scope;
+  }
+
+  @override
+  int get hashCode => scope.hashCode;
+
+  @override
+  String toString() {
+    String? fullString;
+
+    assert(() {
+      fullString =
+          '$runtimeType('
+          'scope: $scope'
+          ')';
+      return true;
+    }());
+
+    return fullString ?? 'CommandListSpeechProfiles';
+  }
+}
+
+@immutable
+class CommandRenameSpeechProfile extends Command {
+  const CommandRenameSpeechProfile({
+    required this.scope,
+    required this.profileId,
+    this.displayName,
+  }) : super();
+
+  static CommandRenameSpeechProfile load(BinaryDeserializer deserializer) {
+    deserializer.increaseContainerDepth();
+    final instance = CommandRenameSpeechProfile(
+      scope: SpeechProfileScope.deserialize(deserializer),
+      profileId: deserializer.deserializeString(),
+      displayName: TraitHelpers.deserializeOptionStr(deserializer),
+    );
+    deserializer.decreaseContainerDepth();
+    return instance;
+  }
+
+  final SpeechProfileScope scope;
+  final String profileId;
+  final String? displayName;
+
+  CommandRenameSpeechProfile copyWith({
+    SpeechProfileScope? scope,
+    String? profileId,
+    String? Function()? displayName,
+  }) {
+    return CommandRenameSpeechProfile(
+      scope: scope ?? this.scope,
+      profileId: profileId ?? this.profileId,
+      displayName: displayName == null ? this.displayName : displayName(),
+    );
+  }
+
+  void serialize(BinarySerializer serializer) {
+    serializer.increaseContainerDepth();
+    serializer.serializeVariantIndex(45);
+    scope.serialize(serializer);
+    serializer.serializeString(profileId);
+    TraitHelpers.serializeOptionStr(displayName, serializer);
+    serializer.decreaseContainerDepth();
+  }
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    if (other.runtimeType != runtimeType) return false;
+
+    return other is CommandRenameSpeechProfile &&
+        scope == other.scope &&
+        profileId == other.profileId &&
+        displayName == other.displayName;
+  }
+
+  @override
+  int get hashCode => Object.hash(scope, profileId, displayName);
+
+  @override
+  String toString() {
+    String? fullString;
+
+    assert(() {
+      fullString =
+          '$runtimeType('
+          'scope: $scope, '
+          'profileId: $profileId, '
+          'displayName: [REDACTED]'
+          ')';
+      return true;
+    }());
+
+    return fullString ?? 'CommandRenameSpeechProfile';
+  }
+}
+
+@immutable
+class CommandMergeSpeechProfiles extends Command {
+  const CommandMergeSpeechProfiles({
+    required this.scope,
+    required this.targetProfileId,
+    required this.sourceProfileId,
+  }) : super();
+
+  static CommandMergeSpeechProfiles load(BinaryDeserializer deserializer) {
+    deserializer.increaseContainerDepth();
+    final instance = CommandMergeSpeechProfiles(
+      scope: SpeechProfileScope.deserialize(deserializer),
+      targetProfileId: deserializer.deserializeString(),
+      sourceProfileId: deserializer.deserializeString(),
+    );
+    deserializer.decreaseContainerDepth();
+    return instance;
+  }
+
+  final SpeechProfileScope scope;
+  final String targetProfileId;
+  final String sourceProfileId;
+
+  CommandMergeSpeechProfiles copyWith({
+    SpeechProfileScope? scope,
+    String? targetProfileId,
+    String? sourceProfileId,
+  }) {
+    return CommandMergeSpeechProfiles(
+      scope: scope ?? this.scope,
+      targetProfileId: targetProfileId ?? this.targetProfileId,
+      sourceProfileId: sourceProfileId ?? this.sourceProfileId,
+    );
+  }
+
+  void serialize(BinarySerializer serializer) {
+    serializer.increaseContainerDepth();
+    serializer.serializeVariantIndex(46);
+    scope.serialize(serializer);
+    serializer.serializeString(targetProfileId);
+    serializer.serializeString(sourceProfileId);
+    serializer.decreaseContainerDepth();
+  }
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    if (other.runtimeType != runtimeType) return false;
+
+    return other is CommandMergeSpeechProfiles &&
+        scope == other.scope &&
+        targetProfileId == other.targetProfileId &&
+        sourceProfileId == other.sourceProfileId;
+  }
+
+  @override
+  int get hashCode => Object.hash(scope, targetProfileId, sourceProfileId);
+
+  @override
+  String toString() {
+    String? fullString;
+
+    assert(() {
+      fullString =
+          '$runtimeType('
+          'scope: $scope, '
+          'targetProfileId: $targetProfileId, '
+          'sourceProfileId: $sourceProfileId'
+          ')';
+      return true;
+    }());
+
+    return fullString ?? 'CommandMergeSpeechProfiles';
+  }
+}
+
+@immutable
+class CommandForgetSpeechProfile extends Command {
+  const CommandForgetSpeechProfile({
+    required this.scope,
+    required this.profileId,
+  }) : super();
+
+  static CommandForgetSpeechProfile load(BinaryDeserializer deserializer) {
+    deserializer.increaseContainerDepth();
+    final instance = CommandForgetSpeechProfile(
+      scope: SpeechProfileScope.deserialize(deserializer),
+      profileId: deserializer.deserializeString(),
+    );
+    deserializer.decreaseContainerDepth();
+    return instance;
+  }
+
+  final SpeechProfileScope scope;
+  final String profileId;
+
+  CommandForgetSpeechProfile copyWith({
+    SpeechProfileScope? scope,
+    String? profileId,
+  }) {
+    return CommandForgetSpeechProfile(
+      scope: scope ?? this.scope,
+      profileId: profileId ?? this.profileId,
+    );
+  }
+
+  void serialize(BinarySerializer serializer) {
+    serializer.increaseContainerDepth();
+    serializer.serializeVariantIndex(47);
+    scope.serialize(serializer);
+    serializer.serializeString(profileId);
+    serializer.decreaseContainerDepth();
+  }
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    if (other.runtimeType != runtimeType) return false;
+
+    return other is CommandForgetSpeechProfile &&
+        scope == other.scope &&
+        profileId == other.profileId;
+  }
+
+  @override
+  int get hashCode => Object.hash(scope, profileId);
+
+  @override
+  String toString() {
+    String? fullString;
+
+    assert(() {
+      fullString =
+          '$runtimeType('
+          'scope: $scope, '
+          'profileId: $profileId'
+          ')';
+      return true;
+    }());
+
+    return fullString ?? 'CommandForgetSpeechProfile';
+  }
+}
+
+@immutable
+class CommandPauseSpeechLearning extends Command {
+  const CommandPauseSpeechLearning({
+    required this.scope,
+    required this.profileId,
+    required this.paused,
+  }) : super();
+
+  static CommandPauseSpeechLearning load(BinaryDeserializer deserializer) {
+    deserializer.increaseContainerDepth();
+    final instance = CommandPauseSpeechLearning(
+      scope: SpeechProfileScope.deserialize(deserializer),
+      profileId: deserializer.deserializeString(),
+      paused: deserializer.deserializeBool(),
+    );
+    deserializer.decreaseContainerDepth();
+    return instance;
+  }
+
+  final SpeechProfileScope scope;
+  final String profileId;
+  final bool paused;
+
+  CommandPauseSpeechLearning copyWith({
+    SpeechProfileScope? scope,
+    String? profileId,
+    bool? paused,
+  }) {
+    return CommandPauseSpeechLearning(
+      scope: scope ?? this.scope,
+      profileId: profileId ?? this.profileId,
+      paused: paused ?? this.paused,
+    );
+  }
+
+  void serialize(BinarySerializer serializer) {
+    serializer.increaseContainerDepth();
+    serializer.serializeVariantIndex(48);
+    scope.serialize(serializer);
+    serializer.serializeString(profileId);
+    serializer.serializeBool(paused);
+    serializer.decreaseContainerDepth();
+  }
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    if (other.runtimeType != runtimeType) return false;
+
+    return other is CommandPauseSpeechLearning &&
+        scope == other.scope &&
+        profileId == other.profileId &&
+        paused == other.paused;
+  }
+
+  @override
+  int get hashCode => Object.hash(scope, profileId, paused);
+
+  @override
+  String toString() {
+    String? fullString;
+
+    assert(() {
+      fullString =
+          '$runtimeType('
+          'scope: $scope, '
+          'profileId: $profileId, '
+          'paused: $paused'
+          ')';
+      return true;
+    }());
+
+    return fullString ?? 'CommandPauseSpeechLearning';
   }
 }

@@ -91,6 +91,10 @@ abstract class NativeEvent {
         return NativeEventCaptureWalState.load(deserializer);
       case 34:
         return NativeEventCaptureGaps.load(deserializer);
+      case 35:
+        return NativeEventSpeechProfiles.load(deserializer);
+      case 36:
+        return NativeEventSpeechProfileMatched.load(deserializer);
       default:
         throw Exception(
           'Unknown variant index for NativeEvent: ' + index.toString(),
@@ -1984,6 +1988,112 @@ class NativeEventCaptureGaps extends NativeEvent {
     }());
 
     return fullString ?? 'NativeEventCaptureGaps';
+  }
+}
+
+@immutable
+class NativeEventSpeechProfiles extends NativeEvent {
+  const NativeEventSpeechProfiles({required this.value}) : super();
+
+  static NativeEventSpeechProfiles load(BinaryDeserializer deserializer) {
+    deserializer.increaseContainerDepth();
+    final instance = NativeEventSpeechProfiles(
+      value: SpeechProfileUpdate.deserialize(deserializer),
+    );
+    deserializer.decreaseContainerDepth();
+    return instance;
+  }
+
+  final SpeechProfileUpdate value;
+
+  NativeEventSpeechProfiles copyWith({SpeechProfileUpdate? value}) {
+    return NativeEventSpeechProfiles(value: value ?? this.value);
+  }
+
+  void serialize(BinarySerializer serializer) {
+    serializer.increaseContainerDepth();
+    serializer.serializeVariantIndex(35);
+    value.serialize(serializer);
+    serializer.decreaseContainerDepth();
+  }
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    if (other.runtimeType != runtimeType) return false;
+
+    return other is NativeEventSpeechProfiles && value == other.value;
+  }
+
+  @override
+  int get hashCode => value.hashCode;
+
+  @override
+  String toString() {
+    String? fullString;
+
+    assert(() {
+      fullString =
+          '$runtimeType('
+          'value: $value'
+          ')';
+      return true;
+    }());
+
+    return fullString ?? 'NativeEventSpeechProfiles';
+  }
+}
+
+@immutable
+class NativeEventSpeechProfileMatched extends NativeEvent {
+  const NativeEventSpeechProfileMatched({required this.value}) : super();
+
+  static NativeEventSpeechProfileMatched load(BinaryDeserializer deserializer) {
+    deserializer.increaseContainerDepth();
+    final instance = NativeEventSpeechProfileMatched(
+      value: SpeechProfileMatched.deserialize(deserializer),
+    );
+    deserializer.decreaseContainerDepth();
+    return instance;
+  }
+
+  final SpeechProfileMatched value;
+
+  NativeEventSpeechProfileMatched copyWith({SpeechProfileMatched? value}) {
+    return NativeEventSpeechProfileMatched(value: value ?? this.value);
+  }
+
+  void serialize(BinarySerializer serializer) {
+    serializer.increaseContainerDepth();
+    serializer.serializeVariantIndex(36);
+    value.serialize(serializer);
+    serializer.decreaseContainerDepth();
+  }
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    if (other.runtimeType != runtimeType) return false;
+
+    return other is NativeEventSpeechProfileMatched && value == other.value;
+  }
+
+  @override
+  int get hashCode => value.hashCode;
+
+  @override
+  String toString() {
+    String? fullString;
+
+    assert(() {
+      fullString =
+          '$runtimeType('
+          'value: $value'
+          ')';
+      return true;
+    }());
+
+    return fullString ?? 'NativeEventSpeechProfileMatched';
   }
 }
 

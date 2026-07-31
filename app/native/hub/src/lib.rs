@@ -42,6 +42,7 @@ mod runtime_capture;
 mod scan;
 mod self_improve;
 pub mod signals;
+pub mod speech_profiles;
 mod stt;
 mod transcription;
 mod user_profile;

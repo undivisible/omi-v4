@@ -1,7 +1,12 @@
 // ignore_for_file: type=lint, type=warning
 part of 'signals.dart';
 
-enum ComputerUseDeliveryRoute { targetAddressed, pointer, unknown }
+enum ComputerUseDeliveryRoute {
+  targetAddressed,
+  perProcessEvent,
+  pointer,
+  unknown,
+}
 
 extension ComputerUseDeliveryRouteExtension on ComputerUseDeliveryRoute {
   static ComputerUseDeliveryRoute deserialize(BinaryDeserializer deserializer) {
@@ -10,8 +15,10 @@ extension ComputerUseDeliveryRouteExtension on ComputerUseDeliveryRoute {
       case 0:
         return ComputerUseDeliveryRoute.targetAddressed;
       case 1:
-        return ComputerUseDeliveryRoute.pointer;
+        return ComputerUseDeliveryRoute.perProcessEvent;
       case 2:
+        return ComputerUseDeliveryRoute.pointer;
+      case 3:
         return ComputerUseDeliveryRoute.unknown;
       default:
         throw Exception(
@@ -25,10 +32,12 @@ extension ComputerUseDeliveryRouteExtension on ComputerUseDeliveryRoute {
     switch (this) {
       case ComputerUseDeliveryRoute.targetAddressed:
         return serializer.serializeVariantIndex(0);
-      case ComputerUseDeliveryRoute.pointer:
+      case ComputerUseDeliveryRoute.perProcessEvent:
         return serializer.serializeVariantIndex(1);
-      case ComputerUseDeliveryRoute.unknown:
+      case ComputerUseDeliveryRoute.pointer:
         return serializer.serializeVariantIndex(2);
+      case ComputerUseDeliveryRoute.unknown:
+        return serializer.serializeVariantIndex(3);
     }
   }
 

@@ -1,7 +1,7 @@
 # Speech profiles & multi-display capture — plan
 
-**Status:** plan only — do not implement until this doc is reviewed.  
-**Date:** 2026-07-24  
+**Status:** speech S0 landed in the hub (`app/native/hub/src/speech_profiles.rs`); S1–S4 open. Displays: plan only.  
+**Date:** 2026-07-24 (speech foundation added 2026-07-31)  
 **Goal:** (1) lasting speech profiles that learn *your* voice and *others’* voices over time, (2) honest multi-monitor screen capture for Rewind / screen understanding, (3) move the durable logic into the Rust hub so macOS / Windows / (later) Linux share one brain, with thin OS shims only for pixels and permissions.
 
 ---
@@ -15,8 +15,9 @@
 | **Marketing** | Site copy still says “Speech profiles, so it knows who said what” — ahead of product. |
 | **Upstream gap** | `COMPARISON.md`: speech-profile / speaker identity is **blocked**, not declined. |
 | **Meeting path** | Provider diarization (`diarize=true` on Deepgram) + in-meeting `SpeakerRoster` in `app/native/hub/src/meeting.rs` → `You` / `Them` / `Speaker N` **within one meeting only**. Cap: 16 diarized indices. |
-| **Persistence** | No enrolled voiceprints, no cross-meeting identity, no “this is Alex” memory claim. |
-| **STT note** | `docs/TODO.md` still has “drop Deepgram → grok-stt”; any profile design must not assume Deepgram forever — profiles must sit **above** the STT vendor. |
+| **Persistence** | Hub has the store and the arithmetic (`speech_profiles.rs`): SQLite tables per §3.1, L2-normalized `SpeakerEmbedding`, threshold **and margin** matching, merge / rename / forget / pause-learning / quarantine, per-embedding provenance. What it does **not** have is any voiceprint in it, because nothing produces one yet. |
+| **Embedding source** | **None exists.** Verified: `x-ai/grok-stt-1.0` via OpenRouter `/v1/audio/transcriptions` returns text only; Deepgram `diarize=true` returns meeting-local indices only; Gemini Live returns its own transcription. No vendor in omi-v4's path emits embeddings, so `NullEmbeddingSource` answers `EmbeddingError::Unavailable` on every call — fail-closed, the same posture `SttError::Unavailable` takes for local STT. See `docs/why-grok-stt-cannot-do-voiceprints.md`. |
+| **STT note** | `docs/TODO.md` still has “drop Deepgram → grok-stt”; any profile design must not assume Deepgram forever — profiles must sit **above** the STT vendor. The hub module does: it takes PCM and knows nothing about the transcription route. |
 
 ### Displays / Rewind
 
@@ -31,7 +32,7 @@
 
 - Durable meeting / STT / memory logic already lives in `app/native/hub` (Rust).
 - Screen grab + OCR + permission prompts are still **macOS Swift**.
-- Speaker attribution beyond one meeting is **not** in the hub yet.
+- Speaker attribution beyond one meeting now **has a home** in the hub (`speech_profiles.rs`, unit-tested with no GUI and no model), but no audio reaches it: the pipeline step that would call `embed_segment` is not wired, because there is nothing behind the seam to call.
 
 ---
 
@@ -126,11 +127,19 @@ New tables (names illustrative):
 
 | Signal | Direction | Role |
 |---|---|---|
-| `ListSpeechProfiles` | UI → hub | settings list |
-| `RenameSpeechProfile` / `MergeSpeechProfiles` / `ForgetSpeechProfile` / `PauseSpeechLearning` | UI → hub | user control |
-| `EnrollOwnerSpeech` | UI → hub | start/finish enrollment with PCM or file refs |
-| `SpeechProfileMatched` | hub → UI | optional toast / note annotation |
-| Meeting note composition | existing | prefer profile `display_name` over `Speaker N` when known |
+| `ListSpeechProfiles` | UI → hub | settings list — **shipped** |
+| `RenameSpeechProfile` / `MergeSpeechProfiles` / `ForgetSpeechProfile` / `PauseSpeechLearning` | UI → hub | user control — **shipped** |
+| `EnrollOwnerSpeech` | UI → hub | start/finish enrollment with PCM or file refs — **not shipped**, it would be a lie without a model |
+| `SpeechProfileMatched` | hub → UI | optional toast / note annotation — **shipped as a signal**, never emitted yet |
+| Meeting note composition | existing | `SpeakerRoster::bind_profile` + `MeetingSession::push_final_named` prefer a bound profile's `display_name` over `Speaker N`; `You` is never overridden — **shipped** |
+
+Every command carries a `SpeechProfileScope { directory, uid }`: the client
+resolves `~/.omi` the way it does for every other local store, and the uid
+scopes every row so a shared machine cannot show one account another's people.
+The answer is always the whole list (`SpeechProfileUpdate`), and **it never
+contains embeddings** — only the count. Vectors do not cross the Rinf bridge.
+`display_name` is redacted in the generated Dart debug output, enforced by
+`app/tool/check_rinf_bindings.sh`.
 
 ### 3.4 UI (Flutter)
 
@@ -140,13 +149,13 @@ New tables (names illustrative):
 
 ### 3.5 Phases
 
-| Phase | Deliverable | Depends on |
-|---|---|---|
-| **S0** | Doc + schema migration stub; fix marketing copy so we don’t claim profiles until S2 | — |
-| **S1** | Persist session roster soft-links + rename UI that only affects **current meeting** display names (no embeddings yet) | Flutter settings |
-| **S2** | Owner enrollment + on-device or vendor embeddings; cross-meeting match for owner + anonymous others | embedding source |
-| **S3** | Promote / suggest names; merge tools; pause learning; memory claim “person:Alex” optional | S2 |
-| **S4** | Encrypted metadata sync to cloud (names only); multi-device profile id stability | auth/uid stable |
+| Phase | Deliverable | Depends on | State |
+|---|---|---|---|
+| **S0** | Doc + schema migration stub; fix marketing copy so we don’t claim profiles until S2 | — | **done** — real schema (not a stub), `PRAGMA user_version` migration, matching, merge/rename/forget/pause/quarantine, roster bridge, signals, 25 unit tests. Marketing copy pass still outstanding. |
+| **S1** | Persist session roster soft-links + rename UI that only affects **current meeting** display names (no embeddings yet) | Flutter settings | **half** — `speech_profile_sightings` and `SpeakerRoster::bind_profile` exist and are tested; no Flutter screen yet, and nothing calls `record_sighting` from the live meeting loop. |
+| **S2** | Owner enrollment + on-device or vendor embeddings; cross-meeting match for owner + anonymous others | embedding source | **blocked on the model only.** Everything downstream of `EmbeddingSource::embed` is written and tested; ship an ONNX model + `ort` (or a CoreML/WinML shim) behind that one trait and S2 is a wiring job, not a design job. |
+| **S3** | Promote / suggest names; merge tools; pause learning; memory claim “person:Alex” optional | S2 | **half** — merge, pause-learning and quarantine are implemented and signalled; promotion / “name this person?” is not. |
+| **S4** | Encrypted metadata sync to cloud (names only); multi-device profile id stability | auth/uid stable | open. Profile ids are already opaque and account-scoped, which is the half that has to be right first. |
 
 ### 3.6 Explicit non-goals (for now)
 
@@ -264,19 +273,32 @@ Until **D1** ships:
 
 ## 7. Testing plan
 
-- **Rust unit:** roster ↔ profile match thresholds; merge; eviction; multi-display retention math (no GUI).
+- **Rust unit:** roster ↔ profile match thresholds; merge; eviction; multi-display retention math (no GUI). Speech half is **done**: `cargo test --lib` in `app/native/hub` covers normalization, cosine distance, blob round-trip, the minimum-duration guard, the fail-closed `NullEmbeddingSource`, threshold, margin/ambiguity, forget, merge, quality-and-trust eviction, quarantine (single and whole-meeting), pause-learning, uid scoping, sightings, and the roster's `Speaker N` → name bridge.
 - **macOS integration:** 2-display fixture (or mocked `DisplayCapturePort`) asserting 2 frames per tick.
 - **Flutter:** settings rename/forget; meeting transcript shows resolved names from fake hub events.
 - **Privacy:** embeddings never appear in Worker logs; network fixtures assert no voiceprint upload.
 
 ---
 
-## 8. Open decisions (resolve before coding)
+## 8. Open decisions
 
-1. **Embedding source for S2:** vendor-provided vs on-device ONNX (recommend on-device for cross-STT-vendor survival).
+1. ~~**Embedding source for S2:** vendor-provided vs on-device ONNX~~ — **resolved: on-device.** Not by preference, by elimination. `x-ai/grok-stt-1.0` (the batch route, via OpenRouter `/v1/audio/transcriptions`) returns a transcript and nothing else — no diarization, no embeddings, no per-speaker anything, so it can never be a voiceprint source. Deepgram's `diarize=true` gives indices scoped to one request. Gemini Live gives its own transcription. There is no vendor to buy this from inside omi-v4's current provider set, so a local speaker-embedding model in the hub is the only option, and it happens to be the one that survives an STT vendor swap. Detail: `docs/why-grok-stt-cannot-do-voiceprints.md`. **Still to pick:** *which* model (see §8.5).
 2. **Default for multi-display:** capture all vs primary-only with opt-in (recommend **all**, with a clear Settings off switch and storage warning).
 3. **Whether anonymous others auto-create profiles** or only after user taps “Remember this speaker” (recommend auto-create anonymous + soft prompt to name).
 4. **OCR location:** keep Vision in Swift for D1 speed, or force hub OCR for Windows parity earlier.
+5. **Which speaker-embedding model — the one decision blocking real voiceprints.** It sets the licence we can ship, the binary size on every platform, the runtime dependency (`ort` and an ONNX Runtime shared library on macOS / Windows / Linux, or per-platform CoreML + WinML shims), and whether `MATCH_THRESHOLD` / `MATCH_MARGIN` keep their current values — both were chosen from upstream omi's cosine scale and must be **re-measured against whatever model is picked**, on our own audio, before any name is shown to a user. Nothing else about S2 is undecided.
+
+### 8.1 What now exists in the hub
+
+`app/native/hub/src/speech_profiles.rs`, wired into `lib.rs`, `signals.rs` and `runtime.rs`:
+
+- `SpeakerEmbedding` — L2-normalized at construction, cosine distance, `f32` blob round-trip; refuses degenerate and mismatched-dimension vectors rather than silently comparing across models.
+- `EmbeddingSource` trait, `EmbeddingError` (with `Unavailable`), `NullEmbeddingSource` (always `Unavailable`), `guard_segment` / `embed_segment` (the `MIN_EMBEDDING_MS = 500` and minimum-sample-rate guard, run *before* the model).
+- `SpeechProfile` / `StoredEmbedding` / `EmbeddingProvenance` with `Attribution` = `Enrolled` | `UserTagged` | `LlmInferred`, `MAX_EMBEDDINGS_PER_PROFILE = 32` with eviction ordered by trust, then quality, then recency — a deliberate enrollment is never displaced by a stream of inferred sightings.
+- `match_profiles` — threshold **and** margin. `MatchOutcome::Ambiguous` is a first-class answer, and it is not actionable.
+- `SpeechProfileStore` — SQLite per §3.1 (`speech_profiles`, `speech_profile_embeddings`, `speech_profile_aliases`, `speech_profile_sightings`), `PRAGMA user_version` migration, uid-scoped; `create_profile`, `add_embedding`, `rename_profile`, `merge_profiles`, `forget_profile` (deletes the bytes, tombstones the row), `set_learning_paused` (pauses the automatic path only), `quarantine_embedding`, `quarantine_meeting`, `record_sighting` / `sighting` / `meeting_sightings`.
+
+Deliberately **not** built: any model or `ort` dependency, an owner-enrollment flow, any Flutter UI, and any call site that feeds meeting audio into `embed_segment`. All four would be dishonest without an embedding source.
 
 ---
 
@@ -286,7 +308,7 @@ Until **D1** ships:
 
 **Displays:** `app/macos/Runner/RewindCaptureBridge.swift`, `app/lib/features/rewind/*`, new hub `display_capture.rs`; Windows shim TBD.
 
-**Docs:** this file; pointer in `docs/TODO.md`; honesty pass on `site/lib/pages/home.dart`.
+**Docs:** this file; `docs/why-grok-stt-cannot-do-voiceprints.md`; pointer in `docs/TODO.md`; honesty pass on `site/lib/pages/home.dart`.
 
 ---
 

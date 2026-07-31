@@ -689,6 +689,10 @@ struct RosterEntry {
     local: u32,
     remote: u32,
     number: Option<u32>,
+    /// The persisted speech profile this diarized voice resolved to, and the
+    /// name the user gave it. Absent until something outside the meeting —
+    /// a voiceprint match or a rename — says who this is.
+    profile: Option<(String, String)>,
 }
 
 /// Resolves the transcription provider's diarization indices into the speaker
@@ -722,6 +726,7 @@ impl SpeakerRoster {
                     local: 0,
                     remote: 0,
                     number: None,
+                    profile: None,
                 });
                 self.entries.len() - 1
             }
@@ -749,6 +754,70 @@ impl SpeakerRoster {
         };
         MeetingSpeaker::Diarized(number)
     }
+
+    /// Binds a diarized index to a persisted speech profile, so the rest of
+    /// the meeting reads `Alex` where it would have read `Speaker 2`.
+    ///
+    /// Binding is the *only* way a name enters the roster: the roster itself
+    /// never infers one. A bind for an index the roster has not seen (and has
+    /// no room for) is refused rather than silently creating a voice that
+    /// never spoke.
+    pub fn bind_profile(&mut self, diarized: u64, profile_id: &str, display_name: &str) -> bool {
+        let display_name = display_name.trim();
+        if display_name.is_empty() {
+            return false;
+        }
+        let position = match self.entries.iter().position(|entry| entry.key == diarized) {
+            Some(position) => position,
+            None if self.entries.len() < MAX_DIARIZED_SPEAKERS => {
+                self.entries.push(RosterEntry {
+                    key: diarized,
+                    local: 0,
+                    remote: 0,
+                    number: None,
+                    profile: None,
+                });
+                self.entries.len() - 1
+            }
+            None => return false,
+        };
+        self.entries[position].profile = Some((profile_id.to_owned(), display_name.to_owned()));
+        true
+    }
+
+    /// Drops the name for one diarized index — the undo for a wrong match.
+    pub fn unbind_profile(&mut self, diarized: u64) -> bool {
+        self.entries
+            .iter_mut()
+            .find(|entry| entry.key == diarized)
+            .is_some_and(|entry| entry.profile.take().is_some())
+    }
+
+    /// The profile bound to `diarized`, if any.
+    pub fn bound_profile(&self, diarized: u64) -> Option<(&str, &str)> {
+        self.entries
+            .iter()
+            .find(|entry| entry.key == diarized)
+            .and_then(|entry| entry.profile.as_ref())
+            .map(|(id, name)| (id.as_str(), name.as_str()))
+    }
+
+    /// The transcript label for a resolved speaker: the bound profile name
+    /// when the provider diarized this voice and something has said who it is,
+    /// and today's `You` / `Them` / `Speaker N` otherwise.
+    ///
+    /// `You` is never overridden. The person running the app already knows who
+    /// they are, and every prompt in this module is written against that
+    /// prefix.
+    pub fn label(&self, diarized: Option<u64>, speaker: MeetingSpeaker) -> Option<String> {
+        if speaker == MeetingSpeaker::You {
+            return speaker.label();
+        }
+        diarized
+            .and_then(|key| self.bound_profile(key))
+            .map(|(_, name)| name.to_owned())
+            .or_else(|| speaker.label())
+    }
 }
 
 #[derive(Debug)]
@@ -758,6 +827,9 @@ pub struct MeetingSession {
     transcript: String,
     transcript_char_count: usize,
     last_speaker: Option<MeetingSpeaker>,
+    /// The label actually printed for the last turn, which is not always the
+    /// speaker's own: a bound speech profile replaces `Speaker N` with a name.
+    last_label: Option<String>,
     roster: SpeakerRoster,
     limiter: InsightLimiter,
     started_at_ms: i64,
@@ -776,6 +848,7 @@ impl MeetingSession {
             transcript: String::new(),
             transcript_char_count: 0,
             last_speaker: None,
+            last_label: None,
             roster: SpeakerRoster::default(),
             limiter: InsightLimiter::default(),
             started_at_ms,
@@ -806,14 +879,34 @@ impl MeetingSession {
     /// no far end (the microphone-only fallback) read exactly as they did
     /// before speaker attribution existed.
     pub fn push_final(&mut self, speaker: MeetingSpeaker, text: &str) {
+        self.push_final_named(speaker, None, text);
+    }
+
+    /// The same, with the label a resolved speech profile supplied. `None`
+    /// falls back to the speaker's own `You` / `Them` / `Speaker N`, which is
+    /// exactly what every caller got before profiles existed.
+    pub fn push_final_named(
+        &mut self,
+        speaker: MeetingSpeaker,
+        display_name: Option<&str>,
+        text: &str,
+    ) {
         let text = text.trim();
         let accumulated = self.transcript_char_count;
         if text.is_empty() || accumulated >= RAW_TRANSCRIPT_CHARS {
             return;
         }
-        let label = speaker.label();
-        let continues =
-            label.is_some() && self.last_speaker == Some(speaker) && !self.transcript.is_empty();
+        let label = match display_name {
+            Some(name) if speaker != MeetingSpeaker::Unknown => Some(name.to_owned()),
+            _ => speaker.label(),
+        };
+        // A turn continues only while the printed label is also unchanged: a
+        // voice that acquires a name mid-meeting has to open a new turn, or
+        // the name it just acquired never appears in the transcript.
+        let continues = label.is_some()
+            && self.last_speaker == Some(speaker)
+            && self.last_label == label
+            && !self.transcript.is_empty();
         let mut prefix = String::new();
         if continues {
             prefix.push(' ');
@@ -821,8 +914,8 @@ impl MeetingSession {
             if !self.transcript.is_empty() {
                 prefix.push('\n');
             }
-            if let Some(label) = label {
-                prefix.push_str(&label);
+            if let Some(label) = &label {
+                prefix.push_str(label);
                 prefix.push_str(": ");
             }
         }
@@ -838,6 +931,7 @@ impl MeetingSession {
         self.transcript.push_str(&text_chars);
         self.transcript_char_count = accumulated + prefix_chars + added_chars;
         self.last_speaker = Some(speaker);
+        self.last_label = label;
     }
 
     /// Combines the provider's diarization index, when there is one, with the
@@ -848,6 +942,23 @@ impl MeetingSession {
         tracked: MeetingSpeaker,
     ) -> MeetingSpeaker {
         self.roster.resolve(diarized, tracked)
+    }
+
+    /// Binds a diarized index to a persisted speech profile for the rest of
+    /// this session.
+    pub fn bind_speaker_profile(
+        &mut self,
+        diarized: u64,
+        profile_id: &str,
+        display_name: &str,
+    ) -> bool {
+        self.roster.bind_profile(diarized, profile_id, display_name)
+    }
+
+    /// The transcript label for a resolved speaker, preferring a bound
+    /// profile's name.
+    pub fn speaker_label(&self, diarized: Option<u64>, speaker: MeetingSpeaker) -> Option<String> {
+        self.roster.label(diarized, speaker)
     }
 
     pub fn transcript(&self) -> &str {
@@ -1307,12 +1418,14 @@ impl MeetingRuntime {
                 } => {
                     if let Some(current) = &mut finishing {
                         let speaker = current.resolve_speaker(diarized, speaker);
-                        current.push_final(speaker, &text);
+                        let label = current.speaker_label(diarized, speaker);
+                        current.push_final_named(speaker, label.as_deref(), &text);
                     } else if let Some(current) = &mut session {
                         let speaker = current.resolve_speaker(diarized, speaker);
-                        current.push_final(speaker, &text);
+                        let label = current.speaker_label(diarized, speaker);
+                        current.push_final_named(speaker, label.as_deref(), &text);
                         NativeEvent::MeetingTranscriptTurn(MeetingTranscriptTurn {
-                            speaker: speaker.name(),
+                            speaker: label.unwrap_or_else(|| speaker.name()),
                             text: text.trim().to_owned(),
                             occurred_at_ms: chrono::Utc::now().timestamp_millis(),
                         })
@@ -2012,6 +2125,75 @@ mod tests {
             roster.resolve(Some(999), MeetingSpeaker::Them),
             MeetingSpeaker::Them
         );
+    }
+
+    #[test]
+    fn a_bound_speech_profile_names_a_diarized_voice() {
+        let mut roster = SpeakerRoster::default();
+        assert_eq!(
+            roster.resolve(Some(7), MeetingSpeaker::Them),
+            MeetingSpeaker::Diarized(1)
+        );
+        // Until something says who this is, the transcript reads as it always
+        // has.
+        assert_eq!(
+            roster.label(Some(7), MeetingSpeaker::Diarized(1)),
+            Some("Speaker 1".to_owned())
+        );
+        assert!(roster.bind_profile(7, "sp_alex", "  Alex  "));
+        assert_eq!(roster.bound_profile(7), Some(("sp_alex", "Alex")));
+        assert_eq!(
+            roster.label(Some(7), MeetingSpeaker::Diarized(1)),
+            Some("Alex".to_owned())
+        );
+        // A different voice, and a segment with no diarization at all, are
+        // untouched.
+        assert_eq!(
+            roster.label(Some(8), MeetingSpeaker::Diarized(2)),
+            Some("Speaker 2".to_owned())
+        );
+        assert_eq!(
+            roster.label(None, MeetingSpeaker::Them),
+            Some("Them".to_owned())
+        );
+        assert_eq!(roster.label(None, MeetingSpeaker::Unknown), None);
+        // The person running the app stays "You" even if a profile is bound to
+        // the index the microphone track claimed.
+        assert_eq!(
+            roster.label(Some(7), MeetingSpeaker::You),
+            Some("You".to_owned())
+        );
+        assert!(roster.unbind_profile(7));
+        assert!(!roster.unbind_profile(7));
+        assert_eq!(
+            roster.label(Some(7), MeetingSpeaker::Diarized(1)),
+            Some("Speaker 1".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_nameless_or_overflowing_bind_is_refused() {
+        let mut roster = SpeakerRoster::default();
+        assert!(!roster.bind_profile(1, "sp_alex", "   "));
+        for index in 0..MAX_DIARIZED_SPEAKERS as u64 {
+            assert!(roster.bind_profile(index, "sp", "Name"));
+        }
+        assert!(!roster.bind_profile(999, "sp", "Name"));
+    }
+
+    #[test]
+    fn a_named_turn_uses_the_profile_name_in_the_transcript() {
+        let mut session = MeetingSession::new_at(None, true, 0);
+        assert_eq!(
+            session.resolve_speaker(Some(4), MeetingSpeaker::Them),
+            MeetingSpeaker::Diarized(1)
+        );
+        let label = session.speaker_label(Some(4), MeetingSpeaker::Diarized(1));
+        session.push_final_named(MeetingSpeaker::Diarized(1), label.as_deref(), "before");
+        assert!(session.bind_speaker_profile(4, "sp_alex", "Alex"));
+        let label = session.speaker_label(Some(4), MeetingSpeaker::Diarized(1));
+        session.push_final_named(MeetingSpeaker::Diarized(1), label.as_deref(), "after");
+        assert_eq!(session.transcript(), "Speaker 1: before\nAlex: after");
     }
 
     #[test]

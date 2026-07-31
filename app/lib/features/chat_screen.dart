@@ -1340,6 +1340,7 @@ class ChatScreenState extends State<ChatScreen>
     };
     final delivery = switch (capability.deliveryRoute) {
       ComputerUseDeliveryRoute.targetAddressed => 'target-addressed delivery',
+      ComputerUseDeliveryRoute.perProcessEvent => 'per-process event delivery',
       ComputerUseDeliveryRoute.pointer => 'pointer delivery',
       ComputerUseDeliveryRoute.unknown => 'delivery route unknown',
     };

@@ -281,6 +281,51 @@ pub enum Command {
     },
     /// Answered by exactly one [`CaptureGaps`].
     ReadCaptureGaps,
+    /// The speech profiles this account has, newest state first. Answered by
+    /// exactly one [`SpeechProfileUpdate`].
+    ListSpeechProfiles {
+        scope: SpeechProfileScope,
+    },
+    /// Give a profile the name the user typed, or clear it with `None`. The
+    /// hub never invents a name, so this is the only way one is set.
+    RenameSpeechProfile {
+        scope: SpeechProfileScope,
+        profile_id: String,
+        display_name: Option<String>,
+    },
+    /// Fold `source_profile_id` into `target_profile_id`: voiceprints and
+    /// session links move, the source is tombstoned.
+    MergeSpeechProfiles {
+        scope: SpeechProfileScope,
+        target_profile_id: String,
+        source_profile_id: String,
+    },
+    /// Forget a person: every voiceprint is deleted, not merely hidden.
+    ForgetSpeechProfile {
+        scope: SpeechProfileScope,
+        profile_id: String,
+    },
+    /// Stop (or resume) learning new voiceprints for one profile. Only the
+    /// automatic path is paused; an enrollment the user runs by hand still
+    /// works.
+    PauseSpeechLearning {
+        scope: SpeechProfileScope,
+        profile_id: String,
+        paused: bool,
+    },
+}
+
+/// Which account's voiceprints a speech-profile command addresses, and where
+/// they live.
+///
+/// The client resolves `directory` from the same `~/.omi` convention every
+/// other local store uses; the hub never invents a location for someone's
+/// voiceprints. `uid` scopes every row, so a shared machine cannot show one
+/// account the other's people.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, SignalPiece)]
+pub struct SpeechProfileScope {
+    pub directory: String,
+    pub uid: String,
 }
 
 /// The Rewind engine's request surface.
@@ -665,6 +710,57 @@ pub enum NativeEvent {
     CaptureAudioAppended(CaptureAudioAppended),
     CaptureWalState(CaptureWalState),
     CaptureGaps(CaptureGaps),
+    SpeechProfiles(SpeechProfileUpdate),
+    SpeechProfileMatched(SpeechProfileMatched),
+}
+
+/// The answer to exactly one speech-profile command.
+#[derive(Debug, Serialize, SignalPiece)]
+pub struct SpeechProfileUpdate {
+    pub request_id: String,
+    pub payload: SpeechProfilePayload,
+}
+
+#[derive(Debug, Serialize, SignalPiece)]
+pub enum SpeechProfilePayload {
+    /// The account's live profiles after whatever the command changed.
+    Profiles { profiles: Vec<SpeechProfileRecord> },
+    /// The store could not be opened, or the profile named does not exist.
+    /// Never an error event: the settings screen simply has nothing to show.
+    Unavailable { detail: String },
+}
+
+/// One profile, as the settings list needs it.
+///
+/// Voiceprints are deliberately absent. They are the one thing in this module
+/// that must never leave the device, and a signal is a bridge to code the hub
+/// does not control — so the count is published and the vectors are not.
+#[derive(Debug, Serialize, SignalPiece)]
+pub struct SpeechProfileRecord {
+    pub id: String,
+    /// `owner` or `other`.
+    pub kind: String,
+    pub display_name: Option<String>,
+    pub created_at_ms: i64,
+    pub updated_at_ms: i64,
+    pub learning_paused: bool,
+    pub embedding_count: i64,
+}
+
+/// A voiceprint match against a live meeting's diarized voice.
+///
+/// `distance` and `runner_up` travel with it because "who is this?" and "how
+/// sure are we?" are the same question to anyone reading a name on a
+/// transcript, and the margin between the two is what the acceptance test
+/// actually turned on.
+#[derive(Debug, Serialize, SignalPiece)]
+pub struct SpeechProfileMatched {
+    pub profile_id: String,
+    pub display_name: Option<String>,
+    pub meeting_id: String,
+    pub diarized_key: i64,
+    pub distance: f32,
+    pub runner_up: Option<f32>,
 }
 
 /// The answer to a [`Command::AppendCaptureAudio`]. Sent once the bytes have

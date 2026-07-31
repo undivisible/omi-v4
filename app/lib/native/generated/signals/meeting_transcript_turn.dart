@@ -84,8 +84,8 @@ class MeetingTranscriptTurn {
     assert(() {
       fullString =
           '$runtimeType('
-          'speaker: $speaker, '
-          'text: $text, '
+          'speaker: [REDACTED], '
+          'text: [REDACTED], '
           'occurredAtMs: $occurredAtMs'
           ')';
       return true;

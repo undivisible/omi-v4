@@ -183,6 +183,24 @@ class TraitHelpers {
     }
   }
 
+  static void serializeOptionF32(double? value, BinarySerializer serializer) {
+    if (value == null) {
+      serializer.serializeOptionTag(false);
+    } else {
+      serializer.serializeOptionTag(true);
+      serializer.serializeFloat32(value);
+    }
+  }
+
+  static double? deserializeOptionF32(BinaryDeserializer deserializer) {
+    final tag = deserializer.deserializeOptionTag();
+    if (tag) {
+      return deserializer.deserializeFloat32();
+    } else {
+      return null;
+    }
+  }
+
   static void serializeOptionI64(int? value, BinarySerializer serializer) {
     if (value == null) {
       serializer.serializeOptionTag(false);
@@ -482,6 +500,26 @@ class TraitHelpers {
     return List.generate(
       length,
       (_) => RewindRetentionOption.deserialize(deserializer),
+    );
+  }
+
+  static void serializeVectorSpeechProfileRecord(
+    List<SpeechProfileRecord> value,
+    BinarySerializer serializer,
+  ) {
+    serializer.serializeLength(value.length);
+    for (final item in value) {
+      item.serialize(serializer);
+    }
+  }
+
+  static List<SpeechProfileRecord> deserializeVectorSpeechProfileRecord(
+    BinaryDeserializer deserializer,
+  ) {
+    final length = deserializer.deserializeLength();
+    return List.generate(
+      length,
+      (_) => SpeechProfileRecord.deserialize(deserializer),
     );
   }
 
