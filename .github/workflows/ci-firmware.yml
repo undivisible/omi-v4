@@ -325,9 +325,9 @@ jobs:
             echo "::error::${elf} was not produced."
             exit 1
           fi
-          if ! arm-zephyr-eabi-nm "${elf}" | grep -q ' T omi_rust_selftest$'; then
+          if ! "${ZEPHYR_SDK_INSTALL_DIR}/arm-zephyr-eabi/bin/arm-zephyr-eabi-nm" "${elf}" | grep -q ' T omi_rust_selftest$'; then
             echo "::error::omi_rust_selftest is not in the linked image, so the Rust staticlib did not actually make it in."
-            arm-zephyr-eabi-nm "${elf}" | grep -i rust || true
+            "${ZEPHYR_SDK_INSTALL_DIR}/arm-zephyr-eabi/bin/arm-zephyr-eabi-nm" "${elf}" | grep -i rust || true
             exit 1
           fi
           echo "omi_rust_selftest is linked into zephyr.elf"
