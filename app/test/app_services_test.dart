@@ -3102,6 +3102,7 @@ final class _FakeHub with NativeHubWithoutCapture implements NativeHub {
   final assistantConfigurations =
       <(AssistantProvider, String, String?, String)>[];
   final trustedAssistantOrigins = <String>[];
+  final cloudMemoryConfigurations = <(String, String)>[];
   final assistantClears = <String>[];
   final transcriptionAuth = <TranscriptionAuth>[];
   final transcriptionEncoding = <AudioEncoding>[];
@@ -3388,6 +3389,15 @@ final class _FakeHub with NativeHubWithoutCapture implements NativeHub {
     required String managedWorkerOrigin,
   }) {
     trustedAssistantOrigins.add(managedWorkerOrigin);
+  }
+
+  @override
+  void configureCloudMemory({
+    required String requestId,
+    required String managedWorkerOrigin,
+    required String credential,
+  }) {
+    cloudMemoryConfigurations.add((managedWorkerOrigin, credential));
   }
 
   @override

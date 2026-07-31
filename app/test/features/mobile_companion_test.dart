@@ -2279,6 +2279,7 @@ final class _FakeFlasher implements FirmwareFlasher {
   Stream<FirmwareFlashProgress> flash({
     required String deviceId,
     required List<FirmwareImage> images,
+    required String packagePath,
   }) async* {
     flashed.add(images);
     yield const FirmwareFlashProgress(FirmwareFlashStage.uploading, .5);
@@ -2303,6 +2304,9 @@ final class _DfuAdapter extends _Adapter implements DeviceRelayDfu {
 
   @override
   bool get dfuSupported => true;
+
+  @override
+  FirmwareDfuTransport get dfuTransport => FirmwareDfuTransport.mcuboot;
 
   @override
   Future<List<RelayDevice>> scan() async => [_dfuDevice];
@@ -2458,6 +2462,13 @@ final class _Hub with NativeHubWithoutCapture implements NativeHub {
   void configureTrustedAssistant({
     required String requestId,
     required String managedWorkerOrigin,
+  }) {}
+
+  @override
+  void configureCloudMemory({
+    required String requestId,
+    required String managedWorkerOrigin,
+    required String credential,
   }) {}
 
   @override

@@ -783,6 +783,13 @@ final class _Hub with NativeHubWithoutCapture implements NativeHub {
   }) {}
 
   @override
+  void configureCloudMemory({
+    required String requestId,
+    required String managedWorkerOrigin,
+    required String credential,
+  }) {}
+
+  @override
   void clearAssistant(String requestId) {}
 
   @override
