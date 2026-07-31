@@ -723,6 +723,7 @@ mod platform {
                 };
                 let finished = stream_capture(&path, header, &stt, &control_rx);
                 reset_speaker_tracker();
+                crate::speech_recognition::reset();
                 if finished {
                     stt.finish();
                 } else {

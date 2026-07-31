@@ -3046,6 +3046,10 @@ async fn execute(
             rewind(&request_id, &state, request, &cancellation).await;
             false
         }
+        Command::ConfigureSpeechProfiles { scope } => {
+            crate::speech_recognition::configure(scope);
+            false
+        }
         Command::ListSpeechProfiles { scope } => {
             speech_profiles(&request_id, scope, SpeechProfileEdit::None, &cancellation).await;
             false
@@ -3308,6 +3312,7 @@ async fn speech_profiles(
         speech_profiles_unavailable(request_id, "speech profiles need a local data directory");
         return;
     }
+    crate::speech_recognition::configure(Some(scope.clone()));
     let path = speech_profile_path(&scope.directory);
     let now_ms = unix_time_ms();
     let task = spawn_blocking(move || {

@@ -331,11 +331,14 @@ impl ReconnectAudioBuffer {
     async fn flush(
         &mut self,
         socket: &mut WebSocketStream<MaybeTlsStream<TcpStream>>,
-        encoding: AudioEncoding,
+        config: &SttConfig,
+        epoch: u32,
     ) -> bool {
-        while let Some(bytes) = self.frames.pop() {
+        while !self.frames.is_empty() {
+            let bytes = self.frames.remove(0);
             self.bytes -= bytes.len();
-            let encoded = encode_audio(&bytes, encoding);
+            crate::speech_recognition::observe_stream_audio(config, epoch, &bytes);
+            let encoded = encode_audio(&bytes, config.encoding);
             if socket.send(Message::Binary(encoded.into())).await.is_err() {
                 return false;
             }
@@ -396,6 +399,7 @@ async fn run(
                 Some(SttControl::Finish) => {
                     while let Ok(bytes) = audio_receiver.try_recv() {
                         pending_audio_bytes.fetch_sub(bytes.len(), Ordering::AcqRel);
+                        crate::speech_recognition::observe_stream_audio(&config, state.epoch, &bytes);
                         let encoded = encode_audio(&bytes, config.encoding);
                         if socket.send(Message::Binary(encoded.into())).await.is_err() {
                             terminal_error(
@@ -429,6 +433,7 @@ async fn run(
             },
             command = audio_receiver.recv() => if let Some(bytes) = command {
                     pending_audio_bytes.fetch_sub(bytes.len(), Ordering::AcqRel);
+                    crate::speech_recognition::observe_stream_audio(&config, state.epoch, &bytes);
                     let encoded = encode_audio(&bytes, config.encoding);
                     if socket.send(Message::Binary(encoded.into())).await.is_err() {
                         let now = unix_time_ms();
@@ -444,11 +449,16 @@ async fn run(
             },
             message = socket.next() => match message {
                 Some(Ok(Message::Text(text))) => {
-                    if let Some(delta) = state.parse(text.as_ref(), unix_time_ms()) {
+                    if let Some(parsed) = state.parse_delta(text.as_ref(), unix_time_ms()) {
+                        let delta = parsed.delta;
                         if delta.final_segment
                             && config.request_id == crate::meeting_capture::CAPTURE_STREAM_ID
                         {
-                            crate::meeting::observe_final_segment(&delta.text, diarization_key(&delta));
+                            crate::meeting::observe_final_segment(
+                                &delta.text,
+                                diarization_key(&delta),
+                                segment_audio(&delta, parsed.word_derived),
+                            );
                         }
                         NativeEvent::TranscriptDelta(delta).send();
                     }
@@ -464,7 +474,7 @@ async fn run(
                 ).await {
                     Some(reconnected) => {
                         socket = reconnected;
-                        if !reconnect_buffer.flush(&mut socket, config.encoding).await {
+                        if !reconnect_buffer.flush(&mut socket, &config, state.epoch).await {
                             let now = unix_time_ms();
                             NativeEvent::TranscriptGap(state.reconnect_gap(now, now)).send();
                             terminal_error(
@@ -489,7 +499,7 @@ async fn run(
                 ).await {
                     Some(reconnected) => {
                         socket = reconnected;
-                        if !reconnect_buffer.flush(&mut socket, config.encoding).await {
+                        if !reconnect_buffer.flush(&mut socket, &config, state.epoch).await {
                             let now = unix_time_ms();
                             NativeEvent::TranscriptGap(state.reconnect_gap(now, now)).send();
                             terminal_error(
@@ -518,13 +528,15 @@ async fn drain_final_results(
         while let Some(message) = socket.next().await {
             match message {
                 Ok(Message::Text(text)) => {
-                    if let Some(delta) = state.parse(text.as_ref(), unix_time_ms()) {
+                    if let Some(parsed) = state.parse_delta(text.as_ref(), unix_time_ms()) {
+                        let delta = parsed.delta;
                         if delta.final_segment
                             && config.request_id == crate::meeting_capture::CAPTURE_STREAM_ID
                         {
                             crate::meeting::observe_final_segment(
                                 &delta.text,
                                 diarization_key(&delta),
+                                segment_audio(&delta, parsed.word_derived),
                             );
                         }
                         NativeEvent::TranscriptDelta(delta).send();
@@ -788,6 +800,38 @@ pub(crate) fn diarization_key(delta: &TranscriptDelta) -> Option<u64> {
     Some(u64::from(channel) << 32 | u64::from(speaker))
 }
 
+/// One parsed provider response, with the fact the delta itself cannot carry.
+///
+/// `word_derived` is false when the response had no word list, in which case
+/// `start_ms` / `end_ms` fall back to a wall-clock `occurred_at_ms` — a value
+/// on a different clock entirely from the audio buffer's, which is why it
+/// travels separately rather than being inferred downstream.
+/// The span of buffered capture audio a finalized segment was spoken in.
+///
+/// `None` whenever the span cannot be trusted to be on the stream clock, which
+/// is the answer for every segment whose response carried no word list.
+pub(crate) fn segment_audio(
+    delta: &TranscriptDelta,
+    word_derived: bool,
+) -> Option<crate::speech_recognition::SegmentAudio> {
+    let window = crate::speech_segments::stream_window(
+        delta.stt_epoch,
+        delta.start_ms,
+        delta.end_ms,
+        word_derived,
+    )?;
+    Some(crate::speech_recognition::SegmentAudio {
+        window,
+        segment_id: delta.segment_id.clone(),
+    })
+}
+
+#[derive(Debug)]
+pub(crate) struct ParsedDelta {
+    pub(crate) delta: TranscriptDelta,
+    pub(crate) word_derived: bool,
+}
+
 #[derive(Debug)]
 pub(crate) struct TranscriptState {
     config: SttConfig,
@@ -806,7 +850,15 @@ impl TranscriptState {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn parse(&mut self, json: &str, occurred_at_ms: i64) -> Option<TranscriptDelta> {
+        self.parse_delta(json, occurred_at_ms)
+            .map(|parsed| parsed.delta)
+    }
+
+    /// The parse the live loop uses, which also reports whether the segment's
+    /// offsets are on the provider's stream clock.
+    pub(crate) fn parse_delta(&mut self, json: &str, occurred_at_ms: i64) -> Option<ParsedDelta> {
         let response: SttResponse = serde_json::from_str(json).ok()?;
         if response
             .event_type
@@ -828,6 +880,7 @@ impl TranscriptState {
         if text.is_empty() {
             return None;
         }
+        let word_derived = !alternative.words.is_empty();
         let start_ms = alternative
             .words
             .first()
@@ -842,27 +895,30 @@ impl TranscriptState {
         if final_segment {
             self.sequence = self.sequence.saturating_add(1);
         }
-        Some(TranscriptDelta {
-            request_id: self.config.request_id.clone(),
-            audio_stream_id: self.config.audio_stream_id.clone(),
-            segment_id: format!(
-                "{}:epoch:{}:segment:{}",
-                self.config.audio_stream_id, self.epoch, sequence
-            ),
-            segment_sequence: sequence,
-            stt_epoch: self.epoch,
-            device_id: self.config.device_id.clone(),
-            provider: self.provider.clone(),
-            start_ms,
-            end_ms,
-            occurred_at_ms,
-            text: text.to_owned(),
-            final_segment,
-            speaker,
-            channel_index,
-            language: alternative.languages.into_iter().next().or_else(|| {
-                (self.config.language != "multi").then(|| self.config.language.clone())
-            }),
+        Some(ParsedDelta {
+            word_derived,
+            delta: TranscriptDelta {
+                request_id: self.config.request_id.clone(),
+                audio_stream_id: self.config.audio_stream_id.clone(),
+                segment_id: format!(
+                    "{}:epoch:{}:segment:{}",
+                    self.config.audio_stream_id, self.epoch, sequence
+                ),
+                segment_sequence: sequence,
+                stt_epoch: self.epoch,
+                device_id: self.config.device_id.clone(),
+                provider: self.provider.clone(),
+                start_ms,
+                end_ms,
+                occurred_at_ms,
+                text: text.to_owned(),
+                final_segment,
+                speaker,
+                channel_index,
+                language: alternative.languages.into_iter().next().or_else(|| {
+                    (self.config.language != "multi").then(|| self.config.language.clone())
+                }),
+            },
         })
     }
 
@@ -893,6 +949,27 @@ fn seconds_to_millis(value: f64) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stashed_audio_is_replayed_oldest_first() {
+        let pending = AtomicUsize::new(0);
+        let mut buffer = ReconnectAudioBuffer::default();
+        for value in 1_u8..=4 {
+            pending.fetch_add(2, Ordering::AcqRel);
+            buffer.stash(vec![value, value], &pending);
+        }
+
+        let replayed: Vec<Vec<u8>> =
+            std::iter::from_fn(|| (!buffer.frames.is_empty()).then(|| buffer.frames.remove(0)))
+                .collect();
+
+        assert_eq!(
+            replayed,
+            vec![vec![1, 1], vec![2, 2], vec![3, 3], vec![4, 4]],
+            "audio replayed after a reconnect must reach the provider in the \
+             order it was spoken"
+        );
+    }
 
     fn config() -> SttConfig {
         SttConfig {

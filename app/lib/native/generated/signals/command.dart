@@ -107,6 +107,8 @@ abstract class Command {
         return CommandForgetSpeechProfile.load(deserializer);
       case 48:
         return CommandPauseSpeechLearning.load(deserializer);
+      case 49:
+        return CommandConfigureSpeechProfiles.load(deserializer);
       default:
         throw Exception(
           'Unknown variant index for Command: ' + index.toString(),
@@ -3575,5 +3577,62 @@ class CommandPauseSpeechLearning extends Command {
     }());
 
     return fullString ?? 'CommandPauseSpeechLearning';
+  }
+}
+
+@immutable
+class CommandConfigureSpeechProfiles extends Command {
+  const CommandConfigureSpeechProfiles({this.scope}) : super();
+
+  static CommandConfigureSpeechProfiles load(BinaryDeserializer deserializer) {
+    deserializer.increaseContainerDepth();
+    final instance = CommandConfigureSpeechProfiles(
+      scope: TraitHelpers.deserializeOptionSpeechProfileScope(deserializer),
+    );
+    deserializer.decreaseContainerDepth();
+    return instance;
+  }
+
+  final SpeechProfileScope? scope;
+
+  CommandConfigureSpeechProfiles copyWith({
+    SpeechProfileScope? Function()? scope,
+  }) {
+    return CommandConfigureSpeechProfiles(
+      scope: scope == null ? this.scope : scope(),
+    );
+  }
+
+  void serialize(BinarySerializer serializer) {
+    serializer.increaseContainerDepth();
+    serializer.serializeVariantIndex(49);
+    TraitHelpers.serializeOptionSpeechProfileScope(scope, serializer);
+    serializer.decreaseContainerDepth();
+  }
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    if (other.runtimeType != runtimeType) return false;
+
+    return other is CommandConfigureSpeechProfiles && scope == other.scope;
+  }
+
+  @override
+  int get hashCode => scope.hashCode;
+
+  @override
+  String toString() {
+    String? fullString;
+
+    assert(() {
+      fullString =
+          '$runtimeType('
+          'scope: $scope'
+          ')';
+      return true;
+    }());
+
+    return fullString ?? 'CommandConfigureSpeechProfiles';
   }
 }

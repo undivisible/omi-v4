@@ -313,6 +313,15 @@ pub enum Command {
         profile_id: String,
         paused: bool,
     },
+    /// Point the live meeting path at this account's voiceprints, or turn it
+    /// off with `None`. Unanswered: it configures, it does not query.
+    ///
+    /// Nothing else tells the hub which account is signed in or where its data
+    /// directory is, and the hub must not guess either, so voice recognition
+    /// stays off until this arrives.
+    ConfigureSpeechProfiles {
+        scope: Option<SpeechProfileScope>,
+    },
 }
 
 /// Which account's voiceprints a speech-profile command addresses, and where

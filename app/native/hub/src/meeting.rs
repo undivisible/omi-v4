@@ -833,6 +833,7 @@ pub struct MeetingSession {
     roster: SpeakerRoster,
     limiter: InsightLimiter,
     started_at_ms: i64,
+    meeting_id: String,
     jots: Vec<String>,
 }
 
@@ -852,12 +853,18 @@ impl MeetingSession {
             roster: SpeakerRoster::default(),
             limiter: InsightLimiter::default(),
             started_at_ms,
+            meeting_id: format!("meeting-{started_at_ms}"),
             jots: Vec::new(),
         }
     }
 
     pub fn started_at_ms(&self) -> i64 {
         self.started_at_ms
+    }
+
+    /// The identity this session's voiceprint sightings are recorded under.
+    pub fn meeting_id(&self) -> &str {
+        &self.meeting_id
     }
 
     pub fn push_jot(&mut self, text: &str) {
@@ -1055,6 +1062,16 @@ pub enum MeetingControl {
         speaker: MeetingSpeaker,
         diarized: Option<u64>,
         text: String,
+        /// Where in the capture stream the segment was spoken, when the
+        /// provider reported offsets that can be trusted to be on that clock.
+        audio: Option<crate::speech_recognition::SegmentAudio>,
+    },
+    /// A voiceprint match arriving back from the off-loop identification of a
+    /// finalized segment.
+    BindSpeechProfile {
+        diarized: u64,
+        profile_id: String,
+        display_name: String,
     },
     Jot {
         text: String,
@@ -1203,7 +1220,11 @@ pub fn configure_note_provider(generator: NoteGenerator) {
 /// `diarized` is the transcription provider's own speaker index for the
 /// segment, when the provider returned one; it takes precedence over the
 /// capture-track heuristic inside the session's roster.
-pub fn observe_final_segment(text: &str, diarized: Option<u64>) {
+pub fn observe_final_segment(
+    text: &str,
+    diarized: Option<u64>,
+    audio: Option<crate::speech_recognition::SegmentAudio>,
+) {
     if text.trim().is_empty() {
         return;
     }
@@ -1214,6 +1235,7 @@ pub fn observe_final_segment(text: &str, diarized: Option<u64>) {
         speaker: crate::meeting_capture::dominant_speaker(),
         diarized,
         text: text.to_owned(),
+        audio,
     };
     match sender.try_send(control) {
         Ok(()) => {}
@@ -1226,6 +1248,16 @@ pub fn observe_final_segment(text: &str, diarized: Option<u64>) {
             eprintln!("omi meeting control queue closed; final transcript segment lost");
         }
     }
+}
+
+/// Hands a voiceprint match back to the meeting loop, which owns the session
+/// the name has to be bound on.
+pub fn bind_speech_profile(diarized: u64, profile_id: &str, display_name: &str) {
+    notify(MeetingControl::BindSpeechProfile {
+        diarized,
+        profile_id: profile_id.to_owned(),
+        display_name: display_name.to_owned(),
+    });
 }
 
 pub struct MeetingRuntime {
@@ -1411,11 +1443,36 @@ impl MeetingRuntime {
                         None => {}
                     }
                 }
+                MeetingControl::BindSpeechProfile {
+                    diarized,
+                    profile_id,
+                    display_name,
+                } => {
+                    if let Some(current) = session.as_mut().or(finishing.as_mut()) {
+                        current.bind_speaker_profile(diarized, &profile_id, &display_name);
+                    }
+                }
                 MeetingControl::FinalSegment {
                     speaker,
                     diarized,
                     text,
+                    audio,
                 } => {
+                    if let (Some(current), Some(key), Some(audio)) = (
+                        session.as_ref().or(finishing.as_ref()),
+                        diarized,
+                        audio.as_ref(),
+                    ) {
+                        crate::speech_recognition::identify(
+                            crate::speech_recognition::SegmentContext {
+                                meeting_id: current.meeting_id().to_owned(),
+                                diarized_key: key,
+                                segment_id: audio.segment_id.clone(),
+                                now_ms: chrono::Utc::now().timestamp_millis(),
+                            },
+                            audio,
+                        );
+                    }
                     if let Some(current) = &mut finishing {
                         let speaker = current.resolve_speaker(diarized, speaker);
                         let label = current.speaker_label(diarized, speaker);
@@ -2615,6 +2672,7 @@ mod tests {
             MeetingControl::FinalSegment {
                 speaker: MeetingSpeaker::Them,
                 diarized: None,
+                audio: None,
                 text: "before stop".to_owned(),
             },
         )
@@ -2632,6 +2690,7 @@ mod tests {
             MeetingControl::FinalSegment {
                 speaker: MeetingSpeaker::Them,
                 diarized: None,
+                audio: None,
                 text: "boundary final".to_owned(),
             },
         )
@@ -2673,6 +2732,7 @@ mod tests {
             MeetingControl::FinalSegment {
                 speaker: MeetingSpeaker::Them,
                 diarized: None,
+                audio: None,
                 text: "old tail".to_owned(),
             },
         )
@@ -2696,6 +2756,7 @@ mod tests {
             MeetingControl::FinalSegment {
                 speaker: MeetingSpeaker::Them,
                 diarized: None,
+                audio: None,
                 text: "new opening".to_owned(),
             },
         )
