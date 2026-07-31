@@ -2101,15 +2101,15 @@ class _PendantHeroState extends State<_PendantHero>
       alignment: Alignment.center,
       clipBehavior: Clip.none,
       children: [
-        IgnorePointer(
-          child: OmiIdleShowcase(
-            size: pendantWidth * 1.08,
-            color: _pageInk(context),
-            state: capturing
-                ? OmiOrbState.listening
-                : widget.busy
-                ? OmiOrbState.thinking
-                : OmiOrbState.idle,
+        Positioned(
+          top: pendantHeight * .74 - pendantWidth * .16,
+          child: IgnorePointer(
+            child: OmiActivityOrb(
+              size: pendantWidth * .32,
+              color: _pageInk(context),
+              motion: OmiOrbMotion.mark,
+              period: const Duration(seconds: 4),
+            ),
           ),
         ),
         // The connect finale: the warm glow bursts outward once, keyed on the
