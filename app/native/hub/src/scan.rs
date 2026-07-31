@@ -1,5 +1,7 @@
+#[cfg(any(target_os = "macos", test))]
+use rusqlite::Connection;
 #[cfg(target_os = "macos")]
-use rusqlite::{Connection, OpenFlags};
+use rusqlite::OpenFlags;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
@@ -744,9 +746,14 @@ fn scan_mail() -> SourceScan {
     } else {
         "''"
     };
-    let query = format!(
-        "SELECT m.ROWID, COALESCE(s.subject, ''), COALESCE(a.address, ''), {comment}, m.date_received, {flags} FROM messages m LEFT JOIN subjects s ON m.subject=s.ROWID LEFT JOIN addresses a ON m.sender=a.ROWID ORDER BY m.date_received DESC LIMIT {MAIL_QUERY_LIMIT}"
-    );
+    let Some(mailbox_join) = primary_mailbox_join(&connection) else {
+        return result(
+            "apple_mail",
+            ScanState::Failed,
+            "Apple Mail mailbox schema is unsupported.",
+        );
+    };
+    let query = mail_query(mailbox_join, comment, flags);
     let mut statement = match connection.prepare(&query) {
         Ok(value) => value,
         Err(error) => return result("apple_mail", ScanState::Failed, error.to_string()),
@@ -818,6 +825,31 @@ fn scan_mail() -> SourceScan {
     complete("apple_mail", memories, count)
 }
 
+#[cfg(any(target_os = "macos", test))]
+fn primary_mailbox_join(connection: &Connection) -> Option<&'static str> {
+    let messages = columns(connection, "messages").ok()?;
+    let mailboxes = columns(connection, "mailboxes").ok()?;
+    let memberships = columns(connection, "mailbox_messages").ok()?;
+    if !mailboxes.contains("url") {
+        return None;
+    }
+    if messages.contains("mailbox") {
+        return Some(
+            "JOIN mailboxes mb ON mb.ROWID=m.mailbox WHERE (lower(mb.url) LIKE '%/inbox' OR lower(mb.url) LIKE '%/categories/primary')",
+        );
+    }
+    (memberships.contains("mailbox") && memberships.contains("message")).then_some(
+        "JOIN mailbox_messages mm ON mm.message=m.ROWID JOIN mailboxes mb ON mb.ROWID=mm.mailbox WHERE (lower(mb.url) LIKE '%/inbox' OR lower(mb.url) LIKE '%/categories/primary')",
+    )
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn mail_query(mailbox_join: &str, comment: &str, flags: &str) -> String {
+    format!(
+        "SELECT m.ROWID, COALESCE(s.subject, ''), COALESCE(a.address, ''), {comment}, m.date_received, {flags} FROM messages m LEFT JOIN subjects s ON m.subject=s.ROWID LEFT JOIN addresses a ON m.sender=a.ROWID {mailbox_join} ORDER BY m.date_received DESC LIMIT {MAIL_QUERY_LIMIT}"
+    )
+}
+
 #[cfg(not(target_os = "macos"))]
 fn scan_mail() -> SourceScan {
     result(
@@ -850,7 +882,7 @@ fn open(path: &Path, source: &str) -> Result<Connection, SourceScan> {
     })
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", test))]
 fn columns(connection: &Connection, table: &str) -> Result<BTreeSet<String>, String> {
     let mut statement = connection
         .prepare(&format!("PRAGMA table_info({table})"))
@@ -1226,6 +1258,72 @@ mod tests {
         assert!(newsletter <= MAIL_SCORE_FLOOR);
         assert!(personal > MAIL_SCORE_FLOOR);
         assert!(flagged > MAIL_SCORE_FLOOR);
+    }
+
+    #[test]
+    fn mail_query_reads_only_inbox_and_primary_mailboxes() {
+        let connection = Connection::open_in_memory();
+        assert!(connection.is_ok());
+        let Ok(connection) = connection else { return };
+        let setup = connection.execute_batch(
+            "CREATE TABLE messages (subject INTEGER, sender INTEGER, date_received INTEGER);
+             CREATE TABLE subjects (subject TEXT);
+             CREATE TABLE addresses (address TEXT, comment TEXT);
+             CREATE TABLE mailboxes (url TEXT);
+             CREATE TABLE mailbox_messages (mailbox INTEGER, message INTEGER);
+             INSERT INTO subjects VALUES ('Inbox'), ('Spam'), ('Primary');
+             INSERT INTO addresses VALUES ('inbox@example.com', 'Inbox Sender'), ('spam@example.com', 'Spam Sender'), ('primary@example.com', 'Primary Sender');
+             INSERT INTO messages VALUES (1, 1, 3), (2, 2, 2), (3, 3, 1);
+             INSERT INTO mailboxes VALUES ('imap://example.com/INBOX'), ('imap://example.com/Junk'), ('imap://example.com/[Gmail]/Categories/Primary');
+             INSERT INTO mailbox_messages VALUES (1, 1), (2, 2), (3, 3);",
+        );
+        assert!(setup.is_ok());
+        let Some(mailbox_join) = primary_mailbox_join(&connection) else {
+            panic!("mailbox schema should be supported");
+        };
+        let query = mail_query(mailbox_join, "''", "0");
+        let statement = connection.prepare(&query);
+        assert!(statement.is_ok());
+        let Ok(mut statement) = statement else { return };
+        let rows = statement.query_map([], |row| row.get::<_, String>(1));
+        assert!(rows.is_ok());
+        let Ok(rows) = rows else { return };
+        let subjects = rows.collect::<Result<Vec<_>, _>>();
+        assert!(subjects.is_ok());
+        let Ok(subjects) = subjects else { return };
+        assert_eq!(subjects, ["Inbox", "Primary"]);
+    }
+
+    #[test]
+    fn mail_query_uses_current_mailbox_column() {
+        let connection = Connection::open_in_memory();
+        assert!(connection.is_ok());
+        let Ok(connection) = connection else { return };
+        let setup = connection.execute_batch(
+            "CREATE TABLE messages (subject INTEGER, sender INTEGER, date_received INTEGER, mailbox INTEGER);
+             CREATE TABLE subjects (subject TEXT);
+             CREATE TABLE addresses (address TEXT, comment TEXT);
+             CREATE TABLE mailboxes (url TEXT);
+             INSERT INTO subjects VALUES ('Inbox'), ('Spam'), ('Primary');
+             INSERT INTO addresses VALUES ('inbox@example.com', 'Inbox Sender'), ('spam@example.com', 'Spam Sender'), ('primary@example.com', 'Primary Sender');
+             INSERT INTO messages VALUES (1, 1, 3, 1), (2, 2, 2, 2), (3, 3, 1, 3);
+             INSERT INTO mailboxes VALUES ('imap://example.com/INBOX'), ('imap://example.com/Junk'), ('imap://example.com/[Gmail]/Categories/Primary');",
+        );
+        assert!(setup.is_ok());
+        let Some(mailbox_join) = primary_mailbox_join(&connection) else {
+            panic!("mailbox schema should be supported");
+        };
+        let query = mail_query(mailbox_join, "''", "0");
+        let statement = connection.prepare(&query);
+        assert!(statement.is_ok());
+        let Ok(mut statement) = statement else { return };
+        let rows = statement.query_map([], |row| row.get::<_, String>(1));
+        assert!(rows.is_ok());
+        let Ok(rows) = rows else { return };
+        let subjects = rows.collect::<Result<Vec<_>, _>>();
+        assert!(subjects.is_ok());
+        let Ok(subjects) = subjects else { return };
+        assert_eq!(subjects, ["Inbox", "Primary"]);
     }
 
     #[test]
