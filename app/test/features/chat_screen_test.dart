@@ -612,6 +612,7 @@ void main() {
     await tester.pump();
 
     expect(currents.calls, greaterThan(initialCalls));
+    expect(currents.requests.last.body, {'force': true});
   });
 }
 
@@ -683,10 +684,12 @@ final class _SignedInGateway implements AuthGateway {
 
 final class _CountingCurrentsTransport implements CurrentsTransport {
   int calls = 0;
+  final requests = <CurrentsRequest>[];
 
   @override
   Future<CurrentsResponse> send(CurrentsRequest request) async {
     calls += 1;
+    requests.add(request);
     return const CurrentsResponse(statusCode: 200, body: {});
   }
 }

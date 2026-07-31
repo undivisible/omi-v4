@@ -486,14 +486,14 @@ class ChatScreenState extends State<ChatScreen>
     };
   }
 
-  Future<void> _refreshCurrents() async {
+  Future<void> _refreshCurrents({bool force = false}) async {
     final currents = widget.services.currents;
     // Currents come from the worker, so signed out there is nothing to ask
     // for. The demo build is the exception: its currents client is a seeded
     // in-process transport, and `omiDemoMode` is a compile-time constant, so
     // outside that build this reads exactly as it did.
     if (currents == null || !(widget.services.chatReady || omiDemoMode)) return;
-    await currents.load();
+    await currents.load(force: force);
   }
 
   Future<void> _saveAssistantMessage({
@@ -505,7 +505,7 @@ class ChatScreenState extends State<ChatScreen>
         requestId: requestId,
         text: text,
       );
-      if (mounted) await _refreshCurrents();
+      if (mounted) await _refreshCurrents(force: true);
     } catch (failure) {
       debugPrint('chat_screen assistant save: $failure');
     }
