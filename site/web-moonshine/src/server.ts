@@ -1,13 +1,11 @@
 import { join } from "node:path";
 import { createBunServer } from "@tschk/moonshine-deploy-bun";
-import { crepusRenderer } from "@tschk/crepus-moonshine";
+import { reactRenderer } from "@tschk/moonshine-react";
 import type { Renderer, RenderContext, RouteArtifact } from "@tschk/moonshine-framework";
-import type { CrepusIr } from "@tschk/crepus-moonshine";
-import { homeIr, architectureIr, apiDocsIr } from "./ir";
 import { buildHead } from "./head";
 
 type PageEntry = {
-  ir: CrepusIr;
+  file: string;
   title: string;
   description: string;
   path: string;
@@ -15,20 +13,20 @@ type PageEntry = {
 
 const pages: Record<string, PageEntry> = {
   "/": {
-    ir: homeIr,
+    file: join(import.meta.dir, "pages", "Home.tsx"),
     title: "Omi — guided hub",
     description: "A live, guided Omi hub running on disclosed sample data.",
     path: "/",
   },
   "/architecture": {
-    ir: architectureIr,
+    file: join(import.meta.dir, "pages", "Architecture.tsx"),
     title: "Omi — architecture",
     description:
       "How Omi is built: one Flutter app, an embedded Rust hub with zkr memory, a Cloudflare Worker, Telegram and Sendblue channels, FaceTime via Sendblue, model tiers, D1 memory authority, and the BLE pendant path.",
     path: "/architecture",
   },
   "/docs/api": {
-    ir: apiDocsIr,
+    file: join(import.meta.dir, "pages", "ApiDocs.tsx"),
     title: "Omi — API reference",
     description:
       "The Omi public API and MCP server: authentication, scopes, rate limits, REST endpoints and MCP tools. The written contract, rendered.",
@@ -41,9 +39,9 @@ function stripExtraDoctype(html: string): string {
 }
 
 const omiRenderer: Renderer = {
-  name: "omi-crepus",
+  name: "omi-react",
   async render(context: RenderContext): Promise<Response> {
-    const response = await crepusRenderer.render(context);
+    const response = await reactRenderer.render(context);
     const html = await response.text();
     const headInject = (context.data as { headInject?: string }).headInject ?? "";
     const modified = stripExtraDoctype(html).replace("</head>", headInject + "</head>");
@@ -52,7 +50,7 @@ const omiRenderer: Renderer = {
     });
   },
   async prerender(context: RenderContext): Promise<string> {
-    const html = await crepusRenderer.prerender(context);
+    const html = await reactRenderer.prerender(context);
     const headInject = (context.data as { headInject?: string }).headInject ?? "";
     return stripExtraDoctype(html).replace("</head>", headInject + "</head>");
   },
@@ -73,7 +71,7 @@ async function fetch(request: Request): Promise<Response> {
   const routeArtifact: RouteArtifact = {
     id: pathname,
     path: pathname,
-    file: "",
+    file: page.file,
     mode: "ssr",
     runtime: "bun",
     decision: "ssr",
@@ -85,8 +83,6 @@ async function fetch(request: Request): Promise<Response> {
     route: routeArtifact,
     params: {},
     data: {
-      root: page.ir.root,
-      version: page.ir.version,
       headInject: buildHead(page.title, page.description, page.path),
     },
     signal: request.signal,

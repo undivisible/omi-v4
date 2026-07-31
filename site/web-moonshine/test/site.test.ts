@@ -1,85 +1,115 @@
 import { describe, expect, test } from "bun:test";
-import { homeIr, architectureIr, apiDocsIr } from "../src/ir";
+import { renderToStaticMarkup } from "react-dom/server";
+import { createElement } from "react";
+import HomePage from "../src/pages/Home";
+import ArchitecturePage from "../src/pages/Architecture";
+import ApiDocsPage from "../src/pages/ApiDocs";
 import { buildHead } from "../src/head";
 
-describe("Crepus IR documents", () => {
-  test("home IR has content", () => {
-    expect(homeIr.root.length).toBeGreaterThan(0);
-    expect(homeIr.version).toBe(1);
+const home = renderToStaticMarkup(createElement(HomePage));
+const architecture = renderToStaticMarkup(createElement(ArchitecturePage));
+const apiDocs = renderToStaticMarkup(createElement(ApiDocsPage));
+
+describe("page components", () => {
+  test("home page has content", () => {
+    expect(home.length).toBeGreaterThan(1000);
+    expect(home).toContain("Be here. Omi keeps the thread.");
   });
 
-  test("architecture IR has content", () => {
-    expect(architectureIr.root.length).toBeGreaterThan(0);
-    expect(architectureIr.version).toBe(1);
+  test("architecture page has content", () => {
+    expect(architecture.length).toBeGreaterThan(1000);
+    expect(architecture).toContain("Few moving parts, on purpose.");
   });
 
-  test("api docs IR has content", () => {
-    expect(apiDocsIr.root.length).toBeGreaterThan(0);
-    expect(apiDocsIr.version).toBe(1);
+  test("api docs page has content", () => {
+    expect(apiDocs.length).toBeGreaterThan(1000);
+    expect(apiDocs).toContain("The public API");
   });
 
-  test("home IR contains capabilities text", () => {
-    const json = JSON.stringify(homeIr);
-    expect(json).toContain("Memory you can check");
-    expect(json).toContain("Live meetings");
-    expect(json).toContain("The pendant");
+  test("home page contains capabilities text", () => {
+    expect(home).toContain("Memory you can check");
+    expect(home).toContain("Live meetings");
+    expect(home).toContain("The pendant");
   });
 
-  test("home IR contains specs", () => {
-    const json = JSON.stringify(homeIr);
-    expect(json).toContain("2.5cm diameter, 1.5cm deep");
-    expect(json).toContain("150 mAh, 10–14 hours");
-    expect(json).toContain("AES-256-GCM");
+  test("home page contains specs", () => {
+    expect(home).toContain("2.5cm diameter, 1.5cm deep");
+    expect(home).toContain("150 mAh, 10–14 hours");
+    expect(home).toContain("AES-256-GCM");
   });
 
-  test("home IR contains hardware capabilities", () => {
-    const json = JSON.stringify(homeIr);
-    expect(json).toContain("Capture everything");
-    expect(json).toContain("Recall instantly");
-    expect(json).toContain("Automate your work");
+  test("home page contains hardware capabilities", () => {
+    expect(home).toContain("Capture everything");
+    expect(home).toContain("Recall instantly");
+    expect(home).toContain("Automate your work");
   });
 
-  test("home IR contains CTA links", () => {
-    const json = JSON.stringify(homeIr);
-    expect(json).toContain("https://api.omi.tsc.hk/portal");
-    expect(json).toContain("Open Omi");
-    expect(json).toContain("Documentation");
+  test("home page contains reach channels", () => {
+    expect(home).toContain("Telegram");
+    expect(home).toContain("iMessage");
+    expect(home).toContain("Same brain, other inboxes.");
   });
 
-  test("architecture IR contains model tiers", () => {
-    const json = JSON.stringify(architectureIr);
-    expect(json).toContain("inception/mercury-2");
-    expect(json).toContain("xiaomi/mimo-v2.5");
-    expect(json).toContain("google/gemini-3.6-flash");
-    expect(json).toContain("perplexity/sonar");
+  test("home page contains pricing and negotiate copy", () => {
+    expect(home).toContain("More than 60% off");
+    expect(home).toContain("Haggle with Omi. It is not a metaphor.");
+    expect(home).toContain("https://omi.me/download");
   });
 
-  test("architecture IR contains section headings", () => {
-    const json = JSON.stringify(architectureIr);
-    expect(json).toContain("The request path");
-    expect(json).toContain("Model tiers");
-    expect(json).toContain("Data plane");
-    expect(json).toContain("Memory");
-    expect(json).toContain("Channels");
-    expect(json).toContain("The approval gate");
-    expect(json).toContain("FaceTime");
-    expect(json).toContain("The pendant path");
+  test("home page contains CTA links", () => {
+    expect(home).toContain("https://api.omi.tsc.hk/portal");
+    expect(home).toContain("Open Omi");
+    expect(home).toContain("Documentation");
   });
 
-  test("api docs IR contains section headings", () => {
-    const json = JSON.stringify(apiDocsIr);
-    expect(json).toContain("The public API");
-    expect(json).toContain("Contents");
-    expect(json).toContain("1. Authentication");
-    expect(json).toContain("5. MCP server");
+  test("home page contains images", () => {
+    expect(home).toContain("/omi-pendant-1200.webp");
+    expect(home).toContain("/omi-worn-1200.webp");
+    expect(home).toContain("/omi-desk-1200.webp");
   });
 
-  test("api docs IR contains REST endpoints", () => {
-    const json = JSON.stringify(apiDocsIr);
-    expect(json).toContain("/api/v1/me");
-    expect(json).toContain("/api/v1/memory/search");
-    expect(json).toContain("/api/v1/currents");
-    expect(json).toContain("/api/v1/facetime/calls");
+  test("architecture page contains model tiers", () => {
+    expect(architecture).toContain("inception/mercury-2");
+    expect(architecture).toContain("xiaomi/mimo-v2.5");
+    expect(architecture).toContain("google/gemini-3.6-flash");
+    expect(architecture).toContain("perplexity/sonar");
+  });
+
+  test("architecture page contains section headings", () => {
+    expect(architecture).toContain("The request path");
+    expect(architecture).toContain("Model tiers");
+    expect(architecture).toContain("Data plane");
+    expect(architecture).toContain("Memory");
+    expect(architecture).toContain("Channels");
+    expect(architecture).toContain("The approval gate");
+    expect(architecture).toContain("FaceTime");
+    expect(architecture).toContain("The pendant path");
+  });
+
+  test("architecture page contains data plane detail", () => {
+    expect(architecture).toContain("omi-memory-claims");
+    expect(architecture).toContain("memory_log");
+    expect(architecture).toContain("POST /v1/memory/zkr-sync");
+    expect(architecture).toContain("facetime_unavailable");
+  });
+
+  test("api docs page contains section headings", () => {
+    expect(apiDocs).toContain("1. Authentication");
+    expect(apiDocs).toContain("5. MCP server");
+    expect(apiDocs).toContain("7. How the rest of it works");
+    expect(apiDocs).toContain("Contents");
+  });
+
+  test("api docs page contains REST endpoints", () => {
+    expect(apiDocs).toContain("/api/v1/me");
+    expect(apiDocs).toContain("/api/v1/memory/search");
+    expect(apiDocs).toContain("/api/v1/currents");
+    expect(apiDocs).toContain("/api/v1/facetime/calls");
+  });
+
+  test("api docs page links its contents anchors", () => {
+    expect(apiDocs).toContain('href="#1-authentication"');
+    expect(apiDocs).toContain('href="#6-data-lifetime-and-deletion"');
   });
 });
 
@@ -119,10 +149,52 @@ describe("head metadata", () => {
 });
 
 describe("server routes", () => {
-  test("all three page paths are defined", () => {
-    const paths = ["/", "/architecture", "/docs/api"];
-    for (const p of paths) {
-      expect(p).toBeTruthy();
-    }
+  const port = 3971;
+  let started = false;
+
+  async function start(): Promise<void> {
+    if (started) return;
+    process.env.PORT = String(port);
+    await import("../src/server");
+    started = true;
+  }
+
+  test("home route serves html", async () => {
+    await start();
+    const res = await fetch(`http://localhost:${port}/`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("text/html");
+    const html = await res.text();
+    expect(html).toContain("<title>Omi — guided hub</title>");
+    expect(html).toContain("Be here. Omi keeps the thread.");
+    expect(html).toContain("Two and a half centimetres of listening.");
+  });
+
+  test("architecture route serves html", async () => {
+    await start();
+    const res = await fetch(`http://localhost:${port}/architecture`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("text/html");
+    const html = await res.text();
+    expect(html).toContain("<title>Omi — architecture</title>");
+    expect(html).toContain("Few moving parts, on purpose.");
+    expect(html).toContain("One table, three implementations.");
+  });
+
+  test("api docs route serves html", async () => {
+    await start();
+    const res = await fetch(`http://localhost:${port}/docs/api`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("text/html");
+    const html = await res.text();
+    expect(html).toContain("<title>Omi — API reference</title>");
+    expect(html).toContain("The public API");
+    expect(html).toContain("4. REST endpoints");
+  });
+
+  test("unknown route is 404", async () => {
+    await start();
+    const res = await fetch(`http://localhost:${port}/nope`);
+    expect(res.status).toBe(404);
   });
 });
