@@ -22,6 +22,7 @@ class OmiShell extends StatefulWidget {
   const OmiShell({
     required this.services,
     this.previewMode = false,
+    this.homeVisible = true,
     this.onExitPreview,
     this.desktopKeyboard,
     this.desktopGesture,
@@ -30,6 +31,7 @@ class OmiShell extends StatefulWidget {
 
   final AppServices services;
   final bool previewMode;
+  final bool homeVisible;
   final VoidCallback? onExitPreview;
   final DesktopKeyboard? desktopKeyboard;
   final DesktopGestureController? desktopGesture;
@@ -305,6 +307,7 @@ class _OmiShellState extends State<OmiShell> {
         key: _chatKey,
         services: widget.services,
         previewMode: widget.previewMode,
+        homeVisible: widget.homeVisible,
         desktopKeyboard: _desktopKeyboard,
         onDesktopGestureReset: _desktopGesture?.reset,
         onOpenProviderSettings: () =>

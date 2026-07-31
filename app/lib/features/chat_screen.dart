@@ -89,6 +89,7 @@ class ChatScreen extends StatefulWidget {
   const ChatScreen({
     required this.services,
     this.previewMode = false,
+    this.homeVisible = true,
     this.desktopKeyboard,
     this.onDesktopGestureReset,
     this.checklistStore,
@@ -100,6 +101,7 @@ class ChatScreen extends StatefulWidget {
 
   final AppServices services;
   final bool previewMode;
+  final bool homeVisible;
   final DesktopKeyboard? desktopKeyboard;
   final VoidCallback? onDesktopGestureReset;
 
@@ -1489,6 +1491,7 @@ class ChatScreenState extends State<ChatScreen>
                                           child: _Greeter(
                                             child: _ChatHome(
                                               markState: _markState,
+                                              homeVisible: widget.homeVisible,
                                               greeting: _greeting(),
                                               setupTaskDone: _setupTaskDone,
                                               onToggleSetupTask:
@@ -2404,6 +2407,7 @@ class _VoiceEdgeGradient extends StatelessWidget {
 class _ChatHome extends StatelessWidget {
   const _ChatHome({
     required this.greeting,
+    required this.homeVisible,
     required this.setupTaskDone,
     required this.onToggleSetupTask,
     required this.starterTasks,
@@ -2427,6 +2431,7 @@ class _ChatHome extends StatelessWidget {
   final OmiOrbState markState;
 
   final String greeting;
+  final bool homeVisible;
   final bool setupTaskDone;
   final VoidCallback onToggleSetupTask;
   final List<String> starterTasks;
@@ -2455,6 +2460,7 @@ class _ChatHome extends StatelessWidget {
         children: [
           _Reveal(
             delayMs: 0,
+            visible: homeVisible,
             child: Column(
               children: [
                 // The cold open finishes on this mark, so it publishes where
@@ -2485,6 +2491,7 @@ class _ChatHome extends StatelessWidget {
           // full list can just ask the agent for it.
           _Reveal(
             delayMs: 420,
+            visible: homeVisible,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
@@ -3969,13 +3976,19 @@ class _AnimatedPlaceholderState extends State<_AnimatedPlaceholder>
 }
 
 class _Reveal extends StatelessWidget {
-  const _Reveal({required this.delayMs, required this.child});
+  const _Reveal({
+    required this.delayMs,
+    this.visible = true,
+    required this.child,
+  });
 
   final int delayMs;
+  final bool visible;
   final Widget child;
 
   @override
   Widget build(BuildContext context) {
+    if (!visible) return Opacity(opacity: 0, child: child);
     if (MediaQuery.disableAnimationsOf(context)) return child;
     final total = delayMs + 650;
     return TweenAnimationBuilder<double>(

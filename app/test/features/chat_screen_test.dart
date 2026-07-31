@@ -15,6 +15,43 @@ import 'package:omi/native/native_hub.dart';
 import 'package:omi/onboarding/hub_checklist.dart';
 
 void main() {
+  testWidgets('home stays transparent before the cold-open handoff', (
+    tester,
+  ) async {
+    final services = AppServices.forTesting(
+      nativeHub: const UnavailableNativeHub('test'),
+      deviceRelay: DeviceRelayService(
+        role: DeviceRelayRole.desktopObserver,
+        adapter: const UnavailableDeviceRelayAdapter(),
+      ),
+      auth: AuthController(const UnconfiguredAuthGateway()),
+      memoryDatabasePath: (uid) => '/tmp/$uid.sqlite3',
+    );
+    addTearDown(services.dispose);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: ChatScreen(
+            services: services,
+            previewMode: true,
+            homeVisible: false,
+          ),
+        ),
+      ),
+    );
+
+    final reveal = tester.widget<Opacity>(
+      find
+          .ancestor(
+            of: find.byKey(const Key('hub_greeting')),
+            matching: find.byType(Opacity),
+          )
+          .first,
+    );
+    expect(reveal.opacity, 0);
+  });
+
   testWidgets('a saved meeting surfaces as a current and opens the notes', (
     tester,
   ) async {
