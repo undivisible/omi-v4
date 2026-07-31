@@ -24,7 +24,6 @@ import 'package:omi/memory/memory.dart';
 import 'package:omi/native/native_hub.dart';
 import 'package:omi/onboarding/onboarding_completion.dart';
 import 'package:omi/ui/burst_glow.dart';
-import 'package:omi/ui/omi_orb.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
@@ -439,13 +438,7 @@ void main() {
           .extendBody,
       isTrue,
     );
-    expect(
-      find.descendant(
-        of: find.byKey(const Key('companion_pendant_tap')),
-        matching: find.byType(OmiActivityOrb),
-      ),
-      findsOneWidget,
-    );
+    expect(find.byKey(const Key('companion_pendant_tap')), findsOneWidget);
     fixture.services.dispose();
   });
 
@@ -1558,10 +1551,6 @@ void main() {
       find.byKey(const Key('companion_home')),
     );
     expect(scaffold.backgroundColor, const Color(0xff171716));
-    expect(
-      tester.widget<OmiActivityOrb>(find.byType(OmiActivityOrb)).color,
-      const Color(0xfffffcec),
-    );
     fixture.services.dispose();
   });
 

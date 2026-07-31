@@ -32,8 +32,6 @@ import 'mobile_update_check.dart';
 import 'transcript_log_store.dart';
 import 'wifi_debug_panel.dart';
 import '../ui/omi_glass.dart' show OmiWaBackdrop;
-import '../ui/omi_idle_showcase.dart';
-import '../ui/omi_orb.dart';
 import '../ui/omi_wa_palette.dart';
 
 const _paper = Color(0xfff7f6f1);
@@ -2101,17 +2099,6 @@ class _PendantHeroState extends State<_PendantHero>
       alignment: Alignment.center,
       clipBehavior: Clip.none,
       children: [
-        Positioned(
-          top: pendantHeight * .74 - pendantWidth * .525,
-          child: IgnorePointer(
-            child: OmiActivityOrb(
-              size: pendantWidth * 1.05,
-              color: _pageInk(context),
-              motion: OmiOrbMotion.mark,
-              period: const Duration(seconds: 4),
-            ),
-          ),
-        ),
         // The connect finale: the warm glow bursts outward once, keyed on the
         // connection so a later reconnect fires a fresh one. Skipped under
         // reduced motion, where a burst that cannot animate would only leave a
