@@ -23,3 +23,10 @@ uint32_t get_utc_time(void)
 }
 
 void sd_notify_time_synced(uint32_t utc_time) {}
+
+int button_init(void)
+{
+    return 0;
+}
+
+void activate_button_work(void) {}

@@ -21,6 +21,17 @@ west update -o=--depth=1 -n
 west zephyr-export
 make -C "$BSIM_OUT_PATH" everything -j"$(nproc)"
 
+if [ -f "$HOME/.cargo/env" ]; then
+  # shellcheck disable=SC1091
+  . "$HOME/.cargo/env"
+fi
+if ! command -v cargo >/dev/null 2>&1; then
+  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --profile minimal
+  # shellcheck disable=SC1091
+  . "$HOME/.cargo/env"
+fi
+rustup target add "${BSIM_RUST_TARGET:-i686-unknown-linux-gnu}"
+
 west build -b nrf5340bsim/nrf5340/cpuapp "$FW/bsim" --sysbuild -d build-bsim-omi --pristine always
 west build -b nrf52_bsim "$FW/bsim/client" -d build-bsim-client --pristine always -S bt-ll-sw-split
 
