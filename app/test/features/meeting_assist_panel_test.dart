@@ -446,7 +446,10 @@ void main() {
 
     final turn = tester.widget<Text>(
       find.ancestor(
-        of: find.textContaining('Anonymous but recognised.', findRichText: true),
+        of: find.textContaining(
+          'Anonymous but recognised.',
+          findRichText: true,
+        ),
         matching: find.byType(Text),
       ),
     );
