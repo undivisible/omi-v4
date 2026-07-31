@@ -36,7 +36,8 @@ final class CurrentsController extends ChangeNotifier {
   Future<void>? _loadFuture;
   int _composeGeneration = 0;
 
-  Future<void> load({bool force = false}) => _loadFuture ??= _load(force: force);
+  Future<void> load({bool force = false}) =>
+      _loadFuture ??= _load(force: force);
 
   Future<void> _load({bool force = false}) async {
     loading = true;
