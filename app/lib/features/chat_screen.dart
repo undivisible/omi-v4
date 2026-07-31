@@ -89,6 +89,7 @@ class ChatScreen extends StatefulWidget {
   const ChatScreen({
     required this.services,
     this.previewMode = false,
+    this.homeVisible = true,
     this.desktopKeyboard,
     this.onDesktopGestureReset,
     this.checklistStore,
@@ -100,6 +101,7 @@ class ChatScreen extends StatefulWidget {
 
   final AppServices services;
   final bool previewMode;
+  final bool homeVisible;
   final DesktopKeyboard? desktopKeyboard;
   final VoidCallback? onDesktopGestureReset;
 
@@ -484,14 +486,29 @@ class ChatScreenState extends State<ChatScreen>
     };
   }
 
-  Future<void> _refreshCurrents() async {
+  Future<void> _refreshCurrents({bool force = false}) async {
     final currents = widget.services.currents;
     // Currents come from the worker, so signed out there is nothing to ask
     // for. The demo build is the exception: its currents client is a seeded
     // in-process transport, and `omiDemoMode` is a compile-time constant, so
     // outside that build this reads exactly as it did.
     if (currents == null || !(widget.services.chatReady || omiDemoMode)) return;
-    await currents.load();
+    await currents.load(force: force);
+  }
+
+  Future<void> _saveAssistantMessage({
+    required String requestId,
+    required String text,
+  }) async {
+    try {
+      await widget.services.saveAssistantMessage(
+        requestId: requestId,
+        text: text,
+      );
+      if (mounted) await _refreshCurrents(force: true);
+    } catch (failure) {
+      debugPrint('chat_screen assistant save: $failure');
+    }
   }
 
   Future<void> handleDesktopGesture(ShiftGestureAction action) async {
@@ -1014,14 +1031,10 @@ class ChatScreenState extends State<ChatScreen>
           }
           if (value.finalSegment) {
             unawaited(
-              widget.services
-                  .saveAssistantMessage(
-                    requestId: value.requestId,
-                    text: message.text,
-                  )
-                  .catchError((Object failure, _) {
-                    debugPrint('chat_screen assistant save: $failure');
-                  }),
+              _saveAssistantMessage(
+                requestId: value.requestId,
+                text: message.text,
+              ),
             );
             _activeRequestId = null;
             _progress = null;
@@ -1478,6 +1491,7 @@ class ChatScreenState extends State<ChatScreen>
                                           child: _Greeter(
                                             child: _ChatHome(
                                               markState: _markState,
+                                              homeVisible: widget.homeVisible,
                                               greeting: _greeting(),
                                               setupTaskDone: _setupTaskDone,
                                               onToggleSetupTask:
@@ -2393,6 +2407,7 @@ class _VoiceEdgeGradient extends StatelessWidget {
 class _ChatHome extends StatelessWidget {
   const _ChatHome({
     required this.greeting,
+    required this.homeVisible,
     required this.setupTaskDone,
     required this.onToggleSetupTask,
     required this.starterTasks,
@@ -2416,6 +2431,7 @@ class _ChatHome extends StatelessWidget {
   final OmiOrbState markState;
 
   final String greeting;
+  final bool homeVisible;
   final bool setupTaskDone;
   final VoidCallback onToggleSetupTask;
   final List<String> starterTasks;
@@ -2444,6 +2460,7 @@ class _ChatHome extends StatelessWidget {
         children: [
           _Reveal(
             delayMs: 0,
+            visible: homeVisible,
             child: Column(
               children: [
                 // The cold open finishes on this mark, so it publishes where
@@ -2474,6 +2491,7 @@ class _ChatHome extends StatelessWidget {
           // full list can just ask the agent for it.
           _Reveal(
             delayMs: 420,
+            visible: homeVisible,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
@@ -3958,18 +3976,24 @@ class _AnimatedPlaceholderState extends State<_AnimatedPlaceholder>
 }
 
 class _Reveal extends StatelessWidget {
-  const _Reveal({required this.delayMs, required this.child});
+  const _Reveal({
+    required this.delayMs,
+    this.visible = true,
+    required this.child,
+  });
 
   final int delayMs;
+  final bool visible;
   final Widget child;
 
   @override
   Widget build(BuildContext context) {
-    if (MediaQuery.disableAnimationsOf(context)) return child;
     final total = delayMs + 650;
     return TweenAnimationBuilder<double>(
-      tween: Tween(begin: 0, end: 1),
-      duration: Duration(milliseconds: total),
+      tween: Tween(begin: 0, end: visible ? 1 : 0),
+      duration: MediaQuery.disableAnimationsOf(context)
+          ? Duration.zero
+          : Duration(milliseconds: total),
       curve: Interval(delayMs / total, 1, curve: const Cubic(.22, 1, .36, 1)),
       builder: (context, value, child) => Opacity(
         opacity: value,

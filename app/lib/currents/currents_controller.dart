@@ -36,15 +36,16 @@ final class CurrentsController extends ChangeNotifier {
   Future<void>? _loadFuture;
   int _composeGeneration = 0;
 
-  Future<void> load() => _loadFuture ??= _load();
+  Future<void> load({bool force = false}) =>
+      _loadFuture ??= _load(force: force);
 
-  Future<void> _load() async {
+  Future<void> _load({bool force = false}) async {
     loading = true;
     error = null;
     briefCrepus = null;
     notifyListeners();
     try {
-      final outcome = await _client.refresh();
+      final outcome = await _client.refresh(force: force);
       items = outcome.items;
       _notifyItemsRefreshed();
       _composeBrief();

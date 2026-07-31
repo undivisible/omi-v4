@@ -35,7 +35,12 @@ if [[ -n "${JASPR_PORT:-}" ]]; then
   jaspr_port_args=(--port "$JASPR_PORT")
 fi
 
-(cd "$site" && dart pub get >/dev/null && jaspr build "${jaspr_port_args[@]}")
+(cd "$site" && dart pub get >/dev/null &&
+  if [[ -n "${JASPR_PORT:-}" ]]; then
+    jaspr build "${jaspr_port_args[@]}"
+  else
+    jaspr build
+  fi)
 
 # Build artefacts that must never be served: the dev-compiler's package tree,
 # the build manifest, and the package config. Jaspr writes them beside the

@@ -78,7 +78,13 @@ class _OmiMarkAnchorTargetState extends State<OmiMarkAnchorTarget> {
   @override
   void dispose() {
     // A mark that has left the tree is not somewhere to fly to.
-    if (_anchor?.value == _reported) _anchor?.value = null;
+    final anchor = _anchor;
+    final reported = _reported;
+    if (anchor?.value == reported) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (anchor?.value == reported) anchor?.value = null;
+      });
+    }
     super.dispose();
   }
 

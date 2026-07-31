@@ -15,6 +15,74 @@ import 'package:omi/native/native_hub.dart';
 import 'package:omi/onboarding/hub_checklist.dart';
 
 void main() {
+  testWidgets('home stays transparent before the cold-open handoff', (
+    tester,
+  ) async {
+    final services = AppServices.forTesting(
+      nativeHub: const UnavailableNativeHub('test'),
+      deviceRelay: DeviceRelayService(
+        role: DeviceRelayRole.desktopObserver,
+        adapter: const UnavailableDeviceRelayAdapter(),
+      ),
+      auth: AuthController(const UnconfiguredAuthGateway()),
+      memoryDatabasePath: (uid) => '/tmp/$uid.sqlite3',
+    );
+    addTearDown(services.dispose);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: ChatScreen(
+            services: services,
+            previewMode: true,
+            homeVisible: false,
+          ),
+        ),
+      ),
+    );
+
+    final reveal = tester.widget<Opacity>(
+      find
+          .ancestor(
+            of: find.byKey(const Key('hub_greeting')),
+            matching: find.byType(Opacity),
+          )
+          .first,
+    );
+    expect(reveal.opacity, 0);
+
+    final revealElement = tester.element(
+      find
+          .ancestor(
+            of: find.byKey(const Key('hub_greeting')),
+            matching: find.byType(TweenAnimationBuilder<double>),
+          )
+          .first,
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: ChatScreen(
+            services: services,
+            previewMode: true,
+            homeVisible: true,
+          ),
+        ),
+      ),
+    );
+    expect(
+      tester.element(
+        find
+            .ancestor(
+              of: find.byKey(const Key('hub_greeting')),
+              matching: find.byType(TweenAnimationBuilder<double>),
+            )
+            .first,
+      ),
+      same(revealElement),
+    );
+  });
+
   testWidgets('a saved meeting surfaces as a current and opens the notes', (
     tester,
   ) async {
@@ -516,10 +584,72 @@ void main() {
       'Meeting summary: Team agreed to ship Friday.\n• Email release notes',
     );
   });
+
+  testWidgets('a completed reply refreshes currents after it is stored', (
+    tester,
+  ) async {
+    final auth = AuthController(
+      _SignedInGateway(),
+      consentStore: VolatileConsentStore()
+        ..receipt = ProcessingConsentReceipt.current(
+          subjectUid: 'user-meeting',
+          acceptedAt: DateTime.utc(2026, 7, 21),
+        ),
+    );
+    await auth.restoreSession();
+    final hub = _MeetingEventHub();
+    final currents = _CountingCurrentsTransport();
+    final services = AppServices.forTesting(
+      nativeHub: hub,
+      deviceRelay: DeviceRelayService(
+        role: DeviceRelayRole.desktopObserver,
+        adapter: const UnavailableDeviceRelayAdapter(),
+      ),
+      auth: auth,
+      memoryDatabasePath: (uid) => '/tmp/$uid.sqlite3',
+      conversations: _RecordingConversationTransport(),
+      currentsClient: CurrentsClient(currents),
+    );
+    addTearDown(services.dispose);
+    await services.initialize();
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(body: ChatScreen(services: services)),
+      ),
+    );
+    await tester.pump();
+    final initialCalls = currents.calls;
+
+    await tester.enterText(
+      find.byKey(const Key('chat_input')),
+      'Make currents',
+    );
+    await tester.tap(find.byKey(const Key('send_chat')));
+    await tester.pump();
+    final requestId = hub.sentRequestId;
+    expect(requestId, isNotNull);
+
+    hub.eventsController.add(
+      NativeEventAssistantDelta(
+        value: AssistantDelta(
+          requestId: requestId!,
+          text: 'Here are your currents.',
+          finalSegment: true,
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+
+    expect(currents.calls, greaterThan(initialCalls));
+    expect(currents.requests.last.body, {'force': true});
+  });
 }
 
 final class _MeetingEventHub implements NativeHub {
   final eventsController = StreamController<NativeEvent>.broadcast();
+  String? sentRequestId;
 
   @override
   bool get available => true;
@@ -534,7 +664,13 @@ final class _MeetingEventHub implements NativeHub {
   void dispose() {}
 
   @override
-  dynamic noSuchMethod(Invocation invocation) => null;
+  @override
+  dynamic noSuchMethod(Invocation invocation) {
+    if (invocation.memberName == #sendMessage) {
+      sentRequestId = invocation.namedArguments[#requestId] as String?;
+    }
+    return null;
+  }
 }
 
 final class _SignedInGateway implements AuthGateway {
@@ -579,10 +715,12 @@ final class _SignedInGateway implements AuthGateway {
 
 final class _CountingCurrentsTransport implements CurrentsTransport {
   int calls = 0;
+  final requests = <CurrentsRequest>[];
 
   @override
   Future<CurrentsResponse> send(CurrentsRequest request) async {
     calls += 1;
+    requests.add(request);
     return const CurrentsResponse(statusCode: 200, body: {});
   }
 }
