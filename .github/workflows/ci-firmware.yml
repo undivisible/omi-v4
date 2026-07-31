@@ -45,6 +45,7 @@ env:
   # hard-float triple, not the thumbv8m.main-none-eabi one the plain nRF5340
   # docs mention.
   RUST_TARGET: thumbv8m.main-none-eabihf
+  BSIM_RUST_TARGET: i686-unknown-linux-gnu
 
 jobs:
   discover:
@@ -414,3 +415,77 @@ jobs:
           set -euo pipefail
           . "${HOME}/.cargo/env"
           cargo clippy --all-targets -- -D warnings -D clippy::undocumented_unsafe_blocks
+
+  bsim:
+    name: BabbleSim simulation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    container:
+      image: ghcr.io/nrfconnect/sdk-nrf-toolchain:v3.4.0
+      options: --user root
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Trust the workspace inside the container
+        run: git config --global --add safe.directory '*'
+
+      - uses: actions/checkout@v4
+
+      - name: Resolve the NCS toolchain on PATH
+        run: bash .github/scripts/setup-ncs-toolchain.sh
+
+      - name: Install the bsim tools build dependencies
+        run: |
+          set -euo pipefail
+          env -u LD_LIBRARY_PATH apt-get update -qq
+          env -u LD_LIBRARY_PATH DEBIAN_FRONTEND=noninteractive apt-get install -y -qq make bc
+          env -u LD_LIBRARY_PATH make --version | head -n 1
+          env -u LD_LIBRARY_PATH bc --version | head -n 1
+
+      - name: Cache the Rust toolchain and cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.rustup/toolchains
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: rust-fw-bsim-${{ env.BSIM_RUST_TARGET }}-${{ hashFiles('firmware/omi/rust/Cargo.toml') }}
+          restore-keys: |
+            rust-fw-bsim-${{ env.BSIM_RUST_TARGET }}-
+
+      - name: Install Rust with the 32-bit bsim host target
+        run: |
+          set -euo pipefail
+          if ! command -v rustup >/dev/null 2>&1; then
+            init_dir="$(mktemp -d)"
+            python3 -c 'import sys, urllib.request; urllib.request.urlretrieve("https://static.rust-lang.org/rustup/dist/x86_64-unknown-linux-gnu/rustup-init", sys.argv[1])' \
+              "${init_dir}/rustup-init"
+            chmod +x "${init_dir}/rustup-init"
+            env -u LD_LIBRARY_PATH RUSTUP_INIT_SKIP_PATH_CHECK=yes "${init_dir}/rustup-init" \
+              -y --no-modify-path --profile minimal --default-toolchain stable
+            rm -rf "${init_dir}"
+          fi
+          . "${HOME}/.cargo/env"
+          rustup target add "${BSIM_RUST_TARGET}"
+          echo "${HOME}/.cargo/bin" >> "$GITHUB_PATH"
+          rustc --version
+          cargo --version
+
+      - name: Run the BabbleSim simulation
+        run: |
+          set -euo pipefail
+          log="${RUNNER_TEMP}/bsim.log"
+          set +e
+          bash firmware/scripts/ci/run-bsim.sh 2>&1 | tee "${log}"
+          status="${PIPESTATUS[0]}"
+          set -e
+          if [ "${status}" -ne 0 ]; then
+            echo "::error::firmware/scripts/ci/run-bsim.sh exited ${status}; the BabbleSim simulation did not pass."
+            exit "${status}"
+          fi
+          if ! grep -q OMI_BSIM_PASS "${log}"; then
+            echo "::error::firmware/scripts/ci/run-bsim.sh exited 0 but never printed OMI_BSIM_PASS, so the simulation did not actually run to completion."
+            exit 1
+          fi
+          echo "OMI_BSIM_PASS observed in the simulation output"
