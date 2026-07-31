@@ -193,19 +193,20 @@ class _MobileCompanionShellState extends State<MobileCompanionShell> {
     return Theme(
       data: Theme.of(context).copyWith(
         brightness: dark ? Brightness.dark : Brightness.light,
-        colorScheme: const ColorScheme.light(
-          primary: _ink,
-          surface: _surface,
-          onSurface: _ink,
-          onSurfaceVariant: _inkSoft,
-          secondary: _teal,
-        ).copyWith(
-          brightness: dark ? Brightness.dark : Brightness.light,
-          primary: foreground,
-          surface: dark ? _inkSheet : _surface,
-          onSurface: foreground,
-          onSurfaceVariant: mutedForeground,
-        ),
+        colorScheme:
+            const ColorScheme.light(
+              primary: _ink,
+              surface: _surface,
+              onSurface: _ink,
+              onSurfaceVariant: _inkSoft,
+              secondary: _teal,
+            ).copyWith(
+              brightness: dark ? Brightness.dark : Brightness.light,
+              primary: foreground,
+              surface: dark ? _inkSheet : _surface,
+              onSurface: foreground,
+              onSurfaceVariant: mutedForeground,
+            ),
         textTheme: Theme.of(
           context,
         ).textTheme.apply(bodyColor: foreground, displayColor: foreground),
@@ -975,29 +976,29 @@ class MobilePendantPageState extends State<MobilePendantPage> {
                     ],
                   ),
           ),
-        if (_pageIndex == 0)
-          Positioned(
-            top: 0,
-            right: 0,
-            child: SafeArea(
-              child: Padding(
-                padding: const EdgeInsets.only(top: 8, right: 14),
-                child: DecoratedBox(
-                  decoration: BoxDecoration(
-                    color: _surface,
-                    border: Border.all(color: _hairline),
-                    shape: BoxShape.circle,
-                  ),
-                  child: IconButton(
-                    key: const Key('companion_settings_button'),
-                    tooltip: 'Settings',
-                    onPressed: _openSettings,
-                    icon: const Icon(Icons.settings_outlined, size: 20),
+          if (_pageIndex == 0)
+            Positioned(
+              top: 0,
+              right: 0,
+              child: SafeArea(
+                child: Padding(
+                  padding: const EdgeInsets.only(top: 8, right: 14),
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: _surface,
+                      border: Border.all(color: _hairline),
+                      shape: BoxShape.circle,
+                    ),
+                    child: IconButton(
+                      key: const Key('companion_settings_button'),
+                      tooltip: 'Settings',
+                      onPressed: _openSettings,
+                      icon: const Icon(Icons.settings_outlined, size: 20),
+                    ),
                   ),
                 ),
               ),
             ),
-          ),
         ],
       ),
       bottomNavigationBar: _pageTabs(),
