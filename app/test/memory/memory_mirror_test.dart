@@ -228,16 +228,18 @@ void main() {
   test(
     'authoritative log tracer preserves order, canonical replays, revisions, retries, and origins',
     () async {
-      final record =
-          (int sequence, String originReplica, Map<String, Object?> payload) =>
-              (
-                sequence: sequence,
-                originReplica: originReplica,
-                recordKind: 'claim',
-                recordId: 'claim-1',
-                payload: payload,
-                recordedAt: 11,
-              );
+      MemoryMirrorRecord record(
+        int sequence,
+        String originReplica,
+        Map<String, Object?> payload,
+      ) => (
+        sequence: sequence,
+        originReplica: originReplica,
+        recordKind: 'claim',
+        recordId: 'claim-1',
+        payload: payload,
+        recordedAt: 11,
+      );
       final local = record(1, 'desktop', {'value': 'local'});
       final cloud = record(2, 'cloud', {'a': 'Acme', 'b': 1});
       final cloudReplay = record(3, 'cloud', {'b': 1, 'a': 'Acme'});
