@@ -96,6 +96,7 @@ class MobileCompanionShell extends StatefulWidget {
     this.firmwareChecker,
     this.firmwareDownloader,
     this.firmwareFlasher,
+    this.legacyFirmwareFlasher,
     this.openLink,
     this.previewMode = false,
     super.key,
@@ -110,6 +111,7 @@ class MobileCompanionShell extends StatefulWidget {
   final FirmwareUpdateChecker? firmwareChecker;
   final FirmwareDownloader? firmwareDownloader;
   final FirmwareFlasher? firmwareFlasher;
+  final FirmwareFlasher? legacyFirmwareFlasher;
   final LinkOpener? openLink;
   final bool previewMode;
 
@@ -233,6 +235,7 @@ class _MobileCompanionShellState extends State<MobileCompanionShell> {
               firmwareChecker: widget.firmwareChecker,
               firmwareDownloader: widget.firmwareDownloader,
               firmwareFlasher: widget.firmwareFlasher,
+              legacyFirmwareFlasher: widget.legacyFirmwareFlasher,
               openLink: widget.openLink,
               previewMode: widget.previewMode,
             ),
@@ -297,6 +300,7 @@ class MobilePendantPage extends StatefulWidget {
     this.firmwareChecker,
     this.firmwareDownloader,
     this.firmwareFlasher,
+    this.legacyFirmwareFlasher,
     this.openLink,
     this.interimText = '',
     this.previewMode = false,
@@ -312,6 +316,7 @@ class MobilePendantPage extends StatefulWidget {
   final FirmwareUpdateChecker? firmwareChecker;
   final FirmwareDownloader? firmwareDownloader;
   final FirmwareFlasher? firmwareFlasher;
+  final FirmwareFlasher? legacyFirmwareFlasher;
   final LinkOpener? openLink;
   final String interimText;
   final bool previewMode;
@@ -511,8 +516,9 @@ class MobilePendantPageState extends State<MobilePendantPage> {
   }
 
   // The firmware notice only exists for a pendant that can actually take an
-  // update over Bluetooth: the SMP service has to be there, and the pendant has
-  // to have told us which revision it runs.
+  // update over Bluetooth: either the MCUboot OTA (SMP) service or the Nordic
+  // Secure DFU service has to be there, and the pendant has to have told us
+  // which revision it runs.
   void _maybeCheckFirmware() {
     if (widget.previewMode || _firmwareChecked) return;
     final device = _connectedDevice;
@@ -549,6 +555,7 @@ class MobilePendantPageState extends State<MobilePendantPage> {
       checker: widget.firmwareChecker ?? FirmwareUpdateChecker(),
       downloader: widget.firmwareDownloader ?? HttpFirmwareDownloader(),
       flasher: widget.firmwareFlasher ?? McuMgrFirmwareFlasher(),
+      legacyFlasher: widget.legacyFirmwareFlasher,
       openLink: widget.openLink ?? _openExternalLink,
       release: release,
     ).then((_) {
@@ -1279,6 +1286,7 @@ class MobilePendantPageState extends State<MobilePendantPage> {
           firmwareChecker: widget.firmwareChecker,
           firmwareDownloader: widget.firmwareDownloader,
           firmwareFlasher: widget.firmwareFlasher,
+          legacyFirmwareFlasher: widget.legacyFirmwareFlasher,
           openLink: widget.openLink ?? _openExternalLink,
           rememberedDeviceId: () => rememberedDeviceId,
           connectedDevice: () => _connectedDevice,
@@ -1515,19 +1523,19 @@ class _DeveloperOptionsPage extends StatelessWidget {
                     detail: '$signal dBm',
                   ),
                 // The update affordance is hidden, not disabled, when the
-                // running image has no SMP service — so say why here rather
-                // than leaving its absence unexplained.
+                // running image advertises neither DFU service — so say why
+                // here rather than leaving its absence unexplained.
                 _PaperTile(
                   key: const Key('companion_dev_dfu_tile'),
                   icon: Icons.system_update_alt_rounded,
                   title: 'Bluetooth firmware update',
                   detail: dfuSupported
-                      ? 'Available: this pendant advertises the MCUboot OTA '
-                            '(SMP) service.'
-                      : 'Unavailable: this firmware was built without the '
-                            'MCUboot OTA (SMP) service, so updates have to go '
-                            'over USB (nRF Connect Programmer or a J-Link) '
-                            'once. After that, updating from the app works.',
+                      ? 'Available: this pendant advertises a firmware update '
+                            'service over Bluetooth.'
+                      : 'Unavailable: this firmware advertises no Bluetooth '
+                            'update service, so updates have to go over USB '
+                            '(nRF Connect Programmer or a J-Link) once. After '
+                            'that, updating from the app works.',
                   trailing: dfuSupported ? const _RowChevron() : null,
                   onTap: dfuSupported ? onOpenFirmwareUpdate : null,
                 ),
@@ -1630,6 +1638,9 @@ final class _RelayFirmwareInstallHost implements FirmwareInstallHost {
   bool get dfuSupported => services.deviceRelay.dfuSupported;
 
   @override
+  FirmwareDfuTransport get dfuTransport => services.deviceRelay.dfuTransport;
+
+  @override
   bool get capturing => isCapturing();
 
   @override
@@ -1658,6 +1669,7 @@ Future<void> _pushFirmwareUpdate(
   required FirmwareUpdateChecker checker,
   required FirmwareDownloader downloader,
   required FirmwareFlasher flasher,
+  FirmwareFlasher? legacyFlasher,
   required LinkOpener openLink,
   FirmwareRelease? release,
 }) => Navigator.of(context).push(
@@ -1671,6 +1683,7 @@ Future<void> _pushFirmwareUpdate(
       checker: checker,
       downloader: downloader,
       flasher: flasher,
+      legacyFlasher: legacyFlasher,
       openLink: openLink,
       release: release,
     ),
@@ -1678,16 +1691,18 @@ Future<void> _pushFirmwareUpdate(
 );
 
 // The pendant firmware update, end to end: detection, the pre-flight gate, the
-// download, and the flash itself over SMP/mcumgr. `omi-cv1` runs MCUboot
-// overwrite-only with downgrade prevention, so nothing here writes an image
-// that is not strictly newer, and nothing writes a package whose bytes do not
-// match what the release published — see `docs/mobile-firmware-dfu.md`.
+// download, and the flash itself over SMP/mcumgr or Nordic Secure DFU,
+// whichever the pendant advertises. `omi-cv1` runs MCUboot overwrite-only with
+// downgrade prevention, so nothing here writes an image that is not strictly
+// newer, and nothing writes a package whose bytes do not match what the release
+// published — see `docs/mobile-firmware-dfu.md`.
 class _FirmwareUpdatePage extends StatefulWidget {
   const _FirmwareUpdatePage({
     required this.host,
     required this.checker,
     required this.downloader,
     required this.flasher,
+    this.legacyFlasher,
     required this.openLink,
     this.release,
   });
@@ -1696,6 +1711,7 @@ class _FirmwareUpdatePage extends StatefulWidget {
   final FirmwareUpdateChecker checker;
   final FirmwareDownloader downloader;
   final FirmwareFlasher flasher;
+  final FirmwareFlasher? legacyFlasher;
   final LinkOpener openLink;
 
   /// Handed in when the home banner already found the release, so opening the
@@ -1714,6 +1730,7 @@ class _FirmwareUpdatePageState extends State<_FirmwareUpdatePage> {
     host: widget.host,
     downloader: widget.downloader,
     flasher: widget.flasher,
+    legacyFlasher: widget.legacyFlasher,
   );
 
   @override
@@ -2933,6 +2950,7 @@ class _SettingsSheet extends StatefulWidget {
     required this.firmwareChecker,
     required this.firmwareDownloader,
     required this.firmwareFlasher,
+    required this.legacyFirmwareFlasher,
     required this.openLink,
     required this.rememberedDeviceId,
     required this.connectedDevice,
@@ -2948,6 +2966,7 @@ class _SettingsSheet extends StatefulWidget {
   final FirmwareUpdateChecker? firmwareChecker;
   final FirmwareDownloader? firmwareDownloader;
   final FirmwareFlasher? firmwareFlasher;
+  final FirmwareFlasher? legacyFirmwareFlasher;
   final LinkOpener openLink;
   final String? Function() rememberedDeviceId;
   final RelayDevice? Function() connectedDevice;
@@ -3084,6 +3103,7 @@ class _SettingsSheetState extends State<_SettingsSheet> {
         checker: widget.firmwareChecker ?? FirmwareUpdateChecker(),
         downloader: widget.firmwareDownloader ?? HttpFirmwareDownloader(),
         flasher: widget.firmwareFlasher ?? McuMgrFirmwareFlasher(),
+        legacyFlasher: widget.legacyFirmwareFlasher,
         openLink: widget.openLink,
       ),
     );
@@ -3203,10 +3223,10 @@ class _SettingsSheetState extends State<_SettingsSheet> {
                       }),
                     ),
                   ),
-                // Only pendants whose firmware carries the SMP service can be
-                // updated over BLE. Everything else — DevKit builds, and any
-                // image built without MCUboot OTA — never sees the row, rather
-                // than being walked to the end of a flow that cannot finish.
+                // Only pendants whose firmware carries a DFU service — MCUboot
+                // OTA (SMP) or Nordic Secure DFU — can be updated over BLE. Any
+                // image carrying neither never sees the row, rather than being
+                // walked to the end of a flow that cannot finish.
                 if (connected && widget.services.deviceRelay.dfuSupported)
                   _PaperTile(
                     key: const Key('companion_firmware_update'),

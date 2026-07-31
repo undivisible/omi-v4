@@ -40,7 +40,11 @@ void main() {
   }) async {
     final subscription =
         McuMgrFirmwareFlasher(factory: factory ?? _FakeFactory(manager))
-            .flash(deviceId: 'omi-1', images: images)
+            .flash(
+              deviceId: 'omi-1',
+              images: images,
+              packagePath: '/tmp/dfu_application.zip',
+            )
             .listen(seen.add, onError: errors.add, onDone: () => done = true);
     await pump();
     await pump();
@@ -201,6 +205,155 @@ void main() {
     expect(manager.killed, 1);
   });
 
+  group('legacy Nordic Secure DFU', () {
+    late _FakeNordicRunner runner;
+    late List<FirmwareFlashProgress> legacySeen;
+    late List<Object> legacyErrors;
+    late bool legacyDone;
+
+    setUp(() {
+      runner = _FakeNordicRunner();
+      legacySeen = [];
+      legacyErrors = [];
+      legacyDone = false;
+    });
+
+    Future<StreamSubscription<FirmwareFlashProgress>> startLegacy() async {
+      final subscription = NordicSecureDfuFlasher(runner: runner)
+          .flash(
+            deviceId: 'omi-1',
+            images: const [],
+            packagePath: '/tmp/legacy_dfu.zip',
+          )
+          .listen(
+            legacySeen.add,
+            onError: legacyErrors.add,
+            onDone: () => legacyDone = true,
+          );
+      await pump();
+      await pump();
+      return subscription;
+    }
+
+    test(
+      'the distribution zip path is handed straight to the runner',
+      () async {
+        await startLegacy();
+
+        expect(runner.deviceId, 'omi-1');
+        expect(runner.packagePath, '/tmp/legacy_dfu.zip');
+        expect(legacySeen.single.stage, FirmwareFlashStage.preparing);
+        expect(legacySeen.single.progress, isNull);
+        expect(legacyDone, isFalse);
+      },
+    );
+
+    test('progress fractions are forwarded as upload progress', () async {
+      await startLegacy();
+      final events = await runner.events;
+      events
+        ..onProgress(0)
+        ..onProgress(0.25)
+        ..onProgress(1);
+      await pump();
+
+      expect(legacySeen.skip(1).map((event) => event.progress), [
+        0.0,
+        0.25,
+        1.0,
+      ]);
+      expect(
+        legacySeen.skip(1).map((event) => event.stage),
+        everyElement(FirmwareFlashStage.uploading),
+      );
+    });
+
+    test('runner stage transitions surface to the caller', () async {
+      await startLegacy();
+      final events = await runner.events;
+      events
+        ..onStage(FirmwareFlashStage.preparing)
+        ..onStage(FirmwareFlashStage.uploading)
+        ..onStage(FirmwareFlashStage.swapping);
+      await pump();
+
+      expect(legacySeen.map((event) => event.stage), [
+        FirmwareFlashStage.preparing,
+        FirmwareFlashStage.preparing,
+        FirmwareFlashStage.uploading,
+        FirmwareFlashStage.swapping,
+      ]);
+      expect(legacySeen.last.progress, isNull);
+      expect(legacyDone, isFalse);
+    });
+
+    test('a completed DFU closes the flash without an error', () async {
+      await startLegacy();
+      (await runner.events).onCompleted();
+      runner.completion.complete();
+      await pump();
+
+      expect(legacyErrors, isEmpty);
+      expect(legacyDone, isTrue);
+    });
+
+    test('a runner error surfaces as a stream error and stops', () async {
+      await startLegacy();
+      final events = await runner.events;
+      events.onError(StateError('the update was aborted by the pendant.'));
+      await pump();
+      events.onProgress(0.9);
+      await pump();
+
+      expect(legacyErrors.single, isStateError);
+      expect(legacyDone, isTrue);
+      expect(legacySeen.map((event) => event.stage), [
+        FirmwareFlashStage.preparing,
+      ]);
+    });
+
+    test('a runner that refuses to start fails the flash', () async {
+      runner.startFailure = StateError('no pendant in DFU mode');
+
+      await startLegacy();
+
+      expect(legacySeen.single.stage, FirmwareFlashStage.preparing);
+      expect(legacyErrors.single, isStateError);
+      expect(legacyDone, isTrue);
+    });
+
+    test('a runner that returns without completing ends the flash '
+        'quietly', () async {
+      await startLegacy();
+      runner.completion.complete();
+      await pump();
+
+      expect(legacyErrors, isEmpty);
+      expect(legacyDone, isTrue);
+    });
+
+    test('cancelling the flash aborts the DFU on the pendant', () async {
+      final subscription = await startLegacy();
+
+      await subscription.cancel();
+
+      expect(runner.aborted, 1);
+      expect(runner.abortedDeviceId, 'omi-1');
+    });
+
+    test('a DFU that already completed is never aborted afterwards', () async {
+      final subscription = await startLegacy();
+      (await runner.events).onCompleted();
+      runner.completion.complete();
+      await pump();
+
+      await subscription.cancel();
+
+      expect(legacyDone, isTrue);
+      expect(runner.aborted, 0);
+    });
+  });
+
   test('the flash reports itself for diagnostics', () {
     expect(
       images.first.toString(),
@@ -211,6 +364,38 @@ void main() {
       'FirmwareFlashProgress(FirmwareFlashStage.uploading, 0.5)',
     );
   });
+}
+
+final class _FakeNordicRunner implements NordicDfuRunner {
+  final _started = Completer<NordicDfuEvents>();
+  final completion = Completer<void>();
+
+  String? deviceId;
+  String? packagePath;
+  String? abortedDeviceId;
+  Object? startFailure;
+  int aborted = 0;
+
+  Future<NordicDfuEvents> get events => _started.future;
+
+  @override
+  Future<void> start({
+    required String deviceId,
+    required String packagePath,
+    required NordicDfuEvents events,
+  }) async {
+    this.deviceId = deviceId;
+    this.packagePath = packagePath;
+    if (startFailure != null) throw startFailure!;
+    _started.complete(events);
+    return completion.future;
+  }
+
+  @override
+  Future<void> abort(String deviceId) async {
+    aborted += 1;
+    abortedDeviceId = deviceId;
+  }
 }
 
 final class _FakeFactory implements mcumgr.UpdateManagerFactory {

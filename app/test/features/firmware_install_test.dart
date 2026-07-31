@@ -163,17 +163,20 @@ void main() {
         FirmwareInstaller installer,
         _FakeHost host,
         _FakeFlasher flasher,
+        _FakeFlasher legacyFlasher,
         List<FirmwareInstallStatus> seen,
       })
     >
     build({
       _FakeHost? host,
       _FakeFlasher? flasher,
+      _FakeFlasher? legacyFlasher,
       Uint8List? bytes,
       void Function(_FakeHost host)? onDownloaded,
     }) async {
       final installHost = host ?? _FakeHost();
       final installFlasher = flasher ?? _FakeFlasher();
+      final installLegacyFlasher = legacyFlasher ?? _FakeFlasher();
       final payload = bytes ?? _defaultPackage;
       final installer = FirmwareInstaller(
         host: installHost,
@@ -183,6 +186,7 @@ void main() {
           onDone: onDownloaded == null ? null : () => onDownloaded(installHost),
         ),
         flasher: installFlasher,
+        legacyFlasher: installLegacyFlasher,
         settleDelay: Duration.zero,
       );
       final seen = <FirmwareInstallStatus>[];
@@ -191,6 +195,7 @@ void main() {
         installer: installer,
         host: installHost,
         flasher: installFlasher,
+        legacyFlasher: installLegacyFlasher,
         seen: seen,
       );
     }
@@ -334,15 +339,192 @@ void main() {
       expect(fixture.installer.status.phase, FirmwareInstallPhase.failed);
       expect(fixture.installer.status.recovery, contains('J-Link'));
     });
+
+    test('an MCUboot pendant is never handed to the legacy flasher', () async {
+      final fixture = await build();
+      fixture.host.revisionAfterReconnect = '3.2.0';
+
+      expect(await fixture.installer.install(_release()), isTrue);
+
+      expect(fixture.flasher.flashed, hasLength(1));
+      expect(fixture.legacyFlasher.flashed, isEmpty);
+      expect(fixture.legacyFlasher.paths, isEmpty);
+    });
+
+    test('stopping an mcuboot write is free, because nothing is swapped until '
+        'a whole image has landed', () async {
+      late FirmwareInstaller installer;
+      final fixture = await build(
+        flasher: _FakeFlasher(beforeEmit: () => installer.abort()),
+      );
+      installer = fixture.installer;
+
+      expect(await fixture.installer.install(_release()), isFalse);
+
+      expect(
+        fixture.installer.status.message,
+        contains('kept the firmware it had'),
+      );
+      expect(fixture.installer.status.recovery, isNull);
+    });
+
+    group('an old pendant on legacy Secure DFU', () {
+      Future<
+        ({
+          FirmwareInstaller installer,
+          _FakeHost host,
+          _FakeFlasher flasher,
+          _FakeFlasher legacyFlasher,
+          List<FirmwareInstallStatus> seen,
+        })
+      >
+      buildLegacy({Uint8List? bytes}) => build(
+        host: _FakeHost()..dfuTransport = FirmwareDfuTransport.nordicSecure,
+        bytes: bytes,
+      );
+
+      test('is flashed by the legacy transport, never the mcuboot '
+          'one', () async {
+        final fixture = await buildLegacy();
+        fixture.host.revisionAfterReconnect = '3.2.0';
+
+        expect(await fixture.installer.install(_release()), isTrue);
+
+        expect(fixture.flasher.flashed, isEmpty);
+        expect(fixture.legacyFlasher.flashed, hasLength(1));
+        expect(fixture.host.released, 1);
+        expect(fixture.host.reconnects, 1);
+      });
+
+      test('hands the downloaded distribution zip over by path, not as '
+          'unpacked images', () async {
+        final fixture = await buildLegacy();
+        fixture.host.revisionAfterReconnect = '3.2.0';
+
+        expect(await fixture.installer.install(_release()), isTrue);
+
+        expect(
+          fixture.legacyFlasher.paths.single,
+          '${directory.path}/dfu_application.zip',
+        );
+        expect(File(fixture.legacyFlasher.paths.single).existsSync(), isTrue);
+        expect(fixture.legacyFlasher.flashed.single, isEmpty);
+      });
+
+      test('installs a package that is not an MCUboot bundle at all', () async {
+        final fixture = await buildLegacy(
+          bytes: Uint8List.fromList(const [0x50, 0x4b, 1, 2, 3, 4, 5, 6]),
+        );
+        fixture.host.revisionAfterReconnect = '3.2.0';
+
+        expect(await fixture.installer.install(_release()), isTrue);
+
+        expect(fixture.legacyFlasher.flashed.single, isEmpty);
+        expect(fixture.installer.status.phase, FirmwareInstallPhase.installed);
+      });
+
+      test('still refuses anything that is not strictly newer', () async {
+        final fixture = await buildLegacy();
+        fixture.host.installedRevision = '3.2.0';
+
+        expect(await fixture.installer.install(_release()), isFalse);
+
+        expect(fixture.installer.status.message, contains('not newer'));
+        expect(fixture.host.released, 0);
+        expect(fixture.legacyFlasher.flashed, isEmpty);
+      });
+
+      test('still refuses bytes that do not match the published '
+          'checksum', () async {
+        final fixture = await buildLegacy();
+
+        expect(
+          await fixture.installer.install(
+            _release(
+              digest:
+                  'sha256:'
+                  '00000000000000000000000000000000000000000000000000000000'
+                  '00000000',
+            ),
+          ),
+          isFalse,
+        );
+
+        expect(fixture.installer.status.message, contains('checksum'));
+        expect(fixture.host.released, 0);
+        expect(fixture.legacyFlasher.flashed, isEmpty);
+      });
+
+      test('still refuses a truncated download', () async {
+        final fixture = await buildLegacy(
+          bytes: Uint8List.fromList(_defaultPackage.sublist(0, 40)),
+        );
+
+        expect(
+          await fixture.installer.install(
+            _release(sizeBytes: _defaultPackage.length),
+          ),
+          isFalse,
+        );
+
+        expect(fixture.installer.status.message, contains('incomplete'));
+        expect(fixture.legacyFlasher.flashed, isEmpty);
+      });
+
+      test('still refuses a pendant that is flat or capturing', () async {
+        final flat = await buildLegacy();
+        flat.host.batteryLevel = 9;
+
+        expect(await flat.installer.install(_release()), isFalse);
+
+        expect(
+          flat.installer.status.message,
+          firmwareInstallBlockMessage(FirmwareUpdateBlock.lowBattery),
+        );
+        expect(flat.legacyFlasher.flashed, isEmpty);
+
+        final busy = await buildLegacy();
+        busy.host.capturing = true;
+
+        expect(await busy.installer.install(_release()), isFalse);
+
+        expect(
+          busy.installer.status.message,
+          firmwareInstallBlockMessage(FirmwareUpdateBlock.capturing),
+        );
+        expect(busy.legacyFlasher.flashed, isEmpty);
+      });
+
+      test('stopping partway through the write says the pendant may be left '
+          'in its update mode, and offers the wired way out', () async {
+        late FirmwareInstaller installer;
+        final fixture = await build(
+          host: _FakeHost()..dfuTransport = FirmwareDfuTransport.nordicSecure,
+          legacyFlasher: _FakeFlasher(beforeEmit: () => installer.abort()),
+        );
+        installer = fixture.installer;
+
+        expect(await fixture.installer.install(_release()), isFalse);
+
+        expect(fixture.installer.status.phase, FirmwareInstallPhase.failed);
+        expect(fixture.installer.status.message, contains('update mode'));
+        expect(
+          fixture.installer.status.message,
+          isNot(contains('kept the firmware it had')),
+        );
+        expect(fixture.installer.status.recovery, firmwareRecoveryInstruction);
+      });
+    });
   });
 }
 
-FirmwareRelease _release({int? sizeBytes}) => FirmwareRelease(
+FirmwareRelease _release({int? sizeBytes, String? digest}) => FirmwareRelease(
   version: '3.2.0',
   url: 'https://example.test/firmware-v3.2.0',
   assetName: 'dfu_application.zip',
   assetUrl: 'https://example.test/dfu_application.zip',
   sizeBytes: sizeBytes,
+  digest: digest,
 );
 
 final Uint8List _defaultPackage = _package(
@@ -386,6 +568,8 @@ final class _FakeHost implements FirmwareInstallHost {
   bool dfuSupported = true;
   @override
   String? deviceId = 'omi-1';
+  @override
+  FirmwareDfuTransport dfuTransport = FirmwareDfuTransport.mcuboot;
 
   String? revisionAfterReconnect = '3.2.0';
   int released = 0;
@@ -440,14 +624,17 @@ final class _FakeFlasher implements FirmwareFlasher {
   /// where a mid-flash change of heart lands.
   final void Function()? beforeEmit;
   final flashed = <List<FirmwareImage>>[];
+  final paths = <String>[];
   bool cancelled = false;
 
   @override
   Stream<FirmwareFlashProgress> flash({
     required String deviceId,
     required List<FirmwareImage> images,
+    required String packagePath,
   }) {
     flashed.add(images);
+    paths.add(packagePath);
     late final StreamController<FirmwareFlashProgress> controller;
     controller = StreamController<FirmwareFlashProgress>(
       onListen: () async {

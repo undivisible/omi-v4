@@ -6,6 +6,7 @@ import 'package:universal_ble/universal_ble.dart';
 
 import 'device_relay.dart';
 import 'device_models.dart';
+import 'firmware_dfu.dart';
 import 'wifi_debug.dart';
 
 final class UniversalBleDeviceRelayAdapter
@@ -53,6 +54,12 @@ final class UniversalBleDeviceRelayAdapter
   // SMP (mcumgr) service. Its presence is what says the running firmware was
   // built with MCUboot OTA and can take a `dfu_application.zip` over BLE.
   static const _smpService = '8d53dc1d-1db7-4cd3-868b-8a527460aa84';
+  // Nordic Secure DFU (SDK 12+) and legacy DFU (SDK <=11) services. Old
+  // firmware that predates MCUboot exposes one of these instead of SMP.
+  static const _nordicSecureDfuService =
+      '0000fe59-0000-1000-8000-00805f9b34fb';
+  static const _nordicSecureDfuShort = 'fe59';
+  static const _nordicLegacyDfuService = '00001530-1212-efde-1523-785feabcd123';
   static const _storageService = '30295780-4301-eabd-2904-2849adfeae43';
   static const _wifiCharacteristic = '30295783-4301-eabd-2904-2849adfeae43';
 
@@ -72,6 +79,7 @@ final class UniversalBleDeviceRelayAdapter
   // not announce "no LED" on firmware that has one.
   bool? _captureLedPresent;
   bool _smpPresent = false;
+  bool _nordicDfuPresent = false;
   bool _wifiPresent = false;
   bool _restoringNotifications = false;
   Timer? _restoreRetryTimer;
@@ -201,6 +209,7 @@ final class UniversalBleDeviceRelayAdapter
     _restoreAttempts = 0;
     _captureLedPresent = null;
     _smpPresent = false;
+    _nordicDfuPresent = false;
     _wifiPresent = false;
     var device = _devices[deviceId];
     if (device == null) {
@@ -450,7 +459,15 @@ final class UniversalBleDeviceRelayAdapter
   // update that turns out to have nowhere to land is worse than not offering
   // one, so this only turns true on a service the pendant actually advertised.
   @override
-  bool get dfuSupported => _connected && _smpPresent;
+  bool get dfuSupported => dfuTransport != FirmwareDfuTransport.none;
+
+  @override
+  FirmwareDfuTransport get dfuTransport {
+    if (!_connected) return FirmwareDfuTransport.none;
+    if (_smpPresent) return FirmwareDfuTransport.mcuboot;
+    if (_nordicDfuPresent) return FirmwareDfuTransport.nordicSecure;
+    return FirmwareDfuTransport.none;
+  }
 
   // A platform that reports no characteristics at all (some desktop stacks, and
   // any stub) leaves the answer unknown rather than declaring the LED missing.
@@ -459,6 +476,12 @@ final class UniversalBleDeviceRelayAdapter
     _smpPresent = services.any(
       (service) => service.uuid.toLowerCase() == _smpService,
     );
+    _nordicDfuPresent = services.any((service) {
+      final uuid = service.uuid.toLowerCase();
+      return uuid == _nordicSecureDfuService ||
+          uuid == _nordicSecureDfuShort ||
+          uuid == _nordicLegacyDfuService;
+    });
     _wifiPresent = services.any(
       (service) =>
           service.uuid.toLowerCase() == _storageService &&
@@ -645,6 +668,7 @@ final class UniversalBleDeviceRelayAdapter
     _connected = false;
     _captureLedPresent = null;
     _smpPresent = false;
+    _nordicDfuPresent = false;
     _wifiPresent = false;
     _restoreRetryTimer?.cancel();
     _restoreRetryTimer = null;

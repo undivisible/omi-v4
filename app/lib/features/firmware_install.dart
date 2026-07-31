@@ -21,6 +21,9 @@ abstract interface class FirmwareInstallHost {
 
   bool get connected;
   bool get dfuSupported;
+
+  FirmwareDfuTransport get dfuTransport;
+
   bool get capturing;
   int? get batteryLevel;
 
@@ -101,13 +104,21 @@ final class FirmwareInstaller extends ChangeNotifier {
     required this.host,
     required this.downloader,
     required this.flasher,
+    FirmwareFlasher? legacyFlasher,
     List<FirmwareImage> Function(Uint8List bytes)? readPackage,
     this.settleDelay = const Duration(seconds: 2),
-  }) : _readPackage = readPackage ?? readFirmwarePackage;
+  }) : _readPackage = readPackage ?? readFirmwarePackage,
+       _legacyFlasher = legacyFlasher ?? NordicSecureDfuFlasher();
 
   final FirmwareInstallHost host;
   final FirmwareDownloader downloader;
   final FirmwareFlasher flasher;
+  final FirmwareFlasher _legacyFlasher;
+
+  FirmwareFlasher get _activeFlasher =>
+      host.dfuTransport == FirmwareDfuTransport.nordicSecure
+      ? _legacyFlasher
+      : flasher;
   final List<FirmwareImage> Function(Uint8List bytes) _readPackage;
 
   /// Time between dropping the app's connection and opening the DFU one. The
@@ -150,9 +161,10 @@ final class FirmwareInstaller extends ChangeNotifier {
     return false;
   }
 
-  /// Asks a running install to stop. Free while the upload is still streaming
-  /// — MCUboot only swaps once a whole image has landed — so this is offered
-  /// right up to the reboot.
+  /// Asks a running install to stop. Free on the MCUboot path while the upload
+  /// is still streaming — it only swaps once a whole image has landed — so this
+  /// is offered right up to the reboot. Not free once a legacy Secure DFU write
+  /// has started, which is what the message below distinguishes.
   void abort() {
     if (!_status.busy) return;
     _abortRequested = true;
@@ -163,10 +175,22 @@ final class FirmwareInstaller extends ChangeNotifier {
     final pending = _uploadDone;
     _uploadDone = null;
     if (pending != null && !pending.isCompleted) pending.complete();
+    // Only MCUboot makes this free: it swaps once a whole image has landed, so
+    // nothing is overwritten until then. Nordic Secure DFU on a single-bank
+    // device writes in place, so a stop partway through can leave the pendant
+    // sitting in its DFU bootloader.
+    final wrote =
+        _status.committed &&
+        host.dfuTransport == FirmwareDfuTransport.nordicSecure;
     _emit(
-      const FirmwareInstallStatus(
+      FirmwareInstallStatus(
         phase: FirmwareInstallPhase.failed,
-        message: 'Update stopped. Your pendant kept the firmware it had.',
+        message: wrote
+            ? 'Update stopped partway through writing. This pendant updates in '
+                  'place, so it may now be waiting in its update mode rather '
+                  'than running its old firmware.'
+            : 'Update stopped. Your pendant kept the firmware it had.',
+        recovery: wrote ? firmwareRecoveryInstruction : null,
       ),
     );
   }
@@ -214,6 +238,7 @@ final class FirmwareInstaller extends ChangeNotifier {
     }
 
     Uint8List bytes;
+    String packagePath;
     try {
       _emit(
         const FirmwareInstallStatus(
@@ -234,6 +259,7 @@ final class FirmwareInstaller extends ChangeNotifier {
       );
       if (_abortRequested) return false;
       bytes = await file.readAsBytes();
+      packagePath = file.path;
     } catch (error) {
       return _fail(
         'The update could not be downloaded: $error',
@@ -252,22 +278,26 @@ final class FirmwareInstaller extends ChangeNotifier {
     final rejected = verifyFirmwareArtifact(release, bytes);
     if (rejected != null) return _fail(rejected, recovery: 'Try again.');
 
-    List<FirmwareImage> images;
-    try {
-      images = _readPackage(bytes);
-    } catch (error) {
-      return _fail(
-        'The update package is not one this pendant can take: $error',
-        recovery:
-            'Try again, or install this release with nRF Connect for '
-            'Mobile.',
-      );
-    }
-    if (images.isEmpty) {
-      return _fail(
-        'The update package contains no firmware images.',
-        recovery: 'Try again.',
-      );
+    // Secure DFU reads the distribution zip itself, so the MCUboot manifest
+    // this unpacks is neither present nor needed on the legacy path.
+    var images = const <FirmwareImage>[];
+    if (host.dfuTransport != FirmwareDfuTransport.nordicSecure) {
+      try {
+        images = _readPackage(bytes);
+      } catch (error) {
+        return _fail(
+          'The update package is not one this pendant can take: $error',
+          recovery:
+              'Try again, or install this release with nRF Connect for '
+              'Mobile.',
+        );
+      }
+      if (images.isEmpty) {
+        return _fail(
+          'The update package contains no firmware images.',
+          recovery: 'Try again.',
+        );
+      }
     }
     if (_abortRequested) return false;
 
@@ -302,7 +332,7 @@ final class FirmwareInstaller extends ChangeNotifier {
     if (_abortRequested) return false;
 
     try {
-      await _upload(deviceId, images);
+      await _upload(deviceId, images, packagePath);
     } on _FirmwareInstallAborted catch (aborted) {
       return _fail(aborted.message, recovery: aborted.recovery);
     } catch (error) {
@@ -352,7 +382,11 @@ final class FirmwareInstaller extends ChangeNotifier {
     return true;
   }
 
-  Future<void> _upload(String deviceId, List<FirmwareImage> images) async {
+  Future<void> _upload(
+    String deviceId,
+    List<FirmwareImage> images,
+    String packagePath,
+  ) async {
     final done = Completer<void>();
     _uploadDone = done;
     _emit(
@@ -362,8 +396,8 @@ final class FirmwareInstaller extends ChangeNotifier {
         message: 'Writing the update. Keep your phone nearby.',
       ),
     );
-    _flash = flasher
-        .flash(deviceId: deviceId, images: images)
+    _flash = _activeFlasher
+        .flash(deviceId: deviceId, images: images, packagePath: packagePath)
         .listen(
           (progress) {
             // Battery is the last value read before the link was released, so

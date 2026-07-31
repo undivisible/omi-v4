@@ -6,6 +6,7 @@ import 'package:archive/archive.dart';
 import 'package:mcumgr_flutter/mcumgr_flutter.dart' as mcumgr;
 import 'package:mcumgr_flutter/models/firmware_upgrade_mode.dart'
     show FirmwareUpgradeMode;
+import 'package:nordic_dfu/nordic_dfu.dart' as nordic;
 
 /// One signed image out of a `dfu_application.zip`. The nRF5340 publishes two —
 /// the application core and the network core — and MCUboot needs both handed to
@@ -164,8 +165,11 @@ abstract interface class FirmwareFlasher {
   Stream<FirmwareFlashProgress> flash({
     required String deviceId,
     required List<FirmwareImage> images,
+    required String packagePath,
   });
 }
+
+enum FirmwareDfuTransport { none, mcuboot, nordicSecure }
 
 /// The real transport, on Nordic's `mcumgr_flutter` (BSD-3-Clause).
 ///
@@ -195,6 +199,7 @@ final class McuMgrFirmwareFlasher implements FirmwareFlasher {
   Stream<FirmwareFlashProgress> flash({
     required String deviceId,
     required List<FirmwareImage> images,
+    required String packagePath,
   }) {
     mcumgr.FirmwareUpdateManager? manager;
     StreamSubscription<mcumgr.FirmwareUpgradeState>? states;
@@ -278,4 +283,145 @@ final class McuMgrFirmwareFlasher implements FirmwareFlasher {
         mcumgr.FirmwareUpgradeState.confirm => FirmwareFlashStage.swapping,
         _ => FirmwareFlashStage.preparing,
       };
+}
+
+typedef NordicDfuEvents = ({
+  void Function(double fraction) onProgress,
+  void Function(FirmwareFlashStage stage) onStage,
+  void Function() onCompleted,
+  void Function(Object error) onError,
+});
+
+abstract interface class NordicDfuRunner {
+  Future<void> start({
+    required String deviceId,
+    required String packagePath,
+    required NordicDfuEvents events,
+  });
+
+  Future<void> abort(String deviceId);
+}
+
+final class PluginNordicDfuRunner implements NordicDfuRunner {
+  PluginNordicDfuRunner({nordic.NordicDfu? dfu})
+    : _dfu = dfu ?? nordic.NordicDfu();
+
+  final nordic.NordicDfu _dfu;
+
+  @override
+  Future<void> start({
+    required String deviceId,
+    required String packagePath,
+    required NordicDfuEvents events,
+  }) async {
+    await _dfu.startDfu(
+      deviceId,
+      packagePath,
+      fileInAsset: false,
+      numberOfPackets: 8,
+      enableUnsafeExperimentalButtonlessServiceInSecureDfu: true,
+      darwinParameters: const nordic.DarwinParameters(
+        packetReceiptNotificationParameter: 8,
+        forceScanningForNewAddressInLegacyDfu: true,
+        connectionTimeout: 60,
+      ),
+      androidParameters: const nordic.AndroidParameters(
+        packetReceiptNotificationsEnabled: true,
+        rebootTime: 1000,
+      ),
+      dfuEventHandler: nordic.DfuEventHandler(
+        onDeviceConnecting: (_) => events.onStage(FirmwareFlashStage.preparing),
+        onDfuProcessStarting: (_) =>
+            events.onStage(FirmwareFlashStage.preparing),
+        onEnablingDfuMode: (_) => events.onStage(FirmwareFlashStage.preparing),
+        onProgressChanged: (_, percent, _, _, _, _) =>
+            events.onProgress((percent / 100).clamp(0.0, 1.0)),
+        onFirmwareValidating: (_) =>
+            events.onStage(FirmwareFlashStage.swapping),
+        onDeviceDisconnecting: (_) =>
+            events.onStage(FirmwareFlashStage.swapping),
+        onDfuCompleted: (_) => events.onCompleted(),
+        onDfuAborted: (_) => events.onError(
+          StateError('The update was aborted by the pendant.'),
+        ),
+        onError: (_, error, errorType, message) =>
+            events.onError(StateError('$error ($errorType): $message')),
+      ),
+    );
+  }
+
+  @override
+  Future<void> abort(String deviceId) async {
+    try {
+      await _dfu.abortDfu(address: deviceId);
+    } catch (_) {}
+  }
+}
+
+final class NordicSecureDfuFlasher implements FirmwareFlasher {
+  NordicSecureDfuFlasher({NordicDfuRunner? runner})
+    : _runner = runner ?? PluginNordicDfuRunner();
+
+  final NordicDfuRunner _runner;
+
+  @override
+  Stream<FirmwareFlashProgress> flash({
+    required String deviceId,
+    required List<FirmwareImage> images,
+    required String packagePath,
+  }) {
+    late final StreamController<FirmwareFlashProgress> controller;
+    var finished = false;
+
+    Future<void> start() async {
+      try {
+        controller.add(
+          const FirmwareFlashProgress(FirmwareFlashStage.preparing),
+        );
+        await _runner.start(
+          deviceId: deviceId,
+          packagePath: packagePath,
+          events: (
+            onProgress: (fraction) {
+              if (controller.isClosed) return;
+              controller.add(
+                FirmwareFlashProgress(
+                  FirmwareFlashStage.uploading,
+                  fraction.clamp(0.0, 1.0),
+                ),
+              );
+            },
+            onStage: (stage) {
+              if (controller.isClosed) return;
+              controller.add(FirmwareFlashProgress(stage));
+            },
+            onCompleted: () {
+              finished = true;
+              if (!controller.isClosed) unawaited(controller.close());
+            },
+            onError: (error) {
+              if (controller.isClosed) return;
+              controller.addError(error);
+              unawaited(controller.close());
+            },
+          ),
+        );
+        if (!finished && !controller.isClosed) unawaited(controller.close());
+      } catch (error, stackTrace) {
+        if (!controller.isClosed) {
+          controller.addError(error, stackTrace);
+          unawaited(controller.close());
+        }
+      }
+    }
+
+    controller = StreamController<FirmwareFlashProgress>(
+      onListen: () => unawaited(start()),
+      onCancel: () async {
+        if (finished) return;
+        await _runner.abort(deviceId);
+      },
+    );
+    return controller.stream;
+  }
 }

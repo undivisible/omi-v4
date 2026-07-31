@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'device_audio_frame.dart';
 import 'device_models.dart';
+import 'firmware_dfu.dart';
 
 abstract interface class DeviceRelayHaptics {
   Future<bool> sendHaptic(int level);
@@ -33,13 +34,15 @@ abstract interface class DeviceRelayRename {
   Future<bool> renameDevice(String name);
 }
 
-/// Reports whether the connected pendant exposes the SMP (mcumgr) service that
-/// MCUboot OTA runs over. Firmware built without
+/// Reports which firmware-update transport the connected pendant exposes: the
+/// SMP (mcumgr) service that MCUboot OTA runs over, or a Nordic DFU service on
+/// older firmware. Firmware built without
 /// `CONFIG_NCS_SAMPLE_MCUMGR_BT_OTA_DFU` — and every DevKit target, which uses
-/// the Adafruit UF2 bootloader instead — has no such service, and the update
+/// the Adafruit UF2 bootloader instead — has neither, and the update
 /// affordance must stay hidden rather than fail at the end of a flow.
 abstract interface class DeviceRelayDfu {
   bool get dfuSupported;
+  FirmwareDfuTransport get dfuTransport;
 }
 
 abstract interface class DeviceRelayWifi {
@@ -175,6 +178,13 @@ class DeviceRelayService {
     if (role != DeviceRelayRole.mobileOwner) return false;
     final Object dfu = adapter;
     return dfu is DeviceRelayDfu && dfu.dfuSupported;
+  }
+
+  /// Which firmware-update transport the connected pendant can take.
+  FirmwareDfuTransport get dfuTransport {
+    if (role != DeviceRelayRole.mobileOwner) return FirmwareDfuTransport.none;
+    final Object dfu = adapter;
+    return dfu is DeviceRelayDfu ? dfu.dfuTransport : FirmwareDfuTransport.none;
   }
 
   /// Whether the pendant LED can be driven from the app at all. Old firmware
