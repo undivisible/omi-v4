@@ -43,6 +43,7 @@ class MobileMemoryScreen extends StatefulWidget {
   const MobileMemoryScreen({
     required this.memory,
     this.embedded = false,
+    this.bottomInset = 0,
     super.key,
   });
 
@@ -50,6 +51,7 @@ class MobileMemoryScreen extends StatefulWidget {
 
   /// When true, omit the AppBar so the screen can sit inside a PageView.
   final bool embedded;
+  final double bottomInset;
 
   @override
   State<MobileMemoryScreen> createState() => _MobileMemoryScreenState();
@@ -150,7 +152,7 @@ class _MobileMemoryScreenState extends State<MobileMemoryScreen> {
   @override
   Widget build(BuildContext context) {
     final dark = _dark(context);
-    final listBottomInset = _floatingBarHeight + 28;
+    final listBottomInset = _floatingBarHeight + 28 + widget.bottomInset;
     final body = Stack(
       children: [
         ListView(
@@ -167,7 +169,7 @@ class _MobileMemoryScreenState extends State<MobileMemoryScreen> {
           left: 18,
           right: 18,
           bottom: widget.embedded
-              ? 0
+              ? widget.bottomInset
               : 12 + MediaQuery.paddingOf(context).bottom,
           child: _floatingComposer(context),
         ),

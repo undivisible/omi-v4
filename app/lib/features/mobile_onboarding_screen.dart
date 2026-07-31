@@ -9,6 +9,7 @@ import 'onboarding/authentication_gate.dart';
 import 'onboarding/backdrop.dart';
 import 'onboarding/lightspeed.dart';
 import 'onboarding/randomized_text.dart';
+import '../ui/omi_orb.dart';
 import '../ui/omi_typography.dart';
 
 enum MobileOnboardingStage { intro, account, pair, teach, finish }
@@ -390,6 +391,13 @@ class _IntroStage extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
+          const OmiActivityOrb(
+            key: Key('mobile_onboarding_personality'),
+            size: 112,
+            color: Color(0xfffffcec),
+            state: OmiOrbState.speaking,
+          ),
+          const SizedBox(height: 28),
           const RandomizedText(
             segments: [
               ('Hi, I’m Omi. I’m a ', null),
