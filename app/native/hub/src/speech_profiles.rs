@@ -41,12 +41,20 @@ pub const MAX_EMBEDDINGS_PER_PROFILE: usize = 32;
 
 /// The cosine distance under which two voiceprints may be the same person.
 ///
-/// Upstream omi hardcodes 0.45 as its single accept/reject test. Measured
-/// against two real models this is far too loose: with a SpeechBrain ECAPA
-/// export, distinct speakers came in as close as 0.14, and with WeSpeaker
-/// CAM++ as close as 0.36, while the same speaker on a different sentence
-/// stayed under 0.11. At 0.45 those pairs are accepted, which merges two
-/// people into one profile.
+/// Upstream omi uses 0.45, calibrated to the equal error rate its model
+/// scores on the VoxCeleb 1 test set (`backend/utils/stt/speaker_embedding.py`
+/// — "Based on VoxCeleb 1 test set EER of 2.8%"). That is a defensible number
+/// and a poor operating point for this: equal error rate is the setting at
+/// which false accepts and false rejects are equally likely, and here they are
+/// nowhere near equally bad. Refusing to name a voice costs a `Speaker N`;
+/// naming the wrong one puts words in someone's mouth and then enrols the
+/// mistake.
+///
+/// It is also not transferable — a distance threshold belongs to the model
+/// that produced the vectors. Measured here against a SpeechBrain ECAPA export
+/// and WeSpeaker CAM++, distinct speakers came in at 0.14 and 0.36 while the
+/// same speaker on a different sentence stayed under 0.11, so 0.45 accepts
+/// pairs those models consider different people.
 ///
 /// [`MATCH_MARGIN`] does not save it. The margin compares the best match to
 /// the runner-up, so it only speaks when two profiles are already close —
