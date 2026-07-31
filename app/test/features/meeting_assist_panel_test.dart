@@ -340,6 +340,119 @@ void main() {
     expect(turn.textSpan?.toPlainText(), 'Nobody knows who said this.');
   });
 
+  testWidgets('a voiceprint match names the turn it arrived too late for', (
+    tester,
+  ) async {
+    final (services, hub) = await servicesWithHub();
+    addTearDown(services.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(body: MeetingAssistPanel(services: services)),
+      ),
+    );
+    hub.eventsController.add(
+      const NativeEventMeetingStateChanged(
+        value: MeetingStateChanged(active: true, suggestedTitle: 'Sync'),
+      ),
+    );
+    hub.eventsController.add(
+      const NativeEventMeetingTranscriptTurn(
+        value: MeetingTranscriptTurn(
+          speaker: 'Speaker 2',
+          diarizedKey: 2,
+          text: 'I can take the migration.',
+          occurredAtMs: 10,
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+
+    Text renderedTurn() => tester.widget<Text>(
+      find.ancestor(
+        of: find.textContaining(
+          'I can take the migration.',
+          findRichText: true,
+        ),
+        matching: find.byType(Text),
+      ),
+    );
+    expect(
+      renderedTurn().textSpan?.toPlainText(),
+      contains('Speaker 2'),
+      reason: 'the turn shows the provisional label before any match lands',
+    );
+
+    hub.eventsController.add(
+      const NativeEventSpeechProfileMatched(
+        value: SpeechProfileMatched(
+          profileId: 'sp_alex',
+          displayName: 'Alex',
+          meetingId: 'meeting-1',
+          diarizedKey: 2,
+          distance: 0.2,
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+
+    final plain = renderedTurn().textSpan?.toPlainText();
+    expect(
+      plain,
+      contains('Alex'),
+      reason: 'a match names every turn that voice has already spoken',
+    );
+    expect(plain, isNot(contains('Speaker 2')));
+  });
+
+  testWidgets('an unnamed match leaves the provisional label alone', (
+    tester,
+  ) async {
+    final (services, hub) = await servicesWithHub();
+    addTearDown(services.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(body: MeetingAssistPanel(services: services)),
+      ),
+    );
+    hub.eventsController.add(
+      const NativeEventMeetingStateChanged(
+        value: MeetingStateChanged(active: true, suggestedTitle: 'Sync'),
+      ),
+    );
+    hub.eventsController.add(
+      const NativeEventMeetingTranscriptTurn(
+        value: MeetingTranscriptTurn(
+          speaker: 'Speaker 3',
+          diarizedKey: 3,
+          text: 'Anonymous but recognised.',
+          occurredAtMs: 11,
+        ),
+      ),
+    );
+    hub.eventsController.add(
+      const NativeEventSpeechProfileMatched(
+        value: SpeechProfileMatched(
+          profileId: 'sp_unnamed',
+          meetingId: 'meeting-1',
+          diarizedKey: 3,
+          distance: 0.2,
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+
+    final turn = tester.widget<Text>(
+      find.ancestor(
+        of: find.textContaining('Anonymous but recognised.', findRichText: true),
+        matching: find.byType(Text),
+      ),
+    );
+    expect(turn.textSpan?.toPlainText(), contains('Speaker 3'));
+  });
+
   testWidgets('a silent far end warns that only the microphone is recorded', (
     tester,
   ) async {

@@ -1483,6 +1483,7 @@ impl MeetingRuntime {
                         current.push_final_named(speaker, label.as_deref(), &text);
                         NativeEvent::MeetingTranscriptTurn(MeetingTranscriptTurn {
                             speaker: label.unwrap_or_else(|| speaker.name()),
+                            diarized_key: diarized.and_then(|key| i64::try_from(key).ok()),
                             text: text.trim().to_owned(),
                             occurred_at_ms: chrono::Utc::now().timestamp_millis(),
                         })

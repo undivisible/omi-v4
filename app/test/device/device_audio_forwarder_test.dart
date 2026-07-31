@@ -871,6 +871,11 @@ final class _SentAudio {
 
 final class _RecordingHub implements NativeHub {
   @override
+  void configureSpeechProfiles({
+    required String requestId,
+    SpeechProfileScope? scope,
+  }) {}
+  @override
   void rewind({required String requestId, required RewindRequest request}) {}
 
   @override

@@ -201,6 +201,11 @@ void main() {
 }
 
 final class _CaptureHub with NativeHubWithoutCapture implements NativeHub {
+  @override
+  void configureSpeechProfiles({
+    required String requestId,
+    SpeechProfileScope? scope,
+  }) {}
   _CaptureHub({this.available = true});
 
   @override

@@ -69,6 +69,12 @@ PODS:
     - FlutterMacOS
     - iOSMcuManagerLibrary (= 1.12)
     - SwiftProtobuf
+  - nordic_dfu (7.1.1):
+    - Flutter
+    - FlutterMacOS
+    - NordicDFU (~> 4.16.0)
+  - NordicDFU (4.16.0):
+    - ZIPFoundation (= 0.9.19)
   - package_info_plus (0.0.1):
     - FlutterMacOS
   - record_macos (2.0.0):
@@ -97,6 +103,7 @@ DEPENDENCIES:
   - flutter_secure_storage_darwin (from `Flutter/ephemeral/.symlinks/plugins/flutter_secure_storage_darwin/darwin`)
   - FlutterMacOS (from `Flutter/ephemeral`)
   - mcumgr_flutter (from `Flutter/ephemeral/.symlinks/plugins/mcumgr_flutter/darwin`)
+  - nordic_dfu (from `Flutter/ephemeral/.symlinks/plugins/nordic_dfu/darwin`)
   - package_info_plus (from `Flutter/ephemeral/.symlinks/plugins/package_info_plus/macos`)
   - record_macos (from `Flutter/ephemeral/.symlinks/plugins/record_macos/macos`)
   - rinf (from `Flutter/ephemeral/.symlinks/plugins/rinf/macos`)
@@ -117,6 +124,7 @@ SPEC REPOS:
     - GoogleUtilities
     - GTMSessionFetcher
     - iOSMcuManagerLibrary
+    - NordicDFU
     - SwiftCBOR
     - SwiftProtobuf
     - ZIPFoundation
@@ -136,6 +144,8 @@ EXTERNAL SOURCES:
     :path: Flutter/ephemeral
   mcumgr_flutter:
     :path: Flutter/ephemeral/.symlinks/plugins/mcumgr_flutter/darwin
+  nordic_dfu:
+    :path: Flutter/ephemeral/.symlinks/plugins/nordic_dfu/darwin
   package_info_plus:
     :path: Flutter/ephemeral/.symlinks/plugins/package_info_plus/macos
   record_macos:
@@ -169,6 +179,8 @@ SPEC CHECKSUMS:
   GTMSessionFetcher: 127211aeec0b1e904fc49f4f6f895dcc535b0ecf
   iOSMcuManagerLibrary: f72db849f6dd66b1f26cd7eea776050a22c8591c
   mcumgr_flutter: b9864b2ae8334b6ba2b33f9ab4fc0a67bbe75c7a
+  nordic_dfu: 05681503e4969f1dfe11903be2bf8840bf5691c9
+  NordicDFU: 116a4ec458945889f8e0e71759e03b23c39c3482
   package_info_plus: f0052d280d17aa382b932f399edf32507174e870
   record_macos: 2e43c16b84ce188b8137754ee648322a2dcdf7fa
   rinf: 262f44da111bc09a28138d438caf7b9a29e9b411

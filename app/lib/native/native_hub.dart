@@ -87,6 +87,8 @@ export 'generated/signals/signals.dart'
         NativeEventMeetingInsight,
         NativeEventMeetingStateChanged,
         NativeEventMeetingTranscriptTurn,
+        SpeechProfileMatched,
+        NativeEventSpeechProfileMatched,
         LiveVoiceAudio,
         LiveVoicePhase,
         LiveVoiceState,
@@ -95,6 +97,7 @@ export 'generated/signals/signals.dart'
         NativeEventLiveVoiceState,
         NativeEventLiveVoiceTranscript,
         SystemAudioCaptureMode,
+        SpeechProfileScope,
         CaptureGap,
         CaptureGaps,
         CaptureAudioAppended,
@@ -205,6 +208,10 @@ abstract interface class NativeHub {
     required String requestId,
     required String managedWorkerOrigin,
     required String credential,
+  });
+  void configureSpeechProfiles({
+    required String requestId,
+    SpeechProfileScope? scope,
   });
   void clearAssistant(String requestId);
   void decideApproval({
@@ -644,6 +651,12 @@ final class UnavailableNativeHub implements NativeHub {
   }) => _unavailable();
 
   @override
+  void configureSpeechProfiles({
+    required String requestId,
+    SpeechProfileScope? scope,
+  }) => _unavailable();
+
+  @override
   void clearAssistant(String requestId) => _unavailable();
 
   @override
@@ -1025,6 +1038,12 @@ final class RinfNativeHub implements NativeHub {
       credential: credential,
     ),
   );
+
+  @override
+  void configureSpeechProfiles({
+    required String requestId,
+    SpeechProfileScope? scope,
+  }) => _send(requestId, CommandConfigureSpeechProfiles(scope: scope));
 
   @override
   void clearAssistant(String requestId) =>

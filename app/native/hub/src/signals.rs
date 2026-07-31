@@ -1091,7 +1091,22 @@ impl std::fmt::Debug for MeetingInsight {
 /// live rolling transcript shows who is speaking.
 #[derive(Serialize, SignalPiece)]
 pub struct MeetingTranscriptTurn {
+    /// The label as it was known when the turn was spoken. A voiceprint match
+    /// lands later, so this is provisional whenever [`diarized_key`] is set:
+    /// the reader is expected to prefer whatever [`SpeechProfileMatched`] has
+    /// since said about that key.
+    ///
+    /// [`diarized_key`]: Self::diarized_key
     pub speaker: String,
+
+    /// The provider's diarized voice this turn belongs to, when it gave one.
+    ///
+    /// Identity is a property of the voice, not of the sentence, so this — not
+    /// a per-turn id — is what a late match is keyed on. One
+    /// [`SpeechProfileMatched`] therefore names every turn that voice has
+    /// already spoken as well as the ones it has yet to.
+    pub diarized_key: Option<i64>,
+
     pub text: String,
     pub occurred_at_ms: i64,
 }

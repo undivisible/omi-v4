@@ -73,6 +73,7 @@ final class AppServices {
     required this.nativeHub,
     required this.deviceRelay,
     required this.memoryDatabasePath,
+    required this.dataDirectory,
     required this.workspaceRoots,
     required this.providerCredentials,
     required this.configurationMessage,
@@ -178,6 +179,7 @@ final class AppServices {
       nativeHub: nativeHub,
       deviceRelay: deviceRelay,
       memoryDatabasePath: _defaultMemoryDatabasePath,
+      dataDirectory: _defaultDataDirectory,
       workspaceRoots: PreferencesWorkspaceRootStore(),
       providerCredentials: const SecureProviderCredentialStore(),
       configurationMessage: 'Configure Firebase to sign in and connect.',
@@ -226,6 +228,7 @@ final class AppServices {
       nativeHub: nativeHub,
       deviceRelay: deviceRelay,
       memoryDatabasePath: _defaultMemoryDatabasePath,
+      dataDirectory: _defaultDataDirectory,
       workspaceRoots: PreferencesWorkspaceRootStore(),
       providerCredentials: const SecureProviderCredentialStore(),
       configurationMessage: gateway.isConfigured
@@ -261,6 +264,7 @@ final class AppServices {
     required DeviceRelayService deviceRelay,
     required AuthController auth,
     required String Function(String uid) memoryDatabasePath,
+    Future<String> Function()? dataDirectory,
     WorkspaceRootStore? workspaceRoots,
     ProviderCredentialStore? providerCredentials,
     ManagedSttClient? managedStt,
@@ -293,6 +297,7 @@ final class AppServices {
     nativeHub: nativeHub,
     deviceRelay: deviceRelay,
     memoryDatabasePath: (uid) async => memoryDatabasePath(uid),
+    dataDirectory: dataDirectory ?? (() async => _testingDataDirectory),
     workspaceRoots: workspaceRoots ?? VolatileWorkspaceRootStore(),
     providerCredentials:
         providerCredentials ?? VolatileProviderCredentialStore(),
@@ -432,6 +437,8 @@ final class AppServices {
   final Duration _assistantRefreshLead;
   final Duration _assistantMinimumRefreshDelay;
   final Future<String> Function(String uid) memoryDatabasePath;
+
+  final Future<String> Function() dataDirectory;
 
   /// The deployed worker is the default backend; OMI_API_ORIGIN overrides it
   /// (e.g. http://127.0.0.1:8787 against `wrangler dev`).
@@ -1309,6 +1316,7 @@ final class AppServices {
         tenantId: _localOfflinePersonId,
         personId: _localOfflinePersonId,
       );
+      await _configureSpeechProfiles(null);
       unawaited(_syncUserProfileSidecar(_localOfflinePersonId, databasePath));
       _transcriptMemoryIngestor.configure(
         personId: _localOfflinePersonId,
@@ -1323,6 +1331,7 @@ final class AppServices {
       _memoryMirrorPump?.stop();
       _memoryMirrorPump = null;
       await _stopCapture();
+      await _configureSpeechProfiles(null);
       await _shutdownNative();
       return;
     }
@@ -1364,6 +1373,7 @@ final class AppServices {
         credential: session.idToken,
       );
     }
+    await _configureSpeechProfiles(session.uid);
     unawaited(_syncUserProfileSidecar(session.uid, databasePath));
     _transcriptMemoryIngestor.configure(
       personId: session.uid,
@@ -1373,6 +1383,24 @@ final class AppServices {
     await _startMemoryMirrorPump(session.uid);
     if (_workerOrigin != null) await _configureSelectedAssistant(session.uid);
     _conversationController.scheduleInboxPoll(Duration.zero);
+  }
+
+  /// Turns the hub's live speaker recognition on for [uid], or off entirely
+  /// when there is no account. The hub keeps voiceprints per `(directory,
+  /// uid)`, so a machine with nobody signed in learns nothing and an account
+  /// switch never reads the other account's people.
+  Future<void> _configureSpeechProfiles(String? uid) async {
+    if (!_nativeInitialized) return;
+    if (uid == null) {
+      nativeHub.configureSpeechProfiles(requestId: 'configure-speech-profiles');
+      return;
+    }
+    final directory = await dataDirectory();
+    if (_disposed || !_nativeInitialized || _configuredPersonId != uid) return;
+    nativeHub.configureSpeechProfiles(
+      requestId: 'configure-speech-profiles-$uid',
+      scope: SpeechProfileScope(directory: directory, uid: uid),
+    );
   }
 
   /// Asks the hub once for the dev-only assistant credential. Only the
@@ -1906,6 +1934,10 @@ DeviceRelayService _createDeviceRelay() {
           ),
   );
 }
+
+Future<String> _defaultDataDirectory() async => (await omiDataDirectory()).path;
+
+const _testingDataDirectory = '/tmp/omi-testing';
 
 Future<String> _defaultMemoryDatabasePath(String uid) async {
   final digest = sha256.convert(utf8.encode(uid));

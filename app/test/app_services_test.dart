@@ -1388,6 +1388,63 @@ void main() {
     await hub.close();
   });
 
+  test(
+    'production initialization scopes speech profiles to the account',
+    () async {
+      final gateway = _FakeAuthGateway(_session('user-a'));
+      final consent = VolatileConsentStore()..receipt = _receipt('user-a');
+      final auth = AuthController(gateway, consentStore: consent);
+      await auth.restoreSession();
+      final hub = _FakeHub();
+      final services = AppServices.forTesting(
+        auth: auth,
+        nativeHub: hub,
+        deviceRelay: DeviceRelayService(
+          role: DeviceRelayRole.desktopObserver,
+          adapter: const UnavailableDeviceRelayAdapter(),
+        ),
+        memoryDatabasePath: (uid) => '/tmp/$uid.sqlite3',
+        dataDirectory: () async => '/tmp/omi-data',
+      );
+
+      await services.initialize();
+
+      expect(hub.speechProfileScopes, hasLength(1));
+      expect(hub.speechProfileScopes.single?.directory, '/tmp/omi-data');
+      expect(hub.speechProfileScopes.single?.uid, 'user-a');
+      services.dispose();
+      await hub.close();
+    },
+  );
+
+  test('signing out turns speech-profile learning off', () async {
+    final gateway = _FakeAuthGateway(_session('user-a'));
+    final consent = VolatileConsentStore()..receipt = _receipt('user-a');
+    final auth = AuthController(gateway, consentStore: consent);
+    await auth.restoreSession();
+    final hub = _FakeHub();
+    final services = AppServices.forTesting(
+      auth: auth,
+      nativeHub: hub,
+      deviceRelay: DeviceRelayService(
+        role: DeviceRelayRole.desktopObserver,
+        adapter: const UnavailableDeviceRelayAdapter(),
+      ),
+      memoryDatabasePath: (uid) => '/tmp/$uid.sqlite3',
+      dataDirectory: () async => '/tmp/omi-data',
+    );
+    await services.initialize();
+    expect(hub.speechProfileScopes.single?.uid, 'user-a');
+
+    gateway.emit(null);
+    await _waitFor(() => hub.disposeCalls == 1);
+
+    expect(hub.speechProfileScopes, hasLength(2));
+    expect(hub.speechProfileScopes.last, isNull);
+    services.dispose();
+    await hub.close();
+  });
+
   test('no current consent keeps native services inert', () async {
     final gateway = _FakeAuthGateway(_session('user-a'));
     final auth = AuthController(gateway);
@@ -3103,6 +3160,7 @@ final class _FakeHub with NativeHubWithoutCapture implements NativeHub {
       <(AssistantProvider, String, String?, String)>[];
   final trustedAssistantOrigins = <String>[];
   final cloudMemoryConfigurations = <(String, String)>[];
+  final speechProfileScopes = <SpeechProfileScope?>[];
   final assistantClears = <String>[];
   final transcriptionAuth = <TranscriptionAuth>[];
   final transcriptionEncoding = <AudioEncoding>[];
@@ -3398,6 +3456,14 @@ final class _FakeHub with NativeHubWithoutCapture implements NativeHub {
     required String credential,
   }) {
     cloudMemoryConfigurations.add((managedWorkerOrigin, credential));
+  }
+
+  @override
+  void configureSpeechProfiles({
+    required String requestId,
+    SpeechProfileScope? scope,
+  }) {
+    speechProfileScopes.add(scope);
   }
 
   @override

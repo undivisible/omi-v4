@@ -9,6 +9,7 @@ part of 'signals.dart';
 class MeetingTranscriptTurn {
   const MeetingTranscriptTurn({
     required this.speaker,
+    this.diarizedKey,
     required this.text,
     required this.occurredAtMs,
   });
@@ -17,6 +18,7 @@ class MeetingTranscriptTurn {
     deserializer.increaseContainerDepth();
     final instance = MeetingTranscriptTurn(
       speaker: deserializer.deserializeString(),
+      diarizedKey: TraitHelpers.deserializeOptionI64(deserializer),
       text: deserializer.deserializeString(),
       occurredAtMs: deserializer.deserializeInt64(),
     );
@@ -34,16 +36,19 @@ class MeetingTranscriptTurn {
   }
 
   final String speaker;
+  final int? diarizedKey;
   final String text;
   final int occurredAtMs;
 
   MeetingTranscriptTurn copyWith({
     String? speaker,
+    int? Function()? diarizedKey,
     String? text,
     int? occurredAtMs,
   }) {
     return MeetingTranscriptTurn(
       speaker: speaker ?? this.speaker,
+      diarizedKey: diarizedKey == null ? this.diarizedKey : diarizedKey(),
       text: text ?? this.text,
       occurredAtMs: occurredAtMs ?? this.occurredAtMs,
     );
@@ -52,6 +57,7 @@ class MeetingTranscriptTurn {
   void serialize(BinarySerializer serializer) {
     serializer.increaseContainerDepth();
     serializer.serializeString(speaker);
+    TraitHelpers.serializeOptionI64(diarizedKey, serializer);
     serializer.serializeString(text);
     serializer.serializeInt64(occurredAtMs);
     serializer.decreaseContainerDepth();
@@ -70,12 +76,13 @@ class MeetingTranscriptTurn {
 
     return other is MeetingTranscriptTurn &&
         speaker == other.speaker &&
+        diarizedKey == other.diarizedKey &&
         text == other.text &&
         occurredAtMs == other.occurredAtMs;
   }
 
   @override
-  int get hashCode => Object.hash(speaker, text, occurredAtMs);
+  int get hashCode => Object.hash(speaker, diarizedKey, text, occurredAtMs);
 
   @override
   String toString() {
@@ -85,6 +92,7 @@ class MeetingTranscriptTurn {
       fullString =
           '$runtimeType('
           'speaker: [REDACTED], '
+          'diarizedKey: $diarizedKey, '
           'text: [REDACTED], '
           'occurredAtMs: $occurredAtMs'
           ')';

@@ -211,6 +211,11 @@ final class _AllGrantedCapabilities implements DesktopCapabilityGateway {
 
 final class _ScanHub with NativeHubWithoutCapture implements NativeHub {
   @override
+  void configureSpeechProfiles({
+    required String requestId,
+    SpeechProfileScope? scope,
+  }) {}
+  @override
   void rewind({required String requestId, required RewindRequest request}) {}
 
   @override

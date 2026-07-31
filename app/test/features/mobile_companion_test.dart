@@ -2399,6 +2399,11 @@ final class _RecordingCaptureNotifier implements CaptureNotifier {
 
 final class _Hub with NativeHubWithoutCapture implements NativeHub {
   @override
+  void configureSpeechProfiles({
+    required String requestId,
+    SpeechProfileScope? scope,
+  }) {}
+  @override
   void rewind({required String requestId, required RewindRequest request}) {}
 
   @override

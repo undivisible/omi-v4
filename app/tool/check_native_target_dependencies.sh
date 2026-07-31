@@ -11,9 +11,15 @@ for target in aarch64-apple-ios aarch64-linux-android wasm32-unknown-unknown x86
   fi
 done
 
+praefectus_version="$(sed -n 's/^praefectus = "=\([0-9][^"]*\)"$/\1/p' "$hub_dir/Cargo.toml" | head -n 1)"
+if [ -z "$praefectus_version" ]; then
+  echo "could not read the pinned praefectus version from $hub_dir/Cargo.toml" >&2
+  exit 1
+fi
+
 for target in aarch64-apple-darwin; do
-  if ! cargo tree --manifest-path "$hub_dir/Cargo.toml" --target "$target" --edges normal --prefix none | grep -q '^praefectus v0\.4\.0$'; then
-    echo "praefectus 0.4.0 must resolve for $target" >&2
+  if ! cargo tree --manifest-path "$hub_dir/Cargo.toml" --target "$target" --edges normal --prefix none | grep -qx "praefectus v$praefectus_version"; then
+    echo "praefectus $praefectus_version must resolve for $target" >&2
     exit 1
   fi
 

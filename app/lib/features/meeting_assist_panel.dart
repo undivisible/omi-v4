@@ -24,6 +24,14 @@ class MeetingAssistPanelState extends State<MeetingAssistPanel> {
   StreamSubscription<NativeEvent>? _events;
   final _jot = TextEditingController();
   final List<MeetingTranscriptTurn> _highlights = [];
+
+  /// Names a voiceprint match has put to the provider's diarized voices.
+  ///
+  /// A match arrives after the turn that produced it has already been shown,
+  /// so the label is resolved here at build time rather than baked into the
+  /// turn. Keying on the voice rather than the sentence is what lets one match
+  /// name everything that voice has already said.
+  final Map<int, String> _resolvedSpeakers = {};
   final List<MeetingInsight> _insights = [];
   final List<String> _preMeetingContext = [];
   final List<String> _memoryContext = [];
@@ -73,6 +81,7 @@ class MeetingAssistPanelState extends State<MeetingAssistPanel> {
           }
           if (!value.active) {
             _highlights.clear();
+            _resolvedSpeakers.clear();
             _insights.clear();
             _preMeetingContext.clear();
             _memoryContext.clear();
@@ -94,6 +103,11 @@ class MeetingAssistPanelState extends State<MeetingAssistPanel> {
             _highlights.removeAt(0);
           }
         });
+      case NativeEventSpeechProfileMatched(:final value) when _active:
+        final name = value.displayName?.trim();
+        if (name != null && name.isNotEmpty) {
+          setState(() => _resolvedSpeakers[value.diarizedKey] = name);
+        }
       case NativeEventMeetingInsight(:final value) when _active:
         setState(() {
           _insights.add(value);
@@ -319,7 +333,10 @@ class MeetingAssistPanelState extends State<MeetingAssistPanel> {
                   for (final highlight in _highlights)
                     Padding(
                       padding: const EdgeInsets.only(bottom: 4),
-                      child: _TranscriptTurnRow(turn: highlight),
+                      child: _TranscriptTurnRow(
+                        turn: highlight,
+                        resolved: _resolvedSpeakers[highlight.diarizedKey],
+                      ),
                     ),
                 ],
                 for (final insight in _insights) ...[
@@ -377,14 +394,19 @@ class MeetingAssistPanelState extends State<MeetingAssistPanel> {
 /// One finalized transcript turn, prefixed with the side of the call it came
 /// from when the two capture tracks could tell them apart.
 class _TranscriptTurnRow extends StatelessWidget {
-  const _TranscriptTurnRow({required this.turn});
+  const _TranscriptTurnRow({required this.turn, this.resolved});
 
   final MeetingTranscriptTurn turn;
+
+  /// The name a later voiceprint match put to this turn's diarized voice, if
+  /// one has arrived. It wins over the provisional label the turn was emitted
+  /// with, which is how a turn already on screen picks up a name.
+  final String? resolved;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final speaker = turn.speaker.trim();
+    final speaker = (resolved ?? turn.speaker).trim();
     return Text.rich(
       TextSpan(
         children: [
