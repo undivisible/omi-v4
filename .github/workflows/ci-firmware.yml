@@ -246,13 +246,13 @@ jobs:
         run: |
           set -euo pipefail
           if ! command -v rustup >/dev/null 2>&1; then
-            apt-get update
-            apt-get install --yes --no-install-recommends curl
-            (
-              export LD_LIBRARY_PATH=
-              /usr/bin/curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
-                | sh -s -- -y --profile minimal --default-toolchain stable --component clippy
-            )
+            init_dir="$(mktemp -d)"
+            python3 -c 'import sys, urllib.request; urllib.request.urlretrieve("https://static.rust-lang.org/rustup/dist/x86_64-unknown-linux-gnu/rustup-init", sys.argv[1])' \
+              "${init_dir}/rustup-init"
+            chmod +x "${init_dir}/rustup-init"
+            env -u LD_LIBRARY_PATH RUSTUP_INIT_SKIP_PATH_CHECK=yes "${init_dir}/rustup-init" \
+              -y --no-modify-path --profile minimal --default-toolchain stable --component clippy
+            rm -rf "${init_dir}"
           fi
           . "${HOME}/.cargo/env"
           rustup component add clippy
