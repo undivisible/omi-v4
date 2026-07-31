@@ -390,7 +390,8 @@ class _OmiAppState extends State<OmiApp> {
       anchor: _markAnchor,
       child: Stack(
         children: [
-          if (_settled) _destination else const _BootField(),
+          if (!_settled) const _BootField(),
+          if (_settled) TickerMode(enabled: false, child: _destination),
           OmiColdOpen(onDone: () => setState(() => _openDone = true)),
         ],
       ),

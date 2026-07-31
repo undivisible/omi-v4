@@ -516,10 +516,71 @@ void main() {
       'Meeting summary: Team agreed to ship Friday.\n• Email release notes',
     );
   });
+
+  testWidgets('a completed reply refreshes currents after it is stored', (
+    tester,
+  ) async {
+    final auth = AuthController(
+      _SignedInGateway(),
+      consentStore: VolatileConsentStore()
+        ..receipt = ProcessingConsentReceipt.current(
+          subjectUid: 'user-meeting',
+          acceptedAt: DateTime.utc(2026, 7, 21),
+        ),
+    );
+    await auth.restoreSession();
+    final hub = _MeetingEventHub();
+    final currents = _CountingCurrentsTransport();
+    final services = AppServices.forTesting(
+      nativeHub: hub,
+      deviceRelay: DeviceRelayService(
+        role: DeviceRelayRole.desktopObserver,
+        adapter: const UnavailableDeviceRelayAdapter(),
+      ),
+      auth: auth,
+      memoryDatabasePath: (uid) => '/tmp/$uid.sqlite3',
+      conversations: _RecordingConversationTransport(),
+      currentsClient: CurrentsClient(currents),
+    );
+    addTearDown(services.dispose);
+    await services.initialize();
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(body: ChatScreen(services: services)),
+      ),
+    );
+    await tester.pump();
+    final initialCalls = currents.calls;
+
+    await tester.enterText(
+      find.byKey(const Key('chat_input')),
+      'Make currents',
+    );
+    await tester.tap(find.byKey(const Key('send_chat')));
+    await tester.pump();
+    final requestId = hub.sentRequestId;
+    expect(requestId, isNotNull);
+
+    hub.eventsController.add(
+      NativeEventAssistantDelta(
+        value: AssistantDelta(
+          requestId: requestId!,
+          text: 'Here are your currents.',
+          finalSegment: true,
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+
+    expect(currents.calls, greaterThan(initialCalls));
+  });
 }
 
 final class _MeetingEventHub implements NativeHub {
   final eventsController = StreamController<NativeEvent>.broadcast();
+  String? sentRequestId;
 
   @override
   bool get available => true;
@@ -534,7 +595,13 @@ final class _MeetingEventHub implements NativeHub {
   void dispose() {}
 
   @override
-  dynamic noSuchMethod(Invocation invocation) => null;
+  @override
+  dynamic noSuchMethod(Invocation invocation) {
+    if (invocation.memberName == #sendMessage) {
+      sentRequestId = invocation.namedArguments[#requestId] as String?;
+    }
+    return null;
+  }
 }
 
 final class _SignedInGateway implements AuthGateway {

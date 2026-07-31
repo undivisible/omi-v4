@@ -494,6 +494,21 @@ class ChatScreenState extends State<ChatScreen>
     await currents.load();
   }
 
+  Future<void> _saveAssistantMessage({
+    required String requestId,
+    required String text,
+  }) async {
+    try {
+      await widget.services.saveAssistantMessage(
+        requestId: requestId,
+        text: text,
+      );
+      if (mounted) await _refreshCurrents();
+    } catch (failure) {
+      debugPrint('chat_screen assistant save: $failure');
+    }
+  }
+
   Future<void> handleDesktopGesture(ShiftGestureAction action) async {
     if (!mounted) return;
     switch (action) {
@@ -1014,14 +1029,10 @@ class ChatScreenState extends State<ChatScreen>
           }
           if (value.finalSegment) {
             unawaited(
-              widget.services
-                  .saveAssistantMessage(
-                    requestId: value.requestId,
-                    text: message.text,
-                  )
-                  .catchError((Object failure, _) {
-                    debugPrint('chat_screen assistant save: $failure');
-                  }),
+              _saveAssistantMessage(
+                requestId: value.requestId,
+                text: message.text,
+              ),
             );
             _activeRequestId = null;
             _progress = null;
