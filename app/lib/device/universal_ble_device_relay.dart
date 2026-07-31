@@ -56,8 +56,7 @@ final class UniversalBleDeviceRelayAdapter
   static const _smpService = '8d53dc1d-1db7-4cd3-868b-8a527460aa84';
   // Nordic Secure DFU (SDK 12+) and legacy DFU (SDK <=11) services. Old
   // firmware that predates MCUboot exposes one of these instead of SMP.
-  static const _nordicSecureDfuService =
-      '0000fe59-0000-1000-8000-00805f9b34fb';
+  static const _nordicSecureDfuService = '0000fe59-0000-1000-8000-00805f9b34fb';
   static const _nordicSecureDfuShort = 'fe59';
   static const _nordicLegacyDfuService = '00001530-1212-efde-1523-785feabcd123';
   static const _storageService = '30295780-4301-eabd-2904-2849adfeae43';
