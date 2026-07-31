@@ -50,6 +50,37 @@ void main() {
           .first,
     );
     expect(reveal.opacity, 0);
+
+    final revealElement = tester.element(
+      find
+          .ancestor(
+            of: find.byKey(const Key('hub_greeting')),
+            matching: find.byType(TweenAnimationBuilder<double>),
+          )
+          .first,
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: ChatScreen(
+            services: services,
+            previewMode: true,
+            homeVisible: true,
+          ),
+        ),
+      ),
+    );
+    expect(
+      tester.element(
+        find
+            .ancestor(
+              of: find.byKey(const Key('hub_greeting')),
+              matching: find.byType(TweenAnimationBuilder<double>),
+            )
+            .first,
+      ),
+      same(revealElement),
+    );
   });
 
   testWidgets('a saved meeting surfaces as a current and opens the notes', (
