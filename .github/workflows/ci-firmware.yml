@@ -261,6 +261,20 @@ jobs:
           rustc --version
           cargo --version
 
+      - name: Install libclang for the zephyr-sys bindgen build script
+        if: matrix.app_dir == 'firmware/omi'
+        run: |
+          set -euo pipefail
+          env -u LD_LIBRARY_PATH apt-get update -qq
+          env -u LD_LIBRARY_PATH DEBIAN_FRONTEND=noninteractive apt-get install -y -qq libclang-dev
+          libclang="$(find /usr/lib -maxdepth 3 -name 'libclang-*.so.*' -print -quit)"
+          if [ -z "${libclang}" ]; then
+            echo "::error::libclang-dev installed but no libclang shared library was found."
+            exit 1
+          fi
+          echo "LIBCLANG_PATH=$(dirname "${libclang}")" >> "$GITHUB_ENV"
+          echo "using libclang at ${libclang}"
+
       - name: Build ${{ matrix.device }}
         env:
           BOARD: ${{ matrix.board }}
