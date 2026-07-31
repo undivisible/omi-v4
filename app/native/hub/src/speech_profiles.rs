@@ -41,12 +41,29 @@ pub const MAX_EMBEDDINGS_PER_PROFILE: usize = 32;
 
 /// The cosine distance under which two voiceprints may be the same person.
 ///
-/// 0.45 is the value upstream omi hardcodes as its single accept/reject test.
-/// It is kept here as the *outer* bound only: on its own it misidentifies
-/// people (upstream omi issue #5565, item 6), because in a room of similar
-/// voices several profiles sit under it at once and whichever happens to be
-/// nearest wins by a rounding error.
-pub const MATCH_THRESHOLD: f32 = 0.45;
+/// Upstream omi hardcodes 0.45 as its single accept/reject test. Measured
+/// against two real models this is far too loose: with a SpeechBrain ECAPA
+/// export, distinct speakers came in as close as 0.14, and with WeSpeaker
+/// CAM++ as close as 0.36, while the same speaker on a different sentence
+/// stayed under 0.11. At 0.45 those pairs are accepted, which merges two
+/// people into one profile.
+///
+/// [`MATCH_MARGIN`] does not save it. The margin compares the best match to
+/// the runner-up, so it only speaks when two profiles are already close —
+/// against a single enrolled profile there is no runner-up and the margin
+/// never fires. The threshold is the only thing standing between one enrolled
+/// person and every other voice in the room.
+///
+/// 0.25 is deliberately tighter than the measurements strictly require,
+/// because the two errors are not equals. Too tight enrols one person twice,
+/// which the user fixes with a merge. Too loose writes one person's voice
+/// into another person's profile, which no control here can cleanly undo.
+///
+/// This is provisional: the figures above come from synthesized voices out of
+/// one speech engine, which sit closer together than people do, and the right
+/// value depends on the model. A shipped model should be calibrated against
+/// real speakers, and profiles should record which model measured them.
+pub const MATCH_THRESHOLD: f32 = 0.25;
 
 /// How much closer the best profile must be than the runner-up before the
 /// match is accepted.
@@ -1229,6 +1246,20 @@ mod tests {
             panic!("a clear winner matches, got {outcome:?}");
         };
         assert!(runner_up.is_some());
+    }
+
+    #[test]
+    fn a_lone_profile_does_not_absorb_a_clearly_different_voice() {
+        // The margin is silent when only one profile is enrolled, so the
+        // threshold is the only thing separating that person from everyone
+        // else. Measured against real models, distinct speakers land here.
+        let profiles = with_embeddings(&[("Alex", 0.0)]);
+        let outcome = match_profiles(&profiles, &at_distance(0.30));
+
+        assert!(
+            matches!(outcome, MatchOutcome::NoMatch { .. }),
+            "a voice 0.30 away is somebody else, got {outcome:?}"
+        );
     }
 
     #[test]
