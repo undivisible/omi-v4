@@ -266,14 +266,20 @@ jobs:
         run: |
           set -euo pipefail
           env -u LD_LIBRARY_PATH apt-get update -qq
-          env -u LD_LIBRARY_PATH DEBIAN_FRONTEND=noninteractive apt-get install -y -qq libclang-dev
-          libclang="$(find /usr/lib -maxdepth 3 -name 'libclang-*.so.*' -print -quit)"
+          env -u LD_LIBRARY_PATH DEBIAN_FRONTEND=noninteractive apt-get install -y -qq libclang-dev clang
+          libclang="$(find /usr/lib/llvm-*/lib -maxdepth 1 -name 'libclang-*.so.*' ! -name 'libclang-cpp*' -print -quit)"
           if [ -z "${libclang}" ]; then
             echo "::error::libclang-dev installed but no libclang shared library was found."
             exit 1
           fi
-          echo "LIBCLANG_PATH=$(dirname "${libclang}")" >> "$GITHUB_ENV"
-          echo "using libclang at ${libclang}"
+          libclang_dir="$(dirname "${libclang}")"
+          builtin_headers="$(find "${libclang_dir}/clang" -maxdepth 2 -name include -type d -print -quit)"
+          if [ -z "${builtin_headers}" ] || [ ! -f "${builtin_headers}/stddef.h" ]; then
+            echo "::error::clang builtin headers were not found under ${libclang_dir}/clang."
+            exit 1
+          fi
+          echo "LIBCLANG_PATH=${libclang_dir}" >> "$GITHUB_ENV"
+          echo "using libclang at ${libclang} with builtin headers at ${builtin_headers}"
 
       - name: Build ${{ matrix.device }}
         env:
