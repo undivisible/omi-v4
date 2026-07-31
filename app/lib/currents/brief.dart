@@ -47,6 +47,36 @@ final class BriefPlan {
 }
 
 /// Chooses what the brief leads with.
+const _promotionalMailMarkers = <String>{
+  'coupon',
+  'deal',
+  'discount',
+  'flash sale',
+  'limited-time',
+  'limited time',
+  'newsletter',
+  'offer',
+  'promo',
+  'sale',
+  'unsubscribe',
+};
+
+bool _isPromotionalMail(BriefEntry entry) {
+  final source = [
+    entry.card.sourceKind,
+    ...entry.card.item.evidence.map((evidence) => evidence.sourceId),
+  ].whereType<String>().join(' ').toLowerCase();
+  if (!source.contains('mail') && !source.contains('email')) return false;
+  final content = [
+    entry.title,
+    entry.summary,
+    entry.card.item.reason,
+    ...entry.card.item.evidence.map((evidence) => evidence.reason),
+  ].join(' ').toLowerCase();
+  return _promotionalMailMarkers.any(content.contains);
+}
+
+/// Chooses what the brief leads with.
 ///
 /// A scheduled thing that has not finished yet wins — the soonest one, because
 /// that is the thing the user is about to walk into. With nothing scheduled the
@@ -67,21 +97,32 @@ BriefPlan planBrief(
       ),
   ];
   if (entries.isEmpty) return const BriefPlan(hero: null, rest: []);
+  final preferred = entries
+      .where((entry) => !_isPromotionalMail(entry))
+      .toList();
+  // If everything available is bulk mail, retain it rather than leaving the
+  // user with a blank brief. Otherwise it cannot lead or crowd out real work.
+  final prioritized = preferred.isEmpty ? entries : preferred;
 
-  final scheduled = entries.where((entry) {
+  final scheduled = prioritized.where((entry) {
     final until = entry._until;
     return until != null && until.isAfter(now);
   }).toList()..sort((a, b) => a.startsAt!.compareTo(b.startsAt!));
 
   final hero = scheduled.isNotEmpty
       ? scheduled.first
-      : entries.reduce(
+      : prioritized.reduce(
           (best, entry) =>
               entry.card.item.confidence > best.card.item.confidence
               ? entry
               : best,
         );
-  final rest = entries.where((entry) => !identical(entry, hero)).toList();
+  final rest = [
+    for (final entry in prioritized)
+      if (!identical(entry, hero)) entry,
+    for (final entry in entries)
+      if (_isPromotionalMail(entry) && !identical(entry, hero)) entry,
+  ];
   return BriefPlan(hero: hero, rest: rest.take(maxRest).toList());
 }
 
@@ -176,22 +217,9 @@ class _CurrentsBriefState extends State<CurrentsBrief> {
     final compact = widget.compact;
     final plan = planBrief(widget.cards, now: now, maxRest: compact ? 2 : 3);
     final palette = widget.palette;
-    final composed = widget.briefCrepus;
-    if (composed != null && crepusRenders(composed)) {
-      final hero = plan.hero;
-      return _BriefInfographic(
-        key: const Key('brief_infographic'),
-        source: composed,
-        palette: palette,
-        compact: compact,
-        proposedNextStep: hero?.card.item.proposedNextStep ?? '',
-        onPrompt: widget.onPrompt,
-        onDraftPrompt: widget.onDraftPrompt,
-        onComplete: hero == null || widget.onComplete == null
-            ? null
-            : () => widget.onComplete!(hero.card.item.id),
-      );
-    }
+    // Currents are action surfaces. A model-composed visualization may be
+    // useful as supporting content later, but it must never replace the
+    // deterministic hero, action controls, or secondary rows.
     final hero = plan.hero;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -399,29 +427,13 @@ class _BriefHero extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final crepus = entry.crepus;
-    final composed = crepus != null && crepusRenders(crepus);
+    // Generated layout is deliberately not rendered here. Current cards must
+    // retain their fixed action affordances, even when a model supplies a
+    // valid-looking visualization.
     final shell = _BriefShell(
       palette: palette,
       compact: compact,
-      child: composed
-          ? CrepusView.fromSource(
-              crepus,
-              theme: crepusThemeFor(palette),
-              onAction: (action) => unawaited(
-                dispatchCrepusAction(
-                  action,
-                  context: context,
-                  onPrompt: onPrompt,
-                  onDraftPrompt: onDraftPrompt,
-                  proposedNextStep: entry.card.item.proposedNextStep,
-                  onComplete: onComplete == null
-                      ? null
-                      : () => onComplete!(entry.card.item.id),
-                ),
-              ),
-            )
-          : _heroBody(),
+      child: _heroBody(),
     );
     // Reduced motion keeps the brief still: it is an infographic, and the
     // entrance is decoration, not information.
@@ -576,19 +588,8 @@ class _BriefRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final crepus = entry.crepus;
-    if (crepus != null && crepusRenders(crepus)) {
-      return CrepusCurrentRow(
-        source: crepus,
-        palette: palette,
-        proposedNextStep: entry.card.item.proposedNextStep,
-        onDraftPrompt: onDraftPrompt,
-        onComplete: onComplete == null
-            ? null
-            : () => onComplete!(entry.card.item.id),
-        onPrompt: onPrompt,
-      );
-    }
+    // Supporting Currents keep the same native interaction contract as the
+    // hero. Model-authored layouts may not replace or intercept this row.
     final start = entry.startsAt;
     final lead = start == null
         ? (entry.card.sourceKind ??

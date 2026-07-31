@@ -13,6 +13,7 @@ import 'package:omi/features/onboarding/lightspeed.dart';
 import 'package:omi/main.dart';
 import 'package:omi/native/native_hub.dart';
 import 'package:omi/onboarding/onboarding_completion.dart';
+import 'package:omi/ui/omi_orb.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
@@ -34,6 +35,11 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
+
+    final personality = tester.widget<OmiActivityOrb>(
+      find.byKey(const Key('mobile_onboarding_personality')),
+    );
+    expect(personality.state, OmiOrbState.speaking);
 
     await tester.tap(find.byKey(const Key('mobile_onboarding_intro_continue')));
     await tester.pumpAndSettle();

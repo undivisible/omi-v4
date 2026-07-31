@@ -36,13 +36,12 @@ use crate::transcription::{
     TranscriptionPhase,
 };
 use crate::transcription::{StartTranscription, TranscriptionControl};
-use fastembed::{EmbeddingModel, TextEmbedding, TextInitOptions};
 use futures::StreamExt;
 use rs_ai_core::{StreamEvent, ToolChoice, ToolDefinition};
 use std::collections::{HashMap, VecDeque, hash_map::Entry};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, LazyLock, Mutex as StdMutex};
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 use tokio::sync::{Mutex, mpsc};
 use tokio::task::{JoinError, JoinHandle, JoinSet, spawn_blocking};
@@ -87,8 +86,6 @@ struct CloudMemoryItem {
     content: String,
     evidence_ids: Vec<String>,
 }
-
-static FASTEMBED: LazyLock<StdMutex<Option<TextEmbedding>>> = LazyLock::new(|| StdMutex::new(None));
 
 #[derive(Default)]
 struct RuntimeState {
@@ -2261,31 +2258,6 @@ async fn local_memory_context(
     }
 }
 
-fn local_embedding(query: String) -> Result<Vec<f64>, String> {
-    let mut model = FASTEMBED
-        .lock()
-        .map_err(|_| "local embedding model lock was poisoned".to_owned())?;
-    if model.is_none() {
-        *model = Some(
-            TextEmbedding::try_new(TextInitOptions::new(EmbeddingModel::BGEBaseENV15))
-                .map_err(|error_value| error_value.to_string())?,
-        );
-    }
-    let embeddings = model
-        .as_mut()
-        .ok_or_else(|| "local embedding model is unavailable".to_owned())?
-        .embed(vec![query], Some(1))
-        .map_err(|error_value| error_value.to_string())?;
-    let embedding = embeddings
-        .into_iter()
-        .next()
-        .ok_or_else(|| "local embedding was empty".to_owned())?;
-    if embedding.len() != 768 {
-        return Err("local embedding had an unexpected dimension".to_owned());
-    }
-    Ok(embedding.into_iter().map(f64::from).collect())
-}
-
 async fn cloud_memory_context(
     state: &Mutex<RuntimeState>,
     query: &str,
@@ -2296,30 +2268,21 @@ async fn cloud_memory_context(
     let Some(config) = config else {
         return Ok(None);
     };
-    let embedding = await_blocking(
-        spawn_blocking({
-            let query = query.to_owned();
-            move || local_embedding(query)
-        }),
-        cancellation,
-    )
-    .await;
-    let embedding = match embedding {
-        BlockingOutcome::Complete(value) => value,
-        BlockingOutcome::Failed(message) => return Err(message),
-        BlockingOutcome::Cancelled => return Err("memory recall was cancelled".to_owned()),
-    };
-    let endpoint = config.endpoint.to_string();
+    let mut endpoint = config.endpoint;
+    endpoint
+        .query_pairs_mut()
+        .append_pair("q", query)
+        .append_pair("limit", &limit.min(20).to_string());
+    let endpoint_text = endpoint.to_string();
     tokio::select! {
         () = cancellation.cancelled() => return Err("memory recall was cancelled".to_owned()),
-        result = endpoint_resolves_publicly(&endpoint) => result?,
+        result = endpoint_resolves_publicly(&endpoint_text) => result?,
     }
     let response = tokio::select! {
         () = cancellation.cancelled() => return Err("memory recall was cancelled".to_owned()),
         result = tokio::time::timeout(Duration::from_secs(15), reqwest::Client::new()
-            .post(config.endpoint)
+            .get(endpoint)
             .bearer_auth(config.credential)
-            .json(&serde_json::json!({ "query": query, "limit": limit.min(20), "vector": embedding }))
             .send()) => result.map_err(|_| "memory recall timed out".to_owned())?
                 .map_err(|_| "memory recall failed".to_owned())?,
     };

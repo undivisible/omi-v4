@@ -68,9 +68,7 @@ final class PreferencesHubChecklistStore implements HubChecklistStore {
       await _forgetStarterTasks(preferences);
       return const [];
     }
-    final age = _now().difference(
-      DateTime.fromMillisecondsSinceEpoch(written),
-    );
+    final age = _now().difference(DateTime.fromMillisecondsSinceEpoch(written));
     if (age >= starterTaskLifetime || age.isNegative) {
       await _forgetStarterTasks(preferences);
       return const [];
@@ -82,10 +80,7 @@ final class PreferencesHubChecklistStore implements HubChecklistStore {
   Future<void> setStarterTasks(List<String> titles) async {
     final preferences = await SharedPreferences.getInstance();
     await preferences.setStringList(_starterKey, titles);
-    await preferences.setInt(
-      _starterWrittenKey,
-      _now().millisecondsSinceEpoch,
-    );
+    await preferences.setInt(_starterWrittenKey, _now().millisecondsSinceEpoch);
   }
 
   @override

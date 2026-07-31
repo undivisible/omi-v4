@@ -210,7 +210,8 @@ class OmiColdOpenPainter extends CustomPainter {
 
   /// The size the mark lands at. A reachable anchor is measured from the widget
   /// that is about to take over, so it beats the constant in every case.
-  double _landingSize(Size size) => _reachable(size)?.shortestSide ?? handoffSize;
+  double _landingSize(Size size) =>
+      _reachable(size)?.shortestSide ?? handoffSize;
 
   /// The field the mark arrives through: faint fixed points that fade up
   /// before the dots and hold until the handover. Positions come from a hash

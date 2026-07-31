@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
+import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 import 'package:omi/api/worker_http.dart';
 import 'package:omi/app_services.dart';
 import 'package:omi/auth/auth.dart';
@@ -375,7 +376,7 @@ void main() {
     fixture.services.dispose();
   });
 
-  testWidgets('only the hero blurs and fades as the page scrolls', (
+  testWidgets('the hero fades without blurring as the page scrolls', (
     tester,
   ) async {
     await tester.binding.setSurfaceSize(const Size(390, 500));
@@ -412,22 +413,51 @@ void main() {
 
     expect(tester.widget<Opacity>(fade).opacity, lessThan(1));
     expect(tester.widget<Opacity>(fade).opacity, greaterThan(0));
-    // The blur wraps only the hero, so the sections below scroll crisply.
-    expect(find.byType(ImageFiltered), findsOneWidget);
-    expect(
-      find.descendant(
-        of: find.byType(ImageFiltered),
-        matching: find.byKey(const Key('companion_pendant_image')),
+    expect(find.byType(ImageFiltered), findsNothing);
+    fixture.services.dispose();
+  });
+
+  testWidgets('companion navigation uses the liquid glass tab bar', (
+    tester,
+  ) async {
+    final fixture = await _mobileFixture('user-a');
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MobileCompanionShell(
+          services: fixture.services,
+          pairedDevices: VolatilePairedDeviceStore(),
+        ),
       ),
-      findsOneWidget,
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byType(GlassTabBar), findsOneWidget);
+    expect(
+      tester
+          .widget<Scaffold>(find.byKey(const Key('companion_mobile_scaffold')))
+          .extendBody,
+      isTrue,
+    );
+    final homePadding = tester.widget<SliverPadding>(
+      find.ancestor(
+        of: find.byKey(const Key('companion_session_list')),
+        matching: find.byType(SliverPadding),
+      ),
     );
     expect(
-      find.descendant(
-        of: find.byType(ImageFiltered),
-        matching: find.byKey(const Key('companion_session_list')),
-      ),
-      findsNothing,
+      (homePadding.padding as EdgeInsets).bottom,
+      greaterThanOrEqualTo(88),
     );
+    expect(find.byKey(const Key('companion_pendant_tap')), findsOneWidget);
+    await _selectCompanionTab(tester, 'Conversations');
+    final conversationPadding =
+        tester
+                .widget<ListView>(
+                  find.byKey(const Key('companion_conversations_page')),
+                )
+                .padding
+            as EdgeInsets;
+    expect(conversationPadding.bottom, greaterThanOrEqualTo(88));
     fixture.services.dispose();
   });
 
@@ -1783,9 +1813,9 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('Home'), findsOneWidget);
-    expect(find.text('Conversations'), findsOneWidget);
-    expect(find.text('Memory'), findsOneWidget);
+    expect(find.text('Home'), findsAtLeastNWidgets(1));
+    expect(find.text('Conversations'), findsAtLeastNWidgets(1));
+    expect(find.text('Memory'), findsAtLeastNWidgets(1));
     expect(find.text('Currents'), findsNothing);
     expect(find.text('Chat'), findsNothing);
     fixture.services.dispose();
@@ -1874,10 +1904,14 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.byKey(const Key('companion_page_view')), findsOneWidget);
-      await tester.tap(find.widgetWithText(GestureDetector, 'Memory'));
+      await _selectCompanionTab(tester, 'Memory');
       await tester.pumpAndSettle();
 
       expect(find.byKey(const Key('memory_floating_bar')), findsOneWidget);
+      expect(
+        tester.getRect(find.byKey(const Key('memory_floating_bar'))).bottom,
+        lessThanOrEqualTo(tester.getRect(find.byType(GlassTabBar)).top),
+      );
       expect(
         find.text('Search what Omi knows, or add something new.'),
         findsNothing,
@@ -1926,7 +1960,13 @@ Future<void> _settle(WidgetTester tester) async {
 }
 
 Future<void> _selectCompanionTab(WidgetTester tester, String label) async {
-  await tester.tap(find.widgetWithText(GestureDetector, label));
+  const labels = ['Home', 'Conversations', 'Memory'];
+  final index = labels.indexOf(label);
+  if (index < 0) throw ArgumentError.value(label, 'label');
+  final bar = tester.getRect(find.byType(GlassTabBar));
+  await tester.tapAt(
+    Offset(bar.left + bar.width * (index + .5) / labels.length, bar.center.dy),
+  );
   await tester.pumpAndSettle();
 }
 

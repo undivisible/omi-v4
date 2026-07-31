@@ -347,6 +347,24 @@ void main() {
     return services;
   }
 
+  testWidgets('an empty home offers a draftable next step', (tester) async {
+    final store = VolatileHubChecklistStore();
+    await pumpLocalHub(tester, store);
+
+    final start = find.byKey(const Key('hub_empty_start'));
+    expect(start, findsOneWidget);
+    await tester.tap(start);
+    await tester.pump();
+
+    expect(
+      tester
+          .widget<TextField>(find.byKey(const Key('chat_input')))
+          .controller!
+          .text,
+      'Help me decide what to focus on next.',
+    );
+  });
+
   testWidgets('starter task row tap sends the title as a chat message', (
     tester,
   ) async {
@@ -937,92 +955,107 @@ void main() {
     expect(find.text('Earlier messages are above'), findsOneWidget);
   });
 
-  testWidgets('tasks with meeting metadata render as rich calendar rows', (
-    tester,
-  ) async {
-    final createdAt = DateTime.utc(2026, 7, 21, 12);
-    final services = makeServices(currentsClient: CurrentsClient(_Transport()));
-    addTearDown(services.dispose);
-    final meta = HubTaskMeta(
-      kind: 'meeting',
-      title: 'Design sync',
-      startsAt: DateTime(2026, 7, 22, 9, 30),
-      endsAt: DateTime(2026, 7, 22, 10, 15),
-      detail: 'Agenda: onboarding polish',
-    );
-    final seeded = <CurrentCard>[
-      CurrentCard(
-        item: CurrentItem.candidate(
-          id: 'design-sync',
-          evidence: [
-            CurrentEvidence(sourceId: 'eventkit:design-sync', reason: 'Event'),
-          ],
-          reason: 'Event',
-          timing: CurrentTiming(surfaceAt: createdAt),
-          confidence: .9,
-          proposedNextStep: 'Prepare for the design sync',
-          createdAt: createdAt,
-        ).transitionTo(CurrentStatus.surfaced, at: createdAt),
+  testWidgets(
+    'tasks with meeting metadata render as rich calendar rows and the Current card drafts its next step',
+    (tester) async {
+      final createdAt = DateTime.utc(2026, 7, 21, 12);
+      final services = makeServices(
+        currentsClient: CurrentsClient(_Transport()),
+      );
+      addTearDown(services.dispose);
+      final meta = HubTaskMeta(
+        kind: 'meeting',
         title: 'Design sync',
-        summary: 'Design sync',
-        sourceKind: 'calendar',
-        metadata: {
-          'kind': 'meeting',
-          'title': 'Design sync',
-          'startsAt': DateTime(2026, 7, 22, 9, 30).toIso8601String(),
-          'endsAt': DateTime(2026, 7, 22, 10, 15).toIso8601String(),
-          'detail': 'Agenda: onboarding polish',
-        },
-      ),
-      CurrentCard(
-        item: CurrentItem.candidate(
-          id: 'plain',
-          evidence: [CurrentEvidence(sourceId: 'memory-plain', reason: 'C')],
-          reason: 'C',
-          timing: CurrentTiming(surfaceAt: createdAt),
-          confidence: .9,
-          proposedNextStep: 'Reply to Alex about the notes',
-          createdAt: createdAt,
-        ).transitionTo(CurrentStatus.surfaced, at: createdAt),
-        title: 'Reply to Alex about the notes',
-        summary: 'Reply to Alex about the notes',
-      ),
-    ];
-    services.currents!.items = seeded;
-
-    final store = VolatileHubChecklistStore()..tasks = [meta.encode()];
-    await tester.pumpWidget(
-      MaterialApp(
-        home: Scaffold(
-          body: ChatScreen(services: services, checklistStore: store),
+        startsAt: DateTime(2026, 7, 22, 9, 30),
+        endsAt: DateTime(2026, 7, 22, 10, 15),
+        detail: 'Agenda: onboarding polish',
+      );
+      final seeded = <CurrentCard>[
+        CurrentCard(
+          item: CurrentItem.candidate(
+            id: 'design-sync',
+            evidence: [
+              CurrentEvidence(
+                sourceId: 'eventkit:design-sync',
+                reason: 'Event',
+              ),
+            ],
+            reason: 'Event',
+            timing: CurrentTiming(surfaceAt: createdAt),
+            confidence: .9,
+            proposedNextStep: 'Prepare for the design sync',
+            createdAt: createdAt,
+          ).transitionTo(CurrentStatus.surfaced, at: createdAt),
+          title: 'Design sync',
+          summary: 'Design sync',
+          sourceKind: 'calendar',
+          metadata: {
+            'kind': 'meeting',
+            'title': 'Design sync',
+            'startsAt': DateTime(2026, 7, 22, 9, 30).toIso8601String(),
+            'endsAt': DateTime(2026, 7, 22, 10, 15).toIso8601String(),
+            'detail': 'Agenda: onboarding polish',
+          },
         ),
-      ),
-    );
-    await tester.pump();
-    services.currents!.items = seeded;
-    await tester.pumpAndSettle();
+        CurrentCard(
+          item: CurrentItem.candidate(
+            id: 'plain',
+            evidence: [CurrentEvidence(sourceId: 'memory-plain', reason: 'C')],
+            reason: 'C',
+            timing: CurrentTiming(surfaceAt: createdAt),
+            confidence: .9,
+            proposedNextStep: 'Reply to Alex about the notes',
+            createdAt: createdAt,
+          ).transitionTo(CurrentStatus.surfaced, at: createdAt),
+          title: 'Reply to Alex about the notes',
+          summary: 'Reply to Alex about the notes',
+        ),
+      ];
+      services.currents!.items = seeded;
 
-    expect(
-      find.byKey(ValueKey('starter_task_${meta.encode()}')),
-      findsOneWidget,
-    );
-    expect(
-      find.byKey(const ValueKey('rich_task_card_Design sync')),
-      findsWidgets,
-    );
-    expect(
-      find.byKey(const ValueKey('rich_task_time_Design sync')),
-      findsWidgets,
-    );
-    expect(find.text('9:30 AM – 10:15 AM'), findsWidgets);
-    expect(find.text('Agenda: onboarding polish'), findsWidgets);
-    expect(
-      find.byKey(
-        const ValueKey('rich_task_card_Reply to Alex about the notes'),
-      ),
-      findsNothing,
-    );
-  });
+      final store = VolatileHubChecklistStore()..tasks = [meta.encode()];
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: ChatScreen(services: services, checklistStore: store),
+          ),
+        ),
+      );
+      await tester.pump();
+      services.currents!.items = seeded;
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byKey(ValueKey('starter_task_${meta.encode()}')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('rich_task_card_Design sync')),
+        findsWidgets,
+      );
+      expect(
+        find.byKey(const ValueKey('rich_task_time_Design sync')),
+        findsWidgets,
+      );
+      expect(find.text('9:30 AM – 10:15 AM'), findsWidgets);
+      expect(find.text('Agenda: onboarding polish'), findsWidgets);
+      expect(
+        find.byKey(
+          const ValueKey('rich_task_card_Reply to Alex about the notes'),
+        ),
+        findsNothing,
+      );
+      await tester.tap(find.byKey(const Key('current_focus')));
+      await tester.pump();
+      expect(
+        tester
+            .widget<TextField>(find.byKey(const Key('chat_input')))
+            .controller!
+            .text,
+        'Prepare for the design sync',
+      );
+    },
+  );
 }
 
 final class _EventHub implements NativeHub {

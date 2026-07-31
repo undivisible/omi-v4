@@ -381,7 +381,6 @@ class _OmiAppState extends State<OmiApp> {
       return DesktopAuthScreen(services: services, sessionId: desktopAuth);
     }
     if (_webPortal) return WebPortalScreen(services: services);
-    if (_openDone) return _destination;
     // The destination is built underneath the open as soon as it is known, so
     // its mark has been laid out and measured by the time the open starts
     // travelling to it. Landing on a placeholder that is swapped out a frame
@@ -390,8 +389,10 @@ class _OmiAppState extends State<OmiApp> {
       anchor: _markAnchor,
       child: Stack(
         children: [
-          if (_settled) _destination else const _BootField(),
-          OmiColdOpen(onDone: () => setState(() => _openDone = true)),
+          if (!_settled) const _BootField(),
+          if (_settled) _destination(homeVisible: _openDone),
+          if (!_openDone)
+            OmiColdOpen(onDone: () => setState(() => _openDone = true)),
         ],
       ),
     );
@@ -403,7 +404,7 @@ class _OmiAppState extends State<OmiApp> {
   /// the app "starting in onboarding before finding the thing".
   bool get _settled => !_checkingCompletion && !services.auth.snapshot.settling;
 
-  Widget get _destination {
+  Widget _destination({bool homeVisible = true}) {
     // The first frame the user ever sees is the mark, not a spinner.
     if (!_settled) {
       return const Scaffold(
@@ -413,7 +414,7 @@ class _OmiAppState extends State<OmiApp> {
     if (_onboardingComplete) {
       return _mobileCompanion
           ? MobileCompanionShell(services: services)
-          : OmiShell(services: services);
+          : OmiShell(services: services, homeVisible: homeVisible);
     }
     return _mobileCompanion
         ? MobileOnboardingScreen(

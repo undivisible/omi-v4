@@ -44,13 +44,16 @@ void main() {
     expect(await store().starterTasks(), isEmpty);
   });
 
-  test('tasks written before the stamp existed are treated as expired', () async {
-    SharedPreferences.setMockInitialValues({
-      'hub_starter_tasks_v1': ['Archive “omi” or schedule its next session.'],
-    });
+  test(
+    'tasks written before the stamp existed are treated as expired',
+    () async {
+      SharedPreferences.setMockInitialValues({
+        'hub_starter_tasks_v1': ['Archive “omi” or schedule its next session.'],
+      });
 
-    expect(await store().starterTasks(), isEmpty);
-  });
+      expect(await store().starterTasks(), isEmpty);
+    },
+  );
 
   test('clearStarterTasks retires them immediately', () async {
     await store().setStarterTasks(['Set a concrete deadline for “omi”.']);
