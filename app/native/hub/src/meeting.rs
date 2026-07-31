@@ -785,6 +785,22 @@ impl SpeakerRoster {
         true
     }
 
+    /// The label this diarized voice's turns were printed with, as far as the
+    /// roster knows: its bound name once it has one, and its assigned number
+    /// otherwise. `None` for a voice that never reached the transcript, which
+    /// is also the answer for one the roster has not seen.
+    ///
+    /// `You` is deliberately not reported: that prefix is never overridden, so
+    /// turns printed under it are never rewritten either.
+    pub fn printed_label(&self, diarized: u64) -> Option<String> {
+        let entry = self.entries.iter().find(|entry| entry.key == diarized)?;
+        entry
+            .profile
+            .as_ref()
+            .map(|(_, name)| name.clone())
+            .or_else(|| entry.number.map(|number| format!("Speaker {number}")))
+    }
+
     /// Drops the name for one diarized index — the undo for a wrong match.
     pub fn unbind_profile(&mut self, diarized: u64) -> bool {
         self.entries
@@ -898,11 +914,26 @@ impl MeetingSession {
         display_name: Option<&str>,
         text: &str,
     ) {
-        let text = text.trim();
         let accumulated = self.transcript_char_count;
-        if text.is_empty() || accumulated >= RAW_TRANSCRIPT_CHARS {
+        if text.trim().is_empty() || accumulated >= RAW_TRANSCRIPT_CHARS {
             return;
         }
+        // Every line of the transcript starts a turn, which is what lets a
+        // rename find the prefixes belonging to one voice without touching
+        // speech that happens to quote a label. A newline inside a segment
+        // would break that, so it is spoken text like any other whitespace.
+        let text: String = text
+            .trim()
+            .chars()
+            .map(|value| {
+                if value == '\n' || value == '\r' {
+                    ' '
+                } else {
+                    value
+                }
+            })
+            .collect();
+        let text = text.as_str();
         let label = match display_name {
             Some(name) if speaker != MeetingSpeaker::Unknown => Some(name.to_owned()),
             _ => speaker.label(),
@@ -959,7 +990,63 @@ impl MeetingSession {
         profile_id: &str,
         display_name: &str,
     ) -> bool {
-        self.roster.bind_profile(diarized, profile_id, display_name)
+        let previous = self.roster.printed_label(diarized);
+        if !self.roster.bind_profile(diarized, profile_id, display_name) {
+            return false;
+        }
+        if let (Some(previous), Some(current)) = (previous, self.roster.printed_label(diarized))
+            && previous != current
+        {
+            self.rename_turns(&previous, &current);
+        }
+        true
+    }
+
+    /// Rewrites the label prefix of every turn already written for one voice,
+    /// so a name that arrives mid-meeting also owns what was said before it.
+    ///
+    /// Only a prefix at the start of a line is a label; anywhere else the same
+    /// text is something a speaker said, and is left alone.
+    fn rename_turns(&mut self, previous: &str, current: &str) {
+        let renamed_last = self.last_label.as_deref() == Some(previous);
+        let previous = format!("{previous}: ");
+        if !self.transcript.starts_with(&previous)
+            && !self.transcript.contains(&format!("\n{previous}"))
+        {
+            return;
+        }
+        let renamed = current.to_owned();
+        let current = format!("{current}: ");
+        let mut rewritten = String::with_capacity(self.transcript.len());
+        for (index, line) in self.transcript.split('\n').enumerate() {
+            if index > 0 {
+                rewritten.push('\n');
+            }
+            match line.strip_prefix(previous.as_str()) {
+                Some(tail) => {
+                    rewritten.push_str(&current);
+                    rewritten.push_str(tail);
+                }
+                None => rewritten.push_str(line),
+            }
+        }
+        let count = rewritten.chars().count();
+        if count > RAW_TRANSCRIPT_CHARS {
+            // A longer name can push the tail past the cap. The transcript has
+            // always been a head-capped string, so it stays one: the overflow
+            // is dropped, and the next turn opens a fresh label rather than
+            // trusting a last turn that may no longer be intact.
+            self.transcript = rewritten.chars().take(RAW_TRANSCRIPT_CHARS).collect();
+            self.transcript_char_count = self.transcript.chars().count();
+            self.last_speaker = None;
+            self.last_label = None;
+            return;
+        }
+        self.transcript = rewritten;
+        self.transcript_char_count = count;
+        if renamed_last {
+            self.last_label = Some(renamed);
+        }
     }
 
     /// The transcript label for a resolved speaker, preferring a bound
@@ -2251,7 +2338,97 @@ mod tests {
         assert!(session.bind_speaker_profile(4, "sp_alex", "Alex"));
         let label = session.speaker_label(Some(4), MeetingSpeaker::Diarized(1));
         session.push_final_named(MeetingSpeaker::Diarized(1), label.as_deref(), "after");
-        assert_eq!(session.transcript(), "Speaker 1: before\nAlex: after");
+        assert_eq!(session.transcript(), "Alex: before after");
+    }
+
+    #[test]
+    fn a_name_arriving_mid_meeting_renames_only_that_voices_earlier_turns() {
+        let mut session = MeetingSession::new_at(None, true, 0);
+        let say = |session: &mut MeetingSession, key: u64, text: &str| {
+            let speaker = session.resolve_speaker(Some(key), MeetingSpeaker::Them);
+            let label = session.speaker_label(Some(key), speaker);
+            session.push_final_named(speaker, label.as_deref(), text);
+        };
+        say(&mut session, 4, "first");
+        say(&mut session, 5, "second");
+        say(&mut session, 4, "third");
+        assert_eq!(
+            session.transcript(),
+            "Speaker 1: first\nSpeaker 2: second\nSpeaker 1: third"
+        );
+        assert!(session.bind_speaker_profile(4, "sp_alex", "Alexandra"));
+        assert_eq!(
+            session.transcript(),
+            "Alexandra: first\nSpeaker 2: second\nAlexandra: third"
+        );
+        assert_eq!(
+            session.transcript().chars().count(),
+            session.transcript_char_count
+        );
+        say(&mut session, 4, "fourth");
+        assert!(session.transcript().ends_with("Alexandra: third fourth"));
+        say(&mut session, 5, "fifth");
+        assert!(session.transcript().ends_with("\nSpeaker 2: fifth"));
+    }
+
+    #[test]
+    fn a_rename_leaves_spoken_text_that_quotes_a_label_alone() {
+        let mut session = MeetingSession::new_at(None, true, 0);
+        let speaker = session.resolve_speaker(Some(4), MeetingSpeaker::Them);
+        let label = session.speaker_label(Some(4), speaker);
+        session.push_final_named(
+            speaker,
+            label.as_deref(),
+            "I think Speaker 1: is what it said\nSpeaker 1: again",
+        );
+        assert!(session.bind_speaker_profile(4, "sp_alex", "Alexandra"));
+        assert_eq!(
+            session.transcript(),
+            "Alexandra: I think Speaker 1: is what it said Speaker 1: again"
+        );
+    }
+
+    #[test]
+    fn a_rename_past_the_cap_truncates_and_reopens_the_next_turn() {
+        let mut session = MeetingSession::new_at(None, true, 0);
+        let speaker = session.resolve_speaker(Some(4), MeetingSpeaker::Them);
+        let label = session.speaker_label(Some(4), speaker);
+        session.push_final_named(speaker, label.as_deref(), &"x".repeat(RAW_TRANSCRIPT_CHARS));
+        assert_eq!(session.transcript_char_count, RAW_TRANSCRIPT_CHARS);
+        assert!(session.bind_speaker_profile(4, "sp_alex", "Alexandra Smith"));
+        assert!(session.transcript().starts_with("Alexandra Smith: xxx"));
+        assert_eq!(
+            session.transcript().chars().count(),
+            RAW_TRANSCRIPT_CHARS,
+            "a rewrite must not blow the cap"
+        );
+        assert_eq!(session.transcript_char_count, RAW_TRANSCRIPT_CHARS);
+        session.push_final_named(speaker, Some("Alexandra Smith"), "more");
+        assert_eq!(
+            session.transcript().chars().count(),
+            RAW_TRANSCRIPT_CHARS,
+            "a full transcript accepts nothing further"
+        );
+    }
+
+    #[test]
+    fn a_shorter_name_keeps_the_counter_in_step() {
+        let mut session = MeetingSession::new_at(None, true, 0);
+        let speaker = session.resolve_speaker(Some(4), MeetingSpeaker::Them);
+        let label = session.speaker_label(Some(4), speaker);
+        session.push_final_named(speaker, label.as_deref(), "hello");
+        assert!(session.bind_speaker_profile(4, "sp_al", "Al"));
+        assert_eq!(session.transcript(), "Al: hello");
+        assert_eq!(
+            session.transcript().chars().count(),
+            session.transcript_char_count
+        );
+        assert!(session.bind_speaker_profile(4, "sp_al", "Alexandra"));
+        assert_eq!(session.transcript(), "Alexandra: hello");
+        assert_eq!(
+            session.transcript().chars().count(),
+            session.transcript_char_count
+        );
     }
 
     #[test]
