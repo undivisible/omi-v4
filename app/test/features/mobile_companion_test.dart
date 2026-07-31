@@ -433,6 +433,19 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.byType(GlassTabBar), findsOneWidget);
+    expect(
+      tester
+          .widget<Scaffold>(find.byKey(const Key('companion_mobile_scaffold')))
+          .extendBody,
+      isTrue,
+    );
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('companion_pendant_tap')),
+        matching: find.byType(OmiIdleShowcase),
+      ),
+      findsOneWidget,
+    );
     fixture.services.dispose();
   });
 

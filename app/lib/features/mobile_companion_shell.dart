@@ -925,7 +925,9 @@ class MobilePendantPageState extends State<MobilePendantPage> {
         phase == DeviceConnectionPhase.disconnecting;
     final deviceTiles = _deviceTiles(phase, connected, lastError);
     return Scaffold(
+      key: const Key('companion_mobile_scaffold'),
       backgroundColor: Colors.transparent,
+      extendBody: true,
       body: Stack(
         clipBehavior: Clip.none,
         children: [
@@ -1001,7 +1003,10 @@ class MobilePendantPageState extends State<MobilePendantPage> {
             ),
         ],
       ),
-      bottomNavigationBar: _pageTabs(),
+      bottomNavigationBar: Padding(
+        padding: const EdgeInsets.only(bottom: 12),
+        child: _pageTabs(),
+      ),
     );
   }
 
@@ -1065,27 +1070,6 @@ class MobilePendantPageState extends State<MobilePendantPage> {
     required List<Widget> deviceTiles,
   }) {
     final content = <Widget>[
-      // The pendant above is the device; this is Omi. It sits below the hero
-      // rather than above it because the hero deliberately drops the top
-      // safe-area inset so the cord reaches past the notch. Left alone it
-      // works through the showcase motions, and it shoulders away from a
-      // finger the same way the desktop greeter does.
-      Center(
-        child: Padding(
-          padding: const EdgeInsets.only(bottom: 10),
-          child: OmiIdleShowcase(
-            size: 40,
-            color: _pageInk(context),
-            // Capturing is Omi listening; connecting is Omi working. Only a
-            // pendant sitting idle leaves it free to perform.
-            state: capturing
-                ? OmiOrbState.listening
-                : busy
-                ? OmiOrbState.thinking
-                : OmiOrbState.idle,
-          ),
-        ),
-      ),
       _LiveTranscriptStrip(
         connected: connected,
         capturing: capturing,
@@ -2117,6 +2101,17 @@ class _PendantHeroState extends State<_PendantHero>
       alignment: Alignment.center,
       clipBehavior: Clip.none,
       children: [
+        IgnorePointer(
+          child: OmiIdleShowcase(
+            size: pendantWidth * 1.08,
+            color: _pageInk(context),
+            state: capturing
+                ? OmiOrbState.listening
+                : widget.busy
+                ? OmiOrbState.thinking
+                : OmiOrbState.idle,
+          ),
+        ),
         // The connect finale: the warm glow bursts outward once, keyed on the
         // connection so a later reconnect fires a fresh one. Skipped under
         // reduced motion, where a burst that cannot animate would only leave a
