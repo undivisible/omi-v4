@@ -438,7 +438,26 @@ void main() {
           .extendBody,
       isTrue,
     );
+    final homePadding = tester.widget<SliverPadding>(
+      find.ancestor(
+        of: find.byKey(const Key('companion_session_list')),
+        matching: find.byType(SliverPadding),
+      ),
+    );
+    expect(
+      (homePadding.padding as EdgeInsets).bottom,
+      greaterThanOrEqualTo(88),
+    );
     expect(find.byKey(const Key('companion_pendant_tap')), findsOneWidget);
+    await _selectCompanionTab(tester, 'Conversations');
+    final conversationPadding =
+        tester
+                .widget<ListView>(
+                  find.byKey(const Key('companion_conversations_page')),
+                )
+                .padding
+            as EdgeInsets;
+    expect(conversationPadding.bottom, greaterThanOrEqualTo(88));
     fixture.services.dispose();
   });
 
@@ -1889,6 +1908,10 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.byKey(const Key('memory_floating_bar')), findsOneWidget);
+      expect(
+        tester.getRect(find.byKey(const Key('memory_floating_bar'))).bottom,
+        lessThanOrEqualTo(tester.getRect(find.byType(GlassTabBar)).top),
+      );
       expect(
         find.text('Search what Omi knows, or add something new.'),
         findsNothing,

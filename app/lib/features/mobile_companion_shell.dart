@@ -43,6 +43,7 @@ const _hairline = Color(0x14171716);
 const _teal = Color(0xff2f9d8a);
 const _coral = Color(0xffd97757);
 const _inkSheet = Color(0xff1c1c1a);
+const _companionTabBarClearance = 88.0;
 
 // Status accents stay in the cream/ink palette — no blue ring or blue status
 // wash when connected. Disconnected stays a soft coral so it still reads as
@@ -1147,7 +1148,12 @@ class MobilePendantPageState extends State<MobilePendantPage> {
           ),
         ),
         SliverPadding(
-          padding: const EdgeInsets.fromLTRB(18, 0, 18, 16),
+          padding: const EdgeInsets.fromLTRB(
+            18,
+            0,
+            18,
+            _companionTabBarClearance,
+          ),
           sliver: SliverList(
             key: const Key('companion_session_list'),
             delegate: SliverChildListDelegate(content),
@@ -1208,7 +1214,12 @@ class MobilePendantPageState extends State<MobilePendantPage> {
       onRefresh: _loadConversation,
       child: ListView(
         key: const Key('companion_conversations_page'),
-        padding: const EdgeInsets.fromLTRB(18, 56, 18, 16),
+        padding: const EdgeInsets.fromLTRB(
+          18,
+          56,
+          18,
+          _companionTabBarClearance,
+        ),
         children: tiles,
       ),
     );
@@ -1228,6 +1239,7 @@ class MobilePendantPageState extends State<MobilePendantPage> {
       key: const Key('companion_memory_page'),
       memory: memory,
       embedded: true,
+      bottomInset: _companionTabBarClearance,
     );
   }
 
