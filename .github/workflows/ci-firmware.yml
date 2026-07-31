@@ -96,19 +96,6 @@ jobs:
         if: steps.cache.outputs.cache-hit != 'true'
         run: bash .github/scripts/setup-ncs-toolchain.sh
 
-      - name: Install Git HTTPS transport
-        if: steps.cache.outputs.cache-hit != 'true'
-        run: |
-          set -euo pipefail
-          apt-get update
-          apt-get install --reinstall --yes --no-install-recommends git
-          git_wrapper_dir="${RUNNER_TEMP}/ncs-git-wrapper"
-          mkdir -p "${git_wrapper_dir}"
-          printf '%s\n' '#!/bin/sh' 'exec env GIT_EXEC_PATH="$(/usr/bin/git --exec-path)" /usr/bin/git "$@"' > "${git_wrapper_dir}/git"
-          chmod +x "${git_wrapper_dir}/git"
-          echo "${git_wrapper_dir}" >> "${GITHUB_PATH}"
-          test -x "$("${git_wrapper_dir}/git" --exec-path)/git-remote-https"
-
       - name: Fetch the nRF Connect SDK
         if: steps.cache.outputs.cache-hit != 'true'
         run: |

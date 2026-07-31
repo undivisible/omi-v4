@@ -22,6 +22,28 @@ persist_env() {
   export "$1=$2"
 }
 
+persist_toolchain_git_env() {
+  # The image bootstraps its toolchain through BASH_ENV=/opt/non-interactive-setup.sh,
+  # which sources /opt/toolchain-env.sh only while ZEPHYR_SDK_INSTALL_DIR is unset.
+  # Once this script writes ZEPHYR_SDK_INSTALL_DIR to $GITHUB_ENV the bootstrap
+  # short-circuits in every later step, so the toolchain git — which is first on
+  # PATH — loses GIT_EXEC_PATH, falls back to the compiled-in /usr/local/libexec/git-core
+  # and cannot find git-remote-https. Carry the git variables across steps too.
+  local git_bin git_exec
+  git_bin="$(command -v git 2>/dev/null || true)"
+  [ -n "${git_bin}" ] || return 0
+  git_exec="${GIT_EXEC_PATH:-}"
+  if [ -z "${git_exec}" ] || [ ! -x "${git_exec}/git-remote-https" ]; then
+    git_exec="$("${git_bin}" --exec-path 2>/dev/null || true)"
+  fi
+  [ -n "${git_exec}" ] && [ -x "${git_exec}/git-remote-https" ] || return 0
+  persist_env GIT_EXEC_PATH "${git_exec}"
+  note "persisted GIT_EXEC_PATH=${git_exec}"
+  if [ -n "${GIT_TEMPLATE_DIR:-}" ] && [ -d "${GIT_TEMPLATE_DIR}" ]; then
+    persist_env GIT_TEMPLATE_DIR "${GIT_TEMPLATE_DIR}"
+  fi
+}
+
 prepend_path() {
   case ":${PATH}:" in
     *":$1:"*) return 0 ;;
@@ -142,8 +164,9 @@ if command -v west >/dev/null 2>&1 && command -v cmake >/dev/null 2>&1 \
       fi
     done
   else
-    persist_env LD_LIBRARY_PATH "${LD_LIBRARY_PATH}"
+    persist_env LD_LIBRARY_PATH "${LD_LIBRARY_PATH%:}"
   fi
+  persist_toolchain_git_env
   export_zephyr_sdk || true
   report_success
   exit 0
@@ -215,6 +238,7 @@ for tool in cmake ninja dtc python3; do
   fi
 done
 
+persist_toolchain_git_env
 export_zephyr_sdk || true
 
 report_failure() {
