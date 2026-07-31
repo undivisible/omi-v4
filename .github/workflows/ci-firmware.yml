@@ -258,8 +258,9 @@ jobs:
         if: matrix.app_dir == 'firmware/omi'
         run: |
           set -euo pipefail
+          apt-get update
+          apt-get install --yes --no-install-recommends libclang-dev
           if ! command -v rustup >/dev/null 2>&1; then
-            apt-get update
             apt-get install --yes --no-install-recommends curl
             (
               export LD_LIBRARY_PATH=
