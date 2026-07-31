@@ -2102,10 +2102,10 @@ class _PendantHeroState extends State<_PendantHero>
       clipBehavior: Clip.none,
       children: [
         Positioned(
-          top: pendantHeight * .74 - pendantWidth * .16,
+          top: pendantHeight * .74 - pendantWidth * .525,
           child: IgnorePointer(
             child: OmiActivityOrb(
-              size: pendantWidth * .32,
+              size: pendantWidth * 1.05,
               color: _pageInk(context),
               motion: OmiOrbMotion.mark,
               period: const Duration(seconds: 4),
