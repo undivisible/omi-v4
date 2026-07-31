@@ -18,7 +18,7 @@ const ALL_CAPS_PENALTY: i32 = 15;
 const RECENCY_WINDOW_DAYS: i64 = 30;
 #[cfg(target_os = "macos")]
 const NOTES_QUERY_LIMIT: usize = LIMIT * 3;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", test))]
 const MAIL_QUERY_LIMIT: usize = LIMIT * 4;
 #[cfg(target_os = "macos")]
 const NOTES_CLASSIFIER_NOISE: &[&str] = &[
@@ -603,6 +603,8 @@ const MAIL_FLAG_FLAGGED: i64 = 0x10;
 #[cfg(any(target_os = "macos", test))]
 const MAIL_SCORE_FLOOR: i32 = -40;
 #[cfg(any(target_os = "macos", test))]
+const MAIL_PRIMARY_JOIN: &str = "JOIN mailboxes mb ON mb.ROWID=m.mailbox JOIN message_global_data mgd ON mgd.ROWID=m.global_message_id WHERE (lower(mb.url) LIKE '%/inbox' OR lower(mb.url) LIKE '%/categories/primary') AND mgd.model_category=0 AND mgd.model_subcategory=1";
+#[cfg(any(target_os = "macos", test))]
 const MAIL_PROMO_KEYWORDS: &[&str] = &[
     "% off",
     "black friday",
@@ -834,6 +836,13 @@ fn primary_mailbox_join(connection: &Connection) -> Option<&'static str> {
         return None;
     }
     if messages.contains("mailbox") {
+        let categories = columns(connection, "message_global_data").ok()?;
+        if messages.contains("global_message_id")
+            && categories.contains("model_category")
+            && categories.contains("model_subcategory")
+        {
+            return Some(MAIL_PRIMARY_JOIN);
+        }
         return Some(
             "JOIN mailboxes mb ON mb.ROWID=m.mailbox WHERE (lower(mb.url) LIKE '%/inbox' OR lower(mb.url) LIKE '%/categories/primary')",
         );
@@ -1295,19 +1304,21 @@ mod tests {
     }
 
     #[test]
-    fn mail_query_uses_current_mailbox_column() {
+    fn mail_query_uses_current_primary_category() {
         let connection = Connection::open_in_memory();
         assert!(connection.is_ok());
         let Ok(connection) = connection else { return };
         let setup = connection.execute_batch(
-            "CREATE TABLE messages (subject INTEGER, sender INTEGER, date_received INTEGER, mailbox INTEGER);
+            "CREATE TABLE messages (subject INTEGER, sender INTEGER, date_received INTEGER, mailbox INTEGER, global_message_id INTEGER);
              CREATE TABLE subjects (subject TEXT);
              CREATE TABLE addresses (address TEXT, comment TEXT);
              CREATE TABLE mailboxes (url TEXT);
-             INSERT INTO subjects VALUES ('Inbox'), ('Spam'), ('Primary');
-             INSERT INTO addresses VALUES ('inbox@example.com', 'Inbox Sender'), ('spam@example.com', 'Spam Sender'), ('primary@example.com', 'Primary Sender');
-             INSERT INTO messages VALUES (1, 1, 3, 1), (2, 2, 2, 2), (3, 3, 1, 3);
-             INSERT INTO mailboxes VALUES ('imap://example.com/INBOX'), ('imap://example.com/Junk'), ('imap://example.com/[Gmail]/Categories/Primary');",
+             CREATE TABLE message_global_data (model_category INTEGER, model_subcategory INTEGER);
+             INSERT INTO subjects VALUES ('Primary'), ('Spam'), ('Transaction');
+             INSERT INTO addresses VALUES ('primary@example.com', 'Primary Sender'), ('spam@example.com', 'Spam Sender'), ('transaction@example.com', 'Transaction Sender');
+             INSERT INTO message_global_data VALUES (0, 1), (0, 1), (1, 4);
+             INSERT INTO messages VALUES (1, 1, 3, 1, 1), (2, 2, 2, 2, 2), (3, 3, 1, 1, 3);
+             INSERT INTO mailboxes VALUES ('imap://example.com/INBOX'), ('imap://example.com/Junk');",
         );
         assert!(setup.is_ok());
         let Some(mailbox_join) = primary_mailbox_join(&connection) else {
@@ -1323,7 +1334,7 @@ mod tests {
         let subjects = rows.collect::<Result<Vec<_>, _>>();
         assert!(subjects.is_ok());
         let Ok(subjects) = subjects else { return };
-        assert_eq!(subjects, ["Inbox", "Primary"]);
+        assert_eq!(subjects, ["Primary"]);
     }
 
     #[test]
