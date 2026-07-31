@@ -84,20 +84,16 @@ packages:
   crepuscularity_components:
     dependency: transitive
     description:
-      path: "plugins/crepuscularity-components/packages/flutter"
-      ref: d67f440d7154be305a120c556442991834147028
-      resolved-ref: d67f440d7154be305a120c556442991834147028
-      url: "https://github.com/tschk/crepuscularity"
-    source: git
+      path: "../../crepuscularity/plugins/crepuscularity-components/packages/flutter"
+      relative: true
+    source: path
     version: "0.1.1"
   crepuscularity_flutter:
     dependency: "direct main"
     description:
-      path: "plugins/crepuscularity-flutter"
-      ref: "v0.11.0"
-      resolved-ref: d67f440d7154be305a120c556442991834147028
-      url: "https://github.com/tschk/crepuscularity"
-    source: git
+      path: "../../crepuscularity/plugins/crepuscularity-flutter"
+      relative: true
+    source: path
     version: "0.2.0"
   cross_file:
     dependency: transitive
