@@ -381,7 +381,6 @@ class _OmiAppState extends State<OmiApp> {
       return DesktopAuthScreen(services: services, sessionId: desktopAuth);
     }
     if (_webPortal) return WebPortalScreen(services: services);
-    if (_openDone) return _destination();
     // The destination is built underneath the open as soon as it is known, so
     // its mark has been laid out and measured by the time the open starts
     // travelling to it. Landing on a placeholder that is swapped out a frame
@@ -391,8 +390,9 @@ class _OmiAppState extends State<OmiApp> {
       child: Stack(
         children: [
           if (!_settled) const _BootField(),
-          if (_settled) _destination(homeVisible: false),
-          OmiColdOpen(onDone: () => setState(() => _openDone = true)),
+          if (_settled) _destination(homeVisible: _openDone),
+          if (!_openDone)
+            OmiColdOpen(onDone: () => setState(() => _openDone = true)),
         ],
       ),
     );
