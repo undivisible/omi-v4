@@ -871,13 +871,6 @@ final class _SentAudio {
 
 final class _RecordingHub implements NativeHub {
   @override
-  void configureCloudMemory({
-    required String requestId,
-    required String managedWorkerOrigin,
-    required String credential,
-  }) {}
-
-  @override
   void rewind({required String requestId, required RewindRequest request}) {}
 
   @override
