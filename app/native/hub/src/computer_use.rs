@@ -131,6 +131,7 @@ pub(crate) fn capabilities() -> Option<ComputerUseCapabilities> {
                 name: capability.action,
                 delivery_route: match capability.delivery_route {
                     DeliveryRoute::TargetAddressed => ComputerUseDeliveryRoute::TargetAddressed,
+                    DeliveryRoute::PerProcessEvent => ComputerUseDeliveryRoute::PerProcessEvent,
                     DeliveryRoute::Pointer => ComputerUseDeliveryRoute::Pointer,
                     DeliveryRoute::Unknown => ComputerUseDeliveryRoute::Unknown,
                 },

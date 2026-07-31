@@ -1309,6 +1309,7 @@ pub struct ComputerUseActionCapability {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, SignalPiece)]
 pub enum ComputerUseDeliveryRoute {
     TargetAddressed,
+    PerProcessEvent,
     Pointer,
     Unknown,
 }
