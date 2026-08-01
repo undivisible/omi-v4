@@ -10,7 +10,9 @@
   // left out of the ambient drift below — two writers on one --omi-rot would
   // fight. It still takes the scatter and the pulse with everything else.
   const marks = [...document.querySelectorAll("[data-omi-mark]")];
-  const drifting = marks.filter((mark) => !mark.matches(".omi-mark--rail"));
+  // Scroll-driven Paramount cold-open mark is owned by computer-stage.js.
+  const ambient = marks.filter((mark) => !mark.matches(".ed-cold-mark"));
+  const drifting = ambient.filter((mark) => !mark.matches(".omi-mark--rail"));
   if (!marks.length) return;
 
   const quiet = window.matchMedia("(prefers-reduced-motion: reduce)");
@@ -18,11 +20,11 @@
 
   // The ring arrives scattered and re-forms, one dot after the next. The
   // stagger lives in CSS transition-delay; all this does is release it.
-  for (const mark of marks) mark.style.setProperty("--omi-spread", "44");
+  for (const mark of ambient) mark.style.setProperty("--omi-spread", "44");
 
   requestAnimationFrame(() => {
     requestAnimationFrame(() => {
-      for (const mark of marks) {
+      for (const mark of ambient) {
         mark.classList.add("is-live");
         mark.style.setProperty("--omi-spread", "0");
       }
@@ -71,7 +73,7 @@
 
   // The mark leans toward the primary action while it is under the cursor.
   const tighten = (on) => {
-    for (const mark of marks) mark.classList.toggle("is-tight", on);
+    for (const mark of ambient) mark.classList.toggle("is-tight", on);
   };
 
   for (const cta of document.querySelectorAll(".btn-solid")) {

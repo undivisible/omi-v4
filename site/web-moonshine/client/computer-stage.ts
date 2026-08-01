@@ -77,27 +77,23 @@ function initHero() {
   const hero = document.querySelector<HTMLElement>("[data-hero]");
   if (!hero || reduced()) return;
 
-  const tl = gsap.timeline({ defaults: { ease: "power3.out" } });
-  tl.fromTo(
-    hero.querySelectorAll("[data-hero-in]"),
-    { y: 36, opacity: 0 },
-    { y: 0, opacity: 1, duration: 0.9, stagger: 0.08 },
-  );
+  gsap
+    .timeline({ defaults: { ease: "power3.out" } })
+    .fromTo(
+      hero.querySelectorAll("[data-hero-in]"),
+      { y: 36, opacity: 0 },
+      { y: 0, opacity: 1, duration: 0.9, stagger: 0.08 },
+    );
 
   const media = hero.querySelector<HTMLElement>("[data-hero-media]");
   if (media) {
     gsap.fromTo(
       media,
-      { scale: 1.08, opacity: 0.4 },
-      {
-        scale: 1,
-        opacity: 1,
-        duration: 1.4,
-        ease: "power2.out",
-      },
+      { scale: 1.08, opacity: 0.35 },
+      { scale: 1, opacity: 1, duration: 1.4, ease: "power2.out" },
     );
     gsap.to(media, {
-      yPercent: 12,
+      yPercent: 14,
       ease: "none",
       scrollTrigger: {
         trigger: hero,
@@ -109,16 +105,15 @@ function initHero() {
   }
 }
 
-/** Example Omi replies float upward until the desplatter section. */
 function initFloatReplies(root: HTMLElement) {
   const layer = root.querySelector<HTMLElement>("[data-float-replies]");
-  const dissolve = root.querySelector<HTMLElement>("#omi-unifies");
+  const dissolve = root.querySelector<HTMLElement>("[data-dissolve-section]");
   if (!layer || !dissolve) return;
   const cards = [...layer.querySelectorAll<HTMLElement>("[data-float-card]")];
   if (!cards.length) return;
 
   if (reduced()) {
-    layer.style.opacity = "0.55";
+    layer.style.opacity = "0.45";
     return;
   }
 
@@ -137,133 +132,38 @@ function initFloatReplies(root: HTMLElement) {
       ease: "power2.out",
     });
     gsap.to(card, {
-      y: "-=120",
-      duration: 14 + i * 1.4,
+      y: "-=140",
+      duration: 16 + i * 1.2,
       repeat: -1,
       ease: "none",
-      delay: i * 0.4,
+      delay: i * 0.35,
     });
     gsap.to(card, {
-      x: `+=${i % 2 === 0 ? 18 : -18}`,
-      duration: 5 + (i % 3),
+      x: `+=${i % 2 === 0 ? 22 : -22}`,
+      duration: 5.5 + (i % 3),
       yoyo: true,
       repeat: -1,
       ease: "sine.inOut",
-      delay: i * 0.2,
     });
   });
 
   gsap.to(layer, {
     opacity: 0,
-    y: -40,
+    y: -48,
     ease: "none",
     scrollTrigger: {
       trigger: dissolve,
-      start: "top 20%",
+      start: "top 25%",
       end: "top top",
       scrub: true,
     },
   });
 }
 
-/** Soft 8-dot field behind the manifesto copy. */
-function initThreadShader(root: HTMLElement) {
-  const host = root.querySelector<HTMLElement>("[data-thread-shader]");
-  if (!host) return;
-  if (reduced()) {
-    host.dataset.fallback = "1";
-    return;
-  }
-
-  const canvas = document.createElement("canvas");
-  host.appendChild(canvas);
-  const gl = canvas.getContext("webgl2", {
-    alpha: true,
-    antialias: true,
-    premultipliedAlpha: false,
-  });
-  if (!gl) {
-    host.dataset.fallback = "1";
-    return;
-  }
-
-  const fs = `#version 300 es
-precision highp float;
-in vec2 v_uv;
-out vec4 outColor;
-uniform float u_time;
-uniform vec2 u_res;
-
-float circle(vec2 p, float r) {
-  return smoothstep(r, r - 0.01, length(p));
-}
-
-void main() {
-  vec2 uv = v_uv;
-  float aspect = u_res.x / max(u_res.y, 1.0);
-  vec2 p = (uv - 0.5) * vec2(aspect, 1.0);
-
-  float pulse = 0.5 + 0.5 * sin(u_time * 0.7);
-  float radius = 0.28 + pulse * 0.02;
-  float glow = 0.0;
-  vec3 accent = vec3(0.62, 0.40, 0.33);
-  vec3 cream = vec3(0.98, 0.97, 0.93);
-
-  for (int i = 0; i < 8; i++) {
-    float a = float(i) * 6.2831853 / 8.0 + u_time * 0.08;
-    vec2 c = vec2(cos(a), sin(a)) * radius;
-    float d = length(p - c);
-    float dot = smoothstep(0.055, 0.0, d);
-    float halo = exp(-d * 14.0) * (0.35 + 0.25 * sin(u_time * 1.4 + float(i)));
-    glow += dot * 0.9 + halo;
-  }
-
-  float ring = abs(length(p) - radius);
-  float ringGlow = exp(-ring * 28.0) * 0.22;
-  float mist = exp(-length(p) * 2.2) * 0.18;
-
-  vec3 col = mix(vec3(0.08, 0.07, 0.06), accent, mist);
-  col = mix(col, cream, clamp(glow * 0.55, 0.0, 1.0));
-  col += accent * ringGlow;
-
-  float alpha = clamp(mist * 1.4 + glow * 0.65 + ringGlow, 0.0, 0.85);
-  outColor = vec4(col, alpha);
-}`;
-
-  const prog = makeProgram(gl, FULLSCREEN_VS, fs);
-  gl.useProgram(prog);
-  bindFullscreenQuad(gl, prog);
-  const uTime = gl.getUniformLocation(prog, "u_time");
-  const uRes = gl.getUniformLocation(prog, "u_res");
-
-  const resize = () => {
-    const dpr = Math.min(window.devicePixelRatio, 2);
-    const w = host.clientWidth;
-    const h = host.clientHeight;
-    canvas.width = Math.max(1, Math.floor(w * dpr));
-    canvas.height = Math.max(1, Math.floor(h * dpr));
-    canvas.style.width = `${w}px`;
-    canvas.style.height = `${h}px`;
-    gl.viewport(0, 0, canvas.width, canvas.height);
-    gl.uniform2f(uRes, canvas.width, canvas.height);
-  };
-  resize();
-  window.addEventListener("resize", resize);
-  gl.enable(gl.BLEND);
-  gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
-
-  const draw = (t: number) => {
-    gl.clearColor(0, 0, 0, 0);
-    gl.clear(gl.COLOR_BUFFER_BIT);
-    gl.uniform1f(uTime, t * 0.001);
-    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-  };
-  gsap.ticker.add(draw);
-}
-
 /**
- * Pinned desplatter: hold on competitor traits, burn them away, then reveal Omi.
- * Progress stays at 0 until the section is pinned (top of viewport).
+ * Pinned sequence:
+ * hold competitors → Paramount-style mark deconstruct + trait scatter →
+ * mark reforms + Omi copy. Noise burn peaks mid-way and clears (never lands white).
  */
 function initDissolve(root: HTMLElement) {
   const section = root.querySelector<HTMLElement>("[data-dissolve-section]");
@@ -271,37 +171,47 @@ function initDissolve(root: HTMLElement) {
   const host = root.querySelector<HTMLElement>("[data-dissolve-canvas]");
   const them = root.querySelector<HTMLElement>("[data-dissolve-them]");
   const us = root.querySelector<HTMLElement>("[data-dissolve-us]");
+  const mark = root.querySelector<HTMLElement>(".ed-cold-mark");
   const traits = [
     ...(them?.querySelectorAll<HTMLElement>("[data-dissolve-trait]") ?? []),
   ];
-  if (!section || !stage || !host || !them || !us) return;
+  if (!section || !stage || !them || !us) return;
 
-  gsap.set(us, { opacity: 0, filter: "blur(12px)", y: 24 });
+  const setMarkSpread = (spread: number) => {
+    if (!mark) return;
+    mark.style.setProperty("--omi-spread", String(spread));
+    mark.classList.add("is-live");
+  };
+
+  gsap.set(us, { opacity: 0, filter: "blur(14px)", y: 28 });
   gsap.set(them, { opacity: 1, filter: "blur(0px)" });
-  gsap.set(traits, { opacity: 1, y: 0 });
+  gsap.set(traits, { opacity: 1, y: 0, scale: 1 });
+  setMarkSpread(0);
 
   if (reduced()) {
-    host.dataset.fallback = "1";
+    if (host) host.dataset.fallback = "1";
     gsap.set(them, { opacity: 0 });
     gsap.set(us, { opacity: 1, filter: "none", y: 0 });
+    setMarkSpread(0);
     return;
   }
 
-  const canvas = document.createElement("canvas");
-  host.appendChild(canvas);
-  const gl = canvas.getContext("webgl2", {
-    alpha: true,
-    antialias: false,
-    premultipliedAlpha: false,
-  });
-  if (!gl) {
-    host.dataset.fallback = "1";
-    return;
-  }
+  let burn = 0;
+  let gl: WebGL2RenderingContext | null = null;
 
-  // burn=1 → opaque (covering "them" with cream/ember), burn→0 as progress rises
-  // so the noise hole opens through the competitor layer.
-  const fs = `#version 300 es
+  if (host) {
+    const canvas = document.createElement("canvas");
+    host.appendChild(canvas);
+    gl = canvas.getContext("webgl2", {
+      alpha: true,
+      antialias: false,
+      premultipliedAlpha: false,
+    });
+    if (!gl) {
+      host.dataset.fallback = "1";
+    } else {
+      // Ember ash that peaks mid-scroll then clears — never a white end state.
+      const fs = `#version 300 es
 precision highp float;
 in vec2 v_uv;
 out vec4 outColor;
@@ -337,87 +247,101 @@ void main() {
   vec2 uv = v_uv;
   float aspect = u_res.x / max(u_res.y, 1.0);
   vec2 p = (uv - 0.5) * vec2(aspect, 1.0);
-  float n = fbm(p * 3.6 + u_time * 0.05);
+  float n = fbm(p * 3.8 + u_time * 0.06);
   float edge = u_edge;
-  // Invert classic veil: start clear over "them", then burn a cream/ember sheet
-  // across them as holes — reads as attributes desplattering apart.
   float scatter = smoothstep(u_progress - edge, u_progress + edge, n);
   float holes = 1.0 - scatter;
   float rim = smoothstep(u_progress - edge * 1.5, u_progress, n)
     * (1.0 - smoothstep(u_progress, u_progress + edge * 1.3, n));
-  vec3 ash = vec3(0.96, 0.93, 0.88);
-  vec3 ember = vec3(0.62, 0.40, 0.33);
-  vec3 col = mix(ash, ember, rim);
-  float alpha = holes * 0.92 + rim * 0.55;
-  // Hold fully clear until burn phase starts (u_progress near 0).
-  alpha *= smoothstep(0.02, 0.12, u_progress);
+  // Onboarding ember / sand — not paper white.
+  vec3 ash = vec3(0.66, 0.50, 0.40);
+  vec3 ember = vec3(0.66, 0.37, 0.27);
+  vec3 room = vec3(0.17, 0.15, 0.13);
+  vec3 col = mix(room, mix(ash, ember, rim), 0.85);
+  float envelope = smoothstep(0.08, 0.28, u_progress)
+    * (1.0 - smoothstep(0.72, 0.98, u_progress));
+  float alpha = (holes * 0.55 + rim * 0.7) * envelope;
   outColor = vec4(col, alpha);
 }`;
 
-  const prog = makeProgram(gl, FULLSCREEN_VS, fs);
-  gl.useProgram(prog);
-  bindFullscreenQuad(gl, prog);
+      const prog = makeProgram(gl, FULLSCREEN_VS, fs);
+      gl.useProgram(prog);
+      bindFullscreenQuad(gl, prog);
+      const uProgress = gl.getUniformLocation(prog, "u_progress");
+      const uTime = gl.getUniformLocation(prog, "u_time");
+      const uEdge = gl.getUniformLocation(prog, "u_edge");
+      const uRes = gl.getUniformLocation(prog, "u_res");
 
-  const uProgress = gl.getUniformLocation(prog, "u_progress");
-  const uTime = gl.getUniformLocation(prog, "u_time");
-  const uEdge = gl.getUniformLocation(prog, "u_edge");
-  const uRes = gl.getUniformLocation(prog, "u_res");
+      const resize = () => {
+        const dpr = Math.min(window.devicePixelRatio, 2);
+        const w = host.clientWidth;
+        const h = host.clientHeight;
+        canvas.width = Math.max(1, Math.floor(w * dpr));
+        canvas.height = Math.max(1, Math.floor(h * dpr));
+        canvas.style.width = `${w}px`;
+        canvas.style.height = `${h}px`;
+        gl!.viewport(0, 0, canvas.width, canvas.height);
+        gl!.uniform2f(uRes, canvas.width, canvas.height);
+      };
+      resize();
+      window.addEventListener("resize", resize);
+      gl.enable(gl.BLEND);
+      gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
 
-  let burn = 0;
-  const resize = () => {
-    const dpr = Math.min(window.devicePixelRatio, 2);
-    const w = host.clientWidth;
-    const h = host.clientHeight;
-    canvas.width = Math.max(1, Math.floor(w * dpr));
-    canvas.height = Math.max(1, Math.floor(h * dpr));
-    canvas.style.width = `${w}px`;
-    canvas.style.height = `${h}px`;
-    gl.viewport(0, 0, canvas.width, canvas.height);
-    gl.uniform2f(uRes, canvas.width, canvas.height);
-  };
-  resize();
-  window.addEventListener("resize", resize);
-
-  gl.enable(gl.BLEND);
-  gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
-
-  const draw = (t: number) => {
-    gl.clearColor(0, 0, 0, 0);
-    gl.clear(gl.COLOR_BUFFER_BIT);
-    gl.uniform1f(uProgress, burn);
-    gl.uniform1f(uTime, t * 0.001);
-    gl.uniform1f(uEdge, 0.18);
-    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-  };
-  gsap.ticker.add(draw);
+      gsap.ticker.add((t) => {
+        if (!gl) return;
+        gl.clearColor(0, 0, 0, 0);
+        gl.clear(gl.COLOR_BUFFER_BIT);
+        gl.uniform1f(uProgress, burn);
+        gl.uniform1f(uTime, t * 0.001);
+        gl.uniform1f(uEdge, 0.16);
+        gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+      });
+    }
+  }
 
   const applyPhase = (p: number) => {
-    // 0–0.18 hold on competitors (no burn)
-    // 0.18–0.62 burn / scatter them
-    // 0.48–1.0 reveal Omi
-    const hold = 0.18;
-    const burnEnd = 0.62;
-    const burnT = Math.min(1, Math.max(0, (p - hold) / (burnEnd - hold)));
-    burn = burnT;
+    // 0–0.16 hold competitors + assembled mark
+    // 0.16–0.55 deconstruct mark + scatter traits + burn
+    // 0.50–0.85 reform mark + reveal Omi
+    // 0.85–1.0 settle (finished)
+    const hold = 0.16;
+    const mid = 0.55;
+    const t = Math.min(1, Math.max(0, (p - hold) / (mid - hold)));
+    burn = t;
 
-    const themFade = 1 - Math.min(1, Math.max(0, (p - 0.28) / 0.34));
+    // Paramount / cold-open: scatter out then ease back (sin curve like successBurst).
+    const decon = Math.min(1, Math.max(0, (p - 0.14) / 0.42));
+    const reform = Math.min(1, Math.max(0, (p - 0.52) / 0.32));
+    const burst = Math.sin(decon * Math.PI) * (1 - reform * 0.95);
+    setMarkSpread(burst * 92);
+
+    const themFade = 1 - Math.min(1, Math.max(0, (p - 0.22) / 0.38));
     them.style.opacity = String(themFade);
-    them.style.filter = `blur(${((1 - themFade) * 8).toFixed(2)}px)`;
-    them.style.transform = `scale(${(1 + (1 - themFade) * 0.03).toFixed(3)})`;
+    them.style.filter = `blur(${((1 - themFade) * 10).toFixed(2)}px)`;
+    them.style.transform = `scale(${(1 + (1 - themFade) * 0.04).toFixed(3)})`;
 
     traits.forEach((trait, i) => {
-      const local = Math.min(
-        1,
-        Math.max(0, (burnT - i * 0.07) / 0.35),
-      );
+      const local = Math.min(1, Math.max(0, (t - i * 0.06) / 0.32));
+      const angle = (i / traits.length) * Math.PI * 2;
+      const dist = local * 48;
       trait.style.opacity = String(1 - local);
-      trait.style.transform = `translateY(${(-12 * local).toFixed(1)}px) scale(${(1 - local * 0.06).toFixed(3)})`;
+      trait.style.transform = `translate(${(Math.cos(angle) * dist).toFixed(1)}px, ${(Math.sin(angle) * dist - 8 * local).toFixed(1)}px) scale(${(1 - local * 0.12).toFixed(3)})`;
     });
 
-    const usT = Math.min(1, Math.max(0, (p - 0.48) / 0.4));
+    const usT = Math.min(1, Math.max(0, (p - 0.5) / 0.35));
     us.style.opacity = String(usT);
     us.style.filter = `blur(${((1 - usT) * 12).toFixed(2)}px)`;
-    us.style.transform = `translateY(${(24 * (1 - usT)).toFixed(1)}px) scale(${(0.96 + usT * 0.04).toFixed(3)})`;
+    us.style.transform = `translateY(${(28 * (1 - usT)).toFixed(1)}px)`;
+
+    if (p >= 0.98) {
+      burn = 1;
+      setMarkSpread(0);
+      them.style.opacity = "0";
+      us.style.opacity = "1";
+      us.style.filter = "none";
+      us.style.transform = "none";
+    }
   };
 
   applyPhase(0);
@@ -425,12 +349,15 @@ void main() {
   ScrollTrigger.create({
     trigger: section,
     start: "top top",
-    end: "+=280%",
+    end: "+=320%",
     pin: stage,
-    scrub: 0.55,
+    scrub: 0.65,
     anticipatePin: 1,
     invalidateOnRefresh: true,
+    pinSpacing: true,
     onUpdate: (self) => applyPhase(self.progress),
+    onLeave: () => applyPhase(1),
+    onEnterBack: () => applyPhase(0.99),
   });
 }
 
@@ -445,11 +372,11 @@ function initReveal(root: HTMLElement) {
   root.querySelectorAll<HTMLElement>("[data-reveal]").forEach((el) => {
     gsap.fromTo(
       el,
-      { y: 28, opacity: 0 },
+      { y: 32, opacity: 0 },
       {
         y: 0,
         opacity: 1,
-        duration: 0.85,
+        duration: 0.9,
         ease: "power3.out",
         scrollTrigger: {
           trigger: el,
@@ -464,12 +391,12 @@ function initReveal(root: HTMLElement) {
     const kids = group.querySelectorAll(":scope > *");
     gsap.fromTo(
       kids,
-      { y: 22, opacity: 0 },
+      { y: 26, opacity: 0 },
       {
         y: 0,
         opacity: 1,
-        duration: 0.7,
-        stagger: 0.07,
+        duration: 0.75,
+        stagger: 0.08,
         ease: "power2.out",
         scrollTrigger: {
           trigger: group,
@@ -477,6 +404,20 @@ function initReveal(root: HTMLElement) {
         },
       },
     );
+  });
+
+  // Soft parallax on band washes so sections feel continuous.
+  root.querySelectorAll<HTMLElement>("[data-wash]").forEach((wash) => {
+    gsap.to(wash, {
+      yPercent: 8,
+      ease: "none",
+      scrollTrigger: {
+        trigger: wash.parentElement ?? wash,
+        start: "top bottom",
+        end: "bottom top",
+        scrub: true,
+      },
+    });
   });
 }
 
@@ -486,7 +427,7 @@ function initSteps(root: HTMLElement) {
   cards.forEach((card) => {
     gsap.fromTo(
       card,
-      { y: 40, opacity: 0.35, filter: "blur(6px)" },
+      { y: 40, opacity: 0.25, filter: "blur(8px)" },
       {
         y: 0,
         opacity: 1,
@@ -494,8 +435,8 @@ function initSteps(root: HTMLElement) {
         ease: "none",
         scrollTrigger: {
           trigger: card,
-          start: "top 80%",
-          end: "top 35%",
+          start: "top 82%",
+          end: "top 38%",
           scrub: true,
         },
       },
@@ -513,7 +454,7 @@ function initHardware(root: HTMLElement) {
   if (img) {
     gsap.fromTo(
       img,
-      { scale: 0.92, rotate: -2 },
+      { scale: 0.9, rotate: -3 },
       {
         scale: 1,
         rotate: 0,
@@ -531,27 +472,34 @@ function initHardware(root: HTMLElement) {
   if (orbit) {
     gsap.to(orbit, {
       rotate: 360,
-      duration: 48,
+      duration: 56,
       repeat: -1,
       ease: "none",
     });
+    const orbitMark = orbit.querySelector<HTMLElement>("[data-omi-mark]");
+    if (orbitMark) {
+      gsap.to(orbitMark, {
+        "--omi-spread": 18,
+        duration: 2.8,
+        yoyo: true,
+        repeat: -1,
+        ease: "sine.inOut",
+      });
+    }
   }
 
   chips.forEach((chip, i) => {
     gsap.fromTo(
       chip,
-      { y: 24, opacity: 0, x: i % 2 === 0 ? -16 : 16 },
+      { y: 28, opacity: 0, x: i % 2 === 0 ? -20 : 20 },
       {
         y: 0,
         opacity: 1,
         x: 0,
-        duration: 0.7,
-        delay: 0.05 * i,
+        duration: 0.75,
+        delay: 0.06 * i,
         ease: "power3.out",
-        scrollTrigger: {
-          trigger: stage,
-          start: "top 70%",
-        },
+        scrollTrigger: { trigger: stage, start: "top 70%" },
       },
     );
   });
@@ -563,12 +511,11 @@ function boot() {
   initLenis();
   initHero();
   initFloatReplies(root);
-  initThreadShader(root);
   initDissolve(root);
   initReveal(root);
   initSteps(root);
   initHardware(root);
-  ScrollTrigger.refresh();
+  requestAnimationFrame(() => ScrollTrigger.refresh());
 }
 
 if (document.readyState === "loading") {

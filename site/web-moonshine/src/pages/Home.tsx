@@ -151,8 +151,15 @@ function HomeDissolve() {
       data-dissolve-section
       aria-label="From the usual assistants to Omi"
     >
-      <div className="ed-dissolve-stage">
-        <div className="ed-thread-shader" data-thread-shader aria-hidden="true" />
+      <div className="ed-dissolve-stage ed-room">
+        <div className="ed-room-wash" data-wash aria-hidden="true" />
+        <div className="ed-dissolve-mark-stage" aria-hidden="true">
+          <OmiMark
+            className="omi-mark--on-dark ed-cold-mark"
+            glow
+            decorative
+          />
+        </div>
         <div className="ed-dissolve-them" data-dissolve-them>
           <p className="ed-kicker">The usual assistants</p>
           <h2 className="ed-dissolve-title">
@@ -168,9 +175,6 @@ function HomeDissolve() {
         </div>
         <div className="ed-dissolve-canvas" data-dissolve-canvas aria-hidden="true" />
         <div className="ed-dissolve-us" data-dissolve-us>
-          <div className="ed-dissolve-mark">
-            <OmiMark className="omi-mark--on-dark" glow decorative={false} />
-          </div>
           <p className="ed-kicker">Omi</p>
           <h2 className="ed-dissolve-title">
             Omi keeps the thread — cited, continuous, with your OK.

@@ -70,7 +70,8 @@ describe("page components", () => {
     expect(home).not.toContain('id="get-started"');
     expect(home).toContain('id="hub-frame"');
     expect(home).toContain("data-float-replies");
-    expect(home).toContain("data-thread-shader");
+    expect(home).toContain("ed-cold-mark");
+    expect(home).toContain("ed-room");
     expect(home).toContain('data-computer-stage');
     expect(home).toContain('id="omi-unifies"');
     expect(home).toContain("data-dissolve-canvas");
@@ -204,7 +205,7 @@ describe("server routes", () => {
     expect(html).toContain("Two and a half centimetres of listening.");
     expect(html).toContain("data-dissolve-canvas");
     expect(html).toContain("data-float-replies");
-    expect(html).toContain("data-thread-shader");
+    expect(html).toContain("ed-cold-mark");
     expect(html).toContain('id="hub-frame"');
     expect(html).not.toContain("keep scrolling to access a demo of the omi desktop app");
   });

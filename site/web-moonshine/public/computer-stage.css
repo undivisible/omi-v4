@@ -16,6 +16,47 @@ html.lenis body {
   --ed-muted: var(--muted, #655f58);
   --ed-accent: var(--sky, #9f6653);
   --ed-rule: var(--rule, rgba(25, 23, 20, 0.12));
+  --ed-room: #2b2722;
+}
+
+/* Seamless Japanese bokashi room (onboarding backdrop language). */
+.ed-room {
+  position: relative;
+  background: var(--ed-room);
+  color: var(--ed-cream);
+  overflow: hidden;
+}
+
+.ed-room-wash {
+  position: absolute;
+  inset: -20%;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(ellipse 55% 50% at 12% 18%, rgba(168, 94, 70, 0.55), transparent 60%),
+    radial-gradient(ellipse 50% 45% at 40% 8%, rgba(212, 174, 135, 0.4), transparent 55%),
+    radial-gradient(ellipse 48% 50% at 88% 22%, rgba(78, 104, 124, 0.45), transparent 58%),
+    radial-gradient(ellipse 45% 48% at 92% 55%, rgba(142, 175, 169, 0.38), transparent 55%),
+    radial-gradient(ellipse 50% 45% at 78% 92%, rgba(166, 170, 121, 0.4), transparent 55%),
+    radial-gradient(ellipse 48% 42% at 48% 95%, rgba(198, 167, 96, 0.35), transparent 55%),
+    radial-gradient(ellipse 45% 48% at 18% 88%, rgba(184, 105, 88, 0.42), transparent 55%),
+    radial-gradient(ellipse 42% 50% at 8% 48%, rgba(155, 97, 116, 0.4), transparent 55%);
+  filter: blur(48px);
+  opacity: 0.72;
+  -webkit-mask-image: radial-gradient(
+    125% 100% at 50% 50%,
+    rgba(0, 0, 0, 0.28) 0%,
+    #000 52%,
+    #000 72%,
+    transparent 100%
+  );
+  mask-image: radial-gradient(
+    125% 100% at 50% 50%,
+    rgba(0, 0, 0, 0.28) 0%,
+    #000 52%,
+    #000 72%,
+    transparent 100%
+  );
 }
 
 .ed-kicker {
@@ -53,7 +94,19 @@ html.lenis body {
   align-items: end;
   overflow: hidden;
   color: var(--ed-cream);
-  background: #141210;
+  background: var(--ed-room);
+}
+
+.ed-hero::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 22vh;
+  z-index: 1;
+  pointer-events: none;
+  background: linear-gradient(180deg, transparent, var(--ed-room));
 }
 
 .ed-hero-media {
@@ -215,10 +268,22 @@ html.lenis body {
 
 .ed-dissolve {
   position: relative;
-  background: #141210;
+  background: var(--ed-room);
   color: var(--ed-cream);
   margin-inline: calc(50% - 50vw);
   width: 100vw;
+}
+
+.ed-dissolve::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 22vh;
+  z-index: 4;
+  pointer-events: none;
+  background: linear-gradient(180deg, transparent, var(--ed-cream));
 }
 
 .ed-dissolve-stage {
@@ -228,32 +293,32 @@ html.lenis body {
   place-items: center;
   overflow: hidden;
   padding: var(--pad);
-  background: #141210;
+  background: transparent;
 }
 
-.ed-thread-shader {
+.ed-dissolve-mark-stage {
   position: absolute;
   inset: 0;
-  z-index: 0;
+  z-index: 1;
+  display: grid;
+  place-items: center;
   pointer-events: none;
 }
 
-.ed-thread-shader canvas {
-  width: 100%;
-  height: 100%;
-  display: block;
+.ed-cold-mark {
+  width: min(42vw, 16rem) !important;
+  margin: 0 !important;
+  opacity: 0.95;
 }
 
-.ed-thread-shader[data-fallback="1"] {
-  background:
-    radial-gradient(circle at 50% 45%, rgba(159, 102, 83, 0.28), transparent 42%),
-    radial-gradient(circle at 50% 50%, rgba(255, 250, 243, 0.08), transparent 55%);
+.ed-cold-mark circle {
+  transition: none !important;
 }
 
 .ed-dissolve-them,
 .ed-dissolve-us {
   position: relative;
-  z-index: 1;
+  z-index: 2;
   grid-area: 1 / 1;
   max-width: 44rem;
   width: min(100%, 44rem);
@@ -261,18 +326,18 @@ html.lenis body {
 }
 
 .ed-dissolve-us {
-  z-index: 1;
+  z-index: 2;
   opacity: 0;
 }
 
 .ed-dissolve-them {
-  z-index: 2;
+  z-index: 3;
 }
 
 .ed-dissolve-canvas {
   position: absolute;
   inset: 0;
-  z-index: 3;
+  z-index: 4;
   pointer-events: none;
 }
 
@@ -285,11 +350,6 @@ html.lenis body {
 .ed-dissolve-canvas[data-fallback="1"] {
   background: transparent;
   opacity: 0;
-}
-
-.ed-dissolve-mark .omi-mark {
-  width: 3rem;
-  margin-bottom: 1rem;
 }
 
 .ed-dissolve-title {
@@ -334,9 +394,14 @@ html.lenis body {
 /* ── Sections ─────────────────────────────────────────────────────── */
 
 .ed-section {
+  position: relative;
   padding: clamp(4rem, 10vw, 7rem) var(--pad);
   max-width: 76rem;
   margin-inline: auto;
+}
+
+.ed-page > .ed-section:first-of-type {
+  padding-top: clamp(5rem, 12vw, 8rem);
 }
 
 .ed-section--tight {
@@ -447,12 +512,35 @@ html.lenis body {
 /* ── Hardware ─────────────────────────────────────────────────────── */
 
 .ed-hardware {
+  position: relative;
   padding: clamp(3rem, 8vw, 6rem) var(--pad);
   background:
-    radial-gradient(ellipse at 20% 0%, rgba(159, 102, 83, 0.12), transparent 50%),
-    linear-gradient(180deg, #f3ebe2 0%, var(--ed-cream) 100%);
+    radial-gradient(ellipse at 15% 0%, rgba(168, 94, 70, 0.16), transparent 50%),
+    radial-gradient(ellipse at 85% 20%, rgba(78, 104, 124, 0.12), transparent 45%),
+    linear-gradient(180deg, #f0e6da 0%, var(--ed-cream) 55%, #f3ebe2 100%);
   margin-inline: calc(50% - 50vw);
   width: 100vw;
+}
+
+.ed-hardware::before,
+.ed-hardware::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 18vh;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.ed-hardware::before {
+  top: 0;
+  background: linear-gradient(180deg, var(--ed-cream), transparent);
+}
+
+.ed-hardware::after {
+  bottom: 0;
+  background: linear-gradient(180deg, transparent, var(--ed-cream));
 }
 
 .ed-hardware-inner {
@@ -687,21 +775,36 @@ html.lenis body {
 
 .foot-stage {
   position: relative;
-  margin-top: clamp(3rem, 8vw, 6rem);
-  background: #141210;
+  margin-top: 0;
+  background: var(--ed-room, #2b2722);
   color: #fffaf3;
   overflow: hidden;
 }
 
+.foot-stage::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 22vh;
+  z-index: 2;
+  pointer-events: none;
+  background: linear-gradient(180deg, var(--ed-cream, #fffaf3), transparent);
+}
+
 .foot-stage-glow {
   position: absolute;
-  inset: -20% -10% auto;
-  height: 70%;
+  inset: -15%;
+  height: auto;
   background:
-    radial-gradient(ellipse at 30% 40%, rgba(159, 102, 83, 0.35), transparent 55%),
-    radial-gradient(ellipse at 70% 20%, rgba(255, 250, 243, 0.12), transparent 50%);
-  filter: blur(40px);
+    radial-gradient(ellipse at 18% 30%, rgba(168, 94, 70, 0.4), transparent 55%),
+    radial-gradient(ellipse at 78% 20%, rgba(78, 104, 124, 0.35), transparent 50%),
+    radial-gradient(ellipse at 60% 80%, rgba(198, 167, 96, 0.28), transparent 50%),
+    radial-gradient(ellipse at 20% 85%, rgba(155, 97, 116, 0.3), transparent 50%);
+  filter: blur(52px);
   pointer-events: none;
+  opacity: 0.85;
 }
 
 .foot-stage-inner {

@@ -7,16 +7,17 @@ import {
 } from "./urls";
 import { markDots, markDotRadius } from "./head";
 
+/* Onboarding bokashi edge lights (app/lib/features/onboarding/backdrop.dart). */
 const glowLights: Array<[number, number, string]> = [
-  [-1.25, -1.2, "#f25e6b"],
-  [-0.25, -1.25, "#f2c2ac"],
-  [0.35, -1.25, "#ffd0b8"],
-  [1.2, -1.05, "#96c4ff"],
-  [1.25, 0.05, "#b9d6ff"],
-  [1.2, 1.15, "#d3e081"],
-  [0.05, 1.25, "#f4d69f"],
-  [-0.75, 1.2, "#f2c2ac"],
-  [-1.25, 0.45, "#ff9a91"],
+  [-1.25, -1.2, "#a85e46"],
+  [-0.25, -1.25, "#c78067"],
+  [0.35, -1.25, "#d4ae87"],
+  [1.2, -1.05, "#4e687c"],
+  [1.25, 0.05, "#8eafa9"],
+  [1.2, 1.15, "#a6aa79"],
+  [0.05, 1.25, "#c6a760"],
+  [-0.75, 1.2, "#b86958"],
+  [-1.25, 0.45, "#9b6174"],
 ];
 
 export function GlowField() {
