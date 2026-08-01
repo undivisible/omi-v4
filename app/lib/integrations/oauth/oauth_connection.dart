@@ -100,6 +100,8 @@ abstract interface class OAuthConnectionStore {
   Future<List<OAuthConnection>> readAll(String uid);
   Future<void> write(String uid, OAuthConnection value);
   Future<void> remove(String uid, String connectorId);
+  Future<void> removeAccount(String uid, String connectorId, String? account);
+
   Future<void> delete(String uid);
 }
 
@@ -144,7 +146,11 @@ final class SecureOAuthConnectionStore implements OAuthConnectionStore {
     final all = await readAll(uid);
     await _writeAll(uid, [
       value,
-      ...all.where((existing) => existing.connectorId != value.connectorId),
+      ...all.where(
+        (existing) =>
+            existing.connectorId != value.connectorId ||
+            existing.account != value.account,
+      ),
     ]);
   }
 
@@ -152,6 +158,26 @@ final class SecureOAuthConnectionStore implements OAuthConnectionStore {
   Future<void> remove(String uid, String connectorId) async {
     final next = (await readAll(uid))
         .where((existing) => existing.connectorId != connectorId)
+        .toList(growable: false);
+    if (next.isEmpty) {
+      await delete(uid);
+      return;
+    }
+    await _writeAll(uid, next);
+  }
+
+  @override
+  Future<void> removeAccount(
+    String uid,
+    String connectorId,
+    String? account,
+  ) async {
+    final next = (await readAll(uid))
+        .where(
+          (existing) =>
+              existing.connectorId != connectorId ||
+              existing.account != account,
+        )
         .toList(growable: false);
     if (next.isEmpty) {
       await delete(uid);
@@ -194,7 +220,11 @@ final class VolatileOAuthConnectionStore implements OAuthConnectionStore {
     final all = values[uid] ?? const <OAuthConnection>[];
     values[uid] = [
       value,
-      ...all.where((existing) => existing.connectorId != value.connectorId),
+      ...all.where(
+        (existing) =>
+            existing.connectorId != value.connectorId ||
+            existing.account != value.account,
+      ),
     ];
   }
 
@@ -204,6 +234,28 @@ final class VolatileOAuthConnectionStore implements OAuthConnectionStore {
     if (all == null) return;
     final next = all
         .where((existing) => existing.connectorId != connectorId)
+        .toList(growable: false);
+    if (next.isEmpty) {
+      values.remove(uid);
+    } else {
+      values[uid] = next;
+    }
+  }
+
+  @override
+  Future<void> removeAccount(
+    String uid,
+    String connectorId,
+    String? account,
+  ) async {
+    final all = values[uid];
+    if (all == null) return;
+    final next = all
+        .where(
+          (existing) =>
+              existing.connectorId != connectorId ||
+              existing.account != account,
+        )
         .toList(growable: false);
     if (next.isEmpty) {
       values.remove(uid);

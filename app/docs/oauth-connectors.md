@@ -45,6 +45,11 @@ under "Show granted access".
 - **Storage**: tokens live only in the platform keychain
   (`flutter_secure_storage`), UID-scoped. The client ID is the only connector
   value in preferences.
+- **Multiple accounts**: each connect adds another account's grant; the
+  settings tile lists every connected account, each with its own disconnect
+  and read preview. Reconnecting the same account replaces its grant instead
+  of duplicating it. The Google consent screen already offers the account
+  chooser, so no separate picker is needed.
 - **Refresh**: two minutes ahead of expiry. `invalid_grant` marks the
   connection reconnect-needed once and is never retried.
 - **Disconnect**: calls the provider's revocation endpoint with the refresh

@@ -31,6 +31,7 @@ final class OAuthConnector {
     this.authorizationParameters = const {},
     this.clientIdHelpUrl,
     this.accountFieldName,
+    this.accountEndpoint,
   });
 
   /// Stable storage key. Never change it for a shipped connector.
@@ -62,6 +63,10 @@ final class OAuthConnector {
   /// Token-response field carrying a human-readable account label, when the
   /// provider returns one.
   final String? accountFieldName;
+
+  /// Endpoint that names the connected account when the token response does
+  /// not carry a label. Called with the fresh access token as a bearer.
+  final Uri? accountEndpoint;
 
   List<String> get scopeValues => [for (final scope in scopes) scope.value];
 
@@ -105,6 +110,10 @@ final googleOAuthConnector = OAuthConnector(
       summary: 'Show the connected account address in settings.',
     ),
   ],
+  accountFieldName: 'email',
+  accountEndpoint: Uri.parse(
+    'https://openidconnect.googleapis.com/v1/userinfo',
+  ),
   authorizationParameters: const {
     // A desktop client only receives a refresh token when it asks for offline
     // access, and only on a consent screen it has not silently skipped.
