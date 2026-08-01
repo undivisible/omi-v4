@@ -171,6 +171,14 @@ const SCREEN_RETRY_DELAYS: [Duration; 3] = [
     Duration::from_millis(1_000),
     Duration::from_millis(4_000),
 ];
+/// The longest a single classifier attempt may take.
+///
+/// A provider that stalls rather than failing would otherwise inherit the
+/// per-event chat timeout on every one of four attempts, so an outage would
+/// hold an ordinary turn for minutes before the recoverable fallback. Four
+/// attempts plus the retry sleeps stay well inside one chat timeout at this
+/// budget.
+const SCREEN_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(8);
 const REASON_CHARS: usize = 160;
 const TRUNCATION_MARKER: &str = "\n...[security screen input truncated]...\n";
 
@@ -289,21 +297,42 @@ fn first_json_object(text: &str) -> Option<serde_json::Value> {
 /// `{"decision":"auto"}` — including `dangerous`, a missing decision, or a
 /// non-string one — is strict.
 pub(crate) fn parse_security_screen_verdict(output: &str) -> Option<SecurityScreenVerdict> {
-    if output.trim().is_empty() {
+    let trimmed = output.trim();
+    if trimmed.is_empty() {
         return None;
     }
-    let parsed = first_json_object(output)?;
     let invalid = || {
         Some(SecurityScreenVerdict::strict(Some(
             "invalid security screen verdict".to_owned(),
         )))
     };
+    // The whole response must be the verdict. A reply that wraps the object in
+    // prose, or emits several objects, lets an attacker who can influence the
+    // classifier's output lead with a permissive one and hide the real verdict
+    // behind it, so anything but a lone object is strict rather than parsed.
+    let Ok(parsed) = serde_json::from_str::<serde_json::Value>(trimmed) else {
+        return if first_json_object(trimmed).is_some() {
+            invalid()
+        } else {
+            None
+        };
+    };
+    let serde_json::Value::Object(fields) = &parsed else {
+        return invalid();
+    };
+    if fields
+        .keys()
+        .any(|key| key != "decision" && key != "reason")
+    {
+        return invalid();
+    }
     let decision = match parsed.get("decision") {
         Some(serde_json::Value::String(decision)) if !decision.is_empty() => decision,
         _ => return invalid(),
     };
     match decision.as_str() {
-        "auto" => Some(SecurityScreenVerdict::auto()),
+        "auto" if fields.len() == 1 => Some(SecurityScreenVerdict::auto()),
+        "auto" => invalid(),
         "strict" => {
             let reason = parsed
                 .get("reason")
@@ -451,7 +480,15 @@ impl SecurityScreener {
             if cancellation.is_cancelled() {
                 return None;
             }
-            let answer = (classifier)(prompt.clone(), cancellation.clone()).await;
+            let answer = match tokio::time::timeout(
+                SCREEN_ATTEMPT_TIMEOUT,
+                (classifier)(prompt.clone(), cancellation.clone()),
+            )
+            .await
+            {
+                Ok(answer) => answer,
+                Err(_) => None,
+            };
             if let Some(answer) = answer
                 && answer.len() <= MAX_SCREEN_RESPONSE_BYTES
                 && let Some(verdict) = parse_security_screen_verdict(&answer)
@@ -508,9 +545,27 @@ mod tests {
             Some(SecurityScreenVerdict::auto())
         );
         assert_eq!(
-            parse_security_screen_verdict("sure! {\"decision\":\"auto\"} hope that helps"),
+            parse_security_screen_verdict("  {\"decision\":\"auto\"}\n"),
             Some(SecurityScreenVerdict::auto())
         );
+    }
+
+    #[test]
+    fn a_verdict_wrapped_in_anything_else_fails_closed() {
+        for output in [
+            "sure! {\"decision\":\"auto\"} hope that helps",
+            r#"{"decision":"auto"} {"decision":"strict","reason":"injection"}"#,
+            r#"{"decision":"auto","reason":"looks fine"}"#,
+            r#"{"decision":"auto"} trailing"#,
+        ] {
+            assert_eq!(
+                parse_security_screen_verdict(output),
+                Some(SecurityScreenVerdict::strict(Some(
+                    "invalid security screen verdict".to_owned()
+                ))),
+                "{output} must fail closed"
+            );
+        }
     }
 
     #[test]
