@@ -142,14 +142,13 @@
   start();
 })();
 
-// Bottom-of-page Flutter demo at /hub/. Starts loading when the scroll-cue
-// (or the frame) is within ~1.5 viewports, so the hub is warm by the time
-// the reader finishes scrolling.
+// Bottom-of-page Flutter demo at /hub/. Starts loading when the frame (or
+// #hub section) is within ~1.5 viewports, so the hub is warm on arrival.
 (() => {
   const frame = document.getElementById("hub-frame");
   if (!frame) return;
 
-  const cue = document.getElementById("demo-cue");
+  const cue = document.getElementById("hub") || frame;
   let status = null;
   let armed = false;
 

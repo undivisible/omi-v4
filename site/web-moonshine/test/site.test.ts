@@ -65,15 +65,19 @@ describe("page components", () => {
     expect(home).toContain("Documentation");
   });
 
-  test("home page ends with demo scroll cue and hub frame", () => {
-    expect(home).toContain("keep scrolling to access a demo of the omi desktop app");
+  test("home page ends with hub demo and stage markers", () => {
+    expect(home).not.toContain("keep scrolling to access a demo of the omi desktop app");
+    expect(home).not.toContain('id="get-started"');
     expect(home).toContain('id="hub-frame"');
-    expect(home).toContain("ss-cue");
+    expect(home).toContain("data-float-replies");
+    expect(home).toContain("data-thread-shader");
     expect(home).toContain('data-computer-stage');
     expect(home).toContain('id="omi-unifies"');
     expect(home).toContain("data-dissolve-canvas");
     expect(home).toContain('data-hero');
     expect(home).toContain("ed-hardware");
+    expect(home).toContain("omi-mark--on-dark");
+    expect(home).toContain("foot-stage");
   });
 
   test("home page includes living shell chrome", () => {
@@ -195,8 +199,10 @@ describe("server routes", () => {
     expect(html).toContain("Be here. Omi keeps the thread.");
     expect(html).toContain("Two and a half centimetres of listening.");
     expect(html).toContain("data-dissolve-canvas");
+    expect(html).toContain("data-float-replies");
+    expect(html).toContain("data-thread-shader");
     expect(html).toContain('id="hub-frame"');
-    expect(html).toContain("keep scrolling to access a demo of the omi desktop app");
+    expect(html).not.toContain("keep scrolling to access a demo of the omi desktop app");
   });
 
   test("architecture route serves html", async () => {

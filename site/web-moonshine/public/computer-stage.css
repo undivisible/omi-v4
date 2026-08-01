@@ -82,7 +82,7 @@ html.lenis body {
 
 .ed-hero-inner {
   position: relative;
-  z-index: 2;
+  z-index: 3;
   padding: var(--pad);
   padding-bottom: clamp(2.5rem, 8vh, 5rem);
   max-width: 76rem;
@@ -92,9 +92,88 @@ html.lenis body {
   gap: 1rem;
 }
 
+.omi-mark--on-dark,
+.ed-hero .omi-mark,
+.ed-dissolve .omi-mark,
+.foot-stage .omi-mark {
+  fill: #ffffff !important;
+  color: #ffffff;
+}
+
 .ed-hero .omi-mark {
-  width: 3.2rem;
-  color: var(--ed-cream);
+  width: 3.5rem;
+  margin-bottom: 1rem;
+}
+
+.ed-section-mark {
+  width: 1.75rem !important;
+  margin: 0 0 0.75rem !important;
+  fill: var(--ed-ink);
+}
+
+.ed-float-replies {
+  position: absolute;
+  inset: 8% 0 18%;
+  z-index: 2;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.ed-float-card {
+  position: absolute;
+  width: min(22rem, 72vw);
+  padding: 0.85rem 1rem;
+  border: 1px solid rgba(255, 250, 243, 0.18);
+  background: rgba(20, 18, 16, 0.72);
+  backdrop-filter: blur(14px);
+  color: #fffaf3;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.28);
+  left: calc(8% + (var(--i) * 7%));
+  top: calc(12% + (var(--i) * 11%));
+}
+
+.ed-float-card:nth-child(even) {
+  left: auto;
+  right: calc(6% + (var(--i) * 4%));
+}
+
+.ed-float-card header {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin-bottom: 0.4rem;
+  font-family: var(--pixel);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: rgba(255, 250, 243, 0.55);
+}
+
+.ed-float-card header em {
+  margin-left: auto;
+  font-style: normal;
+  color: rgba(159, 102, 83, 0.95);
+}
+
+.ed-float-mark {
+  width: 0.9rem !important;
+  margin: 0 !important;
+  fill: #ffffff !important;
+}
+
+.ed-float-card p {
+  font-size: 0.92rem;
+  line-height: 1.4;
+}
+
+.ed-float-card--you {
+  background: rgba(255, 250, 243, 0.1);
+}
+
+@media (max-width: 720px) {
+  .ed-float-card:nth-child(n + 4) {
+    display: none;
+  }
 }
 
 .ed-hero .ed-kicker {
@@ -153,6 +232,25 @@ html.lenis body {
   padding: var(--pad);
 }
 
+.ed-thread-shader {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+}
+
+.ed-thread-shader canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.ed-thread-shader[data-fallback="1"] {
+  background:
+    radial-gradient(circle at 50% 45%, rgba(159, 102, 83, 0.28), transparent 42%),
+    radial-gradient(circle at 50% 50%, rgba(255, 250, 243, 0.08), transparent 55%);
+}
+
 .ed-dissolve-canvas {
   position: absolute;
   inset: 0;
@@ -178,6 +276,11 @@ html.lenis body {
   text-align: left;
   opacity: 0;
   will-change: opacity, filter, transform;
+}
+
+.ed-dissolve-mark .omi-mark {
+  width: 3rem;
+  margin-bottom: 1rem;
 }
 
 .ed-dissolve-title {
@@ -232,13 +335,25 @@ html.lenis body {
   will-change: transform, opacity, filter;
 }
 
-.ed-step-num {
+.ed-step-mark {
   grid-row: 1 / span 2;
+  display: grid;
+  justify-items: center;
+  gap: 0.35rem;
+  padding-top: 0.2rem;
+}
+
+.ed-step-mark .omi-mark {
+  width: 1.35rem;
+  margin: 0;
+  fill: var(--ed-ink);
+}
+
+.ed-step-mark span {
   font-family: var(--pixel);
   font-size: 11px;
   letter-spacing: 0.12em;
   color: var(--ed-accent);
-  padding-top: 0.35rem;
 }
 
 .ed-step-title {
@@ -265,6 +380,20 @@ html.lenis body {
   background: var(--ed-paper);
   padding: 1.35rem 1.25rem 1.5rem;
   min-height: 100%;
+}
+
+.ed-cap-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.ed-cap-mark {
+  width: 1.1rem !important;
+  margin: 0 !important;
+  fill: var(--ed-ink);
+  opacity: 0.7;
 }
 
 .ed-cap-num {
@@ -311,6 +440,21 @@ html.lenis body {
   display: grid;
   place-items: center;
   min-height: min(70vh, 36rem);
+}
+
+.ed-hw-orbit {
+  position: absolute;
+  width: min(70%, 28rem);
+  aspect-ratio: 1;
+  opacity: 0.18;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.ed-hw-orbit-mark {
+  width: 100% !important;
+  margin: 0 !important;
+  fill: var(--ed-ink);
 }
 
 .ed-hardware-photo {
@@ -499,40 +643,161 @@ html.lenis body {
   justify-self: start;
 }
 
-/* ── CTA ──────────────────────────────────────────────────────────── */
+/* ── Demo head ────────────────────────────────────────────────────── */
 
-.ed-cta {
-  margin-inline: calc(50% - 50vw);
-  width: 100vw;
-  min-height: 70svh;
-  display: grid;
-  align-content: end;
-  gap: 1rem;
-  padding: var(--pad);
-  padding-bottom: 12vh;
-  background: #141210;
-  color: var(--ed-cream);
+.ed-demo-head {
+  max-width: 76rem;
+  margin: 0 auto;
+  padding: clamp(2.5rem, 6vw, 4rem) var(--pad) 1.25rem;
 }
 
-.ed-cta-title {
+.ed-demo-head .omi-mark {
+  width: 2rem;
+  margin-bottom: 0.75rem;
+}
+
+/* ── Cool footer stage ────────────────────────────────────────────── */
+
+.foot-stage {
+  position: relative;
+  margin-top: clamp(3rem, 8vw, 6rem);
+  background: #141210;
+  color: #fffaf3;
+  overflow: hidden;
+}
+
+.foot-stage-glow {
+  position: absolute;
+  inset: -20% -10% auto;
+  height: 70%;
+  background:
+    radial-gradient(ellipse at 30% 40%, rgba(159, 102, 83, 0.35), transparent 55%),
+    radial-gradient(ellipse at 70% 20%, rgba(255, 250, 243, 0.12), transparent 50%);
+  filter: blur(40px);
+  pointer-events: none;
+}
+
+.foot-stage-inner {
+  position: relative;
+  z-index: 1;
+  padding-block: clamp(3.5rem, 9vw, 6.5rem) 2rem;
+}
+
+.foot-stage-hero {
+  position: relative;
+  display: grid;
+  gap: 0.85rem;
+  padding-bottom: clamp(2.5rem, 6vw, 4rem);
+  margin-bottom: clamp(2rem, 5vw, 3rem);
+  border-bottom: 1px solid rgba(255, 250, 243, 0.12);
+}
+
+.foot-stage-mark {
+  width: clamp(3.5rem, 8vw, 5.5rem) !important;
+  margin: 0 0 0.5rem !important;
+}
+
+.foot-stage-kicker {
+  font-family: var(--pixel);
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  color: rgba(255, 250, 243, 0.5);
+}
+
+.foot-stage-title {
   font-family: var(--serif);
   font-size: clamp(2.8rem, 9vw, 5.5rem);
   font-weight: 600;
   line-height: 0.98;
   letter-spacing: -0.035em;
-  max-width: 10ch;
+  max-width: 12ch;
 }
 
-.ed-cta p {
-  color: rgba(255, 250, 243, 0.65);
+.foot-stage-sub {
   max-width: 28rem;
+  color: rgba(255, 250, 243, 0.65);
+  line-height: 1.45;
 }
 
-.ed-cta .btn-solid {
-  background: var(--ed-cream);
-  color: var(--ed-ink);
-  border-color: var(--ed-cream);
-  justify-self: start;
+.foot-stage-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+  margin-top: 0.5rem;
+}
+
+.foot-stage .btn-solid {
+  background: #fffaf3;
+  color: #191714;
+  border-color: #fffaf3;
+}
+
+.foot-stage .btn-line {
+  border-color: rgba(255, 250, 243, 0.45);
+  color: #fffaf3;
+}
+
+.foot-constellation {
+  position: absolute;
+  right: 0;
+  top: 10%;
+  width: min(18rem, 40vw);
+  aspect-ratio: 1;
+  pointer-events: none;
+}
+
+.foot-constellation i {
+  --d: 0;
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 0.55rem;
+  height: 0.55rem;
+  margin: -0.275rem;
+  border-radius: 50%;
+  background: #fffaf3;
+  opacity: 0.55;
+  transform:
+    rotate(calc(var(--d) * 45deg))
+    translateY(-6.5rem);
+  animation: foot-dot 3.6s ease-in-out infinite;
+  animation-delay: calc(var(--d) * -0.45s);
+}
+
+@keyframes foot-dot {
+  0%,
+  100% {
+    opacity: 0.35;
+    scale: 1;
+  }
+  40% {
+    opacity: 1;
+    scale: 1.35;
+  }
+}
+
+.foot-stage .foot {
+  color: rgba(255, 250, 243, 0.78);
+}
+
+.foot-stage .foot .label {
+  color: rgba(255, 250, 243, 0.45);
+}
+
+.foot-stage .foot a {
+  color: rgba(255, 250, 243, 0.78);
+}
+
+.foot-stage .foot-rule {
+  color: rgba(255, 250, 243, 0.4);
+  border-color: rgba(255, 250, 243, 0.12);
+}
+
+@media (max-width: 720px) {
+  .foot-constellation {
+    opacity: 0.35;
+    width: 10rem;
+  }
 }
 
 @media (max-width: 960px) {
@@ -570,8 +835,11 @@ html.lenis body {
     grid-template-columns: 1fr;
   }
 
-  .ed-step-num {
+  .ed-step-mark {
     grid-row: auto;
+    justify-items: start;
+    grid-auto-flow: column;
+    align-items: center;
   }
 
   .ed-dissolve {

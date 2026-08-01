@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import {
   apiDocsUrl,
   apiKeysUrl,
@@ -40,14 +40,16 @@ export type OmiMarkProps = {
   variant?: "omi-mark--sm" | "omi-mark--rail" | "omi-mark--nav" | "omi-mark--foot";
   glow?: boolean;
   decorative?: boolean;
+  className?: string;
 };
 
 export function OmiMark({
   variant,
   glow = false,
   decorative = true,
+  className,
 }: OmiMarkProps) {
-  const classes = ["omi-mark", variant].filter(Boolean).join(" ");
+  const classes = ["omi-mark", variant, className].filter(Boolean).join(" ");
   const filterId = `omiMarkGlow-${variant ?? "lead"}`;
   const dots = markDots
     .map(
@@ -68,12 +70,14 @@ export function OmiMark({
   return <span dangerouslySetInnerHTML={{ __html: html }} />;
 }
 
-export function OmiMarkHero() {
-  return <OmiMark glow decorative={false} />;
+export function OmiMarkHero({ className }: { className?: string } = {}) {
+  return <OmiMark glow decorative={false} className={className} />;
 }
 
-export function OmiMarkHeroSmall() {
-  return <OmiMark variant="omi-mark--sm" glow decorative={false} />;
+export function OmiMarkHeroSmall({ className }: { className?: string } = {}) {
+  return (
+    <OmiMark variant="omi-mark--sm" glow decorative={false} className={className} />
+  );
 }
 
 export function SectionRail({
@@ -161,27 +165,51 @@ export function SiteFooter({ compact = false }: { compact?: boolean }) {
     );
   }
   return (
-    <footer className="wrap">
-      <div className="foot">
-        <div className="foot-id">
-          <p>
-            <OmiMark variant="omi-mark--foot" /> thought to action.
+    <footer className="foot-stage">
+      <div className="foot-stage-glow" aria-hidden="true" />
+      <div className="foot-stage-inner wrap">
+        <div className="foot-stage-hero">
+          <OmiMark className="omi-mark--on-dark foot-stage-mark" glow decorative={false} />
+          <p className="foot-stage-kicker">OMI</p>
+          <p className="foot-stage-title">thought to action.</p>
+          <p className="foot-stage-sub">
+            Private memory. Cited answers. Your OK before it acts.
           </p>
-          <p className="small">
-            Based Hardware Inc.
-            <br />
-            San Francisco
-            <br />
-            <a href="mailto:help@omi.me">help@omi.me</a>
-          </p>
+          <div className="foot-stage-actions">
+            <a className="btn btn-solid" href={portalUrl}>
+              Open Omi
+            </a>
+            <a className="btn btn-line" href={apiDocsUrl}>
+              Documentation
+            </a>
+            <a className="btn btn-line" href={downloadUrl}>
+              Download
+            </a>
+          </div>
+          <div className="foot-constellation" aria-hidden="true">
+            {Array.from({ length: 8 }, (_, i) => (
+                <i key={i} style={{ "--d": String(i) } as CSSProperties} />
+            ))}
+          </div>
         </div>
-        <FooterColumn heading="Company" links={footerCompany} />
-        <FooterColumn heading="Products" links={footerProducts} />
-        <FooterColumn heading="Resources" links={footerResources} />
+        <div className="foot">
+          <div className="foot-id">
+            <p className="small">
+              Based Hardware Inc.
+              <br />
+              San Francisco
+              <br />
+              <a href="mailto:help@omi.me">help@omi.me</a>
+            </p>
+          </div>
+          <FooterColumn heading="Company" links={footerCompany} />
+          <FooterColumn heading="Products" links={footerProducts} />
+          <FooterColumn heading="Resources" links={footerResources} />
+        </div>
+        <p className="foot-rule small">
+          © 2026 Based Hardware. All rights reserved.
+        </p>
       </div>
-      <p className="foot-rule small">
-        © 2026 Based Hardware. All rights reserved.
-      </p>
     </footer>
   );
 }

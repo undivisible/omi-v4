@@ -1,11 +1,12 @@
+import type { CSSProperties } from "react";
 import {
   App,
   PrimaryActions,
   downloadUrl,
   portalUrl,
+  OmiMark,
   OmiMarkHero,
 } from "../App";
-import { ScrollCue } from "../../scroll-stage";
 
 const homeRail: Array<[string, string]> = [
   ["top", "Omi"],
@@ -15,7 +16,16 @@ const homeRail: Array<[string, string]> = [
   ["hardware", "Hardware"],
   ["reach", "Reach"],
   ["pricing", "Price"],
-  ["demo-cue", "Demo"],
+  ["hub", "Demo"],
+];
+
+const floatReplies: Array<[string, string, string]> = [
+  ["omi", "You asked about the launch window — from Tuesday’s standup: ship Friday if QA clears the pendant sync path.", "Cited · standup"],
+  ["you", "What did we decide about pricing?", ""],
+  ["omi", "BYOK standard vs managed Omi AI. Negotiation session still open — floor is enforced server-side.", "Cited · chat"],
+  ["omi", "Now Brief: 3 Currents need a look. Top one is the FaceTime follow-up with Maya.", "Currents"],
+  ["you", "Summarize the last meeting.", ""],
+  ["omi", "Live notes: 4 action items, 2 blockers. I can draft the follow-up from what was actually said.", "Meeting"],
 ];
 
 const steps: Array<[string, string, string]> = [
@@ -57,6 +67,12 @@ const hwChips: Array<[string, string]> = [
   ["Training", "Never on your data"],
 ];
 
+function SectionMark() {
+  return (
+    <OmiMark variant="omi-mark--sm" className="ed-section-mark" decorative />
+  );
+}
+
 function HomeHero() {
   return (
     <section className="ed-hero" id="top" data-hero>
@@ -69,9 +85,34 @@ function HomeHero() {
         />
       </div>
       <div className="ed-hero-veil" aria-hidden="true" />
+      <div
+        className="ed-float-replies"
+        data-float-replies
+        aria-hidden="true"
+      >
+        {floatReplies.map(([who, text, tag], i) => (
+          <article
+            className={`ed-float-card ed-float-card--${who}`}
+            data-float-card
+            style={{ "--i": String(i) } as CSSProperties}
+            key={`${who}-${i}`}
+          >
+            <header>
+              <OmiMark
+                variant="omi-mark--rail"
+                className="ed-float-mark"
+                decorative
+              />
+              <span>{who === "omi" ? "Omi" : "You"}</span>
+              {tag ? <em>{tag}</em> : null}
+            </header>
+            <p>{text}</p>
+          </article>
+        ))}
+      </div>
       <div className="ed-hero-inner">
         <div data-hero-in>
-          <OmiMarkHero />
+          <OmiMarkHero className="omi-mark--on-dark" />
         </div>
         <p className="ed-kicker" data-hero-in>
           OMI · PRIVATE MEMORY
@@ -95,8 +136,12 @@ function HomeDissolve() {
   return (
     <section className="ed-dissolve" id="omi-unifies" aria-label="Omi keeps the thread">
       <div className="ed-dissolve-sticky">
+        <div className="ed-thread-shader" data-thread-shader aria-hidden="true" />
         <div className="ed-dissolve-canvas" data-dissolve-canvas />
         <div className="ed-dissolve-copy" data-dissolve-copy>
+          <div className="ed-dissolve-mark" data-reveal>
+            <OmiMark className="omi-mark--on-dark" glow decorative={false} />
+          </div>
           <p className="ed-kicker">The thread</p>
           <h2 className="ed-dissolve-title">
             Most assistants forget the room the moment you leave it.
@@ -115,13 +160,17 @@ function HomeHow() {
   return (
     <section className="ed-section" id="how">
       <header className="ed-section-head" data-reveal>
+        <SectionMark />
         <p className="ed-kicker">How it works</p>
         <h2 className="ed-h2">Capture → recall → act.</h2>
       </header>
       <div className="ed-steps">
         {steps.map(([n, title, body]) => (
           <article className="ed-step" data-step key={n}>
-            <p className="ed-step-num">{n}</p>
+            <div className="ed-step-mark" aria-hidden="true">
+              <OmiMark variant="omi-mark--rail" decorative />
+              <span>{n}</span>
+            </div>
             <h3 className="ed-step-title">{title}</h3>
             <p className="ed-step-body">{body}</p>
           </article>
@@ -135,13 +184,17 @@ function HomeCapabilities() {
   return (
     <section className="ed-section" id="capabilities">
       <header className="ed-section-head" data-reveal>
+        <SectionMark />
         <p className="ed-kicker">What it does</p>
         <h2 className="ed-h2">The omi-v4 surface, brief.</h2>
       </header>
       <div className="ed-caps" data-stagger>
         {capabilities.map(([n, title, body]) => (
           <article className="ed-cap" key={n}>
-            <p className="ed-cap-num">{n}</p>
+            <div className="ed-cap-top">
+              <OmiMark variant="omi-mark--rail" className="ed-cap-mark" decorative />
+              <p className="ed-cap-num">{n}</p>
+            </div>
             <h3 className="ed-cap-title">{title}</h3>
             <p className="ed-cap-body">{body}</p>
           </article>
@@ -156,6 +209,7 @@ function HomeHardware() {
     <section className="ed-hardware" id="hardware">
       <div className="ed-hardware-inner" data-hw-stage>
         <div className="ed-hardware-copy" data-reveal>
+          <SectionMark />
           <p className="ed-kicker">The hardware</p>
           <h2 className="ed-h2">Two and a half centimetres of listening.</h2>
           <p className="ed-lead">
@@ -164,6 +218,9 @@ function HomeHardware() {
           </p>
         </div>
         <div className="ed-hardware-stage">
+          <div className="ed-hw-orbit" aria-hidden="true" data-hw-orbit>
+            <OmiMark className="ed-hw-orbit-mark" decorative />
+          </div>
           <img
             className="ed-hardware-photo"
             data-hw-photo
@@ -204,6 +261,7 @@ function HomeReach() {
   return (
     <section className="ed-section ed-section--tight" id="reach">
       <header className="ed-section-head" data-reveal>
+        <SectionMark />
         <p className="ed-kicker">Reach</p>
         <h2 className="ed-h2">Same brain, other inboxes.</h2>
       </header>
@@ -228,6 +286,7 @@ function HomeReach() {
 function HomePrivacy() {
   return (
     <section className="ed-section ed-section--tight" id="privacy" data-reveal>
+      <SectionMark />
       <p className="ed-kicker">Privacy</p>
       <h2 className="ed-h2">Your account is the source of truth.</h2>
       <ul className="ed-privacy">
@@ -243,6 +302,7 @@ function HomePricing() {
   return (
     <section className="ed-section" id="pricing">
       <header className="ed-section-head" data-reveal>
+        <SectionMark />
         <p className="ed-kicker">Pricing</p>
         <h2 className="ed-h2">Managed, or bring your own keys.</h2>
       </header>
@@ -286,31 +346,14 @@ function HomePricing() {
   );
 }
 
-function HomeGetStarted() {
-  return (
-    <section className="ed-cta" id="get-started" data-reveal>
-      <h2 className="ed-cta-title">Put Omi on your desk.</h2>
-      <p>Open the app — or keep scrolling for a live desktop demo.</p>
-      <a className="btn btn-solid" href={portalUrl}>
-        Open Omi
-      </a>
-    </section>
-  );
-}
-
-function HomeDemoCue() {
-  return (
-    <ScrollCue
-      id="demo-cue"
-      align="end"
-      text="keep scrolling to access a demo of the omi desktop app"
-    />
-  );
-}
-
 function HomeDemo() {
   return (
     <section className="home-demo" id="hub" aria-label="Omi desktop app demo">
+      <div className="ed-demo-head" data-reveal>
+        <OmiMark variant="omi-mark--sm" decorative />
+        <p className="ed-kicker">Live demo</p>
+        <h2 className="ed-h2">Try the desktop surface.</h2>
+      </div>
       <div
         id="hub-frame"
         className="shot-frame"
@@ -333,8 +376,6 @@ export function HomePage() {
         <HomeReach />
         <HomePrivacy />
         <HomePricing />
-        <HomeGetStarted />
-        <HomeDemoCue />
         <HomeDemo />
       </div>
     </App>

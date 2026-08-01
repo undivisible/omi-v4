@@ -2439,14 +2439,14 @@ main:has(.hub-page) {
 }
 
 .home-demo {
-  min-height: 100svh;
-  padding: 0;
+  min-height: auto;
+  padding: 0 0 clamp(2rem, 5vw, 3.5rem);
   max-width: none;
 }
 
 .home-demo .shot-frame {
-  min-height: 100svh;
-  height: 100svh;
+  min-height: min(85svh, 52rem);
+  height: min(85svh, 52rem);
   aspect-ratio: auto;
   border: 0;
   border-radius: 0;
