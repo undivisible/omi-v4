@@ -97,6 +97,37 @@ html.lenis body {
   background: var(--ed-room);
 }
 
+/* The last stretch of the hero is pure room, so the photograph never meets
+   the next section on a line. Same colour at both ends — this only takes the
+   picture's brightness out of the join. */
+.ed-hero::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 26vh;
+  z-index: 2;
+  pointer-events: none;
+  background:
+    radial-gradient(
+      ellipse 55% 130% at 12% 108%,
+      rgba(168, 94, 70, 0.3),
+      transparent 62%
+    ),
+    radial-gradient(
+      ellipse 45% 120% at 88% 112%,
+      rgba(78, 104, 124, 0.24),
+      transparent 60%
+    ),
+    linear-gradient(
+      180deg,
+      rgba(43, 39, 34, 0) 0%,
+      rgba(43, 39, 34, 0.85) 62%,
+      #2b2722 92%
+    );
+}
+
 .ed-hero-media {
   position: absolute;
   inset: 0;
@@ -110,6 +141,20 @@ html.lenis body {
   object-position: center 35%;
   display: block;
   filter: saturate(0.92) contrast(1.05);
+  /* The photograph dies out into the room rather than being cut off at the
+     section's edge, so the hero and the dissolve share one surface. */
+  -webkit-mask-image: linear-gradient(
+    180deg,
+    #000 46%,
+    rgba(0, 0, 0, 0.55) 74%,
+    transparent 96%
+  );
+  mask-image: linear-gradient(
+    180deg,
+    #000 46%,
+    rgba(0, 0, 0, 0.55) 74%,
+    transparent 96%
+  );
 }
 
 .ed-hero-veil {
@@ -117,7 +162,14 @@ html.lenis body {
   inset: 0;
   z-index: 1;
   background:
-    linear-gradient(180deg, rgba(20, 18, 16, 0.25) 0%, rgba(20, 18, 16, 0.15) 40%, rgba(37, 33, 29, 0.92) 88%, #2b2722 100%),
+    linear-gradient(
+      180deg,
+      rgba(20, 18, 16, 0.28) 0%,
+      rgba(20, 18, 16, 0.18) 38%,
+      rgba(35, 31, 27, 0.62) 66%,
+      rgba(43, 39, 34, 0.94) 86%,
+      #2b2722 97%
+    ),
     radial-gradient(ellipse at 70% 20%, rgba(159, 102, 83, 0.22), transparent 55%);
 }
 
@@ -271,6 +323,9 @@ html.lenis body {
 
 .ed-dissolve {
   position: relative;
+  /* The hero's height lands on a fractional pixel, and the page's tan shows
+     through the rounding as a hairline. Overlapping by one pixel closes it. */
+  margin-top: -1px;
   background: var(--ed-room);
   color: var(--ed-cream);
   margin-inline: calc(50% - 50vw);
