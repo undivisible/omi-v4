@@ -2428,6 +2428,32 @@ main:has(.hub-page) {
   margin: 0;
 }
 
+.ss-stage {
+  --ss-ink: var(--ink);
+  --ss-paper: var(--cream);
+  --ss-muted: var(--muted);
+  --ss-pad: var(--pad);
+  --ss-font-display: var(--serif);
+  --ss-font-label: var(--pixel);
+  background: transparent;
+}
+
+.home-demo {
+  min-height: 100svh;
+  padding: 0;
+  max-width: none;
+}
+
+.home-demo .shot-frame {
+  min-height: 100svh;
+  height: 100svh;
+  aspect-ratio: auto;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  background: #e9dcc8;
+}
+
 .hub-page .shot-frame {
   height: 100%;
   aspect-ratio: auto;

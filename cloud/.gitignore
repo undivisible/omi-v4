@@ -11,6 +11,10 @@ public/index.html
 public/main.js
 public/mark.js
 public/styles.css
+public/scroll-stage.css
+public/scroll-stage.js
+public/computer-stage.css
+public/computer-stage.js
 public/architecture/
 public/docs/
 public/*.ttf

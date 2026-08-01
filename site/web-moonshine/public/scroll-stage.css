@@ -1,0 +1,159 @@
+/* scroll-stage — portable sticky frames + scroll cue
+   Copy this file onto any site. Theme via the --ss-* variables. */
+
+:root {
+  --ss-ink: #171716;
+  --ss-paper: #fffcec;
+  --ss-muted: #a6a49c;
+  --ss-pad: clamp(1.25rem, 5vw, 4.5rem);
+  --ss-max: 76rem;
+  --ss-frame-min: 100svh;
+  --ss-pin-min: 140svh;
+  --ss-cue-size: clamp(2rem, 6.5vw, 4.75rem);
+  --ss-cue-measure: 16ch;
+  --ss-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --ss-font-display: Georgia, "Times New Roman", serif;
+  --ss-font-label: ui-monospace, Menlo, Consolas, monospace;
+}
+
+.ss-stage {
+  color: var(--ss-ink);
+  background: var(--ss-paper);
+}
+
+.ss-frame {
+  position: relative;
+  min-height: var(--ss-frame-min);
+}
+
+.ss-frame--pin {
+  min-height: var(--ss-pin-min);
+}
+
+.ss-frame__sticky {
+  position: sticky;
+  top: 0;
+  min-height: 100svh;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: clamp(1rem, 3vw, 2rem);
+  padding: var(--ss-pad);
+  max-width: var(--ss-max);
+  margin-inline: auto;
+  width: 100%;
+}
+
+.ss-frame__sticky--flush {
+  max-width: none;
+}
+
+.ss-label {
+  font-family: var(--ss-font-label);
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ss-muted);
+}
+
+.ss-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: clamp(1.5rem, 4vw, 3rem);
+}
+
+.ss-step {
+  display: grid;
+  gap: 0.35rem;
+  max-width: 40rem;
+}
+
+.ss-step__num {
+  font-family: var(--ss-font-label);
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  color: var(--ss-muted);
+}
+
+.ss-step__title {
+  font-family: var(--ss-font-display);
+  font-size: clamp(1.25rem, 3vw, 1.75rem);
+  line-height: 1.15;
+  font-weight: 600;
+}
+
+.ss-step__body {
+  font-size: clamp(1rem, 2.2vw, 1.125rem);
+  line-height: 1.55;
+}
+
+.ss-cue {
+  min-height: var(--ss-frame-min);
+  box-sizing: border-box;
+  display: flex;
+  align-items: flex-end;
+  justify-content: flex-end;
+  padding: var(--ss-pad);
+  max-width: var(--ss-max);
+  margin-inline: auto;
+  width: 100%;
+}
+
+.ss-cue--start {
+  justify-content: flex-start;
+  text-align: left;
+}
+
+.ss-cue--center {
+  justify-content: center;
+  text-align: center;
+}
+
+.ss-cue--end {
+  justify-content: flex-end;
+  text-align: right;
+}
+
+.ss-cue__text {
+  margin: 0;
+  max-width: var(--ss-cue-measure);
+  font-family: var(--ss-font-display);
+  font-size: var(--ss-cue-size);
+  font-weight: 600;
+  line-height: 1.05;
+  letter-spacing: -0.02em;
+  color: var(--ss-ink);
+}
+
+.ss-cue__text[data-ss-inview="1"] {
+  animation: ss-cue-rise 0.9s var(--ss-ease) both;
+}
+
+@keyframes ss-cue-rise {
+  from {
+    opacity: 0;
+    transform: translateY(1.25rem);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ss-cue__text[data-ss-inview="1"] {
+    animation: none;
+  }
+
+  .ss-frame--pin {
+    min-height: var(--ss-frame-min);
+  }
+
+  .ss-frame__sticky {
+    position: relative;
+  }
+}

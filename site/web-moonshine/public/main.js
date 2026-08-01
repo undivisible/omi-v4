@@ -142,13 +142,14 @@
   start();
 })();
 
-// The hero embeds the real hub — the Flutter web build at /hub/. It loads
-// when the frame nears the viewport or the reader interacts with it, so the
-// marketing page stays light until the demo is actually in view.
+// Bottom-of-page Flutter demo at /hub/. Starts loading when the scroll-cue
+// (or the frame) is within ~1.5 viewports, so the hub is warm by the time
+// the reader finishes scrolling.
 (() => {
   const frame = document.getElementById("hub-frame");
   if (!frame) return;
 
+  const cue = document.getElementById("demo-cue");
   let status = null;
   let armed = false;
 
@@ -191,7 +192,7 @@
 
     const live = document.createElement("iframe");
     live.title = "Omi, running on sample data";
-  live.src = "/hub/?v=guided-hub-v4";
+    live.src = "/hub/?v=guided-hub-v4";
     live.allow = "clipboard-write; language-model";
     live.addEventListener("error", fail);
     live.addEventListener("load", () => {
@@ -223,24 +224,25 @@
     const observer = new IntersectionObserver(
       (entries) => {
         for (const entry of entries) {
-          if (entry.isIntersecting && entry.intersectionRatio >= 0.12) {
+          if (entry.isIntersecting) {
             arm();
             observer.disconnect();
             break;
           }
         }
       },
-      { rootMargin: "120px 0px", threshold: [0, 0.12, 0.25] },
+      // Start ~1.5 viewports early so scroll-in feels ready, not cold.
+      { rootMargin: "150% 0px", threshold: 0 },
     );
-    observer.observe(frame);
+    observer.observe(cue || frame);
+  } else {
+    arm();
   }
 
   frame.addEventListener("pointerenter", arm, { once: true });
   frame.addEventListener("focusin", arm, { once: true });
 
-  // Deep links that land with the hero already visible should not wait for
-  // another scroll tick before the demo starts.
-  if (frame.getBoundingClientRect().top < window.innerHeight * 0.92) {
+  if (frame.getBoundingClientRect().top < window.innerHeight * 1.5) {
     arm();
   }
 })();

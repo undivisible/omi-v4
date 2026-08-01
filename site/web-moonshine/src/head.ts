@@ -48,6 +48,8 @@ export function buildHead(
     `<link rel="preload" href="/inter-latin-variable.woff2" as="font" type="font/woff2" crossorigin=""/>`,
     `<link rel="preload" href="/geist-pixel-square.woff2" as="font" type="font/woff2" crossorigin=""/>`,
     `<link rel="stylesheet" href="/styles.css"/>`,
+    `<link rel="stylesheet" href="/scroll-stage.css"/>`,
+    `<link rel="stylesheet" href="/computer-stage.css"/>`,
     `<meta name="theme-color" content="${inkColor}"/>`,
     `<meta property="og:title" content="${title}"/>`,
     `<meta property="og:description" content="${description}"/>`,
@@ -55,6 +57,8 @@ export function buildHead(
     `<meta property="og:url" content="${canonical}"/>`,
     `<script src="/main.js" defer></script>`,
     `<script src="/mark.js" defer></script>`,
+    `<script src="/scroll-stage.js" defer></script>`,
+    `<script src="/computer-stage.js" defer></script>`,
   ].join("");
 }
 

@@ -7,12 +7,20 @@ import {
   Section,
   T,
   V,
+  OmiMarkHeroSmall,
   codeStyle,
   giantStyle,
   labelStyle,
   midStyle,
   noteStyle,
 } from "../App";
+
+const apiRail: Array<[string, string]> = [
+  ["top", "API"],
+  ["1-authentication", "Auth"],
+  ["4-rest-endpoints", "REST"],
+  ["5-mcp-server", "MCP"],
+];
 
 const apiSections: Array<[string, string]> = [
   ["1-authentication", "1. Authentication"],
@@ -41,20 +49,23 @@ const restEndpoints: Array<[string, string]> = [
 function ApiHero() {
   return (
     <Section>
-      <Badge style={labelStyle}>Reference</Badge>
-      <T style={giantStyle}>The public API</T>
-      <V gap={16}>
-        <V gap={0}>
-          <T style={midStyle}>Two surfaces on one credential: a REST API under </T>
-          <T style={codeStyle}>/api/v1</T>
-          <T style={midStyle}> and an MCP server at </T>
-          <T style={codeStyle}>/mcp</T>
-          <T style={midStyle}>
-            . Everything here is scoped to a single account.
-          </T>
+      <div className="section-intro reveal" id="top">
+        <OmiMarkHeroSmall />
+        <Badge style={labelStyle}>Reference</Badge>
+        <T style={giantStyle}>The public API</T>
+        <V gap={16}>
+          <V gap={0}>
+            <T style={midStyle}>Two surfaces on one credential: a REST API under </T>
+            <T style={codeStyle}>/api/v1</T>
+            <T style={midStyle}> and an MCP server at </T>
+            <T style={codeStyle}>/mcp</T>
+            <T style={midStyle}>
+              . Everything here is scoped to a single account.
+            </T>
+          </V>
+          <PrimaryActions />
         </V>
-        <PrimaryActions />
-      </V>
+      </div>
     </Section>
   );
 }
@@ -157,7 +168,7 @@ function ApiReference() {
 
 export function ApiDocsPage() {
   return (
-    <App>
+    <App rail={apiRail}>
       <ApiHero />
       <Divider />
       <ApiContents />

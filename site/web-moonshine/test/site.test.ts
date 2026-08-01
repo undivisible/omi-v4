@@ -62,6 +62,26 @@ describe("page components", () => {
     expect(home).toContain("Documentation");
   });
 
+  test("home page ends with demo scroll cue and hub frame", () => {
+    expect(home).toContain("keep scrolling to access a demo of the omi desktop app");
+    expect(home).toContain('id="hub-frame"');
+    expect(home).toContain("ss-cue");
+    expect(home).toContain('data-computer-stage');
+    expect(home).toContain('id="omi-unifies"');
+    expect(home).toContain("data-unifies-canvas");
+    expect(home).toContain('id="manifesto"');
+    expect(home).toContain("steps-stack");
+  });
+
+  test("home page includes living shell chrome", () => {
+    expect(home).toContain('class="field"');
+    expect(home).toContain("data-omi-mark");
+    expect(home).toContain("omi-mark");
+    expect(home).toContain('class="rail"');
+    expect(home).toContain("btn-solid");
+    expect(home).toContain("reveal");
+  });
+
   test("home page contains images", () => {
     expect(home).toContain("/omi-pendant-1200.webp");
     expect(home).toContain("/omi-worn-1200.webp");
@@ -124,6 +144,8 @@ describe("head metadata", () => {
   test("buildHead includes stylesheet and fonts", () => {
     const head = buildHead("Title", "Desc", "/");
     expect(head).toContain('/styles.css');
+    expect(head).toContain('/scroll-stage.css');
+    expect(head).toContain('/computer-stage.css');
     expect(head).toContain('/inter-latin-variable.woff2');
     expect(head).toContain('/geist-pixel-square.woff2');
   });
@@ -132,6 +154,8 @@ describe("head metadata", () => {
     const head = buildHead("Title", "Desc", "/");
     expect(head).toContain('/main.js');
     expect(head).toContain('/mark.js');
+    expect(head).toContain('/scroll-stage.js');
+    expect(head).toContain('/computer-stage.js');
   });
 
   test("buildHead includes favicon data URI", () => {
@@ -165,9 +189,11 @@ describe("server routes", () => {
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toContain("text/html");
     const html = await res.text();
-    expect(html).toContain("<title>Omi — guided hub</title>");
+    expect(html).toContain("<title>Omi — private memory</title>");
     expect(html).toContain("Be here. Omi keeps the thread.");
     expect(html).toContain("Two and a half centimetres of listening.");
+    expect(html).toContain('id="hub-frame"');
+    expect(html).toContain("keep scrolling to access a demo of the omi desktop app");
   });
 
   test("architecture route serves html", async () => {

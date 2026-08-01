@@ -1,9 +1,12 @@
 import type { CSSProperties, ReactNode } from "react";
 
-export const portalUrl = "https://api.omi.tsc.hk/portal";
-export const apiKeysUrl = "https://api.omi.tsc.hk/portal#api-keys";
-export const apiDocsUrl = "https://api.omi.tsc.hk/docs/api";
-export const downloadUrl = "https://omi.me/download";
+export {
+  portalUrl,
+  apiKeysUrl,
+  apiDocsUrl,
+  downloadUrl,
+} from "./urls";
+import { portalUrl, apiKeysUrl, apiDocsUrl } from "./urls";
 
 const inkColor = "#171716";
 const creamColor = "#fffcec";
@@ -206,17 +209,17 @@ export function Section({
 
 export function PrimaryActions() {
   return (
-    <H style={{ flexWrap: "wrap", gap: 12 }}>
-      <Ln href={portalUrl} style={btnSolidStyle}>
+    <div className="links">
+      <a className="btn btn-solid" href={portalUrl}>
         Open Omi
-      </Ln>
-      <Ln href={apiDocsUrl} style={btnLineStyle}>
+      </a>
+      <a className="btn btn-line" href={apiDocsUrl}>
         Documentation
-      </Ln>
-      <Ln href={apiKeysUrl} style={btnLineStyle}>
+      </a>
+      <a className="btn btn-line" href={apiKeysUrl}>
         API login
-      </Ln>
-    </H>
+      </a>
+    </div>
   );
 }
 
@@ -243,8 +246,29 @@ export function ColumnGroup({
   );
 }
 
-export function App({ children }: { children: ReactNode }) {
-  return <>{children}</>;
+export {
+  Page,
+  OmiMark,
+  OmiMarkHero,
+  OmiMarkHeroSmall,
+  GlowField,
+} from "./shell";
+import { Page } from "./shell";
+
+export function App({
+  children,
+  rail,
+  compactFooter,
+}: {
+  children: ReactNode;
+  rail?: Array<[string, string]>;
+  compactFooter?: boolean;
+}) {
+  return (
+    <Page rail={rail} compactFooter={compactFooter}>
+      {children}
+    </Page>
+  );
 }
 
 export default App;

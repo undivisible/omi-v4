@@ -8,6 +8,7 @@ import {
   Section,
   T,
   V,
+  OmiMarkHeroSmall,
   bigStyle,
   btnLineStyle,
   btnSolidStyle,
@@ -21,6 +22,18 @@ import {
   strongStyle,
 } from "../App";
 
+const archRail: Array<[string, string]> = [
+  ["top", "Architecture"],
+  ["path", "Request path"],
+  ["tiers", "Model tiers"],
+  ["data", "Data plane"],
+  ["memory", "Memory"],
+  ["channels", "Channels"],
+  ["approval", "Approval gate"],
+  ["facetime", "FaceTime"],
+  ["pendant", "Pendant"],
+];
+
 const tiers: Array<[string, string, string]> = [
   ["speed", "Live meeting insights, classification, quick answers", "inception/mercury-2"],
   ["balanced", "The default — roughly 80% of traffic", "xiaomi/mimo-v2.5"],
@@ -32,15 +45,18 @@ const tiers: Array<[string, string, string]> = [
 function ArchHero() {
   return (
     <Section>
-      <Badge style={labelStyle}>Architecture</Badge>
-      <T style={giantStyle}>Few moving parts, on purpose.</T>
-      <V gap={16}>
-        <T style={midStyle}>
-          One app, one embedded runtime, one edge worker, one model gateway.
-          Every box below exists in the repository today.
-        </T>
-        <PrimaryActions />
-      </V>
+      <div className="section-intro reveal" id="top">
+        <OmiMarkHeroSmall />
+        <Badge style={labelStyle}>Architecture</Badge>
+        <T style={giantStyle}>Few moving parts, on purpose.</T>
+        <V gap={16}>
+          <T style={midStyle}>
+            One app, one embedded runtime, one edge worker, one model gateway.
+            Every box below exists in the repository today.
+          </T>
+          <PrimaryActions />
+        </V>
+      </div>
     </Section>
   );
 }
@@ -365,7 +381,7 @@ function ArchPendant() {
 
 export function ArchitecturePage() {
   return (
-    <App>
+    <App rail={archRail}>
       <ArchHero />
       <Divider />
       <ArchRequestPath />

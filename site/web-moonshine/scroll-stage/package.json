@@ -1,0 +1,15 @@
+{
+  "name": "scroll-stage",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./index.ts",
+    "./react": "./react.tsx",
+    "./css": "./css/scroll-stage.css",
+    "./js": "./js/scroll-stage.js"
+  },
+  "peerDependencies": {
+    "react": ">=18"
+  }
+}

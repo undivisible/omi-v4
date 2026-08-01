@@ -94,10 +94,6 @@ jobs:
         with:
           channel: stable
           cache: true
-      - uses: dart-lang/setup-dart@v1
-        with:
-          sdk: 3.11.0
-      - run: dart pub global activate jaspr_cli 0.23.2
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
@@ -108,6 +104,9 @@ jobs:
       - run: cargo clippy --lib --target wasm32-unknown-unknown -- -D warnings
       - run: cargo test --lib
       - run: cargo install worker-build --version 0.8.5 --locked
+      - name: Typecheck and test moonshine site
+        working-directory: site/web-moonshine
+        run: bun install && bunx tsc --noEmit && bun test
       - run: bun run deploy:dry-run
 
   rust:
