@@ -2598,14 +2598,21 @@ async fn dispatch_assistant(
     if let Some(recalled) = memory_context.as_deref() {
         sources.push(LabelledContent::new(ContentSource::Ambient(None), recalled));
     }
-    // Profile lines reach the prompt through `local_profile_context` rather than
-    // the memory list, so they are the one recalled path the loop above misses.
-    // They are distilled from the same captured material, so they are screened
-    // as ambient too.
+    // Profile lines and soul text reach the prompt through
+    // `local_profile_context` / `format_about_user` rather than the memory
+    // list, so they are the recalled paths the loop above misses. Both are
+    // distilled from the same captured material, so they are screened as
+    // ambient too.
     if let Some(profile_lines) = profile.as_ref().map(|value| value.lines.as_str()) {
         sources.push(LabelledContent::new(
             ContentSource::Ambient(Some("profile".to_owned())),
             profile_lines,
+        ));
+    }
+    if let Some(about) = about_user.as_deref() {
+        sources.push(LabelledContent::new(
+            ContentSource::Ambient(Some("soul".to_owned())),
+            about,
         ));
     }
     let security = screen_turn(
