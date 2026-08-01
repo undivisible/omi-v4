@@ -558,6 +558,7 @@ a {
   border-radius: 999px;
   border: 1px solid rgba(255, 250, 243, 0.35);
   background: rgba(25, 23, 20, 0.55);
+  -webkit-backdrop-filter: blur(6px);
   backdrop-filter: blur(6px);
   opacity: 0;
   transform: translateY(0.35rem);
@@ -1666,6 +1667,7 @@ main > .band.wrap {
   border: 1px solid rgba(25, 23, 20, 0.09);
   border-radius: 30px;
   background: rgba(255, 253, 249, 0.48);
+  -webkit-backdrop-filter: blur(18px) saturate(125%);
   backdrop-filter: blur(18px) saturate(125%);
 }
 
