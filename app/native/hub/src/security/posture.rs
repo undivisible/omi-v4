@@ -2,7 +2,7 @@
 //!
 //! A posture says how much the hub trusts content that reaches the assistant.
 //! `dangerous` screens nothing, `auto` screens external content, `strict`
-//! stops screening and gates every effectful tool on a human instead. The
+//! screens it too and additionally gates every effectful tool on a human. The
 //! three postures are ordered, and composition may only ever tighten: a narrower
 //! scope (a single turn, a single surface) can raise the posture above the
 //! configured floor but can never lower it below.
@@ -73,7 +73,7 @@ pub(crate) fn resolve_security_policy(posture: SecurityPosture) -> ResolvedSecur
             tool_approvals: ToolApprovals::None,
         },
         SecurityPosture::Strict => ResolvedSecurityPolicy {
-            inbound_screening: InboundScreening::Off,
+            inbound_screening: InboundScreening::External,
             tool_approvals: ToolApprovals::All,
         },
     }
@@ -160,6 +160,16 @@ mod tests {
     }
 
     #[test]
+    fn tightening_the_posture_never_removes_screening() {
+        let screened = |posture| {
+            resolve_security_policy(posture).inbound_screening == InboundScreening::External
+        };
+        assert!(!screened(SecurityPosture::Dangerous));
+        assert!(screened(SecurityPosture::Auto));
+        assert!(screened(SecurityPosture::Strict));
+    }
+
+    #[test]
     fn a_looser_scope_cannot_lower_the_floor() {
         assert_eq!(
             compose_security_posture(SecurityPosture::Strict, Some(SecurityPosture::Dangerous)),
@@ -205,8 +215,11 @@ mod tests {
             }
         );
         assert_eq!(
-            resolve_security_policy(SecurityPosture::Strict).tool_approvals,
-            ToolApprovals::All
+            resolve_security_policy(SecurityPosture::Strict),
+            ResolvedSecurityPolicy {
+                inbound_screening: InboundScreening::External,
+                tool_approvals: ToolApprovals::All,
+            }
         );
         assert_eq!(
             resolve_security_policy(SecurityPosture::Dangerous).inbound_screening,
