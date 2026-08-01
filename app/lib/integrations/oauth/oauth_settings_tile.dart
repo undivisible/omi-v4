@@ -165,15 +165,17 @@ class _OAuthConnectorTileState extends State<OAuthConnectorTile> {
   }
 
   Future<void> _disconnect() async {
+    final target = connection;
     await _run((uid) async {
-      await manager.disconnect(uid, widget.connector);
+      await manager.disconnect(uid, widget.connector, account: target?.account);
+      final all = await manager.connections(uid, widget.connector);
       if (mounted) {
         setState(() {
-          connections = [];
-          connection = null;
+          connections = all;
+          connection = all.isEmpty ? null : all.first;
           items = null;
           previewAccount = null;
-          expanded = false;
+          if (all.isEmpty) expanded = false;
         });
       }
     });

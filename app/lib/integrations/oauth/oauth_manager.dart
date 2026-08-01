@@ -176,11 +176,7 @@ final class OAuthConnectionManager {
     } catch (error) {
       failure = error;
     }
-    if (account != null) {
-      await _connections.removeAccount(uid, connector.id, stored.account);
-    } else {
-      await _connections.remove(uid, connector.id);
-    }
+    await _connections.removeAccount(uid, connector.id, stored.account);
     if (failure != null) {
       throw OAuthException(
         'Signed out locally, but ${connector.displayName} did not confirm '

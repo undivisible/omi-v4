@@ -95,6 +95,12 @@ final class OAuthConnection {
   }
 }
 
+bool _replacesGrant(OAuthConnection existing, OAuthConnection value) {
+  if (existing.connectorId != value.connectorId) return false;
+  if (existing.account == value.account) return true;
+  return existing.account == null && value.account != null;
+}
+
 abstract interface class OAuthConnectionStore {
   Future<OAuthConnection?> read(String uid, String connectorId);
   Future<List<OAuthConnection>> readAll(String uid);
@@ -146,11 +152,7 @@ final class SecureOAuthConnectionStore implements OAuthConnectionStore {
     final all = await readAll(uid);
     await _writeAll(uid, [
       value,
-      ...all.where(
-        (existing) =>
-            existing.connectorId != value.connectorId ||
-            existing.account != value.account,
-      ),
+      ...all.where((existing) => !_replacesGrant(existing, value)),
     ]);
   }
 
@@ -220,11 +222,7 @@ final class VolatileOAuthConnectionStore implements OAuthConnectionStore {
     final all = values[uid] ?? const <OAuthConnection>[];
     values[uid] = [
       value,
-      ...all.where(
-        (existing) =>
-            existing.connectorId != value.connectorId ||
-            existing.account != value.account,
-      ),
+      ...all.where((existing) => !_replacesGrant(existing, value)),
     ];
   }
 
