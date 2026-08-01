@@ -117,30 +117,33 @@ function initFloatReplies(root: HTMLElement) {
     return;
   }
 
+  // An endless upward stream: cards are distributed along one loop and
+  // conveyor-belt through it, wrapping from the top back to the bottom.
+  const H = layer.clientHeight || window.innerHeight;
+  const range = H * 1.35;
+  const wrapY = gsap.utils.wrap(-0.25 * H, range - 0.25 * H);
+
   cards.forEach((card, i) => {
-    const x = (i % 2 === 0 ? -1 : 1) * (18 + (i % 3) * 10);
+    card.style.top = "0px";
+    const startY = wrapY((i / cards.length) * range);
     gsap.set(card, {
-      xPercent: x,
-      y: 40 + i * 28,
-      opacity: 0,
-      rotate: i % 2 === 0 ? -2 : 2,
-    });
-    gsap.to(card, {
+      y: startY,
+      xPercent: i % 2 === 0 ? -6 : 6,
       opacity: 0.92,
-      duration: 0.8,
-      delay: 0.35 + i * 0.12,
-      ease: "power2.out",
+      rotate: i % 2 === 0 ? -1.5 : 1.5,
     });
     gsap.to(card, {
-      y: "-=140",
-      duration: 16 + i * 1.2,
+      y: `-=${range}`,
+      duration: range / (48 + (i % 3) * 12),
       repeat: -1,
       ease: "none",
-      delay: i * 0.35,
+      modifiers: {
+        y: (y: string) => `${wrapY(parseFloat(y)).toFixed(1)}px`,
+      },
     });
     gsap.to(card, {
-      x: `+=${i % 2 === 0 ? 22 : -22}`,
-      duration: 5.5 + (i % 3),
+      x: `+=${i % 2 === 0 ? 20 : -20}`,
+      duration: 5.5 + (i % 4),
       yoyo: true,
       repeat: -1,
       ease: "sine.inOut",
@@ -177,22 +180,75 @@ function initDissolve(root: HTMLElement) {
   ];
   if (!section || !stage || !them || !us) return;
 
-  const setMarkSpread = (spread: number) => {
-    if (!mark) return;
-    mark.style.setProperty("--omi-spread", String(spread));
-    mark.classList.add("is-live");
+  // The dots live everywhere while the usual assistants hold the stage —
+  // scattered to their own random points across the room — then gather into
+  // the ring as Omi arrives. Positions are in SVG user units, so screen
+  // distances are divided by the mark's render scale.
+  const circles = mark
+    ? [...mark.querySelectorAll<SVGCircleElement>("circle")]
+    : [];
+  let scatterTargets: Array<{ x: number; y: number }> = [];
+  const seedScatter = () => {
+    if (!mark || !circles.length) return;
+    const rect = mark.getBoundingClientRect();
+    const scale = (rect.width || 160) / 260;
+    const w = stage.clientWidth || window.innerWidth;
+    const h = stage.clientHeight || window.innerHeight;
+    scatterTargets = circles.map((_, i) => {
+      const ang =
+        (i / circles.length) * Math.PI * 2 + (Math.random() - 0.5) * 1.4;
+      return {
+        x: (Math.cos(ang) * (0.16 + Math.random() * 0.26) * w) / scale,
+        y: (Math.sin(ang) * (0.2 + Math.random() * 0.3) * h) / scale,
+      };
+    });
   };
+  seedScatter();
+  window.addEventListener("resize", seedScatter);
+
+  let gather = 0; // 0 = fully scattered, 1 = ring assembled
+  const placeDots = (time: number) => {
+    circles.forEach((c, i) => {
+      const t = scatterTargets[i];
+      if (!t) return;
+      const away = 1 - gather;
+      const wob = away * 10;
+      const x = t.x * away + Math.sin(time * 0.7 + i * 2.1) * wob;
+      const y = t.y * away + Math.cos(time * 0.55 + i * 1.3) * wob;
+      c.style.translate = `${x.toFixed(1)}px ${y.toFixed(1)}px`;
+      c.style.opacity = String(0.7 + 0.3 * gather);
+    });
+  };
+  if (circles.length && !reduced()) {
+    gsap.ticker.add((t) => placeDots(t));
+  }
+
+  // Room colour follows the desplatter: settled dark, ember-lit at the
+  // height of the burn, then a calmer warm dark once Omi holds the stage.
+  const lerpC = (a: number[], b: number[], t: number) =>
+    a.map((v, i) => Math.round(v + (b[i] - v) * t));
+  const ROOM = [43, 39, 34];
+  const EMBER = [64, 44, 30];
+  const SETTLED = [36, 33, 29];
+  const paintRoom = (p: number) => {
+    const up = Math.min(1, Math.max(0, (p - 0.16) / 0.3));
+    const down = Math.min(1, Math.max(0, (p - 0.55) / 0.3));
+    const mid = lerpC(ROOM, EMBER, up);
+    const c = lerpC(mid, SETTLED, down);
+    section.style.backgroundColor = `rgb(${c[0]}, ${c[1]}, ${c[2]})`;
+  };
+  const wash = section.querySelector<HTMLElement>("[data-wash]");
 
   gsap.set(us, { opacity: 0, filter: "blur(6px)", y: 18 });
   gsap.set(them, { opacity: 1, filter: "blur(0px)" });
   gsap.set(traits, { opacity: 1, y: 0, scale: 1 });
-  setMarkSpread(0);
 
   if (reduced()) {
     if (host) host.dataset.fallback = "1";
     gsap.set(them, { opacity: 0 });
     gsap.set(us, { opacity: 1, filter: "none", y: 0 });
-    setMarkSpread(0);
+    gather = 1;
+    placeDots(0);
     return;
   }
 
@@ -315,11 +371,12 @@ void main() {
     const t = Math.min(1, Math.max(0, (p - hold) / (mid - hold)));
     burn = t;
 
-    // Paramount / cold-open: scatter out then ease back (sin curve like successBurst).
-    const decon = Math.min(1, Math.max(0, (p - 0.14) / 0.42));
-    const reform = Math.min(1, Math.max(0, (p - 0.52) / 0.32));
-    const burst = Math.sin(decon * Math.PI) * (1 - reform * 0.95);
-    setMarkSpread(burst * 92);
+    // Cold-open in reverse: the dots start everywhere and gather into the
+    // ring as Omi takes the stage. Ease-out so the last few px settle softly.
+    const reform = Math.min(1, Math.max(0, (p - 0.48) / 0.34));
+    gather = 1 - Math.pow(1 - reform, 3);
+    paintRoom(p);
+    if (wash) wash.style.opacity = String(0.6 + 0.3 * reform);
 
     const themFade = 1 - Math.min(1, Math.max(0, (p - 0.22) / 0.38));
     them.style.opacity = String(themFade);
@@ -341,7 +398,7 @@ void main() {
 
     if (p >= 0.98) {
       burn = 1;
-      setMarkSpread(0);
+      gather = 1;
       them.style.opacity = "0";
       us.style.opacity = "1";
       us.style.filter = "none";

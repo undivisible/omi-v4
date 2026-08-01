@@ -26,6 +26,12 @@ const floatReplies: Array<[string, string, string]> = [
   ["omi", "Now Brief: 3 Currents need a look. Top one is the FaceTime follow-up with Maya.", "Currents"],
   ["you", "Summarize the last meeting.", ""],
   ["omi", "Live notes: 4 action items, 2 blockers. I can draft the follow-up from what was actually said.", "Meeting"],
+  ["omi", "Current: studio lease renewal — options lapse Friday. Two sources, both cited.", "Current"],
+  ["you", "Call Maya about the follow-up.", ""],
+  ["omi", "Placing a FaceTime Audio call to Maya — say stop to cancel.", "FaceTime"],
+  ["omi", "Current: Pia’s birthday dinner — you said Thursday in iMessage. Want it on the calendar?", "Current"],
+  ["you", "What did I miss while I was heads-down?", ""],
+  ["omi", "Two Telegram threads and one meeting. The only thing that needs you today is the invoice approval.", "Now Brief"],
 ];
 
 const steps: Array<[string, string, string]> = [
@@ -94,7 +100,7 @@ function HomeHero() {
           <article
             className={`ed-float-card ed-float-card--${who}`}
             data-float-card
-            style={{ "--i": String(i) } as CSSProperties}
+            style={{ "--i": String(i % 6) } as CSSProperties}
             key={`${who}-${i}`}
           >
             <header>

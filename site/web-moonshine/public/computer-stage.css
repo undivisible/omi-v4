@@ -166,10 +166,24 @@ html.lenis body {
 
 .ed-float-replies {
   position: absolute;
-  inset: 8% 0 18%;
+  inset: 4% 0 10%;
   z-index: 2;
   pointer-events: none;
   overflow: hidden;
+  -webkit-mask-image: linear-gradient(
+    180deg,
+    transparent,
+    #000 14%,
+    #000 82%,
+    transparent
+  );
+  mask-image: linear-gradient(
+    180deg,
+    transparent,
+    #000 14%,
+    #000 82%,
+    transparent
+  );
 }
 
 .ed-float-card {
@@ -817,15 +831,15 @@ html.lenis body {
 .foot-stage-inner {
   position: relative;
   z-index: 1;
-  padding-block: clamp(3.5rem, 9vw, 6.5rem) 2rem;
+  padding-block: clamp(3rem, 7vw, 5rem) 1.75rem;
 }
 
 .foot-stage-hero {
   position: relative;
   display: grid;
   gap: 0.85rem;
-  padding-bottom: clamp(2.5rem, 6vw, 4rem);
-  margin-bottom: clamp(2rem, 5vw, 3rem);
+  padding-bottom: clamp(2rem, 5vw, 3rem);
+  margin-bottom: clamp(1.75rem, 4vw, 2.5rem);
   border-bottom: 1px solid rgba(255, 250, 243, 0.12);
 }
 
@@ -843,10 +857,10 @@ html.lenis body {
 
 .foot-stage-title {
   font-family: var(--serif);
-  font-size: clamp(2.8rem, 9vw, 5.5rem);
+  font-size: clamp(3rem, 10vw, 6.5rem);
   font-weight: 600;
-  line-height: 0.98;
-  letter-spacing: -0.035em;
+  line-height: 0.96;
+  letter-spacing: -0.04em;
   max-width: 12ch;
 }
 
@@ -876,40 +890,49 @@ html.lenis body {
 
 .foot-constellation {
   position: absolute;
-  right: 0;
-  top: 10%;
-  width: min(18rem, 40vw);
-  aspect-ratio: 1;
+  right: 2%;
+  top: 6%;
+  width: min(24rem, 42vw);
+  height: min(20rem, 60vh);
   pointer-events: none;
 }
 
 .foot-constellation i {
   --d: 0;
+  --fx: 0;
+  --fy: 0;
   position: absolute;
-  left: 50%;
-  top: 50%;
-  width: 0.55rem;
-  height: 0.55rem;
-  margin: -0.275rem;
+  left: calc(var(--fx) * 1%);
+  top: calc(var(--fy) * 1%);
+  width: 0.5rem;
+  height: 0.5rem;
   border-radius: 50%;
   background: #fffaf3;
   opacity: 0.55;
-  transform:
-    rotate(calc(var(--d) * 45deg))
-    translateY(-6.5rem);
-  animation: foot-dot 3.6s ease-in-out infinite;
-  animation-delay: calc(var(--d) * -0.45s);
+  animation:
+    foot-drift 7s ease-in-out infinite alternate,
+    foot-dot 3.6s ease-in-out infinite;
+  animation-delay: calc(var(--d) * -1.1s), calc(var(--d) * -0.45s);
+}
+
+@keyframes foot-drift {
+  from {
+    translate: 0 0;
+  }
+  to {
+    translate: 0.9rem -1.1rem;
+  }
 }
 
 @keyframes foot-dot {
   0%,
   100% {
-    opacity: 0.35;
+    opacity: 0.3;
     scale: 1;
   }
   40% {
     opacity: 1;
-    scale: 1.35;
+    scale: 1.4;
   }
 }
 

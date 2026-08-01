@@ -2672,21 +2672,6 @@ class _CurrentFocusState extends State<_CurrentFocus> {
           ),
           child: Stack(
             children: [
-              // A saturated rule down the leading edge instead of a soft bloom
-              // bleeding out of the corner: the accent says "this card" at full
-              // strength in three pixels, where the wash said it faintly across
-              // half the surface and tinted the type on the way.
-              Positioned(
-                top: 0,
-                bottom: 0,
-                left: 0,
-                child: IgnorePointer(
-                  child: DecoratedBox(
-                    decoration: BoxDecoration(color: colors.hintBlue),
-                    child: const SizedBox(width: 3),
-                  ),
-                ),
-              ),
               Padding(
                 padding: const EdgeInsets.all(20),
                 child: Column(

@@ -83,6 +83,27 @@
     cta.addEventListener("blur", () => tighten(false));
   }
 
+  // Hovering any mark sends each dot to its own random point — a new
+  // constellation every time — and the ring re-forms on leave. The CSS
+  // transition (staggered per dot) carries the motion.
+  for (const mark of ambient) {
+    const dots = [...mark.querySelectorAll("circle")];
+    if (!dots.length) continue;
+    const host = mark.closest("a, button") ?? mark;
+    host.addEventListener("pointerenter", () => {
+      for (const dot of dots) {
+        const a = Math.random() * Math.PI * 2;
+        const d = 18 + Math.random() * 34;
+        dot.style.translate = `${(Math.cos(a) * d).toFixed(1)}px ${(
+          Math.sin(a) * d
+        ).toFixed(1)}px`;
+      }
+    });
+    host.addEventListener("pointerleave", () => {
+      for (const dot of dots) dot.style.removeProperty("translate");
+    });
+  }
+
   // Honour the setting if it is changed while the page is open.
   quiet.addEventListener("change", (event) => {
     if (!event.matches) return;

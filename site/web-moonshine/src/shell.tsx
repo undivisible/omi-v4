@@ -102,6 +102,20 @@ export function SectionRail({
   );
 }
 
+/* A loose constellation, not a ring: percent offsets inside the field. */
+const constellation: Array<[number, number]> = [
+  [8, 12],
+  [34, 4],
+  [62, 18],
+  [88, 8],
+  [18, 46],
+  [50, 38],
+  [78, 52],
+  [30, 72],
+  [64, 80],
+  [92, 66],
+];
+
 const footerCompany: Array<[string, string]> = [
   ["Careers", "https://www.omi.me/pages/careers"],
   ["Invest", "https://omi.me/invest"],
@@ -188,8 +202,17 @@ export function SiteFooter({ compact = false }: { compact?: boolean }) {
             </a>
           </div>
           <div className="foot-constellation" aria-hidden="true">
-            {Array.from({ length: 8 }, (_, i) => (
-                <i key={i} style={{ "--d": String(i) } as CSSProperties} />
+            {constellation.map(([fx, fy], i) => (
+              <i
+                key={i}
+                style={
+                  {
+                    "--d": String(i),
+                    "--fx": String(fx),
+                    "--fy": String(fy),
+                  } as CSSProperties
+                }
+              />
             ))}
           </div>
         </div>

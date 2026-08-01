@@ -2445,8 +2445,8 @@ main:has(.hub-page) {
 }
 
 .home-demo .shot-frame {
-  min-height: min(85svh, 52rem);
-  height: min(85svh, 52rem);
+  min-height: min(96svh, 64rem);
+  height: min(96svh, 64rem);
   aspect-ratio: auto;
   border: 0;
   border-radius: 0;
