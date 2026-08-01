@@ -830,24 +830,15 @@ html.lenis body {
   padding-block: clamp(3rem, 7vw, 5.5rem) clamp(3.5rem, 8vw, 6rem);
 }
 
-.home-demo::before,
 .home-demo::after {
   content: "";
   position: absolute;
   left: 0;
   right: 0;
+  bottom: -1px;
   height: 12vh;
   z-index: 2;
   pointer-events: none;
-}
-
-.home-demo::before {
-  top: 0;
-  background: linear-gradient(180deg, #e6d5bc, transparent);
-}
-
-.home-demo::after {
-  bottom: -1px;
   background: linear-gradient(180deg, transparent, #e6d5bc);
 }
 
@@ -869,9 +860,9 @@ html.lenis body {
 .home-demo .shot-frame {
   position: relative;
   z-index: 3;
-  width: min(76rem, calc(100% - 2 * var(--pad)));
+  width: min(88rem, calc(100% - 2 * var(--pad)));
   margin-inline: auto;
-  height: min(78svh, 52rem);
+  height: min(88svh, 60rem);
   min-height: 0;
   border: 1px solid rgba(255, 250, 243, 0.16);
   border-radius: 18px;
