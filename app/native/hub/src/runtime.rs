@@ -2616,7 +2616,7 @@ async fn dispatch_assistant(
         cancellation,
     )
     .await;
-    let framed_prompt = framed_assistant_prompt(origin, context.as_deref(), &text);
+    let framed_prompt = framed_assistant_prompt(origin, None, &text);
     let datetime = current_datetime_context(chrono::Local::now().fixed_offset());
     let security_framing = match security.notice.as_deref() {
         Some(notice) => format!(
@@ -2633,9 +2633,10 @@ async fn dispatch_assistant(
         .to_owned(),
     };
     let mut prompt = format!(
-        "{}{}\n\n{security_framing}\n\n{text}",
+        "{}{}\n\n{security_framing}\n\n{}",
         framed_prompt.strip_suffix(&text).unwrap_or(&framed_prompt),
-        datetime
+        datetime,
+        assistant_prompt(context.as_deref(), &text),
     );
     if let Some(document) = user_profile.as_ref()
         && let Some(custom_prompt) = crate::user_profile::custom_prompt(document)
