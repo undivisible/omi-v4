@@ -480,15 +480,12 @@ impl SecurityScreener {
             if cancellation.is_cancelled() {
                 return None;
             }
-            let answer = match tokio::time::timeout(
+            let answer = tokio::time::timeout(
                 SCREEN_ATTEMPT_TIMEOUT,
                 (classifier)(prompt.clone(), cancellation.clone()),
             )
             .await
-            {
-                Ok(answer) => answer,
-                Err(_) => None,
-            };
+            .unwrap_or_default();
             if let Some(answer) = answer
                 && answer.len() <= MAX_SCREEN_RESPONSE_BYTES
                 && let Some(verdict) = parse_security_screen_verdict(&answer)
