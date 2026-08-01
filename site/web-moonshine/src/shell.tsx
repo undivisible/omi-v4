@@ -102,18 +102,27 @@ export function SectionRail({
   );
 }
 
-/* A loose constellation, not a ring: percent offsets inside the field. */
+/* A loose constellation, not a ring: percent offsets inside the field. It
+   spans the whole footer, denser toward the open right half. */
 const constellation: Array<[number, number]> = [
-  [8, 12],
-  [34, 4],
-  [62, 18],
-  [88, 8],
-  [18, 46],
-  [50, 38],
-  [78, 52],
-  [30, 72],
-  [64, 80],
-  [92, 66],
+  [6, 10],
+  [16, 30],
+  [11, 62],
+  [24, 84],
+  [33, 14],
+  [41, 48],
+  [36, 92],
+  [52, 8],
+  [57, 34],
+  [49, 68],
+  [64, 88],
+  [68, 18],
+  [74, 52],
+  [79, 76],
+  [84, 8],
+  [88, 38],
+  [93, 62],
+  [96, 22],
 ];
 
 const footerCompany: Array<[string, string]> = [
@@ -182,38 +191,47 @@ export function SiteFooter({ compact = false }: { compact?: boolean }) {
   return (
     <footer className="foot-stage">
       <div className="foot-stage-glow" aria-hidden="true" />
+      <div className="foot-ghost" aria-hidden="true">
+        <OmiMark decorative />
+      </div>
+      <div className="foot-constellation" aria-hidden="true">
+        {constellation.map(([fx, fy], i) => (
+          <i
+            key={i}
+            style={
+              {
+                "--d": String(i),
+                "--fx": String(fx),
+                "--fy": String(fy),
+              } as CSSProperties
+            }
+          />
+        ))}
+      </div>
       <div className="foot-stage-inner wrap">
         <div className="foot-stage-hero">
           <OmiMark className="omi-mark--on-dark foot-stage-mark" glow decorative={false} />
-          <p className="foot-stage-kicker">OMI</p>
-          <p className="foot-stage-title">thought to action.</p>
-          <p className="foot-stage-sub">
-            Private memory. Cited answers. Your OK before it acts.
+          <p className="foot-stage-kicker">OMI · BASED HARDWARE · SF</p>
+          <p className="foot-stage-title">
+            thought
+            <br />
+            to action.
           </p>
-          <div className="foot-stage-actions">
-            <a className="btn btn-solid" href={portalUrl}>
-              Open Omi
-            </a>
-            <a className="btn btn-line" href={apiDocsUrl}>
-              Documentation
-            </a>
-            <a className="btn btn-line" href={downloadUrl}>
-              Download
-            </a>
-          </div>
-          <div className="foot-constellation" aria-hidden="true">
-            {constellation.map(([fx, fy], i) => (
-              <i
-                key={i}
-                style={
-                  {
-                    "--d": String(i),
-                    "--fx": String(fx),
-                    "--fy": String(fy),
-                  } as CSSProperties
-                }
-              />
-            ))}
+          <div className="foot-stage-row">
+            <p className="foot-stage-sub">
+              Private memory. Cited answers. Your OK before it acts.
+            </p>
+            <div className="foot-stage-actions">
+              <a className="btn btn-solid" href={portalUrl}>
+                Open Omi
+              </a>
+              <a className="btn btn-line" href={apiDocsUrl}>
+                Documentation
+              </a>
+              <a className="btn btn-line" href={downloadUrl}>
+                Download
+              </a>
+            </div>
           </div>
         </div>
         <div className="foot">
@@ -231,7 +249,8 @@ export function SiteFooter({ compact = false }: { compact?: boolean }) {
           <FooterColumn heading="Resources" links={footerResources} />
         </div>
         <p className="foot-rule small">
-          © 2026 Based Hardware. All rights reserved.
+          <span>© 2026 Based Hardware. All rights reserved.</span>
+          <span>37.7749° N · 122.4194° W</span>
         </p>
       </div>
     </footer>

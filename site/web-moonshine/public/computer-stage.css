@@ -851,21 +851,30 @@ html.lenis body {
 .foot-stage-kicker {
   font-family: var(--pixel);
   font-size: 11px;
-  letter-spacing: 0.16em;
+  letter-spacing: 0.22em;
   color: rgba(255, 250, 243, 0.5);
 }
 
 .foot-stage-title {
   font-family: var(--serif);
-  font-size: clamp(3rem, 10vw, 6.5rem);
+  font-size: clamp(4rem, 13.5vw, 12rem);
   font-weight: 600;
-  line-height: 0.96;
-  letter-spacing: -0.04em;
-  max-width: 12ch;
+  line-height: 0.9;
+  letter-spacing: -0.05em;
+  max-width: none;
+}
+
+.foot-stage-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1rem 2.5rem;
+  margin-top: clamp(1.25rem, 3vw, 2rem);
 }
 
 .foot-stage-sub {
-  max-width: 28rem;
+  max-width: 24rem;
   color: rgba(255, 250, 243, 0.65);
   line-height: 1.45;
 }
@@ -874,7 +883,30 @@ html.lenis body {
   display: flex;
   flex-wrap: wrap;
   gap: 0.65rem;
-  margin-top: 0.5rem;
+}
+
+/* A huge, faint ring turning behind everything — the mark as architecture. */
+.foot-ghost {
+  position: absolute;
+  right: -12%;
+  top: -18%;
+  width: min(56rem, 70vw);
+  aspect-ratio: 1;
+  pointer-events: none;
+  opacity: 0.07;
+  animation: foot-ghost-spin 240s linear infinite;
+}
+
+.foot-ghost .omi-mark {
+  width: 100% !important;
+  margin: 0 !important;
+  fill: #fffaf3;
+}
+
+@keyframes foot-ghost-spin {
+  to {
+    rotate: 360deg;
+  }
 }
 
 .foot-stage .btn-solid {
@@ -890,10 +922,7 @@ html.lenis body {
 
 .foot-constellation {
   position: absolute;
-  right: 2%;
-  top: 6%;
-  width: min(24rem, 42vw);
-  height: min(20rem, 60vh);
+  inset: 0;
   pointer-events: none;
 }
 
@@ -901,14 +930,18 @@ html.lenis body {
   --d: 0;
   --fx: 0;
   --fy: 0;
+  --px: 0px;
+  --py: 0px;
   position: absolute;
   left: calc(var(--fx) * 1%);
   top: calc(var(--fy) * 1%);
-  width: 0.5rem;
-  height: 0.5rem;
+  width: 0.45rem;
+  height: 0.45rem;
   border-radius: 50%;
   background: #fffaf3;
-  opacity: 0.55;
+  opacity: 0.5;
+  transform: translate(var(--px), var(--py));
+  transition: transform 700ms var(--ease);
   animation:
     foot-drift 7s ease-in-out infinite alternate,
     foot-dot 3.6s ease-in-out infinite;
@@ -949,14 +982,55 @@ html.lenis body {
 }
 
 .foot-stage .foot-rule {
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.5rem 2rem;
   color: rgba(255, 250, 243, 0.4);
   border-color: rgba(255, 250, 243, 0.12);
+}
+
+.foot-stage .foot-rule span:last-child {
+  font-family: var(--pixel);
+  font-size: 10px;
+  letter-spacing: 0.16em;
+}
+
+.foot-stage .foot-col a {
+  display: inline-block;
+  transition:
+    color 180ms ease,
+    translate 220ms var(--ease);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .foot-stage .foot-col a:hover {
+    color: #fffaf3;
+    translate: 5px 0;
+  }
 }
 
 @media (max-width: 720px) {
   .foot-constellation {
     opacity: 0.35;
-    width: 10rem;
+  }
+
+  .foot-ghost {
+    right: -35%;
+    top: auto;
+    bottom: -10%;
+    width: 30rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .foot-ghost,
+  .foot-constellation i {
+    animation: none;
+  }
+
+  .foot-constellation i {
+    transition: none;
   }
 }
 

@@ -104,6 +104,43 @@
     });
   }
 
+  // The footer constellation leans away from the cursor: each dot is pushed
+  // along the line from the pointer, harder the closer it sits, and eases
+  // home when the pointer leaves. CSS carries the easing; this only writes
+  // the per-dot offset.
+  const foot = document.querySelector(".foot-stage");
+  const fieldDots = foot
+    ? [...foot.querySelectorAll(".foot-constellation i")]
+    : [];
+  if (foot && fieldDots.length && matchMedia("(hover: hover)").matches) {
+    let raf = 0;
+    let ev = null;
+    const apply = () => {
+      raf = 0;
+      if (!ev) return;
+      for (const dot of fieldDots) {
+        const b = dot.getBoundingClientRect();
+        const dx = b.x + b.width / 2 - ev.clientX;
+        const dy = b.y + b.height / 2 - ev.clientY;
+        const dist = Math.hypot(dx, dy) || 1;
+        const push = Math.max(0, 1 - dist / 240);
+        dot.style.setProperty("--px", `${((dx / dist) * push * 90).toFixed(1)}px`);
+        dot.style.setProperty("--py", `${((dy / dist) * push * 90).toFixed(1)}px`);
+      }
+    };
+    foot.addEventListener("pointermove", (event) => {
+      ev = event;
+      if (!raf) raf = requestAnimationFrame(apply);
+    });
+    foot.addEventListener("pointerleave", () => {
+      ev = null;
+      for (const dot of fieldDots) {
+        dot.style.setProperty("--px", "0px");
+        dot.style.setProperty("--py", "0px");
+      }
+    });
+  }
+
   // Honour the setting if it is changed while the page is open.
   quiet.addEventListener("change", (event) => {
     if (!event.matches) return;
