@@ -132,23 +132,52 @@ function HomeHero() {
   );
 }
 
+const competitorTraits: string[] = [
+  "Forgets the room when you leave",
+  "Answers without sources",
+  "Invent what it can’t cite",
+  "Takes over your whole screen",
+  "Acts before you approve",
+  "Memory stuck in one chat tab",
+  "No trail when you correct it",
+  "A different brain in every inbox",
+];
+
 function HomeDissolve() {
   return (
-    <section className="ed-dissolve" id="omi-unifies" aria-label="Omi keeps the thread">
-      <div className="ed-dissolve-sticky">
+    <section
+      className="ed-dissolve"
+      id="omi-unifies"
+      data-dissolve-section
+      aria-label="From the usual assistants to Omi"
+    >
+      <div className="ed-dissolve-stage">
         <div className="ed-thread-shader" data-thread-shader aria-hidden="true" />
-        <div className="ed-dissolve-canvas" data-dissolve-canvas />
-        <div className="ed-dissolve-copy" data-dissolve-copy>
-          <div className="ed-dissolve-mark" data-reveal>
-            <OmiMark className="omi-mark--on-dark" glow decorative={false} />
-          </div>
-          <p className="ed-kicker">The thread</p>
+        <div className="ed-dissolve-them" data-dissolve-them>
+          <p className="ed-kicker">The usual assistants</p>
           <h2 className="ed-dissolve-title">
             Most assistants forget the room the moment you leave it.
           </h2>
+          <ul className="ed-dissolve-traits">
+            {competitorTraits.map((trait) => (
+              <li key={trait} data-dissolve-trait>
+                {trait}
+              </li>
+            ))}
+          </ul>
+        </div>
+        <div className="ed-dissolve-canvas" data-dissolve-canvas aria-hidden="true" />
+        <div className="ed-dissolve-us" data-dissolve-us>
+          <div className="ed-dissolve-mark">
+            <OmiMark className="omi-mark--on-dark" glow decorative={false} />
+          </div>
+          <p className="ed-kicker">Omi</p>
+          <h2 className="ed-dissolve-title">
+            Omi keeps the thread — cited, continuous, with your OK.
+          </h2>
           <p className="ed-dissolve-body">
-            Omi keeps one continuous, cited memory — capture, currents, and
-            action on every surface you use.
+            One private memory across desktop, pendant, and the inboxes you
+            already use. Correct it, and anything built on it updates.
           </p>
         </div>
       </div>

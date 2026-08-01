@@ -155,12 +155,12 @@ function initFloatReplies(root: HTMLElement) {
 
   gsap.to(layer, {
     opacity: 0,
-    y: -80,
+    y: -40,
     ease: "none",
     scrollTrigger: {
       trigger: dissolve,
-      start: "top 85%",
-      end: "top 15%",
+      start: "top 20%",
+      end: "top top",
       scrub: true,
     },
   });
@@ -261,16 +261,29 @@ void main() {
   gsap.ticker.add(draw);
 }
 
-/** Noise-edge dissolve (Computer-style desplatter). */
+/**
+ * Pinned desplatter: hold on competitor traits, burn them away, then reveal Omi.
+ * Progress stays at 0 until the section is pinned (top of viewport).
+ */
 function initDissolve(root: HTMLElement) {
-  const section = root.querySelector<HTMLElement>("#omi-unifies");
+  const section = root.querySelector<HTMLElement>("[data-dissolve-section]");
+  const stage = root.querySelector<HTMLElement>(".ed-dissolve-stage");
   const host = root.querySelector<HTMLElement>("[data-dissolve-canvas]");
-  const copy = root.querySelector<HTMLElement>("[data-dissolve-copy]");
-  if (!section || !host) return;
+  const them = root.querySelector<HTMLElement>("[data-dissolve-them]");
+  const us = root.querySelector<HTMLElement>("[data-dissolve-us]");
+  const traits = [
+    ...(them?.querySelectorAll<HTMLElement>("[data-dissolve-trait]") ?? []),
+  ];
+  if (!section || !stage || !host || !them || !us) return;
+
+  gsap.set(us, { opacity: 0, filter: "blur(12px)", y: 24 });
+  gsap.set(them, { opacity: 1, filter: "blur(0px)" });
+  gsap.set(traits, { opacity: 1, y: 0 });
 
   if (reduced()) {
     host.dataset.fallback = "1";
-    if (copy) copy.style.opacity = "1";
+    gsap.set(them, { opacity: 0 });
+    gsap.set(us, { opacity: 1, filter: "none", y: 0 });
     return;
   }
 
@@ -286,6 +299,8 @@ function initDissolve(root: HTMLElement) {
     return;
   }
 
+  // burn=1 → opaque (covering "them" with cream/ember), burn→0 as progress rises
+  // so the noise hole opens through the competitor layer.
   const fs = `#version 300 es
 precision highp float;
 in vec2 v_uv;
@@ -322,15 +337,20 @@ void main() {
   vec2 uv = v_uv;
   float aspect = u_res.x / max(u_res.y, 1.0);
   vec2 p = (uv - 0.5) * vec2(aspect, 1.0);
-  float n = fbm(p * 3.4 + u_time * 0.04);
+  float n = fbm(p * 3.6 + u_time * 0.05);
   float edge = u_edge;
-  float burn = smoothstep(u_progress - edge, u_progress + edge, n);
-  float rim = smoothstep(u_progress - edge * 1.4, u_progress, n)
-    * (1.0 - smoothstep(u_progress, u_progress + edge * 1.2, n));
-  vec3 veil = vec3(0.98, 0.97, 0.93);
+  // Invert classic veil: start clear over "them", then burn a cream/ember sheet
+  // across them as holes — reads as attributes desplattering apart.
+  float scatter = smoothstep(u_progress - edge, u_progress + edge, n);
+  float holes = 1.0 - scatter;
+  float rim = smoothstep(u_progress - edge * 1.5, u_progress, n)
+    * (1.0 - smoothstep(u_progress, u_progress + edge * 1.3, n));
+  vec3 ash = vec3(0.96, 0.93, 0.88);
   vec3 ember = vec3(0.62, 0.40, 0.33);
-  vec3 col = mix(veil, ember, rim * 0.85);
-  float alpha = burn * 0.97 + rim * 0.35;
+  vec3 col = mix(ash, ember, rim);
+  float alpha = holes * 0.92 + rim * 0.55;
+  // Hold fully clear until burn phase starts (u_progress near 0).
+  alpha *= smoothstep(0.02, 0.12, u_progress);
   outColor = vec4(col, alpha);
 }`;
 
@@ -343,7 +363,7 @@ void main() {
   const uEdge = gl.getUniformLocation(prog, "u_edge");
   const uRes = gl.getUniformLocation(prog, "u_res");
 
-  let progress = 0;
+  let burn = 0;
   const resize = () => {
     const dpr = Math.min(window.devicePixelRatio, 2);
     const w = host.clientWidth;
@@ -364,28 +384,53 @@ void main() {
   const draw = (t: number) => {
     gl.clearColor(0, 0, 0, 0);
     gl.clear(gl.COLOR_BUFFER_BIT);
-    gl.uniform1f(uProgress, progress);
+    gl.uniform1f(uProgress, burn);
     gl.uniform1f(uTime, t * 0.001);
-    gl.uniform1f(uEdge, 0.2);
+    gl.uniform1f(uEdge, 0.18);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   };
-
   gsap.ticker.add(draw);
+
+  const applyPhase = (p: number) => {
+    // 0–0.18 hold on competitors (no burn)
+    // 0.18–0.62 burn / scatter them
+    // 0.48–1.0 reveal Omi
+    const hold = 0.18;
+    const burnEnd = 0.62;
+    const burnT = Math.min(1, Math.max(0, (p - hold) / (burnEnd - hold)));
+    burn = burnT;
+
+    const themFade = 1 - Math.min(1, Math.max(0, (p - 0.28) / 0.34));
+    them.style.opacity = String(themFade);
+    them.style.filter = `blur(${((1 - themFade) * 8).toFixed(2)}px)`;
+    them.style.transform = `scale(${(1 + (1 - themFade) * 0.03).toFixed(3)})`;
+
+    traits.forEach((trait, i) => {
+      const local = Math.min(
+        1,
+        Math.max(0, (burnT - i * 0.07) / 0.35),
+      );
+      trait.style.opacity = String(1 - local);
+      trait.style.transform = `translateY(${(-12 * local).toFixed(1)}px) scale(${(1 - local * 0.06).toFixed(3)})`;
+    });
+
+    const usT = Math.min(1, Math.max(0, (p - 0.48) / 0.4));
+    us.style.opacity = String(usT);
+    us.style.filter = `blur(${((1 - usT) * 12).toFixed(2)}px)`;
+    us.style.transform = `translateY(${(24 * (1 - usT)).toFixed(1)}px) scale(${(0.96 + usT * 0.04).toFixed(3)})`;
+  };
+
+  applyPhase(0);
 
   ScrollTrigger.create({
     trigger: section,
     start: "top top",
-    end: "bottom bottom",
-    scrub: 0.45,
-    onUpdate: (self) => {
-      progress = self.progress;
-      if (copy) {
-        const reveal = Math.min(1, Math.max(0, (self.progress - 0.15) / 0.55));
-        copy.style.opacity = String(reveal);
-        copy.style.filter = `blur(${((1 - reveal) * 10).toFixed(2)}px)`;
-        copy.style.transform = `scale(${(0.96 + reveal * 0.04).toFixed(3)})`;
-      }
-    },
+    end: "+=280%",
+    pin: stage,
+    scrub: 0.55,
+    anticipatePin: 1,
+    invalidateOnRefresh: true,
+    onUpdate: (self) => applyPhase(self.progress),
   });
 }
 

@@ -74,6 +74,10 @@ describe("page components", () => {
     expect(home).toContain('data-computer-stage');
     expect(home).toContain('id="omi-unifies"');
     expect(home).toContain("data-dissolve-canvas");
+    expect(home).toContain("data-dissolve-them");
+    expect(home).toContain("data-dissolve-us");
+    expect(home).toContain("The usual assistants");
+    expect(home).toContain("Answers without sources");
     expect(home).toContain('data-hero');
     expect(home).toContain("ed-hardware");
     expect(home).toContain("omi-mark--on-dark");
