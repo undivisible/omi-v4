@@ -135,7 +135,7 @@ function HomeHero() {
 const competitorTraits: string[] = [
   "Forgets the room when you leave",
   "Answers without sources",
-  "Invent what it can’t cite",
+  "Invents what it can’t cite",
   "Takes over your whole screen",
   "Acts before you approve",
   "Memory stuck in one chat tab",

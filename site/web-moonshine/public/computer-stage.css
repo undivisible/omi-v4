@@ -280,33 +280,37 @@ html.lenis body {
   left: 0;
   right: 0;
   bottom: -1px;
-  height: 22vh;
+  height: 16vh;
   z-index: 4;
   pointer-events: none;
-  background: linear-gradient(180deg, transparent, var(--ed-cream));
+  background: linear-gradient(180deg, transparent, #e6d5bc);
 }
 
 .ed-dissolve-stage {
   position: relative;
   min-height: 100svh;
   display: grid;
-  place-items: center;
+  grid-template-rows: auto auto;
+  align-content: center;
+  justify-items: center;
+  row-gap: clamp(2.25rem, 6vh, 4rem);
   overflow: hidden;
   padding: var(--pad);
   background: transparent;
 }
 
 .ed-dissolve-mark-stage {
-  position: absolute;
-  inset: 0;
+  position: relative;
+  grid-area: 1 / 1;
   z-index: 1;
   display: grid;
   place-items: center;
+  min-height: clamp(8rem, 24vh, 13rem);
   pointer-events: none;
 }
 
 .ed-cold-mark {
-  width: min(42vw, 16rem) !important;
+  width: clamp(6.5rem, 16vw, 10rem) !important;
   margin: 0 !important;
   opacity: 0.95;
 }
@@ -319,9 +323,10 @@ html.lenis body {
 .ed-dissolve-us {
   position: relative;
   z-index: 2;
-  grid-area: 1 / 1;
+  grid-area: 2 / 1;
   max-width: 44rem;
   width: min(100%, 44rem);
+  text-align: center;
   will-change: opacity, filter, transform;
 }
 
@@ -367,12 +372,14 @@ html.lenis body {
   line-height: 1.5;
   color: rgba(255, 250, 243, 0.72);
   max-width: 34rem;
+  margin-inline: auto;
 }
 
 .ed-dissolve-traits {
   list-style: none;
   display: flex;
   flex-wrap: wrap;
+  justify-content: center;
   gap: 0.55rem;
   margin-top: 1.75rem;
 }
@@ -395,7 +402,7 @@ html.lenis body {
 
 .ed-section {
   position: relative;
-  padding: clamp(4rem, 10vw, 7rem) var(--pad);
+  padding: clamp(3.5rem, 8vw, 5.5rem) var(--pad);
   max-width: 76rem;
   margin-inline: auto;
 }
@@ -515,9 +522,9 @@ html.lenis body {
   position: relative;
   padding: clamp(3rem, 8vw, 6rem) var(--pad);
   background:
-    radial-gradient(ellipse at 15% 0%, rgba(168, 94, 70, 0.16), transparent 50%),
+    radial-gradient(ellipse at 15% 0%, rgba(168, 94, 70, 0.14), transparent 50%),
     radial-gradient(ellipse at 85% 20%, rgba(78, 104, 124, 0.12), transparent 45%),
-    linear-gradient(180deg, #f0e6da 0%, var(--ed-cream) 55%, #f3ebe2 100%);
+    linear-gradient(180deg, #e6d5bc 0%, #ecdfc9 55%, #e6d5bc 100%);
   margin-inline: calc(50% - 50vw);
   width: 100vw;
 }
@@ -528,19 +535,19 @@ html.lenis body {
   position: absolute;
   left: 0;
   right: 0;
-  height: 18vh;
+  height: 12vh;
   pointer-events: none;
   z-index: 0;
 }
 
 .ed-hardware::before {
   top: 0;
-  background: linear-gradient(180deg, var(--ed-cream), transparent);
+  background: linear-gradient(180deg, #e6d5bc, transparent);
 }
 
 .ed-hardware::after {
   bottom: 0;
-  background: linear-gradient(180deg, transparent, var(--ed-cream));
+  background: linear-gradient(180deg, transparent, #e6d5bc);
 }
 
 .ed-hardware-inner {
@@ -787,10 +794,10 @@ html.lenis body {
   left: 0;
   right: 0;
   top: 0;
-  height: 22vh;
+  height: 14vh;
   z-index: 2;
   pointer-events: none;
-  background: linear-gradient(180deg, var(--ed-cream, #fffaf3), transparent);
+  background: linear-gradient(180deg, #e9dcc8, transparent);
 }
 
 .foot-stage-glow {

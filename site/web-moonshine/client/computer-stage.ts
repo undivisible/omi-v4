@@ -183,7 +183,7 @@ function initDissolve(root: HTMLElement) {
     mark.classList.add("is-live");
   };
 
-  gsap.set(us, { opacity: 0, filter: "blur(14px)", y: 28 });
+  gsap.set(us, { opacity: 0, filter: "blur(6px)", y: 18 });
   gsap.set(them, { opacity: 1, filter: "blur(0px)" });
   gsap.set(traits, { opacity: 1, y: 0, scale: 1 });
   setMarkSpread(0);
@@ -210,7 +210,9 @@ function initDissolve(root: HTMLElement) {
     if (!gl) {
       host.dataset.fallback = "1";
     } else {
-      // Ember ash that peaks mid-scroll then clears — never a white end state.
+      // Fine ember grain that peaks mid-scroll then clears — never a white
+      // end state, never full-frame clouds. Concentrated centrally and
+      // broken by high-frequency sparkle so it reads as embers, not fog.
       const fs = `#version 300 es
 precision highp float;
 in vec2 v_uv;
@@ -247,20 +249,23 @@ void main() {
   vec2 uv = v_uv;
   float aspect = u_res.x / max(u_res.y, 1.0);
   vec2 p = (uv - 0.5) * vec2(aspect, 1.0);
-  float n = fbm(p * 3.8 + u_time * 0.06);
+  vec2 drift = vec2(0.0, u_time * 0.045);
+  float n = fbm(p * 8.5 + drift);
   float edge = u_edge;
   float scatter = smoothstep(u_progress - edge, u_progress + edge, n);
   float holes = 1.0 - scatter;
   float rim = smoothstep(u_progress - edge * 1.5, u_progress, n)
     * (1.0 - smoothstep(u_progress, u_progress + edge * 1.3, n));
-  // Onboarding ember / sand — not paper white.
-  vec3 ash = vec3(0.66, 0.50, 0.40);
+  float grain = noise(p * 90.0 + vec2(0.0, u_time * 0.6));
+  float sparkle = 0.45 + 0.55 * grain;
+  float vign = 1.0 - smoothstep(0.5, 1.05, length(p));
+  vec3 ash = vec3(0.83, 0.68, 0.53);
   vec3 ember = vec3(0.66, 0.37, 0.27);
   vec3 room = vec3(0.17, 0.15, 0.13);
-  vec3 col = mix(room, mix(ash, ember, rim), 0.85);
-  float envelope = smoothstep(0.08, 0.28, u_progress)
-    * (1.0 - smoothstep(0.72, 0.98, u_progress));
-  float alpha = (holes * 0.55 + rim * 0.7) * envelope;
+  vec3 col = mix(room, mix(ash, ember, rim), 0.9);
+  float envelope = smoothstep(0.06, 0.26, u_progress)
+    * (1.0 - smoothstep(0.68, 0.94, u_progress));
+  float alpha = (holes * 0.28 + rim * 0.55) * sparkle * vign * envelope;
   outColor = vec4(col, alpha);
 }`;
 
@@ -294,7 +299,7 @@ void main() {
         gl.clear(gl.COLOR_BUFFER_BIT);
         gl.uniform1f(uProgress, burn);
         gl.uniform1f(uTime, t * 0.001);
-        gl.uniform1f(uEdge, 0.16);
+        gl.uniform1f(uEdge, 0.11);
         gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
       });
     }
@@ -318,7 +323,7 @@ void main() {
 
     const themFade = 1 - Math.min(1, Math.max(0, (p - 0.22) / 0.38));
     them.style.opacity = String(themFade);
-    them.style.filter = `blur(${((1 - themFade) * 10).toFixed(2)}px)`;
+    them.style.filter = `blur(${((1 - themFade) * 5).toFixed(2)}px)`;
     them.style.transform = `scale(${(1 + (1 - themFade) * 0.04).toFixed(3)})`;
 
     traits.forEach((trait, i) => {
@@ -331,8 +336,8 @@ void main() {
 
     const usT = Math.min(1, Math.max(0, (p - 0.5) / 0.35));
     us.style.opacity = String(usT);
-    us.style.filter = `blur(${((1 - usT) * 12).toFixed(2)}px)`;
-    us.style.transform = `translateY(${(28 * (1 - usT)).toFixed(1)}px)`;
+    us.style.filter = `blur(${((1 - usT) * 6).toFixed(2)}px)`;
+    us.style.transform = `translateY(${(18 * (1 - usT)).toFixed(1)}px)`;
 
     if (p >= 0.98) {
       burn = 1;
@@ -349,7 +354,7 @@ void main() {
   ScrollTrigger.create({
     trigger: section,
     start: "top top",
-    end: "+=320%",
+    end: "+=220%",
     pin: stage,
     scrub: 0.65,
     anticipatePin: 1,
@@ -427,7 +432,7 @@ function initSteps(root: HTMLElement) {
   cards.forEach((card) => {
     gsap.fromTo(
       card,
-      { y: 40, opacity: 0.25, filter: "blur(8px)" },
+      { y: 30, opacity: 0.4, filter: "blur(3px)" },
       {
         y: 0,
         opacity: 1,
