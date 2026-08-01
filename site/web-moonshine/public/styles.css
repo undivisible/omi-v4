@@ -1259,18 +1259,30 @@ tbody th {
 .omi-mark-ring {
   transform-box: fill-box;
   transform-origin: 50% 50%;
-  rotate: var(--omi-rot);
+  transform: rotate(var(--omi-rot));
+}
+
+/* Safari applies the individual translate/scale properties to HTML boxes but
+   not to SVG geometry, so every dot moves through one composed transform
+   instead, with the pulse riding a registered custom property. */
+@property --omi-ps {
+  syntax: "<number>";
+  inherits: false;
+  initial-value: 1;
 }
 
 .omi-mark circle {
+  --tx: calc(var(--omi-spread) * var(--ux) * 1px);
+  --ty: calc(var(--omi-spread) * var(--uy) * 1px);
+  --sc: 1;
   transform-box: fill-box;
   transform-origin: 50% 50%;
-  translate: calc(var(--omi-spread) * var(--ux) * 1px)
-    calc(var(--omi-spread) * var(--uy) * 1px);
+  transform: translate(var(--tx), var(--ty))
+    scale(calc(var(--sc) * var(--omi-ps, 1)));
   opacity: 0.62;
   fill: var(--dot, inherit);
   transition:
-    translate 900ms var(--ease),
+    transform 900ms var(--ease),
     fill 700ms var(--ease),
     opacity 600ms var(--ease);
   animation: omi-dot-pulse var(--omi-pulse) var(--ease) infinite;
@@ -1323,11 +1335,11 @@ tbody th {
   70%,
   100% {
     opacity: 0.62;
-    scale: 1;
+    --omi-ps: 1;
   }
   12% {
     opacity: 1;
-    scale: 1.14;
+    --omi-ps: 1.14;
   }
 }
 
@@ -1336,20 +1348,20 @@ tbody th {
    each dot's lane offset; the stagger is the same one the ring re-forms on,
    so it travels rather than switching. */
 .omi-mark.is-wave circle {
+  --tx: var(--lx, 0px);
+  --ty: var(--ly, 0px);
+  --sc: 0.68;
   animation: none;
-  translate: var(--lx, 0) var(--ly, 0);
-  scale: 0.68;
   opacity: 1;
   transition:
-    translate 620ms var(--ease),
-    scale 620ms var(--ease),
+    transform 620ms var(--ease),
     fill 380ms linear,
     opacity 380ms linear;
 }
 
 .omi-mark.is-wave .omi-mark-ring {
-  rotate: 0deg;
-  transition: rotate 620ms var(--ease);
+  transform: rotate(0deg);
+  transition: transform 620ms var(--ease);
 }
 
 /* Hovering the primary call to action draws the ring in on itself and
@@ -1364,13 +1376,15 @@ tbody th {
     --omi-spread: 0 !important;
     --omi-rot: 0deg !important;
   }
+  .omi-mark-ring {
+    transform: none;
+  }
   .omi-mark circle,
   .omi-mark.is-live circle {
     animation: none;
     transition: none;
     opacity: 1;
-    scale: 1;
-    translate: none;
+    transform: none;
     fill: inherit;
   }
 }

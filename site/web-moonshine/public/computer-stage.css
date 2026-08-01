@@ -97,23 +97,6 @@ html.lenis body {
   background: var(--ed-room);
 }
 
-.ed-hero::after {
-  content: "";
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  height: 34vh;
-  z-index: 1;
-  pointer-events: none;
-  background: linear-gradient(
-    180deg,
-    transparent,
-    rgba(43, 39, 34, 0.65) 55%,
-    var(--ed-room) 92%
-  );
-}
-
 .ed-hero-media {
   position: absolute;
   inset: 0;

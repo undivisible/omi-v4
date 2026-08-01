@@ -215,7 +215,7 @@ function initDissolve(root: HTMLElement) {
       const wob = away * 10;
       const x = t.x * away + Math.sin(time * 0.7 + i * 2.1) * wob;
       const y = t.y * away + Math.cos(time * 0.55 + i * 1.3) * wob;
-      c.style.translate = `${x.toFixed(1)}px ${y.toFixed(1)}px`;
+      c.style.transform = `translate(${x.toFixed(1)}px, ${y.toFixed(1)}px)`;
       c.style.opacity = String(0.7 + 0.3 * gather);
     });
   };
@@ -229,7 +229,7 @@ function initDissolve(root: HTMLElement) {
     a.map((v, i) => Math.round(v + (b[i] - v) * t));
   const ROOM = [43, 39, 34];
   const EMBER = [64, 44, 30];
-  const SETTLED = [36, 33, 29];
+  const SETTLED = [43, 39, 34];
   const paintRoom = (p: number) => {
     const up = Math.min(1, Math.max(0, (p - 0.16) / 0.3));
     const down = Math.min(1, Math.max(0, (p - 0.55) / 0.3));
@@ -346,6 +346,13 @@ void main() {
       };
       resize();
       window.addEventListener("resize", resize);
+      // Safari lays the pinned stage out after this module runs, so the first
+      // measurement can be a fraction of the real box and the grain renders
+      // into a strip at the top. Observing the host corrects it on the frame
+      // the box actually gets its size.
+      if ("ResizeObserver" in window) {
+        new ResizeObserver(resize).observe(host);
+      }
       gl.enable(gl.BLEND);
       gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
 
