@@ -116,9 +116,11 @@ pub(crate) fn posture_from_env() -> SecurityPosture {
 
 /// The framing a policy contributes to the assistant prompt.
 ///
-/// `escalated` says whether a classifier verdict raised this turn to strict. A
-/// deployment that configures strict as its floor screens nothing, so claiming
-/// an injection there would frame every ordinary turn as an incident.
+/// `escalated` says whether a well-formed classifier verdict raised this turn
+/// to strict. A deployment that configures strict as its floor screens nothing,
+/// so claiming an injection there would frame every ordinary turn as an
+/// incident. Fail-closed parses of malformed classifier output also tighten to
+/// strict without setting this flag.
 pub(crate) fn render_security_policy_prompt(
     policy: ResolvedSecurityPolicy,
     escalated: bool,

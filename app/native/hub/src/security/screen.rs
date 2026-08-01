@@ -119,6 +119,9 @@ pub(crate) struct SecurityScreenVerdict {
     pub(crate) reason: Option<String>,
 }
 
+/// Reason attached when a reply is unusable and the screener fails closed.
+const INVALID_SECURITY_SCREEN_VERDICT: &str = "invalid security screen verdict";
+
 impl SecurityScreenVerdict {
     fn auto() -> Self {
         Self {
@@ -132,6 +135,16 @@ impl SecurityScreenVerdict {
             decision: SecurityPosture::Strict,
             reason,
         }
+    }
+
+    /// Whether this is a well-formed classifier decision that chose strict.
+    ///
+    /// Fail-closed synthetic strict (malformed JSON shape, unknown decision,
+    /// prose wrapping the object, and similar cases) still tightens posture,
+    /// but it is not an identified injection attempt.
+    pub(crate) fn is_escalation(&self) -> bool {
+        self.decision == SecurityPosture::Strict
+            && self.reason.as_deref() != Some(INVALID_SECURITY_SCREEN_VERDICT)
     }
 }
 
@@ -303,7 +316,7 @@ pub(crate) fn parse_security_screen_verdict(output: &str) -> Option<SecurityScre
     }
     let invalid = || {
         Some(SecurityScreenVerdict::strict(Some(
-            "invalid security screen verdict".to_owned(),
+            INVALID_SECURITY_SCREEN_VERDICT.to_owned(),
         )))
     };
     // The whole response must be the verdict. A reply that wraps the object in
@@ -558,7 +571,7 @@ mod tests {
             assert_eq!(
                 parse_security_screen_verdict(output),
                 Some(SecurityScreenVerdict::strict(Some(
-                    "invalid security screen verdict".to_owned()
+                    INVALID_SECURITY_SCREEN_VERDICT.to_owned()
                 ))),
                 "{output} must fail closed"
             );
@@ -579,11 +592,34 @@ mod tests {
             assert_eq!(
                 parse_security_screen_verdict(output),
                 Some(SecurityScreenVerdict::strict(Some(
-                    "invalid security screen verdict".to_owned()
+                    INVALID_SECURITY_SCREEN_VERDICT.to_owned()
                 ))),
                 "{output} must fail closed"
             );
         }
+    }
+
+    #[test]
+    fn only_a_well_formed_strict_verdict_is_an_escalation() {
+        let malformed = parse_security_screen_verdict(r#"{"decision":"dangerous"}"#)
+            .expect("fail-closed yields a verdict");
+        assert_eq!(malformed.decision, SecurityPosture::Strict);
+        assert!(!malformed.is_escalation());
+        let wrapped =
+            parse_security_screen_verdict("sure! {\"decision\":\"auto\"} hope that helps")
+                .expect("wrapped JSON fails closed");
+        assert!(!wrapped.is_escalation());
+        assert!(
+            parse_security_screen_verdict(r#"{"decision":"strict"}"#)
+                .expect("bare strict")
+                .is_escalation()
+        );
+        assert!(
+            parse_security_screen_verdict(r#"{"decision":"strict","reason":"override"}"#)
+                .expect("reasoned strict")
+                .is_escalation()
+        );
+        assert!(!SecurityScreenVerdict::auto().is_escalation());
     }
 
     #[test]
