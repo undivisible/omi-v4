@@ -1269,6 +1269,9 @@ fn security_classifier(provider: Arc<dyn AssistantProvider>) -> SecurityClassifi
 struct TurnSecurity {
     posture: SecurityPosture,
     notice: Option<String>,
+    /// Whether a classifier verdict, rather than the configured floor, is what
+    /// raised this turn to strict.
+    escalated: bool,
 }
 
 /// Screens the turn's non-human content and composes the result onto the
@@ -1288,6 +1291,7 @@ async fn screen_turn(
     let unscreened = || TurnSecurity {
         posture: floor,
         notice: None,
+        escalated: false,
     };
     if resolve_security_policy(floor).inbound_screening != InboundScreening::External {
         return unscreened();
@@ -1295,16 +1299,30 @@ async fn screen_turn(
     let screener = SecurityScreener::new(security_classifier(Arc::clone(provider)));
     match screener.screen(sources, cancellation).await {
         ScreenOutcome::NothingToScreen => unscreened(),
-        ScreenOutcome::Screened(verdict) => TurnSecurity {
-            posture: compose_security_posture(floor, Some(verdict.decision)),
-            notice: None,
-        },
+        ScreenOutcome::Screened(verdict) => {
+            let posture = compose_security_posture(floor, Some(verdict.decision));
+            TurnSecurity {
+                posture,
+                notice: None,
+                escalated: posture.rank() > floor.rank(),
+            }
+        }
         ScreenOutcome::Unavailable => {
             let kind = sources
                 .iter()
                 .find(|labelled| labelled.source.is_screened())
                 .map(|labelled| labelled.source.kind())
                 .unwrap_or("content");
+            // The screener reports a cancelled classifier call as unavailable.
+            // A user stopping their own turn is not a security-service outage,
+            // and the cancellation path downstream already ends the turn.
+            if cancellation.is_cancelled() {
+                return TurnSecurity {
+                    posture: floor,
+                    notice: Some(unscreened_notice(kind)),
+                    escalated: false,
+                };
+            }
             error(
                 Some(request_id.to_owned()),
                 UNSCREENED_REASON,
@@ -1314,6 +1332,7 @@ async fn screen_turn(
             TurnSecurity {
                 posture: floor,
                 notice: Some(unscreened_notice(kind)),
+                escalated: false,
             }
         }
     }
@@ -2579,6 +2598,16 @@ async fn dispatch_assistant(
     if let Some(recalled) = memory_context.as_deref() {
         sources.push(LabelledContent::new(ContentSource::Ambient(None), recalled));
     }
+    // Profile lines reach the prompt through `local_profile_context` rather than
+    // the memory list, so they are the one recalled path the loop above misses.
+    // They are distilled from the same captured material, so they are screened
+    // as ambient too.
+    if let Some(profile_lines) = profile.as_ref().map(|value| value.lines.as_str()) {
+        sources.push(LabelledContent::new(
+            ContentSource::Ambient(Some("profile".to_owned())),
+            profile_lines,
+        ));
+    }
     let security = screen_turn(
         request_id,
         &provider,
@@ -2592,9 +2621,16 @@ async fn dispatch_assistant(
     let security_framing = match security.notice.as_deref() {
         Some(notice) => format!(
             "{}\n{notice}",
-            render_security_policy_prompt(resolve_security_policy(security.posture))
+            render_security_policy_prompt(
+                resolve_security_policy(security.posture),
+                security.escalated
+            )
         ),
-        None => render_security_policy_prompt(resolve_security_policy(security.posture)).to_owned(),
+        None => render_security_policy_prompt(
+            resolve_security_policy(security.posture),
+            security.escalated,
+        )
+        .to_owned(),
     };
     let mut prompt = format!(
         "{}{}\n\n{security_framing}\n\n{text}",
