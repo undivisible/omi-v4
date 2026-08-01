@@ -97,31 +97,46 @@
     "#9b6174",
   ];
 
-  // Hovering any mark sends each dot to its own random point — a new
-  // constellation every time, each dot taking its own colour — and the ring
-  // re-forms on leave. The CSS transition (staggered per dot) carries it.
+  // Hovering any mark plays the app's own move: the ring unrolls into the
+  // wave chain (OmiMarkGeometry.laneOf / laneXOf / laneYOf in
+  // app/lib/ui/omi_orb_motion.dart) and rolls back on leave. One motion, one
+  // easing, staggered around the ring so it reads as a wave rather than a
+  // switch. Each dot takes its own colour on the way out.
+  const CENTRE = 129.5;
+  const LANE_SPAN = 92;
+  const laneOffset = (index, cx, cy) => {
+    const lane = (index + 3) % 8;
+    const x = (lane / 7 - 0.5) * 2 * LANE_SPAN;
+    const t = x / LANE_SPAN;
+    return [x - (cx - CENTRE), 7 * t * t - 2 - (cy - CENTRE)];
+  };
+
   for (const mark of ambient) {
     const dots = [...mark.querySelectorAll("circle")];
     if (!dots.length) continue;
     const host = mark.closest("a, button") ?? mark;
+    dots.forEach((dot, index) => {
+      const [dx, dy] = laneOffset(
+        index,
+        Number(dot.getAttribute("cx")),
+        Number(dot.getAttribute("cy")),
+      );
+      dot.style.setProperty("--lx", `${dx.toFixed(1)}px`);
+      dot.style.setProperty("--ly", `${dy.toFixed(1)}px`);
+    });
     host.addEventListener("pointerenter", () => {
-      for (const dot of dots) {
-        const a = Math.random() * Math.PI * 2;
-        const d = 18 + Math.random() * 34;
-        dot.style.translate = `${(Math.cos(a) * d).toFixed(1)}px ${(
-          Math.sin(a) * d
-        ).toFixed(1)}px`;
+      const start = (Math.random() * bokashi.length) | 0;
+      dots.forEach((dot, index) => {
         dot.style.setProperty(
           "--dot",
-          bokashi[(Math.random() * bokashi.length) | 0],
+          bokashi[(start + index) % bokashi.length],
         );
-      }
+      });
+      mark.classList.add("is-wave");
     });
     host.addEventListener("pointerleave", () => {
-      for (const dot of dots) {
-        dot.style.removeProperty("translate");
-        dot.style.removeProperty("--dot");
-      }
+      mark.classList.remove("is-wave");
+      for (const dot of dots) dot.style.removeProperty("--dot");
     });
   }
 
@@ -168,7 +183,7 @@
     running = false;
     visible = false;
     for (const mark of marks) {
-      mark.classList.remove("is-live", "is-tight");
+      mark.classList.remove("is-live", "is-tight", "is-wave");
       mark.style.removeProperty("--omi-spread");
       mark.style.removeProperty("--omi-rot");
     }

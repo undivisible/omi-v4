@@ -155,9 +155,10 @@ const footerResources: Array<[string, string]> = [
   ["Community", "https://discord.omi.me/"],
 ];
 
-/* The link index: three ruled strips, each link wearing one of the mark's
-   dots. The dot is dim until the cursor arrives; then it lights and the
-   link steps forward — the same grammar as the mark itself. */
+/* The index reads as a masthead column, not a nav bar: a pixel-face label
+   over a hairline, then the names in a quiet stack. Each link wears one of
+   the mark's dots, dim until the cursor arrives — the same grammar as the
+   mark itself. */
 function FooterRow({
   heading,
   links,
@@ -166,17 +167,14 @@ function FooterRow({
   links: Array<[string, string]>;
 }) {
   return (
-    <nav
-      className="hairline-t grid items-baseline gap-x-6 gap-y-4 py-[clamp(0.9rem,2vw,1.3rem)] grid-cols-1 md:grid-cols-[clamp(6rem,12vw,9rem)_minmax(0,1fr)]"
-      aria-label={heading}
-    >
-      <h2 className="label font-normal">{heading}</h2>
-      <ul className="list-none flex flex-wrap gap-x-7 gap-y-[0.35rem]">
+    <nav aria-label={heading}>
+      <h2 className="label hairline-t font-normal pt-3">{heading}</h2>
+      <ul className="list-none grid gap-y-[0.4rem] mt-4">
         {links.map(([label, href]) => (
           <li key={label}>
             <a
               href={href}
-              className="group inline-flex items-center gap-2 text-onDark text-[0.95rem] transition-colors duration-180 hover:text-cream"
+              className="group inline-flex items-center gap-[0.55rem] text-onDark text-[0.92rem] transition-colors duration-180 hover:text-cream"
             >
               <i
                 aria-hidden="true"
@@ -224,21 +222,21 @@ export function SiteFooter({ compact = false }: { compact?: boolean }) {
         ))}
       </div>
       <div className="foot-stage-inner wrap">
-        <div className="foot-stage-hero">
-          <OmiMark className="omi-mark--on-dark foot-stage-mark" glow decorative={false} />
-          <p className="font-pixel text-[11px] tracking-[0.22em] text-[rgba(255,250,243,0.5)]">
-            OMI · BASED HARDWARE · SF
-          </p>
-          <p className="foot-stage-title">
-            thought
-            <br />
-            to action.
-          </p>
-          <div className="flex flex-wrap items-end justify-between gap-x-10 gap-y-4 mt-[clamp(1.25rem,3vw,2rem)]">
-            <p className="max-w-96 leading-relaxed text-[rgba(255,250,243,0.65)]">
+        <div className="grid gap-x-[clamp(2rem,5vw,5rem)] gap-y-[clamp(2.5rem,6vw,4rem)] lg:grid-cols-[minmax(0,1.05fr)_minmax(0,0.95fr)]">
+          <div className="foot-stage-hero">
+            <OmiMark className="omi-mark--on-dark foot-stage-mark" glow decorative={false} />
+            <p className="font-pixel text-[11px] tracking-[0.22em] text-[rgba(255,250,243,0.5)]">
+              OMI · BASED HARDWARE · SF
+            </p>
+            <p className="foot-stage-title">
+              thought
+              <br />
+              to action<span className="text-sky">.</span>
+            </p>
+            <p className="max-w-96 leading-relaxed text-[rgba(255,250,243,0.65)] mt-[clamp(1rem,2.5vw,1.75rem)]">
               Private memory. Cited answers. Your OK before it acts.
             </p>
-            <div className="flex flex-wrap gap-[0.65rem]">
+            <div className="flex flex-wrap gap-[0.65rem] mt-[clamp(1.25rem,3vw,2rem)]">
               <a className="btn btn-solid" href={portalUrl}>
                 Open Omi
               </a>
@@ -250,11 +248,11 @@ export function SiteFooter({ compact = false }: { compact?: boolean }) {
               </a>
             </div>
           </div>
-        </div>
-        <div className="grid">
-          <FooterRow heading="Company" links={footerCompany} />
-          <FooterRow heading="Products" links={footerProducts} />
-          <FooterRow heading="Resources" links={footerResources} />
+          <div className="grid gap-x-[clamp(1.5rem,3vw,3rem)] gap-y-10 sm:grid-cols-2 lg:grid-cols-3 lg:self-end">
+            <FooterRow heading="Company" links={footerCompany} />
+            <FooterRow heading="Products" links={footerProducts} />
+            <FooterRow heading="Resources" links={footerResources} />
+          </div>
         </div>
         <p className="foot-rule small flex flex-wrap justify-between gap-x-8 gap-y-2">
           <span>
@@ -262,7 +260,7 @@ export function SiteFooter({ compact = false }: { compact?: boolean }) {
             <a href="mailto:help@omi.me">help@omi.me</a>
           </span>
           <span className="font-pixel text-[10px] tracking-[0.16em]">
-            37.7749° N · 122.4194° W
+            <span data-sf-clock>37.7749° N · 122.4194° W</span>
           </span>
         </p>
       </div>

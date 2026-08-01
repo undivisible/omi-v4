@@ -142,6 +142,52 @@
   start();
 })();
 
+// The footer's fine print carries the office's own clock. Without JS the
+// coordinates stand on their own, which is why they are what ships in the
+// markup.
+(() => {
+  const slot = document.querySelector("[data-sf-clock]");
+  if (!slot) return;
+  const time = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Los_Angeles",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+  const tick = () => {
+    slot.textContent = `SAN FRANCISCO ${time.format(new Date())} · 37.7749° N · 122.4194° W`;
+  };
+  tick();
+  window.setInterval(tick, 20000);
+})();
+
+// The rail is fixed over rooms of very different brightness. Sections that
+// are dark declare themselves, and the rail flips to cream while one of them
+// is under its middle — the same trick a sticky header uses, one band tall.
+(() => {
+  const rail = document.querySelector(".rail");
+  if (!rail || !("IntersectionObserver" in window)) return;
+
+  const dark = document.querySelectorAll(
+    '.ed-hero, .ed-dissolve, .foot-stage, [data-tone="dark"]',
+  );
+  if (!dark.length) return;
+
+  const over = new Set();
+  const watcher = new IntersectionObserver(
+    (entries) => {
+      for (const entry of entries) {
+        if (entry.isIntersecting) over.add(entry.target);
+        else over.delete(entry.target);
+      }
+      if (over.size) rail.dataset.tone = "dark";
+      else delete rail.dataset.tone;
+    },
+    { rootMargin: "-30% 0px -30% 0px" },
+  );
+  for (const section of dark) watcher.observe(section);
+})();
+
 // Bottom-of-page Flutter demo at /hub/. Starts loading when the frame (or
 // #hub section) is within ~1.5 viewports, so the hub is warm on arrival.
 (() => {
@@ -202,6 +248,32 @@
       }
     });
     frame.append(live);
+
+    // Until the reader asks for it, the demo is a picture: the shield takes
+    // the wheel so the page keeps scrolling past a canvas that would
+    // otherwise swallow it. Click to hand control over, Escape to take it
+    // back.
+    const shield = document.createElement("button");
+    shield.type = "button";
+    shield.className = "shot-shield";
+    shield.innerHTML = "<span>Click to interact</span>";
+    shield.addEventListener("click", () => {
+      frame.dataset.live = "1";
+      live.focus();
+    });
+    frame.append(shield);
+
+    const release = () => {
+      if (frame.dataset.live !== "1") return;
+      delete frame.dataset.live;
+      shield.blur();
+    };
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") release();
+    });
+    document.addEventListener("pointerdown", (event) => {
+      if (!frame.contains(event.target)) release();
+    });
 
     window.setTimeout(() => {
       if (frame.dataset.state === "loading") {

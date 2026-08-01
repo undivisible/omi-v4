@@ -797,6 +797,89 @@ html.lenis body {
   margin-bottom: 0.75rem;
 }
 
+/* The rail crosses light and dark rooms, so it carries its own tone: cream
+   over the hero, the dissolve and the footer, ink over the paper sections. */
+.rail {
+  transition:
+    color 320ms var(--ease),
+    border-color 320ms var(--ease);
+}
+
+.rail[data-tone="dark"] {
+  border-color: rgba(255, 250, 243, 0.16);
+}
+
+.rail[data-tone="dark"] ol a {
+  color: #fffaf3;
+}
+
+.rail[data-tone="dark"] .omi-mark {
+  fill: #fffaf3;
+}
+
+/* The demo is no longer the last thing on the page — it is the payoff right
+   after the mark re-forms, so it needs to read as a screen in a room rather
+   than a slab at the end of the scroll. Dark band, framed window, seams
+   feathered into the tan on both sides. */
+.home-demo {
+  position: relative;
+  margin-inline: calc(50% - 50vw);
+  width: 100vw;
+  background: var(--ed-room, #2b2722);
+  color: var(--ed-cream, #fffaf3);
+  padding-block: clamp(3rem, 7vw, 5.5rem) clamp(3.5rem, 8vw, 6rem);
+}
+
+.home-demo::before,
+.home-demo::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 12vh;
+  z-index: 2;
+  pointer-events: none;
+}
+
+.home-demo::before {
+  top: 0;
+  background: linear-gradient(180deg, #e6d5bc, transparent);
+}
+
+.home-demo::after {
+  bottom: -1px;
+  background: linear-gradient(180deg, transparent, #e6d5bc);
+}
+
+.home-demo .ed-demo-head {
+  position: relative;
+  z-index: 3;
+  padding-top: 0;
+  padding-bottom: clamp(1.25rem, 3vw, 2rem);
+}
+
+.home-demo .ed-demo-head .ed-kicker {
+  color: rgba(255, 250, 243, 0.6);
+}
+
+.home-demo .ed-demo-head .omi-mark {
+  fill: #fffaf3;
+}
+
+.home-demo .shot-frame {
+  position: relative;
+  z-index: 3;
+  width: min(76rem, calc(100% - 2 * var(--pad)));
+  margin-inline: auto;
+  height: min(78svh, 52rem);
+  min-height: 0;
+  border: 1px solid rgba(255, 250, 243, 0.16);
+  border-radius: 18px;
+  background: #14120f;
+  box-shadow: 0 50px 140px rgba(0, 0, 0, 0.55);
+  overflow: hidden;
+}
+
 /* ── Cool footer stage ────────────────────────────────────────────── */
 
 .foot-stage {
@@ -836,16 +919,14 @@ html.lenis body {
 .foot-stage-inner {
   position: relative;
   z-index: 1;
-  padding-block: clamp(3rem, 7vw, 5rem) 1.75rem;
+  padding-block: clamp(4rem, 9vw, 7rem) 1.75rem;
 }
 
 .foot-stage-hero {
   position: relative;
   display: grid;
-  gap: 0.85rem;
-  padding-bottom: clamp(2rem, 5vw, 3rem);
-  margin-bottom: clamp(1.75rem, 4vw, 2.5rem);
-  border-bottom: 1px solid rgba(255, 250, 243, 0.12);
+  align-content: start;
+  gap: 0.6rem;
 }
 
 .foot-stage-mark {
@@ -855,10 +936,10 @@ html.lenis body {
 
 .foot-stage-title {
   font-family: var(--serif);
-  font-size: clamp(4rem, 13.5vw, 12rem);
+  font-size: clamp(3.25rem, 7.5vw, 7rem);
   font-weight: 600;
-  line-height: 0.9;
-  letter-spacing: -0.05em;
+  line-height: 0.88;
+  letter-spacing: -0.045em;
   max-width: none;
 }
 
@@ -947,6 +1028,7 @@ html.lenis body {
 }
 
 .foot-stage .foot-rule {
+  margin-top: clamp(3rem, 7vw, 5rem);
   color: rgba(255, 250, 243, 0.4);
   border-color: rgba(255, 250, 243, 0.12);
 }

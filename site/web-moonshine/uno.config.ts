@@ -30,6 +30,6 @@ export default defineConfig({
   shortcuts: {
     label:
       "font-pixel text-[10px] tracking-[0.2em] uppercase text-onDarkDim",
-    "hairline-t": "border-t border-solid border-onDarkRule",
+    "hairline-t": "border-t-1 border-t-solid border-t-onDarkRule",
   },
 });

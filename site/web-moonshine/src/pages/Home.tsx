@@ -8,16 +8,6 @@ import {
   OmiMarkHero,
 } from "../App";
 
-const homeRail: Array<[string, string]> = [
-  ["top", "Omi"],
-  ["omi-unifies", "Thread"],
-  ["how", "How"],
-  ["capabilities", "Does"],
-  ["hardware", "Hardware"],
-  ["reach", "Reach"],
-  ["pricing", "Price"],
-  ["hub", "Demo"],
-];
 
 const floatReplies: Array<[string, string, string]> = [
   ["omi", "You asked about the launch window — from Tuesday’s standup: ship Friday if QA clears the pendant sync path.", "Cited · standup"],
@@ -405,17 +395,17 @@ function HomeDemo() {
 
 export function HomePage() {
   return (
-    <App rail={homeRail}>
+    <App>
       <div data-computer-stage className="ed-page">
         <HomeHero />
         <HomeDissolve />
+        <HomeDemo />
         <HomeHow />
         <HomeCapabilities />
         <HomeHardware />
         <HomeReach />
         <HomePrivacy />
         <HomePricing />
-        <HomeDemo />
       </div>
     </App>
   );
