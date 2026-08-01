@@ -219,6 +219,12 @@ trait AssistantProvider: Send + Sync {
     fn model_for_tier(&self, tier: ModelTier) -> String {
         crate::model_tier::model_for_tier_env(tier)
     }
+
+    /// Whether a turn on `tier` fetches web content inside the provider call,
+    /// where the turn's screener cannot reach it before the model reads it.
+    fn retrieves_unscreened_web_content(&self, _tier: ModelTier) -> bool {
+        false
+    }
 }
 
 struct UnavailableAssistantProvider {
@@ -840,6 +846,10 @@ async fn bind_computer_use_action(
 impl AssistantProvider for RsAiAssistantProvider {
     fn model_for_tier(&self, tier: ModelTier) -> String {
         self.config.model_for_tier(tier)
+    }
+
+    fn retrieves_unscreened_web_content(&self, tier: ModelTier) -> bool {
+        self.config.hosted_backend(tier).is_some()
     }
 
     fn dispatch(
@@ -2624,9 +2634,21 @@ async fn dispatch_assistant(
         cancellation,
     )
     .await;
+    // A search-tier turn retrieves its web pages inside the provider call, so
+    // that material never passes the classifier above. Nothing here can screen
+    // it, but the model can still be told it arrives unchecked.
+    let hosted_search_notice = provider
+        .retrieves_unscreened_web_content(routed_tier)
+        .then(|| unscreened_notice("web search result"));
+    let notice = match (security.notice.as_deref(), hosted_search_notice.as_deref()) {
+        (Some(screened), Some(hosted)) => Some(format!("{screened}\n{hosted}")),
+        (Some(screened), None) => Some(screened.to_owned()),
+        (None, Some(hosted)) => Some(hosted.to_owned()),
+        (None, None) => None,
+    };
     let framed_prompt = framed_assistant_prompt(origin, None, &text);
     let datetime = current_datetime_context(chrono::Local::now().fixed_offset());
-    let security_framing = match security.notice.as_deref() {
+    let security_framing = match notice.as_deref() {
         Some(notice) => format!(
             "{}\n{notice}",
             render_security_policy_prompt(
@@ -6074,6 +6096,39 @@ mod tests {
         prompt: Arc<StdMutex<Option<String>>>,
     }
 
+    struct HostedSearchAssistantProvider {
+        prompt: Arc<StdMutex<Option<String>>>,
+    }
+
+    impl AssistantProvider for HostedSearchAssistantProvider {
+        fn retrieves_unscreened_web_content(&self, _tier: ModelTier) -> bool {
+            true
+        }
+
+        fn dispatch(
+            &self,
+            _request_id: String,
+            text: String,
+            _tier: ModelTier,
+            _cancellation: CancellationToken,
+        ) -> mpsc::Receiver<Result<AssistantProviderEvent, String>> {
+            *self
+                .prompt
+                .lock()
+                .unwrap_or_else(|failure| failure.into_inner()) = Some(text);
+            let (sender, receiver) = mpsc::channel(1);
+            tokio::spawn(async move {
+                let _ = sender
+                    .send(Ok(AssistantProviderEvent::Delta {
+                        text: "ok".to_owned(),
+                        final_segment: true,
+                    }))
+                    .await;
+            });
+            receiver
+        }
+    }
+
     impl AssistantProvider for CapturingAssistantProvider {
         fn dispatch(
             &self,
@@ -7843,6 +7898,40 @@ mod tests {
         assert_eq!(registry.terminal.len(), TERMINAL_PROPOSAL_CAPACITY);
         assert!(!registry.terminal.contains_key("terminal-0"));
         assert!(registry.terminal.contains_key("terminal-256"));
+    }
+
+    #[tokio::test]
+    async fn a_hosted_search_turn_tells_the_model_its_web_results_are_unscreened() {
+        let state = Arc::new(Mutex::new(RuntimeState {
+            configuration_generation: 3,
+            authority_uid: Some("user-a".to_owned()),
+            ..RuntimeState::default()
+        }));
+        let prompt = Arc::new(StdMutex::new(None));
+        let provider: Arc<dyn AssistantProvider> = Arc::new(HostedSearchAssistantProvider {
+            prompt: Arc::clone(&prompt),
+        });
+        dispatch_assistant(
+            "chat-search-1",
+            state.as_ref(),
+            Arc::clone(&provider),
+            "what happened at the summit today?".to_owned(),
+            None,
+            false,
+            &CancellationToken::new(),
+            None,
+        )
+        .await;
+        let captured = prompt
+            .lock()
+            .unwrap_or_else(|failure| failure.into_inner())
+            .clone()
+            .unwrap_or_default();
+        assert!(
+            captured.contains(crate::security::screen::UNSCREENED_PREFIX),
+            "{captured}"
+        );
+        assert!(captured.contains("web search result"), "{captured}");
     }
 
     #[tokio::test]
