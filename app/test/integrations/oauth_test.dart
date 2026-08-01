@@ -383,6 +383,58 @@ void main() {
       },
     );
 
+    test(
+      'connecting another account keeps a healthy legacy nameless grant',
+      () async {
+        final store = VolatileOAuthConnectionStore();
+        await store.write('u', _connection(refreshToken: 'refresh-legacy'));
+        await store.write(
+          'u',
+          _connection().copyWith(
+            account: 'work@corp.com',
+            accessToken: 'access-2',
+            refreshToken: 'refresh-2',
+          ),
+        );
+        final after = await store.readAll('u');
+        expect(after, hasLength(2));
+        expect(
+          after.where((value) => value.account == null).single.refreshToken,
+          'refresh-legacy',
+        );
+        expect(
+          after
+              .where((value) => value.account == 'work@corp.com')
+              .single
+              .accessToken,
+          'access-2',
+        );
+      },
+    );
+
+    test(
+      'reconnect supersedes a dead legacy nameless grant once labeled',
+      () async {
+        final store = VolatileOAuthConnectionStore();
+        await store.write(
+          'u',
+          _connection(needsReconnect: true, refreshToken: 'refresh-dead'),
+        );
+        await store.write(
+          'u',
+          _connection().copyWith(
+            account: 'junk@gmail.com',
+            accessToken: 'access-fresh',
+            refreshToken: 'refresh-fresh',
+          ),
+        );
+        final after = await store.readAll('u');
+        expect(after, hasLength(1));
+        expect(after.single.account, 'junk@gmail.com');
+        expect(after.single.refreshToken, 'refresh-fresh');
+      },
+    );
+
     test('accessToken reads the named account grant', () async {
       final store = VolatileOAuthConnectionStore();
       await store.write('u', _connection().copyWith(account: 'junk@gmail.com'));

@@ -98,7 +98,9 @@ final class OAuthConnection {
 bool _replacesGrant(OAuthConnection existing, OAuthConnection value) {
   if (existing.connectorId != value.connectorId) return false;
   if (existing.account == value.account) return true;
-  return existing.account == null && value.account != null;
+  return existing.account == null &&
+      value.account != null &&
+      existing.needsReconnect;
 }
 
 abstract interface class OAuthConnectionStore {
