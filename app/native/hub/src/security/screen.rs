@@ -601,23 +601,23 @@ mod tests {
 
     #[test]
     fn only_a_well_formed_strict_verdict_is_an_escalation() {
-        let malformed = parse_security_screen_verdict(r#"{"decision":"dangerous"}"#)
-            .expect("fail-closed yields a verdict");
-        assert_eq!(malformed.decision, SecurityPosture::Strict);
-        assert!(!malformed.is_escalation());
-        let wrapped =
-            parse_security_screen_verdict("sure! {\"decision\":\"auto\"} hope that helps")
-                .expect("wrapped JSON fails closed");
-        assert!(!wrapped.is_escalation());
-        assert!(
-            parse_security_screen_verdict(r#"{"decision":"strict"}"#)
-                .expect("bare strict")
-                .is_escalation()
+        let escalation = |output: &str| {
+            parse_security_screen_verdict(output).map(|verdict| verdict.is_escalation())
+        };
+        assert_eq!(
+            parse_security_screen_verdict(r#"{"decision":"dangerous"}"#)
+                .map(|verdict| verdict.decision),
+            Some(SecurityPosture::Strict)
         );
-        assert!(
-            parse_security_screen_verdict(r#"{"decision":"strict","reason":"override"}"#)
-                .expect("reasoned strict")
-                .is_escalation()
+        assert_eq!(escalation(r#"{"decision":"dangerous"}"#), Some(false));
+        assert_eq!(
+            escalation("sure! {\"decision\":\"auto\"} hope that helps"),
+            Some(false)
+        );
+        assert_eq!(escalation(r#"{"decision":"strict"}"#), Some(true));
+        assert_eq!(
+            escalation(r#"{"decision":"strict","reason":"override"}"#),
+            Some(true)
         );
         assert!(!SecurityScreenVerdict::auto().is_escalation());
     }
