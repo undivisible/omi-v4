@@ -849,7 +849,11 @@ impl AssistantProvider for RsAiAssistantProvider {
     }
 
     fn retrieves_unscreened_web_content(&self, tier: ModelTier) -> bool {
-        self.config.hosted_backend(tier).is_some()
+        match self.config.hosted_backend(tier) {
+            Some(SearchBackend::CodexResponses { web_search, .. }) => web_search,
+            Some(_) => true,
+            None => false,
+        }
     }
 
     fn dispatch(
