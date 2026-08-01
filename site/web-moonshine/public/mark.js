@@ -83,9 +83,23 @@
     cta.addEventListener("blur", () => tighten(false));
   }
 
+  // The onboarding backdrop's edge lights, reused as the scatter palette so a
+  // broken ring still reads as Omi (app/lib/features/onboarding/backdrop.dart).
+  const bokashi = [
+    "#a85e46",
+    "#c78067",
+    "#d4ae87",
+    "#4e687c",
+    "#8eafa9",
+    "#a6aa79",
+    "#c6a760",
+    "#b86958",
+    "#9b6174",
+  ];
+
   // Hovering any mark sends each dot to its own random point — a new
-  // constellation every time — and the ring re-forms on leave. The CSS
-  // transition (staggered per dot) carries the motion.
+  // constellation every time, each dot taking its own colour — and the ring
+  // re-forms on leave. The CSS transition (staggered per dot) carries it.
   for (const mark of ambient) {
     const dots = [...mark.querySelectorAll("circle")];
     if (!dots.length) continue;
@@ -97,10 +111,17 @@
         dot.style.translate = `${(Math.cos(a) * d).toFixed(1)}px ${(
           Math.sin(a) * d
         ).toFixed(1)}px`;
+        dot.style.setProperty(
+          "--dot",
+          bokashi[(Math.random() * bokashi.length) | 0],
+        );
       }
     });
     host.addEventListener("pointerleave", () => {
-      for (const dot of dots) dot.style.removeProperty("translate");
+      for (const dot of dots) {
+        dot.style.removeProperty("translate");
+        dot.style.removeProperty("--dot");
+      }
     });
   }
 

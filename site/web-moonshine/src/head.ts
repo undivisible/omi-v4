@@ -50,6 +50,7 @@ export function buildHead(
     `<link rel="stylesheet" href="/styles.css"/>`,
     `<link rel="stylesheet" href="/scroll-stage.css"/>`,
     `<link rel="stylesheet" href="/computer-stage.css"/>`,
+    `<link rel="stylesheet" href="/uno.css"/>`,
     `<meta name="theme-color" content="${inkColor}"/>`,
     `<meta property="og:title" content="${title}"/>`,
     `<meta property="og:description" content="${description}"/>`,

@@ -103,10 +103,15 @@ html.lenis body {
   left: 0;
   right: 0;
   bottom: 0;
-  height: 22vh;
+  height: 34vh;
   z-index: 1;
   pointer-events: none;
-  background: linear-gradient(180deg, transparent, var(--ed-room));
+  background: linear-gradient(
+    180deg,
+    transparent,
+    rgba(43, 39, 34, 0.65) 55%,
+    var(--ed-room) 92%
+  );
 }
 
 .ed-hero-media {
@@ -129,7 +134,7 @@ html.lenis body {
   inset: 0;
   z-index: 1;
   background:
-    linear-gradient(180deg, rgba(20, 18, 16, 0.25) 0%, rgba(20, 18, 16, 0.15) 40%, rgba(20, 18, 16, 0.88) 100%),
+    linear-gradient(180deg, rgba(20, 18, 16, 0.25) 0%, rgba(20, 18, 16, 0.15) 40%, rgba(37, 33, 29, 0.92) 88%, #2b2722 100%),
     radial-gradient(ellipse at 70% 20%, rgba(159, 102, 83, 0.22), transparent 55%);
 }
 
@@ -848,13 +853,6 @@ html.lenis body {
   margin: 0 0 0.5rem !important;
 }
 
-.foot-stage-kicker {
-  font-family: var(--pixel);
-  font-size: 11px;
-  letter-spacing: 0.22em;
-  color: rgba(255, 250, 243, 0.5);
-}
-
 .foot-stage-title {
   font-family: var(--serif);
   font-size: clamp(4rem, 13.5vw, 12rem);
@@ -862,27 +860,6 @@ html.lenis body {
   line-height: 0.9;
   letter-spacing: -0.05em;
   max-width: none;
-}
-
-.foot-stage-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 1rem 2.5rem;
-  margin-top: clamp(1.25rem, 3vw, 2rem);
-}
-
-.foot-stage-sub {
-  max-width: 24rem;
-  color: rgba(255, 250, 243, 0.65);
-  line-height: 1.45;
-}
-
-.foot-stage-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.65rem;
 }
 
 /* A huge, faint ring turning behind everything — the mark as architecture. */
@@ -969,45 +946,9 @@ html.lenis body {
   }
 }
 
-.foot-stage .foot {
-  color: rgba(255, 250, 243, 0.78);
-}
-
-.foot-stage .foot .label {
-  color: rgba(255, 250, 243, 0.45);
-}
-
-.foot-stage .foot a {
-  color: rgba(255, 250, 243, 0.78);
-}
-
 .foot-stage .foot-rule {
-  display: flex;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 0.5rem 2rem;
   color: rgba(255, 250, 243, 0.4);
   border-color: rgba(255, 250, 243, 0.12);
-}
-
-.foot-stage .foot-rule span:last-child {
-  font-family: var(--pixel);
-  font-size: 10px;
-  letter-spacing: 0.16em;
-}
-
-.foot-stage .foot-col a {
-  display: inline-block;
-  transition:
-    color 180ms ease,
-    translate 220ms var(--ease);
-}
-
-@media (hover: hover) and (pointer: fine) {
-  .foot-stage .foot-col a:hover {
-    color: #fffaf3;
-    translate: 5px 0;
-  }
 }
 
 @media (max-width: 720px) {

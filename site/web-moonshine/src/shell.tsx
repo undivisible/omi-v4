@@ -155,7 +155,10 @@ const footerResources: Array<[string, string]> = [
   ["Community", "https://discord.omi.me/"],
 ];
 
-function FooterColumn({
+/* The link index: three ruled strips, each link wearing one of the mark's
+   dots. The dot is dim until the cursor arrives; then it lights and the
+   link steps forward — the same grammar as the mark itself. */
+function FooterRow({
   heading,
   links,
 }: {
@@ -163,12 +166,24 @@ function FooterColumn({
   links: Array<[string, string]>;
 }) {
   return (
-    <nav className="foot-col" aria-label={heading}>
-      <h2 className="label">{heading}</h2>
-      <ul>
+    <nav
+      className="hairline-t grid items-baseline gap-x-6 gap-y-4 py-[clamp(0.9rem,2vw,1.3rem)] grid-cols-1 md:grid-cols-[clamp(6rem,12vw,9rem)_minmax(0,1fr)]"
+      aria-label={heading}
+    >
+      <h2 className="label font-normal">{heading}</h2>
+      <ul className="list-none flex flex-wrap gap-x-7 gap-y-[0.35rem]">
         {links.map(([label, href]) => (
           <li key={label}>
-            <a href={href}>{label}</a>
+            <a
+              href={href}
+              className="group inline-flex items-center gap-2 text-onDark text-[0.95rem] transition-colors duration-180 hover:text-cream"
+            >
+              <i
+                aria-hidden="true"
+                className="w-[0.3rem] h-[0.3rem] rounded-full bg-onDarkDot transition-all duration-300 ease-omi group-hover:bg-cream group-hover:scale-180 group-hover:shadow-[0_0_12px_rgba(255,250,243,0.9)]"
+              />
+              {label}
+            </a>
           </li>
         ))}
       </ul>
@@ -211,17 +226,19 @@ export function SiteFooter({ compact = false }: { compact?: boolean }) {
       <div className="foot-stage-inner wrap">
         <div className="foot-stage-hero">
           <OmiMark className="omi-mark--on-dark foot-stage-mark" glow decorative={false} />
-          <p className="foot-stage-kicker">OMI · BASED HARDWARE · SF</p>
+          <p className="font-pixel text-[11px] tracking-[0.22em] text-[rgba(255,250,243,0.5)]">
+            OMI · BASED HARDWARE · SF
+          </p>
           <p className="foot-stage-title">
             thought
             <br />
             to action.
           </p>
-          <div className="foot-stage-row">
-            <p className="foot-stage-sub">
+          <div className="flex flex-wrap items-end justify-between gap-x-10 gap-y-4 mt-[clamp(1.25rem,3vw,2rem)]">
+            <p className="max-w-96 leading-relaxed text-[rgba(255,250,243,0.65)]">
               Private memory. Cited answers. Your OK before it acts.
             </p>
-            <div className="foot-stage-actions">
+            <div className="flex flex-wrap gap-[0.65rem]">
               <a className="btn btn-solid" href={portalUrl}>
                 Open Omi
               </a>
@@ -234,23 +251,19 @@ export function SiteFooter({ compact = false }: { compact?: boolean }) {
             </div>
           </div>
         </div>
-        <div className="foot">
-          <div className="foot-id">
-            <p className="small">
-              Based Hardware Inc.
-              <br />
-              San Francisco
-              <br />
-              <a href="mailto:help@omi.me">help@omi.me</a>
-            </p>
-          </div>
-          <FooterColumn heading="Company" links={footerCompany} />
-          <FooterColumn heading="Products" links={footerProducts} />
-          <FooterColumn heading="Resources" links={footerResources} />
+        <div className="grid">
+          <FooterRow heading="Company" links={footerCompany} />
+          <FooterRow heading="Products" links={footerProducts} />
+          <FooterRow heading="Resources" links={footerResources} />
         </div>
-        <p className="foot-rule small">
-          <span>© 2026 Based Hardware. All rights reserved.</span>
-          <span>37.7749° N · 122.4194° W</span>
+        <p className="foot-rule small flex flex-wrap justify-between gap-x-8 gap-y-2">
+          <span>
+            © 2026 Based Hardware Inc. · San Francisco ·{" "}
+            <a href="mailto:help@omi.me">help@omi.me</a>
+          </span>
+          <span className="font-pixel text-[10px] tracking-[0.16em]">
+            37.7749° N · 122.4194° W
+          </span>
         </p>
       </div>
     </footer>
