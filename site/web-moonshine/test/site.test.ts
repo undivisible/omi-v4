@@ -27,21 +27,24 @@ describe("page components", () => {
   });
 
   test("home page contains capabilities text", () => {
-    expect(home).toContain("Memory you can check");
+    expect(home).toContain("Cited memory");
     expect(home).toContain("Live meetings");
     expect(home).toContain("The pendant");
+    expect(home).toContain("API &amp; MCP");
+    expect(home).toContain("Approve-once actions");
   });
 
   test("home page contains specs", () => {
-    expect(home).toContain("2.5cm diameter, 1.5cm deep");
-    expect(home).toContain("150 mAh, 10–14 hours");
+    expect(home).toContain("2.5cm · 1.5cm deep");
+    expect(home).toContain("150 mAh · 10–14h");
     expect(home).toContain("AES-256-GCM");
   });
 
   test("home page contains hardware capabilities", () => {
-    expect(home).toContain("Capture everything");
-    expect(home).toContain("Recall instantly");
-    expect(home).toContain("Automate your work");
+    expect(home).toContain("Capture");
+    expect(home).toContain("Recall");
+    expect(home).toContain("Automate");
+    expect(home).toContain("Two and a half centimetres of listening.");
   });
 
   test("home page contains reach channels", () => {
@@ -68,9 +71,9 @@ describe("page components", () => {
     expect(home).toContain("ss-cue");
     expect(home).toContain('data-computer-stage');
     expect(home).toContain('id="omi-unifies"');
-    expect(home).toContain("data-unifies-canvas");
-    expect(home).toContain('id="manifesto"');
-    expect(home).toContain("steps-stack");
+    expect(home).toContain("data-dissolve-canvas");
+    expect(home).toContain('data-hero');
+    expect(home).toContain("ed-hardware");
   });
 
   test("home page includes living shell chrome", () => {
@@ -85,7 +88,6 @@ describe("page components", () => {
   test("home page contains images", () => {
     expect(home).toContain("/omi-pendant-1200.webp");
     expect(home).toContain("/omi-worn-1200.webp");
-    expect(home).toContain("/omi-desk-1200.webp");
   });
 
   test("architecture page contains model tiers", () => {
@@ -192,6 +194,7 @@ describe("server routes", () => {
     expect(html).toContain("<title>Omi — private memory</title>");
     expect(html).toContain("Be here. Omi keeps the thread.");
     expect(html).toContain("Two and a half centimetres of listening.");
+    expect(html).toContain("data-dissolve-canvas");
     expect(html).toContain('id="hub-frame"');
     expect(html).toContain("keep scrolling to access a demo of the omi desktop app");
   });
