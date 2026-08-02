@@ -24,6 +24,10 @@ abstract interface class AuthGateway {
 
   bool get supportsDesktopBrowserHandoff;
 
+  /// Whether the user signs in by redeeming a code the Omi bot sent them over
+  /// Telegram or iMessage.
+  bool get supportsChannelCode;
+
   AuthSession? get currentSession;
 
   Stream<AuthSession?> get sessionChanges;
@@ -40,6 +44,10 @@ abstract interface class AuthGateway {
   });
 
   Future<AuthSession> signIn(AuthProvider provider);
+
+  /// Redeems a sign-in code received over Telegram or iMessage. The code both
+  /// identifies the user and creates the account on first use.
+  Future<AuthSession> signInWithChannelCode(String code);
 
   Future<AuthSession> signInWithDesktopBrowser({
     required void Function(String code) onConfirmationCode,
@@ -69,6 +77,9 @@ final class UnconfiguredAuthGateway implements AuthGateway {
   bool get supportsDesktopBrowserHandoff => false;
 
   @override
+  bool get supportsChannelCode => false;
+
+  @override
   AuthSession? get currentSession => null;
 
   @override
@@ -93,6 +104,10 @@ final class UnconfiguredAuthGateway implements AuthGateway {
 
   @override
   Future<AuthSession> signIn(AuthProvider provider) =>
+      throw AuthConfigurationException();
+
+  @override
+  Future<AuthSession> signInWithChannelCode(String code) =>
       throw AuthConfigurationException();
 
   @override

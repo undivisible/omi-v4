@@ -1,7 +1,6 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
 import '../../auth/auth.dart';
 
@@ -20,13 +19,10 @@ class AuthenticationGate extends StatefulWidget {
 }
 
 class _AuthenticationGateState extends State<AuthenticationGate> {
-  final phone = TextEditingController();
   final code = TextEditingController();
-  bool phoneDisclosureAcknowledged = false;
 
   @override
   void dispose() {
-    phone.dispose();
     code.dispose();
     super.dispose();
   }
@@ -92,156 +88,45 @@ class _AuthenticationGateState extends State<AuthenticationGate> {
               controlAffinity: ListTileControlAffinity.leading,
             ),
           ),
-          if (snapshot.phase == AuthPhase.awaitingOtp) ...[
+          if (widget.auth.supportsChannelCode) ...[
+            const Text(
+              'Message Omi on Telegram, or text it from your phone. It replies '
+              'with a seven-character code. No browser, no password.',
+            ),
+            const SizedBox(height: 10),
             TextField(
-              key: const Key('auth_otp'),
+              key: const Key('auth_channel_code'),
               controller: code,
-              keyboardType: TextInputType.number,
+              autocorrect: false,
+              enableSuggestions: false,
               autofillHints: const [AutofillHints.oneTimeCode],
-              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+              textCapitalization: TextCapitalization.none,
               textInputAction: TextInputAction.done,
-              decoration: const InputDecoration(labelText: 'Verification code'),
-              onSubmitted: busy
+              decoration: const InputDecoration(
+                labelText: 'Sign-in code',
+                hintText: 'ab12cd3',
+              ),
+              onSubmitted: busy || !snapshot.consentGranted
                   ? null
-                  : (_) => widget.auth.confirmPhoneOtp(code.text),
+                  : (_) =>
+                        unawaited(widget.auth.signInWithChannelCode(code.text)),
             ),
             const SizedBox(height: 10),
             FilledButton(
-              key: const Key('confirm_phone_otp'),
-              onPressed: busy
+              key: const Key('redeem_channel_code'),
+              onPressed: busy || !snapshot.consentGranted
                   ? null
-                  : () => widget.auth.confirmPhoneOtp(code.text),
-              child: const Text('Verify phone'),
+                  : () =>
+                        unawaited(widget.auth.signInWithChannelCode(code.text)),
+              child: const Text('Sign in'),
             ),
-          ] else ...[
-            if (widget.auth.supportsPhoneOtp) ...[
-              const Text(
-                'Your sign-in code is issued over the channel you message Omi from — Telegram or your phone — and is redeemed once.',
-              ),
-              Material(
-                color: Colors.transparent,
-                child: CheckboxListTile(
-                  key: const Key('firebase_phone_disclosure'),
-                  contentPadding: EdgeInsets.zero,
-                  value: phoneDisclosureAcknowledged,
-                  onChanged: busy
-                      ? null
-                      : (value) => setState(
-                          () => phoneDisclosureAcknowledged = value ?? false,
-                        ),
-                  title: const Text(
-                    'I understand how the sign-in code reaches me',
-                  ),
-                  controlAffinity: ListTileControlAffinity.leading,
-                ),
-              ),
-              const SizedBox(height: 10),
-              TextField(
-                key: const Key('auth_phone'),
-                controller: phone,
-                keyboardType: TextInputType.phone,
-                autofillHints: const [AutofillHints.telephoneNumber],
-                textInputAction: TextInputAction.send,
-                decoration: const InputDecoration(
-                  labelText: 'Phone number',
-                  hintText: '+1 555 555 0123',
-                ),
-                onSubmitted:
-                    busy ||
-                        !snapshot.consentGranted ||
-                        !phoneDisclosureAcknowledged
-                    ? null
-                    : (_) => widget.auth.requestPhoneOtp(phone.text),
-              ),
-              const SizedBox(height: 10),
-              FilledButton(
-                key: const Key('request_phone_otp'),
-                onPressed:
-                    busy ||
-                        !snapshot.consentGranted ||
-                        !phoneDisclosureAcknowledged
-                    ? null
-                    : () => widget.auth.requestPhoneOtp(phone.text),
-                child: const Text('Text me a code'),
-              ),
-            ] else if (widget.auth.supportsDesktopBrowserHandoff) ...[
-              const Text(
-                'Message Omi on Telegram or from your phone. It replies with a code that signs in this device once.',
-              ),
-              const SizedBox(height: 8),
-              const Text(
-                'Completing browser sign-in does not grant Omi processing consent. You will review that separately after returning to Omi.',
-              ),
-              CheckboxListTile(
-                key: const Key('firebase_phone_disclosure'),
-                contentPadding: EdgeInsets.zero,
-                value: phoneDisclosureAcknowledged,
-                onChanged: busy
-                    ? null
-                    : (value) => setState(
-                        () => phoneDisclosureAcknowledged = value ?? false,
-                      ),
-                title: const Text(
-                  'I understand how the sign-in code reaches me',
-                ),
-                controlAffinity: ListTileControlAffinity.leading,
-              ),
-              FilledButton.icon(
-                key: const Key('desktop_browser_sign_in'),
-                onPressed:
-                    busy ||
-                        !snapshot.consentGranted ||
-                        !phoneDisclosureAcknowledged
-                    ? null
-                    : () => widget.auth.signInWithDesktopBrowser(),
-                icon: const Icon(Icons.open_in_browser_rounded),
-                label: const Text('Continue securely in browser'),
-              ),
-              if (widget.auth.desktopConfirmationCode case final code?) ...[
-                const SizedBox(height: 12),
-                SelectableText(
-                  code,
-                  key: const Key('desktop_confirmation_code'),
-                  textAlign: TextAlign.center,
-                  style: Theme.of(context).textTheme.headlineMedium,
-                ),
-                const Text(
-                  'Enter this code in the browser to confirm it is your desktop.',
-                  textAlign: TextAlign.center,
-                ),
-              ],
-            ] else
-              const _ReadinessRow(
-                icon: Icons.phone_disabled_outlined,
-                title: 'Phone sign-in',
-                detail: 'Secure browser handoff is not configured.',
-                state: 'Unavailable',
-              ),
-            const SizedBox(height: 10),
-            Row(
-              children: [
-                Expanded(
-                  child: OutlinedButton(
-                    key: const Key('sign_in_google'),
-                    onPressed: busy || !snapshot.consentGranted
-                        ? null
-                        : () => widget.auth.signIn(AuthProvider.google),
-                    child: const Text('Google'),
-                  ),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: OutlinedButton(
-                    key: const Key('sign_in_apple'),
-                    onPressed: busy || !snapshot.consentGranted
-                        ? null
-                        : () => widget.auth.signIn(AuthProvider.apple),
-                    child: const Text('Apple'),
-                  ),
-                ),
-              ],
+          ] else
+            const _ReadinessRow(
+              icon: Icons.person_off_outlined,
+              title: 'Sign-in',
+              detail: 'No sign-in method is configured.',
+              state: 'Unavailable',
             ),
-          ],
           if (busy)
             Semantics(
               liveRegion: true,

@@ -45,6 +45,37 @@ final class AuthController extends ChangeNotifier {
   bool get supportsDesktopBrowserHandoff =>
       _gateway.supportsDesktopBrowserHandoff;
 
+  bool get supportsChannelCode => _gateway.supportsChannelCode;
+
+  /// Redeems a code the Omi bot sent over Telegram or iMessage.
+  Future<void> signInWithChannelCode(String code) async {
+    if (!_gateway.supportsChannelCode) {
+      _fail(
+        AuthErrorCode.unsupportedPlatform,
+        'Signing in with a code is not available here',
+      );
+      return;
+    }
+    _set(
+      AuthSnapshot(
+        phase: AuthPhase.signingIn,
+        consentGranted: _snapshot.consentGranted,
+      ),
+    );
+    try {
+      final session = await _gateway.signInWithChannelCode(code);
+      _authenticated(
+        session,
+        consentGranted: true,
+        processingConsent: await _receiptFor(session.uid),
+      );
+    } on AuthGatewayException catch (error) {
+      _fail(error.failure.code, error.failure.message);
+    } catch (_) {
+      _fail(AuthErrorCode.unknown, 'Could not sign in with that code');
+    }
+  }
+
   Future<void> restoreSession() async {
     if (!_gateway.isConfigured) return;
     try {

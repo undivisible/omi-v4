@@ -60,6 +60,13 @@ final class _Gateway implements AuthGateway {
   bool get supportsDesktopBrowserHandoff => false;
 
   @override
+  bool get supportsChannelCode => false;
+
+  @override
+  Future<AuthSession> signInWithChannelCode(String code) =>
+      throw UnimplementedError();
+
+  @override
   AuthSession? get currentSession => _session;
 
   @override

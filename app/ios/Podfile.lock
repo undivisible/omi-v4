@@ -68,6 +68,12 @@ PODS:
     - FlutterMacOS
     - iOSMcuManagerLibrary (= 1.12)
     - SwiftProtobuf
+  - nordic_dfu (7.1.1):
+    - Flutter
+    - FlutterMacOS
+    - NordicDFU (~> 4.16.0)
+  - NordicDFU (4.16.0):
+    - ZIPFoundation (= 0.9.19)
   - package_info_plus (0.4.5):
     - Flutter
   - RecaptchaInterop (101.0.0)
@@ -97,6 +103,7 @@ DEPENDENCIES:
   - flutter_local_notifications (from `.symlinks/plugins/flutter_local_notifications/ios`)
   - flutter_secure_storage_darwin (from `.symlinks/plugins/flutter_secure_storage_darwin/darwin`)
   - mcumgr_flutter (from `.symlinks/plugins/mcumgr_flutter/darwin`)
+  - nordic_dfu (from `.symlinks/plugins/nordic_dfu/darwin`)
   - package_info_plus (from `.symlinks/plugins/package_info_plus/ios`)
   - record_ios (from `.symlinks/plugins/record_ios/ios`)
   - rinf (from `.symlinks/plugins/rinf/ios`)
@@ -117,6 +124,7 @@ SPEC REPOS:
     - GoogleUtilities
     - GTMSessionFetcher
     - iOSMcuManagerLibrary
+    - NordicDFU
     - RecaptchaInterop
     - SwiftCBOR
     - SwiftProtobuf
@@ -137,6 +145,8 @@ EXTERNAL SOURCES:
     :path: ".symlinks/plugins/flutter_secure_storage_darwin/darwin"
   mcumgr_flutter:
     :path: ".symlinks/plugins/mcumgr_flutter/darwin"
+  nordic_dfu:
+    :path: ".symlinks/plugins/nordic_dfu/darwin"
   package_info_plus:
     :path: ".symlinks/plugins/package_info_plus/ios"
   record_ios:
@@ -165,11 +175,13 @@ SPEC CHECKSUMS:
   FirebaseCoreInternal: 6ab6a02c94446c026d2cf35cf5383842ebaa4992
   Flutter: cabc95a1d2626b1b06e7179b784ebcf0c0cde467
   flutter_local_notifications: 643a3eda1ce1c0599413ca31672536d423dee214
-  flutter_secure_storage_darwin: acdb3f316ed05a3e68f856e0353b133eec373a23
+  flutter_secure_storage_darwin: 46e401699982ee74142909676535e0f6a7321e58
   GoogleUtilities: 766ace00c6b10d8148408f329d10c4f051931850
   GTMSessionFetcher: 127211aeec0b1e904fc49f4f6f895dcc535b0ecf
   iOSMcuManagerLibrary: f72db849f6dd66b1f26cd7eea776050a22c8591c
   mcumgr_flutter: b9864b2ae8334b6ba2b33f9ab4fc0a67bbe75c7a
+  nordic_dfu: 05681503e4969f1dfe11903be2bf8840bf5691c9
+  NordicDFU: 116a4ec458945889f8e0e71759e03b23c39c3482
   package_info_plus: af8e2ca6888548050f16fa2f1938db7b5a5df499
   RecaptchaInterop: 11e0b637842dfb48308d242afc3f448062325aba
   record_ios: 390a30c7caaf8b5d0fb1cb1d2fd5064b48b4520c

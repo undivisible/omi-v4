@@ -20,41 +20,39 @@ void main() {
     phoneNumber: '+15555550123',
   );
 
-  testWidgets('Firebase authentication and phone disclosure stay separate', (
+  testWidgets('consent gates the code, and the code is the whole sign-in', (
     tester,
   ) async {
     final gateway = _Gateway(session);
     final auth = AuthController(gateway);
 
     await tester.pumpWidget(_controls(auth));
+    // No browser, no provider buttons, no phone number: the credential is a
+    // code the user already has.
+    expect(find.byKey(const Key('sign_in_google')), findsNothing);
+    expect(find.byKey(const Key('sign_in_apple')), findsNothing);
+    expect(find.byKey(const Key('desktop_browser_sign_in')), findsNothing);
+    expect(find.byKey(const Key('auth_phone')), findsNothing);
     expect(
       tester
-          .widget<FilledButton>(find.byKey(const Key('request_phone_otp')))
+          .widget<FilledButton>(find.byKey(const Key('redeem_channel_code')))
           .onPressed,
       isNull,
+      reason: 'consent is still required before any sign-in',
     );
 
     await tester.tap(find.byKey(const Key('firebase_auth_acknowledgement')));
     await tester.pumpAndSettle();
     expect(auth.snapshot.consentGranted, isTrue);
-    expect(
-      tester
-          .widget<FilledButton>(find.byKey(const Key('request_phone_otp')))
-          .onPressed,
-      isNull,
-    );
 
-    await tester.tap(find.byKey(const Key('firebase_phone_disclosure')));
-    await tester.pumpAndSettle();
-    expect(
-      tester
-          .widget<FilledButton>(find.byKey(const Key('request_phone_otp')))
-          .onPressed,
-      isNotNull,
+    await tester.enterText(
+      find.byKey(const Key('auth_channel_code')),
+      'ab12cd3',
     );
-
-    await tester.tap(find.byKey(const Key('sign_in_google')));
+    await tester.tap(find.byKey(const Key('redeem_channel_code')));
     await tester.pumpAndSettle();
+
+    expect(gateway.redeemed, 'ab12cd3');
     expect(auth.snapshot.phase, AuthPhase.signedIn);
   });
 
@@ -1093,6 +1091,17 @@ final class _Gateway implements AuthGateway {
 
   @override
   bool get supportsDesktopBrowserHandoff => false;
+
+  @override
+  bool get supportsChannelCode => true;
+
+  String? redeemed;
+
+  @override
+  Future<AuthSession> signInWithChannelCode(String code) async {
+    redeemed = code;
+    return session;
+  }
 
   @override
   Future<AuthSession> confirmPhoneOtp({

@@ -404,6 +404,13 @@ final class _FakeAuthGateway implements AuthGateway {
   final bool supportsDesktopBrowserHandoff;
 
   @override
+  bool get supportsChannelCode => false;
+
+  @override
+  Future<AuthSession> signInWithChannelCode(String code) =>
+      throw UnimplementedError();
+
+  @override
   AuthSession? get currentSession => initialSession;
 
   @override

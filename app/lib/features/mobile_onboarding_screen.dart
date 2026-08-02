@@ -76,7 +76,7 @@ class _MobileOnboardingScreenState extends State<MobileOnboardingScreen> {
 
   void _refresh() => setState(() {});
 
-  // Firebase can be entirely unconfigured (local/testing builds with no
+  // Sign-in can be entirely unconfigured (local/testing builds with no
   // backend); there is no sign-in flow to satisfy in that case, so don't
   // block forever waiting for processing authority that can never arrive.
   bool get _authSatisfied =>

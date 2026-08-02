@@ -95,6 +95,9 @@ final class WorkerAuthGateway implements AuthGateway {
   bool get supportsDesktopBrowserHandoff => false;
 
   @override
+  bool get supportsChannelCode => true;
+
+  @override
   AuthSession? get currentSession => _session;
 
   @override
@@ -145,6 +148,7 @@ final class WorkerAuthGateway implements AuthGateway {
   }
 
   /// Redeems a sign-in code from Telegram or iMessage.
+  @override
   ///
   /// Async so that a rejected code arrives as a failed future like every other
   /// refusal, rather than throwing under the caller before it has one.
