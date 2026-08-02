@@ -5,7 +5,7 @@ use super::Capability;
 pub(crate) const DEFAULT_SPEED_MODEL: &str = "inception/mercury-2";
 pub(crate) const DEFAULT_BALANCED_MODEL: &str = "xiaomi/mimo-v2.5";
 pub(crate) const DEFAULT_SMART_MODEL: &str = "openai/gpt-5.6-luna";
-pub(crate) const DEFAULT_MULTIMODAL_MODEL: &str = "google/gemini-3.6-flash";
+pub(crate) const DEFAULT_MULTIMODAL_MODEL: &str = "openai/gpt-5.6-luna";
 pub(crate) const DEFAULT_SEARCH_MODEL: &str = "perplexity/sonar";
 pub(crate) const DEFAULT_TRANSCRIBE_MODEL: &str = "x-ai/grok-stt-1.0";
 pub(crate) const DEFAULT_SPEAK_MODEL: &str = "openai/gpt-audio-mini";
@@ -28,5 +28,8 @@ pub(crate) const MODEL_CAPABILITIES: &[(&str, &[Capability])] = &[
         "openai/gpt-audio-mini",
         &[Capability::Text, Capability::AudioOut],
     ),
-    ("openai/gpt-5.6-luna", &[Capability::Text]),
+    (
+        "openai/gpt-5.6-luna",
+        &[Capability::Text, Capability::ImageIn],
+    ),
 ];

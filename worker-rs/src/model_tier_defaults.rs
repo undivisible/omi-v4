@@ -6,7 +6,7 @@ use super::ModelCapability::{AudioIn, AudioOut, ImageIn, Text};
 pub const DEFAULT_SPEED_MODEL: &str = "inception/mercury-2";
 pub const DEFAULT_BALANCED_MODEL: &str = "xiaomi/mimo-v2.5";
 pub const DEFAULT_SMART_MODEL: &str = "openai/gpt-5.6-luna";
-pub const DEFAULT_MULTIMODAL_MODEL: &str = "google/gemini-3.6-flash";
+pub const DEFAULT_MULTIMODAL_MODEL: &str = "openai/gpt-5.6-luna";
 pub const DEFAULT_SEARCH_MODEL: &str = "perplexity/sonar";
 pub const DEFAULT_TRANSCRIBE_MODEL: &str = "x-ai/grok-stt-1.0";
 pub const DEFAULT_SPEAK_MODEL: &str = "openai/gpt-audio-mini";
@@ -20,5 +20,5 @@ pub const MODEL_CAPABILITIES: &[(&str, &[ModelCapability])] = &[
     ("google/gemini-3.5-flash-lite", &[Text, AudioIn]),
     ("x-ai/grok-stt-1.0", &[AudioIn]),
     ("openai/gpt-audio-mini", &[Text, AudioOut]),
-    ("openai/gpt-5.6-luna", &[Text]),
+    ("openai/gpt-5.6-luna", &[Text, ImageIn]),
 ];
