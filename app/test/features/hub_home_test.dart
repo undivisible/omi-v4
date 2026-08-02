@@ -1056,6 +1056,56 @@ void main() {
       );
     },
   );
+
+  testWidgets('a currents refresh that failed says so instead of claiming the '
+      'list is empty', (tester) async {
+    final services = makeServices(currentsClient: CurrentsClient(_Transport()));
+    addTearDown(services.dispose);
+    services.currents!.error = 'Currents request failed';
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: ChatScreen(
+            services: services,
+            checklistStore: VolatileHubChecklistStore(),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.byKey(const Key('hub_currents_error')), findsOneWidget);
+    expect(find.text('Currents request failed'), findsOneWidget);
+    expect(find.text('Nothing needs attention yet.'), findsNothing);
+    expect(find.byKey(const Key('hub_empty_start')), findsNothing);
+  });
+
+  testWidgets(
+    'a hub with no account to sync against names that as the reason',
+    (tester) async {
+      final services = makeServices(
+        currentsClient: CurrentsClient(_Transport()),
+      );
+      addTearDown(services.dispose);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: ChatScreen(
+              services: services,
+              checklistStore: VolatileHubChecklistStore(),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      expect(find.byKey(const Key('hub_empty_start')), findsOneWidget);
+      expect(find.text('Currents aren’t syncing yet.'), findsOneWidget);
+      expect(find.text('Nothing needs attention yet.'), findsNothing);
+    },
+  );
 }
 
 final class _EventHub implements NativeHub {

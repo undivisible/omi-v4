@@ -1409,6 +1409,11 @@ class ChatScreenState extends State<ChatScreen>
         currents != null && !currents.loading && currents.error == null
         ? currents.items.take(4).toList()
         : const <CurrentCard>[];
+    // The same guard `_refreshCurrents` returns on: a hub in this state never
+    // asks for currents at all, so an empty list here is not an answer.
+    final currentsUnavailable =
+        !widget.previewMode &&
+        (currents == null || !(widget.services.chatReady || omiDemoMode));
     final exchange = _exchangeBuilders();
     final history = _historyBuildersNewestFirst();
     return Stack(
@@ -1517,6 +1522,18 @@ class ChatScreenState extends State<ChatScreen>
                                                     ),
                                               onPrompt: _sendPrompt,
                                               onDraftPrompt: _usePrompt,
+                                              currentsError: currents?.error,
+                                              currentsUnavailable:
+                                                  currentsUnavailable,
+                                              currentsLoading:
+                                                  currents?.loading ?? false,
+                                              onRetryCurrents: currents == null
+                                                  ? null
+                                                  : () => unawaited(
+                                                      _refreshCurrents(
+                                                        force: true,
+                                                      ),
+                                                    ),
                                               showByokHint:
                                                   !_byokHintDismissed &&
                                                   _byokPlanFree,
@@ -2405,6 +2422,78 @@ class _VoiceEdgeGradient extends StatelessWidget {
   );
 }
 
+/// The hairline-bounded row the hub shows in place of a current focus: an
+/// invitation when there is genuinely nothing, and the reason otherwise.
+class _CurrentsNotice extends StatelessWidget {
+  const _CurrentsNotice({
+    super.key,
+    required this.title,
+    this.detail,
+    this.action,
+    this.onTap,
+  });
+
+  final String title;
+  final String? detail;
+  final String? action;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = _HubColors.of(context);
+    final detail = this.detail;
+    final action = this.action;
+    final body = Padding(
+      padding: const EdgeInsets.symmetric(vertical: 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            title,
+            style: TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.w600,
+              color: colors.ink,
+            ),
+          ),
+          if (detail != null) ...[
+            const SizedBox(height: 4),
+            Text(detail, style: TextStyle(fontSize: 13, color: colors.muted)),
+          ],
+          if (action != null) ...[
+            const SizedBox(height: 4),
+            Text(
+              action,
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: colors.hintBlue,
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        border: Border(
+          top: BorderSide(color: colors.hairline),
+          bottom: BorderSide(color: colors.hairline),
+        ),
+      ),
+      child: onTap == null
+          ? body
+          : InkWell(
+              onTap: onTap,
+              hoverColor: colors.rowHover,
+              splashColor: Colors.transparent,
+              highlightColor: Colors.transparent,
+              child: body,
+            ),
+    );
+  }
+}
+
 class _ChatHome extends StatelessWidget {
   const _ChatHome({
     required this.greeting,
@@ -2420,6 +2509,10 @@ class _ChatHome extends StatelessWidget {
     required this.onComplete,
     required this.onPrompt,
     required this.onDraftPrompt,
+    this.currentsError,
+    this.currentsUnavailable = false,
+    this.currentsLoading = false,
+    this.onRetryCurrents,
     this.showByokHint = false,
     this.onOpenByok,
     this.onDismissByok,
@@ -2447,6 +2540,21 @@ class _ChatHome extends StatelessWidget {
   /// Drafts text into the composer without sending it, so model-authored
   /// `prompt:` actions are seen before they are submitted.
   final ValueChanged<String> onDraftPrompt;
+
+  /// Why the currents refresh failed, when it did. An empty task list means
+  /// three different things — nothing to do, a refresh that failed, and a hub
+  /// with no account to refresh against — and reporting all three as "nothing
+  /// needs attention" hides the two that need acting on.
+  final String? currentsError;
+
+  /// The hub has no currents client, or no signed-in account to ask. Currents
+  /// are composed server-side from synced memory, so this state can never
+  /// resolve on its own.
+  final bool currentsUnavailable;
+
+  /// A refresh is in flight. Nothing is claimed about the list until it lands.
+  final bool currentsLoading;
+  final VoidCallback? onRetryCurrents;
   final bool showByokHint;
   final VoidCallback? onOpenByok;
   final VoidCallback? onDismissByok;
@@ -2502,50 +2610,31 @@ class _ChatHome extends StatelessWidget {
                     onDraftPrompt: onDraftPrompt,
                     onComplete: onComplete,
                   ),
-                if (tasks.isEmpty &&
+                if (tasks.isEmpty && currentsError != null)
+                  _CurrentsNotice(
+                    key: const Key('hub_currents_error'),
+                    title: 'Currents didn’t load.',
+                    detail: currentsError!,
+                    action: 'Try again →',
+                    onTap: onRetryCurrents,
+                  )
+                else if (tasks.isEmpty &&
+                    !currentsLoading &&
                     starterTasks.isEmpty &&
                     meetingNotes.isEmpty)
-                  DecoratedBox(
-                    decoration: BoxDecoration(
-                      border: Border(
-                        top: BorderSide(color: colors.hairline),
-                        bottom: BorderSide(color: colors.hairline),
-                      ),
-                    ),
-                    child: InkWell(
-                      key: const Key('hub_empty_start'),
-                      onTap: () => onDraftPrompt(
-                        'Help me decide what to focus on next.',
-                      ),
-                      hoverColor: colors.rowHover,
-                      splashColor: Colors.transparent,
-                      highlightColor: Colors.transparent,
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 16),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              'Nothing needs attention yet.',
-                              style: TextStyle(
-                                fontSize: 16,
-                                fontWeight: FontWeight.w600,
-                                color: colors.ink,
-                              ),
-                            ),
-                            const SizedBox(height: 4),
-                            Text(
-                              'Tell Omi what you’re working on →',
-                              style: TextStyle(
-                                fontSize: 13,
-                                fontWeight: FontWeight.w600,
-                                color: colors.hintBlue,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
+                  _CurrentsNotice(
+                    key: const Key('hub_empty_start'),
+                    title: currentsUnavailable
+                        ? 'Currents aren’t syncing yet.'
+                        : 'Nothing needs attention yet.',
+                    detail: currentsUnavailable
+                        ? 'Omi builds these from the memory on your account, '
+                              'and this hub is on its local store. Sign in to '
+                              'start syncing.'
+                        : null,
+                    action: 'Tell Omi what you’re working on →',
+                    onTap: () =>
+                        onDraftPrompt('Help me decide what to focus on next.'),
                   ),
                 _TaskRow(
                   key: const Key('task_setup_omi'),
