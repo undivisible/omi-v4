@@ -157,7 +157,7 @@ class _DesktopAuthScreenState extends State<DesktopAuthScreen> {
                             ),
                             const SizedBox(height: 8),
                             const Text(
-                              'Sign in here. Your Firebase password or SMS code never passes through the desktop handoff service.',
+                              'Sign in here. Your sign-in code is redeemed once and never passes through the desktop handoff service.',
                             ),
                             const SizedBox(height: 20),
                             AuthenticationGate(

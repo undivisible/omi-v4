@@ -14,7 +14,6 @@ import 'api/byok_client.dart';
 import 'api/facetime_client.dart';
 import 'api/worker_http.dart';
 import 'auth/auth.dart';
-import 'auth/firebase_bootstrap.dart';
 import 'capabilities/desktop_capabilities.dart';
 import 'capabilities/hub_platform.dart';
 import 'channels/channels.dart';
@@ -162,13 +161,17 @@ final class AppServices {
   }
 
   factory AppServices.fromEnvironment() {
+    final origin = apiOrigin();
+    // Deliberately unconfigured: this synchronous factory cannot await a
+    // session restore, and a controller left in `restoring` never settles, so
+    // every screen waits forever. The shipped entry points all go through
+    // [initializeFromEnvironment], which restores before it builds anything.
     final auth = AuthController(
       const UnconfiguredAuthGateway(),
       consentStore: PreferencesConsentStore(),
     );
     final nativeHub = createNativeHub();
     final deviceRelay = _createDeviceRelay();
-    final origin = apiOrigin();
     final worker = WorkerHttpClient(
       baseUri: Uri.parse(origin),
       sessionProvider: ({forceRefresh = false}) =>
@@ -182,7 +185,7 @@ final class AppServices {
       dataDirectory: _defaultDataDirectory,
       workspaceRoots: PreferencesWorkspaceRootStore(),
       providerCredentials: const SecureProviderCredentialStore(),
-      configurationMessage: 'Configure Firebase to sign in and connect.',
+      configurationMessage: 'Set an HTTPS API origin to sign in and connect.',
       memory: MemoryClient(WorkerMemoryTransport(worker)),
       settings: SettingsClient(WorkerSettingsTransport(worker)),
       channels: ChannelClient(WorkerChannelTransport(worker)),
@@ -209,7 +212,8 @@ final class AppServices {
   }
 
   static Future<AppServices> initializeFromEnvironment() async {
-    final gateway = await initializeFirebaseAuth();
+    final origin = apiOrigin();
+    final gateway = WorkerAuthGateway(apiOrigin: Uri.parse(origin));
     final auth = AuthController(
       gateway,
       consentStore: PreferencesConsentStore(),
@@ -217,7 +221,6 @@ final class AppServices {
     await auth.restoreSession();
     final nativeHub = createNativeHub();
     final deviceRelay = _createDeviceRelay();
-    final origin = apiOrigin();
     final worker = WorkerHttpClient(
       baseUri: Uri.parse(origin),
       sessionProvider: ({forceRefresh = false}) =>
@@ -233,7 +236,7 @@ final class AppServices {
       providerCredentials: const SecureProviderCredentialStore(),
       configurationMessage: gateway.isConfigured
           ? 'Sign in to connect.'
-          : 'Configure Firebase to sign in and connect.',
+          : 'Set an HTTPS API origin to sign in and connect.',
       memory: MemoryClient(WorkerMemoryTransport(worker)),
       settings: SettingsClient(WorkerSettingsTransport(worker)),
       channels: ChannelClient(WorkerChannelTransport(worker)),

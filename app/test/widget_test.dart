@@ -116,7 +116,7 @@ void main() {
       find.text('I would like Full Disk Access to learn more about you.'),
       findsOneWidget,
     );
-    expect(find.textContaining('Firebase'), findsWidgets);
+    expect(find.textContaining('Omi account'), findsWidgets);
     expect(find.byKey(const Key('grant_processing_consent')), findsNothing);
     expect(find.textContaining('workspace'), findsNothing);
     expect(find.text('Continue'), findsNothing);

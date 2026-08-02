@@ -40,7 +40,7 @@ class _AuthenticationGateState extends State<AuthenticationGate> {
         children: [
           _ReadinessRow(
             icon: Icons.verified_user_outlined,
-            title: 'Firebase account',
+            title: 'Omi account',
             detail:
                 snapshot.session?.phoneNumber ??
                 snapshot.session?.email ??
@@ -59,7 +59,7 @@ class _AuthenticationGateState extends State<AuthenticationGate> {
     if (snapshot.phase == AuthPhase.unavailable) {
       return _ReadinessRow(
         icon: Icons.person_off_outlined,
-        title: 'Firebase account',
+        title: 'Omi account',
         detail: widget.configurationMessage,
         state: 'Unavailable',
       );
@@ -75,7 +75,7 @@ class _AuthenticationGateState extends State<AuthenticationGate> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           const Text(
-            'Firebase account',
+            'Omi account',
             style: TextStyle(fontWeight: FontWeight.w600),
           ),
           Material(
@@ -88,7 +88,7 @@ class _AuthenticationGateState extends State<AuthenticationGate> {
                   ? null
                   : (value) =>
                         unawaited(widget.auth.setConsent(value ?? false)),
-              title: const Text('I agree to Firebase account authentication'),
+              title: const Text('I agree to Omi account authentication'),
               controlAffinity: ListTileControlAffinity.leading,
             ),
           ),
@@ -116,7 +116,7 @@ class _AuthenticationGateState extends State<AuthenticationGate> {
           ] else ...[
             if (widget.auth.supportsPhoneOtp) ...[
               const Text(
-                'For abuse prevention, Firebase sends your phone number to Google and Google stores it under its authentication terms.',
+                'Your sign-in code is issued over the channel you message Omi from — Telegram or your phone — and is redeemed once.',
               ),
               Material(
                 color: Colors.transparent,
@@ -130,7 +130,7 @@ class _AuthenticationGateState extends State<AuthenticationGate> {
                           () => phoneDisclosureAcknowledged = value ?? false,
                         ),
                   title: const Text(
-                    'I understand this Firebase phone-number disclosure',
+                    'I understand how the sign-in code reaches me',
                   ),
                   controlAffinity: ListTileControlAffinity.leading,
                 ),
@@ -166,7 +166,7 @@ class _AuthenticationGateState extends State<AuthenticationGate> {
               ),
             ] else if (widget.auth.supportsDesktopBrowserHandoff) ...[
               const Text(
-                'Phone verification opens in your browser. The browser returns a one-time Firebase sign-in token only to this desktop.',
+                'Message Omi on Telegram or from your phone. It replies with a code that signs in this device once.',
               ),
               const SizedBox(height: 8),
               const Text(
@@ -182,7 +182,7 @@ class _AuthenticationGateState extends State<AuthenticationGate> {
                         () => phoneDisclosureAcknowledged = value ?? false,
                       ),
                 title: const Text(
-                  'I understand Firebase sends my phone number to Google for abuse prevention',
+                  'I understand how the sign-in code reaches me',
                 ),
                 controlAffinity: ListTileControlAffinity.leading,
               ),

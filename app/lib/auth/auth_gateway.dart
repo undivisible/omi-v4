@@ -7,9 +7,8 @@ sealed class AuthGatewayException implements Exception {
 }
 
 final class AuthConfigurationException extends AuthGatewayException {
-  AuthConfigurationException([
-    String message = 'Firebase configuration is missing',
-  ]) : super(AuthFailure(AuthErrorCode.configurationMissing, message));
+  AuthConfigurationException([String message = 'Sign-in is not configured'])
+    : super(AuthFailure(AuthErrorCode.configurationMissing, message));
 }
 
 final class AuthOperationException extends AuthGatewayException {
@@ -53,7 +52,7 @@ final class UnconfiguredAuthGateway implements AuthGateway {
   const UnconfiguredAuthGateway([
     this.configurationFailure = const AuthFailure(
       AuthErrorCode.configurationMissing,
-      'Firebase configuration is missing',
+      'Sign-in is not configured',
     ),
   ]);
 
