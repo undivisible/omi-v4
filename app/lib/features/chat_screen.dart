@@ -1567,15 +1567,6 @@ class ChatScreenState extends State<ChatScreen>
                             height: 36,
                             child: IgnorePointer(child: _HistoryTopFade()),
                           ),
-                        if (_activityMarquee case final label?)
-                          Positioned(
-                            top: 0,
-                            left: 0,
-                            right: 0,
-                            child: IgnorePointer(
-                              child: _ChatActivityMarquee(label: label),
-                            ),
-                          ),
                       ],
                     );
                   },
@@ -1679,34 +1670,16 @@ class ChatScreenState extends State<ChatScreen>
   bool get _showSkeleton =>
       _activeRequestId != null && !_assistantTurnStarted(_activeRequestId!);
 
-  /// Top status strip while the hub is working but not streaming plain text.
-  String? get _activityMarquee {
-    final active = _activeRequestId;
-    if (active == null) return null;
+  /// What the hub is doing while a turn is in flight, for the row under the
+  /// message. Which model answered is not part of it: it named a slug the user
+  /// never chose and could not act on, and it sat over the transcript saying so
+  /// on every turn.
+  String? get _progressLabel {
     final progress = _progress;
-    if (progress != null) {
-      final parts = progress.split(' · ');
-      if (parts.isNotEmpty && parts.first == 'chat_model') {
-        if (_assistantTurnStarted(active)) return null;
-        final model = _modelFromChatProgress(progress);
-        return model == null ? 'Thinking…' : 'Thinking · $model';
-      }
-      if (_isToolActivityProgress(progress)) {
-        return _formatToolActivity(progress);
-      }
-    }
-    if (_assistantTurnStarted(active)) return null;
-    return 'Thinking…';
-  }
-
-  String? _modelFromChatProgress(String progress) {
-    final parts = progress.split(' · ');
-    if (parts.length < 3) return null;
-    final detail = parts.sublist(2).join(' · ');
-    final segments = detail.split(':');
-    if (segments.isEmpty) return null;
-    final model = segments.last.trim();
-    return model.isEmpty ? null : model;
+    if (progress == null) return null;
+    if (progress.split(' · ').first == 'chat_model') return null;
+    if (_isToolActivityProgress(progress)) return _formatToolActivity(progress);
+    return progress;
   }
 
   bool _isToolActivityProgress(String progress) {
@@ -1872,8 +1845,8 @@ class ChatScreenState extends State<ChatScreen>
           spinning: true,
           child: const _SkeletonBubble(key: Key('chat_skeleton')),
         )
-      else if (_progress != null && _activityMarquee == null)
-        () => Text(_progress!, key: const Key('chat_progress')),
+      else if (_progressLabel case final label?)
+        () => Text(label, key: const Key('chat_progress')),
       if (_error != null)
         () => Text(
           _error!,
@@ -1922,7 +1895,15 @@ class ChatScreenState extends State<ChatScreen>
             alignment: Alignment.topCenter,
             minHeight: 0,
             maxHeight: double.infinity,
-            child: child,
+            // The reading column can only narrow under loose width, and the
+            // list hands its leading item a tight one. Without this the rising
+            // message is laid out full-bleed and left-aligned, then snaps to
+            // the centre on the frame the animation lands.
+            child: Align(
+              alignment: Alignment.topCenter,
+              heightFactor: 1,
+              child: child,
+            ),
           ),
         );
       },
@@ -2228,153 +2209,6 @@ class _HistoryTopFade extends StatelessWidget {
           colors: [page, page.withValues(alpha: 0)],
         ),
       ),
-    );
-  }
-}
-
-/// A pill at the top of the chat viewport reporting what Omi is doing while a
-/// turn is in flight — model routing, tool work, memory — but not during plain
-/// text generation, which streams in the assistant bubble instead.
-class _ChatActivityMarquee extends StatelessWidget {
-  const _ChatActivityMarquee({required this.label});
-
-  final String label;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = _HubColors.of(context);
-    return SafeArea(
-      bottom: false,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 6, 16, 0),
-        child: Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: _readingColumnMaxWidth),
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                color: colors.cardBg.withValues(alpha: 0.94),
-                borderRadius: BorderRadius.circular(999),
-                border: Border.all(color: colors.hairline),
-                boxShadow: [
-                  BoxShadow(
-                    color: colors.cardShadow,
-                    offset: const Offset(0, 2),
-                    blurRadius: 10,
-                  ),
-                ],
-              ),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 14,
-                  vertical: 7,
-                ),
-                child: _MarqueeLabel(
-                  key: const Key('chat_activity_marquee'),
-                  label: label,
-                  style: TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w500,
-                    color: colors.muted,
-                    letterSpacing: 0.1,
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _MarqueeLabel extends StatefulWidget {
-  const _MarqueeLabel({required this.label, required this.style, super.key});
-
-  final String label;
-  final TextStyle style;
-
-  @override
-  State<_MarqueeLabel> createState() => _MarqueeLabelState();
-}
-
-class _MarqueeLabelState extends State<_MarqueeLabel>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _scroll;
-  double _overflow = 0;
-
-  @override
-  void initState() {
-    super.initState();
-    _scroll = AnimationController(vsync: this);
-    WidgetsBinding.instance.addPostFrameCallback((_) => _measure());
-  }
-
-  @override
-  void didUpdateWidget(covariant _MarqueeLabel oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.label != widget.label) {
-      _scroll.stop();
-      _scroll.reset();
-      _overflow = 0;
-      WidgetsBinding.instance.addPostFrameCallback((_) => _measure());
-    }
-  }
-
-  @override
-  void dispose() {
-    _scroll.dispose();
-    super.dispose();
-  }
-
-  void _measure() {
-    if (!mounted) return;
-    final box = context.findRenderObject() as RenderBox?;
-    if (box == null || !box.hasSize) return;
-    final textPainter = TextPainter(
-      text: TextSpan(text: widget.label, style: widget.style),
-      textDirection: Directionality.of(context),
-      maxLines: 1,
-    )..layout(maxWidth: double.infinity);
-    final viewport = box.size.width;
-    final overflow = math.max(0.0, textPainter.width - viewport);
-    if ((overflow - _overflow).abs() < 1) return;
-    setState(() => _overflow = overflow);
-    _scroll.stop();
-    if (overflow <= 0 ||
-        MediaQuery.maybeOf(context)?.disableAnimations == true) {
-      return;
-    }
-    _scroll.duration = Duration(
-      milliseconds: (6000 + overflow * 18).round().clamp(6000, 18000),
-    );
-    _scroll.repeat();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        WidgetsBinding.instance.addPostFrameCallback((_) => _measure());
-        final label = Text(
-          widget.label,
-          maxLines: 1,
-          softWrap: false,
-          style: widget.style,
-        );
-        if (_overflow <= 0 ||
-            MediaQuery.maybeOf(context)?.disableAnimations == true) {
-          return Align(alignment: Alignment.center, child: label);
-        }
-        return ClipRect(
-          child: AnimatedBuilder(
-            animation: _scroll,
-            builder: (context, _) => Transform.translate(
-              offset: Offset(-_overflow * _scroll.value, 0),
-              child: label,
-            ),
-          ),
-        );
-      },
     );
   }
 }

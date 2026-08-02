@@ -522,7 +522,6 @@ void main() {
       ),
     );
     await tester.pump();
-    expect(find.byKey(const Key('chat_activity_marquee')), findsOneWidget);
     expect(find.text('planner · running · Reading tasks'), findsOneWidget);
     expect(find.byKey(const Key('chat_skeleton')), findsNothing);
 
@@ -710,8 +709,6 @@ void main() {
     await tester.pump(const Duration(milliseconds: 900));
     final requestId = hub.messages.single.$1;
 
-    expect(find.byKey(const Key('chat_activity_marquee')), findsOneWidget);
-    expect(find.text('Thinking…'), findsOneWidget);
     expect(find.byKey(const Key('chat_skeleton')), findsOneWidget);
 
     hub.eventsController.add(
@@ -725,7 +722,8 @@ void main() {
       ),
     );
     await tester.pump();
-    expect(find.text('Thinking · inception/mercury-2'), findsOneWidget);
+    expect(find.textContaining('inception/mercury-2'), findsNothing);
+    expect(find.byKey(const Key('chat_progress')), findsNothing);
 
     hub.eventsController.add(
       NativeEventAssistantDelta(
