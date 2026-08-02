@@ -23,6 +23,21 @@ pub enum DevFakePro {
 }
 
 /// Evaluate the DEV_FAKE_PRO / ENVIRONMENT guard exactly as the TS does.
+/// Whether plans are being enforced at all.
+///
+/// Before launch there is nothing to sell and nobody to bill, so refusing to
+/// answer until someone subscribes is a wall in front of an empty shop. This is
+/// a deliberate env switch rather than [`dev_fake_pro`], which is ignored in
+/// production precisely so a stray dev flag cannot give away a real product —
+/// turning enforcement off for everyone is a decision, and it should have to be
+/// made on purpose.
+pub fn plan_enforced(flag: Option<&str>) -> bool {
+    !matches!(
+        flag.map(str::trim),
+        Some("false" | "FALSE" | "0" | "off" | "OFF")
+    )
+}
+
 pub fn dev_fake_pro(dev_fake_pro: Option<&str>, environment: Option<&str>) -> DevFakePro {
     if dev_fake_pro == Some("true") {
         if environment == Some("production") {
@@ -55,6 +70,17 @@ mod tests {
             plan: Some(plan.to_string()),
             status: Some(status.to_string()),
             valid_until,
+        }
+    }
+
+    #[test]
+    fn enforcement_is_on_until_it_is_explicitly_turned_off() {
+        assert!(plan_enforced(None));
+        assert!(plan_enforced(Some("true")));
+        assert!(plan_enforced(Some("")));
+        assert!(plan_enforced(Some("yes")));
+        for off in ["false", "FALSE", "0", "off", "OFF", " false "] {
+            assert!(!plan_enforced(Some(off)), "{off}");
         }
     }
 

@@ -55,6 +55,9 @@ BYOK_FLOOR_PRICE_CENTS = "700"
 BYOK_NEGOTIATION_MAX_TURNS = "6"
 BYOK_NEGOTIATION_COOLDOWN_HOURS = "720"
 GEMINI_LIVE_MODEL = "gemini-3.1-flash-live-preview"
+# Pre-launch: nothing is being sold yet, so nobody is turned away for not
+# having bought it. Remove this line to start enforcing plans again.
+CHANNEL_REQUIRE_PLAN = "false"
 FACETIME_MAX_SESSION_SECONDS = "600"
 FACETIME_COST_MICROUSD_PER_MINUTE = "30000"
 AGORA_CLOUD_PROXY = "tcp"

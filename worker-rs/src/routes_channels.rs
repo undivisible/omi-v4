@@ -2163,6 +2163,10 @@ pub async fn respond_to_stale_inbox_items(env: &Env) -> Result<()> {
 
 /// `hasActivePro` against an `Env` (parity with entitlement.ts).
 async fn env_has_active_pro(env: &Env, uid: &str) -> bool {
+    let enforce = crate::worker_util::secret_or_var(env, "CHANNEL_REQUIRE_PLAN");
+    if !crate::entitlement::plan_enforced(enforce.as_deref()) {
+        return true;
+    }
     let dev = env.var("DEV_FAKE_PRO").ok().map(|v| v.to_string());
     let environment = env.var("ENVIRONMENT").ok().map(|v| v.to_string());
     match crate::entitlement::dev_fake_pro(dev.as_deref(), environment.as_deref()) {
