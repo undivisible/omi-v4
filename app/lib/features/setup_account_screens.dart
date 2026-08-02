@@ -56,6 +56,180 @@ enum SettingsSection {
   }
 }
 
+/// The rows a settings section is made of, shared by the desktop settings
+/// window and the phone's settings screen. Both surfaces show the same
+/// account- and product-level rows; only the chrome around them differs.
+List<Widget> settingsSectionTiles(
+  SettingsSection section, {
+  required AppServices services,
+  required bool previewMode,
+}) {
+  return switch (section) {
+    SettingsSection.account => [
+      // Auth is still looking for a stored session. Offering the sign-in
+      // form here would put it in front of a user who is already signed in
+      // and then yank it away a beat later.
+      if (!previewMode && services.auth.snapshot.settling)
+        const _InfoTile(
+          key: Key('account_restoring'),
+          icon: Icons.person_outline_rounded,
+          title: 'Sign in',
+          detail: 'Checking your account…',
+        )
+      else ...[
+        // Signed out, the row that says "Sign in" has to *be* the sign-in.
+        // Stating the account is missing and offering nothing to do about it
+        // leaves the whole screen looking inert, since most rows below need an
+        // account to become interactive.
+        if (previewMode || services.auth.snapshot.session != null)
+          _InfoTile(
+            icon: Icons.person_outline_rounded,
+            title: 'Sign in',
+            detail: previewMode
+                ? 'Account access is disabled in the interface preview.'
+                : services.auth.snapshot.session?.displayName ??
+                      services.configurationMessage,
+          )
+        else if (!services.auth.supportsChannelCode)
+          _InfoTile(
+            icon: Icons.person_outline_rounded,
+            title: 'Sign in',
+            detail: services.configurationMessage,
+          ),
+        if (!previewMode && services.auth.snapshot.session != null) ...[
+          _Tile(
+            icon: Icons.logout_rounded,
+            title: 'Log out',
+            detail: 'Sign out of this device. Your account data stays intact.',
+            trailing: TextButton(
+              key: const Key('sign_out'),
+              onPressed: () => unawaited(services.auth.signOut()),
+              child: const Text('Log out'),
+            ),
+          ),
+          DeleteAccountTile(services: services),
+          if (services.channels != null)
+            _ChannelLinkTile(client: services.channels!),
+        ] else if (!previewMode) ...[
+          if (services.auth.supportsChannelCode)
+            SignInWithCodeTile(services: services),
+          DeleteLocalDataTile(services: services),
+        ],
+      ],
+    ],
+    SettingsSection.personal => const [],
+    SettingsSection.plan => [
+      if (previewMode || services.billing == null)
+        const _InfoTile(
+          icon: Icons.credit_card_outlined,
+          title: 'Plan unavailable',
+          detail: 'Sign in to manage your plan.',
+        )
+      else
+        _PlanTile(client: services.billing!),
+    ],
+    SettingsSection.providers => [
+      if (previewMode || kIsWeb)
+        const _InfoTile(
+          icon: Icons.key_outlined,
+          title: 'AI providers',
+          detail: 'Configure BYOK securely from a native Omi app.',
+        )
+      else ...[
+        _ProviderTile(services: services),
+        const _InfoTile(
+          icon: Icons.savings_outlined,
+          title: 'Bring your own AI',
+          detail:
+              'Sign in with an xAI (SuperGrok / X Premium+) or ChatGPT '
+              '(Plus / Pro) subscription you already pay for, so there is no '
+              'separate inference bill — or bring an API key for OpenAI, '
+              'Anthropic, Gemini or a compatible endpoint and pay that '
+              "provider directly. Either way Omi's own price is negotiable.",
+        ),
+      ],
+    ],
+    SettingsSection.developer => [
+      if (previewMode || services.apiKeys == null)
+        const _InfoTile(
+          icon: Icons.terminal_rounded,
+          title: 'API keys unavailable',
+          detail: 'Sign in to mint a key for the public API and MCP server.',
+        )
+      else
+        _ApiKeysTile(client: services.apiKeys!, origin: services.apiOriginUri),
+      _McpEndpointTile(origin: services.apiOriginUri),
+    ],
+    SettingsSection.permissions => [
+      if (_isMacDesktop)
+        InputMonitoringSetupTile(
+          gateway: services.capabilities,
+          previewMode: previewMode,
+        ),
+      if (_isMacDesktop)
+        AccessibilitySetupTile(
+          gateway: services.capabilities,
+          previewMode: previewMode,
+        ),
+      ScreenCaptureSetupTile(
+        gateway: services.capabilities,
+        previewMode: previewMode,
+      ),
+      if (_isMacDesktop)
+        SystemAudioCaptureModeTile(
+          services: services,
+          previewMode: previewMode,
+        ),
+    ],
+    SettingsSection.calendar => [
+      for (final source in AppleEventKitSource.values)
+        AppleEventKitConnectionTile(
+          services: services,
+          source: source,
+          previewMode: previewMode,
+        ),
+      EventKitProactiveSyncTile(
+        previewMode: previewMode,
+        onEnabled: services.syncCurrentsToEventKit,
+      ),
+    ],
+    SettingsSection.connections => [
+      for (final connector in oauthConnectors)
+        OAuthConnectorTile(
+          connector: connector,
+          uid: services.auth.snapshot.session?.uid,
+          previewMode: previewMode || kIsWeb,
+        ),
+      const _InfoTile(
+        icon: Icons.lock_outline_rounded,
+        title: 'How connections are stored',
+        detail:
+            'Omi asks for read-only access, keeps the tokens in the system '
+            'keychain, and revokes them at the provider when you '
+            'disconnect. No client secret ships in the app.',
+      ),
+    ],
+    SettingsSection.rewind => [
+      if (previewMode)
+        const RewindSettingsTile(previewMode: true)
+      else
+        _RewindSection(services: services),
+    ],
+    SettingsSection.advanced => [
+      if (previewMode || !services.canUseApi)
+        const _InfoTile(
+          icon: Icons.shield_outlined,
+          title: 'Agent control unavailable',
+          detail: 'Sign in to load your approval policy.',
+        )
+      else
+        _AgentControlTile(client: services.settings!),
+      if (!previewMode && services.settings != null)
+        _ProductionHealthTile(client: services.settings!),
+    ],
+  };
+}
+
 bool get _isWindowsStyle =>
     !kIsWeb && defaultTargetPlatform == TargetPlatform.windows;
 
@@ -175,178 +349,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
     SettingsSection.advanced,
   ];
 
-  List<Widget> _tiles(SettingsSection section) {
-    final services = widget.services;
-    final previewMode = widget.previewMode;
-    return switch (section) {
-      SettingsSection.account => [
-        // Auth is still looking for a stored session. Offering the sign-in
-        // form here would put it in front of a user who is already signed in
-        // and then yank it away a beat later.
-        if (!previewMode && services.auth.snapshot.settling)
-          const _InfoTile(
-            key: Key('account_restoring'),
-            icon: Icons.person_outline_rounded,
-            title: 'Sign in',
-            detail: 'Checking your account…',
-          )
-        else ...[
-          // Signed out, the row that says "Sign in" has to *be* the sign-in.
-          // Stating the account is missing and offering nothing to do about it
-          // leaves the whole screen looking inert, since most rows below need an
-          // account to become interactive.
-          if (previewMode || services.auth.snapshot.session != null)
-            _InfoTile(
-              icon: Icons.person_outline_rounded,
-              title: 'Sign in',
-              detail: previewMode
-                  ? 'Account access is disabled in the interface preview.'
-                  : services.auth.snapshot.session?.displayName ??
-                        services.configurationMessage,
-            )
-          else if (!services.auth.supportsChannelCode)
-            _InfoTile(
-              icon: Icons.person_outline_rounded,
-              title: 'Sign in',
-              detail: services.configurationMessage,
-            ),
-          if (!previewMode && services.auth.snapshot.session != null) ...[
-            _Tile(
-              icon: Icons.logout_rounded,
-              title: 'Log out',
-              detail:
-                  'Sign out of this device. Your account data stays intact.',
-              trailing: TextButton(
-                key: const Key('sign_out'),
-                onPressed: () => unawaited(services.auth.signOut()),
-                child: const Text('Log out'),
-              ),
-            ),
-            DeleteAccountTile(services: services),
-            if (services.channels != null)
-              _ChannelLinkTile(client: services.channels!),
-          ] else if (!previewMode) ...[
-            if (services.auth.supportsChannelCode)
-              SignInWithCodeTile(services: services),
-            DeleteLocalDataTile(services: services),
-          ],
-        ],
-      ],
-      SettingsSection.personal => const [],
-      SettingsSection.plan => [
-        if (previewMode || services.billing == null)
-          const _InfoTile(
-            icon: Icons.credit_card_outlined,
-            title: 'Plan unavailable',
-            detail: 'Sign in to manage your plan.',
-          )
-        else
-          _PlanTile(client: services.billing!),
-      ],
-      SettingsSection.providers => [
-        if (previewMode || kIsWeb)
-          const _InfoTile(
-            icon: Icons.key_outlined,
-            title: 'AI providers',
-            detail: 'Configure BYOK securely from a native Omi app.',
-          )
-        else ...[
-          _ProviderTile(services: services),
-          const _InfoTile(
-            icon: Icons.savings_outlined,
-            title: 'Bring your own AI',
-            detail:
-                'Sign in with an xAI (SuperGrok / X Premium+) or ChatGPT '
-                '(Plus / Pro) subscription you already pay for, so there is no '
-                'separate inference bill — or bring an API key for OpenAI, '
-                'Anthropic, Gemini or a compatible endpoint and pay that '
-                "provider directly. Either way Omi's own price is negotiable.",
-          ),
-        ],
-      ],
-      SettingsSection.developer => [
-        if (previewMode || services.apiKeys == null)
-          const _InfoTile(
-            icon: Icons.terminal_rounded,
-            title: 'API keys unavailable',
-            detail: 'Sign in to mint a key for the public API and MCP server.',
-          )
-        else
-          _ApiKeysTile(
-            client: services.apiKeys!,
-            origin: services.apiOriginUri,
-          ),
-        _McpEndpointTile(origin: services.apiOriginUri),
-      ],
-      SettingsSection.permissions => [
-        if (_isMacDesktop)
-          InputMonitoringSetupTile(
-            gateway: services.capabilities,
-            previewMode: previewMode,
-          ),
-        if (_isMacDesktop)
-          AccessibilitySetupTile(
-            gateway: services.capabilities,
-            previewMode: previewMode,
-          ),
-        ScreenCaptureSetupTile(
-          gateway: services.capabilities,
-          previewMode: previewMode,
-        ),
-        if (_isMacDesktop)
-          SystemAudioCaptureModeTile(
-            services: services,
-            previewMode: previewMode,
-          ),
-      ],
-      SettingsSection.calendar => [
-        for (final source in AppleEventKitSource.values)
-          AppleEventKitConnectionTile(
-            services: services,
-            source: source,
-            previewMode: previewMode,
-          ),
-        EventKitProactiveSyncTile(
-          previewMode: previewMode,
-          onEnabled: services.syncCurrentsToEventKit,
-        ),
-      ],
-      SettingsSection.connections => [
-        for (final connector in oauthConnectors)
-          OAuthConnectorTile(
-            connector: connector,
-            uid: services.auth.snapshot.session?.uid,
-            previewMode: previewMode || kIsWeb,
-          ),
-        const _InfoTile(
-          icon: Icons.lock_outline_rounded,
-          title: 'How connections are stored',
-          detail:
-              'Omi asks for read-only access, keeps the tokens in the system '
-              'keychain, and revokes them at the provider when you '
-              'disconnect. No client secret ships in the app.',
-        ),
-      ],
-      SettingsSection.rewind => [
-        if (previewMode)
-          const RewindSettingsTile(previewMode: true)
-        else
-          _RewindSection(services: services),
-      ],
-      SettingsSection.advanced => [
-        if (previewMode || !services.canUseApi)
-          const _InfoTile(
-            icon: Icons.shield_outlined,
-            title: 'Agent control unavailable',
-            detail: 'Sign in to load your approval policy.',
-          )
-        else
-          _AgentControlTile(client: services.settings!),
-        if (!previewMode && services.settings != null)
-          _ProductionHealthTile(client: services.settings!),
-      ],
-    };
-  }
+  List<Widget> _tiles(SettingsSection section) => settingsSectionTiles(
+    section,
+    services: widget.services,
+    previewMode: widget.previewMode,
+  );
 
   /// The orb click streak that reveals "Omi in numbers". Clicks have to land
   /// within [_orbStreakWindow] of each other, so ordinary single clicks on
@@ -496,7 +503,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         ),
                         const SizedBox(height: 12),
                       ],
-                      _SettingsGroup(children: _tiles(active)),
+                      SettingsTileGroup(children: _tiles(active)),
                     ],
                   ),
                 ),
@@ -673,8 +680,8 @@ class _SidebarItem extends StatelessWidget {
   }
 }
 
-class _SettingsGroup extends StatelessWidget {
-  const _SettingsGroup({required this.children});
+class SettingsTileGroup extends StatelessWidget {
+  const SettingsTileGroup({required this.children, super.key});
 
   final List<Widget> children;
 
@@ -887,8 +894,11 @@ class _SignInWithCodeTileState extends State<SignInWithCodeTile> {
           'Ask Omi for a sign-in code: text ${AppServices.messagingNumber()}, '
               'or message ${AppServices.telegramHandle()} on Telegram, and say '
               '"send me a sign-in code".',
+      // A phone is far narrower than the settings window, and this row already
+      // spends its width on an icon and two lines of prose. Holding the field
+      // at its desktop width there overflows the row instead of wrapping.
       trailing: SizedBox(
-        width: 220,
+        width: MediaQuery.sizeOf(context).width < 520 ? 150 : 220,
         child: Row(
           children: [
             Expanded(

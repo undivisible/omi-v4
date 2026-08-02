@@ -18,6 +18,7 @@ import '../device/device.dart';
 import 'mobile_companion_cache.dart';
 import 'mobile_digest_view.dart';
 import 'mobile_memory_screen.dart';
+import 'mobile_settings_screen.dart';
 import '../ui/markdown_text.dart';
 import '../memory/memory_models.dart';
 import '../features/setup_account_screens.dart' show EventKitProactiveSyncTile;
@@ -3421,6 +3422,29 @@ class _MobileSettingsSection {
     required bool previewMode,
   }) => [
     _AccountTiles(services: services, previewMode: previewMode),
+    // Everything the desktop settings window offers that a phone can act on —
+    // plan, providers, API keys, connections, personal context — lives behind
+    // this row. Inlining those sections here would bury the pendant rows this
+    // sheet exists for under a page of account chrome.
+    _PaperTile(
+      key: const Key('companion_open_settings'),
+      icon: Icons.tune_rounded,
+      title: 'Account & app settings',
+      detail:
+          'Sign in, plan, AI providers, API keys, connections, and your '
+          'personal context.',
+      trailing: const _RowChevron(),
+      onTap: () => unawaited(
+        Navigator.of(context).push(
+          MaterialPageRoute<void>(
+            builder: (_) => MobileSettingsScreen(
+              services: services,
+              previewMode: previewMode,
+            ),
+          ),
+        ),
+      ),
+    ),
     const _PaperTile(
       key: Key('companion_version_tile'),
       icon: Icons.info_outline_rounded,
