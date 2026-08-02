@@ -113,7 +113,7 @@ final class OAuthTokenClient {
       throw const OAuthException('Token response carried no access token');
     }
     final refresh = body['refresh_token'];
-    return OAuthConnection(
+    final connection = OAuthConnection(
       connectorId: request.connector.id,
       accessToken: accessToken,
       expiresAt: _expiry(body['expires_in']),
@@ -121,6 +121,12 @@ final class OAuthTokenClient {
       refreshToken: refresh is String && refresh.isNotEmpty ? refresh : null,
       account: _account(request.connector, body),
     );
+    if (connection.account != null) return connection;
+    final account = await _accountFromEndpoint(
+      request.connector,
+      connection.accessToken,
+    );
+    return account == null ? connection : connection.copyWith(account: account);
   }
 
   /// Trades the refresh token for a fresh access token. A provider that
@@ -228,6 +234,34 @@ final class OAuthTokenClient {
     if (field == null) return null;
     final value = body[field];
     return value is String && value.isNotEmpty ? value : null;
+  }
+
+  /// Names the connected account when the token response carried no label.
+  /// Best effort: a missing or unreadable account stays nameless and the
+  /// connection still works.
+  Future<String?> _accountFromEndpoint(
+    OAuthConnector connector,
+    String accessToken,
+  ) async {
+    final endpoint = connector.accountEndpoint;
+    final field = connector.accountFieldName;
+    if (endpoint == null || field == null) return null;
+    try {
+      final response = await httpClient.get(
+        endpoint,
+        headers: {
+          'authorization': 'Bearer $accessToken',
+          'accept': 'application/json',
+        },
+      );
+      if (response.statusCode < 200 || response.statusCode >= 300) return null;
+      final decoded = jsonDecode(response.body);
+      if (decoded is! Map) return null;
+      final value = decoded[field];
+      return value is String && value.isNotEmpty ? value : null;
+    } catch (_) {
+      return null;
+    }
   }
 }
 

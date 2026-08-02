@@ -19,5 +19,9 @@ final class ConnectorPreviewItem {
 /// A connector's read path. Today this only feeds the settings preview; the
 /// same call is what a future ingestion pass would drain into memory.
 abstract interface class OAuthReadPath {
-  Future<List<ConnectorPreviewItem>> preview(String uid, {int limit});
+  Future<List<ConnectorPreviewItem>> preview(
+    String uid, {
+    int limit,
+    String? account,
+  });
 }

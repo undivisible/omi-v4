@@ -119,6 +119,9 @@ void main() {
       late Map<String, String> sent;
       final client = OAuthTokenClient(
         httpClient: MockClient((request) async {
+          if (request.url.path.endsWith('/userinfo')) {
+            return http.Response('{}', 200);
+          }
           sent = Uri.splitQueryString(request.body);
           return http.Response(
             jsonEncode({
@@ -146,6 +149,47 @@ void main() {
         'https://www.googleapis.com/auth/gmail.readonly',
       ]);
     });
+
+    test('exchange names the account via the userinfo endpoint', () async {
+      final client = OAuthTokenClient(
+        httpClient: MockClient((request) async {
+          if (request.url.path.endsWith('/userinfo')) {
+            return http.Response(
+              jsonEncode({'email': 'work@corp.com', 'name': 'Work'}),
+              200,
+            );
+          }
+          return http.Response(
+            jsonEncode({'access_token': 'at', 'expires_in': 3600}),
+            200,
+          );
+        }),
+        now: () => DateTime.utc(2030),
+      );
+      final connection = await client.exchange(_request(), 'code-1');
+      expect(connection.account, 'work@corp.com');
+    });
+
+    test(
+      'an unreadable account endpoint leaves the account nameless',
+      () async {
+        final client = OAuthTokenClient(
+          httpClient: MockClient((request) async {
+            if (request.url.path.endsWith('/userinfo')) {
+              return http.Response('nope', 500);
+            }
+            return http.Response(
+              jsonEncode({'access_token': 'at', 'expires_in': 3600}),
+              200,
+            );
+          }),
+          now: () => DateTime.utc(2030),
+        );
+        final connection = await client.exchange(_request(), 'code-1');
+        expect(connection.account, isNull);
+        expect(connection.accessToken, 'at');
+      },
+    );
 
     test('invalid_grant on refresh surfaces as reconnect required', () async {
       final client = OAuthTokenClient(
@@ -297,6 +341,167 @@ void main() {
         throwsA(isA<OAuthException>()),
       );
     });
+
+    test(
+      'the store keeps one grant per account and replaces on reconnect',
+      () async {
+        final store = VolatileOAuthConnectionStore();
+        await store.write(
+          'u',
+          _connection().copyWith(account: 'junk@gmail.com'),
+        );
+        await store.write(
+          'u',
+          _connection().copyWith(
+            account: 'work@corp.com',
+            accessToken: 'access-2',
+          ),
+        );
+        expect(await store.readAll('u'), hasLength(2));
+
+        await store.write(
+          'u',
+          _connection().copyWith(
+            account: 'junk@gmail.com',
+            accessToken: 'access-3',
+          ),
+        );
+        final after = await store.readAll('u');
+        expect(after, hasLength(2));
+        expect(
+          after
+              .firstWhere((value) => value.account == 'junk@gmail.com')
+              .accessToken,
+          'access-3',
+        );
+        expect(
+          after
+              .firstWhere((value) => value.account == 'work@corp.com')
+              .accessToken,
+          'access-2',
+        );
+      },
+    );
+
+    test(
+      'connecting another account keeps a healthy legacy nameless grant',
+      () async {
+        final store = VolatileOAuthConnectionStore();
+        await store.write('u', _connection(refreshToken: 'refresh-legacy'));
+        await store.write(
+          'u',
+          _connection().copyWith(
+            account: 'work@corp.com',
+            accessToken: 'access-2',
+            refreshToken: 'refresh-2',
+          ),
+        );
+        final after = await store.readAll('u');
+        expect(after, hasLength(2));
+        expect(
+          after.where((value) => value.account == null).single.refreshToken,
+          'refresh-legacy',
+        );
+        expect(
+          after
+              .where((value) => value.account == 'work@corp.com')
+              .single
+              .accessToken,
+          'access-2',
+        );
+      },
+    );
+
+    test(
+      'reconnect supersedes a dead legacy nameless grant once labeled',
+      () async {
+        final store = VolatileOAuthConnectionStore();
+        await store.write(
+          'u',
+          _connection(needsReconnect: true, refreshToken: 'refresh-dead'),
+        );
+        await store.write(
+          'u',
+          _connection().copyWith(
+            account: 'junk@gmail.com',
+            accessToken: 'access-fresh',
+            refreshToken: 'refresh-fresh',
+          ),
+        );
+        final after = await store.readAll('u');
+        expect(after, hasLength(1));
+        expect(after.single.account, 'junk@gmail.com');
+        expect(after.single.refreshToken, 'refresh-fresh');
+      },
+    );
+
+    test('accessToken reads the named account grant', () async {
+      final store = VolatileOAuthConnectionStore();
+      await store.write('u', _connection().copyWith(account: 'junk@gmail.com'));
+      await store.write(
+        'u',
+        _connection().copyWith(
+          account: 'work@corp.com',
+          accessToken: 'work-token',
+        ),
+      );
+      final manager = OAuthConnectionManager(
+        connections: store,
+        clientIds: VolatileOAuthClientIdStore(),
+        now: () => DateTime.utc(2029),
+        httpClient: MockClient((_) async => fail('no request expected')),
+      );
+      expect(
+        await manager.accessToken(
+          'u',
+          googleOAuthConnector,
+          account: 'work@corp.com',
+        ),
+        'work-token',
+      );
+      expect(
+        await manager.accessToken(
+          'u',
+          googleOAuthConnector,
+          account: 'junk@gmail.com',
+        ),
+        'access-1',
+      );
+    });
+
+    test('disconnect removes only the named account grant', () async {
+      final store = VolatileOAuthConnectionStore();
+      await store.write('u', _connection().copyWith(account: 'junk@gmail.com'));
+      await store.write(
+        'u',
+        _connection().copyWith(
+          account: 'work@corp.com',
+          refreshToken: 'refresh-2',
+        ),
+      );
+      final manager = OAuthConnectionManager(
+        connections: store,
+        clientIds: VolatileOAuthClientIdStore(),
+        httpClient: MockClient((_) async => http.Response('', 200)),
+      );
+
+      await manager.disconnect(
+        'u',
+        googleOAuthConnector,
+        account: 'work@corp.com',
+      );
+      final remaining = await store.readAll('u');
+      expect(remaining, hasLength(1));
+      expect(remaining.single.account, 'junk@gmail.com');
+      expect(
+        await manager.accessToken(
+          'u',
+          googleOAuthConnector,
+          account: 'junk@gmail.com',
+        ),
+        'access-1',
+      );
+    });
   });
 
   group('storage', () {
@@ -347,6 +552,11 @@ void main() {
         );
       }
       expect(googleOAuthConnector.revocable, isTrue);
+    });
+
+    test('Google names the connected account from the userinfo endpoint', () {
+      expect(googleOAuthConnector.accountFieldName, 'email');
+      expect(googleOAuthConnector.accountEndpoint, isNotNull);
     });
 
     test('registered connectors have unique ids and a lookup', () {

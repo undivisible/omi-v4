@@ -65,6 +65,32 @@ final class OAuthConnectionManager {
   Future<OAuthConnection?> connection(String uid, OAuthConnector connector) =>
       _connections.read(uid, connector.id);
 
+  /// Every stored grant for [connector] — one per connected account.
+  Future<List<OAuthConnection>> connections(
+    String uid,
+    OAuthConnector connector,
+  ) async {
+    final all = await _connections.readAll(uid);
+    return [
+      for (final value in all)
+        if (value.connectorId == connector.id) value,
+    ];
+  }
+
+  Future<OAuthConnection?> connectionFor(
+    String uid,
+    OAuthConnector connector, {
+    String? account,
+  }) async {
+    final all = await _connections.readAll(uid);
+    for (final value in all) {
+      if (value.connectorId != connector.id) continue;
+      if (account != null && value.account != account) continue;
+      return value;
+    }
+    return null;
+  }
+
   Future<OAuthConnectionState> state(
     String uid,
     OAuthConnector connector,
@@ -104,9 +130,14 @@ final class OAuthConnectionManager {
 
   /// Returns a token that is valid now, refreshing first when it is close to
   /// expiry. A connection already marked [OAuthConnectionState.reconnectRequired]
-  /// throws immediately instead of hammering a dead grant.
-  Future<String> accessToken(String uid, OAuthConnector connector) async {
-    final stored = await _connections.read(uid, connector.id);
+  /// throws immediately instead of hammering a dead grant. When [account] is
+  /// given, only that account's grant is used.
+  Future<String> accessToken(
+    String uid,
+    OAuthConnector connector, {
+    String? account,
+  }) async {
+    final stored = await connectionFor(uid, connector, account: account);
     if (stored == null || stored.needsReconnect) {
       throw OAuthReconnectRequiredException(connector.id);
     }
@@ -130,9 +161,14 @@ final class OAuthConnectionManager {
 
   /// Revokes at the provider, then forgets locally. The local record is
   /// dropped even if revocation fails, but the failure is reported so the user
-  /// is never told access is gone when it is not.
-  Future<void> disconnect(String uid, OAuthConnector connector) async {
-    final stored = await _connections.read(uid, connector.id);
+  /// is never told access is gone when it is not. When [account] is given,
+  /// only that account's grant is revoked and forgotten.
+  Future<void> disconnect(
+    String uid,
+    OAuthConnector connector, {
+    String? account,
+  }) async {
+    final stored = await connectionFor(uid, connector, account: account);
     if (stored == null) return;
     Object? failure;
     try {
@@ -140,7 +176,7 @@ final class OAuthConnectionManager {
     } catch (error) {
       failure = error;
     }
-    await _connections.remove(uid, connector.id);
+    await _connections.removeAccount(uid, connector.id, stored.account);
     if (failure != null) {
       throw OAuthException(
         'Signed out locally, but ${connector.displayName} did not confirm '

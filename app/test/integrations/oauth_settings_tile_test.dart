@@ -123,4 +123,62 @@ void main() {
     expect(find.text('Reconnect needed'), findsOneWidget);
     expect(find.text('Reconnect'), findsOneWidget);
   });
+
+  testWidgets('additional accounts render with per-account disconnect', (
+    tester,
+  ) async {
+    final store = VolatileOAuthConnectionStore();
+    await store.write(
+      'u',
+      OAuthConnection(
+        connectorId: 'google',
+        accessToken: 'at-2',
+        expiresAt: DateTime.utc(2030),
+        grantedScopes: googleOAuthConnector.scopeValues,
+        refreshToken: 'rt-2',
+        account: 'work@corp.com',
+      ),
+    );
+    await store.write(
+      'u',
+      OAuthConnection(
+        connectorId: 'google',
+        accessToken: 'at-1',
+        expiresAt: DateTime.utc(2030),
+        grantedScopes: googleOAuthConnector.scopeValues,
+        refreshToken: 'rt-1',
+        account: 'junk@gmail.com',
+      ),
+    );
+    await tester.pumpWidget(
+      _host(
+        OAuthConnectorTile(
+          connector: googleOAuthConnector,
+          uid: 'u',
+          previewMode: false,
+          manager: OAuthConnectionManager(
+            connections: store,
+            clientIds: VolatileOAuthClientIdStore(),
+            httpClient: MockClient((_) async => http.Response('', 200)),
+          ),
+          readPathBuilder: (_) => null,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('junk@gmail.com'), findsOneWidget);
+    expect(find.text('work@corp.com'), findsOneWidget);
+    expect(find.text('Connect another account'), findsOneWidget);
+
+    await tester.tap(
+      find.byKey(const Key('oauth_google_account_work@corp.com_action')),
+    );
+    await tester.pumpAndSettle();
+
+    final remaining = await store.readAll('u');
+    expect(remaining, hasLength(1));
+    expect(remaining.single.account, 'junk@gmail.com');
+    expect(find.text('work@corp.com'), findsNothing);
+  });
 }
