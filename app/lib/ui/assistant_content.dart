@@ -24,6 +24,7 @@ class _Segment {
 /// `crepus` (```crepus\n<source>\n```) and renders each segment:
 ///   * markdown → the existing [AssistantMarkdown] (byte-identical behaviour),
 ///   * a valid crepus block → an artifact card drawing [CrepusView.fromSource],
+///     with every unsourced chart removed by [stripUnsourcedCharts] first,
 ///   * an invalid crepus block → the raw fenced block back through
 ///     [AssistantMarkdown] as a plain code segment (graceful fallback).
 ///
@@ -67,16 +68,17 @@ class AssistantContent extends StatelessWidget {
         children.add(const _ArtifactSkeleton());
         continue;
       }
-      if (crepusRenders(segment.text)) {
-        children.add(_ArtifactFadeIn(child: _artifact(context, segment.text)));
+      final source = stripUnsourcedCharts(segment.text);
+      // Nothing survived the chart strip: the artifact was only an invented
+      // plot, and there is nothing left worth drawing.
+      if (source.trim().isEmpty) continue;
+      if (crepusRenders(source)) {
+        children.add(_ArtifactFadeIn(child: _artifact(context, source)));
       } else {
         // Not renderable → show the raw block as a fenced code segment rather
         // than a blank or half-drawn card.
         children.add(
-          AssistantMarkdown(
-            '```crepus\n${segment.text}\n```',
-            streaming: streaming,
-          ),
+          AssistantMarkdown('```crepus\n$source\n```', streaming: streaming),
         );
       }
     }
@@ -250,6 +252,70 @@ class _ArtifactFadeIn extends StatelessWidget {
       child: child,
     );
   }
+}
+
+/// Element names that plot a series. `sparkline` is the only one the renderer
+/// draws; the rest are spellings a model reaches for when it wants a chart.
+const Set<String> _chartElements = {
+  'sparkline',
+  'chart',
+  'linechart',
+  'line-chart',
+  'barchart',
+  'bar-chart',
+  'areachart',
+  'area-chart',
+  'graph',
+  'plot',
+  'series',
+};
+
+final RegExp _chartSourceAttribute = RegExp(
+  r'(?<![A-Za-z0-9_-])source[_-]?=\s*(?:"([^"]*)"|\{([^}]*)\}|(\S+))',
+  caseSensitive: false,
+);
+
+/// Whether a chart line names the tool result its values came from, as
+/// `source=tool:<name>`. Mirrors `chart_values_are_sourced` in
+/// `worker-rs/src/crepus_safety.rs`.
+bool chartValuesAreSourced(String line) {
+  final match = _chartSourceAttribute.firstMatch(line);
+  if (match == null) return false;
+  final raw = (match.group(1) ?? match.group(2) ?? match.group(3) ?? '')
+      .trim()
+      .toLowerCase();
+  if (!raw.startsWith('tool:')) return false;
+  return raw.substring('tool:'.length).trim().isNotEmpty;
+}
+
+/// Drops every chart line whose values did not come from a tool result, along
+/// with anything nested under it. A model that plots numbers it never measured
+/// produces something that reads as evidence, which is worse than no chart at
+/// all; the same rule runs server-side in `worker-rs/src/crepus_safety.rs`.
+String stripUnsourcedCharts(String source) {
+  final kept = <String>[];
+  int? dropping;
+  for (final line in source.split('\n')) {
+    if (line.trim().isEmpty) {
+      if (dropping == null) kept.add(line);
+      continue;
+    }
+    final indent = line.length - line.trimLeft().length;
+    if (dropping != null) {
+      if (indent > dropping) continue;
+      dropping = null;
+    }
+    final trimmed = line.trimLeft();
+    final end = trimmed.indexOf(RegExp(r'\s'));
+    final element = (end < 0 ? trimmed : trimmed.substring(0, end))
+        .toLowerCase();
+    if (_chartElements.contains(element) && !chartValuesAreSourced(line)) {
+      dropping = indent;
+      continue;
+    }
+    kept.add(line);
+  }
+  return kept.join('\n');
 }
 
 /// Scans `text` for fenced blocks opened by a line whose info-string is exactly

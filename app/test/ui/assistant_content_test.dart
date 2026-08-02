@@ -33,6 +33,7 @@ Widget _host(
 );
 
 void main() {
+  _chartStripping();
   testWidgets('plain message renders markdown only, no artifact', (
     tester,
   ) async {
@@ -175,4 +176,87 @@ void main() {
       expect(find.text('•'), findsNWidgets(3));
     },
   );
+}
+
+void _chartStripping() {
+  group('unsourced charts', () {
+    test('drops a chart the model invented, and its nested lines', () {
+      expect(
+        stripUnsourcedCharts(
+          'stack col gap-2\n'
+          '  text "Current Focus"\n'
+          '  sparkline color=blue variant=gradient values=6,8,7,11\n'
+          '    text "legend"\n'
+          '  text "keep me"',
+        ),
+        'stack col gap-2\n  text "Current Focus"\n  text "keep me"',
+      );
+      for (final element in [
+        'chart',
+        'linechart',
+        'line-chart',
+        'barchart',
+        'bar-chart',
+        'areachart',
+        'area-chart',
+        'graph',
+        'plot',
+        'series',
+      ]) {
+        expect(
+          stripUnsourcedCharts('stack col\n  $element values=1,2,3'),
+          'stack col',
+          reason: element,
+        );
+      }
+    });
+
+    test('keeps a chart whose values came from a tool result', () {
+      for (final line in [
+        'sparkline values=1,2,3 source=tool:memory_search',
+        'sparkline values=1,2,3 source="tool:memory_search"',
+        'sparkline values=1,2,3 source={tool:memory_search}',
+        'sparkline values=1,2,3 source=TOOL:memory_search',
+      ]) {
+        expect(chartValuesAreSourced(line), isTrue, reason: line);
+        expect(stripUnsourcedCharts(line), line, reason: line);
+      }
+      for (final line in [
+        'sparkline values=1,2,3',
+        'sparkline values=1,2,3 source=',
+        'sparkline values=1,2,3 source=tool:',
+        'sparkline values=1,2,3 datasource=tool:memory_search',
+      ]) {
+        expect(chartValuesAreSourced(line), isFalse, reason: line);
+      }
+    });
+  });
+
+  testWidgets('an invented chart never reaches the card', (tester) async {
+    await tester.pumpWidget(
+      _host(
+        'Here is where things stand.\n\n'
+        '```crepus\n'
+        'stack col gap-2\n'
+        '  text "Current Focus & Project Load"\n'
+        '  sparkline color=blue variant=gradient values=3,5,4,9,11\n'
+        '```',
+      ),
+    );
+    expect(find.byKey(const Key('assistant_crepus_artifact')), findsOneWidget);
+    expect(find.text('Current Focus & Project Load'), findsOneWidget);
+  });
+
+  testWidgets('a chart-only artifact renders nothing at all', (tester) async {
+    await tester.pumpWidget(
+      _host(
+        'Here is where things stand.\n\n'
+        '```crepus\n'
+        'sparkline color=blue values=3,5,4,9,11\n'
+        '```',
+      ),
+    );
+    expect(find.byKey(const Key('assistant_crepus_artifact')), findsNothing);
+    expect(find.textContaining('sparkline'), findsNothing);
+  });
 }

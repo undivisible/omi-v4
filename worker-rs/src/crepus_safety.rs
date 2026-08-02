@@ -1,7 +1,8 @@
 //! Defense-in-depth for AI-authored `.crepus` stored by the worker. The client
 //! renderer is the primary boundary; this rejects hostile sources early: a
-//! closed set of action verbs on event attributes, and image `src` URLs that
-//! must be public `http(s)` with no credentials.
+//! closed set of action verbs on event attributes, image `src` URLs that must
+//! be public `http(s)` with no credentials, and chart nodes whose values do
+//! not name the tool result they came from.
 
 use url::Url;
 
@@ -16,6 +17,31 @@ const BLOCKED_IMAGE_HOSTS: &[&str] = &["localhost", "127.0.0.1", "0.0.0.0", "::1
 /// The event attribute names scanned for an action value: `onclick`,
 /// `onchange`, `onlongpress`, `onlong-press`, `onlong_press`.
 const EVENT_NAMES: &[&str] = &["click", "change", "long-press", "long_press", "longpress"];
+
+/// Element names that plot a series. `sparkline` is the only one the pinned
+/// `crepuscularity_flutter` renderer draws (`kAllowedKinds` in its
+/// `view_ir.dart`); the rest are spellings a model reaches for when it wants a
+/// chart, and are listed so an invented one is dropped rather than left to
+/// render as nothing.
+const CHART_ELEMENTS: &[&str] = &[
+    "sparkline",
+    "chart",
+    "linechart",
+    "line-chart",
+    "barchart",
+    "bar-chart",
+    "areachart",
+    "area-chart",
+    "graph",
+    "plot",
+    "series",
+];
+
+/// The attribute a chart line must carry to survive: `source=tool:<name>`.
+const CHART_SOURCE_ATTRIBUTE: &str = "source";
+
+/// The only accepted provenance for plotted values.
+const CHART_SOURCE_PREFIX: &str = "tool:";
 
 /// Outcome of [`validate_crepus`].
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -352,6 +378,81 @@ fn read_image_src(source: &str, equals_at: usize, line_end: usize) -> Option<Str
     Some(source[start..cursor].to_string())
 }
 
+/// The element name a line opens with, lowercased.
+fn element_name(line: &str) -> String {
+    let trimmed = line.trim_start();
+    let end = trimmed.find(char::is_whitespace).unwrap_or(trimmed.len());
+    trimmed[..end].to_lowercase()
+}
+
+fn indent_width(line: &str) -> usize {
+    line.len() - line.trim_start().len()
+}
+
+/// Reads a named attribute's decoded value off a single line.
+fn attribute_value(line: &str, name: &str) -> Option<String> {
+    let lower = line.to_lowercase();
+    let bytes = lower.as_bytes();
+    let mut index = 0usize;
+    while let Some(offset) = lower[index..].find(name) {
+        let at = index + offset;
+        index = at + name.len();
+        if at > 0 && is_ident_byte(bytes[at - 1]) {
+            continue;
+        }
+        if let Some((value, _)) = read_attribute_value(line, at + name.len()) {
+            return Some(value);
+        }
+    }
+    None
+}
+
+/// Whether a chart line names the tool result its values came from.
+pub fn chart_values_are_sourced(line: &str) -> bool {
+    let Some(value) = attribute_value(line, CHART_SOURCE_ATTRIBUTE) else {
+        return false;
+    };
+    let value = value.trim().to_lowercase();
+    match value.strip_prefix(CHART_SOURCE_PREFIX) {
+        Some(tool) => !tool.trim().is_empty(),
+        None => false,
+    }
+}
+
+/// Whether a line opens a charting element.
+pub fn is_chart_element_line(line: &str) -> bool {
+    CHART_ELEMENTS.contains(&element_name(line).as_str())
+}
+
+/// Drops every chart line whose values did not come from a tool result, along
+/// with anything nested under it. A plotted series the model invented reads as
+/// measurement, which is the one thing an artifact must never fake.
+pub fn strip_unsourced_charts(source: &str) -> String {
+    let mut kept: Vec<&str> = Vec::new();
+    let mut dropping: Option<usize> = None;
+    for line in source.lines() {
+        if line.trim().is_empty() {
+            if dropping.is_none() {
+                kept.push(line);
+            }
+            continue;
+        }
+        let indent = indent_width(line);
+        if let Some(parent) = dropping {
+            if indent > parent {
+                continue;
+            }
+            dropping = None;
+        }
+        if is_chart_element_line(line) && !chart_values_are_sourced(line) {
+            dropping = Some(indent);
+            continue;
+        }
+        kept.push(line);
+    }
+    kept.join("\n")
+}
+
 /// Trim, bound and scan a candidate `.crepus` source.
 pub fn validate_crepus(value: &str) -> CrepusValidation {
     let trimmed = value.trim();
@@ -361,13 +462,20 @@ pub fn validate_crepus(value: &str) -> CrepusValidation {
     if trimmed.chars().count() > CREPUS_MAX_LEN {
         return CrepusValidation::Err("Invalid crepus: exceeds maximum length".to_string());
     }
-    if let Some(error) = find_disallowed_crepus_action(trimmed) {
+    let stripped = strip_unsourced_charts(trimmed);
+    let stripped = stripped.trim();
+    if stripped.is_empty() {
+        return CrepusValidation::Err(
+            "Invalid crepus: chart values must come from a tool result".to_string(),
+        );
+    }
+    if let Some(error) = find_disallowed_crepus_action(stripped) {
         return CrepusValidation::Err(error);
     }
-    if let Some(error) = find_unsafe_crepus_image_url(trimmed) {
+    if let Some(error) = find_unsafe_crepus_image_url(stripped) {
         return CrepusValidation::Err(error);
     }
-    CrepusValidation::Ok(trimmed.to_string())
+    CrepusValidation::Ok(stripped.to_string())
 }
 
 /// Pass-through rejection: the validated source, or `None`.
@@ -527,6 +635,75 @@ mod tests {
     }
 
     #[test]
+    fn strips_a_chart_the_model_invented() {
+        let source =
+            "stack col gap-2\n  text \"Focus\"\n  sparkline color=blue values=6,8,7,11\n  text \"Up\"";
+        assert_eq!(
+            strip_unsourced_charts(source),
+            "stack col gap-2\n  text \"Focus\"\n  text \"Up\""
+        );
+        for element in [
+            "chart",
+            "linechart",
+            "line-chart",
+            "barchart",
+            "bar-chart",
+            "areachart",
+            "area-chart",
+            "graph",
+            "plot",
+            "series",
+        ] {
+            let line = format!("stack col\n  {element} values=1,2,3");
+            assert_eq!(strip_unsourced_charts(&line), "stack col", "{element}");
+        }
+    }
+
+    #[test]
+    fn keeps_a_chart_whose_values_came_from_a_tool() {
+        for line in [
+            "sparkline values=1,2,3 source=tool:memory_search",
+            "sparkline values=1,2,3 source=\"tool:memory_search\"",
+            "sparkline values=1,2,3 source={tool:memory_search}",
+            "sparkline values=1,2,3 source=TOOL:memory_search",
+        ] {
+            assert!(chart_values_are_sourced(line), "{line}");
+            assert_eq!(strip_unsourced_charts(line), line, "{line}");
+        }
+        for line in [
+            "sparkline values=1,2,3",
+            "sparkline values=1,2,3 source=",
+            "sparkline values=1,2,3 source=tool:",
+            "sparkline values=1,2,3 source=my own sense of it",
+            "sparkline values=1,2,3 datasource=tool:memory_search",
+        ] {
+            assert!(!chart_values_are_sourced(line), "{line}");
+        }
+    }
+
+    #[test]
+    fn strips_the_lines_nested_under_a_dropped_chart() {
+        let source = "stack col\n  sparkline values=1,2\n    text \"legend\"\n  text \"keep me\"";
+        assert_eq!(
+            strip_unsourced_charts(source),
+            "stack col\n  text \"keep me\""
+        );
+    }
+
+    #[test]
+    fn validation_removes_the_chart_and_refuses_a_document_that_was_only_a_chart() {
+        assert_eq!(
+            validate_crepus("stack col\n  sparkline values=1,2\n  text \"hi\"").value(),
+            Some("stack col\n  text \"hi\"")
+        );
+        assert_eq!(
+            validate_crepus("sparkline values=1,2,3").error(),
+            Some("Invalid crepus: chart values must come from a tool result")
+        );
+        assert!(validate_crepus("sparkline values=1,2,3 source=tool:get_goals").is_ok());
+    }
+
+    #[test]
     fn sanitize_drops_every_rejected_source() {
         assert_eq!(
             sanitize_crepus("text \"ok\""),
@@ -535,5 +712,6 @@ mod tests {
         assert_eq!(sanitize_crepus("button onclick={exec:boom}"), None);
         assert_eq!(sanitize_crepus("image src=http://127.0.0.1/a.png"), None);
         assert_eq!(sanitize_crepus("  "), None);
+        assert_eq!(sanitize_crepus("sparkline values=1,2,3"), None);
     }
 }
