@@ -232,6 +232,7 @@ void main() {
     SharedPreferences.setMockInitialValues({});
     final auth = AuthController(_SignedInGateway());
     await auth.restoreSession();
+    await auth.grantProcessingConsent();
     final services = makeServices(auth: auth);
     await tester.pumpWidget(
       MaterialApp(home: SettingsScreen(services: services)),
@@ -242,6 +243,49 @@ void main() {
     expect(find.text('Log out'), findsWidgets);
     expect(find.byKey(const Key('delete_account')), findsOneWidget);
     expect(find.byKey(const Key('delete_local_data')), findsNothing);
+    // The signed-out message belongs to the signed-out pane. Reading it off a
+    // session with no display name is how a signed-in account came to be
+    // introduced by "Sign in to connect."
+    expect(find.text('Sign in to connect.'), findsNothing);
+    expect(find.byKey(const Key('settings_sign_in_code')), findsNothing);
+    expect(find.text('Ada'), findsOneWidget);
+  });
+
+  // Signed in with no consent receipt on this device: every worker call is
+  // refused, so the pane must not offer the rows that make them. Showing
+  // "Log out" and "Delete account" beside a sign-in prompt, and a link dialog
+  // that answers "Sign in is required", was one pane holding two beliefs.
+  testWidgets('signed in without a consent receipt, the pane says so once', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    final auth = AuthController(_SignedInGateway());
+    await auth.restoreSession();
+    final services = makeServices(
+      auth: auth,
+      channels: ChannelClient(_CountingChannelTransport()),
+    );
+    await tester.pumpWidget(
+      MaterialApp(home: SettingsScreen(services: services)),
+    );
+    await tester.pumpAndSettle();
+
+    expect(auth.snapshot.standing, AccountStanding.processingConsentMissing);
+    expect(find.byKey(const Key('account_finish_sign_in')), findsOneWidget);
+    expect(find.byKey(const Key('settings_sign_in_code')), findsNothing);
+    expect(find.text('Sign in to connect.'), findsNothing);
+    expect(find.byKey(const Key('channel_link_tile')), findsNothing);
+    expect(find.byKey(const Key('delete_account')), findsNothing);
+    expect(find.byKey(const Key('sign_out')), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('account_grant_consent')));
+    await tester.pumpAndSettle();
+
+    expect(auth.snapshot.standing, AccountStanding.active);
+    expect(find.byKey(const Key('account_finish_sign_in')), findsNothing);
+    expect(find.byKey(const Key('account_signed_in')), findsOneWidget);
+    expect(find.byKey(const Key('delete_account')), findsOneWidget);
+    expect(find.byKey(const Key('channel_link_tile')), findsOneWidget);
   });
 
   testWidgets('signed out, the account section offers the sign-in itself', (
@@ -502,6 +546,7 @@ void main() {
       channels: ChannelClient(transport),
     );
     await services.auth.restoreSession();
+    await services.auth.grantProcessingConsent();
     await tester.pumpWidget(
       MaterialApp(home: SettingsScreen(services: services)),
     );

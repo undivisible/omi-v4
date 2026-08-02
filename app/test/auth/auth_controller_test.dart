@@ -51,6 +51,31 @@ void main() {
     expect(gateway.confirmedCode, '123456');
   });
 
+  // A session on its own does not get a request through: validSession hands
+  // back nothing until a consent receipt authorizes the uid. Anything that
+  // reads `session != null` instead of the standing disagrees with every
+  // worker call for exactly as long as the receipt is missing.
+  test('a session without a consent receipt is not signed in yet', () async {
+    final gateway = _FakeAuthGateway(session);
+    final controller = AuthController(gateway);
+
+    await controller.setConsent(true);
+    await controller.requestPhoneOtp('+15555550123');
+    await controller.confirmPhoneOtp('123456');
+
+    expect(controller.snapshot.session, isNotNull);
+    expect(
+      controller.snapshot.standing,
+      AccountStanding.processingConsentMissing,
+    );
+    expect(await controller.validSession(), isNull);
+
+    await controller.grantProcessingConsent();
+
+    expect(controller.snapshot.standing, AccountStanding.active);
+    expect((await controller.validSession())?.uid, 'firebase-uid');
+  });
+
   test('OAuth failure remains typed and does not create a session', () async {
     final gateway = _FakeAuthGateway(session)
       ..failure = const AuthFailure(

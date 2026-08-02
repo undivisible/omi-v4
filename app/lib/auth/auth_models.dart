@@ -70,6 +70,28 @@ final class AuthFailure {
   final String message;
 }
 
+/// The one answer the account UI is allowed to branch on. A session on its own
+/// is not enough to reach the account: every worker call goes through
+/// [AuthController.validSession], which hands back nothing without a
+/// processing-consent receipt for that uid. Deriving rows from
+/// `session != null` and gating requests on the receipt is how one pane came
+/// to offer "Log out" while the request behind the next row answered
+/// "Sign in is required".
+enum AccountStanding {
+  /// The stored session has not been looked for yet.
+  settling,
+
+  /// No usable session, and nothing outstanding that would produce one.
+  signedOut,
+
+  /// Signed in, but this device holds no processing-consent receipt for the
+  /// account, so nothing that talks to the worker will work until it does.
+  processingConsentMissing,
+
+  /// Signed in and able to reach the account.
+  active,
+}
+
 final class AuthSnapshot {
   const AuthSnapshot({
     required this.phase,
@@ -113,4 +135,14 @@ final class AuthSnapshot {
   /// Whether the answer is still outstanding. Nothing should decide what to
   /// show the user while this is true.
   bool get settling => phase == AuthPhase.restoring;
+
+  AccountStanding get standing {
+    if (settling) return AccountStanding.settling;
+    if (phase != AuthPhase.signedIn || session == null) {
+      return AccountStanding.signedOut;
+    }
+    return hasProcessingAuthority
+        ? AccountStanding.active
+        : AccountStanding.processingConsentMissing;
+  }
 }

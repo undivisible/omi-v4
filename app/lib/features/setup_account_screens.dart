@@ -8,6 +8,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../api/api_keys_client.dart';
 import '../api/worker_http.dart';
 import '../app_services.dart';
+import '../auth/auth.dart';
 import '../capabilities/desktop_capabilities.dart';
 import '../capabilities/hub_platform.dart';
 import '../channels/channels.dart';
@@ -66,56 +67,62 @@ List<Widget> settingsSectionTiles(
 }) {
   return switch (section) {
     SettingsSection.account => [
-      // Auth is still looking for a stored session. Offering the sign-in
-      // form here would put it in front of a user who is already signed in
-      // and then yank it away a beat later.
-      if (!previewMode && services.auth.snapshot.settling)
+      if (previewMode)
         const _InfoTile(
-          key: Key('account_restoring'),
           icon: Icons.person_outline_rounded,
           title: 'Sign in',
-          detail: 'Checking your account…',
+          detail: 'Account access is disabled in the interface preview.',
         )
-      else ...[
-        // Signed out, the row that says "Sign in" has to *be* the sign-in.
-        // Stating the account is missing and offering nothing to do about it
-        // leaves the whole screen looking inert, since most rows below need an
-        // account to become interactive.
-        if (previewMode || services.auth.snapshot.session != null)
-          _InfoTile(
-            icon: Icons.person_outline_rounded,
-            title: 'Sign in',
-            detail: previewMode
-                ? 'Account access is disabled in the interface preview.'
-                : services.auth.snapshot.session?.displayName ??
-                      services.configurationMessage,
-          )
-        else if (!services.auth.supportsChannelCode)
-          _InfoTile(
-            icon: Icons.person_outline_rounded,
-            title: 'Sign in',
-            detail: services.configurationMessage,
-          ),
-        if (!previewMode && services.auth.snapshot.session != null) ...[
-          _Tile(
-            icon: Icons.logout_rounded,
-            title: 'Log out',
-            detail: 'Sign out of this device. Your account data stays intact.',
-            trailing: TextButton(
-              key: const Key('sign_out'),
-              onPressed: () => unawaited(services.auth.signOut()),
-              child: const Text('Log out'),
+      else
+        // Every account row comes off one answer. Rows built from
+        // `session != null` while requests were gated on the consent receipt
+        // is what let the pane offer "Log out" beside a sign-in prompt and a
+        // link dialog that refused for want of a sign-in.
+        ...switch (services.auth.snapshot.standing) {
+          // Auth is still looking for a stored session. Offering the sign-in
+          // form here would put it in front of a user who is already signed in
+          // and then yank it away a beat later.
+          AccountStanding.settling => const [
+            _InfoTile(
+              key: Key('account_restoring'),
+              icon: Icons.person_outline_rounded,
+              title: 'Sign in',
+              detail: 'Checking your account…',
             ),
-          ),
-          DeleteAccountTile(services: services),
-          if (services.channels != null)
-            _ChannelLinkTile(client: services.channels!),
-        ] else if (!previewMode) ...[
-          if (services.auth.supportsChannelCode)
-            SignInWithCodeTile(services: services),
-          DeleteLocalDataTile(services: services),
-        ],
-      ],
+          ],
+          // Signed out, the row that says "Sign in" has to *be* the sign-in.
+          // Stating the account is missing and offering nothing to do about it
+          // leaves the whole screen looking inert, since most rows below need
+          // an account to become interactive.
+          AccountStanding.signedOut => [
+            if (services.auth.supportsChannelCode)
+              SignInWithCodeTile(services: services)
+            else
+              _InfoTile(
+                icon: Icons.person_outline_rounded,
+                title: 'Sign in',
+                detail: services.configurationMessage,
+              ),
+            DeleteLocalDataTile(services: services),
+          ],
+          AccountStanding.processingConsentMissing => [
+            _FinishSignInTile(services: services),
+            _signOutTile(services),
+            DeleteLocalDataTile(services: services),
+          ],
+          AccountStanding.active => [
+            _InfoTile(
+              key: const Key('account_signed_in'),
+              icon: Icons.person_outline_rounded,
+              title: 'Account',
+              detail: _accountLabel(services.auth.snapshot.session!),
+            ),
+            _signOutTile(services),
+            DeleteAccountTile(services: services),
+            if (services.channels != null)
+              _ChannelLinkTile(client: services.channels!),
+          ],
+        },
     ],
     SettingsSection.personal => const [],
     SettingsSection.plan => [
@@ -843,6 +850,69 @@ class _StateTile extends StatelessWidget {
 /// Telegram or from their phone and it replies with seven characters. There is
 /// nothing to send from here, so this is an entry field rather than a
 /// "send me a code" button.
+String _accountLabel(AuthSession session) =>
+    session.displayName ??
+    session.email ??
+    session.phoneNumber ??
+    'Signed in on this device.';
+
+Widget _signOutTile(AppServices services) => _Tile(
+  icon: Icons.logout_rounded,
+  title: 'Log out',
+  detail: 'Sign out of this device. Your account data stays intact.',
+  trailing: TextButton(
+    key: const Key('sign_out'),
+    onPressed: () => unawaited(services.auth.signOut()),
+    child: const Text('Log out'),
+  ),
+);
+
+/// Signed in with no processing-consent receipt on this device. The account
+/// exists, but every request to it is refused until the receipt is recorded,
+/// so the pane says so and offers the one action that resolves it rather than
+/// showing rows that would fail.
+class _FinishSignInTile extends StatefulWidget {
+  const _FinishSignInTile({required this.services});
+
+  final AppServices services;
+
+  @override
+  State<_FinishSignInTile> createState() => _FinishSignInTileState();
+}
+
+class _FinishSignInTileState extends State<_FinishSignInTile> {
+  bool _busy = false;
+
+  Future<void> _grant() async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      await widget.services.auth.grantProcessingConsent();
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final session = widget.services.auth.snapshot.session;
+    return _Tile(
+      key: const Key('account_finish_sign_in'),
+      icon: Icons.pending_outlined,
+      title: 'Finish signing in',
+      detail:
+          '${session == null ? 'Your account' : _accountLabel(session)} is '
+          'signed in, but this device has not recorded your consent to '
+          'process your data, so Omi cannot reach your account yet.',
+      trailing: TextButton(
+        key: const Key('account_grant_consent'),
+        onPressed: _busy ? null : () => unawaited(_grant()),
+        child: const Text('Continue'),
+      ),
+    );
+  }
+}
+
 class SignInWithCodeTile extends StatefulWidget {
   const SignInWithCodeTile({required this.services, super.key});
 
@@ -866,7 +936,15 @@ class _SignInWithCodeTileState extends State<SignInWithCodeTile> {
     if (_busy) return;
     setState(() => _busy = true);
     try {
-      await widget.services.auth.signInWithChannelCode(_code.text);
+      final auth = widget.services.auth;
+      await auth.signInWithChannelCode(_code.text);
+      // Mobile and web both record the receipt the moment they sign in, and
+      // every worker request is refused without one. A desktop that skipped it
+      // read as signed in on this pane while nothing it asked for was allowed.
+      if (auth.snapshot.phase == AuthPhase.signedIn &&
+          !auth.snapshot.hasProcessingAuthority) {
+        await auth.grantProcessingConsent();
+      }
     } finally {
       if (mounted) setState(() => _busy = false);
     }
