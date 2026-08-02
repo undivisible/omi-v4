@@ -1264,21 +1264,14 @@ tbody th {
 
 /* Safari applies the individual translate/scale properties to HTML boxes but
    not to SVG geometry, so every dot moves through one composed transform
-   instead, with the pulse riding a registered custom property. */
-@property --omi-ps {
-  syntax: "<number>";
-  inherits: false;
-  initial-value: 1;
-}
-
+   instead. */
 .omi-mark circle {
   --tx: calc(var(--omi-spread) * var(--ux) * 1px);
   --ty: calc(var(--omi-spread) * var(--uy) * 1px);
   --sc: 1;
   transform-box: fill-box;
   transform-origin: 50% 50%;
-  transform: translate(var(--tx), var(--ty))
-    scale(calc(var(--sc) * var(--omi-ps, 1)));
+  transform: translate(var(--tx), var(--ty)) scale(var(--sc));
   opacity: 0.62;
   fill: var(--dot, inherit);
   transition:
@@ -1335,11 +1328,9 @@ tbody th {
   70%,
   100% {
     opacity: 0.62;
-    --omi-ps: 1;
   }
   12% {
     opacity: 1;
-    --omi-ps: 1.14;
   }
 }
 

@@ -11,6 +11,31 @@
     .filter(Boolean);
   const railMark = document.querySelector(".omi-mark--rail");
 
+  const tone = document.querySelector(".page-bg i");
+  const darkEnd = document.querySelector("#hub");
+  const darkAgain = document.querySelector(".foot-stage");
+  if (tone) document.documentElement.classList.add("has-tone");
+
+  const smoothstep = (edge0, edge1, x) => {
+    const t = Math.min(1, Math.max(0, (x - edge0) / (edge1 - edge0 || 1)));
+    return t * t * (3 - 2 * t);
+  };
+
+  const toneAt = () => {
+    const here = window.scrollY + window.innerHeight * 0.5;
+    const band = window.innerHeight * 0.45;
+    let value = 1;
+    if (darkEnd) {
+      const edge = darkEnd.getBoundingClientRect().bottom + window.scrollY;
+      value = 1 - smoothstep(edge - band, edge + band, here);
+    }
+    if (darkAgain) {
+      const edge = darkAgain.getBoundingClientRect().top + window.scrollY;
+      value = Math.max(value, smoothstep(edge - band, edge, here));
+    }
+    return value;
+  };
+
   // Where the reader is, expressed on the rail's own scale: 0 at the first
   // section, sections.length - 1 at the last. Fractional between them, which
   // is what lets the rail fade rather than step.
@@ -35,6 +60,9 @@
     queued = false;
     const height = document.documentElement.scrollHeight - window.innerHeight;
     const progress = height > 0 ? Math.min(1, window.scrollY / height) : 0;
+    const shade = tone ? toneAt() : 0;
+
+    if (tone) tone.style.setProperty("--tone", shade.toFixed(3));
 
     if (field && !reduced) field.style.setProperty("--scroll", progress);
 
@@ -242,7 +270,9 @@
     live.addEventListener("error", fail);
     live.addEventListener("load", () => {
       try {
-        if (live.contentWindow.location.href === "about:blank") fail();
+        if (live.contentWindow.location.href === "about:blank") return fail();
+        const doc = live.contentDocument;
+        if (!doc || !doc.querySelector('script[src$="flutter.js"]')) fail();
       } catch {
         fail();
       }

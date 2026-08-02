@@ -177,6 +177,65 @@
     });
   }
 
+  const FAVICON_FPS = 12;
+  const FAVICON_FRAMES = 10;
+  const FAVICON_ARC = 45;
+  const FAVICON_INTERVAL = 1000 / FAVICON_FPS;
+
+  const spinFavicon = () => {
+    const icon = document.querySelector('link[rel="icon"]');
+    if (!icon) return;
+    const prefix = "data:image/svg+xml,";
+    if (!icon.getAttribute("href").startsWith(prefix)) return;
+    const svg = decodeURIComponent(
+      icon.getAttribute("href").slice(prefix.length),
+    );
+    const parts = svg.match(/^([\s\S]*<rect[^>]*\/>)([\s\S]*)<\/svg>$/);
+    if (!parts) return;
+
+    const frames = [];
+    for (let i = 0; i < FAVICON_FRAMES; i += 1) {
+      const angle = ((i * FAVICON_ARC) / FAVICON_FRAMES).toFixed(3);
+      frames.push(
+        prefix +
+          encodeURIComponent(
+            `${parts[1]}<g transform='rotate(${angle} 16 16)'>${parts[2]}</g></svg>`,
+          ),
+      );
+    }
+
+    let step = 0;
+    let timer = 0;
+    let due = 0;
+    const tick = (now) => {
+      timer = requestAnimationFrame(tick);
+      if (now < due) return;
+      due += FAVICON_INTERVAL;
+      if (due < now) due = now + FAVICON_INTERVAL;
+      step = (step + 1) % FAVICON_FRAMES;
+      icon.setAttribute("href", frames[step]);
+    };
+    const spin = () => {
+      if (timer || document.hidden || quiet.matches) return;
+      due = performance.now();
+      timer = requestAnimationFrame(tick);
+    };
+    const rest = () => {
+      cancelAnimationFrame(timer);
+      timer = 0;
+    };
+    document.addEventListener("visibilitychange", () =>
+      document.hidden ? rest() : spin(),
+    );
+    quiet.addEventListener("change", () => {
+      rest();
+      icon.setAttribute("href", frames[0]);
+      spin();
+    });
+    spin();
+  };
+  spinFavicon();
+
   // Honour the setting if it is changed while the page is open.
   quiet.addEventListener("change", (event) => {
     if (!event.matches) return;

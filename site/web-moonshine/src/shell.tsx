@@ -284,6 +284,9 @@ export function Page({
       <a className="skip-link" href="#main">
         Skip to content
       </a>
+      <div className="page-bg" aria-hidden="true">
+        <i />
+      </div>
       <GlowField />
       <main id="main">
         {rail.length > 0 ? <SectionRail sections={rail} /> : null}

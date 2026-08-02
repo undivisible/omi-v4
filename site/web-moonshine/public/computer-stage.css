@@ -899,6 +899,10 @@ html.lenis body {
   overflow: hidden;
 }
 
+.home-demo .shot-status {
+  color: rgba(255, 250, 243, 0.72);
+}
+
 /* ── Cool footer stage ────────────────────────────────────────────── */
 
 .foot-stage {
@@ -1138,4 +1142,106 @@ html.lenis body {
     transform: none !important;
     filter: none !important;
   }
+}
+
+/* ── One page surface ─────────────────────────────────────────────── */
+
+.page-bg {
+  position: fixed;
+  inset: 0;
+  z-index: -2;
+  pointer-events: none;
+  display: none;
+  background: linear-gradient(180deg, #f7f1e8 0%, #efe4d3 52%, #e6d5bc 100%);
+}
+
+html.has-tone .page-bg {
+  display: block;
+}
+
+html.has-tone {
+  background: #e6d5bc;
+}
+
+html.has-tone body {
+  background: transparent;
+}
+
+.page-bg i {
+  position: absolute;
+  inset: 0;
+  display: block;
+  opacity: var(--tone, 1);
+  background: linear-gradient(180deg, #241f1b 0%, #2b2722 50%, #201c18 100%);
+  will-change: opacity;
+}
+
+.ed-dissolve {
+  --ed-burn: 0;
+}
+
+html.has-tone .ed-dissolve::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  opacity: var(--ed-burn);
+  background: radial-gradient(
+    ellipse 72% 42% at 50% 46%,
+    rgba(122, 74, 44, 0.55),
+    transparent 70%
+  );
+}
+
+html.has-tone .ed-hero,
+html.has-tone .ed-dissolve,
+html.has-tone .ed-room,
+html.has-tone .home-demo,
+html.has-tone .foot-stage {
+  background: transparent;
+}
+
+html.has-tone .ed-hero::after,
+html.has-tone .home-demo::after,
+html.has-tone .ed-hardware::before,
+html.has-tone .ed-hardware::after,
+html.has-tone .foot-stage::before {
+  display: none;
+}
+
+html.has-tone .ed-hardware {
+  background:
+    radial-gradient(ellipse at 15% 0%, rgba(168, 94, 70, 0.16), transparent 55%),
+    radial-gradient(ellipse at 85% 20%, rgba(78, 104, 124, 0.14), transparent 50%);
+}
+
+html.has-tone .ed-hero-veil {
+  background:
+    linear-gradient(
+      180deg,
+      rgba(20, 18, 16, 0.3) 0%,
+      rgba(20, 18, 16, 0.16) 34%,
+      rgba(28, 25, 21, 0.34) 62%,
+      rgba(32, 28, 24, 0.2) 84%,
+      transparent 100%
+    ),
+    radial-gradient(ellipse at 70% 20%, rgba(159, 102, 83, 0.2), transparent 55%);
+}
+
+html.has-tone .ed-hero-media img {
+  -webkit-mask-image: linear-gradient(
+    180deg,
+    #000 34%,
+    rgba(0, 0, 0, 0.72) 58%,
+    rgba(0, 0, 0, 0.28) 78%,
+    transparent 94%
+  );
+  mask-image: linear-gradient(
+    180deg,
+    #000 34%,
+    rgba(0, 0, 0, 0.72) 58%,
+    rgba(0, 0, 0, 0.28) 78%,
+    transparent 94%
+  );
 }

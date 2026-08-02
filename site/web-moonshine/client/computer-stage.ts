@@ -223,19 +223,10 @@ function initDissolve(root: HTMLElement) {
     gsap.ticker.add((t) => placeDots(t));
   }
 
-  // Room colour follows the desplatter: settled dark, ember-lit at the
-  // height of the burn, then a calmer warm dark once Omi holds the stage.
-  const lerpC = (a: number[], b: number[], t: number) =>
-    a.map((v, i) => Math.round(v + (b[i] - v) * t));
-  const ROOM = [43, 39, 34];
-  const EMBER = [64, 44, 30];
-  const SETTLED = [43, 39, 34];
   const paintRoom = (p: number) => {
     const up = Math.min(1, Math.max(0, (p - 0.16) / 0.3));
     const down = Math.min(1, Math.max(0, (p - 0.55) / 0.3));
-    const mid = lerpC(ROOM, EMBER, up);
-    const c = lerpC(mid, SETTLED, down);
-    section.style.backgroundColor = `rgb(${c[0]}, ${c[1]}, ${c[2]})`;
+    section.style.setProperty("--ed-burn", (up * (1 - down)).toFixed(3));
   };
   const wash = section.querySelector<HTMLElement>("[data-wash]");
 
@@ -545,16 +536,6 @@ function initHardware(root: HTMLElement) {
       repeat: -1,
       ease: "none",
     });
-    const orbitMark = orbit.querySelector<HTMLElement>("[data-omi-mark]");
-    if (orbitMark) {
-      gsap.to(orbitMark, {
-        "--omi-spread": 18,
-        duration: 2.8,
-        yoyo: true,
-        repeat: -1,
-        ease: "sine.inOut",
-      });
-    }
   }
 
   chips.forEach((chip, i) => {
