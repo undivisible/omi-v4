@@ -81,6 +81,16 @@ final class AuthController extends ChangeNotifier {
       receipt = await _receiptFor(session.uid);
     } catch (_) {}
     _authenticated(session, consentGranted: true, processingConsent: receipt);
+    // Typing a code is the person asking for this account on this device, so
+    // the receipt every request is refused without is recorded here rather
+    // than left to each surface to remember — which the desktop pane and the
+    // onboarding gate both did not, leaving a session that looked signed in
+    // and could do nothing. Restoring or switching accounts is not this: a
+    // subject that did not just ask still has to consent for itself.
+    if (_snapshot.phase == AuthPhase.signedIn &&
+        !_snapshot.hasProcessingAuthority) {
+      await grantProcessingConsent();
+    }
   }
 
   Future<void> restoreSession() async {

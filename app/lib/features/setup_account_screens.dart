@@ -936,15 +936,7 @@ class _SignInWithCodeTileState extends State<SignInWithCodeTile> {
     if (_busy) return;
     setState(() => _busy = true);
     try {
-      final auth = widget.services.auth;
-      await auth.signInWithChannelCode(_code.text);
-      // Mobile and web both record the receipt the moment they sign in, and
-      // every worker request is refused without one. A desktop that skipped it
-      // read as signed in on this pane while nothing it asked for was allowed.
-      if (auth.snapshot.phase == AuthPhase.signedIn &&
-          !auth.snapshot.hasProcessingAuthority) {
-        await auth.grantProcessingConsent();
-      }
+      await widget.services.auth.signInWithChannelCode(_code.text);
     } finally {
       if (mounted) setState(() => _busy = false);
     }

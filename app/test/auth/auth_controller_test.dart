@@ -76,6 +76,16 @@ void main() {
     expect((await controller.validSession())?.uid, 'firebase-uid');
   });
 
+  test('signing in with a code finishes signing in', () async {
+    final gateway = _FakeAuthGateway(session);
+    final controller = AuthController(gateway);
+
+    await controller.signInWithChannelCode('ABC1234');
+
+    expect(controller.snapshot.standing, AccountStanding.active);
+    expect((await controller.validSession())?.uid, 'firebase-uid');
+  });
+
   test('OAuth failure remains typed and does not create a session', () async {
     final gateway = _FakeAuthGateway(session)
       ..failure = const AuthFailure(
@@ -429,11 +439,13 @@ final class _FakeAuthGateway implements AuthGateway {
   final bool supportsDesktopBrowserHandoff;
 
   @override
-  bool get supportsChannelCode => false;
+  bool get supportsChannelCode => true;
 
   @override
-  Future<AuthSession> signInWithChannelCode(String code) =>
-      throw UnimplementedError();
+  Future<AuthSession> signInWithChannelCode(String code) async {
+    if (failure != null) throw AuthOperationException(failure!);
+    return session;
+  }
 
   @override
   AuthSession? get currentSession => initialSession;
