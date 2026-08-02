@@ -244,6 +244,79 @@ pub(crate) fn bind(
     })
 }
 
+/// One element of a snapshot, reduced to what decides whether the model can
+/// name it in an action. The full accessibility tree praefectus validates runs
+/// to megabytes; everything dropped here is either unroutable or something the
+/// model cannot act on anyway.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub(crate) struct ObservedElement {
+    pub(crate) tag: String,
+    pub(crate) role: String,
+    pub(crate) name: Option<String>,
+    pub(crate) invokable: bool,
+    pub(crate) editable: bool,
+    /// False when another element shares this name. `bind` refuses an
+    /// ambiguous name, so the model has to be told before it spends an
+    /// approval round on one.
+    pub(crate) unambiguous: bool,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub(crate) struct Observation {
+    pub(crate) elements: Vec<ObservedElement>,
+    /// True when elements were left out, by praefectus or by the cap below.
+    /// Without it a shortened list reads as a complete one, and the model
+    /// concludes a control it cannot see does not exist.
+    pub(crate) truncated: bool,
+}
+
+/// The most elements one snapshot hands the model. praefectus allows 4096,
+/// which is a prompt-sized document on its own.
+pub(crate) const MAX_OBSERVED_ELEMENTS: usize = 80;
+
+#[cfg(target_os = "macos")]
+pub(crate) fn observe(cancellation: &CancellationToken) -> Result<Observation, ComputerUseError> {
+    let deadline_at_ms = now_ms().saturating_add(30_000);
+    let executor = NativeExecutor::default();
+    let observation = executor
+        .observe_semantic(cancellation, deadline_at_ms)
+        .map_err(|_| ComputerUseError::TargetUnavailable)?;
+    observation
+        .validate(now_ms())
+        .map_err(|_| ComputerUseError::TargetUnavailable)?;
+    // An element the protocol would refuse to route is worse than no element:
+    // naming it costs a whole approval round that can only end in failure. Only
+    // what is actionable right now is worth the model's attention.
+    let actionable: Vec<_> = observation
+        .elements
+        .iter()
+        .filter(|element| {
+            element.actionability.visible
+                && element.actionability.enabled
+                && (element.actionability.invokable || element.actionability.editable)
+        })
+        .collect();
+    let truncated = observation.truncated || actionable.len() > MAX_OBSERVED_ELEMENTS;
+    let elements = actionable
+        .into_iter()
+        .take(MAX_OBSERVED_ELEMENTS)
+        .map(|element| ObservedElement {
+            tag: element.tag.clone(),
+            role: element.role.clone(),
+            name: element.name.clone(),
+            invokable: element.actionability.invokable,
+            editable: element.actionability.editable,
+            unambiguous: element.actionability.unambiguous,
+        })
+        .collect();
+    Ok(Observation {
+        elements,
+        truncated,
+    })
+}
+
 #[cfg(target_os = "macos")]
 pub(crate) fn cancellation_token() -> CancellationToken {
     CancellationToken::default()

@@ -16,13 +16,20 @@ Source: `app/native/hub/src/computer_use.rs`, the tool-call plumbing in
 
 ## 1. What it can drive
 
-Two tools are offered to the provider, and only when the platform actually
+Three tools are offered to the provider, and only when the platform actually
 supports them:
 
-| Tool | Arguments | Effect |
-| --- | --- | --- |
-| `computer_invoke` | `target_name`, `background_only` | Invoke the accessible element with that exact name. |
-| `computer_set_value` | `target_name`, `value`, `background_only` | Set the value of the editable accessible element with that exact name. |
+| Tool | Arguments | Effect | Fenced |
+| --- | --- | --- | --- |
+| `computer_observe` | none | List the actionable elements on screen, with the exact names the other two take. | No — it reads. |
+| `computer_invoke` | `target_name`, `background_only` | Invoke the accessible element with that exact name. | Yes. |
+| `computer_set_value` | `target_name`, `value`, `background_only` | Set the value of the editable accessible element with that exact name. | Yes. |
+
+`computer_observe` is what stops `target_name` from being a guess. It runs
+immediately, without an approval, because reading the accessibility tree changes
+nothing; its result rejoins the conversation and the model answers again. It is
+bounded to 80 actionable elements and 8 KB of text, and says so when it drops
+anything, because a shortened list reads to a model as a complete one.
 
 There is no mouse, no key synthesis, no screenshot loop and no coordinate space.
 Actions are addressed semantically, through the platform accessibility tree by
@@ -45,8 +52,8 @@ Provider output is untrusted input, and `runtime.rs` treats a malformed tool
 call as a failed turn rather than something to repair.
 
 * A `ToolCallStart` is rejected unless computer-use tools are actually active,
-  the call id is 1–256 bytes of `[A-Za-z0-9_-]`, the tool name is one of the two
-  above, and the call id has not already been seen in this stream.
+  the call id is 1–256 bytes of `[A-Za-z0-9_-]`, the tool name is one the turn
+  actually offered, and the call id has not already been seen in this stream.
 * Arguments are deserialized into structs declared `#[serde(deny_unknown_fields)]`
   with every field required, so an extra or missing key fails rather than
   defaulting.

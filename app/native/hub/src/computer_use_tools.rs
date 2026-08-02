@@ -21,13 +21,16 @@ struct ComputerSetValueArgs {
     background_only: bool,
 }
 
-pub(crate) fn valid_computer_tool_identity(call_id: &str, tool_name: &str) -> bool {
+pub(crate) fn valid_call_id(call_id: &str) -> bool {
     !call_id.is_empty()
         && call_id.len() <= 256
         && call_id
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
-        && matches!(tool_name, COMPUTER_INVOKE_TOOL | COMPUTER_SET_VALUE_TOOL)
+}
+
+pub(crate) fn valid_computer_tool_identity(call_id: &str, tool_name: &str) -> bool {
+    valid_call_id(call_id) && matches!(tool_name, COMPUTER_INVOKE_TOOL | COMPUTER_SET_VALUE_TOOL)
 }
 
 /// Builds the same `ActionProposal` chat and Live both register for approval.

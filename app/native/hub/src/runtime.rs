@@ -3,6 +3,11 @@ use crate::approval::{
     PENDING_PROPOSAL_CAPACITY, ProposalRegistration, TERMINAL_PROPOSAL_CAPACITY,
 };
 use crate::approval::{ProposalDecisionError, ProposalRegistry, ProposalStatus, unix_time_ms};
+use crate::assistant_tools::{
+    COMPUTER_OBSERVE_TOOL, MAX_TOOL_ROUNDS, MEMORY_SEARCH_TOOL, PROFILE_READ_TOOL, ToolEffect,
+    computer_observe_tool, memory_search_query, render_observation, tool_effect,
+    truncated_tool_result, user_data_tools, valid_tool_identity,
+};
 use crate::byok_tier::ByokProvider;
 use crate::capture_service::CaptureControl;
 use crate::chat_router::ChatRouter;
@@ -12,7 +17,6 @@ use crate::computer_use::{
 };
 use crate::computer_use_tools::{
     COMPUTER_INVOKE_TOOL, COMPUTER_SET_VALUE_TOOL, computer_use_proposal,
-    valid_computer_tool_identity,
 };
 use crate::hosted_search::{SearchBackend, dispatch as dispatch_hosted_search};
 use crate::live_voice::LiveFunctionCall;
@@ -45,7 +49,11 @@ use crate::transcription::{
 };
 use crate::transcription::{StartTranscription, TranscriptionControl};
 use futures::StreamExt;
-use rs_ai_core::{StreamEvent, ToolChoice, ToolDefinition};
+use futures::future::BoxFuture;
+use rs_ai_core::{
+    AiError, ContentPart, Message, Prompt, Role, StreamEvent, ToolCallRequest, ToolChoice,
+    ToolDefinition,
+};
 use std::collections::{HashMap, VecDeque, hash_map::Entry};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::path::{Path, PathBuf};
@@ -204,6 +212,23 @@ async fn receive_provider_event(
     }
 }
 
+/// What the read-only tools of one turn are allowed to read. The provider is
+/// built from configuration alone and never sees runtime state, so the turn
+/// hands it one of these instead of the provider reaching for a database.
+/// Nothing effectful is reachable through here by construction.
+trait AssistantTurnTools: Send + Sync {
+    fn memory_search(
+        &self,
+        query: String,
+        cancellation: CancellationToken,
+    ) -> BoxFuture<'static, Result<Option<String>, String>>;
+
+    fn profile(
+        &self,
+        cancellation: CancellationToken,
+    ) -> BoxFuture<'static, Result<Option<String>, String>>;
+}
+
 trait AssistantProvider: Send + Sync {
     fn dispatch(
         &self,
@@ -211,6 +236,7 @@ trait AssistantProvider: Send + Sync {
         text: String,
         tier: ModelTier,
         cancellation: CancellationToken,
+        tools: Option<Arc<dyn AssistantTurnTools>>,
     ) -> mpsc::Receiver<Result<AssistantProviderEvent, String>>;
 
     /// The model id this provider would dispatch `tier` to, so the tier the
@@ -238,6 +264,7 @@ impl AssistantProvider for UnavailableAssistantProvider {
         _text: String,
         _tier: ModelTier,
         _cancellation: CancellationToken,
+        _tools: Option<Arc<dyn AssistantTurnTools>>,
     ) -> mpsc::Receiver<Result<AssistantProviderEvent, String>> {
         let (sender, receiver) = mpsc::channel(1);
         let reason = self.reason.clone();
@@ -862,6 +889,7 @@ impl AssistantProvider for RsAiAssistantProvider {
         text: String,
         tier: ModelTier,
         cancellation: CancellationToken,
+        tools: Option<Arc<dyn AssistantTurnTools>>,
     ) -> mpsc::Receiver<Result<AssistantProviderEvent, String>> {
         let (sender, receiver) = mpsc::channel(COMMAND_QUEUE_CAPACITY);
         let config = self.config.clone();
@@ -967,107 +995,258 @@ impl AssistantProvider for RsAiAssistantProvider {
                     return;
                 }
             }
-            let base = match config.kind {
-                AssistantProviderKind::OpenAi => rs_ai::chatgpt(),
-                AssistantProviderKind::Anthropic => rs_ai::claude(),
-                AssistantProviderKind::Gemini => rs_ai::gemini(),
-                AssistantProviderKind::Xai => rs_ai::xai(),
-                AssistantProviderKind::Compatible | AssistantProviderKind::Worker => {
-                    rs_ai::compatible(config.endpoint.unwrap_or_default())
-                }
-            }
-            .model(model);
-            let client = base.api_key(config.credential);
             let computer_tools_active =
                 computer_use_enabled && computer_use_available() && tier != ModelTier::Speed;
-            let client = if computer_tools_active {
-                client
-                    .with_tools(computer_use_tools())
-                    .with_tool_choice(ToolChoice::Auto)
-            } else {
-                client
-            };
-            let connected = tokio::select! {
-                () = cancellation.cancelled() => return,
-                result = tokio::time::timeout(PROVIDER_CONNECT_TIMEOUT, client.stream(text)) => result,
-            };
-            let stream = match connected {
-                Ok(stream) => stream,
-                Err(_) => {
-                    let _ = sender
-                        .send(Err("assistant provider connection timed out".to_owned()))
-                        .await;
-                    return;
+            let mut catalogue = Vec::new();
+            if computer_tools_active {
+                catalogue.push(computer_observe_tool());
+                catalogue.extend(computer_use_tools());
+            }
+            if tools.is_some() {
+                catalogue.extend(user_data_tools());
+            }
+            // A tool result attaches to a conversation, not to a prompt: it has
+            // to arrive as its own message answering the call that asked for
+            // it, which a single `stream(text)` has nowhere to put.
+            let messages = vec![Message::user(text)];
+            // Owned clones, not borrows: an async closure that borrowed the
+            // turn's sender could not be proven `Send` for every lifetime the
+            // spawned task might hand it.
+            let round_sender = sender.clone();
+            let round_cancellation = cancellation.clone();
+            let open_round = async move |round: u32, messages: &[Message]| {
+                // `stream_prompt` consumes the builder, so every round builds
+                // its own. A builder is configuration, not a connection.
+                let base = match config.kind {
+                    AssistantProviderKind::OpenAi => rs_ai::chatgpt(),
+                    AssistantProviderKind::Anthropic => rs_ai::claude(),
+                    AssistantProviderKind::Gemini => rs_ai::gemini(),
+                    AssistantProviderKind::Xai => rs_ai::xai(),
+                    AssistantProviderKind::Compatible | AssistantProviderKind::Worker => {
+                        rs_ai::compatible(config.endpoint.clone().unwrap_or_default())
+                    }
                 }
-            };
-            let mut stream = match stream {
-                Ok(stream) => stream,
-                Err(_) => {
-                    let _ = sender
-                        .send(Err("assistant provider connection failed".to_owned()))
-                        .await;
-                    return;
-                }
-            };
-            let mut tool_names = HashMap::new();
-            loop {
-                let next = tokio::select! {
-                    () = cancellation.cancelled() => return,
-                    result = tokio::time::timeout(PROVIDER_EVENT_TIMEOUT, stream.next()) => result,
+                .model(model.clone());
+                let client = base.api_key(config.credential.clone());
+                // The last round carries no tools at all. A cap the model is
+                // merely asked to respect is not a cap; withholding the tools
+                // is what actually ends the turn.
+                let client = if catalogue.is_empty() || round == MAX_TOOL_ROUNDS {
+                    client
+                } else {
+                    client
+                        .with_tools(catalogue.clone())
+                        .with_tool_choice(ToolChoice::Auto)
                 };
-                let Some(next) = (match next {
-                    Ok(next) => next,
-                    Err(_) => {
-                        let _ = sender
-                            .send(Err("assistant provider stream timed out".to_owned()))
+                let connected = tokio::select! {
+                    () = round_cancellation.cancelled() => return None,
+                    result = tokio::time::timeout(
+                        PROVIDER_CONNECT_TIMEOUT,
+                        client.stream_prompt(Prompt::Messages(messages.to_vec())),
+                    ) => result,
+                };
+                match connected {
+                    Ok(Ok(stream)) => Some(stream),
+                    Ok(Err(_)) => {
+                        let _ = round_sender
+                            .send(Err("assistant provider connection failed".to_owned()))
                             .await;
-                        return;
+                        None
                     }
-                }) else {
-                    // Some compatible providers (including Mercury over OpenRouter)
-                    // close the HTTP stream without a MessageEnd frame. Treat an
-                    // exhausted stream like hosted search does so the UI always
-                    // receives a terminal delta.
+                    Err(_) => {
+                        let _ = round_sender
+                            .send(Err("assistant provider connection timed out".to_owned()))
+                            .await;
+                        None
+                    }
+                }
+            };
+            run_tool_rounds(
+                open_round,
+                messages,
+                &request_id,
+                computer_tools_active,
+                tools.as_ref(),
+                &sender,
+                &cancellation,
+            )
+            .await;
+        });
+        receiver
+    }
+}
+
+/// Drives a turn across at most `MAX_TOOL_ROUNDS` tool rounds, asking
+/// `open_round` for a fresh model stream each time the conversation grew a
+/// tool result. `open_round` reports its own failures and answers `None`.
+async fn run_tool_rounds<S, F>(
+    mut open_round: F,
+    mut messages: Vec<Message>,
+    request_id: &str,
+    computer_tools_active: bool,
+    tools: Option<&Arc<dyn AssistantTurnTools>>,
+    sender: &mpsc::Sender<Result<AssistantProviderEvent, String>>,
+    cancellation: &CancellationToken,
+) where
+    S: futures::Stream<Item = Result<StreamEvent, AiError>> + Unpin,
+    F: AsyncFnMut(u32, &[Message]) -> Option<S>,
+{
+    for round in 0..=MAX_TOOL_ROUNDS {
+        let Some(mut stream) = open_round(round, &messages).await else {
+            return;
+        };
+        match run_tool_round(
+            &mut stream,
+            request_id,
+            computer_tools_active,
+            tools,
+            sender,
+            cancellation,
+        )
+        .await
+        {
+            ToolRoundOutcome::Done => return,
+            ToolRoundOutcome::Continue(appended) => messages.extend(appended),
+        }
+    }
+    // Reached only when a model keeps calling tools right through the last
+    // round, and every path that ends a turn owes the UI a terminal delta.
+    let _ = sender
+        .send(Ok(AssistantProviderEvent::Delta {
+            text: String::new(),
+            final_segment: true,
+        }))
+        .await;
+}
+
+enum ToolRoundOutcome {
+    /// The turn is over and its terminal event has already been sent.
+    Done,
+    /// Read-only results to append to the conversation before asking again.
+    Continue(Vec<Message>),
+}
+
+/// A tool the turn never offered is not a tool the model may call, even when
+/// the hub knows the name: the user-data tools only exist when the turn was
+/// given a runtime to read them out of.
+fn tool_call_is_offered(
+    tool_name: &str,
+    computer_tools_active: bool,
+    user_data_available: bool,
+) -> bool {
+    match tool_name {
+        COMPUTER_INVOKE_TOOL | COMPUTER_SET_VALUE_TOOL | COMPUTER_OBSERVE_TOOL => {
+            computer_tools_active
+        }
+        MEMORY_SEARCH_TOOL | PROFILE_READ_TOOL => user_data_available,
+        _ => false,
+    }
+}
+
+/// One request to the model and everything it asked for in reply. Split out of
+/// `dispatch` so the round loop can be driven by a scripted stream in tests
+/// instead of by a provider.
+async fn run_tool_round<S>(
+    stream: &mut S,
+    request_id: &str,
+    computer_tools_active: bool,
+    tools: Option<&Arc<dyn AssistantTurnTools>>,
+    sender: &mpsc::Sender<Result<AssistantProviderEvent, String>>,
+    cancellation: &CancellationToken,
+) -> ToolRoundOutcome
+where
+    S: futures::Stream<Item = Result<StreamEvent, AiError>> + Unpin,
+{
+    let mut tool_names = HashMap::new();
+    let mut spoken = String::new();
+    let mut calls: Vec<ContentPart> = Vec::new();
+    let mut results: Vec<Message> = Vec::new();
+    // A fenced action was proposed, so the turn stops at the end of this
+    // round: nothing ran, and there is no outcome to hand back.
+    let mut proposed = false;
+    loop {
+        let next = tokio::select! {
+            () = cancellation.cancelled() => return ToolRoundOutcome::Done,
+            result = tokio::time::timeout(PROVIDER_EVENT_TIMEOUT, stream.next()) => result,
+        };
+        let next = match next {
+            Ok(next) => next,
+            Err(_) => {
+                let _ = sender
+                    .send(Err("assistant provider stream timed out".to_owned()))
+                    .await;
+                return ToolRoundOutcome::Done;
+            }
+        };
+        let Some(next) = next else {
+            // Some compatible providers (including Mercury over OpenRouter)
+            // close the HTTP stream without a MessageEnd frame. Treat an
+            // exhausted stream like hosted search does so the UI always
+            // receives a terminal delta.
+            return finish_tool_round(spoken, calls, results, proposed, sender).await;
+        };
+        let event = match next {
+            Ok(StreamEvent::TextDelta { delta }) => {
+                spoken.push_str(&delta);
+                Ok(AssistantProviderEvent::Delta {
+                    text: delta,
+                    final_segment: false,
+                })
+            }
+            Ok(StreamEvent::ToolCallStart { call_id, tool_name }) => {
+                if !tool_call_is_offered(&tool_name, computer_tools_active, tools.is_some())
+                    || !valid_tool_identity(&call_id, &tool_name)
+                    || tool_names.insert(call_id, tool_name).is_some()
+                {
+                    Err("assistant provider returned an invalid computer-use tool call".to_owned())
+                } else {
+                    continue;
+                }
+            }
+            Ok(StreamEvent::ToolCallEnd { call_id, arguments }) => {
+                let Some(tool_name) = tool_names.remove(&call_id) else {
                     let _ = sender
-                        .send(Ok(AssistantProviderEvent::Delta {
-                            text: String::new(),
-                            final_segment: true,
-                        }))
+                        .send(Err(
+                            "assistant provider returned an invalid computer-use tool call"
+                                .to_owned(),
+                        ))
                         .await;
-                    return;
+                    return ToolRoundOutcome::Done;
                 };
-                let event = match next {
-                    Ok(StreamEvent::TextDelta { delta }) => Ok(AssistantProviderEvent::Delta {
-                        text: delta,
-                        final_segment: false,
-                    }),
-                    Ok(StreamEvent::ToolCallStart { call_id, tool_name }) => {
-                        if !computer_tools_active
-                            || !valid_computer_tool_identity(&call_id, &tool_name)
-                            || tool_names.insert(call_id, tool_name).is_some()
-                        {
-                            Err(
-                                "assistant provider returned an invalid computer-use tool call"
-                                    .to_owned(),
-                            )
-                        } else {
-                            continue;
-                        }
+                match tool_effect(&tool_name) {
+                    Some(ToolEffect::Read) => {
+                        // Reading costs nobody an approval, so it runs now and
+                        // its result rejoins the conversation. The empty delta
+                        // ahead of it is a keep-alive: the turn's reader gives
+                        // up on silence, and a screen snapshot is not instant.
+                        let _ = sender
+                            .send(Ok(AssistantProviderEvent::Delta {
+                                text: String::new(),
+                                final_segment: false,
+                            }))
+                            .await;
+                        let result =
+                            run_read_only_tool(&tool_name, &arguments, tools, cancellation).await;
+                        calls.push(ContentPart::ToolCall {
+                            call: ToolCallRequest {
+                                id: call_id.clone(),
+                                name: tool_name,
+                                arguments,
+                            },
+                        });
+                        results.push(Message::tool_result(
+                            call_id,
+                            truncated_tool_result(&result),
+                        ));
+                        continue;
                     }
-                    Ok(StreamEvent::ToolCallEnd { call_id, arguments }) => {
-                        let Some(tool_name) = tool_names.remove(&call_id) else {
-                            let _ = sender
-                                .send(Err(
-                                    "assistant provider returned an invalid computer-use tool call"
-                                        .to_owned(),
-                                ))
-                                .await;
-                            return;
-                        };
-                        match computer_use_proposal(&request_id, &call_id, &tool_name, arguments) {
+                    Some(ToolEffect::Write) => {
+                        let event = match computer_use_proposal(
+                            request_id, &call_id, &tool_name, arguments,
+                        ) {
                             Ok(mut proposal) => match proposal.computer_action.clone() {
                                 Some(action) => {
-                                    match bind_computer_use_action(action, &cancellation).await {
+                                    match bind_computer_use_action(action, cancellation).await {
                                         Ok(bound_computer_action) => {
                                             proposal.expires_at_ms = Some(
                                                 proposal
@@ -1093,42 +1272,137 @@ impl AssistantProvider for RsAiAssistantProvider {
                                 ),
                             },
                             Err(message) => Err(message),
-                        }
+                        };
+                        proposed = proposed || event.is_ok();
+                        event
                     }
-                    Ok(StreamEvent::MessageEnd { .. }) => {
-                        if tool_names.is_empty() {
-                            Ok(AssistantProviderEvent::Delta {
-                                text: String::new(),
-                                final_segment: true,
-                            })
-                        } else {
-                            Err(
-                                "assistant provider returned an incomplete computer-use tool call"
-                                    .to_owned(),
-                            )
-                        }
-                    }
-                    Ok(StreamEvent::Error { .. }) => {
-                        Err("assistant provider stream failed".to_owned())
-                    }
-                    Ok(_) => continue,
-                    Err(_) => Err("assistant provider stream failed".to_owned()),
-                };
-                let terminal = event.is_err()
-                    || matches!(
-                        &event,
-                        Ok(AssistantProviderEvent::Delta {
-                            final_segment: true,
-                            ..
-                        })
-                    );
-                if sender.send(event).await.is_err() || terminal {
-                    return;
+                    None => Err(
+                        "assistant provider returned an invalid computer-use tool call".to_owned(),
+                    ),
                 }
             }
-        });
-        receiver
+            Ok(StreamEvent::MessageEnd { .. }) => {
+                if tool_names.is_empty() {
+                    return finish_tool_round(spoken, calls, results, proposed, sender).await;
+                }
+                Err("assistant provider returned an incomplete computer-use tool call".to_owned())
+            }
+            Ok(StreamEvent::Error { .. }) => Err("assistant provider stream failed".to_owned()),
+            Ok(_) => continue,
+            Err(_) => Err("assistant provider stream failed".to_owned()),
+        };
+        let terminal = event.is_err();
+        if sender.send(event).await.is_err() || terminal {
+            return ToolRoundOutcome::Done;
+        }
     }
+}
+
+async fn finish_tool_round(
+    spoken: String,
+    calls: Vec<ContentPart>,
+    results: Vec<Message>,
+    proposed: bool,
+    sender: &mpsc::Sender<Result<AssistantProviderEvent, String>>,
+) -> ToolRoundOutcome {
+    if results.is_empty() || proposed {
+        let _ = sender
+            .send(Ok(AssistantProviderEvent::Delta {
+                text: String::new(),
+                final_segment: true,
+            }))
+            .await;
+        return ToolRoundOutcome::Done;
+    }
+    // A provider only accepts a tool result that answers a call it can see in
+    // the history, so the assistant turn that made the calls is replayed ahead
+    // of the results it produced.
+    let mut content = Vec::new();
+    if !spoken.trim().is_empty() {
+        content.push(ContentPart::Text { text: spoken });
+    }
+    content.extend(calls);
+    let mut appended = vec![Message {
+        role: Role::Assistant,
+        content,
+        name: None,
+        metadata: HashMap::new(),
+    }];
+    appended.extend(results);
+    ToolRoundOutcome::Continue(appended)
+}
+
+/// Runs a read-only tool and renders its outcome as the text the model reads.
+/// A failure comes back as a result rather than as a turn error: the model can
+/// route around "no memory is configured", it cannot route around a dead
+/// stream.
+async fn run_read_only_tool(
+    tool_name: &str,
+    arguments: &serde_json::Value,
+    tools: Option<&Arc<dyn AssistantTurnTools>>,
+    cancellation: &CancellationToken,
+) -> String {
+    match tool_name {
+        COMPUTER_OBSERVE_TOOL => match observe_screen(cancellation).await {
+            Ok(observation) => render_observation(&observation),
+            Err(message) => message,
+        },
+        MEMORY_SEARCH_TOOL => {
+            let query = match memory_search_query(arguments) {
+                Ok(query) => query,
+                Err(message) => return message,
+            };
+            let Some(tools) = tools else {
+                return "No memory is available on this device.".to_owned();
+            };
+            match tools.memory_search(query, cancellation.clone()).await {
+                Ok(Some(lines)) => lines,
+                Ok(None) => "Nothing in the user's memory matched that query.".to_owned(),
+                Err(_) => "The user's memory could not be searched.".to_owned(),
+            }
+        }
+        PROFILE_READ_TOOL => {
+            let Some(tools) = tools else {
+                return "No profile is available on this device.".to_owned();
+            };
+            match tools.profile(cancellation.clone()).await {
+                Ok(Some(lines)) => lines,
+                Ok(None) => "Nothing is recorded about the user yet.".to_owned(),
+                Err(_) => "The user's profile could not be read.".to_owned(),
+            }
+        }
+        _ => "That tool is not available.".to_owned(),
+    }
+}
+
+#[cfg(target_os = "macos")]
+async fn observe_screen(
+    cancellation: &CancellationToken,
+) -> Result<crate::computer_use::Observation, String> {
+    let protocol_cancellation = crate::computer_use::cancellation_token();
+    if cancellation.is_cancelled() {
+        crate::computer_use::cancel(&protocol_cancellation);
+    }
+    let watcher_source = cancellation.clone();
+    let watcher_target = protocol_cancellation.clone();
+    let watcher = tokio::spawn(async move {
+        watcher_source.cancelled().await;
+        crate::computer_use::cancel(&watcher_target);
+    });
+    let task = spawn_blocking(move || crate::computer_use::observe(&protocol_cancellation));
+    let result = task
+        .await
+        .map_err(|_| "The screen could not be observed.".to_owned())?
+        .map_err(|_| "The screen could not be observed.".to_owned());
+    watcher.abort();
+    result
+}
+
+#[cfg(not(target_os = "macos"))]
+async fn observe_screen(
+    _cancellation: &CancellationToken,
+) -> Result<crate::computer_use::Observation, String> {
+    Err("Computer use is unavailable on this platform.".to_owned())
 }
 
 /// The provider configuration the hub starts with: the user's configured
@@ -1188,7 +1462,15 @@ async fn generate_once(
     cancellation: &CancellationToken,
 ) -> Option<String> {
     let request_id = format!("{label}-{}", unix_time_ms());
-    let mut events = provider.dispatch(request_id, prompt.to_owned(), tier, cancellation.clone());
+    let mut events = provider.dispatch(
+        request_id,
+        prompt.to_owned(),
+        tier,
+        cancellation.clone(),
+        // A one-shot generation composes a document; it has nothing to look up
+        // and nothing to act on.
+        None,
+    );
     let mut text = String::new();
     loop {
         match receive_provider_event(&mut events, cancellation, PROVIDER_EVENT_TIMEOUT).await {
@@ -2508,13 +2790,75 @@ fn combined_context(
     }
 }
 
+/// The turn's read-only tools, backed by the same recall the prompt's own
+/// context is built from. Wiring them to `local_memory_context`,
+/// `cloud_memory_context` and `local_profile_context` rather than to fresh
+/// queries keeps a tool answer and a prompt context from ever disagreeing
+/// about what the hub knows.
+struct RuntimeAssistantTools {
+    state: Arc<Mutex<RuntimeState>>,
+}
+
+impl AssistantTurnTools for RuntimeAssistantTools {
+    fn memory_search(
+        &self,
+        query: String,
+        cancellation: CancellationToken,
+    ) -> BoxFuture<'static, Result<Option<String>, String>> {
+        let state = Arc::clone(&self.state);
+        Box::pin(async move {
+            if state.lock().await.cloud_memory.is_some() {
+                let items = cloud_memory_context(
+                    state.as_ref(),
+                    &query,
+                    LOCAL_MEMORY_CONTEXT_ITEMS,
+                    &cancellation,
+                )
+                .await?;
+                return Ok(items.map(|items| {
+                    items
+                        .into_iter()
+                        .map(|item| format!("- {}", item.content))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                }));
+            }
+            Ok(local_memory_context(state.as_ref(), &query, &cancellation).await)
+        })
+    }
+
+    fn profile(
+        &self,
+        cancellation: CancellationToken,
+    ) -> BoxFuture<'static, Result<Option<String>, String>> {
+        let state = Arc::clone(&self.state);
+        Box::pin(async move {
+            let user_profile_path = state.lock().await.user_profile_path.clone();
+            let about_user = user_profile_path
+                .as_deref()
+                .and_then(crate::user_profile::read_user_profile)
+                .as_ref()
+                .and_then(crate::user_profile::format_about_user);
+            let profile = local_profile_context(state.as_ref(), &cancellation).await;
+            let mut lines = Vec::new();
+            if let Some(about) = about_user {
+                lines.push(about);
+            }
+            if let Some(profile) = profile {
+                lines.push(profile.lines);
+            }
+            Ok((!lines.is_empty()).then(|| lines.join("\n")))
+        })
+    }
+}
+
 #[expect(
     clippy::too_many_arguments,
     reason = "the assistant turn carries independently sourced inputs; grouping them would only relabel the arity"
 )]
 async fn dispatch_assistant(
     request_id: &str,
-    state: &Mutex<RuntimeState>,
+    state: &Arc<Mutex<RuntimeState>>,
     provider: Arc<dyn AssistantProvider>,
     text: String,
     memory_context: Option<String>,
@@ -2698,6 +3042,9 @@ async fn dispatch_assistant(
         prompt,
         routed_tier,
         cancellation.clone(),
+        Some(Arc::new(RuntimeAssistantTools {
+            state: Arc::clone(state),
+        })),
     );
     loop {
         let next =
@@ -5611,6 +5958,239 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::Instant;
 
+    /// A stand-in for the turn's runtime so the round loop can be tested
+    /// without a memory database behind it.
+    struct ScriptedTurnTools {
+        memory: Option<String>,
+        profile: Option<String>,
+    }
+
+    impl AssistantTurnTools for ScriptedTurnTools {
+        fn memory_search(
+            &self,
+            _query: String,
+            _cancellation: CancellationToken,
+        ) -> BoxFuture<'static, Result<Option<String>, String>> {
+            let memory = self.memory.clone();
+            Box::pin(async move { Ok(memory) })
+        }
+
+        fn profile(
+            &self,
+            _cancellation: CancellationToken,
+        ) -> BoxFuture<'static, Result<Option<String>, String>> {
+            let profile = self.profile.clone();
+            Box::pin(async move { Ok(profile) })
+        }
+    }
+
+    fn message_end() -> StreamEvent {
+        StreamEvent::MessageEnd {
+            finish_reason: rs_ai_core::FinishReason::Stop,
+            usage: None,
+        }
+    }
+
+    fn scripted_stream(
+        events: Vec<StreamEvent>,
+    ) -> impl futures::Stream<Item = Result<StreamEvent, AiError>> + Unpin {
+        futures::stream::iter(events.into_iter().map(Ok))
+    }
+
+    fn tool_call(call_id: &str, tool_name: &str, arguments: serde_json::Value) -> Vec<StreamEvent> {
+        vec![
+            StreamEvent::ToolCallStart {
+                call_id: call_id.to_owned(),
+                tool_name: tool_name.to_owned(),
+            },
+            StreamEvent::ToolCallEnd {
+                call_id: call_id.to_owned(),
+                arguments,
+            },
+        ]
+    }
+
+    fn drain(
+        receiver: &mut mpsc::Receiver<Result<AssistantProviderEvent, String>>,
+    ) -> Vec<Result<AssistantProviderEvent, String>> {
+        let mut events = Vec::new();
+        while let Ok(event) = receiver.try_recv() {
+            events.push(event);
+        }
+        events
+    }
+
+    #[tokio::test]
+    async fn a_read_only_tool_result_reaches_the_next_model_turn() {
+        let (sender, mut receiver) = mpsc::channel(16);
+        let tools: Arc<dyn AssistantTurnTools> = Arc::new(ScriptedTurnTools {
+            memory: Some("- I work at Acme".to_owned()),
+            profile: None,
+        });
+        let mut events = tool_call(
+            "call_1",
+            MEMORY_SEARCH_TOOL,
+            serde_json::json!({"query": "work"}),
+        );
+        events.push(message_end());
+        let outcome = run_tool_round(
+            &mut scripted_stream(events),
+            "chat-tools-1",
+            false,
+            Some(&tools),
+            &sender,
+            &CancellationToken::new(),
+        )
+        .await;
+        let ToolRoundOutcome::Continue(appended) = outcome else {
+            panic!("a completed read-only call continues the turn");
+        };
+        assert_eq!(appended.len(), 2);
+        assert!(matches!(appended[0].role, Role::Assistant));
+        assert!(matches!(
+            appended[0].content.first(),
+            Some(ContentPart::ToolCall { call }) if call.name == MEMORY_SEARCH_TOOL
+        ));
+        assert!(matches!(appended[1].role, Role::Tool));
+        assert!(matches!(
+            appended[1].content.first(),
+            Some(ContentPart::ToolResult { result })
+                if result.call_id == "call_1" && result.content.contains("Acme")
+        ));
+        // Nothing terminal was sent: the turn is still going.
+        assert!(drain(&mut receiver).iter().all(|event| matches!(
+            event,
+            Ok(AssistantProviderEvent::Delta {
+                final_segment: false,
+                ..
+            })
+        )));
+    }
+
+    #[tokio::test]
+    async fn a_completed_tool_call_no_longer_ends_the_turn_as_incomplete() {
+        let (sender, mut receiver) = mpsc::channel(16);
+        let tools: Arc<dyn AssistantTurnTools> = Arc::new(ScriptedTurnTools {
+            memory: None,
+            profile: None,
+        });
+        let mut events = tool_call(
+            "call_1",
+            MEMORY_SEARCH_TOOL,
+            serde_json::json!({"query": "work"}),
+        );
+        events.push(message_end());
+        let outcome = run_tool_round(
+            &mut scripted_stream(events),
+            "chat-tools-2",
+            false,
+            Some(&tools),
+            &sender,
+            &CancellationToken::new(),
+        )
+        .await;
+        assert!(matches!(outcome, ToolRoundOutcome::Continue(_)));
+        assert!(!drain(&mut receiver).iter().any(Result::is_err));
+
+        // A call the model opened and never closed is still the failure the
+        // incomplete-call guard was written for.
+        let (sender, mut receiver) = mpsc::channel(16);
+        let outcome = run_tool_round(
+            &mut scripted_stream(vec![
+                StreamEvent::ToolCallStart {
+                    call_id: "call_2".to_owned(),
+                    tool_name: MEMORY_SEARCH_TOOL.to_owned(),
+                },
+                message_end(),
+            ]),
+            "chat-tools-3",
+            false,
+            Some(&tools),
+            &sender,
+            &CancellationToken::new(),
+        )
+        .await;
+        assert!(matches!(outcome, ToolRoundOutcome::Done));
+        assert!(drain(&mut receiver).iter().any(Result::is_err));
+    }
+
+    #[tokio::test]
+    async fn an_effectful_tool_call_is_never_run_and_never_feeds_the_model() {
+        let (sender, mut receiver) = mpsc::channel(16);
+        let mut events = tool_call(
+            "call_1",
+            COMPUTER_INVOKE_TOOL,
+            serde_json::json!({"target_name": "Save", "background_only": false}),
+        );
+        events.push(message_end());
+        let outcome = run_tool_round(
+            &mut scripted_stream(events),
+            "chat-tools-4",
+            true,
+            None,
+            &sender,
+            &CancellationToken::new(),
+        )
+        .await;
+        // Whether the bind succeeds depends on the host's accessibility
+        // permission, but neither outcome may put the action's result into the
+        // conversation: it has not happened, and it will not happen until the
+        // approval ledger says so.
+        assert!(matches!(outcome, ToolRoundOutcome::Done));
+        for event in drain(&mut receiver) {
+            match event {
+                Ok(AssistantProviderEvent::Proposal(_)) | Err(_) => {}
+                Ok(AssistantProviderEvent::Delta { text, .. }) => assert!(text.is_empty()),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_model_that_keeps_calling_tools_is_stopped_at_the_round_cap() {
+        let (sender, mut receiver) = mpsc::channel(64);
+        let tools: Arc<dyn AssistantTurnTools> = Arc::new(ScriptedTurnTools {
+            memory: Some("- I work at Acme".to_owned()),
+            profile: None,
+        });
+        let rounds = Arc::new(StdMutex::new(0_u32));
+        let counted = Arc::clone(&rounds);
+        let open_round = async move |_round: u32, _messages: &[Message]| {
+            *counted
+                .lock()
+                .unwrap_or_else(|error_value| panic!("round count locks: {error_value}")) += 1;
+            let mut events = tool_call(
+                "call_1",
+                MEMORY_SEARCH_TOOL,
+                serde_json::json!({"query": "work"}),
+            );
+            events.push(message_end());
+            Some(scripted_stream(events))
+        };
+        run_tool_rounds(
+            open_round,
+            vec![Message::user("what do you know about me?")],
+            "chat-tools-5",
+            false,
+            Some(&tools),
+            &sender,
+            &CancellationToken::new(),
+        )
+        .await;
+        assert_eq!(
+            *rounds
+                .lock()
+                .unwrap_or_else(|error_value| panic!("round count locks: {error_value}")),
+            MAX_TOOL_ROUNDS + 1
+        );
+        assert!(drain(&mut receiver).iter().any(|event| matches!(
+            event,
+            Ok(AssistantProviderEvent::Delta {
+                final_segment: true,
+                ..
+            })
+        )));
+    }
+
     fn lifecycle_memory(label: &str) -> (std::path::PathBuf, MemoryContext, zkr::Remembered) {
         let path = std::env::temp_dir().join(format!(
             "omi-v4-{label}-{}-{}.sqlite3",
@@ -6082,6 +6662,7 @@ mod tests {
             _text: String,
             _tier: ModelTier,
             _cancellation: CancellationToken,
+            _tools: Option<Arc<dyn AssistantTurnTools>>,
         ) -> mpsc::Receiver<Result<AssistantProviderEvent, String>> {
             let events = self
                 .events
@@ -6120,6 +6701,7 @@ mod tests {
             text: String,
             _tier: ModelTier,
             _cancellation: CancellationToken,
+            _tools: Option<Arc<dyn AssistantTurnTools>>,
         ) -> mpsc::Receiver<Result<AssistantProviderEvent, String>> {
             *self
                 .prompt
@@ -6145,6 +6727,7 @@ mod tests {
             text: String,
             _tier: ModelTier,
             _cancellation: CancellationToken,
+            _tools: Option<Arc<dyn AssistantTurnTools>>,
         ) -> mpsc::Receiver<Result<AssistantProviderEvent, String>> {
             *self
                 .prompt
@@ -6175,6 +6758,7 @@ mod tests {
             _text: String,
             _tier: ModelTier,
             _cancellation: CancellationToken,
+            _tools: Option<Arc<dyn AssistantTurnTools>>,
         ) -> mpsc::Receiver<Result<AssistantProviderEvent, String>> {
             let state = Arc::clone(&self.state);
             let proposal = self
@@ -7922,7 +8506,7 @@ mod tests {
         });
         dispatch_assistant(
             "chat-search-1",
-            state.as_ref(),
+            &state,
             Arc::clone(&provider),
             "what happened at the summit today?".to_owned(),
             None,
@@ -7956,7 +8540,7 @@ mod tests {
         });
         dispatch_assistant(
             "chat-ctx-1",
-            state.as_ref(),
+            &state,
             Arc::clone(&provider),
             "what coffee do I like?".to_owned(),
             Some("Relevant synced memory:\n- Sam prefers espresso".to_owned()),
@@ -7981,7 +8565,7 @@ mod tests {
 
         dispatch_assistant(
             "chat-ctx-2",
-            state.as_ref(),
+            &state,
             provider,
             "plain message".to_owned(),
             None,
@@ -8056,7 +8640,7 @@ mod tests {
         // overlay origin must bypass it so the tool pipeline stays in play.
         dispatch_assistant(
             "overlay-1",
-            state.as_ref(),
+            &state,
             provider,
             "open my latest draft".to_owned(),
             None,
@@ -8090,7 +8674,7 @@ mod tests {
         });
         dispatch_assistant(
             "chat-mem-1",
-            state.as_ref(),
+            &state,
             provider,
             "where do I work?".to_owned(),
             None,
@@ -8171,7 +8755,7 @@ mod tests {
             });
             dispatch_assistant(
                 request_id,
-                state.as_ref(),
+                &state,
                 provider,
                 "what is my name?".to_owned(),
                 None,
@@ -8258,7 +8842,7 @@ mod tests {
         });
         dispatch_assistant(
             "chat-onboarding-1",
-            state.as_ref(),
+            &state,
             provider,
             "what do you know about me?".to_owned(),
             None,
@@ -8295,7 +8879,7 @@ mod tests {
         });
         dispatch_assistant(
             "chat-redact-1",
-            state.as_ref(),
+            &state,
             provider,
             "email sam.jones@example.com about my plans".to_owned(),
             Some("- Email is sam.jones@example.com\n- Phone is +1 (555) 123-4567".to_owned()),
@@ -8341,7 +8925,7 @@ mod tests {
         });
         dispatch_assistant(
             request_id,
-            state.as_ref(),
+            &state,
             provider,
             "plan".to_owned(),
             None,
@@ -8371,7 +8955,7 @@ mod tests {
         });
         dispatch_assistant(
             "chat-g7-2",
-            state.as_ref(),
+            &state,
             cancelled_provider,
             "cancel".to_owned(),
             None,
@@ -8400,7 +8984,7 @@ mod tests {
             });
         dispatch_assistant(
             "chat-g7-3",
-            state.as_ref(),
+            &state,
             reconfiguring_provider,
             "reconfigure".to_owned(),
             None,
@@ -8435,7 +9019,7 @@ mod tests {
         });
         dispatch_assistant(
             request_id,
-            state.as_ref(),
+            &state,
             provider,
             "hi".to_owned(),
             None,
@@ -8790,6 +9374,7 @@ mod tests {
             _text: String,
             _tier: ModelTier,
             _cancellation: CancellationToken,
+            _tools: Option<Arc<dyn AssistantTurnTools>>,
         ) -> mpsc::Receiver<Result<AssistantProviderEvent, String>> {
             let (sender, receiver) = mpsc::channel(1);
             let reply = self.reply;

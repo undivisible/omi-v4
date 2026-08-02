@@ -1,4 +1,5 @@
 mod approval;
+mod assistant_tools;
 pub mod brief;
 mod byok_tier;
 #[cfg(feature = "facetime")]
