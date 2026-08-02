@@ -1,11 +1,11 @@
 //! @generated from config/model-tiers.json — do not edit; run scripts/sync-model-tiers.ts
 
-use super::ModelCapability;
 use super::ModelCapability::{AudioIn, AudioOut, ImageIn, Text};
+use super::ModelCapability;
 
 pub const DEFAULT_SPEED_MODEL: &str = "inception/mercury-2";
 pub const DEFAULT_BALANCED_MODEL: &str = "xiaomi/mimo-v2.5";
-pub const DEFAULT_SMART_MODEL: &str = "xiaomi/mimo-v2.5-pro";
+pub const DEFAULT_SMART_MODEL: &str = "openai/gpt-5.6-luna";
 pub const DEFAULT_MULTIMODAL_MODEL: &str = "google/gemini-2.5-flash-lite";
 pub const DEFAULT_SEARCH_MODEL: &str = "perplexity/sonar";
 pub const DEFAULT_TRANSCRIBE_MODEL: &str = "x-ai/grok-stt-1.0";
@@ -20,4 +20,5 @@ pub const MODEL_CAPABILITIES: &[(&str, &[ModelCapability])] = &[
     ("google/gemini-3.5-flash-lite", &[Text, AudioIn]),
     ("x-ai/grok-stt-1.0", &[AudioIn]),
     ("openai/gpt-audio-mini", &[Text, AudioOut]),
+    ("openai/gpt-5.6-luna", &[Text]),
 ];
