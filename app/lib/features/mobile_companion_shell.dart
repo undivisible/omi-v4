@@ -44,7 +44,36 @@ const _hairline = Color(0x14171716);
 const _teal = Color(0xff2f9d8a);
 const _coral = Color(0xffd97757);
 const _inkSheet = Color(0xff1c1c1a);
-const _companionTabBarClearance = 88.0;
+
+// Bottom navigation geometry. The clearance is the bar's own footprint —
+// barHeight plus its symmetric vertical padding plus the gap under it — and is
+// what every scrollable on the shell reserves so its last row stays reachable.
+const _tabBarHeight = 60.0;
+const _tabBarVerticalPadding = 8.0;
+const _tabBarHorizontalPadding = 12.0;
+const _tabBarBottomGap = 12.0;
+const _companionTabBarClearance =
+    _tabBarHeight + _tabBarVerticalPadding * 2 + _tabBarBottomGap;
+
+// liquid_glass_widgets pads the selected-tab indicator 4 px inside its slot
+// (AnimatedGlassIndicator.padding, hardcoded by TabIndicator and not exposed),
+// so the resting pill is 52 px tall inside a 60 px bar.
+const _tabIndicatorInset = 4.0;
+const _tabIndicatorHeight = _tabBarHeight - _tabIndicatorInset * 2;
+
+// With a capsule bar the package hands the indicator its capsule sentinel, and
+// the shader clamps that to half the pill height — a 26 px stadium. At this bar
+// height the "nested arc" radius (outer 38, minus 8 padding, minus the 4 px
+// inset) lands on the same 26, so the pill's left and right ends curve away
+// from the slot boundary and the track shows through on both sides while the
+// middle looks full. Halving the arc leaves 26 px of straight vertical edge at
+// each end, so the fill meets its slot instead of tapering into it.
+const _tabIndicatorRadius = _tabIndicatorHeight / 4;
+
+/// Bottom padding a scrollable needs so its last row clears the tab bar,
+/// including the device's own bottom inset (the bar is inside a `SafeArea`).
+double _tabBarClearance(BuildContext context) =>
+    _companionTabBarClearance + MediaQuery.paddingOf(context).bottom;
 
 // Status accents stay in the cream/ink palette — no blue ring or blue status
 // wash when connected. Disconnected stays a soft coral so it still reads as
@@ -84,6 +113,29 @@ Color _pageInk(BuildContext context) => _darkMode(context) ? _cream : _ink;
 
 Color _pageInkSoft(BuildContext context) =>
     _darkMode(context) ? const Color(0xffa6a49c) : _inkSoft;
+
+// The desktop hub's chat palette (`_HubColors` in chat_screen.dart), mirrored
+// here so a conversation reads the same on both devices. Those fields are
+// private to the desktop screen, so the values live once in this block rather
+// than as literals scattered through the mobile message widgets.
+const _hubMutedLight = Color(0xff756b61);
+const _hubMutedDark = Color(0xffa6a49c);
+const _hubCardBgLight = Color(0xfffbf4e9);
+const _hubCardBgDark = Color(0xff302a27);
+const _hubCardShadowLight = Color(0x0a000000);
+const _hubCardShadowDark = Color(0x33000000);
+
+/// The hub's `muted` — what the user's own turn is set in.
+Color _pageMuted(BuildContext context) =>
+    _darkMode(context) ? _hubMutedDark : _hubMutedLight;
+
+/// The hub's `cardBg` — the assistant card's fill.
+Color _pageCardBg(BuildContext context) =>
+    _darkMode(context) ? _hubCardBgDark : _hubCardBgLight;
+
+/// The hub's `cardShadow` — a single soft lift, not a drop shadow.
+Color _pageCardShadow(BuildContext context) =>
+    _darkMode(context) ? _hubCardShadowDark : _hubCardShadowLight;
 
 class MobileCompanionShell extends StatefulWidget {
   const MobileCompanionShell({
@@ -1010,9 +1062,15 @@ class MobilePendantPageState extends State<MobilePendantPage> {
             ),
         ],
       ),
-      bottomNavigationBar: Padding(
-        padding: const EdgeInsets.only(bottom: 12),
-        child: _pageTabs(),
+      // The glass bar draws no safe-area inset of its own, so wrap it: without
+      // this it sits under the home indicator and everything measured off its
+      // top edge — the memory bar above it especially — lands too low.
+      bottomNavigationBar: SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.only(bottom: _tabBarBottomGap),
+          child: _pageTabs(),
+        ),
       ),
     );
   }
@@ -1045,9 +1103,16 @@ class MobilePendantPageState extends State<MobilePendantPage> {
           curve: Curves.easeOutCubic,
         ),
       ),
-      barHeight: 60,
-      verticalPadding: 8,
-      horizontalPadding: 12,
+      barHeight: _tabBarHeight,
+      verticalPadding: _tabBarVerticalPadding,
+      horizontalPadding: _tabBarHorizontalPadding,
+      // Without these three the indicator falls back to a translucent stadium
+      // that leaves the track visible either side of the selected tab.
+      indicatorBorderRadius: _tabIndicatorRadius,
+      indicatorExpansion: const EdgeInsets.all(_tabIndicatorInset),
+      indicatorColor: (dark ? _cream : _ink).withValues(
+        alpha: dark ? .16 : .10,
+      ),
       selectedIconColor: selectedFg,
       unselectedIconColor: idleFg,
       selectedLabelColor: selectedFg,
@@ -1156,12 +1221,7 @@ class MobilePendantPageState extends State<MobilePendantPage> {
           ),
         ),
         SliverPadding(
-          padding: const EdgeInsets.fromLTRB(
-            18,
-            0,
-            18,
-            _companionTabBarClearance,
-          ),
+          padding: EdgeInsets.fromLTRB(18, 0, 18, _tabBarClearance(context)),
           sliver: SliverList(
             key: const Key('companion_session_list'),
             delegate: SliverChildListDelegate(content),
@@ -1222,12 +1282,7 @@ class MobilePendantPageState extends State<MobilePendantPage> {
       onRefresh: _loadConversation,
       child: ListView(
         key: const Key('companion_conversations_page'),
-        padding: const EdgeInsets.fromLTRB(
-          18,
-          56,
-          18,
-          _companionTabBarClearance,
-        ),
+        padding: EdgeInsets.fromLTRB(18, 56, 18, _tabBarClearance(context)),
         children: tiles,
       ),
     );
@@ -1247,7 +1302,7 @@ class MobilePendantPageState extends State<MobilePendantPage> {
       key: const Key('companion_memory_page'),
       memory: memory,
       embedded: true,
-      bottomInset: _companionTabBarClearance,
+      bottomInset: _tabBarClearance(context),
     );
   }
 
@@ -2793,35 +2848,65 @@ class _ConversationBubble extends StatelessWidget {
     final fromUser = message.role == 'user';
     final accent = _sourceAccent(message.source);
     final label = _sourceLabel(message.source);
+    // Desktop treatment, phone sizing: the user's own words are bare — no
+    // bubble, no rule, just muted ink pulled to the right — so the card around
+    // the reply is what tells the two sides apart.
+    if (fromUser) {
+      return Padding(
+        key: const Key('companion_user_turn'),
+        padding: const EdgeInsets.fromLTRB(40, 6, 0, 6),
+        child: Align(
+          alignment: Alignment.centerRight,
+          child: Text(
+            message.text,
+            textAlign: TextAlign.right,
+            style: TextStyle(
+              fontSize: 15,
+              height: 1.45,
+              letterSpacing: .1,
+              color: _pageMuted(context),
+            ),
+          ),
+        ),
+      );
+    }
     return Padding(
       padding: const EdgeInsets.only(bottom: _tileGap),
       child: Align(
-        alignment: fromUser ? Alignment.centerRight : Alignment.centerLeft,
+        alignment: Alignment.centerLeft,
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 340),
           child: DecoratedBox(
+            key: const Key('companion_assistant_turn'),
             decoration: BoxDecoration(
-              color: _pageSurface(context),
-              borderRadius: BorderRadius.circular(16),
+              color: _pageCardBg(context),
+              borderRadius: BorderRadius.circular(14),
               border: Border.all(color: _pageHairline(context)),
+              boxShadow: [
+                BoxShadow(
+                  color: _pageCardShadow(context),
+                  offset: const Offset(0, 1),
+                  blurRadius: 3,
+                ),
+              ],
             ),
             child: IntrinsicHeight(
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  if (!fromUser && accent != null)
+                  if (accent != null)
                     Container(
-                      width: 3,
+                      width: 2,
                       decoration: BoxDecoration(
                         color: accent,
                         borderRadius: const BorderRadius.horizontal(
-                          left: Radius.circular(16),
+                          left: Radius.circular(14),
                         ),
                       ),
                     ),
                   Expanded(
                     child: Padding(
-                      padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+                      padding: const EdgeInsets.all(12),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
@@ -2829,32 +2914,23 @@ class _ConversationBubble extends StatelessWidget {
                             Text(
                               label,
                               style: TextStyle(
-                                fontSize: 11,
+                                fontSize: 10.5,
                                 fontWeight: FontWeight.w600,
-                                letterSpacing: 0.2,
-                                color: accent ?? _pageInkSoft(context),
+                                letterSpacing: 1.1,
+                                color: accent ?? _pageMuted(context),
                               ),
                             ),
-                            const SizedBox(height: 4),
+                            const SizedBox(height: 6),
                           ],
-                          if (fromUser)
-                            Text(
-                              message.text,
-                              style: TextStyle(
-                                fontSize: 15,
-                                height: 1.35,
-                                color: _pageInk(context),
-                              ),
-                            )
-                          else
-                            DefaultTextStyle(
-                              style: TextStyle(
-                                fontSize: 15,
-                                height: 1.35,
-                                color: _pageInk(context),
-                              ),
-                              child: AssistantMarkdown(message.text),
+                          DefaultTextStyle(
+                            style: TextStyle(
+                              fontSize: 15,
+                              height: 1.45,
+                              letterSpacing: .1,
+                              color: _pageInk(context),
                             ),
+                            child: AssistantMarkdown(message.text),
+                          ),
                         ],
                       ),
                     ),
@@ -2911,9 +2987,6 @@ class _ConversationSummaryTile extends StatelessWidget {
     );
   }
 }
-
-Color _pageSurface(BuildContext context) =>
-    _darkMode(context) ? const Color(0xff232320) : _surface;
 
 Color _pageHairline(BuildContext context) =>
     _darkMode(context) ? const Color(0x1ffffcec) : _hairline;

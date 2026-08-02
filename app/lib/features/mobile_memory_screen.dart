@@ -18,6 +18,10 @@ const _teal = Color(0xff2f9d8a);
 const _coral = Color(0xffd97757);
 
 const _floatingBarHeight = 52.0;
+
+/// Gap between the memory bar and whatever sits under it — the shell's bottom
+/// navigation when embedded, the screen edge when standalone.
+const _floatingBarGap = 8.0;
 const _searchDebounceDelay = Duration(milliseconds: 300);
 
 bool _dark(BuildContext context) =>
@@ -51,6 +55,10 @@ class MobileMemoryScreen extends StatefulWidget {
 
   /// When true, omit the AppBar so the screen can sit inside a PageView.
   final bool embedded;
+
+  /// Space already spoken for at the bottom of the screen — the shell's
+  /// navigation bar plus the device inset. The memory bar sits directly on top
+  /// of it rather than floating somewhere above it.
   final double bottomInset;
 
   @override
@@ -152,7 +160,14 @@ class _MobileMemoryScreenState extends State<MobileMemoryScreen> {
   @override
   Widget build(BuildContext context) {
     final dark = _dark(context);
-    final listBottomInset = _floatingBarHeight + 28 + widget.bottomInset;
+    // Measured from the true bottom of the screen in both modes, so the bar
+    // ends up exactly [_floatingBarGap] above the navigation bar (embedded) or
+    // above the home indicator (standalone). No SafeArea wraps the stack: the
+    // inset is counted once, here.
+    final barBottom = widget.embedded
+        ? widget.bottomInset + _floatingBarGap
+        : 12 + MediaQuery.paddingOf(context).bottom;
+    final listBottomInset = barBottom + _floatingBarHeight + 16;
     final body = Stack(
       children: [
         ListView(
@@ -168,9 +183,7 @@ class _MobileMemoryScreenState extends State<MobileMemoryScreen> {
         Positioned(
           left: 18,
           right: 18,
-          bottom: widget.embedded
-              ? widget.bottomInset
-              : 12 + MediaQuery.paddingOf(context).bottom,
+          bottom: barBottom,
           child: _floatingComposer(context),
         ),
       ],
@@ -179,7 +192,7 @@ class _MobileMemoryScreenState extends State<MobileMemoryScreen> {
       return ColoredBox(
         key: const Key('mobile_memory_screen'),
         color: dark ? _inkSheet : _paper,
-        child: SafeArea(top: false, child: body),
+        child: body,
       );
     }
     return Scaffold(
@@ -191,7 +204,7 @@ class _MobileMemoryScreenState extends State<MobileMemoryScreen> {
         elevation: 0,
         foregroundColor: _pageInk(context),
       ),
-      body: SafeArea(top: false, child: body),
+      body: body,
     );
   }
 

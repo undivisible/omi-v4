@@ -1919,6 +1919,195 @@ void main() {
       services.dispose();
     },
   );
+
+  testWidgets('the selected tab indicator is sized to fill its whole slot', (
+    tester,
+  ) async {
+    final fixture = await _mobileFixture('user-a');
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MobileCompanionShell(
+          services: fixture.services,
+          pairedDevices: VolatilePairedDeviceStore(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final bar = tester.widget<GlassTabBar>(find.byType(GlassTabBar));
+    expect(bar.barHeight, 60);
+    expect(bar.verticalPadding, 8);
+    expect(bar.horizontalPadding, 12);
+    // liquid_glass_widgets insets the pill 4 px inside its slot, leaving a
+    // 52 px pill. Left at the package default the pill is a stadium — radius
+    // 26, half its own height — so both ends curve away from the slot and the
+    // track shows through. A quarter of the pill height keeps 26 px of
+    // straight vertical edge at each end.
+    expect(bar.indicatorBorderRadius, 13.0);
+    // Cancels that same 4 px inset once the drag spring is at full thickness,
+    // so the moving pill reaches its slot bounds exactly.
+    expect(bar.indicatorExpansion, const EdgeInsets.all(4));
+    // The package default is the text colour at 10% — the grey the fill was
+    // reading as. Both modes name their own wash instead.
+    expect(bar.indicatorColor, isNotNull);
+    fixture.services.dispose();
+  });
+
+  testWidgets('the memory bar sits directly on top of the navigation bar', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    await tester.binding.setSurfaceSize(const Size(800, 1600));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final auth = await _authorizedAuth('user-a');
+    final services = AppServices.forTesting(
+      nativeHub: _Hub(),
+      deviceRelay: DeviceRelayService(
+        role: DeviceRelayRole.mobileOwner,
+        adapter: _Adapter(),
+      ),
+      auth: auth,
+      memory: MemoryClient(_CompanionMemoryTransport()),
+      memoryDatabasePath: (uid) => '/tmp/$uid.sqlite3',
+      managedStt: _ManagedStt(
+        ManagedSttSession(
+          websocketUrl: 'wss://api.example.test/v1/stt/sessions/s/stream',
+          session: _session('user-a'),
+        ),
+      ),
+    );
+    await services.initialize();
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MobileCompanionShell(
+          services: services,
+          pairedDevices: VolatilePairedDeviceStore(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await _selectCompanionTab(tester, 'Memory');
+    await tester.pumpAndSettle();
+
+    final memoryBar = tester.getRect(
+      find.byKey(const Key('memory_floating_bar')),
+    );
+    final navBar = tester.getRect(find.byType(GlassTabBar));
+    // Above the navigation bar, and close enough to it to read as one stack:
+    // no overlap in either direction, and no floating gap.
+    expect(memoryBar.bottom, lessThanOrEqualTo(navBar.top));
+    expect(navBar.top - memoryBar.bottom, lessThanOrEqualTo(20));
+    // Results still scroll clear of the bar that sits over them.
+    final listPadding =
+        tester
+                .widget<ListView>(find.byKey(const Key('mobile_memory_list')))
+                .padding
+            as EdgeInsets;
+    expect(listPadding.bottom, greaterThan(memoryBar.height));
+    services.dispose();
+  });
+
+  testWidgets('conversation turns follow the desktop hub theme', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(800, 1600));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    SharedPreferences.setMockInitialValues({
+      'companion_page_index_v1': 1,
+      'companion_conversation_v1': jsonEncode([
+        {
+          'cursor': 1,
+          'clientMessageId': 'm1',
+          'role': 'user',
+          'source': 'app',
+          'text': 'What did I miss?',
+          'createdAt': 1,
+        },
+        {
+          'cursor': 2,
+          'clientMessageId': 'm2',
+          'role': 'assistant',
+          'source': 'app',
+          'text': 'Nothing urgent.',
+          'createdAt': 2,
+        },
+      ]),
+    });
+    final fixture = await _mobileFixture('user-a');
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MobileCompanionShell(
+          services: fixture.services,
+          pairedDevices: VolatilePairedDeviceStore(),
+          previewMode: true,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // The user's own words are bare, in the hub's `muted` — the card around
+    // the reply is what tells the two sides apart, exactly as on desktop.
+    final userTurn = tester.widget<Text>(
+      find.descendant(
+        of: find.byKey(const Key('companion_user_turn')),
+        matching: find.byType(Text),
+      ),
+    );
+    expect(userTurn.style?.color, const Color(0xff756b61));
+    expect(userTurn.textAlign, TextAlign.right);
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('companion_user_turn')),
+        matching: find.byType(DecoratedBox),
+      ),
+      findsNothing,
+    );
+
+    // The assistant turn is the hub's card: `cardBg`, a hairline, one soft
+    // lift — no heavy bubble.
+    final card = tester.widget<DecoratedBox>(
+      find.byKey(const Key('companion_assistant_turn')),
+    );
+    final decoration = card.decoration as BoxDecoration;
+    expect(decoration.color, const Color(0xfffbf4e9));
+    expect(decoration.boxShadow?.single.color, const Color(0x0a000000));
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ThemeData.dark(),
+        home: MobileCompanionShell(
+          services: fixture.services,
+          pairedDevices: VolatilePairedDeviceStore(),
+          previewMode: true,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      tester
+          .widget<Text>(
+            find.descendant(
+              of: find.byKey(const Key('companion_user_turn')),
+              matching: find.byType(Text),
+            ),
+          )
+          .style
+          ?.color,
+      const Color(0xffa6a49c),
+    );
+    expect(
+      (tester
+                  .widget<DecoratedBox>(
+                    find.byKey(const Key('companion_assistant_turn')),
+                  )
+                  .decoration
+              as BoxDecoration)
+          .color,
+      const Color(0xff302a27),
+    );
+    fixture.services.dispose();
+  });
 }
 
 // Device work hops between the fake test clock and real async (stream
