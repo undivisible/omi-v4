@@ -53,12 +53,6 @@ const _tabBarHeight = 60.0;
 const _tabBarVerticalPadding = 8.0;
 const _tabBarHorizontalPadding = 12.0;
 const _tabBarBottomGap = 12.0;
-
-// The bar's own radius is the capsule sentinel, which the shader clamps to half
-// its height — so it is already a pill. It only reads as a rectangle because it
-// was handed the full screen width and both rounded ends sat off the edges.
-// Inset it and the capsule is visible again, floating over the page.
-const _tabBarSideInset = 16.0;
 const _companionTabBarClearance =
     _tabBarHeight + _tabBarVerticalPadding * 2 + _tabBarBottomGap;
 
@@ -1075,12 +1069,7 @@ class MobilePendantPageState extends State<MobilePendantPage> {
       bottomNavigationBar: SafeArea(
         top: false,
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(
-            _tabBarSideInset,
-            0,
-            _tabBarSideInset,
-            _tabBarBottomGap,
-          ),
+          padding: const EdgeInsets.only(bottom: _tabBarBottomGap),
           child: _pageTabs(),
         ),
       ),
@@ -1289,6 +1278,10 @@ class MobilePendantPageState extends State<MobilePendantPage> {
           ..._withGaps(_transcriptTiles()),
         ],
       ],
+      // Last thing under the conversation, where somebody who has just read a
+      // reply and wants to answer from outside the app will look for it.
+      const SizedBox(height: _sectionGap),
+      _ChannelLinks(openLink: widget.openLink ?? _openExternalLink),
     ];
     return RefreshIndicator(
       onRefresh: _loadConversation,
@@ -2848,8 +2841,72 @@ class _RenameDialogState extends State<_RenameDialog> {
   );
 }
 
-/// One replayed conversation turn on the Chat page. Channel sources get a
-/// small colored rail so Telegram / iMessage read differently from desktop.
+/// The two places Omi answers outside the app. Set as quiet text rather than
+/// buttons: it is a way out of the app, not something to press on the way in.
+class _ChannelLinks extends StatelessWidget {
+  const _ChannelLinks({required this.openLink});
+
+  final LinkOpener openLink;
+
+  /// `sms:` and not `imessage:` — iOS hands `sms:` to Messages all the same and
+  /// it is the only one of the two Android understands, so a single scheme
+  /// covers both platforms instead of branching on one.
+  static Uri messagingUri() => Uri.parse(
+    'sms:${AppServices.messagingNumber().replaceAll(RegExp(r'[^\d+]'), '')}',
+  );
+
+  static Uri telegramUri() => Uri.parse(
+    'https://t.me/${AppServices.telegramHandle().replaceAll('@', '')}',
+  );
+
+  @override
+  Widget build(BuildContext context) {
+    final muted = _pageMuted(context);
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        Text('Talk to Omi on ', style: TextStyle(color: muted)),
+        _ChannelLink(
+          key: const Key('companion_channel_imessage'),
+          label: 'iMessage',
+          onTap: () => openLink(messagingUri()),
+        ),
+        Text(' or ', style: TextStyle(color: muted)),
+        _ChannelLink(
+          key: const Key('companion_channel_telegram'),
+          label: 'Telegram',
+          onTap: () => openLink(telegramUri()),
+        ),
+      ],
+    );
+  }
+}
+
+class _ChannelLink extends StatelessWidget {
+  const _ChannelLink({required this.label, required this.onTap, super.key});
+
+  final String label;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) => GestureDetector(
+    onTap: onTap,
+    behavior: HitTestBehavior.opaque,
+    child: Text(
+      label,
+      style: TextStyle(
+        color: _pageInk(context),
+        decoration: TextDecoration.underline,
+        decorationColor: _pageHairline(context),
+      ),
+    ),
+  );
+}
+
+/// One replayed conversation turn on the Chat page, built to the desktop hub's
+/// message row: the same two shapes, the same metrics, and nothing the hub does
+/// not also draw — a channel the turn arrived on is not a difference the reader
+/// has to see, so it gets no rail and no badge.
 class _ConversationBubble extends StatelessWidget {
   const _ConversationBubble({required this.message});
 
@@ -2858,119 +2915,53 @@ class _ConversationBubble extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final fromUser = message.role == 'user';
-    final accent = _sourceAccent(message.source);
-    final label = _sourceLabel(message.source);
     // Desktop treatment, phone sizing: the user's own words are bare — no
     // bubble, no rule, just muted ink pulled to the right — so the card around
     // the reply is what tells the two sides apart.
     if (fromUser) {
       return Padding(
         key: const Key('companion_user_turn'),
-        padding: const EdgeInsets.fromLTRB(40, 6, 0, 6),
+        padding: const EdgeInsets.fromLTRB(48, 12, 12, 12),
         child: Align(
           alignment: Alignment.centerRight,
           child: Text(
             message.text,
             textAlign: TextAlign.right,
-            style: TextStyle(
-              fontSize: 15,
-              height: 1.45,
-              letterSpacing: .1,
-              color: _pageMuted(context),
-            ),
+            style: TextStyle(color: _pageMuted(context)),
           ),
         ),
       );
     }
+    // The hub's assistant turn is a themed [Card]: fill, one soft lift, 12 of
+    // padding, and the 4 of margin a Card carries by default. Mobile draws it
+    // by hand because the hub's fill is its own palette value, not this app's
+    // card colour, and the two must not drift apart.
     return Padding(
-      padding: const EdgeInsets.only(bottom: _tileGap),
-      child: Align(
-        alignment: Alignment.centerLeft,
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 340),
-          child: DecoratedBox(
-            key: const Key('companion_assistant_turn'),
-            decoration: BoxDecoration(
-              color: _pageCardBg(context),
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(color: _pageHairline(context)),
-              boxShadow: [
-                BoxShadow(
-                  color: _pageCardShadow(context),
-                  offset: const Offset(0, 1),
-                  blurRadius: 3,
-                ),
-              ],
+      padding: const EdgeInsets.all(4),
+      child: DecoratedBox(
+        key: const Key('companion_assistant_turn'),
+        decoration: BoxDecoration(
+          color: _pageCardBg(context),
+          borderRadius: BorderRadius.circular(12),
+          boxShadow: [
+            BoxShadow(
+              color: _pageCardShadow(context),
+              offset: const Offset(0, 1),
+              blurRadius: 3,
             ),
-            child: IntrinsicHeight(
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  if (accent != null)
-                    Container(
-                      width: 2,
-                      decoration: BoxDecoration(
-                        color: accent,
-                        borderRadius: const BorderRadius.horizontal(
-                          left: Radius.circular(14),
-                        ),
-                      ),
-                    ),
-                  Expanded(
-                    child: Padding(
-                      padding: const EdgeInsets.all(12),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          if (label != null) ...[
-                            Text(
-                              label,
-                              style: TextStyle(
-                                fontSize: 10.5,
-                                fontWeight: FontWeight.w600,
-                                letterSpacing: 1.1,
-                                color: accent ?? _pageMuted(context),
-                              ),
-                            ),
-                            const SizedBox(height: 6),
-                          ],
-                          DefaultTextStyle(
-                            style: TextStyle(
-                              fontSize: 15,
-                              height: 1.45,
-                              letterSpacing: .1,
-                              color: _pageInk(context),
-                            ),
-                            child: AssistantMarkdown(message.text),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
+          ],
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: DefaultTextStyle(
+            style: DefaultTextStyle.of(
+              context,
+            ).style.copyWith(color: _pageInk(context)),
+            child: AssistantMarkdown(message.text),
           ),
         ),
       ),
     );
-  }
-
-  static Color? _sourceAccent(String source) {
-    return switch (source) {
-      'telegram' => const Color(0xff2aabee),
-      'imessage' || 'blooio' => const Color(0xff34c759),
-      _ => null,
-    };
-  }
-
-  static String? _sourceLabel(String source) {
-    return switch (source) {
-      'telegram' => 'TELEGRAM',
-      'imessage' || 'blooio' => 'IMESSAGE',
-      'desktop' || 'app' || 'web' => null,
-      _ => source.toUpperCase(),
-    };
   }
 }
 

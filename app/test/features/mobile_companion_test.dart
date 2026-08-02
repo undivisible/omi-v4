@@ -1692,6 +1692,46 @@ void main() {
     fixture.services.dispose();
   });
 
+  testWidgets('the settings sheet keeps every pendant row and opens the full '
+      'settings screen', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(800, 2400));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final fixture = await _mobileFixture('user-a');
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MobileCompanionShell(
+          services: fixture.services,
+          pairedDevices: VolatilePairedDeviceStore(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('companion_settings_button')));
+    await tester.pumpAndSettle();
+
+    // The rows that only exist on this sheet — voices, calendar and account
+    // chrome — have to survive alongside the row into the full screen, because
+    // nothing else on the phone reaches them. The DEVICE and MEMORY sections
+    // are left out: they are gated on a paired pendant and on a memory client,
+    // neither of which this fixture has.
+    for (final key in const [
+      'companion_account_tile',
+      'companion_open_settings',
+      'companion_version_tile',
+      'companion_speech_profiles',
+      'companion_eventkit_proactive_sync',
+      'companion_delete_account',
+    ]) {
+      expect(find.byKey(Key(key)), findsOneWidget, reason: key);
+    }
+
+    await tester.tap(find.byKey(const Key('companion_open_settings')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('mobile_settings_screen')), findsOneWidget);
+    fixture.services.dispose();
+  });
+
   testWidgets('the Calendar & Reminders row sits on the same paper card as '
       'every other mobile row', (tester) async {
     await tester.binding.setSurfaceSize(const Size(800, 2400));
@@ -1953,9 +1993,7 @@ void main() {
     fixture.services.dispose();
   });
 
-  testWidgets('the tab bar is a floating pill, not a full-width band', (
-    tester,
-  ) async {
+  testWidgets('the tab bar spans the width of the display', (tester) async {
     SharedPreferences.setMockInitialValues({});
     await tester.binding.setSurfaceSize(const Size(800, 1600));
     addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -1985,11 +2023,10 @@ void main() {
     expect(bar, findsOneWidget);
     final rect = tester.getRect(bar);
     final screen = tester.getRect(find.byType(MaterialApp));
-    // Both rounded ends have to be on screen or the capsule reads as a
-    // rectangle spanning the display.
-    expect(rect.left, greaterThan(screen.left));
-    expect(rect.right, lessThan(screen.right));
-    expect(rect.left - screen.left, closeTo(screen.right - rect.right, 0.5));
+    // The bar is a band across the bottom of the screen, not an inset pill
+    // floating over the page — it reaches both edges of the display.
+    expect(rect.left, closeTo(screen.left, 0.5));
+    expect(rect.right, closeTo(screen.right, 0.5));
   });
 
   testWidgets('the memory bar sits directly on top of the navigation bar', (
@@ -2145,6 +2182,48 @@ void main() {
           .color,
       const Color(0xff302a27),
     );
+    fixture.services.dispose();
+  });
+
+  testWidgets('the chat page offers iMessage and Telegram', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(800, 1600));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    SharedPreferences.setMockInitialValues({'companion_page_index_v1': 1});
+    final fixture = await _mobileFixture('user-a');
+    final opened = <Uri>[];
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MobileCompanionShell(
+          services: fixture.services,
+          pairedDevices: VolatilePairedDeviceStore(),
+          previewMode: true,
+          openLink: (uri) async => opened.add(uri),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final imessage = find.byKey(const Key('companion_channel_imessage'));
+    final telegram = find.byKey(const Key('companion_channel_telegram'));
+    expect(imessage, findsOneWidget);
+    expect(telegram, findsOneWidget);
+
+    await tester.tap(imessage);
+    await tester.tap(telegram);
+    await tester.pumpAndSettle();
+
+    // Built from the accessors, so a deployment that overrides either value
+    // still sends people to the account that actually answers.
+    final digits = AppServices.messagingNumber().replaceAll(
+      RegExp(r'[^\d+]'),
+      '',
+    );
+    expect(opened, [
+      Uri.parse('sms:$digits'),
+      Uri.parse(
+        'https://t.me/${AppServices.telegramHandle().replaceAll('@', '')}',
+      ),
+    ]);
     fixture.services.dispose();
   });
 }
