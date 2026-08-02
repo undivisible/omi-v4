@@ -1953,6 +1953,45 @@ void main() {
     fixture.services.dispose();
   });
 
+  testWidgets('the tab bar is a floating pill, not a full-width band', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    await tester.binding.setSurfaceSize(const Size(800, 1600));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final auth = await _authorizedAuth('user-a');
+    final services = AppServices.forTesting(
+      nativeHub: _Hub(),
+      deviceRelay: DeviceRelayService(
+        role: DeviceRelayRole.mobileOwner,
+        adapter: _Adapter(),
+      ),
+      auth: auth,
+      memory: MemoryClient(_CompanionMemoryTransport()),
+      memoryDatabasePath: (uid) => '/tmp/$uid.sqlite3',
+    );
+    await services.initialize();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MobileCompanionShell(
+          services: services,
+          pairedDevices: VolatilePairedDeviceStore(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final bar = find.byType(GlassTabBar);
+    expect(bar, findsOneWidget);
+    final rect = tester.getRect(bar);
+    final screen = tester.getRect(find.byType(MaterialApp));
+    // Both rounded ends have to be on screen or the capsule reads as a
+    // rectangle spanning the display.
+    expect(rect.left, greaterThan(screen.left));
+    expect(rect.right, lessThan(screen.right));
+    expect(rect.left - screen.left, closeTo(screen.right - rect.right, 0.5));
+  });
+
   testWidgets('the memory bar sits directly on top of the navigation bar', (
     tester,
   ) async {

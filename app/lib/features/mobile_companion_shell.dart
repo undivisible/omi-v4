@@ -52,6 +52,12 @@ const _tabBarHeight = 60.0;
 const _tabBarVerticalPadding = 8.0;
 const _tabBarHorizontalPadding = 12.0;
 const _tabBarBottomGap = 12.0;
+
+// The bar's own radius is the capsule sentinel, which the shader clamps to half
+// its height — so it is already a pill. It only reads as a rectangle because it
+// was handed the full screen width and both rounded ends sat off the edges.
+// Inset it and the capsule is visible again, floating over the page.
+const _tabBarSideInset = 16.0;
 const _companionTabBarClearance =
     _tabBarHeight + _tabBarVerticalPadding * 2 + _tabBarBottomGap;
 
@@ -1068,7 +1074,12 @@ class MobilePendantPageState extends State<MobilePendantPage> {
       bottomNavigationBar: SafeArea(
         top: false,
         child: Padding(
-          padding: const EdgeInsets.only(bottom: _tabBarBottomGap),
+          padding: const EdgeInsets.fromLTRB(
+            _tabBarSideInset,
+            0,
+            _tabBarSideInset,
+            _tabBarBottomGap,
+          ),
           child: _pageTabs(),
         ),
       ),
