@@ -279,6 +279,35 @@ pub async fn run_managed_inbox_completion(
     messages: &[managed_ai::Message],
     tier: managed_ai::ModelTier,
 ) -> Option<String> {
+    run_managed_inbox_turn(env, uid, messages, tier, None)
+        .await
+        .and_then(|turn| turn.content)
+}
+
+/// One completion: either words, or a request to run tools.
+///
+/// A turn with tool calls and no content is the normal shape of "call these
+/// first" and is not a failure, which is why this is a struct rather than an
+/// `Option<String>` — the old return type could not say it.
+pub struct InboxTurn {
+    pub content: Option<String>,
+    /// The `tool_calls` array exactly as the model sent it, to be echoed back
+    /// in the follow-up request.
+    pub tool_calls_raw: Option<Value>,
+    pub tool_calls: Vec<managed_ai::ToolCall>,
+}
+
+/// `run_managed_inbox_completion`, but able to offer tools and report the calls
+/// that come back. Everything else — admission, accounting, tracing — is the
+/// same path, because a tool round is a completion like any other and is billed
+/// like one.
+pub async fn run_managed_inbox_turn(
+    env: &Env,
+    uid: &str,
+    messages: &[managed_ai::Message],
+    tier: managed_ai::ModelTier,
+    tools: Option<&[Value]>,
+) -> Option<InboxTurn> {
     let endpoint = env_get(env, "MIMO_CHAT_COMPLETIONS_URL");
     // Meeting-note-style one-shot completions run on the BALANCED tier, which
     // defaults to MIMO_MODEL when set. Callers answering someone who has not
@@ -363,16 +392,20 @@ pub async fn run_managed_inbox_completion(
         return None;
     }
 
-    let message_values: Vec<Value> = messages
-        .iter()
-        .map(|m| json!({ "role": m.role, "content": m.content }))
-        .collect();
-    let body = json!({
+    let message_values: Vec<Value> = messages.iter().map(managed_ai::Message::to_json).collect();
+    let mut body = json!({
         "model": model,
         "messages": message_values,
         "stream": false,
         "max_tokens": WORKER_COMPLETION_MAX_OUTPUT_TOKENS,
     });
+    if let Some(tools) = tools.filter(|t| !t.is_empty()) {
+        let obj = body.as_object_mut().expect("object");
+        obj.insert("tools".into(), Value::Array(tools.to_vec()));
+        // `auto`, not `required`: most messages are just conversation, and a
+        // model forced to call something on every turn will invent a reason to.
+        obj.insert("tool_choice".into(), Value::String("auto".into()));
+    }
 
     let mut init = RequestInit::new();
     init.with_method(Method::Post);
@@ -463,11 +496,12 @@ pub async fn run_managed_inbox_completion(
         Some(v) => managed_ai::parse_completion(v),
         None => (None, None, None),
     };
-    let status = if content.is_none() {
-        "failed"
-    } else {
-        "complete"
-    };
+    let calls = value.as_ref().and_then(managed_ai::parse_tool_calls);
+    // A turn that asked for tools and said nothing is a complete, successful
+    // turn. Judging it by content alone would bill it as a failure and hand the
+    // caller a `None` that releases the inbox claim for a pointless retry.
+    let produced = content.is_some() || calls.is_some();
+    let status = if produced { "complete" } else { "failed" };
     settle_managed_inbox(
         env,
         &stub,
@@ -487,12 +521,23 @@ pub async fn run_managed_inbox_completion(
         trace_provider,
         &model,
         trace_started_at,
-        if content.is_some() { "ok" } else { "error" },
+        if produced { "ok" } else { "error" },
         input_tokens,
         output_tokens,
     )
     .await;
-    content
+    if !produced {
+        return None;
+    }
+    let (tool_calls_raw, tool_calls) = match calls {
+        Some((raw, calls)) => (Some(raw), calls),
+        None => (None, Vec::new()),
+    };
+    Some(InboxTurn {
+        content,
+        tool_calls_raw,
+        tool_calls,
+    })
 }
 
 /// Env-based variant of `insert_managed_request` for the inbox completion path

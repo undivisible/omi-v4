@@ -20,6 +20,7 @@ use crate::channel_commands as cmd;
 use crate::channel_group::{self, GROUP_CHANNEL_LINK_ERROR};
 use crate::channel_link;
 use crate::channel_signup::{self, SignupResult, SIGNUP_GUIDE_TEXT};
+use crate::channel_tools as tools;
 use crate::delivery::{
     self, coordinator_name, due_deliveries_for_conversation_sql, due_deliveries_sql, http_outcome,
     network_error_message, network_outcome, retry_delay, stable_idempotency_key, Channel,
@@ -1194,16 +1195,12 @@ pub async fn handle_channel_message(
     now: i64,
 ) -> Result<ChannelOutcome> {
     let binding = channel_binding(env, channel, channel_user_id).await?;
-    // Asking in words is the documented route — the app tells people to ask Omi
-    // for a sign-in code, not to type a slash command they have never seen.
-    //
-    // Ungated, including for a sender with no binding yet. A code is how you
-    // get *into* Omi, so metering it turns a bad first minute into no account
-    // at all; and there is nothing to meter anyway, since an outstanding code
-    // is re-derived rather than reissued.
-    if cmd::is_signin_request(text) {
-        return start_signin(env, channel, channel_user_id, channel_chat_id, now).await;
-    }
+    // Asking for a sign-in code in words used to be caught here, by a table of
+    // synonyms and a word-count ceiling. It is not caught here any more: the
+    // assistant has a tool for it, and the assistant is the thing that can
+    // actually read a sentence. What is left in this function is the typed
+    // command table, which is not a guess about meaning — a person who types
+    // `/signin` has said exactly one thing.
     let Some(parsed) = cmd::parse_command(text) else {
         return if binding.is_some() {
             Ok(ChannelOutcome {
@@ -1833,20 +1830,156 @@ pub async fn deliver_due_channel_messages_for(
 // The lease-claim fencing and retry/ack transitions below drive `channel_inbox`
 // on their own.
 
+/// Which chat a completion is answering, so a tool it calls acts on that chat
+/// and no other. Resolved from the binding rather than taken from the model.
+struct ToolContext {
+    channel: Channel,
+    channel_user_id: String,
+    channel_chat_id: String,
+}
+
+async fn tool_context(env: &Env, uid: &str, channel: Channel) -> Option<ToolContext> {
+    let db = env.d1("DB").ok()?;
+    let row = db
+        .prepare(
+            "SELECT channel_user_id, channel_chat_id FROM channel_bindings\n     WHERE uid = ?1 AND channel = ?2 AND revoked_at IS NULL\n     ORDER BY verified_at DESC LIMIT 1",
+        )
+        .bind(&[uid.into(), channel.as_str().into()])
+        .ok()?
+        .first::<Value>(None)
+        .await
+        .ok()
+        .flatten()?;
+    let channel_user_id = json_str(&row, "channel_user_id")?;
+    let channel_chat_id =
+        json_str(&row, "channel_chat_id").unwrap_or_else(|| channel_user_id.clone());
+    Some(ToolContext {
+        channel,
+        channel_user_id,
+        channel_chat_id,
+    })
+}
+
+async fn run_channel_tool(env: &Env, uid: &str, ctx: &ToolContext, name: &str, now: i64) -> String {
+    match name {
+        tools::GET_SIGNIN_CODE => match issue_signin_code(
+            env,
+            ctx.channel,
+            &ctx.channel_user_id,
+            &ctx.channel_chat_id,
+            now,
+        )
+        .await
+        {
+            Ok(Some((code, expires_at))) => tools::ok_result(json!({
+                "code": code,
+                "expiresInMinutes": (expires_at - now).max(0) / 60_000,
+                "instructions": "Type this into Omi on a phone or desktop to sign in. It works once.",
+            })),
+            // No code could be minted — the channel has no signing secret, or
+            // this is a group chat, where a bearer code would sign in whoever
+            // read it first.
+            Ok(None) => tools::failed_result(
+                "A sign-in code cannot be issued in this chat. Ask them to message Omi directly, one to one.",
+            ),
+            Err(_) => tools::failed_result("Issuing the code failed. Ask them to try again."),
+        },
+        tools::GET_LINK_CODE => match issue_link_code(
+            env,
+            ctx.channel,
+            &ctx.channel_user_id,
+            &ctx.channel_chat_id,
+            now,
+        )
+        .await
+        {
+            Ok(Some((code, expires_at))) => tools::ok_result(json!({
+                "code": code,
+                "expiresInMinutes": (expires_at - now).max(0) / 60_000,
+                "instructions": "Enter this in the Omi app under Settings, Account, Link a chat, or type it into the desktop chat box. It works once.",
+            })),
+            Ok(None) => tools::failed_result(
+                "A link code cannot be issued in this chat. Ask them to message Omi directly, one to one.",
+            ),
+            Err(_) => tools::failed_result("Issuing the code failed. Ask them to try again."),
+        },
+        tools::GET_ACCOUNT_STATUS => {
+            let binding = channel_binding(env, ctx.channel, &ctx.channel_user_id)
+                .await
+                .ok()
+                .flatten();
+            let signed_in_on_a_device = !is_unclaimed_channel_account(env, uid).await;
+            tools::ok_result(json!({
+                "chatIsLinked": binding.is_some(),
+                "account": cmd::mask_email(binding.as_ref().and_then(|b| b.email.as_deref())),
+                "signedInOnADevice": signed_in_on_a_device,
+            }))
+        }
+        tools::LIST_COMMANDS => tools::ok_result(json!({ "commands": cmd::channel_help_text() })),
+        other => tools::unknown_tool_result(other),
+    }
+}
+
+/// Answer one inbound message, letting the model run tools first.
+///
+/// The loop is bounded twice over: by `MAX_TOOL_ROUNDS`, and by the fact that a
+/// turn with no tool calls ends it. A model that keeps asking for tools past
+/// the cap gets one final call with none offered, so the last word is always
+/// words — running out of rounds must not be the same thing as saying nothing.
 async fn managed_inbox_completion(
     env: &Env,
     uid: &str,
     messages: &[fallback::Message],
     tier: crate::managed_ai::ModelTier,
+    ctx: Option<&ToolContext>,
+    now: i64,
 ) -> Option<String> {
-    let managed: Vec<crate::managed_ai::Message> = messages
+    let mut conversation: Vec<crate::managed_ai::Message> = messages
         .iter()
-        .map(|m| crate::managed_ai::Message {
-            role: m.role.clone(),
-            content: m.content.clone(),
-        })
+        .map(|m| crate::managed_ai::Message::new(&m.role, m.content.clone()))
         .collect();
-    crate::routes_ai::run_managed_inbox_completion(env, uid, &managed, tier).await
+    let catalogue = tools::tool_schemas();
+    for round in 0..=tools::MAX_TOOL_ROUNDS {
+        let offered = match ctx {
+            Some(_) if round < tools::MAX_TOOL_ROUNDS => Some(catalogue.as_slice()),
+            _ => None,
+        };
+        let turn =
+            match crate::routes_ai::run_managed_inbox_turn(env, uid, &conversation, tier, offered)
+                .await
+            {
+                Some(turn) => turn,
+                // A model that does not accept a `tools` array rejects the
+                // whole request, and the cheap tier a guest is answered on is
+                // exactly where that is most likely. Losing tools costs them a
+                // sign-in code; losing the reply costs them the conversation,
+                // so if there is a plain completion to be had, take it.
+                None if offered.is_some() => {
+                    return crate::routes_ai::run_managed_inbox_turn(
+                        env,
+                        uid,
+                        &conversation,
+                        tier,
+                        None,
+                    )
+                    .await?
+                    .content
+                }
+                None => return None,
+            };
+        let (Some(ctx), Some(raw)) = (ctx, turn.tool_calls_raw.clone()) else {
+            return turn.content;
+        };
+        if turn.tool_calls.is_empty() {
+            return turn.content;
+        }
+        conversation.push(crate::managed_ai::Message::tool_request(raw));
+        for call in &turn.tool_calls {
+            let result = run_channel_tool(env, uid, ctx, &call.name, now).await;
+            conversation.push(crate::managed_ai::Message::tool_result(&call.id, result));
+        }
+    }
+    None
 }
 
 /// Whether this uid belongs to an account that was created here, in a chat,
@@ -2000,7 +2133,12 @@ async fn respond_to_item(env: &Env, id: &str, uid: &str, now: i64) -> Result<()>
         } else {
             crate::managed_ai::ModelTier::Balanced
         };
-        match managed_inbox_completion(env, uid, &messages, tier).await {
+        let parsed_channel = Channel::parse(&channel);
+        let tool_ctx = match parsed_channel {
+            Some(parsed) => tool_context(env, uid, parsed).await,
+            None => None,
+        };
+        match managed_inbox_completion(env, uid, &messages, tier, tool_ctx.as_ref(), now).await {
             Some(completion) => completion,
             None => {
                 if attempts < fallback::MAX_ATTEMPTS {

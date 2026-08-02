@@ -193,44 +193,6 @@ pub fn parse_command(text: &str) -> Option<ParsedCommand> {
     Some(ParsedCommand { command, argument })
 }
 
-/// Whether a plain message is asking for a sign-in code.
-///
-/// `/signin` only helps someone who already knows the command exists. People
-/// arriving from the app read "ask Omi for a sign-in code" and then type that
-/// sentence, so the sentence has to work.
-///
-/// Deliberately matched here rather than handed to the assistant: a code
-/// request must be answerable before there is an account, a plan, or a model
-/// call to spend, and this dispatcher runs ahead of all three.
-pub fn is_signin_request(text: &str) -> bool {
-    let lowered = text.to_lowercase();
-    let normalized: String = lowered
-        .chars()
-        .map(|c| if c.is_alphanumeric() { c } else { ' ' })
-        .collect();
-    let words: Vec<&str> = normalized.split_whitespace().collect();
-    let joined = words.join(" ");
-    if joined.is_empty() || words.len() > 8 {
-        return false;
-    }
-    // "code" alone is the whole request often enough to honour it, but only
-    // when it is the whole message — otherwise every mention of a code in
-    // conversation would mint one.
-    if joined == "code" || joined == "signin" || joined == "sign in" {
-        return true;
-    }
-    let wants_code = joined.contains("code");
-    let about_signin = joined.contains("sign me in")
-        || joined.contains("sign in")
-        || joined.contains("signin")
-        || joined.contains("sign into")
-        || joined.contains("log in")
-        || joined.contains("login")
-        || joined.contains("sign up")
-        || joined.contains("signup");
-    (wants_code && about_signin) || (about_signin && words.len() <= 6)
-}
-
 /// Resolve a canonical command name (or alias) to its table entry.
 pub fn resolve_command(command: &str) -> Option<&'static ChannelCommand> {
     CHANNEL_COMMANDS
@@ -241,35 +203,6 @@ pub fn resolve_command(command: &str) -> Option<&'static ChannelCommand> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn a_sentence_asking_for_a_code_is_a_sign_in_request() {
-        for text in [
-            "I want a sign in code",
-            "can I get a signin code please",
-            "send me a login code",
-            "sign me in",
-            "how do I log in",
-            "code",
-            "Sign In",
-        ] {
-            assert!(is_signin_request(text), "{text}");
-        }
-    }
-
-    #[test]
-    fn ordinary_conversation_does_not_mint_a_code() {
-        for text in [
-            "what is the code for the front door",
-            "I signed in yesterday and it worked",
-            "remind me to review the login code changes in the repo tomorrow",
-            "thanks",
-            "",
-            "what did we decide about the sign in code review process last week",
-        ] {
-            assert!(!is_signin_request(text), "{text}");
-        }
-    }
 
     #[test]
     fn parse_strips_the_group_botname_suffix() {

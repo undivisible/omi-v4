@@ -1,7 +1,7 @@
 //! @generated from config/model-tiers.json — do not edit; run scripts/sync-model-tiers.ts
 
-use super::ModelCapability::{AudioIn, AudioOut, ImageIn, Text};
 use super::ModelCapability;
+use super::ModelCapability::{AudioIn, AudioOut, ImageIn, Text};
 
 pub const DEFAULT_SPEED_MODEL: &str = "inception/mercury-2";
 pub const DEFAULT_BALANCED_MODEL: &str = "xiaomi/mimo-v2.5";

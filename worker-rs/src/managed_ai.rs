@@ -382,10 +382,66 @@ const ALLOWED_KEYS: &[&str] = &[
     "stream_options",
 ];
 
-#[derive(Clone, Debug, PartialEq)]
+/// A chat message on the way to a completion.
+///
+/// `tool_calls` and `tool_call_id` are what make a tool round trip expressible:
+/// the assistant turn that asked to call something carries the calls, and each
+/// answer comes back as a `tool` message naming the call it answers. Both are
+/// `None` for every message on the strict `/v1/chat/completions` path, which
+/// does not accept tools at all — see [`parse_request`].
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Message {
     pub role: String,
     pub content: String,
+    pub tool_calls: Option<Value>,
+    pub tool_call_id: Option<String>,
+}
+
+impl Message {
+    pub fn new(role: &str, content: impl Into<String>) -> Message {
+        Message {
+            role: role.to_string(),
+            content: content.into(),
+            ..Message::default()
+        }
+    }
+
+    /// The assistant turn that requested tools. The upstream wants the original
+    /// `tool_calls` array echoed back verbatim, so it is carried rather than
+    /// rebuilt — a re-serialized approximation is how ids stop matching.
+    pub fn tool_request(tool_calls: Value) -> Message {
+        Message {
+            role: "assistant".to_string(),
+            content: String::new(),
+            tool_calls: Some(tool_calls),
+            tool_call_id: None,
+        }
+    }
+
+    /// One tool's result, answering the call with that id.
+    pub fn tool_result(tool_call_id: &str, content: impl Into<String>) -> Message {
+        Message {
+            role: "tool".to_string(),
+            content: content.into(),
+            tool_calls: None,
+            tool_call_id: Some(tool_call_id.to_string()),
+        }
+    }
+
+    /// The wire shape: the optional fields are omitted rather than sent null,
+    /// because a null `tool_calls` is rejected by some providers that accept
+    /// its absence.
+    pub fn to_json(&self) -> Value {
+        let mut value = serde_json::json!({ "role": self.role, "content": self.content });
+        let obj = value.as_object_mut().expect("object");
+        if let Some(calls) = &self.tool_calls {
+            obj.insert("tool_calls".into(), calls.clone());
+        }
+        if let Some(id) = &self.tool_call_id {
+            obj.insert("tool_call_id".into(), Value::String(id.clone()));
+        }
+        value
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -487,10 +543,7 @@ pub fn parse_request(body: &Value, model: &str) -> Option<CompletionRequest> {
         if input_characters > MAXIMUM_INPUT_CHARACTERS {
             return None;
         }
-        messages.push(Message {
-            role: role.to_string(),
-            content: content.to_string(),
-        });
+        messages.push(Message::new(role, content));
     }
     if messages.is_empty() {
         return None;
@@ -612,6 +665,55 @@ impl UsageTail {
     }
 }
 
+/// One tool the model asked to run.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ToolCall {
+    pub id: String,
+    pub name: String,
+    /// The raw `arguments` string. Left as the model wrote it: it is JSON by
+    /// convention and not by guarantee, so each caller parses what it needs and
+    /// decides for itself what a malformed argument means.
+    pub arguments: String,
+}
+
+/// The `tool_calls` the first choice asked for, if any, alongside the array
+/// exactly as it arrived.
+///
+/// The verbatim array is returned because it has to be echoed back in the
+/// follow-up request: rebuilding it from the parsed calls would drop provider
+/// fields and risks ids that no longer line up with the `tool` messages
+/// answering them.
+pub fn parse_tool_calls(value: &Value) -> Option<(Value, Vec<ToolCall>)> {
+    let raw = value
+        .get("choices")
+        .and_then(Value::as_array)
+        .and_then(|c| c.first())
+        .and_then(|c| c.get("message"))
+        .and_then(|m| m.get("tool_calls"))?;
+    let entries = raw.as_array()?;
+    let calls: Vec<ToolCall> = entries
+        .iter()
+        .filter_map(|entry| {
+            let function = entry.get("function")?;
+            Some(ToolCall {
+                id: entry.get("id").and_then(Value::as_str)?.to_string(),
+                name: function.get("name").and_then(Value::as_str)?.to_string(),
+                arguments: function
+                    .get("arguments")
+                    .and_then(Value::as_str)
+                    .unwrap_or("{}")
+                    .to_string(),
+            })
+        })
+        .collect();
+    // An empty or wholly unparseable array is not a tool round: reporting one
+    // would send the caller back to the model with nothing to answer, forever.
+    if calls.is_empty() {
+        return None;
+    }
+    Some((raw.clone(), calls))
+}
+
 /// Port of the non-streaming inbox completion's response parse: the trimmed
 /// first-choice content plus bounded usage.
 pub fn parse_completion(value: &Value) -> (Option<String>, Option<i64>, Option<i64>) {
@@ -674,6 +776,72 @@ pub fn bounded_json(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn completion_with_calls(calls: Value) -> Value {
+        serde_json::json!({ "choices": [{ "message": { "content": null, "tool_calls": calls } }] })
+    }
+
+    #[test]
+    fn tool_calls_are_read_off_the_first_choice() {
+        let value = completion_with_calls(serde_json::json!([{
+            "id": "call_1",
+            "type": "function",
+            "function": { "name": "get_signin_code", "arguments": "{}" },
+        }]));
+        let (raw, calls) = parse_tool_calls(&value).expect("tool calls");
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].id, "call_1");
+        assert_eq!(calls[0].name, "get_signin_code");
+        assert_eq!(calls[0].arguments, "{}");
+        // The array is carried verbatim, provider fields and all, because it
+        // has to be echoed back with ids the tool results will name.
+        assert_eq!(raw[0]["type"], serde_json::json!("function"));
+    }
+
+    #[test]
+    fn a_call_with_no_arguments_field_still_parses() {
+        // Providers omit `arguments` for a no-argument tool often enough that
+        // treating it as malformed would drop real calls on the floor.
+        let value = completion_with_calls(serde_json::json!([{
+            "id": "call_1", "function": { "name": "list_commands" },
+        }]));
+        let (_, calls) = parse_tool_calls(&value).expect("tool calls");
+        assert_eq!(calls[0].arguments, "{}");
+    }
+
+    #[test]
+    fn nothing_to_call_is_reported_as_no_tool_round() {
+        // Each of these would otherwise send the caller back to the model with
+        // no results to supply, which is a loop that never ends.
+        for value in [
+            serde_json::json!({ "choices": [{ "message": { "content": "hi" } }] }),
+            completion_with_calls(serde_json::json!([])),
+            completion_with_calls(serde_json::json!([{ "id": "call_1" }])),
+            completion_with_calls(serde_json::json!([{ "function": { "name": "x" } }])),
+            serde_json::json!({}),
+        ] {
+            assert_eq!(parse_tool_calls(&value), None, "{value}");
+        }
+    }
+
+    #[test]
+    fn the_wire_shape_omits_tool_fields_rather_than_nulling_them() {
+        let plain = Message::new("user", "hi").to_json();
+        assert_eq!(
+            plain,
+            serde_json::json!({ "role": "user", "content": "hi" })
+        );
+        assert!(plain.get("tool_calls").is_none());
+
+        let request = Message::tool_request(serde_json::json!([{ "id": "c1" }])).to_json();
+        assert_eq!(request["role"], serde_json::json!("assistant"));
+        assert_eq!(request["tool_calls"][0]["id"], serde_json::json!("c1"));
+
+        let result = Message::tool_result("c1", "{\"ok\":true}").to_json();
+        assert_eq!(result["role"], serde_json::json!("tool"));
+        assert_eq!(result["tool_call_id"], serde_json::json!("c1"));
+        assert!(result.get("tool_calls").is_none());
+    }
 
     #[test]
     fn ai_gateway_route_rejects_path_smuggling_and_carries_its_token() {
@@ -817,12 +985,7 @@ mod tests {
 
     #[test]
     fn reserves_framing_for_64_tiny_messages() {
-        let messages: Vec<Message> = (0..64)
-            .map(|_| Message {
-                role: "user".into(),
-                content: "x".into(),
-            })
-            .collect();
+        let messages: Vec<Message> = (0..64).map(|_| Message::new("user", "x")).collect();
         // 64 * (16 + 4 + 1) + 64 = 1408, plus max_tokens 1 = 1409.
         assert_eq!(input_token_reservation(&messages), 1408);
         assert_eq!(input_token_reservation(&messages) + 1, 1409);
@@ -881,10 +1044,7 @@ mod tests {
         assert_eq!(cost_for(7, 2, 1_000_000, 1_000_000), 9);
         // estimated_cost for the streaming test: reservation(256 max) with
         // input reservation for "Remember this safely." (21 bytes) + framing.
-        let messages = vec![Message {
-            role: "user".into(),
-            content: "Remember this safely.".into(),
-        }];
+        let messages = vec![Message::new("user", "Remember this safely.")];
         let est_input = input_token_reservation(&messages);
         // 64 + 16 + 4 + 21 = 105.
         assert_eq!(est_input, 105);

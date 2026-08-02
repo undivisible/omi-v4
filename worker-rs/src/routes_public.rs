@@ -742,10 +742,8 @@ async fn recent_history(
         .rev()
         .filter_map(|row| {
             let role = memory::str_field(row, "role");
-            (role == "user" || role == "assistant").then(|| crate::managed_ai::Message {
-                role,
-                content: memory::str_field(row, "text"),
-            })
+            (role == "user" || role == "assistant")
+                .then(|| crate::managed_ai::Message::new(&role, memory::str_field(row, "text")))
         })
         .collect())
 }
@@ -794,13 +792,13 @@ pub(crate) async fn ask_omi_operation(
             ));
         };
         let memory_context = memory::memory_context_for(&ctx.env, uid, &input.question).await;
-        let mut messages = vec![crate::managed_ai::Message {
-            role: "system".into(),
-            content: match memory_context {
+        let mut messages = vec![crate::managed_ai::Message::new(
+            "system",
+            match memory_context {
                 None => api::ASSISTANT_SYSTEM_PROMPT.to_string(),
                 Some(context) => format!("{}\n\n{}", api::ASSISTANT_SYSTEM_PROMPT, context),
             },
-        }];
+        )];
         messages.extend(recent_history(&db, uid).await?);
         let Some(completion) = crate::routes_ai::run_managed_inbox_completion(
             &ctx.env,

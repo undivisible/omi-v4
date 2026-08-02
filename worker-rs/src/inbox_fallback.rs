@@ -83,9 +83,10 @@ pub const GUEST_PROMPT_ADDENDUM: &str = "This person has not signed in on a phon
 /// command injection.
 pub fn system_prompt_for_channel(channel: &str) -> String {
     format!(
-        "{SYSTEM_PROMPT_BASE}\n\n{}\n\n{}",
+        "{SYSTEM_PROMPT_BASE}\n\n{}\n\n{}\n\n{}",
         crate::channel_style::channel_style_prompt(channel),
-        crate::channel_commands::channel_command_prompt()
+        crate::channel_commands::channel_command_prompt(),
+        crate::channel_tools::TOOL_PROMPT
     )
 }
 

@@ -16,6 +16,7 @@ pub mod channel_group;
 pub mod channel_link;
 pub mod channel_signup;
 pub mod channel_style;
+pub mod channel_tools;
 pub mod conversations;
 pub mod crepus_safety;
 pub mod cron_cursor;
