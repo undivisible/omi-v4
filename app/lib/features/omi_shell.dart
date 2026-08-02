@@ -127,7 +127,8 @@ class _OmiShellState extends State<OmiShell> {
       final previous = _inputDiagnostics;
       if (previous?.trusted == event.trusted &&
           previous?.inputMonitoring == event.inputMonitoring &&
-          previous?.tapInstalled == event.tapInstalled) {
+          previous?.tapInstalled == event.tapInstalled &&
+          previous?.secureInput == event.secureInput) {
         return;
       }
       setState(() => _inputDiagnostics = event);
@@ -145,8 +146,9 @@ class _OmiShellState extends State<OmiShell> {
       SnackBar(
         content: Text(
           event.inputMonitoring
-              ? 'Global double-Shift needs Input Monitoring in System Settings '
-                    '→ Privacy & Security. It still works inside the hub window.'
+              ? 'Global double-Shift is not running even though Input '
+                    'Monitoring is granted. It still works inside the hub '
+                    'window.'
               : 'Allow Input Monitoring so double-Shift works outside Omi. '
                     'System Settings should open now.',
         ),
@@ -525,6 +527,13 @@ class _GlobalInputNotice extends StatelessWidget {
   final DesktopInputDiagnosticsEvent diagnostics;
   final VoidCallback onGrant;
 
+  String get _cause => diagnostics.secureInput
+      ? 'Another app has secure input on — a password field is focused '
+            'somewhere — so macOS is handing your keystrokes to nobody. '
+            'Close that field and double-Shift comes back. '
+      : 'Global double-Shift only works outside Omi once Input Monitoring '
+            'is granted. ';
+
   @override
   Widget build(BuildContext context) => DecoratedBox(
     key: const Key('global_input_notice'),
@@ -545,25 +554,26 @@ class _GlobalInputNotice extends StatelessWidget {
           const SizedBox(width: 10),
           Expanded(
             child: Text(
-              'Global double-Shift only works outside Omi once Input Monitoring '
-              'is granted. '
+              '$_cause'
               'Accessibility: '
               '${diagnostics.trusted ? "granted" : "not granted"} · '
               'Input Monitoring: '
               '${diagnostics.inputMonitoring ? "granted" : "not granted"} · '
-              'input tap: ${diagnostics.tapInstalled ? "live" : "not running"}.',
+              'input tap: ${diagnostics.tapInstalled ? "live" : "not running"} · '
+              'secure input: ${diagnostics.secureInput ? "on" : "off"}.',
               style: const TextStyle(fontSize: 12, color: Color(0xffffd99a)),
             ),
           ),
-          TextButton(
-            key: const Key('global_input_notice_grant'),
-            onPressed: onGrant,
-            child: Text(
-              diagnostics.inputMonitoring
-                  ? 'Open Accessibility'
-                  : 'Allow Input Monitoring',
+          if (!diagnostics.secureInput)
+            TextButton(
+              key: const Key('global_input_notice_grant'),
+              onPressed: onGrant,
+              child: Text(
+                diagnostics.inputMonitoring
+                    ? 'Open Accessibility'
+                    : 'Allow Input Monitoring',
+              ),
             ),
-          ),
         ],
       ),
     ),

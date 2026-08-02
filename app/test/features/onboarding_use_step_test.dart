@@ -19,7 +19,7 @@ void main() {
   /// A single chord resolves only after the double-chord window elapses.
   Future<void> singleChord(WidgetTester tester) async {
     await chord(tester);
-    await tester.pump(const Duration(milliseconds: 450));
+    await tester.pump(const Duration(milliseconds: 600));
   }
 
   Future<void> doubleChord(WidgetTester tester) async {

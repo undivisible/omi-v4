@@ -118,6 +118,28 @@ void main() {
     expect(press(PhysicalShift.right, true), [ShiftGestureAction.toggleVoice]);
   });
 
+  test('a second chord that keeps one Shift held still toggles voice', () {
+    final gesture = machine();
+
+    expect(gesture.shift(PhysicalShift.left, true), isEmpty);
+    expect(gesture.shift(PhysicalShift.right, true), isEmpty);
+    expect(gesture.hasPendingChord, isTrue);
+    // Only the right Shift is tapped again; the left one never comes up.
+    expect(gesture.shift(PhysicalShift.right, false), isEmpty);
+    advance(const Duration(milliseconds: 200));
+    expect(gesture.shift(PhysicalShift.right, true), [
+      ShiftGestureAction.toggleVoice,
+    ]);
+  });
+
+  test('the double-chord window fits an unhurried human repeat', () {
+    final gesture = machine();
+
+    expect(chord(gesture), isEmpty);
+    advance(const Duration(milliseconds: 450));
+    expect(chord(gesture), [ShiftGestureAction.toggleVoice]);
+  });
+
   test('secure input cancels once, not on every repeat', () {
     final gesture = machine();
 

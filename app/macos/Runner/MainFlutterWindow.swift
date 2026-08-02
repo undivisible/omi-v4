@@ -582,6 +582,7 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
   private var lastLeftShiftDown = false
   private var lastRightShiftDown = false
   private var lastSecureInput: Bool?
+  private var lastDiagnostics: [Bool]?
   let voiceOverlayController = VoiceOverlayController()
   private let permissionService = MacPermissionService()
   private var permissionOverlay: PermissionDragOverlay?
@@ -617,18 +618,30 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
   func onCancel(withArguments arguments: Any?) -> FlutterError? {
     keyboardSink = nil
     lastSecureInput = nil
+    lastDiagnostics = nil
     return nil
   }
 
-  /// Reports whether the process is Accessibility-trusted and whether the
-  /// global capture tap is actually live, so the in-app diagnostic can show a
-  /// missing-permission or dead-tap state instead of failing silently.
+  /// Reports whether the process is Accessibility-trusted, whether the global
+  /// capture tap is actually live, and whether secure event input is holding
+  /// every keystroke back, so the in-app diagnostic can show a
+  /// missing-permission, dead-tap or suppressed state instead of failing
+  /// silently.
   private func emitDiagnostics() {
+    let state = [
+      AXIsProcessTrusted(),
+      MacPermissionService.inputMonitoringGranted,
+      globalInputTap.isInstalled,
+      IsSecureEventInputEnabled(),
+    ]
+    guard state != lastDiagnostics else { return }
+    lastDiagnostics = state
     keyboardSink?([
       "type": "diagnostics",
-      "trusted": AXIsProcessTrusted(),
-      "inputMonitoring": MacPermissionService.inputMonitoringGranted,
-      "tapInstalled": globalInputTap.isInstalled,
+      "trusted": state[0],
+      "inputMonitoring": state[1],
+      "tapInstalled": state[2],
+      "secureInput": state[3],
     ])
   }
 
@@ -677,6 +690,7 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
     guard force || enabled != lastSecureInput else { return }
     lastSecureInput = enabled
     keyboardSink?(["type": "secureInput", "enabled": enabled])
+    emitDiagnostics()
   }
 
   override func awakeFromNib() {

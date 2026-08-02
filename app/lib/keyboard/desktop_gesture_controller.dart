@@ -44,8 +44,12 @@ final class DesktopGestureController {
 
   /// A first chord is held back for the double-chord window; when no second
   /// chord upgrades it to voice, the timer resolves it as the single-chord
-  /// text-input intent.
+  /// text-input intent. The timer is armed once per pending chord — every
+  /// event runs through here, and restarting it on the Shift releases that
+  /// follow the chord would push the deadline past the window the machine
+  /// measures the second chord against.
   void _armChordTimer() {
+    if (_machine.hasPendingChord && (_chordTimer?.isActive ?? false)) return;
     _chordTimer?.cancel();
     _chordTimer = null;
     if (!_machine.hasPendingChord) return;

@@ -102,6 +102,45 @@ void main() {
     await h.events.close();
   });
 
+  test('later events do not push back the pending chord deadline', () async {
+    final h = harness();
+
+    chord(h.events);
+    // The native side keeps talking while the chord waits — its secure-input
+    // state precedes every keystroke. The deadline belongs to the chord.
+    for (var tick = 0; tick < 3; tick += 1) {
+      await Future<void>.delayed(window ~/ 2);
+      h.events.add(const DesktopSecureInputEvent(false));
+    }
+    await Future<void>.delayed(Duration.zero);
+
+    expect(h.actions, [ShiftGestureAction.openOverlay]);
+    await h.controller.dispose();
+    await h.events.close();
+  });
+
+  test('a second chord holding one Shift down still toggles voice', () async {
+    final h = harness();
+
+    h.events.add(
+      const DesktopShiftEvent(key: PhysicalShift.left, pressed: true),
+    );
+    h.events.add(
+      const DesktopShiftEvent(key: PhysicalShift.right, pressed: true),
+    );
+    h.events.add(
+      const DesktopShiftEvent(key: PhysicalShift.right, pressed: false),
+    );
+    h.events.add(
+      const DesktopShiftEvent(key: PhysicalShift.right, pressed: true),
+    );
+    await Future<void>.delayed(Duration.zero);
+
+    expect(h.actions, [ShiftGestureAction.toggleVoice]);
+    await h.controller.dispose();
+    await h.events.close();
+  });
+
   test('escape emits the shared dismissal', () async {
     final h = harness();
 

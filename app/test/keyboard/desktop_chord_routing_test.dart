@@ -72,6 +72,30 @@ void main() {
 
     await harness.close(tester);
   });
+
+  testWidgets('secure input held on elsewhere is named as the cause', (
+    tester,
+  ) async {
+    final harness = await _Harness.pump(tester, makeServices());
+
+    // Every grant is in place and the tap is alive, yet macOS is delivering
+    // nothing: without naming secure input this looks like a broken chord.
+    harness.emit(const {
+      'type': 'diagnostics',
+      'trusted': true,
+      'inputMonitoring': true,
+      'tapInstalled': true,
+      'secureInput': true,
+    });
+    await tester.pump();
+
+    expect(find.byKey(const Key('global_input_notice')), findsOne);
+    expect(find.textContaining('secure input'), findsOne);
+    // Nothing to grant — offering a permission button would be a dead end.
+    expect(find.byKey(const Key('global_input_notice_grant')), findsNothing);
+
+    await harness.close(tester);
+  });
 }
 
 final class _Harness {

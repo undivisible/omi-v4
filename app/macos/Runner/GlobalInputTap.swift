@@ -27,8 +27,10 @@ final class GlobalInputTap {
     (1 << CGEventType.keyDown.rawValue)
     | (1 << CGEventType.flagsChanged.rawValue)
 
-  /// How often a failed installation is retried, so granting Accessibility
-  /// while omi runs starts global capture without a restart.
+  /// How often a failed installation is retried and the live state is
+  /// re-published, so granting Accessibility while omi runs starts global
+  /// capture without a restart, and a state that changes without any event
+  /// reaching us — secure input engaging elsewhere — still becomes visible.
   static let retryInterval: TimeInterval = 3
 
   private var tap: CFMachPort?
@@ -48,11 +50,11 @@ final class GlobalInputTap {
     let timer = Timer(timeInterval: Self.retryInterval, repeats: true) {
       [weak self] _ in
       guard let self else { return }
-      if self.isInstalled { return }
-      let wasInstalled = self.tap != nil
-      self.teardownTap()
-      self.install()
-      if self.isInstalled || wasInstalled { self.onStateChange?() }
+      if !self.isInstalled {
+        self.teardownTap()
+        self.install()
+      }
+      self.onStateChange?()
     }
     RunLoop.main.add(timer, forMode: .common)
     retryTimer = timer
@@ -67,8 +69,11 @@ final class GlobalInputTap {
   private func install() {
     // Input Monitoring is required for a session keyboard tap on modern
     // macOS — Accessibility alone is not enough and `tapCreate` returns nil
-    // without this grant.
-    guard tap == nil, MacPermissionService.inputMonitoringGranted else { return }
+    // without this grant. `tapCreate` itself is the authority on that, not
+    // `IOHIDCheckAccess`, which reports a stale answer for a re-signed build
+    // that the user has already allowed; gating on the check would leave the
+    // tap uninstalled forever with the grant visibly on.
+    guard tap == nil else { return }
     let callback: CGEventTapCallBack = { _, type, event, userInfo in
       guard let userInfo else { return Unmanaged.passUnretained(event) }
       let tap = Unmanaged<GlobalInputTap>.fromOpaque(userInfo)

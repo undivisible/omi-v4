@@ -26,13 +26,16 @@ enum ShiftGestureAction {
 class ShiftGestureMachine {
   ShiftGestureMachine({
     DateTime Function()? now,
-    this.doubleChordWindow = const Duration(milliseconds: 400),
+    this.doubleChordWindow = const Duration(milliseconds: 500),
   }) : _now = now ?? DateTime.now;
 
   final DateTime Function() _now;
 
   /// How long a completed chord waits for a second chord before it resolves
-  /// as the single-chord text-input intent.
+  /// as the single-chord text-input intent. Matched to the system
+  /// double-click default: a two-key chord repeated twice is slower than a
+  /// double tap of one key, and a tighter window reads as the gesture being
+  /// broken rather than missed.
   final Duration doubleChordWindow;
 
   bool secureInput = false;
@@ -107,8 +110,11 @@ class ShiftGestureMachine {
 
   void reset() => _reset();
 
+  /// Releasing either Shift ends the chord. Requiring both back up first
+  /// loses the common second chord, where one Shift is held down through the
+  /// repeat and only the other is tapped again.
   void _clearChordWhenReleased() {
-    if (!_leftDown && !_rightDown) _chordConsumed = false;
+    if (!_leftDown || !_rightDown) _chordConsumed = false;
   }
 
   void _reset() {

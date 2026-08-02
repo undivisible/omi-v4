@@ -975,6 +975,7 @@ class _OnboardingUseStepState extends State<OnboardingUseStep> {
     for (final action in actions) {
       unawaited(widget.pill.handleGesture(action));
     }
+    if (_chords.hasPendingChord && (_chordTimer?.isActive ?? false)) return;
     _chordTimer?.cancel();
     _chordTimer = null;
     if (!_chords.hasPendingChord) return;
