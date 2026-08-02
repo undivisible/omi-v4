@@ -761,11 +761,29 @@ async fn handle_chat_completions(mut req: Request, ctx: RouteContext<()>) -> Res
         return error_json("Managed AI unavailable", 503);
     };
 
-    let Some(parsed) = body
+    let Some(mut parsed) = body
         .as_ref()
         .and_then(|b| managed_ai::parse_request(b, &model))
     else {
         return error_json("Invalid request", 400);
+    };
+    // The client asks for the tier's model by its bare id, and the compat
+    // endpoint reads the provider off the front of the id — so the same
+    // rewrite the inbox path does has to happen here, or the gateway routes to
+    // whichever provider the first path segment names while carrying a key
+    // that provider never issued.
+    let provider = if gateway.is_some() {
+        parsed.model = managed_ai::gateway_model(
+            &parsed.model,
+            &env_get(&ctx.env, "CF_AI_GATEWAY_PROVIDER")
+                .unwrap_or_else(|| managed_ai::DEFAULT_GATEWAY_PROVIDER.to_string()),
+        );
+        // What the row and the trace say was billed has to be who was actually
+        // asked. The tier's own name for its upstream is only right when the
+        // request goes there directly.
+        managed_ai::DEFAULT_GATEWAY_PROVIDER
+    } else {
+        provider
     };
 
     let auth = match authenticate(&req, &ctx).await {
