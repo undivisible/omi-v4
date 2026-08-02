@@ -67,9 +67,10 @@ pub enum RejectReason {
     Expired,
     /// Matched, but this code has been guessed at too often.
     Locked,
-    /// Matched a code minted only for binding, not for signing in. A binding
-    /// code must never be a sign-in credential: it is issued on a longer TTL
-    /// and under weaker assumptions.
+    /// Matched a code minted only for binding, not for signing in, against an
+    /// account that someone has already signed into. There the two codes mean
+    /// different things and a binding code must not be a sign-in credential:
+    /// it is issued on a longer TTL and under weaker assumptions.
     WrongPurpose,
     /// Group chats cannot own an identity — any member could sign in as it.
     GroupChat,
@@ -87,6 +88,10 @@ pub struct StoredCode {
     /// The uid already bound to this sender, if any. `None` means this sender
     /// has no account and one must be created.
     pub bound_uid: Option<String>,
+    /// Whether the bound account has ever been signed into on a device. An
+    /// account nobody has claimed has no other side to link to, so for it the
+    /// two kinds of code mean the same thing.
+    pub bound_account_claimed: bool,
 }
 
 /// Whether a well-formed-but-unmatched code should count against the global
@@ -109,6 +114,18 @@ pub fn burns_code_attempt(reason: RejectReason) -> bool {
     )
 }
 
+/// Whether a binding code may stand in for a sign-in code.
+///
+/// It may, and only, when nobody has signed into the bound account on a device.
+/// There is then no second side to bind this chat to, so "link" and "sign in"
+/// are the same request and refusing one of them only tells the person their
+/// code is broken. Once the account is claimed the distinction is real again —
+/// a binding code is typed by someone already authenticated and lives far
+/// longer — so it is refused there.
+pub fn accepts_link_code(code: &StoredCode) -> bool {
+    code.purpose == PURPOSE_LINK && !code.bound_account_claimed
+}
+
 /// Decides the outcome for a code the glue has already normalized and looked
 /// up. `stored` is `None` when the hash matched nothing.
 pub fn decide(stored: Option<&StoredCode>, now_ms: i64) -> ExchangeDecision {
@@ -118,7 +135,7 @@ pub fn decide(stored: Option<&StoredCode>, now_ms: i64) -> ExchangeDecision {
     if code.locked_at_ms.is_some() || code.attempts >= MAX_CODE_ATTEMPTS {
         return ExchangeDecision::Reject(RejectReason::Locked);
     }
-    if code.purpose != PURPOSE_SIGNIN {
+    if code.purpose != PURPOSE_SIGNIN && !accepts_link_code(code) {
         return ExchangeDecision::Reject(RejectReason::WrongPurpose);
     }
     if code.consumed_at_ms.is_some() {
@@ -169,6 +186,7 @@ mod tests {
             locked_at_ms: None,
             is_group_chat: false,
             bound_uid: None,
+            bound_account_claimed: false,
         }
     }
 
@@ -187,6 +205,7 @@ mod tests {
     fn a_bound_sender_keeps_their_existing_uid() {
         let mut code = live();
         code.bound_uid = Some("usr_existing".to_owned());
+        code.bound_account_claimed = true;
         assert_eq!(
             decide(Some(&code), NOW),
             ExchangeDecision::Accept {
@@ -230,12 +249,59 @@ mod tests {
     }
 
     #[test]
-    fn a_binding_code_is_not_a_sign_in_credential() {
+    fn a_binding_code_is_not_a_sign_in_credential_for_a_claimed_account() {
+        let mut code = live();
+        code.purpose = PURPOSE_LINK.to_owned();
+        code.bound_uid = Some("usr_existing".to_owned());
+        code.bound_account_claimed = true;
+        assert_eq!(
+            decide(Some(&code), NOW),
+            ExchangeDecision::Reject(RejectReason::WrongPurpose)
+        );
+    }
+
+    #[test]
+    fn a_binding_code_signs_in_an_account_nobody_has_claimed() {
+        let mut code = live();
+        code.purpose = PURPOSE_LINK.to_owned();
+        code.bound_uid = Some("usr_guest".to_owned());
+        assert_eq!(
+            decide(Some(&code), NOW),
+            ExchangeDecision::Accept {
+                uid: "usr_guest".to_owned(),
+                is_new: false
+            }
+        );
+    }
+
+    #[test]
+    fn a_binding_code_from_a_sender_with_no_account_signs_them_up() {
         let mut code = live();
         code.purpose = PURPOSE_LINK.to_owned();
         assert_eq!(
             decide(Some(&code), NOW),
-            ExchangeDecision::Reject(RejectReason::WrongPurpose)
+            ExchangeDecision::Accept {
+                uid: String::new(),
+                is_new: true
+            }
+        );
+    }
+
+    #[test]
+    fn a_spent_or_expired_binding_code_is_still_refused() {
+        let mut code = live();
+        code.purpose = PURPOSE_LINK.to_owned();
+        code.consumed_at_ms = Some(NOW - 1);
+        assert_eq!(
+            decide(Some(&code), NOW),
+            ExchangeDecision::Reject(RejectReason::AlreadyUsed)
+        );
+        let mut code = live();
+        code.purpose = PURPOSE_LINK.to_owned();
+        code.expires_at_ms = NOW;
+        assert_eq!(
+            decide(Some(&code), NOW),
+            ExchangeDecision::Reject(RejectReason::Expired)
         );
     }
 

@@ -10,11 +10,11 @@ pub const IMESSAGE_REPLY_LIMIT: usize = 2000;
 pub fn channel_style_prompt(channel: &str) -> String {
     if channel == "telegram" {
         return format!(
-            "Delivery channel: Telegram. {SHARED_MESSAGING_RULES} Telegram allows a little structure, but still avoid markdown — use line breaks sparingly instead of bullets."
+            "Delivery channel: Telegram. {SHARED_MESSAGING_RULES} Telegram allows a little structure, but still avoid markdown — put a blank line between distinct thoughts, and a code or an instruction on its own line, instead of running everything into one paragraph or using bullets."
         );
     }
     format!(
-        "Delivery channel: iMessage/SMS. {SHARED_MESSAGING_RULES} iMessage reads best as casual texts — no lists, no tables, no emoji spam unless the user uses them first."
+        "Delivery channel: iMessage/SMS. {SHARED_MESSAGING_RULES} iMessage reads best as casual texts — no lists, no tables, no emoji spam unless the user uses them first. Start a new line for each separate thought, and put a code or an instruction on its own line."
     )
 }
 
@@ -32,6 +32,7 @@ pub fn sanitize_channel_reply(channel: &str, text: &str) -> String {
     if value.is_empty() {
         return value;
     }
+    value = unwrap_quoted_reply(&value);
     value = drop_fenced_blocks(&value).trim().to_string();
     value = unwrap_markdown_links(&value);
     value = strip_line_prefixes(&value);
@@ -45,6 +46,26 @@ pub fn sanitize_channel_reply(channel: &str, text: &str) -> String {
         value = format!("{head}…");
     }
     value
+}
+
+/// Drop a pair of quotes wrapping the whole reply. A model that has just read a
+/// tool result sometimes hands back its answer as a quoted string, and the
+/// person then sees their message inside literal quote marks. Only a reply that
+/// quotes nothing else is unwrapped, so a message that really does quote
+/// something at both ends is left alone.
+fn unwrap_quoted_reply(value: &str) -> String {
+    for (open, close) in [('"', '"'), ('“', '”')] {
+        let Some(inner) = value
+            .strip_prefix(open)
+            .and_then(|rest| rest.strip_suffix(close))
+        else {
+            continue;
+        };
+        if !inner.is_empty() && !inner.contains(open) && !inner.contains(close) {
+            return inner.trim().to_string();
+        }
+    }
+    value.to_string()
 }
 
 fn drop_fenced_blocks(value: &str) -> String {
@@ -214,6 +235,41 @@ mod tests {
             sanitize_channel_reply("telegram", "see [the docs](https://example.com)"),
             "see the docs (https://example.com)"
         );
+    }
+
+    #[test]
+    fn a_reply_wrapped_in_quotes_is_unwrapped() {
+        assert_eq!(
+            sanitize_channel_reply("telegram", "\"Here's your code: R76VTJ9\""),
+            "Here's your code: R76VTJ9"
+        );
+        assert_eq!(
+            sanitize_channel_reply("telegram", "“Here's your code”"),
+            "Here's your code"
+        );
+        // A reply that quotes something inside itself keeps every quote.
+        assert_eq!(
+            sanitize_channel_reply("telegram", "you said \"hi\" and then \"bye\""),
+            "you said \"hi\" and then \"bye\""
+        );
+    }
+
+    #[test]
+    fn paragraph_breaks_survive() {
+        assert_eq!(
+            sanitize_channel_reply(
+                "telegram",
+                "Here's your code: R76VTJ9\n\nIt lasts 3 minutes."
+            ),
+            "Here's your code: R76VTJ9\n\nIt lasts 3 minutes."
+        );
+    }
+
+    #[test]
+    fn each_channel_is_told_to_break_lines_between_thoughts() {
+        for channel in ["telegram", "imessage"] {
+            assert!(channel_style_prompt(channel).contains("own line"));
+        }
     }
 
     #[test]

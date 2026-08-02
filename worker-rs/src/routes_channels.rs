@@ -1982,38 +1982,6 @@ async fn run_channel_tool(env: &Env, uid: &str, ctx: &ToolContext, name: &str, n
             ),
             Err(_) => tools::failed_result("Issuing the code failed. Ask them to try again."),
         },
-        // A link code attaches this chat to an account that is already signed
-        // in somewhere. Someone who has never signed in anywhere cannot use
-        // one: they would paste it into the app's sign-in box, where it is
-        // rejected for having the wrong purpose and reads as "your code is
-        // broken". The words that ask for the two are near-identical — "a code
-        // to link my desktop" is a sign-in code — so the situation decides,
-        // not the phrasing.
-        tools::GET_LINK_CODE if is_unclaimed_channel_account(env, uid).await => {
-            tools::failed_result(
-                "They have not signed in on any device yet, so a link code is the wrong one and \
-the app will reject it. Call get_signin_code instead.",
-            )
-        }
-        tools::GET_LINK_CODE => match issue_link_code(
-            env,
-            ctx.channel,
-            &ctx.channel_user_id,
-            &ctx.channel_chat_id,
-            now,
-        )
-        .await
-        {
-            Ok(Some((code, expires_at))) => tools::ok_result(json!({
-                "code": code,
-                "expiresInMinutes": (expires_at - now).max(0) / 60_000,
-                "instructions": "Enter this in the Omi app under Settings, Account, Link a chat, or type it into the desktop chat box. It works once.",
-            })),
-            Ok(None) => tools::failed_result(
-                "A link code cannot be issued in this chat. Ask them to message Omi directly, one to one.",
-            ),
-            Err(_) => tools::failed_result("Issuing the code failed. Ask them to try again."),
-        },
         tools::GET_ACCOUNT_STATUS => {
             let binding = channel_binding(env, ctx.channel, &ctx.channel_user_id)
                 .await

@@ -13,6 +13,13 @@
 //! destructive or spend money, and a model that mis-reads one sentence should
 //! not be able to sign someone out. They stay as typed commands, which are an
 //! explicit instruction rather than an inference.
+//!
+//! Minting a binding code is not here either, for a related reason. The two
+//! codes are asked for in near-identical words, the model kept choosing the
+//! binding one for people who wanted to sign in, and a binding code pasted into
+//! the sign-in box reads as "your code is broken". Rewriting the description
+//! did not fix it twice over, so the choice is gone: `/start` mints a binding
+//! code, and that is a person saying exactly one thing.
 
 use serde_json::{json, Value};
 
@@ -28,16 +35,10 @@ pub const MAX_TOOL_ROUNDS: u32 = 2;
 /// The name of every tool, in one place, so the catalogue and the executor
 /// cannot disagree about what exists.
 pub const GET_SIGNIN_CODE: &str = "get_signin_code";
-pub const GET_LINK_CODE: &str = "get_link_code";
 pub const GET_ACCOUNT_STATUS: &str = "get_account_status";
 pub const LIST_COMMANDS: &str = "list_commands";
 
-pub const TOOL_NAMES: &[&str] = &[
-    GET_SIGNIN_CODE,
-    GET_LINK_CODE,
-    GET_ACCOUNT_STATUS,
-    LIST_COMMANDS,
-];
+pub const TOOL_NAMES: &[&str] = &[GET_SIGNIN_CODE, GET_ACCOUNT_STATUS, LIST_COMMANDS];
 
 fn tool(name: &str, description: &str) -> Value {
     json!({
@@ -65,13 +66,6 @@ this whenever they want to use Omi on a device, get set up, add another device, 
 have been signed out — however they phrase it. Never invent a code yourself.",
         ),
         tool(
-            GET_LINK_CODE,
-            "Mint a code that attaches this chat to an Omi account the person is ALREADY signed \
-into on a phone or desktop. This is the rarer of the two codes. Getting Omi onto a device — \
-including 'a code to link my desktop', which sounds like this one and is not — is \
-get_signin_code. Only use this when they have said they are already signed in somewhere else.",
-        ),
-        tool(
             GET_ACCOUNT_STATUS,
             "Look up whether this chat is connected to an account, which account that is, and \
 whether they have signed in on a device yet. Call this before answering anything about their \
@@ -91,7 +85,7 @@ can do here or ask for help, so you quote the real list instead of remembering o
 /// specific and common: asked for a code, a model happily explains where codes
 /// come from and never calls anything, and the user is left holding advice
 /// instead of a code.
-pub const TOOL_PROMPT: &str = "You have tools for the things you cannot do with words: minting sign-in and link codes, and reading this chat's account state. When someone wants one of those, call the tool — do not describe how they could get it themselves, and never make up a code, a status, or a command. Call a tool at most twice for one message, then answer in words with what it gave you.";
+pub const TOOL_PROMPT: &str = "You have tools for the things you cannot do with words: minting a sign-in code, and reading this chat's account state. When someone wants one of those, call the tool — do not describe how they could get it themselves, and never make up a code, a status, or a command. Call a tool at most twice for one message, then answer in words with what it gave you.";
 
 /// What a tool the executor does not recognise gets told.
 ///
@@ -153,6 +147,14 @@ mod tests {
         let names = TOOL_NAMES.join(" ");
         for forbidden in ["logout", "unlink", "reset", "delete", "subscribe", "pay"] {
             assert!(!names.contains(forbidden), "{forbidden} is model-invokable");
+        }
+    }
+
+    #[test]
+    fn the_model_cannot_choose_the_binding_code() {
+        assert!(!TOOL_NAMES.join(" ").contains("link"));
+        for schema in tool_schemas() {
+            assert_ne!(schema["function"]["name"], json!("get_link_code"));
         }
     }
 

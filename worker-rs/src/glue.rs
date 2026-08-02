@@ -2134,7 +2134,7 @@ async fn handle_channel_exchange(mut req: Request, ctx: RouteContext<()>) -> Res
     };
     let row = match db
         .prepare(
-            "SELECT c.channel, c.channel_user_id, c.channel_chat_id, c.purpose, c.expires_at,\n                    c.consumed_at, c.attempts, c.locked_at, b.uid AS bound_uid\n             FROM channel_link_codes c\n             LEFT JOIN channel_bindings b\n               ON b.channel = c.channel AND b.channel_user_id = c.channel_user_id\n              AND b.revoked_at IS NULL\n             WHERE c.code_hash = ?1",
+            "SELECT c.channel, c.channel_user_id, c.channel_chat_id, c.purpose, c.expires_at,\n                    c.consumed_at, c.attempts, c.locked_at, b.uid AS bound_uid,\n                    a.uid AS guest_uid, a.claimed_at AS guest_claimed_at\n             FROM channel_link_codes c\n             LEFT JOIN channel_bindings b\n               ON b.channel = c.channel AND b.channel_user_id = c.channel_user_id\n              AND b.revoked_at IS NULL\n             LEFT JOIN channel_accounts a\n               ON a.uid = b.uid AND a.retired_at IS NULL\n             WHERE c.code_hash = ?1",
         )
         .bind(&[js_str(&code_hash)])
     {
@@ -2163,6 +2163,16 @@ async fn handle_channel_exchange(mut req: Request, ctx: RouteContext<()>) -> Res
                 )
             }),
         bound_uid: row_str(value, "bound_uid"),
+        // Anything that is not a chat-created account still waiting to be
+        // signed into counts as claimed: an account with no `channel_accounts`
+        // row was made in the app, and one with a `claimed_at` has been signed
+        // into on a device.
+        bound_account_claimed: row_str(value, "bound_uid").is_some()
+            && !(row_str(value, "guest_uid").is_some()
+                && value
+                    .get("guest_claimed_at")
+                    .and_then(json_to_i64)
+                    .is_none()),
     });
     let crate::channel_auth::ExchangeDecision::Accept { uid, is_new } =
         crate::channel_auth::decide(stored.as_ref(), now)
@@ -2172,6 +2182,10 @@ async fn handle_channel_exchange(mut req: Request, ctx: RouteContext<()>) -> Res
     let Some(row) = row else {
         return opaque_auth_failure();
     };
+    // The consuming writes below re-check every condition `decide` checked, so
+    // a code racing two exchanges is spent once. That includes the purpose,
+    // which is whichever kind `decide` just accepted.
+    let purpose = stored.map(|code| code.purpose).unwrap_or_default();
     let Some(channel) = row_str(&row, "channel").and_then(|value| Channel::parse(&value)) else {
         return opaque_auth_failure();
     };
@@ -2202,15 +2216,16 @@ async fn handle_channel_exchange(mut req: Request, ctx: RouteContext<()>) -> Res
     let result = db
         .batch(vec![
             db.prepare(
-                "UPDATE channel_link_codes\n                 SET consumed_at = ?2\n                 WHERE code_hash = ?1 AND purpose = 'signin' AND consumed_at IS NULL\n                   AND expires_at > ?2 AND attempts < ?3 AND locked_at IS NULL",
+                "UPDATE channel_link_codes\n                 SET consumed_at = ?2\n                 WHERE code_hash = ?1 AND purpose = ?4 AND consumed_at IS NULL\n                   AND expires_at > ?2 AND attempts < ?3 AND locked_at IS NULL",
             )
             .bind(&[
                 js_str(&code_hash),
                 (now as f64).into(),
                 (crate::channel_auth::MAX_CODE_ATTEMPTS as f64).into(),
+                js_str(&purpose),
             ])?,
             db.prepare(
-                "INSERT INTO auth_sessions\n                 (id, uid, refresh_hash, device_label, origin, created_at, last_seen_at, expires_at, rotated_from)\n                 SELECT ?1, ?2, ?3, NULL, ?4, ?5, ?5, ?6, NULL\n                 WHERE EXISTS (SELECT 1 FROM channel_link_codes\n                               WHERE code_hash = ?7 AND purpose = 'signin' AND consumed_at = ?5)",
+                "INSERT INTO auth_sessions\n                 (id, uid, refresh_hash, device_label, origin, created_at, last_seen_at, expires_at, rotated_from)\n                 SELECT ?1, ?2, ?3, NULL, ?4, ?5, ?5, ?6, NULL\n                 WHERE EXISTS (SELECT 1 FROM channel_link_codes\n                               WHERE code_hash = ?7 AND purpose = ?8 AND consumed_at = ?5)",
             )
             .bind(&[
                 js_str(&write.id),
@@ -2220,6 +2235,7 @@ async fn handle_channel_exchange(mut req: Request, ctx: RouteContext<()>) -> Res
                 (write.created_at as f64).into(),
                 (write.expires_at as f64).into(),
                 js_str(&code_hash),
+                js_str(&purpose),
             ])?,
         ])
         .await;
