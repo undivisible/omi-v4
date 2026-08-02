@@ -581,6 +581,7 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
   private var pillHostChannel: FlutterMethodChannel?
   private var lastLeftShiftDown = false
   private var lastRightShiftDown = false
+  private var lastSecureInput: Bool?
   let voiceOverlayController = VoiceOverlayController()
   private let permissionService = MacPermissionService()
   private var permissionOverlay: PermissionDragOverlay?
@@ -596,7 +597,7 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
 
   func onListen(withArguments arguments: Any?, eventSink events: @escaping FlutterEventSink) -> FlutterError? {
     keyboardSink = events
-    emitSecureInput()
+    emitSecureInput(force: true)
     events(["type": "appActivation", "active": NSApp.isActive])
     // The session CGEventTap only captures global input once Input Monitoring
     // is granted; without it the double-Shift chord works solely inside omi,
@@ -615,6 +616,7 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
 
   func onCancel(withArguments arguments: Any?) -> FlutterError? {
     keyboardSink = nil
+    lastSecureInput = nil
     return nil
   }
 
@@ -663,11 +665,17 @@ class MainFlutterWindow: NSWindow, FlutterStreamHandler {
     lastRightShiftDown = false
   }
 
-  private func emitSecureInput() {
+  /// Only transitions are sent. This runs ahead of every keystroke, and a
+  /// repeat of the state Dart already holds makes the chord detector discard
+  /// the Shift it is holding, so the chord never completes. `force` re-seeds a
+  /// fresh subscriber, which has no state yet.
+  private func emitSecureInput(force: Bool = false) {
     let enabled = IsSecureEventInputEnabled()
     if enabled {
       resetShiftTracking()
     }
+    guard force || enabled != lastSecureInput else { return }
+    lastSecureInput = enabled
     keyboardSink?(["type": "secureInput", "enabled": enabled])
   }
 

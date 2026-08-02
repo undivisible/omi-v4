@@ -46,6 +46,11 @@ class ShiftGestureMachine {
   bool get hasPendingChord => _pendingChordAt != null;
 
   List<ShiftGestureAction> setSecureInput(bool enabled) {
+    // Only edges count. The native side reports the secure-input state
+    // alongside every keystroke, so treating a repeat of the current state as
+    // an edge would reset the half-finished chord between the two Shift
+    // presses and the chord could never complete.
+    if (secureInput == enabled) return const [];
     secureInput = enabled;
     // Reset on both edges: entering secure input must not leave voice
     // running, and leaving it must not fire a chord from flags that were

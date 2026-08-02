@@ -96,4 +96,34 @@ void main() {
     expect(gesture.shift(PhysicalShift.right, true), isEmpty);
     expect(gesture.hasPendingChord, isTrue);
   });
+
+  test('the secure-input state repeated between keys keeps the chord', () {
+    final gesture = machine();
+
+    // What the native side actually sends: the current secure-input state
+    // ahead of every keystroke.
+    List<ShiftGestureAction> press(PhysicalShift key, bool pressed) => [
+      ...gesture.setSecureInput(false),
+      ...gesture.shift(key, pressed),
+    ];
+
+    expect(press(PhysicalShift.left, true), isEmpty);
+    expect(press(PhysicalShift.right, true), isEmpty);
+    expect(press(PhysicalShift.left, false), isEmpty);
+    expect(press(PhysicalShift.right, false), isEmpty);
+    expect(gesture.hasPendingChord, isTrue);
+
+    advance(const Duration(milliseconds: 250));
+    expect(press(PhysicalShift.left, true), isEmpty);
+    expect(press(PhysicalShift.right, true), [ShiftGestureAction.toggleVoice]);
+  });
+
+  test('secure input cancels once, not on every repeat', () {
+    final gesture = machine();
+
+    expect(gesture.setSecureInput(true), [ShiftGestureAction.cancel]);
+    expect(gesture.setSecureInput(true), isEmpty);
+    expect(gesture.setSecureInput(false), isEmpty);
+    expect(gesture.setSecureInput(true), [ShiftGestureAction.cancel]);
+  });
 }

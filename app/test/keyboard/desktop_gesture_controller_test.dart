@@ -81,6 +81,27 @@ void main() {
     await h.events.close();
   });
 
+  test('the chord survives the secure-input state sent per keystroke', () async {
+    final h = harness();
+
+    for (var press = 0; press < 2; press += 1) {
+      for (final (key, down) in const [
+        (PhysicalShift.left, true),
+        (PhysicalShift.right, true),
+        (PhysicalShift.left, false),
+        (PhysicalShift.right, false),
+      ]) {
+        h.events.add(const DesktopSecureInputEvent(false));
+        h.events.add(DesktopShiftEvent(key: key, pressed: down));
+      }
+    }
+    await Future<void>.delayed(Duration.zero);
+
+    expect(h.actions, [ShiftGestureAction.toggleVoice]);
+    await h.controller.dispose();
+    await h.events.close();
+  });
+
   test('escape emits the shared dismissal', () async {
     final h = harness();
 
