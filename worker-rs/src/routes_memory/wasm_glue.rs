@@ -494,6 +494,12 @@ async fn search_memory_claims_by_vector(
     let Some(matches) = index.query(vector, top_k, uid).await else {
         return Ok(Vec::new());
     };
+    // Nearest neighbours are always returned; relevant ones are not. Anything
+    // under the floor is a confident non-answer, not a memory.
+    let matches = routes_memory::relevant_matches(
+        matches,
+        routes_memory::search_min_score(env_get(env, "MEMORY_SEARCH_MIN_SCORE").as_deref()),
+    );
     if matches.is_empty() {
         return Ok(Vec::new());
     }

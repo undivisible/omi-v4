@@ -49,6 +49,39 @@ pub fn valid_embedding(vector: &[f64]) -> bool {
             .all(|value| value.is_finite() && value.abs() <= 1_000.0)
 }
 
+/// Minimum cosine similarity a Vectorize match needs before it is treated as
+/// a memory hit.
+///
+/// A nearest-neighbour query has no notion of "no answer": ask it about a word
+/// the user has never said and it still returns its `topK` closest vectors,
+/// which the caller then reports as cited memory. That is how an assistant
+/// ends up asserting a conversation that never happened. `bge-base-en-v1.5`
+/// packs unrelated English into roughly 0.6–0.7 cosine and puts genuine
+/// matches well above it, so the floor sits at the top of that band: it drops
+/// the confident non-answers and leaves real hits untouched.
+///
+/// `MEMORY_SEARCH_MIN_SCORE` overrides it without a redeploy.
+pub const DEFAULT_SEARCH_MIN_SCORE: f64 = 0.7;
+
+/// Reads the configured floor, falling back to [`DEFAULT_SEARCH_MIN_SCORE`].
+/// A value outside `0.0..=1.0` is not a tighter or looser policy, it is a
+/// mistake, and is ignored rather than obeyed.
+pub fn search_min_score(value: Option<&str>) -> f64 {
+    value
+        .and_then(|raw| raw.trim().parse::<f64>().ok())
+        .filter(|score| score.is_finite() && (0.0..=1.0).contains(score))
+        .unwrap_or(DEFAULT_SEARCH_MIN_SCORE)
+}
+
+/// Drops matches below the floor. Vectorize returns matches in descending
+/// score order, so this keeps the leading run.
+pub fn relevant_matches(matches: Vec<(String, f64)>, min_score: f64) -> Vec<(String, f64)> {
+    matches
+        .into_iter()
+        .filter(|(_, score)| *score >= min_score)
+        .collect()
+}
+
 // memory-vectors.ts tuning constants.
 pub const MAXIMUM_ATTEMPTS: i64 = 8;
 pub const DRAIN_BATCH_SIZE: i64 = 32;
@@ -1027,6 +1060,36 @@ pub use wasm_glue::{cron_slice, memory_context_for, register};
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn a_nearest_neighbour_below_the_floor_is_not_a_memory() {
+        let matches = vec![
+            ("real".to_owned(), 0.88),
+            ("borderline".to_owned(), 0.7),
+            ("chinchilla".to_owned(), 0.62),
+        ];
+        let kept = relevant_matches(matches, DEFAULT_SEARCH_MIN_SCORE);
+        assert_eq!(
+            kept.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(),
+            vec!["real", "borderline"],
+        );
+    }
+
+    #[test]
+    fn every_match_can_fall_below_the_floor() {
+        let matches = vec![("a".to_owned(), 0.51), ("b".to_owned(), 0.4)];
+        assert!(relevant_matches(matches, DEFAULT_SEARCH_MIN_SCORE).is_empty());
+    }
+
+    #[test]
+    fn the_floor_is_configurable_and_nonsense_is_ignored() {
+        assert_eq!(search_min_score(Some(" 0.85 ")), 0.85);
+        assert_eq!(search_min_score(Some("0")), 0.0);
+        for bad in ["", "nope", "-0.1", "1.5", "NaN", "inf"] {
+            assert_eq!(search_min_score(Some(bad)), DEFAULT_SEARCH_MIN_SCORE);
+        }
+        assert_eq!(search_min_score(None), DEFAULT_SEARCH_MIN_SCORE);
+    }
 
     #[test]
     fn scoped_record_rejects_foreign_scope() {
