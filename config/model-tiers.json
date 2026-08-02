@@ -3,7 +3,7 @@
     "speed": "inception/mercury-2",
     "balanced": "xiaomi/mimo-v2.5",
     "smart": "openai/gpt-5.6-luna",
-    "multimodal": "google/gemini-2.5-flash-lite",
+    "multimodal": "google/gemini-3.6-flash",
     "search": "perplexity/sonar",
     "transcribe": "x-ai/grok-stt-1.0",
     "speak": "openai/gpt-audio-mini"
@@ -31,7 +31,7 @@
     "perplexity/sonar": [
       "text"
     ],
-    "google/gemini-2.5-flash-lite": [
+    "google/gemini-3.6-flash": [
       "text",
       "audioIn",
       "imageIn"

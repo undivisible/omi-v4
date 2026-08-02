@@ -30,15 +30,6 @@ const VISION_MARKERS: &[&str] = &[
     "on screen",
 ];
 
-const MEMORY_RECALL_MARKERS: &[&str] = &[
-    "what do you remember",
-    "do you remember",
-    "recall ",
-    "my memories",
-    "from my memory",
-    "from my past",
-];
-
 // Extra prompt heuristics layered onto rx4's defaults so hard reasoning routes
 // to the Heavy tier (our SMART model) rather than falling through to Standard.
 const HEAVY_KEYWORDS: &[&str] = &[
@@ -132,12 +123,12 @@ impl ChatRouter {
         if VISION_MARKERS.iter().any(|marker| lowered.contains(marker)) {
             return ModelTier::Multimodal;
         }
-        if MEMORY_RECALL_MARKERS
-            .iter()
-            .any(|marker| lowered.contains(marker))
-        {
-            return ModelTier::Multimodal;
-        }
+        // Recall prompts ("do you remember…") used to divert here too, but the
+        // memories they ask about reach the model as text the runtime already
+        // recalled, so nothing about them needs a vision model. Sending them to
+        // MULTIMODAL only bought them a lite model chosen for reading pictures
+        // and audio, which is not a chat model — recall answers came back
+        // shallow. They now take the ordinary chat path like any other turn.
         if !likely_needs_tools(prompt, origin)
             && is_short_simple(prompt)
             && !HEAVY_KEYWORDS
@@ -218,7 +209,8 @@ mod tests {
 
     use crate::model_tier::{
         DEFAULT_BALANCED_MODEL, DEFAULT_MULTIMODAL_MODEL, DEFAULT_SEARCH_MODEL,
-        DEFAULT_SMART_MODEL, DEFAULT_SPEED_MODEL,
+        DEFAULT_SMART_MODEL, DEFAULT_SPEAK_MODEL, DEFAULT_SPEED_MODEL, DEFAULT_TRANSCRIBE_MODEL,
+        capabilities_of,
     };
     use crate::signals::MessageOrigin;
 
@@ -263,12 +255,61 @@ mod tests {
     }
 
     #[test]
-    fn memory_recall_routes_to_multimodal() {
+    fn memory_recall_stays_on_a_chat_tier() {
         let router = default_router();
         assert_eq!(
             router.route_prompt("what do you remember about my work?", None),
-            ModelTier::Multimodal
+            ModelTier::Speed
         );
+    }
+
+    // The regression this pins: desktop chat once answered on a lite model
+    // picked for audio and pictures, because a text prompt was routed to a
+    // non-chat tier. A tier whose model cannot hold a text conversation must
+    // never be reachable from a typed turn, whatever the wording.
+    #[test]
+    fn no_typed_prompt_routes_to_a_non_chat_tier() {
+        let router = default_router();
+        let prompts = [
+            "hi there",
+            "what do you remember about my work?",
+            "recall my notes from the standup",
+            "from my memory, what did I promise Ana?",
+            "summarize my past week and tell me what I keep putting off",
+            "prove this theorem step by step",
+            "click the save button",
+            "search the web for today's headlines",
+            "what is in this image?",
+        ];
+        for prompt in prompts {
+            let tier = router.route_prompt(prompt, None);
+            assert!(
+                !matches!(tier, ModelTier::Transcribe | ModelTier::Speak),
+                "{prompt:?} routed to {tier:?}"
+            );
+            assert!(
+                capabilities_of(&model_for_tier(tier, |_| None), |_| None)
+                    .contains(&Capability::Text),
+                "{prompt:?} routed to {tier:?}, whose model cannot carry text"
+            );
+        }
+    }
+
+    // Recall is a text workload, so it has to resolve to a text-first chat
+    // model rather than to whatever the audio tiers happen to name.
+    #[test]
+    fn recall_never_resolves_to_the_transcribe_model() {
+        let router = default_router();
+        for prompt in [
+            "do you remember the plan?",
+            "recall my notes from the standup",
+            "what do you remember about my work?",
+        ] {
+            let model = router.model_for_prompt(prompt, |_| None);
+            assert_ne!(model, DEFAULT_TRANSCRIBE_MODEL, "{prompt:?}");
+            assert_ne!(model, DEFAULT_SPEAK_MODEL, "{prompt:?}");
+            assert_eq!(model, DEFAULT_SPEED_MODEL, "{prompt:?}");
+        }
     }
 
     #[test]

@@ -3,6 +3,7 @@
  * Regenerates Rust tier defaults from config/model-tiers.json.
  * Run after editing the JSON; CI should fail if generated files drift.
  */
+import { spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -102,6 +103,23 @@ ${workerRsCapabilities}
 ];
 `;
 
-writeFileSync(join(root, "app/native/hub/src/model_tier_defaults.rs"), hubFile);
-writeFileSync(join(root, "worker-rs/src/model_tier_defaults.rs"), workerRsFile);
+const hubPath = join(root, "app/native/hub/src/model_tier_defaults.rs");
+const workerRsPath = join(root, "worker-rs/src/model_tier_defaults.rs");
+writeFileSync(hubPath, hubFile);
+writeFileSync(workerRsPath, workerRsFile);
+
+// A long capability list wraps differently than the one-line-per-model shape
+// emitted above, so the generated files are handed to rustfmt here. Without
+// this, `cargo fmt --check` fails on a file nobody is allowed to hand-edit.
+for (const [path, edition] of [
+  [hubPath, "2024"],
+  [workerRsPath, "2021"],
+] as const) {
+  const formatted = spawnSync("rustfmt", ["--edition", edition, path], {
+    stdio: "inherit",
+  });
+  if (formatted.status !== 0) {
+    throw new Error(`rustfmt failed on ${path}`);
+  }
+}
 console.log("synced model tier defaults to hub and worker-rs");
