@@ -1681,6 +1681,12 @@ async fn process_channel_message(
             replied: outcome.reply.is_some(),
         });
     }
+    // The message is going to the assistant, which takes seconds. Say so before
+    // any of that starts, so the gap between sending and hearing back is a
+    // visible "working on it" rather than silence.
+    if fresh {
+        crate::routes_channels::send_typing(env, channel, channel_chat_id).await;
+    }
     let db = env.d1("DB")?;
     let queued = enqueue_channel_message(
         &db,

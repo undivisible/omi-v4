@@ -1409,6 +1409,48 @@ pub async fn send_channel_text(
     }
 }
 
+/// Show the "typing…" bubble in the chat.
+///
+/// Telegram clears the indicator after about five seconds, or the moment any
+/// message arrives, so this is re-sent at each step of a turn rather than once
+/// at the start. That cadence is deliberate: a bubble that expires mid-thought
+/// reads as the bot having given up, which is worse than never showing one.
+///
+/// Best-effort throughout. It is decoration on top of the reply, and a failure
+/// to decorate must never be a reason the reply itself does not go out — that
+/// is why nothing here returns an error and why the result is discarded at
+/// every call site.
+pub async fn send_typing(env: &Env, channel: Channel, chat_id: &str) {
+    // Telegram only. Sendblue has a typing-indicator surface, but sending on it
+    // is not something to guess at from a webhook list, and a wrong call on the
+    // iMessage path costs a real message.
+    if channel != Channel::Telegram {
+        return;
+    }
+    let token = env
+        .secret("TELEGRAM_BOT_TOKEN")
+        .ok()
+        .map(|v| v.to_string())
+        .or_else(|| env.var("TELEGRAM_BOT_TOKEN").ok().map(|v| v.to_string()))
+        .filter(|v| !v.is_empty());
+    let Some(token) = token else {
+        return;
+    };
+    let url = format!("https://api.telegram.org/bot{token}/sendChatAction");
+    let mut init = RequestInit::new();
+    init.with_method(Method::Post);
+    let headers = Headers::new();
+    if headers.set("content-type", "application/json").is_err() {
+        return;
+    }
+    init.with_headers(headers);
+    let body = json!({ "chat_id": chat_id, "action": "typing" });
+    init.with_body(Some(JsValue::from_str(&body.to_string())));
+    if let Ok(request) = Request::new_with_init(&url, &init) {
+        let _ = Fetch::Request(request).send().await;
+    }
+}
+
 fn response_message_id(body: &Value) -> Option<String> {
     let candidate = body
         .get("result")
@@ -1944,6 +1986,12 @@ async fn managed_inbox_completion(
             Some(_) if round < tools::MAX_TOOL_ROUNDS => Some(catalogue.as_slice()),
             _ => None,
         };
+        // Re-arm the indicator each round. A turn that runs tools takes two
+        // model calls, which is comfortably longer than Telegram keeps the
+        // bubble up on its own.
+        if let Some(ctx) = ctx {
+            send_typing(env, ctx.channel, &ctx.channel_chat_id).await;
+        }
         let turn =
             match crate::routes_ai::run_managed_inbox_turn(env, uid, &conversation, tier, offered)
                 .await

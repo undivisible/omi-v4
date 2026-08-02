@@ -412,6 +412,7 @@ pub async fn run_managed_inbox_turn(
     let headers = Headers::new();
     let _ = headers.set("authorization", &format!("Bearer {secret}"));
     let _ = headers.set("content-type", "application/json");
+    let via_gateway = gateway.is_some();
     if let Some(token) = gateway.and_then(|route| route.token) {
         let _ = headers.set("cf-aig-authorization", &format!("Bearer {token}"));
     }
@@ -464,6 +465,24 @@ pub async fn run_managed_inbox_turn(
     };
     let upstream_status = upstream.status_code() as i64;
     if upstream_status >= 300 {
+        // The status alone is not enough to act on. A 401 here can mean the
+        // provider key is wrong, or that the AI Gateway in front of it is an
+        // authenticated one and the request carried no `cf-aig-authorization`
+        // — and those have different fixes. The body says which; without it
+        // the only trace of a dead pipeline is "completion unavailable" on an
+        // inbox row, which names nothing. Bounded, because an upstream error
+        // page can be arbitrarily large.
+        let detail: String = upstream
+            .text()
+            .await
+            .unwrap_or_default()
+            .chars()
+            .take(512)
+            .collect();
+        worker::console_error!(
+            "managed-inbox-completion upstream {upstream_status} model={model} \
+             gateway={via_gateway} detail={detail}"
+        );
         settle_managed_inbox(
             env,
             &stub,
