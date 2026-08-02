@@ -19,10 +19,7 @@ use crate::channel_checkout::{
 use crate::channel_commands as cmd;
 use crate::channel_group::{self, GROUP_CHANNEL_LINK_ERROR};
 use crate::channel_link;
-use crate::channel_signup::{
-    self, parse_signup_answer, FirstContact, SignupAnswer, SignupResult, CLARIFY_ANSWER_TEXT,
-    FIRST_CONTACT_TEXT, SIGNUP_GUIDE_TEXT,
-};
+use crate::channel_signup::{self, SignupResult, SIGNUP_GUIDE_TEXT};
 use crate::delivery::{
     self, coordinator_name, due_deliveries_for_conversation_sql, due_deliveries_sql, http_outcome,
     network_error_message, network_outcome, retry_delay, stable_idempotency_key, Channel,
@@ -431,6 +428,15 @@ async fn remember_logout_prompt(
     Ok(())
 }
 
+/// The ceiling on canned replies and link codes for a sender with no binding.
+///
+/// This is deliberately no longer a cap on *talking*. It used to be: five
+/// messages an hour and then silence, applied to anyone who had not linked an
+/// account, which is to say applied to everyone new. Conversation is unmetered
+/// now — a new sender is given an account and answered on the cheap tier — and
+/// what is left here guards only the two things worth guarding, link-code
+/// issuance and the fixed command replies, in the narrow window where signup
+/// did not produce a binding.
 async fn unlinked_reply_allowed(env: &Env, channel: Channel, channel_user_id: &str) -> bool {
     // Shares the one canonical rate limiter with the managed-AI routes; the
     // deletion pass removed the old standalone module this used to call.
@@ -465,7 +471,6 @@ async fn checkout_allowed(env: &Env, channel: Channel, channel_user_id: &str) ->
     global
 }
 
-#[allow(dead_code)]
 async fn signup_allowed(env: &Env, channel: Channel, channel_user_id: &str) -> bool {
     let (per_sender, _) = crate::routes_ai::consume_rate_limit(
         env,
@@ -903,7 +908,6 @@ pub async fn live_channel_account(
     }))
 }
 
-#[allow(dead_code)]
 fn channel_uid() -> String {
     let mut bytes = [0u8; 16];
     getrandom::getrandom(&mut bytes).expect("getrandom");
@@ -917,7 +921,6 @@ fn channel_uid() -> String {
 }
 
 /// `signUpChannelSender`.
-#[allow(dead_code)]
 pub async fn sign_up_channel_sender(
     env: &Env,
     channel: Channel,
@@ -1019,7 +1022,6 @@ pub async fn sign_up_channel_sender(
 }
 
 /// `claimChannelAccount`.
-#[allow(dead_code)]
 pub async fn claim_channel_account(
     env: &Env,
     channel: Channel,
@@ -1050,67 +1052,6 @@ pub async fn claim_channel_account(
         .and_then(|m| m.changes)
         .unwrap_or(0);
     Ok((changes == 1).then_some(account.uid))
-}
-
-async fn first_contact_state(
-    env: &Env,
-    channel: Channel,
-    channel_user_id: &str,
-) -> Result<Option<FirstContact>> {
-    let db = env.d1("DB")?;
-    let row = db
-        .prepare(
-            "SELECT asked_at, answered_at FROM channel_first_contact\n       WHERE channel = ?1 AND channel_user_id = ?2",
-        )
-        .bind(&[channel.as_str().into(), channel_user_id.into()])?
-        .first::<Value>(None)
-        .await?;
-    Ok(row.map(|row| FirstContact {
-        asked_at: json_i64(&row, "asked_at").unwrap_or(0),
-        answered_at: json_i64(&row, "answered_at"),
-    }))
-}
-
-async fn record_first_contact(
-    env: &Env,
-    channel: Channel,
-    channel_user_id: &str,
-    channel_chat_id: &str,
-    now: i64,
-) -> Result<()> {
-    let db = env.d1("DB")?;
-    db.prepare(
-        "INSERT INTO channel_first_contact\n         (channel, channel_user_id, channel_chat_id, asked_at)\n       VALUES (?1, ?2, ?3, ?4)\n       ON CONFLICT(channel, channel_user_id) DO UPDATE SET\n         channel_chat_id = excluded.channel_chat_id, asked_at = excluded.asked_at",
-    )
-    .bind(&[
-        channel.as_str().into(),
-        channel_user_id.into(),
-        channel_chat_id.into(),
-        (now as f64).into(),
-    ])?
-    .run()
-    .await?;
-    Ok(())
-}
-
-async fn mark_first_contact_answered(
-    env: &Env,
-    channel: Channel,
-    channel_user_id: &str,
-    now: i64,
-) -> Result<()> {
-    let db = env.d1("DB")?;
-    db.prepare(
-        "UPDATE channel_first_contact SET answered_at = ?1\n       WHERE channel = ?2 AND channel_user_id = ?3 AND answered_at IS NULL",
-    )
-    .bind(&[
-        (now as f64).into(),
-        channel.as_str().into(),
-        channel_user_id.into(),
-    ])?
-    .run()
-    .await?;
-    Ok(())
 }
 
 async fn retire_channel_account(env: &Env, uid: &str, now: i64) -> Result<()> {
@@ -1148,67 +1089,46 @@ fn signup_guide(channel: Channel, channel_user_id: &str, channel_chat_id: &str) 
     }
 }
 
-async fn ask_first_contact(
+/// Someone we have never heard from, saying something that is not a command.
+///
+/// They used to be screened: a canned introduction, a yes/no about whether they
+/// already had an account, a clarification when the answer did not parse, and
+/// a rate limit of five of those an hour. Nobody got to talk to the assistant
+/// until they had navigated it, which meant the first thing Omi ever did was
+/// refuse to be useful.
+///
+/// Now they get an account — a real row in `users`, same as anyone's — and the
+/// message goes straight to the assistant. That account is what makes the rest
+/// honest: everything they say is remembered under it from the first word, and
+/// a sign-in code redeemed later signs them into that same uid, so the memory
+/// graph they built while unsigned-in is simply theirs. Nothing is merged
+/// because nothing was ever kept somewhere else.
+async fn unrecognized_sender(
     env: &Env,
     channel: Channel,
     channel_user_id: &str,
     channel_chat_id: &str,
     now: i64,
 ) -> Result<ChannelOutcome> {
-    if !unlinked_reply_allowed(env, channel, channel_user_id).await {
-        return Ok(ChannelOutcome {
-            reply: None,
-            enqueue: false,
-        });
-    }
     if channel_group::is_group_channel_chat(channel.as_str(), channel_user_id, channel_chat_id) {
         return Ok(ChannelOutcome {
             reply: Some(GROUP_CHANNEL_LINK_ERROR.to_string()),
             enqueue: false,
         });
     }
-    record_first_contact(env, channel, channel_user_id, channel_chat_id, now).await?;
-    Ok(ChannelOutcome {
-        reply: Some(FIRST_CONTACT_TEXT.to_string()),
-        enqueue: false,
-    })
-}
-
-async fn unrecognized_sender(
-    env: &Env,
-    channel: Channel,
-    channel_user_id: &str,
-    channel_chat_id: &str,
-    text: &str,
-    now: i64,
-) -> Result<ChannelOutcome> {
-    let state = first_contact_state(env, channel, channel_user_id).await?;
-    if state.is_none() {
-        return ask_first_contact(env, channel, channel_user_id, channel_chat_id, now).await;
-    }
-    if state.and_then(|s| s.answered_at).is_some() {
-        return start_link(env, channel, channel_user_id, channel_chat_id, now).await;
-    }
-    let answer = parse_signup_answer(text);
-    if answer.is_none() {
-        if !unlinked_reply_allowed(env, channel, channel_user_id).await {
-            return Ok(ChannelOutcome {
-                reply: None,
-                enqueue: false,
-            });
-        }
-        return Ok(ChannelOutcome {
-            reply: Some(CLARIFY_ANSWER_TEXT.to_string()),
-            enqueue: false,
-        });
-    }
-    mark_first_contact_answered(env, channel, channel_user_id, now).await?;
-    match answer {
-        Some(SignupAnswer::HasAccount) => {
+    match sign_up_channel_sender(env, channel, channel_user_id, channel_chat_id, now).await? {
+        // The binding is written by the signup, so the enqueue that follows
+        // this outcome resolves the new uid and the assistant answers as it
+        // would for anyone else.
+        SignupResult::Created { .. } | SignupResult::Existing { .. } => Ok(ChannelOutcome {
+            reply: None,
+            enqueue: true,
+        }),
+        // No account could be provisioned — the global signup ceiling, or a
+        // binding that points somewhere else. Offer the linking route instead
+        // of dropping them into silence.
+        SignupResult::RateLimited | SignupResult::Conflict => {
             start_link(env, channel, channel_user_id, channel_chat_id, now).await
-        }
-        Some(SignupAnswer::NeedsAccount) | None => {
-            Ok(signup_guide(channel, channel_user_id, channel_chat_id))
         }
     }
 }
@@ -1276,9 +1196,12 @@ pub async fn handle_channel_message(
     let binding = channel_binding(env, channel, channel_user_id).await?;
     // Asking in words is the documented route — the app tells people to ask Omi
     // for a sign-in code, not to type a slash command they have never seen.
-    if cmd::is_signin_request(text)
-        && (binding.is_some() || unlinked_reply_allowed(env, channel, channel_user_id).await)
-    {
+    //
+    // Ungated, including for a sender with no binding yet. A code is how you
+    // get *into* Omi, so metering it turns a bad first minute into no account
+    // at all; and there is nothing to meter anyway, since an outstanding code
+    // is re-derived rather than reissued.
+    if cmd::is_signin_request(text) {
         return start_signin(env, channel, channel_user_id, channel_chat_id, now).await;
     }
     let Some(parsed) = cmd::parse_command(text) else {
@@ -1288,7 +1211,7 @@ pub async fn handle_channel_message(
                 enqueue: true,
             })
         } else {
-            unrecognized_sender(env, channel, channel_user_id, channel_chat_id, text, now).await
+            unrecognized_sender(env, channel, channel_user_id, channel_chat_id, now).await
         };
     };
     let Some(command) = cmd::resolve_command(&parsed.command) else {
@@ -1304,17 +1227,10 @@ pub async fn handle_channel_message(
         });
     };
     if command.name == "/signin" {
-        if binding.is_none() && !unlinked_reply_allowed(env, channel, channel_user_id).await {
-            return Ok(ChannelOutcome {
-                reply: None,
-                enqueue: false,
-            });
-        }
         return start_signin(env, channel, channel_user_id, channel_chat_id, now).await;
     }
     let Some(binding) = binding else {
         if command.name == "/signup" {
-            mark_first_contact_answered(env, channel, channel_user_id, now).await?;
             return Ok(signup_guide(channel, channel_user_id, channel_chat_id));
         }
         if command.name != "/start" {
@@ -1921,6 +1837,7 @@ async fn managed_inbox_completion(
     env: &Env,
     uid: &str,
     messages: &[fallback::Message],
+    tier: crate::managed_ai::ModelTier,
 ) -> Option<String> {
     let managed: Vec<crate::managed_ai::Message> = messages
         .iter()
@@ -1929,7 +1846,34 @@ async fn managed_inbox_completion(
             content: m.content.clone(),
         })
         .collect();
-    crate::routes_ai::run_managed_inbox_completion(env, uid, &managed).await
+    crate::routes_ai::run_managed_inbox_completion(env, uid, &managed, tier).await
+}
+
+/// Whether this uid belongs to an account that was created here, in a chat,
+/// and has not yet been signed into on a phone or desktop.
+///
+/// This is the only thing separating a guest from anyone else. It is not a
+/// permission check — a guest gets the same assistant, the same memory, and no
+/// message cap. It picks the model tier and one paragraph of prompt, and it
+/// stops being true the moment they redeem a sign-in code.
+async fn is_unclaimed_channel_account(env: &Env, uid: &str) -> bool {
+    let Ok(db) = env.d1("DB") else {
+        return false;
+    };
+    let row = db
+        .prepare(
+            "SELECT uid FROM channel_accounts\n     WHERE uid = ?1 AND claimed_at IS NULL AND retired_at IS NULL",
+        )
+        .bind(&[uid.into()]);
+    match row {
+        Ok(statement) => statement
+            .first::<Value>(None)
+            .await
+            .ok()
+            .flatten()
+            .is_some(),
+        Err(_) => false,
+    }
 }
 
 async fn memory_context_for(env: &Env, uid: &str, text: &str) -> Option<String> {
@@ -2044,11 +1988,19 @@ async fn respond_to_item(env: &Env, id: &str, uid: &str, now: i64) -> Result<()>
     let attempts = json_i64(&item, "attempts").unwrap_or(0) as u32;
 
     let mut reply = if env_has_active_pro(env, uid).await {
+        let guest = is_unclaimed_channel_account(env, uid).await;
         let memory_context = memory_context_for(env, uid, &text).await;
         let history = recent_history(env, uid, &channel).await.unwrap_or_default();
         let messages =
-            fallback::build_messages(&channel, memory_context.as_deref(), &history, &text);
-        match managed_inbox_completion(env, uid, &messages).await {
+            fallback::build_messages(&channel, memory_context.as_deref(), &history, &text, guest);
+        // A guest conversation is unmetered, so the cheap tier is what makes it
+        // affordable. Someone who has signed in is paying for the good one.
+        let tier = if guest {
+            crate::managed_ai::ModelTier::Speed
+        } else {
+            crate::managed_ai::ModelTier::Balanced
+        };
+        match managed_inbox_completion(env, uid, &messages, tier).await {
             Some(completion) => completion,
             None => {
                 if attempts < fallback::MAX_ATTEMPTS {

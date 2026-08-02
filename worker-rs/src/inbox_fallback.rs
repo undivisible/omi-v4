@@ -69,6 +69,16 @@ pub const MODEL_UNAVAILABLE_TEXT: &str =
 /// like one, so the wording is load-bearing, not cosmetic.
 pub const SYSTEM_PROMPT_BASE: &str = "You are Omi, the user's personal assistant, replying over a messaging channel. You run in the cloud and answer from the user's synced memory, so this chat is a complete way to reach them — never suggest they check another device. Answer the user's latest message directly and concisely in plain text.";
 
+/// What the model is told when it is talking to someone who has not signed in
+/// on any device yet.
+///
+/// Such a sender is not a stranger to be screened — they have a real account
+/// already, provisioned the moment they said anything, and everything they say
+/// is being remembered under it. So the model's job is to be useful first and
+/// mention signing in only when there is a reason to, which is why this says
+/// what the code *is* rather than instructing the model to go fishing for one.
+pub const GUEST_PROMPT_ADDENDUM: &str = "This person has not signed in on a phone or desktop yet. Do not interrogate them about it and do not open with a pitch: answer what they asked. If they ask what you are or what you can do, tell them plainly. Everything they tell you is already being saved to their memory, and it carries over the moment they sign in — so nothing here is lost or provisional. If they want the app, tell them to ask you for a sign-in code and type it into Omi on their phone or desktop; that code signs them into this same memory.";
+
 /// `systemPromptForChannel` — base, the channel style rules, then the channel
 /// command injection.
 pub fn system_prompt_for_channel(channel: &str) -> String {
@@ -77,6 +87,17 @@ pub fn system_prompt_for_channel(channel: &str) -> String {
         crate::channel_style::channel_style_prompt(channel),
         crate::channel_commands::channel_command_prompt()
     )
+}
+
+/// The prompt for a given sender, which differs only in whether the guest
+/// addendum is appended.
+pub fn system_prompt_for(channel: &str, guest: bool) -> String {
+    let base = system_prompt_for_channel(channel);
+    if guest {
+        format!("{base}\n\n{GUEST_PROMPT_ADDENDUM}")
+    } else {
+        base
+    }
 }
 
 /// A chat message (`ManagedMessage`): role + content.
@@ -107,8 +128,9 @@ pub fn build_messages(
     memory_context: Option<&str>,
     history: &[Message],
     inbound: &str,
+    guest: bool,
 ) -> Vec<Message> {
-    let base = system_prompt_for_channel(channel);
+    let base = system_prompt_for(channel, guest);
     let system_content = match memory_context {
         None => base,
         Some(context) => format!("{base}\n\n{context}"),
@@ -196,7 +218,7 @@ mod tests {
     #[test]
     fn build_messages_without_memory() {
         let history = vec![Message::new("user", "hi"), Message::new("assistant", "hey")];
-        let out = build_messages("telegram", None, &history, "latest");
+        let out = build_messages("telegram", None, &history, "latest", false);
         assert_eq!(out.len(), 4);
         assert_eq!(out[0].role, "system");
         assert_eq!(out[0].content, system_prompt_for_channel("telegram"));
@@ -206,12 +228,39 @@ mod tests {
 
     #[test]
     fn build_messages_with_memory_context() {
-        let out = build_messages("imessage", Some("MEMORY"), &[], "q");
+        let out = build_messages("imessage", Some("MEMORY"), &[], "q", false);
         assert_eq!(
             out[0].content,
             format!("{}\n\nMEMORY", system_prompt_for_channel("imessage"))
         );
         assert_eq!(out.len(), 2);
+    }
+
+    #[test]
+    fn a_guest_is_told_their_memory_is_already_being_kept() {
+        let guest = build_messages("telegram", None, &[], "what are you", true);
+        assert!(guest[0].content.contains(GUEST_PROMPT_ADDENDUM));
+        // The memory context still lands after the addendum, so a guest with a
+        // few turns behind them answers from them like anyone else.
+        let with_memory = build_messages("telegram", Some("MEMORY"), &[], "q", true);
+        assert!(with_memory[0].content.ends_with("\n\nMEMORY"));
+        // And nothing is added for a signed-in sender.
+        assert!(!build_messages("telegram", None, &[], "q", false)[0]
+            .content
+            .contains(GUEST_PROMPT_ADDENDUM));
+    }
+
+    #[test]
+    fn the_guest_prompt_neither_screens_nor_pitches() {
+        let lowered = GUEST_PROMPT_ADDENDUM.to_lowercase();
+        // The old first-contact flow opened by demanding a yes/no about an
+        // account before it would say anything at all. Whatever the model does
+        // here, it must not reintroduce that.
+        assert!(!lowered.contains("yes or no"));
+        assert!(lowered.contains("answer what they asked"));
+        // The one promise it makes is the one the code path actually keeps.
+        assert!(lowered.contains("carries over"));
+        assert!(lowered.contains("sign-in code"));
     }
 
     #[test]

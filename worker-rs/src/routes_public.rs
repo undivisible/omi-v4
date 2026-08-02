@@ -802,8 +802,13 @@ pub(crate) async fn ask_omi_operation(
             },
         }];
         messages.extend(recent_history(&db, uid).await?);
-        let Some(completion) =
-            crate::routes_ai::run_managed_inbox_completion(&ctx.env, uid, &messages).await
+        let Some(completion) = crate::routes_ai::run_managed_inbox_completion(
+            &ctx.env,
+            uid,
+            &messages,
+            crate::managed_ai::ModelTier::Balanced,
+        )
+        .await
         else {
             return Ok(OperationResult::new(
                 502,

@@ -2221,6 +2221,20 @@ async fn handle_channel_exchange(mut req: Request, ctx: RouteContext<()>) -> Res
     if results.len() != 2 || changes(&results[0]) != 1 || changes(&results[1]) != 1 {
         return opaque_auth_failure();
     }
+    // This is the moment a guest stops being one. The uid does not change —
+    // that is the whole point, their memory is already under it — but the
+    // account is no longer unclaimed, so the responder stops treating them as
+    // someone who has never signed in anywhere and moves them off the cheap
+    // tier. A failure here costs them a model upgrade, not their session, so it
+    // must not fail the exchange.
+    let _ = crate::routes_channels::claim_channel_account(
+        &ctx.env,
+        channel,
+        &channel_user_id,
+        &uid,
+        now,
+    )
+    .await;
     Ok(Response::from_json(&response)?.with_status(201))
 }
 

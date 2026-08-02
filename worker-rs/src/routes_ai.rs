@@ -277,12 +277,14 @@ pub async fn run_managed_inbox_completion(
     env: &Env,
     uid: &str,
     messages: &[managed_ai::Message],
+    tier: managed_ai::ModelTier,
 ) -> Option<String> {
     let endpoint = env_get(env, "MIMO_CHAT_COMPLETIONS_URL");
     // Meeting-note-style one-shot completions run on the BALANCED tier, which
-    // defaults to MIMO_MODEL when set.
-    let model =
-        managed_ai::model_for_tier(managed_ai::ModelTier::Balanced, |name| env_get(env, name));
+    // defaults to MIMO_MODEL when set. Callers answering someone who has not
+    // signed in anywhere yet pass SPEED instead: the conversation is free and
+    // uncapped, so what keeps it affordable is the model, not a quota.
+    let model = managed_ai::model_for_tier(tier, |name| env_get(env, name));
     if messages.is_empty() {
         return None;
     }
