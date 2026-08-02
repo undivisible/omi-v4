@@ -241,6 +241,29 @@ void main() {
     expect(find.byKey(const Key('delete_local_data')), findsNothing);
   });
 
+  testWidgets('signed out, the account section offers the sign-in itself', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    final gateway = _Gateway();
+    final services = makeServices(auth: AuthController(gateway));
+    await tester.pumpWidget(
+      MaterialApp(home: SettingsScreen(services: services)),
+    );
+    await tester.pumpAndSettle();
+
+    // A row that says "Sign in" and does nothing is what made the whole screen
+    // read as inert.
+    final field = find.byKey(const Key('settings_sign_in_code'));
+    expect(field, findsOneWidget);
+    await tester.enterText(field, 'ab12cd3');
+    await tester.tap(find.byKey(const Key('settings_sign_in')));
+    await tester.pumpAndSettle();
+
+    expect(gateway.redeemedCode, 'ab12cd3');
+    expect(find.text('That code was not accepted.'), findsOneWidget);
+  });
+
   testWidgets('signed-out account section shows a single delete data action', (
     tester,
   ) async {
@@ -461,11 +484,17 @@ final class _SignedInGateway implements AuthGateway {
   bool get supportsDesktopBrowserHandoff => false;
 
   @override
-  bool get supportsChannelCode => false;
+  bool get supportsChannelCode => true;
+
+  String? redeemedCode;
 
   @override
-  Future<AuthSession> signInWithChannelCode(String code) =>
-      throw UnimplementedError();
+  Future<AuthSession> signInWithChannelCode(String code) async {
+    redeemedCode = code;
+    throw const AuthOperationException(
+      AuthFailure(AuthErrorCode.invalidOtp, 'That code was not accepted.'),
+    );
+  }
 
   @override
   AuthSession? get currentSession => _session;
@@ -479,6 +508,70 @@ final class _SignedInGateway implements AuthGateway {
   @override
   Future<AuthSession?> refreshSession({bool forceRefresh = false}) async =>
       _session;
+
+  @override
+  Future<PhoneOtpChallenge> requestPhoneOtp(String phoneNumber) =>
+      throw UnimplementedError();
+
+  @override
+  Future<AuthSession> confirmPhoneOtp({
+    required PhoneOtpChallenge challenge,
+    required String code,
+  }) => throw UnimplementedError();
+
+  @override
+  Future<AuthSession> signIn(AuthProvider provider) =>
+      throw UnimplementedError();
+
+  @override
+  Future<AuthSession> signInWithDesktopBrowser({
+    required void Function(String code) onConfirmationCode,
+  }) => throw UnimplementedError();
+
+  @override
+  Future<void> signOut() async {}
+}
+
+/// Configured, signed out, and signing in by code — the state the desktop app
+/// is in before its first sign-in.
+final class _Gateway implements AuthGateway {
+  String? redeemedCode;
+
+  @override
+  bool get isConfigured => true;
+
+  @override
+  AuthFailure? get configurationFailure => null;
+
+  @override
+  bool get supportsPhoneOtp => false;
+
+  @override
+  bool get supportsDesktopBrowserHandoff => false;
+
+  @override
+  bool get supportsChannelCode => true;
+
+  @override
+  Future<AuthSession> signInWithChannelCode(String code) async {
+    redeemedCode = code;
+    throw const AuthOperationException(
+      AuthFailure(AuthErrorCode.invalidOtp, 'That code was not accepted.'),
+    );
+  }
+
+  @override
+  AuthSession? get currentSession => null;
+
+  @override
+  Stream<AuthSession?> get sessionChanges => const Stream.empty();
+
+  @override
+  Future<AuthSession?> restoreSession() async => null;
+
+  @override
+  Future<AuthSession?> refreshSession({bool forceRefresh = false}) async =>
+      null;
 
   @override
   Future<PhoneOtpChallenge> requestPhoneOtp(String phoneNumber) =>

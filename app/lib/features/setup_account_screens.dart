@@ -157,14 +157,25 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final previewMode = widget.previewMode;
     return switch (section) {
       SettingsSection.account => [
-        _InfoTile(
-          icon: Icons.person_outline_rounded,
-          title: 'Sign in',
-          detail: previewMode
-              ? 'Account access is disabled in the interface preview.'
-              : services.auth.snapshot.session?.displayName ??
-                    services.configurationMessage,
-        ),
+        // Signed out, the row that says "Sign in" has to *be* the sign-in.
+        // Stating the account is missing and offering nothing to do about it
+        // leaves the whole screen looking inert, since most rows below need an
+        // account to become interactive.
+        if (previewMode || services.auth.snapshot.session != null)
+          _InfoTile(
+            icon: Icons.person_outline_rounded,
+            title: 'Sign in',
+            detail: previewMode
+                ? 'Account access is disabled in the interface preview.'
+                : services.auth.snapshot.session?.displayName ??
+                      services.configurationMessage,
+          )
+        else if (!services.auth.supportsChannelCode)
+          _InfoTile(
+            icon: Icons.person_outline_rounded,
+            title: 'Sign in',
+            detail: services.configurationMessage,
+          ),
         if (!previewMode && services.auth.snapshot.session != null) ...[
           _Tile(
             icon: Icons.logout_rounded,
@@ -179,8 +190,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
           DeleteAccountTile(services: services),
           if (services.channels != null)
             _ChannelLinkTile(client: services.channels!),
-        ] else if (!previewMode)
+        ] else if (!previewMode) ...[
+          if (services.auth.supportsChannelCode)
+            SignInWithCodeTile(services: services),
           DeleteLocalDataTile(services: services),
+        ],
       ],
       SettingsSection.personal => const [],
       SettingsSection.plan => [
@@ -788,6 +802,83 @@ class _StateTile extends StatelessWidget {
             icon: const Icon(Icons.arrow_forward_rounded),
           ),
   );
+}
+
+/// Signing in from Settings, for anyone who skipped or lost it in onboarding.
+///
+/// The credential is a code the user already holds: they message Omi on
+/// Telegram or from their phone and it replies with seven characters. There is
+/// nothing to send from here, so this is an entry field rather than a
+/// "send me a code" button.
+class SignInWithCodeTile extends StatefulWidget {
+  const SignInWithCodeTile({required this.services, super.key});
+
+  final AppServices services;
+
+  @override
+  State<SignInWithCodeTile> createState() => _SignInWithCodeTileState();
+}
+
+class _SignInWithCodeTileState extends State<SignInWithCodeTile> {
+  final _code = TextEditingController();
+  bool _busy = false;
+
+  @override
+  void dispose() {
+    _code.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      await widget.services.auth.signInWithChannelCode(_code.text);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final failure = widget.services.auth.snapshot.failure;
+    return _Tile(
+      icon: Icons.login_rounded,
+      title: 'Sign in',
+      detail:
+          failure?.message ??
+          'Message Omi on Telegram or from your phone. It replies with a '
+              'seven-character code.',
+      trailing: SizedBox(
+        width: 220,
+        child: Row(
+          children: [
+            Expanded(
+              child: TextField(
+                key: const Key('settings_sign_in_code'),
+                controller: _code,
+                autocorrect: false,
+                enableSuggestions: false,
+                enabled: !_busy,
+                textInputAction: TextInputAction.done,
+                decoration: const InputDecoration(
+                  isDense: true,
+                  hintText: 'ab12cd3',
+                ),
+                onSubmitted: _busy ? null : (_) => unawaited(_submit()),
+              ),
+            ),
+            const SizedBox(width: 8),
+            TextButton(
+              key: const Key('settings_sign_in'),
+              onPressed: _busy ? null : () => unawaited(_submit()),
+              child: const Text('Sign in'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 class DeleteAccountTile extends StatefulWidget {
