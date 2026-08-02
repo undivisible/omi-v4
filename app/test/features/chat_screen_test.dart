@@ -645,6 +645,101 @@ void main() {
     expect(currents.calls, greaterThan(initialCalls));
     expect(currents.requests.last.body, {'force': true});
   });
+
+  testWidgets('internal tool progress never reaches the transcript', (
+    tester,
+  ) async {
+    final auth = AuthController(
+      _SignedInGateway(),
+      consentStore: VolatileConsentStore()
+        ..receipt = ProcessingConsentReceipt.current(
+          subjectUid: 'user-meeting',
+          acceptedAt: DateTime.utc(2026, 7, 21),
+        ),
+    );
+    await auth.restoreSession();
+    final hub = _MeetingEventHub();
+    final services = AppServices.forTesting(
+      nativeHub: hub,
+      deviceRelay: DeviceRelayService(
+        role: DeviceRelayRole.desktopObserver,
+        adapter: const UnavailableDeviceRelayAdapter(),
+      ),
+      auth: auth,
+      memoryDatabasePath: (uid) => '/tmp/$uid.sqlite3',
+      conversations: _RecordingConversationTransport(),
+    );
+    addTearDown(services.dispose);
+    await services.initialize();
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(body: ChatScreen(services: services)),
+      ),
+    );
+    await tester.pump();
+
+    await tester.enterText(find.byKey(const Key('chat_input')), 'hello');
+    await tester.tap(find.byKey(const Key('send_chat')));
+    await tester.pump();
+    final requestId = hub.sentRequestId;
+    expect(requestId, isNotNull);
+
+    hub.eventsController.add(
+      NativeEventAssistantDelta(
+        value: AssistantDelta(
+          requestId: requestId!,
+          text: 'Working on it.',
+          finalSegment: false,
+        ),
+      ),
+    );
+    await tester.pump();
+
+    hub.eventsController.add(
+      NativeEventToolProgress(
+        value: ToolProgress(
+          requestId: requestId,
+          tool: 'chat_context',
+          status: ToolStatus.running,
+          detail: 'assembling context',
+        ),
+      ),
+    );
+    await tester.pump();
+    expect(find.byKey(const Key('chat_progress')), findsNothing);
+    expect(find.textContaining('chat_context'), findsNothing);
+
+    hub.eventsController.add(
+      NativeEventToolProgress(
+        value: ToolProgress(
+          requestId: requestId,
+          tool: 'some_tool_added_next_quarter',
+          status: ToolStatus.running,
+          detail: 'doing something',
+        ),
+      ),
+    );
+    await tester.pump();
+    expect(find.byKey(const Key('chat_progress')), findsNothing);
+    expect(find.textContaining('some_tool_added_next_quarter'), findsNothing);
+
+    hub.eventsController.add(
+      NativeEventToolProgress(
+        value: ToolProgress(
+          requestId: requestId,
+          tool: 'computer_use',
+          status: ToolStatus.waitingForApproval,
+          detail: 'click Send',
+        ),
+      ),
+    );
+    await tester.pump();
+    expect(
+      find.text('Waiting for your approval to use the computer'),
+      findsOneWidget,
+    );
+  });
 }
 
 final class _MeetingEventHub implements NativeHub {

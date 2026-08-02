@@ -1047,11 +1047,7 @@ class ChatScreenState extends State<ChatScreen>
               !value.requestId.startsWith('approval-')) {
             return;
           }
-          _progress = [
-            value.tool,
-            value.status.name,
-            if (value.detail != null) value.detail!,
-          ].join(' · ');
+          _progress = _toolProgressLabel(value.tool, value.status);
           if (value.status == ToolStatus.failed ||
               value.status == ToolStatus.cancelled) {
             if (value.requestId == _activeRequestId) {
@@ -1674,30 +1670,57 @@ class ChatScreenState extends State<ChatScreen>
   /// message. Which model answered is not part of it: it named a slug the user
   /// never chose and could not act on, and it sat over the transcript saying so
   /// on every turn.
-  String? get _progressLabel {
-    final progress = _progress;
-    if (progress == null) return null;
-    if (progress.split(' · ').first == 'chat_model') return null;
-    if (_isToolActivityProgress(progress)) return _formatToolActivity(progress);
-    return progress;
-  }
+  String? get _progressLabel => _progress;
 
-  bool _isToolActivityProgress(String progress) {
-    final parts = progress.split(' · ');
-    if (parts.length < 2) return false;
-    if (parts.first == 'chat_model') return false;
-    const terminal = {'complete', 'failed', 'cancelled'};
-    return !terminal.contains(parts[1]);
-  }
+  /// Only the tools whose work the user asked to see, each in words they can
+  /// act on. Everything else the hub reports — context assembly, routing,
+  /// recall, transcription, whichever model answered — is machinery the user
+  /// never chose and cannot act on, so it shows nothing at all. A tool absent
+  /// from this table stays silent, which is what keeps a newly added internal
+  /// tool from leaking its identifier into the transcript.
+  static const Map<String, ({String active, String waiting, String done})>
+  _toolWording = {
+    'computer_use': (
+      active: 'Using the computer',
+      waiting: 'Waiting for your approval to use the computer',
+      done: 'Finished using the computer',
+    ),
+    'computer_invoke': (
+      active: 'Using the computer',
+      waiting: 'Waiting for your approval to use the computer',
+      done: 'Finished using the computer',
+    ),
+    'computer_set_value': (
+      active: 'Typing for you',
+      waiting: 'Waiting for your approval to type for you',
+      done: 'Finished typing for you',
+    ),
+    'currents_read': (
+      active: 'Reading your Currents',
+      waiting: 'Waiting for your approval to read your Currents',
+      done: 'Read your Currents',
+    ),
+    'currents_write': (
+      active: 'Saving to your Currents',
+      waiting: 'Waiting for your approval to save to your Currents',
+      done: 'Saved to your Currents',
+    ),
+    'meeting': (
+      active: 'Following your meeting',
+      waiting: 'Waiting for your approval to follow your meeting',
+      done: 'Meeting updated',
+    ),
+  };
 
-  String _formatToolActivity(String progress) {
-    final parts = progress.split(' · ');
-    final tool = parts.first;
-    final status = parts.length > 1 ? parts[1] : 'running';
-    if (parts.length > 2) {
-      return '$tool · $status · ${parts.sublist(2).join(' · ')}';
-    }
-    return '$tool · $status';
+  String? _toolProgressLabel(String tool, ToolStatus status) {
+    final wording = _toolWording[tool];
+    if (wording == null) return null;
+    return switch (status) {
+      ToolStatus.waitingForApproval => wording.waiting,
+      ToolStatus.queued || ToolStatus.running => wording.active,
+      ToolStatus.complete => wording.done,
+      ToolStatus.failed || ToolStatus.cancelled => null,
+    };
   }
 
   Widget _messageRow(
