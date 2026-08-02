@@ -216,6 +216,17 @@ impl Engine {
         self.store.root()
     }
 
+    /// The frame index, in capture order.
+    pub fn stored_frames(&self) -> &[Frame] {
+        self.store.frames()
+    }
+
+    /// Where one frame's image actually is, for a reader that needs the bytes
+    /// rather than the row.
+    pub fn frame_path(&self, frame: &Frame) -> PathBuf {
+        self.store.file_for(frame)
+    }
+
     pub fn handle(&mut self, request: Request, now_ms: i64) -> Response {
         match request {
             Request::Tick {

@@ -5,6 +5,8 @@ use std::time::Duration;
 const SUMMARY_TIMEOUT: Duration = Duration::from_secs(12);
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 const RESPONSE_TIMEOUT: Duration = Duration::from_secs(20);
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+const IMAGE_TIMEOUT: Duration = Duration::from_secs(20);
 const SUMMARY_CHARS: usize = 420;
 
 pub fn is_available() -> bool {
@@ -67,6 +69,38 @@ pub async fn respond(prompt: &str) -> Option<String> {
     #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
     {
         let _ = prompt;
+        None
+    }
+}
+
+/// Describes an image with the on-device model. There is no fallback: an
+/// image the caller could not describe here is one the machine cannot
+/// describe at all, and sending it somewhere that can is a different decision
+/// than this function is allowed to make.
+pub async fn describe_image(prompt: &str, image: &[u8], mime: &str) -> Option<String> {
+    if !is_available() || image.is_empty() {
+        return None;
+    }
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    {
+        let options = rs_ai_local::foundationmodels::GenerationOptions {
+            temperature: Some(0.1),
+            max_tokens: Some(160),
+        };
+        let attachment = rs_ai_local::foundationmodels::Attachment::image(image, mime);
+        let session = rs_ai_local::foundationmodels::Session::new().ok()?;
+        tokio::time::timeout(
+            IMAGE_TIMEOUT,
+            session.respond_with_attachment(prompt, &attachment, &options),
+        )
+        .await
+        .ok()?
+        .ok()
+        .and_then(|value| clean_summary(&value))
+    }
+    #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+    {
+        let _ = (prompt, mime);
         None
     }
 }

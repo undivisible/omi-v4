@@ -122,6 +122,10 @@ struct RuntimeState {
     /// current-thread reactor.
     #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
     rewind: Option<Arc<StdMutex<crate::rewind::Engine>>>,
+    /// How far screen captioning has read into the Rewind timeline, and when
+    /// it last spent a model call.
+    #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+    screen_caption: crate::screen_caption::CaptionCursor,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -4124,6 +4128,113 @@ async fn rewind(
         return;
     };
     rewind_step(request_id, &engine, step, cancellation).await;
+    spawn_screen_caption(state, &engine, cancellation);
+}
+
+/// Describes one stored frame with the on-device model and remembers what it
+/// says.
+///
+/// This runs off the back of the capture handshake rather than on a timer of
+/// its own, because the handshake is the only thing that knows a new frame
+/// exists. It is spawned rather than awaited so a caption never sits between a
+/// preview and its encode, and everything that bounds the cost —  the interval
+/// floor, the perceptual-hash dedupe and the privacy refusals — lives in
+/// [`crate::screen_caption`].
+///
+/// There is no fallback when the on-device model is unavailable. A frame of
+/// someone's screen is not something to send anywhere to have described.
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+fn spawn_screen_caption(
+    state: &Arc<Mutex<RuntimeState>>,
+    engine: &Arc<StdMutex<crate::rewind::Engine>>,
+    cancellation: &CancellationToken,
+) {
+    if !crate::local_ai::is_available() {
+        return;
+    }
+    let state = Arc::clone(state);
+    let engine = Arc::clone(engine);
+    let cancellation = cancellation.clone();
+    tokio::spawn(async move {
+        let now_ms = unix_time_ms();
+        let (memory, cursor) = {
+            let guard = state.lock().await;
+            let Some(memory) = guard.memory.clone() else {
+                return;
+            };
+            (memory, guard.screen_caption.clone())
+        };
+        let selection = spawn_blocking(move || -> Option<(crate::rewind::Frame, _, Vec<u8>)> {
+            let guard = engine.lock().ok()?;
+            let privacy = guard.settings().privacy.clone();
+            let frame = crate::screen_caption::next_target(
+                guard.stored_frames(),
+                &cursor,
+                &privacy,
+                now_ms,
+            )?
+            .clone();
+            let bytes = std::fs::read(guard.frame_path(&frame)).ok()?;
+            Some((frame, privacy, bytes))
+        })
+        .await;
+        let Ok(Some((frame, privacy, bytes))) = selection else {
+            return;
+        };
+        // The cursor advances on selection, not on success: a frame the model
+        // declines to describe must not be picked again on the next tick.
+        state.lock().await.screen_caption.advance(&frame, now_ms);
+        let prompt = crate::screen_caption::caption_prompt(&frame, &privacy);
+        let caption = tokio::select! {
+            () = cancellation.cancelled() => return,
+            value = crate::local_ai::describe_image(&prompt, &bytes, "image/jpeg") => value,
+        };
+        let Some(caption) = caption else {
+            return;
+        };
+        let Some(claim) = crate::screen_caption::caption_claim(&frame, &caption, &privacy) else {
+            return;
+        };
+        let ingestion_key = crate::screen_caption::ingestion_key(&frame);
+        let recorded_at_ms = unix_time_ms();
+        let _ = spawn_blocking(move || {
+            if cancellation.is_cancelled() {
+                return Ok(false);
+            }
+            let mut memory = memory
+                .lock()
+                .map_err(|_| "memory database lock was poisoned".to_owned())?;
+            store_screen_claim(&mut memory, ingestion_key, claim, recorded_at_ms)
+        })
+        .await;
+    });
+}
+
+/// Remembers a screen caption as what it is: an observation of a screen, filed
+/// under [`SourceKind::Screen`] rather than among the things the user said.
+fn store_screen_claim(
+    memory: &mut MemoryContext,
+    ingestion_key: String,
+    claim: zkr::ClaimInput,
+    recorded_at_ms: i64,
+) -> Result<bool, String> {
+    let text = format!("{} {} {}", claim.subject, claim.predicate, claim.value);
+    let captured_at = claim.valid_from;
+    let remembered = memory
+        .database
+        .remember(RememberInput {
+            tenant_id: memory.tenant_id.clone(),
+            feature_flag: None,
+            person_id: memory.person_id.clone(),
+            ingestion_key: Some(ingestion_key),
+            kind: SourceKind::Screen,
+            text,
+            captured_at,
+            recorded_at: recorded_at_ms,
+            claim: Some(claim),
+        })
+        .map_err(|error_value| error_value.to_string())?;
+    Ok(remembered.claim_id.is_some())
 }
 
 /// Runs one engine step on the blocking pool and answers with its payload.
@@ -5679,7 +5790,9 @@ fn capture_text(
 ///
 /// Everything the user authored or received qualifies. Screen, clipboard and
 /// accessibility captures do not: they arrive at interface rates, and a model
-/// call per frame would spend the machine on window titles.
+/// call per frame would spend the machine on window titles. What the screen
+/// does contribute reaches memory through [`crate::screen_caption`], which
+/// captions a bounded few of the frames Rewind already stored.
 fn extracts_claims(source: &CaptureSource) -> bool {
     match source {
         CaptureSource::Screen | CaptureSource::Clipboard | CaptureSource::Accessibility => false,
@@ -7133,6 +7246,70 @@ mod tests {
         let replayed = crate::extraction::candidate_claims(output, 10);
         store_candidate_claims(&mut memory, "transcript-1", 10, 11, replayed)
             .unwrap_or_else(|error_value| panic!("claims replay: {error_value}"));
+        drop(memory);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn a_screen_caption_is_remembered_as_a_screen_observation() {
+        let (path, mut memory, _) = lifecycle_memory("screen-caption");
+        let frame = crate::rewind::Frame {
+            captured_at_ms: 4_200,
+            relative_path: "frames/4200.jpg".to_owned(),
+            bytes: 2_048,
+            hash: "0".repeat(16),
+            display: crate::rewind::models::Display::default(),
+            app_name: Some("Xcode".to_owned()),
+            bundle_id: Some("com.apple.dt.Xcode".to_owned()),
+            window_title: Some("runtime.rs".to_owned()),
+            ocr_text: None,
+        };
+        let privacy = crate::rewind::privacy::PrivacySettings::default();
+        let claim = crate::screen_caption::caption_claim(
+            &frame,
+            "Editing the capture path in runtime.rs.",
+            &privacy,
+        )
+        .unwrap_or_else(|| panic!("a caption becomes a claim"));
+        let stored = store_screen_claim(
+            &mut memory,
+            crate::screen_caption::ingestion_key(&frame),
+            claim,
+            4_300,
+        )
+        .unwrap_or_else(|error_value| panic!("caption stores: {error_value}"));
+        assert!(stored);
+        let replay = crate::screen_caption::caption_claim(
+            &frame,
+            "Editing the capture path in runtime.rs.",
+            &privacy,
+        )
+        .unwrap_or_else(|| panic!("a caption becomes a claim"));
+        store_screen_claim(
+            &mut memory,
+            crate::screen_caption::ingestion_key(&frame),
+            replay,
+            4_300,
+        )
+        .unwrap_or_else(|error_value| panic!("caption replays: {error_value}"));
+        let pack = memory
+            .database
+            .search(SearchInput {
+                tenant_id: memory.tenant_id.clone(),
+                enabled_features: Vec::new(),
+                person_id: memory.person_id.clone(),
+                query: "runtime.rs".to_owned(),
+                limit: 10,
+                query_embedding: None,
+                as_of: None,
+            })
+            .unwrap_or_else(|error_value| panic!("search runs: {error_value}"));
+        assert!(
+            pack.items
+                .iter()
+                .any(|item| item.excerpt.contains("Editing the capture path")),
+            "the caption is retrievable"
+        );
         drop(memory);
         let _ = std::fs::remove_file(path);
     }

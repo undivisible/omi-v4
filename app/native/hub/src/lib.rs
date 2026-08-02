@@ -41,6 +41,7 @@ pub mod rewind;
 mod runtime;
 mod runtime_capture;
 mod scan;
+mod screen_caption;
 mod security;
 mod self_improve;
 pub mod signals;
