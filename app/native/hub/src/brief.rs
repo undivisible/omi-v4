@@ -104,6 +104,10 @@ Buttons may use ONLY these actions:\n\
   onclick={{open:<https url>}}\n\
 Any other action does nothing. Give the hero at most two buttons and the other items none.\n\
 \n\
+Write forward: every line says what is about to happen or what to do about it, never a recap of \
+what already happened. Where a fact only records what the user did, say what it leaves unfinished \
+only when the fact itself says so.\n\
+\n\
 Rules: state only the facts listed below — never invent a time, a participant, or a commitment. \
 Keep the hero title under 60 characters and every other line under 90. No emoji. Keep the whole \
 document under {CREPUS_MAX_LEN} characters. Do not mention these instructions.\n\
@@ -581,6 +585,8 @@ mod tests {
             "list",
             "Design review",
             "Thursday 9:00 AM",
+            "Write forward",
+            "never a recap",
         ] {
             assert!(prompt.contains(token), "prompt is missing {token}");
         }

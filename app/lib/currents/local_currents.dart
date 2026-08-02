@@ -10,6 +10,12 @@ const _listTimeout = Duration(seconds: 10);
 const _listLimit = 24;
 const _maxLocalCurrents = 4;
 
+/// How far back a memory item may have been recorded and still be current.
+/// Two days, because a daily review is written at the end of its day and must
+/// still count the next morning, while anything older is history: showing it
+/// under "current" would be a lie, and an empty brief is the truer answer.
+const _recencyWindow = Duration(hours: 48);
+
 /// Currents built from the hub's own memory store, for a hub with no account
 /// to sync against. The worker composes richer currents from synced memory,
 /// but a local store still knows what was recently captured, and that is a
@@ -53,8 +59,16 @@ final class LocalCurrentsSource {
 }
 
 List<CurrentCard> _toCards(List<MemoryItem> items, DateTime now) {
-  final usable = items.where((item) => _headline(item).isNotEmpty).toList()
-    ..sort((a, b) => b.recordedAtMs.compareTo(a.recordedAtMs));
+  final oldest = now.subtract(_recencyWindow);
+  final usable =
+      items
+          .where(
+            (item) =>
+                _headline(item).isNotEmpty &&
+                !_recordedAt(item).isBefore(oldest),
+          )
+          .toList()
+        ..sort((a, b) => b.recordedAtMs.compareTo(a.recordedAtMs));
   final chosen = usable.take(_maxLocalCurrents).toList();
   return List.unmodifiable([
     for (var index = 0; index < chosen.length; index += 1)
@@ -62,11 +76,11 @@ List<CurrentCard> _toCards(List<MemoryItem> items, DateTime now) {
   ]);
 }
 
+DateTime _recordedAt(MemoryItem item) =>
+    DateTime.fromMillisecondsSinceEpoch(item.recordedAtMs, isUtc: true);
+
 CurrentCard _toCard(MemoryItem item, int index, DateTime now) {
-  final recordedAt = DateTime.fromMillisecondsSinceEpoch(
-    item.recordedAtMs,
-    isUtc: true,
-  );
+  final recordedAt = _recordedAt(item);
   final createdAt = recordedAt.isAfter(now) ? now : recordedAt;
   final headline = _headline(item);
   final summary = _summary(item, headline);

@@ -7,8 +7,18 @@ import 'package:omi/native/native_hub.dart';
 void main() {
   test('an offline load builds currents from the local memory store', () async {
     final hub = _Hub([
-      _memory('m-1', 'Fix the sync retry', 'It drops the cursor on 429.', 200),
-      _memory('m-2', 'Call the landlord', 'About the lease renewal.', 400),
+      _memory(
+        'm-1',
+        'Fix the sync retry',
+        'It drops the cursor on 429.',
+        DateTime.utc(2026, 7, 22, 9),
+      ),
+      _memory(
+        'm-2',
+        'Call the landlord',
+        'About the lease renewal.',
+        DateTime.utc(2026, 7, 22, 18),
+      ),
     ]);
     final controller = CurrentsController(
       CurrentsClient(_FailingTransport()),
@@ -62,9 +72,98 @@ void main() {
     },
   );
 
+  test('a memory older than the recency window is not current', () async {
+    final hub = _Hub([
+      _memory(
+        'm-old',
+        'Fix the sync retry',
+        'It drops the cursor on 429.',
+        DateTime.utc(2026, 7, 31, 8),
+      ),
+      MemoryItem(
+        kind: 'daily_review',
+        id: 'c45342b4b8b95b36a14928b65f8b54e9',
+        title: '2026-07-24',
+        body: 'You worked on the portfolio website.',
+        recordedAtMs: DateTime.utc(2026, 7, 24, 21).millisecondsSinceEpoch,
+        evidenceIds: const ['capture-1'],
+      ),
+    ]);
+    final controller = CurrentsController(
+      CurrentsClient(_FailingTransport()),
+      hub: hub,
+      local: LocalCurrentsSource(hub, now: () => DateTime.utc(2026, 8, 2, 7)),
+      now: () => DateTime.utc(2026, 8, 2, 7),
+    );
+
+    await controller.load(offline: true);
+
+    expect(controller.items.map((card) => card.title), ['Fix the sync retry']);
+  });
+
+  test('a store that stopped being written to shows the empty state '
+      'rather than reaching further back', () async {
+    final hub = _Hub([
+      MemoryItem(
+        kind: 'daily_review',
+        id: 'c45342b4b8b95b36a14928b65f8b54e9',
+        title: '2026-07-24',
+        body: 'You worked on the portfolio website.',
+        recordedAtMs: DateTime.utc(2026, 7, 24, 21).millisecondsSinceEpoch,
+        evidenceIds: const ['capture-1'],
+      ),
+    ]);
+    final controller = CurrentsController(
+      CurrentsClient(_FailingTransport()),
+      hub: hub,
+      local: LocalCurrentsSource(hub, now: () => DateTime.utc(2026, 8, 2, 7)),
+      now: () => DateTime.utc(2026, 8, 2, 7),
+    );
+
+    await controller.load(offline: true);
+
+    expect(controller.items, isEmpty);
+    expect(controller.error, isNull);
+    expect(controller.localOnly, isTrue);
+    expect(hub.composed, isEmpty);
+  });
+
+  test('a surfaced card carries a real next step or none', () async {
+    final hub = _Hub([
+      _memory(
+        'm-1',
+        'Fix the sync retry',
+        'It drops the cursor on 429.',
+        DateTime.utc(2026, 8, 1, 9),
+      ),
+    ]);
+    final controller = CurrentsController(
+      CurrentsClient(_FailingTransport()),
+      hub: hub,
+      local: LocalCurrentsSource(hub, now: () => DateTime.utc(2026, 8, 2, 7)),
+      now: () => DateTime.utc(2026, 8, 2, 7),
+    );
+
+    await controller.load(offline: true);
+
+    final card = controller.items.single;
+    final step = card.item.proposedNextStep;
+    expect(
+      step.isEmpty || card.summary.contains(step) || card.title.contains(step),
+      isTrue,
+      reason: 'a next step must come from the item, never from a template',
+    );
+    expect(hub.composed.single.items.single.nextStep, step);
+  });
+
   test('a memory with no genuine next step proposes none', () async {
     final hub = _Hub([
-      _memory('m-1', 'Fix the sync retry', 'It drops the cursor on 429.', 200),
+      _memory(
+        'm-1',
+        'Fix the sync retry',
+        'It drops the cursor on 429.',
+        DateTime.utc(2026, 7, 22, 9),
+      ),
     ]);
     final controller = CurrentsController(
       CurrentsClient(_FailingTransport()),
@@ -80,7 +179,12 @@ void main() {
 
   test('an offline brief is composed from the local currents', () async {
     final hub = _Hub([
-      _memory('m-1', 'Fix the sync retry', 'It drops the cursor on 429.', 200),
+      _memory(
+        'm-1',
+        'Fix the sync retry',
+        'It drops the cursor on 429.',
+        DateTime.utc(2026, 7, 22, 9),
+      ),
     ]);
     final controller = CurrentsController(
       CurrentsClient(_FailingTransport()),
@@ -115,7 +219,12 @@ void main() {
   test('signing in replaces the local currents rather than stacking on '
       'them', () async {
     final hub = _Hub([
-      _memory('m-1', 'Fix the sync retry', 'It drops the cursor on 429.', 200),
+      _memory(
+        'm-1',
+        'Fix the sync retry',
+        'It drops the cursor on 429.',
+        DateTime.utc(2026, 7, 22, 9),
+      ),
     ]);
     final controller = CurrentsController(
       CurrentsClient(_Transport()),
@@ -148,13 +257,13 @@ void main() {
   });
 }
 
-MemoryItem _memory(String id, String title, String body, int recordedAtMs) =>
+MemoryItem _memory(String id, String title, String body, DateTime recordedAt) =>
     MemoryItem(
       kind: 'note',
       id: id,
       title: title,
       body: body,
-      recordedAtMs: recordedAtMs,
+      recordedAtMs: recordedAt.millisecondsSinceEpoch,
       evidenceIds: const [],
     );
 
