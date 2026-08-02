@@ -286,7 +286,7 @@ void main() {
         const NativeEventAssistantDelta(
           value: AssistantDelta(
             requestId: 'chat-channel:inbox-message-action:1',
-            text: '',
+            text: 'Opening that for you.',
             finalSegment: true,
           ),
         ),
@@ -294,7 +294,10 @@ void main() {
       await _waitFor(() => inbox.completed.length == 2);
       expect(
         inbox.completed.last.responseText,
-        'Approval required on desktop: Click on screen — Click at (10, 20)',
+        'Opening that for you.\n\n'
+        'Waiting for your approval in Omi on your computer: '
+        'Click on screen — Click at (10, 20). '
+        'Approving here is not something I can accept.',
       );
 
       services.dispose();
@@ -515,14 +518,14 @@ void main() {
       NativeEventToolProgress(
         value: ToolProgress(
           requestId: requestId,
-          tool: 'planner',
+          tool: 'computer_use',
           status: ToolStatus.running,
-          detail: 'Reading tasks',
+          detail: 'clicking Send',
         ),
       ),
     );
     await tester.pump();
-    expect(find.text('planner · running · Reading tasks'), findsOneWidget);
+    expect(find.text('Using the computer'), findsOneWidget);
     expect(find.byKey(const Key('chat_skeleton')), findsNothing);
 
     hub.eventsController.add(

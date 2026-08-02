@@ -1111,6 +1111,7 @@ const UID_SCOPED_TABLES: &[&str] = &[
     "conversation_replay_cursors",
     "conversation_messages",
     "conversations",
+    "desktop_presence",
     "channel_inbox_completions",
     "channel_inbox",
     "channel_deliveries",
@@ -2545,6 +2546,20 @@ async fn handle_inbox_claim(req: Request, ctx: RouteContext<()>) -> Result<Respo
     };
     let db = ctx.env.d1("DB")?;
     let now = now_ms();
+    // This request is the only truthful signal the Worker has that a desktop
+    // hub is alive and willing to take channel work: nothing else on this
+    // account calls it. Recording it here is what lets an inbound Telegram or
+    // iMessage message wait a moment for the machine that can actually touch
+    // the user's computer.
+    let _ = db
+        .prepare(crate::inbox_fallback::RECORD_DESKTOP_POLL_SQL)
+        .bind(&[
+            js_str(&auth.uid),
+            now.into(),
+            (now - crate::inbox_fallback::DESKTOP_PRESENCE_REFRESH_MS as f64).into(),
+        ])?
+        .run()
+        .await;
     db.prepare(
         "UPDATE channel_inbox SET status = 'failed', lease_until = NULL, lease_token = NULL,\n           last_error = 'Automatic retry limit reached', completed_at = ?2\n         WHERE uid = ?1 AND status = 'processing' AND lease_until <= ?2\n           AND attempts >= 5",
     )

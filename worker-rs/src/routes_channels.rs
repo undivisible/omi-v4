@@ -2262,6 +2262,21 @@ fn claim_delay_ms(env: &Env) -> i64 {
     )
 }
 
+/// When a desktop hub last polled this user's inbox, or `None` if one never
+/// has. A read failure reads as absence: the cost of wrongly believing nobody
+/// is there is a Worker answer, and the cost of wrongly waiting is silence.
+async fn last_desktop_poll(env: &Env, uid: &str) -> Option<i64> {
+    let db = env.d1("DB").ok()?;
+    let row = db
+        .prepare(fallback::DESKTOP_PRESENCE_SQL)
+        .bind(&[uid.into()])
+        .ok()?
+        .first::<Value>(None)
+        .await
+        .ok()??;
+    json_i64(&row, "last_polled_at")
+}
+
 /// `CHANNEL_FALLBACK_RESPONDER = "false"` still switches the responder off —
 /// the kill switch outlives the name, and it is the only way to stop the Worker
 /// answering without a redeploy.
@@ -2279,7 +2294,11 @@ fn responder_disabled(env: &Env) -> bool {
 ///
 /// This is the whole point of the change: the assistant runs here, in the
 /// cloud, against memory that is already synced here, so there is nothing to
-/// wait for. The webhook has already returned its 200 by the time this runs —
+/// wait for — unless a desktop hub is polling this user's inbox right now, in
+/// which case it is given a few seconds to lease the item first, because it is
+/// the only responder that can see and act on their computer. If it does not
+/// take it, or takes it and dies, the Worker answers exactly as it otherwise
+/// would. The webhook has already returned its 200 by the time this runs —
 /// the caller hands it to `waitUntil` — so a slow model costs the provider
 /// nothing and cannot earn us a webhook retry.
 ///
@@ -2288,6 +2307,11 @@ fn responder_disabled(env: &Env) -> bool {
 /// to the person holding the phone, indistinguishable from no reply at all.
 pub async fn answer_and_deliver_now(env: &Env, uid: &str, channel: Channel) -> Result<()> {
     if !responder_disabled(env) {
+        if let fallback::InlineAnswerPlan::HoldForDesktop { wait_ms } =
+            fallback::inline_answer_plan(last_desktop_poll(env, uid).await, now_ms())
+        {
+            Delay::from(std::time::Duration::from_millis(wait_ms.max(0) as u64)).await;
+        }
         let now = now_ms();
         let db = env.d1("DB")?;
         let items = db
@@ -2319,6 +2343,10 @@ pub async fn respond_to_stale_inbox_items(env: &Env) -> Result<()> {
     }
     let now = now_ms();
     let db = env.d1("DB")?;
+    db.prepare(fallback::RELEASE_EXPIRED_LEASES_SQL)
+        .bind(&[(now as f64).into(), (fallback::MAX_ATTEMPTS as f64).into()])?
+        .run()
+        .await?;
     let stale = db
         .prepare(fallback::claimable_items_sql())
         .bind(&[

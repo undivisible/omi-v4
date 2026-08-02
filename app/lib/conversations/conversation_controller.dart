@@ -486,7 +486,9 @@ final class ConversationController {
       :final value,
     ) when value.requestId == active.requestId) {
       active.approvalResponse =
-          'Approval required on desktop: ${value.title} — ${value.summary}';
+          'Waiting for your approval in Omi on your computer: '
+          '${value.title} — ${value.summary}. '
+          'Approving here is not something I can accept.';
       return;
     }
     if (event case NativeEventAssistantDelta(
@@ -495,9 +497,13 @@ final class ConversationController {
       active.response.write(value.text);
       if (value.finalSegment) {
         final streamedResponse = active.response.toString().trim();
-        final response = streamedResponse.isEmpty
-            ? active.approvalResponse ?? ''
-            : streamedResponse;
+        final approval = active.approvalResponse;
+        final response = switch ((streamedResponse, approval)) {
+          ('', final pending?) => pending,
+          ('', _) => '',
+          (final streamed, final pending?) => '$streamed\n\n$pending',
+          (final streamed, _) => streamed,
+        };
         unawaited(
           _finishInboxItem(
             active,
