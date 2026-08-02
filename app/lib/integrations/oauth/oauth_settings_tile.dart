@@ -91,7 +91,9 @@ class _OAuthConnectorTileState extends State<OAuthConnectorTile> {
       : null;
 
   OAuthConnection? connection;
+  List<OAuthConnection> connections = [];
   List<ConnectorPreviewItem>? items;
+  String? previewAccount;
   bool busy = false;
   bool expanded = false;
   String? message;
@@ -106,8 +108,13 @@ class _OAuthConnectorTileState extends State<OAuthConnectorTile> {
   Future<void> _load() async {
     final uid = widget.uid;
     if (uid == null || widget.previewMode) return;
-    final value = await manager.connection(uid, widget.connector);
-    if (mounted) setState(() => connection = value);
+    final all = await manager.connections(uid, widget.connector);
+    if (mounted) {
+      setState(() {
+        connections = all;
+        connection = all.isEmpty ? null : all.first;
+      });
+    }
   }
 
   Future<void> _run(Future<void> Function(String uid) action) async {
@@ -145,9 +152,11 @@ class _OAuthConnectorTileState extends State<OAuthConnectorTile> {
     if (clientId == null) return;
     await _run((uid) async {
       final value = await manager.connect(uid, widget.connector);
+      final all = await manager.connections(uid, widget.connector);
       if (mounted) {
         setState(() {
-          connection = value;
+          connections = all;
+          connection = all.isEmpty ? value : all.first;
           expanded = true;
           items = null;
         });
@@ -156,13 +165,34 @@ class _OAuthConnectorTileState extends State<OAuthConnectorTile> {
   }
 
   Future<void> _disconnect() async {
+    final target = connection;
     await _run((uid) async {
-      await manager.disconnect(uid, widget.connector);
+      await manager.disconnect(uid, widget.connector, account: target?.account);
+      final all = await manager.connections(uid, widget.connector);
       if (mounted) {
         setState(() {
-          connection = null;
+          connections = all;
+          connection = all.isEmpty ? null : all.first;
           items = null;
-          expanded = false;
+          previewAccount = null;
+          if (all.isEmpty) expanded = false;
+        });
+      }
+    });
+  }
+
+  Future<void> _disconnectAccount(OAuthConnection value) async {
+    await _run((uid) async {
+      await manager.disconnect(uid, widget.connector, account: value.account);
+      final all = await manager.connections(uid, widget.connector);
+      if (mounted) {
+        setState(() {
+          connections = all;
+          connection = all.isEmpty ? null : all.first;
+          if (value.account == previewAccount) {
+            items = null;
+            previewAccount = null;
+          }
         });
       }
     });
@@ -171,9 +201,29 @@ class _OAuthConnectorTileState extends State<OAuthConnectorTile> {
   Future<void> _preview() async {
     final path = readPath;
     if (path == null) return;
+    final account = connection?.account;
     await _run((uid) async {
-      final values = await path.preview(uid);
-      if (mounted) setState(() => items = values);
+      final values = await path.preview(uid, account: account);
+      if (mounted) {
+        setState(() {
+          items = values;
+          previewAccount = account;
+        });
+      }
+    });
+  }
+
+  Future<void> _previewAccount(OAuthConnection value) async {
+    final path = readPath;
+    if (path == null) return;
+    await _run((uid) async {
+      final values = await path.preview(uid, account: value.account);
+      if (mounted) {
+        setState(() {
+          items = values;
+          previewAccount = value.account;
+        });
+      }
     });
   }
 
@@ -297,6 +347,17 @@ class _OAuthConnectorTileState extends State<OAuthConnectorTile> {
                 connector: widget.connector,
                 granted: value.grantedScopes,
               ),
+            if (!widget.previewMode) ...[
+              const SizedBox(height: 6),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: TextButton(
+                  key: Key('oauth_${widget.connector.id}_add'),
+                  onPressed: busy ? null : _connect,
+                  child: const Text('Connect another account'),
+                ),
+              ),
+            ],
           ],
           if (connected && readPath != null) ...[
             Align(
@@ -307,37 +368,139 @@ class _OAuthConnectorTileState extends State<OAuthConnectorTile> {
                 child: const Text('Read a few recent items'),
               ),
             ),
-            if (items case final values?)
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  color: colors.wash,
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: colors.hairline),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    if (values.isEmpty)
-                      Text(
-                        'Nothing recent to show.',
-                        style: TextStyle(fontSize: 12, color: colors.muted),
-                      ),
-                    for (final item in values)
-                      Padding(
-                        padding: const EdgeInsets.only(bottom: 4),
-                        child: Text(
-                          '${item.subtitle} · ${item.title}',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(fontSize: 12, color: colors.ink),
-                        ),
-                      ),
-                  ],
-                ),
-              ),
+            _previewItemsIfShown(
+              values: items,
+              shownAccount: previewAccount,
+              account: value.account,
+              colors: colors,
+            ),
           ],
+          for (final other in connections.skip(1)) _accountRow(other),
+        ],
+      ),
+    );
+  }
+
+  Widget _accountRow(OAuthConnection value) {
+    final colors = _ConnectorColors.of(context);
+    final connected = !value.needsReconnect;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const SizedBox(height: 6),
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            color: colors.wash,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: colors.hairline),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          value.account ?? 'Connected account',
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: colors.ink,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          value.needsReconnect
+                              ? 'Reconnect needed'
+                              : 'Connected',
+                          style: TextStyle(fontSize: 12, color: colors.muted),
+                        ),
+                      ],
+                    ),
+                  ),
+                  TextButton(
+                    key: Key(
+                      'oauth_${widget.connector.id}_account_${value.account ?? 'none'}_action',
+                    ),
+                    onPressed: busy
+                        ? null
+                        : value.needsReconnect
+                        ? _connect
+                        : () => _disconnectAccount(value),
+                    child: Text(
+                      value.needsReconnect ? 'Reconnect' : 'Disconnect',
+                    ),
+                  ),
+                  if (connected && readPath != null)
+                    TextButton(
+                      key: Key(
+                        'oauth_${widget.connector.id}_account_${value.account ?? 'none'}_read',
+                      ),
+                      onPressed: busy ? null : () => _previewAccount(value),
+                      child: const Text('Read'),
+                    ),
+                ],
+              ),
+              _previewItemsIfShown(
+                values: items,
+                shownAccount: previewAccount,
+                account: value.account,
+                colors: colors,
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _previewItemsIfShown({
+    required List<ConnectorPreviewItem>? values,
+    required String? shownAccount,
+    required String? account,
+    required _ConnectorColors colors,
+  }) {
+    if (values == null || shownAccount != account) {
+      return const SizedBox.shrink();
+    }
+    return _previewItems(values: values, colors: colors);
+  }
+
+  Widget _previewItems({
+    required List<ConnectorPreviewItem> values,
+    required _ConnectorColors colors,
+  }) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: colors.wash,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: colors.hairline),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (values.isEmpty)
+            Text(
+              'Nothing recent to show.',
+              style: TextStyle(fontSize: 12, color: colors.muted),
+            ),
+          for (final item in values)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 4),
+              child: Text(
+                '${item.subtitle} · ${item.title}',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(fontSize: 12, color: colors.ink),
+              ),
+            ),
         ],
       ),
     );

@@ -31,6 +31,7 @@ Chat always goes to the configured cloud provider — managed through the Rust W
 - [`app/ARCHITECTURE-desktop.md`](app/ARCHITECTURE-desktop.md) — desktop UI, Rust hub, and macOS Runner
 - [`firmware/ARCHITECTURE.md`](firmware/ARCHITECTURE.md) — pendant firmware
 - [`docs/ai-and-observability.md`](docs/ai-and-observability.md) — model routing, transcription, and the observability stack
+- [`docs/security-screening.md`](docs/security-screening.md) — the inbound security screen and the `OMI_SECURITY_POSTURE` setting
 - [`PLAN.md`](PLAN.md) — product and implementation decisions · [`CONTEXT.md`](CONTEXT.md) — domain language
 
 The architecture documents describe only how this system is built; every comparative claim lives in `COMPARISON.md`.

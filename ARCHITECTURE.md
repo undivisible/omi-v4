@@ -9,6 +9,7 @@ This document covers the system as a whole and describes only how it is built �
 - [`app/ARCHITECTURE-desktop.md`](app/ARCHITECTURE-desktop.md) — the Flutter desktop UI, the Rust hub, and the macOS Runner.
 - [`firmware/ARCHITECTURE.md`](firmware/ARCHITECTURE.md) — the vendored nRF5340 pendant firmware.
 - [`docs/ai-and-observability.md`](docs/ai-and-observability.md) — the decision record behind model selection, transcription, and the observability stack.
+- [`docs/security-screening.md`](docs/security-screening.md) — the inbound security screen: provenance labelling, the classifier, and the posture setting.
 
 ## 1. Product summary
 
@@ -185,6 +186,10 @@ Tier defaults and capability tables live in `config/model-tiers.json`. The worke
 | `search` | web-grounded answers | `perplexity/sonar` | `OMI_MODEL_SEARCH` |
 
 `balanced` additionally accepts the legacy `MIMO_MODEL` name so existing managed-AI configuration keeps working. The defaults are OpenRouter-style slugs; the reasoning behind each pick, and the caveat that the ids are best-effort and need verifying against the real provider APIs, is recorded in [`docs/ai-and-observability.md`](docs/ai-and-observability.md). On the Worker side only the `balanced` tier is currently read (`worker/src/assistant.ts` for both managed chat and one-shot inbox completions); the hub reads `speed` directly for its dev Gemini path and reaches the other tiers through the router.
+
+#### Inbound security screening
+
+Everything the hub recalls into an assistant turn that did not come from the user — pendant and meeting audio, screen and workspace scans, web results, tool output — is labelled with its provenance and read by a classifier before the model sees it (`app/native/hub/src/security/`, wired into `dispatch_assistant` in `app/native/hub/src/runtime.rs`). The classifier runs on the `speed` tier, its verdict fails closed to strict, and a strict verdict tightens the turn's posture rather than editing or dropping the content. `OMI_SECURITY_POSTURE` sets the floor — `dangerous`, `auto` (the default), or `strict` — and composition is monotonic, so a turn may only ever be tightened above the floor. When the classifier cannot be reached the content still reaches the model, explicitly marked as unscreened. The full design, including the chunking and retry bounds, is in [`docs/security-screening.md`](docs/security-screening.md).
 
 #### The Cloudflare AI Gateway route
 

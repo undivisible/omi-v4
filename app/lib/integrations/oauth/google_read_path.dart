@@ -29,8 +29,9 @@ final class GoogleReadPath implements OAuthReadPath {
   Future<List<ConnectorPreviewItem>> preview(
     String uid, {
     int limit = 3,
+    String? account,
   }) async {
-    final token = await manager.accessToken(uid, connector);
+    final token = await manager.accessToken(uid, connector, account: account);
     return [
       ...await upcomingEvents(token, limit: limit),
       ...await recentMessages(token, limit: limit),
