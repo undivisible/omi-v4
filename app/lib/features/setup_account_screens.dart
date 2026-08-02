@@ -847,8 +847,9 @@ class _SignInWithCodeTileState extends State<SignInWithCodeTile> {
       title: 'Sign in',
       detail:
           failure?.message ??
-          'Message Omi on Telegram or from your phone. It replies with a '
-              'seven-character code.',
+          'Ask Omi for a sign-in code: text ${AppServices.messagingNumber()}, '
+              'or message ${AppServices.telegramHandle()} on Telegram, and say '
+              '"send me a sign-in code".',
       trailing: SizedBox(
         width: 220,
         child: Row(

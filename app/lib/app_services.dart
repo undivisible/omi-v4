@@ -452,6 +452,23 @@ final class AppServices {
     return origin.isEmpty ? defaultApiOrigin : origin;
   }
 
+  /// The iMessage number Omi answers on. Shown wherever we ask someone to
+  /// message Omi, because "text Omi" is useless without saying where.
+  static const defaultMessagingNumber = '+1 512 578 9425';
+
+  static String messagingNumber() {
+    const number = String.fromEnvironment('OMI_MESSAGING_NUMBER');
+    return number.isEmpty ? defaultMessagingNumber : number;
+  }
+
+  /// The Telegram handle Omi answers on.
+  static const defaultTelegramHandle = '@omi_bot';
+
+  static String telegramHandle() {
+    const handle = String.fromEnvironment('OMI_TELEGRAM_HANDLE');
+    return handle.isEmpty ? defaultTelegramHandle : handle;
+  }
+
   final _nativeEvents = StreamController<NativeEvent>.broadcast();
   StreamSubscription<NativeEvent>? _nativeEventSubscription;
   String? _configuredPersonId;

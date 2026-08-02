@@ -1275,6 +1275,13 @@ pub async fn handle_channel_message(
     now: i64,
 ) -> Result<ChannelOutcome> {
     let binding = channel_binding(env, channel, channel_user_id).await?;
+    // Asking in words is the documented route — the app tells people to ask Omi
+    // for a sign-in code, not to type a slash command they have never seen.
+    if cmd::is_signin_request(text)
+        && (binding.is_some() || unlinked_reply_allowed(env, channel, channel_user_id).await)
+    {
+        return start_signin(env, channel, channel_user_id, channel_chat_id, now).await;
+    }
     let Some(parsed) = cmd::parse_command(text) else {
         return if binding.is_some() {
             Ok(ChannelOutcome {

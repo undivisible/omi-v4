@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../../app_services.dart';
 import '../../auth/auth.dart';
 
 class AuthenticationGate extends StatefulWidget {
@@ -89,9 +90,10 @@ class _AuthenticationGateState extends State<AuthenticationGate> {
             ),
           ),
           if (widget.auth.supportsChannelCode) ...[
-            const Text(
-              'Message Omi on Telegram, or text it from your phone. It replies '
-              'with a seven-character code. No browser, no password.',
+            Text(
+              'Ask Omi for a sign-in code: text ${AppServices.messagingNumber()}, '
+              'or message ${AppServices.telegramHandle()} on Telegram, and say '
+              '"send me a sign-in code". It replies with seven characters.',
             ),
             const SizedBox(height: 10),
             TextField(
