@@ -1,8 +1,8 @@
 //! Defense-in-depth for AI-authored `.crepus` stored by the worker. The client
 //! renderer is the primary boundary; this rejects hostile sources early: a
 //! closed set of action verbs on event attributes, image `src` URLs that must
-//! be public `http(s)` with no credentials, and chart nodes whose values do
-//! not name the tool result they came from.
+//! be public `http(s)` with no credentials, and the removal of chart and toggle
+//! nodes, neither of which an artifact may contain.
 
 use url::Url;
 
@@ -22,7 +22,7 @@ const EVENT_NAMES: &[&str] = &["click", "change", "long-press", "long_press", "l
 /// `crepuscularity_flutter` renderer draws (`kAllowedKinds` in its
 /// `view_ir.dart`); the rest are spellings a model reaches for when it wants a
 /// chart, and are listed so an invented one is dropped rather than left to
-/// render as nothing.
+/// render as nothing. Every one of them is removed unconditionally.
 const CHART_ELEMENTS: &[&str] = &[
     "sparkline",
     "chart",
@@ -37,11 +37,10 @@ const CHART_ELEMENTS: &[&str] = &[
     "series",
 ];
 
-/// The attribute a chart line must carry to survive: `source=tool:<name>`.
-const CHART_SOURCE_ATTRIBUTE: &str = "source";
-
-/// The only accepted provenance for plotted values.
-const CHART_SOURCE_PREFIX: &str = "tool:";
+/// Element names the renderer turns into a `Switch`. The pinned renderer draws
+/// it from a static `checked` value and holds no state, so the control can
+/// never move under a tap; `switch` is the parser's alias for the same node.
+const TOGGLE_ELEMENTS: &[&str] = &["toggle", "switch"];
 
 /// Outcome of [`validate_crepus`].
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -389,45 +388,21 @@ fn indent_width(line: &str) -> usize {
     line.len() - line.trim_start().len()
 }
 
-/// Reads a named attribute's decoded value off a single line.
-fn attribute_value(line: &str, name: &str) -> Option<String> {
-    let lower = line.to_lowercase();
-    let bytes = lower.as_bytes();
-    let mut index = 0usize;
-    while let Some(offset) = lower[index..].find(name) {
-        let at = index + offset;
-        index = at + name.len();
-        if at > 0 && is_ident_byte(bytes[at - 1]) {
-            continue;
-        }
-        if let Some((value, _)) = read_attribute_value(line, at + name.len()) {
-            return Some(value);
-        }
-    }
-    None
-}
-
-/// Whether a chart line names the tool result its values came from.
-pub fn chart_values_are_sourced(line: &str) -> bool {
-    let Some(value) = attribute_value(line, CHART_SOURCE_ATTRIBUTE) else {
-        return false;
-    };
-    let value = value.trim().to_lowercase();
-    match value.strip_prefix(CHART_SOURCE_PREFIX) {
-        Some(tool) => !tool.trim().is_empty(),
-        None => false,
-    }
-}
-
 /// Whether a line opens a charting element.
 pub fn is_chart_element_line(line: &str) -> bool {
     CHART_ELEMENTS.contains(&element_name(line).as_str())
 }
 
-/// Drops every chart line whose values did not come from a tool result, along
-/// with anything nested under it. A plotted series the model invented reads as
-/// measurement, which is the one thing an artifact must never fake.
-pub fn strip_unsourced_charts(source: &str) -> String {
+/// Whether a line opens a toggle element.
+pub fn is_toggle_element_line(line: &str) -> bool {
+    TOGGLE_ELEMENTS.contains(&element_name(line).as_str())
+}
+
+/// Drops every chart and toggle line, along with anything nested under it.
+/// Artifacts do not chart: a plotted series reads as measurement whether or not
+/// the numbers were ever measured. Artifacts do not toggle either: the renderer
+/// holds no state, so a switch cannot move under a tap.
+pub fn strip_charts_and_toggles(source: &str) -> String {
     let mut kept: Vec<&str> = Vec::new();
     let mut dropping: Option<usize> = None;
     for line in source.lines() {
@@ -444,7 +419,7 @@ pub fn strip_unsourced_charts(source: &str) -> String {
             }
             dropping = None;
         }
-        if is_chart_element_line(line) && !chart_values_are_sourced(line) {
+        if is_chart_element_line(line) || is_toggle_element_line(line) {
             dropping = Some(indent);
             continue;
         }
@@ -462,11 +437,11 @@ pub fn validate_crepus(value: &str) -> CrepusValidation {
     if trimmed.chars().count() > CREPUS_MAX_LEN {
         return CrepusValidation::Err("Invalid crepus: exceeds maximum length".to_string());
     }
-    let stripped = strip_unsourced_charts(trimmed);
+    let stripped = strip_charts_and_toggles(trimmed);
     let stripped = stripped.trim();
     if stripped.is_empty() {
         return CrepusValidation::Err(
-            "Invalid crepus: chart values must come from a tool result".to_string(),
+            "Invalid crepus: charts and toggles are not rendered".to_string(),
         );
     }
     if let Some(error) = find_disallowed_crepus_action(stripped) {
@@ -635,11 +610,11 @@ mod tests {
     }
 
     #[test]
-    fn strips_a_chart_the_model_invented() {
+    fn strips_every_chart_spelling() {
         let source =
             "stack col gap-2\n  text \"Focus\"\n  sparkline color=blue values=6,8,7,11\n  text \"Up\"";
         assert_eq!(
-            strip_unsourced_charts(source),
+            strip_charts_and_toggles(source),
             "stack col gap-2\n  text \"Focus\"\n  text \"Up\""
         );
         for element in [
@@ -655,37 +630,47 @@ mod tests {
             "series",
         ] {
             let line = format!("stack col\n  {element} values=1,2,3");
-            assert_eq!(strip_unsourced_charts(&line), "stack col", "{element}");
+            assert_eq!(strip_charts_and_toggles(&line), "stack col", "{element}");
         }
     }
 
     #[test]
-    fn keeps_a_chart_whose_values_came_from_a_tool() {
+    fn a_chart_cannot_buy_its_way_back_in_with_a_source_marker() {
         for line in [
             "sparkline values=1,2,3 source=tool:memory_search",
             "sparkline values=1,2,3 source=\"tool:memory_search\"",
             "sparkline values=1,2,3 source={tool:memory_search}",
             "sparkline values=1,2,3 source=TOOL:memory_search",
         ] {
-            assert!(chart_values_are_sourced(line), "{line}");
-            assert_eq!(strip_unsourced_charts(line), line, "{line}");
+            assert_eq!(strip_charts_and_toggles(line), "", "{line}");
         }
+    }
+
+    #[test]
+    fn strips_toggles_and_switches() {
         for line in [
-            "sparkline values=1,2,3",
-            "sparkline values=1,2,3 source=",
-            "sparkline values=1,2,3 source=tool:",
-            "sparkline values=1,2,3 source=my own sense of it",
-            "sparkline values=1,2,3 datasource=tool:memory_search",
+            "toggle \"Lock deep-work blocks\"",
+            "toggle \"Lock it\" onchange={prompt:lock it}",
+            "switch \"Lock it\" checked=true",
         ] {
-            assert!(!chart_values_are_sourced(line), "{line}");
+            assert_eq!(strip_charts_and_toggles(line), "", "{line}");
         }
+        assert_eq!(
+            strip_charts_and_toggles("stack col\n  toggle \"Lock\"\n  text \"keep me\""),
+            "stack col\n  text \"keep me\""
+        );
+        // A checkbox is a static state marker, not a control that promises to move.
+        assert_eq!(
+            strip_charts_and_toggles("checkbox \"Done\" checked=true"),
+            "checkbox \"Done\" checked=true"
+        );
     }
 
     #[test]
     fn strips_the_lines_nested_under_a_dropped_chart() {
         let source = "stack col\n  sparkline values=1,2\n    text \"legend\"\n  text \"keep me\"";
         assert_eq!(
-            strip_unsourced_charts(source),
+            strip_charts_and_toggles(source),
             "stack col\n  text \"keep me\""
         );
     }
@@ -698,9 +683,12 @@ mod tests {
         );
         assert_eq!(
             validate_crepus("sparkline values=1,2,3").error(),
-            Some("Invalid crepus: chart values must come from a tool result")
+            Some("Invalid crepus: charts and toggles are not rendered")
         );
-        assert!(validate_crepus("sparkline values=1,2,3 source=tool:get_goals").is_ok());
+        assert_eq!(
+            validate_crepus("sparkline values=1,2,3 source=tool:get_goals").error(),
+            Some("Invalid crepus: charts and toggles are not rendered")
+        );
     }
 
     #[test]
@@ -713,5 +701,10 @@ mod tests {
         assert_eq!(sanitize_crepus("image src=http://127.0.0.1/a.png"), None);
         assert_eq!(sanitize_crepus("  "), None);
         assert_eq!(sanitize_crepus("sparkline values=1,2,3"), None);
+        assert_eq!(
+            sanitize_crepus("sparkline values=1,2,3 source=tool:get_goals"),
+            None
+        );
+        assert_eq!(sanitize_crepus("toggle \"Lock deep-work blocks\""), None);
     }
 }

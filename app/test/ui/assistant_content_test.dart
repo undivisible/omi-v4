@@ -179,10 +179,10 @@ void main() {
 }
 
 void _chartStripping() {
-  group('unsourced charts', () {
-    test('drops a chart the model invented, and its nested lines', () {
+  group('charts and toggles', () {
+    test('drops a chart, and its nested lines', () {
       expect(
-        stripUnsourcedCharts(
+        stripChartsAndToggles(
           'stack col gap-2\n'
           '  text "Current Focus"\n'
           '  sparkline color=blue variant=gradient values=6,8,7,11\n'
@@ -204,35 +204,44 @@ void _chartStripping() {
         'series',
       ]) {
         expect(
-          stripUnsourcedCharts('stack col\n  $element values=1,2,3'),
+          stripChartsAndToggles('stack col\n  $element values=1,2,3'),
           'stack col',
           reason: element,
         );
       }
     });
 
-    test('keeps a chart whose values came from a tool result', () {
+    test('a source marker cannot buy a chart back in', () {
       for (final line in [
         'sparkline values=1,2,3 source=tool:memory_search',
         'sparkline values=1,2,3 source="tool:memory_search"',
         'sparkline values=1,2,3 source={tool:memory_search}',
         'sparkline values=1,2,3 source=TOOL:memory_search',
       ]) {
-        expect(chartValuesAreSourced(line), isTrue, reason: line);
-        expect(stripUnsourcedCharts(line), line, reason: line);
+        expect(stripChartsAndToggles(line), '', reason: line);
       }
+    });
+
+    test('drops toggles and switches, and keeps checkboxes', () {
       for (final line in [
-        'sparkline values=1,2,3',
-        'sparkline values=1,2,3 source=',
-        'sparkline values=1,2,3 source=tool:',
-        'sparkline values=1,2,3 datasource=tool:memory_search',
+        'toggle "Lock deep-work blocks"',
+        'toggle "Lock it" onchange={prompt:lock it}',
+        'switch "Lock it" checked=true',
       ]) {
-        expect(chartValuesAreSourced(line), isFalse, reason: line);
+        expect(stripChartsAndToggles(line), '', reason: line);
       }
+      expect(
+        stripChartsAndToggles('stack col\n  toggle "Lock"\n  text "keep me"'),
+        'stack col\n  text "keep me"',
+      );
+      expect(
+        stripChartsAndToggles('checkbox "Done" checked=true'),
+        'checkbox "Done" checked=true',
+      );
     });
   });
 
-  testWidgets('an invented chart never reaches the card', (tester) async {
+  testWidgets('a chart never reaches the card', (tester) async {
     await tester.pumpWidget(
       _host(
         'Here is where things stand.\n\n'
@@ -258,5 +267,61 @@ void _chartStripping() {
     );
     expect(find.byKey(const Key('assistant_crepus_artifact')), findsNothing);
     expect(find.textContaining('sparkline'), findsNothing);
+  });
+
+  testWidgets('a sourced chart and a toggle both never reach the card', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      _host(
+        'Here is where things stand.\n\n'
+        '```crepus\n'
+        'stack col gap-2\n'
+        '  text "Weekly focus distribution"\n'
+        '  sparkline color=blue values=6,8,7,11 source=tool:memory_search\n'
+        '  toggle "Lock deep-work blocks"\n'
+        '  button "Adjust schedule" onclick={prompt:Adjust my schedule}\n'
+        '```',
+      ),
+    );
+    expect(find.byKey(const Key('assistant_crepus_artifact')), findsOneWidget);
+    expect(find.text('Weekly focus distribution'), findsOneWidget);
+    expect(find.text('Adjust schedule'), findsOneWidget);
+    expect(find.byType(Switch), findsNothing);
+  });
+
+  testWidgets('the layout example from the guidance draws as a card', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      _host(
+        'Two ways to do this.\n\n'
+        '```crepus\n'
+        'stack col gap-3 items-stretch\n'
+        '  text text-lg font-semibold "Two ways to protect tomorrow"\n'
+        '  stack row gap-3 items-start\n'
+        '    stack col gap-1 p-2\n'
+        '      badge "Simplest" tone=success\n'
+        '      text font-semibold "Block 9–11"\n'
+        '      text text-sm text-muted "One long block."\n'
+        '      button "Do this" onclick={prompt:Block 9-11 tomorrow}\n'
+        '    stack col gap-1 p-2\n'
+        '      badge "More room" tone=warning\n'
+        '      text font-semibold "Two shorter blocks"\n'
+        '      text text-sm text-muted "90 minutes, twice."\n'
+        '      button "Do it" onclick={prompt:Block 9-10:30 and 2-3:30}\n'
+        '  divider\n'
+        '  stack row justify-between items-center\n'
+        '    text text-sm text-muted "Meetings tomorrow"\n'
+        '    text text-sm font-semibold "4"\n'
+        '```',
+      ),
+    );
+    expect(find.byKey(const Key('assistant_crepus_artifact')), findsOneWidget);
+    expect(find.text('Two ways to protect tomorrow'), findsOneWidget);
+    expect(find.text('Simplest'), findsOneWidget);
+    expect(find.text('Meetings tomorrow'), findsOneWidget);
+    expect(find.text('Do this'), findsOneWidget);
+    expect(find.textContaining('unsupported:'), findsNothing);
   });
 }

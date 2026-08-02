@@ -24,7 +24,7 @@ class _Segment {
 /// `crepus` (```crepus\n<source>\n```) and renders each segment:
 ///   * markdown → the existing [AssistantMarkdown] (byte-identical behaviour),
 ///   * a valid crepus block → an artifact card drawing [CrepusView.fromSource],
-///     with every unsourced chart removed by [stripUnsourcedCharts] first,
+///     with every chart and toggle removed by [stripChartsAndToggles] first,
 ///   * an invalid crepus block → the raw fenced block back through
 ///     [AssistantMarkdown] as a plain code segment (graceful fallback).
 ///
@@ -68,9 +68,9 @@ class AssistantContent extends StatelessWidget {
         children.add(const _ArtifactSkeleton());
         continue;
       }
-      final source = stripUnsourcedCharts(segment.text);
-      // Nothing survived the chart strip: the artifact was only an invented
-      // plot, and there is nothing left worth drawing.
+      final source = stripChartsAndToggles(segment.text);
+      // Nothing survived the strip: the artifact was only a chart or a dead
+      // control, and there is nothing left worth drawing.
       if (source.trim().isEmpty) continue;
       if (crepusRenders(source)) {
         children.add(_ArtifactFadeIn(child: _artifact(context, source)));
@@ -256,6 +256,7 @@ class _ArtifactFadeIn extends StatelessWidget {
 
 /// Element names that plot a series. `sparkline` is the only one the renderer
 /// draws; the rest are spellings a model reaches for when it wants a chart.
+/// Every one of them is removed unconditionally.
 const Set<String> _chartElements = {
   'sparkline',
   'chart',
@@ -270,29 +271,16 @@ const Set<String> _chartElements = {
   'series',
 };
 
-final RegExp _chartSourceAttribute = RegExp(
-  r'(?<![A-Za-z0-9_-])source[_-]?=\s*(?:"([^"]*)"|\{([^}]*)\}|(\S+))',
-  caseSensitive: false,
-);
+/// Element names the renderer turns into a `Switch`. It draws one from a static
+/// `checked` value and holds no state, so the control cannot move under a tap;
+/// `switch` is the parser's alias for the same node.
+const Set<String> _toggleElements = {'toggle', 'switch'};
 
-/// Whether a chart line names the tool result its values came from, as
-/// `source=tool:<name>`. Mirrors `chart_values_are_sourced` in
-/// `worker-rs/src/crepus_safety.rs`.
-bool chartValuesAreSourced(String line) {
-  final match = _chartSourceAttribute.firstMatch(line);
-  if (match == null) return false;
-  final raw = (match.group(1) ?? match.group(2) ?? match.group(3) ?? '')
-      .trim()
-      .toLowerCase();
-  if (!raw.startsWith('tool:')) return false;
-  return raw.substring('tool:'.length).trim().isNotEmpty;
-}
-
-/// Drops every chart line whose values did not come from a tool result, along
-/// with anything nested under it. A model that plots numbers it never measured
-/// produces something that reads as evidence, which is worse than no chart at
-/// all; the same rule runs server-side in `worker-rs/src/crepus_safety.rs`.
-String stripUnsourcedCharts(String source) {
+/// Drops every chart and toggle line, along with anything nested under it. A
+/// plotted series reads as measurement whether or not anything was measured,
+/// and a switch that cannot move is worse than no control at all; the same rule
+/// runs server-side in `worker-rs/src/crepus_safety.rs`.
+String stripChartsAndToggles(String source) {
   final kept = <String>[];
   int? dropping;
   for (final line in source.split('\n')) {
@@ -309,7 +297,7 @@ String stripUnsourcedCharts(String source) {
     final end = trimmed.indexOf(RegExp(r'\s'));
     final element = (end < 0 ? trimmed : trimmed.substring(0, end))
         .toLowerCase();
-    if (_chartElements.contains(element) && !chartValuesAreSourced(line)) {
+    if (_chartElements.contains(element) || _toggleElements.contains(element)) {
       dropping = indent;
       continue;
     }
