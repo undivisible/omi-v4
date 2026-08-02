@@ -74,7 +74,7 @@ Future<void> main() async {
 @pragma('vm:entry-point')
 Future<void> settingsMain() async {
   WidgetsFlutterBinding.ensureInitialized();
-  final services = await AppServices.initializeFromEnvironment();
+  final services = await AppServices.initializeForSettingsWindow();
   await services.initialize();
   runApp(SettingsWindowApp(services: services));
 }

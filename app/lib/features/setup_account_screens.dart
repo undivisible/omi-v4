@@ -292,10 +292,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ),
       ],
       SettingsSection.rewind => [
-        RewindSettingsTile(
-          previewMode: previewMode,
-          hub: previewMode ? null : services.nativeHub,
-        ),
+        if (previewMode)
+          const RewindSettingsTile(previewMode: true)
+        else
+          _RewindSection(services: services),
       ],
       SettingsSection.advanced => [
         if (previewMode || !services.canUseApi)
@@ -880,6 +880,44 @@ class _SignInWithCodeTileState extends State<SignInWithCodeTile> {
       ),
     );
   }
+}
+
+/// Rewind talks to the Rust hub directly, and the settings window does not
+/// bring the hub up at launch. Ask for it when this row is actually shown, so
+/// opening any other section never pays for it.
+class _RewindSection extends StatefulWidget {
+  const _RewindSection({required this.services});
+
+  final AppServices services;
+
+  @override
+  State<_RewindSection> createState() => _RewindSectionState();
+}
+
+class _RewindSectionState extends State<_RewindSection> {
+  late final Future<bool> _ready = widget.services.ensureNativeHubReady();
+
+  @override
+  Widget build(BuildContext context) => FutureBuilder<bool>(
+    future: _ready,
+    builder: (context, snapshot) {
+      if (snapshot.connectionState != ConnectionState.done) {
+        return const _InfoTile(
+          icon: Icons.motion_photos_on_outlined,
+          title: 'Rewind',
+          detail: 'Starting the capture engine…',
+        );
+      }
+      if (snapshot.data != true) {
+        return const _InfoTile(
+          icon: Icons.motion_photos_off_outlined,
+          title: 'Rewind unavailable',
+          detail: 'The capture engine did not start on this device.',
+        );
+      }
+      return RewindSettingsTile(hub: widget.services.nativeHub);
+    },
+  );
 }
 
 class DeleteAccountTile extends StatefulWidget {

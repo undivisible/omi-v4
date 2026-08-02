@@ -100,8 +100,11 @@ final class AppServices {
     LiveVoiceCapture? liveVoice,
     this.liveVoiceTokens,
     SystemAudioCaptureModeStore? captureModeStore,
+    bool settingsWindow = false,
     this._meetingMic,
-  }) : _captureModeStore =
+  }) : _settingsWindow = settingsWindow,
+       _deferredNativeSetup = settingsWindow,
+       _captureModeStore =
            captureModeStore ?? PreferencesSystemAudioCaptureModeStore(),
        _currentsTaskSync = currentsTaskSync,
        currents = currentsClient == null
@@ -262,6 +265,54 @@ final class AppServices {
     );
   }
 
+  /// Services for the macOS settings window, which is a second FlutterEngine
+  /// in the same process. It gets the worker-backed clients every settings row
+  /// reads and writes, and a restored auth session, but none of the machinery
+  /// the hub window already runs: no Rust hub at launch, no memory sync pump,
+  /// no memory mirror pump, and no second handle on the local memory database
+  /// the primary engine already has open. The rows that genuinely need the hub
+  /// (Rewind, the profile editor, calendar import) bring it up on demand
+  /// through [ensureNativeHubReady] / [activateNativeServices].
+  static Future<AppServices> initializeForSettingsWindow() async {
+    final origin = apiOrigin();
+    final gateway = WorkerAuthGateway(apiOrigin: Uri.parse(origin));
+    final auth = AuthController(
+      gateway,
+      consentStore: PreferencesConsentStore(),
+    );
+    await auth.restoreSession();
+    final worker = WorkerHttpClient(
+      baseUri: Uri.parse(origin),
+      sessionProvider: ({forceRefresh = false}) =>
+          auth.validSession(forceRefresh: forceRefresh),
+    );
+    return AppServices._(
+      auth: auth,
+      nativeHub: createNativeHub(),
+      deviceRelay: _createDeviceRelay(),
+      memoryDatabasePath: _defaultMemoryDatabasePath,
+      dataDirectory: _defaultDataDirectory,
+      workspaceRoots: PreferencesWorkspaceRootStore(),
+      providerCredentials: const SecureProviderCredentialStore(),
+      configurationMessage: gateway.isConfigured
+          ? 'Sign in to connect.'
+          : 'Set an HTTPS API origin to sign in and connect.',
+      memory: MemoryClient(WorkerMemoryTransport(worker)),
+      settings: SettingsClient(WorkerSettingsTransport(worker)),
+      channels: ChannelClient(WorkerChannelTransport(worker)),
+      billing: WorkerBillingClient(worker),
+      byok: WorkerByokClient(worker),
+      apiKeys: WorkerApiKeysClient(worker),
+      facetime: WorkerFaceTimeClient(worker),
+      conversations: WorkerConversationTransport(worker),
+      currentsClient: CurrentsClient(WorkerCurrentsTransport(worker)),
+      currentsTaskSync: EventKitTaskSync.platformDefault(),
+      worker: worker,
+      workerOrigin: worker.trustedOrigin,
+      settingsWindow: true,
+    );
+  }
+
   factory AppServices.forTesting({
     required NativeHub nativeHub,
     required DeviceRelayService deviceRelay,
@@ -291,8 +342,10 @@ final class AppServices {
     WorkerHttpClient? worker,
     ApiKeysClient? apiKeys,
     FaceTimeClient? facetime,
+    bool settingsWindow = false,
     String configurationMessage = 'Test services are not connected.',
   }) => AppServices._(
+    settingsWindow: settingsWindow,
     auth: auth,
     worker: worker,
     apiKeys: apiKeys,
@@ -419,6 +472,12 @@ final class AppServices {
   final dataWipes = ValueNotifier<int>(0);
 
   final MemorySyncPump? memorySyncPump;
+
+  /// True for the second FlutterEngine that renders only settings.
+  final bool _settingsWindow;
+
+  /// Cleared the first time a settings row asks for the native stack.
+  bool _deferredNativeSetup;
   MemoryMirrorPump? _memoryMirrorPump;
   PreferencesMemorySyncCursorStore? _memoryCursorStore;
   final ManagedSttClient? _managedStt;
@@ -625,11 +684,44 @@ final class AppServices {
 
   Future<void> initialize() async {
     auth.addListener(_authChanged);
+    if (_settingsWindow) {
+      // The settings window shares the process with the hub window, so
+      // starting a capture coordinator or a second copy of the memory stack
+      // here buys nothing and costs the whole window's responsiveness.
+      await capabilities.verifiedWorkspaceRoot();
+      return;
+    }
     // Started here, never awaited on the connect path: opening the log and
     // reading alert settings must not add latency between pairing a pendant
     // and streaming from it.
     unawaited(_ensureCapture());
     await capabilities.verifiedWorkspaceRoot();
+    await _queueProductionSync();
+  }
+
+  /// Whether the native stack is still deferred: true in the settings window
+  /// until a row that needs the hub asks for it.
+  bool get nativeSetupDeferred => _deferredNativeSetup;
+
+  /// Brings the Rust hub up without configuring memory or the assistant, for
+  /// rows that talk to the hub directly (Rewind). Serialised through the same
+  /// lifecycle queue as the production sync so two rows asking at once cannot
+  /// subscribe to the event stream twice.
+  Future<bool> ensureNativeHubReady() {
+    if (_nativeInitialized) return Future.value(true);
+    final operation = _lifecycle
+        .then<void>((_) {}, onError: (_, _) {})
+        .then((_) => _ensureNativeInitialized());
+    _lifecycle = operation.then<void>((_) {}, onError: (_, _) {});
+    return operation;
+  }
+
+  /// Configures the full native stack — hub, memory store, assistant — for a
+  /// row that cannot work without it (the profile editor, calendar import).
+  /// A no-op outside the settings window, where it already ran at launch.
+  Future<void> activateNativeServices() async {
+    if (!_deferredNativeSetup) return;
+    _deferredNativeSetup = false;
     await _queueProductionSync();
   }
 
@@ -1300,6 +1392,7 @@ final class AppServices {
   }
 
   Future<void> _queueProductionSync() {
+    if (_deferredNativeSetup) return Future<void>.value();
     final operation = _lifecycle
         .then<void>((_) {}, onError: (_, _) {})
         .then((_) => _syncProductionState());
@@ -1430,6 +1523,9 @@ final class AppServices {
     final worker = _worker;
     if (worker == null ||
         kIsWeb ||
+        // The hub window owns the mirror; a second pump on the same replica
+        // would fight it for the same cursor.
+        _settingsWindow ||
         !nativeHub.available ||
         _disposed ||
         !productionReady) {
