@@ -12,6 +12,10 @@ pub const MAXIMUM_MESSAGES: usize = 64;
 pub const MAXIMUM_INPUT_CHARACTERS: usize = 32_000;
 pub const MAXIMUM_OUTPUT_TOKENS: i64 = 4096;
 pub const DEFAULT_OUTPUT_TOKENS: i64 = 1024;
+/// How many tools one managed request may put in front of a model. The hub's
+/// whole catalogue is five; the cap exists so an arbitrary client cannot spend
+/// this user's context on a tool list.
+pub const MAXIMUM_TOOLS: usize = 16;
 pub const REQUEST_FRAMING_TOKEN_RESERVE: i64 = 64;
 pub const MESSAGE_FRAMING_TOKEN_RESERVE: i64 = 16;
 pub const STALE_REQUEST_MS: i64 = 120_000;
@@ -400,6 +404,15 @@ pub fn model_for_tier(tier: ModelTier, value: impl Fn(&str) -> Option<String>) -
         .unwrap_or_else(|| tier.default_model().to_string())
 }
 
+/// Every key a managed completion body may carry. Anything else is rejected
+/// outright rather than stripped, so a client cannot smuggle a parameter past
+/// the accounting by spelling it differently.
+///
+/// `tools` and `tool_choice` are here because withholding them is what actually
+/// broke the desktop assistant: the hub attaches its catalogue to a turn, this
+/// list did not admit the key, and the whole request came back `400 Invalid
+/// request` — which the client could only report as "assistant provider stream
+/// failed". It was read as the model refusing tools. No model was ever asked.
 const ALLOWED_KEYS: &[&str] = &[
     "messages",
     "model",
@@ -408,7 +421,15 @@ const ALLOWED_KEYS: &[&str] = &[
     "temperature",
     "top_p",
     "stream_options",
+    "tools",
+    "tool_choice",
 ];
+
+/// The keys one message may carry. The two tool fields are what make a tool
+/// round trip expressible at all: the assistant turn that asked to call
+/// something carries `tool_calls`, and each answer comes back as a `tool`
+/// message naming the call it answers.
+const ALLOWED_MESSAGE_KEYS: &[&str] = &["role", "content", "tool_calls", "tool_call_id"];
 
 /// A chat message on the way to a completion.
 ///
@@ -479,6 +500,10 @@ pub struct CompletionRequest {
     pub max_tokens: i64,
     pub temperature: Option<f64>,
     pub top_p: Option<f64>,
+    /// Carried through to the upstream verbatim. The worker has no opinion
+    /// about what a tool is; it only bounds how many there may be.
+    pub tools: Option<Value>,
+    pub tool_choice: Option<Value>,
 }
 
 /// Port of `validatePinnedEndpoint`. Returns the parsed URL only when the
@@ -556,22 +581,49 @@ pub fn parse_request(body: &Value, model: &str) -> Option<CompletionRequest> {
     let mut input_characters = 0usize;
     for candidate in messages_val {
         let value = candidate.as_object()?;
-        if value.keys().any(|k| k != "role" && k != "content") {
+        if !object_keys_all_allowed(value, ALLOWED_MESSAGE_KEYS) {
             return None;
         }
         let role = value.get("role").and_then(Value::as_str)?;
-        if role != "assistant" && role != "system" && role != "user" {
+        if role != "assistant" && role != "system" && role != "user" && role != "tool" {
             return None;
         }
-        let content = value.get("content").and_then(Value::as_str)?;
-        if content.is_empty() {
+        let tool_calls = value.get("tool_calls").cloned();
+        let tool_call_id = match value.get("tool_call_id") {
+            None => None,
+            Some(id) => Some(id.as_str()?.to_string()),
+        };
+        if let Some(calls) = &tool_calls {
+            if role != "assistant" || calls.as_array().is_none_or(Vec::is_empty) {
+                return None;
+            }
+        }
+        // A `tool` message answers a call, so it must name one; nothing else
+        // may claim to.
+        if (role == "tool") != tool_call_id.is_some() {
+            return None;
+        }
+        // The turn that asks to call something says nothing while it does, so
+        // an empty content is only allowed there. Everywhere else an empty
+        // message is a client bug that costs the user a request.
+        let content = match value.get("content") {
+            None => String::new(),
+            Some(Value::Null) => String::new(),
+            Some(content) => content.as_str()?.to_string(),
+        };
+        if content.is_empty() && tool_calls.is_none() {
             return None;
         }
         input_characters += content.encode_utf16().count();
         if input_characters > MAXIMUM_INPUT_CHARACTERS {
             return None;
         }
-        messages.push(Message::new(role, content));
+        messages.push(Message {
+            role: role.to_string(),
+            content,
+            tool_calls,
+            tool_call_id,
+        });
     }
     if messages.is_empty() {
         return None;
@@ -614,22 +666,54 @@ pub fn parse_request(body: &Value, model: &str) -> Option<CompletionRequest> {
             Some(n)
         }
     };
+    let tools = match obj.get("tools") {
+        None => None,
+        Some(tools) => {
+            let listed = tools.as_array()?;
+            if listed.is_empty() || listed.len() > MAXIMUM_TOOLS {
+                return None;
+            }
+            if !listed.iter().all(Value::is_object) {
+                return None;
+            }
+            Some(tools.clone())
+        }
+    };
+    // A tool choice without tools is a request the upstream cannot honour, and
+    // the shape is left to the upstream beyond that: naming the tool to call is
+    // an object, and the three standing answers are strings.
+    let tool_choice = match obj.get("tool_choice") {
+        None => None,
+        Some(_) if tools.is_none() => return None,
+        Some(choice) => match choice {
+            Value::String(named) => {
+                if named != "auto" && named != "none" && named != "required" {
+                    return None;
+                }
+                Some(choice.clone())
+            }
+            Value::Object(_) => Some(choice.clone()),
+            _ => return None,
+        },
+    };
     Some(CompletionRequest {
         model: model.to_string(),
         messages,
         max_tokens,
         temperature,
         top_p,
+        tools,
+        tool_choice,
     })
 }
 
 /// The upstream body sent for a parsed managed request: the request plus the
 /// forced `stream_options.include_usage`.
 pub fn upstream_body(request: &CompletionRequest) -> Value {
-    let mut messages = Vec::with_capacity(request.messages.len());
-    for m in &request.messages {
-        messages.push(serde_json::json!({ "role": m.role, "content": m.content }));
-    }
+    // `to_json` rather than a fresh role/content pair: a tool round trip only
+    // works if the call ids the assistant turn quoted survive to the upstream
+    // unchanged, and rebuilding the message is how they stop matching.
+    let messages: Vec<Value> = request.messages.iter().map(Message::to_json).collect();
     let mut body = serde_json::json!({
         "model": request.model,
         "messages": messages,
@@ -643,6 +727,12 @@ pub fn upstream_body(request: &CompletionRequest) -> Value {
     }
     if let Some(p) = request.top_p {
         obj.insert("top_p".into(), serde_json::json!(p));
+    }
+    if let Some(tools) = &request.tools {
+        obj.insert("tools".into(), tools.clone());
+    }
+    if let Some(choice) = &request.tool_choice {
+        obj.insert("tool_choice".into(), choice.clone());
     }
     body
 }
@@ -1045,6 +1135,105 @@ mod tests {
         // 64 * (16 + 4 + 1) + 64 = 1408, plus max_tokens 1 = 1409.
         assert_eq!(input_token_reservation(&messages), 1408);
         assert_eq!(input_token_reservation(&messages) + 1, 1409);
+    }
+
+    // The regression this pins: the desktop assistant attaches a tool
+    // catalogue to a turn, and this route used to reject the whole request for
+    // carrying the key. The client saw a bare stream failure and the cause was
+    // read as the model refusing tools — the model was never asked.
+    #[test]
+    fn a_request_carrying_tools_is_forwarded_rather_than_refused() {
+        let mut with_tools = valid().as_object().unwrap().clone();
+        with_tools.insert(
+            "tools".into(),
+            json!([{
+                "type": "function",
+                "function": { "name": "memory_search", "parameters": { "type": "object" } }
+            }]),
+        );
+        with_tools.insert("tool_choice".into(), json!("auto"));
+        let parsed = parse_request(&Value::Object(with_tools), "xiaomi/mimo-v2.5-pro")
+            .expect("a tools request parses");
+        let body = upstream_body(&parsed);
+        assert_eq!(
+            body["tools"][0]["function"]["name"].as_str(),
+            Some("memory_search")
+        );
+        assert_eq!(body["tool_choice"].as_str(), Some("auto"));
+    }
+
+    #[test]
+    fn a_tool_round_trip_keeps_the_call_ids_that_answer_each_other() {
+        let mut round_trip = valid().as_object().unwrap().clone();
+        round_trip.insert(
+            "messages".into(),
+            json!([
+                { "role": "user", "content": "what do you know about me?" },
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [{
+                        "id": "call_1",
+                        "type": "function",
+                        "function": { "name": "memory_search", "arguments": "{}" }
+                    }]
+                },
+                { "role": "tool", "tool_call_id": "call_1", "content": "- I work at Acme" }
+            ]),
+        );
+        let parsed = parse_request(&Value::Object(round_trip), "xiaomi/mimo-v2.5-pro")
+            .expect("a tool round trip parses");
+        let body = upstream_body(&parsed);
+        assert_eq!(
+            body["messages"][1]["tool_calls"][0]["id"].as_str(),
+            Some("call_1")
+        );
+        assert_eq!(body["messages"][2]["tool_call_id"].as_str(), Some("call_1"));
+        // The user turn keeps the shape every non-tool message always had.
+        assert!(body["messages"][0].get("tool_calls").is_none());
+    }
+
+    #[test]
+    fn a_malformed_tool_shape_is_still_refused() {
+        let base = valid();
+        let mut choice_alone = base.as_object().unwrap().clone();
+        choice_alone.insert("tool_choice".into(), json!("auto"));
+        assert!(parse_request(&Value::Object(choice_alone), "xiaomi/mimo-v2.5-pro").is_none());
+
+        let mut too_many = base.as_object().unwrap().clone();
+        too_many.insert(
+            "tools".into(),
+            json!(vec![json!({ "type": "function" }); MAXIMUM_TOOLS + 1]),
+        );
+        assert!(parse_request(&Value::Object(too_many), "xiaomi/mimo-v2.5-pro").is_none());
+
+        let mut empty_tools = base.as_object().unwrap().clone();
+        empty_tools.insert("tools".into(), json!([]));
+        assert!(parse_request(&Value::Object(empty_tools), "xiaomi/mimo-v2.5-pro").is_none());
+
+        // An answer to nothing, and a call from nobody.
+        let mut orphan_result = base.as_object().unwrap().clone();
+        orphan_result.insert(
+            "messages".into(),
+            json!([{ "role": "tool", "content": "anything" }]),
+        );
+        assert!(parse_request(&Value::Object(orphan_result), "xiaomi/mimo-v2.5-pro").is_none());
+
+        let mut user_calls = base.as_object().unwrap().clone();
+        user_calls.insert(
+            "messages".into(),
+            json!([{ "role": "user", "content": "hi", "tool_calls": [{ "id": "call_1" }] }]),
+        );
+        assert!(parse_request(&Value::Object(user_calls), "xiaomi/mimo-v2.5-pro").is_none());
+
+        // An empty message is still a client bug everywhere it is not a turn
+        // that spoke only by calling something.
+        let mut empty_user = base.as_object().unwrap().clone();
+        empty_user.insert(
+            "messages".into(),
+            json!([{ "role": "user", "content": "" }]),
+        );
+        assert!(parse_request(&Value::Object(empty_user), "xiaomi/mimo-v2.5-pro").is_none());
     }
 
     #[test]

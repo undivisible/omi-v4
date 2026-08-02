@@ -1,10 +1,12 @@
 use crate::computer_use::Observation;
 use crate::computer_use_tools::{COMPUTER_INVOKE_TOOL, COMPUTER_SET_VALUE_TOOL, valid_call_id};
+use crate::model_tier::ModelTier;
 use rs_ai_core::ToolDefinition;
 
 pub(crate) const COMPUTER_OBSERVE_TOOL: &str = "computer_observe";
 pub(crate) const MEMORY_SEARCH_TOOL: &str = "memory_search";
 pub(crate) const PROFILE_READ_TOOL: &str = "profile_read";
+pub(crate) const ESCALATE_TOOL: &str = "escalate";
 
 /// How many times a turn may call tools and come back for more before it has
 /// to answer with what it has. Four covers the deepest sequence the desktop
@@ -30,12 +32,16 @@ pub(crate) const MAX_TOOL_RESULT_BYTES: usize = 8 * 1024;
 pub(crate) enum ToolEffect {
     Read,
     Write,
+    /// Changes nothing and answers nothing: it ends the round so the same
+    /// conversation can be asked again of a stronger model.
+    Handoff,
 }
 
 pub(crate) fn tool_effect(tool_name: &str) -> Option<ToolEffect> {
     match tool_name {
         COMPUTER_OBSERVE_TOOL | MEMORY_SEARCH_TOOL | PROFILE_READ_TOOL => Some(ToolEffect::Read),
         COMPUTER_INVOKE_TOOL | COMPUTER_SET_VALUE_TOOL => Some(ToolEffect::Write),
+        ESCALATE_TOOL => Some(ToolEffect::Handoff),
         _ => None,
     }
 }
@@ -58,6 +64,41 @@ pub(crate) fn computer_observe_tool() -> ToolDefinition {
             "properties": {},
         }),
         examples: None,
+    }
+}
+
+/// How the fast model gets rid of a turn it should not be answering.
+///
+/// This is the whole tier decision. The alternative was to guess from outside —
+/// count the prompt's characters, match a keyword — which cannot tell a hard
+/// short question from an easy long one. Mercury reads the question, and the
+/// only thing it is asked to judge is whether it is the right model for it.
+pub(crate) fn escalate_tool() -> ToolDefinition {
+    ToolDefinition {
+        name: ESCALATE_TOOL.to_owned(),
+        description:
+            "Hand this turn to a stronger model instead of answering it yourself. Call this as the first thing you do, before saying anything, whenever the turn needs careful reasoning, long-form writing, code, or facts newer than your training — `smart` for reasoning and writing, `search` for anything that depends on what is true on the web right now. Answer normally when you can do it well"
+                .to_owned(),
+        parameters: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "tier": {"type": "string", "enum": ["smart", "search"]},
+                "reason": {"type": "string"}
+            },
+            "required": ["tier"]
+        }),
+        examples: None,
+    }
+}
+
+/// The tier an `escalate` call asks for. An unrecognised or missing name is the
+/// stronger general model rather than a refusal: the model has already said it
+/// is the wrong one for this turn, and arguing about the spelling of the
+/// handoff would strand the turn on it.
+pub(crate) fn escalation_tier(arguments: &serde_json::Value) -> ModelTier {
+    match arguments.get("tier").and_then(serde_json::Value::as_str) {
+        Some("search") => ModelTier::Search,
+        _ => ModelTier::Smart,
     }
 }
 
@@ -173,6 +214,7 @@ mod tests {
             tool_effect(COMPUTER_SET_VALUE_TOOL),
             Some(ToolEffect::Write)
         );
+        assert_eq!(tool_effect(ESCALATE_TOOL), Some(ToolEffect::Handoff));
         assert_eq!(tool_effect("bash"), None);
         assert!(!valid_tool_identity("call_1", "bash"));
         assert!(!valid_tool_identity("call/1", COMPUTER_OBSERVE_TOOL));
@@ -218,6 +260,27 @@ mod tests {
             render_observation(&Observation::default()),
             "No actionable elements are on screen right now."
         );
+    }
+
+    #[test]
+    fn a_handoff_names_a_stronger_tier_and_never_the_one_it_came_from() {
+        assert_eq!(
+            escalation_tier(&serde_json::json!({"tier": "search"})),
+            ModelTier::Search
+        );
+        assert_eq!(
+            escalation_tier(&serde_json::json!({"tier": "smart"})),
+            ModelTier::Smart
+        );
+        // A turn Mercury has already declined never lands back on Mercury,
+        // whatever it wrote in the argument.
+        for arguments in [
+            serde_json::json!({}),
+            serde_json::json!({"tier": "speed"}),
+            serde_json::json!({"tier": 7}),
+        ] {
+            assert_ne!(escalation_tier(&arguments), ModelTier::Speed);
+        }
     }
 
     #[test]

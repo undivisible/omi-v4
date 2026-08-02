@@ -4,13 +4,13 @@ use crate::approval::{
 };
 use crate::approval::{ProposalDecisionError, ProposalRegistry, ProposalStatus, unix_time_ms};
 use crate::assistant_tools::{
-    COMPUTER_OBSERVE_TOOL, MAX_TOOL_ROUNDS, MEMORY_SEARCH_TOOL, PROFILE_READ_TOOL, ToolEffect,
-    computer_observe_tool, memory_search_query, render_observation, tool_effect,
-    truncated_tool_result, user_data_tools, valid_tool_identity,
+    COMPUTER_OBSERVE_TOOL, ESCALATE_TOOL, MAX_TOOL_ROUNDS, MEMORY_SEARCH_TOOL, PROFILE_READ_TOOL,
+    ToolEffect, computer_observe_tool, escalate_tool, escalation_tier, memory_search_query,
+    render_observation, tool_effect, truncated_tool_result, user_data_tools, valid_tool_identity,
 };
 use crate::byok_tier::ByokProvider;
 use crate::capture_service::CaptureControl;
-use crate::chat_router::ChatRouter;
+use crate::chat_router::FIRST_TIER;
 use crate::computer_use::{
     BoundComputerUseAction, ComputerUseError, ExecutionOutcome, PreparedComputerUseAction,
     available as computer_use_available, capabilities as computer_use_capabilities,
@@ -116,7 +116,6 @@ struct RuntimeState {
     self_improve: Option<rx4::self_improve::SelfImprove>,
     personality: Option<rx4::Personality>,
     memory_mirror_high_water: i64,
-    chat_router: Option<ChatRouter>,
     /// The Rewind timeline, once the client has opened it. It lives behind a
     /// std mutex rather than the async one because every operation on it is
     /// blocking file work that runs on `spawn_blocking`, never on the
@@ -894,21 +893,76 @@ impl AssistantProvider for RsAiAssistantProvider {
         let (sender, receiver) = mpsc::channel(COMMAND_QUEUE_CAPACITY);
         let config = self.config.clone();
         let computer_use_enabled = self.computer_use_enabled;
-        // The multimodal tier exists to read pictures; a configuration that
-        // routes it to a model which cannot is a misconfiguration, not a
-        // request to answer anyway.
-        let required: &[Capability] = if tier == ModelTier::Multimodal {
-            &[Capability::Text, Capability::ImageIn]
-        } else {
-            &[Capability::Text]
-        };
-        let model = match config.model_for_capability(tier, required) {
+        if let Err(message) = config.model_for_capability(tier, required_capabilities(tier)) {
+            tokio::spawn(async move {
+                let _ = sender.send(Err(message)).await;
+            });
+            return receiver;
+        }
+        tokio::spawn(async move {
+            run_assistant_turn(
+                config,
+                computer_use_enabled,
+                request_id,
+                text,
+                tier,
+                cancellation,
+                tools,
+                sender,
+            )
+            .await;
+        });
+        receiver
+    }
+}
+
+/// What the model this tier resolves to has to be able to carry.
+///
+/// The multimodal tier exists to read pictures; a configuration that routes it
+/// to a model which cannot is a misconfiguration, not a request to answer
+/// anyway. This is the one part of tier selection that is a fact about the
+/// input rather than a judgement about the question, so it is checked here
+/// rather than left to the model that hands the turn on.
+fn required_capabilities(tier: ModelTier) -> &'static [Capability] {
+    if tier == ModelTier::Multimodal {
+        &[Capability::Text, Capability::ImageIn]
+    } else {
+        &[Capability::Text]
+    }
+}
+
+/// One assistant turn, across however many models answer it.
+///
+/// The turn starts on whichever tier it was dispatched to — for chat that is
+/// always Mercury — and moves up only when the model itself says it should, by
+/// calling `escalate`. The conversation moves with it: the read-only lookups
+/// the fast model already paid for are still in front of the stronger one, so a
+/// handoff costs a round rather than the work.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the turn carries independently sourced inputs; grouping them would only relabel the arity"
+)]
+async fn run_assistant_turn(
+    config: AssistantProviderConfig,
+    computer_use_enabled: bool,
+    request_id: String,
+    text: String,
+    tier: ModelTier,
+    cancellation: CancellationToken,
+    tools: Option<Arc<dyn AssistantTurnTools>>,
+    sender: mpsc::Sender<Result<AssistantProviderEvent, String>>,
+) {
+    // A tool result attaches to a conversation, not to a prompt: it has to
+    // arrive as its own message answering the call that asked for it, which a
+    // single `stream(text)` has nowhere to put.
+    let mut conversation = vec![Message::user(text.clone())];
+    let mut tier = tier;
+    loop {
+        let model = match config.model_for_capability(tier, required_capabilities(tier)) {
             Ok(model) => model,
             Err(message) => {
-                tokio::spawn(async move {
-                    let _ = sender.send(Err(message)).await;
-                });
-                return receiver;
+                let _ = sender.send(Err(message)).await;
+                return;
             }
         };
         // The SEARCH tier is grounded through the provider's hosted web-search
@@ -918,153 +972,190 @@ impl AssistantProvider for RsAiAssistantProvider {
         // the worker's chat completions) so the `url_citation` sources survive
         // to the reply instead of being dropped by the crate's stream parser.
         if let Some(backend) = config.hosted_backend(tier) {
-            let search_model = model.clone();
-            tokio::spawn(async move {
-                if let SearchBackend::ManagedChat { endpoint } = &backend {
-                    let preflight = tokio::select! {
-                        () = cancellation.cancelled() => return,
-                        result = endpoint_resolves_publicly(endpoint) => result,
-                    };
-                    if let Err(message) = preflight {
-                        let _ = sender.send(Err(message)).await;
-                        return;
-                    }
-                }
-                let opened = tokio::select! {
-                    () = cancellation.cancelled() => return,
-                    result = dispatch_hosted_search(
-                        &backend,
-                        &search_model,
-                        &config.credential,
-                        &text,
-                        PROVIDER_CONNECT_TIMEOUT,
-                    ) => result,
-                };
-                let mut stream = match opened {
-                    Ok(stream) => stream,
-                    Err(message) => {
-                        let _ = sender.send(Err(message)).await;
-                        return;
-                    }
-                };
-                loop {
-                    let next = tokio::select! {
-                        () = cancellation.cancelled() => return,
-                        result = tokio::time::timeout(PROVIDER_EVENT_TIMEOUT, stream.next()) => result,
-                    };
-                    let event = match next {
-                        Ok(Some(Ok(delta))) => AssistantProviderEvent::Delta {
-                            text: delta,
-                            final_segment: false,
-                        },
-                        Ok(Some(Err(message))) => {
-                            let _ = sender.send(Err(message)).await;
-                            return;
-                        }
-                        Ok(None) => {
-                            let _ = sender
-                                .send(Ok(AssistantProviderEvent::Delta {
-                                    text: String::new(),
-                                    final_segment: true,
-                                }))
-                                .await;
-                            return;
-                        }
-                        Err(_) => {
-                            let _ = sender
-                                .send(Err("assistant provider stream timed out".to_owned()))
-                                .await;
-                            return;
-                        }
-                    };
-                    if sender.send(Ok(event)).await.is_err() {
-                        return;
-                    }
-                }
-            });
-            return receiver;
+            // The hosted backends take a question, not a conversation, so a
+            // handoff to one asks the user's own words again. What the fast
+            // model looked up locally is of no use to a search engine anyway.
+            run_hosted_turn(&config, &backend, &model, &text, &cancellation, &sender).await;
+            return;
         }
-        tokio::spawn(async move {
-            if let Some(endpoint) = config.endpoint.as_deref() {
-                let preflight = tokio::select! {
-                    () = cancellation.cancelled() => return,
-                    result = endpoint_resolves_publicly(endpoint) => result,
-                };
-                if let Err(message) = preflight {
-                    let _ = sender.send(Err(message)).await;
-                    return;
-                }
-            }
-            let computer_tools_active =
-                computer_use_enabled && computer_use_available() && tier != ModelTier::Speed;
-            let mut catalogue = Vec::new();
-            if computer_tools_active {
-                catalogue.push(computer_observe_tool());
-                catalogue.extend(computer_use_tools());
-            }
-            if tools.is_some() {
-                catalogue.extend(user_data_tools());
-            }
-            // A tool result attaches to a conversation, not to a prompt: it has
-            // to arrive as its own message answering the call that asked for
-            // it, which a single `stream(text)` has nowhere to put.
-            let messages = vec![Message::user(text)];
-            // Owned clones, not borrows: an async closure that borrowed the
-            // turn's cancellation could not be proven `Send` for every lifetime
-            // the spawned task might hand it.
-            let round_cancellation = cancellation.clone();
-            let open_round = async move |offer_tools: bool, messages: &[Message]| {
-                // `stream_prompt` consumes the builder, so every round builds
-                // its own. A builder is configuration, not a connection.
-                let base = match config.kind {
-                    AssistantProviderKind::OpenAi => rs_ai::chatgpt(),
-                    AssistantProviderKind::Anthropic => rs_ai::claude(),
-                    AssistantProviderKind::Gemini => rs_ai::gemini(),
-                    AssistantProviderKind::Xai => rs_ai::xai(),
-                    AssistantProviderKind::Compatible | AssistantProviderKind::Worker => {
-                        rs_ai::compatible(config.endpoint.clone().unwrap_or_default())
-                    }
-                }
-                .model(model.clone());
-                let client = base.api_key(config.credential.clone());
-                // The last round carries no tools at all. A cap the model is
-                // merely asked to respect is not a cap; withholding the tools
-                // is what actually ends the turn.
-                let client = if catalogue.is_empty() || !offer_tools {
-                    client
-                } else {
-                    client
-                        .with_tools(catalogue.clone())
-                        .with_tool_choice(ToolChoice::Auto)
-                };
-                let connected = tokio::select! {
-                    () = round_cancellation.cancelled() => return None,
-                    result = tokio::time::timeout(
-                        PROVIDER_CONNECT_TIMEOUT,
-                        client.stream_prompt(Prompt::Messages(messages.to_vec())),
-                    ) => result,
-                };
-                match connected {
-                    Ok(Ok(stream)) => Some(Ok(stream)),
-                    // A refused request is reported rather than sent, because a
-                    // refusal of a tools request is exactly the one the caller
-                    // can still answer by asking again without them.
-                    Ok(Err(_)) => Some(Err("assistant provider connection failed".to_owned())),
-                    Err(_) => Some(Err("assistant provider connection timed out".to_owned())),
-                }
+        if let Some(endpoint) = config.endpoint.as_deref() {
+            let preflight = tokio::select! {
+                () = cancellation.cancelled() => return,
+                result = endpoint_resolves_publicly(endpoint) => result,
             };
-            run_tool_rounds(
-                open_round,
-                messages,
-                &request_id,
-                computer_tools_active,
-                tools.as_ref(),
-                &sender,
-                &cancellation,
-            )
-            .await;
-        });
-        receiver
+            if let Err(message) = preflight {
+                let _ = sender.send(Err(message)).await;
+                return;
+            }
+        }
+        let offered = OfferedTools {
+            computer: computer_use_enabled && computer_use_available(),
+            // Only the tier the turn starts on may hand it on, so a handoff
+            // happens at most once and can never come back down.
+            escalation: tier == FIRST_TIER,
+        };
+        let mut catalogue = Vec::new();
+        if offered.computer {
+            catalogue.push(computer_observe_tool());
+            catalogue.extend(computer_use_tools());
+        }
+        if tools.is_some() {
+            catalogue.extend(user_data_tools());
+        }
+        if offered.escalation {
+            catalogue.push(escalate_tool());
+        }
+        // Owned clones, not borrows: an async closure that borrowed the turn's
+        // cancellation could not be proven `Send` for every lifetime the
+        // spawned task might hand it.
+        let round_config = config.clone();
+        let round_cancellation = cancellation.clone();
+        let open_round = async move |offer_tools: bool, messages: &[Message]| {
+            // `stream_prompt` consumes the builder, so every round builds its
+            // own. A builder is configuration, not a connection.
+            let base = match round_config.kind {
+                AssistantProviderKind::OpenAi => rs_ai::chatgpt(),
+                AssistantProviderKind::Anthropic => rs_ai::claude(),
+                AssistantProviderKind::Gemini => rs_ai::gemini(),
+                AssistantProviderKind::Xai => rs_ai::xai(),
+                AssistantProviderKind::Compatible | AssistantProviderKind::Worker => {
+                    rs_ai::compatible(round_config.endpoint.clone().unwrap_or_default())
+                }
+            }
+            .model(model.clone());
+            let client = base.api_key(round_config.credential.clone());
+            // The last round carries no tools at all. A cap the model is merely
+            // asked to respect is not a cap; withholding the tools is what
+            // actually ends the turn.
+            let client = if catalogue.is_empty() || !offer_tools {
+                client
+            } else {
+                client
+                    .with_tools(catalogue.clone())
+                    .with_tool_choice(ToolChoice::Auto)
+            };
+            let connected = tokio::select! {
+                () = round_cancellation.cancelled() => return None,
+                result = tokio::time::timeout(
+                    PROVIDER_CONNECT_TIMEOUT,
+                    client.stream_prompt(Prompt::Messages(messages.to_vec())),
+                ) => result,
+            };
+            match connected {
+                Ok(Ok(stream)) => Some(Ok(stream)),
+                // A refused request is reported rather than sent, because a
+                // refusal of a tools request is exactly the one the caller can
+                // still answer by asking again without them. The upstream's own
+                // words travel with it: a request this client is not allowed to
+                // send is indistinguishable from a model that cannot answer
+                // until someone reads the status and the body.
+                Ok(Err(error)) => Some(Err(format!(
+                    "assistant provider connection failed: {error}"
+                ))),
+                Err(_) => Some(Err("assistant provider connection timed out".to_owned())),
+            }
+        };
+        let handoff = run_tool_rounds(
+            open_round,
+            conversation,
+            &request_id,
+            offered,
+            tools.as_ref(),
+            &sender,
+            &cancellation,
+        )
+        .await;
+        let Some(handoff) = handoff else {
+            return;
+        };
+        tier = handoff.tier;
+        conversation = handoff.conversation;
+        // The model the user was told about is no longer the model answering,
+        // and a reply arriving from somewhere the interface never named reads
+        // as a different assistant.
+        progress(
+            &request_id,
+            CHAT_MODEL_TOOL,
+            ToolStatus::Complete,
+            Some(&format!(
+                "{ONLINE_CHAT_MODEL_DETAIL}:{}",
+                config.model_for_tier(tier)
+            )),
+        );
+    }
+}
+
+/// A turn answered by a provider's own hosted search surface rather than by an
+/// `rs_ai` chat completion. Split out of the turn loop because a handoff to the
+/// search tier arrives here mid-turn.
+async fn run_hosted_turn(
+    config: &AssistantProviderConfig,
+    backend: &SearchBackend,
+    model: &str,
+    text: &str,
+    cancellation: &CancellationToken,
+    sender: &mpsc::Sender<Result<AssistantProviderEvent, String>>,
+) {
+    if let SearchBackend::ManagedChat { endpoint } = backend {
+        let preflight = tokio::select! {
+            () = cancellation.cancelled() => return,
+            result = endpoint_resolves_publicly(endpoint) => result,
+        };
+        if let Err(message) = preflight {
+            let _ = sender.send(Err(message)).await;
+            return;
+        }
+    }
+    let opened = tokio::select! {
+        () = cancellation.cancelled() => return,
+        result = dispatch_hosted_search(
+            backend,
+            model,
+            &config.credential,
+            text,
+            PROVIDER_CONNECT_TIMEOUT,
+        ) => result,
+    };
+    let mut stream = match opened {
+        Ok(stream) => stream,
+        Err(message) => {
+            let _ = sender.send(Err(message)).await;
+            return;
+        }
+    };
+    loop {
+        let next = tokio::select! {
+            () = cancellation.cancelled() => return,
+            result = tokio::time::timeout(PROVIDER_EVENT_TIMEOUT, stream.next()) => result,
+        };
+        let event = match next {
+            Ok(Some(Ok(delta))) => AssistantProviderEvent::Delta {
+                text: delta,
+                final_segment: false,
+            },
+            Ok(Some(Err(message))) => {
+                let _ = sender.send(Err(message)).await;
+                return;
+            }
+            Ok(None) => {
+                let _ = sender
+                    .send(Ok(AssistantProviderEvent::Delta {
+                        text: String::new(),
+                        final_segment: true,
+                    }))
+                    .await;
+                return;
+            }
+            Err(_) => {
+                let _ = sender
+                    .send(Err("assistant provider stream timed out".to_owned()))
+                    .await;
+                return;
+            }
+        };
+        if sender.send(Ok(event)).await.is_err() {
+            return;
+        }
     }
 }
 
@@ -1083,11 +1174,12 @@ async fn run_tool_rounds<S, F>(
     mut open_round: F,
     messages: Vec<Message>,
     request_id: &str,
-    computer_tools_active: bool,
+    offered: OfferedTools,
     tools: Option<&Arc<dyn AssistantTurnTools>>,
     sender: &mpsc::Sender<Result<AssistantProviderEvent, String>>,
     cancellation: &CancellationToken,
-) where
+) -> Option<Handoff>
+where
     S: futures::Stream<Item = Result<StreamEvent, AiError>> + Unpin,
     F: AsyncFnMut(bool, &[Message]) -> Option<Result<S, String>>,
 {
@@ -1100,12 +1192,12 @@ async fn run_tool_rounds<S, F>(
         // asked to respect is not a cap.
         let offer_tools = !degraded && round < MAX_TOOL_ROUNDS;
         let outcome = match open_round(offer_tools, &conversation).await {
-            None => return,
+            None => return None,
             Some(Ok(mut stream)) => {
                 run_tool_round(
                     &mut stream,
                     request_id,
-                    computer_tools_active,
+                    offered,
                     tools,
                     sender,
                     cancellation,
@@ -1118,7 +1210,19 @@ async fn run_tool_rounds<S, F>(
             },
         };
         match outcome {
-            ToolRoundOutcome::Done => return,
+            ToolRoundOutcome::Done => return None,
+            // The escalating call is deliberately not carried: it asks a
+            // question only this loop can answer, and a model handed a tool
+            // call it cannot close reads it as an error.
+            ToolRoundOutcome::HandedOff { tier, spoken } => {
+                if spoken_anything || spoken {
+                    // The fast model already answered out loud, so there is
+                    // nothing left for a stronger one to say that would not be
+                    // said twice.
+                    break;
+                }
+                return Some(Handoff { tier, conversation });
+            }
             ToolRoundOutcome::Continue { appended, spoken } => {
                 spoken_anything = spoken_anything || spoken;
                 conversation.extend(appended);
@@ -1132,7 +1236,7 @@ async fn run_tool_rounds<S, F>(
                 }
                 if degraded || !offer_tools {
                     let _ = sender.send(Err(message)).await;
-                    return;
+                    return None;
                 }
                 degraded = true;
                 conversation = messages.clone();
@@ -1148,6 +1252,14 @@ async fn run_tool_rounds<S, F>(
             final_segment: true,
         }))
         .await;
+    None
+}
+
+/// A turn the model asked a stronger one to finish, and everything it learned
+/// before asking.
+struct Handoff {
+    tier: ModelTier,
+    conversation: Vec<Message>,
 }
 
 enum ToolRoundOutcome {
@@ -1158,24 +1270,31 @@ enum ToolRoundOutcome {
         appended: Vec<Message>,
         spoken: bool,
     },
+    /// The model declined the turn and named who should take it. Nothing
+    /// terminal has been sent: the turn is not over, it moved.
+    HandedOff { tier: ModelTier, spoken: bool },
     /// The round could not be completed. Nothing terminal has been sent, so the
     /// caller still gets to decide between retrying and reporting.
     Failed { message: String, spoken: bool },
 }
 
+/// Which of the hub's tools this particular turn put in front of the model.
+/// User-data tools are not here because their availability is the presence of
+/// the runtime handle that backs them, not a decision.
+#[derive(Clone, Copy)]
+struct OfferedTools {
+    computer: bool,
+    escalation: bool,
+}
+
 /// A tool the turn never offered is not a tool the model may call, even when
 /// the hub knows the name: the user-data tools only exist when the turn was
 /// given a runtime to read them out of.
-fn tool_call_is_offered(
-    tool_name: &str,
-    computer_tools_active: bool,
-    user_data_available: bool,
-) -> bool {
+fn tool_call_is_offered(tool_name: &str, offered: OfferedTools, user_data_available: bool) -> bool {
     match tool_name {
-        COMPUTER_INVOKE_TOOL | COMPUTER_SET_VALUE_TOOL | COMPUTER_OBSERVE_TOOL => {
-            computer_tools_active
-        }
+        COMPUTER_INVOKE_TOOL | COMPUTER_SET_VALUE_TOOL | COMPUTER_OBSERVE_TOOL => offered.computer,
         MEMORY_SEARCH_TOOL | PROFILE_READ_TOOL => user_data_available,
+        ESCALATE_TOOL => offered.escalation,
         _ => false,
     }
 }
@@ -1186,7 +1305,7 @@ fn tool_call_is_offered(
 async fn run_tool_round<S>(
     stream: &mut S,
     request_id: &str,
-    computer_tools_active: bool,
+    offered: OfferedTools,
     tools: Option<&Arc<dyn AssistantTurnTools>>,
     sender: &mpsc::Sender<Result<AssistantProviderEvent, String>>,
     cancellation: &CancellationToken,
@@ -1231,7 +1350,7 @@ where
                 })
             }
             Ok(StreamEvent::ToolCallStart { call_id, tool_name }) => {
-                if !tool_call_is_offered(&tool_name, computer_tools_active, tools.is_some())
+                if !tool_call_is_offered(&tool_name, offered, tools.is_some())
                     || !valid_tool_identity(&call_id, &tool_name)
                     || tool_names.insert(call_id, tool_name).is_some()
                 {
@@ -1249,6 +1368,12 @@ where
                     };
                 };
                 match tool_effect(&tool_name) {
+                    Some(ToolEffect::Handoff) => {
+                        return ToolRoundOutcome::HandedOff {
+                            tier: escalation_tier(&arguments),
+                            spoken: !spoken.is_empty(),
+                        };
+                    }
                     Some(ToolEffect::Read) => {
                         // Reading costs nobody an approval, so it runs now and
                         // its result rejoins the conversation. The empty delta
@@ -1322,9 +1447,16 @@ where
                 }
                 Err("assistant provider returned an incomplete computer-use tool call".to_owned())
             }
-            Ok(StreamEvent::Error { .. }) => Err("assistant provider stream failed".to_owned()),
+            // Both of these used to be reported as a bare "assistant provider
+            // stream failed", which is how a request the upstream rejected
+            // outright and a model that ran out of tokens became the same
+            // sentence, and how the wrong cause was diagnosed from it. The
+            // upstream's own words are the only evidence there is.
+            Ok(StreamEvent::Error { error }) => {
+                Err(format!("assistant provider stream failed: {error}"))
+            }
             Ok(_) => continue,
-            Err(_) => Err("assistant provider stream failed".to_owned()),
+            Err(error) => Err(format!("assistant provider stream failed: {error}")),
         };
         let event = match event {
             Ok(event) => event,
@@ -2119,7 +2251,6 @@ impl CommandDispatcher {
                         continue;
                     }
                 }
-                state.chat_router = None;
                 continue;
             }
             if let Command::ConfigureCloudMemory {
@@ -2185,7 +2316,6 @@ impl CommandDispatcher {
                                 config: config.clone(),
                                 computer_use_enabled: computer_use_available(),
                             });
-                        self.state.lock().await.chat_router = None;
                         publish_note_provider(&self.assistant_provider);
                         publish_brief_provider(Some(&config));
                         progress(
@@ -2213,7 +2343,6 @@ impl CommandDispatcher {
                     Arc::new(UnavailableAssistantProvider {
                         reason: "no model provider is configured".to_owned(),
                     });
-                self.state.lock().await.chat_router = None;
                 publish_note_provider(&self.assistant_provider);
                 publish_brief_provider(None);
                 progress(
@@ -2914,13 +3043,11 @@ async fn dispatch_assistant(
     origin: Option<MessageOrigin>,
 ) {
     let generation = state.lock().await.configuration_generation;
-    let (user_profile_path, routed_tier) = {
-        let mut guard = state.lock().await;
-        let user_profile_path = guard.user_profile_path.clone();
-        let router = guard.chat_router.get_or_insert_with(ChatRouter::from_env);
-        let routed_tier = router.route_prompt(&text, origin);
-        (user_profile_path, routed_tier)
-    };
+    let user_profile_path = state.lock().await.user_profile_path.clone();
+    // Every turn starts on the same tier. Which model should finish it is
+    // decided inside the turn by the model reading it, not out here by counting
+    // its characters — see `chat_router::FIRST_TIER`.
+    let routed_tier = FIRST_TIER;
     if let Err(message) =
         client_context_within_limit(memory_context.as_deref(), MAX_CLIENT_MEMORY_CONTEXT_BYTES)
     {
@@ -3271,6 +3398,23 @@ async fn execute(
                 person_id,
                 &cancellation,
                 configuration_generation.unwrap_or_default(),
+            )
+            .await;
+            false
+        }
+        Command::AbsorbLocalMemory {
+            database_path,
+            tenant_id,
+            person_id,
+        } => {
+            let memory = state.lock().await.memory.clone();
+            crate::memory_migration::absorb_local_memory(
+                &request_id,
+                memory,
+                database_path,
+                tenant_id,
+                person_id,
+                &cancellation,
             )
             .await;
             false
@@ -4248,7 +4392,6 @@ async fn configure_memory(
             state.computer_use_ledger_path = computer_use_ledger_path;
             state.user_profile_path = Some(user_profile_path);
             state.memory_mirror_high_water = 0;
-            state.chat_router = None;
             drop(state);
             NativeEvent::RuntimeStatus(runtime_status(true)).send();
             let review_cancellation = cancellation.clone();
@@ -6031,6 +6174,19 @@ mod tests {
         }
     }
 
+    const NO_HUB_TOOLS: OfferedTools = OfferedTools {
+        computer: false,
+        escalation: false,
+    };
+    const SCREEN_TOOLS: OfferedTools = OfferedTools {
+        computer: true,
+        escalation: false,
+    };
+    const HANDOFF_OFFERED: OfferedTools = OfferedTools {
+        computer: false,
+        escalation: true,
+    };
+
     fn message_end() -> StreamEvent {
         StreamEvent::MessageEnd {
             finish_reason: rs_ai_core::FinishReason::Stop,
@@ -6083,7 +6239,7 @@ mod tests {
         let outcome = run_tool_round(
             &mut scripted_stream(events),
             "chat-tools-1",
-            false,
+            NO_HUB_TOOLS,
             Some(&tools),
             &sender,
             &CancellationToken::new(),
@@ -6130,7 +6286,7 @@ mod tests {
         let outcome = run_tool_round(
             &mut scripted_stream(events),
             "chat-tools-2",
-            false,
+            NO_HUB_TOOLS,
             Some(&tools),
             &sender,
             &CancellationToken::new(),
@@ -6151,7 +6307,7 @@ mod tests {
                 message_end(),
             ]),
             "chat-tools-3",
-            false,
+            NO_HUB_TOOLS,
             Some(&tools),
             &sender,
             &CancellationToken::new(),
@@ -6176,7 +6332,7 @@ mod tests {
         let outcome = run_tool_round(
             &mut scripted_stream(events),
             "chat-tools-4",
-            true,
+            SCREEN_TOOLS,
             None,
             &sender,
             &CancellationToken::new(),
@@ -6220,7 +6376,7 @@ mod tests {
             open_round,
             vec![Message::user("what do you know about me?")],
             "chat-tools-5",
-            false,
+            NO_HUB_TOOLS,
             Some(&tools),
             &sender,
             &CancellationToken::new(),
@@ -6279,7 +6435,7 @@ mod tests {
             open_round,
             vec![Message::user("help me decide what to focus on next")],
             "chat-tools-6",
-            false,
+            NO_HUB_TOOLS,
             Some(&tools),
             &sender,
             &CancellationToken::new(),
@@ -6322,7 +6478,7 @@ mod tests {
             open_round,
             vec![Message::user("help me decide what to focus on next")],
             "chat-tools-7",
-            false,
+            NO_HUB_TOOLS,
             Some(&tools),
             &sender,
             &CancellationToken::new(),
@@ -6350,7 +6506,7 @@ mod tests {
             open_round,
             vec![Message::user("help me decide what to focus on next")],
             "chat-tools-8",
-            false,
+            NO_HUB_TOOLS,
             None,
             &sender,
             &CancellationToken::new(),
@@ -6387,13 +6543,172 @@ mod tests {
             open_round,
             vec![Message::user("help me decide what to focus on next")],
             "chat-tools-9",
-            false,
+            NO_HUB_TOOLS,
             Some(&tools),
             &sender,
             &CancellationToken::new(),
         )
         .await;
         assert!(drain(&mut receiver).iter().any(Result::is_err));
+    }
+
+    #[tokio::test]
+    async fn a_turn_the_fast_model_answers_is_never_handed_on() {
+        let (sender, mut receiver) = mpsc::channel(64);
+        let open_round = async move |_offer_tools: bool, _messages: &[Message]| {
+            Some(Ok::<_, String>(scripted_stream(vec![
+                StreamEvent::TextDelta {
+                    delta: "it is Tuesday".to_owned(),
+                },
+                message_end(),
+            ])))
+        };
+        let handoff = run_tool_rounds(
+            open_round,
+            vec![Message::user("what day is it?")],
+            "chat-escalate-1",
+            HANDOFF_OFFERED,
+            None,
+            &sender,
+            &CancellationToken::new(),
+        )
+        .await;
+        assert!(handoff.is_none());
+        let events = drain(&mut receiver);
+        assert!(!events.iter().any(Result::is_err));
+        assert_eq!(spoken_text(&events), "it is Tuesday");
+    }
+
+    #[tokio::test]
+    async fn a_handoff_carries_what_the_fast_model_already_looked_up() {
+        let (sender, mut receiver) = mpsc::channel(64);
+        let tools: Arc<dyn AssistantTurnTools> = Arc::new(ScriptedTurnTools {
+            memory: Some("- I work at Acme".to_owned()),
+            profile: None,
+        });
+        let rounds = Arc::new(StdMutex::new(0_u32));
+        let counted = Arc::clone(&rounds);
+        let open_round = async move |_offer_tools: bool, _messages: &[Message]| {
+            let mut count = counted
+                .lock()
+                .unwrap_or_else(|error_value| panic!("round count locks: {error_value}"));
+            *count += 1;
+            let first = *count == 1;
+            drop(count);
+            let mut events = if first {
+                tool_call(
+                    "call_1",
+                    MEMORY_SEARCH_TOOL,
+                    serde_json::json!({"query": "work"}),
+                )
+            } else {
+                tool_call(
+                    "call_2",
+                    ESCALATE_TOOL,
+                    serde_json::json!({"tier": "smart", "reason": "this needs real reasoning"}),
+                )
+            };
+            events.push(message_end());
+            Some(Ok::<_, String>(scripted_stream(events)))
+        };
+        let handoff = run_tool_rounds(
+            open_round,
+            vec![Message::user("should I leave Acme?")],
+            "chat-escalate-2",
+            HANDOFF_OFFERED,
+            Some(&tools),
+            &sender,
+            &CancellationToken::new(),
+        )
+        .await;
+        let handoff = handoff.unwrap_or_else(|| panic!("the turn was handed on"));
+        assert_eq!(handoff.tier, ModelTier::Smart);
+        // The lookup survives the handoff; the call that asked for the handoff
+        // does not, because the stronger model has no way to answer it.
+        assert!(handoff.conversation.len() > 1);
+        let carried = format!("{:?}", handoff.conversation);
+        assert!(carried.contains("Acme"));
+        assert!(!carried.contains(ESCALATE_TOOL));
+        // Nothing terminal reached the UI: the turn is not over, it moved.
+        let events = drain(&mut receiver);
+        assert!(!events.iter().any(Result::is_err));
+        assert!(!events.iter().any(|event| matches!(
+            event,
+            Ok(AssistantProviderEvent::Delta {
+                final_segment: true,
+                ..
+            })
+        )));
+    }
+
+    #[tokio::test]
+    async fn a_turn_that_was_already_handed_on_may_not_hand_it_on_again() {
+        // The stronger tier never offers `escalate`, so a model that names it
+        // anyway is calling something the turn did not offer — the same
+        // refusal any unoffered name gets, which costs the tools and not the
+        // answer.
+        assert!(tool_call_is_offered(ESCALATE_TOOL, HANDOFF_OFFERED, false));
+        assert!(!tool_call_is_offered(ESCALATE_TOOL, NO_HUB_TOOLS, true));
+
+        let (sender, mut receiver) = mpsc::channel(64);
+        let open_round = async move |offer_tools: bool, _messages: &[Message]| {
+            if offer_tools {
+                let mut events = tool_call(
+                    "call_1",
+                    ESCALATE_TOOL,
+                    serde_json::json!({"tier": "smart"}),
+                );
+                events.push(message_end());
+                return Some(Ok::<_, String>(scripted_stream(events)));
+            }
+            Some(Ok(scripted_stream(vec![
+                StreamEvent::TextDelta {
+                    delta: "here is the careful answer".to_owned(),
+                },
+                message_end(),
+            ])))
+        };
+        let handoff = run_tool_rounds(
+            open_round,
+            vec![Message::user("should I leave Acme?")],
+            "chat-escalate-3",
+            NO_HUB_TOOLS,
+            None,
+            &sender,
+            &CancellationToken::new(),
+        )
+        .await;
+        assert!(handoff.is_none());
+        let events = drain(&mut receiver);
+        assert!(!events.iter().any(Result::is_err));
+        assert_eq!(spoken_text(&events), "here is the careful answer");
+    }
+
+    // A turn that has to be seen rather than read cannot be handed to a model
+    // that cannot see. That is a fact about the input, so it is enforced before
+    // any model is asked anything.
+    #[test]
+    fn a_tier_that_has_to_read_a_picture_says_so_before_it_is_dispatched() {
+        assert!(required_capabilities(ModelTier::Multimodal).contains(&Capability::ImageIn));
+        assert!(!required_capabilities(ModelTier::Speed).contains(&Capability::ImageIn));
+        let text_only = AssistantProviderConfig {
+            kind: AssistantProviderKind::Worker,
+            model: crate::model_tier::DEFAULT_SPEED_MODEL.to_owned(),
+            credential: "token".to_owned(),
+            endpoint: Some("https://example.invalid".to_owned()),
+            tier_overrides: vec![(
+                ModelTier::Multimodal,
+                crate::model_tier::DEFAULT_SPEED_MODEL.to_owned(),
+            )],
+        };
+        assert!(
+            text_only
+                .model_for_capability(
+                    ModelTier::Multimodal,
+                    required_capabilities(ModelTier::Multimodal)
+                )
+                .is_err()
+        );
     }
 
     fn lifecycle_memory(label: &str) -> (std::path::PathBuf, MemoryContext, zkr::Remembered) {
