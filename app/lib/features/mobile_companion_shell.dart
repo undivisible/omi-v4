@@ -4,7 +4,6 @@ import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart' as url_launcher;
@@ -46,23 +45,19 @@ const _teal = Color(0xff2f9d8a);
 const _coral = Color(0xffd97757);
 const _inkSheet = Color(0xff1c1c1a);
 
-// Bottom navigation geometry. The clearance is the bar's own footprint —
-// barHeight plus its symmetric vertical padding plus the gap under it — and is
-// what every scrollable on the shell reserves so its last row stays reachable.
-const _tabBarHeight = 72.0;
-const _tabBarVerticalPadding = 8.0;
-const _tabBarHorizontalPadding = 12.0;
-// No gap: the bar sits on the bottom of the display. It is inside a SafeArea,
-// so the device's own inset is what keeps it off the home indicator, and
-// anything added here only lifts it back up off the edge.
-const _tabBarBottomGap = 0.0;
-const _companionTabBarClearance =
-    _tabBarHeight + _tabBarVerticalPadding * 2 + _tabBarBottomGap;
+// Bottom navigation geometry. The clearance is the bar's own footprint — the
+// row of tabs plus its symmetric vertical padding — and is what every
+// scrollable on the shell reserves so its last row stays reachable.
+const _tabBarHeight = 76.0;
+const _tabBarVerticalPadding = 10.0;
+const _tabBarIconSize = 28.0;
+const _tabBarIndicatorRadius = 18.0;
+const _companionTabBarClearance = _tabBarHeight + _tabBarVerticalPadding * 2;
 
 /// Bottom padding a scrollable needs so its last row clears the tab bar,
-/// including the device's own bottom inset (the bar is inside a `SafeArea`).
+/// including the device's own bottom inset (the bar's background runs under it).
 double _tabBarClearance(BuildContext context) =>
-    _companionTabBarClearance + MediaQuery.paddingOf(context).bottom;
+    _companionTabBarClearance + MediaQuery.viewPaddingOf(context).bottom;
 
 // Status accents stay in the cream/ink palette — no blue ring or blue status
 // wash when connected. Disconnected stays a soft coral so it still reads as
@@ -1112,74 +1107,20 @@ class MobilePendantPageState extends State<MobilePendantPage> {
             ),
         ],
       ),
-      // The glass bar draws no safe-area inset of its own, so wrap it: without
-      // this it sits under the home indicator and everything measured off its
-      // top edge — the memory bar above it especially — lands too low.
-      bottomNavigationBar: SafeArea(
-        top: false,
-        child: Padding(
-          padding: const EdgeInsets.only(bottom: _tabBarBottomGap),
-          child: _pageTabs(),
-        ),
-      ),
+      bottomNavigationBar: _pageTabs(),
     );
   }
 
-  Widget _pageTabs() {
-    const labels = ['Home', 'Conversations', 'Memory'];
-    const icons = [
-      Icons.home_rounded,
-      Icons.forum_rounded,
-      Icons.auto_awesome_rounded,
-    ];
-    final dark = _darkMode(context);
-    final selectedFg = dark ? _cream : _ink;
-    final idleFg = _pageInkSoft(context);
-    return GlassTabBar.bottom(
-      tabs: [
-        for (var index = 0; index < labels.length; index++)
-          GlassTab(
-            icon: Icon(icons[index]),
-            activeIcon: Icon(icons[index]),
-            label: labels[index],
-            glowColor: _teal,
-          ),
-      ],
-      selectedIndex: _pageIndex,
-      onTabSelected: (index) => unawaited(
-        _pageController?.animateToPage(
-          index,
-          duration: const Duration(milliseconds: 240),
-          curve: Curves.easeOutCubic,
-        ),
+  Widget _pageTabs() => _CompanionTabBar(
+    selectedIndex: _pageIndex,
+    onSelected: (index) => unawaited(
+      _pageController?.animateToPage(
+        index,
+        duration: const Duration(milliseconds: 240),
+        curve: Curves.easeOutCubic,
       ),
-      barHeight: _tabBarHeight,
-      verticalPadding: _tabBarVerticalPadding,
-      horizontalPadding: _tabBarHorizontalPadding,
-      // Nothing is drawn behind the selected tab. Every shape the package can
-      // put there — stadium, rounded rectangle — reads as a blob sitting on the
-      // glass rather than as part of it, so selection is carried by the icon
-      // and label alone: full-strength ink against the soft idle ink, and a
-      // heavier label weight.
-      indicatorColor: const Color(0x00000000),
-      selectedIconColor: selectedFg,
-      unselectedIconColor: idleFg,
-      selectedLabelColor: selectedFg,
-      unselectedLabelColor: idleFg,
-      selectedLabelStyle: const TextStyle(fontWeight: FontWeight.w700),
-      unselectedLabelStyle: const TextStyle(fontWeight: FontWeight.w500),
-      settings: LiquidGlassSettings(
-        glassColor: (dark ? _inkSheet : _surface).withValues(alpha: 0.55),
-        thickness: 18,
-        blur: 8,
-        chromaticAberration: .006,
-        lightIntensity: .35,
-        refractiveIndex: 1.15,
-        saturation: 1.15,
-        glowIntensity: .35,
-      ),
-    );
-  }
+    ),
+  );
 
   Widget _currentsPage({
     required RelayDevice? device,
@@ -3639,6 +3580,121 @@ class _AccountTiles extends StatelessWidget {
           ],
         );
       },
+    );
+  }
+}
+
+/// The shell's bottom navigation: a full-bleed band across the base of the
+/// display, with a rounded blob behind whichever tab is selected.
+class _CompanionTabBar extends StatelessWidget {
+  const _CompanionTabBar({
+    required this.selectedIndex,
+    required this.onSelected,
+  });
+
+  static const labels = ['Home', 'Conversations', 'Memory'];
+  static const icons = [
+    Icons.home_rounded,
+    Icons.forum_rounded,
+    Icons.auto_awesome_rounded,
+  ];
+
+  final int selectedIndex;
+  final ValueChanged<int> onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    final dark = _darkMode(context);
+    // The band's background runs under the home indicator; only the tappable
+    // row is held above it, so nothing sits where a swipe would land.
+    final safeBottom = MediaQuery.viewPaddingOf(context).bottom;
+    return DecoratedBox(
+      key: const Key('companion_tab_bar'),
+      decoration: BoxDecoration(
+        color: dark ? _inkSheet : _surface,
+        border: Border(top: BorderSide(color: _pageHairline(context))),
+      ),
+      child: Padding(
+        padding: EdgeInsets.only(
+          top: _tabBarVerticalPadding,
+          bottom: _tabBarVerticalPadding + safeBottom,
+        ),
+        child: SizedBox(
+          height: _tabBarHeight,
+          child: Row(
+            children: [
+              for (var index = 0; index < labels.length; index++)
+                Expanded(
+                  child: _CompanionTab(
+                    label: labels[index],
+                    icon: icons[index],
+                    selected: index == selectedIndex,
+                    onTap: () => onSelected(index),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _CompanionTab extends StatelessWidget {
+  const _CompanionTab({
+    required this.label,
+    required this.icon,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final String label;
+  final IconData icon;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final dark = _darkMode(context);
+    final foreground = selected
+        ? (dark ? _cream : _ink)
+        : _pageInkSoft(context);
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: onTap,
+      child: Center(
+        child: AnimatedContainer(
+          key: Key('companion_tab_indicator_$label'),
+          duration: const Duration(milliseconds: 180),
+          curve: Curves.easeOutCubic,
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+          decoration: BoxDecoration(
+            color: selected
+                ? _teal.withValues(alpha: dark ? .26 : .16)
+                : const Color(0x00000000),
+            borderRadius: BorderRadius.circular(_tabBarIndicatorRadius),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: _tabBarIconSize, color: foreground),
+              const SizedBox(height: 4),
+              Text(
+                label,
+                maxLines: 1,
+                softWrap: false,
+                overflow: TextOverflow.fade,
+                style: TextStyle(
+                  fontSize: 12,
+                  height: 1.1,
+                  color: foreground,
+                  fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }

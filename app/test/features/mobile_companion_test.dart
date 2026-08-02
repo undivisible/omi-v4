@@ -8,7 +8,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
-import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 import 'package:omi/api/worker_http.dart';
 import 'package:omi/app_services.dart';
 import 'package:omi/auth/auth.dart';
@@ -417,7 +416,7 @@ void main() {
     fixture.services.dispose();
   });
 
-  testWidgets('companion navigation uses the liquid glass tab bar', (
+  testWidgets('companion navigation uses the full-width tab bar', (
     tester,
   ) async {
     final fixture = await _mobileFixture('user-a');
@@ -431,7 +430,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.byType(GlassTabBar), findsOneWidget);
+    expect(find.byKey(const Key('companion_tab_bar')), findsOneWidget);
     expect(
       tester
           .widget<Scaffold>(find.byKey(const Key('companion_mobile_scaffold')))
@@ -2039,7 +2038,9 @@ void main() {
       expect(find.byKey(const Key('memory_floating_bar')), findsOneWidget);
       expect(
         tester.getRect(find.byKey(const Key('memory_floating_bar'))).bottom,
-        lessThanOrEqualTo(tester.getRect(find.byType(GlassTabBar)).top),
+        lessThanOrEqualTo(
+          tester.getRect(find.byKey(const Key('companion_tab_bar'))).top,
+        ),
       );
       expect(
         find.text('Search what Omi knows, or add something new.'),
@@ -2049,7 +2050,7 @@ void main() {
     },
   );
 
-  testWidgets('nothing is drawn behind the selected tab', (tester) async {
+  testWidgets('a rounded blob sits behind the selected tab', (tester) async {
     final fixture = await _mobileFixture('user-a');
     await tester.pumpWidget(
       MaterialApp(
@@ -2061,14 +2062,19 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    final bar = tester.widget<GlassTabBar>(find.byType(GlassTabBar));
-    expect(bar.barHeight, 72);
-    expect(bar.verticalPadding, 8);
-    expect(bar.horizontalPadding, 12);
-    // Fully transparent, not merely faint. Every shape the package can put
-    // behind the selected tab reads as a blob sitting on the glass rather than
-    // as part of it, so the selection is carried by the icon and label alone.
-    expect(bar.indicatorColor?.a, 0);
+    BoxDecoration blob(String label) =>
+        tester
+                .widget<AnimatedContainer>(
+                  find.byKey(Key('companion_tab_indicator_$label')),
+                )
+                .decoration!
+            as BoxDecoration;
+    final selected = blob('Home');
+    // The selected tab carries a filled rounded rectangle behind it; the idle
+    // tabs carry nothing.
+    expect(selected.color!.a, greaterThan(0));
+    expect(selected.borderRadius, BorderRadius.circular(18));
+    expect(blob('Memory').color!.a, 0);
     fixture.services.dispose();
   });
 
@@ -2090,15 +2096,23 @@ void main() {
     await services.initialize();
     await tester.pumpWidget(
       MaterialApp(
-        home: MobileCompanionShell(
-          services: services,
-          pairedDevices: VolatilePairedDeviceStore(),
+        home: Builder(
+          builder: (context) => MediaQuery(
+            data: MediaQuery.of(context).copyWith(
+              padding: const EdgeInsets.only(bottom: 34),
+              viewPadding: const EdgeInsets.only(bottom: 34),
+            ),
+            child: MobileCompanionShell(
+              services: services,
+              pairedDevices: VolatilePairedDeviceStore(),
+            ),
+          ),
         ),
       ),
     );
     await tester.pumpAndSettle();
 
-    final bar = find.byType(GlassTabBar);
+    final bar = find.byKey(const Key('companion_tab_bar'));
     expect(bar, findsOneWidget);
     final rect = tester.getRect(bar);
     final screen = tester.getRect(find.byType(MaterialApp));
@@ -2106,6 +2120,10 @@ void main() {
     // floating over the page — it reaches both edges of the display.
     expect(rect.left, closeTo(screen.left, 0.5));
     expect(rect.right, closeTo(screen.right, 0.5));
+    // It runs to the very bottom, its background filling the home-indicator
+    // inset: the tab row's own height plus its padding plus that inset.
+    expect(rect.bottom, closeTo(screen.bottom, 0.5));
+    expect(rect.height, closeTo(76 + 10 * 2 + 34, 0.5));
   });
 
   testWidgets('the memory bar sits directly on top of the navigation bar', (
@@ -2148,7 +2166,7 @@ void main() {
     final memoryBar = tester.getRect(
       find.byKey(const Key('memory_floating_bar')),
     );
-    final navBar = tester.getRect(find.byType(GlassTabBar));
+    final navBar = tester.getRect(find.byKey(const Key('companion_tab_bar')));
     // Above the navigation bar, and close enough to it to read as one stack:
     // no overlap in either direction, and no floating gap.
     expect(memoryBar.bottom, lessThanOrEqualTo(navBar.top));
@@ -2349,7 +2367,7 @@ Future<void> _selectCompanionTab(WidgetTester tester, String label) async {
   const labels = ['Home', 'Conversations', 'Memory'];
   final index = labels.indexOf(label);
   if (index < 0) throw ArgumentError.value(label, 'label');
-  final bar = tester.getRect(find.byType(GlassTabBar));
+  final bar = tester.getRect(find.byKey(const Key('companion_tab_bar')));
   await tester.tapAt(
     Offset(bar.left + bar.width * (index + .5) / labels.length, bar.center.dy),
   );
