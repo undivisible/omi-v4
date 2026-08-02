@@ -148,6 +148,16 @@ abstract interface class NativeHub {
     required String tenantId,
     required String personId,
   });
+
+  /// Folds the memory captured before anyone signed in into the account the
+  /// hub is configured for. Answered by one `ToolProgress` named
+  /// `local-memory`, whose `detail` is set only when memory actually moved.
+  void absorbLocalMemory({
+    required String requestId,
+    required String databasePath,
+    required String tenantId,
+    required String personId,
+  });
   void capture({
     required String requestId,
     required String ingestionKey,
@@ -573,6 +583,14 @@ final class UnavailableNativeHub implements NativeHub {
   }) => _unavailable();
 
   @override
+  void absorbLocalMemory({
+    required String requestId,
+    required String databasePath,
+    required String tenantId,
+    required String personId,
+  }) => _unavailable();
+
+  @override
   void capture({
     required String requestId,
     required String ingestionKey,
@@ -939,6 +957,21 @@ final class RinfNativeHub implements NativeHub {
   }) => _send(
     requestId,
     CommandConfigureMemory(
+      databasePath: databasePath,
+      tenantId: tenantId,
+      personId: personId,
+    ),
+  );
+
+  @override
+  void absorbLocalMemory({
+    required String requestId,
+    required String databasePath,
+    required String tenantId,
+    required String personId,
+  }) => _send(
+    requestId,
+    CommandAbsorbLocalMemory(
       databasePath: databasePath,
       tenantId: tenantId,
       personId: personId,

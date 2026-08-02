@@ -1389,6 +1389,73 @@ void main() {
   });
 
   test(
+    'signing in folds the offline memory database into the account and says so',
+    () async {
+      final gateway = _FakeAuthGateway(_session('user-a'));
+      final consent = VolatileConsentStore()..receipt = _receipt('user-a');
+      final auth = AuthController(gateway, consentStore: consent);
+      await auth.restoreSession();
+      final hub = _FakeHub()
+        ..absorbAnswer =
+            'Moved 61 memories you recorded before signing in '
+            'into your account.';
+      final services = AppServices.forTesting(
+        auth: auth,
+        nativeHub: hub,
+        deviceRelay: DeviceRelayService(
+          role: DeviceRelayRole.desktopObserver,
+          adapter: const UnavailableDeviceRelayAdapter(),
+        ),
+        memoryDatabasePath: (uid) => '/tmp/$uid.sqlite3',
+      );
+
+      await services.initialize();
+      await pumpEventQueue();
+
+      expect(hub.absorbRequests, hasLength(1));
+      expect(
+        hub.absorbRequests.single.databasePath,
+        '/tmp/local-offline.sqlite3',
+        reason: 'the offline database is the one absorbed, not the account one',
+      );
+      expect(
+        services.memorySyncNotice.value,
+        'Moved 61 memories you recorded before signing in into your account.',
+      );
+      services.dispose();
+      await hub.close();
+    },
+  );
+
+  test(
+    'an offline database with nothing to move is absorbed in silence',
+    () async {
+      final gateway = _FakeAuthGateway(_session('user-a'));
+      final consent = VolatileConsentStore()..receipt = _receipt('user-a');
+      final auth = AuthController(gateway, consentStore: consent);
+      await auth.restoreSession();
+      final hub = _FakeHub()..absorbAnswer = null;
+      final services = AppServices.forTesting(
+        auth: auth,
+        nativeHub: hub,
+        deviceRelay: DeviceRelayService(
+          role: DeviceRelayRole.desktopObserver,
+          adapter: const UnavailableDeviceRelayAdapter(),
+        ),
+        memoryDatabasePath: (uid) => '/tmp/$uid.sqlite3',
+      );
+
+      await services.initialize();
+      await pumpEventQueue();
+
+      expect(hub.absorbRequests, hasLength(1));
+      expect(services.memorySyncNotice.value, isNull);
+      services.dispose();
+      await hub.close();
+    },
+  );
+
+  test(
     'production initialization scopes speech profiles to the account',
     () async {
       final gateway = _FakeAuthGateway(_session('user-a'));
@@ -3153,6 +3220,8 @@ final class _FakeHub with NativeHubWithoutCapture implements NativeHub {
   int initializeCalls = 0;
   int disposeCalls = 0;
   final databasePaths = <String>[];
+  final absorbRequests = <({String requestId, String databasePath})>[];
+  String? absorbAnswer;
   final personIds = <String>[];
   final captures = <_Capture>[];
   final cancelled = <String>[];
@@ -3257,6 +3326,29 @@ final class _FakeHub with NativeHubWithoutCapture implements NativeHub {
   }) {
     databasePaths.add(databasePath);
     personIds.add(personId);
+  }
+
+  @override
+  void absorbLocalMemory({
+    required String requestId,
+    required String databasePath,
+    required String tenantId,
+    required String personId,
+  }) {
+    absorbRequests.add((requestId: requestId, databasePath: databasePath));
+    // The hub always answers exactly one progress event, with no detail when
+    // there was nothing to move; a fake that stayed silent would leave every
+    // signed-in test waiting out the absorb timeout.
+    eventsController.add(
+      NativeEventToolProgress(
+        value: ToolProgress(
+          requestId: requestId,
+          tool: 'local-memory',
+          status: ToolStatus.complete,
+          detail: absorbAnswer,
+        ),
+      ),
+    );
   }
 
   @override

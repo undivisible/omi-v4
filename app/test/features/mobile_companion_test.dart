@@ -2049,9 +2049,7 @@ void main() {
     },
   );
 
-  testWidgets('nothing is drawn behind the selected tab', (
-    tester,
-  ) async {
+  testWidgets('nothing is drawn behind the selected tab', (tester) async {
     final fixture = await _mobileFixture('user-a');
     await tester.pumpWidget(
       MaterialApp(
@@ -2641,8 +2639,16 @@ final class _Adapter implements DeviceRelayAdapter {
 final class _MultiDeviceAdapter extends _Adapter
     implements DeviceRelayIdentify {
   static const pendants = [
-    RelayDevice(id: 'omi-1', name: 'Omi One', audioCodec: DeviceAudioCodec.opus),
-    RelayDevice(id: 'omi-2', name: 'Omi Two', audioCodec: DeviceAudioCodec.opus),
+    RelayDevice(
+      id: 'omi-1',
+      name: 'Omi One',
+      audioCodec: DeviceAudioCodec.opus,
+    ),
+    RelayDevice(
+      id: 'omi-2',
+      name: 'Omi Two',
+      audioCodec: DeviceAudioCodec.opus,
+    ),
     RelayDevice(
       id: 'omi-3',
       name: 'Omi Three',
@@ -2911,6 +2917,14 @@ final class _Hub with NativeHubWithoutCapture implements NativeHub {
 
   @override
   void configureMemory({
+    required String requestId,
+    required String databasePath,
+    required String tenantId,
+    required String personId,
+  }) {}
+
+  @override
+  void absorbLocalMemory({
     required String requestId,
     required String databasePath,
     required String tenantId,

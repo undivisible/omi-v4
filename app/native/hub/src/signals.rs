@@ -322,6 +322,19 @@ pub enum Command {
     ConfigureSpeechProfiles {
         scope: Option<SpeechProfileScope>,
     },
+    /// Fold the memory captured before anyone signed in into the account the
+    /// hub is configured for now. Without this the offline database keeps
+    /// every claim it recorded and nothing ever reads it again: sign-in opens
+    /// a different file and the sync pump only ever uploads that one.
+    ///
+    /// Answered by exactly one [`ToolProgress`] named `local-memory`, whose
+    /// `detail` is the sentence to show the user when memory actually moved
+    /// and `None` when there was nothing to move.
+    AbsorbLocalMemory {
+        database_path: String,
+        tenant_id: String,
+        person_id: String,
+    },
 }
 
 /// Which account's voiceprints a speech-profile command addresses, and where

@@ -756,6 +756,14 @@ final class _Hub with NativeHubWithoutCapture implements NativeHub {
   }) {}
 
   @override
+  void absorbLocalMemory({
+    required String requestId,
+    required String databasePath,
+    required String tenantId,
+    required String personId,
+  }) {}
+
+  @override
   void capture({
     required String requestId,
     required String ingestionKey,

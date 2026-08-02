@@ -279,6 +279,14 @@ final class _ScanHub with NativeHubWithoutCapture implements NativeHub {
   }) {}
 
   @override
+  void absorbLocalMemory({
+    required String requestId,
+    required String databasePath,
+    required String tenantId,
+    required String personId,
+  }) {}
+
+  @override
   void scanOnboarding({
     required String requestId,
     required List<String> roots,

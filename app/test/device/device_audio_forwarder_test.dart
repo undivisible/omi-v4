@@ -1246,6 +1246,14 @@ final class _RecordingHub implements NativeHub {
   }) {}
 
   @override
+  void absorbLocalMemory({
+    required String requestId,
+    required String databasePath,
+    required String tenantId,
+    required String personId,
+  }) {}
+
+  @override
   void dispose() {}
 
   @override

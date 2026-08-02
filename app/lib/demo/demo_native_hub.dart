@@ -62,6 +62,14 @@ final class DemoNativeHub with NativeHubWithoutCapture implements NativeHub {
   }) {}
 
   @override
+  void absorbLocalMemory({
+    required String requestId,
+    required String databasePath,
+    required String tenantId,
+    required String personId,
+  }) {}
+
+  @override
   void setSystemAudioCaptureMode({
     required String requestId,
     required SystemAudioCaptureMode mode,

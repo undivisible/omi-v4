@@ -109,6 +109,8 @@ abstract class Command {
         return CommandPauseSpeechLearning.load(deserializer);
       case 49:
         return CommandConfigureSpeechProfiles.load(deserializer);
+      case 50:
+        return CommandAbsorbLocalMemory.load(deserializer);
       default:
         throw Exception(
           'Unknown variant index for Command: ' + index.toString(),
@@ -3634,5 +3636,81 @@ class CommandConfigureSpeechProfiles extends Command {
     }());
 
     return fullString ?? 'CommandConfigureSpeechProfiles';
+  }
+}
+
+@immutable
+class CommandAbsorbLocalMemory extends Command {
+  const CommandAbsorbLocalMemory({
+    required this.databasePath,
+    required this.tenantId,
+    required this.personId,
+  }) : super();
+
+  static CommandAbsorbLocalMemory load(BinaryDeserializer deserializer) {
+    deserializer.increaseContainerDepth();
+    final instance = CommandAbsorbLocalMemory(
+      databasePath: deserializer.deserializeString(),
+      tenantId: deserializer.deserializeString(),
+      personId: deserializer.deserializeString(),
+    );
+    deserializer.decreaseContainerDepth();
+    return instance;
+  }
+
+  final String databasePath;
+  final String tenantId;
+  final String personId;
+
+  CommandAbsorbLocalMemory copyWith({
+    String? databasePath,
+    String? tenantId,
+    String? personId,
+  }) {
+    return CommandAbsorbLocalMemory(
+      databasePath: databasePath ?? this.databasePath,
+      tenantId: tenantId ?? this.tenantId,
+      personId: personId ?? this.personId,
+    );
+  }
+
+  void serialize(BinarySerializer serializer) {
+    serializer.increaseContainerDepth();
+    serializer.serializeVariantIndex(50);
+    serializer.serializeString(databasePath);
+    serializer.serializeString(tenantId);
+    serializer.serializeString(personId);
+    serializer.decreaseContainerDepth();
+  }
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    if (other.runtimeType != runtimeType) return false;
+
+    return other is CommandAbsorbLocalMemory &&
+        databasePath == other.databasePath &&
+        tenantId == other.tenantId &&
+        personId == other.personId;
+  }
+
+  @override
+  int get hashCode => Object.hash(databasePath, tenantId, personId);
+
+  @override
+  String toString() {
+    String? fullString;
+
+    assert(() {
+      fullString =
+          '$runtimeType('
+          'databasePath: $databasePath, '
+          'tenantId: $tenantId, '
+          'personId: $personId'
+          ')';
+      return true;
+    }());
+
+    return fullString ?? 'CommandAbsorbLocalMemory';
   }
 }

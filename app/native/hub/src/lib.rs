@@ -29,6 +29,7 @@ mod mark_video;
 pub mod meeting;
 mod meeting_capture;
 pub mod meeting_detector;
+mod memory_migration;
 mod model_tier;
 mod personality;
 mod proactive_binds;

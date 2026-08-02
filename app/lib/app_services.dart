@@ -569,6 +569,8 @@ final class AppServices {
   /// The most recent memory upload or mirror failure, cleared on the next
   /// successful sync cycle.
   final memorySyncNotice = ValueNotifier<String?>(null);
+  Completer<String?>? _absorbCompleter;
+  StreamSubscription<NativeEvent>? _absorbSubscription;
   Future<void> _liveVoiceLifecycle = Future.value();
   int _liveVoiceGeneration = 0;
   final SystemAudioCaptureModeStore _captureModeStore;
@@ -1502,6 +1504,7 @@ final class AppServices {
       personId: session.uid,
       authorityGeneration: _authorityGeneration,
     );
+    unawaited(_absorbLocalOfflineMemory(session.uid, databasePath));
     memorySyncPump?.start(session.uid);
     await _startMemoryMirrorPump(session.uid);
     if (_workerOrigin != null) await _configureSelectedAssistant(session.uid);
@@ -1562,6 +1565,74 @@ final class AppServices {
       // Mirror setup must not block onboarding scan / production sync. The
       // local memory store is already configured; pull can retry later.
       _reportMemoryFailure(error, stackTrace);
+    }
+  }
+
+  /// Folds whatever was captured before anyone signed in into the account
+  /// that just did.
+  ///
+  /// Signed-out capture lands in the `local-offline` database; sign-in opens
+  /// the account's own file and the sync pump only ever uploads that one, so
+  /// without this everything remembered before the account existed would stay
+  /// in a file nothing reads again. It runs after [NativeHub.configureMemory]
+  /// because the hub absorbs into the memory it currently holds, and before
+  /// the pump starts so the absorbed claims go up with the first upload.
+  ///
+  /// The hub decides whether there is anything to move: a machine that never
+  /// captured offline, and an offline database some other account already
+  /// took, both answer with no detail and say nothing to the user.
+  Future<void> _absorbLocalOfflineMemory(
+    String uid,
+    String databasePath,
+  ) async {
+    if (_disposed || !_nativeInitialized) return;
+    final offlinePath = await memoryDatabasePath(_localOfflinePersonId);
+    if (_disposed || offlinePath == databasePath) return;
+    if (auth.snapshot.session?.uid != uid) return;
+    final requestId = 'absorb-local-memory-$uid';
+    // No timeout waits on the answer: absorbing a long offline history can
+    // take a while, the hub answers exactly once either way, and a pending
+    // timer would outlive the service. [dispose] settles it instead.
+    final completer = _absorbCompleter = Completer<String?>();
+    // Listens on the hub directly rather than [nativeEvents]: the shared
+    // stream is the chat surface, and it drops progress that belongs to no
+    // conversation — which this always does.
+    final subscription = _absorbSubscription = nativeHub.events.listen((event) {
+      if (completer.isCompleted) return;
+      if (event case NativeEventToolProgress(
+        :final value,
+      ) when value.requestId == requestId) {
+        if (value.status == ToolStatus.running) return;
+        completer.complete(value.detail);
+      } else if (event case NativeEventError(
+        :final value,
+      ) when value.requestId == requestId) {
+        completer.completeError(StateError(value.message));
+      }
+    }, onError: (_, _) {});
+    try {
+      nativeHub.absorbLocalMemory(
+        requestId: requestId,
+        databasePath: offlinePath,
+        tenantId: _localOfflinePersonId,
+        personId: _localOfflinePersonId,
+      );
+      final detail = await completer.future;
+      if (_disposed || detail == null) return;
+      // Reuses the sync notice so the move is not silent. It clears itself on
+      // the first successful upload, which is exactly when the moved claims
+      // have reached the cloud.
+      memorySyncNotice.value = detail;
+    } on Object catch (error, stackTrace) {
+      // A refused absorb must not stop sign-in: the offline database is left
+      // unmarked, so the next sign-in retries it from where it stopped.
+      _reportMemoryFailure(error, stackTrace);
+    } finally {
+      await subscription.cancel();
+      if (identical(_absorbSubscription, subscription)) {
+        _absorbSubscription = null;
+        _absorbCompleter = null;
+      }
     }
   }
 
@@ -1998,6 +2069,11 @@ final class AppServices {
   void dispose() {
     _disposed = true;
     unawaited(capture?.dispose());
+    // Settle a migration still waiting on the hub so its listener unwinds
+    // instead of holding the event stream open past disposal.
+    if (_absorbCompleter case final completer? when !completer.isCompleted) {
+      completer.complete(null);
+    }
     memorySyncPump?.dispose();
     _memoryMirrorPump?.dispose();
     auth.removeListener(_authChanged);
