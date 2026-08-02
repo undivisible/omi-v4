@@ -1968,8 +1968,10 @@ class ChatScreenState extends State<ChatScreen>
             controller: currents,
             checklistStore: _checklist,
             onAccept: (task) {
+              final step = task.item.proposedNextStep.trim();
+              if (step.isEmpty) return;
               Navigator.of(context).maybePop();
-              _usePrompt(task.item.proposedNextStep);
+              _usePrompt(step);
             },
           ),
         ),
@@ -2596,7 +2598,12 @@ class _CurrentFocusState extends State<_CurrentFocus> {
     if (hero == null) return const SizedBox.shrink();
     final colors = _HubColors.of(context);
     final card = hero.card;
-    final evidence = card.item.evidence;
+    final evidence = card.item.evidence
+        .map((item) => item.reason.trim())
+        .where((reason) => reason.isNotEmpty)
+        .join(' · ');
+    final nextStep = card.item.proposedNextStep.trim();
+    final when = hero.detail;
     final source = (card.sourceKind ?? 'Current').toUpperCase();
     final surface = Color.alphaBlend(
       colors.hintBlue.withValues(alpha: .08),
@@ -2606,7 +2613,7 @@ class _CurrentFocusState extends State<_CurrentFocus> {
       padding: const EdgeInsets.only(bottom: 12),
       child: InkWell(
         key: const Key('current_focus'),
-        onTap: () => widget.onDraftPrompt(card.item.proposedNextStep),
+        onTap: nextStep.isEmpty ? null : () => widget.onDraftPrompt(nextStep),
         borderRadius: BorderRadius.circular(24),
         hoverColor: colors.rowHover,
         splashColor: Colors.transparent,
@@ -2654,6 +2661,18 @@ class _CurrentFocusState extends State<_CurrentFocus> {
                           ),
                         ),
                         const Spacer(),
+                        if (when != null) ...[
+                          Text(
+                            when,
+                            key: const Key('current_focus_when'),
+                            style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w600,
+                              color: colors.muted,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                        ],
                         _CurrentChip(label: source, color: colors.hintBlue),
                       ],
                     ),
@@ -2690,95 +2709,100 @@ class _CurrentFocusState extends State<_CurrentFocus> {
                       color: colors,
                       detailKey: const Key('current_focus_reason'),
                     ),
-                    const SizedBox(height: 12),
-                    _CurrentDetail(
-                      label: 'EVIDENCE',
-                      text: evidence
-                          .map((item) => '${item.sourceId}: ${item.reason}')
-                          .join(' · '),
-                      color: colors,
-                      detailKey: const Key('current_focus_evidence'),
-                    ),
-                    const SizedBox(height: 16),
-                    DecoratedBox(
-                      decoration: BoxDecoration(
-                        color: colors.hintBlue.withValues(alpha: .10),
-                        borderRadius: BorderRadius.circular(14),
+                    if (evidence.isNotEmpty) ...[
+                      const SizedBox(height: 12),
+                      _CurrentDetail(
+                        label: 'EVIDENCE',
+                        text: evidence,
+                        color: colors,
+                        detailKey: const Key('current_focus_evidence'),
                       ),
-                      child: Padding(
-                        padding: const EdgeInsets.fromLTRB(14, 12, 10, 10),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              'NEXT ACTION',
-                              style: TextStyle(
-                                fontSize: 9,
-                                fontWeight: FontWeight.w700,
-                                letterSpacing: 1.1,
-                                color: colors.muted,
-                              ),
-                            ),
-                            const SizedBox(height: 4),
-                            Text(
-                              card.item.proposedNextStep,
-                              key: const Key('current_focus_next_action'),
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                fontSize: 13,
-                                height: 1.32,
-                                fontWeight: FontWeight.w600,
-                                color: colors.ink,
-                              ),
-                            ),
-                            const SizedBox(height: 6),
-                            Row(
-                              children: [
-                                TextButton(
-                                  key: const Key('current_focus_act'),
-                                  onPressed: () => widget.onDraftPrompt(
-                                    card.item.proposedNextStep,
+                    ],
+                    if (nextStep.isNotEmpty || widget.onComplete != null) ...[
+                      const SizedBox(height: 16),
+                      DecoratedBox(
+                        decoration: BoxDecoration(
+                          color: colors.hintBlue.withValues(alpha: .10),
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                        child: Padding(
+                          padding: const EdgeInsets.fromLTRB(14, 12, 10, 10),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              if (nextStep.isNotEmpty) ...[
+                                Text(
+                                  'NEXT ACTION',
+                                  style: TextStyle(
+                                    fontSize: 9,
+                                    fontWeight: FontWeight.w700,
+                                    letterSpacing: 1.1,
+                                    color: colors.muted,
                                   ),
-                                  style: TextButton.styleFrom(
-                                    foregroundColor: colors.hintBlue,
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 4,
-                                      vertical: 6,
-                                    ),
-                                    textStyle: const TextStyle(
-                                      fontSize: 13,
-                                      fontWeight: FontWeight.w700,
-                                    ),
-                                  ),
-                                  child: const Text('Work on this →'),
                                 ),
-                                if (widget.onComplete != null) ...[
-                                  const SizedBox(width: 8),
-                                  TextButton(
-                                    key: const Key('current_focus_done'),
-                                    onPressed: () =>
-                                        widget.onComplete!(card.item.id),
-                                    style: TextButton.styleFrom(
-                                      foregroundColor: colors.muted,
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 4,
-                                        vertical: 6,
-                                      ),
-                                      textStyle: const TextStyle(
-                                        fontSize: 13,
-                                        fontWeight: FontWeight.w600,
-                                      ),
-                                    ),
-                                    child: const Text('Done'),
+                                const SizedBox(height: 4),
+                                Text(
+                                  nextStep,
+                                  key: const Key('current_focus_next_action'),
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    height: 1.32,
+                                    fontWeight: FontWeight.w600,
+                                    color: colors.ink,
                                   ),
-                                ],
+                                ),
+                                const SizedBox(height: 6),
                               ],
-                            ),
-                          ],
+                              Row(
+                                children: [
+                                  if (nextStep.isNotEmpty)
+                                    TextButton(
+                                      key: const Key('current_focus_act'),
+                                      onPressed: () =>
+                                          widget.onDraftPrompt(nextStep),
+                                      style: TextButton.styleFrom(
+                                        foregroundColor: colors.hintBlue,
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 4,
+                                          vertical: 6,
+                                        ),
+                                        textStyle: const TextStyle(
+                                          fontSize: 13,
+                                          fontWeight: FontWeight.w700,
+                                        ),
+                                      ),
+                                      child: const Text('Work on this →'),
+                                    ),
+                                  if (widget.onComplete != null) ...[
+                                    if (nextStep.isNotEmpty)
+                                      const SizedBox(width: 8),
+                                    TextButton(
+                                      key: const Key('current_focus_done'),
+                                      onPressed: () =>
+                                          widget.onComplete!(card.item.id),
+                                      style: TextButton.styleFrom(
+                                        foregroundColor: colors.muted,
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 4,
+                                          vertical: 6,
+                                        ),
+                                        textStyle: const TextStyle(
+                                          fontSize: 13,
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                      ),
+                                      child: const Text('Done'),
+                                    ),
+                                  ],
+                                ],
+                              ),
+                            ],
+                          ),
                         ),
                       ),
-                    ),
+                    ],
                   ],
                 ),
               ),

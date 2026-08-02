@@ -84,6 +84,7 @@ Future<void> dispatchCrepusAction(
   }
   if (action == 'accept') {
     // Mirrors the existing accept/handoff: prompt with the proposed step.
+    if (proposedNextStep.trim().isEmpty) return;
     onPrompt(proposedNextStep);
     return;
   }

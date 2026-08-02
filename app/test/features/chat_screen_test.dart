@@ -259,6 +259,71 @@ void main() {
     expect(find.text('Send the notes'), findsNothing);
   });
 
+  testWidgets('a current with no next step offers no work-on-this action', (
+    tester,
+  ) async {
+    final createdAt = DateTime.utc(2026, 7, 21, 12);
+    final services = AppServices.forTesting(
+      nativeHub: const UnavailableNativeHub('test'),
+      deviceRelay: DeviceRelayService(
+        role: DeviceRelayRole.desktopObserver,
+        adapter: const UnavailableDeviceRelayAdapter(),
+      ),
+      auth: AuthController(const UnconfiguredAuthGateway()),
+      memoryDatabasePath: (uid) => '/tmp/$uid.sqlite3',
+      currentsClient: CurrentsClient(_Transport()),
+    );
+    addTearDown(services.dispose);
+    final seeded = <CurrentCard>[
+      CurrentCard(
+        item: CurrentItem.candidate(
+          id: 'local:m-1',
+          evidence: [
+            CurrentEvidence(
+              sourceId: 'c45342b4b8b95b36a14928b65f8b54e9',
+              reason: 'From your daily review, 24 July',
+            ),
+          ],
+          reason: 'Captured on this device.',
+          timing: CurrentTiming(surfaceAt: createdAt),
+          confidence: .5,
+          proposedNextStep: '',
+          createdAt: createdAt,
+        ).transitionTo(CurrentStatus.surfaced, at: createdAt),
+        title: 'You worked on the portfolio website',
+        summary: '',
+      ),
+    ];
+    services.currents!.items = seeded;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: ChatScreen(
+            services: services,
+            checklistStore: VolatileHubChecklistStore(),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    services.currents!.items = seeded;
+    await tester.pump();
+
+    expect(find.byKey(const Key('current_focus')), findsOneWidget);
+    expect(
+      tester.widget<Text>(find.byKey(const Key('current_focus_title'))).data,
+      'You worked on the portfolio website',
+    );
+    expect(find.byKey(const Key('current_focus_next_action')), findsNothing);
+    expect(find.byKey(const Key('current_focus_act')), findsNothing);
+    expect(find.text('Work on this →'), findsNothing);
+    expect(
+      tester.widget<Text>(find.byKey(const Key('current_focus_evidence'))).data,
+      'From your daily review, 24 July',
+    );
+  });
+
   testWidgets('task rows render from currents and dismiss on complete tap', (
     tester,
   ) async {

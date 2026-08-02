@@ -93,7 +93,6 @@ class CurrentItem {
   }) : evidence = List.unmodifiable(evidence) {
     _requireText(id, 'id');
     _requireText(reason, 'reason');
-    _requireText(proposedNextStep, 'proposedNextStep');
     if (evidence.isEmpty) {
       throw ArgumentError.value(evidence, 'evidence', 'must not be empty');
     }
@@ -159,7 +158,7 @@ class CurrentItem {
       reason: _string(json, 'reason'),
       timing: CurrentTiming.fromJson(_map(json['timing'], 'timing')),
       confidence: _number(json, 'confidence').toDouble(),
-      proposedNextStep: _string(json, 'proposedNextStep'),
+      proposedNextStep: _stringOrEmpty(json, 'proposedNextStep'),
       createdAt: _dateTime(json, 'createdAt'),
       updatedAt: _dateTime(json, 'updatedAt'),
       feedbackReference: _optionalString(json, 'feedbackReference'),
@@ -270,6 +269,17 @@ String _string(Map<String, Object?> json, String key) {
     throw FormatException('$key must be a non-empty string');
   }
   return value;
+}
+
+/// A current without a genuine next step carries none: the field is absent or
+/// empty, and every surface hides its action rather than proposing filler.
+String _stringOrEmpty(Map<String, Object?> json, String key) {
+  final value = json[key];
+  if (value == null) return '';
+  if (value is! String) {
+    throw FormatException('$key must be a string');
+  }
+  return value.trim().isEmpty ? '' : value;
 }
 
 String? _optionalString(Map<String, Object?> json, String key) {

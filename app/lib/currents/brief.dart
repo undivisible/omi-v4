@@ -399,7 +399,7 @@ class _BriefHero extends StatelessWidget {
   Widget _heroBody() {
     final start = entry.startsAt;
     final range = entry.meta?.formatTimeRange();
-    final prep = entry.card.item.proposedNextStep;
+    final prep = entry.card.item.proposedNextStep.trim();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -445,19 +445,20 @@ class _BriefHero extends StatelessWidget {
             ),
           ),
         ],
-        if (!compact) ...[
+        if (!compact && (prep.isNotEmpty || onComplete != null)) ...[
           const SizedBox(height: 16),
           Row(
             children: [
-              _BriefAction(
-                key: const Key('brief_hero_prep'),
-                palette: palette,
-                label: 'Prep me →',
-                emphasis: true,
-                onTap: () => onPrompt(prep),
-              ),
+              if (prep.isNotEmpty)
+                _BriefAction(
+                  key: const Key('brief_hero_prep'),
+                  palette: palette,
+                  label: 'Prep me →',
+                  emphasis: true,
+                  onTap: () => onPrompt(prep),
+                ),
               if (onComplete != null) ...[
-                const SizedBox(width: 16),
+                if (prep.isNotEmpty) const SizedBox(width: 16),
                 _BriefAction(
                   key: const Key('brief_hero_done'),
                   palette: palette,
@@ -543,12 +544,13 @@ class _BriefRow extends StatelessWidget {
                   currentContentKindLabel(entry.card.contentKind))
               .toUpperCase()
         : briefCountdown(start, now).toUpperCase();
+    final prep = entry.card.item.proposedNextStep.trim();
     return DecoratedBox(
       decoration: BoxDecoration(
         border: Border(top: BorderSide(color: palette.hairline)),
       ),
       child: InkWell(
-        onTap: () => onPrompt(entry.card.item.proposedNextStep),
+        onTap: prep.isEmpty ? null : () => onPrompt(prep),
         hoverColor: palette.rowHover,
         splashColor: Colors.transparent,
         highlightColor: Colors.transparent,

@@ -29,6 +29,55 @@ void main() {
     expect(controller.items.first.item.evidence.single.sourceId, 'm-2');
   });
 
+  test(
+    'a daily review reads as a headline, a date, and its provenance',
+    () async {
+      final hub = _Hub([
+        MemoryItem(
+          kind: 'daily_review',
+          id: 'c45342b4b8b95b36a14928b65f8b54e9',
+          title: '2026-07-24',
+          body: 'You worked on the portfolio website.',
+          recordedAtMs: DateTime.utc(2026, 7, 24, 21).millisecondsSinceEpoch,
+          evidenceIds: const ['capture-1'],
+        ),
+      ]);
+      final controller = CurrentsController(
+        CurrentsClient(_FailingTransport()),
+        hub: hub,
+        local: LocalCurrentsSource(hub, now: () => DateTime.utc(2026, 7, 25)),
+        now: () => DateTime.utc(2026, 7, 25),
+      );
+
+      await controller.load(offline: true);
+
+      final card = controller.items.single;
+      expect(card.title, 'You worked on the portfolio website.');
+      expect(card.metadata!['detail'], '24 July');
+      expect(card.sourceKind, 'daily review');
+      final evidence = card.item.evidence.single;
+      expect(evidence.reason, 'From your daily review, 24 July');
+      expect(evidence.reason, isNot(contains(evidence.sourceId)));
+      expect(card.item.proposedNextStep, isEmpty);
+    },
+  );
+
+  test('a memory with no genuine next step proposes none', () async {
+    final hub = _Hub([
+      _memory('m-1', 'Fix the sync retry', 'It drops the cursor on 429.', 200),
+    ]);
+    final controller = CurrentsController(
+      CurrentsClient(_FailingTransport()),
+      hub: hub,
+      local: LocalCurrentsSource(hub, now: () => DateTime.utc(2026, 7, 23)),
+      now: () => DateTime.utc(2026, 7, 23),
+    );
+
+    await controller.load(offline: true);
+
+    expect(controller.items.single.item.proposedNextStep, isEmpty);
+  });
+
   test('an offline brief is composed from the local currents', () async {
     final hub = _Hub([
       _memory('m-1', 'Fix the sync retry', 'It drops the cursor on 429.', 200),
