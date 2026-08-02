@@ -35,7 +35,7 @@ class OmiColdOpen extends StatefulWidget {
   final double handoffSize;
 
   /// Field, converge, lock, showcase, settle, hand off.
-  static const Duration duration = Duration(milliseconds: 2400);
+  static const Duration duration = Duration(milliseconds: 1600);
 
   @override
   State<OmiColdOpen> createState() => _OmiColdOpenState();
@@ -113,10 +113,13 @@ class _OmiColdOpenState extends State<OmiColdOpen>
 }
 
 /// The beats, as fractions of [OmiColdOpen.duration].
-const double _fieldEnd = 0.02;
-const double _convergeEnd = 0.34;
-const double _showcaseEnd = 0.70;
-const double _settleEnd = 0.78;
+///
+/// The mark arrives and is then the mark. It used to run a lap of the Tusi
+/// couple between arriving and handing over, which read as the logo fidgeting
+/// at someone who was waiting to use the app.
+const double _fieldEnd = 0.03;
+const double _convergeEnd = 0.62;
+const double _settleEnd = 0.74;
 
 /// How many points are in the sky the mark arrives through.
 const int _starCount = 90;
@@ -267,23 +270,6 @@ class OmiColdOpenPainter extends CustomPainter {
       return (_converge(_span(_fieldEnd, _convergeEnd), reach), openSize, 1);
     }
 
-    if (progress <= _showcaseEnd) {
-      // One whole lap of the detuned Tusi couple. Both ends of the lap are the
-      // mark — the lattice resynchronises exactly at turn 1 — so the blend in
-      // and out only has to cover the stagger, not a jump.
-      final lap = _span(_convergeEnd, _showcaseEnd);
-      final blend = math.min(
-        Curves.easeInOutCubic.transform((lap / 0.12).clamp(0.0, 1.0)),
-        Curves.easeInOutCubic.transform(((1 - lap) / 0.14).clamp(0.0, 1.0)),
-      );
-      final rest = omiOrbPlacements(motion: OmiOrbMotion.mark, turn: lap);
-      final show = omiOrbPlacements(
-        motion: OmiOrbMotion.tusiPendulum,
-        turn: lap,
-      );
-      return (_lerp(rest, show, blend), openSize, 1);
-    }
-
     if (progress <= _settleEnd) {
       return (
         omiOrbPlacements(motion: OmiOrbMotion.mark, turn: 0),
@@ -332,16 +318,6 @@ class OmiColdOpenPainter extends CustomPainter {
           alpha: (local * 5).clamp(0.0, 1.0),
         );
       }, growable: false);
-
-  List<OmiDotPlacement> _lerp(
-    List<OmiDotPlacement> a,
-    List<OmiDotPlacement> b,
-    double t,
-  ) => List<OmiDotPlacement>.generate(
-    OmiMarkGeometry.dotCount,
-    (i) => OmiDotPlacement.lerp(a[i], b[i], t),
-    growable: false,
-  );
 
   /// [progress] rescaled to 0..1 across one beat.
   double _span(double from, double to) =>
