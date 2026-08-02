@@ -267,6 +267,10 @@ class ChatScreenState extends State<ChatScreen>
     widget.services.desktopVoice.level,
     widget.services.liveVoice.level,
   ]);
+  late final _voiceTranscript = MergedTranscript([
+    widget.services.liveVoice.userTranscript,
+    widget.services.desktopVoice.partialTranscript,
+  ]);
 
   @override
   void initState() {
@@ -679,6 +683,7 @@ class ChatScreenState extends State<ChatScreen>
     _sendEnter.dispose();
     _scroll.dispose();
     _voiceLevel.dispose();
+    _voiceTranscript.dispose();
     _input.dispose();
     _inputFocus.dispose();
     super.dispose();
@@ -1613,7 +1618,7 @@ class ChatScreenState extends State<ChatScreen>
         const IgnorePointer(child: _VoiceEdgeGradient()),
         InAppVoiceView(
           level: _voiceLevel,
-          userTranscript: widget.services.liveVoice.userTranscript,
+          userTranscript: _voiceTranscript,
           assistantTranscript: widget.services.liveVoice.assistantTranscript,
           notice: widget.services.voiceNotice,
           onDone: () =>

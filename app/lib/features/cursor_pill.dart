@@ -123,8 +123,6 @@ class _CursorPillState extends State<CursorPill> {
 
   void _focusChanged() {
     if (!mounted) return;
-    // Rebuild so the typing shimmer starts/stops with focus.
-    setState(() {});
     if (_focus.hasFocus) return;
     if (widget.controller.state == CursorPillState.input) {
       unawaited(widget.controller.dismiss());
@@ -520,25 +518,11 @@ class _CursorPillState extends State<CursorPill> {
 
   Widget _pill() => LiquidGlass(
     key: _pillKey,
-    child: AnimatedContainer(
-      duration: MediaQuery.disableAnimationsOf(context)
-          ? Duration.zero
-          : const Duration(milliseconds: 160),
-      curve: Curves.easeOut,
+    child: SizedBox(
       height: pillHeight,
-      padding: const EdgeInsets.symmetric(horizontal: 14),
-      child: Stack(
-        children: [
-          _pillContent(),
-          Positioned.fill(
-            child: IgnorePointer(
-              child: TypingShimmer(
-                enabled:
-                    _focus.hasFocus && !MediaQuery.disableAnimationsOf(context),
-              ),
-            ),
-          ),
-        ],
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 14),
+        child: _pillContent(),
       ),
     ),
   );
@@ -1242,83 +1226,4 @@ class ListeningEdgeGlowPainter extends CustomPainter {
   @override
   bool shouldRepaint(ListeningEdgeGlowPainter old) =>
       old.level != level || old.breathe != breathe || old.burst != burst;
-}
-
-/// A slow diagonal light sweep looping across the input glass while it holds
-/// focus — the typing shimmer. Rendered as a non-interactive overlay (it takes
-/// no child) so it never intercepts text entry. Honors reduced motion via
-/// [enabled]: when off it paints nothing.
-class TypingShimmer extends StatefulWidget {
-  const TypingShimmer({required this.enabled, super.key});
-
-  static const period = Duration(milliseconds: 2200);
-
-  final bool enabled;
-
-  @override
-  State<TypingShimmer> createState() => _TypingShimmerState();
-}
-
-class _TypingShimmerState extends State<TypingShimmer>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _sweep = AnimationController(
-    vsync: this,
-    duration: TypingShimmer.period,
-  );
-
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    _sync();
-  }
-
-  @override
-  void didUpdateWidget(covariant TypingShimmer old) {
-    super.didUpdateWidget(old);
-    _sync();
-  }
-
-  void _sync() {
-    if (widget.enabled) {
-      if (!_sweep.isAnimating) _sweep.repeat();
-    } else {
-      _sweep.stop();
-      _sweep.value = 0;
-    }
-  }
-
-  @override
-  void dispose() {
-    _sweep.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    if (!widget.enabled) return const SizedBox.shrink();
-    return AnimatedBuilder(
-      animation: _sweep,
-      builder: (context, child) {
-        final travel = -0.4 + 1.8 * _sweep.value;
-        return DecoratedBox(
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.centerLeft,
-              end: Alignment.centerRight,
-              colors: const [
-                Color(0x00fffefa),
-                Color(0x33fffefa),
-                Color(0x00fffefa),
-              ],
-              stops: [
-                (travel - 0.22).clamp(0.0, 1.0),
-                travel.clamp(0.0, 1.0),
-                (travel + 0.22).clamp(0.0, 1.0),
-              ],
-            ),
-          ),
-        );
-      },
-    );
-  }
 }

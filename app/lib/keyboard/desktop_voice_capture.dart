@@ -49,6 +49,12 @@ final class DesktopVoiceCapture {
   int _generation = 0;
   final level = ValueNotifier<double>(0);
 
+  /// What has been heard so far this turn — finalized segments plus the
+  /// in-flight partial. The listening surface reads it so the transcription
+  /// route shows words as they arrive instead of an empty screen; only the
+  /// live-voice route used to publish anything.
+  final partialTranscript = ValueNotifier<String>('');
+
   bool get active => _session != null;
 
   Future<bool> hasPermission() =>
@@ -60,6 +66,7 @@ final class DesktopVoiceCapture {
     required String authorityId,
   }) async {
     await cancel();
+    partialTranscript.value = '';
     final generation = ++_generation;
     final streamId =
         'desktop-voice-$authorityId-${DateTime.now().microsecondsSinceEpoch}';
@@ -199,7 +206,11 @@ final class DesktopVoiceCapture {
       final text = value.text.trim();
       if (value.finalSegment && text.isNotEmpty) {
         session.segments[value.segmentSequence.toInt()] = text;
+        session.pending = '';
+      } else if (!value.finalSegment) {
+        session.pending = text;
       }
+      _publishTranscript(session);
     } else if (event case NativeEventError(:final value)
         when value.requestId == session.startRequestId &&
             !session.started.isCompleted) {
@@ -258,6 +269,15 @@ final class DesktopVoiceCapture {
     }
   }
 
+  void _publishTranscript(_DesktopVoiceSession session) {
+    if (_session != session) return;
+    final settled = session.segments.values.join(' ').trim();
+    final pending = session.pending.trim();
+    partialTranscript.value = pending.isEmpty
+        ? settled
+        : (settled.isEmpty ? pending : '$settled $pending');
+  }
+
   Future<void> _release(_DesktopVoiceSession session) async {
     if (!session.cancelled.isCompleted) session.cancelled.complete();
     await session.audio?.cancel();
@@ -265,6 +285,7 @@ final class DesktopVoiceCapture {
     if (_session == session) {
       _session = null;
       level.value = 0;
+      partialTranscript.value = '';
     }
   }
 }
@@ -280,6 +301,10 @@ final class _DesktopVoiceSession {
   final finished = Completer<TranscriptionStatus>();
   final audioDone = Completer<void>();
   final segments = SplayTreeMap<int, String>();
+
+  /// The newest non-final segment, replaced each time the provider revises it.
+  String pending = '';
+
   StreamSubscription<NativeEvent>? events;
   StreamSubscription<Uint8List>? audio;
   int sequence = 0;

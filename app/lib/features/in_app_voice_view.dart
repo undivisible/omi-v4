@@ -4,6 +4,46 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 
+/// The first non-empty of several transcript sources. A voice turn runs over
+/// exactly one route — the Gemini live session or managed transcription — and
+/// only that route publishes text, so the listening surface reads both rather
+/// than staying blank whenever the route it watched was not the one that ran.
+final class MergedTranscript extends ChangeNotifier
+    implements ValueListenable<String> {
+  MergedTranscript(this._sources) {
+    for (final source in _sources) {
+      source.addListener(_changed);
+    }
+  }
+
+  final List<ValueListenable<String>> _sources;
+  String _value = '';
+
+  @override
+  String get value => _value;
+
+  void _changed() {
+    var next = '';
+    for (final source in _sources) {
+      if (source.value.trim().isNotEmpty) {
+        next = source.value;
+        break;
+      }
+    }
+    if (next == _value) return;
+    _value = next;
+    notifyListeners();
+  }
+
+  @override
+  void dispose() {
+    for (final source in _sources) {
+      source.removeListener(_changed);
+    }
+    super.dispose();
+  }
+}
+
 /// The listening surface shown inside the omi window while a voice turn is
 /// running: one large centred waveform driven by the combined microphone and
 /// playback level, with the live transcript settling underneath it.

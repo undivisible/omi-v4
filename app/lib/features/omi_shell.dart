@@ -84,17 +84,13 @@ class _OmiShellState extends State<OmiShell> {
     }
     _menuBar = DesktopMenuBarController(
       currents: widget.services.currents,
-      isListening: () => widget.services.desktopVoice.active,
+      isListening: () => widget.services.desktopVoiceActive,
       isMeetingActive: () => widget.services.meetingActive,
-      // Menu Capture is always overlay-first — even when the hub window is
+      // Menu text input is always overlay-first — even when the hub window is
       // already frontmost. The keyboard chord still prefers the hub composer
       // in that case (see `_handleDesktopGesture`); the menu item must not.
-      onCapture: _summonOverlayCapture,
-      onToggleListening: () => _handleDesktopGesture(
-        widget.services.desktopVoice.active
-            ? ShiftGestureAction.stopVoice
-            : ShiftGestureAction.startVoice,
-      ),
+      onOpenInput: _summonOverlayCapture,
+      onToggleLiveConversation: _toggleLiveConversation,
       onToggleMeeting: _toggleMeeting,
       onOpenSettings: _openSettings,
     );
@@ -240,28 +236,45 @@ class _OmiShellState extends State<OmiShell> {
         .whenComplete(() => _settingsRouteOpen = false);
   }
 
-  Future<void> _toggleMeeting() async {
+  /// Starting a meeting fails whenever the platform has no meeting runtime or
+  /// native services are not connected yet. Both used to be swallowed, so the
+  /// menu item looked dead; the reason is returned for the menu to show.
+  Future<String?> _toggleMeeting() async {
     try {
       if (widget.services.meetingActive) {
         widget.services.stopMeeting();
       } else {
         widget.services.startMeeting();
       }
-    } on StateError {
-      return;
+      return null;
+    } on StateError catch (failure) {
+      return failure.message.toString();
     }
   }
 
-  Future<void> _summonOverlayCapture() async {
-    if (!mounted) return;
+  /// The spoken half of the menu bar. Distinct from [_summonOverlayCapture]:
+  /// this never opens the text field, it only starts or ends a voice turn.
+  Future<String?> _toggleLiveConversation() async {
+    if (!mounted) return null;
+    await _handleDesktopGesture(
+      widget.services.desktopVoiceActive
+          ? ShiftGestureAction.stopVoice
+          : ShiftGestureAction.startVoice,
+    );
+    return _cursorPill?.error;
+  }
+
+  Future<String?> _summonOverlayCapture() async {
+    if (!mounted) return null;
     final pill = _cursorPill;
     if (pill != null) {
       await pill.handleGesture(ShiftGestureAction.openOverlay);
-      return;
+      return pill.error;
     }
     await _chatKey.currentState?.handleDesktopGesture(
       ShiftGestureAction.openOverlay,
     );
+    return null;
   }
 
   Future<void> _handleDesktopGesture(ShiftGestureAction action) async {

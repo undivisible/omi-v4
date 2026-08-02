@@ -134,4 +134,27 @@ void main() {
       isTrue,
     );
   });
+
+  test('MergedTranscript takes whichever voice route actually spoke', () {
+    final live = ValueNotifier<String>('');
+    addTearDown(live.dispose);
+    final transcription = ValueNotifier<String>('');
+    addTearDown(transcription.dispose);
+    final merged = MergedTranscript([live, transcription]);
+    addTearDown(merged.dispose);
+    var notifications = 0;
+    merged.addListener(() => notifications += 1);
+
+    expect(merged.value, '');
+
+    transcription.value = 'book the flight';
+    expect(merged.value, 'book the flight');
+    expect(notifications, 1);
+
+    live.value = 'book the train';
+    expect(merged.value, 'book the train');
+
+    live.value = '';
+    expect(merged.value, 'book the flight');
+  });
 }

@@ -36,7 +36,7 @@ import 'settings/settings.dart';
 
 export 'memory/transcript_memory_ingestor.dart' show TranscriptCaptureConflict;
 
-const _managedAssistantModel = 'mimo-v2.5-pro';
+const _managedAssistantModel = 'openai/gpt-5.6-luna';
 const _localOfflinePersonId = 'local-offline';
 const _localProfileNameKey = 'omi_local_profile_name';
 const _defaultAssistantRefreshLead = Duration(minutes: 5);
@@ -626,15 +626,28 @@ final class AppServices {
     if (_disposed || _settingsWindow || !_nativeInitialized) return;
     final personId = _configuredPersonId;
     if (personId == null) return;
+    await _loadMemoryStatus();
+    if (_disposed) return;
     // Onboarding runs the first scan itself, and a second pass racing it would
     // scan the same machine twice for the same result.
-    try {
-      if (!await onboardingCompletion.isComplete(personId)) return;
-    } catch (_) {
-      return;
+    var onboarded = force;
+    if (!force) {
+      try {
+        onboarded = await _onboardingComplete(personId);
+      } catch (error) {
+        _noteScanSkipped('Omi could not check whether setup finished: $error');
+        return;
+      }
     }
     if (_disposed) return;
-    await _loadMemoryStatus();
+    if (!onboarded) {
+      _noteScanSkipped(
+        'Scan skipped: setup is not marked complete for this account, so Omi '
+        'has not read anything yet. Finish setup, or press Scan now.',
+      );
+      return;
+    }
+    _noteScanSkipped(null);
     if (!force) {
       final last = memoryStatus.value.lastScanAt;
       if (last != null && _now().difference(last) < _contextScanInterval) {
@@ -651,7 +664,41 @@ final class AppServices {
         includeAppleMail: defaultTargetPlatform == TargetPlatform.macOS,
         recordedAtMs: _now().millisecondsSinceEpoch,
       );
-    } catch (_) {}
+    } catch (error) {
+      _noteScanSkipped('Omi could not start the scan: $error');
+    }
+  }
+
+  /// Records why the scan did not run, so a stalled pipeline is readable in the
+  /// personal-context panel instead of looking like an empty machine.
+  void _noteScanSkipped(String? reason) {
+    if (_disposed) return;
+    if (memoryStatus.value.scanSkipReason == reason) return;
+    memoryStatus.value = memoryStatus.value.copyWith(
+      scanSkipReason: reason,
+      clearScanSkipReason: reason == null,
+    );
+  }
+
+  /// Whether setup finished for the person memory is configured for.
+  ///
+  /// Onboarding records completion under the signed-in uid, or under
+  /// [localOnboardingUid] when nobody is signed in, while memory is configured
+  /// for [_localOfflinePersonId] or the uid. Mapping the person id onto the
+  /// onboarding uid is what keeps a machine that onboarded offline from being
+  /// treated as never set up, and carrying that completion onto the uid is what
+  /// keeps signing in from stranding someone who already finished.
+  Future<bool> _onboardingComplete(String personId) async {
+    final uid = personId == _localOfflinePersonId
+        ? localOnboardingUid
+        : personId;
+    if (await onboardingCompletion.isComplete(uid)) return true;
+    if (uid == localOnboardingUid) return false;
+    if (!await onboardingCompletion.isComplete(localOnboardingUid)) {
+      return false;
+    }
+    await onboardingCompletion.complete(uid);
+    return true;
   }
 
   void _handleContextScanEvent(NativeEvent event) {
@@ -1082,7 +1129,9 @@ final class AppServices {
       throw StateError('Meeting assist is not available on this platform.');
     }
     if (!chatReady) {
-      throw StateError('Native services are not connected.');
+      throw StateError(
+        'Sign in and wait for Omi to connect before starting a meeting.',
+      );
     }
     nativeHub.startMeeting(
       requestId: 'meeting-start-${randomId()}',
@@ -1095,7 +1144,9 @@ final class AppServices {
       throw StateError('Meeting assist is not available on this platform.');
     }
     if (!chatReady) {
-      throw StateError('Native services are not connected.');
+      throw StateError(
+        'Sign in and wait for Omi to connect before starting a meeting.',
+      );
     }
     nativeHub.stopMeeting('meeting-stop-${randomId()}');
   }
@@ -1104,7 +1155,9 @@ final class AppServices {
     if (text.trim().isEmpty) return;
     if (!meetingAssistSupported) return;
     if (!chatReady) {
-      throw StateError('Native services are not connected.');
+      throw StateError(
+        'Sign in and wait for Omi to connect before starting a meeting.',
+      );
     }
     nativeHub.jotMeetingNote(
       requestId: 'meeting-jot-${randomId()}',

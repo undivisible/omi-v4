@@ -1263,7 +1263,7 @@ void main() {
       await services.initialize();
       expect(hub.assistantConfigurations.single, (
         AssistantProvider.worker,
-        'mimo-v2.5-pro',
+        'openai/gpt-5.6-luna',
         'https://worker.example.test/v1',
         'fresh-token-1',
       ));
@@ -1557,6 +1557,101 @@ void main() {
       expect(hub.initializeCalls, 1);
       expect(hub.databasePaths, isEmpty);
       expect(hub.scanRequests.single.requestId, requestId);
+      services.dispose();
+      await hub.close();
+    },
+  );
+
+  test(
+    'context refresh says why it skipped when setup was never completed',
+    () async {
+      SharedPreferences.setMockInitialValues({});
+      final auth = AuthController(
+        _FakeAuthGateway(_session('user-a')),
+        consentStore: VolatileConsentStore()..receipt = _receipt('user-a'),
+      );
+      await auth.restoreSession();
+      final hub = _FakeHub();
+      final services = AppServices.forTesting(
+        auth: auth,
+        nativeHub: hub,
+        deviceRelay: DeviceRelayService(
+          role: DeviceRelayRole.desktopObserver,
+          adapter: const UnavailableDeviceRelayAdapter(),
+        ),
+        memoryDatabasePath: (uid) => '/tmp/$uid.sqlite3',
+      );
+      await services.initialize();
+      await services.refreshPersonalContext();
+
+      expect(hub.scanRequests, isEmpty);
+      expect(services.memoryStatus.value.scanSkipReason, contains('Scan '));
+      services.dispose();
+      await hub.close();
+    },
+  );
+
+  test(
+    'context refresh carries offline onboarding onto a signed-in uid',
+    () async {
+      SharedPreferences.setMockInitialValues({
+        'onboarding_complete_v1_local': true,
+      });
+      final auth = AuthController(
+        _FakeAuthGateway(_session('user-a')),
+        consentStore: VolatileConsentStore()..receipt = _receipt('user-a'),
+      );
+      await auth.restoreSession();
+      final hub = _FakeHub();
+      final services = AppServices.forTesting(
+        auth: auth,
+        nativeHub: hub,
+        deviceRelay: DeviceRelayService(
+          role: DeviceRelayRole.desktopObserver,
+          adapter: const UnavailableDeviceRelayAdapter(),
+        ),
+        memoryDatabasePath: (uid) => '/tmp/$uid.sqlite3',
+      );
+      await services.initialize();
+      await services.refreshPersonalContext();
+
+      expect(hub.scanRequests, isNotEmpty);
+      expect(services.memoryStatus.value.scanSkipReason, isNull);
+      expect(
+        (await SharedPreferences.getInstance()).getBool(
+          'onboarding_complete_v1_user-a',
+        ),
+        isTrue,
+      );
+      services.dispose();
+      await hub.close();
+    },
+  );
+
+  test(
+    'a forced context refresh scans even before setup is marked complete',
+    () async {
+      SharedPreferences.setMockInitialValues({});
+      final auth = AuthController(
+        _FakeAuthGateway(_session('user-a')),
+        consentStore: VolatileConsentStore()..receipt = _receipt('user-a'),
+      );
+      await auth.restoreSession();
+      final hub = _FakeHub();
+      final services = AppServices.forTesting(
+        auth: auth,
+        nativeHub: hub,
+        deviceRelay: DeviceRelayService(
+          role: DeviceRelayRole.desktopObserver,
+          adapter: const UnavailableDeviceRelayAdapter(),
+        ),
+        memoryDatabasePath: (uid) => '/tmp/$uid.sqlite3',
+      );
+      await services.initialize();
+      await services.refreshPersonalContext(force: true);
+
+      expect(hub.scanRequests, isNotEmpty);
+      expect(services.memoryStatus.value.scanSkipReason, isNull);
       services.dispose();
       await hub.close();
     },

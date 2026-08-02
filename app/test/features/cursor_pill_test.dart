@@ -1242,8 +1242,6 @@ void main() {
       findsOneWidget,
     );
     // The chip sweep is one-shot; past its window the chip is bare again.
-    // (A blanket pumpAndSettle would hang on the input's looping typing
-    // shimmer, so advance a fixed span instead.)
     await tester.pump(const Duration(milliseconds: 700));
     expect(
       find.descendant(
@@ -1252,6 +1250,60 @@ void main() {
       ),
       findsNothing,
     );
+
+    await tester.pumpWidget(const SizedBox());
+    controller.dispose();
+    await harness.close();
+  });
+
+  testWidgets('the focused input settles instead of animating forever', (
+    tester,
+  ) async {
+    final harness = _Harness();
+    final controller = harness.controller();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(body: CursorPill(controller: controller)),
+      ),
+    );
+
+    await controller.summon();
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('cursor_pill_input')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('cursor_pill_input')), findsOneWidget);
+
+    await tester.enterText(
+      find.byKey(const Key('cursor_pill_input')),
+      'rename my screenshots',
+    );
+    await tester.pumpAndSettle();
+    expect(tester.binding.hasScheduledFrame, isFalse);
+
+    await tester.pumpWidget(const SizedBox());
+    controller.dispose();
+    await harness.close();
+  });
+
+  testWidgets('typing and talking are separate affordances on the pill', (
+    tester,
+  ) async {
+    final harness = _Harness();
+    final controller = harness.controller();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(body: CursorPill(controller: controller)),
+      ),
+    );
+
+    await controller.summon();
+    await tester.pump();
+    expect(find.byKey(const Key('cursor_pill_input')), findsOneWidget);
+    expect(find.byKey(const Key('cursor_pill_mic')), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('cursor_pill_mic')));
+    await tester.pump();
+    expect(controller.state, CursorPillState.listening);
 
     await tester.pumpWidget(const SizedBox());
     controller.dispose();

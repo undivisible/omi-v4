@@ -6,13 +6,17 @@ import 'package:flutter/services.dart';
 import '../currents/currents.dart';
 import '../ui/markdown_text.dart';
 
+/// What a menu-bar action reports back: null when it did what it said, or a
+/// one-line reason the menu shows so the item is never a silent no-op.
+typedef MenuBarAction = Future<String?> Function();
+
 final class DesktopMenuBarController {
   DesktopMenuBarController({
     required this.currents,
     required this.isListening,
     required this.isMeetingActive,
-    required this.onCapture,
-    required this.onToggleListening,
+    required this.onOpenInput,
+    required this.onToggleLiveConversation,
     required this.onToggleMeeting,
     required this.onOpenSettings,
     MethodChannel? channel,
@@ -21,12 +25,23 @@ final class DesktopMenuBarController {
   final CurrentsController? currents;
   final bool Function() isListening;
   final bool Function() isMeetingActive;
-  final Future<void> Function() onCapture;
-  final Future<void> Function() onToggleListening;
-  final Future<void> Function() onToggleMeeting;
+
+  /// Opens the typing surface — the floating input, never voice.
+  final MenuBarAction onOpenInput;
+
+  /// Starts or ends a spoken conversation — voice only, never the text field.
+  final MenuBarAction onToggleLiveConversation;
+
+  final MenuBarAction onToggleMeeting;
   final VoidCallback onOpenSettings;
   final MethodChannel _channel;
   bool _started = false;
+  String? _notice;
+
+  /// The last failure a menu action reported, shown as a disabled line in the
+  /// menu until the next action succeeds.
+  @visibleForTesting
+  String? get notice => _notice;
 
   Future<void> start() async {
     if (!_supported || _started) return;
@@ -52,12 +67,12 @@ final class DesktopMenuBarController {
 
   Future<void> _handleCall(MethodCall call) async {
     switch (call.method) {
-      case 'capture':
-        await onCapture();
-      case 'toggleListening':
-        await onToggleListening();
+      case 'openInput':
+        _notice = await onOpenInput();
+      case 'toggleLiveConversation':
+        _notice = await onToggleLiveConversation();
       case 'toggleMeeting':
-        await onToggleMeeting();
+        _notice = await onToggleMeeting();
       case 'openSettings':
         onOpenSettings();
         return;
@@ -74,6 +89,7 @@ final class DesktopMenuBarController {
       'task': items.isEmpty ? null : stripInlineMarkdown(items.first.title),
       'listening': isListening(),
       'meeting': isMeetingActive(),
+      'notice': _notice,
     });
   }
 

@@ -46,9 +46,9 @@ void main() {
       currents: currents,
       isListening: () => true,
       isMeetingActive: () => false,
-      onCapture: () async {},
-      onToggleListening: () async {},
-      onToggleMeeting: () async {},
+      onOpenInput: () async => null,
+      onToggleLiveConversation: () async => null,
+      onToggleMeeting: () async => null,
       onOpenSettings: () {},
       channel: channel,
     );
@@ -60,6 +60,7 @@ void main() {
       'task': 'Finish the release',
       'listening': true,
       'meeting': false,
+      'notice': null,
     });
     await menuBar.dispose();
   });
@@ -101,9 +102,9 @@ void main() {
       currents: currents,
       isListening: () => false,
       isMeetingActive: () => false,
-      onCapture: () async {},
-      onToggleListening: () async {},
-      onToggleMeeting: () async {},
+      onOpenInput: () async => null,
+      onToggleLiveConversation: () async => null,
+      onToggleMeeting: () async => null,
       onOpenSettings: () {},
       channel: channel,
     );
@@ -114,6 +115,7 @@ void main() {
       'task': 'Finish the release',
       'listening': false,
       'meeting': false,
+      'notice': null,
     });
     await menuBar.dispose();
   });
@@ -138,11 +140,12 @@ void main() {
       currents: null,
       isListening: () => false,
       isMeetingActive: () => meeting,
-      onCapture: () async {},
-      onToggleListening: () async {},
+      onOpenInput: () async => null,
+      onToggleLiveConversation: () async => null,
       onToggleMeeting: () async {
         toggles += 1;
         meeting = !meeting;
+        return null;
       },
       onOpenSettings: () {},
       channel: channel,
@@ -153,6 +156,7 @@ void main() {
       'task': null,
       'listening': false,
       'meeting': false,
+      'notice': null,
     });
 
     await TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
@@ -167,7 +171,109 @@ void main() {
       'task': null,
       'listening': false,
       'meeting': true,
+      'notice': null,
     });
+    await menuBar.dispose();
+  });
+
+  test('live conversation and text input are separate menu actions', () async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    const channel = MethodChannel('omi/menu_bar_separate_test');
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async => null);
+    addTearDown(
+      () => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, null),
+    );
+    var inputs = 0;
+    var conversations = 0;
+    final menuBar = DesktopMenuBarController(
+      currents: null,
+      isListening: () => false,
+      isMeetingActive: () => false,
+      onOpenInput: () async {
+        inputs += 1;
+        return null;
+      },
+      onToggleLiveConversation: () async {
+        conversations += 1;
+        return null;
+      },
+      onToggleMeeting: () async => null,
+      onOpenSettings: () {},
+      channel: channel,
+    );
+    await menuBar.start();
+
+    Future<void> invoke(String method) => TestDefaultBinaryMessengerBinding
+        .instance
+        .defaultBinaryMessenger
+        .handlePlatformMessage(
+          channel.name,
+          channel.codec.encodeMethodCall(MethodCall(method)),
+          (_) {},
+        );
+
+    await invoke('openInput');
+    expect(inputs, 1);
+    expect(conversations, 0);
+
+    await invoke('toggleLiveConversation');
+    expect(inputs, 1);
+    expect(conversations, 1);
+
+    await menuBar.dispose();
+  });
+
+  test('publishes why an action failed instead of doing nothing', () async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    const channel = MethodChannel('omi/menu_bar_notice_test');
+    final calls = <MethodCall>[];
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+          calls.add(call);
+          return null;
+        });
+    addTearDown(
+      () => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, null),
+    );
+    String? reason = 'Native services are not connected.';
+    final menuBar = DesktopMenuBarController(
+      currents: null,
+      isListening: () => false,
+      isMeetingActive: () => false,
+      onOpenInput: () async => null,
+      onToggleLiveConversation: () async => null,
+      onToggleMeeting: () async => reason,
+      onOpenSettings: () {},
+      channel: channel,
+    );
+    await menuBar.start();
+
+    Future<void> toggle() => TestDefaultBinaryMessengerBinding
+        .instance
+        .defaultBinaryMessenger
+        .handlePlatformMessage(
+          channel.name,
+          channel.codec.encodeMethodCall(const MethodCall('toggleMeeting')),
+          (_) {},
+        );
+
+    await toggle();
+    expect(menuBar.notice, 'Native services are not connected.');
+    expect(
+      calls.last.arguments,
+      containsPair('notice', 'Native services are not connected.'),
+    );
+
+    reason = null;
+    await toggle();
+    expect(menuBar.notice, isNull);
+    expect(calls.last.arguments, containsPair('notice', null));
+
     await menuBar.dispose();
   });
 }
