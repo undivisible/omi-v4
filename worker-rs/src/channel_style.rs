@@ -199,9 +199,110 @@ fn collapse_blank_lines(value: &str) -> String {
     out
 }
 
+/// Make the code that was actually minted the one the reader sees.
+///
+/// The code reached the reply by being read out of a tool result and typed
+/// again by the model, and a model that mistypes one character hands over a
+/// code no account has: the exchange finds no row, burns no attempt, and
+/// answers the same opaque refusal it gives a guesser. From the outside that is
+/// indistinguishable from the code being rejected, which is what the user was
+/// told, repeatedly, while the real code sat unused until it expired.
+///
+/// So the reply is corrected rather than trusted. Anything shaped like a code
+/// is replaced with the minted one, and a reply that quotes none is given it,
+/// which also covers a model that describes the code instead of writing it.
+pub fn enforce_minted_code(text: &str, code: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut replaced = false;
+    let mut rest = text;
+    while let Some((token_start, token)) = next_code_token(rest) {
+        out.push_str(&rest[..token_start]);
+        out.push_str(code);
+        replaced = true;
+        rest = &rest[token_start + token.len()..];
+    }
+    out.push_str(rest);
+    if replaced {
+        return out;
+    }
+    let trimmed = out.trim_end();
+    if trimmed.is_empty() {
+        return code.to_string();
+    }
+    format!("{trimmed}\n\n{code}")
+}
+
+/// The next run of code-alphabet characters that is exactly a code long and
+/// stands on its own. Bounded by non-alphanumerics so a longer word that
+/// happens to open with seven of them is left alone.
+///
+/// Case is not folded, deliberately. Codes are minted upper-case and quoted
+/// that way, while `Refresh` and `Message` are ordinary words of exactly seven
+/// letters the alphabet happens to contain — folding would overwrite the
+/// sentence around the code with the code.
+fn next_code_token(text: &str) -> Option<(usize, &str)> {
+    let bytes = text.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        if index > 0 && bytes[index - 1].is_ascii_alphanumeric() {
+            index += 1;
+            continue;
+        }
+        let mut end = index;
+        while end < bytes.len() && crate::channel_link::LINK_CODE_ALPHABET.contains(&bytes[end]) {
+            end += 1;
+        }
+        if end - index == crate::channel_link::LINK_CODE_LENGTH
+            && !bytes.get(end).is_some_and(u8::is_ascii_alphanumeric)
+        {
+            return Some((index, &text[index..end]));
+        }
+        index = if end > index { end } else { index + 1 };
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_mistyped_code_is_replaced_with_the_one_that_was_minted() {
+        assert_eq!(
+            enforce_minted_code("Here's your code: 79UM32Z. It lasts 15 minutes.", "79UM32X"),
+            "Here's your code: 79UM32X. It lasts 15 minutes."
+        );
+    }
+
+    #[test]
+    fn a_reply_that_forgot_the_code_is_given_it() {
+        assert_eq!(
+            enforce_minted_code("I've sent a code over.", "79UM32X"),
+            "I've sent a code over.\n\n79UM32X"
+        );
+    }
+
+    #[test]
+    fn an_ordinary_word_of_the_same_length_is_left_alone() {
+        // Seven letters, every one of them in the code alphabet.
+        assert_eq!(
+            enforce_minted_code("Message Omi to Refresh that.", "79UM32X"),
+            "Message Omi to Refresh that.\n\n79UM32X"
+        );
+    }
+
+    #[test]
+    fn a_lone_correct_code_survives_unchanged() {
+        assert_eq!(enforce_minted_code("79UM32X", "79UM32X"), "79UM32X");
+    }
+
+    #[test]
+    fn a_code_repeated_twice_is_corrected_in_both_places() {
+        assert_eq!(
+            enforce_minted_code("Code AAAAAAA. Again: AAAAAAA", "79UM32X"),
+            "Code 79UM32X. Again: 79UM32X"
+        );
+    }
 
     #[test]
     fn telegram_and_imessage_each_get_plain_text_rules() {

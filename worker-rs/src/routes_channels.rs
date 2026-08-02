@@ -1958,7 +1958,14 @@ async fn tool_context(env: &Env, uid: &str, channel: Channel) -> Option<ToolCont
     })
 }
 
-async fn run_channel_tool(env: &Env, uid: &str, ctx: &ToolContext, name: &str, now: i64) -> String {
+async fn run_channel_tool(
+    env: &Env,
+    uid: &str,
+    ctx: &ToolContext,
+    name: &str,
+    now: i64,
+    minted: &mut Option<String>,
+) -> String {
     match name {
         tools::GET_SIGNIN_CODE => match issue_signin_code(
             env,
@@ -1969,11 +1976,14 @@ async fn run_channel_tool(env: &Env, uid: &str, ctx: &ToolContext, name: &str, n
         )
         .await
         {
-            Ok(Some((code, expires_at))) => tools::ok_result(json!({
-                "code": code,
-                "expiresInMinutes": (expires_at - now).max(0) / 60_000,
-                "instructions": "Type this into Omi on a phone or desktop to sign in. It works once.",
-            })),
+            Ok(Some((code, expires_at))) => {
+                minted.replace(code.clone());
+                tools::ok_result(json!({
+                    "code": code,
+                    "expiresInMinutes": (expires_at - now).max(0) / 60_000,
+                    "instructions": "Type this into Omi on a phone or desktop to sign in. It works once.",
+                }))
+            }
             // No code could be minted — the channel has no signing secret, or
             // this is a group chat, where a bearer code would sign in whoever
             // read it first.
@@ -2018,6 +2028,7 @@ async fn managed_inbox_completion(
         .map(|m| crate::managed_ai::Message::new(&m.role, m.content.clone()))
         .collect();
     let catalogue = tools::tool_schemas();
+    let mut minted: Option<String> = None;
     for round in 0..=tools::MAX_TOOL_ROUNDS {
         let offered = match ctx {
             Some(_) if round < tools::MAX_TOOL_ROUNDS => Some(catalogue.as_slice()),
@@ -2040,31 +2051,45 @@ async fn managed_inbox_completion(
                 // sign-in code; losing the reply costs them the conversation,
                 // so if there is a plain completion to be had, take it.
                 None if offered.is_some() => {
-                    return crate::routes_ai::run_managed_inbox_turn(
-                        env,
-                        uid,
-                        &conversation,
-                        tier,
-                        None,
+                    return with_minted_code(
+                        crate::routes_ai::run_managed_inbox_turn(
+                            env,
+                            uid,
+                            &conversation,
+                            tier,
+                            None,
+                        )
+                        .await?
+                        .content,
+                        minted.as_deref(),
                     )
-                    .await?
-                    .content
                 }
                 None => return None,
             };
         let (Some(ctx), Some(raw)) = (ctx, turn.tool_calls_raw.clone()) else {
-            return turn.content;
+            return with_minted_code(turn.content, minted.as_deref());
         };
         if turn.tool_calls.is_empty() {
-            return turn.content;
+            return with_minted_code(turn.content, minted.as_deref());
         }
         conversation.push(crate::managed_ai::Message::tool_request(raw));
         for call in &turn.tool_calls {
-            let result = run_channel_tool(env, uid, ctx, &call.name, now).await;
+            let result = run_channel_tool(env, uid, ctx, &call.name, now, &mut minted).await;
             conversation.push(crate::managed_ai::Message::tool_result(&call.id, result));
         }
     }
-    None
+    // The rounds ran out with no words. A code was still minted, and it is the
+    // only thing in this turn the user cannot be sent twice, so it goes out on
+    // its own rather than expiring unseen.
+    minted
+}
+
+/// A reply that mentions a minted code says the one that was actually minted.
+fn with_minted_code(content: Option<String>, minted: Option<&str>) -> Option<String> {
+    match (content, minted) {
+        (Some(text), Some(code)) => Some(crate::channel_style::enforce_minted_code(&text, code)),
+        (content, _) => content,
+    }
 }
 
 /// Whether this uid belongs to an account that was created here, in a chat,
